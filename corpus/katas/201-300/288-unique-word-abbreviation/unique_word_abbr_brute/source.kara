@@ -1,0 +1,80 @@
+// LeetCode 288 — Unique Word Abbreviation, with NO INDEX AT ALL.
+//
+// The definition, transcribed. `is_unique(word)` re-reads the whole dictionary
+// and asks the question directly: does any dictionary word DIFFERENT from
+// `word` share its abbreviation?
+//
+//     unique  <=>  for every d in dict:  abbrev(d) != abbrev(word)  or  d == word
+//
+// O(n) per query against the indexed files' O(1), and it recomputes every
+// dictionary abbreviation on every call — but it is the file to read to settle
+// what the answer IS, because it has no representation choice to be wrong about.
+// The other three all pre-compute an index and then argue that the index
+// preserves this predicate; this one is the predicate.
+//
+// THE DUPLICATE TRAP CANNOT ARISE HERE, and that is worth stating, because it
+// is the reason this file is the differential's reference. A repeated
+// dictionary word is compared against `word` and excluded by `d == word` on
+// every one of its occurrences, so ["deer","deer"] behaves exactly like
+// ["deer"] without anything having to deduplicate it. The indexed files have to
+// SPEND something to get that right — a `prev != w` test, a `contains` scan, a
+// `Set` insert — and each of those is a place to get it wrong.
+
+fn abbrev(w: ref String) -> String {
+    let cs: Vec[char] = w.chars().collect();
+    let n = cs.len();
+    if n <= 2 {
+        return w.clone();
+    }
+    let mut out = String.new();
+    out.push(cs[0]);
+    out.push_str(f"{n - 2}");
+    out.push(cs[n - 1]);
+    return out;
+}
+
+fn is_unique(dict: Slice[String], word: ref String) -> bool {
+    let a = abbrev(word);
+    let n = dict.len();
+    let mut i = 0;
+    while i < n {
+        let d = ref dict[i];
+        // A dictionary word that IS the queried word never disqualifies it,
+        // however many times it appears.
+        if d != word {
+            if abbrev(d) == a {
+                return false;
+            }
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn report(dict: Slice[String], word: String) {
+    println(f"is_unique({word}) = {is_unique(dict, word)}");
+}
+
+fn main() {
+    let dict: Vec[String] = ["deer", "door", "cake", "card"];
+
+    report(dict, "dear");
+    report(dict, "cart");
+    report(dict, "cane");
+    report(dict, "make");
+    report(dict, "cake");
+
+    let pair: Vec[String] = ["deer", "door"];
+    report(pair, "deer");
+    report(pair, "dear");
+
+    let dup: Vec[String] = ["deer", "deer", "deer"];
+    report(dup, "deer");
+    report(dup, "dear");
+
+    let shorts: Vec[String] = ["it", "a", "do"];
+    report(shorts, "it");
+    report(shorts, "is");
+    report(shorts, "a");
+    report(shorts, "hello");
+}

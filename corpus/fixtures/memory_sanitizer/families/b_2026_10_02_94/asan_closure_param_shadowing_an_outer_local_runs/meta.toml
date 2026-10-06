@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_10_02_94.rs::asan_closure_param_shadowing_an_outer_local_runs"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

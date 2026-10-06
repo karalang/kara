@@ -1,0 +1,18 @@
+
+fn doubled[C: ElementwiseMap[i64]](c: ref C) -> C {
+    c.map(|x| x * 2)
+}
+fn combine[C: ElementwiseMap[i64]](a: ref C, b: ref C) -> C {
+    a.zip_with(b, |x, y| x + y)
+}
+fn main() {
+    let col: Column[i64] = Column.from_vec([1, 2, 3]);
+    let t: Tensor[i64, [3]] = Tensor.from([10, 20, 5]);
+    let a: Column[i64] = Column.from_vec([1, 2, 3]);
+    let b: Column[i64] = Column.from_vec([10, 20, 30]);
+    let dc: Column[i64] = doubled(col);
+    let dt: Tensor[i64, [3]] = doubled(t);
+    let z: Column[i64] = combine(a, b);
+    println(f"{dc.sum()} {dt.sum()}");
+    println(f"{z.sum()}");
+}

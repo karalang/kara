@@ -1,0 +1,109 @@
+// LeetCode #320: Generalized Abbreviation — enumerate the 2^n subsets directly.
+//
+// A generalized abbreviation of `word` replaces any set of disjoint,
+// non-adjacent substrings with their lengths. "word" has sixteen of them:
+// "word", "wor1", "wo1d", "wo2", "w1rd", … , "4".
+//
+// The whole problem collapses once you see what is actually being chosen. An
+// abbreviation is not a choice of SUBSTRINGS — it is a choice, independently
+// for each of the `n` letters, of "keep this letter" or "count it". Any such
+// choice is legal, and two different choices give two different abbreviations,
+// so the answer has exactly 2^n entries and is indexed by an n-bit mask.
+//
+// The "disjoint and non-adjacent" clause in the statement is not a constraint
+// to enforce; it is a description of what the mask already gives you. Two
+// counted runs that touched would be one longer run — and the notation could
+// not express them as two even if you wanted it to, because a run of 1
+// followed by a run of 2 has to be written "12", which reads back as a single
+// run of TWELVE. So the rule is really "numbers are maximal runs of counted
+// letters", which is exactly what run-length encoding a mask produces.
+//
+// That is this arm: walk `mask` from 0 to 2^n, and for each one sweep the
+// letters left to right accumulating a run of counted positions, flushing the
+// run as a decimal number the moment a kept letter interrupts it. One pass per
+// mask, no recursion, no backtracking state — O(2^n * n) time, which is
+// optimal up to a constant because the output itself is that big.
+//
+// Bit `i` set means "letter `i` is counted". Under that convention mask 0 is
+// the word itself and mask 2^n - 1 is the bare length, which makes the
+// enumeration order readable: the answer starts at "word" and ends at "4".
+//
+// `n == 0` is not a special case. The loop bound `1 << 0` is 1, the single
+// mask 0 sweeps zero letters, and the arm emits one empty abbreviation — which
+// is correct: the empty word has exactly one, itself.
+
+fn abbreviations(word: ref String) -> Vec[String] {
+    let bs = word.bytes();
+    let n = bs.len();
+    let mut out: Vec[String] = Vec.new();
+
+    let limit = 1 << n;
+    let mut mask = 0;
+    while mask < limit {
+        let mut abbr = String.new();
+        let mut run = 0;
+        for i in 0..n {
+            if (mask & (1 << i)) != 0 {
+                // Counted: extend the pending run, emit nothing yet.
+                run = run + 1;
+            } else {
+                // Kept: the run (if any) ends here and becomes its length.
+                if run > 0 {
+                    abbr.push_str(run.to_string());
+                    run = 0;
+                }
+                abbr.push(bs[i] as char);
+            }
+        }
+        // A run that reaches the end of the word still has to be flushed.
+        if run > 0 {
+            abbr.push_str(run.to_string());
+        }
+        out.push(abbr);
+        mask = mask + 1;
+    }
+    return out;
+}
+
+fn report(word: String) {
+    let all = abbreviations(word);
+    println(f"\"{word}\" -> {all.len()}");
+    let mut line = String.new();
+    for i in 0..all.len() {
+        if i > 0 { line.push_str(" "); }
+        line.push_str(all[i]);
+    }
+    println(line);
+}
+
+fn main() {
+    report("word");
+    report("");
+    report("a");
+    report("ab");
+    report("abc");
+    report("aaaa");
+    report("leet");
+
+    // Larger words: print the count and a fold of every abbreviation's bytes,
+    // so the whole list is checked without printing 2^16 strings.
+    let mut words: Vec[String] = Vec.new();
+    words.push("abcdefgh");
+    words.push("mississippi");
+    words.push("abcdefghijklmnop");
+    for t in 0..words.len() {
+        let w = words[t].clone();
+        let all = abbreviations(w);
+        let mut acc = 0;
+        let mut chars = 0;
+        for i in 0..all.len() {
+            let b = all[i].bytes();
+            chars = chars + b.len();
+            for j in 0..b.len() {
+                acc = (acc * 131 + (b[j] as i64)) % 1000000007;
+            }
+            acc = (acc * 131 + 7) % 1000000007;
+        }
+        println(f"\"{w}\" -> {all.len()} abbreviations, {chars} chars, fold {acc}");
+    }
+}

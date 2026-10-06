@@ -1,0 +1,12 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+struct P { a: R, b: R, c: R }
+fn consume(x: P) {
+    let l = R { id: 9 };
+    println("in");
+}
+fn main() {
+    let x = P { c: R { id: 21 }, a: R { id: 1 }, b: R { id: 11 } };
+    consume(x);
+    println("after");
+}

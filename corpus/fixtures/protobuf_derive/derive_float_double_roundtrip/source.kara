@@ -1,0 +1,16 @@
+
+#[derive(Message)]
+struct Meas { d: f64, f: f32, label: String }
+
+fn main() {
+    let m = Meas { d: 3.141592653589793, f: 2.5, label: "x" };
+    let back = Meas.decode(m.encode());
+    println(back.d == 3.141592653589793);
+    println(back.f == 2.5);
+    println(back.label);
+    let n = Meas { d: -1.5, f: -0.25, label: "" };
+    let bn = Meas.decode(n.encode());
+    println(bn.d == -1.5);
+    println(bn.f == -0.25);
+    println(Meas.decode(Vec.new()).d == 0.0);
+}

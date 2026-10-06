@@ -1,0 +1,12 @@
+struct H { xs: Vec[i64], t: (i64, Vec[i64]), s: (String, Vec[String]) }
+fn idx(k: i64) -> i64 { println(f"idx{k}"); return k }
+fn main() {
+    let mut hs: Vec[H] = [H { xs: [1], t: (0, [5, 9]), s: ("a".to_string(), ["p".to_string(), "q".to_string()]) }, H { xs: [2], t: (1, [6, 7]), s: ("b".to_string(), ["r".to_string()]) }];
+    hs[idx(1)].t.1[idx(0)] = 40;
+    hs[idx(0) + 1].t.1[1] = 41;
+    hs[idx(0)].s.1[idx(1)] = "heap-replacement-string-x".to_string();
+    println(f"{hs[1].t.1[0]} {hs[1].t.1[1]} {hs[0].s.1[1]} {hs[0].t.1[0]}");
+    let mut ts: Vec[(i64, Vec[i64])] = [(0, [1, 2])];
+    ts[idx(0)].1[idx(1)] = 8;
+    println(f"{ts[0].1[1]}");
+}

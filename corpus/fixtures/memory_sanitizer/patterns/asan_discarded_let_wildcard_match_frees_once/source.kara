@@ -1,0 +1,10 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"heap-{i}" }; }
+fn main() {
+    let n = 1;
+    let _ = match n { 1 => { R { id: 7, name: f"lit-seven" } } _ => { mk(0) } };
+    let _ = match n { 1 => mk(3), _ => mk(0) };
+    println("dropped");
+}

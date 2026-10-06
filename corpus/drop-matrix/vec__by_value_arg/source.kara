@@ -1,0 +1,11 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn consume(x: Vec[R]) {
+    let l = R { id: 9 };
+    println("in");
+}
+fn main() {
+    let x = [R { id: 1 }, R { id: 11 }, R { id: 21 }];
+    consume(x);
+    println("after");
+}

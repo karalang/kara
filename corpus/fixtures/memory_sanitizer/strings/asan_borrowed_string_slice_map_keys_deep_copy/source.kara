@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut s = String.new();
+    s.push_str("foo");
+    s.push_str("bar");        // heap buffer "foobar"
+    m.insert(s[0..3], 1);     // borrowed slice -> deep-copied into the map
+    m.insert(s[3..6], 2);
+    s = String.new();         // frees the old "foobar" buffer
+    let mut junk = String.new();
+    let mut i = 0i64;
+    while i < 2000 { junk.push_str("zzzz"); i = i + 1; }
+    match m.get("foo") { Some(v) => println(v), None => println(-1) }
+    match m.get("bar") { Some(v) => println(v), None => println(-1) }
+    m.insert(s[0..0], 9);     // empty borrowed key (null ptr, len 0)
+    println(m.len())
+}

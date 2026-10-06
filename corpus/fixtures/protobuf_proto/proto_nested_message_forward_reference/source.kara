@@ -1,0 +1,13 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    message Outer { Inner child = 1; int64 id = 2; }
+    message Inner { int64 v = 1; }
+";
+
+fn main() {
+    let o = Outer { child: Inner { v: 99 }, id: 4 };
+    let back = Outer.decode(o.encode());
+    println(back.child.v);
+    println(back.id);
+}

@@ -1,0 +1,102 @@
+// LeetCode 156 — Binary Tree Upside Down. (LeetCode Premium.)
+//
+// In the given tree every right node is a leaf with a left sibling. Flip it so
+// the original LEFT-most node becomes the new root; each old parent becomes the
+// RIGHT child of its old left child, and the old right sibling becomes the LEFT
+// child. Iterative pointer rewire down the left spine. Nodes are `Vec`-owned
+// (strong) with `weak` left/right overlays (the linked-list cluster's tree
+// sibling), so the rewiring only moves weak links and stays leak-free.
+
+shared struct Node {
+    val: i64,
+    id: i64,
+    mut left: weak Node,
+    mut right: weak Node,
+}
+
+fn left_idx(nodes: ref Vec[Node], i: i64) -> i64 {
+    match nodes[i].left {
+        None => { return -1; }
+        Some(nx) => { return nx.id; }
+    }
+}
+
+fn right_idx(nodes: ref Vec[Node], i: i64) -> i64 {
+    match nodes[i].right {
+        None => { return -1; }
+        Some(nx) => { return nx.id; }
+    }
+}
+
+fn set_left(nodes: mut ref Vec[Node], cur: i64, target: i64) {
+    if target == -1 {
+        nodes[cur].left = None;
+    } else {
+        nodes[cur].left = nodes[target];
+    }
+}
+
+fn set_right(nodes: mut ref Vec[Node], cur: i64, target: i64) {
+    if target == -1 {
+        nodes[cur].right = None;
+    } else {
+        nodes[cur].right = nodes[target];
+    }
+}
+
+fn flip(nodes: mut ref Vec[Node], root: i64) -> i64 {
+    let mut cur = root;
+    let mut prev = -1;
+    let mut prev_right = -1;
+    while cur != -1 {
+        let next = left_idx(nodes, cur);
+        set_left(nodes, cur, prev_right);
+        prev_right = right_idx(nodes, cur);
+        set_right(nodes, cur, prev);
+        prev = cur;
+        cur = next;
+    }
+    return prev;
+}
+
+fn serialize(nodes: ref Vec[Node], root: i64, out: mut ref String) {
+    if root == -1 {
+        out.push_str("# ");
+        return;
+    }
+    out.push_str(nodes[root].val.to_string());
+    out.push_str(" ");
+    serialize(nodes, left_idx(nodes, root), out);
+    serialize(nodes, right_idx(nodes, root), out);
+}
+
+fn main() {
+    //     1          flips to        4
+    //    / \                        / \
+    //   2   3                      5   2
+    //  / \                            / \
+    // 4   5                          3   1
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: 1, id: 0, left: None, right: None });
+    nodes.push(Node { val: 2, id: 1, left: None, right: None });
+    nodes.push(Node { val: 3, id: 2, left: None, right: None });
+    nodes.push(Node { val: 4, id: 3, left: None, right: None });
+    nodes.push(Node { val: 5, id: 4, left: None, right: None });
+    nodes[0].left = nodes[1];
+    nodes[0].right = nodes[2];
+    nodes[1].left = nodes[3];
+    nodes[1].right = nodes[4];
+
+    let new_root = flip(mut nodes, 0);
+    let mut out: String = "";
+    serialize(nodes, new_root, mut out);
+    println(out);
+
+    // Single node.
+    let mut s: Vec[Node] = Vec.new();
+    s.push(Node { val: 7, id: 0, left: None, right: None });
+    let sr = flip(mut s, 0);
+    let mut o2: String = "";
+    serialize(s, sr, mut o2);
+    println(o2);
+}

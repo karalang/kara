@@ -1,0 +1,9 @@
+scene 1: AddrInUse-aware port picker
+  occupied 18080; picker starts at 18080
+  port 18080 in use — stepping to next
+  bound port 18081
+scene 2: ConnectionRefused-aware reconnect
+  attempt 1: connection refused — retrying
+  attempt 2: connection refused — retrying
+  attempt 3: connection refused — retrying
+  reconnect finished

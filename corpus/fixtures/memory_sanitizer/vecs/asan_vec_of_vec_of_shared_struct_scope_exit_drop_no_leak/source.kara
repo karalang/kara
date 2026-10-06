@@ -1,0 +1,17 @@
+
+shared struct Node { label: String }
+fn build(n: i64) -> Vec[Vec[Node]] {
+    let mut outer: Vec[Vec[Node]] = Vec.new();
+    let mut a: Vec[Node] = Vec.new();
+    a.push(Node { label: f"alpha string padded out beyond thirty-six bytes {n}" });
+    outer.push(a);
+    return outer;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let vv = build(i);
+        println(vv.len());
+        i = i + 1;
+    };
+}

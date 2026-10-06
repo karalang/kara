@@ -1,0 +1,13 @@
+
+struct Inner { data: Vec[i64] }
+struct Outer { inner: Inner, n: i64 }
+fn make() -> Outer {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    return Outer { inner: Inner { data: v }, n: 5 };
+}
+fn main() {
+    let Outer { inner: Inner { data }, n } = make();
+    println(data.len() + n);
+}

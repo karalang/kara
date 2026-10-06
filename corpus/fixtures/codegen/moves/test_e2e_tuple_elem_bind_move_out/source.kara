@@ -1,0 +1,24 @@
+
+enum Tok { Id(String), Num(i64) }
+struct Inner { tok: Tok, n: i64 }
+struct Hs { ps: (Inner, i64) }
+struct Plain { a: i64, b: i64 }
+struct Hp { ps: (Plain, i64) }
+fn main() {
+    // Struct element moved out, then read a field.
+    let h1 = Hs { ps: (Inner { tok: Tok.Id("alpha".to_string()), n: 42 }, 7) };
+    let inr = h1.ps.0;
+    println(inr.n.to_string());                 // 42
+    // Struct element moved out, then CONSUME its enum field via match.
+    let h2 = Hs { ps: (Inner { tok: Tok.Id("beta".to_string()), n: 1 }, 2) };
+    let inr2 = h2.ps.0;
+    match inr2.tok { Id(s) => { println(s); } Num(n) => { println(n.to_string()); } }  // beta
+    // Enum field moved out THROUGH the tuple element, then consumed.
+    let h3 = Hs { ps: (Inner { tok: Tok.Id("gamma".to_string()), n: 9 }, 3) };
+    let tk = h3.ps.0.tok;
+    match tk { Id(s) => { println(s); } Num(n) => { println(n.to_string()); } }        // gamma
+    // Heapless tuple element — regression guard (reads the right field).
+    let hp = Hp { ps: (Plain { a: 5, b: 6 }, 7) };
+    let p = hp.ps.0;
+    println(p.a.to_string());                   // 5
+}

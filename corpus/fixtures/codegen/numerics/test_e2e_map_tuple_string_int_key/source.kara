@@ -1,0 +1,23 @@
+
+fn main() {
+    let mut m: Map[(String, i64), i64] = Map.new();
+    m.insert(("alice", 1_i64), 100_i64);
+    m.insert(("alice", 2_i64), 200_i64);
+    m.insert(("bob",   1_i64), 300_i64);
+    println(m.len());
+    let v1 = m.get(("alice", 1_i64));
+    match v1 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+    let v2 = m.get(("bob", 1_i64));
+    match v2 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+    let v3 = m.get(("alice", 9_i64));
+    match v3 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+}

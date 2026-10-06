@@ -1,0 +1,14 @@
+
+import std.web.{Display, Storage};
+import std.web.net.fetch;
+
+fn paint() with writes(Display) reads(Storage) {
+}
+
+fn main() {
+    paint();
+    match fetch("https://example.com/") {
+        Ok(resp) => println("fetched"),
+        Err(e) => println(f"stub: {e.message}"),
+    }
+}

@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut m: Map[String, Vec[i64]] = Map.new();
+    let mut k = String.new();
+    k.push_str("key");
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7i64);
+    v.push(8i64);
+    m.insert(k, v);
+    println(m.len());
+}

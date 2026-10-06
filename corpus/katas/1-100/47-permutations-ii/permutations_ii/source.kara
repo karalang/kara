@@ -1,0 +1,134 @@
+// LeetCode #47: Permutations II — sorted + used-array with adjacent-duplicate skip (★).
+//
+// Given an array `nums` that MAY CONTAIN DUPLICATES, return every UNIQUE ordering of all its
+// elements. This is the duplicate-input twin of kata [#46](../46-permutations/) exactly as
+// [#40](../40-combination-sum-ii/) is the duplicate-input twin of [#39](../39-combination-sum/):
+// #46 had DISTINCT integers, so its any-unused-element DFS already enumerated each ordering once;
+// the moment the input repeats a value, that same DFS emits the same ordering once per arrangement
+// of the equal copies (two 1s in [1,1,2] would give [1,1,2] twice). The job is to suppress those
+// duplicate siblings — and the canonical way is the kata-40 move: SORT first, then at each tree
+// level skip any candidate equal to its predecessor when that predecessor is NOT currently used:
+//
+//   if i > 0 and nums[i] == nums[i-1] and not used[i-1] { continue }
+//
+// The `not used[i-1]` guard is the whole trick, and it is the permutation analog of #40's
+// `i > start` guard. A run of equal values may be CONSUMED down a single branch (deeper picks set
+// `used[i-1] = true`, so the next equal copy is allowed — that is how [1,1,2] still produces the
+// two-1s prefix), but it may not be STARTED more than once at the same level: when `used[i-1]` is
+// false, the predecessor is a sibling we already tried at this level, and descending into the
+// equal copy would re-enumerate its whole subtree. Equal values are adjacent after the sort, so
+// the skip is a single backward look — no HashSet of seen permutations.
+//
+// Everything else is the ★ shape of #46: a parallel `Vec[bool]` `used` marker flipped in lockstep
+// with one mutable `path` (mark / push / recurse / pop / unmark), leaf at `path.len() == n`, and a
+// snapshot `out.push(path.clone())` into a `Vec[Vec[i64]]`. The only additions over #46 are the
+// initial sort and the one extra skip line. Because the array is sorted and the loop always scans
+// `0..n` picking the first eligible index first, the permutations come out in lexicographic order
+// BY VALUE — for [1,1,2]: [1,1,2],[1,2,1],[2,1,1] — the contrast with #46's "lexicographic by
+// original index" (there the input was not sorted). The two sibling files
+// ([`_counted`](permutations_ii_counted.kara), [`_snapshot`](permutations_ii_snapshot.kara)) emit
+// the identical listing by construction.
+//
+// LeetCode bounds: 1 ≤ n ≤ 8, -10 ≤ nums[i] ≤ 10. The n! ≤ 40320 upper bound on the listing and
+// every value fit trivially inside i64.
+
+fn backtrack(
+    nums: ref Vec[i64],
+    used: mut ref Vec[bool],
+    path: mut ref Vec[i64],
+    out: mut ref Vec[Vec[i64]],
+) {
+    let n = nums.len();
+    if path.len() == n {
+        // Every element placed — record this permutation by snapshot.
+        out.push(path.clone());
+        return;
+    }
+    let mut i = 0;
+    while i < n {
+        if used[i] {
+            i = i + 1;
+            continue;
+        }
+        // Same-level duplicate skip: only the first of a run of equal values may START a
+        // permutation at this level. `not used[i-1]` means the predecessor is a sibling
+        // already tried here (not a copy consumed deeper down this branch).
+        if i > 0 and nums[i] == nums[i - 1] and not used[i - 1] {
+            i = i + 1;
+            continue;
+        }
+        used[i] = true;
+        path.push(nums[i]);
+        backtrack(nums, used, path, out);
+        path.pop();
+        used[i] = false;
+        i = i + 1;
+    }
+}
+
+fn permute_unique(nums: Slice[i64]) -> Vec[Vec[i64]] {
+    let mut xs: Vec[i64] = Vec.from_slice(nums);
+    // Sort so equal values are adjacent — the adjacent-skip depends on it.
+    xs.sort_by(|a, b| a.cmp(b));
+    let n = xs.len();
+    let mut used: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        used.push(false);
+        i = i + 1;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    backtrack(xs, mut used, mut path, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(perm: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = perm.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{perm[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn report(nums: Slice[i64]) {
+    let perms = permute_unique(nums);
+    let count = perms.len();
+    let input: Vec[i64] = Vec.from_slice(nums);
+    println(f"{show(input)} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(show(perms[i]));
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    // LeetCode example 1 — one repeated value: [[1,1,2],[1,2,1],[2,1,1]].
+    report([1, 1, 2]);
+
+    // LeetCode example 2 — all distinct, degenerates to #46's 3! = 6 (but value-sorted).
+    report([1, 2, 3]);
+
+    // Two pairs — {1,1,2,2} has 4!/(2!2!) = 6 unique permutations.
+    report([2, 2, 1, 1]);
+
+    // Three equal + one distinct, given unsorted — {0,3,3,3} has 4!/3! = 4.
+    report([3, 3, 0, 3]);
+
+    // The singleton.
+    report([1]);
+
+    // All equal — exactly one unique permutation.
+    report([5, 5, 5]);
+}

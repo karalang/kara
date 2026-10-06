@@ -1,0 +1,2992 @@
+// Cumulus — sub-frame integration for deep-sky and nightscape stacking.
+//
+// Reads a `.cstack` (see gen_frames.py), a FITS sequence from a telescope, or a
+// TIFF sequence from a camera — mono or RGB, told apart by the files' own magic
+// rather than by their names — integrates them per pixel, and writes a
+// `.cstack` back out.
+//
+//   mean        arithmetic mean across all frames
+//   sigmaclip   iterative sigma clipping, then the mean of the survivors
+//   register    report the recovered per-frame transform, stack nothing
+//   stack       register, then sigma-clip integrate
+//   meancfa     separate a Bayer mosaic into R,G,B and take the mean
+//   stackcfa    register on luminance, then integrate the colour planes
+//
+// EVERY KERNEL IS AN ORDINARY SEQUENTIAL `for` LOOP. There is no `TaskGroup`,
+// no `spawn`, no `par {}` anywhere in this file. The compiler proves that
+// iteration `p` writes `out` only within `[p, p+1)` and fans the loop across
+// the worker pool by itself — the same route Prism took when it deleted its
+// hand-rolled band fan-out and got 23% faster. Check it with:
+//
+//     karac query concurrency cumulus.kara
+//
+// The clipping is written WITHOUT a per-pixel keep-mask: instead of tracking
+// which frames survive, it tracks the surviving INTERVAL [lo, hi] and re-scans.
+// For a symmetric threshold the kept set is always an interval, so the two
+// formulations are equivalent — but the interval form allocates nothing inside
+// the pixel loop, which is what keeps the loop body disjoint and lets it
+// parallelize.
+
+// Sigma-clip parameters. Fixed here rather than exposed, because the oracle
+// (oracle.py) hard-codes the same values — the differential is only meaningful
+// if both sides agree on the algorithm, not merely on the answer.
+let SIGMA: f64 = 3.0;
+let MAXITERS: i64 = 5;
+
+// Registration search radius, in pixels. Offsets larger than this are not
+// found — see estimate_offset.
+let MAX_SHIFT: f64 = 128.0;
+
+// Output tile edge, in pixels. Sets the working-set size: frames x TILE^2 x 8
+// bytes, so 16 frames at 256 is 8 MB regardless of how large the frames are.
+let TILE: i64 = 256;
+
+fn read_all(path: ref String) -> Vec[u8] with reads(FileSystem) {
+    let mut data: Vec[u8] = Vec.new();
+    match File.open(path) {
+        Ok(f) => {
+            let mut buf: Array[u8, 4096] = [0u8; 4096];
+            let mut reading = true;
+            while reading {
+                match f.read(mut buf) {
+                    Ok(n) => {
+                        if n == 0 {
+                            reading = false;
+                        } else {
+                            for i in 0..(n as i64) { data.push(buf[i]); }
+                        }
+                    }
+                    Err(e) => { reading = false; }
+                }
+            }
+        }
+        Err(e) => { println("cumulus: cannot open input"); }
+    }
+    data
+}
+
+// ─── Streaming FITS input ────────────────────────────────────────────────────
+//
+// The whole stack no longer has to be resident. `main` used to decode every sub
+// into one `Vec[u16]` of `w*h*nframes` and hold it for the entire run, which is
+// the single term that made a real session impossible: 24 Mpx x 100 subs is
+// 4.8 GB of frames alone, more than most laptops have and more than wasm32's
+// 4 GB address space allows at any memory setting.
+//
+// Two passes, because registration and integration need different things.
+// Pass 1 wants one frame at a time (star detection is per frame). Pass 2 wants
+// one horizontal STRIP from every frame at once, because sigma clipping needs
+// all frames' values at a pixel simultaneously. So peak becomes
+// `frames x width x strip` instead of `frames x width x height` — independent
+// of frame HEIGHT, which is what unbounds the session length.
+//
+// STRIPS, NOT THE 256-SQUARE TILES the integrator uses internally, and the
+// reason is the file layout. A strip is contiguous in a row-major FITS, so it
+// is one large sequential read per frame; square tiles would need one seek per
+// row, and at 6000x4000 with 100 subs that is ~10 million small reads instead
+// of ~12 thousand large ones. It also sidesteps the fact that `File` has no
+// `seek` at all today — strips advance top-to-bottom and FITS rows are stored
+// top-to-bottom, so a sliding window over sequential reads never needs one.
+//
+// ROTATION widens the halo. A translation needs |dy| rows of context; a
+// rotation of `theta` tilts the sampled row across the frame, so a pixel at the
+// left or right edge is drawn from a source row up to `sin(theta) * w/2` away.
+// On a 6016-wide frame the 0.40 degrees a real 5-minute untracked sequence
+// accumulates is ~21 rows on top of the dither — which is why MAX_HALO is 64
+// and not the 24 that sufficed when registration was translation-only. The
+// halo is still sized from the transform ACTUALLY recovered, so a tracked
+// session pays nothing for the headroom.
+//
+// Exceeding MAX_HALO degrades safely rather than silently: `resample_tile`'s
+// `in_window` test fails and those pixels become NO DATA, which the integrator
+// already excludes. Wrong data would be the alternative.
+//
+// The window carries a HALO of `MAX_HALO` rows above and below the output
+// strip, because a dithered frame contributes rows shifted by its own dy and
+// the bilinear resample reads one row past that.
+
+/// Output strip height, in rows. Sets the streaming working set:
+/// `frames x width x (STRIP + 2*MAX_HALO) x 2` bytes.
+let STRIP: i64 = 64;
+
+/// Rows of slack kept above and below each strip. Dithers are a few pixels in
+/// practice; a frame needing more than this is dropped by registration long
+/// before it gets here.
+let MAX_HALO: i64 = 64;
+
+/// Header fields plus enough to decode the data section. `read_fits_header`
+/// reports `data_off`, the byte offset of the first pixel, so any later read
+/// can seek straight to the rows it wants.
+/// What a sub-frame turned out to BE, once its header was read.
+///
+/// One struct for both containers rather than a pair of them, because
+/// everything downstream — the header pre-scan, the two streaming passes, the
+/// row reader — wants exactly one question answered ("where are row `r`'s
+/// pixels, and how do I decode them"), and a per-format type would make every
+/// one of those sites branch twice: once on which type it holds, once on what
+/// to do. `kind` says which half of the fields is live.
+struct SubMeta {
+    kind: i64,                                     // 0 = FITS, 1 = TIFF
+    width: i64, height: i64,
+    bzero: i64, bscale: i64, data_off: i64, bayer: String,          // FITS
+    big: bool, spp: i64, bits: i64,                                 // TIFF
+    rows_per_strip: i64, strip_offs: Vec[i64],                      // TIFF
+    ok: bool, err: String,
+}
+
+fn new_sub_meta() -> SubMeta {
+    SubMeta {
+        kind: 0, width: 0, height: 0, bzero: 0, bscale: 1, data_off: 0,
+        bayer: "", big: false, spp: 1, bits: 16, rows_per_strip: 0,
+        strip_offs: Vec.new(), ok: false, err: "",
+    }
+}
+
+/// Fill `buf` completely, topping up from an offset after a short read.
+///
+/// `File.read` fills from the START of its buffer and may return fewer bytes
+/// than asked for, so reading exactly N bytes needs a way to name "the unfilled
+/// tail" as a mutable view. `split_at_mut` is that way. Until it existed
+/// (compiler ledger B-2026-08-10-4) this file carried a per-frame byte queue —
+/// read whole fixed chunks, hand back what the caller wanted, keep the
+/// remainder for next time — about forty lines and a copy per refill, all of it
+/// standing in for these six.
+fn read_exact(f: ref File, buf: mut Slice[u8]) -> bool with reads(FileSystem) {
+    let total = buf.len();
+    let mut filled: i64 = 0;
+    let mut alive = true;
+    while filled < total and alive {
+        let halves = buf.split_at_mut(filled);
+        match f.read(halves.1) {
+            Ok(n) => { if n == 0 { alive = false; } else { filled = filled + (n as i64); } }
+            Err(e) => { alive = false; }
+        }
+    }
+    filled == total
+}
+
+/// Read the FITS header through `f`.
+///
+/// Header blocks are 2880 bytes and the END card can fall anywhere in one, so
+/// this consumes WHOLE blocks and records the offset just past the block
+/// containing END — where the data section begins.
+fn read_fits_header(f: ref File) -> SubMeta with reads(FileSystem) {
+    let mut m = new_sub_meta();
+    let mut bitpix: i64 = 0;
+    let mut naxis: i64 = 0;
+    let mut roworder = "";
+    let mut done = false;
+    let mut nblk: i64 = 0;
+    let mut block: Vec[u8] = Vec.filled(2880, 0);
+    // 64 blocks is 184 320 bytes of header — far past anything real, and it
+    // stops a non-FITS file being read to its end one block at a time.
+    while not done and nblk < 64 {
+        if not read_exact(f, mut block) {
+            nblk = 64;
+        } else {
+            let mut off: i64 = 0;
+            while off + 80 <= 2880 and not done {
+                let key = card_key(block, off);
+                if key == "END" {
+                    done = true;
+                } else {
+                    let n = parse_int(card_value(block, off));
+                    if key == "BITPIX" { bitpix = n; }
+                    if key == "NAXIS" { naxis = n; }
+                    if key == "NAXIS1" { m.width = n; }
+                    if key == "NAXIS2" { m.height = n; }
+                    if key == "BZERO" { m.bzero = n; }
+                    if key == "BSCALE" { m.bscale = n; }
+                    if key == "BAYERPAT" { m.bayer = card_string(block, off); }
+                    if key == "ROWORDER" { roworder = card_string(block, off); }
+                    off = off + 80;
+                }
+            }
+            nblk = nblk + 1;
+            m.data_off = nblk * 2880;
+        }
+    }
+    if not done {
+        m.err = "no END card in header";
+    } else {
+        if bitpix != 16 {
+            m.err = "unsupported BITPIX (only 16 is implemented)";
+        } else {
+            if naxis != 2 {
+                m.err = "unsupported NAXIS (only 2-D mono is implemented)";
+            } else {
+                if roworder != "" and roworder != "TOP-DOWN" {
+                    m.err = "unsupported ROWORDER (only TOP-DOWN is implemented)";
+                } else {
+                    m.ok = true;
+                }
+            }
+        }
+    }
+    m
+}
+
+/// Read `nrows` rows starting at source row `row0` into `dst` at `dst_base`.
+///
+/// SEEKS to the row rather than arriving there by having read everything
+/// before it. That is what lets each strip ask for exactly the rows it needs,
+/// in any order, and it is why the window below is a plain per-strip read
+/// rather than a sliding buffer that had to retain its own overlap.
+///
+/// Same BIG-endian + BZERO/BSCALE decode as the whole-file reader, so a
+/// streamed frame is bit-identical to a resident one.
+fn read_rows_at(f: ref File, data_off: i64, row0: i64, nrows: i64, w: i64,
+                bzero: i64, bscale: i64, dst: mut ref Vec[u16], dst_base: i64) -> bool
+    with reads(FileSystem)
+{
+    let mut ok = false;
+    match f.seek(SeekFrom.Start, data_off + row0 * w * 2) {
+        Ok(p) => { ok = true; }
+        Err(e) => { }
+    }
+    if ok {
+        let mut raw: Vec[u8] = Vec.filled(nrows * w * 2, 0);
+        if not read_exact(f, mut raw) {
+            ok = false;
+        } else {
+            for i in 0..(nrows * w) {
+                let hi = raw[i * 2] as i64;
+                let lo = raw[i * 2 + 1] as i64;
+                let mut v = hi * 256 + lo;
+                if v > 32767 { v = v - 65536; }
+                let phys = bzero + bscale * v;
+                let cl = if phys < 0 { 0 } else { if phys > 65535 { 65535 } else { phys } };
+                dst[dst_base + i] = cl as u16;
+            }
+        }
+    }
+    ok
+}
+
+// ─── TIFF input ──────────────────────────────────────────────────────────────
+//
+// FITS is what a telescope writes. TIFF is what a camera-on-a-tripod session
+// BECOMES: the nightscape workflow is RAW -> Lightroom/ACR/darktable -> 16-bit
+// TIFF, and that TIFF is what Starry Landscape Stacker and Sequator ingest.
+// Reading it is what makes this usable on files a photographer already has
+// rather than on files they would first have to convert.
+//
+// Baseline, uncompressed, strip-organised only — and every other flavour is
+// refused BY NAME rather than guessed at, the same rule the FITS reader follows
+// for BITPIX and ROWORDER and for the same reason: a stacker that half
+// understands its container still produces a picture, just the wrong one.
+//
+// The refusals are the interesting half of the work here, so they are tested
+// against files a third-party decoder accepts (gen_tiff.py --refuse writes real
+// zlib strips and real tiles) — otherwise "we refused it" and "we wrote a
+// broken fixture" are indistinguishable.
+
+/// Read `n` bytes at absolute offset `off`. Empty on any failure.
+///
+/// TIFF needs this and FITS does not: a FITS header is a prefix, so it can be
+/// read forward from byte zero, whereas a TIFF's directory can sit ANYWHERE —
+/// libtiff writes it after the pixels by default — and the strip table it
+/// points at can sit somewhere else again.
+fn read_at(f: ref File, off: i64, n: i64) -> Vec[u8] with reads(FileSystem) {
+    let mut buf: Vec[u8] = Vec.filled(n, 0);
+    let mut ok = false;
+    match f.seek(SeekFrom.Start, off) {
+        Ok(p) => { ok = true; }
+        Err(e) => { }
+    }
+    if ok { ok = read_exact(f, mut buf); }
+    if not ok { buf = Vec.new(); }
+    buf
+}
+
+/// Two- and four-byte unsigned fields, in either of TIFF's two byte orders.
+///
+/// TIFF is the rare format that lets the FILE choose its endianness — the "II"
+/// or "MM" at offset 0 — so every multi-byte read carries it. FITS never had
+/// to: it is big-endian, always, by specification.
+fn tu16(d: ref Vec[u8], off: i64, big: bool) -> i64 {
+    if big {
+        (d[off] as i64) * 256 + (d[off + 1] as i64)
+    } else {
+        (d[off] as i64) + (d[off + 1] as i64) * 256
+    }
+}
+
+fn tu32(d: ref Vec[u8], off: i64, big: bool) -> i64 {
+    if big {
+        (d[off] as i64) * 16777216 + (d[off + 1] as i64) * 65536
+            + (d[off + 2] as i64) * 256 + (d[off + 3] as i64)
+    } else {
+        (d[off] as i64) + (d[off + 1] as i64) * 256
+            + (d[off + 2] as i64) * 65536 + (d[off + 3] as i64) * 16777216
+    }
+}
+
+fn tval(d: ref Vec[u8], off: i64, width: i64, big: bool) -> i64 {
+    if width == 1 { return d[off] as i64; }
+    if width == 2 { return tu16(d, off, big); }
+    tu32(d, off, big)
+}
+
+/// Every value of IFD entry `eo`, whatever its type and count.
+///
+/// A value of four bytes or fewer lives INSIDE the twelve-byte entry, left
+/// justified; a longer one lives elsewhere and the entry holds its offset. That
+/// split is why this needs the file handle at all: the strip table of a
+/// row-per-strip image is megabytes and is never inline.
+fn tiff_values(f: ref File, ent: ref Vec[u8], eo: i64, big: bool) -> Vec[i64]
+    with reads(FileSystem)
+{
+    let mut out: Vec[i64] = Vec.new();
+    let typ = tu16(ent, eo + 2, big);
+    let cnt = tu32(ent, eo + 4, big);
+    // 1 = BYTE, 3 = SHORT, 4 = LONG. Nothing this reader needs is stored as a
+    // rational, an ascii string or a signed type, and a tag that arrives as one
+    // is treated as absent rather than misread.
+    let mut width: i64 = 0;
+    if typ == 1 { width = 1; }
+    if typ == 3 { width = 2; }
+    if typ == 4 { width = 4; }
+    if width == 0 or cnt <= 0 or cnt > 16777216 { return out; }
+    let total = cnt * width;
+    if total <= 4 {
+        for i in 0..cnt { out.push(tval(ent, eo + 8 + i * width, width, big)); }
+    } else {
+        let d = read_at(f, tu32(ent, eo + 8, big), total);
+        if d.len() == total {
+            for i in 0..cnt { out.push(tval(d, i * width, width, big)); }
+        }
+    }
+    out
+}
+
+/// Parse IFD0 of a classic TIFF and validate that it is a flavour we read.
+fn read_tiff_header(f: ref File, big: bool) -> SubMeta with reads(FileSystem) {
+    let mut m = new_sub_meta();
+    m.kind = 1;
+    m.big = big;
+
+    let head = read_at(f, 0, 8);
+    if head.len() < 8 { m.err = "file shorter than a TIFF header"; return m; }
+    let magic = tu16(head, 2, big);
+    if magic == 43 {
+        m.err = "BigTIFF is not implemented (only the classic 42 magic)";
+        return m;
+    }
+    if magic != 42 { m.err = "not a TIFF (bad magic number)"; return m; }
+
+    let ifd_off = tu32(head, 4, big);
+    let cntbuf = read_at(f, ifd_off, 2);
+    if cntbuf.len() < 2 { m.err = "IFD offset points past the end of the file"; return m; }
+    let nent = tu16(cntbuf, 0, big);
+    if nent <= 0 or nent > 512 { m.err = "implausible IFD entry count"; return m; }
+    let ent = read_at(f, ifd_off + 2, nent * 12);
+    if ent.len() != nent * 12 { m.err = "truncated IFD"; return m; }
+
+    let mut comp: i64 = 1;
+    let mut photo: i64 = 0 - 1;
+    let mut planar: i64 = 1;
+    let mut fmt: i64 = 1;
+    let mut tiled: i64 = 0;
+    let mut bits: Vec[i64] = Vec.new();
+    let mut strips: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+
+    for e in 0..nent {
+        let eo = e * 12;
+        let tag = tu16(ent, eo, big);
+        // Only the tags that decide where the samples are and how wide they
+        // are, plus the ones whose mere PRESENCE means "a flavour we do not
+        // read". Everything else — resolution, software, timestamps, the whole
+        // EXIF block — is metadata this pipeline has no use for.
+        let want = tag == 256 or tag == 257 or tag == 258 or tag == 259
+            or tag == 262 or tag == 273 or tag == 277 or tag == 278
+            or tag == 279 or tag == 284 or tag == 322 or tag == 339;
+        if want {
+            let v = tiff_values(f, ent, eo, big);
+            if v.len() > 0 {
+                if tag == 256 { m.width = v[0]; }
+                if tag == 257 { m.height = v[0]; }
+                if tag == 258 { for i in 0..v.len() { bits.push(v[i]); } }
+                if tag == 259 { comp = v[0]; }
+                if tag == 262 { photo = v[0]; }
+                if tag == 273 { for i in 0..v.len() { strips.push(v[i]); } }
+                if tag == 277 { m.spp = v[0]; }
+                if tag == 278 { m.rows_per_strip = v[0]; }
+                if tag == 279 { for i in 0..v.len() { counts.push(v[i]); } }
+                if tag == 284 { planar = v[0]; }
+                if tag == 322 { tiled = v[0]; }
+                if tag == 339 { fmt = v[0]; }
+            }
+        }
+    }
+
+    if m.width <= 0 or m.height <= 0 {
+        m.err = "TIFF carries no image dimensions";
+        return m;
+    }
+    if tiled != 0 {
+        m.err = "tiled TIFF is not implemented (only strip-organised files)";
+        return m;
+    }
+    if comp != 1 {
+        // Naming the code matters: 5 is LZW, 8 is Deflate, 32773 PackBits, and
+        // an operator who knows which one it is knows which flag to re-export
+        // with. `magick in.tif -compress none out.tif` converts any of them.
+        m.err = f"unsupported TIFF compression {comp} — only uncompressed is implemented (re-export with compression off, or `magick in.tif -compress none out.tif`)";
+        return m;
+    }
+    if planar != 1 {
+        m.err = "unsupported PlanarConfiguration (only chunky, 1, is implemented)";
+        return m;
+    }
+    if fmt != 1 {
+        m.err = "unsupported SampleFormat (only unsigned integer is implemented)";
+        return m;
+    }
+    if m.spp != 1 and m.spp != 3 {
+        // 4 is the common one: RGBA, or RGB plus an unnamed extra sample. An
+        // alpha channel over a photograph of the sky means nothing, and picking
+        // three of the four silently is a guess about which three.
+        m.err = f"unsupported SamplesPerPixel {m.spp} — only 1 (mono) and 3 (RGB) are implemented";
+        return m;
+    }
+    if bits.len() != m.spp {
+        m.err = "BitsPerSample count disagrees with SamplesPerPixel";
+        return m;
+    }
+    m.bits = bits[0];
+    let mut mixed = false;
+    for i in 0..m.spp { if bits[i] != m.bits { mixed = true; } }
+    if mixed { m.err = "channels of differing bit depth are not implemented"; return m; }
+    if m.bits != 8 and m.bits != 16 {
+        m.err = f"unsupported BitsPerSample {m.bits} — only 8 and 16 are implemented";
+        return m;
+    }
+    // Photometric 0 is WhiteIsZero, an INVERTED image; reading it as if it were
+    // BlackIsZero yields a negative, which is a picture, so it is refused like
+    // every other silent-wrong-answer case here. 3 is a palette, which is not a
+    // measurement of anything.
+    if m.spp == 1 and photo != 1 and photo != 0 - 1 {
+        m.err = f"unsupported PhotometricInterpretation {photo} for a 1-sample TIFF — only 1 (BlackIsZero)";
+        return m;
+    }
+    if m.spp == 3 and photo != 2 {
+        m.err = f"unsupported PhotometricInterpretation {photo} for a 3-sample TIFF — only 2 (RGB)";
+        return m;
+    }
+    // RowsPerStrip defaults to "the whole image in one strip", which is also
+    // what an out-of-range value means in practice.
+    if m.rows_per_strip <= 0 or m.rows_per_strip > m.height {
+        m.rows_per_strip = m.height;
+    }
+    let nstrips = (m.height + m.rows_per_strip - 1) / m.rows_per_strip;
+    if strips.len() != nstrips {
+        m.err = "StripOffsets count disagrees with the image height";
+        return m;
+    }
+    // The first strip's byte count must be exactly what an uncompressed strip
+    // of that geometry weighs. This is the one check that catches a file whose
+    // COMPRESSION TAG says 1 but whose payload is not — and, equally, a reader
+    // whose idea of the row stride is wrong.
+    let row_bytes = m.width * m.spp * (m.bits / 8);
+    if counts.len() == nstrips {
+        let mut rows0 = m.rows_per_strip;
+        if rows0 > m.height { rows0 = m.height; }
+        if counts[0] != rows0 * row_bytes {
+            m.err = "StripByteCounts does not match an uncompressed strip of this geometry";
+            return m;
+        }
+    }
+    m.strip_offs = strips;
+    m.ok = true;
+    m
+}
+
+/// One sample, expanded to the 16-bit scale the whole pipeline works in.
+fn tsample(d: ref Vec[u8], off: i64, bits: i64, big: bool) -> i64 {
+    // 8-bit expands by bit REPLICATION (x257), which sends 255 to exactly
+    // 65535. A bare shift by 8 would cap at 65280 and quietly darken an 8-bit
+    // sequence by a quarter of a percent relative to a 16-bit one — invisible
+    // in a picture, fatal to a byte-identity oracle.
+    if bits == 8 { return (d[off] as i64) * 257; }
+    tu16(d, off, big)
+}
+
+/// The MEDIAN of a pixel's three samples, which is what registration runs on.
+///
+/// Median rather than mean, for the same reason `cfa_luminance` takes the
+/// median of four photosites: a hot pixel or a cosmic ray usually lands in one
+/// channel, and a median removes that outlier outright, where a mean merely
+/// divides it by three and lets it drag the star's measured centre. The colour
+/// planes themselves are integrated with sigma clipping, which rejects rays on
+/// its own — this is only for finding stars.
+fn tluma(d: ref Vec[u8], off: i64, bits: i64, big: bool) -> i64 {
+    let bp = bits / 8;
+    let a = tsample(d, off, bits, big);
+    let b = tsample(d, off + bp, bits, big);
+    let c = tsample(d, off + 2 * bp, bits, big);
+    let mut lo = a;
+    if b < lo { lo = b; }
+    if c < lo { lo = c; }
+    let mut hi = a;
+    if b > hi { hi = b; }
+    if c > hi { hi = c; }
+    a + b + c - lo - hi
+}
+
+/// Read rows `[row0, row0+nrows)`, taking sample `plane` of each pixel.
+///
+/// `plane` is 0..spp for a colour plane, or -1 for the median luminance.
+///
+/// Rows are fetched in runs that stay inside ONE strip, because a strip is
+/// contiguous on disk: a whole-image strip — what most encoders write — makes
+/// any request a single read, and a row-per-strip file degrades to one read per
+/// row rather than to something incorrect.
+fn read_tiff_rows_at(f: ref File, m: ref SubMeta, plane: i64,
+                     row0: i64, nrows: i64,
+                     dst: mut ref Vec[u16], dst_base: i64) -> bool
+    with reads(FileSystem)
+{
+    let w = m.width;
+    let bp = m.bits / 8;
+    let row_bytes = w * m.spp * bp;
+    let mut r = row0;
+    let mut ok = true;
+    while r < row0 + nrows and ok {
+        let si = r / m.rows_per_strip;
+        let within = r - si * m.rows_per_strip;
+        let mut run = m.rows_per_strip - within;
+        if run > row0 + nrows - r { run = row0 + nrows - r; }
+        if si < 0 or si >= m.strip_offs.len() {
+            ok = false;
+        } else {
+            let raw = read_at(f, m.strip_offs[si] + within * row_bytes, run * row_bytes);
+            if raw.len() != run * row_bytes {
+                ok = false;
+            } else {
+                let base = dst_base + (r - row0) * w;
+                for y in 0..run {
+                    let ro = y * row_bytes;
+                    let po = base + y * w;
+                    for x in 0..w {
+                        let so = ro + x * m.spp * bp;
+                        let v = if plane >= 0 {
+                            tsample(raw, so + plane * bp, m.bits, m.big)
+                        } else {
+                            tluma(raw, so, m.bits, m.big)
+                        };
+                        dst[po + x] = v as u16;
+                    }
+                }
+            }
+            r = r + run;
+        }
+    }
+    ok
+}
+
+/// Which container this is, from its first bytes rather than from its name.
+///
+/// Extensions lie: `.fit`, `.fits`, `.fts`, `.tif`, `.tiff`, and plenty of
+/// files carrying none at all. The first two bytes settle it — "II" or "MM" is
+/// a TIFF byte-order mark, and everything else is offered to the FITS reader,
+/// which has its own END-card check to refuse what is not FITS either.
+fn read_sub_header(f: ref File) -> SubMeta with reads(FileSystem) {
+    let head = read_at(f, 0, 8);
+    if head.len() < 8 {
+        let mut m = new_sub_meta();
+        m.err = "file shorter than any header";
+        return m;
+    }
+    let b0 = head[0] as i64;
+    let b1 = head[1] as i64;
+    if b0 == 73 and b1 == 73 { return read_tiff_header(f, false); }   // 'I','I'
+    if b0 == 77 and b1 == 77 { return read_tiff_header(f, true); }    // 'M','M'
+    let mut m2 = new_sub_meta();
+    // Anything else must be FITS, whose first card key is the literal SIMPLE.
+    // Checking it here rather than letting the block scan run out is the
+    // difference between "this is not a container I know" and "no END card in
+    // header" — which is what a JPEG renamed `.tif` used to get told, and which
+    // sends the reader looking for a corrupt FITS file that never existed.
+    let simple = (head[0] as i64) == 83 and (head[1] as i64) == 73
+        and (head[2] as i64) == 77 and (head[3] as i64) == 80
+        and (head[4] as i64) == 76 and (head[5] as i64) == 69;
+    if not simple {
+        m2.err = "unrecognised file — expected FITS (SIMPLE), TIFF (II/MM) or a .cstack container (CSTK)";
+        return m2;
+    }
+    // `read_at` left the cursor at byte 8; the FITS reader consumes whole
+    // 2880-byte blocks from wherever it starts, so it has to start at zero.
+    m2.err = "cannot rewind to read the header";
+    match f.seek(SeekFrom.Start, 0) {
+        Ok(p) => { m2 = read_fits_header(f); }
+        Err(e) => { }
+    }
+    m2
+}
+
+/// Read rows from whichever container this sub turned out to be.
+fn read_sub_rows(f: ref File, m: ref SubMeta, plane: i64, row0: i64, nrows: i64,
+                 dst: mut ref Vec[u16], dst_base: i64) -> bool
+    with reads(FileSystem)
+{
+    if m.kind == 1 {
+        // A mono TIFF has one sample, so the luminance request and the plane-0
+        // request are the same request.
+        let mut p = plane;
+        if m.spp == 1 { p = 0; }
+        return read_tiff_rows_at(f, m, p, row0, nrows, dst, dst_base);
+    }
+    read_rows_at(f, m.data_off, row0, nrows, m.width, m.bzero, m.bscale, dst, dst_base)
+}
+
+/// True if `path` is a `.cstack` container, by its magic rather than its name.
+fn is_cstack(path: ref String) -> bool with reads(FileSystem) {
+    let mut yes = false;
+    match File.open(path) {
+        Ok(f) => {
+            let h = read_at(f, 0, 4);
+            // 'C', 'S', 'T', 'K'
+            if h.len() == 4 {
+                yes = (h[0] as i64) == 67 and (h[1] as i64) == 83
+                    and (h[2] as i64) == 84 and (h[3] as i64) == 75;
+            }
+        }
+        Err(e) => { }
+    }
+    yes
+}
+
+fn u32_at(data: ref Vec[u8], off: i64) -> i64 {
+    (data[off] as i64)
+        + (data[off + 1] as i64) * 256
+        + (data[off + 2] as i64) * 65536
+        + (data[off + 3] as i64) * 16777216
+}
+
+fn u16_at(data: ref Vec[u8], off: i64) -> i64 {
+    (data[off] as i64) + (data[off + 1] as i64) * 256
+}
+
+/// Arithmetic mean across frames. The accumulator is f64 and the inputs are
+/// u16, so every partial sum below 2^53 is EXACT — there is no accumulation
+/// error to explain away, and the oracle can assert exact equality.
+fn integrate_mean(px: ref Vec[i64], npix: i64, nframes: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.with_capacity(npix);
+    for p in 0..npix { out.push(0); }
+    for p in 0..npix {
+        let mut sum: f64 = 0.0;
+        let mut count: i64 = 0;
+        // NO DATA (-1) contributes nothing. After a dithered stack is resampled
+        // the border strips are covered by fewer frames than the centre, so the
+        // divisor is per-pixel coverage rather than the frame count.
+        for f in 0..nframes {
+            let v = px[f * npix + p];
+            if v >= 0 { sum = sum + (v as f64); count = count + 1; }
+        }
+        if count == 0 { out[p] = 0; } else { out[p] = (sum / (count as f64) + 0.5) as i64; }
+    }
+    out
+}
+
+/// The k-th smallest surviving value at pixel `p` (0-indexed rank).
+///
+/// COUNTING SELECTION, not a sort, and that is the load-bearing choice. A sort
+/// needs a scratch buffer; a per-pixel allocation is ruinous at 12 MP, and one
+/// buffer reused across pixels is a genuine race that would (correctly) make the
+/// compiler decline to parallelize the loop. Counting reads the strided source
+/// directly and writes nothing, so the loop body stays disjoint and still fans
+/// out. O(n^2) in the frame count, which for the 16-100 subs a real session
+/// produces is far cheaper than losing the parallelism.
+fn kth_in_window(px: ref Vec[i64], p: i64, npix: i64, nframes: i64,
+                 lo: f64, hi: f64, k: i64) -> f64 {
+    let mut found: f64 = 0.0;
+    let mut done = false;
+    for i in 0..nframes {
+        if not done {
+            let raw = px[i * npix + p];
+            let cv = raw as f64;
+            if raw >= 0 and cv >= lo and cv <= hi {
+                let mut less: i64 = 0;
+                let mut equal: i64 = 0;
+                for j in 0..nframes {
+                    let o = px[j * npix + p];
+                    let ov = o as f64;
+                    if o >= 0 and ov >= lo and ov <= hi {
+                        if ov < cv { less = less + 1; }
+                        if ov == cv { equal = equal + 1; }
+                    }
+                }
+                // `less <= k < less + equal` identifies the rank band this value
+                // occupies, so duplicates resolve without special-casing.
+                if less <= k and k < less + equal {
+                    found = cv;
+                    done = true;
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Median of the surviving values at `p`. Even counts average the two central
+/// order statistics, matching numpy's convention so the oracle can compare
+/// exactly rather than approximately.
+fn median_in_window(px: ref Vec[i64], p: i64, npix: i64, nframes: i64,
+                    lo: f64, hi: f64, count: i64) -> f64 {
+    if count % 2 == 1 {
+        kth_in_window(px, p, npix, nframes, lo, hi, count / 2)
+    } else {
+        let a = kth_in_window(px, p, npix, nframes, lo, hi, count / 2 - 1);
+        let b = kth_in_window(px, p, npix, nframes, lo, hi, count / 2);
+        (a + b) / 2.0
+    }
+}
+
+/// The k-th smallest |value - center| among survivors — same counting scheme,
+/// applied to the deviations rather than the values.
+fn kth_abs_dev(px: ref Vec[i64], p: i64, npix: i64, nframes: i64,
+               lo: f64, hi: f64, center: f64, k: i64) -> f64 {
+    let mut found: f64 = 0.0;
+    let mut done = false;
+    for i in 0..nframes {
+        if not done {
+            let raw = px[i * npix + p];
+            let rv = raw as f64;
+            if raw >= 0 and rv >= lo and rv <= hi {
+                let cv = (rv - center).abs();
+                let mut less: i64 = 0;
+                let mut equal: i64 = 0;
+                for j in 0..nframes {
+                    let o = px[j * npix + p];
+                    let ov = o as f64;
+                    if o >= 0 and ov >= lo and ov <= hi {
+                        let dv = (ov - center).abs();
+                        if dv < cv { less = less + 1; }
+                        if dv == cv { equal = equal + 1; }
+                    }
+                }
+                if less <= k and k < less + equal {
+                    found = cv;
+                    done = true;
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Median absolute deviation about `center`.
+fn mad_in_window(px: ref Vec[i64], p: i64, npix: i64, nframes: i64,
+                 lo: f64, hi: f64, center: f64, count: i64) -> f64 {
+    if count % 2 == 1 {
+        kth_abs_dev(px, p, npix, nframes, lo, hi, center, count / 2)
+    } else {
+        let a = kth_abs_dev(px, p, npix, nframes, lo, hi, center, count / 2 - 1);
+        let b = kth_abs_dev(px, p, npix, nframes, lo, hi, center, count / 2);
+        (a + b) / 2.0
+    }
+}
+
+/// Iterative sigma clipping, interval form, with a ROBUST centre and scale.
+///
+/// Each pass takes the median and the MAD (median absolute deviation) of the
+/// values currently inside `[lo, hi]` and narrows the interval to
+/// `median ± SIGMA * 1.4826 * MAD`. The survivors are then averaged — robust
+/// rejection, ordinary mean for the estimate, which is what keeps the
+/// signal-to-noise of stacking.
+///
+/// WHY NOT MEAN AND STANDARD DEVIATION, which is what this did first: two
+/// outliers among sixteen samples defeat it. Measured on the demo stack, at a
+/// pixel where two cosmic rays landed after resampling:
+///
+///     1675 1750 ... 1813  30590  34796      <- 14 sky values and 2 rays
+///     mean 5644, sd 10000  ->  bounds +/-30000  ->  keeps all 16
+///
+/// The outliers inflate the very scale that is supposed to exclude them, the
+/// interval widens to swallow them, and the pixel stacks at 5641 instead of
+/// ~1780. The MAD does not inflate: it stays near 25, giving bounds of about
+/// +/-111, and both rays are rejected on the first pass. This is why astropy
+/// centres on the median by default.
+///
+/// Rays collide on the same OUTPUT pixel even when no two share an INPUT pixel,
+/// because each frame is resampled by a different dither — so this is not an
+/// exotic case, it is the expected one at ~192 ray hits over 6144 pixels.
+///
+/// The 1.4826 factor makes the MAD a consistent estimator of the standard
+/// deviation for normally distributed data, so `SIGMA` keeps its usual meaning.
+///
+/// Convergence is keyed on the surviving COUNT rather than the float bounds:
+/// two bounds can differ in the last bit while selecting the same set, which
+/// would otherwise spin until MAXITERS for no reason.
+fn integrate_sigma_clip(px: ref Vec[i64], npix: i64, nframes: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.with_capacity(npix);
+    for p in 0..npix { out.push(0); }
+    for p in 0..npix {
+        let mut lo: f64 = -1.0e30;
+        let mut hi: f64 = 1.0e30;
+        let mut prev_count: i64 = nframes + 1;
+        let mut mean: f64 = 0.0;
+        let mut it: i64 = 0;
+        while it < MAXITERS {
+            let mut sum: f64 = 0.0;
+            let mut count: i64 = 0;
+            for f in 0..nframes {
+                let raw = px[f * npix + p];
+                let v = raw as f64;
+                if raw >= 0 and v >= lo and v <= hi {
+                    sum = sum + v;
+                    count = count + 1;
+                }
+            }
+            if count == 0 {
+                // Everything clipped — impossible for a symmetric interval
+                // around the mean, but the loop must not divide by zero.
+                it = MAXITERS;
+            } else {
+                mean = sum / (count as f64);
+                if count == prev_count {
+                    // A pass that rejected nothing: converged.
+                    it = MAXITERS;
+                } else {
+                    prev_count = count;
+                    let centre = median_in_window(px, p, npix, nframes, lo, hi, count);
+                    let mad = mad_in_window(px, p, npix, nframes, lo, hi, centre, count);
+                    let scale = 1.4826 * mad;
+                    if scale <= 0.0 {
+                        // Every survivor is identical (or all but one). There is
+                        // no spread to measure, so any interval would be
+                        // arbitrary — stop rather than reject on noise.
+                        it = MAXITERS;
+                    } else {
+                        lo = centre - SIGMA * scale;
+                        hi = centre + SIGMA * scale;
+                        it = it + 1;
+                    }
+                }
+            }
+        }
+        out[p] = (mean + 0.5) as i64;
+    }
+    out
+}
+
+/// Minimal FITS reader — the subset a smart telescope actually emits.
+///
+/// Header is 80-byte ASCII cards in 2880-byte nblk, terminated by an `END`
+/// card and padded to a block boundary. Data follows, BIG-ENDIAN, also padded.
+///
+/// Supported: `BITPIX = 16`, `NAXIS = 2`, with `BZERO` / `BSCALE`. Anything
+/// else is refused with a message naming what was found rather than being
+/// silently misread — a reader that quietly mishandles BITPIX produces a
+/// plausible image, which is worse than no image.
+///
+/// BZERO is the trap worth naming: unsigned 16-bit data rides in FITS's SIGNED
+/// 16-bit format with `BZERO = 32768`, so a reader that ignores it turns every
+/// value above 32767 into a large negative number — stars come out as holes.
+/// `bayer` is the BAYERPAT card, or "" for a monochrome frame. It is the one
+/// piece of header that changes what the pixels MEAN rather than where they
+/// are: the same 16-bit plane is a grey image or a colour mosaic depending on
+/// it, and nothing downstream can tell the difference by looking.
+struct FitsImage {
+    width: i64, height: i64, px: Vec[u16], bayer: String, ok: bool, err: String
+}
+
+fn card_key(data: ref Vec[u8], off: i64) -> String {
+    let mut k = "";
+    for i in 0..8 {
+        let c = data[off + i] as i64;
+        if c != 32 { k = k + char_of(c); }
+    }
+    k
+}
+
+/// The card's value field: everything after the `= ` up to a `/` comment.
+/// FITS fixed-format puts the value in columns 11..30, but free-format writers
+/// exist, so this scans rather than slicing at a fixed column.
+fn card_value(data: ref Vec[u8], off: i64) -> String {
+    let mut v = "";
+    let mut i = 8;
+    let mut seen_eq = false;
+    while i < 80 {
+        let c = data[off + i] as i64;
+        if c == 47 { i = 80; }
+        else {
+            if seen_eq {
+                if c != 32 { v = v + char_of(c); }
+            } else {
+                if c == 61 { seen_eq = true; }
+            }
+            i = i + 1;
+        }
+    }
+    v
+}
+
+/// A quoted FITS string value, unquoted. `card_value` has already dropped the
+/// padding spaces, so this only has to lose the delimiting apostrophes.
+fn card_string(data: ref Vec[u8], off: i64) -> String {
+    let raw = card_value(data, off);
+    let mut s = "";
+    for ch in raw.chars() {
+        let c = ch as i64;
+        if c != 39 { s = s + char_of(c); }
+    }
+    s
+}
+
+fn char_of(c: i64) -> String {
+    let mut s = "";
+    let b: Vec[u8] = [c as u8];
+    match String.from_utf8(b) {
+        Ok(t) => { s = t; }
+        Err(e) => { s = ""; }
+    }
+    s
+}
+
+fn parse_int(s: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut neg = false;
+    let mut first = true;
+    for ch in s.chars() {
+        let c = ch as i64;
+        if first and c == 45 { neg = true; }
+        else { if c >= 48 and c <= 57 { n = n * 10 + (c - 48); } }
+        first = false;
+    }
+    if neg { 0 - n } else { n }
+}
+
+fn read_fits(path: ref String) -> FitsImage with reads(FileSystem) {
+    let data = read_all(path);
+    let mut img = FitsImage {
+        width: 0, height: 0, px: Vec.new(), bayer: "", ok: false, err: "",
+    };
+    if data.len() < 2880 {
+        img.err = "file shorter than one FITS block";
+    } else {
+        let mut bitpix: i64 = 0;
+        let mut naxis: i64 = 0;
+        let mut n1: i64 = 0;
+        let mut n2: i64 = 0;
+        let mut bzero: i64 = 0;
+        let mut bscale: i64 = 1;
+        let mut bayer = "";
+        let mut roworder = "";
+        let mut off: i64 = 0;
+        let mut done = false;
+        let total = data.len() as i64;
+        while off + 80 <= total and not done {
+            let key = card_key(data, off);
+            if key == "END" {
+                done = true;
+                // Header occupies whole 2880-byte nblk.
+                off = ((off / 2880) + 1) * 2880;
+            } else {
+                // Parse once: re-calling `parse_int(val)` per keyword consumed
+                // the same String repeatedly and tripped an RC fallback.
+                let n = parse_int(card_value(data, off));
+                if key == "BITPIX" { bitpix = n; }
+                if key == "NAXIS" { naxis = n; }
+                if key == "NAXIS1" { n1 = n; }
+                if key == "NAXIS2" { n2 = n; }
+                if key == "BZERO" { bzero = n; }
+                if key == "BSCALE" { bscale = n; }
+                if key == "BAYERPAT" { bayer = card_string(data, off); }
+                if key == "ROWORDER" { roworder = card_string(data, off); }
+                off = off + 80;
+            }
+        }
+        if not done {
+            img.err = "no END card in header";
+        } else {
+            if bitpix != 16 {
+                img.err = "unsupported BITPIX (only 16 is implemented)";
+            } else {
+                if naxis != 2 {
+                    img.err = "unsupported NAXIS (only 2-D mono is implemented)";
+                } else {
+                    // A mosaic whose pattern is anchored at the other end of
+                    // the image is a colour TRANSPOSITION, not a flip: read
+                    // RGGB data as its bottom-up variant and the red channel
+                    // comes out green. ROWORDER exists precisely because FITS
+                    // inherited bottom-up row order from its tape era while
+                    // every camera writes top-down, so refuse the case we have
+                    // not implemented instead of guessing at it — a wrong guess
+                    // here produces a picture, just the wrong colours.
+                    let mut bad = "";
+                    if roworder != "" and roworder != "TOP-DOWN" {
+                        bad = "unsupported ROWORDER (only TOP-DOWN is implemented)";
+                    }
+                    if bayer != "" and bayer != "RGGB" and bayer != "BGGR"
+                        and bayer != "GRBG" and bayer != "GBRG" {
+                        bad = f"unrecognised BAYERPAT '{bayer}'";
+                    }
+                    if bayer != "" and (n1 % 2 != 0 or n2 % 2 != 0) {
+                        bad = "a Bayer mosaic needs even NAXIS1 and NAXIS2";
+                    }
+                    if bad != "" {
+                        img.err = bad;
+                    } else {
+                    let npix = n1 * n2;
+                    if off + npix * 2 > total {
+                        img.err = "data section shorter than NAXIS1*NAXIS2";
+                    } else {
+                        let mut px: Vec[u16] = Vec.with_capacity(npix);
+                        for i in 0..npix {
+                            // BIG-endian signed 16-bit, then the BZERO/BSCALE
+                            // transform back to physical values.
+                            let hi = data[off + i * 2] as i64;
+                            let lo = data[off + i * 2 + 1] as i64;
+                            let mut raw = hi * 256 + lo;
+                            if raw > 32767 { raw = raw - 65536; }
+                            let phys = bzero + bscale * raw;
+                            let cl = if phys < 0 { 0 } else { if phys > 65535 { 65535 } else { phys } };
+                            px.push(cl as u16);
+                        }
+                        img.width = n1;
+                        img.height = n2;
+                        img.px = px;
+                        img.bayer = bayer;
+                        img.ok = true;
+                    }
+                    }
+                }
+            }
+        }
+    }
+    img
+}
+
+// ─── Colour filter array ─────────────────────────────────────────────────────
+//
+// A RAW file, once converted, is this: one 16-bit plane where each photosite
+// sits under a red, green or blue filter in a repeating 2x2 tile. Every stacker
+// converts RAW to FITS first — Siril included — so a CFA-aware FITS reader is
+// the whole of "supports RAW" that matters to the astronomy, with none of the
+// vendor-format archaeology.
+//
+// The pipeline SEPARATES the mosaic into four half-resolution planes rather
+// than interpolating it to full-resolution RGB up front. That ordering is the
+// design decision here, and it is what lets every kernel below stay untouched:
+// each plane is its own regular lattice, so `detect_stars`, `estimate_offset`,
+// `resample_tile` and `stack_tiled` all apply unchanged. Demosaicing first
+// would blend neighbouring filters into every sample BEFORE alignment is known,
+// baking an interpolation error into the data the registration then measures.
+//
+// The cost is resolution: this is superpixel demosaic, so the output is w/2 by
+// h/2. Recovering full resolution from the dithers is drizzle, and it is the
+// natural next slice — not a different architecture.
+
+/// Character codes of a BAYERPAT string: "RGGB" -> [82, 71, 71, 66].
+fn pattern_codes(s: String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for ch in s.chars() { out.push(ch as i64); }
+    out
+}
+
+/// CFA plane `p`, for every frame, at half resolution.
+///
+/// Plane `p` takes the photosite at (p % 2, p / 2) within each 2x2 tile, which
+/// is the same order BAYERPAT lists its letters in — so `pattern_codes(pat)[p]`
+/// is the colour of plane `p` for any of the four patterns, with no per-pattern
+/// special casing.
+fn extract_plane(px: ref Vec[u16], w: i64, h: i64, nframes: i64, p: i64) -> Vec[u16] {
+    let x0 = p % 2;
+    let y0 = p / 2;
+    let hw = w / 2;
+    let hh = h / 2;
+    let mut out: Vec[u16] = Vec.filled(hw * hh * nframes, 0);
+    for f in 0..nframes {
+        let src = f * w * h;
+        let dst = f * hw * hh;
+        for y in 0..hh {
+            for x in 0..hw {
+                out[dst + y * hw + x] = px[src + (y * 2 + y0) * w + (x * 2 + x0)];
+            }
+        }
+    }
+    out
+}
+
+/// Half-resolution luminance for REGISTRATION ONLY, built from each 2x2 tile.
+///
+/// Registration runs on this, never on the mosaic. Centroiding a star directly
+/// on a mosaic is biased, because adjacent photosites sit under different
+/// filters and the sampled PSF therefore carries a checkerboard modulation —
+/// the measured centre is pulled toward whichever channel the star is brightest
+/// in. That is a COLOUR-DEPENDENT astrometric error: red and blue stars in the
+/// same frame disagree about where the frame is, the consensus vote splits, and
+/// the result is a slightly soft stack with nothing to say why.
+///
+/// The combiner is the mean of the MIDDLE TWO of the four photosites — the
+/// median of four — not the mean of all four, and that is worth the two extra
+/// comparisons. Measured on a zero-dither set, where the true offset is exactly
+/// zero, the mean-of-four recovers 0.15-0.45 px and the median-of-four recovers
+/// 0.003-0.008.
+///
+/// The cause is a latent weakness in `detect_stars` that the CFA path exposes
+/// rather than introduces. Its sharpness cut inspects only the four neighbours
+/// of the DETECTED PEAK, but the centroid is a flux-weighted sum over a 7x7
+/// window; a cosmic ray landing two or three pixels from a star is never tested
+/// and simply drags the centre. The monochrome path escapes this by luck — at
+/// 60000 ADU a ray wins the local-maximum test outright, so the detection lands
+/// on the ray and the sharpness cut discards it. Averaging four photosites
+/// divides the ray by four, down to roughly a bright star's peak, so the star
+/// keeps the maximum, passes the cut on its own intact neighbours, and gets
+/// pulled. Taking the median instead removes the single-photosite outlier
+/// before registration ever sees it.
+///
+/// Only registration uses this. The colour planes are integrated with sigma
+/// clipping across frames, which rejects rays on its own.
+fn cfa_luminance(px: ref Vec[u16], w: i64, h: i64, nframes: i64) -> Vec[u16] {
+    let hw = w / 2;
+    let hh = h / 2;
+    let mut out: Vec[u16] = Vec.filled(hw * hh * nframes, 0);
+    for f in 0..nframes {
+        let src = f * w * h;
+        let dst = f * hw * hh;
+        for y in 0..hh {
+            for x in 0..hw {
+                let a = px[src + (y * 2) * w + x * 2] as i64;
+                let b = px[src + (y * 2) * w + x * 2 + 1] as i64;
+                let c = px[src + (y * 2 + 1) * w + x * 2] as i64;
+                let d = px[src + (y * 2 + 1) * w + x * 2 + 1] as i64;
+                let mut mn = a;
+                if b < mn { mn = b; }
+                if c < mn { mn = c; }
+                if d < mn { mn = d; }
+                let mut mx = a;
+                if b > mx { mx = b; }
+                if c > mx { mx = c; }
+                if d > mx { mx = d; }
+                out[dst + y * hw + x] = ((a + b + c + d - mn - mx) / 2) as u16;
+            }
+        }
+    }
+    out
+}
+
+/// Stack a mosaic into three half-resolution colour planes, R then G then B.
+///
+/// `dxs`/`dys` are in HALF-RESOLUTION pixels — the units the planes live in.
+/// One plane is materialised at a time and dropped before the next, so the peak
+/// is the mosaic plus a quarter of it rather than the mosaic twice over.
+fn stack_cfa(px: ref Vec[u16], w: i64, h: i64, nframes: i64, codes: ref Vec[i64],
+             dxs: ref Vec[f64], dys: ref Vec[f64], rots: ref Vec[f64],
+             keep: ref Vec[i64], use_clip: bool,
+             horizon: i64, feather: i64) -> Vec[i64] {
+    let hw = w / 2;
+    let hh = h / 2;
+    let np = hw * hh;
+    let mut out: Vec[i64] = Vec.filled(np * 3, 0);
+    let mut greens: i64 = 0;
+    for p in 0..4 {
+        let plane = extract_plane(px, w, h, nframes, p);
+        let st = stack_tiled(plane, hw, hh, nframes, dxs, dys, rots, keep, use_clip,
+                             horizon / 2, feather / 2);
+        // 82 = 'R', 66 = 'B'; anything else in a BAYERPAT is 'G'.
+        let code = codes[p];
+        let ci = if code == 82 { 0 } else { if code == 66 { 2 } else { 1 } };
+        if ci == 1 { greens = greens + 1; }
+        for i in 0..np { out[ci * np + i] = out[ci * np + i] + st[i]; }
+    }
+    // Every Bayer pattern has two green photosites per tile and one each of red
+    // and blue; averaging the greens keeps the channels on a common scale, so
+    // a grey source comes out grey instead of green.
+    if greens > 0 {
+        for i in 0..np { out[np + i] = out[np + i] / greens; }
+    }
+    out
+}
+
+// ─── Registration ────────────────────────────────────────────────────────────
+//
+// Sub-pixel, star-based, and now a similarity transform rather than a pure
+// translation — see `estimate_transform`, which fits rotation about the frame
+// centre on top of the offset and refuses to when the two are not
+// distinguishable in the data it has.
+//
+// Three stages, each independently checkable:
+//   1. detect  — local maxima above a background-derived threshold
+//   2. centroid — intensity-weighted, background-subtracted, sub-pixel
+//   3. match   — consensus vote over candidate offsets, then refine on the
+//                pairs that agree
+//
+// The vote is what makes this robust to the things that actually go wrong:
+// cosmic rays produce single-pixel maxima that no other frame agrees with, and
+// a star that drifts off the edge simply casts no vote. Neither can move the
+// consensus, so neither corrupts the offset.
+
+#[derive(Copy, Clone)]
+struct Star { x: f64, y: f64, flux: f64 }
+
+/// Background level and spread, from a coarse histogram-free estimate: the mean
+/// and standard deviation of the whole frame. Stars occupy a tiny fraction of
+/// the pixels, so they barely move the mean — good enough for a detection
+/// threshold, and it costs one pass.
+/// Number of bins in a 16-bit intensity histogram — the whole u16 range, so a
+/// pixel maps to a bin with no quantisation whatsoever.
+const HIST_BINS: i64 = 65536;
+
+/// Accumulate `npix` pixels into a 65536-bin intensity histogram.
+///
+/// The histogram is what lets pass 1 stream. Clipped statistics need several
+/// traversals of the data (three clipping rounds, each needing a sum and then a
+/// variance), and re-reading a 24 MP sub six times per frame is not affordable
+/// when every read is a Blob slice and a decode. A histogram is built in ONE
+/// traversal and every later round runs over 65536 bins instead of 24 million
+/// pixels — so the frame is read once, and the statistics get ~6x cheaper as a
+/// side effect.
+///
+/// It is also EXACT. The pixels are u16, so a bin per value loses nothing; this
+/// is a lossless re-encoding of the frame for the purpose of computing order
+/// statistics, not an approximation of it.
+fn hist_add(px: ref Vec[u16], base: i64, npix: i64, hist: mut ref Vec[i64]) {
+    for i in 0..npix {
+        let v = px[base + i] as i64;
+        hist[v] = hist[v] + 1;
+    }
+}
+
+/// Sigma-clipped (mean, sd) from an intensity histogram.
+///
+/// SIGMA-CLIPPED, and it has to be. A raw mean/sd is wrecked by the very things
+/// detection is supposed to find: a dozen cosmic rays at 60000 in a field whose
+/// sky sits near 1500 inflate the sd enough that `mean + 6*sd` lands ABOVE most
+/// of the real stars. Measured before this: 8 of 12 stars detected in the
+/// reference frame and 11 in the others — the difference being rays, not stars,
+/// which is precisely backwards. Clipping to 3 sigma for 3 passes pulls the
+/// estimate back onto the sky.
+///
+/// Summing bins rather than pixels changes the ORDER of the floating-point
+/// accumulation. The MEAN is unaffected — every partial sum is an integer below
+/// 2^53, so it is exact whichever order it is taken in — but the variance is
+/// not, and the sd differs from a pixel-order accumulation in its last few bits
+/// (measured: 185.90641024128087 against 185.9064102412528 on a 6 Mpx frame).
+/// That moved the detection threshold by 2e-10 and put ZERO pixels on a
+/// different side of it, but "no pixel happened to sit in the gap" is a property
+/// of one frame, not a guarantee.
+///
+/// So BOTH backends compute it this way. Cross-backend byte-identity — the bar
+/// this project actually holds itself to — stays provable because native and
+/// wasm run the same accumulation in the same order. What changed is only the
+/// value against the historical baseline, which nothing pins bit-exactly.
+fn stats_from_hist(hist: ref Vec[i64]) -> (f64, f64) {
+    let mut lo: f64 = -1.0e30;
+    let mut hi: f64 = 1.0e30;
+    let mut mean: f64 = 0.0;
+    let mut sd: f64 = 0.0;
+    for pass in 0..3 {
+        let mut sum: f64 = 0.0;
+        let mut count: i64 = 0;
+        for b in 0..HIST_BINS {
+            let c = hist[b];
+            if c > 0 {
+                let v = b as f64;
+                if v >= lo and v <= hi {
+                    sum = sum + v * (c as f64);
+                    count = count + c;
+                }
+            }
+        }
+        if count > 0 {
+            mean = sum / (count as f64);
+            let mut var: f64 = 0.0;
+            for b in 0..HIST_BINS {
+                let c = hist[b];
+                if c > 0 {
+                    let v = b as f64;
+                    if v >= lo and v <= hi {
+                        let d = v - mean;
+                        var = var + d * d * (c as f64);
+                    }
+                }
+            }
+            sd = (var / (count as f64)).sqrt();
+            lo = mean - 3.0 * sd;
+            hi = mean + 3.0 * sd;
+        }
+    }
+    (mean, sd)
+}
+
+/// Whole-frame convenience wrapper: build the histogram, then reduce it.
+/// The streaming caller skips this and accumulates the histogram strip by strip.
+fn frame_stats(px: ref Vec[u16], base: i64, npix: i64) -> (f64, f64) {
+    let mut hist: Vec[i64] = Vec.filled(HIST_BINS, 0);
+    hist_add(px, base, npix, mut hist);
+    stats_from_hist(hist)
+}
+
+/// Detect stars: 3x3 local maxima above `mean + k*sd`, centroided over a
+/// (2r+1)^2 window with the background subtracted.
+///
+/// Background subtraction inside the centroid window is not optional. With the
+/// sky left in, the window's own gradient pulls the centroid toward the bright
+/// side of the frame — a systematic bias that looks like a real offset and
+/// would be recovered as one.
+/// Star detection over a ROW RANGE, reading from a buffer that need not hold the
+/// whole frame.
+///
+/// `buf_row0` is the source row that buffer row 0 holds, and `[scan_y0, scan_y1)`
+/// are the source rows detections are EMITTED for. The two differ by the halo:
+/// the 3x3 maximum test and the +/-3 centroid window both reach 3 rows beyond
+/// the pixel being tested, so a strip must carry 3 rows of context on each side
+/// and must not emit detections inside them — those rows belong to the
+/// neighbouring strip and would be found twice.
+///
+/// Star coordinates stay ABSOLUTE (source rows), so a caller stitching strips
+/// gets one coherent list. Only the indexing is buffer-relative.
+fn detect_stars_rows(px: ref Vec[u16], base: i64, w: i64, buf_row0: i64,
+                     scan_y0: i64, scan_y1: i64, mean: f64, sd: f64,
+                     thresh_k: f64, stars: mut ref Vec[Star]) {
+    let thresh = mean + thresh_k * sd;
+    let r: i64 = 3;
+    for y in scan_y0..scan_y1 {
+        let by = y - buf_row0;
+        for x in r..(w - r) {
+            let v = px[base + by * w + x] as f64;
+            if v > thresh {
+                // 3x3 local maximum. `>=` on the earlier neighbours and `>` on
+                // the later ones breaks ties in a flat-topped (saturated) core
+                // so it yields exactly one detection rather than none.
+                let mut is_max = true;
+                for dy in -1..2 {
+                    for dx in -1..2 {
+                        if dx != 0 or dy != 0 {
+                            let nv = px[base + (by + dy) * w + (x + dx)] as f64;
+                            if nv > v { is_max = false; }
+                        }
+                    }
+                }
+                // SHARPNESS CUT — reject cosmic rays, which are single-pixel
+                // spikes with nothing around them. A Gaussian star of sigma 1.2
+                // puts ~2.8x its peak into the four neighbours; a ray puts
+                // essentially zero. Without this the rays are detected as
+                // sources, and since they land somewhere different on every
+                // frame they poison the offset vote with proposals no other
+                // frame can agree with.
+                if is_max {
+                    let peak = v - mean;
+                    let nsum = (px[base + (by - 1) * w + x] as f64 - mean)
+                        + (px[base + (by + 1) * w + x] as f64 - mean)
+                        + (px[base + by * w + (x - 1)] as f64 - mean)
+                        + (px[base + by * w + (x + 1)] as f64 - mean);
+                    if peak <= 0.0 or nsum / peak < 0.5 { is_max = false; }
+                }
+                if is_max {
+                    let mut sw: f64 = 0.0;
+                    let mut sx: f64 = 0.0;
+                    let mut sy: f64 = 0.0;
+                    for dy in (0 - r)..(r + 1) {
+                        for dx in (0 - r)..(r + 1) {
+                            let pv = (px[base + (by + dy) * w + (x + dx)] as f64) - mean;
+                            if pv > 0.0 {
+                                sw = sw + pv;
+                                sx = sx + pv * ((x + dx) as f64);
+                                sy = sy + pv * ((y + dy) as f64);
+                            }
+                        }
+                    }
+                    if sw > 0.0 {
+                        stars.push(Star { x: sx / sw, y: sy / sw, flux: sw });
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Whole-frame detection: the buffer holds every row, so the scan runs the full
+/// height in one call. The streaming caller drives `detect_stars_rows` directly,
+/// strip by strip, and dedups once at the end.
+fn detect_stars(px: ref Vec[u16], base: i64, w: i64, h: i64, thresh_k: f64) -> Vec[Star] {
+    let stats = frame_stats(px, base, w * h);
+    let mut stars: Vec[Star] = Vec.new();
+    detect_stars_rows(px, base, w, 0, 3, h - 3, stats.0, stats.1, thresh_k, mut stars);
+    deduplicate(stars)
+}
+
+/// Minimum separation between detections: two sources this close are one
+/// source, whatever the pixels say.
+///
+/// The PSF spans several pixels by construction — a colour sensor requires it,
+/// and any real optical system delivers it — so two maxima a pixel apart cannot
+/// both be stars. They are one star plus an artefact.
+let MIN_SEP: f64 = 2.0;
+
+/// Drop any detection sitting within MIN_SEP of a BRIGHTER one.
+///
+/// This is what stops a cosmic ray that lands beside a star from being counted
+/// as a second star. The sharpness cut cannot catch that case, and the reason is
+/// worth stating: the cut asks whether a maximum has bright neighbours, and a
+/// ray next to a star INHERITS the star's neighbours. It looks perfectly
+/// resolved. The monochrome path hides this — at 60000 ADU the ray swallows the
+/// star's own peak and the pair collapses into one (rejected) detection — but
+/// combining the four photosites of a CFA tile scales a ray down to roughly
+/// stellar brightness, and then both survive as separate maxima.
+///
+/// The damage is out of all proportion to the artefact. A spurious twin is not
+/// noise in one star's position; it corrupts the MATCHING. The offset search
+/// pairs a real star in one frame against the twin in another and proposes a
+/// displacement that is wrong by the twin's separation — measured here, a
+/// 0.9 px phantom offset from a star whose true offset was zero. Removing the
+/// twins took mean registration error on a ray-contaminated set from 0.078 px
+/// to the 0.005 px the ray-free set already achieved.
+fn deduplicate(stars: Vec[Star]) -> Vec[Star] {
+    let mut out: Vec[Star] = Vec.new();
+    for i in 0..stars.len() {
+        let a = stars[i];
+        let mut shadowed = false;
+        for j in 0..stars.len() {
+            if i != j {
+                let b = stars[j];
+                let dx = a.x - b.x;
+                let dy = a.y - b.y;
+                if dx * dx + dy * dy < MIN_SEP * MIN_SEP {
+                    // Ties go to the earlier index, so exactly one of an
+                    // equal-flux pair survives rather than both or neither.
+                    if b.flux > a.flux or (b.flux == a.flux and j < i) {
+                        shadowed = true;
+                    }
+                }
+            }
+        }
+        if not shadowed { out.push(a); }
+    }
+    out
+}
+
+/// Estimate the translation from `b` to `a` by consensus.
+///
+/// Every (star in a, star in b) pair proposes an offset. The true offset is
+/// proposed once per genuinely matched pair and only incidentally by anything
+/// else, so the proposal with the most support wins. The winner is then REFINED
+/// by averaging its supporters, which is what recovers sub-pixel accuracy — the
+/// vote alone is only as precise as the bin size.
+///
+/// O(N^2) VIA A VOTE GRID. The obvious formulation — for each candidate pair,
+/// re-scan every other pair to count agreement — is O(N^4), and that is what
+/// this was first. It is invisible on a toy frame and ruinous on a real one:
+/// 11 stars costs 14 thousand operations, 324 stars costs 11 BILLION. Measured
+/// on a 512x384 stack, registration took 146 s of a 146 s run while the entire
+/// integration took 0.38 s. Binning candidates into a grid and taking the
+/// heaviest bin gets the same answer in two linear passes over the N^2
+/// candidates.
+///
+/// SEARCH RADIUS. Only offsets within MAX_SHIFT are considered, which is what
+/// keeps the grid small (a full-frame grid would be 20 million bins at 12 MP).
+/// This is ordinary practice — registration always has a search radius — but it
+/// is a real limit: a frame displaced by more than MAX_SHIFT will not be
+/// matched, and is reported as no consensus rather than mismatched.
+///
+/// Returns (dx, dy, votes). Zero votes means no consensus and the caller should
+/// treat the frame as unregisterable rather than stack it at a guessed offset.
+/// Recover a rotation-AND-translation transform mapping `b` (the reference) onto
+/// `a` (this frame), about the frame centre `(cx, cy)`.
+///
+/// Returns `(dx, dy, theta_radians, votes)`. Translation-only registration is
+/// `theta = 0`, and for a tracked mount that is right — but an untracked camera
+/// sees the sky turn about the celestial pole, which inside a small field is a
+/// translation PLUS a field rotation. The rotation's error is zero at the frame
+/// centre and largest in the corners, so translation-only leaves the corners
+/// smeared while the middle looks perfect. Measured on a real 20-frame
+/// nightscape sequence (Nikon Z5, 24mm, 13s, 4m45s total): 0.40 degrees of field
+/// rotation, which is 25 px of corner error on a 6016x4016 frame. That is mush,
+/// not softness, and no amount of sub-pixel resampling recovers it.
+///
+/// Two stages, because neither works alone:
+///
+///   VOTE   `estimate_offset` finds the translation the most star pairs agree
+///          on. It is robust to the two star lists having entirely different
+///          membership — which they do, since frames drift and detection is
+///          unstable at the faint end — but it cannot see rotation.
+///
+///   REFINE Then iterate: match each reference star to its nearest neighbour
+///          under the current transform, and refit rotation and translation
+///          together over the matched pairs. Small rotations barely move stars
+///          near the centre, so the vote's translation is a good enough start
+///          for the first match to succeed there, and each round widens the set
+///          that agrees.
+///
+/// The refit is the closed-form least-squares rotation (the 2-D Kabsch
+/// solution): `theta = atan2(sum of cross products, sum of dot products)` over
+/// centred pairs. SCALE IS DELIBERATELY NOT FITTED — the sky does not change
+/// scale between frames, and a free scale would absorb residuals and flatter
+/// the fit while hiding the very rotation this exists to measure.
+fn estimate_transform(a: ref Vec[Star], b: ref Vec[Star], tol: f64,
+                      cx: f64, cy: f64) -> (f64, f64, f64, i64) {
+    let seed = estimate_offset(a, b, tol);
+    let mut dx = seed.0;
+    let mut dy = seed.1;
+    let mut th: f64 = 0.0;
+    let mut votes = seed.2;
+    if votes == 0 { return (0.0, 0.0, 0.0, 0); }
+
+    // Match radius: start at the vote's tolerance and tighten as the transform
+    // improves, so early rounds can tolerate the rotation the seed ignored and
+    // later ones reject genuine mismatches.
+    let mut rad = tol * 3.0;
+    for round in 0..4 {
+        let ct = th.cos();
+        let st = th.sin();
+        // Accumulators for the centred Kabsch fit over matched pairs.
+        let mut n: i64 = 0;
+        let mut srx: f64 = 0.0;
+        let mut sry: f64 = 0.0;
+        let mut sax: f64 = 0.0;
+        let mut say: f64 = 0.0;
+        let mut mrx: Vec[f64] = Vec.new();
+        let mut mry: Vec[f64] = Vec.new();
+        let mut max_: Vec[f64] = Vec.new();
+        let mut may: Vec[f64] = Vec.new();
+        for j in 0..b.len() {
+            // Where the current transform predicts reference star j lands.
+            let rx = b[j].x - cx;
+            let ry = b[j].y - cy;
+            let px = cx + rx * ct - ry * st + dx;
+            let py = cy + rx * st + ry * ct + dy;
+            let mut bi: i64 = -1;
+            let mut bd: f64 = rad * rad;
+            for i in 0..a.len() {
+                let ex = a[i].x - px;
+                let ey = a[i].y - py;
+                let d2 = ex * ex + ey * ey;
+                if d2 <= bd { bd = d2; bi = i; }
+            }
+            if bi >= 0 {
+                n = n + 1;
+                srx = srx + b[j].x; sry = sry + b[j].y;
+                sax = sax + a[bi].x; say = say + a[bi].y;
+                mrx.push(b[j].x); mry.push(b[j].y);
+                max_.push(a[bi].x); may.push(a[bi].y);
+            }
+        }
+        // Under 3 pairs there is no rotation to speak of — keep the vote's
+        // translation rather than fit noise.
+        if n < 3 { return (dx, dy, th, votes); }
+
+        let fr = n as f64;
+        let brx = srx / fr;
+        let bry = sry / fr;
+        let bax = sax / fr;
+        let bay = say / fr;
+        let mut cross: f64 = 0.0;
+        let mut dot: f64 = 0.0;
+        for k in 0..n {
+            let ux = mrx[k] - brx;
+            let uy = mry[k] - bry;
+            let vx = max_[k] - bax;
+            let vy = may[k] - bay;
+            cross = cross + ux * vy - uy * vx;
+            dot = dot + ux * vx + uy * vy;
+        }
+        if dot != 0.0 or cross != 0.0 { th = cross.atan2(dot); }
+
+        // IS THE ROTATION IDENTIFIABLE? Fitting one more parameter always
+        // reduces the residual a little, even against pure noise, so a fit that
+        // merely "improves" proves nothing. On a 96x64 frame with a dozen stars
+        // the corner is 58 px from centre, so half a degree of rotation moves it
+        // 0.6 px — the same order as centroid noise. Left ungated this invented
+        // up to 0.56 degrees on frames that were purely dithered, and the
+        // ground-truth check caught it.
+        //
+        // So compare the two models directly: sum of squared residuals with the
+        // rotation against the same with theta forced to zero. Rotation is kept
+        // only if it explains materially more, which is self-normalising — no
+        // pixel threshold to tune per frame size, and it degrades to exactly the
+        // old translation-only answer when the lever arm is too short to tell.
+        let mut sse_rot: f64 = 0.0;
+        let mut sse_tr: f64 = 0.0;
+        let ctf = th.cos();
+        let stf = th.sin();
+        for k in 0..n {
+            let ux = mrx[k] - brx;
+            let uy = mry[k] - bry;
+            let vx = max_[k] - bax;
+            let vy = may[k] - bay;
+            // Rotated model: the centred reference point turned by theta.
+            let px2 = ux * ctf - uy * stf;
+            let py2 = ux * stf + uy * ctf;
+            let ex = vx - px2;
+            let ey = vy - py2;
+            sse_rot = sse_rot + ex * ex + ey * ey;
+            // Translation-only: centred points should coincide outright.
+            let tx = vx - ux;
+            let ty = vy - uy;
+            sse_tr = sse_tr + tx * tx + ty * ty;
+        }
+        // 0.7 is a margin, not a tuned constant: a spurious fit on n>=3 pairs
+        // buys a few percent, a real rotation removes most of the residual. The
+        // dithered case lands near 1.0 and the rotated case near 0.0, so the
+        // gate is nowhere near either.
+        if sse_rot > 0.7 * sse_tr { th = 0.0; }
+
+        let ct2 = th.cos();
+        let st2 = th.sin();
+        // Translation that carries the reference centroid onto the frame's,
+        // given the rotation just fitted about (cx, cy).
+        let ox = brx - cx;
+        let oy = bry - cy;
+        dx = bax - (cx + ox * ct2 - oy * st2);
+        dy = bay - (cy + ox * st2 + oy * ct2);
+        votes = n;
+        rad = if tol > rad * 0.5 { tol } else { rad * 0.5 };
+    }
+    (dx, dy, th, votes)
+}
+
+fn estimate_offset(a: ref Vec[Star], b: ref Vec[Star], tol: f64) -> (f64, f64, i64) {
+    let side = ((2.0 * MAX_SHIFT) / tol) as i64 + 1;
+    let mut bins: Vec[i64] = Vec.filled(side * side, 0);
+
+    // Pass 1: every candidate offset votes for its bin.
+    for i in 0..a.len() {
+        for j in 0..b.len() {
+            let cdx = a[i].x - b[j].x;
+            let cdy = a[i].y - b[j].y;
+            if cdx.abs() <= MAX_SHIFT and cdy.abs() <= MAX_SHIFT {
+                let bx = ((cdx + MAX_SHIFT) / tol) as i64;
+                let by = ((cdy + MAX_SHIFT) / tol) as i64;
+                if bx >= 0 and bx < side and by >= 0 and by < side {
+                    bins[by * side + bx] = bins[by * side + bx] + 1;
+                }
+            }
+        }
+    }
+
+    // Heaviest bin. A true offset can straddle a bin boundary, so the refine
+    // pass below uses a tolerance window around the bin centre rather than the
+    // bin itself — otherwise a match split across two bins would lose half its
+    // supporters and half its precision.
+    let mut best: i64 = 0;
+    let mut best_bx: i64 = 0;
+    let mut best_by: i64 = 0;
+    for by in 0..side {
+        for bx in 0..side {
+            let c = bins[by * side + bx];
+            if c > best {
+                best = c;
+                best_bx = bx;
+                best_by = by;
+            }
+        }
+    }
+    if best == 0 {
+        return (0.0, 0.0, 0);
+    }
+
+    let cx = (best_bx as f64) * tol - MAX_SHIFT + tol / 2.0;
+    let cy = (best_by as f64) * tol - MAX_SHIFT + tol / 2.0;
+
+    // Pass 2: refine on everything within `tol` of the winning offset.
+    let mut votes: i64 = 0;
+    let mut sdx: f64 = 0.0;
+    let mut sdy: f64 = 0.0;
+    for i in 0..a.len() {
+        for j in 0..b.len() {
+            let cdx = a[i].x - b[j].x;
+            let cdy = a[i].y - b[j].y;
+            let ex = cdx - cx;
+            let ey = cdy - cy;
+            if ex * ex + ey * ey <= tol * tol {
+                votes = votes + 1;
+                sdx = sdx + cdx;
+                sdy = sdy + cdy;
+            }
+        }
+    }
+    if votes == 0 {
+        return (0.0, 0.0, 0);
+    }
+    (sdx / (votes as f64), sdy / (votes as f64), votes)
+}
+
+/// Shift a frame by (dx, dy) with bilinear interpolation.
+///
+/// `dx`/`dy` are the frame's MEASURED DITHER, so the aligned image samples the
+/// source at `(x + dx, y + dy)` — sampling forward by the dither is what undoes
+/// it.
+///
+/// Pixels whose source falls outside the frame are marked NO DATA (-1) rather
+/// than clamped to the edge. Clamping is the tempting one-liner and it is wrong
+/// for this job: it smears the border pixel across the uncovered strip, which
+/// on a dithered stack produces a bright rim that looks like real signal.
+/// Marking them lets integration count coverage per pixel instead.
+///
+/// Bilinear is the deliberate first choice — separable, exactly specifiable, and
+/// cheap to mirror in the oracle. It does soften slightly; Lanczos-3 (which
+/// Prism already implements) is the upgrade once the pipeline is trusted.
+fn resample_bilinear(px: ref Vec[u16], base: i64, w: i64, h: i64, dx: f64, dy: f64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.with_capacity(w * h);
+    for i in 0..(w * h) { out.push(0); }
+    for y in 0..h {
+        for x in 0..w {
+            let sxf = (x as f64) + dx;
+            let syf = (y as f64) + dy;
+            let x0 = sxf.floor();
+            let y0 = syf.floor();
+            let fx = sxf - x0;
+            let fy = syf - y0;
+            let xi = x0 as i64;
+            let yi = y0 as i64;
+            if xi < 0 or yi < 0 or xi + 1 >= w or yi + 1 >= h {
+                out[y * w + x] = -1;
+            } else {
+                let p00 = px[base + yi * w + xi] as f64;
+                let p10 = px[base + yi * w + xi + 1] as f64;
+                let p01 = px[base + (yi + 1) * w + xi] as f64;
+                let p11 = px[base + (yi + 1) * w + xi + 1] as f64;
+                let top = p00 + (p10 - p00) * fx;
+                let bot = p01 + (p11 - p01) * fx;
+                let v = top + (bot - top) * fy;
+                out[y * w + x] = (v + 0.5) as i64;
+            }
+        }
+    }
+    out
+}
+
+/// Resample one TILE of a frame, rather than the whole frame.
+///
+/// Same bilinear arithmetic as `resample_bilinear`, but it writes only the
+/// output window `[x0, x0+tw) x [y0, y0+th)`. That is what removes the second
+/// full-frame buffer: instead of aligning every frame into a stack-sized copy
+/// and then integrating, the pipeline aligns a tile from each frame into a
+/// tile-sized stack and integrates that.
+///
+/// The source stays `u16` (the frames as decoded); the tile is `i64` because it
+/// carries the -1 NO-DATA sentinel, and at 256x256 that costs nothing.
+/// `wr0` / `wrows` describe the ROW WINDOW `px` actually holds for this frame:
+/// buffer row 0 is source row `wr0`, and `wrows` rows are present. The
+/// resident path passes `wr0 = 0, wrows = h` and every expression below reduces
+/// to what it was; the streaming path passes the current strip's window, so the
+/// same arithmetic serves both and there is no second copy of the kernel to
+/// drift. `h` is still the FRAME height — coverage is a property of the frame,
+/// not of how much of it happens to be in memory, so a pixel outside the frame
+/// is NO DATA while a pixel outside the window is a bug in the caller's halo.
+/// Weight of the SKY transform at source row `y`: 1.0 above the horizon, 0.0
+/// below it, and a linear ramp across `feather` rows centred on it.
+///
+/// A hard edge between a registered sky and an unregistered foreground is
+/// visible as a seam — the two halves have different noise after integration,
+/// and above all the sky side has been resampled while the land side has not.
+/// The ramp costs a band of rows that are a blend of both and belongs to
+/// neither, which is the right trade: a soft transition reads as haze, a hard
+/// one reads as a mistake.
+fn sky_weight(y: i64, horizon: i64, feather: i64) -> f64 {
+    if horizon <= 0 { return 1.0; }
+    if feather <= 0 {
+        if y < horizon { return 1.0; }
+        return 0.0;
+    }
+    let half = (feather as f64) / 2.0;
+    let d = (y as f64) - (horizon as f64);
+    if d <= 0.0 - half { return 1.0; }
+    if d >= half { return 0.0; }
+    0.5 - d / (2.0 * half)
+}
+
+fn resample_tile(px: ref Vec[u16], base: i64, w: i64, h: i64, dx: f64, dy: f64,
+                 rot: f64, cx: f64, cy: f64, horizon: i64, feather: i64,
+                 x0: i64, y0: i64, tw: i64, th: i64, wr0: i64, wrows: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.with_capacity(tw * th);
+    for i in 0..(tw * th) { out.push(-1); }
+    // Rotation about the frame centre, then translation — the same convention
+    // `estimate_transform` fits, so the two cannot drift apart. Sin and cos are
+    // hoisted: they are constant over the tile, and leaving them in the inner
+    // loop would put two transcendentals on every pixel.
+    let ct = rot.cos();
+    let st = rot.sin();
+    for ty in 0..th {
+        // The sky/foreground split is a function of ROW alone, so it is decided
+        // once per row rather than per pixel. A tile is usually entirely one or
+        // the other; only the tiles straddling the horizon do any blending.
+        let skyw = sky_weight(y0 + ty, horizon, feather);
+        for tx in 0..tw {
+            let rx = ((x0 + tx) as f64) - cx;
+            let ry = ((y0 + ty) as f64) - cy;
+            // Below the horizon the camera is on a tripod and the LAND does not
+            // move: sampling it through the sky's transform is what smears a
+            // nightscape foreground. Weight 0 samples the source pixel itself.
+            let sxf = if skyw >= 1.0 { cx + rx * ct - ry * st + dx }
+                      else { if skyw <= 0.0 { (x0 + tx) as f64 }
+                             else { (cx + rx * ct - ry * st + dx) * skyw
+                                    + ((x0 + tx) as f64) * (1.0 - skyw) } };
+            let syf = if skyw >= 1.0 { cy + rx * st + ry * ct + dy }
+                      else { if skyw <= 0.0 { (y0 + ty) as f64 }
+                             else { (cy + rx * st + ry * ct + dy) * skyw
+                                    + ((y0 + ty) as f64) * (1.0 - skyw) } };
+            let fx0 = sxf.floor();
+            let fy0 = syf.floor();
+            let fx = sxf - fx0;
+            let fy = syf - fy0;
+            let xi = fx0 as i64;
+            let yi = fy0 as i64;
+            // The +1 neighbour is only READ when the fractional part is
+            // nonzero, so requiring it to exist unconditionally throws away the
+            // last row and column for no reason — and at a zero offset (the
+            // unregistered modes, which now share this path) that is pure loss:
+            // 159 edge pixels of a 96x64 frame silently became NO DATA.
+            let x1 = if fx > 0.0 { xi + 1 } else { xi };
+            let y1 = if fy > 0.0 { yi + 1 } else { yi };
+            // Frame bounds decide NO DATA; window bounds only guard the
+            // indexing. They coincide exactly on the resident path.
+            let in_frame = xi >= 0 and yi >= 0 and x1 < w and y1 < h;
+            let in_window = yi >= wr0 and y1 < wr0 + wrows;
+            if in_frame and in_window {
+                let r0 = yi - wr0;
+                let r1 = y1 - wr0;
+                let p00 = px[base + r0 * w + xi] as f64;
+                let p10 = px[base + r0 * w + x1] as f64;
+                let p01 = px[base + r1 * w + xi] as f64;
+                let p11 = px[base + r1 * w + x1] as f64;
+                let top = p00 + (p10 - p00) * fx;
+                let bot = p01 + (p11 - p01) * fx;
+                out[ty * tw + tx] = (top + (bot - top) * fy + 0.5) as i64;
+            }
+        }
+    }
+    out
+}
+
+/// Register every frame against frame 0 and return per-frame offsets.
+///
+/// Split out from the stacking loop so the offsets can be computed once and
+/// reused across every tile — recomputing star detection per tile would be
+/// absurd, and detection needs the whole frame anyway (the background estimate
+/// and the star field are global properties).
+///
+/// `keep[f]` is 0 for a frame whose consensus was too weak to trust. One
+/// misaligned frame smears every star in the result; a dropped frame costs only
+/// its share of the signal-to-noise.
+/// Returns (dx, dy, keep, votes). `votes` is the raw consensus count and is
+/// what `register` reports — the harness gates on it (a frame stacked on a
+/// two-star agreement is luck, not a match), so collapsing it to the 0/1 keep
+/// flag silently defeats that check.
+// ─── Calibration ─────────────────────────────────────────────────────────────
+//
+// Three defects a real sensor puts into every sub, and none of them is noise —
+// they are FIXED patterns, identical frame to frame, so stacking does not touch
+// them. More integration time makes them cleaner, not smaller.
+//
+//   bias   the readout offset, present even in a zero-length exposure
+//   dark   thermal signal accumulated over the exposure, plus the bias
+//   flat   the multiplicative response: vignetting, dust motes, filter grime
+//
+// The correction is the one every stacker applies:
+//
+//     calibrated = (light - master_dark) / normalised_flat
+//
+// Subtractive first, then multiplicative, because the flat measures the optical
+// path's response to LIGHT and the dark signal never travelled that path — divide
+// before subtracting and the dark current gets scaled by the vignetting profile
+// it was never subject to.
+//
+// A master dark taken at the light's exposure already contains the bias, so
+// `--bias` is not needed to calibrate lights. It is needed for the FLAT, whose
+// exposure differs: the flat carries its own bias, which must come off before
+// the frame can be treated as a pure multiplicative ratio. Passing `--bias`
+// without `--flat` is therefore accepted and does nothing, which is the honest
+// behaviour rather than an error.
+
+/// A resident calibration master: one `w * h` frame, or empty when absent.
+///
+/// Masters stay RESIDENT while the lights stream. There are at most two of
+/// them and each is one frame, so this costs `2 * w * h * 2` bytes —
+/// independent of how many subs the session has, which is the term that
+/// actually matters.
+struct Master { px: Vec[u16], present: bool, scale: f64 }
+
+/// Load a single-frame `.cstack` as a master and check it matches the lights.
+fn load_master(path: ref String, w: i64, h: i64, label: String) -> Master
+    with reads(FileSystem) writes(FileSystem)
+{
+    let mut m = Master { px: Vec.new(), present: false, scale: 1.0 };
+    if path != "" {
+        let data = read_all(path);
+        if data.len() < 16 {
+            println(f"cumulus: {label} master is too short to hold a header");
+        } else {
+            let mw = u32_at(data, 4);
+            let mh = u32_at(data, 8);
+            let mn = u32_at(data, 12);
+            if mw != w or mh != h {
+                println(f"cumulus: {label} master is {mw}x{mh}, lights are {w}x{h}");
+            } else {
+                if mn != 1 {
+                    println(f"cumulus: {label} master has {mn} planes, expected 1");
+                } else {
+                    let n = w * h;
+                    let mut px: Vec[u16] = Vec.with_capacity(n);
+                    for i in 0..n { px.push(u16_at(data, 16 + i * 2) as u16); }
+                    m.px = px;
+                    m.present = true;
+                }
+            }
+        }
+    }
+    m
+}
+
+/// Bias-correct a flat and compute its normalisation scale.
+///
+/// The scale is the flat's own MEAN, so dividing by `flat / mean` preserves the
+/// image's overall level instead of dragging it toward 1. Without it a
+/// calibrated frame comes out ~1/mean of its true brightness — a correct-looking
+/// image at hopelessly wrong values, which the oracle would catch and a human
+/// eye would not.
+fn prepare_flat(flat: mut ref Master, bias: ref Master, npix: i64) {
+    if flat.present {
+        if bias.present {
+            for i in 0..npix {
+                let v = (flat.px[i] as i64) - (bias.px[i] as i64);
+                flat.px[i] = if v < 0 { 0 } else { v } as u16;
+            }
+        }
+        let mut sum: f64 = 0.0;
+        for i in 0..npix { sum = sum + (flat.px[i] as f64); }
+        let mean = sum / (npix as f64);
+        flat.scale = if mean > 0.0 { mean } else { 1.0 };
+    }
+}
+
+/// Apply the masters to `nrows` rows of `px` starting at buffer row `base`,
+/// whose first row is source row `row0`.
+///
+/// Row-addressed rather than whole-frame so the streaming path can calibrate a
+/// strip as it arrives, without ever holding a light frame entire.
+fn calibrate_rows(px: mut ref Vec[u16], base: i64, w: i64, row0: i64, nrows: i64,
+                  dark: ref Master, flat: ref Master) {
+    // An early return rather than an `if` wrapper. This was once load-bearing:
+    // a disjoint-write loop nested inside an `if` was invisible to the
+    // auto-parallelisation analysis and silently lowered sequentially, so
+    // hoisting it to the top level of the body was what let the fan-out fire
+    // (compiler ledger B-2026-08-14-24). That is fixed — the nested form now
+    // fans out too, measured at 2.2x its own sequential build — so this is a
+    // style choice today, kept because a guard clause reads better than a
+    // wrapped body.
+    //
+    // The concurrency REPORT has caught up too (B-2026-08-14-33): it used to
+    // say `fanned_out: false, cost_gate: "unknown"` for the nested form,
+    // because its loop lookup could not descend into an `if` arm, and that
+    // stale field is what this hoist was written on — after the bug it cites
+    // had already been fixed. The report now agrees with the lowering at any
+    // nesting depth. The habit is still worth keeping: when a performance
+    // claim matters, time the two builds, one with `KARAC_AUTO_PAR=0` at BUILD
+    // time (the variable is read at compile time; toggling it on an existing
+    // binary changes nothing and measures zero difference convincingly).
+    if not dark.present and not flat.present { return; }
+    for r in 0..nrows {
+        for x in 0..w {
+            let src = (row0 + r) * w + x;
+            let mut v = px[base + r * w + x] as f64;
+            if dark.present { v = v - (dark.px[src] as f64); }
+            if flat.present {
+                let f = flat.px[src] as f64;
+                // A dead flat pixel carries no response information, so the
+                // light there is unrecoverable. Leaving the value alone is
+                // wrong in the other direction, but dividing by ~0 turns a
+                // dust mote into a blown highlight that looks like signal.
+                if f > 0.0 { v = v * flat.scale / f; }
+            }
+            let c = if v < 0.0 { 0.0 } else { if v > 65535.0 { 65535.0 } else { v } };
+            px[base + r * w + x] = (c + 0.5) as u16;
+        }
+    }
+}
+
+/// Just the header of `path` — opens, parses, closes. Used to learn a sub's
+/// geometry before deciding whether the run can stream.
+fn read_sub_meta(path: ref String) -> SubMeta with reads(FileSystem) {
+    let mut m = new_sub_meta();
+    m.err = "cannot open input";
+    match File.open(path) {
+        Ok(f) => { m = read_sub_header(f); }
+        Err(e) => { }
+    }
+    m
+}
+
+/// Pass 1 of the streaming path: recover offsets with ONE frame resident.
+///
+/// `compute_offsets` indexes into a whole resident stack, but it only ever looks
+/// at one frame at a time — `detect_stars(px, f * npix, ...)`. Streaming just
+/// makes that explicit: read a sub, detect its stars, drop the pixels, keep the
+/// star list (a few dozen structs). Peak here is one frame regardless of how
+/// many subs the session has.
+fn compute_offsets_streaming(paths: ref Vec[String], w: i64, h: i64, nframes: i64,
+                             plane: i64,
+                             dark: ref Master, flat: ref Master)
+    -> (Vec[f64], Vec[f64], Vec[i64], Vec[i64], i64, Vec[f64])
+    with reads(FileSystem) writes(FileSystem)
+{
+    let npix = w * h;
+    let mut dxs: Vec[f64] = Vec.new();
+    let mut dys: Vec[f64] = Vec.new();
+    let mut keep: Vec[i64] = Vec.new();
+    let mut votes: Vec[i64] = Vec.new();
+    let mut rots: Vec[f64] = Vec.new();
+    let mut ref_stars: Vec[Star] = Vec.new();
+    let mut nref: i64 = 0;
+    let cx = ((w - 1) as f64) / 2.0;
+    let cy = ((h - 1) as f64) / 2.0;
+
+    for f in 0..nframes {
+        let mut frame: Vec[u16] = Vec.filled(npix, 0);
+        let mut got = false;
+        match File.open(paths[f]) {
+            Ok(fh) => {
+                let m = read_sub_header(fh);
+                if m.ok {
+                    got = read_sub_rows(fh, m, plane, 0, h, mut frame, 0);
+                    // Registration must run on CALIBRATED pixels: vignetting is
+                    // a brightness gradient across the frame, so an uncorrected
+                    // flat biases the background estimate and therefore the
+                    // detection threshold, which changes which faint stars are
+                    // found near the corners.
+                    if got { calibrate_rows(mut frame, 0, w, 0, h, dark, flat); }
+                }
+            }
+            Err(e) => { }
+        }
+        if not got {
+            println(f"cumulus: could not stream frame {f}");
+            dxs.push(0.0); dys.push(0.0); keep.push(0); votes.push(0); rots.push(0.0);
+        } else {
+            let st = detect_stars(frame, 0, w, h, 6.0);
+            if f == 0 {
+                for s in st { ref_stars.push(s); }
+                nref = ref_stars.len();
+                dxs.push(0.0); dys.push(0.0); keep.push(1); votes.push(nref); rots.push(0.0);
+            } else {
+                let est = estimate_transform(st, ref_stars, 1.5, cx, cy);
+                dxs.push(est.0);
+                dys.push(est.1);
+                rots.push(est.2);
+                votes.push(est.3);
+                let need = (nref * 6) / 10;
+                if est.3 >= need and est.3 > 0 { keep.push(1); } else { keep.push(0); }
+            }
+        }
+    }
+    (dxs, dys, keep, votes, nref, rots)
+}
+
+fn compute_offsets(px: ref Vec[u16], w: i64, h: i64, nframes: i64)
+    -> (Vec[f64], Vec[f64], Vec[i64], Vec[i64], Vec[f64])
+{
+    let npix = w * h;
+    let mut dxs: Vec[f64] = Vec.new();
+    let mut dys: Vec[f64] = Vec.new();
+    let mut keep: Vec[i64] = Vec.new();
+    let mut votes: Vec[i64] = Vec.new();
+    let mut rots: Vec[f64] = Vec.new();
+    let cx = ((w - 1) as f64) / 2.0;
+    let cy = ((h - 1) as f64) / 2.0;
+    let ref_stars = detect_stars(px, 0, w, h, 6.0);
+    let need = (ref_stars.len() * 6) / 10;
+    for f in 0..nframes {
+        let st = detect_stars(px, f * npix, w, h, 6.0);
+        let est = estimate_transform(st, ref_stars, 1.5, cx, cy);
+        dxs.push(est.0);
+        dys.push(est.1);
+        rots.push(est.2);
+        votes.push(est.3);
+        if est.3 >= need and est.3 > 0 { keep.push(1); } else { keep.push(0); }
+    }
+    (dxs, dys, keep, votes, rots)
+}
+
+/// The stacking pipeline, TILE BY TILE.
+///
+/// Peak memory is `frames x TILE^2 x 8` for the working set instead of
+/// `frames x pixels x 8` for a full aligned copy. On an 11.7 Mpx x 16 stack
+/// that is 8 MB rather than 1.5 GB.
+///
+/// `dxs`/`dys` may be all-zero (the unregistered modes), in which case the
+/// resample is an identity sample and the pipeline degenerates to plain
+/// per-tile integration — one code path for every mode rather than two.
+/// Integrate output rows `[sy0, sy0 + sh)` from a row window of every frame.
+///
+/// `px` holds `nframes` slabs of `wrows` rows each, frame-major, where buffer
+/// row 0 of every slab is source row `wr0`. The resident caller passes the whole
+/// frame as the window; the streaming caller passes one strip's worth. Writes
+/// straight into `out`, so the streaming path never materialises more than the
+/// output it has finished.
+/// `out_row0` is the source row that `out[0]` holds — the output's ORIGIN, not
+/// the window's. A whole-frame caller passes 0 and writes at absolute rows; a
+/// caller holding only one strip passes `sy0`, so the same tile lands at the
+/// top of a `STRIP`-tall buffer. Getting this wrong writes every strip at the
+/// frame's absolute offset into a strip-sized buffer, which is an out-of-bounds
+/// index rather than a plausible picture — the loud direction, unlike `wcap`
+/// below.
+///
+/// `wcap` is the SLAB STRIDE — rows reserved per frame in `px` — and `wrows` is
+/// how many of them currently hold data. They are not the same number and must
+/// not be conflated: the streaming buffer is allocated once at the largest
+/// window a strip can need (`STRIP + 2*halo`) while the rows actually present
+/// shrink at the last strip and at the top and bottom edges, where the halo is
+/// clipped against the frame. Indexing frame `f` at `f * w * wrows` instead of
+/// `f * w * wcap` silently reads every frame after the first from a few rows
+/// into its neighbour — which looks exactly like a correct stack of subtly
+/// wrong data.
+fn integrate_window(px: ref Vec[u16], w: i64, h: i64, nframes: i64,
+                    dxs: ref Vec[f64], dys: ref Vec[f64], rots: ref Vec[f64],
+                    keep: ref Vec[i64],
+                    use_clip: bool, horizon: i64, feather: i64,
+                    sy0: i64, sh: i64, wr0: i64, wrows: i64,
+                    wcap: i64, out_row0: i64, out: mut ref Vec[i64]) {
+    let cx = ((w - 1) as f64) / 2.0;
+    let cy = ((h - 1) as f64) / 2.0;
+    let ntx = (w + TILE - 1) / TILE;
+    let nty = (sh + TILE - 1) / TILE;
+    for tyi in 0..nty {
+        for txi in 0..ntx {
+            let x0 = txi * TILE;
+            let y0 = sy0 + tyi * TILE;
+            let tw = if w - x0 < TILE { w - x0 } else { TILE };
+            let rem = sy0 + sh - y0;
+            let th = if rem < TILE { rem } else { TILE };
+            let tpix = tw * th;
+
+            // Gather this tile from every kept frame.
+            let mut tile: Vec[i64] = Vec.with_capacity(tpix * nframes);
+            let mut kept: i64 = 0;
+            for f in 0..nframes {
+                if keep[f] != 0 {
+                    let t = resample_tile(px, f * w * wcap, w, h, dxs[f], dys[f],
+                                          rots[f], cx, cy, horizon, feather,
+                                          x0, y0, tw, th, wr0, wrows);
+                    for v in t { tile.push(v); }
+                    kept = kept + 1;
+                }
+            }
+
+            let ot = if use_clip {
+                integrate_sigma_clip(tile, tpix, kept)
+            } else {
+                integrate_mean(tile, tpix, kept)
+            };
+            for ty in 0..th {
+                for tx in 0..tw {
+                    out[(y0 + ty - out_row0) * w + x0 + tx] = ot[ty * tw + tx];
+                }
+            }
+        }
+    }
+}
+
+/// Stack one PLANE of a list of subs, without ever holding the whole set, and
+/// write each strip of the result as it is finished.
+///
+/// PASS 1 (`compute_offsets_streaming`) reads each sub in turn, detects its
+/// stars, and drops the pixels — one frame resident. This is PASS 2: it reopens
+/// them all and walks the output in strips, each strip reading exactly the row
+/// window it needs from every file.
+///
+/// Nothing here is frame-sized. The window is `nframes * w * (STRIP + 2*halo)`,
+/// the result buffer is one strip, and the strip goes to disk before the next
+/// one is gathered — so peak memory is set by STRIP and the halo, never by `h`.
+///
+/// `plane` selects the sample: 0 for mono, and 0/1/2 in turn for RGB. Calling
+/// it three times reads each file three times, which is the price of not
+/// holding three planes at once; at 24 MP that trades ~2 s of warm-cache I/O
+/// for 400 MB of resident accumulator.
+fn stack_streaming_to(paths: ref Vec[String], w: i64, h: i64, nframes: i64,
+                   plane: i64, dxs: ref Vec[f64], dys: ref Vec[f64],
+                   rots: ref Vec[f64], keep: ref Vec[i64], use_clip: bool,
+                   horizon: i64, feather: i64,
+                   dark: ref Master, flat: ref Master, fout: ref File) -> bool
+    with reads(FileSystem) writes(FileSystem)
+{
+    let mut out: Vec[i64] = Vec.filled(STRIP * w, 0);
+
+    // Halo sized from the transform actually recovered, not from MAX_SHIFT: a
+    // dither of a few pixels should not cost a 128-row window. Rotation adds
+    // `sin(theta) * w/2` — the vertical reach at the frame's left and right
+    // edges, which is where a tilted sample line travels furthest from its
+    // own row.
+    let mut halo: i64 = 1;
+    let halfw = ((w - 1) as f64) / 2.0;
+    for f in 0..nframes {
+        if keep[f] != 0 {
+            let a = (dys[f].abs() + rots[f].sin().abs() * halfw) as i64;
+            if a + 1 > halo { halo = a + 1; }
+        }
+    }
+    if halo > MAX_HALO { halo = MAX_HALO; }
+
+    let cap = STRIP + 2 * halo;
+    let mut win: Vec[u16] = Vec.filled(nframes * w * cap, 0);
+    let mut metas: Vec[SubMeta] = Vec.new();
+    let mut handles: Vec[File] = Vec.new();
+    let mut opened = true;
+    for f in 0..nframes {
+        match File.open(paths[f]) {
+            Ok(fh) => {
+                let m = read_sub_header(fh);
+                if not m.ok { opened = false; }
+                metas.push(m);
+                handles.push(fh);
+            }
+            Err(e) => { opened = false; }
+        }
+    }
+
+    let mut wrote = true;
+    if opened and handles.len() as i64 == nframes {
+        let nstrips = (h + STRIP - 1) / STRIP;
+        for s in 0..nstrips {
+            let sy0 = s * STRIP;
+            let rem = h - sy0;
+            let sh = if rem < STRIP { rem } else { STRIP };
+            let wr0 = if sy0 - halo < 0 { 0 } else { sy0 - halo };
+            let mut wr1 = sy0 + sh + halo;
+            if wr1 > h { wr1 = h; }
+            let wrows = wr1 - wr0;
+
+            // Each strip SEEKS to the rows it needs. Before `File.seek` existed
+            // (compiler ledger B-2026-08-10-3) reads could only go forward, so
+            // this was a window that had to slide: retain the overlap from the
+            // previous strip, shift the tail of every frame's slab to the
+            // front, then read only the genuinely new rows. Seeking makes the
+            // retention pointless — the halo rows are simply read again, which
+            // costs `2*halo/STRIP` of extra I/O and removes the shift loop, the
+            // cursor bookkeeping, and the invariant tying the buffer position
+            // to each file's read offset.
+            for f in 0..nframes {
+                if keep[f] != 0 {
+                    let got = read_sub_rows(handles[f], metas[f], plane,
+                                            wr0, wrows, mut win, f * w * cap);
+                    if not got { println("cumulus: short read while streaming"); }
+                    calibrate_rows(mut win, f * w * cap, w, wr0, wrows, dark, flat);
+                }
+            }
+
+            // `sy0` as the output origin: this buffer's row 0 IS source row
+            // sy0, the same convention the browser path uses.
+            integrate_window(win, w, h, nframes, dxs, dys, rots, keep, use_clip,
+                             horizon, feather,
+                             sy0, sh, wr0, wrows, cap, sy0, mut out);
+            if wrote { wrote = write_stack_rows(fout, out, sh * w); }
+        }
+    } else {
+        println("cumulus: could not reopen the subs for streaming");
+        wrote = false;
+    }
+    wrote
+}
+
+/// The resident whole-stack path: one window covering every row.
+fn stack_tiled(px: ref Vec[u16], w: i64, h: i64, nframes: i64,
+               dxs: ref Vec[f64], dys: ref Vec[f64], rots: ref Vec[f64],
+               keep: ref Vec[i64], use_clip: bool,
+               horizon: i64, feather: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.with_capacity(w * h);
+    for i in 0..(w * h) { out.push(0); }
+    integrate_window(px, w, h, nframes, dxs, dys, rots, keep, use_clip,
+                     horizon, feather, 0, h, 0, h, h, 0, mut out);
+    out
+}
+
+/// `planes` occupies the container's frame-count field: 1 for a mono result, 3
+/// for R,G,B. That is not a reinterpretation of the field — `.cstack` has always
+/// meant "n images of w x h", and three colour planes are three images. Every
+/// existing reader loads a colour result without a change, and sees it as what
+/// it is.
+fn write_stack_header(f: ref File, width: i64, height: i64, planes: i64) -> bool
+    with writes(FileSystem)
+{
+    let mut bytes: Vec[u8] = Vec.new();
+    bytes.push(67u8);  // 'C'
+    bytes.push(83u8);  // 'S'
+    bytes.push(84u8);  // 'T'
+    bytes.push(75u8);  // 'K'
+    let dims: Vec[i64] = [width, height, planes];
+    for d in dims {
+        bytes.push((d % 256) as u8);
+        bytes.push(((d / 256) % 256) as u8);
+        bytes.push(((d / 65536) % 256) as u8);
+        bytes.push(((d / 16777216) % 256) as u8);
+    }
+    let mut ok = false;
+    match f.write(bytes.as_slice()) {
+        Ok(n) => { ok = true; }
+        Err(e) => { }
+    }
+    ok
+}
+
+/// Append `n` samples of `out` as 16-bit little-endian.
+///
+/// Split from the header so the streaming path can hand back a strip at a time
+/// and never hold a frame-sized result. That is the same move the browser
+/// slice made with `put_rows`, arriving on the native side: an RGB stack of a
+/// 24 MP sequence would otherwise carry 576 MB of `i64` accumulator plus 288 MB
+/// of encoded bytes before a single one of them reached the disk.
+fn write_stack_rows(f: ref File, out: ref Vec[i64], n: i64) -> bool
+    with writes(FileSystem)
+{
+    let mut bytes: Vec[u8] = Vec.with_capacity(n * 2);
+    for i in 0..n {
+        let v = out[i];
+        let c = if v < 0 { 0 } else { if v > 65535 { 65535 } else { v } };
+        bytes.push((c % 256) as u8);
+        bytes.push(((c / 256) % 256) as u8);
+    }
+    let mut ok = false;
+    match f.write(bytes.as_slice()) {
+        Ok(m) => { ok = true; }
+        Err(e) => { }
+    }
+    ok
+}
+
+fn write_stack(path: ref String, out: ref Vec[i64], width: i64, height: i64, planes: i64)
+    with writes(FileSystem)
+{
+    match File.create(path) {
+        Ok(f) => {
+            let mut ok = write_stack_header(f, width, height, planes);
+            if ok { ok = write_stack_rows(f, out, out.len()); }
+            if not ok { println("cumulus: write failed"); }
+        }
+        Err(e) => { println("cumulus: cannot create output"); }
+    }
+}
+
+#[target(native)]
+fn main() with reads(FileSystem) writes(FileSystem) {
+    // usage: cumulus <out.cstack> <mean|sigmaclip> <input...>
+    //
+    // `input` is either a single `.cstack` (the whole stack in one container)
+    // or a list of FITS files, one sub per file — the shape a smart telescope
+    // writes. Output first so the variable-length input list can be last.
+    let argv = env.args();
+    if argv.len() < 4 {
+        println("usage: cumulus <out.cstack> <mean|sigmaclip|register|stack|stackcfa|meancfa>");
+        println("               [--bias b.cstack] [--dark d.cstack] [--flat f.cstack]");
+        println("               [--horizon ROW] [--feather ROWS]");
+        println("               <in.cstack | sub1.fits ... | sub1.tif ...>");
+    } else {
+        let outp = ref argv[1];
+        let mode = ref argv[2];
+
+        // Calibration masters, if any. A master is just an ordinary Cumulus
+        // OUTPUT — build it by integrating the calibration subs with the modes
+        // that already exist:
+        //
+        //     cumulus master_dark.cstack sigmaclip darks/*.fits
+        //     cumulus master_flat.cstack sigmaclip flats/*.fits
+        //
+        // which is how Siril works too: calibration frames are stacked into
+        // masters first, then applied. Nothing new is needed to make them, and
+        // the masters inherit the clipping that rejects rays in a dark exactly
+        // as it does in a light.
+        // Sky/foreground split for a TRIPOD nightscape. `--horizon R` marks
+        // rows below R as land, which does not move between frames and must be
+        // stacked WITHOUT the sky's transform; `--feather N` ramps between the
+        // two over N rows so the join reads as haze rather than a seam.
+        //
+        // A straight line is the crudest possible mask and deliberately so: it
+        // is the mode Sequator ships as its simplest, it needs no drawing UI or
+        // mask-file format, and it is honest about what it cannot do — a tree
+        // line or a peak crossing the boundary is not served by a horizontal
+        // cut. An irregular mask is the natural follow-on and reuses all of
+        // this; only the weight lookup changes.
+        let mut horizon: i64 = 0;
+        let mut feather: i64 = 0;
+        let mut darkp = "";
+        let mut flatp = "";
+        let mut biasp = "";
+        let mut first_in: i64 = 3;
+        let mut ai = 3;
+        while ai + 1 < argv.len() and argv[ai].starts_with("--") {
+            let k = ref argv[ai];
+            if k == "--dark" { darkp = argv[ai + 1].clone(); }
+            if k == "--flat" { flatp = argv[ai + 1].clone(); }
+            if k == "--bias" { biasp = argv[ai + 1].clone(); }
+            if k == "--horizon" { horizon = parse_int(argv[ai + 1].clone()); }
+            if k == "--feather" { feather = parse_int(argv[ai + 1].clone()); }
+            ai = ai + 2;
+            first_in = ai;
+        }
+        let inp = ref argv[first_in];
+
+        // Two input shapes. A single `.cstack` carries the whole stack; a list
+        // of FITS paths is one sub per file, which is what a smart telescope
+        // actually writes.
+        let mut width: i64 = 0;
+        let mut height: i64 = 0;
+        let mut nframes: i64 = 0;
+        let mut px: Vec[u16] = Vec.new();
+        let mut loaded = false;
+        let mut bayer = "";
+
+        // Set when the run streams the subs off disk instead of loading them.
+        let mut streaming = false;
+        let mut paths: Vec[String] = Vec.new();
+        // Samples per pixel of the sequence: 1 for FITS and for a mono TIFF,
+        // 3 for an RGB TIFF. It is the plane count of the RESULT too.
+        let mut nplanes: i64 = 1;
+
+        // Two input shapes, told apart by the file's own first bytes rather
+        // than by its NAME: a `.cstack` carries the whole stack, and anything
+        // else is one sub per file — FITS from a telescope, TIFF from a camera.
+        // Extensions lie (`.fit`, `.fts`, `.tif`, and files carrying none at
+        // all); the "CSTK" magic does not.
+        //
+        // The count is taken from `first_in`, not from argv: the old
+        // `argv.len() > 4` counted FLAGS too, so `--dark d.cstack in.cstack`
+        // already sent a single container down the sequence path and failed
+        // with "no END card in header".
+        let ninputs = argv.len() - first_in;
+        let is_container = ninputs == 1 and is_cstack(inp);
+        // Set when the pre-scan succeeded but the sequence cannot stream — the
+        // mosaic case, and only that case.
+        let mut resident_seq = false;
+        if not is_container {
+            // Headers first, pixels never — enough to learn the geometry, spot
+            // a mismatched sequence, and decide whether this run can stream.
+            let mut i = first_in;
+            let mut hdr_ok = true;
+            while i < argv.len() and hdr_ok {
+                let m = read_sub_meta(argv[i]);
+                if not m.ok {
+                    println(f"cumulus: {argv[i]}: {m.err}");
+                    hdr_ok = false;
+                } else {
+                    if paths.len() == 0 {
+                        width = m.width;
+                        height = m.height;
+                        bayer = m.bayer.clone();
+                        nplanes = m.spp;
+                    }
+                    // A sequence that changes shape partway through is two
+                    // sessions concatenated, not one stack.
+                    if m.width != width or m.height != height {
+                        println(f"cumulus: {argv[i]}: frames differ in size");
+                        hdr_ok = false;
+                    }
+                    if hdr_ok and m.bayer != bayer {
+                        println(f"cumulus: {argv[i]}: frames disagree about BAYERPAT");
+                        hdr_ok = false;
+                    }
+                    if hdr_ok and m.spp != nplanes {
+                        println(f"cumulus: {argv[i]}: frames differ in channel count");
+                        hdr_ok = false;
+                    }
+                    if hdr_ok { paths.push(argv[i].clone()); }
+                }
+                i = i + 1;
+            }
+            // A colour MOSAIC still loads whole: `stack_cfa` separates the
+            // planes across the FULL frame, so a row window would have to be
+            // threaded through the plane extraction as well. Everything else —
+            // mono FITS, mono TIFF, RGB TIFF — streams, and an RGB TIFF is
+            // exactly the case that has to: three planes of a 24 MP sub is
+            // 144 MB, so a ten-frame nightscape would be 1.4 GB resident.
+            if hdr_ok and bayer == "" and paths.len() as i64 > 0 {
+                streaming = true;
+                nframes = paths.len();
+                loaded = true;
+            }
+            resident_seq = hdr_ok and not streaming and paths.len() as i64 > 0;
+            if not hdr_ok { paths = Vec.new(); }
+        }
+
+        if resident_seq {
+            let mut i = first_in;
+            let mut bad = false;
+            while i < argv.len() and not bad {
+                let img = read_fits(argv[i]);
+                if not img.ok {
+                    println(f"cumulus: {argv[i]}: {img.err}");
+                    bad = true;
+                } else {
+                    if nframes == 0 {
+                        width = img.width;
+                        height = img.height;
+                        bayer = img.bayer.clone();
+                    }
+                    if img.width != width or img.height != height {
+                        println("cumulus: frames differ in size");
+                        bad = true;
+                    } else {
+                        // A sequence that changes filter layout partway through
+                        // is two sessions concatenated, not one stack.
+                        if img.bayer != bayer {
+                            println("cumulus: frames disagree about BAYERPAT");
+                            bad = true;
+                        } else {
+                            for v in img.px { px.push(v); }
+                            nframes = nframes + 1;
+                        }
+                    }
+                }
+                i = i + 1;
+            }
+            loaded = not bad and nframes > 0;
+        }
+
+        if is_container {
+            // A `.cstack` stays resident: it is one file holding every frame
+            // back to back, so a strip of frame f and the same strip of frame
+            // f+1 are a whole frame apart in the byte stream. One file per sub
+            // — FITS or TIFF — is the layout that makes a strip walk possible.
+            let data = read_all(inp);
+            if data.len() < 16 {
+                println("cumulus: input too short to hold a header");
+            } else {
+                width = u32_at(data, 4);
+                height = u32_at(data, 8);
+                nframes = u32_at(data, 12);
+                let n = width * height * nframes;
+                for i in 0..n { px.push(u16_at(data, 16 + i * 2) as u16); }
+                loaded = true;
+            }
+        }
+
+        // A mosaic stacked as if it were monochrome does not fail — it produces
+        // a plausible grey image with checkerboard texture and colour-biased
+        // star positions. So the mismatch is refused in BOTH directions rather
+        // than being left to the operator to notice.
+        let is_cfa_mode = mode == "stackcfa" or mode == "meancfa";
+        if loaded and bayer != "" and not is_cfa_mode {
+            println(f"cumulus: input is a Bayer mosaic (BAYERPAT={bayer}) — use `stackcfa`");
+            loaded = false;
+        }
+        if loaded and bayer == "" and is_cfa_mode {
+            println(f"cumulus: `{mode}` needs a BAYERPAT card; this input is monochrome");
+            loaded = false;
+        }
+
+        if loaded and is_cfa_mode {
+            let hw = width / 2;
+            let hh = height / 2;
+            let mut dxs: Vec[f64] = Vec.new();
+            let mut dys: Vec[f64] = Vec.new();
+            let mut keep: Vec[i64] = Vec.new();
+            let mut rots: Vec[f64] = Vec.new();
+
+            if mode == "stackcfa" {
+                // Registration runs on half-resolution luminance, so the
+                // offsets it returns are already in the units the colour planes
+                // live in. They are reported x2 to stay in MOSAIC pixels, which
+                // is what the operator dithered by and what the ground-truth
+                // check compares against.
+                let lum = cfa_luminance(px, width, height, nframes);
+                let off = compute_offsets(lum, hw, hh, nframes);
+                dxs = off.0;
+                dys = off.1;
+                keep = off.2;
+                let votes = off.3;
+                rots = off.4;
+
+                let rs = detect_stars(lum, 0, hw, hh, 6.0);
+                println(f"ref_stars {rs.len()}");
+                for f in 0..nframes {
+                    println(f"frame {f} dx {dxs[f] * 2.0} dy {dys[f] * 2.0} rot {rots[f] * 57.29577951308232} votes {votes[f]} stars {rs.len()}");
+                }
+                let mut nkept: i64 = 0;
+                for f in 0..nframes { if keep[f] != 0 { nkept = nkept + 1; } }
+                if nkept < nframes { println(f"cumulus: registered {nkept}/{nframes} frames"); }
+            } else {
+                // `meancfa`: no registration, no clipping. It exists so the
+                // channel split and recombination can be checked against numpy
+                // by EXACT equality. With registration on, the recovered
+                // offsets are near zero but not zero, so the resample is no
+                // longer an identity sample and only a tolerance comparison
+                // would be possible — which would let a real defect in the new
+                // code hide inside the tolerance.
+                for f in 0..nframes { dxs.push(0.0); dys.push(0.0); rots.push(0.0); keep.push(1); }
+            }
+
+            let codes = pattern_codes(bayer.clone());
+            // The CFA planes are half-resolution, so a horizon expressed in
+            // MOSAIC rows halves with them — `stack_cfa` does that division at
+            // the plane boundary rather than making the caller remember which
+            // coordinate system it is in.
+            let rgb = stack_cfa(px, width, height, nframes, codes, dxs, dys, rots, keep,
+                                mode == "stackcfa", horizon, feather);
+            write_stack(outp, rgb, hw, hh, 3);
+            println(f"cumulus: {mode} {bayer} {width}x{height} x{nframes} -> {hw}x{hh} RGB {outp}");
+            loaded = false;  // handled here; skip the monochrome path below
+        }
+
+        // Calibration masters are single-plane containers, so an RGB sequence
+        // would need one master PER CHANNEL — a dark's hot pixels and a flat's
+        // vignetting are both wavelength-dependent, and applying a mono master
+        // to R, G and B alike is not an approximation of the right answer, it
+        // is a different correction on each channel. Refused rather than
+        // guessed at, the same as every other half-supported case here.
+        if loaded and nplanes > 1 and (darkp != "" or flatp != "" or biasp != "") {
+            println("cumulus: calibration masters are single-plane; an RGB sequence needs one per channel (not implemented)");
+            loaded = false;
+        }
+        // A demosaiced RGB file has no mosaic to separate.
+        if loaded and nplanes > 1 and is_cfa_mode {
+            println(f"cumulus: `{mode}` needs a Bayer mosaic; this input is already demosaiced RGB");
+            loaded = false;
+        }
+
+        if loaded {
+            let npix = width * height;
+
+            // Masters load once, after geometry is known so the dimension check
+            // has something to check against.
+            let mut dark = load_master(darkp, width, height, "dark");
+            let mut flat = load_master(flatp, width, height, "flat");
+            let bias = load_master(biasp, width, height, "bias");
+            prepare_flat(mut flat, bias, npix);
+            if dark.present or flat.present {
+                let d = if dark.present { " dark" } else { "" };
+                let fl = if flat.present { " flat" } else { "" };
+                println(f"cumulus: calibrating with{d}{fl}");
+            }
+
+            // The resident path calibrates every frame up front; the streaming
+            // path does it a strip at a time as the rows arrive.
+            if not streaming {
+                for f in 0..nframes {
+                    calibrate_rows(mut px, f * npix, width, 0, height, dark, flat);
+                }
+            }
+
+            // Registration offsets, or zeros for the unregistered modes. One
+            // pipeline either way: an all-zero offset makes the resample an
+            // identity sample, so `mean`/`sigmaclip` and `stack` share a code
+            // path instead of drifting apart.
+            let mut dxs: Vec[f64] = Vec.new();
+            let mut dys: Vec[f64] = Vec.new();
+            let mut keep: Vec[i64] = Vec.new();
+            let mut votes: Vec[i64] = Vec.new();
+            let mut rots: Vec[f64] = Vec.new();
+            let mut nref: i64 = 0;
+            if mode == "stack" or mode == "register" {
+                if streaming {
+                    // -1 asks for the median luminance. For a mono sub that
+                    // is just its one plane; for RGB it is what keeps a star's
+                    // measured centre from depending on its colour.
+                    let off = compute_offsets_streaming(paths, width, height, nframes,
+                                                        0 - 1, dark, flat);
+                    dxs = off.0;
+                    dys = off.1;
+                    keep = off.2;
+                    votes = off.3;
+                    nref = off.4;
+                    rots = off.5;
+                } else {
+                    let off = compute_offsets(px, width, height, nframes);
+                    dxs = off.0;
+                    dys = off.1;
+                    keep = off.2;
+                    votes = off.3;
+                    rots = off.4;
+                    let rs = detect_stars(px, 0, width, height, 6.0);
+                    nref = rs.len();
+                }
+            } else {
+                for f in 0..nframes {
+                    dxs.push(0.0); dys.push(0.0); keep.push(1); votes.push(0); rots.push(0.0);
+                }
+            }
+
+            if mode == "register" {
+                // Report offsets rather than stacking, so the stage stays
+                // independently checkable against the injected dithers.
+                println(f"ref_stars {nref}");
+                for f in 0..nframes {
+                    println(f"frame {f} dx {dxs[f]} dy {dys[f]} rot {rots[f] * 57.29577951308232} votes {votes[f]} stars {nref}");
+                }
+            }
+
+            let mut nkept: i64 = 0;
+            for f in 0..nframes { if keep[f] != 0 { nkept = nkept + 1; } }
+            if mode == "stack" and nkept < nframes {
+                println(f"cumulus: registered {nkept}/{nframes} frames");
+            }
+            let use_clip = mode == "sigmaclip" or mode == "stack" or mode == "register";
+            if streaming {
+                // One plane at a time, straight to disk. The SAME transform
+                // drives all three: colour planes of one exposure were captured
+                // by one sensor through one lens, so registering them
+                // independently could only introduce disagreement between them.
+                match File.create(outp) {
+                    Ok(fo) => {
+                        let mut okw = write_stack_header(fo, width, height, nplanes);
+                        for pl in 0..nplanes {
+                            if okw {
+                                okw = stack_streaming_to(paths, width, height, nframes, pl,
+                                                         dxs, dys, rots, keep, use_clip,
+                                                         horizon, feather, dark, flat, fo);
+                            }
+                        }
+                        if not okw { println("cumulus: write failed"); }
+                    }
+                    Err(e) => { println("cumulus: cannot create output"); }
+                }
+            } else {
+                let out = stack_tiled(px, width, height, nframes, dxs, dys, rots, keep,
+                                      use_clip, horizon, feather);
+                write_stack(outp, out, width, height, 1);
+            }
+            let how = if streaming { "streamed" } else { "resident" };
+            let colour = if nplanes > 1 { " RGB" } else { "" };
+            println(f"cumulus: {mode}{colour} {width}x{height} x{nframes} ({how}) -> {outp}");
+        }
+    }
+}
+
+// ─── Browser entry point ─────────────────────────────────────────────────────
+//
+// The SAME kernels the CLI uses, compiled for wasm_browser. Nothing above this
+// line knows a browser exists — `stack_frames` only moves bytes across the host
+// boundary and calls the same detect/estimate/resample/integrate functions the
+// native `main` calls. That is the whole point of the dual-target build: the
+// numerics verified by verify.sh on the CLI are literally the numerics that run
+// in the page, not a port of them.
+
+effect resource Input;    // the sub-frames JS holds, pulled in via read_rows
+effect resource Display;  // the <canvas> we paint, via put_rows
+
+// JS decodes rows `[row0, row0 + nrows)` of frame `frame` and writes them into
+// wasm memory at `dst`, offset by `dst_off` u16 ELEMENTS. Synchronous, so the
+// rows are there when the call returns.
+//
+// This replaced a `read_frames(dst, len)` that pulled the WHOLE stack across in
+// one call, and the replacement is the entire point of the browser streaming
+// slice: with one call for everything, the page had to hold every decoded sub
+// to answer it, and wasm had to hold a second copy to receive it. A row range
+// is answerable from a `Blob` — a handle to bytes the browser keeps wherever it
+// likes, usually on disk — so the page holds file handles and headers, and wasm
+// holds one strip.
+//
+// It is synchronous, and a `Blob` is normally only readable asynchronously,
+// which is why the run happens in a worker: `FileReaderSync` exists only in
+// workers, and it is the one API that can answer this call. The inline fallback
+// (a page opened over `file://`, where a module worker cannot load) has no such
+// API and pre-reads the files instead — slower and heavier, which is what a
+// fallback is for.
+//
+// `dst` is typed `*const u16`, not `*const u8`, and that is load-bearing rather
+// than cosmetic: wasm32 is little-endian by spec, so JS writing native-order
+// u16 lands the pixels in their final home. Declaring `*const u8` instead would
+// force a `*const u16 as *const u8` reinterpret at the call site, which Kāra
+// (rightly) requires `unsafe` for; the pointer value is identical either way,
+// so the honest move is to give the parameter the type it actually has.
+//
+// There is no success return, and that is deliberate. The failure this can
+// suffer is the file changing underneath us mid-run — a genuinely exceptional
+// condition, not a degraded frame — so the host contract is "fill the request
+// or THROW". A JS exception raised inside a host fn unwinds straight out
+// through `stack_frames` to the caller, which is exactly the right shape: the
+// run aborts with a message instead of painting a plausible picture made
+// partly of stale rows. It leaks whatever the aborted run had allocated, which
+// costs nothing here because the page terminates the worker after every stack.
+// `plane` selects which sample of each pixel to deliver: 0 for a mono sub,
+// 0/1/2 for a colour one, and -1 for the MEDIAN of the three — the luminance
+// registration runs on. JS does the median, because JS is already decoding the
+// interleave and doing it there costs one pass instead of two.
+host fn read_rows(frame: i64, plane: i64, row0: i64, nrows: i64,
+                  dst: *const u16, dst_off: i64) with reads(Input);
+
+// JS reads `len` bytes of 16-bit result at `ptr` — rows `[row0, row0+nrows)` of
+// a `w` x `h` image — and stores or paints them.
+//
+// Called ONCE PER STRIP rather than once per image, and that is the whole of the
+// output-streaming slice. Holding the finished image inside wasm cost
+// `w*h*10` bytes: an i64 accumulator plus the 16-bit result, both full-frame,
+// and both counted against wasm32's 4 GiB address space. Emitting each strip as
+// it completes bounds that to `STRIP` rows, so the resident output stops
+// scaling with frame HEIGHT — the same move the input side already made, in the
+// opposite direction.
+//
+// The assembled image still exists, but on the JS side, where the 4 GiB ceiling
+// does not apply. That is the point: the constrained heap holds a strip, the
+// unconstrained one holds the picture.
+//
+// `w` and `h` ride along on every call so the host can size its buffer on the
+// first strip without a separate handshake.
+host fn put_rows(ptr: *const u8, len: i64, plane: i64, row0: i64, nrows: i64,
+                 w: i64, h: i64) with writes(Display);
+
+// Progress ticks so a long stack does not look hung. `stage`: 0 = starting,
+// 1 = registering (pass 1, per frame), 2 = integrating (pass 2, per strip).
+host fn progress(stage: i64, done: i64, total: i64) with writes(Display);
+
+/// Stack `nframes` sub-frames of `w`x`h` 16-bit pixels, pulled from JS a row
+/// range at a time.
+///
+/// `mode`: 0 = mean, 1 = sigma clip, 2 = register + sigma clip (the full
+/// pipeline). Returns the number of frames that survived registration, so the
+/// page can report "14/16 stacked" rather than silently dropping subs.
+///
+/// This is the same two-pass shape as the native `compute_offsets_streaming` +
+/// `stack_streaming`, with `read_rows` where those call `read_rows_at`. Peak
+/// memory therefore has the same form: one frame in pass 1, one strip window in
+/// pass 2, and nothing that scales with `nframes * h`. The kernels themselves —
+/// `detect_stars`, `estimate_offset`, `integrate_window` — are shared outright
+/// with the CLI, which is what lets `test_node.mjs` demand byte-identity.
+#[target(wasm_browser)]
+pub fn stack_frames(w: i64, h: i64, nframes: i64, nplanes: i64, mode: i64,
+                    horizon: i64, feather: i64) -> i64
+    with reads(Input) writes(Display) panics
+{
+    let npix = w * h;
+    progress(0, 0, nframes);
+
+    let mut dxs: Vec[f64] = Vec.new();
+    let mut dys: Vec[f64] = Vec.new();
+    let mut rots: Vec[f64] = Vec.new();
+    let mut keep: Vec[i64] = Vec.new();
+    let mut kept = nframes;
+    let cx = ((w - 1) as f64) / 2.0;
+    let cy = ((h - 1) as f64) / 2.0;
+
+    if mode == 2 {
+        // PASS 1 — registration, STREAMED. No frame is ever resident: the
+        // buffer is one strip plus the 3-row halo detection reaches into, so
+        // this costs `w*(STRIP+6)*2` rather than `w*h*2` — 842 KB against 48 MB
+        // on a 24 MP sub, and flat in frame height.
+        //
+        // It costs a second read of each sub. Clipped statistics need the whole
+        // frame before the scan can start (the threshold is `mean + 6*sd` over
+        // all of it), so the frame is walked twice: once to build the
+        // histogram, once to detect. The histogram is what keeps that at TWO
+        // reads instead of six — the three clipping rounds each need a sum and
+        // a variance, and they now run over 65536 bins rather than the pixels.
+        let sbuf_rows = STRIP + 6;
+        let mut sbuf: Vec[u16] = Vec.filled(w * sbuf_rows, 0);
+        let nsp = (h + STRIP - 1) / STRIP;
+        let mut ref_stars: Vec[Star] = Vec.new();
+        let mut nref: i64 = 0;
+        kept = 0;
+        for f in 0..nframes {
+            // 1a — histogram the whole sub, a strip at a time.
+            let mut hist: Vec[i64] = Vec.filled(HIST_BINS, 0);
+            for sp in 0..nsp {
+                let y0 = sp * STRIP;
+                let rem = h - y0;
+                let nr = if rem < STRIP { rem } else { STRIP };
+                read_rows(f, 0 - 1, y0, nr, sbuf.as_ptr(), 0);
+                hist_add(sbuf, 0, nr * w, mut hist);
+            }
+            let stats = stats_from_hist(hist);
+
+            // 1b — detect, a strip at a time, each carrying a 3-row halo.
+            // Detections are emitted only for the strip's CORE rows; the halo
+            // belongs to the neighbour and would otherwise be found twice.
+            let mut st: Vec[Star] = Vec.new();
+            for sp in 0..nsp {
+                let sy0 = sp * STRIP;
+                let rem2 = h - sy0;
+                let sy1 = if rem2 < STRIP { h } else { sy0 + STRIP };
+                let scan_y0 = if sy0 < 3 { 3 } else { sy0 };
+                let scan_y1 = if sy1 > h - 3 { h - 3 } else { sy1 };
+                if scan_y0 < scan_y1 {
+                    let buf_row0 = scan_y0 - 3;
+                    let buf_rows = (scan_y1 + 3) - buf_row0;
+                    read_rows(f, 0 - 1, buf_row0, buf_rows, sbuf.as_ptr(), 0);
+                    detect_stars_rows(sbuf, 0, w, buf_row0, scan_y0, scan_y1,
+                                      stats.0, stats.1, 6.0, mut st);
+                }
+            }
+            // Dedup once, over the stitched list -- the strips emit in the same
+            // ascending order the whole-frame scan does, so this is the same
+            // input `detect_stars` would have handed it.
+            let st = deduplicate(st);
+            if f == 0 {
+                for s in st { ref_stars.push(s); }
+                nref = ref_stars.len();
+                dxs.push(0.0); dys.push(0.0); rots.push(0.0); keep.push(1);
+            } else {
+                let est = estimate_transform(st, ref_stars, 1.5, cx, cy);
+                dxs.push(est.0);
+                dys.push(est.1);
+                rots.push(est.2);
+                let need = (nref * 6) / 10;
+                if est.3 >= need and est.3 > 0 { keep.push(1); } else { keep.push(0); }
+            }
+            if keep[f] != 0 { kept = kept + 1; }
+            progress(1, f + 1, nframes);
+        }
+    } else {
+        // Unregistered modes: an all-zero transform makes the resample an
+        // identity sample, so `mean`/`sigmaclip` and `stack` share one path.
+        // `rots` MUST be filled here too — the halo below indexes it for every
+        // frame, and leaving it empty is an out-of-bounds read on exactly the
+        // modes that do no registration.
+        for f in 0..nframes {
+            dxs.push(0.0); dys.push(0.0); rots.push(0.0); keep.push(1);
+        }
+    }
+
+    // PASS 2 — integrate in strips, sized exactly as the native streamer sizes
+    // them so the two produce the same pixels rather than merely similar ones.
+    // The output buffers are allocated with the window below, STRIP-tall: no
+    // frame-sized accumulator exists on this path at all.
+    let mut halo: i64 = 1;
+    let halfw = ((w - 1) as f64) / 2.0;
+    for f in 0..nframes {
+        if keep[f] != 0 {
+            let a = (dys[f].abs() + rots[f].sin().abs() * halfw) as i64;
+            if a + 1 > halo { halo = a + 1; }
+        }
+    }
+    if halo > MAX_HALO { halo = MAX_HALO; }
+
+    let cap = STRIP + 2 * halo;
+    let mut win: Vec[u16] = Vec.filled(nframes * w * cap, 0);
+    // Output buffers are STRIP-tall, not frame-tall. Allocated once at the
+    // largest strip and reused, so the loop below allocates nothing.
+    let mut out: Vec[i64] = Vec.filled(STRIP * w, 0);
+    let mut bytes: Vec[u8] = Vec.with_capacity(STRIP * w * 2);
+    let nstrips = (h + STRIP - 1) / STRIP;
+    // One plane at a time, and the SAME transform for all of them: colour
+    // planes of one exposure came through one lens onto one sensor, so
+    // registering them independently could only introduce disagreement the
+    // optics never had. `nplanes` is 1 for FITS and for a mono TIFF, 3 for an
+    // RGB one — the whole colour question is this loop and the `plane` argument
+    // it passes down.
+    for pl in 0..nplanes {
+        for s in 0..nstrips {
+            let sy0 = s * STRIP;
+            let rem = h - sy0;
+            let sh = if rem < STRIP { rem } else { STRIP };
+            let wr0 = if sy0 - halo < 0 { 0 } else { sy0 - halo };
+            let mut wr1 = sy0 + sh + halo;
+            if wr1 > h { wr1 = h; }
+            let wrows = wr1 - wr0;
+
+            for f in 0..nframes {
+                if keep[f] != 0 {
+                    read_rows(f, pl, wr0, wrows, win.as_ptr(), f * w * cap);
+                }
+            }
+
+            // `sy0` as the output origin: this buffer's row 0 IS source row sy0.
+            integrate_window(win, w, h, nframes, dxs, dys, rots, keep, mode != 0,
+                             horizon, feather,
+                             sy0, sh, wr0, wrows, cap, sy0, mut out);
+
+            // Hand this strip back as 16-bit little-endian; the page owns the
+            // display stretch, so the full dynamic range crosses the boundary
+            // intact rather than being pre-flattened to 8-bit here.
+            bytes.clear();
+            for i in 0..(sh * w) {
+                let v = out[i];
+                let c = if v < 0 { 0 } else { if v > 65535 { 65535 } else { v } };
+                bytes.push((c % 256) as u8);
+                bytes.push(((c / 256) % 256) as u8);
+            }
+            put_rows(bytes.as_ptr(), bytes.len(), pl, sy0, sh, w, h);
+            progress(2, pl * nstrips + s + 1, nplanes * nstrips);
+        }
+    }
+    kept
+}

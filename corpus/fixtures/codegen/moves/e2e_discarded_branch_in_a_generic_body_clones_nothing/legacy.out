@@ -1,0 +1,22 @@
+stmt
+  1
+loop
+  2
+block
+  3
+match
+  4
+kept
+  kept 26
+  5
+nested
+  6
+callerdiscard
+  26
+callerkept
+  26
+  26
+twoinst
+  7
+  8
+end

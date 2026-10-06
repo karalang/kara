@@ -1,0 +1,32 @@
+unread
+  m
+  dE
+  dR1
+bound_result
+  dE
+  dR2
+  =9
+iflet
+  i
+  dE
+  dR3
+read_only
+  dE
+  dR4
+  =5
+consumed
+  dE
+  dR6
+  =6
+by_value_param
+  dE
+  dR7
+  =9
+struct_leaf
+  s
+  dR8
+wildcard
+  w
+  dE
+  dR9
+end

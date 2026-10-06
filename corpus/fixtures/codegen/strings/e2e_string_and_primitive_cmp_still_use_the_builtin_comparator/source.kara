@@ -1,0 +1,8 @@
+
+fn main() {
+    let a: String = "apple";
+    let b: String = "zebra";
+    println(a.cmp(b).is_lt());
+    println(a < b);
+    println(b < a);
+}

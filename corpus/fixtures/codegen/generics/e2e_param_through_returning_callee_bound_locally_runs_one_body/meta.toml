@@ -1,0 +1,13 @@
+source = "tests/codegen/generics.rs::e2e_param_through_returning_callee_bound_locally_runs_one_body"
+dedup_of = ["tests/interpreter/generics.rs::test_param_through_returning_callee_bound_locally_runs_one_body"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

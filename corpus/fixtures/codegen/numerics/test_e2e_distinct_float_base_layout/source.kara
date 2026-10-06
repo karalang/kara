@@ -1,0 +1,6 @@
+
+distinct type Meters = f64;
+fn main() {
+    let m = Meters(3.5);
+    println(m.raw());
+}

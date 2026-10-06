@@ -1,0 +1,63 @@
+// LeetCode #346: Moving Average from Data Stream — prefix sums.
+//
+// Keep the running total after every value: prefix[n] is the sum of the first
+// n. The last k values sum to prefix[n] - prefix[n - k], where k is the window
+// size or n, whichever is smaller.
+//
+// O(1) per call, but O(n) space: the history is never dropped.
+
+struct MovingAverage {
+    size: i64,
+    prefix: Vec[i64],
+}
+
+impl MovingAverage {
+    fn new(size: i64) -> MovingAverage {
+        return MovingAverage { size: size, prefix: [0] };
+    }
+
+    fn next(mut ref self, val: i64) -> f64 {
+        let n = self.prefix.len();
+        let total = self.prefix[n - 1] + val;
+        self.prefix.push(total);
+        let k = if n < self.size { n } else { self.size };
+        return (total - self.prefix[n - k]) as f64 / k as f64;
+    }
+}
+
+fn run(size: i64, vals: Vec[i64]) {
+    let mut m = MovingAverage.new(size);
+    let mut out = String.new();
+    for v in vals {
+        if out.len() > 0 {
+            out.push_str(", ");
+        }
+        let a = m.next(v);
+        out.push_str(f"{a:.5}");
+    }
+    println(f"size {size}: [{out}]");
+}
+
+fn main() {
+    // The example from the problem statement.
+    run(3, [1, 10, 3, 5]);
+
+    // A window of one is the stream itself; a window wider than the stream
+    // never drops anything.
+    run(1, [4, -2, 7]);
+    run(10, [1, 2, 3, 4]);
+
+    // Negative values, and a mean that is not a terminating decimal.
+    run(2, [-5, 5, -5, 5, 0]);
+    run(3, [1, 1, 2]);
+
+    // Large values near the problem's bound (|val| <= 100000) over a long run.
+    let mut m = MovingAverage.new(1000);
+    let mut last = 0.0;
+    let mut total = 0.0;
+    for k in 0..100000 {
+        last = m.next((k * 7919) % 200001 - 100000);
+        total += last;
+    }
+    println(f"100000 values, window 1000: last {last:.5}, sum of averages {total:.3}");
+}

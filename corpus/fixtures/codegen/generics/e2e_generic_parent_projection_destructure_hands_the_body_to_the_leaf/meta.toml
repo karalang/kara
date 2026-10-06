@@ -1,0 +1,13 @@
+source = "tests/codegen/generics.rs::e2e_generic_parent_projection_destructure_hands_the_body_to_the_leaf"
+dedup_of = ["tests/interpreter/generics.rs::test_generic_parent_projection_destructure_hands_the_body_to_the_leaf"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,75 @@
+bind
+  x
+  hit
+  dR1
+  dR2
+read
+  x
+  hit3
+  dR3
+  dR4
+iflet
+  x
+  hit
+  dR5
+  dR6
+whilet
+  x
+  hit
+  dR7
+  dR8
+  end
+result
+  x
+  hit
+  dR9
+  dR10
+twice
+  x
+  a
+  b
+  dR11
+  dR12
+after
+  x
+  hit
+  dR13
+  dR14
+  end
+wild
+  x
+  hit
+  dR15
+  dR16
+struct
+  x
+  hit
+  dW18
+  dR17
+single
+  x
+  hit
+  dR19
+ret
+  x
+  dR30
+  dR31
+  hit
+eat
+  x
+  eat
+  hit7
+  dR20
+  dR21
+nomatch
+  dR22
+  dR23
+  x
+none
+  x
+  n
+tlocal
+  dR24
+  dR25
+  x
+end

@@ -1,0 +1,69 @@
+// LeetCode #315: Count of Smaller Numbers After Self — a sorted list grown by insertion.
+//
+// Walk right to left keeping the values already seen in a SORTED Vec. The
+// answer at i is the insertion point of nums[i] (a binary search — the number
+// of seen values strictly below it), and then nums[i] is inserted there to
+// keep the list sorted. The search is O(log n); the insertion shifts the tail,
+// O(n), so the whole thing is O(n^2) in the worst case — but the shift is a
+// memmove and the constant is tiny, which is why this is the answer most
+// people actually submit. It is here as a third mechanism (no tree, no merge),
+// and because `Vec.insert` in a hot loop is a codegen surface worth walking.
+
+fn lower_bound(sorted: ref Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < x { lo = mid + 1; } else { hi = mid; }
+    }
+    return lo;
+}
+
+fn count_smaller(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..n { counts.push(0); }
+    let mut seen: Vec[i64] = Vec.new();
+    let mut i = n - 1;
+    while i >= 0 {
+        let pos = lower_bound(seen, nums[i]);
+        counts[i] = pos;
+        seen.insert(pos, nums[i]);
+        i = i - 1;
+    }
+    return counts;
+}
+
+// ------------------------------------------------------------- demo ---
+
+fn fmt(v: ref Vec[i64]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..v.len() {
+        if i > 0 { s = s + ","; }
+        s = s + v[i].to_string();
+    }
+    return s + "]";
+}
+
+fn main() {
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    cases.push([5, 2, 6, 1]);            // LeetCode: [2,1,1,0]
+    cases.push([-1]);                    // [0]
+    cases.push([-1, -1]);                // [0,0] — equal is not smaller
+    cases.push([]);
+    cases.push([3, 3, 3, 3]);
+    cases.push([1, 2, 3, 4, 5]);         // ascending: all zero
+    cases.push([5, 4, 3, 2, 1]);         // descending: n-1-i
+    cases.push([-10000, 10000, 0, -10000, 7, 7, -3]);
+    cases.push([2, 0, 1]);
+
+    let mut acc = 0;
+    for c in 0..cases.len() {
+        let counts = count_smaller(cases[c]);
+        for j in 0..counts.len() {
+            acc = (acc * 131 + counts[j] + 1) % 1000000007;
+        }
+        println(f"case {c}: {fmt(counts)}");
+    }
+    println(f"sink: {acc}");
+}

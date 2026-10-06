@@ -1,0 +1,8 @@
+
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let w = [10, 20, 30, 40];
+    for (a, b) in v.iter().filter(|x| x > 1).zip(w.iter().map(|y| y * 2)) {
+        println(f"{a}+{b}");
+    }
+}

@@ -1,0 +1,122 @@
+// Scaled harness around the EXACT shape that gained the rc-fallback in kata #93,
+// so the cost of that Rc can be measured. The kata's own main runs LeetCode-tiny
+// inputs (timing noise), and bench/restore_ip.kara measures a different
+// formulation (`restore_fold`) with no `path` threading at all — so neither can
+// answer this.
+//
+// `backtrack` is copied verbatim from leetcode/1-100/93-restore-ip-addresses/
+// restore_ip.kara. The load-bearing detail is `path: String` being CONSUMED by
+// `out.push(path)` on the `part == 4` arm and USED by `f"{path}.{seg}"` further
+// down. Those sites are on disjoint branches (the consume arm returns), but they
+// are dominance-INCOMPARABLE, so post-c8bce5d3 rc-promotion inserts an Rc for
+// `path` where the pre-fix compiler saw no second use at all.
+//
+// Punch loop: 12-digit numeric strings, each fully enumerated. Every recursion
+// level builds a fresh `f"{path}.{seg}"`, so `path` is threaded through four
+// levels per solution — the Rc, if it costs anything, costs it here.
+
+fn to_bytes(str: ref String) -> Vec[u8] {
+    let b = str.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        v.push(b[i]);
+        i = i + 1;
+    }
+    v
+}
+
+fn backtrack(s: ref Vec[u8], n: i64, start: i64, part: i64, path: String,
+        out: mut ref Vec[String]) {
+    if part == 4 {
+        if start == n {
+            out.push(path);
+        }
+        return;
+    }
+    let mut len = 1;
+    while len <= 3 {
+        if start + len > n {
+            break;
+        }
+        let mut val = 0;
+        let mut seg: String = "";
+        let mut i = 0;
+        while i < len {
+            let d = (s[start + i] as i64) - 48;
+            val = val * 10 + d;
+            seg.push_str(f"{d}");
+            i = i + 1;
+        }
+        let valid = (len == 1 or s[start] != 48u8) and val <= 255;
+        if valid {
+            let newpath = if part == 0 {
+                seg
+            } else {
+                f"{path}.{seg}"
+            };
+            backtrack(s, n, start + len, part + 1, newpath, out);
+        }
+        len = len + 1;
+    }
+}
+
+fn restore(str: ref String) -> Vec[String] {
+    let s = to_bytes(str);
+    let n = s.len();
+    let mut out: Vec[String] = Vec.new();
+    backtrack(s, n, 0, 0, "", mut out);
+    out
+}
+
+// Overflow-free 31-bit LCG; draws use bits 16..23.
+fn lcg(state: i64) -> i64 {
+    (state * 1103515245 + 12345) & 2147483647
+}
+
+fn main() {
+    let iters = 40000;
+
+    // Build the 12-digit subjects once (build-once + punch, BENCHMARKS.md).
+    // Digits {1,2} at length 8: every 1-3 digit group is <=222 and never has a
+    // leading zero, so all 19 four-part splits of each subject are VALID. That
+    // maximises how often `f"{path}.{seg}"` runs — the configuration most likely
+    // to expose a cost for the Rc on `path`. If nothing shows here, nothing
+    // shows in the kata.
+    let mut digits: Vec[String] = Vec.new();
+    digits.push("1"); digits.push("2");
+
+    let mut subjects: Vec[String] = Vec.new();
+    let mut state = 1;
+    let mut j = 0;
+    while j < 64 {
+        let mut sj: String = "";
+        let mut k = 0;
+        while k < 8 {
+            state = lcg(state);
+            sj.push_str(digits[(state / 65536) % 2]);
+            k = k + 1;
+        }
+        subjects.push(sj);
+        j = j + 1;
+    }
+
+    // Sink: rolling polynomial hash of the solution counts and their lengths —
+    // loop-carried, so the punch loop stays sequential by construction.
+    let mut acc = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = it % 64;
+        let ips = restore(subjects[idx]);
+        let c = ips.len();
+        let mut tot = 0;
+        let mut q = 0;
+        while q < c {
+            tot = tot + ips[q].len();
+            q = q + 1;
+        }
+        acc = (acc * 131 + c * 7 + tot) % 1000000007;
+        it = it + 1;
+    }
+    println(f"{acc}");
+}

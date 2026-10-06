@@ -1,0 +1,19 @@
+
+struct Wrap[T] { val: T }
+struct Pair[A, B] { a: A, b: B }
+fn boom(x: i64) -> Result[i64, Wrap[String]] {
+    if x > 0i64 { Ok(x) } else { Err(Wrap { val: "badness".to_string() }) }
+}
+fn opt(x: i64) -> Option[Wrap[String]] {
+    if x > 0i64 { Some(Wrap { val: "opt".to_string() }) } else { None }
+}
+fn pair(x: i64) -> Result[i64, Pair[i64, String]] {
+    if x > 0i64 { Ok(x) } else { Err(Pair { a: 7i64, b: "hi".to_string() }) }
+}
+fn main() {
+    match boom(-1i64) { Ok(_) => { println("ok"); } Err(e) => { println(e.val); } }
+    match boom(-1i64) { Ok(_) => { println("ok"); } Err(e) => { println(e.val.len().to_string()); } }
+    match boom(-1i64) { Ok(_) => { println("ok"); } Err(e) => { let s = e.val; println(s.len().to_string()); } }
+    match opt(1i64) { Some(w) => { println(w.val); } None => { println("none"); } }
+    match pair(-1i64) { Ok(_) => { println("ok"); } Err(e) => { println(e.a.to_string()); println(e.b); } }
+}

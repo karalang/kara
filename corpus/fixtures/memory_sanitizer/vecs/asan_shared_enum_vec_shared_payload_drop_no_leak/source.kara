@@ -1,0 +1,19 @@
+
+shared struct Node { mut val: i64 }
+shared enum Tree { Leaf, Branch(Vec[Node]) }
+fn build(n: i64) -> Tree {
+    let mut v: Vec[Node] = Vec.new();
+    v.push(Node { val: n });
+    v.push(Node { val: n + 1 });
+    Tree.Branch(v)
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        let t = build(i);
+        total = total + 1;
+        i = i + 1;
+    }
+    println(total.to_string());
+}

@@ -1,0 +1,4 @@
+fn main() {
+             let tab: Interner = Interner.new();
+             println(tab.handle_id > 0);
+         }

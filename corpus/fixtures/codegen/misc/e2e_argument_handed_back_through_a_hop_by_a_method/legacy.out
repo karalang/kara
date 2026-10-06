@@ -1,0 +1,19 @@
+assoc_hop
+  v=1
+  dR1
+assoc_direct
+  v=2
+  dR2
+method_hop
+  v=3
+  dR3
+assoc_hop_copyable
+  v=4
+  dP4
+method_hop_dies
+  dR5
+  v=5
+named_into_assoc_hop
+  v=6
+  dR6
+end

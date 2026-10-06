@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::test_ir_freshtemp_shared_enum_method_materializes_and_rc_drops"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

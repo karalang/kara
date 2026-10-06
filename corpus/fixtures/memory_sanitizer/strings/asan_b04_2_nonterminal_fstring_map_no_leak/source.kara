@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];
+        let r: Vec[String] = v.iter().map(|x| f"payload-element-number-{x}-aaaaaaaaaaaaaaaaaaaa").filter(|s| s.len() > 0i64).collect();
+        println(f"{r.len()} {r[0i64]} {r[3i64]}");
+        round = round + 1i64;
+    }
+}

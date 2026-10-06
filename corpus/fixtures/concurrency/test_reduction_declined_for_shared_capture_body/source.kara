@@ -1,0 +1,25 @@
+
+        shared struct Node {
+            val: i64,
+            next: Option[Node],
+        }
+
+        fn len(node: Option[Node]) -> i64 {
+            match node {
+                None => 0,
+                Some(n) => 1 + len(n.next),
+            }
+        }
+
+        fn main() {
+            let mut pool: Vec[Option[Node]] = Vec.new();
+            pool.push(Some(Node { val: 1, next: None }));
+            let mut total = 0;
+            let mut k = 0;
+            while k < 100000 {
+                total = total + len(pool[k % 1]);
+                k = k + 1;
+            }
+            println(total);
+        }
+        

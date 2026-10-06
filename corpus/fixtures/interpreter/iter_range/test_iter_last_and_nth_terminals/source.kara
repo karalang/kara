@@ -1,0 +1,11 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    match v.iter().last() { Some(x) => println(x), None => println(-1) }
+    match v.iter().nth(1) { Some(x) => println(x), None => println(-1) }
+    match v.iter().nth(9) { Some(x) => println(x), None => println(-1) }
+    let s: Vec[String] = ["a", "b", "c"];
+    match s.iter().last() { Some(x) => println(x), None => println("none") }
+    let e: Vec[i64] = [];
+    match e.iter().last() { Some(x) => println(x), None => println(-1) }
+}

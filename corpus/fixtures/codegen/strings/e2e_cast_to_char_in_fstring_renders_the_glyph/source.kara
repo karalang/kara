@@ -1,0 +1,15 @@
+
+fn main() {
+    let n = 97i64;
+    let b = n as u8;
+    println(f"A:{b as char}");
+    println(f"B:{(n as u8) as char}");
+    let c = b as char;
+    println(f"C:{c}");
+    let big = 300i64;
+    println(f"D:{big as u8}");
+    let neg = 0i64 - 1i64;
+    println(f"E:{neg as u8}");
+    let f = 2.9f64;
+    println(f"F:{f as i64}");
+}

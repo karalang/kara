@@ -1,0 +1,37 @@
+
+struct P { name: String, k: i64 }
+enum K { A(String), B }
+struct G { o: Option[String], p: Option[P], q: Option[K], m: Option[Map[i64, String]], t: Option[(String, i64)], n: i64 }
+fn mk(i: i64) -> String { f"alpha-{i}-long-enough-to-heap" }
+fn mg(i: i64) -> G {
+    let mut mm: Map[i64, String] = Map.new();
+    mm.insert(i, mk(i));
+    G { o: Some(mk(i)), p: Some(P { name: mk(i), k: i }), q: Some(K.A(mk(i))), m: Some(mm), t: Some((mk(i), 3)), n: i }
+}
+fn main() {
+    let g: Vec[G] = [mg(1), mg(22)];
+    let mut n = 0;
+    let a = g[0].q;
+    match a { Some(K.A(s)) => { n = n + s.len(); } _ => {} }
+    match g[0].q { Some(K.A(s)) => { n = n + s.len(); } _ => {} }
+    let b = g[0].m;
+    match b { Some(m) => { n = n + m.len(); } None => {} }
+    match g[0].m { Some(m) => { n = n + m.len(); } None => {} }
+    println(f"let {n}");
+    n = 0;
+    match g[0].p { Some(P { name, k }) => { n = n + name.len() + k; } _ => {} }
+    match g[0].p { Some(pp) => { n = n + pp.name.len(); } _ => {} }
+    match g[0].p { Some(pp) => { let q = pp; n = n + q.name.len(); } _ => {} }
+    if let Some(P { name, k }) = g[0].p { n = n + name.len() + k; }
+    println(f"pat {n}");
+    n = 0;
+    for x in g {
+        match x.o { Some(s) => { n = n + s.len(); } None => {} }
+        if let Some(K.A(s)) = x.q { n = n + s.len(); }
+        let q = x.q;
+        match q { Some(K.A(s)) => { n = n + s.len(); } _ => {} }
+        match x.p { Some(P { name, k }) => { n = n + name.len() + k; } _ => {} }
+        match x.t { Some((s, k)) => { n = n + s.len() + k; } _ => {} }
+    }
+    println(f"loop {n}");
+}

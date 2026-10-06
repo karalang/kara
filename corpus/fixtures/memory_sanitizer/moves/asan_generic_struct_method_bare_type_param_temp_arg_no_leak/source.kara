@@ -1,0 +1,19 @@
+
+struct Stack[T] { items: Vec[T] }
+impl[T] Stack[T] {
+    fn new() -> Stack[T] { Stack { items: Vec.new() } }
+    fn push(mut ref self, v: T) { self.items.push(v); }
+    fn len(ref self) -> i64 { self.items.len() }
+}
+fn main() {
+    let mut temps: Stack[Vec[i64]] = Stack.new();
+    let mut named: Stack[Vec[i64]] = Stack.new();
+    let mut i: i64 = 0i64;
+    while i < 50i64 {
+        temps.push([i, i + 1i64, i + 2i64]);
+        let v: Vec[i64] = [i, i + 1i64];
+        named.push(v);
+        i = i + 1;
+    }
+    println((temps.len() + named.len()).to_string());
+}

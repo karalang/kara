@@ -1,0 +1,15 @@
+
+#[derive(Message)]
+struct Bag { ds: Vec[f64] }
+
+fn main() {
+    let mut buf = Vec.new();
+    buf.extend_from_slice(ProtoBuf.encode_tag(1, 1));
+    buf.extend_from_slice(ProtoBuf.encode_fixed64((1.5f64).to_bits()));
+    buf.extend_from_slice(ProtoBuf.encode_tag(1, 1));
+    buf.extend_from_slice(ProtoBuf.encode_fixed64((2.5f64).to_bits()));
+    let back = Bag.decode(buf);
+    println(back.ds.len());
+    println(back.ds[0] == 1.5);
+    println(back.ds[1] == 2.5);
+}

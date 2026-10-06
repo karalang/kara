@@ -1,0 +1,22 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct Key { id: i64, parts: Vec[i64] }
+fn main() {
+    let mut m: Map[Key, i64] = Map.new();
+    let mut seed: Vec[i64] = Vec.new();
+    seed.push(1i64);
+    m.insert(Key { id: 1i64, parts: seed }, 7i64);
+    let mut j = 0i64;
+    let mut hits = 0i64;
+    while j < 5i64 {
+        let mut p: Vec[i64] = Vec.new();
+        p.push(j);
+        p.push(j + 1i64);
+        match m.get(Key { id: j, parts: p }) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{hits}{m.len()}");
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/generics.rs::e2e_derived_ord_satisfies_a_generic_impl_bound"
+dedup_of = ["tests/interpreter/generics.rs::test_derived_ord_satisfies_a_generic_impl_bound", "tests/typechecker.rs::derived_ord_satisfies_a_bound_on_a_generic_impl_method"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

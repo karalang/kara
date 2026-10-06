@@ -1,0 +1,12 @@
+
+struct Item { id: i64, name: String }
+struct Bag { xs: Vec[Item] }
+impl Bag {
+    fn go(mut ref self) { self.xs[0] = Item { id: 9, name: f"z{9}" }; }
+}
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.xs.push(Item { id: 1, name: f"a{1}" });
+    b.go();
+    println(f"{b.xs[0].id}");
+}

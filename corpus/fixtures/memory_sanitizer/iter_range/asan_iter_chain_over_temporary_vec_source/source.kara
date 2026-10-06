@@ -1,0 +1,10 @@
+
+fn main() {
+    let n: i64 = vec![1, 2, 3, 4].iter().sum();
+    println(n);
+    let mut c = 0;
+    for s in vec!["alpha", "beta", "gamma"].iter() {
+        c = c + 1;
+    }
+    println(c);
+}

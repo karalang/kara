@@ -1,0 +1,62 @@
+// LeetCode 165 — Compare Version Numbers.
+//
+// Compare two dot-separated version strings. Each revision is compared as an
+// INTEGER (so "1.01" == "1.001" — leading zeros are insignificant), left to
+// right. A version with fewer revisions is padded with implicit zeros, so
+// "1.0" == "1" and "1.0.0" == "1". Return -1 / 0 / 1.
+//
+// Parse each version into its list of integer revisions in one byte scan
+// (accumulating digits directly, no substring allocation), then compare the two
+// lists element by element treating a missing revision as 0.
+
+fn revisions(v: String) -> Vec[i64] {
+    let bytes = v.bytes();
+    let n = bytes.len();
+    let dot: u8 = b'.';
+    let zero: u8 = b'0';
+    let mut revs: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut val: i64 = 0;
+        while i < n and bytes[i] != dot {
+            val = val * 10 + (bytes[i] as i64 - zero as i64);
+            i = i + 1;
+        }
+        revs.push(val);
+        i = i + 1; // skip the '.'
+    }
+    return revs;
+}
+
+fn compare_version(v1: String, v2: String) -> i64 {
+    let a = revisions(v1);
+    let b = revisions(v2);
+    let na = a.len();
+    let nb = b.len();
+    let m = if na > nb { na } else { nb };
+    let mut i = 0;
+    while i < m {
+        let x = if i < na { a[i] } else { 0 };
+        let y = if i < nb { b[i] } else { 0 };
+        if x < y { return -1; }
+        if x > y { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn report(v1: String, v2: String) {
+    println(compare_version(v1, v2));
+}
+
+fn main() {
+    report("1.2", "1.10");       // -1  (2 < 10)
+    report("1.01", "1.001");     //  0
+    report("1.0", "1.0.0.0");    //  0
+    report("1.0.1", "1");        //  1
+    report("7.5.2.4", "7.5.3");  // -1
+    report("1.1", "1.1");        //  0
+    report("0.1", "1.1");        // -1
+    report("1.0.0", "1");        //  0
+    report("12.34", "12.3");     //  1
+}

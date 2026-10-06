@@ -1,0 +1,25 @@
+shared struct H { id: i64 }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+struct W { o: Option[H], n: i64 }
+struct X { h: H, n: i64 }
+enum E { A(H), B }
+fn cw(w: W) { println(f"w{w.n}") }
+fn cx(x: X) { println(f"x{x.n}") }
+fn co(o: Option[H]) { println("o") }
+fn ct(t: (H, i64)) { println(f"t{t.1}") }
+fn ce(e: E) { println("e") }
+fn cv(v: Vec[H]) { println(f"v{v.len()}") }
+fn keepw(w: W) -> W { w }
+fn main() {
+    let w = W { o: Some(H { id: 1 }), n: 7 }; cw(w); println("_1");
+    let x = X { h: H { id: 2 }, n: 2 }; cx(x); println("_2");
+    let o = Some(H { id: 3 }); co(o); println("_3");
+    let t = (H { id: 4 }, 1); ct(t); println("_4");
+    let e = E.A(H { id: 5 }); ce(e); println("_5");
+    let v = vec![H { id: 6 }]; cv(v); println("_6");
+    { let w7 = W { o: Some(H { id: 7 }), n: 8 }; let k = keepw(w7); println(f"_7 {k.n}"); }
+    println("_7b");
+    { let r = Some(H { id: 8 }); println(f"_8 {r.is_some()}"); }
+    println("_8b");
+    println("end")
+}

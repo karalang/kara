@@ -1,0 +1,14 @@
+
+struct G3[T] { v: T, w: String }
+fn ms(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
+fn mkres(k: i64) -> Result[G3[String], i64] { Result.Ok(G3 { v: ms(k), w: ms(k * 10) }) }
+fn m1() -> i64 { let o: Result[G3[String], i64] = Result.Ok(G3 { v: ms(1), w: ms(11) }); match o { Result.Ok(G3 { v, .. }) => { println(v); v.len() }, Result.Err(e) => e } }
+fn m2() -> i64 { let o: Result[G3[String], i64] = Result.Ok(G3 { v: ms(2), w: ms(22) }); match o { Result.Ok(G3 { w, .. }) => { println(w); w.len() }, Result.Err(e) => e } }
+fn m3() -> i64 { match mkres(3) { Result.Ok(G3 { v, .. }) => { println(v); v.len() }, Result.Err(e) => e } }
+fn m4() -> i64 { if let Result.Ok(G3 { w, .. }) = mkres(4) { println(w); w.len() } else { 0 } }
+fn m5() -> i64 { let o = Option.Some(G3 { v: ms(5), w: ms(55) }); match o { Option.Some(G3 { v, .. }) => { println(v); v.len() }, Option.None => 0 } }
+fn m6() -> i64 { match Option.Some(G3 { v: ms(6), w: ms(66) }) { Option.Some(G3 { w, .. }) => { println(w); w.len() }, Option.None => 0 } }
+fn main() {
+    println(m1()); println(m2()); println(m3()); println(m4()); println(m5()); println(m6())
+    println("end")
+}

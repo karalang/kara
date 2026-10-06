@@ -1,0 +1,10 @@
+
+#[derive(Eq)]
+struct P { name: String }
+struct Holder { inner: P }
+fn f(h: ref Holder, other: ref P) -> bool { h.inner == other }
+fn main() {
+    let h = Holder { inner: P { name: "abcd" } };
+    let q = P { name: "abcd" };
+    println(f"{f(h, q)}");
+}

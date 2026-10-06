@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    let mut i: i64 = 0i64;
+    while i < 5i64 {
+        let e: String = f"stable-elem-padding-padding";
+        match s.try_insert(e) {
+            Ok(b) => println(b),
+            Err(_) => println("oom"),
+        }
+        i = i + 1;
+    }
+    println(s.len());
+}

@@ -1,0 +1,12 @@
+
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+let s: Mix[Vec[R]] = Mix.A(a);
+println("mid");
+println("end");
+}

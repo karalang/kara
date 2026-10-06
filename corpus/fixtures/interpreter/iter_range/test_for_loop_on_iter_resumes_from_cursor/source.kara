@@ -1,0 +1,10 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    let mut it = v.iter();
+    let _ = it.next();
+    let _ = it.next();
+    for x in it {
+        println(x);
+    }
+}

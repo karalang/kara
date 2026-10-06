@@ -1,0 +1,7 @@
+fn main() {
+        let s: String = "hello";
+        println(f"{s.chars().count()}");
+        println(f"{s.chars().len()}");
+        let e: String = "";
+        println(f"{e.chars().count()}");
+    }

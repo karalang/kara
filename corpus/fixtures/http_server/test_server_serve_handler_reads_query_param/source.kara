@@ -1,0 +1,32 @@
+
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                let params: Vec[(String, String)] = req.query();
+                let mut found_q = 0;
+                let mut found_lang = 0;
+                for (k, v) in params {
+                    if k == "q" {
+                        if v == "hello world" {
+                            found_q = 1;
+                        }
+                    }
+                    if k == "lang" {
+                        if v == "en" {
+                            found_lang = 1;
+                        }
+                    }
+                }
+                let body = if found_q == 1 {
+                    if found_lang == 1 { "both" } else { "q-only" }
+                } else {
+                    "miss"
+                };
+                Response { status: 200, body: body }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        

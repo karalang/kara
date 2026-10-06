@@ -1,0 +1,14 @@
+
+shared struct Node { id: i64 }
+impl PartialEq for Node { fn eq(ref self, other: ref Node) -> bool { false } }
+impl Eq for Node {}
+impl PartialOrd for Node {
+    fn partial_cmp(ref self, other: ref Node) -> Option[Ordering] { Some(other.id.cmp(self.id)) }
+}
+fn main() {
+    let a = Node { id: 1 };
+    let b = Node { id: 5 };
+    let c = Node { id: 1 };
+    println(f"{a < b} {a > b}");
+    println(f"{a == c} {a != c}");
+}

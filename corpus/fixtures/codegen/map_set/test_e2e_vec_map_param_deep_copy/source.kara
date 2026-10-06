@@ -1,0 +1,20 @@
+
+fn id(v: Vec[Map[i64, i64]]) -> Vec[Map[i64, i64]] {
+    v
+}
+
+fn main() {
+    let mut v: Vec[Map[i64, i64]] = Vec.new();
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1i64, 10i64);
+    m.insert(2i64, 20i64);
+    v.push(m);
+    let mut m2: Map[i64, i64] = Map.new();
+    m2.insert(3i64, 30i64);
+    v.push(m2);
+    let r = id(v);
+    println(r.len());
+    match r[0].get(1i64) { Some(x) => println(x), None => println(-1i64) }
+    match r[0].get(2i64) { Some(x) => println(x), None => println(-1i64) }
+    match r[1].get(3i64) { Some(x) => println(x), None => println(-1i64) }
+}

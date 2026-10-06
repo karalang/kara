@@ -1,0 +1,24 @@
+
+shared struct SharedOwner { mut m: Map[i64, Vec[Vec[String]]] }
+struct PlainOwner { mut m: Map[i64, Vec[Vec[String]]] }
+fn nested(tag: String) -> Vec[Vec[String]] {
+    let mut inner: Vec[String] = Vec.new();
+    inner.push(tag);
+    inner.push("a second reasonably long string in the inner vec");
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    outer.push(inner);
+    return outer;
+}
+fn main() {
+    let so = SharedOwner { m: Map.new() };
+    so.m.insert(1i64, nested("shared owner field value string"));
+    println(so.m.len());
+
+    let mut po = PlainOwner { m: Map.new() };
+    po.m.insert(2i64, nested("plain owner field value string"));
+    println(po.m.len());
+
+    let mut local: Map[i64, Vec[Vec[String]]] = Map.new();
+    local.insert(3i64, nested("plain local binding value string"));
+    println(local.len());
+}

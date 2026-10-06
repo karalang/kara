@@ -1,0 +1,5 @@
+top   WithVec { v: Vector(1, -2, 3, -4), n: 1 }
+nest  [WithVec { v: Vector(1, -2, 3, -4), n: 1 }]
+float WithVec { v: Vector(9, 8, 7, 6), n: 1 }
+narrow WithNarrow { a: 2.5, b: 3.5, c: 4.5 }
+plain Plain { n: 1, s: s, w: 340282366920938463463374607431768211455 }

@@ -1,0 +1,32 @@
+// Baseline: the sanctioned semantics of a bare (owning) parameter.
+//
+// `consume` declares `t: Tracked` with no `ref`, so it OWNS its argument and the
+// destructor runs INSIDE the callee, before control returns. Expected output:
+//
+//     DROP tearing down: [hello-world-payload]
+//       consume returned 19
+//     end of main
+//
+// Compare borrows.kara, where the identical call written inside an f-string
+// interpolation does not consume `t` at all.
+
+struct Tracked {
+    s: String,
+}
+
+impl Drop for Tracked {
+    fn drop(mut ref self) {
+        println(f"DROP tearing down: [{self.s}]");
+    }
+}
+
+fn consume(t: Tracked) -> i64 {
+    return t.s.len();
+}
+
+fn main() {
+    let t = Tracked { s: "hello-world-payload" };
+    let n = consume(t);
+    println(f"  consume returned {n}");
+    println("end of main");
+}

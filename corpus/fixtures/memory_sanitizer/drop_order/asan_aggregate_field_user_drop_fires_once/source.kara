@@ -1,0 +1,28 @@
+
+struct Res { tag: i64, buf: Vec[i64] }
+impl Drop for Res {
+    fn drop(mut ref self) { self.buf.clear(); }
+}
+struct Holder { label: String, r: Res }
+struct MovedOut { res: Res }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        let mut inner: Vec[i64] = Vec.new();
+        inner.push(i);
+        let h = Holder { label: "held", r: Res { tag: i, buf: inner } };
+        n = n + h.label.len();
+
+        // Field moved OUT: exactly one drop of `res` must happen (the
+        // destination's), never the holder's as well.
+        let mut inner2: Vec[i64] = Vec.new();
+        inner2.push(i);
+        let m = MovedOut { res: Res { tag: i, buf: inner2 } };
+        let taken = m.res;
+        n = n + taken.tag - i;
+        i = i + 1;
+    }
+    println(n);
+}

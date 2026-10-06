@@ -1,0 +1,66 @@
+// LeetCode 292 — Nim Game.
+//
+// A heap of `n` stones. You and a friend alternate, you first, and each turn
+// removes 1, 2 or 3 stones. Whoever takes the LAST stone wins. Both play
+// optimally. Can you win?
+//
+//     n = 1, 2, 3  ->  true    take them all
+//     n = 4        ->  false   whatever you leave (3, 2, 1) they take
+//     n = 5, 6, 7  ->  true    leave exactly 4
+//
+// THE ANSWER IS `n % 4 != 0`, and the whole interest of this kata is that a
+// one-line answer is not the same as an obvious one. Written cold it looks like
+// a magic constant; derived, it is forced.
+//
+// LOSING POSITIONS ARE THE ONES WORTH NAMING. Call a heap LOSING if the player
+// about to move cannot win against optimal play. n = 0 is losing — no stone to
+// take, and the player who moved last already won. A position is WINNING
+// exactly when SOME move reaches a losing position, since you get to choose;
+// it is losing when EVERY move reaches a winning one, since your opponent gets
+// to choose next.
+//
+// From n = 0 losing, the moves reach 1, 2 and 3 — each can step back to 0, so
+// all three are winning. Then n = 4 must reach 3, 2 or 1, all winning, so 4 is
+// losing. And that is the whole induction: from a multiple of 4 every move
+// (1, 2 or 3) lands on a non-multiple, and from a non-multiple you can always
+// take r = n % 4 stones and hand back a multiple. Multiples of 4 are exactly
+// the losing positions.
+//
+// So `n % 4 != 0` is not a pattern spotted in a table — it is the statement
+// that 1, 2, 3 cannot span a gap of 4. `nim_game_dp.kara` computes the same
+// table the induction describes, and `nim_game_memo.kara` searches the game
+// tree that both summarise; they exist to be checked AGAINST this file, not
+// because the closed form is in doubt.
+//
+// THE CONSTRAINT IS WHY THE CLOSED FORM IS NOT OPTIONAL. LeetCode allows
+// n up to 2^31 - 1. The DP is O(n) time and O(n) space, so at the top of the
+// range it wants ~17 GB and a couple of billion steps. The closed form answers
+// in one modulo. The differential below can therefore only cross-check the two
+// over the range the DP can actually reach — see `differential.kara`, which
+// says so rather than quietly testing small n and implying more.
+
+fn can_win_nim(n: i64) -> bool {
+    return (n % 4) != 0;
+}
+
+fn report(n: i64) {
+    println(f"n={n} -> {can_win_nim(n)}");
+}
+
+fn main() {
+    // The first few, where the induction is still checkable by hand.
+    let mut n = 1;
+    while n <= 12 {
+        report(n);
+        n = n + 1;
+    }
+
+    // The stated upper bound, which only this file can answer.
+    report(2147483647);   // 2^31-1 = 4*536870911 + 3  -> true
+    report(2147483644);   // a multiple of 4           -> false
+
+    // n = 0 is outside LeetCode's constraint (it starts at 1) but is the base
+    // case the whole induction rests on, so it is worth stating: the player to
+    // move has already lost.
+    report(0);
+}

@@ -1,0 +1,135 @@
+// LeetCode 250 — Count Univalue Subtrees, iterative post-order.
+//
+// Same answer as the ★ file, same O(n), no recursion. A post-order walk with an
+// explicit stack needs each node visited TWICE — once to schedule its children,
+// once to decide it after they are done — so the stack carries a parallel
+// `expanded` flag alongside the node index. A `Vec[bool] uni` memo holds each
+// finished subtree's verdict for its parent to read.
+//
+// The contrast with the ★ file is the point: recursion gets the two-phase visit
+// for free from the call stack, and this file has to spell it out. Both reach
+// the identical count.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn build(vals: Slice[i64], null_val: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let len = vals.len();
+    if len == 0 or vals[0] == null_val {
+        return nodes;
+    }
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < len {
+        let cur = queue[head];
+        head = head + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let li = nodes.len() - 1;
+            nodes[cur].left = li;
+            queue.push(li);
+        }
+        i = i + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let ri = nodes.len() - 1;
+            nodes[cur].right = ri;
+            queue.push(ri);
+        }
+        i = i + 1;
+    }
+    return nodes;
+}
+
+fn count_univalue(vals: Slice[i64], null_val: i64) -> i64 {
+    let nodes = build(vals, null_val);
+    let n = nodes.len();
+    if n == 0 {
+        return 0;
+    }
+
+    let mut uni: Vec[bool] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        uni.push(false);
+        k = k + 1;
+    }
+
+    // Two parallel stacks stand in for a stack of pairs.
+    let mut stack: Vec[i64] = Vec.new();
+    let mut expanded: Vec[bool] = Vec.new();
+    stack.push(0);
+    expanded.push(false);
+
+    let mut total = 0;
+    while stack.len() > 0 {
+        let node = match stack.pop() {
+            Some(v) => v,
+            None => -1,
+        };
+        let seen = match expanded.pop() {
+            Some(v) => v,
+            None => false,
+        };
+        if node == -1 {
+            continue; // absent child: nothing to decide, nothing to memo
+        }
+        if not seen {
+            // First visit — reschedule this node behind its children.
+            stack.push(node);
+            expanded.push(true);
+            stack.push(nodes[node].right);
+            expanded.push(false);
+            stack.push(nodes[node].left);
+            expanded.push(false);
+            continue;
+        }
+        // Second visit — both children have already written their verdicts.
+        let left = nodes[node].left;
+        let right = nodes[node].right;
+        let mut ok = true;
+        if left != -1 {
+            if not uni[left] or nodes[left].val != nodes[node].val {
+                ok = false;
+            }
+        }
+        if right != -1 {
+            if not uni[right] or nodes[right].val != nodes[node].val {
+                ok = false;
+            }
+        }
+        uni[node] = ok;
+        if ok {
+            total = total + 1;
+        }
+    }
+    return total;
+}
+
+fn main() {
+    let null = -1000;
+
+    let a: Array[i64, 7] = [5, 1, 5, 5, 5, -1000, 5];
+    println(f"{count_univalue(a, null)}");
+    let b: Array[i64, 0] = [];
+    println(f"{count_univalue(b, null)}");
+    let c: Array[i64, 1] = [1];
+    println(f"{count_univalue(c, null)}");
+    let d: Array[i64, 3] = [1, 1, 1];
+    println(f"{count_univalue(d, null)}");
+    let e: Array[i64, 3] = [1, 1, 2];
+    println(f"{count_univalue(e, null)}");
+    let f: Array[i64, 7] = [5, 5, 5, 5, 5, -1000, 5];
+    println(f"{count_univalue(f, null)}");
+    let g: Array[i64, 7] = [1, 2, 3, 4, 5, 6, 7];
+    println(f"{count_univalue(g, null)}");
+    let h: Array[i64, 7] = [7, 7, 7, 7, 7, 7, 7];
+    println(f"{count_univalue(h, null)}");
+}

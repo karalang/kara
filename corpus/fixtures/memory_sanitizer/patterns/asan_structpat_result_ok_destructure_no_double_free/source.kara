@@ -1,0 +1,13 @@
+
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let r: Result[Holder, i64] = Ok(Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i });
+        match r {
+            Ok(Holder { name, id }) => { println(name.len() + id); },
+            Err(e) => { println(e); },
+        }
+        i = i + 1;
+    };
+}

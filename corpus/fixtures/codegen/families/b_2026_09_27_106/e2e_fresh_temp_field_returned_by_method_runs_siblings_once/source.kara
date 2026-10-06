@@ -1,0 +1,42 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { D { id: n, name: f"n{n}" } }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
+struct T { w: W, t: D }
+fn mkt(n: i64) -> T { T { w: mkw(n), t: mkd(n + 300) } }
+struct H { k: i64 }
+impl H { fn g(ref self, w: W) -> D { w.r } }
+impl W {
+    fn getr(self) -> D { self.r }
+    fn gets(self) -> D { return self.s; }
+    fn getb(self) -> i64 { self.b }
+    fn dest(self) -> D { let W { r, s, b } = self; r }
+}
+impl T {
+    fn deep(self) -> D { self.w.r }
+    fn getw(self) -> W { self.w }
+}
+fn main() {
+    let h = H { k: 0 };
+    let a = h.g(mkw(1));
+    println(f"a{a.id}");
+    let b = mkw(2).getr();
+    println(f"b{b.id}");
+    let c = mkt(3).deep();
+    println(f"c{c.id}");
+    let e = mkw(4).gets();
+    println(f"e{e.id}");
+    println(f"f{mkw(5).getb()}");
+    let g = mkw(6).dest();
+    println(f"g{g.id}");
+    let w = mkt(7).getw();
+    println(f"i{w.b}");
+    let v = mkw(8);
+    let j = v.getr();
+    println(f"j{j.id}");
+    let x = mkw(9);
+    let k = h.g(x);
+    println(f"k{k.id}");
+    println("end")
+}

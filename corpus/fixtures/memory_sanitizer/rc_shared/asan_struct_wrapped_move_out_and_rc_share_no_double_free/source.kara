@@ -1,0 +1,21 @@
+
+shared enum Expr { Num(i64), Add(BinOp), Neg(Unary) }
+struct BinOp { left: Expr, right: Expr }
+struct Unary { operand: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+        Neg(u) => 0 - eval(u.operand),
+    }
+}
+fn main() {
+    let t1 = Add(BinOp { left: Num(3), right: Num(4) });
+    let t2 = t1;
+    let sub = Add(BinOp { left: Num(2), right: Num(3) });
+    let p1 = Add(BinOp { left: sub, right: Num(10) });
+    let p2 = Neg(Unary { operand: Num(7) });
+    println(eval(t2));
+    println(eval(p1));
+    println(eval(p2));
+}

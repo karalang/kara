@@ -1,0 +1,167 @@
+// LeetCode #21: Merge Two Sorted Lists — iterative O(m + n), O(1) extra.
+//
+// Given the heads of two lists sorted in non-decreasing order, splice their
+// nodes together into one sorted list and return its head. The merged list
+// reuses the input nodes — no new node is allocated, the existing nodes are
+// just re-linked.
+//
+// This is the merge step of a merge sort, in linked-list form. Walk both
+// lists with a cursor each (`a`, `b`); at every step compare the two front
+// nodes and splice the smaller one onto the growing output tail, advancing
+// only that list's cursor. When one list runs dry, the other's remaining
+// suffix is already sorted and already linked, so it attaches in one move —
+// `tail.next = a` (or `b`) — with no per-node copying.
+//
+// The dummy node is the same load-bearing trick as kata [#2](../2-add-two-numbers/)
+// and kata [#19](../19-remove-nth-node-from-end-of-list/): a throwaway node
+// placed before the output head so the first spliced node is not a special
+// case. `tail` starts on the dummy; every iteration does `tail.next = <node>;
+// tail = <node>;` uniformly, head or not, and the real head falls out as
+// `dummy.next` at the end.
+//
+// `<=` (not `<`) on the tie makes the merge *stable*: when both fronts are
+// equal, `a`'s node is taken first, so equal keys keep their list-1-before-
+// list-2 order. Stability is invisible on bare i64 values but is the property
+// that makes this merge reusable as the combine step of a stable sort.
+//
+// `shared struct ListNode` gives the nodes reference (Rc-like) semantics, so
+// `tail = node` re-points the cursor without copying and `tail.next = a`
+// grafts an entire suffix by aliasing it — the same model kata 2 introduced.
+//
+// LeetCode bounds each list at 50 nodes and values to [-100, 100], so i32
+// would suffice; values are i64 here for uniformity with the rest of the
+// corpus (contrast kata [#18](../18-4sum/), where the 10⁹ bound forces i64).
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn merge_two_lists(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    // Dummy before the output head: the first spliced node is `dummy.next`,
+    // so it needs no special case.
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+
+    loop {
+        if let Some(na) = a {
+            if let Some(nb) = b {
+                // Both lists still have a front node — splice the smaller.
+                // `<=` keeps the merge stable on ties (list-1 node wins).
+                if na.val <= nb.val {
+                    tail.next = Some(na);
+                    tail = na;
+                    a = na.next;
+                } else {
+                    tail.next = Some(nb);
+                    tail = nb;
+                    b = nb.next;
+                }
+            } else {
+                // `b` is exhausted — graft `a`'s remaining suffix in one move.
+                tail.next = a;
+                break;
+            }
+        } else {
+            // `a` is exhausted — graft what is left of `b` (possibly None).
+            tail.next = b;
+            break;
+        }
+    }
+
+    dummy.next
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn report(a: Slice[i64], b: Slice[i64]) {
+    let l1 = from_array(a);
+    let l2 = from_array(b);
+    let out = merge_two_lists(l1, l2);
+    println(to_string(out));
+}
+
+fn main() {
+    // LeetCode example 1 — interleaved with a tie at the front → stable order.
+    let a1: Array[i64, 3] = [1, 2, 4];
+    let b1: Array[i64, 3] = [1, 3, 4];
+    report(a1, b1); // [1, 1, 2, 3, 4, 4]
+
+    // LeetCode example 2 — both empty → [].
+    let a2: Array[i64, 0] = [];
+    let b2: Array[i64, 0] = [];
+    report(a2, b2); // []
+
+    // LeetCode example 3 — one empty, one singleton → [0].
+    let a3: Array[i64, 0] = [];
+    let b3: Array[i64, 1] = [0];
+    report(a3, b3); // [0]
+
+    // Reverse of example 3 — exercises the other empty arm.
+    let a4: Array[i64, 1] = [5];
+    let b4: Array[i64, 0] = [];
+    report(a4, b4); // [5]
+
+    // Fully disjoint, list 1 entirely below list 2 — `b` exhausts last.
+    let a5: Array[i64, 3] = [1, 2, 3];
+    let b5: Array[i64, 3] = [4, 5, 6];
+    report(a5, b5); // [1, 2, 3, 4, 5, 6]
+
+    // Fully disjoint, list 2 entirely below list 1 — `a` exhausts last.
+    let a6: Array[i64, 3] = [4, 5, 6];
+    let b6: Array[i64, 3] = [1, 2, 3];
+    report(a6, b6); // [1, 2, 3, 4, 5, 6]
+
+    // All keys equal — every tie takes the list-1 node first (stability).
+    let a7: Array[i64, 3] = [2, 2, 2];
+    let b7: Array[i64, 2] = [2, 2];
+    report(a7, b7); // [2, 2, 2, 2, 2]
+
+    // Singletons.
+    let a8: Array[i64, 1] = [1];
+    let b8: Array[i64, 1] = [2];
+    report(a8, b8); // [1, 2]
+
+    // Negatives (values span [-100, 100]) interleaved.
+    let a9: Array[i64, 3] = [-3, -1, 2];
+    let b9: Array[i64, 3] = [-2, 0, 4];
+    report(a9, b9); // [-3, -2, -1, 0, 2, 4]
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/drop_order.rs::e2e_vec_in_option_or_map_field_runs_element_bodies_on_every_backend"
+dedup_of = ["tests/interpreter/drop_order.rs::interp_vec_in_option_or_map_field_runs_element_bodies"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,7 @@
+
+fn main() {
+    let n = 7i64;
+    let s = n.to_string();
+    println(f"value={s}!");
+    println(n.to_string() + "x");
+}

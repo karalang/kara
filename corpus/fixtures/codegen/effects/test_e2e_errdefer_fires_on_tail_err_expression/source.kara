@@ -1,0 +1,11 @@
+
+fn body() -> Result[i64, i64] {
+    errdefer { println("tail-err-cleanup"); }
+    Err(42_i64)
+}
+fn main() {
+    match body() {
+        Ok(_) => println("ok"),
+        Err(_) => println("caller-err"),
+    }
+}

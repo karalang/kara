@@ -1,0 +1,15 @@
+
+fn main() {
+    let a: Column[f64] = Column.from_vec([2.0, 4.0, 6.0]);
+    // Scalar reductions allocate no heap; the column is untouched.
+    println(a.sum());
+    println(a.mean());
+    println(a.var());
+    println(a.std());
+    // corr with a fresh-temp argument (a + a) — the temporary column is
+    // freed after the read; `a` is borrowed.
+    println(a.corr(a + a));
+    // a still usable after all of the above (borrowed, not consumed).
+    println(a.min());
+    println(a.max());
+}

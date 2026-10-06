@@ -1,0 +1,136 @@
+// LeetCode 250 — Count Univalue Subtrees.
+//
+// A uni-value subtree is one in which every node holds the same value. Count
+// them. The decision is inherently BOTTOM-UP: a node's subtree is uni-value iff
+// both child subtrees are uni-value AND every present child holds the node's own
+// value, so the children must be answered before the parent can be.
+//
+// This file is the ★ recursion's PURE twin: instead of bumping a `mut ref i64`
+// accumulator, `tally` returns a `Verdict { uni, count }` by value and each node
+// sums its children's counts. No shared mutable state anywhere in the traversal
+// — the same answer reached with an out-parameter in ★ and with a return value
+// here, which is the contrast #52's two files draw for a search tally.
+//
+// It also sidesteps the short-circuit trap structurally rather than by
+// discipline: both children must be evaluated because both counts are needed,
+// so there is no `and` to take a shortcut through.
+//
+// The tree is the corpus index-pool (`Vec[Node]` with i64 child indices,
+// -1 = null), built from a level-order array with a NULL sentinel — the standard
+// LeetCode serialization, identical to #199's builder.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+// Build the index-pool tree from a level-order array (`null_val` marks absent
+// children). Returns the node pool; the root is index 0 (or the tree is empty).
+fn build(vals: Slice[i64], null_val: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let len = vals.len();
+    if len == 0 or vals[0] == null_val {
+        return nodes;
+    }
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < len {
+        let cur = queue[head];
+        head = head + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let li = nodes.len() - 1;
+            nodes[cur].left = li;
+            queue.push(li);
+        }
+        i = i + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let ri = nodes.len() - 1;
+            nodes[cur].right = ri;
+            queue.push(ri);
+        }
+        i = i + 1;
+    }
+    return nodes;
+}
+
+// Post-order, pure: every node's answer is a value returned upward.
+struct Verdict {
+    uni: bool,
+    count: i64,
+}
+
+fn tally(nodes: ref Vec[Node], node: i64) -> Verdict {
+    if node == -1 {
+        return Verdict { uni: true, count: 0 };
+    }
+    let left = nodes[node].left;
+    let right = nodes[node].right;
+
+    // Both recursions are needed for their COUNTS regardless of the verdicts, so
+    // the short-circuit that breaks the accumulator form cannot arise here.
+    let l = tally(nodes, left);
+    let r = tally(nodes, right);
+
+    let mut ok = l.uni and r.uni;
+    if left != -1 and nodes[left].val != nodes[node].val {
+        ok = false;
+    }
+    if right != -1 and nodes[right].val != nodes[node].val {
+        ok = false;
+    }
+    let mut n = l.count + r.count;
+    if ok {
+        n = n + 1;
+    }
+    return Verdict { uni: ok, count: n };
+}
+
+fn count_univalue(vals: Slice[i64], null_val: i64) -> i64 {
+    let nodes = build(vals, null_val);
+    if nodes.len() == 0 {
+        return 0;
+    }
+    return tally(nodes, 0).count;
+}
+
+fn main() {
+    let null = -1000; // sentinel outside the value range
+
+    // [5,1,5,5,5,null,5] -> 4  (the three 5-leaves, plus the right child)
+    let a: Array[i64, 7] = [5, 1, 5, 5, 5, -1000, 5];
+    println(f"{count_univalue(a, null)}");
+
+    // [] -> 0
+    let b: Array[i64, 0] = [];
+    println(f"{count_univalue(b, null)}");
+
+    // [1] -> 1  (a lone leaf is uni-value)
+    let c: Array[i64, 1] = [1];
+    println(f"{count_univalue(c, null)}");
+
+    // [1,1,1] -> 3  (both leaves, then the root)
+    let d: Array[i64, 3] = [1, 1, 1];
+    println(f"{count_univalue(d, null)}");
+
+    // [1,1,2] -> 2  (both leaves; the root is broken by the 2)
+    let e: Array[i64, 3] = [1, 1, 2];
+    println(f"{count_univalue(e, null)}");
+
+    // [5,5,5,5,5,null,5] -> 6  (every node)
+    let f: Array[i64, 7] = [5, 5, 5, 5, 5, -1000, 5];
+    println(f"{count_univalue(f, null)}");
+
+    // [1,2,3,4,5,6,7] -> 4  (all distinct: only the leaves)
+    let g: Array[i64, 7] = [1, 2, 3, 4, 5, 6, 7];
+    println(f"{count_univalue(g, null)}");
+
+    // [7,7,7,7,7,7,7] -> 7
+    let h: Array[i64, 7] = [7, 7, 7, 7, 7, 7, 7];
+    println(f"{count_univalue(h, null)}");
+}

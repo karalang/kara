@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("alice");
+    s.insert("bob");
+    let r = s.remove("alice");
+    println(r);
+    println(s.contains("alice"));
+    println(s.contains("bob"));
+    println(s.len());
+}

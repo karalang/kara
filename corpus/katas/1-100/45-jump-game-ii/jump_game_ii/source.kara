@@ -1,0 +1,89 @@
+// LeetCode #45: Jump Game II — greedy range expansion, one pass, O(1) space (★).
+//
+// From index 0, `nums[i]` is the maximum forward jump length from `i`; return the MINIMUM
+// number of jumps to reach the last index (the input is guaranteed reachable). This is the
+// optimization sibling of #55 (which only asks *whether* the end is reachable): here we count
+// the fewest hops.
+//
+// The key fact is that minimum jumps = number of BFS layers in the implicit graph "i → any j
+// in (i, i+nums[i]]". Layer 0 is {0}; layer k+1 is every new index reachable from layer k. The
+// explicit-layer ([`_bfs`](jump_game_ii_bfs.kara)) and full-recurrence ([`_dp`](jump_game_ii_dp.kara))
+// files materialize those layers; this ★ file collapses the whole layered BFS into a single
+// left-to-right scan with three scalars:
+//
+//   - `farthest`     — the rightmost index reachable using AT MOST one more jump than we have
+//                      committed so far (the running max of `i + nums[i]`).
+//   - `current_end`  — the right boundary of the CURRENT layer: the farthest we can be after
+//                      `jumps` hops. While `i` walks within `[.., current_end]` we are still
+//                      spending the same jump.
+//   - `jumps`        — layers consumed so far.
+//
+// Walk `i` from 0 to n-2 (never need to jump *from* the last index). Each step widens
+// `farthest`; the instant `i` reaches `current_end` we have exhausted the current layer, so we
+// spend one jump and extend the boundary to `farthest` — the start of the next layer. Because
+// the input is reachable, `current_end` strictly advances past every index, so the scan is one
+// linear pass with three i64 scalars and no allocation. n ≤ 10⁴ and nums[i] ≤ 1000, so every
+// index and the jump count stay far inside i64.
+
+fn jump(nums: Slice[i64], n: i64) -> i64 {
+    let mut jumps = 0;
+    let mut current_end = 0; // right edge of the current BFS layer
+    let mut farthest = 0; // rightmost index reachable with one more jump
+    let mut i = 0;
+    // No need to act on the last index: arriving there ends the walk.
+    while i < n - 1 {
+        if i + nums[i] > farthest {
+            farthest = i + nums[i];
+        }
+        if i == current_end {
+            // Exhausted this layer — spend a jump and open the next one.
+            jumps = jumps + 1;
+            current_end = farthest;
+        }
+        i = i + 1;
+    }
+    jumps
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn report(nums: Slice[i64], n: i64) {
+    let ans = jump(nums, n);
+    println(f"{ans}");
+}
+
+fn main() {
+    // LeetCode example 1: 0 → idx1 → last.
+    let a1: Array[i64, 5] = [2, 3, 1, 1, 4];
+    report(a1, 5); // 2
+
+    // LeetCode example 2: a zero on the path, still two jumps.
+    let a2: Array[i64, 5] = [2, 3, 0, 1, 4];
+    report(a2, 5); // 2
+
+    // Already at the last index — zero jumps.
+    let a3: Array[i64, 1] = [0];
+    report(a3, 1); // 0
+
+    // Two elements, one hop either way.
+    let a4: Array[i64, 2] = [1, 2];
+    report(a4, 2); // 1
+    let a5: Array[i64, 2] = [2, 1];
+    report(a5, 2); // 1
+
+    // All ones — must step every index.
+    let a6: Array[i64, 4] = [1, 1, 1, 1];
+    report(a6, 4); // 3
+
+    // One big leap clears the whole array.
+    let a7: Array[i64, 5] = [5, 1, 1, 1, 1];
+    report(a7, 5); // 1
+    let a8: Array[i64, 5] = [4, 1, 1, 1, 1];
+    report(a8, 5); // 1
+
+    // Short ramps.
+    let a9: Array[i64, 3] = [1, 2, 3];
+    report(a9, 3); // 2
+    let a10: Array[i64, 5] = [2, 1, 1, 1, 1];
+    report(a10, 5); // 3
+}

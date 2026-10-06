@@ -1,0 +1,19 @@
+struct Box { rows: Vec[String] }
+struct H { n: i64 }
+impl H {
+    fn grow(ref self, v: mut ref Vec[String]) { v.push("row"); }
+}
+fn free_grow(v: mut ref Vec[String]) { v.push("row"); }
+fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    while i < 50i64 {
+        let mut b = Box { rows: ["seed"] };
+        free_grow(mut b.rows);
+        let h = H { n: 0 };
+        h.grow(mut b.rows);
+        total = total + b.rows.len();
+        i = i + 1;
+    }
+    println(total);
+}

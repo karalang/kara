@@ -1,0 +1,5 @@
+
+fn g[const N: i64]() -> i64 { N * 2 + 1 }
+fn main() {
+    println(g[7]());
+}

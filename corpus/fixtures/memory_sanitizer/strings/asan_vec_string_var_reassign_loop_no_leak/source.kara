@@ -1,0 +1,23 @@
+
+fn mkstr(c: char, n: i64) -> String {
+    let mut s = "";
+    let mut i = 0i64;
+    while i < n {
+        s.push(c);
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let mut cur: Vec[String] = Vec.new();
+    cur.push(mkstr('a', 6i64));
+    let mut r = 0i64;
+    while r < 4i64 {
+        let mut nxt: Vec[String] = Vec.new();
+        nxt.push(mkstr('b', 6i64));
+        nxt.push(mkstr('c', 6i64));
+        cur = nxt;
+        r = r + 1i64;
+    }
+    println(cur.len().to_string());
+}

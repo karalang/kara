@@ -1,0 +1,80 @@
+// LeetCode 188 — Best Time to Buy and Sell Stock IV.
+//
+// Maximum profit from at most `k` buy/sell transactions (buy before sell, one
+// position at a time). Two regimes:
+//
+//   * If `k` is at least `n/2`, there is no effective cap — you can capture every
+//     upward move — so greedily sum all positive day-to-day deltas.
+//   * Otherwise an O(n·k) DP over two rolling arrays: `buy[j]` = best profit
+//     while HOLDING after at most `j` buys, `sell[j]` = best profit while FLAT
+//     after at most `j` sells. Each day either extends the best or acts:
+//     `buy[j] = max(buy[j], sell[j-1] - price)` (open the j-th position),
+//     `sell[j] = max(sell[j], buy[j] + price)` (close it). Answer is `sell[k]`.
+
+fn max_i64(a: i64, b: i64) -> i64 { if a > b { return a; } return b; }
+
+fn max_profit(k: i64, prices: Slice[i64]) -> i64 {
+    let n = prices.len();
+    if n == 0 or k == 0 {
+        return 0;
+    }
+    // Unlimited-transaction shortcut: sum every positive delta.
+    if k >= n / 2 {
+        let mut profit = 0;
+        let mut i = 1;
+        while i < n {
+            if prices[i] > prices[i - 1] {
+                profit = profit + (prices[i] - prices[i - 1]);
+            }
+            i = i + 1;
+        }
+        return profit;
+    }
+
+    let neg = -1000000000; // below any achievable holding value
+    let mut buy: Vec[i64] = Vec.new();
+    let mut sell: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j <= k {
+        buy.push(neg);
+        sell.push(0);
+        j = j + 1;
+    }
+
+    let mut d = 0;
+    while d < n {
+        let price = prices[d];
+        let mut t = 1;
+        while t <= k {
+            buy[t] = max_i64(buy[t], sell[t - 1] - price);
+            sell[t] = max_i64(sell[t], buy[t] + price);
+            t = t + 1;
+        }
+        d = d + 1;
+    }
+    return sell[k];
+}
+
+fn report(k: i64, prices: Slice[i64]) {
+    println(max_profit(k, prices));
+}
+
+fn main() {
+    let a: Array[i64, 3] = [2, 4, 1];
+    report(2, a);                       // 2
+
+    let b: Array[i64, 6] = [3, 2, 6, 5, 0, 3];
+    report(2, b);                       // 7
+
+    let c: Array[i64, 6] = [1, 2, 3, 4, 5, 6];
+    report(2, c);                       // 5
+
+    let d: Array[i64, 6] = [6, 5, 4, 3, 2, 1];
+    report(2, d);                       // 0
+
+    let e: Array[i64, 8] = [1, 4, 2, 8, 3, 9, 1, 7];
+    report(3, e);                       // 19
+
+    let f: Array[i64, 4] = [1, 2, 4, 2];
+    report(0, f);                       // 0
+}

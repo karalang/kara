@@ -1,0 +1,26 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
+fn keep(d: D) -> D { d }
+fn ownw(w: W, c: bool) -> i64 { let mut xs: Vec[W] = Vec.new(); if c { xs.push(w); } xs.len() }
+fn st(xs: mut ref Vec[W], w: W, c: bool) { if c { xs.push(w); } }
+fn tl(w: W, c: bool) -> i64 { let mut xs: Vec[W] = Vec.new(); if c { xs.push(w) } xs.len() }
+fn lst(xs: mut ref Vec[W], w: W, n: i64) { let mut i = 0; while i < n { if i == 1 { xs.push(w); return; } i = i + 1; } }
+struct H { k: i64 }
+impl H { fn m(ref self, w: W, c: bool) -> i64 { let mut xs: Vec[W] = Vec.new(); if c { xs.push(w); } xs.len() } }
+struct X { w: W, t: D }
+struct Y { w: W, n: i64 }
+fn yst(xs: mut ref Vec[Y], y: Y, c: bool) { if c { xs.push(y); } }
+fn main() {
+    println(f"a{ownw(mkw(1), false)}"); println(f"a{ownw(mkw(2), true)}")
+    let w3 = mkw(3); println(f"b{ownw(w3, false)}"); let w4 = mkw(4); println(f"b{ownw(w4, true)}")
+    let mut ws: Vec[W] = Vec.new(); st(mut ws, mkw(5), false); let w6 = mkw(6); st(mut ws, w6, true); println(f"c{ws.len()}")
+    println(f"d{tl(mkw(7), false)}"); println(f"d{tl(mkw(8), true)}")
+    let h = H { k: 0 }; println(f"e{h.m(mkw(9), false)}"); let w10 = mkw(10); println(f"e{h.m(w10, true)}")
+    let x11 = X { w: mkw(11), t: mkd(311) }; println(f"f{ownw(x11.w, false)}"); let x12 = X { w: mkw(12), t: mkd(312) }; println(f"f{ownw(x12.w, true)}")
+    let mut ys: Vec[Y] = Vec.new(); yst(mut ys, Y { w: mkw(13), n: 13 }, false); let y14 = Y { w: mkw(14), n: 14 }; yst(mut ys, y14, true); println(f"g{ys.len()}")
+    lst(mut ws, mkw(15), 1); let w16 = mkw(16); lst(mut ws, w16, 3); println(f"h{ws.len()}")
+    println("end")
+}

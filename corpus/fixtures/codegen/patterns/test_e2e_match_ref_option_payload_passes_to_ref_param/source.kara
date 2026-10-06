@@ -1,0 +1,14 @@
+
+fn read_int(n: ref i64) -> i64 { n * 2 }
+fn show(opt: ref Option[i64]) -> i64 {
+    match opt {
+        Option.Some(n) => read_int(n),
+        Option.None => -1,
+    }
+}
+fn main() {
+    let some = Option.Some(7);
+    let none: Option[i64] = Option.None;
+    println(show(some));
+    println(show(none));
+}

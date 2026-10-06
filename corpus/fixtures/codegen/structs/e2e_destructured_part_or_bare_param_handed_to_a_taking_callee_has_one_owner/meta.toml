@@ -1,0 +1,13 @@
+source = "tests/codegen/structs.rs::e2e_destructured_part_or_bare_param_handed_to_a_taking_callee_has_one_owner"
+dedup_of = ["tests/interpreter/structs.rs::test_destructured_part_or_bare_param_handed_to_a_taking_callee_has_one_owner", "tests/memory_sanitizer/structs.rs::asan_destructured_part_or_bare_param_handed_to_a_taking_callee_clean"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut inner2: Map[i64, String] = Map.new();
+    inner2.insert(1, f"deepest payload padded out beyond thirty-six bytes {1}");
+    let mut inner1: Map[i64, Map[i64, String]] = Map.new();
+    inner1.insert(2, inner2);
+    let mut m: Map[i64, Map[i64, Map[i64, String]]] = Map.new();
+    m.insert(3, inner1);
+    println(m.len());
+}

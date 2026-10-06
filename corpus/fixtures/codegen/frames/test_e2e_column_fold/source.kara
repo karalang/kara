@@ -1,0 +1,17 @@
+
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4, 5]);
+    println(f"{c.fold(0, |a, x| a + x)}");
+    println(f"{c.fold(1, |a, x| a * x)}");
+    println(f"{c.fold(0, |a, x| if x > 2 { a + 1 } else { a })}");
+    println(f"{c.fold(0, |a, x| a + x * x)}");
+    let cf: Column[f64] = Column.from_vec([1.5, 2.5, 4.0]);
+    println(f"{cf.fold(0.0, |a, x| a + x)}");
+    let k: i64 = 10;
+    println(f"{c.fold(0, |a, x| a + x + k)}");
+    let e: Column[i64] = Column.from_vec([]);
+    println(f"{e.fold(99, |a, x| a + x)}");
+    let a: i64 = 7;
+    let s = c.fold(0, |a, x| a + x);
+    println(f"{s} {a}");
+}

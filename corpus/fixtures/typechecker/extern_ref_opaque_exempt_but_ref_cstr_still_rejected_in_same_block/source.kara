@@ -1,0 +1,6 @@
+unsafe extern "C" {
+    type Handle;
+    fn use_it(h: ref Handle);
+    fn strlen(s: ref CStr) -> usize;
+}
+fn main() {}

@@ -1,0 +1,577 @@
+// LeetCode 314 — four arms against each other and against a restatement of
+// the SPECIFICATION that no arm computes.
+//
+//   A  BFS with a column tag, columns in a SortedMap        vertical_order.kara ★
+//   B  extent pass, then a BFS frontier into an offset Vec  vertical_order_offset.kara
+//   C  DFS tagging (column, row, position), then one sort   vertical_order_dfs.kara
+//   D  BFS into a hash Map, keys sorted for the read-out    vertical_order_hashed.kara
+//
+// WHAT THE ARMS SHARE, AND WHAT THEY DO NOT. A, B and D are one walk — breadth
+// first — with three ways of getting the columns into order (an ordered map,
+// a pre-measured offset, a sort of the keys). If BFS order were not the
+// required within-column order, all three would be wrong together. C is the
+// other walk: depth first, which is NOT the required order, repaired by a sort
+// over explicit (column, row, position) keys. So A/B/D agreeing with C is the
+// one comparison that crosses the premise: it says the BFS order and the
+// sorted-key order coincide, which is the whole content of the problem.
+//
+// THE SPEC ORACLE. When every node value is distinct, one depth-first pass can
+// record each value's column, row and preorder position in a table, and the
+// specification becomes five pairwise checks over any candidate answer:
+//
+//   P2  the answer is a permutation of the tree's values
+//   P3  the columns are exactly the contiguous range [leftmost, rightmost]
+//   P4  every value sits in the column the table assigns it
+//   P5  within a column, rows never decrease
+//   P6  within a column, equal rows come in increasing preorder position
+//       (for nodes at one depth, preorder IS left-to-right)
+//
+// Together these pin the answer completely — an output passing all five is
+// THE vertical order, by definition — without sorting anything, so they do
+// not share arm C's mechanism either. Wherever the table exists they settle
+// the case; P1 (arm agreement) then only localises.
+//
+// THE TABLE NEEDS DISTINCT VALUES, and that is the band where it does not
+// reach. Duplicate values are legal input and change nothing about the
+// answer's structure, but a value can no longer name a node, so P3-P6 cannot
+// be evaluated. In that band the checks are P1, P2 and a weakened P7, and the
+// count of such cases is reported because it is where the arms are actually
+// standing on their own.
+//
+//   P7, mirror relation: reflecting the tree negates every column, keeps every
+//   row, and reverses left-to-right within a row. So the vertical order of
+//   the mirror is the original's column list reversed, with each run of
+//   equal-row values inside a column reversed too. Relates two invocations
+//   over two different trees, which is the axis P2-P6 never vary.
+//
+//   BE EXACT ABOUT WHAT P7 CANNOT SEE. An arm that swapped left and right
+//   CONSISTENTLY computes vertical(mirror(t)) for every t, and the mirror
+//   relation is an involution, so P7 holds for it perfectly. P4 catches that
+//   arm at once (every column is negated). P7 earns its place in the
+//   DUPLICATE band, where P4 does not run: there it is checked column-wise on
+//   sizes and multisets, because rows cannot be attributed to values.
+//
+//   P8, closed forms: a left spine of n nodes is n singleton columns; a
+//   perfect tree of depth d has 2d - 1 columns whose sizes are sums of
+//   binomials; a zigzag path occupies exactly two columns, alternating.
+//   External answers reached by counting, not by walking.
+//
+// BANDS ARE SIZED BY THE TREE-WALK INTERPRETER, the slowest of the four
+// surfaces every kata must agree on.
+
+const NMAX: i64 = 40;        // largest random tree
+const SEEDS: i64 = 40;       // random trees per size, distinct-value band
+const DUP_NMAX: i64 = 30;
+const DUP_SEEDS: i64 = 20;   // random trees per size, duplicate-value band
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn node(v: i64, l: Option[TreeNode], r: Option[TreeNode]) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    return node(v, None, None);
+}
+
+// ------------------------------------------------------------- arm A ---
+
+fn solve_a(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut cols: SortedMap[i64, Vec[i64]] = SortedMap.new();
+    let mut q: VecDeque[(TreeNode, i64)] = VecDeque.new();
+    match root {
+        None => {}
+        Some(n) => { q.push_back((n, 0)); }
+    }
+    while q.len() > 0 {
+        match q.pop_front() {
+            None => {}
+            Some(item) => {
+                let (n, c) = item;
+                if not cols.contains_key(c) {
+                    cols.insert(c, Vec.new());
+                }
+                cols[c].push(n.val);
+                match n.left {
+                    None => {}
+                    Some(l) => { q.push_back((l, c - 1)); }
+                }
+                match n.right {
+                    None => {}
+                    Some(r) => { q.push_back((r, c + 1)); }
+                }
+            }
+        }
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for k in cols.keys() {
+        out.push(cols[k].clone());
+    }
+    return out;
+}
+
+// ------------------------------------------------------------- arm B ---
+
+fn extent(t: Option[TreeNode], col: i64, lo: mut ref i64, hi: mut ref i64) {
+    match t {
+        None => {}
+        Some(n) => {
+            if col < lo { lo = col; }
+            if col > hi { hi = col; }
+            extent(n.left, col - 1, lo, hi);
+            extent(n.right, col + 1, lo, hi);
+        }
+    }
+}
+
+fn solve_b(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut current: Vec[(TreeNode, i64)] = Vec.new();
+    match root {
+        None => { return out; }
+        Some(n) => { current.push((n, 0)); }
+    }
+    let mut lo = 0;
+    let mut hi = 0;
+    extent(root, 0, mut lo, mut hi);
+    for i in lo..(hi + 1) { out.push(Vec.new()); }
+    while current.len() > 0 {
+        let mut next: Vec[(TreeNode, i64)] = Vec.new();
+        for (n, c) in current {
+            out[c - lo].push(n.val);
+            match n.left {
+                None => {}
+                Some(l) => { next.push((l, c - 1)); }
+            }
+            match n.right {
+                None => {}
+                Some(r) => { next.push((r, c + 1)); }
+            }
+        }
+        current = next;
+    }
+    return out;
+}
+
+// ------------------------------------------------------------- arm C ---
+
+fn walk(t: Option[TreeNode], col: i64, row: i64, tagged: mut ref Vec[(i64, i64, i64, i64)]) {
+    match t {
+        None => {}
+        Some(n) => {
+            tagged.push((col, row, tagged.len(), n.val));
+            walk(n.left, col - 1, row + 1, tagged);
+            walk(n.right, col + 1, row + 1, tagged);
+        }
+    }
+}
+
+fn solve_c(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut tagged: Vec[(i64, i64, i64, i64)] = Vec.new();
+    walk(root, 0, 0, mut tagged);
+    tagged.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) }
+                          else if a.1 != b.1 { a.1.cmp(b.1) }
+                          else { a.2.cmp(b.2) });
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..tagged.len() {
+        let (c, r, p, v) = tagged[i];
+        if i == 0 or c != tagged[i - 1].0 {
+            out.push(Vec.new());
+        }
+        let last = out.len() - 1;
+        out[last].push(v);
+    }
+    return out;
+}
+
+// ------------------------------------------------------------- arm D ---
+
+fn solve_d(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut cols: Map[i64, Vec[i64]] = Map.new();
+    let mut q: VecDeque[(TreeNode, i64)] = VecDeque.new();
+    match root {
+        None => {}
+        Some(n) => { q.push_back((n, 0)); }
+    }
+    while q.len() > 0 {
+        match q.pop_front() {
+            None => {}
+            Some(item) => {
+                let (n, c) = item;
+                cols.entry(c).or_insert(Vec.new()).push(n.val);
+                match n.left {
+                    None => {}
+                    Some(l) => { q.push_back((l, c - 1)); }
+                }
+                match n.right {
+                    None => {}
+                    Some(r) => { q.push_back((r, c + 1)); }
+                }
+            }
+        }
+    }
+    let mut keys: Vec[i64] = cols.keys();
+    keys.sort();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..keys.len() {
+        out.push(cols[keys[i]].clone());
+    }
+    return out;
+}
+
+// ----------------------------------------------------------- harness ---
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+// Grow a random tree by splitting the remaining node budget at a random
+// point, so shapes range from bushy to spine-like. Distinct values come from
+// a scrambled counter; duplicate values from a three-letter alphabet.
+fn grow(n: i64, seed: mut ref i64, counter: mut ref i64, labelled: bool) -> Option[TreeNode] {
+    if n <= 0 {
+        return None;
+    }
+    seed = lcg(seed);
+    // Distinct values are a PERMUTATION of the preorder numbering (37 is
+    // coprime to 97), so value order says nothing about position -- a tie
+    // broken by value instead of position would otherwise be equivalent here.
+    let v = if labelled { counter = counter + 1; (counter * 37) % 97 - 50 } else { seed % 3 };
+    seed = lcg(seed);
+    let left_n = if n <= 1 { 0 } else { seed % n };
+    let right_n = n - 1 - left_n;
+    let l = grow(left_n, seed, counter, labelled);
+    let r = grow(right_n, seed, counter, labelled);
+    return node(v, l, r);
+}
+
+fn mirror(t: Option[TreeNode]) -> Option[TreeNode] {
+    match t {
+        None => { return None; }
+        Some(n) => { return node(n.val, mirror(n.right), mirror(n.left)); }
+    }
+}
+
+// The spec table: value -> (column, row, preorder position). Distinct values
+// only; the caller guarantees it.
+fn annotate(t: Option[TreeNode], col: i64, row: i64, pos: mut ref i64,
+            table: mut ref Map[i64, (i64, i64, i64)]) {
+    match t {
+        None => {}
+        Some(n) => {
+            let here: i64 = pos;
+            table.insert(n.val, (col, row, here));
+            pos = pos + 1;
+            annotate(n.left, col - 1, row + 1, pos, table);
+            annotate(n.right, col + 1, row + 1, pos, table);
+        }
+    }
+}
+
+fn values_into(t: Option[TreeNode], out: mut ref Vec[i64]) {
+    match t {
+        None => {}
+        Some(n) => {
+            values_into(n.left, out);
+            out.push(n.val);
+            values_into(n.right, out);
+        }
+    }
+}
+
+fn flatten(cols: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..cols.len() {
+        for j in 0..cols[i].len() {
+            out.push(cols[i][j]);
+        }
+    }
+    return out;
+}
+
+fn same_rows(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() { return false; }
+    for i in 0..a.len() {
+        if a[i] != b[i] { return false; }
+    }
+    return true;
+}
+
+fn same(a: ref Vec[Vec[i64]], b: ref Vec[Vec[i64]]) -> bool {
+    if a.len() != b.len() { return false; }
+    for i in 0..a.len() {
+        if not same_rows(a[i], b[i]) { return false; }
+    }
+    return true;
+}
+
+fn sorted_copy(v: ref Vec[i64]) -> Vec[i64] {
+    let mut s = v.clone();
+    s.sort();
+    return s;
+}
+
+// What the mirror's vertical order must be, derived from the original's:
+// columns reversed, and inside each column every run of equal-row values
+// reversed. Rows come from the spec table.
+fn expected_mirror(cols: ref Vec[Vec[i64]], table: ref Map[i64, (i64, i64, i64)]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut i = cols.len() - 1;
+    while i >= 0 {
+        let col = ref cols[i];
+        let mut flipped: Vec[i64] = Vec.new();
+        let mut start = 0;
+        while start < col.len() {
+            let row = table[col[start]].1;
+            let mut end = start;
+            while end < col.len() and table[col[end]].1 == row {
+                end = end + 1;
+            }
+            let mut k = end - 1;
+            while k >= start {
+                flipped.push(col[k]);
+                k = k - 1;
+            }
+            start = end;
+        }
+        out.push(flipped);
+        i = i - 1;
+    }
+    return out;
+}
+
+// P3-P6 over one candidate answer, against the spec table. Returns the
+// failure counts as (range, placement, row order, tie-break).
+fn spec_failures(r: ref Vec[Vec[i64]], table: ref Map[i64, (i64, i64, i64)],
+                 lo: i64, want_cols: i64) -> (i64, i64, i64, i64) {
+    let mut f3 = 0;
+    let mut f4 = 0;
+    let mut f5 = 0;
+    let mut f6 = 0;
+    // P3 — the columns are exactly [leftmost, rightmost], none empty.
+    if r.len() != want_cols { f3 += 1; }
+    for i in 0..r.len() {
+        if r[i].len() == 0 { f3 += 1; }
+    }
+    // P4, P5, P6 — placement, row order, and the left-to-right tie. Only
+    // meaningful when the column count is right, since column i is then
+    // column lo + i.
+    if r.len() == want_cols {
+        for i in 0..r.len() {
+            for j in 0..r[i].len() {
+                let v = r[i][j];
+                if not table.contains_key(v) {
+                    f4 += 1;
+                } else {
+                    let e = table[v];
+                    if e.0 != lo + i { f4 += 1; }
+                    if j > 0 {
+                        let prev = table[r[i][j - 1]];
+                        if e.1 < prev.1 { f5 += 1; }
+                        if e.1 == prev.1 and e.2 <= prev.2 { f6 += 1; }
+                    }
+                }
+            }
+        }
+    }
+    return (f3, f4, f5, f6);
+}
+
+fn left_spine(n: i64) -> Option[TreeNode] {
+    if n <= 0 { return None; }
+    return node(-n, left_spine(n - 1), None);
+}
+
+fn right_spine(n: i64) -> Option[TreeNode] {
+    if n <= 0 { return None; }
+    return node(n, None, right_spine(n - 1));
+}
+
+fn perfect(depth: i64, counter: mut ref i64) -> Option[TreeNode] {
+    if depth <= 0 { return None; }
+    counter = counter + 1;
+    let v = counter;
+    let l = perfect(depth - 1, counter);
+    let r = perfect(depth - 1, counter);
+    return node(v, l, r);
+}
+
+// left, right, left, right, ... : a path that never leaves columns {0, -1}.
+fn zigzag(n: i64, go_left: bool) -> Option[TreeNode] {
+    if n <= 0 { return None; }
+    if go_left {
+        return node(n, zigzag(n - 1, false), None);
+    }
+    return node(n, None, zigzag(n - 1, true));
+}
+
+fn binom(n: i64, k: i64) -> i64 {
+    if k < 0 or k > n { return 0; }
+    let mut r = 1;
+    for i in 0..k {
+        r = r * (n - i) / (i + 1);
+    }
+    return r;
+}
+
+fn main() {
+    let mut cases = 0;
+    let mut dup_cases = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6 = 0;
+    let mut p7 = 0;
+    let mut p8 = 0;
+
+    // ---- distinct-value band: the spec oracle reaches everything ----
+    let mut seed = 20260904;
+    for n in 0..(NMAX + 1) {
+        for s in 0..SEEDS {
+            let mut counter = 0;
+            let t = grow(n, mut seed, mut counter, true);
+            let mut table: Map[i64, (i64, i64, i64)] = Map.new();
+            let mut pos = 0;
+            annotate(t.clone(), 0, 0, mut pos, mut table);
+
+            let ra = solve_a(t.clone());
+            let rb = solve_b(t.clone());
+            let rc = solve_c(t.clone());
+            let rd = solve_d(t.clone());
+
+            // P1 — the arms agree.
+            if not same(ra, rb) or not same(ra, rc) or not same(ra, rd) { p1 += 1; }
+
+            // P2 — a permutation of the tree's values.
+            let mut vals: Vec[i64] = Vec.new();
+            values_into(t.clone(), mut vals);
+            if not same_rows(sorted_copy(flatten(ra)), sorted_copy(vals)) { p2 += 1; }
+
+            // P3-P6 — the spec oracle, applied to EVERY arm's output, so a
+            // wrong arm is named by the property it breaks rather than only
+            // by P1's disagreement.
+            let mut lo = 0;
+            let mut hi = 0;
+            extent(t.clone(), 0, mut lo, mut hi);
+            let want_cols = if n == 0 { 0 } else { hi - lo + 1 };
+            let fa = spec_failures(ra, table, lo, want_cols);
+            let fb = spec_failures(rb, table, lo, want_cols);
+            let fc = spec_failures(rc, table, lo, want_cols);
+            let fd = spec_failures(rd, table, lo, want_cols);
+            p3 += fa.0 + fb.0 + fc.0 + fd.0;
+            p4 += fa.1 + fb.1 + fc.1 + fd.1;
+            p5 += fa.2 + fb.2 + fc.2 + fd.2;
+            p6 += fa.3 + fb.3 + fc.3 + fd.3;
+
+            // P7 — the mirror relation, exact.
+            let rm = solve_a(mirror(t.clone()));
+            if not same(rm, expected_mirror(ra, table)) { p7 += 1; }
+
+            cases += 1;
+        }
+    }
+
+    // ---- duplicate-value band: no table, the arms stand alone ----
+    for n in 1..(DUP_NMAX + 1) {
+        for s in 0..DUP_SEEDS {
+            let mut counter = 0;
+            let t = grow(n, mut seed, mut counter, false);
+            let ra = solve_a(t.clone());
+            let rb = solve_b(t.clone());
+            let rc = solve_c(t.clone());
+            let rd = solve_d(t.clone());
+            if not same(ra, rb) or not same(ra, rc) or not same(ra, rd) { p1 += 1; }
+
+            let mut vals: Vec[i64] = Vec.new();
+            values_into(t.clone(), mut vals);
+            if not same_rows(sorted_copy(flatten(ra)), sorted_copy(vals)) { p2 += 1; }
+
+            // P7, weakened: column i of the mirror is column (last - i) of the
+            // original as a multiset.
+            let rm = solve_a(mirror(t.clone()));
+            if rm.len() != ra.len() {
+                p7 += 1;
+            } else {
+                for i in 0..ra.len() {
+                    if not same_rows(sorted_copy(rm[i]), sorted_copy(ra[ra.len() - 1 - i])) { p7 += 1; }
+                }
+            }
+            cases += 1;
+            dup_cases += 1;
+        }
+    }
+
+    // ---- closed forms ----
+    for n in 1..13 {
+        // A left spine: n columns, one value each, leftmost is the deepest.
+        let ls = solve_a(left_spine(n));
+        if ls.len() != n { p8 += 1; }
+        for i in 0..ls.len() {
+            if ls[i].len() != 1 or ls[i][0] != -(i + 1) { p8 += 1; }
+        }
+        // A right spine: n columns, the root leftmost, so values n..1.
+        let rs = solve_a(right_spine(n));
+        if rs.len() != n { p8 += 1; }
+        for i in 0..rs.len() {
+            if rs[i].len() != 1 or rs[i][0] != n - i { p8 += 1; }
+        }
+        // A zigzag path: two columns (one when n == 1), and the values
+        // alternate between them from the top down.
+        let zz = solve_a(zigzag(n, true));
+        let want = if n == 1 { 1 } else { 2 };
+        if zz.len() != want { p8 += 1; }
+        if n > 1 {
+            // Column -1 holds the even-numbered steps (n-1, n-3, ...), column 0
+            // the root and every second step after it.
+            for j in 0..zz[1].len() {
+                if zz[1][j] != n - 2 * j { p8 += 1; }
+            }
+            for j in 0..zz[0].len() {
+                if zz[0][j] != n - 1 - 2 * j { p8 += 1; }
+            }
+        }
+        cases += 3;
+    }
+    for d in 1..7 {
+        // A perfect tree of depth d: columns -(d-1)..(d-1); the count in
+        // column c is the number of root-to-node paths with (#right - #left)
+        // equal to c, summed over every depth k: C(k, (k + c) / 2) where k + c
+        // is even.
+        let mut counter = 0;
+        let pf = solve_a(perfect(d, mut counter));
+        if pf.len() != 2 * d - 1 { p8 += 1; }
+        for i in 0..pf.len() {
+            let c = i - (d - 1);
+            let mut want = 0;
+            for k in 0..d {
+                if (k + c) % 2 == 0 and k + c >= 0 {
+                    want = want + binom(k, (k + c) / 2);
+                }
+            }
+            if pf[i].len() != want { p8 += 1; }
+        }
+        cases += 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"duplicate-value cases beyond the spec oracle {dup_cases}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 permutation failures {p2}");
+    println(f"P3 column-range failures {p3}");
+    println(f"P4 placement failures {p4}");
+    println(f"P5 row-order failures {p5}");
+    println(f"P6 tie-break failures {p6}");
+    println(f"P7 mirror failures {p7}");
+    println(f"P8 closed-form failures {p8}");
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 and p8 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

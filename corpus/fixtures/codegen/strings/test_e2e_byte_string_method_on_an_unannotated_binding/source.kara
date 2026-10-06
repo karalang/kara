@@ -1,0 +1,8 @@
+
+fn main() {
+    let a = b"abc";
+    println(a.is_sorted());
+    let b = b"cba";
+    println(b.is_sorted());
+    println(a.len());
+}

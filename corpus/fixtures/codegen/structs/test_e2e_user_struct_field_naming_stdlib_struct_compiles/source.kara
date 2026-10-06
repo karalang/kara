@@ -1,0 +1,7 @@
+
+struct Holder { c: Command, n: i64 }
+
+fn main() {
+    let h = Holder { c: Command.new("echo"), n: 7 };
+    println(h.n);
+}

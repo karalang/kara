@@ -1,0 +1,65 @@
+// Benchmark workload for LeetCode #237 — Delete Node in a Linked List.
+//
+// Build-once + punch on an index-pool list (`Vec[Node]`, `next` = -1 is null).
+// One pool of N nodes is built once; each cycle relinks it into 0 → 1 → … → N-1
+// and then sweeps the list repeatedly, deleting every other node by the kata's
+// O(1) rule — copy the successor's value into the node you were handed, splice
+// the successor out — until a single node is left, summing the survivors after
+// each sweep. The delete is two dependent loads and two stores through an index
+// (`nodes[cur].val = nodes[s].val`), and the survivor walk is a pointer chase
+// (`k = nodes[k].next`); neither vectorizes. Sink = rolling 30-bit polynomial
+// hash of the per-sweep sums, so the cycles cannot be reordered or elided.
+//
+// The delete is written inline rather than as a `delete_node` call so every
+// language measures the same three statements — C/Rust/Go would inline the
+// equivalent function and the comparison would then be about inlining, not
+// about the delete.
+
+struct Node {
+    mut val: i64,
+    mut next: i64,
+}
+
+fn main() {
+    let n = 8000;
+    let cycles = 7000;
+
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        nodes.push(Node { val: state % 50, next: -1 });
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut c = 0;
+    while c < cycles {
+        // Relink into one list: 0 → 1 → … → n-1.
+        let mut r = 0;
+        while r < n {
+            if r + 1 < n { nodes[r].next = r + 1; } else { nodes[r].next = -1; }
+            r = r + 1;
+        }
+        // Sweep until one node is left, deleting every other node.
+        while nodes[0].next != -1 {
+            let mut cur = 0;
+            while cur != -1 and nodes[cur].next != -1 {
+                let s = nodes[cur].next;
+                nodes[cur].val = nodes[s].val;
+                nodes[cur].next = nodes[s].next;
+                cur = nodes[cur].next;
+            }
+            let mut pass = 0;
+            let mut k = 0;
+            while k != -1 {
+                pass = pass + nodes[k].val;
+                k = nodes[k].next;
+            }
+            sink = (sink * 31 + pass) & 1073741823;
+        }
+        c = c + 1;
+    }
+    println(sink);
+}

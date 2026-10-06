@@ -1,0 +1,7 @@
+exhaustive over 2^0..2^12: 8191 inputs, 20481 states produced
+  arm disagreement (scan vs rebuild): 0
+  wrong result count:                 0
+  wrong result length:                0
+  not exactly one legal move away:    0
+  wrong '+' count:                    0
+long structured strings: 6 cases, 0 bad

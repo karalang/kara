@@ -1,0 +1,182 @@
+// LeetCode #82: Remove Duplicates from Sorted List II — iterative, dummy + prev.
+//
+// Given the head of a SORTED linked list, delete every node that has a duplicate
+// value, leaving only the values that were distinct in the original list. Unlike
+// kata #83 (its m=1 sibling, "keep one copy"), a value that appears more than once
+// is removed ENTIRELY: [1,2,3,3,4,4,5] -> [1,2,5], [1,1,1,2,3] -> [2,3].
+//
+// The classic single-pass form. A dummy node sits before the head so the very first
+// node can be dropped without a special case, and a `prev` cursor tracks the last
+// node known to be KEPT. A `cur` cursor scans forward. At each `cur`:
+//
+//   - If cur and its successor share a value, cur starts a duplicate RUN: advance a
+//     runner past every node equal to cur.val, then splice the whole run out with
+//     `prev.next = <first node after the run>` (prev does NOT move — the node after
+//     the run might itself start another run).
+//   - Otherwise cur is unique so far: keep it, advance `prev` onto it.
+//
+// The nodes are `shared struct` (Rc-like) handles, so `prev.next = runner` re-links
+// by aliasing — no copying — and the surviving head falls out as `dummy.next`.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn delete_duplicates(head: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut prev = dummy;
+    let mut cur = dummy.next;
+
+    loop {
+        match cur {
+            Some(node) => {
+                // Does `node` start a run of equal values?
+                let mut is_dup = false;
+                match node.next {
+                    Some(nxt) => {
+                        if node.val == nxt.val {
+                            is_dup = true;
+                        }
+                    }
+                    None => {}
+                }
+
+                if is_dup {
+                    // Skip every node whose value equals node.val.
+                    let v = node.val;
+                    let mut runner = cur;
+                    loop {
+                        match runner {
+                            Some(rn) => {
+                                if rn.val == v {
+                                    runner = rn.next;
+                                } else {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    // Unlink the whole run. `prev` stays put — `runner` may start
+                    // another run.
+                    prev.next = runner;
+                    cur = runner;
+                } else {
+                    // Unique so far — keep it and advance prev.
+                    prev = node;
+                    cur = node.next;
+                }
+            }
+            None => break,
+        }
+    }
+
+    dummy.next
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn report(arr: Slice[i64], acc: mut ref i64) {
+    let list = from_array(arr);
+    let out = delete_duplicates(list);
+    let s = to_string(out);
+    println(s);
+    // Fold the rendered result (length + each surviving val) into a running hash.
+    let mut a = acc;
+    let mut cur = out;
+    let mut count = 0;
+    loop {
+        match cur {
+            Some(node) => {
+                a = (a * 131 + (node.val + 1000)) % 1000000007;
+                count = count + 1;
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+    acc = (a * 131 + (count + 1)) % 1000000007;
+}
+
+fn main() {
+    let mut acc = 0;
+
+    // LeetCode example 1.
+    let a1: Array[i64, 7] = [1, 2, 3, 3, 4, 4, 5];
+    report(a1, mut acc);          // [1, 2, 5]
+
+    // LeetCode example 2.
+    let a2: Array[i64, 5] = [1, 1, 1, 2, 3];
+    report(a2, mut acc);          // [2, 3]
+
+    // Two identical — everything removed.
+    let a3: Array[i64, 2] = [1, 1];
+    report(a3, mut acc);          // []
+
+    // No duplicates — unchanged.
+    let a4: Array[i64, 3] = [1, 2, 3];
+    report(a4, mut acc);          // [1, 2, 3]
+
+    // Empty.
+    let a5: Array[i64, 0] = [];
+    report(a5, mut acc);          // []
+
+    // Single node.
+    let a6: Array[i64, 1] = [1];
+    report(a6, mut acc);          // [1]
+
+    // Every value duplicated — all removed.
+    let a7: Array[i64, 6] = [1, 1, 2, 2, 3, 3];
+    report(a7, mut acc);          // []
+
+    // Duplicate run at the tail.
+    let a8: Array[i64, 3] = [1, 2, 2];
+    report(a8, mut acc);          // [1]
+
+    // Leading run, then survivors — negatives too.
+    let a9: Array[i64, 4] = [-1, -1, 0, 1];
+    report(a9, mut acc);          // [0, 1]
+
+    // Adjacent runs back-to-back (prev must not advance between them).
+    let a10: Array[i64, 6] = [1, 1, 2, 3, 3, 4];
+    report(a10, mut acc);         // [2, 4]
+
+    println(f"sink: {acc}");
+}

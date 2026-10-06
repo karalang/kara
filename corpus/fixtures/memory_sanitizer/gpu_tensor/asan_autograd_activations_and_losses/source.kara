@@ -1,0 +1,27 @@
+
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t1 = TensorTape.new();
+    let a = TensorVar.leaf(t1, Tensor.from([0.0, 1.0, -2.0]));
+    let y = a.silu();
+    let z = y.softmax();
+    let g = z.gelu();
+    let s = g.sum();
+    s.backward();
+    let ga = a.grad_at(0);
+    println(f"{ga == ga}");
+
+    let t2 = TensorTape.new();
+    let p = TensorVar.leaf(t2, Tensor.from([0.8, 0.3]));
+    let tg = TensorVar.leaf(t2, Tensor.from([1.0, 0.0]));
+    let lb = p.bce(tg);
+    lb.backward();
+    println(f"{p.grad_at(0) < 0.0}");
+
+    let t3 = TensorTape.new();
+    let x = TensorVar.leaf(t3, Tensor.from([1.0, 2.0, 3.0]));
+    let oh = TensorVar.leaf(t3, Tensor.from([0.0, 0.0, 1.0]));
+    let lc = x.cross_entropy(oh);
+    lc.backward();
+    println(f"{x.grad_at(2) < 0.0}");
+}

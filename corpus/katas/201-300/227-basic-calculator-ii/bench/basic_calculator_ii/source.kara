@@ -1,0 +1,114 @@
+// Benchmark workload for LeetCode #227 — Basic Calculator II.
+//
+// Build-once + punch: a deterministic 32-bit LCG (overflow-safe in i64) builds
+// ONE long, valid expression buffer — operands 1..99 joined by +, -, *, / with
+// the invariant that a high-precedence op (* or /) never immediately follows
+// another, so every folded term stays small (no overflow, no divide-by-zero
+// since operands are >= 1). The buffer is stored as raw ASCII byte codes in a
+// Vec[i64]. Then `calculate` (the kata's precedence term-stack, scanning bytes
+// and folding * / into the stack top while + - push signed terms) is run K
+// times; before each run one leading digit is perturbed so the optimizer cannot
+// hoist the repeated evaluation. The byte scan has a data-dependent 3-way branch
+// (digit / operator / fold) that does not vectorize. Sink = the accumulated
+// (mod) sum of the K results.
+
+fn pop_or_zero(stack: mut ref Vec[i64]) -> i64 {
+    match stack.pop() {
+        Some(v) => v,
+        None => 0,
+    }
+}
+
+// ASCII: '+'=43 '-'=45 '*'=42 '/'=47 '0'=48 '9'=57
+fn calculate(bytes: ref Vec[i64], n: i64) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut num = 0;
+    let mut op = 43;                      // '+' precedes the first number
+    let mut i = 0;
+    while i < n {
+        let b = bytes[i];
+        if b >= 48 and b <= 57 {
+            num = num * 10 + (b - 48);
+        }
+        let is_op = b == 43 or b == 45 or b == 42 or b == 47;
+        if is_op or i == n - 1 {
+            if op == 43 {
+                stack.push(num);
+            } else if op == 45 {
+                stack.push(-num);
+            } else if op == 42 {
+                let t = pop_or_zero(mut stack);
+                stack.push(t * num);
+            } else {                          // '/'
+                let t = pop_or_zero(mut stack);
+                stack.push(t / num);          // truncates toward zero
+            }
+            op = b;
+            num = 0;
+        }
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut k = 0;
+    while k < stack.len() {
+        total = total + stack[k];
+        k = k + 1;
+    }
+    return total;
+}
+
+fn push_number(buf: mut ref Vec[i64], num: i64) {
+    if num >= 10 {
+        buf.push(48 + num / 10);
+        buf.push(48 + num % 10);
+    } else {
+        buf.push(48 + num);
+    }
+}
+
+fn main() {
+    let tokens = 200000;                  // operand count in the expression
+    let passes = 250;
+    let modulus = 1000000007;
+
+    let mut buf: Vec[i64] = Vec.new();
+    let mut state = 12345;
+
+    // First operand (1..99).
+    state = (state * 1103515245 + 12345) & 2147483647;
+    push_number(mut buf, (state % 99) + 1);
+
+    let mut prev_high = false;
+    let mut t = 1;
+    while t < tokens {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let opsel = if prev_high { state % 2 } else { state % 4 };
+        if opsel == 0 {
+            buf.push(43);                 // '+'
+            prev_high = false;
+        } else if opsel == 1 {
+            buf.push(45);                 // '-'
+            prev_high = false;
+        } else if opsel == 2 {
+            buf.push(42);                 // '*'
+            prev_high = true;
+        } else {
+            buf.push(47);                 // '/'
+            prev_high = true;
+        }
+        state = (state * 1103515245 + 12345) & 2147483647;
+        push_number(mut buf, (state % 99) + 1);
+        t = t + 1;
+    }
+
+    let n = buf.len();
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        buf[0] = 49 + (p % 9);         // perturb leading digit to '1'..'9'
+        let r = calculate(buf, n);
+        sink = ((sink + r) % modulus + modulus) % modulus;
+        p = p + 1;
+    }
+    println(sink);
+}

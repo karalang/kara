@@ -1,0 +1,13 @@
+source = "tests/codegen/option_result.rs::codegen_declined_option_payload_names_its_shape"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

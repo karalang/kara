@@ -1,0 +1,84 @@
+// Benchmark harness for LeetCode #239 — Sliding Window Maximum.
+//
+// Build-once + punch (BENCHMARKS.md): the arrays are generated once, then each
+// punch runs the full monotonic-deque pass. Regenerating them per iteration
+// would be a vectorizable refill loop.
+//
+// Data shape matters for this algorithm. A monotonically increasing array makes
+// every back-pop fire and keeps the deque at length 1; a decreasing one never
+// pops and grows the deque to k. LCG draws sit between those extremes, so the
+// back-pop loop does a realistic variable amount of work per element rather
+// than degenerating to a best or worst case.
+
+fn max_sliding_window(nums: ref Vec[i64], k: i64) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut dq: Vec[i64] = Vec.new();
+    let mut head = 0;
+
+    let mut i = 0;
+    while i < n {
+        while dq.len() > head {
+            let back = dq[dq.len() - 1];
+            if nums[back] <= nums[i] {
+                let _ = dq.pop();
+            } else {
+                break;
+            }
+        }
+        dq.push(i);
+
+        if dq[head] <= i - k {
+            head = head + 1;
+        }
+
+        if i >= k - 1 {
+            out.push(nums[dq[head]]);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn lcg(seed: i64, n: i64, cap: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = seed;
+    let mut t = 0;
+    while t < n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        out.push(x % cap);
+        t = t + 1;
+    }
+    out
+}
+
+fn main() {
+    let np = 8;
+    let n = 50000;
+    let cap = 100000;
+    let k = 64;
+    let iters = 300;
+
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut j = 0;
+    while j < np {
+        arrays.push(lcg(j + 1, n, cap));
+        j = j + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 3) % np;
+        let res = max_sliding_window(arrays[idx], k);
+        // Position-weighted so the sink depends on window ORDER, not just the
+        // multiset of maxima — a transposition in the output would show up.
+        let mut v = 0;
+        while v < res.len() {
+            sink = (sink + (v + 1) * res[v]) % 1000000007;
+            v = v + 1;
+        }
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

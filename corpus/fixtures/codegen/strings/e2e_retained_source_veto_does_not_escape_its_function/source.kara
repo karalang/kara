@@ -1,0 +1,16 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}") } }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}" }; }
+
+fn retained() { let t = (mk(4), Option.Some(mk(104))); let (_, o) = t; match o { Option.Some(r) => { println(f"  g{r.id}") }, Option.None => { println("  n") } } }
+fn mover()    { let o = Option.Some(mk(11)); let q = o; println(f"  m{q.is_some()}") }
+fn moverstr() { let o = Option.Some(f"z12"); let q = o; println(f"  s{q.is_some()}") }
+fn unshared() { let d = Option.Some(mk(13)); let e = d; println(f"  d{e.is_some()}") }
+
+fn main() {
+  println("mover");    mover()
+  println("moverstr"); moverstr()
+  println("unshared"); unshared()
+  println("retained"); retained()
+  println("done")
+}

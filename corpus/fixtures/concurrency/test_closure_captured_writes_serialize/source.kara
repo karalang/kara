@@ -1,0 +1,10 @@
+
+        fn main() {
+            let mut a: Vec[i64] = Vec.new();
+            let mut pa = |x: i64| { a.push(x); };
+            pa(1);
+            pa(2);
+            pa(3);
+            println(a.len());
+        }
+        

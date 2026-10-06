@@ -1,0 +1,8 @@
+
+shared struct Wrapper { val: i64 }
+fn read_val(w: Wrapper) -> i64 { w.val }
+fn main() {
+    let w = Wrapper { val: 77 };
+    println(read_val(w));
+    println(w.val);
+}

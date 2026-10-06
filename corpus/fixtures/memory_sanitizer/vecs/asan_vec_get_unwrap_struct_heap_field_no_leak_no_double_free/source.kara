@@ -1,0 +1,16 @@
+
+struct Acct { name: String, txns: i64 }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut v: Vec[Acct] = Vec.new();
+        v.push(Acct { name: "alice".to_string(), txns: 2 });
+        v.push(Acct { name: "bobby".to_string(), txns: 3 });
+        let a = v.get(0).unwrap();
+        let b = v.last().unwrap();
+        acc = acc + a.name.len() + a.txns + b.name.len() + b.txns;
+        i = i + 1;
+    }
+    println(acc);
+}

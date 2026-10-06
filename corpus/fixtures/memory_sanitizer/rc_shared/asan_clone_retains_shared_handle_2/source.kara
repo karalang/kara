@@ -1,0 +1,9 @@
+
+shared enum E { V(i64) }
+fn main() {
+    let mut v: Vec[E] = Vec.new();
+    v.push(E.V(1));
+    v.push(E.V(2));
+    let w = v.clone();
+    println(w.len());
+}

@@ -1,0 +1,141 @@
+// LeetCode 244 — Shortest Word Distance II, the binary-search variant.
+//
+// Same preprocessing as `shortest_distance_ii.kara` — `word -> ascending
+// positions`, built once — but a different query. Instead of merging the two
+// lists in lockstep, walk the SHORTER list and binary-search the longer one for
+// each of its positions. The closest partner to `p` is one of the two entries
+// straddling the insertion point, so checking both bounds is enough.
+//
+// The trade is O(|p1| + |p2|) for O(min·log max). Which wins depends entirely
+// on the shape of the data: for two words of comparable frequency the merge is
+// strictly better, but when one word is rare and the other is everywhere —
+// "the" against a hapax in a real corpus — the merge still walks every one of
+// the common word's thousands of positions, while this variant does a handful
+// of binary searches. Real query workloads are skewed that way, which is why
+// this phrasing is worth having rather than a curiosity.
+//
+// Both variants are exercised against the same inputs and must agree exactly,
+// which is what makes the pair useful: they are independent implementations of
+// one specification.
+
+struct WordDistance {
+    index: Map[String, Vec[i64]],
+    size: i64,
+}
+
+// Construction is identical to the two-pointer variant's: `entry(w).or_insert`
+// hands back a `mut ref Vec[i64]` into the map's own slot, so each position
+// appends in place and the build is O(n). Only the QUERY differs between the
+// two files.
+fn new_word_distance(words: ref Slice[String]) -> WordDistance {
+    let mut index: Map[String, Vec[i64]] = Map.new();
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        index.entry(words[i]).or_insert(Vec.new()).push(i);
+        i = i + 1;
+    }
+    return WordDistance { index: index, size: n };
+}
+
+// Lower bound: the count of entries in `hits` that are strictly less than
+// `target`. That index and the one before it straddle `target`, so between them
+// they hold the nearest entry on each side.
+fn lower_bound(hits: ref Vec[i64], target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = hits.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if hits[mid] < target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+// Closest entry in `hits` to `target`, checking both sides of the insertion
+// point. `hits` is never empty here — a word with no occurrences has no map
+// entry at all, and the caller returns early on that.
+fn closest_gap(hits: ref Vec[i64], target: i64) -> i64 {
+    let idx = lower_bound(hits, target);
+    let mut best = -1;
+    if idx < hits.len() {
+        best = (hits[idx] - target).abs();
+    }
+    if idx > 0 {
+        let left = (hits[idx - 1] - target).abs();
+        if best < 0 or left < best {
+            best = left;
+        }
+    }
+    return best;
+}
+
+fn shortest(wd: ref WordDistance, word1: ref String, word2: ref String) -> i64 {
+    match wd.index.get(word1) {
+        None => { return wd.size; }
+        Some(p1) => {
+            match wd.index.get(word2) {
+                None => { return wd.size; }
+                Some(p2) => {
+                    let mut best = wd.size;
+                    // Drive from whichever list is shorter — that is the whole
+                    // point of this phrasing, and it is what makes the skewed
+                    // case cheap.
+                    if p1.len() <= p2.len() {
+                        let mut i = 0;
+                        while i < p1.len() {
+                            best = min(best, closest_gap(p2, p1[i]));
+                            i = i + 1;
+                        }
+                    } else {
+                        let mut i = 0;
+                        while i < p2.len() {
+                            best = min(best, closest_gap(p1, p2[i]));
+                            i = i + 1;
+                        }
+                    }
+                    return best;
+                }
+            }
+        }
+    }
+}
+
+fn report(wd: ref WordDistance, word1: ref String, word2: ref String) {
+    println(f"{word1} <-> {word2} : {shortest(wd, word1, word2)}");
+}
+
+fn main() {
+    let d1: Array[String, 5] = ["practice", "makes", "perfect", "coding", "makes"];
+    let wd1 = new_word_distance(d1);
+    report(wd1, "coding", "practice");   // 3
+    report(wd1, "makes", "coding");      // 1
+    report(wd1, "makes", "perfect");     // 1
+    report(wd1, "practice", "perfect");  // 2
+
+    let d2: Array[String, 7] = ["a", "b", "x", "x", "x", "a", "b"];
+    let wd2 = new_word_distance(d2);
+    report(wd2, "a", "b");               // 1
+    report(wd2, "b", "a");               // 1
+    report(wd2, "a", "x");               // 1
+
+    let d3: Array[String, 2] = ["a", "b"];
+    let wd3 = new_word_distance(d3);
+    report(wd3, "a", "b");               // 1
+
+    let d4: Array[String, 6] = ["p", "q", "p", "q", "p", "q"];
+    let wd4 = new_word_distance(d4);
+    report(wd4, "p", "q");               // 1
+
+    let d5: Array[String, 6] = ["m", "z", "z", "z", "n", "m"];
+    let wd5 = new_word_distance(d5);
+    report(wd5, "m", "n");               // 1
+    report(wd5, "z", "n");               // 1
+
+    let d6: Array[String, 3] = ["one", "two", "three"];
+    let wd6 = new_word_distance(d6);
+    report(wd6, "two", "four");          // 3
+}

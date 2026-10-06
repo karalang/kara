@@ -1,0 +1,82 @@
+// LeetCode #91 — Kara bench mirror. Same DP as src/main.kara
+// (bottom-up, 2-cell rolling window, O(n) per call).
+//
+// Workload shape: an 80-byte mutable digit buffer fed to decode_ways
+// repeatedly. Each iteration mutates one byte (cycling through digits
+// 1..9 at position k % 80) before the call, so the input genuinely
+// changes per iter — defeats LLVM's "input is loop-invariant, hoist
+// the whole computation out" optimization. Hot loop runs N_ITERS
+// times; the sum (reduced mod 1e9+7) is the sink.
+//
+// decode_ways takes `ref Slice[u8]` here rather than `ref String`
+// (src/main.kara's signature) — bench is a slice-of-bytes workload,
+// the byte view is what the algorithm needs and the String wrapper
+// would just add per-iter alloc that biases the comparison vs C/Go.
+//
+// Seq-only per BENCH.md (cross-iteration dependency on prev1/prev2).
+
+fn decode_ways(bytes: Slice[u8]) -> i64 {
+    let n = bytes.len();
+    if n == 0 {
+        return 0;
+    }
+    let zero: u8 = b'0';
+    if bytes[0] == zero {
+        return 0;
+    }
+
+    let mut prev2: i64 = 1;
+    let mut prev1: i64 = 1;
+
+    let mut i = 1;
+    while i < n {
+        let d1: i32 = (bytes[i] as i32) - (zero as i32);
+        let d0: i32 = (bytes[i - 1] as i32) - (zero as i32);
+        let two: i32 = d0 * 10i32 + d1;
+
+        let mut cur: i64 = 0;
+        if d1 >= 1i32 and d1 <= 9i32 {
+            cur = cur + prev1;
+        }
+        if two >= 10i32 and two <= 26i32 {
+            cur = cur + prev2;
+        }
+
+        prev2 = prev1;
+        prev1 = cur;
+        i = i + 1;
+    }
+
+    prev1
+}
+
+fn main() {
+    let l: i64 = 80;
+    let zero: u8 = b'0';
+
+    // Seed buffer: digits cycle 1,4,7,1,4,7,... over positions 0..79.
+    let mut buf: Vec[u8] = Vec.new();
+    let mut j: i64 = 0;
+    while j < l {
+        let d: i64 = ((j * 3) % 9) + 1;
+        buf.push(((zero as i32) + (d as i32)) as u8);
+        j = j + 1;
+    }
+
+    let n_iters: i64 = 10000000;
+    let modulus: i64 = 1000000007;
+
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < n_iters {
+        // Per-iter mutation: digit at position (k % l) becomes
+        // ((k * 11) % 9) + 1. Each iter writes a different byte, the
+        // input genuinely varies, the optimizer can't hoist.
+        let pos: i64 = k % l;
+        let d: i64 = ((k * 11) % 9) + 1;
+        buf[pos] = ((zero as i32) + (d as i32)) as u8;
+        sum = (sum + decode_ways(buf)) % modulus;
+        k = k + 1;
+    }
+    println(sum);
+}

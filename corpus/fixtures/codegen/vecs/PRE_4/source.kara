@@ -1,0 +1,4 @@
+fn go() -> i64 { let t = mkp(9); let mut s = payload(); let mut i = 0i64;
+  while i < 3i64 { s = t.a; i = i + 1; }
+  return s.len(); }
+fn main() { println(go()); }

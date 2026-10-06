@@ -1,0 +1,229 @@
+// Differential and property check for LeetCode #345.
+//
+// Five ways to reverse the vowels, plus an oracle that works by rank:
+//
+//   by_two        two indices that skip consonants      (reverse_vowels.kara)
+//   by_stack      push the vowels, pop while rebuilding (reverse_vowels_stack.kara)
+//   by_positions  record vowel indices, swap pairwise   (reverse_vowels_positions.kara)
+//   by_closure    filter, then map popping a stack      (reverse_vowels_closure.kara)
+//   by_bytes      two indices over the UTF-8 bytes      (reverse_vowels_bytes.kara)
+//   by_rank       the r-th vowel from the front becomes the r-th from the back
+//
+// Inputs: every length 0..300, each with a pseudo-random fill over an alphabet
+// that mixes vowels of both cases, consonants, punctuation, and two-, three-
+// and four-byte code points, some of which (ā, é, ü) look like vowels.
+//
+// Properties:
+//   P1  all five equal the oracle, for every input
+//   P2  reversing twice gives the input back
+//   P3  every non-vowel keeps its place
+//   P4  the vowels of the result are the vowels of the input, reversed
+//   P5  the character count and the byte length are unchanged
+
+const MAX_LEN: i64 = 300;
+
+fn is_vowel(c: char) -> bool {
+    return match c {
+        'a' | 'e' | 'i' | 'o' | 'u' | 'A' | 'E' | 'I' | 'O' | 'U' => true,
+        _ => false,
+    };
+}
+
+fn is_vowel_byte(b: u8) -> bool {
+    return match b {
+        b'a' | b'e' | b'i' | b'o' | b'u' | b'A' | b'E' | b'I' | b'O' | b'U' => true,
+        _ => false,
+    };
+}
+
+fn pack(cs: ref Vec[char]) -> String {
+    let mut out = String.new();
+    for c in cs {
+        out.push(c);
+    }
+    return out;
+}
+
+fn by_two(s: ref String) -> String {
+    let mut cs: Vec[char] = s.chars().collect();
+    let mut i = 0;
+    let mut j = cs.len() - 1;
+    while i < j {
+        if not is_vowel(cs[i]) {
+            i += 1;
+        } else if not is_vowel(cs[j]) {
+            j -= 1;
+        } else {
+            cs.swap(i, j);
+            i += 1;
+            j -= 1;
+        }
+    }
+    return pack(cs);
+}
+
+fn by_stack(s: ref String) -> String {
+    let mut stack: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if is_vowel(c) {
+            stack.push(c);
+        }
+    }
+    let mut out = String.new();
+    for c in s.chars() {
+        if is_vowel(c) {
+            out.push(stack.pop().unwrap());
+        } else {
+            out.push(c);
+        }
+    }
+    return out;
+}
+
+fn by_positions(s: ref String) -> String {
+    let mut cs: Vec[char] = s.chars().collect();
+    let mut at: Vec[i64] = Vec.new();
+    for k in 0..cs.len() {
+        if is_vowel(cs[k]) {
+            at.push(k);
+        }
+    }
+    let m = at.len();
+    for k in 0..m / 2 {
+        cs.swap(at[k], at[m - 1 - k]);
+    }
+    return pack(cs);
+}
+
+fn by_closure(s: ref String) -> String {
+    let mut vowels: Vec[char] = s.chars().filter(|c| is_vowel(c)).collect();
+    return s.chars().map(|c| if is_vowel(c) { vowels.pop().unwrap() } else { c }).collect();
+}
+
+fn by_bytes(s: ref String) -> String {
+    let mut bs: Vec[u8] = s.bytes().to_vec();
+    let mut i = 0;
+    let mut j = bs.len() - 1;
+    while i < j {
+        while i < j and not is_vowel_byte(bs[i]) {
+            i += 1;
+        }
+        while i < j and not is_vowel_byte(bs[j]) {
+            j -= 1;
+        }
+        if i < j {
+            bs.swap(i, j);
+            i += 1;
+            j -= 1;
+        }
+    }
+    return String.from_utf8(bs).unwrap();
+}
+
+// The oracle shares no loop shape with the five above: it counts how many
+// vowels precede each position and reads the vowel that many places from the
+// end of the vowel list.
+fn by_rank(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut vs: Vec[char] = Vec.new();
+    for c in cs {
+        if is_vowel(c) {
+            vs.push(c);
+        }
+    }
+    let m = vs.len();
+    let mut out: Vec[char] = Vec.new();
+    let mut rank = 0;
+    for k in 0..cs.len() {
+        if is_vowel(cs[k]) {
+            out.push(vs[m - 1 - rank]);
+            rank += 1;
+        } else {
+            out.push(cs[k]);
+        }
+    }
+    return pack(out);
+}
+
+fn vowels_of(s: ref String) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if is_vowel(c) {
+            out.push(c);
+        }
+    }
+    return out;
+}
+
+fn fill(n: i64, seed: i64) -> String {
+    let alphabet: Vec[char] = "aeiouAEIOUbcdxyzBXZ019 ,._ñāéü€ह日🦀".chars().collect();
+    let mut out = String.new();
+    let mut x = seed * 2654435761 % 4294967296 + 1;
+    for _ in 0..n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        out.push(alphabet[(x / 65536) % alphabet.len()]);
+    }
+    return out;
+}
+
+fn main() {
+    let mut failures = 0;
+    let mut checksum = 0;
+    let mut total_vowels = 0;
+    for n in 0..MAX_LEN + 1 {
+        let s = fill(n, n);
+        let want = by_rank(s);
+
+        let a = by_two(s);
+        let b = by_stack(s);
+        let c = by_positions(s);
+        let d = by_closure(s);
+        let e = by_bytes(s);
+        if a != want or b != want or c != want or d != want or e != want {
+            println(f"P1 FAIL n={n}");
+            failures += 1;
+        }
+
+        if by_two(a) != s or by_bytes(e) != s {
+            println(f"P2 FAIL n={n}");
+            failures += 1;
+        }
+
+        let sc: Vec[char] = s.chars().collect();
+        let wc: Vec[char] = want.chars().collect();
+        for k in 0..sc.len() {
+            if not is_vowel(sc[k]) and wc[k] != sc[k] {
+                println(f"P3 FAIL n={n} k={k}");
+                failures += 1;
+            }
+            checksum = (checksum * 31 + (wc[k] as u32) as i64 * (k + 1)) % 1000000007;
+        }
+
+        let vin = vowels_of(s);
+        let vout = vowels_of(want);
+        let m = vin.len();
+        total_vowels += m;
+        if vout.len() != m {
+            println(f"P4 FAIL n={n} count");
+            failures += 1;
+        } else {
+            for k in 0..m {
+                if vout[k] != vin[m - 1 - k] {
+                    println(f"P4 FAIL n={n} k={k}");
+                    failures += 1;
+                }
+            }
+        }
+
+        if wc.len() != sc.len() or want.len() != s.len() {
+            println(f"P5 FAIL n={n}");
+            failures += 1;
+        }
+    }
+
+    println(f"lengths 0..{MAX_LEN}: {total_vowels} vowels, checksum {checksum}");
+    println(f"failures {failures}");
+    if failures == 0 {
+        println("all properties hold");
+    }
+}

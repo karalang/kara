@@ -1,0 +1,13 @@
+
+enum E { Id(String), N(i64) }
+fn make() -> E {
+    let e = E.Id("hello".to_string());
+    e
+}
+fn main() {
+    let r = make();
+    match r {
+        Id(s) => println(s),
+        N(n) => println(n.to_string()),
+    }
+}

@@ -1,0 +1,37 @@
+
+fn name(n: i64) -> String { return f"item{n}"; }
+fn ids(n: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"item{n}");
+    return v;
+}
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("item1");
+    v.push("item2");
+
+    // fresh temporaries: freed here
+    println(f"{v.contains(name(1))}");
+    println(f"{v.contains(name(9))}");
+
+    // bound: owned by the binding, must survive the lookup
+    let bound = name(2);
+    println(f"{v.contains(bound)}");
+    println(bound);
+
+    // place expression: owned by its container
+    println(f"{v.contains(v[0])}");
+    println(v[0]);
+
+    // literal: rodata
+    println(f"{v.contains("item1")}");
+
+    // nested container needle, fresh and bound
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    outer.push(ids(1));
+    println(f"{outer.contains(ids(1))}");
+    let held = ids(1);
+    println(f"{outer.contains(held)}");
+    println(held[0]);
+}

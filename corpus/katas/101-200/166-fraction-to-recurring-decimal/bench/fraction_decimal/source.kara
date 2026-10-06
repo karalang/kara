@@ -1,0 +1,55 @@
+// Benchmark workload for LeetCode #166 — Fraction to Recurring Decimal.
+//
+// Punch stream: PASSES PRNG numerator/denominator pairs (den in 2..1024, so no
+// division by zero) are fed through the long-division digit generator. Each
+// fractional digit costs a variable-divisor idiv/mod pair, and a Map of seen
+// remainders detects the repeating cycle — a division + hash kernel that does
+// NOT vectorize. Every pair is distinct, so nothing hoists. Sink = running
+// checksum of the fractional digits produced across all passes.
+//
+// NOTE: the remainder->position lookup is a Map here (and a HashMap/map/dict in
+// the Rust/Go/Python mirrors); the C mirror hand-rolls an epoch-stamped table
+// (no std map). All five emit the identical digit sequence, so the checksum
+// sink is byte-identical — only the seen-remainder data structure differs.
+
+fn frac_checksum(num: i64, den: i64) -> i64 {
+    let mut rem = num % den;
+    let mut checksum = 0;
+    if rem == 0 {
+        return 0;
+    }
+    let mut pos: Map[i64, i64] = Map.new();
+    let mut count = 0;
+    while rem != 0 {
+        match pos.get(rem) {
+            Some(_idx) => {
+                rem = 0; // cycle closed — stop
+            }
+            None => {
+                let _ = pos.insert(rem, count);
+                rem = rem * 10;
+                let digit = rem / den;
+                checksum = checksum + digit;
+                rem = rem % den;
+                count = count + 1;
+            }
+        }
+    }
+    return checksum;
+}
+
+fn main() {
+    let passes = 500000;
+    let mut state = 12345;
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let num = state % 1000000;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let den = 2 + (state % 1023);
+        sink = sink + frac_checksum(num, den);
+        p = p + 1;
+    }
+    println(sink);
+}

@@ -1,0 +1,8 @@
+
+fn main() {
+    let a = 3;
+    let b = 7;
+    let combine = |x: i64| x + a + b;
+    println(combine(0));
+    println(combine(10));
+}

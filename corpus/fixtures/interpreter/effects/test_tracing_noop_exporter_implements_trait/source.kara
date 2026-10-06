@@ -1,0 +1,8 @@
+fn main() {
+         let e = NoOpExporter {};
+         let s = Span.root("request", 1);
+         let ev = LogEvent.info("hello");
+         e.export_span(s);
+         e.export_event(ev);
+         println("ok");
+     }

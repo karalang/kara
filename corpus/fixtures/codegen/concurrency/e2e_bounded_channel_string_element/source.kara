@@ -1,0 +1,8 @@
+
+fn main() {
+    let bc: BoundedChannel[String] = BoundedChannel.new(1, OnFull.Block);
+    match bc.send("hello bounded") { Ok(_) => println("sent"), Err(_) => println("full"), }
+    match bc.send("overflow") { Ok(_) => println("sent"), Err(_) => println("full"), }
+    match bc.recv() { Some(s) => println(s), None => println("empty"), }
+    match bc.recv() { Some(s) => println(s), None => println("empty"), }
+}

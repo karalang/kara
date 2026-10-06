@@ -1,0 +1,16 @@
+
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha element string padded well past thirty-six bytes");
+    v.push("beta element string also padded past thirty-six bytes!!");
+    v.push("gamma element string likewise padded beyond thirty-six b");
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        println(names().contains("beta element string also padded past thirty-six bytes!!"));
+        i = i + 1;
+    };
+}

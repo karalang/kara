@@ -1,0 +1,14 @@
+vec_lit [(1, 2), (3, 4)]
+push [(1, 2), (3, 4)]
+insert [(5, 6), (1, 2), (3, 4)]
+index_assign [(5, 6), (7, 8), (3, 4)]
+deque 3 4 1 2
+map_val 1 2
+set 2 true true
+opt 1 2
+arr 3 4
+nested [[(1, 2), (3, 4)]]
+u8 [(200, 7)]
+nested2 [[(1, 2), (3, 4)], [(5, 6)]]
+inner_tuple [(1, (200, 3)), (4, (5, 6))]
+float 3 4

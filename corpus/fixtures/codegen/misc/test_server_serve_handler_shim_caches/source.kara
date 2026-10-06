@@ -1,0 +1,11 @@
+
+struct Response { status: i64, body: String }
+
+fn handle(req: Request) -> Response {
+    Response { status: 200, body: "{}" }
+}
+
+fn main() {
+    let _r1 = Server.serve("127.0.0.1:0", handle);
+    let _r2 = Server.serve("127.0.0.1:0", handle);
+}

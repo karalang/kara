@@ -1,0 +1,18 @@
+
+fn make(s: ref String) -> String {
+    let mut o: String = "";
+    o.push_str(s[0..5]);
+    o
+}
+
+fn main() {
+    let src: String = "alpha beta gamma delta";
+    let mut acc: String = "";
+    let mut k = 0i64;
+    while k < 4i64 {
+        let d = make(src);
+        acc.push_str(d[0..3]);
+        k = k + 1i64;
+    }
+    println(acc);
+}

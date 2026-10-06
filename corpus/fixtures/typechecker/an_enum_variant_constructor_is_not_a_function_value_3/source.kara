@@ -1,0 +1,3 @@
+enum Col { A(i64), B }
+fn mk() -> Fn(i64) -> Col { return Col.A; }
+fn main() { let g = mk(); println("end") }

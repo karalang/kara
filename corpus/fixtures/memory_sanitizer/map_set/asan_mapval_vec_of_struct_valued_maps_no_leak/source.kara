@@ -1,0 +1,14 @@
+
+struct Holder { name: String, id: i64 }
+fn build(n: i64) -> Map[i64, Holder] {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: f"holder payload padded out beyond thirty-six bytes {n}", id: n };
+    m.insert(n, h);
+    m
+}
+fn main() {
+    let mut v: Vec[Map[i64, Holder]] = Vec.new();
+    v.push(build(1));
+    v.push(build(2));
+    println(v.len());
+}

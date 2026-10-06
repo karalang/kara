@@ -1,0 +1,6 @@
+
+fn main() {
+    defer { println("a"); }
+    defer { println("b"); }
+    println("body");
+}

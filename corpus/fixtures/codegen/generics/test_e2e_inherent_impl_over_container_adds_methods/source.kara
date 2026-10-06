@@ -1,0 +1,17 @@
+
+impl Column[i64] {
+    fn doubled_sum(ref self) -> i64 { self.sum() + self.sum() }
+    fn quad_sum(ref self) -> i64 { self.doubled_sum() + self.doubled_sum() }
+}
+impl Column[i64] {
+    fn spread(ref self) -> i64 { self.max() - self.min() }
+}
+impl Tensor[i64, [3]] {
+    fn twice_sum(ref self) -> i64 { self.sum() + self.sum() }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{c.doubled_sum()} {c.quad_sum()} {c.spread()}");
+    println(f"{t.twice_sum()}");
+}

@@ -1,0 +1,6 @@
+
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let j = v.iter().fold(String.from(""), |acc, x| f"{acc}-{x}");
+    println(j);
+}

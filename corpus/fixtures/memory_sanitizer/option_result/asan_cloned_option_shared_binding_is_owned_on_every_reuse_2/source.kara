@@ -1,0 +1,20 @@
+
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn clone_offset(node: Option[Node], delta: i64) -> Option[Node] {
+    match node {
+        None => None,
+        Some(n) => Some(Node { val: n.val + delta, left: clone_offset(n.left, delta), right: clone_offset(n.right, delta) }),
+    }
+}
+fn count_nodes(node: Option[Node]) -> i64 {
+    match node { None => 0, Some(n) => 1 + count_nodes(n.left) + count_nodes(n.right) }
+}
+fn main() {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None }));
+    let base: Option[Node] = src[0].clone();
+    let s = base.clone();
+    let l0 = clone_offset(s, 10);
+    let l1 = clone_offset(s, 20);
+    println(count_nodes(l0) + count_nodes(l1));
+}

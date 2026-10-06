@@ -1,0 +1,7 @@
+
+struct Point { x: i64, y: i64 }
+fn main() {
+    let p = Point { x: 7, y: 11 };
+    let sum = || p.x + p.y;
+    println(sum());
+}

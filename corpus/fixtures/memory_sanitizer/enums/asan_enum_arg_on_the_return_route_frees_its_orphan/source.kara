@@ -1,0 +1,34 @@
+
+enum Es { A(String), B }
+impl Drop for Es { fn drop(mut ref self) { println("dEs") } }
+struct H { n: i64 }
+impl H {
+    fn spass(e: Es) -> Es { return e; }
+    fn mpass(ref self, e: Es) -> Es { return e; }
+}
+fn mkes(i: i64) -> Es { return Es.A(f"ee{i}"); }
+fn passe(e: Es) -> Es { return e; }
+fn passg[T](e: T) -> T { return e; }
+fn eatg[T](e: T) -> i64 { return 1; }
+fn stashg[T](v: mut ref Vec[T], x: T) { v.push(x); }
+
+struct Rs { id: i64, name: String }
+impl Drop for Rs { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> Rs { return Rs { id: i, name: f"hh{i}" }; }
+
+fn main() {
+    let h = H { n: 1 };
+    let i = 71;
+
+    let z1 = passe(mkes(i));            println("p1");
+    let z2 = passe(Es.A(f"ee{i}"));     println("p2");
+    let z3 = H.spass(mkes(i));          println("p3");
+    let z4 = h.mpass(mkes(i));          println("p4");
+    let z5 = passg(mkes(i));            println("p5");
+    let z6 = passg(Es.A(f"ee{i}"));     println("p6");
+    let n7 = eatg(mkes(i));             println(f"p7={n7}");
+    let z8 = passg(mkr(9));             println("p8");
+    let mut v: Vec[Es] = Vec.new();
+    stashg(mut v, mkes(56));            println(f"p9={v.len()}");
+    println("end");
+}

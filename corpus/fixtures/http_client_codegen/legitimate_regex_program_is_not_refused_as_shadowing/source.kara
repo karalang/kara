@@ -1,0 +1,6 @@
+
+fn main() {
+    let r = Regex.compile("^[0-9]+$").unwrap();
+    let m = r.is_match("123");
+    println(f"{m}");
+}

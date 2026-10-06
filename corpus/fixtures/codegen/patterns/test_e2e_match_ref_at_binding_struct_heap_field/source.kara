@@ -1,0 +1,13 @@
+
+struct Foo { a: String, n: i64 }
+fn main() {
+    let foo = Foo { a: "hi", n: 7 };
+    match foo {
+        ref x @ Foo { a, n } => {
+            println(a);
+            println(n);
+            println(x.n);
+        }
+    }
+    println(foo.a);
+}

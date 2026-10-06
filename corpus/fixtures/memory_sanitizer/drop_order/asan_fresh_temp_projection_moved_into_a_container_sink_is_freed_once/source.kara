@@ -1,0 +1,35 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, name: String, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
+struct Q { name: String, k: i64 }
+fn mkq(n: i64) -> Q { return Q { name: f"q-string-longer-than-sso-{n}", k: n } }
+struct G[T] { v: T, k: i64 }
+fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+fn main() {
+    let mut xs: Vec[D] = Vec.new();
+    xs.push(mkw(1).r);
+    xs.insert(0, mkw(2).s);
+    xs.push(wrap(mkd(3)).v);
+    xs.push(if true { mkw(4).r } else { mkd(0) });
+    println(f"xs{xs.len()}");
+    let mut dq: VecDeque[D] = VecDeque.new();
+    dq.push_back(mkw(5).r);
+    dq.push_front(mkw(6).r);
+    println(f"dq{dq.len()}");
+    let mut ss: Vec[String] = Vec.new();
+    ss.push(mkq(7).name);
+    ss.insert(0, mkw(8).name);
+    println(f"ss{ss.len()} {ss[0]} {ss[1]}");
+    let mut m: Map[String, D] = Map.new();
+    m.insert(mkq(9).name, mkw(10).r);
+    println(f"m{m.len()}");
+    let mut sm: SortedMap[i64, D] = SortedMap.new();
+    sm.insert(1, mkw(11).r);
+    println(f"sm{sm.len()}");
+    let mut st: Set[String] = Set.new();
+    st.insert(mkq(12).name);
+    println(f"st{st.len()}");
+    println("end")
+}

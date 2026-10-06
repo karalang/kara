@@ -1,0 +1,29 @@
+
+fn make_map(x: i64) -> Option[Map[i64, i64]] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(x, x * 2);
+    return Some(m);
+}
+fn make_set(x: i64) -> Option[Set[i64]] {
+    let mut s: Set[i64] = Set.new();
+    s.insert(x);
+    s.insert(x + 100);
+    return Some(s);
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        match make_map(i) {
+            Some(m) => println(i + m.len()),
+            None => println(-1),
+        }
+        match make_set(i) {
+            Some(s) => {
+                if s.contains(i) { println(s.len()); } else { println(-1); }
+            }
+            None => println(-1),
+        }
+        i = i + 1;
+    }
+    println(99);
+}

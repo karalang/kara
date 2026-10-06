@@ -1,0 +1,17 @@
+
+fn fetch(id: i64) -> Result[i64, String] {
+    if id > 0 { Result.Ok(id * 10) } else { Result.Err(f"bad:{id}") }
+}
+fn main() {
+    let a: i64 = 1;
+    let b: i64 = -2;
+    let c: i64 = 3;
+    let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| fetch(a), || fetch(b), || fetch(c)];
+    let results: Vec[Result[i64, String]] = collect_all_vec(fs);
+    for r in results {
+        match r {
+            Result.Ok(v) => { println(f"ok {v}"); }
+            Result.Err(e) => { println(f"err {e}"); }
+        }
+    }
+}

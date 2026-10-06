@@ -1,0 +1,13 @@
+source = "tests/typechecker.rs::add_bounded_arithmetic_still_rejects_two_different_parameters"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

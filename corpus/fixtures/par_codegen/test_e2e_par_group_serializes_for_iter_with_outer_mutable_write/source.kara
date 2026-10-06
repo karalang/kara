@@ -1,0 +1,21 @@
+
+fn dummy(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < n { v.push(i); i = i + 1; }
+    v
+}
+fn helper(nums: Slice[i64]) -> i64 {
+    let mut cap = 1i64;
+    for v in nums.iter() {
+        if v > cap { cap = v; }
+    }
+    let f: Vec[i64] = dummy(cap);
+    println(cap);
+    println(f.len());
+    cap
+}
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 4, 6];
+    println(helper(a));
+}

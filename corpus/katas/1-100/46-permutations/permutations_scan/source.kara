@@ -1,0 +1,95 @@
+// LeetCode #46: Permutations — in-path membership scan (no `used` array).
+//
+// Same DFS as the ★ file — at each level pick any element not yet on the current branch, leaf
+// at `path.len() == n`, snapshot the path — but the ONE axis that changes is how "still unused"
+// is decided. Where the ★ file keeps a parallel `Vec[bool]` marker flipped in lockstep with the
+// path, this style allocates NO side array: an element is available iff it is not already in
+// `path`, tested by a linear scan (`contains`). Because `nums` is distinct, "value not in path"
+// is exactly equivalent to "index not used", so this walks the same tree in the same order and
+// emits the identical permutation listing.
+//
+// The trade is array-of-bools O(n) auxiliary space and an O(1) lookup (★) versus zero auxiliary
+// space and an O(depth) membership scan per candidate — the classic space-for-time swap. At
+// n ≤ 6 the scan is trivially cheap; the point is the contrast in mechanism, not the asymptotics.
+// Only the availability test differs from the ★ file: the mutable path, the push/pop bracketing,
+// and the leaf snapshot are unchanged.
+//
+// LeetCode bounds: 1 ≤ n ≤ 6, -10 ≤ nums[i] ≤ 10, all DISTINCT — the distinctness is what makes
+// the membership scan a correct stand-in for the index marker.
+
+fn contains(path: ref Vec[i64], x: i64) -> bool {
+    let n = path.len();
+    let mut i = 0;
+    while i < n {
+        if path[i] == x {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn backtrack(nums: ref Vec[i64], path: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    let n = nums.len();
+    if path.len() == n {
+        out.push(path.clone());
+        return;
+    }
+    let mut i = 0;
+    while i < n {
+        let x = nums[i];
+        // Available iff not already placed on this branch — the side-array-free test.
+        if not contains(path, x) {
+            path.push(x);
+            backtrack(nums, path, out);
+            path.pop();
+        }
+        i = i + 1;
+    }
+}
+
+fn permute(nums: Slice[i64]) -> Vec[Vec[i64]] {
+    let xs: Vec[i64] = Vec.from_slice(nums);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    backtrack(xs, mut path, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(perm: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = perm.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{perm[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn report(nums: Slice[i64]) {
+    let perms = permute(nums);
+    let count = perms.len();
+    let input: Vec[i64] = Vec.from_slice(nums);
+    println(f"{show(input)} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(show(perms[i]));
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    report([1, 2, 3]);
+    report([0, 1]);
+    report([1]);
+    report([5, 3, 4]);
+    report([1, 2, 3, 4]);
+}

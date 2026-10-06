@@ -1,0 +1,11 @@
+
+struct Net { id: i64 }
+impl Net {
+    fn open(u: String) -> i64 with sends(Network) receives(Network) { return 33; }
+}
+fn main() {
+    let x = Net.open("host-a");
+    let y = Net.open("host-b");
+    println(x);
+    println(y);
+}

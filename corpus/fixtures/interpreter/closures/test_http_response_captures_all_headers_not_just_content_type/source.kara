@@ -1,0 +1,18 @@
+
+fn main() with sends(Network) receives(Network) {{
+    let c = Client.new();
+    match c.get("http://127.0.0.1:{port}/g") {{
+        Ok(r) => {{
+            match r.header("X-Echo") {{
+                Some(v) => println("xecho " + v),
+                None => println("xecho MISSING"),
+            }}
+            match r.header("content-type") {{
+                Some(v) => println("ct " + v),
+                None => println("ct MISSING"),
+            }}
+            println(r.headers().len() > 1);
+        }}
+        Err(e) => println("err " + e.message()),
+    }}
+}}

@@ -1,0 +1,75 @@
+// LeetCode #316: Remove Duplicate Letters — the recursive greedy.
+//
+// The FIRST letter of the answer is the smallest letter that can go first: pick
+// the position `pos` of the smallest letter seen before some letter's LAST
+// occurrence runs out. Concretely: walk left, keeping `pos` at the smallest
+// letter so far; the moment a letter's remaining count hits zero, stop — the
+// answer must start with s[pos], since everything after that point is missing
+// that letter. Then delete every copy of s[pos] from the suffix after `pos` and
+// recurse. Each level removes one distinct letter, so there are at most 26
+// levels of O(n) work: O(26 n).
+//
+// This is the classic "prove the first character, then recurse" shape — the
+// stack arm does the same thing in one pass by deferring the proof.
+
+fn solve(bs: ref Vec[u8]) -> String {
+    if bs.len() == 0 { return String.new(); }
+
+    let mut count: Vec[i64] = Vec.new();
+    for k in 0..26 { count.push(0); }
+    for i in 0..bs.len() { count[(bs[i] - b'a') as i64] += 1; }
+
+    let mut pos = 0;
+    for i in 0..bs.len() {
+        if bs[i] < bs[pos] { pos = i; }
+        let ci = (bs[i] - b'a') as i64;
+        count[ci] -= 1;
+        if count[ci] == 0 { break; }
+    }
+
+    let first = bs[pos];
+    let mut rest: Vec[u8] = Vec.new();
+    for i in (pos + 1)..bs.len() {
+        if bs[i] != first { rest.push(bs[i]); }
+    }
+
+    let mut out = String.new();
+    out.push(first as char);
+    out.push_str(solve(rest));
+    return out;
+}
+
+fn remove_duplicate_letters(s: ref String) -> String {
+    let bs = s.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    for i in 0..bs.len() { v.push(bs[i]); }
+    return solve(v);
+}
+
+// ------------------------------------------------------------- demo ---
+
+fn main() {
+    let mut cases: Vec[String] = Vec.new();
+    cases.push("bcabc");
+    cases.push("cbacdcbc");
+    cases.push("a");
+    cases.push("aaaa");
+    cases.push("abcabc");
+    cases.push("cba");
+    cases.push("bbcaac");
+    cases.push("leetcode");
+    cases.push("zyxzyxzyx");
+    cases.push("ecbacba");
+    cases.push("bcac");
+
+    let mut acc = 0;
+    for c in 0..cases.len() {
+        let r = remove_duplicate_letters(cases[c]);
+        let rb = r.bytes();
+        for j in 0..rb.len() {
+            acc = (acc * 131 + (rb[j] as i64)) % 1000000007;
+        }
+        println(f"case {c}: {cases[c]} -> {r}");
+    }
+    println(f"sink: {acc}");
+}

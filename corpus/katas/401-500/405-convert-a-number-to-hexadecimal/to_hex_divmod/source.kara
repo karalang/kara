@@ -1,0 +1,58 @@
+// LeetCode #405: Convert a Number to Hexadecimal — arithmetic mod/div variant.
+//
+// Same radix-16 render, but the nibble is reached by `% 16` / `/ 16` instead of
+// `& 0xf` / `>> 4`. This is the literal base-16 sibling of #67 add-binary's
+// `% 2` / `/ 2` and #415 add-strings' `% 10` / `/ 10` carry arithmetic — it
+// makes the point that the digit-table render is one surface regardless of how
+// the digit is extracted: bit masking and modular arithmetic produce the same
+// nibble stream over a non-negative value.
+//
+// The two's-complement fold still happens by masking once up front
+// (`num & 0xffffffff`); after that `n` is a positive i64 and `% 16` / `/ 16`
+// agree with `& 0xf` / `>> 4` exactly.
+
+fn to_hex(num: i64) -> String {
+    if num == 0 {
+        return "0";
+    }
+
+    let hexd: String = "0123456789abcdef";
+
+    let mut n = num & 0xffffffff;
+
+    let mut buf: Vec[i64] = Vec.new();
+    while n > 0 {
+        buf.push(n % 16);
+        n = n / 16;
+    }
+
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        let d = buf[k];
+        out.push_str(hexd[d..d + 1]);
+        k = k - 1;
+    }
+    out
+}
+
+fn report(num: i64) {
+    println(f"{num} -> \"{to_hex(num)}\"");
+}
+
+fn main() {
+    report(26);              // 1a
+    report(0);               // 0
+    report(-1);              // ffffffff
+
+    report(1);               // 1
+    report(15);              // f
+    report(16);              // 10
+    report(255);             // ff
+    report(256);             // 100
+
+    report(2147483647);      // 7fffffff
+    report(-2147483648);     // 80000000
+    report(-26);             // ffffffe6
+    report(-256);            // ffffff00
+}

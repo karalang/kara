@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/patterns.rs::asan_option_param_never_destructured_leaks_payload"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

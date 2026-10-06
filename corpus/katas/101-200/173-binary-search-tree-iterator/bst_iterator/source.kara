@@ -1,0 +1,110 @@
+// LeetCode 173 — Binary Search Tree Iterator.
+//
+// Implement an in-order iterator over a BST with `next()` (the next smallest
+// value) and `has_next()`, in O(h) space and amortised O(1) per `next`. The
+// classic controlled-recursion trick: keep an explicit STACK holding the path of
+// the not-yet-visited left spine. `has_next` is "stack non-empty"; `next` pops
+// the top (the current smallest), then pushes the left spine of its right child
+// — so each node is pushed and popped exactly once across a full traversal.
+//
+// The tree is an index-pool (`Vec[Node]` with i64 child indices, -1 = null) —
+// the corpus idiom for pointer structures without RC. The iterator's stack is a
+// `Vec[i64]` of node indices.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+struct BstIterator {
+    stack: Vec[i64],
+}
+
+// Insert `val` into the BST rooted at index `root`; returns the (possibly new)
+// root index. A fresh node is appended to the pool.
+fn insert(nodes: mut ref Vec[Node], root: i64, val: i64) -> i64 {
+    if root == -1 {
+        nodes.push(Node { val: val, left: -1, right: -1 });
+        return nodes.len() - 1;
+    }
+    if val < nodes[root].val {
+        let li = nodes[root].left;
+        let l = insert(nodes, li, val);
+        nodes[root].left = l;
+    } else {
+        let ri = nodes[root].right;
+        let r = insert(nodes, ri, val);
+        nodes[root].right = r;
+    }
+    return root;
+}
+
+// Push the entire left spine starting at `start` onto the iterator's stack.
+fn push_left(it: mut ref BstIterator, nodes: ref Vec[Node], start: i64) {
+    let mut idx = start;
+    while idx != -1 {
+        it.stack.push(idx);
+        idx = nodes[idx].left;
+    }
+}
+
+fn new_iterator(nodes: ref Vec[Node], root: i64) -> BstIterator {
+    let mut it = BstIterator { stack: Vec.new() };
+    push_left(mut it, nodes, root);
+    return it;
+}
+
+fn has_next(it: ref BstIterator) -> bool {
+    return it.stack.len() > 0;
+}
+
+fn next(it: mut ref BstIterator, nodes: ref Vec[Node]) -> i64 {
+    let top = it.stack[it.stack.len() - 1];
+    let _ = it.stack.pop();
+    let res = nodes[top].val;
+    let r = nodes[top].right;
+    push_left(it, nodes, r); // `it` is already a mut ref — forward without re-marking
+    return res;
+}
+
+fn build(values: Slice[i64]) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut root = -1;
+    let n = values.len();
+    let mut i = 0;
+    while i < n {
+        root = insert(mut nodes, root, values[i]);
+        i = i + 1;
+    }
+    return nodes;
+}
+
+fn drive(values: Slice[i64]) {
+    let nodes = build(values);
+    // The first inserted value is the root (index 0), or -1 for an empty tree.
+    let root = if nodes.len() > 0 { 0 } else { -1 };
+    let mut it = new_iterator(nodes, root);
+    let mut out: String = "";
+    let mut first = true;
+    while has_next(it) {
+        let v = next(mut it, nodes);
+        if first { first = false; } else { out.push_str(" "); }
+        out.push_str(f"{v}");
+    }
+    println(out);
+}
+
+fn main() {
+    let a: Array[i64, 7] = [5, 3, 8, 1, 4, 7, 9];
+    drive(a);                          // 1 3 4 5 7 8 9
+
+    let b: Array[i64, 5] = [7, 3, 15, 9, 20];
+    drive(b);                          // 3 7 9 15 20
+
+    let c: Array[i64, 1] = [42];
+    drive(c);                          // 42
+
+    let d: Array[i64, 6] = [4, 2, 6, 1, 3, 5];
+    drive(d);                          // 1 2 3 4 5 6
+}

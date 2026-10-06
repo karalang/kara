@@ -1,0 +1,25 @@
+
+#[derive(Display)]
+enum E { A { n: i64 }, T(i64, i64), S { s: String }, Z }
+#[derive(Display)]
+struct H { u: E }
+enum U { P { n: i64 }, Q }
+impl Display for U {
+    fn to_string(ref self) -> String {
+        match self { P { n } => f"pee{n}", Q => "cue" }
+    }
+}
+#[derive(Display)]
+struct G { u: U }
+fn main() {
+    let a = H { u: E.A { n: 1 } };
+    println(f"{a}")
+    let t = H { u: E.T(1, 2) };
+    println(f"{t}")
+    let s = H { u: E.S { s: "hi" } };
+    println(f"{s}")
+    let z = H { u: E.Z };
+    println(f"{z}")
+    let g = G { u: U.Q };
+    println(f"{g}")
+}

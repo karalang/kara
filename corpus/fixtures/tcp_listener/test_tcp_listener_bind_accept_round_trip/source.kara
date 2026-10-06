@@ -1,0 +1,7 @@
+
+            fn main() {
+                let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let _stream = listener.accept().unwrap();
+                println(0);
+            }
+        

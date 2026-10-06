@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/patterns.rs::asan_freshtemp_result_arm_binding_a_struct_payload_owns_it_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

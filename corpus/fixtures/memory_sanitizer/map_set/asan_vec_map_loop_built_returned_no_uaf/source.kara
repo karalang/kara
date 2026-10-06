@@ -1,0 +1,18 @@
+
+fn make() -> Vec[Map[i64, i64]] {
+    let mut v: Vec[Map[i64, i64]] = Vec.new();
+    let mut i = 0i64;
+    while i < 5i64 {
+        let mut m: Map[i64, i64] = Map.new();
+        m.insert(i, i * 100i64);
+        v.push(m);
+        i = i + 1;
+    }
+    v
+}
+
+fn main() {
+    let v = make();
+    println(v.len());
+    match v[3].get(3i64) { Some(x) => println(x), None => println(-1i64) }
+}

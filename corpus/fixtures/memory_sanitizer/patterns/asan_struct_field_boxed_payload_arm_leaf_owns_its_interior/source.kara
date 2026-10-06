@@ -1,0 +1,52 @@
+
+struct R2 { s: String, t: String, u: String }
+enum K { A(R2), B }
+enum Ks { A(String), B }
+struct Holder { k: Option[K], n: i64 }
+struct HolderS { k: Option[Ks], n: i64 }
+
+fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
+fn eat(r: R2) -> i64 { return r.s.len(); }
+
+fn field(h: Holder) {
+    match h.k { Option.Some(K.A(r)) => { println(f"f:{r.s}"); } Option.Some(K.B) => {} Option.None => {} }
+}
+fn untouched(h: Holder) { println(f"u:{h.n}"); }
+fn wildcard(h: Holder) {
+    match h.k { Option.Some(_) => { println("wc"); } Option.None => {} }
+}
+fn variantwild(h: Holder) {
+    match h.k { Option.Some(K.A(_)) => { println("vw"); } Option.Some(K.B) => {} Option.None => {} }
+}
+fn whole(h: Holder) {
+    match h.k { Option.Some(kk) => { match kk { K.A(r) => { println(f"w:{r.s}"); } K.B => {} } } Option.None => {} }
+}
+fn handsout(h: Holder) {
+    match h.k { Option.Some(K.A(r)) => { println(f"h:{eat(r)}"); } Option.Some(K.B) => {} Option.None => {} }
+}
+fn rebind(h: Holder) {
+    match h.k { Option.Some(K.A(r)) => { let m = r; println(f"rb:{m.s}"); } Option.Some(K.B) => {} Option.None => {} }
+}
+fn stringpay(h: HolderS) {
+    match h.k { Option.Some(Ks.A(s)) => { println(f"sp:{s}"); } Option.Some(Ks.B) => {} Option.None => {} }
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        field(Holder { k: Option.Some(K.A(mkr(i))), n: i });
+        untouched(Holder { k: Option.Some(K.A(mkr(i))), n: i });
+        wildcard(Holder { k: Option.Some(K.A(mkr(i))), n: i });
+        variantwild(Holder { k: Option.Some(K.A(mkr(i))), n: i });
+        whole(Holder { k: Option.Some(K.A(mkr(i))), n: i });
+        handsout(Holder { k: Option.Some(K.A(mkr(i))), n: i });
+        rebind(Holder { k: Option.Some(K.A(mkr(i))), n: i });
+        stringpay(HolderS { k: Option.Some(Ks.A(f"pppppppp{i}")), n: i });
+        let lh = Holder { k: Option.Some(K.A(mkr(i))), n: i };
+        match lh.k { Option.Some(K.A(r)) => { println(f"lo:{r.s}"); } Option.Some(K.B) => {} Option.None => {} }
+        let bl: Option[K] = Option.Some(K.A(mkr(i)));
+        match bl { Option.Some(K.A(r)) => { println(f"bl:{r.s}"); } Option.Some(K.B) => {} Option.None => {} }
+        i = i + 1;
+    }
+    println("end");
+}

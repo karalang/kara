@@ -1,0 +1,13 @@
+source = "tests/codegen/structs.rs::test_e2e_call_result_struct_handed_back_by_callee_frees_original"
+dedup_of = ["tests/memory_sanitizer/structs.rs::asan_call_result_struct_handed_back_by_callee_frees_original"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

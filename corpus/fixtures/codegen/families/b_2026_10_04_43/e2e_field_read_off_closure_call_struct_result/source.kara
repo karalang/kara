@@ -1,0 +1,17 @@
+struct P { x: i64, y: i64 }
+struct R { id: i64, name: String, p: P }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Q { s: String, n: i64 }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", p: P { x: i * 2, y: 0 } }; }
+fn main() {
+    let base = 100;
+    let h = |x: R| x;
+    let g = |n: i64| Q { s: f"q{n + base}", n: n };
+    println(f"r{h(mk(47)).id}");
+    println(f"a:{h(mk(1)).name}");
+    println(f"b:{h(mk(2)).p.x}");
+    println(f"c:{g(5).s} {g(6).n}");
+    let t = g(7).s;
+    println(f"d:{t} {h(mk(3)).name.len()}");
+    println("end");
+}

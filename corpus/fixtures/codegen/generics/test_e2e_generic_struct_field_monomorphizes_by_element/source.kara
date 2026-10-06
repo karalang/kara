@@ -1,0 +1,18 @@
+
+struct Box[T] { v: T }
+struct Pair[T] { a: T, b: T }
+fn getv(b: ref Box[f64]) -> f64 { b.v }
+fn main() {
+    let bf = Box { v: 2.5 };
+    println(f"{bf.v}");
+    let bi = Box { v: 42 };
+    println(f"{bi.v}");
+    let bs = Box { v: "gen_struct_string_payload_abcdef" };
+    println(f"{bs.v}");
+    let mut m = Box { v: 1.0 };
+    m.v = 9.5;
+    println(f"{m.v}");
+    let p = Pair { a: 1.5, b: 4.0 };
+    println(f"{p.a - p.b}");
+    println(f"{getv(bf)}");
+}

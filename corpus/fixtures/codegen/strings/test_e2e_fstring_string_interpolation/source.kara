@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut name: String = String.new();
+    name.push_str("Alice");
+    let msg = f"Hello, {name}!";
+    println(msg);
+}

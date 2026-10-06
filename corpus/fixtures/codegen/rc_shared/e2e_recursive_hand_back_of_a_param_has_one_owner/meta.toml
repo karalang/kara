@@ -1,0 +1,13 @@
+source = "tests/codegen/rc_shared.rs::e2e_recursive_hand_back_of_a_param_has_one_owner"
+dedup_of = ["tests/interpreter/drop_order.rs::interp_recursive_hand_back_of_a_param_has_one_owner", "tests/memory_sanitizer/rc_shared.rs::asan_recursive_hand_back_of_a_param_has_one_owner"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

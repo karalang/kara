@@ -1,0 +1,18 @@
+
+struct S[T] { items: Vec[T] }
+impl[T] S[T] {
+    fn new() -> S[T] { S { items: Vec.new() } }
+    fn push(mut ref self, x: T) { self.items.push(x); }
+    fn len(ref self) -> i64 { self.items.len() }
+}
+fn main() {
+    let mut r: i64 = 0;
+    while r < 3 {
+        let mut s: S[String] = S.new();
+        s.push(f"row-{r}-aaaa");
+        s.push(f"row-{r}-bbbb");
+        s.push(f"row-{r}-cccc");
+        println(f"{s.len()}");
+        r = r + 1;
+    }
+}

@@ -1,0 +1,19 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    message Packet {
+        sint64 delta = 1;
+        sint32 small = 2;
+        fixed64 id = 3;
+        sfixed32 temp = 4;
+    }
+";
+
+fn main() {
+    let p = Packet { delta: -1000, small: -3, id: 4294967296u64, temp: -42 };
+    let back = Packet.decode(p.encode());
+    println(back.delta);
+    println(back.small);
+    println(back.id);
+    println(back.temp);
+}

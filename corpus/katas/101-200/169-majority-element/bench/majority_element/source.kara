@@ -1,0 +1,59 @@
+// LeetCode 169 — Majority Element. Benchmark kernel (Boyer-Moore, O(n) O(1)).
+//
+// Build-once + punch: fill N values with a deterministic 60%-majority LCG, then
+// run the Boyer-Moore scan K times, perturbing one element each round so the
+// pure function can't be hoisted out of the loop. Sink = sum of the K results.
+//
+// N = 10_000_000, K = 20, majority value = 7. The scan carries a candidate/count
+// dependency chain (not auto-vectorizable), so it measures a genuine sequential
+// pass. Identical LCG, perturbation and algorithm across the C / Rust / Go /
+// Python mirrors (honest bench).
+
+fn majority_element(nums: ref Vec[i64]) -> i64 {
+    let mut candidate = nums[0];
+    let mut count = 0;
+    let n = nums.len();
+    let mut i = 0;
+    while i < n {
+        let x = nums[i];
+        if count == 0 {
+            candidate = x;
+        }
+        if x == candidate {
+            count = count + 1;
+        } else {
+            count = count - 1;
+        }
+        i = i + 1;
+    }
+    return candidate;
+}
+
+fn main() {
+    let n = 10000000;
+    let k = 20;
+    let majority = 7;
+
+    let mut nums: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        if state % 100 < 60 {
+            nums.push(majority);
+        } else {
+            nums.push(state % 1000000 + 1000);
+        }
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut round = 0;
+    while round < k {
+        let idx = (round * 7919) % n;
+        nums[idx] = nums[idx] + 1;
+        sink = sink + majority_element(nums);
+        round = round + 1;
+    }
+    println(sink);
+}

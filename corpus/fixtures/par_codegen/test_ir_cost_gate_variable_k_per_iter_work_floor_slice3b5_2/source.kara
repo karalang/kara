@@ -1,0 +1,22 @@
+
+fn inner(m: i64) -> i64 {
+    let mut acc: i64 = 0i64;
+    let mut j: i64 = 0i64;
+    while j < m {
+        acc = acc + (j * j) % 7i64;
+        j = j + 1i64;
+    }
+    return acc;
+}
+fn helper(n: i64) -> i64 {
+    let mut sum: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < n {
+        sum = sum + inner(i);
+        i = i + 1i64;
+    }
+    return sum;
+}
+fn main() {
+    println(helper(100i64));
+}

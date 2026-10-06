@@ -1,0 +1,209 @@
+// LeetCode 212 — Word Search II.
+//
+// Given an m x n board of characters and a list of words, return every word that
+// can be spelled by a path of orthogonally-adjacent cells, using each cell at
+// most once per word.
+//
+// The naive "run Word Search once per word" is too slow; instead build a TRIE of
+// all the words and walk the board ONCE, descending the trie in lockstep with
+// the DFS. From each cell, follow the child edge for that cell's letter — if the
+// trie has no such edge the whole branch is dead, which prunes enormous swaths of
+// the search. A trie node flagged as a word-end means the path spelled a target,
+// so it is collected (and the flag cleared, so each word is reported once even if
+// it occurs in several places). Cells are marked visited in place during a branch
+// and restored on the way out (classic backtracking). Results are sorted for a
+// canonical order.
+//
+// This is #208's trie fused with grid backtracking — a strictly richer traversal.
+
+struct TrieNode {
+    children: Map[char, i64],   // next char -> child node index
+    mut is_end: bool,
+}
+
+fn new_node() -> TrieNode {
+    return TrieNode { children: Map.new(), is_end: false };
+}
+
+fn child_of(nodes: ref Vec[TrieNode], idx: i64, c: char) -> i64 {
+    match nodes[idx].children.get(c) {
+        Some(v) => v,
+        None => -1,
+    }
+}
+
+fn insert(nodes: mut ref Vec[TrieNode], word: ref String) {
+    let cs: Vec[char] = word.chars().collect();
+    let n = cs.len();
+    let mut cur = 0;
+    let mut i = 0;
+    while i < n {
+        let ch = cs[i];
+        let child = child_of(nodes, cur, ch);
+        if child == -1 {
+            let idx = nodes.len();
+            nodes.push(new_node());
+            let _ = nodes[cur].children.insert(ch, idx);
+            cur = idx;
+        } else {
+            cur = child;
+        }
+        i = i + 1;
+    }
+    nodes[cur].is_end = true;
+}
+
+fn collect_word(path: ref Vec[char]) -> String {
+    let mut s: String = "";
+    let mut i = 0;
+    while i < path.len() {
+        s.push(path[i]);
+        i = i + 1;
+    }
+    return s;
+}
+
+fn dfs(
+    board: mut ref Vec[Vec[char]],
+    r: i64,
+    c: i64,
+    rows: i64,
+    cols: i64,
+    nodes: mut ref Vec[TrieNode],
+    node: i64,
+    path: mut ref Vec[char],
+    results: mut ref Vec[String],
+) {
+    let ch = board[r][c];
+    if ch == '#' { return; }                 // already used on this path
+    let nxt = child_of(nodes, node, ch);
+    if nxt == -1 { return; }              // no trie edge — prune
+
+    path.push(ch);
+    if nodes[nxt].is_end {
+        nodes[nxt].is_end = false;           // collect each word once
+        results.push(collect_word(path));
+    }
+
+    board[r][c] = '#';                       // mark visited
+    if r > 0 { dfs(board, r - 1, c, rows, cols, nodes, nxt, path, results); }
+    if r + 1 < rows { dfs(board, r + 1, c, rows, cols, nodes, nxt, path, results); }
+    if c > 0 { dfs(board, r, c - 1, rows, cols, nodes, nxt, path, results); }
+    if c + 1 < cols { dfs(board, r, c + 1, rows, cols, nodes, nxt, path, results); }
+    board[r][c] = ch;                        // restore
+
+    let _ = path.pop();
+}
+
+fn sort_strings(v: mut ref Vec[String]) {
+    let n = v.len();
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n {
+            if v[j] < v[i] {
+                v.swap(i, j);
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}
+
+fn find_words(board: mut ref Vec[Vec[char]], words: ref Vec[String]) -> Vec[String] {
+    let mut nodes: Vec[TrieNode] = Vec.new();
+    nodes.push(new_node());                  // root at index 0
+    let mut w = 0;
+    while w < words.len() {
+        insert(mut nodes, words[w]);
+        w = w + 1;
+    }
+
+    let mut results: Vec[String] = Vec.new();
+    let rows = board.len();
+    if rows == 0 { return results; }
+    let cols = board[0].len();
+
+    let mut path: Vec[char] = Vec.new();
+    let mut r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            dfs(board, r, c, rows, cols, mut nodes, 0, mut path, mut results);
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    sort_strings(mut results);
+    return results;
+}
+
+fn report(board: mut ref Vec[Vec[char]], words: ref Vec[String]) {
+    let res = find_words(board, words);
+    if res.len() == 0 {
+        println("[]");
+        return;
+    }
+    let mut line: String = "";
+    let mut i = 0;
+    let mut first = true;
+    while i < res.len() {
+        if first { first = false; } else { line.push_str(" "); }
+        line.push_str(res[i]);
+        i = i + 1;
+    }
+    println(line);
+}
+
+fn add_row(board: mut ref Vec[Vec[char]], row: String) {
+    board.push(row.chars().collect());
+}
+
+fn words_of(items: Slice[String]) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < items.len() {
+        v.push(items[i]);
+        i = i + 1;
+    }
+    return v;
+}
+
+fn main() {
+    // Canonical LeetCode example.
+    let mut b1: Vec[Vec[char]] = Vec.new();
+    add_row(mut b1, "oaan");
+    add_row(mut b1, "etae");
+    add_row(mut b1, "ihkr");
+    add_row(mut b1, "iflv");
+    let w1: Array[String, 4] = ["oath", "pea", "eat", "rain"];
+    report(mut b1, words_of(w1));               // eat oath
+
+    // No word present.
+    let mut b2: Vec[Vec[char]] = Vec.new();
+    add_row(mut b2, "ab");
+    add_row(mut b2, "cd");
+    let w2: Array[String, 1] = ["abcb"];
+    report(mut b2, words_of(w2));               // []
+
+    // Several short words, some absent.
+    let mut b3: Vec[Vec[char]] = Vec.new();
+    add_row(mut b3, "ab");
+    add_row(mut b3, "cd");
+    let w3: Array[String, 5] = ["ab", "cb", "ad", "bd", "xyz"];
+    report(mut b3, words_of(w3));               // ab bd  (cb/ad aren't adjacency-reachable)
+
+    // Single cell.
+    let mut b4: Vec[Vec[char]] = Vec.new();
+    add_row(mut b4, "a");
+    let w4: Array[String, 2] = ["a", "aa"];
+    report(mut b4, words_of(w4));               // a
+
+    // A word woven through the whole board.
+    let mut b5: Vec[Vec[char]] = Vec.new();
+    add_row(mut b5, "abc");
+    add_row(mut b5, "hid");
+    add_row(mut b5, "gfe");
+    let w5: Array[String, 2] = ["abcdefghi", "abed"];
+    report(mut b5, words_of(w5));               // abcdefghi
+}

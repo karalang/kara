@@ -1,0 +1,90 @@
+// LeetCode #320 — the same 2^n answer, reached by recursion instead of by
+// counting in binary.
+//
+// The ★ arm builds the mask first and then translates it. This arm never forms
+// a mask at all: it walks the word one letter at a time carrying a partially
+// built abbreviation, and at each letter takes both branches —
+//
+//   count it   the letter joins the pending run; the string does not grow
+//   keep it    the pending run is flushed as a number, then the letter lands
+//
+// which is the same two-way choice per letter, made in a different order. The
+// recursion tree has 2^n leaves and one abbreviation is emitted per leaf.
+//
+// The state that makes this work is `run`: the number of counted letters seen
+// since the last kept one. It is carried, not stored, and it is the whole
+// reason "adjacent numbers" can never be produced — a second number cannot
+// start until a kept letter has flushed the first. The ★ arm gets that same
+// guarantee from run-length encoding; here it is structural.
+//
+// Note the two ends of the recursion. At `i == n` a pending run still has to
+// be flushed before the leaf is emitted, exactly as the ★ arm flushes after
+// its letter loop — forgetting it silently drops the trailing number from half
+// the answers. And `path` is cloned for the first branch because the second
+// branch consumes it: the two subtrees need independent strings.
+//
+// Enumeration order differs from the ★ arm's — this one takes the "count it"
+// branch first, so it emits "4" before "word" where the mask walk does the
+// reverse. Nothing about the problem fixes an order (LeetCode accepts any),
+// and the differential compares the two arms as sorted multisets, which is
+// what makes the disagreement in order a feature rather than a hazard: two
+// arms that agreed on order would likely be the same algorithm twice.
+
+fn walk(bs: ref Vec[u8], n: i64, i: i64, run: i64, path: String,
+        out: mut ref Vec[String]) {
+    if i == n {
+        let mut leaf = path;
+        if run > 0 {
+            leaf.push_str(run.to_string());
+        }
+        out.push(leaf);
+        return;
+    }
+
+    // Branch 1: count letter `i` — the pending run grows, the string does not.
+    walk(bs, n, i + 1, run + 1, path.clone(), out);
+
+    // Branch 2: keep letter `i` — flush the run, then append the letter.
+    let mut kept = path;
+    if run > 0 {
+        kept.push_str(run.to_string());
+    }
+    kept.push(bs[i] as char);
+    walk(bs, n, i + 1, 0, kept, out);
+}
+
+fn to_bytes(word: ref String) -> Vec[u8] {
+    let b = word.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    for i in 0..b.len() { v.push(b[i]); }
+    return v;
+}
+
+fn abbreviations(word: ref String) -> Vec[String] {
+    let bs = to_bytes(word);
+    let n = bs.len();
+    let mut out: Vec[String] = Vec.new();
+    walk(bs, n, 0, 0, String.new(), mut out);
+    return out;
+}
+
+fn report(word: String) {
+    let all = abbreviations(word);
+    println(f"\"{word}\" -> {all.len()}");
+    let mut line = String.new();
+    for i in 0..all.len() {
+        if i > 0 { line.push_str(" "); }
+        line.push_str(all[i]);
+    }
+    println(line);
+}
+
+fn main() {
+    report("word");
+    report("");
+    report("a");
+    report("ab");
+    report("abc");
+    report("aaaa");
+    report("leet");
+}

@@ -1,0 +1,129 @@
+// LeetCode 300 — recovering an ACTUAL longest increasing subsequence, not just
+// its length.
+//
+// The kata only asks for the length, and both other arms in this directory stop
+// there. This one is here because the length alone is a weak thing to test: an
+// implementation can produce the right number for the wrong reason on every
+// input a generator is likely to produce, and no amount of arm-vs-arm agreement
+// notices. A WITNESS can be checked directly — is it increasing, is it really a
+// subsequence of the input, is it as long as the reported answer — and those
+// three questions have nothing to do with how it was computed. That is what the
+// differential's P5 does with this arm's output.
+//
+// WHY `tails` ISN'T THE ANSWER. Patience sorting keeps `tails[k]` = the
+// smallest value ending an increasing subsequence of length k+1. It is the
+// right length, but its CONTENTS are generally not a subsequence of the input:
+//
+//     nums   = [10, 9, 2, 5, 3, 7, 101, 18]
+//     tails  = [2, 3, 7, 18]                   <- happens to be valid here
+//     nums   = [1, 9, 2, 5]
+//     tails  = [1, 2, 5]                       <- 1,2,5 IS in the input
+//     nums   = [3, 4, 1, 2]
+//     tails  = [1, 2]                          <- but the LIS is 3,4 or 1,2
+//
+// The last case is the tell: `tails` ends holding [1, 2] because those overwrote
+// the earlier [3, 4], and while both are length 2 the array is a record of what
+// is achievable, not of what was achieved. Printing `tails` as the answer is a
+// real and common bug that produces the correct LENGTH always and the correct
+// SEQUENCE only sometimes — invisible to any test that checks the number.
+//
+// So reconstruction needs two extra records:
+//
+//     tails_at[k]  the INDEX of the element currently sitting at tails[k]
+//     parent[i]    the index preceding i in the best subsequence ending at i
+//
+// When x lands in slot `lo`, its predecessor is whatever index currently
+// occupies slot `lo - 1` — by the invariant that is the smallest possible tail
+// of a length-`lo` subsequence, and it is necessarily earlier in the array and
+// smaller in value. Walking `parent` back from `tails_at[last]` yields the
+// witness in reverse.
+
+fn lis_witness(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = Vec.new();
+    if n == 0 { return out; }
+
+    let mut tails: Vec[i64] = Vec.new();       // values, sorted
+    let mut tails_at: Vec[i64] = Vec.new();    // index in nums of each tail
+    let mut parent: Vec[i64] = Vec.filled(n, -1);
+
+    let mut i = 0;
+    while i < n {
+        let x = nums[i];
+
+        let mut lo = 0;
+        let mut hi = tails.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if tails[mid] < x { lo = mid + 1; } else { hi = mid; }
+        }
+
+        // The predecessor is the current occupant of the slot to the left.
+        if lo > 0 { parent[i] = tails_at[lo - 1]; }
+
+        if lo == tails.len() {
+            tails.push(x);
+            tails_at.push(i);
+        } else {
+            tails[lo] = x;
+            tails_at[lo] = i;
+        }
+        i = i + 1;
+    }
+
+    // Walk the parent chain back from the end of the longest run.
+    let mut cur = tails_at[tails_at.len() - 1];
+    while cur != -1 {
+        out.push(nums[cur]);
+        cur = parent[cur];
+    }
+
+    // `out` is reversed; flip it in place.
+    let mut a = 0;
+    let mut b = out.len() - 1;
+    while a < b {
+        let t = out[a];
+        out[a] = out[b];
+        out[b] = t;
+        a = a + 1;
+        b = b - 1;
+    }
+    return out;
+}
+
+fn report(nums: Vec[i64]) {
+    let w = lis_witness(nums);
+    let mut line = String.new();
+    line.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { line.push_str(", "); }
+        line.push_str(f"{nums[i]}");
+        i = i + 1;
+    }
+    line.push_str("] -> len ");
+    line.push_str(f"{w.len()}");
+    line.push_str("  witness [");
+    i = 0;
+    while i < w.len() {
+        if i > 0 { line.push_str(", "); }
+        line.push_str(f"{w[i]}");
+        i = i + 1;
+    }
+    line.push_str("]");
+    println(line);
+}
+
+fn main() {
+    report([10, 9, 2, 5, 3, 7, 101, 18]);
+    report([0, 1, 0, 3, 2, 3]);
+    report([7, 7, 7, 7]);
+    report([]);
+    report([1]);
+    report([5, 4, 3, 2, 1]);
+    report([1, 2, 3, 4, 5]);
+    report([2, 2, 2, 1, 3]);
+    report([-5, -3, -8, 0, -1]);
+    report([1, 3, 2, 4, 3, 5]);
+    report([3, 4, 1, 2]);     // the case where `tails` is NOT a valid witness
+}

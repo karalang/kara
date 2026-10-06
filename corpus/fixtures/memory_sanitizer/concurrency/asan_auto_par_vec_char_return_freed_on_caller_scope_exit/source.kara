@@ -1,0 +1,20 @@
+
+fn build_chars(n: i64) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut i = 0i64;
+    while i < n {
+        out.push('X');
+        i = i + 1;
+    }
+    out
+}
+fn main() {
+    let mut sum = 0i64;
+    let mut k = 0i64;
+    while k < 10 {
+        let v = build_chars(100);
+        sum = sum + v.len();
+        k = k + 1;
+    }
+    println(sum);
+}

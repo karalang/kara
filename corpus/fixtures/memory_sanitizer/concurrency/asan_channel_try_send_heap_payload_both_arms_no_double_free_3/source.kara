@@ -1,0 +1,21 @@
+
+struct Big { a: String, b: String }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let (tx, rx) = Channel.bounded(1);
+        let x = Big { a: f"one-{i}", b: f"two-{i}" };
+        let r0 = tx.try_send(x);
+        let y = Big { a: f"three-{i}", b: f"four-{i}" };
+        match tx.try_send(y) {
+            Ok(u) => { total = total + 1; }
+            Err(SendError.Full(v)) => { total = total + v.a.len() + v.b.len(); }
+            Err(SendError.Closed(v)) => { total = total + v.a.len(); }
+        }
+        let g = rx.recv();
+        total = total + g.a.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

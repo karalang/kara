@@ -1,0 +1,24 @@
+
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+layout world: Vec[Entity] {
+    group pos { x, y }
+    group vel { vx }
+    cold { vy }
+}
+fn main() {
+    let world: Vec[Entity] = [
+        Entity { x: 0, y: 1, vx: 2, vy: 3 },
+        Entity { x: 10, y: 11, vx: 12, vy: 13 },
+        Entity { x: 20, y: 21, vx: 22, vy: 23 },
+        Entity { x: 30, y: 31, vx: 32, vy: 33 },
+        Entity { x: 40, y: 41, vx: 42, vy: 43 },
+        Entity { x: 50, y: 51, vx: 52, vy: 53 }
+    ];
+    println(world.len());
+    println(world[0].x);
+    println(world[4].y);
+    println(world[5].vx);
+    println(world[5].vy);
+    let e = world[2];
+    println(e.vy);
+}

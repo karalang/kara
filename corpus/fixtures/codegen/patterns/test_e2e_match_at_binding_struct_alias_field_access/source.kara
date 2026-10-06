@@ -1,0 +1,12 @@
+
+struct Foo { a: i64, n: i64 }
+fn main() {
+    let foo = Foo { a: 1, n: 7 };
+    match foo {
+        x @ Foo { a, n } => {
+            println(a);
+            println(n);
+            println(x.n);
+        }
+    }
+}

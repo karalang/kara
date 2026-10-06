@@ -1,0 +1,9 @@
+
+struct WideErr { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+fn make() -> Result[i64, WideErr] {
+    return Ok(7);
+}
+fn main() {
+    let r = make();
+    println(0);
+}

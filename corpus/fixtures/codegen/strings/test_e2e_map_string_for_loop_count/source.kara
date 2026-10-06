@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1_i64);
+    m.insert("b", 2_i64);
+    let mut count: i64 = 0;
+    for (k, v) in m {
+        count = count + 1_i64;
+    }
+    println(count);
+}

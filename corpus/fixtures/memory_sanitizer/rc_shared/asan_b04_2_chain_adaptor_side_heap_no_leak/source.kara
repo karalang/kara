@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 30i64 {
+        let mut a: Vec[String] = Vec[
+            "chain-adp-left-alpha-aaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "chain-adp-left-bravo-bbbbbbbbbbbbbbbbbbbbbb".to_string()
+        ];
+        let mut b: Vec[String] = Vec[
+            "chain-adp-right-charlie-cccccccccccccccccccc".to_string(),
+            "chain-adp-right-delta-dddddddddddddddddddddd".to_string()
+        ];
+        let r: Vec[String] = a.iter().filter(|s| s.len() > 0i64).chain(b.iter()).collect();
+        println(f"{r.len()} {r[0i64]} {r[3i64]} {a.len()} {b.len()}");
+        round = round + 1i64;
+    }
+}

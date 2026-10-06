@@ -1,0 +1,9 @@
+
+fn pick[T: Ord](a: T, b: T) -> T {
+    if a > b { a } else { b }
+}
+
+fn main() {
+    println(pick(f"apple", f"banana"));
+    println(pick(3, 7));
+}

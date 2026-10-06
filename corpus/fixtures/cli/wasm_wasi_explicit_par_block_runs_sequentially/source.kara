@@ -1,0 +1,9 @@
+
+fn main() {
+    par {
+        println(100);
+        println(200);
+        println(300);
+    }
+    println(999);
+}

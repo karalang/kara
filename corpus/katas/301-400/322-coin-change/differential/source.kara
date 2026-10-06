@@ -1,0 +1,488 @@
+// LeetCode #322: Coin Change — differential + property harness.
+//
+// Four arms, each reaching the answer by a different route:
+//
+//   star   best(a) for every amount 0..=target, bottom up (★)
+//   bfs    shortest path from the target down to 0, one coin per edge
+//   memo   the same recurrence top down, with `None` for unreachable
+//   brute  every vector of per-coin counts that sums to the target
+//
+// The properties below do not know how any arm works:
+//
+//   P1   bfs agrees with star
+//   P2   memo agrees with star
+//   P3   brute agrees with star                        (where it is cheap)
+//   P4   the answer is -1 exactly when a reachability sieve says the target
+//        cannot be made at all
+//   P5   a WITNESS exists: a multiset of the given coins, of exactly the
+//        answer's size, that sums to the target
+//   P6   no randomly sampled combination of coins that hits the target uses
+//        fewer coins than the answer
+//   P7   the order of the coins does not matter (reversed, rotated)
+//   P8   one more denomination never makes the answer worse
+//   P9   answer(a) <= answer(a - c) + 1 for every coin c, with equality for
+//        at least one coin whenever a > 0 is reachable
+//   P10  answer(x + y) <= answer(x) + answer(y) for reachable x and y
+//   P11  scaling every coin and the target by s changes nothing, and a
+//        target that is not a multiple of s becomes unreachable
+//   P12  ceil(target / max coin) <= answer <= target / min coin
+//   P13  greedy (largest coin that fits, repeatedly), when it lands on 0,
+//        never uses fewer coins than the answer
+//   P14  adding the target itself as a coin makes the answer 1
+//
+// P5 and P6 watch the answer, not an arm. P5 says it can be BUILT: an arm
+// that reports a count no combination achieves fails it, however plausible
+// the number. P6 is the other half. It samples the statement's own space
+// (random coins, drawn until the target is hit or overshot) and asks whether
+// anything found that way is cheaper. It keeps working where the brute force
+// cannot. "Buildable" and "not beaten" together are the whole definition of
+// the problem.
+//
+// Sizing. Every bound here is set by the TREE-WALK interpreter, not by the
+// JIT: the repo's A/B rule wants this harness byte-identical under `karac run`,
+// `karac run --interp` and both `karac build` modes.
+const SMALL_TOP: i64 = 6;       // exhaustive tier: every nonempty subset of 1..=SMALL_TOP
+const SMALL_AMOUNT: i64 = 24;   // ... at every target 0..=SMALL_AMOUNT
+const BRUTE_LEAVES: i64 = 4000; // the brute force runs where its count vectors stay under this
+const MEDIUM_CASES: i64 = 24;   // medium tier: random coins and targets, no brute
+const MEDIUM_TOP: i64 = 60;
+const MEDIUM_AMOUNT: i64 = 300;
+const SAMPLES: i64 = 16;        // P6 random walks per case
+const PAIRS: i64 = 8;           // P10 random (x, y) pairs per case
+
+// -------------------------------------------------------------- arms ---
+
+fn change_star(coins: ref Vec[i64], amount: i64) -> i64 {
+    let unreachable = amount + 1;
+    let mut best: Vec[i64] = Vec.filled(amount + 1, unreachable);
+    best[0] = 0;
+    for a in 1..amount + 1 {
+        for i in 0..coins.len() {
+            let c = coins[i];
+            if c <= a and best[a - c] + 1 < best[a] {
+                best[a] = best[a - c] + 1;
+            }
+        }
+    }
+    if best[amount] == unreachable {
+        return -1;
+    }
+    return best[amount];
+}
+
+fn change_bfs(coins: ref Vec[i64], amount: i64) -> i64 {
+    if amount == 0 {
+        return 0;
+    }
+    let mut seen: Vec[bool] = Vec.filled(amount + 1, false);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(amount);
+    seen[amount] = true;
+    let mut level = 0;
+    while not queue.is_empty() {
+        level = level + 1;
+        // Everything in the queue right now is at the same distance; drain
+        // exactly that many so the next round is the next level.
+        let width = queue.len();
+        for w in 0..width {
+            let rem = queue.pop_front().unwrap();
+            for i in 0..coins.len() {
+                let next = rem - coins[i];
+                if next == 0 {
+                    return level;
+                }
+                if next > 0 and not seen[next] {
+                    seen[next] = true;
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+    return -1;
+}
+
+fn fewest_memo(coins: ref Vec[i64], a: i64, memo: mut ref Map[i64, Option[i64]]) -> Option[i64] {
+    if a == 0 {
+        return Some(0);
+    }
+    if memo.contains_key(a) {
+        return memo[a];
+    }
+    let mut best: Option[i64] = None;
+    for i in 0..coins.len() {
+        let c = coins[i];
+        if c > a {
+            continue;
+        }
+        match fewest_memo(coins, a - c, memo) {
+            Some(n) => {
+                best = match best {
+                    Some(b) if b <= n + 1 => Some(b),
+                    _ => Some(n + 1),
+                };
+            }
+            None => {}
+        }
+    }
+    memo.insert(a, best);
+    return best;
+}
+
+fn change_memo(coins: ref Vec[i64], amount: i64) -> i64 {
+    let mut memo: Map[i64, Option[i64]] = Map.new();
+    return match fewest_memo(coins, amount, mut memo) {
+        Some(n) => n,
+        None => -1,
+    };
+}
+
+fn search_brute(coins: ref Vec[i64], i: i64, rem: i64, used: i64, best: mut ref i64) {
+    if i == coins.len() {
+        if rem == 0 and (best < 0 or used < best) {
+            best = used;
+        }
+        return;
+    }
+    let c = coins[i];
+    let mut k = 0;
+    while k * c <= rem {
+        search_brute(coins, i + 1, rem - k * c, used + k, best);
+        k = k + 1;
+    }
+}
+
+fn change_brute(coins: ref Vec[i64], amount: i64) -> i64 {
+    let mut best = -1;
+    search_brute(coins, 0, amount, 0, mut best);
+    return best;
+}
+
+// ----------------------------------------------------------- oracles ---
+
+// Can `target` be made at all? A plain reachability sieve: no counts, no
+// minimum, nothing an arm shares.
+fn reachable(coins: ref Vec[i64], target: i64) -> bool {
+    let mut can: Vec[bool] = Vec.filled(target + 1, false);
+    can[0] = true;
+    for a in 1..target + 1 {
+        for i in 0..coins.len() {
+            if coins[i] <= a and can[a - coins[i]] {
+                can[a] = true;
+            }
+        }
+    }
+    return can[target];
+}
+
+// One cheapest multiset of coins for `target`, or [] if there is none. It
+// keeps, for every amount, the coin that was added last on a cheapest path,
+// and walks those back from the target.
+fn witness(coins: ref Vec[i64], target: i64) -> Vec[i64] {
+    let mut cost: Vec[i64] = Vec.filled(target + 1, -1);
+    let mut last: Vec[i64] = Vec.filled(target + 1, 0);
+    cost[0] = 0;
+    for a in 1..target + 1 {
+        for i in 0..coins.len() {
+            let c = coins[i];
+            if c <= a and cost[a - c] >= 0 and (cost[a] < 0 or cost[a - c] + 1 < cost[a]) {
+                cost[a] = cost[a - c] + 1;
+                last[a] = c;
+            }
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    if cost[target] < 0 {
+        return out;
+    }
+    let mut a = target;
+    while a > 0 {
+        out.push(last[a]);
+        a = a - last[a];
+    }
+    return out;
+}
+
+// Does `bag` consist only of denominations in `coins`, and sum to `target`?
+fn builds(bag: ref Vec[i64], coins: ref Vec[i64], target: i64) -> bool {
+    let mut sum = 0;
+    for i in 0..bag.len() {
+        if not coins.contains(bag[i]) {
+            return false;
+        }
+        sum = sum + bag[i];
+    }
+    return sum == target;
+}
+
+// A random walk through the statement's own space: draw coins that still fit
+// until the target is hit or nothing fits. The number of coins drawn, or -1
+// if the walk got stuck short of the target.
+fn sampled(coins: ref Vec[i64], target: i64, seed: mut ref i64) -> i64 {
+    let mut rem = target;
+    let mut used = 0;
+    while rem > 0 {
+        let mut fits: Vec[i64] = Vec.new();
+        for i in 0..coins.len() {
+            if coins[i] <= rem { fits.push(coins[i]); }
+        }
+        if fits.is_empty() {
+            return -1;
+        }
+        rem = rem - fits[next(seed) % fits.len()];
+        used = used + 1;
+    }
+    return used;
+}
+
+// Largest coin that fits, repeatedly. The count, or -1 if it gets stuck.
+fn greedy(coins: ref Vec[i64], target: i64) -> i64 {
+    let mut sorted = coins.clone();
+    sorted.sort();
+    let mut rem = target;
+    let mut used = 0;
+    let mut i = sorted.len() - 1;
+    while rem > 0 and i >= 0 {
+        if sorted[i] <= rem {
+            rem = rem - sorted[i];
+            used = used + 1;
+        } else {
+            i = i - 1;
+        }
+    }
+    if rem == 0 { return used; }
+    return -1;
+}
+
+// How many count vectors the brute force would visit, capped at `cap + 1`.
+fn brute_leaves(coins: ref Vec[i64], target: i64, cap: i64) -> i64 {
+    let mut leaves = 1;
+    for i in 0..coins.len() {
+        leaves = leaves * (target / coins[i] + 1);
+        if leaves > cap { return cap + 1; }
+    }
+    return leaves;
+}
+
+// ------------------------------------------------------ transformations ---
+
+fn reversed(v: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = v.len() - 1;
+    while i >= 0 {
+        out.push(v[i]);
+        i = i - 1;
+    }
+    return out;
+}
+
+fn rotated(v: ref Vec[i64], by: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..v.len() {
+        out.push(v[(i + by) % v.len()]);
+    }
+    return out;
+}
+
+fn scaled(v: ref Vec[i64], s: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..v.len() { out.push(v[i] * s); }
+    return out;
+}
+
+fn with_coin(v: ref Vec[i64], c: i64) -> Vec[i64] {
+    let mut out = v.clone();
+    if not out.contains(c) { out.push(c); }
+    return out;
+}
+
+fn smallest(v: ref Vec[i64]) -> i64 {
+    let mut m = v[0];
+    for i in 1..v.len() { if v[i] < m { m = v[i]; } }
+    return m;
+}
+
+fn largest(v: ref Vec[i64]) -> i64 {
+    let mut m = v[0];
+    for i in 1..v.len() { if v[i] > m { m = v[i]; } }
+    return m;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// `count` distinct denominations drawn from 1..=top.
+fn denominations(count: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    while v.len() < count {
+        let c = next(seed) % top + 1;
+        if not v.contains(c) {
+            v.push(c);
+        }
+    }
+    return v;
+}
+
+// ---------------------------------------------------------- checking ---
+
+struct Tally {
+    cases: i64,
+    brute_cases: i64,
+    reachable_cases: i64,
+    samples: i64,
+    hits: i64,
+    p: Vec[i64],
+}
+
+fn fail(tally: mut ref Tally, prop: i64) {
+    tally.p[prop] += 1;
+}
+
+// Is `x` a worse answer than `y`? -1 (unreachable) is worse than any count.
+fn worse(x: i64, y: i64) -> bool {
+    if y < 0 { return false; }
+    return x < 0 or x > y;
+}
+
+fn check(coins: ref Vec[i64], target: i64, seed: mut ref i64, tally: mut ref Tally) {
+    tally.cases += 1;
+    let ans = change_star(coins, target);
+
+    if change_bfs(coins, target) != ans { fail(tally, 1); }
+    if change_memo(coins, target) != ans { fail(tally, 2); }
+    if brute_leaves(coins, target, BRUTE_LEAVES) <= BRUTE_LEAVES {
+        tally.brute_cases += 1;
+        if change_brute(coins, target) != ans { fail(tally, 3); }
+    }
+
+    // P4: -1 exactly when nothing makes the target.
+    if (ans < 0) != not reachable(coins, target) { fail(tally, 4); }
+    if ans >= 0 { tally.reachable_cases += 1; }
+
+    // P5: a multiset of exactly `ans` coins builds the target.
+    if ans >= 0 {
+        let bag = witness(coins, target);
+        if bag.len() != ans or not builds(bag, coins, target) { fail(tally, 5); }
+    }
+
+    // P6: nothing sampled from the statement's own space is cheaper.
+    for s in 0..SAMPLES {
+        let used = sampled(coins, target, seed);
+        tally.samples += 1;
+        if used >= 0 {
+            tally.hits += 1;
+            if ans < 0 or used < ans { fail(tally, 6); }
+        }
+    }
+
+    // P7: the order of the coins is irrelevant.
+    if change_star(reversed(coins), target) != ans { fail(tally, 7); }
+    if change_star(rotated(coins, 1 + next(seed) % coins.len()), target) != ans { fail(tally, 7); }
+
+    // P8: one more denomination can only help.
+    let extra = 1 + next(seed) % (largest(coins) + 3);
+    if worse(change_star(with_coin(coins, extra), target), ans) { fail(tally, 8); }
+
+    // P9: the recurrence holds at every amount up to the target (capped so the
+    // medium tier stays affordable under the interpreter).
+    let mut top = target;
+    if top > 60 { top = 60; }
+    for a in 1..top + 1 {
+        let here = change_star(coins, a);
+        let mut tight = false;
+        for i in 0..coins.len() {
+            let c = coins[i];
+            if c <= a {
+                let before = change_star(coins, a - c);
+                if before >= 0 and worse(here, before + 1) { fail(tally, 9); }
+                if before >= 0 and here == before + 1 { tight = true; }
+            }
+        }
+        if here > 0 and not tight { fail(tally, 9); }
+    }
+
+    // P10: making x + y never costs more than making each separately.
+    for s in 0..PAIRS {
+        let x = next(seed) % (target + 1);
+        let y = next(seed) % (target + 1);
+        let fx = change_star(coins, x);
+        let fy = change_star(coins, y);
+        if fx >= 0 and fy >= 0 and worse(change_star(coins, x + y), fx + fy) { fail(tally, 10); }
+    }
+
+    // P11: scale everything by s; off-multiples become unreachable.
+    let s = 2 + next(seed) % 3;
+    if change_star(scaled(coins, s), target * s) != ans { fail(tally, 11); }
+    if change_star(scaled(coins, s), target * s + 1) != -1 { fail(tally, 11); }
+
+    // P12: every coin is between the smallest and the largest.
+    if ans >= 0 {
+        let hi = largest(coins);
+        if ans < (target + hi - 1) / hi or ans > target / smallest(coins) { fail(tally, 12); }
+    }
+
+    // P13: greedy, when it finishes, is never cheaper.
+    let g = greedy(coins, target);
+    if g >= 0 and (ans < 0 or g < ans) { fail(tally, 13); }
+
+    // P14: the target as a coin of its own.
+    if target > 0 and change_star(with_coin(coins, target), target) != 1 { fail(tally, 14); }
+}
+
+// -------------------------------------------------------------- main ---
+
+fn main() {
+    let mut tally = Tally { cases: 0, brute_cases: 0, reachable_cases: 0, samples: 0, hits: 0,
+        p: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] };
+    let mut seed = 32217;
+
+    // Small tier: every nonempty subset of 1..=SMALL_TOP, at every target
+    // 0..=SMALL_AMOUNT. The subset is the bit pattern of `mask`.
+    for mask in 1..(1 << SMALL_TOP) {
+        let mut coins: Vec[i64] = Vec.new();
+        for b in 0..SMALL_TOP {
+            if (mask >> b) & 1 == 1 { coins.push(b + 1); }
+        }
+        for target in 0..(SMALL_AMOUNT + 1) {
+            check(coins, target, mut seed, mut tally);
+        }
+    }
+
+    // Hand-picked: greedy traps and sets without a 1.
+    let mut hc: Vec[Vec[i64]] = [[1, 3, 4], [1, 5, 6, 9], [186, 419, 83, 408], [4, 6],
+        [7, 11], [2, 5, 10, 20], [25, 10, 1], [3, 7, 405, 436]];
+    let mut ht: Vec[i64] = [6, 11, 6249, 14, 59, 43, 30, 8839];
+    for t in 0..hc.len() {
+        let coins = hc[t].clone();
+        check(coins, ht[t], mut seed, mut tally);
+    }
+
+    // Medium tier: larger random coins and targets, no brute force; P5, P6
+    // and P13 carry it.
+    for c in 0..MEDIUM_CASES {
+        let count = 1 + next(mut seed) % 6;
+        let coins = denominations(count, MEDIUM_TOP, mut seed);
+        let target = next(mut seed) % (MEDIUM_AMOUNT + 1);
+        check(coins, target, mut seed, mut tally);
+    }
+
+    println(f"cases {tally.cases} brute-cases {tally.brute_cases} reachable {tally.reachable_cases} samples {tally.samples} hits {tally.hits}");
+    println(f"P1  bfs-vs-star disagreements {tally.p[1]}");
+    println(f"P2  memo-vs-star disagreements {tally.p[2]}");
+    println(f"P3  brute-vs-star disagreements {tally.p[3]}");
+    println(f"P4  reachability mismatches {tally.p[4]}");
+    println(f"P5  answers with no witness {tally.p[5]}");
+    println(f"P6  sampled combinations cheaper than the answer {tally.p[6]}");
+    println(f"P7  coin-order failures {tally.p[7]}");
+    println(f"P8  extra-denomination failures {tally.p[8]}");
+    println(f"P9  recurrence failures {tally.p[9]}");
+    println(f"P10 subadditivity failures {tally.p[10]}");
+    println(f"P11 scaling failures {tally.p[11]}");
+    println(f"P12 bound failures {tally.p[12]}");
+    println(f"P13 greedy-beats-answer failures {tally.p[13]}");
+    println(f"P14 target-as-coin failures {tally.p[14]}");
+    let mut total = 0;
+    for x in 0..tally.p.len() { total = total + tally.p[x]; }
+    if total == 0 { println("DIFFERENTIAL OK"); } else { println("DIFFERENTIAL FAILED"); }
+}

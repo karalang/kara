@@ -1,0 +1,61 @@
+// LeetCode 283 — the definition, built out of place.
+//
+// Collect the non-zeros in order, append as many zeros as were removed, copy the
+// result back. That is the problem statement with nothing else in it: no cursor,
+// no swap, no argument about which index is safe to write.
+//
+// O(n) time and O(n) EXTRA SPACE, which the problem forbids — and that is fine,
+// because this one is not competing. Both in-place solvers share an invariant
+// they never state out loud: that `write <= i`, so a store never clobbers an
+// unread element. A misreading of that — an off-by-one in the cursor, a swap
+// with the wrong index — is the failure mode they have in common, and it is
+// invisible between two solvers that both reason that way.
+//
+// This version has no cursor to get wrong. It is the third opinion the other two
+// cannot supply for each other, exactly as the brute-force enumerators were in
+// katas 276 through 282.
+
+fn move_zeroes(a: mut ref Vec[i64], stores: mut ref i64) {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != 0 { out.push(a[i]); }
+        i = i + 1;
+    }
+    while out.len() < a.len() { out.push(0); }
+    let mut j = 0;
+    while j < a.len() {
+        a[j] = out[j];
+        stores = stores + 1;
+        j = j + 1;
+    }
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + f"{v[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn report(input: Vec[i64]) {
+    let mut a = input;
+    let before = show(a);
+    let mut w = 0;
+    move_zeroes(mut a, mut w);
+    println(f"{before} -> {show(a)}  ({w} stores)");
+}
+
+fn main() {
+    report([0, 1, 0, 3, 12]);
+    report([0]);
+    report([1, 2, 3]);
+    report([0, 0, 0]);
+    report([4, 0, 5, 0, 0, 6]);
+    report([1]);
+    report([0, 0, 1]);
+}

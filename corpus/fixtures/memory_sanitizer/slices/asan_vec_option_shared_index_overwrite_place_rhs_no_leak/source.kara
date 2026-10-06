@@ -1,0 +1,30 @@
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn probe(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+    let mut work = lists;
+    work[0] = work[1].clone();
+    work[0]
+}
+
+fn main() {
+    let a2 = ListNode { val: 10, next: None };
+    let a1 = ListNode { val: 11, next: Some(a2) };
+    let b = ListNode { val: 22, next: None };
+    let mut v: Vec[Option[ListNode]] = Vec.new();
+    v.push(Some(a1));
+    v.push(Some(b));
+    let mut cur = probe(v);
+    loop {
+        match cur {
+            Some(node) => {
+                println(node.val);
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+}

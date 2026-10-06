@@ -1,0 +1,2 @@
+
+fn main() { let s: String = "hi"; let a = s; let b = s; println("x"); }

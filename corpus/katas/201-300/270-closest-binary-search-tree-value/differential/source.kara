@@ -1,0 +1,225 @@
+// LeetCode 270 — differential harness.
+//
+// Three solvers over randomized BSTs: the O(h) descent that tracks a running
+// best, the O(n) full scan that uses no search-tree property at all, and the
+// floor/ceiling pair that compares exactly two finalists and keeps no running
+// best.
+//
+// The full scan is the reference for CORRECTNESS — it cannot be wrong about
+// ancestors because it never skips a node. The floor/ceiling form is the
+// reference for the TIE RULE, because it decides the tie structurally (floor ≤
+// target ≤ ceiling, so the floor is the smaller value and `<=` selects it)
+// rather than by comparing values, so it cannot inherit a value-comparison bug
+// from the other two.
+//
+// GENERATOR DESIGN turns on one fact: RANDOM FLOAT TARGETS NEVER TIE. Two values
+// are equidistant only when the target sits exactly at their midpoint, which a
+// uniform draw hits with probability zero — so a naive harness would exercise
+// the tie rule zero times out of any number of cases, and the strict-`<`
+// comparison that silently depends on visit order would pass forever.
+//
+// So the midpoints are CONSTRUCTED. One family draws two adjacent values from
+// the tree's sorted contents and targets exactly between them, which is always a
+// tie and always a tie between the two closest values. Another offsets that
+// midpoint by a hair in each direction, so the boundary is probed from both
+// sides rather than only landed on. The harness counts the ties it generated,
+// so "the tie rule was exercised" is a number.
+
+fn abs_f(x: f64) -> f64 {
+    if x < 0.0 { return 0.0 - x; }
+    return x;
+}
+
+fn descent(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+           root: i64, target: f64) -> i64 {
+    let mut best = val[root];
+    let mut best_diff = abs_f(val[root] as f64 - target);
+    let mut cur = root;
+    while cur >= 0 {
+        let v = val[cur];
+        let d = abs_f(v as f64 - target);
+        if d < best_diff or (d == best_diff and v < best) { best = v; best_diff = d; }
+        if (v as f64) < target { cur = right[cur]; } else { cur = left[cur]; }
+    }
+    return best;
+}
+
+fn scan(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+        root: i64, target: f64) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    stack.push(root);
+    let mut best = val[root];
+    let mut best_diff = abs_f(val[root] as f64 - target);
+    while stack.len() > 0 {
+        let cur = stack[stack.len() - 1];
+        stack.pop();
+        let v = val[cur];
+        let d = abs_f(v as f64 - target);
+        if d < best_diff or (d == best_diff and v < best) { best = v; best_diff = d; }
+        if left[cur] >= 0 { stack.push(left[cur]); }
+        if right[cur] >= 0 { stack.push(right[cur]); }
+    }
+    return best;
+}
+
+fn bounds(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+          root: i64, target: f64) -> i64 {
+    let mut has_floor = false;
+    let mut floor_v = 0;
+    let mut has_ceil = false;
+    let mut ceil_v = 0;
+    let mut cur = root;
+    while cur >= 0 {
+        let v = val[cur];
+        if (v as f64) <= target {
+            if not has_floor or v > floor_v { has_floor = true; floor_v = v; }
+            cur = right[cur];
+        } else {
+            if not has_ceil or v < ceil_v { has_ceil = true; ceil_v = v; }
+            cur = left[cur];
+        }
+    }
+    if not has_floor { return ceil_v; }
+    if not has_ceil { return floor_v; }
+    if abs_f(floor_v as f64 - target) <= abs_f(ceil_v as f64 - target) { return floor_v; }
+    return ceil_v;
+}
+
+fn main() {
+    let cases = 4000;
+    let mut seed = 270270;
+
+    let mut mismatches = 0;
+    let mut ties = 0;
+    let mut open_side = 0;
+    let mut nodes_total = 0;
+    let mut digest = 0;
+
+    let mut c = 0;
+    while c < cases {
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let n = (seed / 65536) % 14 + 1;       // 1..14 nodes
+
+        // Build a BST by inserting distinct values.
+        let mut val: Vec[i64] = Vec.new();
+        let mut left: Vec[i64] = Vec.new();
+        let mut right: Vec[i64] = Vec.new();
+        let mut used: Vec[bool] = Vec.new();
+        let mut z = 0;
+        while z < 60 { used.push(false); z = z + 1; }
+
+        let mut inserted = 0;
+        let mut tries = 0;
+        while inserted < n and tries < 200 {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let v = (seed / 65536) % 40;           // 0..39, distinct
+            tries = tries + 1;
+            if used[v] {
+                continue;
+            }
+            used[v] = true;
+            if val.len() == 0 {
+                val.push(v); left.push(-1); right.push(-1);
+            } else {
+                let mut cur = 0;
+                while true {
+                    if v < val[cur] {
+                        if left[cur] < 0 {
+                            val.push(v); left.push(-1); right.push(-1);
+                            left[cur] = val.len() - 1;
+                            break;
+                        }
+                        cur = left[cur];
+                    } else {
+                        if right[cur] < 0 {
+                            val.push(v); left.push(-1); right.push(-1);
+                            right[cur] = val.len() - 1;
+                            break;
+                        }
+                        cur = right[cur];
+                    }
+                }
+            }
+            inserted = inserted + 1;
+        }
+        if val.len() == 0 { c = c + 1; continue; }
+
+        // Sorted contents, for constructing targets.
+        let mut sorted: Vec[i64] = Vec.new();
+        let mut s = 0;
+        while s < 40 {
+            if used[s] { sorted.push(s); }
+            s = s + 1;
+        }
+
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let family = (seed / 65536) % 5;
+        let mut target = 0.0;
+
+        if family == 0 and sorted.len() >= 2 {
+            // ★ exact midpoint of two adjacent values — always a tie
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let at = (seed / 65536) % (sorted.len() - 1);
+            target = (sorted[at] as f64 + sorted[at + 1] as f64) / 2.0;
+        }
+        if family == 1 and sorted.len() >= 2 {
+            // the same midpoint nudged either way — the boundary from both sides
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let at = (seed / 65536) % (sorted.len() - 1);
+            let mid = (sorted[at] as f64 + sorted[at + 1] as f64) / 2.0;
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            if (seed / 65536) % 2 == 0 { target = mid - 0.125; }
+            else { target = mid + 0.125; }
+        }
+        if family == 2 {
+            // exactly on a value
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            target = sorted[(seed / 65536) % sorted.len()] as f64;
+        }
+        if family == 3 {
+            // outside the range on one side — exercises the open-side handling
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            if (seed / 65536) % 2 == 0 { target = sorted[0] as f64 - 7.5; }
+            else { target = sorted[sorted.len() - 1] as f64 + 7.5; }
+        }
+        if family == 4 or (family <= 1 and sorted.len() < 2) {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            target = ((seed / 65536) % 4800) as f64 / 100.0 - 4.0;
+        }
+
+        let a = descent(val, left, right, 0, target);
+        let b = scan(val, left, right, 0, target);
+        let d = bounds(val, left, right, 0, target);
+        if a != b or a != d { mismatches = mismatches + 1; }
+
+        // Was this actually a tie? Two distinct values equidistant from target.
+        let mut best_d = abs_f(sorted[0] as f64 - target);
+        let mut q = 1;
+        while q < sorted.len() {
+            let dd = abs_f(sorted[q] as f64 - target);
+            if dd < best_d { best_d = dd; }
+            q = q + 1;
+        }
+        let mut at_best = 0;
+        q = 0;
+        while q < sorted.len() {
+            if abs_f(sorted[q] as f64 - target) == best_d { at_best = at_best + 1; }
+            q = q + 1;
+        }
+        if at_best > 1 { ties = ties + 1; }
+        if target < sorted[0] as f64 or target > sorted[sorted.len() - 1] as f64 {
+            open_side = open_side + 1;
+        }
+
+        nodes_total = nodes_total + val.len();
+        digest = (digest * 131 + a + val.len()) % 1000000007;
+        c = c + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"nodes built {nodes_total}");
+    println(f"targets that TIE two values {ties}");
+    println(f"targets outside the value range {open_side}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

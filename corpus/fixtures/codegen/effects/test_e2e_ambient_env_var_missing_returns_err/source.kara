@@ -1,0 +1,7 @@
+
+fn main() reads(Env) {
+    match env.var("__KARAC_E2E_NO_SUCH_VAR_ZZZ__") {
+        Ok(v) => { println(v); }
+        Err(_) => { println("missing"); }
+    }
+}

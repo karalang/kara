@@ -1,0 +1,9 @@
+
+fn main() {
+    let (tx, rx): (Sender[Vec[i64]], Receiver[Vec[i64]]) = Channel.new();
+    let mut v = Vec.new();
+    v.push(1);
+    v.push(2);
+    tx.send(v);
+    println("sent");
+}

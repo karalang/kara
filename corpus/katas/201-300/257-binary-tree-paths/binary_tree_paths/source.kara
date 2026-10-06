@@ -1,0 +1,169 @@
+// LeetCode 257 — Binary Tree Paths.
+//
+// Every root-to-leaf path, rendered as "1->2->5". A leaf is a node with neither
+// child; a node with exactly one child is NOT a leaf and contributes no path of
+// its own — which is the only thing about this problem that is easy to get
+// wrong, and why `[1,2]` yields one path rather than two.
+//
+// This file carries the path as a STRING and extends it at every node: each
+// recursive call receives its parent's rendered prefix and appends "->" plus its
+// own value. At a leaf the string is finished and pushed.
+//
+// That is the natural way to write it and it has a cost worth seeing: the prefix
+// is COPIED at every node, so the work is O(n · depth) bytes even though the
+// answer is only O(leaves · depth). On a balanced tree the two are close; on a
+// path-shaped tree (one leaf, depth n) this file does O(n²) byte-copying to
+// produce a single string. `binary_tree_paths_join.kara` keeps a `Vec[i64]`
+// instead and renders once per leaf, which is the same algorithm with the
+// copying moved to where the output actually is — the difference is measured in
+// bench/.
+//
+// The tree is the corpus index-pool (`Vec[Node]`, i64 child indices, -1 = null)
+// built from a level-order array with a NULL sentinel, as in #199 and #250.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn build(vals: Slice[i64], null_val: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let len = vals.len();
+    if len == 0 or vals[0] == null_val {
+        return nodes;
+    }
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < len {
+        let cur = queue[head];
+        head = head + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let li = nodes.len() - 1;
+            nodes[cur].left = li;
+            queue.push(li);
+        }
+        i = i + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let ri = nodes.len() - 1;
+            nodes[cur].right = ri;
+            queue.push(ri);
+        }
+        i = i + 1;
+    }
+    return nodes;
+}
+
+// `prefix` is a `ref String`, not owned: both children read it, so an owned
+// parameter would be consumed by the left recursion and re-used by the right —
+// which the ownership checker correctly reports as an RC fallback
+// (`perf[rc-fallback]: direct re-use after consume`). Borrowing says what is
+// actually meant: the walker never keeps the prefix, it only reads it to build
+// the next one. The single copy is made at the LEAF, which is exactly where a
+// new owned string genuinely comes into existence.
+fn walk(nodes: ref Vec[Node], node: i64, prefix: ref String, out: mut ref Vec[String]) {
+    let left = nodes[node].left;
+    let right = nodes[node].right;
+    if left == -1 and right == -1 {
+        let mut done: String = "";
+        done.push_str(prefix);
+        out.push(done); // a leaf finishes the path
+        return;
+    }
+    if left != -1 {
+        let mut next: String = "";
+        next.push_str(prefix);
+        next.push_str("->");
+        next.push_str(f"{nodes[left].val}");
+        walk(nodes, left, next, out);
+    }
+    if right != -1 {
+        let mut next: String = "";
+        next.push_str(prefix);
+        next.push_str("->");
+        next.push_str(f"{nodes[right].val}");
+        walk(nodes, right, next, out);
+    }
+}
+
+fn binary_tree_paths(vals: Slice[i64], null_val: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let nodes = build(vals, null_val);
+    if nodes.len() == 0 {
+        return out;
+    }
+    let mut root_s: String = "";
+    root_s.push_str(f"{nodes[0].val}");
+    walk(nodes, 0, root_s, mut out);
+    return out;
+}
+
+fn render(paths: ref Vec[String]) -> String {
+    if paths.len() == 0 {
+        return "[]";
+    }
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < paths.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(paths[i]);
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(vals: Slice[i64], null_val: i64, label: ref String) {
+    let paths = binary_tree_paths(vals, null_val);
+    println(f"{label} -> {render(paths)}");
+}
+
+fn main() {
+    let null = -1000;
+
+    // [1,2,3,null,5] -> ["1->2->5","1->3"]
+    let a: Array[i64, 5] = [1, 2, 3, -1000, 5];
+    report(a, null, "[1,2,3,null,5]");
+
+    // [1] -> ["1"]
+    let b: Array[i64, 1] = [1];
+    report(b, null, "[1]");
+
+    // [] -> []
+    let c: Array[i64, 0] = [];
+    report(c, null, "[]");
+
+    // [1,2] -> ["1->2"]  — the root has ONE child, so it is not a leaf
+    let d: Array[i64, 2] = [1, 2];
+    report(d, null, "[1,2]");
+
+    // [1,null,2] -> ["1->2"]  — the same, on the other side
+    let e: Array[i64, 3] = [1, -1000, 2];
+    report(e, null, "[1,null,2]");
+
+    // a full tree: every leaf is a path
+    let f: Array[i64, 7] = [1, 2, 3, 4, 5, 6, 7];
+    report(f, null, "[1,2,3,4,5,6,7]");
+
+    // a left spine — one path, depth 4. Level-order for a spine lists each
+    // node's absent sibling, so it is [1, 2,null, 3,null, 4,null] rather than
+    // a padded full-tree array (my first attempt padded to 15 and silently
+    // built 1-2-3, dropping the 4 — the array shape has to match the walk).
+    let g: Array[i64, 7] = [1, 2, -1000, 3, -1000, 4, -1000];
+    report(g, null, "[left spine 1-2-3-4]");
+
+    // negative values render with their sign
+    let h: Array[i64, 3] = [-1, -2, -3];
+    report(h, null, "[-1,-2,-3]");
+
+    // zero is a legitimate value, distinct from the null sentinel
+    let i: Array[i64, 3] = [0, 0, 0];
+    report(i, null, "[0,0,0]");
+}

@@ -1,0 +1,77 @@
+// LeetCode #55: Jump Game — backward "last good index" scan, one pass, O(1) space.
+//
+// The ★ file ([`jump_game.kara`](jump_game.kara)) sweeps forward growing a reach horizon; this
+// file runs the mirror image and asks the question from the destination backwards. Call an
+// index GOOD if the last index is reachable from it. The last index is good by definition. An
+// index `i` is good exactly when it can step to some good index — and because `good` only ever
+// moves LEFT as we scan right-to-left, the nearest good index is always the current `good`, so
+// the test collapses to `i + nums[i] >= good`.
+//
+//   - seed `good = n - 1` (the destination reaches itself).
+//   - for `i` from `n-2` down to `0`: if `i + nums[i] >= good`, then `i` is good, so `good = i`.
+//
+// After the sweep the whole array is reachable iff `good` has walked all the way to index 0.
+// It is the same reachability relation as the greedy scan, evaluated from the far end: instead
+// of "how far right can I get", it asks "is the goalpost still in front of me", advancing the
+// goalpost leftward onto every index that can reach it. One right-to-left pass, one i64 scalar,
+// no allocation. n ≤ 10⁴ and nums[i] ≤ 10⁵, so every index and reach fit i64.
+
+fn can_jump(nums: Slice[i64], n: i64) -> bool {
+    let mut good = n - 1; // leftmost index known to reach the end
+    let mut i = n - 2;
+    while i >= 0 {
+        if i + nums[i] >= good {
+            good = i; // i can hop onto a good index, so i is good too
+        }
+        i = i - 1;
+    }
+    good == 0
+}
+
+// ---- test harness (shared verbatim by all three solvers) ------------------
+
+fn report(nums: Slice[i64], n: i64) {
+    if can_jump(nums, n) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    let a1: Array[i64, 5] = [2, 3, 1, 1, 4];
+    report(a1, 5); // true
+
+    let a2: Array[i64, 5] = [3, 2, 1, 0, 4];
+    report(a2, 5); // false
+
+    let a3: Array[i64, 1] = [0];
+    report(a3, 1); // true
+
+    let a4: Array[i64, 2] = [0, 1];
+    report(a4, 2); // false
+
+    let a5: Array[i64, 2] = [1, 0];
+    report(a5, 2); // true
+
+    let a6: Array[i64, 3] = [2, 0, 0];
+    report(a6, 3); // true
+
+    let a7: Array[i64, 4] = [1, 1, 1, 1];
+    report(a7, 4); // true
+
+    let a8: Array[i64, 4] = [1, 0, 1, 0];
+    report(a8, 4); // false
+
+    let a9: Array[i64, 5] = [5, 0, 0, 0, 0];
+    report(a9, 5); // true
+
+    let a10: Array[i64, 4] = [2, 5, 0, 0];
+    report(a10, 4); // true
+
+    let a11: Array[i64, 3] = [1, 2, 3];
+    report(a11, 3); // true
+
+    let a12: Array[i64, 4] = [1, 1, 0, 1];
+    report(a12, 4); // false
+}

@@ -1,0 +1,40 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+struct Wr { h: Ho[R] }
+impl Wr { fn get(self) -> Ho[R] { return self.h } }
+fn hold(x: Ho[R]) { println("h") }
+fn holds(x: Ho[S]) { println("hs") }
+fn holdm(x: Ho[R]) { match x { Full(_) => { println("m") } Empty => { println("e") } } }
+fn outer(x: Ho[R]) { println("o"); hold(x) }
+fn mkg(r: R) -> Ho[R] { return Ho.Full(r) }
+fn idg[T](v: T) -> T { return v }
+fn gh[T](x: Ho[T]) { println("gh") }
+fn gm[T](x: Ho[T]) { match x { Full(_) => { println("gm") } Empty => { println("e") } } }
+fn main() {
+    hold(Ho.Full(R { id: 1 }));
+    hold(mkg(R { id: 2 }));
+    let h3 = Ho.Full(R { id: 3 });
+    hold(h3);
+    hold(Ho[R].Full(R { id: 4 }));
+    let c = true;
+    hold(if c { Ho.Full(R { id: 5 }) } else { Ho.Empty });
+    hold({ let r = R { id: 6 }; Ho.Full(r) });
+    outer(Ho.Full(R { id: 8 }));
+    hold(idg(Ho.Full(R { id: 11 })));
+    holdm(Ho.Full(R { id: 12 }));
+    for i in 0..2 { hold(Ho.Full(R { id: 19 + i })); }
+    gh(Ho.Full(R { id: 17 }));
+    let h18 = Ho.Full(R { id: 18 });
+    gh(h18);
+    gm(Ho.Full(R { id: 23 }));
+    let w = Wr { h: Ho.Full(R { id: 10 }) };
+    hold(w.get());
+    let mut v: Vec[Ho[R]] = Vec.new();
+    v.push(Ho.Full(R { id: 21 }));
+    hold(v.pop().unwrap());
+    holds(Ho.Full(S { id: 15, s: f"x{1}" }));
+    println("end");
+}

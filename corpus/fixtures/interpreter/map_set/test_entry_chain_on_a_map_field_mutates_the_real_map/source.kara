@@ -1,0 +1,22 @@
+
+struct Holder { buckets: Map[i64, Vec[i64]], counts: Map[i64, i64] }
+
+fn main() {
+    let mut local: Map[i64, Vec[i64]] = Map.new();
+    local.entry(1).or_insert(Vec.new()).push(7);
+    local.entry(1).or_insert(Vec.new()).push(8);
+    println(local[1].len());
+
+    let mut h = Holder { buckets: Map.new(), counts: Map.new() };
+    h.buckets.entry(1).or_insert(Vec.new()).push(7);
+    h.buckets.entry(1).or_insert(Vec.new()).push(8);
+    println(h.buckets[1].len());
+
+    h.counts.entry(2).and_modify(|v| { *v = *v + 100; }).or_insert(7);
+    println(h.counts[2]);
+    h.counts.entry(2).and_modify(|v| { *v = *v + 100; }).or_insert(7);
+    println(h.counts[2]);
+
+    h.buckets.entry(3).or_insert_with(|| Vec.new()).push(42);
+    println(h.buckets[3].len());
+}

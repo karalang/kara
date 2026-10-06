@@ -1,0 +1,14 @@
+
+effect resource Screen;
+
+struct ElementHandle { id: i64 }
+
+#[derive(Copy, Clone)]
+struct Point { x: f64, y: f64 }
+
+host fn ok_primitives(a: i64, b: f64, c: bool) -> i64 with reads(Clock);
+host fn ok_handle(el: ElementHandle) -> ElementHandle with writes(Screen);
+host fn ok_copy(p: Point) -> Point with reads(Clock);
+host fn ok_ptr(buf: *const u8, len: i64) with reads(Clock);
+
+fn main() {}

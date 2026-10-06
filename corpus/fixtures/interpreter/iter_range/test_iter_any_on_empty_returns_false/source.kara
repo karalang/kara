@@ -1,0 +1,6 @@
+
+fn main() {
+    let v: Vec[i64] = Vec[];
+    let b: bool = v.iter().any(|x| x > 0);
+    println(b);
+}

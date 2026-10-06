@@ -1,0 +1,15 @@
+low=50 high=100 count=3
+low=0 high=0 count=1
+low=0 high=9 count=3
+low=1 high=1 count=1
+low=8 high=8 count=1
+low=0 high=100 count=7
+low=10 high=1000 count=16
+low=1 high=10000 count=38
+low=100 high=999 count=12
+low=11 high=69 count=2
+low=69 high=69 count=1
+low=609 high=906 count=7
+low=2 high=3 count=0
+low=1000 high=99999 count=80
+low=6 high=9 count=1

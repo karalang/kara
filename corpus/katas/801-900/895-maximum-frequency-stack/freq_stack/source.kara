@@ -1,0 +1,114 @@
+// LeetCode #895: Maximum Frequency Stack — freq counts + per-frequency stacks.
+//
+// `push(x)` records x at its NEW frequency; `pop()` returns the most frequent
+// element, breaking ties toward the one pushed most recently. Two maps and a
+// running maximum:
+//
+//   freq    : Map[i64, i64]        how many copies of x are live
+//   buckets : Map[i64, Vec[i64]]   for each frequency f, the elements that
+//                                  reached f, in push order
+//   maxfreq                        the largest f with a non-empty bucket
+//
+// `push` bumps `freq[x]` to f and appends x to `buckets[f]`; `pop` takes the
+// LAST element of `buckets[maxfreq]` — exactly the most-recent among the
+// most-frequent — then decrements. Both are O(1).
+//
+// The surface this kata exists for is `Map[i64, Vec[i64]]`: a container nested
+// inside a container, mutated through a `mut ref self` method.
+//
+// THE IDIOMATIC SPELLING DOES NOT RUN, which is what this kata found.
+// `self.buckets.entry(f).or_insert(Vec.new()).push(x)` passes `karac check`
+// and then fails on ALL THREE backends — "method 'push' not found on type
+// 'unknown'" from the interpreter, "no handler for method 'push' on
+// non-identifier receiver" from codegen — whenever the map is a struct FIELD.
+// The same chain over a LOCAL map works everywhere, so the variable is the
+// receiver's root. Filed as B-2026-08-18-34; `entry_chain_gap.kara` here is
+// the standing minimal probe.
+//
+// So `push` below uses the get/modify/insert round-trip. That is a genuine
+// canonical spelling rather than a contortion to dodge the bug — it is what
+// the explicit variant uses too — but it copies the bucket out and back, and
+// the O(1) append this problem is famous for becomes O(n). Swap it for the
+// one-liner once -34 closes.
+
+struct FreqStack {
+    freq: Map[i64, i64],
+    buckets: Map[i64, Vec[i64]],
+    maxfreq: i64,
+}
+
+fn new_freq_stack() -> FreqStack {
+    return FreqStack { freq: Map.new(), buckets: Map.new(), maxfreq: 0 };
+}
+
+impl FreqStack {
+    fn push(mut ref self, x: i64) {
+        let f = self.freq.get_or(x, 0) + 1;
+        self.freq.insert(x, f);
+        if f > self.maxfreq {
+            self.maxfreq = f;
+        }
+        let mut b = self.buckets.get_or(f, Vec.new());
+        b.push(x);
+        self.buckets.insert(f, b);
+    }
+
+    fn pop(mut ref self) -> i64 {
+        let top = self.maxfreq;
+        let mut b = self.buckets.get_or(top, Vec.new());
+        let x = b[b.len() - 1];
+        b.pop();
+        let drained = b.is_empty();
+        self.buckets.insert(top, b);
+        self.freq.insert(x, self.freq.get_or(x, 0) - 1);
+        if drained {
+            self.maxfreq = top - 1;
+        }
+        return x;
+    }
+}
+
+// A deterministic stress over the same structure: an LCG feeds pushes, and
+// every third step pops. Small modulus on purpose — repeated values are what
+// drive frequencies up and keep several buckets live at once, which is where a
+// stale bucket handle or an over-eager temp drop would show as a wrong sum
+// rather than a crash.
+fn stress() -> i64 {
+    let mut st = new_freq_stack();
+    let mut seed = 12345;
+    let mut live = 0;
+    let mut checksum = 0;
+    let mut i = 0;
+    while i < 600 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        if i % 3 == 2 and live > 0 {
+            checksum = checksum + st.pop() * (i % 7 + 1);
+            live = live - 1;
+        } else {
+            st.push(seed % 12);
+            live = live + 1;
+        }
+        i = i + 1;
+    }
+    while live > 0 {
+        checksum = checksum + st.pop();
+        live = live - 1;
+    }
+    return checksum;
+}
+
+fn main() {
+    let mut st = new_freq_stack();
+    st.push(5);
+    st.push(7);
+    st.push(5);
+    st.push(7);
+    st.push(4);
+    st.push(5);
+    // freq: 5->3, 7->2, 4->1  =>  pops are 5, 7, 5, 4
+    println(st.pop().to_string());
+    println(st.pop().to_string());
+    println(st.pop().to_string());
+    println(st.pop().to_string());
+    println(stress().to_string());
+}

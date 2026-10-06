@@ -1,0 +1,6 @@
+
+fn main() {
+    let v = Vector[i64, 4].splat(7);
+    println(v[0]);
+    println(v[3]);
+}

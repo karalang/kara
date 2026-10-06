@@ -1,0 +1,15 @@
+
+fn total_len(path: String) -> Result[i64, IoError] with reads(FileSystem) {{
+    let lines = fs.read_lines(path)?;
+    let mut total = 0;
+    for line in lines {{
+        total = total + line.len();
+    }}
+    Ok(total)
+}}
+fn main() with reads(FileSystem) {{
+    match total_len("{path}") {{
+        Ok(n) => println(n.to_string()),
+        Err(_) => println("read-err"),
+    }}
+}}

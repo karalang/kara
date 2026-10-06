@@ -1,0 +1,122 @@
+// LeetCode #94: Binary Tree Inorder Traversal — recursive DFS (★).
+//
+// Given the root of a binary tree, return the inorder traversal of its nodes' values:
+// visit the left subtree, then the node, then the right subtree. For a binary search
+// tree this yields the values in sorted order, but inorder is defined for ANY binary
+// tree — it is just the left-node-right visiting discipline.
+//
+// The recursion is the textbook three lines: recurse left, emit this node's value,
+// recurse right. `None` (an absent child) is the base case and contributes nothing.
+// The visited values are pushed into a `mut ref Vec[i64]` threaded down the calls — the
+// call-site-marker rule fires once at the root (`mut out`, a fresh owned binding) and
+// the inner forwards are unmarked (`out` is already a `mut ref`), the same shape as the
+// backtracking siblings [#77](../77-combinations/)/[#78](../78-subsets/).
+//
+// The alternative ([`inorder_iter.kara`](inorder_iter.kara)) replaces the call stack
+// with an explicit `Vec[TreeNode]` stack — the other classic route and an independent
+// cross-check that must land byte-identical. Node type and construction mirror kata
+// [#98](../98-validate-binary-search-tree/) / [#226](../../201-300/226-invert-binary-tree/).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn inorder(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    match node {
+        None => {}
+        Some(n) => {
+            inorder(n.left, out);
+            out.push(n.val);
+            inorder(n.right, out);
+        }
+    }
+}
+
+fn traverse(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    inorder(root, mut out);
+    out
+}
+
+// ---- test harness (shared verbatim by both solvers + the Python mirror) --------
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    Some(TreeNode { val: v, left: None, right: None })
+}
+
+fn report(root: Option[TreeNode], acc: mut ref i64) {
+    let vals = traverse(root);
+    let n = vals.len();
+    // Print the traversal as a bracketed, space-separated list.
+    let mut line: String = "";
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            line.push_str(" ");
+        }
+        line.push_str(f"{vals[i]}");
+        i = i + 1;
+    }
+    println(f"[{line}]");
+    // Fold count + each value (shifted past the -100..100 range) into a running hash.
+    let mut a = (acc * 131 + (n + 1)) % 1000000007;
+    i = 0;
+    while i < n {
+        a = (a * 131 + (vals[i] + 1000)) % 1000000007;
+        i = i + 1;
+    }
+    acc = a;
+}
+
+fn main() {
+    let mut acc = 0;
+
+    // Empty and singleton.
+    report(None, mut acc);                                          // []
+    report(leaf(1), mut acc);                                   // [1]
+
+    // LeetCode example: [1,null,2,3] — 1 with right child 2 whose left child is 3.
+    report(Some(TreeNode { val: 1, left: None,
+        right: Some(TreeNode { val: 2, left: leaf(3), right: None }) }), mut acc);
+                                                                   // [1 3 2]
+
+    // Balanced [2,1,3].
+    report(Some(TreeNode { val: 2, left: leaf(1), right: leaf(3) }), mut acc);
+                                                                   // [1 2 3]
+
+    // Full 7-node BST [4,2,6,1,3,5,7] -> sorted.
+    report(Some(TreeNode { val: 4,
+        left: Some(TreeNode { val: 2, left: leaf(1), right: leaf(3) }),
+        right: Some(TreeNode { val: 6, left: leaf(5), right: leaf(7) }) }), mut acc);
+                                                                   // [1 2 3 4 5 6 7]
+
+    // Left-skewed chain 4->3->2->1.
+    report(Some(TreeNode { val: 4,
+        left: Some(TreeNode { val: 3,
+            left: Some(TreeNode { val: 2, left: leaf(1), right: None }),
+            right: None }),
+        right: None }), mut acc);                                  // [1 2 3 4]
+
+    // Right-skewed chain 1->2->3->4.
+    report(Some(TreeNode { val: 1, left: None,
+        right: Some(TreeNode { val: 2, left: None,
+            right: Some(TreeNode { val: 3, left: None, right: leaf(4) }) }) }), mut acc);
+                                                                   // [1 2 3 4]
+
+    // Negative values (LeetCode allows -100..100).
+    report(Some(TreeNode { val: 0,
+        left: Some(TreeNode { val: -3, left: leaf(-10), right: leaf(-1) }),
+        right: Some(TreeNode { val: 9, left: leaf(5), right: None }) }), mut acc);
+                                                                   // [-10 -3 -1 0 5 9]
+
+    // Irregular: 5 with a deep left arm and a shallow right leaf.
+    report(Some(TreeNode { val: 5,
+        left: Some(TreeNode { val: 3,
+            left: leaf(2),
+            right: Some(TreeNode { val: 4, left: None, right: None }) }),
+        right: leaf(8) }), mut acc);                            // [2 3 4 5 8]
+
+    println(f"sink: {acc}");
+}

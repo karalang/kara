@@ -1,0 +1,13 @@
+source = "tests/codegen/patterns.rs::e2e_owned_enum_receiver_runs_its_payload_body_when_no_arm_claims_it"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

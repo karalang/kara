@@ -1,0 +1,14 @@
+
+fn value(b: u8) -> i64 {
+    match b {
+        b'I' => 1,
+        b'V' => 5,
+        b'X' => 10,
+        _ => 0,
+    }
+}
+fn main() {
+    println(value(b'I'));
+    println(value(b'X'));
+    println(value(b'?'));
+}

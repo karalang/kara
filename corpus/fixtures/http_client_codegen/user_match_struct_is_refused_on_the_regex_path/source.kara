@@ -1,0 +1,8 @@
+
+struct Match { text: String }
+fn main() {
+    match Regex.compile("a+") {
+        Ok(re) => { if re.is_match("aaa") { println("m"); } }
+        Err(e) => { println("e"); }
+    }
+}

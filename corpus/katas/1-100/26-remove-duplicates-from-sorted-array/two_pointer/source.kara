@@ -1,0 +1,66 @@
+// LeetCode #26: Remove Duplicates from Sorted Array — two pointers, in-place.
+//
+// nums is sorted in non-decreasing order. Remove the duplicates in place so
+// that each unique element appears once, preserving relative order, and
+// return k — the number of unique elements. The first k slots of nums hold
+// the answer; what's past k doesn't matter. O(n) time, O(1) extra space.
+//
+// The invariant: nums[0..k] is the deduplicated prefix of everything read so
+// far, so nums[k - 1] is the largest value kept. Because the input is sorted,
+// "nums[i] is a new value" reduces to one compare against that single cell —
+// no lookback past it, no set. The read head i only ever runs at or ahead of
+// the write head k, so no value is overwritten before it is read.
+
+fn remove_duplicates(nums: mut Slice[i64], len: i64) -> i64 {
+    if len == 0 {
+        return 0;
+    }
+    let mut k = 1;
+    for i in 1..len {
+        if nums[i] != nums[k - 1] {
+            nums[k] = nums[i];
+            k = k + 1;
+        }
+    }
+    k
+}
+
+fn report(nums: mut Slice[i64], len: i64) {
+    // nums is already an in-scope mut Slice — forwards without a marker
+    // (design.md Feature 4 Part 1½, Rule 2).
+    let k = remove_duplicates(nums, len);
+    println(f"k = {k}");
+    for i in 0..k {
+        println(nums[i]);
+    }
+}
+
+fn main() {
+    // Case 1: LeetCode example 1.
+    let mut a1: Array[i64, 3] = [1, 1, 2];
+    report(mut a1, 3);              // expect: k = 2, then 1 2
+
+    // Case 2: LeetCode example 2.
+    let mut a2: Array[i64, 10] = [0, 0, 1, 1, 1, 2, 2, 3, 3, 4];
+    report(mut a2, 10);             // expect: k = 5, then 0 1 2 3 4
+
+    // Case 3: single element — loop never runs.
+    let mut a3: Array[i64, 1] = [7];
+    report(mut a3, 1);              // expect: k = 1, then 7
+
+    // Case 4: all duplicates — k stays 1.
+    let mut a4: Array[i64, 4] = [5, 5, 5, 5];
+    report(mut a4, 4);              // expect: k = 1, then 5
+
+    // Case 5: already unique — every compare succeeds, array unchanged.
+    let mut a5: Array[i64, 3] = [1, 2, 3];
+    report(mut a5, 3);              // expect: k = 3, then 1 2 3
+
+    // Case 6: negatives and zero across the dedup boundary.
+    let mut a6: Array[i64, 5] = [-3, -3, -1, 0, 0];
+    report(mut a6, 5);              // expect: k = 3, then -3 -1 0
+
+    // Case 7: empty — the len == 0 guard, below LeetCode's 1 ≤ len floor.
+    let mut a7: Array[i64, 0] = [];
+    report(mut a7, 0);              // expect: k = 0
+}

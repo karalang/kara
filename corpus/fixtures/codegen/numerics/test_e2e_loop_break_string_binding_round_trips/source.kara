@@ -1,0 +1,11 @@
+
+fn pick() -> String {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        let s = f"row{i}";
+        if i == 2 { break s }
+    }
+}
+
+fn main() { println(pick()); }

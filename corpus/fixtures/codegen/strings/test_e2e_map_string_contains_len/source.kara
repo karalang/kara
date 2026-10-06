@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("x", 9_i64);
+    println(m.contains_key("x"));
+    println(m.contains_key("y"));
+    println(m.len());
+}

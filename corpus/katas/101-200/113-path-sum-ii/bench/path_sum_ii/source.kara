@@ -1,0 +1,69 @@
+// Benchmark workload for LeetCode #113 — build 8 perfect depth-5 trees once (16 leaves each,
+// distinct per-tree value so nothing hoists), then K reps of path_sum collecting ALL 16
+// root-to-leaf paths on a DATA-DEPENDENT-selected tree (idx = acc%8, target = 5*(idx+1) hits every
+// leaf), folding the returned Vec[Vec[i64]] into a rolling hash. Unlike #112's read-only bool walk
+// this is ALLOC-bound: each rep allocates 16 inner Vec[i64] snapshots (+ the outer Vec) and the
+// backtracking path buffer — the collect-and-copy regime (cf. #107 nested-Vec build). The two
+// recursive calls plus the per-hit snapshot copy are all threaded through one `mut ref` output.
+shared struct TreeNode { val: i64, mut left: Option[TreeNode], mut right: Option[TreeNode] }
+
+fn dfs(node: Option[TreeNode], target: i64, path: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    match node {
+        None => {}
+        Some(n) => {
+            path.push(n.val);
+            let rem = target - n.val;
+            let left_none = match n.left { None => true, Some(_) => false };
+            let right_none = match n.right { None => true, Some(_) => false };
+            if left_none and right_none {
+                if rem == 0 {
+                    let mut copy: Vec[i64] = Vec.new();
+                    let mut i = 0;
+                    while i < path.len() { copy.push(path[i]); i = i + 1; }
+                    out.push(copy);
+                }
+            } else {
+                dfs(n.left, rem, path, out);
+                dfs(n.right, rem, path, out);
+            }
+            match path.pop() { None => {} Some(_) => {} }
+        }
+    }
+}
+fn path_sum(root: Option[TreeNode], target: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    dfs(root, target, mut path, mut out);
+    out
+}
+fn build_perfect(depth: i64, val: i64) -> Option[TreeNode] {
+    if depth <= 0 { return None; }
+    let node = TreeNode { val: val, left: None, right: None };
+    node.left = build_perfect(depth - 1, val);
+    node.right = build_perfect(depth - 1, val);
+    Some(node)
+}
+fn main() {
+    let mut pool: Vec[Option[TreeNode]] = Vec.new();
+    let mut t = 0;
+    while t < 8 { pool.push(build_perfect(5, t + 1)); t = t + 1; }
+    let mut acc = 1;
+    let mut rep = 0;
+    while rep < 300000 {
+        let idx = acc % 8;
+        let paths = path_sum(pool[idx].clone(), 5 * (idx + 1));
+        let mut h = paths.len();
+        let mut pi = 0;
+        while pi < paths.len() {
+            let mut pj = 0;
+            while pj < paths[pi].len() {
+                h = (h * 131 + paths[pi][pj]) % 1000000007;
+                pj = pj + 1;
+            }
+            pi = pi + 1;
+        }
+        acc = (acc * 1000003 + h + 1) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

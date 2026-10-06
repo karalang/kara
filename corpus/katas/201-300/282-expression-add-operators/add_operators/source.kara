@@ -1,0 +1,132 @@
+// LeetCode 282 — Expression Add Operators.
+//
+// Insert `+`, `-` or `*` between the digits of `num` (or nothing, joining them
+// into a multi-digit operand) so the expression evaluates to `target`. Return
+// every such expression.
+//
+//     "123", target 6   ->  "1+2+3", "1*2*3"
+//     "232", target 8   ->  "2*3+2", "2+3*2"
+//     "105", target 5   ->  "1*0+5", "10-5"
+//
+// THE ★ MECHANISM: BACKTRACKING THAT CARRIES ITS LAST OPERAND.
+//
+// The difficulty is `*`, and it is a PRECEDENCE problem, not a search problem.
+// Walking left to right with a running total works for `+` and `-`, because each
+// new term is simply added or subtracted. It breaks for `*`, because the new
+// factor binds to the PREVIOUS TERM rather than to the total: after `2+3`, a
+// `*4` must produce `2+12`, not `(2+3)*4`.
+//
+// The fix is to carry the last term alongside the total and undo it:
+//
+//     cur = cur - last + (last * n)     and the new last is  last * n
+//
+// Subtract what the previous term contributed, then re-add it multiplied. That
+// one line is the whole kata, and it is why the search state is `(pos, expr,
+// cur, last)` rather than `(pos, expr, cur)` — a solver that tracks only the
+// total is right on every `+`/`-` case and silently wrong the moment a `*`
+// follows anything.
+//
+// TWO RULES THAT ARE EASY TO MISS:
+//
+//   * LEADING ZEROS. A multi-digit operand may not start with `0`, so from a
+//     position holding `0` the ONLY operand is the single digit `0` itself.
+//     `"105"` admits `"1*0+5"` and `"10-5"` but never `"1*05"`. Forgetting this
+//     does not produce a wrong VALUE — every expression it emits still
+//     evaluates to the target — it produces expressions that are not legal, so
+//     a harness that only checks arithmetic sees nothing wrong.
+//
+//   * NO LEADING OPERATOR. The first operand is taken with no sign in front,
+//     which is why the first step is separate from the loop below.
+
+fn digit_at(s: ref String, i: i64) -> i64 {
+    let b = s.bytes();
+    return (b[i] as i64) - 48;
+}
+
+fn slice(s: ref String, lo: i64, hi: i64) -> String {
+    return s.substring(lo, hi);
+}
+
+fn search(num: ref String, target: i64, pos: i64, expr: String, cur: i64, last: i64,
+          out: mut ref Vec[String]) {
+    if pos == num.len() {
+        if cur == target { out.push(expr); }
+        return;
+    }
+    let mut end = pos + 1;
+    while end <= num.len() {
+        // leading zero: only the single digit `0` may start at a `0`
+        if end > pos + 1 and digit_at(num, pos) == 0 {
+            return;
+        }
+        let piece = slice(num, pos, end);
+        let mut n = 0;
+        let mut k = pos;
+        while k < end {
+            n = n * 10 + digit_at(num, k);
+            k = k + 1;
+        }
+        if pos == 0 {
+            // first operand — no operator in front of it
+            search(num, target, end, piece, n, n, out);
+        } else {
+            search(num, target, end, expr + "+" + piece.clone(), cur + n, n, out);
+            search(num, target, end, expr + "-" + piece, cur - n, 0 - n, out);
+            // `*` binds to the previous term: undo it, re-add it multiplied
+            search(num, target, end, expr + "*" + piece, cur - last + last * n, last * n, out);
+        }
+        end = end + 1;
+    }
+}
+
+fn add_operators(num: String, target: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if num.len() == 0 { return out; }
+    search(num, target, 0, "", 0, 0, mut out);
+    return out;
+}
+
+fn show(v: ref Vec[String]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + v[i];
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn sort_strings(v: mut ref Vec[String]) {
+    // the answer is a SET, and the two solvers enumerate it in different orders
+    // (DFS versus mask order), so both sort before reporting — that makes the
+    // two mains directly diffable without either pretending order is meaningful
+    let mut a = 1;
+    while a < v.len() {
+        let mut b = a;
+        while b > 0 and v[b - 1] > v[b] {
+            let t = v[b - 1].clone();
+            v[b - 1] = v[b].clone();
+            v[b] = t;
+            b = b - 1;
+        }
+        a = a + 1;
+    }
+}
+
+fn report(num: String, target: i64) {
+    let mut got = add_operators(num.clone(), target);
+    sort_strings(mut got);
+    println(f"{num} t={target} -> {show(got)}");
+}
+
+fn main() {
+    report("123", 6);
+    report("232", 8);
+    report("105", 5);
+    report("00", 0);
+    report("5", 5);
+    report("123", 0 - 1);
+    report("1234567", 100);
+    report("3456", 21);
+}

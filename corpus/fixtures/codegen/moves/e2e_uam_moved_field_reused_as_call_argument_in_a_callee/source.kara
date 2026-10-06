@@ -1,0 +1,24 @@
+
+struct Stat { service: String }
+struct Entry { service: String }
+
+fn agg(entries: Vec[Entry]) -> Vec[Stat] {
+    let mut index: Map[String, usize] = Map.new();
+    let mut stats: Vec[Stat] = Vec.new();
+    let mut i = 0;
+    while i < entries.len() {
+        let e = ref entries[i];
+        let _ = index.insert(e.service, 0 as usize);
+        stats.push(Stat { service: e.service });
+        i = i + 1;
+    }
+    return stats;
+}
+
+fn main() {
+    let mut es: Vec[Entry] = Vec.new();
+    es.push(Entry { service: "alphabetical" });
+    es.push(Entry { service: "betamaximum" });
+    let out = agg(es);
+    println(f"{out[0].service} {out[1].service}");
+}

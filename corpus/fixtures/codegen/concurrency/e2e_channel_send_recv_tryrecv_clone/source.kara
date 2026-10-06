@@ -1,0 +1,24 @@
+
+fn main() {
+    let n = 3;
+    if n > 0 { println(n); }
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    tx.send(100);
+    let tx2 = tx.clone();
+    tx2.send(5);
+    match rx.try_recv() {
+        Some(v) => println(v),
+        None => println(-1),
+    }
+    match rx.try_recv() {
+        Some(v) => println(v),
+        None => println(-1),
+    }
+    match rx.try_recv() {
+        Some(v) => println(v),
+        None => println(-1),
+    }
+    let (stx, srx): (Sender[String], Receiver[String]) = Channel.new();
+    stx.send("hello channel");
+    println(srx.recv());
+}

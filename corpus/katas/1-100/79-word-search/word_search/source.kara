@@ -1,0 +1,123 @@
+// LeetCode #79: Word Search — DFS backtracking with in-place cell marking.
+//
+// Given an m x n grid of characters and a word, return whether the word can be
+// spelled out along a path of orthogonally-adjacent cells, each cell used at most
+// once. The canonical solve is a depth-first search from every cell that matches
+// word[0]: at each step the current cell is temporarily blanked (a sentinel byte
+// that no board letter equals) so the path can't reuse it, the four neighbours are
+// explored, and the cell is restored on the way out — classic backtracking with
+// O(1) extra state beyond the recursion stack.
+//
+// The board is a `Vec[Vec[u8]]` built from the row strings' bytes; the mark/restore
+// step is a nested 2D index assignment (`board[r][c] = 0`). Bounds and the
+// letter-match are checked at the top of each call, so out-of-range neighbours
+// (including r-1 = -1) fall out immediately.
+
+fn dfs(board: mut ref Vec[Vec[u8]], word: ref Vec[u8], r: i64, c: i64, k: i64,
+        rows: i64, cols: i64) -> bool {
+    if k == word.len() {
+        return true;
+    }
+    if r < 0 or r >= rows or c < 0 or c >= cols {
+        return false;
+    }
+    if board[r][c] != word[k] {
+        return false;
+    }
+    // Mark this cell used (0 is not a printable board letter), recurse, restore.
+    let saved = board[r][c];
+    board[r][c] = 0u8;
+    let found = dfs(board, word, r + 1, c, k + 1, rows, cols)
+        or dfs(board, word, r - 1, c, k + 1, rows, cols)
+        or dfs(board, word, r, c + 1, k + 1, rows, cols)
+        or dfs(board, word, r, c - 1, k + 1, rows, cols);
+    board[r][c] = saved;
+    found
+}
+
+fn exists(board: mut ref Vec[Vec[u8]], word: ref Vec[u8]) -> bool {
+    let rows = board.len();
+    if rows == 0 {
+        return word.len() == 0;
+    }
+    let cols = board[0].len();
+    let wlen = word.len();
+    if wlen == 0 {
+        return true;
+    }
+    let mut r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            if dfs(board, word, r, c, 0, rows, cols) {
+                return true;
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    false
+}
+
+// Build a Vec[Vec[u8]] board from an array of equal-length row strings.
+fn make_board(rows: ref Vec[String]) -> Vec[Vec[u8]] {
+    let mut board: Vec[Vec[u8]] = Vec.new();
+    let n = rows.len();
+    let mut i = 0;
+    while i < n {
+        let bytes = rows[i].bytes();
+        let mut row: Vec[u8] = Vec.new();
+        let mut j = 0;
+        while j < bytes.len() {
+            row.push(bytes[j]);
+            j = j + 1;
+        }
+        board.push(row);
+        i = i + 1;
+    }
+    board
+}
+
+fn report(rows: ref Vec[String], word: String, acc: mut ref i64) {
+    let mut board = make_board(rows);
+    let wbytes = word.bytes();
+    let mut wvec: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < wbytes.len() {
+        wvec.push(wbytes[i]);
+        i = i + 1;
+    }
+    let found = exists(mut board, wvec);
+    if found {
+        println(f"{word}: true");
+    } else {
+        println(f"{word}: false");
+    }
+    // Fold the boolean result (1/0) into a running hash so the sink is outcome-sensitive.
+    let bit = if found { 1 } else { 0 };
+    let a = acc;
+    acc = (a * 131 + bit + 1) % 1000000007;
+}
+
+fn main() {
+    let mut board_rows: Vec[String] = Vec.new();
+    board_rows.push("ABCE");
+    board_rows.push("SFCS");
+    board_rows.push("ADEE");
+
+    let mut acc = 0;
+    report(board_rows, "ABCCED", mut acc);   // true
+    report(board_rows, "SEE", mut acc);      // true
+    report(board_rows, "ABCB", mut acc);     // false (would reuse 'B')
+    report(board_rows, "SFDA", mut acc);     // true (down-then-around)
+    report(board_rows, "ABCESEEEFS", mut acc); // false
+    report(board_rows, "A", mut acc);        // true (single cell)
+    report(board_rows, "Z", mut acc);        // false (absent letter)
+
+    let mut single: Vec[String] = Vec.new();
+    single.push("A");
+    report(single, "A", mut acc);            // true
+    report(single, "AB", mut acc);           // false (only one cell)
+
+    println(f"sink: {acc}");
+}

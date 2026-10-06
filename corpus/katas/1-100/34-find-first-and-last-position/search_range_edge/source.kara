@@ -1,0 +1,104 @@
+// LeetCode #34: Find First and Last Position — single biased edge-finder.
+//
+// Same problem as search_range.kara (return [first, last] of target's run, or
+// [-1, -1]), but instead of two distinct bound searches this uses ONE binary
+// search parameterized by a `find_first` flag. The search tests for equality —
+// but on a hit it does NOT stop: it records the index as the best-so-far and
+// keeps going toward the chosen end, so it converges on the extreme occurrence.
+//
+//   - find_first = true:  on nums[mid] == target, remember mid and search LEFT
+//     (hi = mid - 1) — any earlier equal value beats this one.
+//   - find_first = false: on nums[mid] == target, remember mid and search RIGHT
+//     (lo = mid + 1) — any later equal value beats this one.
+//
+// On nums[mid] < target go right, on nums[mid] > target go left, exactly as a
+// plain binary search. The only twist is that equality, instead of returning,
+// updates the answer and then deliberately keeps shrinking toward the wanted
+// side. The window still halves every step, so each edge is O(log n); two calls
+// give both ends. `ans` starts at -1, so an absent target falls straight through
+// to [-1, -1] with no separate presence check — the bound style's `nums[lo] !=
+// target` guard is folded into "we never recorded a hit".
+//
+// Pedagogically this is the mirror image of the lower/upper-bound decomposition:
+// there, the searches never test equality and you reconstruct presence afterward;
+// here, the search tests equality directly and the bias does the end-selection
+// inline. Same O(log n), same two passes, opposite factoring.
+
+// Index of the first (find_first) or last (!find_first) occurrence of target,
+// or -1 if absent.
+fn search_edge(nums: Slice[i64], len: i64, target: i64, find_first: bool) -> i64 {
+    let mut lo = 0;
+    let mut hi = len - 1;
+    let mut ans = -1;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] == target {
+            ans = mid;
+            if find_first {
+                hi = mid - 1;            // keep searching left for an earlier hit
+            } else {
+                lo = mid + 1;            // keep searching right for a later hit
+            }
+        } else if nums[mid] < target {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    ans
+}
+
+fn fmt(nums: Slice[i64], len: i64) -> String {
+    let mut s: String = "[";
+    for i in 0..len {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(nums: Slice[i64], len: i64, target: i64) {
+    let first = search_edge(nums, len, target, true);
+    let last = search_edge(nums, len, target, false);
+    println(f"{fmt(nums, len)} target={target} -> [{first}, {last}]");
+}
+
+fn main() {
+    let a1: Array[i64, 6] = [5, 7, 7, 8, 8, 10];
+    report(a1, 6, 8);                // [3, 4]
+    report(a1, 6, 6);                // [-1, -1]
+
+    let a2: Array[i64, 0] = [];
+    report(a2, 0, 0);                // [-1, -1]
+
+    let a3: Array[i64, 1] = [1];
+    report(a3, 1, 1);                // [0, 0]
+    report(a3, 1, 0);                // [-1, -1]
+
+    let a4: Array[i64, 5] = [2, 2, 2, 2, 2];
+    report(a4, 5, 2);                // [0, 4]
+    report(a4, 5, 1);                // [-1, -1]
+    report(a4, 5, 3);                // [-1, -1]
+
+    let a5: Array[i64, 7] = [4, 4, 5, 6, 7, 9, 9];
+    report(a5, 7, 4);                // [0, 1]
+    report(a5, 7, 9);                // [5, 6]
+    report(a5, 7, 5);                // [2, 2]
+    report(a5, 7, 8);                // [-1, -1]
+
+    let a6: Array[i64, 9] = [-5, -3, -3, -3, 0, 0, 1, 4, 4];
+    report(a6, 9, -3);               // [1, 3]
+    report(a6, 9, 0);                // [4, 5]
+    report(a6, 9, 4);                // [7, 8]
+    report(a6, 9, -5);               // [0, 0]
+    report(a6, 9, 2);                // [-1, -1]
+
+    let a7: Array[i64, 2] = [1, 3];
+    report(a7, 2, 1);                // [0, 0]
+    report(a7, 2, 3);                // [1, 1]
+    report(a7, 2, 2);                // [-1, -1]
+    report(a7, 2, 0);                // [-1, -1]
+}

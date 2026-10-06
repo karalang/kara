@@ -1,0 +1,93 @@
+// LeetCode #41: First Missing Positive — in-place cyclic sort (index = value-1 home) (★).
+//
+// Given an unsorted integer array, return the smallest positive integer NOT present, in
+// O(n) time and O(1) auxiliary space. The answer is always in [1, n+1]: an array of length
+// n can hold at most n distinct positives 1..n, so if all of 1..n are present the answer is
+// n+1, and otherwise it is the smallest gap in 1..n. Values ≤ 0 and > n are irrelevant —
+// they can never be the answer and only take up slots.
+//
+// The O(1)-space trick is to use the ARRAY ITSELF as a hash table keyed by value: the home
+// of value v (for v in 1..n) is index v-1. Walk the array placing each in-range value at
+// its home by SWAPPING, until the current slot holds a value that is out of range or
+// already home:
+//
+//   while nums[i] is in [1, n] and nums[nums[i]-1] != nums[i]:
+//       swap nums[i] with nums[nums[i]-1]
+//
+// The `nums[v-1] != v` guard is what makes this O(n), not O(n²): a swap only fires when it
+// moves a value to a home that does NOT already hold it, so each swap places one value
+// permanently — at most n swaps total across the whole walk, even though `i` may sit still
+// for several of them. Duplicates and out-of-range values fall through the guard and `i`
+// advances. After the placement pass, the first index `i` whose slot is NOT `i+1` is the
+// gap → answer `i+1`; if every slot is correct, the answer is `n+1`.
+//
+// This is the allocation-free, index-as-hashtable sibling of the fixed-grid katas
+// [#36](../36-valid-sudoku/)/[#37](../37-sudoku-solver/): no `Vec`, no `Map`, just in-place
+// swaps on the input `mut Slice[i64]` and two linear scans. i64 throughout — LeetCode
+// allows values down to -2³¹, but only [1, n] ever index, and n ≤ 10⁵ fits any width.
+
+fn first_missing_positive(nums: mut Slice[i64], n: i64) -> i64 {
+    // Placement pass: send each in-range value to its home index v-1 by swapping.
+    let mut i = 0;
+    while i < n {
+        let v = nums[i];
+        if v >= 1 and v <= n and nums[v - 1] != v {
+            // swap nums[i] (= v) with nums[v-1]; re-examine the slot, so don't advance i.
+            let t = nums[v - 1];
+            nums[v - 1] = v;
+            nums[i] = t;
+        } else {
+            i = i + 1;
+        }
+    }
+    // The first slot not holding its home value is the missing positive.
+    let mut j = 0;
+    while j < n {
+        if nums[j] != j + 1 {
+            return j + 1;
+        }
+        j = j + 1;
+    }
+    n + 1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn report(nums: mut Slice[i64], n: i64) {
+    let ans = first_missing_positive(nums, n);
+    println(f"{ans}");
+}
+
+fn main() {
+    // LeetCode example 1: 1 and 2 present, 3 missing.
+    let mut a1: Array[i64, 3] = [1, 2, 0];
+    report(mut a1, 3); // 3
+
+    // LeetCode example 2: 1 present, 2 missing; negatives ignored.
+    let mut a2: Array[i64, 4] = [3, 4, -1, 1];
+    report(mut a2, 4); // 2
+
+    // LeetCode example 3: all values out of range [1,5] ⇒ 1 missing.
+    let mut a3: Array[i64, 5] = [7, 8, 9, 11, 12];
+    report(mut a3, 5); // 1
+
+    // Singleton holding 1 ⇒ 2.
+    let mut a4: Array[i64, 1] = [1];
+    report(mut a4, 1); // 2
+
+    // All duplicates of an in-range value ⇒ 1 missing.
+    let mut a5: Array[i64, 4] = [2, 2, 2, 2];
+    report(mut a5, 4); // 1
+
+    // Dense 1..5 present ⇒ answer is n+1 = 6.
+    let mut a6: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(mut a6, 5); // 6
+
+    // All negative ⇒ 1.
+    let mut a7: Array[i64, 3] = [-5, -3, -1];
+    report(mut a7, 3); // 1
+
+    // Shuffled full range with one gap (4 missing).
+    let mut a8: Array[i64, 6] = [5, 3, 1, 2, 6, 5];
+    report(mut a8, 6); // 4
+}

@@ -1,0 +1,10 @@
+fn main() {
+         let e = LogEvent.info("started")
+             .with_field("user_id", "42")
+             .with_field("ip", "127.0.0.1")
+             .in_span(5);
+         println(e.level);
+         println(e.message);
+         println(e.fields.len());
+         println(e.span_id);
+     }

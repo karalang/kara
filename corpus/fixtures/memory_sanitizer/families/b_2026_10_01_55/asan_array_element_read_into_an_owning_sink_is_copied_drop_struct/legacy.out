@@ -1,0 +1,100 @@
+dR1
+dR2
+dR1
+local_ret0 r1:pppppppppppppppppppppp1
+dR1
+dR2
+dR2
+local_reti r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR2
+local_tail r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR1
+local_tup r1:pppppppppppppppppppppp1
+dR1
+dR2
+dR2
+local_some r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR1
+dR2
+local_push r1:pppppppppppppppppppppp1/r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR1
+local_fld r1:pppppppppppppppppppppp1
+dR1
+dR2
+dR2
+local_fldi r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR1
+own_ret0 r1:pppppppppppppppppppppp1
+dR1
+dR2
+dR2
+own_reti r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR2
+own_tail r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR1
+own_tup r1:pppppppppppppppppppppp1
+dR1
+dR2
+dR2
+own_some r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR1
+dR2
+own_push r1:pppppppppppppppppppppp1/r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR1
+own_fld r1:pppppppppppppppppppppp1
+dR1
+dR2
+dR2
+own_fldi r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR1
+ref_ret0 r1:pppppppppppppppppppppp1
+dR1
+dR2
+dR2
+ref_reti r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR2
+ref_tail r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR1
+ref_tup r1:pppppppppppppppppppppp1
+dR1
+dR2
+dR2
+ref_some r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR1
+dR2
+ref_push r1:pppppppppppppppppppppp1/r2:pppppppppppppppppppppp2
+dR1
+dR2
+dR1
+ref_fld r1:pppppppppppppppppppppp1
+dR1
+dR2
+dR2
+ref_fldi r2:pppppppppppppppppppppp2
+end

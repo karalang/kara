@@ -1,0 +1,13 @@
+
+fn main() {
+    let a: Array[u8, 4] = [104u8, 105u8, 0u8, 0u8];
+    // Safety: `a` is NUL-terminated within its 4 bytes (b"hi\0\0").
+    let s = unsafe { CStr.from_ptr(a.as_ptr()) };
+    println(s.len());
+    let bytes = s.as_bytes();
+    println(bytes[0]);
+    println(bytes[1]);
+    // `as_mut_ptr()` addresses the same first element.
+    let s2 = unsafe { CStr.from_ptr(a.as_mut_ptr() as *const u8) };
+    println(s2.len());
+}

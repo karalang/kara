@@ -1,0 +1,11 @@
+
+fn build(n: i64) -> Vec[Result[String, i64]] {
+    let mut v: Vec[Result[String, i64]] = Vec.new();
+    v.push(Ok(f"alpha ok payload padded out beyond thirty-six bytes {n}"));
+    v.push(Err(7_i64));
+    return v;
+}
+fn main() {
+    let v = build(1);
+    println(v.len());
+}

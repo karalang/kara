@@ -1,0 +1,7 @@
+
+        fn work() -> i64 with suspends { return 1; }
+        fn main() {
+            let a = work();
+            let b = work();
+        }
+        

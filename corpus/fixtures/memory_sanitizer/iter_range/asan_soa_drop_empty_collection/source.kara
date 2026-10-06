@@ -1,0 +1,10 @@
+
+struct Entity { x: f64, y: f64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+}
+fn main() {
+    let entities: Vec[Entity] = Vec.new();
+    println(entities.len());
+}

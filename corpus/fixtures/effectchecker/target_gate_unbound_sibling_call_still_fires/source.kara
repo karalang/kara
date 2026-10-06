@@ -1,0 +1,13 @@
+
+effect resource Display;
+
+fn render() with writes(Display) {
+}
+
+fn untracked() {
+    render();
+}
+
+fn main() {
+    untracked();
+}

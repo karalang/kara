@@ -1,0 +1,145 @@
+// LeetCode #25: Reverse Nodes in k-Group — recursive O(n), O(n/k) stack.
+//
+// Same group reversal as `iterative.kara`, but the group-to-group cursor walk
+// is replaced by structural recursion one *group* at a time:
+//
+//   reverse(n1 → … → nk → rest) = nk → … → n1 → reverse(rest)
+//   reverse(fewer than k nodes) = unchanged
+//
+// Each call probes k nodes ahead; if a full group exists, it recurses on the
+// suffix *first* (so the already-reversed tail is in hand), then reverses its
+// own k nodes onto that tail with the same three-local pointer loop as the
+// iterative form, `prev` seeded with the recursive result instead of the
+// probed suffix. The old group head ends up as the group tail, already linked
+// — no dummy node and no graft step, because the caller (or `main`) receives
+// the new group head as the return value.
+//
+// This is the recursive peer of kata [#24](../24-swap-nodes-in-pairs/)'s
+// `recursive.kara` (which is exactly the k = 2 case, its pair swap unrolled
+// where this loops). One frame per *group* (depth n/k, ≤ n at k = 1 — the
+// deepest recursion in the linked-list run so far at LeetCode's 5000-node
+// bound). `return head` from the probe's None arm exits through a live
+// `match`-in-`while` nest; the shape is not tail-recursive (the call's result
+// seeds the local reversal before the return) — same TCO caveat as katas
+// #21/#24 (kara `docs/deferred.md § Tail-Call Optimization`).
+//
+// `let mut prev = reverse_k_group(probe, k)` consumes the freshly-owned chain
+// the recursive call returns (a +1 transfer), while `prev = Some(node)`
+// re-wraps a pattern-bound alias the constructor must retain — the same two
+// store flavors as kata #24, here alternating k times per frame.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn reverse_k_group(head: Option[ListNode], k: i64) -> Option[ListNode] {
+    // Probe: does a full group of k nodes start at `head`? `probe` ends on
+    // the first node after the group — the recursion argument.
+    let mut probe = head;
+    let mut count = 0;
+    while count < k {
+        match probe {
+            Some(node) => {
+                probe = node.next;
+                count = count + 1;
+            }
+            None => {
+                // Fewer than k remain — the partial suffix stays as-is.
+                return head;
+            }
+        }
+    }
+
+    // Recurse on the rest first, then reverse the local k nodes onto the
+    // already-reversed tail: `prev` seeds with the recursive result, so the
+    // old group head (the new tail) links straight to it.
+    let mut prev = reverse_k_group(probe, k);
+    let mut cur = head;
+    let mut j = 0;
+    while j < k {
+        if let Some(node) = cur {
+            cur = node.next;
+            node.next = prev;
+            prev = Some(node);
+        }
+        j = j + 1;
+    }
+
+    // `prev` is the old k-th node — the new group head.
+    prev
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn report(arr: Slice[i64], k: i64) {
+    let head = from_array(arr);
+    let out = reverse_k_group(head, k);
+    println(to_string(out));
+}
+
+fn main() {
+    // Same nine cases as `iterative.kara` — the two must diff line-for-line.
+    let case1: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case1, 2); // [2, 1, 4, 3, 5]
+
+    let case2: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case2, 3); // [3, 2, 1, 4, 5]
+
+    let case3: Array[i64, 1] = [1];
+    report(case3, 1); // [1]
+
+    let case4: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case4, 1); // [1, 2, 3, 4, 5]
+
+    let case5: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case5, 5); // [5, 4, 3, 2, 1]
+
+    let case6: Array[i64, 6] = [1, 2, 3, 4, 5, 6];
+    report(case6, 2); // [2, 1, 4, 3, 6, 5]
+
+    let case7: Array[i64, 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    report(case7, 4); // [4, 3, 2, 1, 8, 7, 6, 5]
+
+    let case8: Array[i64, 4] = [7, 7, 7, 7];
+    report(case8, 2); // [7, 7, 7, 7]
+
+    let case9: Array[i64, 5] = [1000, 0, 999, 1, 500];
+    report(case9, 3); // [999, 0, 1000, 1, 500]
+}

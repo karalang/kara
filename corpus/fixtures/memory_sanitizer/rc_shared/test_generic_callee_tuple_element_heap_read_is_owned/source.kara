@@ -1,0 +1,15 @@
+
+struct R { id: i64, name: String }
+
+fn firstof[T](x: T) -> (T, i64) { return (x, 1); }
+
+fn main() {
+    let q = firstof(R { id: 1, name: f"n{41}" });
+    println(q.0.name);
+    println(firstof(R { id: 2, name: f"m{2}" }).0.name);
+    let w = firstof(R { id: 3, name: f"p{3}" }).0.name;
+    println(w);
+    println(q.0.id);
+    println(q.1);
+    println(q.0.name);
+}

@@ -1,0 +1,2 @@
+enum Col { S { v: i64 }, E }
+fn main() { let x: Col = Col[i64].S { v: 3 }; println("end") }

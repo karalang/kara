@@ -1,0 +1,7 @@
+lt=true gt=false eq=false ne=true
+add=4 sub=-1 mul=3.75 div=1.6640625
+neg=-1.5 abs=1.5
+min=1.5 max=2.5
+clamp=1.5
+seq=true sne=false
+contains=true missing=false

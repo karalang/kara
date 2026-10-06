@@ -1,0 +1,50 @@
+struct D { n: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+enum E { One(D), Many(Vec[D]) }
+fn count(xs: ref Vec[D]) -> i64 { xs.len() }
+fn one(d: ref D) -> i64 { d.n }
+fn walk(items: ref Vec[E]) -> i64 {
+    let mut total = 0;
+    for item in items.iter() {
+        match item {
+            One(d) => { total += one(d); },
+            Many(xs) => { total += count(xs); },
+        }
+    }
+    total
+}
+fn walk_place(items: ref Vec[E]) -> i64 {
+    let mut total = 0;
+    for item in items {
+        match item {
+            One(d) => { total += one(d); },
+            Many(xs) => { total += count(xs); },
+        }
+    }
+    total
+}
+fn walk_enum(items: ref Vec[E]) -> i64 {
+    let mut total = 0;
+    for (i, item) in items.iter().enumerate() {
+        match item {
+            One(d) => { total += one(d) + i; },
+            Many(xs) => { total += count(xs); },
+        }
+    }
+    total
+}
+fn main() {
+    let items = vec![Many(vec![D { n: 1 }, D { n: 2 }]), One(D { n: 3 })];
+    println(f"walk {walk(items)}");
+    println(f"walk {walk_place(items)}");
+    println(f"walk {walk_enum(items)}");
+    let mut t = 0;
+    for item in items.iter() {
+        match item {
+            One(_) => { t += 1; },
+            Many(xs) => { t += count(xs); },
+        }
+    }
+    println(f"t {t}");
+    println("end");
+}

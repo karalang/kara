@@ -1,0 +1,13 @@
+source = "tests/interpreter/slices.rs::test_vec_extend_from_slice_nested_index_source"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

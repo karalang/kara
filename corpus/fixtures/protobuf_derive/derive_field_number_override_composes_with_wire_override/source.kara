@@ -1,0 +1,12 @@
+
+#[derive(Message)]
+struct M { #[karac::field(9)] #[karac::proto(sint64)] v: i64 }
+
+fn main() {
+    let back = M.decode(M { v: 0 - 5 }.encode());
+    println(back.v);
+    let mut r = ProtoReader.new(M { v: 0 - 5 }.encode());
+    let (f, w) = r.read_tag();
+    println(f);
+    println(w);
+}

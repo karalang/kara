@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_17_32.rs::e2e_conditionally_returned_param_all_return_branches_output"
+dedup_of = ["tests/interpreter/families/b_2026_09_17_32.rs::test_conditionally_returned_param_all_return_branches_output", "tests/memory_sanitizer/families/b_2026_09_17_32.rs::asan_conditionally_returned_param_all_return_branches_clean"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

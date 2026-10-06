@@ -1,0 +1,13 @@
+source = "tests/simd_report.rs::require_simd_rejects_unsupported_element"
+dedup_of = []
+expect = "error:E_REQUIRE_SIMD"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

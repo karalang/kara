@@ -1,0 +1,12 @@
+
+shared struct N { v: i64 }
+
+fn main() {
+    let a: N = N { v: 7 };
+    let mut inner: Vec[Option[N]] = Vec.new();
+    inner.push(Option.Some(a));
+    let mut outer: Vec[Vec[Option[N]]] = Vec.new();
+    outer.push(inner);
+    match outer[0][0] { Some(x) => { println(x.v) } None => { println(0 - 1) } }
+    println(a.v);
+}

@@ -1,0 +1,3 @@
+par struct Pa { n: i64 }
+enum Box2[T] { V(T), N }
+fn main() { let z: Box2[Pa] = Box2.V(Pa { n: 3 }); println("ok"); }

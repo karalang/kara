@@ -1,0 +1,5 @@
+
+fn main() {
+    let cell: OnceLock[i64] = OnceLock.new();
+    let _ = cell.set(1);
+}

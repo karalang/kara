@@ -1,0 +1,14 @@
+
+fn second(v: Vec[i64]) -> i64 {
+    let mut work: Vec[i64] = Vec.new();
+    work.push(0);
+    work = v;
+    work[1]
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7);
+    v.push(9);
+    println(second(v));
+}

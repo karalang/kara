@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut s: String = "";
+    s.push('h');
+    s.push('e');
+    s.push('l');
+    s.push('l');
+    s.push('o');
+    println(s);
+    println(s.len());
+}

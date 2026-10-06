@@ -1,0 +1,63 @@
+// LeetCode 263 — Ugly Number.
+//
+// An ugly number is a POSITIVE integer whose prime factors are all drawn from
+// {2, 3, 5}. Return whether n is ugly.
+//
+// Divide out every 2, then every 3, then every 5, and ask what is left. If the
+// residue is 1 the number was built entirely from those three primes; anything
+// else means some other prime survived.
+//
+// The order does not matter — division is commutative over the factorisation —
+// but the GUARD does. `n <= 0` must be rejected BEFORE the loop, and not because
+// of a definitional nicety about positivity:
+//
+//     0 % 2 == 0   and   0 / 2 == 0
+//
+// so a divide-out loop entered with n = 0 divides forever and never terminates.
+// It is not a wrong answer, it is a hang, and it is the only way this
+// four-line problem can genuinely bite. Negative inputs terminate on their own
+// (-6 -> -3 -> -1, residue -1 != 1) but are still not ugly, since ugliness is
+// defined on positive integers.
+//
+// n = 1 is ugly: the empty product of primes.
+
+fn is_ugly(n: i64) -> bool {
+    if n <= 0 {
+        // Not merely "not ugly" — entering the loop at 0 would never leave it.
+        return false;
+    }
+    let mut m = n;
+    while m % 2 == 0 { m = m / 2; }
+    while m % 3 == 0 { m = m / 3; }
+    while m % 5 == 0 { m = m / 5; }
+    return m == 1;
+}
+
+fn report(n: i64) {
+    if is_ugly(n) {
+        println(f"{n} -> true");
+    } else {
+        println(f"{n} -> false");
+    }
+}
+
+fn main() {
+    report(1);            // empty product
+    report(6);            // 2 * 3
+    report(8);            // 2^3
+    report(14);           // 2 * 7 — the 7 survives
+    report(0);            // the hang case, if the guard is missing
+    report(-6);           // negative: terminates, still false
+    report(-1);
+    report(2);
+    report(3);
+    report(5);
+    report(7);            // a bare non-{2,3,5} prime
+    report(30);           // 2 * 3 * 5
+    report(1024);         // 2^10
+    report(59049);        // 3^10
+    report(9765625);      // 5^10
+    report(2147483647);   // i32 max, a prime
+    report(1259712);      // 2^6 * 3^9 — large and ugly
+    report(1259711);      // one less, and not
+}

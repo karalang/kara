@@ -1,0 +1,28 @@
+
+#[derive(Clone)]
+enum Tok { Word(String), End }
+#[derive(Clone)]
+struct Pair { name: String, n: i64 }
+fn main() {
+    let mut es: Vec[Tok] = Vec.new();
+    let mut ps: Vec[Pair] = Vec.new();
+    let mut i = 0i64;
+    while i < 8 {
+        es.push(Tok.Word(f"w-{i}-payload"));
+        ps.push(Pair { name: f"p-{i}-payload", n: i });
+        i = i + 1;
+    }
+    let mut total = 0i64;
+    let mut j = 0i64;
+    while j < 4000 {
+        let e = es[j & 7i64].clone();            // deep-clone bind of enum element
+        match e { Tok.Word(s) => { total = total + s.bytes().len(); }, Tok.End => {} }
+        let p = ps[j & 7i64].clone();            // deep-clone bind of struct element
+        total = total + p.name.bytes().len() + p.n;
+        j = j + 1i64;
+    }
+    println(total);
+    match es[0i64] { Tok.Word(s) => println(s), Tok.End => println("end") }
+    println(ps[0i64].name);             // both vecs intact after 4000 binds
+    println(es.len());
+}

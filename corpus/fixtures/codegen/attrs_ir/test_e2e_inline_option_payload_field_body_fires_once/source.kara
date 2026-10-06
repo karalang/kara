@@ -1,0 +1,22 @@
+
+struct Small { id: i64 }
+impl Drop for Small { fn drop(mut ref self) { println(f"drop {self.id}") } }
+struct Big { id: i64, name: String }
+impl Drop for Big { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+struct Hsm { o: Option[Small], t: i64 }
+struct Hb { o: Option[Big], t: i64 }
+struct Hr { r: Result[Small, i64], t: i64 }
+fn take(h: Hsm) -> i64 { h.t }
+fn main() {
+    println("inline-field:");
+    { let h = Hsm { o: Option.Some(Small { id: 1 }), t: 10 }; println(h.t); }
+    println("inline-field-byvalue:");
+    { let h = Hsm { o: Option.Some(Small { id: 2 }), t: 20 }; println(take(h)); }
+    println("boxed-field:");
+    { let h = Hb { o: Option.Some(Big { id: 3, name: f"c{3}" }), t: 30 }; println(h.t); }
+    println("result-sibling:");
+    { let h = Hr { r: Result.Ok(Small { id: 4 }), t: 40 }; println(h.t); }
+    println("direct-binding:");
+    { let o = Option.Some(Small { id: 5 }); println(50); }
+    println("end");
+}

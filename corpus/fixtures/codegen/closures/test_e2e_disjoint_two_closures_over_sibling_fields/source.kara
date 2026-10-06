@@ -1,0 +1,8 @@
+
+struct Point { x: i64, y: i64 }
+fn main() {
+    let p = Point { x: 7, y: 11 };
+    let read_x = || p.x;
+    let read_y = || p.y;
+    println(read_x() + read_y());
+}

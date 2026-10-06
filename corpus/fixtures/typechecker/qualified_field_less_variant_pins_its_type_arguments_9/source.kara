@@ -1,0 +1,2 @@
+enum Ho[T] { Full(T), Empty }
+fn main() { let x: Ho[i64] = Ho[i64].Nope; println("end") }

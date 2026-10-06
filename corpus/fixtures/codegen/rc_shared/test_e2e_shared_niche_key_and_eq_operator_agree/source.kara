@@ -1,0 +1,13 @@
+
+#[derive(Hash, Eq, PartialEq)]
+shared struct Node { v: i64, next: Option[Node] }
+fn main() {
+    let leaf = Node { v: 2, next: None };
+    let a = Node { v: 1, next: Some(leaf) };
+    let leaf2 = Node { v: 2, next: None };
+    let b = Node { v: 1, next: Some(leaf2) };
+    let mut m: Map[Node, i64] = Map.new();
+    m.insert(a, 7);
+    println(f"contains={m.contains_key(b)}");
+    println(f"operator={a == b}");
+}

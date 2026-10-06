@@ -1,0 +1,30 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { xs: Vec[Res], tag: i64 }
+fn passthru(v: Vec[Res]) -> Vec[Res] { v }
+fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
+fn consume(v: Vec[Res]) -> i64 { v.len() }
+fn main() {
+    println("a");
+    {
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"a{1}" });
+        let ys = passthru(xs);
+        println(ys.len());
+    }
+    {
+        let mut zs: Vec[Res] = Vec.new();
+        zs.push(Res { id: 2, name: f"b{2}" });
+        let h = mk(zs);
+        println(h.tag);
+    }
+    {
+        let mut ws: Vec[Res] = Vec.new();
+        ws.push(Res { id: 3, name: f"c{3}" });
+        println(consume(ws));
+    }
+    println("end");
+}

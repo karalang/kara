@@ -1,0 +1,140 @@
+// LeetCode #21: Merge Two Sorted Lists — recursive O(m + n).
+//
+// Same merge as `iterative.kara`, but the explicit cursor loop is replaced
+// by structural recursion. The smaller front node is chosen, and *its* `next`
+// is set to the merge of the rest — the recursion does the splicing, so no
+// dummy node and no `tail` cursor are needed:
+//
+//   merge(a, b) = if a.val <= b.val then a ++ merge(a.next, b)
+//                                   else b ++ merge(a, b.next)
+//   merge(None, b) = b      merge(a, None) = a
+//
+// The base cases (one list empty) return the other list whole — already
+// sorted, already linked — which is the recursive analogue of the iterative
+// version's one-move suffix graft. The `<=` tie-break keeps the merge stable,
+// same as the iterative form.
+//
+// This is the direct recursive peer to kata [#2](../2-add-two-numbers/)'s
+// `recursive.kara`: both thread a linked-list fold through `Some(node)` with
+// the recursive call sitting in the node's `next` slot. The recursion depth
+// is m + n (one frame per node consumed), so at LeetCode's ≤ 50-per-list
+// bound the stack is shallow; Kāra does not yet guarantee TCO, and this shape
+// is not tail-recursive anyway (the call's result feeds a field store, then
+// `Some(node)` is returned), so the depth is real but bounded.
+//
+// `n1.next = merge_two_lists(n1.next, l2)` mutates the chosen node's `next`
+// through its `shared struct` (Rc-like) handle; the recursive call returns a
+// freshly-owned chain (a +1 transfer), so the field store consumes that ref
+// without re-retaining — contrast the iterative form's `tail.next = Some(na)`,
+// where the payload is an *alias* and the store must retain.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn merge_two_lists(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    if let Some(n1) = l1 {
+        if let Some(n2) = l2 {
+            // Both non-empty — pick the smaller front, recurse on the rest.
+            // `<=` keeps the merge stable (list-1 node wins a tie).
+            if n1.val <= n2.val {
+                n1.next = merge_two_lists(n1.next, l2);
+                Some(n1)
+            } else {
+                n2.next = merge_two_lists(l1, n2.next);
+                Some(n2)
+            }
+        } else {
+            // `l2` empty — the rest of list 1 is the answer.
+            l1
+        }
+    } else {
+        // `l1` empty — the rest of list 2 is the answer (possibly None).
+        l2
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn report(a: Slice[i64], b: Slice[i64]) {
+    let l1 = from_array(a);
+    let l2 = from_array(b);
+    let out = merge_two_lists(l1, l2);
+    println(to_string(out));
+}
+
+fn main() {
+    // Same nine cases as `iterative.kara` — the two must diff line-for-line.
+    let a1: Array[i64, 3] = [1, 2, 4];
+    let b1: Array[i64, 3] = [1, 3, 4];
+    report(a1, b1); // [1, 1, 2, 3, 4, 4]
+
+    let a2: Array[i64, 0] = [];
+    let b2: Array[i64, 0] = [];
+    report(a2, b2); // []
+
+    let a3: Array[i64, 0] = [];
+    let b3: Array[i64, 1] = [0];
+    report(a3, b3); // [0]
+
+    let a4: Array[i64, 1] = [5];
+    let b4: Array[i64, 0] = [];
+    report(a4, b4); // [5]
+
+    let a5: Array[i64, 3] = [1, 2, 3];
+    let b5: Array[i64, 3] = [4, 5, 6];
+    report(a5, b5); // [1, 2, 3, 4, 5, 6]
+
+    let a6: Array[i64, 3] = [4, 5, 6];
+    let b6: Array[i64, 3] = [1, 2, 3];
+    report(a6, b6); // [1, 2, 3, 4, 5, 6]
+
+    let a7: Array[i64, 3] = [2, 2, 2];
+    let b7: Array[i64, 2] = [2, 2];
+    report(a7, b7); // [2, 2, 2, 2, 2]
+
+    let a8: Array[i64, 1] = [1];
+    let b8: Array[i64, 1] = [2];
+    report(a8, b8); // [1, 2]
+
+    let a9: Array[i64, 3] = [-3, -1, 2];
+    let b9: Array[i64, 3] = [-2, 0, 4];
+    report(a9, b9); // [-3, -2, -1, 0, 2, 4]
+}

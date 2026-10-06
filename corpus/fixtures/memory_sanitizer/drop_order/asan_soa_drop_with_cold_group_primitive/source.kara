@@ -1,0 +1,16 @@
+
+struct Entity { x: f64, y: f64, hp: i64, label: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+    cold { label }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    entities.push(Entity { x: 1.0, y: 2.0, hp: 100, label: 11 });
+    entities.push(Entity { x: 3.0, y: 4.0, hp: 200, label: 22 });
+    entities.push(Entity { x: 5.0, y: 6.0, hp: 300, label: 33 });
+    entities.push(Entity { x: 7.0, y: 8.0, hp: 400, label: 44 });
+    entities.push(Entity { x: 9.0, y: 10.0, hp: 500, label: 55 });
+    println(entities.len());
+}

@@ -1,0 +1,15 @@
+
+fn main() {
+    match c"hello".to_string_slice() {
+        Ok(s) => println(s),
+        Err(_) => println("ERR"),
+    }
+    match c"\xff".to_string_slice() {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            Utf8Error.InvalidByte => println("INVALID"),
+            Utf8Error.IncompleteSequence => println("INCOMPLETE"),
+            Utf8Error.Other(m) => println(m),
+        },
+    }
+}

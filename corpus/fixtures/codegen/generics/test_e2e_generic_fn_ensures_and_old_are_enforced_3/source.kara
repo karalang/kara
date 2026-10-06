@@ -1,0 +1,12 @@
+
+fn grow[T](v: mut ref Vec[T], x: T) -> i64
+    ensures(result) result == old(v.len()) + 1
+where T: Ord
+{
+    v.push(x);
+    v.len()
+}
+fn main() {
+    let mut a: Vec[i64] = [1, 2];
+    println(grow(mut a, 3));
+}

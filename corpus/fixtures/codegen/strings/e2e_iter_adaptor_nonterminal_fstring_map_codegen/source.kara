@@ -1,0 +1,10 @@
+
+fn main() {
+    let v: Vec[i64] = Vec[1i64, 2i64, 3i64];
+    // f-string map then filter (identity downstream)
+    let a: Vec[String] = v.iter().map(|x| f"n{x}").filter(|s| s.len() > 0i64).collect();
+    println(f"{a.len()} {a[0i64]} {a[2i64]}");
+    // f-string map then element-type-changing map
+    let b: Vec[i64] = v.iter().map(|x| f"num-{x}").map(|s| s.len()).collect();
+    println(f"{b.len()} {b[0i64]} {b[2i64]}");
+}

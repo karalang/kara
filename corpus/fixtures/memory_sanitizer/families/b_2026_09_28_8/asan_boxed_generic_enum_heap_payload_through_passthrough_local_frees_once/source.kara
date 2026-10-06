@@ -1,0 +1,20 @@
+enum G[T] { Y(T), N }
+fn glen[T](g: G[T]) -> i64 { return 1 }
+fn gid[T](g: G[T]) -> G[T] { return g }
+fn gvia[T](g: G[T]) -> i64 { let h = gid(g); return glen(h) }
+fn gviac[T](g: G[T], c: bool) -> i64 { let h = gid(g); if c { return glen(h) } println("keep"); return 0 }
+fn gvia2[T](g: G[T]) -> i64 { let h = gid(g); let k = gid(h); return glen(k) }
+fn main() {
+    let s: G[String] = G.Y(f"ffffffffffff51-heap-string-longer");
+    println(f"s {gvia(s)}");
+    let a: G[Array[String, 2]] = G.Y([f"qqqqqqqqqqqqqqqqqqqqqqqqqqqqq4", f"rrrrrrrrrrrrrrrrrrrrrrrrrrrr5"]);
+    println(f"a {gvia(a)}");
+    let c1: G[Array[String, 2]] = G.Y([f"qqqqqqqqqqqqqqqqqqqqqqqqqqqqq8", f"rrrrrrrrrrrrrrrrrrrrrrrrrrrr9"]);
+    println(f"c1 {gviac(c1, false)}");
+    let c2: G[Array[String, 2]] = G.Y([f"qqqqqqqqqqqqqqqqqqqqqqqqqqqq10", f"rrrrrrrrrrrrrrrrrrrrrrrrrrr11"]);
+    println(f"c2 {gviac(c2, true)}");
+    let v0: Vec[String] = [f"aaaaaaaaaaaaaaaaaaaaaaaaaaaaa1", f"bbbbbbbbbbbbbbbbbbbbbbbbbbbbb2"];
+    let v: G[Vec[String]] = G.Y(v0);
+    println(f"v {gvia2(v)}");
+    println("end")
+}

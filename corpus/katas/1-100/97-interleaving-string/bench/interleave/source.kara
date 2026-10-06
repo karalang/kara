@@ -1,0 +1,43 @@
+// Benchmark workload for LeetCode #97 — 2D interleaving-string DP.
+// K = 400,000 reps of the O(|s1|*|s2|) DP over a data-dependent case (idx = acc%12,
+// seeded by the running hash, so the compiler cannot hoist/CSE the per-rep result),
+// folding each verdict into a rolling polynomial hash. 12 pre-generated cases
+// (|s1|,|s2| ~ 18..24). Each mirror fills a fresh Vec[bool]/array table per call.
+fn is_interleave(s1: ref String, s2: ref String, s3: ref String) -> bool {
+    let a = s1.bytes(); let b = s2.bytes(); let c = s3.bytes();
+    let n = a.len(); let m = b.len();
+    if n + m != c.len() { return false; }
+    let stride = m + 1;
+    let mut dp: Vec[bool] = Vec.filled((n + 1) * stride, false);
+    dp[0] = true;
+    let mut j = 1;
+    while j <= m { dp[j] = dp[j - 1] and (b[j - 1] == c[j - 1]); j = j + 1; }
+    let mut i = 1;
+    while i <= n {
+        dp[i * stride] = dp[(i - 1) * stride] and (a[i - 1] == c[i - 1]);
+        let mut jj = 1;
+        while jj <= m {
+            let up = dp[(i - 1) * stride + jj] and (a[i - 1] == c[i + jj - 1]);
+            let left = dp[i * stride + jj - 1] and (b[jj - 1] == c[i + jj - 1]);
+            dp[i * stride + jj] = up or left;
+            jj = jj + 1;
+        }
+        i = i + 1;
+    }
+    dp[n * stride + m]
+}
+fn main() {
+    let s1s = ["baacccbabbacacabbbcabbcc", "abcababacbbacbcbccbcac", "abbaabbabacbcaaccbbcbcca", "bacaccbbaaacbaaaabaaaa", "cbabaabcacccbccaabbbc", "bacaacaccaccacabcbbcccb", "aaaccbbbcbaabbbcabbbbabc", "abbabbabcbcccaaacabbccbb", "caccbacaaacabbbcccb", "cccbacbaacbbbcbaaccbb", "aacbcaccaabbaababcccbc", "bbacbaabbabbaabccbacccaa"];
+    let s2s = ["baabaabbbcaccbcaaaaa", "cacccaaaccaaacccbcacabc", "bbacbacccccbaabccaacc", "ccbbaabcaacaccccbcccaca", "abaaabbbbccbaaccca", "babaaccaccbaaaacbcccc", "bbacaaaabaabbabacbcb", "ccbbabaaabaccababacacbbc", "bbccaabcbabcbcacacbccacc", "ccabccacabbbaabacbacb", "babcaabacabcbbcacab", "abbaacaabccbcaababbbbbc"];
+    let s3s = ["baabcaabcacabbbabbcaccbacabccaaaaaabbbcabbcc", "cabacccacbaaabaccacaaabbaccbccbcbccacbcacabcc", "bbaabbaabcbabcacbccaccbbcaaabacccaaccbbcbccca", "baccacccbbbaabaaabccabaacaccccbaacabaaaaccaca", "acbababaaabbbbcacbcbaacccabccccacaabbbc", "babbaacaaaccaccacccabccacabcabbcaccbaacbcccc", "aaabbacacaacabbbaabbbacbabacbcbabbbcabbbbabc", "cabbacbbbabbaaabaacbcbcacccabaaabacacbcbabcbccbb", "bcbacccacababcacbabcaabccaaacabbcbcccccbacc", "cccccbaabcbcacacacbabbbbcbbaabacbacbaaccbb", "aabcabbccaaacbaccabacabbbcbacaabababcccbc", "abbbbaaaccabaabcacbbbabcbaabaabbabbbcbcbaccccaa"];
+    let mut acc = 1;
+    let mut rep = 0;
+    while rep < 400000 {
+        let idx = acc % 12;
+        let ok = is_interleave(s1s[idx], s2s[idx], s3s[idx]);
+        let bit = if ok { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

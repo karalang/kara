@@ -1,0 +1,7 @@
+
+fn main() {
+    let xs: Vec[i64] = (0..=100).take(3).collect();
+    for x in xs {
+        println(x);
+    }
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/patterns.rs::test_e2e_borrowed_get_payload_destructure_matches_interp"
+dedup_of = ["tests/memory_sanitizer/patterns.rs::asan_borrowed_get_payload_destructure_reads_its_fields"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

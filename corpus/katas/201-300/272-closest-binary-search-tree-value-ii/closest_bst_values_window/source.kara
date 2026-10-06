@@ -1,0 +1,107 @@
+// LeetCode 272 — the sorted-array window.
+//
+// Flatten the tree in-order into a sorted array, binary-search the target's
+// insertion point, then grow a window outward k times. O(n) to flatten, O(log n)
+// to place the window, O(k) to grow it — dominated by the flatten, so O(n) all
+// told, against the ★ two-stack merge's O(h + k).
+//
+// WHY IT IS WORTH KEEPING despite being asymptotically worse: it decides
+// membership by INDEX ARITHMETIC on a sorted array, not by walking two tree
+// iterators. The answer is the contiguous range `(lo, hi)` — every one of the k
+// closest values is adjacent in sorted order, which is the fact the ★ merge
+// exploits implicitly and this solver states outright. Two different reasons to
+// believe the same output.
+//
+// THE TIE RULE, again decided by structure rather than by comparing values:
+// `lo` is always below `hi`, so on equal distance taking `lo` takes the smaller
+// value. Same `<=` as the merge, for the same reason.
+//
+// THE EDGES ARE THE BUG SURFACE HERE. `lo` runs off the front and `hi` off the
+// back, and the guard has to come BEFORE the distance comparison — a distance
+// read from an out-of-range index is not a smaller answer, it is a crash or a
+// neighbour's value. When k exceeds the node count the window simply stops at
+// both ends, which is why the loop breaks on `lo < 0 and hi >= n` rather than
+// counting to k.
+
+fn inorder(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+           root: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut cur = root;
+    while cur >= 0 or stack.len() > 0 {
+        while cur >= 0 {
+            stack.push(cur);
+            cur = left[cur];
+        }
+        let node = stack[stack.len() - 1];
+        stack.pop();
+        out.push(val[node]);
+        cur = right[node];
+    }
+    return out;
+}
+
+fn closest_k(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+             root: i64, target: f64, k: i64) -> Vec[i64] {
+    let sorted = inorder(val, left, right, root);
+    let n = sorted.len();
+
+    // First index whose value is >= target. `hi` starts there and `lo` just
+    // below it, so the window is the empty gap the target falls into.
+    let mut a = 0;
+    let mut b = n;
+    while a < b {
+        let mid = a + (b - a) / 2;
+        if (sorted[mid] as f64) < target { a = mid + 1; } else { b = mid; }
+    }
+    let mut hi = a;
+    let mut lo = a - 1;
+
+    let mut taken = 0;
+    while taken < k {
+        if lo < 0 and hi >= n {
+            taken = k;                          // fewer than k values exist
+        } else {
+            let mut take_lo = hi >= n;
+            if lo >= 0 and hi < n {
+                let dl = (sorted[lo] as f64 - target).abs();
+                let dh = (sorted[hi] as f64 - target).abs();
+                take_lo = dl <= dh;             // tie -> `lo`, the smaller value
+            }
+            if take_lo { lo = lo - 1; } else { hi = hi + 1; }
+            taken = taken + 1;
+        }
+    }
+
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = lo + 1;
+    while i < hi {
+        out.push(sorted[i]);
+        i = i + 1;
+    }
+    return out;
+}
+
+fn show(xs: ref Vec[i64]) -> String {
+    let mut s = "[";
+    let mut i = 0;
+    while i < xs.len() {
+        if i > 0 { s = s + ","; }
+        s = s + f"{xs[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    let val: Vec[i64] = [4, 2, 5, 1, 3];
+    let left: Vec[i64] = [1, 3, -1, -1, -1];
+    let right: Vec[i64] = [2, 4, -1, -1, -1];
+
+    println(show(closest_k(val, left, right, 0, 3.714286, 2)));
+    println(show(closest_k(val, left, right, 0, 3.714286, 4)));
+    println(show(closest_k(val, left, right, 0, 2.5, 1)));
+    println(show(closest_k(val, left, right, 0, 2.5, 3)));
+    println(show(closest_k(val, left, right, 0, -10.0, 3)));
+    println(show(closest_k(val, left, right, 0, 3.5, 9)));
+}

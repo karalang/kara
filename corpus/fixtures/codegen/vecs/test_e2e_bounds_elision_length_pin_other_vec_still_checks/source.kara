@@ -1,0 +1,14 @@
+
+fn go(n: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j < n { dp.push(1i64); j = j + 1i64; }
+    let mut short: Vec[i64] = Vec.new();
+    short.push(1i64);
+    short.push(2i64);
+    let mut acc = 0i64;
+    let mut c = 0i64;
+    while c < n { acc = acc + short[c]; c = c + 1i64; }
+    acc
+}
+fn main() { println(go(6i64)); }

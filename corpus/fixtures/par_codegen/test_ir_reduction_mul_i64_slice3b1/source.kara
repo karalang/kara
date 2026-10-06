@@ -1,0 +1,9 @@
+
+fn main() {
+    let k_iters: i64 = 18i64;
+    let mut prod: i64 = 1i64;
+    for k in 0i64..k_iters {
+        prod = prod * (k + 1i64);
+    }
+    println(prod);
+}

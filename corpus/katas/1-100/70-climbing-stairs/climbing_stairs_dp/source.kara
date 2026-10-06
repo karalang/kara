@@ -1,0 +1,70 @@
+// LeetCode #70: Climbing Stairs — full DP table, O(n) time and space.
+//
+// The textbook form of the same recurrence the ★
+// ([`climbing_stairs.kara`](climbing_stairs.kara)) rolls onto two scalars. Here
+// every count is materialised in a `Vec[i64]`: `dp[i]` is the number of ways to
+// reach step `i`, filled from
+//
+//     dp[i] = dp[i-1] + dp[i-2]
+//
+// with `dp[1] = 1`, `dp[2] = 2`. The answer is `dp[n]`. The array carries no
+// information the rolling ★'s two scalars don't — every `dp[i]` past `i-2` is
+// dead once used — so this trades O(n) space for the O(1) the ★ keeps; it is here
+// as the space optimisation shown as a diff and an independent cross-check, the
+// same 1-D DP shape as kata [#62](../62-unique-paths/)'s rolling row before it is
+// collapsed. `dp[0]` is seeded to 1 (an empty climb) so the `i = 3` loop's first
+// read of `dp[1] + dp[0]` is unnecessary — the loop starts at 3 and only ever
+// reads the two filled predecessors.
+//
+// n ≤ 45, so every `dp[i] ≤ ways(45) = 1_836_311_903` fits i64 with room to
+// spare.
+
+fn climb(n: i64) -> i64 {
+    if n <= 2 {
+        return n;
+    }
+    // dp[i] = ways to reach step i. Seed the two base cases, fill the rest.
+    let mut dp: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i <= n {
+        dp.push(0);
+        i = i + 1;
+    }
+    dp[1] = 1;
+    dp[2] = 2;
+
+    let mut j = 3;
+    while j <= n {
+        dp[j] = dp[j - 1] + dp[j - 2];
+        j = j + 1;
+    }
+
+    dp[n]
+}
+
+// ---- test harness (shared verbatim with climbing_stairs.kara) ----------------
+
+fn report(n: i64, s: mut ref String) {
+    let ways = climb(n);
+    println(f"climb({n}) = {ways}");
+    s.push(' ');
+    s.push_str(f"{ways}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report(1, mut s);            // 1
+    report(2, mut s);            // 2
+    report(3, mut s);            // 3
+    report(4, mut s);            // 5
+    report(5, mut s);            // 8
+    report(6, mut s);            // 13
+    report(10, mut s);          // 89
+    report(15, mut s);          // 987
+    report(20, mut s);          // 10946
+    report(30, mut s);          // 1346269
+    report(45, mut s);          // 1836311903
+
+    println(s);
+}

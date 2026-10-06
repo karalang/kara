@@ -1,0 +1,8 @@
+
+distinct type Even = i64 where self % 2 == 0;
+fn mk(n: i64) -> Even { Even(n) }
+fn main() {
+    let e = mk(7);
+    println(e.raw());
+    println(42);
+}

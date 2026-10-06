@@ -1,0 +1,36 @@
+
+struct G { id: i64, s: String }
+impl Drop for G {
+    fn drop(mut ref self) {
+        if self.id < 0i64 { println(self.id); }
+    }
+}
+fn main() {
+    let mut it = 0i64;
+    while it < 200i64 {
+        let mut v: Vec[G] = Vec.new();
+        v.push(G { id: it, s: f"one-{it}" });
+        v.push(G { id: it + 1i64, s: f"two-{it}" });
+        while let Option.Some(r) = v.pop() {
+            let _ = r.s.len();
+        }
+        let mut w: Vec[G] = Vec.new();
+        w.push(G { id: it, s: f"three-{it}" });
+        if let Option.Some(r) = w.pop() {
+            let _ = r.s.len();
+        }
+        let mut u: Vec[G] = Vec.new();
+        u.push(G { id: it, s: f"four-{it}" });
+        match u.pop() {
+            Option.Some(r) => { let _ = r.s.len(); }
+            Option.None => {}
+        }
+        let mut m: Map[i64, G] = Map.new();
+        m.insert(1i64, G { id: it, s: f"five-{it}" });
+        if let Option.Some(r) = m.get(1i64) {
+            let _ = r.s.len();
+        }
+        it = it + 1i64;
+    }
+    println("done");
+}

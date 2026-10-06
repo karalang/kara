@@ -1,0 +1,235 @@
+// Differential and property check for LeetCode #325.
+//
+// Four implementations of the same function, run on the same random inputs:
+//
+//   by_entry     Map, `get` then `entry(p).or_insert(i)`      (max_sub_len.kara)
+//   by_contains  Map, `contains_key` / index / `insert`       (max_sub_len_contains.kara)
+//   by_sorted    SortedMap, `if let` and insert-then-restore  (max_sub_len_sorted.kara)
+//   brute        every start, every end                       (max_sub_len_brute.kara)
+//
+// plus `span`, which returns WHERE the longest subarray is, as
+// Option[(start, len)], so the answer can be checked against the input
+// directly rather than only against another implementation.
+//
+// Properties, over every round:
+//   P1  all four lengths agree
+//   P2  0 <= length <= n
+//   P3  span agrees with the length (None exactly when the length is 0)
+//   P4  the span's values really sum to k
+//   P5  reversing the input does not change the length
+//   P6  negating every value and k does not change the length
+//   P7  k = the whole array's sum gives length n
+//   P8  appending a 0 never shortens the answer
+
+fn by_entry(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut first: Map[i64, i64] = Map.new();
+    first.insert(0, -1);
+    let mut p = 0;
+    let mut best = 0;
+    for i in 0..nums.len() {
+        p += nums[i];
+        match first.get(p - k) {
+            Some(j) => {
+                if i - j > best {
+                    best = i - j;
+                }
+            }
+            None => {}
+        }
+        first.entry(p).or_insert(i);
+    }
+    return best;
+}
+
+fn by_contains(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut first: Map[i64, i64] = Map.new();
+    first.insert(0, -1);
+    let mut p = 0;
+    let mut best = 0;
+    for i in 0..nums.len() {
+        p += nums[i];
+        if first.contains_key(p - k) {
+            let j = first[p - k];
+            if i - j > best {
+                best = i - j;
+            }
+        }
+        if not first.contains_key(p) {
+            first.insert(p, i);
+        }
+    }
+    return best;
+}
+
+fn by_sorted(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut first: SortedMap[i64, i64] = SortedMap.new();
+    first.insert(0, -1);
+    let mut p = 0;
+    let mut best = 0;
+    for i in 0..nums.len() {
+        p += nums[i];
+        if let Some(j) = first.get(p - k) {
+            best = best.max(i - j);
+        }
+        if let Some(earlier) = first.insert(p, i) {
+            first.insert(p, earlier);
+        }
+    }
+    return best;
+}
+
+fn brute(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    for j in 0..n {
+        let mut s = 0;
+        for i in j..n {
+            s += nums[i];
+            if s == k and i - j + 1 > best {
+                best = i - j + 1;
+            }
+        }
+    }
+    return best;
+}
+
+// Where the longest subarray is: (start, length), or None.
+fn span(nums: ref Vec[i64], k: i64) -> Option[(i64, i64)] {
+    let mut first: Map[i64, i64] = Map.new();
+    first.insert(0, -1);
+    let mut p = 0;
+    let mut best: Option[(i64, i64)] = None;
+    for i in 0..nums.len() {
+        p += nums[i];
+        if let Some(j) = first.get(p - k) {
+            let len = i - j;
+            let longer = match best {
+                Some((_, l)) => len > l,
+                None => true,
+            };
+            if longer {
+                best = Some((j + 1, len));
+            }
+        }
+        first.entry(p).or_insert(i);
+    }
+    return best;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn random_input(n: i64, r: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        a.push(next(seed) % (2 * r + 1) - r);
+    }
+    return a;
+}
+
+fn reversed(a: ref Vec[i64]) -> Vec[i64] {
+    let mut b = a.clone();
+    b.reverse();
+    return b;
+}
+
+fn negated(a: ref Vec[i64]) -> Vec[i64] {
+    let mut b: Vec[i64] = Vec.new();
+    for x in a {
+        b.push(-x);
+    }
+    return b;
+}
+
+fn total(a: ref Vec[i64]) -> i64 {
+    let mut s = 0;
+    for x in a {
+        s += x;
+    }
+    return s;
+}
+
+struct Tally {
+    rounds: i64,
+    found: i64,
+    longest: i64,
+    failures: Vec[String],
+}
+
+impl Tally {
+    fn check(mut ref self, ok: bool, what: String) {
+        if not ok and self.failures.len() < 10 {
+            self.failures.push(what);
+        }
+    }
+}
+
+fn round(nums: ref Vec[i64], k: i64, t: mut ref Tally) {
+    let n = nums.len();
+    let a = by_entry(nums, k);
+    let b = by_contains(nums, k);
+    let c = by_sorted(nums, k);
+    let d = brute(nums, k);
+    t.rounds += 1;
+    if a > 0 {
+        t.found += 1;
+    }
+    t.longest = t.longest.max(a);
+    let ctx = f"n={n} k={k}";
+
+    t.check(a == b and b == c and c == d, f"P1 {ctx}: {a} {b} {c} {d}");
+    t.check(a >= 0 and a <= n, f"P2 {ctx}: {a}");
+
+    match span(nums, k) {
+        Some((start, len)) => {
+            t.check(len == a, f"P3 {ctx}: span len {len} vs {a}");
+            let mut s = 0;
+            for i in start..start + len {
+                s += nums[i];
+            }
+            t.check(s == k, f"P4 {ctx}: span ({start}, {len}) sums to {s}");
+        }
+        None => t.check(a == 0, f"P3 {ctx}: no span but length {a}"),
+    }
+
+    t.check(by_entry(reversed(nums), k) == a, f"P5 {ctx}");
+    t.check(by_entry(negated(nums), -k) == a, f"P6 {ctx}");
+    t.check(by_entry(nums, total(nums)) == n, f"P7 {ctx}");
+
+    let mut longer = nums.clone();
+    longer.push(0);
+    t.check(by_entry(longer, k) >= a, f"P8 {ctx}");
+}
+
+fn main() {
+    let mut t = Tally { rounds: 0, found: 0, longest: 0, failures: Vec.new() };
+    let mut seed = 32500;
+
+    // Edge cases first.
+    round([], 0, mut t);
+    round([], 5, mut t);
+    round([0], 0, mut t);
+    round([1, -1, 1, -1, 1, -1], 0, mut t);
+    round([10000, -10000, 10000, -10000, 10000], 10000, mut t);
+    round([-10000, -10000, -10000], -30000, mut t);
+
+    for _ in 0..1000 {
+        let n = next(mut seed) % 40;
+        let r = 1 + next(mut seed) % 6;
+        let a = random_input(n, r, mut seed);
+        // Mostly small k, so that most rounds find something.
+        let k = next(mut seed) % (4 * r + 1) - 2 * r;
+        round(a, k, mut t);
+    }
+
+    println(f"rounds {t.rounds}, found {t.found}, longest {t.longest}");
+    if t.failures.is_empty() {
+        println("all properties hold");
+    } else {
+        for f in t.failures {
+            println(f"FAIL {f}");
+        }
+    }
+}

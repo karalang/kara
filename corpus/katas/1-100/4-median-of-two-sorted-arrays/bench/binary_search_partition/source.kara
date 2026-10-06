@@ -1,0 +1,115 @@
+// Benchmark workload — binary-search-partition O(log min(m, n)) Median of
+// Two Sorted Arrays.
+//
+// M = N = 1_000_000, R = 1_000 rotation period, K = 10_000_000 outer iters.
+//
+// A single middle_pair call on M-element inputs does only ~log2(M) ≈ 20
+// partition cross-checks — ~hundred-ns of work — so without K in the
+// millions and per-iter input variation the bench dips below hyperfine's
+// measurement floor (or, worse, the optimizer hoists the call out of the
+// loop because the inputs are loop-invariant).
+//
+// Per-iter input variation is what the rotation buys: each outer iter k
+// picks `off = k % R` and runs `middle_pair_off(base_a, off, M, base_b, off,
+// N)`. The result depends on `off`, so the same-call hoisting CSE cannot
+// lift it; the compiler would have to unroll the K/R cycle at minimum (R
+// distinct calls). The algorithmic shape stays identical to a fixed-input
+// call — each iter still does a log-depth binary search over M+N elements.
+//
+// Inputs are perfectly-alternating sorted prefixes:
+//   base_a = [0, 2, 4, ..., 2(M+R-1)]      (evens, length M + R)
+//   base_b = [1, 3, 5, ..., 2(N+R-1)+1]    (odds,  length N + R)
+// For offset `off`, the merged sub-sequence base_a[off..off+M] ∪
+// base_b[off..off+N] is exactly [2*off, 2*off+1, ..., 2*off+2M-1] of length
+// 2M (even). Median: lower = 2*off + M - 1, upper = 2*off + M. Per-iter
+// contribution to the sink: 4*off + (2M - 1).
+//
+// Sink: sum over k in [0, K) of (lower + upper). With K = R · cycles
+// = 1000 · 10_000 = 10_000_000, each off ∈ [0, R) appears exactly `cycles`
+// times, so:
+//   sink = cycles · sum_{off=0..R-1} (4*off + 2M - 1)
+//        = cycles · (4 · R(R-1)/2  +  R · (2M - 1))
+//        = 10_000· (4 · 499_500   +  1000 · 1_999_999)
+//        = 10_000· (1_998_000     +  1_999_999_000)
+//        = 10_000· 2_001_997_000
+//        = 20_019_970_000_000
+//
+// Built via `karac build`; pairs with bench/binary_search_partition.py and
+// bench/binary_search_partition.rs for the codegen-vs-Python-vs-Rust harness
+// in bench.sh. Output (the sink integer) must match line-for-line across all
+// three so the bench can't be "fast but wrong".
+
+fn min_i64(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+fn max_i64(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+// Offset+length variant of middle_pair — same algorithm as the kata file's
+// `middle_pair`, but takes explicit `(a_off, a_len)` / `(b_off, b_len)`
+// instead of relying on the slice's own bounds. This lets the bench loop
+// vary the effective inputs without sub-slicing on every iter, which would
+// be zero-cost in Kāra/Rust but O(len) on Python's `list`. All three
+// languages here use the offset form so the per-iter work is comparable.
+fn middle_pair_off(a: Slice[i64], a_off: i64, a_len: i64,
+                   b: Slice[i64], b_off: i64, b_len: i64) -> Array[i64, 2] {
+    if a_len > b_len {
+        return middle_pair_off(b, b_off, b_len, a, a_off, a_len);
+    }
+    let half = (a_len + b_len + 1) / 2;
+    let mut lo = 0;
+    let mut hi = a_len;
+    while lo <= hi {
+        let i = (lo + hi) / 2;
+        let j = half - i;
+        let left_a  = if i > 0     { a[a_off + i - 1] } else { i64.MIN };
+        let right_a = if i < a_len { a[a_off + i]     } else { i64.MAX };
+        let left_b  = if j > 0     { b[b_off + j - 1] } else { i64.MIN };
+        let right_b = if j < b_len { b[b_off + j]     } else { i64.MAX };
+        if left_a > right_b {
+            hi = i - 1;
+        } else if left_b > right_a {
+            lo = i + 1;
+        } else {
+            let lower = max_i64(left_a, left_b);
+            if (a_len + b_len) % 2 == 1 {
+                return [lower, lower];
+            }
+            let upper = min_i64(right_a, right_b);
+            return [lower, upper];
+        }
+    }
+    [0, 0]
+}
+
+fn main() {
+    let M = 1000000;
+    let N = 1000000;
+    let R = 1000;
+    let K = 10000000;
+
+    let mut base_a: Vec[i64] = Vec.filled(M + R, 0);
+    let mut p = 0;
+    while p < M + R {
+        base_a[p] = 2 * p;
+        p = p + 1;
+    }
+
+    let mut base_b: Vec[i64] = Vec.filled(N + R, 0);
+    p = 0;
+    while p < N + R {
+        base_b[p] = 2 * p + 1;
+        p = p + 1;
+    }
+
+    let mut sum = 0;
+    let mut k = 0;
+    while k < K {
+        let off = k % R;
+        let pair = middle_pair_off(base_a, off, M, base_b, off, N);
+        sum = sum + pair[0] + pair[1];
+        k = k + 1;
+    }
+    println(sum);
+}

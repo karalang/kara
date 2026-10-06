@@ -1,0 +1,19 @@
+
+struct Bag { items: Vec[i64] }
+impl Bag {
+    fn ident(self) -> Bag { self }
+    fn count(ref self) -> i64 { self.items.len() }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let mut b = Bag { items: Vec.new() };
+        b.items.push(i);
+        b.items.push(i + 1);
+        let b2 = b.ident();
+        total = total + b2.count();
+        i = i + 1;
+    }
+    println(total);
+}

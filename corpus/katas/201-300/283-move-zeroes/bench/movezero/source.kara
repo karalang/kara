@@ -1,0 +1,74 @@
+// LeetCode 283 bench kernel — the write cursor over one large array, many times.
+//
+// BUILD ONCE, PUNCH MANY TIMES, AND THE REFRESH IS LOAD-BEARING — the same trap
+// kata 280 documented. This is an in-place reorder, so a second pass over an
+// already-moved array finds the zeros already at the end and does almost
+// nothing. Each round must copy from the source first, and that copy sits inside
+// the timed region because it is what makes round two cost the same as round one.
+//
+// THE ZERO DENSITY IS THE INTERESTING KNOB, not the length. The write cursor
+// stores at every position regardless, but the swap variant's cost depends
+// entirely on how early the first zero appears — so the array is ~50% zeros,
+// which is where the two diverge most. An array of mostly non-zeros would make
+// the swap lane look free and measure nothing.
+//
+// THE SINK IS POSITION-WEIGHTED over the result, plus the write count. A plain
+// sum would be invariant under every possible bug: the pass only PERMUTES, so
+// the total is fixed no matter how wrong the order comes out.
+//
+// NO PARALLEL LANE. The rounds are dependent by construction (each refreshes
+// from the same source and folds into the sink in order), and the pass itself is
+// a sequential scan whose cursor position depends on every earlier element.
+// Kata 282 is where a fan-out was genuinely available and I had wrongly skipped
+// it; here the dependency is in the algorithm, as in 279 through 281.
+
+fn move_zeroes(a: mut ref Vec[i64], stores: mut ref i64) {
+    let mut write = 0;
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != 0 {
+            a[write] = a[i];
+            stores = stores + 1;
+            write = write + 1;
+        }
+        i = i + 1;
+    }
+    while write < a.len() {
+        a[write] = 0;
+        stores = stores + 1;
+        write = write + 1;
+    }
+}
+
+fn main() {
+    let n = 2000000;
+    let rounds = 60;
+
+    let mut src: Vec[i64] = Vec.new();
+    let mut seed = 20260821;
+    let mut i = 0;
+    while i < n {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        // about half zeros — the density where the cursor and swap forms diverge
+        if seed % 2 == 0 { src.push(0); } else { src.push(seed % 100003); }
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut total_stores = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut work: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < n { work.push(src[k]); k = k + 1; }
+        let mut st = 0;
+        move_zeroes(mut work, mut st);
+        total_stores = total_stores + st;
+        let mut h = 0;
+        let mut j = 0;
+        while j < n { h = (h * 31 + work[j]) % 1000000007; j = j + 1; }
+        sink = (sink + h) % 1000000007;
+        r = r + 1;
+    }
+    println(f"{sink} {total_stores}");
+}

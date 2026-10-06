@@ -1,0 +1,7 @@
+
+fn f(a: f32, b: f32, c: f32, d: f32) -> i32 {
+    let v: Vector[f32, 4] = Vector[f32, 4](a, b, c, d);
+    let bits = v.to_bits();
+    bits[0]
+}
+fn main() { println(f(1.0f32, 2.0f32, 3.0f32, 4.0f32)); }

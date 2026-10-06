@@ -1,0 +1,40 @@
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Deep-nested object: pair keys, element strings, child array,
+        // child object — everything below the first level.
+        match Json.parse("{\"list\":[\"alpha-string-long-enough\",{\"k\":\"nested-value-string\"},[1,2,3]],\"name\":\"outer-name-string-payload\"}") {
+            Result.Ok(j) => {
+                let s = j.stringify();
+                n = n + s.len();
+            }
+            Result.Err(e) => { n = n + 100000; }
+        }
+        // Destructure MOVE-OUT: the arm takes the Vec; the source's walker
+        // must skip the wiped node (no double-free), and the bound Vec's own
+        // cleanup frees the buffer once.
+        match Json.parse("[10, 20]") {
+            Result.Ok(j) => {
+                match j {
+                    Json.Array(xs) => { n = n + xs.len(); }
+                    Json.Null => { n = n + 7; }
+                    Json.Bool(b) => { n = n + 7; }
+                    Json.Number(f) => { n = n + 7; }
+                    Json.Int(v) => { n = n + 7; }
+                    Json.String(s2) => { n = n + s2.len(); }
+                    Json.Object(kv) => { n = n + kv.len(); }
+                }
+            }
+            Result.Err(e) => { n = n + 100000; }
+        }
+        // Unused payload — the registration alone must free it.
+        match Json.parse("\"disposable-string-payload\"") {
+            Result.Ok(j) => { n = n + 1; }
+            Result.Err(e) => { n = n + 100000; }
+        }
+        i = i + 1;
+    }
+    println(n);
+}

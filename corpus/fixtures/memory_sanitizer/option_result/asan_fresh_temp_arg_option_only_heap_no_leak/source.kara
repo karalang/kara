@@ -1,0 +1,20 @@
+
+struct Inner { s: String }
+struct A { value: Option[Inner] }
+fn mk(k: i64) -> A {
+    let mut b: String = String.new();
+    b.push_str("payload-");
+    b.push_str(k.to_string());
+    b.push_str("-tail-padding-to-force-heap");
+    A { value: Some(Inner { s: b }) }
+}
+fn use_a(a: A) -> i64 {
+    match a.value { Some(w) => { if w.s.starts_with("payload") { 1 } else { 2 } } None => 0 }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut t = 0;
+    let mut i = 0;
+    while i < 200 { t = t + use_a(mk(i + n)); i = i + 1; }
+    println(t);
+}

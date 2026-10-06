@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_02_57.rs::test_callee_names_resolve_lexically_not_through_the_caller"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

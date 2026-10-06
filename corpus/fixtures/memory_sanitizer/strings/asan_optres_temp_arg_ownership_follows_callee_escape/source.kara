@@ -1,0 +1,26 @@
+
+struct Bag { xs: Vec[Option[String]] }
+struct Mk { n: i64 }
+impl Bag {
+    fn wrap(x: Option[String]) -> Bag { let mut v: Vec[Option[String]] = Vec.new(); v.push(x); return Bag { xs: v }; }
+}
+impl Mk {
+    fn wrap(ref self, x: Option[String]) -> Bag { let mut v: Vec[Option[String]] = Vec.new(); v.push(x); return Bag { xs: v }; }
+}
+fn wrapf(x: Option[String]) -> Bag { let mut v: Vec[Option[String]] = Vec.new(); v.push(x); return Bag { xs: v }; }
+fn pass(x: Option[Vec[String]]) -> Option[Vec[String]] { return x; }
+fn mks(n: i64) -> String { return f"payloadpayload{n}"; }
+fn main() {
+    let m = Mk { n: 1 };
+    let mut i = 0;
+    while i < 3 {
+        println(f"{Bag.wrap(Some(mks(i))).xs.len()}");
+        println(f"{m.wrap(Some(mks(i))).xs.len()}");
+        println(f"{wrapf(Some(mks(i))).xs.len()}");
+        let mut vs: Vec[String] = Vec.new();
+        vs.push(f"payloadpayload{i}");
+        println(f"{pass(Some(vs))}");
+        i = i + 1;
+    }
+    println("done");
+}

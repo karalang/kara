@@ -1,0 +1,15 @@
+
+fn first[T](v: ref Vec[T]) -> T {
+    v[0]
+}
+fn wrap[T](v: ref Vec[T]) -> T {
+    first(v)
+}
+fn main() {
+    let a: Vec[i64] = vec![7, 8, 9];
+    let b: Vec[f64] = vec![2.5, 3.5];
+    println(f"{first(a)}");
+    println(f"{first(b)}");
+    println(f"{wrap(a)}");
+    println(f"{wrap(b)}");
+}

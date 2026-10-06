@@ -1,0 +1,20 @@
+fn mkv() -> Vec[i64] { vec![1, 2, 3] }
+fn rc[T: Clone](x: ref T) -> T { x.clone() }
+fn pair[T: Clone](x: ref T) -> T {
+    let (v, n) = (x.clone(), 1);
+    let w = v.clone();
+    w
+}
+fn tail[T: Clone](x: ref T) -> T {
+    let (v, n) = (x.clone(), 1);
+    v.clone()
+}
+fn main() {
+    let d = rc(mkv());
+    println(f"a:{d.len()} {d[2]}");
+    let e = rc(vec![4, 5]);
+    println(f"b:{e.len()}");
+    println(f"c:{pair("ab".to_string())} {tail("cd".to_string())} {tail(7)}");
+    let p = pair(mkv());
+    println(f"d:{p.len()}");
+}

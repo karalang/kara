@@ -1,0 +1,76 @@
+// LeetCode #48 bench harness — Kāra, the in-place layer four-way cyclic rotation (★).
+//
+// The headline ★ style: rotate an n×n matrix 90° CLOCKWISE in place by walking concentric rings
+// and cycling four cells at a time via a FOUR-TARGET parallel assignment
+// (`top, right, bottom, left = left, top, right, bottom`). Unlike kata [#46](../46-permutations/)/
+// [#47](../47-permutations-ii/), this kernel allocates NOTHING per solve — the matrix is its own
+// scratch — so it is a pure COMPUTE + memory-access workload (index arithmetic + in-place swaps),
+// not a Vec[Vec] allocation workload.
+//
+// Workload: a fixed n = 20 matrix (the max LeetCode size) is rotated TOTAL times IN PLACE, the
+// state carrying forward across iterations. Each iteration first punches one cell
+// (`m[k % n][(k * 7) % n] = k % 97`, not reverted) so the rotated content keeps varying with k —
+// no hoisting of a constant result — then rotates the whole matrix once and folds a
+// position-weighted signature of every cell into a rolling checksum that carries a loop-borne
+// dependency. That loop-carried checksum makes this a single-lane (seq) bench by construction. All
+// five language mirrors fold the identical integer signature and must print the identical checksum
+// before timing.
+
+fn rotate(m: mut ref Vec[Vec[i64]]) {
+    let n = m.len();
+    let mut i = 0;
+    while i < n / 2 {
+        let mut j = i;
+        while j < n - 1 - i {
+            m[i][j], m[j][n - 1 - i], m[n - 1 - i][n - 1 - j], m[n - 1 - j][i] =
+                m[n - 1 - j][i], m[i][j], m[j][n - 1 - i], m[n - 1 - i][n - 1 - j];
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}
+
+fn main() {
+    let total = 40000;
+    let modulus = 1000000007;
+    let n = 20;
+
+    // Build the fixed n×n matrix; cells are small, deterministic, non-negative.
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut a = 0;
+    while a < n {
+        let mut row: Vec[i64] = Vec.new();
+        let mut b = 0;
+        while b < n {
+            row.push((a * 7 + b * 13) % 97);
+            b = b + 1;
+        }
+        m.push(row);
+        a = a + 1;
+    }
+
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        // Punch one cell (no hoisting); not reverted, so state evolves across iterations.
+        m[k % n][(k * 7) % n] = k % 97;
+        rotate(mut m);
+
+        // Position-weighted signature of the whole rotated matrix.
+        let mut sig = 0;
+        let mut i = 0;
+        while i < n {
+            let row = ref m[i];
+            let mut j = 0;
+            while j < n {
+                sig = (sig * 31 + row[j] * (i * n + j + 1)) % modulus;
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+        acc = (acc * 131 + sig) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

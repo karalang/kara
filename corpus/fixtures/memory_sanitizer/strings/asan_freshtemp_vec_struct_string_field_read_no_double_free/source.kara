@@ -1,0 +1,20 @@
+
+struct Rec { name: String, n: i64 }
+
+fn make_recs() -> Vec[Rec] {
+    let mut v: Vec[Rec] = Vec.new();
+    v.push(Rec { name: "alpha name field padded out beyond thirty-six bytes ok", n: 1_i64 });
+    v.push(Rec { name: "beta name field padded out beyond thirty-six bytes okk", n: 2_i64 });
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 2 {
+        match make_recs().get(i) {
+            Some(r) => println(r.name),
+            None => println("none"),
+        };
+        i = i + 1;
+    };
+}

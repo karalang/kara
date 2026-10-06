@@ -1,0 +1,12 @@
+
+fn fill(xs: Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    v.store_masked(xs, m);
+}
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 3, 4];
+    fill(a);
+}

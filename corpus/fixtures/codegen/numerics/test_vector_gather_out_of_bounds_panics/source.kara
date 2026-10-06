@@ -1,0 +1,7 @@
+
+fn main() {
+    let a: Array[i64, 4] = [10, 20, 30, 40];
+    let idx = Vector[i64, 4](0, 1, 9, 2);
+    let v = Vector[i64, 4].gather(a.as_slice(), idx);
+    println(v[0]);
+}

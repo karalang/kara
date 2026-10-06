@@ -1,0 +1,9 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+struct H { s: E, z: R }
+enum E { Two(R, R), One(R) }
+fn main() {
+    let x = E.Two(R { id: 1 }, R { id: 11 });
+    let h = H { z: R { id: 1 }, s: x };
+    println("end");
+}

@@ -1,0 +1,327 @@
+// Differential for LeetCode #340 (Longest Substring with At Most K Distinct
+// Characters).
+//
+// The five arms, copied verbatim apart from their names, against an oracle
+// that tries every substring from the longest down and counts its distinct
+// characters by sorting them, on 300 small pseudo-random strings and the hand
+// cases, plus properties.
+//
+//   P1  the five arms agree (also on the five large strings the arms print)
+//   P2  they equal the oracle
+//   P3  k = 0 gives 0, and k at least the number of distinct characters in s
+//       gives the length of s
+//   P4  the answer never falls as k grows
+//   P5  the answer is at most the length of s and at least min(length, k)
+//   P6  reversing s keeps the answer
+//   P7  renaming the characters one-to-one keeps the answer
+//   P8  for s + t the answer is at least each part's and at most their sum
+
+// ---- longest_k_distinct.kara ----
+
+fn lkd_star(s: ref String, k: i64) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut counts: Map[char, i64] = Map.new();
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..cs.len() {
+        let c = cs[right];
+        counts.insert(c, counts.get(c).unwrap_or(0) + 1);
+        while counts.len() > k {
+            let d = cs[left];
+            let n = counts.get(d).unwrap() - 1;
+            if n == 0 {
+                counts.remove(d);
+            } else {
+                counts.insert(d, n);
+            }
+            left += 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    return best;
+}
+
+// ---- longest_k_distinct_array.kara ----
+
+fn lkd_array(s: ref String, k: i64) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut counts: Vec[i64] = vec![0; 128];
+    let mut kinds = 0;
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..cs.len() {
+        let c = cs[right] as i64;
+        if counts[c] == 0 {
+            kinds += 1;
+        }
+        counts[c] += 1;
+        while kinds > k {
+            let d = cs[left] as i64;
+            counts[d] -= 1;
+            if counts[d] == 0 {
+                kinds -= 1;
+            }
+            left += 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    return best;
+}
+
+// ---- longest_k_distinct_lastpos.kara ----
+
+fn lkd_lastpos(s: ref String, k: i64) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut last: Map[char, i64] = Map.new();
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..cs.len() {
+        last.insert(cs[right], right);
+        if last.len() > k {
+            let mut oldest = right;
+            for (_, i) in last.iter() {
+                oldest = oldest.min(i);
+            }
+            last.remove(cs[oldest]);
+            left = oldest + 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    return best;
+}
+
+// ---- longest_k_distinct_nonshrink.kara ----
+
+fn lkd_nonshrink(s: ref String, k: i64) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut counts: Map[char, i64] = Map.new();
+    let mut left = 0;
+    for c in cs.iter() {
+        counts.insert(c, counts.get(c).unwrap_or(0) + 1);
+        if counts.len() > k {
+            let d = cs[left];
+            let n = counts.get(d).unwrap() - 1;
+            if n == 0 {
+                counts.remove(d);
+            } else {
+                counts.insert(d, n);
+            }
+            left += 1;
+        }
+    }
+    return cs.len() - left;
+}
+
+// ---- longest_k_distinct_brute.kara ----
+
+fn lkd_brute(s: ref String, k: i64) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut best = 0;
+    for i in 0..cs.len() {
+        let mut seen: Set[char] = Set.new();
+        let mut j = i;
+        while j < cs.len() {
+            seen.insert(cs[j]);
+            if seen.len() > k {
+                break;
+            }
+            j += 1;
+        }
+        best = best.max(j - i);
+    }
+    return best;
+}
+
+// ---- the oracle ----
+
+fn distinct_count(cs: ref Vec[char], from: i64, to: i64) -> i64 {
+    let mut part: Vec[char] = Vec.new();
+    for i in from..to {
+        part.push(cs[i]);
+    }
+    part.sort();
+    let mut count = 0;
+    for i in 0..part.len() {
+        if i == 0 or part[i] != part[i - 1] {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn oracle(s: ref String, k: i64) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut len = n;
+    while len > 0 {
+        for start in 0..=(n - len) {
+            if distinct_count(cs, start, start + len) <= k {
+                return len;
+            }
+        }
+        len -= 1;
+    }
+    return 0;
+}
+
+// ---- helpers --------------------------------------------------------------
+
+fn next(state: mut ref i64) -> i64 {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return state >> 8;
+}
+
+fn gen_text(seed: i64, n: i64, alpha: i64) -> String {
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".chars().collect();
+    let mut state = seed;
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push(letters[next(mut state) % alpha]);
+    }
+    return out;
+}
+
+fn all_arms(s: ref String, k: i64) -> Vec[i64] {
+    return vec![lkd_star(s, k), lkd_array(s, k), lkd_lastpos(s, k), lkd_nonshrink(s, k), lkd_brute(s, k)];
+}
+
+struct Tally {
+    failures: i64,
+    shown: i64,
+}
+
+fn fail(t: mut ref Tally, msg: String) {
+    t.failures += 1;
+    if t.shown < 10 {
+        println(f"FAIL {msg}");
+        t.shown += 1;
+    }
+}
+
+// The answer every arm agrees on, or -1 after reporting a disagreement.
+fn agreed(t: mut ref Tally, s: ref String, k: i64) -> i64 {
+    let got = all_arms(s, k);
+    for g in got.iter() {
+        if g != got[0] {
+            fail(t, f"P1 arms disagree on \"{s}\" k={k}: {got}");
+            return -1;
+        }
+    }
+    return got[0];
+}
+
+fn kinds_in(s: ref String) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    return distinct_count(cs, 0, cs.len());
+}
+
+fn reversed(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i = cs.len();
+    while i > 0 {
+        i -= 1;
+        out.push(cs[i]);
+    }
+    return out;
+}
+
+// Maps letter number i to letter number (7 i + 3) mod 52, a bijection on the
+// 52 letters since 7 and 52 are coprime.
+fn renamed(s: ref String) -> String {
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".chars().collect();
+    let mut out = String.new();
+    for c in s.chars() {
+        let mut i = 0;
+        while letters[i] != c {
+            i += 1;
+        }
+        out.push(letters[(7 * i + 3) % 52]);
+    }
+    return out;
+}
+
+fn check_case(t: mut ref Tally, s: ref String, k: i64) -> i64 {
+    let w = agreed(t, s, k);
+    if w < 0 {
+        return 0;
+    }
+    let want = oracle(s, k);
+    if w != want {
+        fail(t, f"P2 \"{s}\" k={k}: arms {w}, oracle {want}");
+    }
+    let n = s.chars().count();
+    if k == 0 and w != 0 {
+        fail(t, f"P3 \"{s}\" k=0 gave {w}");
+    }
+    if k >= kinds_in(s) and w != n {
+        fail(t, f"P3 \"{s}\" k={k} gave {w}, length {n}");
+    }
+    let w1 = agreed(t, s, k + 1);
+    if w1 >= 0 and w1 < w {
+        fail(t, f"P4 \"{s}\" k={k}: {w}, k+1: {w1}");
+    }
+    if w > n or w < n.min(k) {
+        fail(t, f"P5 \"{s}\" k={k}: {w}");
+    }
+    let r = reversed(s);
+    if agreed(t, r, k) != w {
+        fail(t, f"P6 \"{s}\" k={k}");
+    }
+    let m = renamed(s);
+    if agreed(t, m, k) != w {
+        fail(t, f"P7 \"{s}\" k={k}");
+    }
+    return w;
+}
+
+fn main() {
+    let mut t = Tally { failures: 0, shown: 0 };
+    let hand: Vec[(String, i64)] = vec![
+        ("eceba".to_string(), 2),
+        ("aa".to_string(), 1),
+        ("".to_string(), 3),
+        ("abc".to_string(), 0),
+        ("a".to_string(), 5),
+        ("abaccc".to_string(), 2),
+        ("aabbcc".to_string(), 1),
+        ("abcadcacacaca".to_string(), 3),
+    ];
+    let mut cases: Vec[(String, i64)] = Vec.new();
+    for h in hand.iter() {
+        cases.push((h.0.clone(), h.1));
+    }
+    let mut state = 12345;
+    for seed in 1..=300 {
+        let n = next(mut state) % 41;
+        let alpha = next(mut state) % 6 + 1;
+        let k = next(mut state) % 8;
+        cases.push((gen_text(seed, n, alpha), k));
+    }
+    let mut checked = 0;
+    let mut total = 0;
+    for c in cases.iter() {
+        total += check_case(mut t, c.0, c.1);
+        checked += 1;
+    }
+    // P8 on consecutive pairs of the random cases.
+    for i in 8..(cases.len() - 1) {
+        let s = cases[i].0.clone();
+        let u = cases[i + 1].0.clone();
+        let k = cases[i].1;
+        let joined = f"{s}{u}";
+        let a = agreed(mut t, s, k);
+        let b = agreed(mut t, u, k);
+        let j = agreed(mut t, joined, k);
+        if a >= 0 and b >= 0 and j >= 0 and (j < a.max(b) or j > a + b) {
+            fail(mut t, f"P8 \"{s}\" + \"{u}\" k={k}: {a}, {b}, joined {j}");
+        }
+    }
+    // P1 on the large strings the arms print.
+    let big: Vec[(i64, i64, i64, i64)] = vec![(1, 20, 3, 2), (7, 1000, 5, 3), (42, 50000, 26, 10), (2026, 50000, 4, 3), (99, 50000, 52, 40)];
+    for b in big.iter() {
+        let s = gen_text(b.0, b.1, b.2);
+        agreed(mut t, s, b.3);
+    }
+    println(f"{checked} cases checked (answers add up to {total}), {t.failures} failures");
+}

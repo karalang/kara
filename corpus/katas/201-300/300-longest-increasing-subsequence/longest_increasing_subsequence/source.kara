@@ -1,0 +1,96 @@
+// LeetCode 300 — Longest Increasing Subsequence.
+//
+// Given an integer array, return the length of the longest STRICTLY increasing
+// subsequence. A subsequence keeps relative order but need not be contiguous.
+//
+//     [10, 9, 2, 5, 3, 7, 101, 18]  ->  4     e.g. 2, 3, 7, 101
+//     [0, 1, 0, 3, 2, 3]            ->  4     0, 1, 2, 3
+//     [7, 7, 7, 7]                  ->  1     STRICT, so equal values don't chain
+//
+// PATIENCE SORTING, in O(n log n). `tails[k]` holds the SMALLEST value that can
+// end an increasing subsequence of length `k + 1` seen so far. That array is
+// automatically sorted — which is what makes the binary search legal — and its
+// LENGTH is the answer.
+//
+// The invariant is worth stating precisely, because the array is not a
+// subsequence and reading it as one is the classic misunderstanding:
+//
+//     tails[k] = min over all increasing subsequences of length k+1
+//                of that subsequence's final element
+//
+// So `tails` is a summary of what is still ACHIEVABLE, not a witness. Its
+// contents at the end are frequently not an increasing subsequence of the
+// input at all — `longest_increasing_subsequence_reconstruct.kara` in this
+// directory recovers a real witness, and needs separate machinery to do it.
+//
+// For each incoming x, find the leftmost slot whose tail is >= x:
+//
+//   - found  ->  overwrite it. A subsequence of that length can now end on a
+//                SMALLER value, which can only help later elements extend it.
+//   - none   ->  every existing tail is < x, so x extends the longest run:
+//                append, and the answer grows by one.
+//
+// `>=` rather than `>` is what makes this the STRICT variant. With `>` the
+// search would skip over an equal tail and append, counting [7, 7] as length 2.
+// That single character is the difference between this kata and the
+// non-decreasing variant, and it is the mutation the differential checks.
+
+fn lis_length(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+
+    let mut tails: Vec[i64] = Vec.new();
+
+    let mut i = 0;
+    while i < n {
+        let x = nums[i];
+
+        // Leftmost index with tails[idx] >= x. `lo` lands on the insertion
+        // point, which is `tails.len()` exactly when every tail is < x.
+        let mut lo = 0;
+        let mut hi = tails.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if tails[mid] < x {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+
+        if lo == tails.len() {
+            tails.push(x);
+        } else {
+            tails[lo] = x;
+        }
+        i = i + 1;
+    }
+
+    return tails.len();
+}
+
+fn report(nums: Vec[i64]) {
+    let mut line = String.new();
+    line.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { line.push_str(", "); }
+        line.push_str(f"{nums[i]}");
+        i = i + 1;
+    }
+    line.push_str("]");
+    println(f"{line} -> {lis_length(nums)}");
+}
+
+fn main() {
+    report([10, 9, 2, 5, 3, 7, 101, 18]);   // 4
+    report([0, 1, 0, 3, 2, 3]);             // 4
+    report([7, 7, 7, 7]);                   // 1 — strictness
+    report([]);                             // 0
+    report([1]);                            // 1
+    report([5, 4, 3, 2, 1]);                // 1 — strictly descending
+    report([1, 2, 3, 4, 5]);                // 5 — already sorted
+    report([2, 2, 2, 1, 3]);                // 2
+    report([-5, -3, -8, 0, -1]);            // 3 — negatives
+    report([1, 3, 2, 4, 3, 5]);             // 4
+}

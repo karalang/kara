@@ -1,0 +1,99 @@
+// LeetCode #59: Spiral Matrix II — boundary shrinking, O(n²) time.
+//
+// Fill an n×n matrix with 1..n² in clockwise spiral order. This is the
+// inverse of kata #54 (which *reads* a matrix in spiral order); here we
+// *write* the same traversal. Keep four shrinking boundaries — `top`,
+// `bottom`, `left`, `right` — and fill one ring per outer iteration:
+//
+//   top row    left → right,   then top++
+//   right col  top  → bottom,  then right--
+//   bottom row right → left,   then bottom--   (only if a row remains)
+//   left col   bottom → top,   then left++     (only if a column remains)
+//
+// The two `if` guards on the bottom row and left column are the whole
+// correctness subtlety: on an odd n the innermost cell is reached by the top
+// row alone, and without the guards the bottom/left sweeps would re-walk it
+// (or run backwards over an empty span). Same ring-with-guards shape as kata
+// #54's reader.
+//
+// The grid is a `Vec[Vec[i64]]` built as n rows of `Vec.filled(n, 0)`; each
+// cell is written with the nested index-store `grid[r][c] = v`. LeetCode
+// bounds n by [1, 20], so n² ≤ 400 fits trivially in i64.
+
+fn generate_matrix(n: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r < n {
+        grid.push(Vec.filled(n, 0));
+        r = r + 1;
+    }
+
+    let mut top = 0;
+    let mut bottom = n - 1;
+    let mut left = 0;
+    let mut right = n - 1;
+    let mut v = 1;
+
+    while top <= bottom and left <= right {
+        // Top row, left → right.
+        let mut c = left;
+        while c <= right {
+            grid[top][c] = v;
+            v = v + 1;
+            c = c + 1;
+        }
+        top = top + 1;
+
+        // Right column, top → bottom.
+        let mut r2 = top;
+        while r2 <= bottom {
+            grid[r2][right] = v;
+            v = v + 1;
+            r2 = r2 + 1;
+        }
+        right = right - 1;
+
+        // Bottom row, right → left — only if a row still remains.
+        if top <= bottom {
+            let mut c2 = right;
+            while c2 >= left {
+                grid[bottom][c2] = v;
+                v = v + 1;
+                c2 = c2 - 1;
+            }
+            bottom = bottom - 1;
+        }
+
+        // Left column, bottom → top — only if a column still remains.
+        if left <= right {
+            let mut r3 = bottom;
+            while r3 >= top {
+                grid[r3][left] = v;
+                v = v + 1;
+                r3 = r3 - 1;
+            }
+            left = left + 1;
+        }
+    }
+    grid
+}
+
+fn report(n: i64) {
+    let g = generate_matrix(n);
+    println(n);
+    for row in g.iter() {
+        let mut line: String = "";
+        for x in row.iter() {
+            line = f"{line}{x} ";
+        }
+        println(line);
+    }
+}
+
+fn main() {
+    report(1);   // [[1]]
+    report(2);   // [[1,2],[4,3]]
+    report(3);   // [[1,2,3],[8,9,4],[7,6,5]]
+    report(4);   // 4×4 spiral
+    report(5);   // 5×5 spiral — odd center reached by the top row alone
+}

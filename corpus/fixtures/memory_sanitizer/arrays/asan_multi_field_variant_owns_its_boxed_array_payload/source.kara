@@ -1,0 +1,47 @@
+
+struct R { s: String }
+enum Two { Both(Array[String, 2], Array[String, 2]), None2 }
+enum Mix { M(Array[String, 2], i64), N }
+enum Mix2 { M(i64, Array[String, 2]), N }
+enum Tri { T(Array[String, 2], i64, Array[String, 2]), N }
+enum St { S { a: Array[String, 2], n: i64 }, N }
+enum St1 { S { a: Array[String, 2] }, N }
+enum Mx { M(Array[String, 2], String), N }
+enum Wrp { Full(Array[String, 2]), Empty }
+
+fn mka(t: String) -> Array[String, 2] {
+    return [f"b1515-{t}-aaaaaaaaaaaaaaaa", f"b1515-{t}-bbbbbbbbbbbbbbbb"];
+}
+fn eat(a: Array[String, 2]) -> i64 { return a[0].len(); }
+fn tlen(t: Two) -> i64 { match t { Two.Both(x, y) => { return x[0].len() + y[1].len(); } Two.None2 => { return 0; } } }
+fn mlen(m: Mix) -> i64 { match m { Mix.M(x, k) => { return x[0].len() + k; } Mix.N => { return 0; } } }
+fn mlen2(m: Mix2) -> i64 { match m { Mix2.M(k, x) => { return x[0].len() + k; } Mix2.N => { return 0; } } }
+fn trilen(t: Tri) -> i64 { match t { Tri.T(x, k, y) => { return x[0].len() + k + y[1].len(); } Tri.N => { return 0; } } }
+fn stlen(s: St) -> i64 { match s { St.S { a, n } => { return a[0].len() + n; } St.N => { return 0; } } }
+fn sthand(s: St) -> i64 { match s { St.S { a, n } => { return eat(a) + n; } St.N => { return 0; } } }
+fn st1hand(s: St1) -> i64 { match s { St1.S { a } => { return eat(a); } St1.N => { return 0; } } }
+fn mhand(m: Mix) -> i64 { match m { Mix.M(x, k) => { return eat(x) + k; } Mix.N => { return 0; } } }
+fn mout(m: Mix) -> Array[String, 2] { match m { Mix.M(x, k) => { return x; } Mix.N => { return mka("z"); } } }
+fn mxlen(m: Mx) -> i64 { match m { Mx.M(x, s) => { return x[0].len() + s.len(); } Mx.N => { return 0; } } }
+fn wlen(w: Wrp) -> i64 { match w { Wrp.Full(x) => { return x[0].len(); } Wrp.Empty => { return 0; } } }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+        { let w = Two.Both(mka(f"p{i}"), mka(f"q{i}")); println(f"two:{tlen(w)}"); }
+        { let w = Mix.M(mka(f"a{i}"), 5); println(f"mix:{mlen(w)}"); }
+        { let w = Mix2.M(5, mka(f"b{i}")); println(f"mix2:{mlen2(w)}"); }
+        { let w = Tri.T(mka(f"c{i}"), 5, mka(f"d{i}")); println(f"tri:{trilen(w)}"); }
+        { let w = St.S { a: mka(f"e{i}"), n: 5 }; println(f"struct:{stlen(w)}"); }
+        { let w = St.S { a: mka(f"f{i}"), n: 5 }; println(f"structhand:{sthand(w)}"); }
+        { let w = St1.S { a: mka(f"g{i}") }; println(f"struct1hand:{st1hand(w)}"); }
+        { let w = Mix.M(mka(f"h{i}"), 5); println(f"tuplehand:{mhand(w)}"); }
+        { let w = Mix.M(mka(f"j{i}"), 5); let r = mout(w); println(f"out:{r[1].len()}"); }
+        { let w = Mx.M(mka(f"k{i}"), f"b1515-sib-aaaaaaaaaaaaaaaa"); println(f"heapsib:{mxlen(w)}"); }
+        let src = mka(f"m{i}");
+        { let w = Mix.M(src, 5); println(f"srcmove:{mlen(w)}"); }
+        println(f"srcread:{src[0].len()}");
+        { let w = Wrp.Full(mka(f"n{i}")); println(f"single:{wlen(w)}"); }
+        i = i + 1;
+    }
+}

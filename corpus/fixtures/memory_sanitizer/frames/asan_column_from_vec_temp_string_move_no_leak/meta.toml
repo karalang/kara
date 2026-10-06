@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/frames.rs::asan_column_from_vec_temp_string_move_no_leak"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:dataframe"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

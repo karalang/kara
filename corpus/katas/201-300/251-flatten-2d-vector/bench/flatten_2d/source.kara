@@ -1,0 +1,81 @@
+// Benchmark workload for LeetCode #251 — Flatten 2D Vector.
+//
+// Build-once + punch. A deterministic 32-bit LCG builds ONE ragged 2D input
+// (~45% of rows empty, so runs of consecutive empties are constant), then the
+// lazy (row, col) iterator drains it from scratch PASSES times over. The build
+// is paid once; what is measured is the drain.
+//
+// The iterator is the ★ solver verbatim: `skip_empty` restoring the cursor at
+// the top of both entry points, `has_next` polled before every `next` exactly as
+// a real caller would. Empty rows make the cursor advance unpredictably relative
+// to the element stream, so the skip loop is data-dependent and does not
+// vectorize away. Sink = positional checksum, so the ORDER of the yielded
+// elements is load-bearing and not just their sum.
+
+struct Vector2D {
+    data: Vec[Vec[i64]],
+    mut row: i64,
+    mut col: i64,
+}
+
+fn skip_empty(v: mut ref Vector2D) {
+    while v.row < v.data.len() and v.col >= v.data[v.row].len() {
+        v.row = v.row + 1;
+        v.col = 0;
+    }
+}
+
+fn v_has_next(v: mut ref Vector2D) -> bool {
+    skip_empty(v);
+    return v.row < v.data.len();
+}
+
+fn v_next(v: mut ref Vector2D) -> i64 {
+    skip_empty(v);
+    if v.row >= v.data.len() {
+        return -1;
+    }
+    let x = v.data[v.row][v.col];
+    v.col = v.col + 1;
+    return x;
+}
+
+fn main() {
+    let rows = 20000;
+    let passes = 1500;
+
+    // ---- build once ------------------------------------------------------
+    let mut data: Vec[Vec[i64]] = Vec.new();
+    let mut state = 251251;
+    let mut r = 0;
+    while r < rows {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let mut row: Vec[i64] = Vec.new();
+        if (state / 65536) % 100 >= 45 {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let cols = (state / 65536) % 6 + 1;
+            let mut c = 0;
+            while c < cols {
+                state = (state * 1103515245 + 12345) & 2147483647;
+                row.push((state / 65536) % 1000);
+                c = c + 1;
+            }
+        }
+        data.push(row);
+        r = r + 1;
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let mut v = Vector2D { data: data, row: 0, col: 0 };
+        while v_has_next(mut v) {
+            let x = v_next(mut v);
+            sink = (sink * 31 + x + 1) % 1000000007;
+        }
+        data = v.data;
+        p = p + 1;
+    }
+    println(sink);
+}

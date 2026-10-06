@@ -1,0 +1,4 @@
+fn main() {
+            let bs = "".bytes();
+            println(bs.len());
+        }

@@ -1,0 +1,10 @@
+
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn main() with panics {
+    let mut cells: Vec[Cell] = Vec.new();
+    cells.push(Cell { id: 7, name: f"original-soa-heap-string-payload-{0}" });
+    cells[0].name = f"replacement-soa-heap-string-payload-{0}";
+    println(cells[0].name);
+    println(cells[0].id);
+}

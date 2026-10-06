@@ -1,0 +1,7 @@
+
+fn main() {
+    let a = Vector[f64, 4](1.0, 2.0, 3.0, 4.0);
+    let i = 3;
+    let r = a.replace(i, 9.5);
+    println(r[3]);
+}

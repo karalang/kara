@@ -1,0 +1,17 @@
+
+trait Default {
+    fn default() -> Self;
+}
+
+fn make[T]() -> T where T: Default {
+    default()
+}
+
+struct Wrapper { value: i64 }
+impl Default for Wrapper {
+    fn default() -> Wrapper { Wrapper { value: 0 } }
+}
+
+fn main() {
+    let w: Wrapper = make();
+}

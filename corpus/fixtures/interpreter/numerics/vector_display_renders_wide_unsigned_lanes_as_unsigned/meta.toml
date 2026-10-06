@@ -1,0 +1,13 @@
+source = "tests/interpreter/numerics.rs::vector_display_renders_wide_unsigned_lanes_as_unsigned"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

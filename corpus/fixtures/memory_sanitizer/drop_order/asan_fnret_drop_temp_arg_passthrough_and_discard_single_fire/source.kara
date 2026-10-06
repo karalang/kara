@@ -1,0 +1,21 @@
+
+struct Guard { name: String, id: i64 }
+impl Drop for Guard {
+    fn drop(mut ref self) { println(self.name); println(self.id); }
+}
+fn make(n: i64) -> Guard {
+    Guard { name: f"guard payload padded beyond thirty-six bytes {n}", id: n }
+}
+fn consume(g: Guard) { println(100 + g.id); }
+fn pass(g: Guard) -> Guard { g }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        consume(make(i));
+        i = i + 1;
+    };
+    make(60);
+    println(999);
+    let x = pass(make(50));
+    println(x.name.len());
+}

@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_09_30_46.rs::asan_whole_value_match_arm_over_named_struct_runs_each_drop_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

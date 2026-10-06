@@ -1,0 +1,15 @@
+
+fn make_grid() -> Vec[Vec[i64]] {
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    let mut row: Vec[i64] = Vec.new();
+    row.push(10_i64);
+    g.push(row);
+    return g;
+}
+
+fn main() {
+    match make_grid().get(0) {
+        Some(r) => println(r[0]),
+        None => println(0_i64),
+    };
+}

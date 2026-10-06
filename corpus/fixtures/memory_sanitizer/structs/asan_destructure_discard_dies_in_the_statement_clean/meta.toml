@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/structs.rs::asan_destructure_discard_dies_in_the_statement_clean"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

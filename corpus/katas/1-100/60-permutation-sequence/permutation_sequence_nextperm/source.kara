@@ -1,0 +1,85 @@
+// LeetCode #60: Permutation Sequence — iterate next_permutation k-1 times.
+//
+// The brute-but-honest solver, and a direct reuse of kata #31: start from the
+// FIRST permutation 1,2,…,n (fully ascending) and step forward one lexicographic
+// permutation at a time, k-1 times. The k-th permutation is where we land.
+//
+// next_permutation is kata #31's four-move scan verbatim (pivot → successor →
+// swap → reverse-suffix), here over a `mut ref Vec[i64]` so it mutates the
+// caller's array in place. No wrap branch is needed: k ≤ n! by the problem
+// constraint, so we never step past the last permutation.
+//
+// This is O(k · n) — up to 9! · 9 ≈ 3.3M primitive ops at the n = 9 bound, still
+// instant, but asymptotically worse than the O(n²) factorial-number-system
+// solver (permutation_sequence.kara), which jumps straight to the k-th without
+// walking the k-1 in between. Both agree on every case; this one exists to show
+// the incremental dual of the closed form, and to exercise the exact #31 step.
+
+fn next_permutation(a: mut ref Vec[i64], len: i64) {
+    // 1. Pivot: rightmost i with a[i] < a[i+1].
+    let mut i = len - 2;
+    while i >= 0 and a[i] >= a[i + 1] {
+        i = i - 1;
+    }
+
+    // 2. Successor: smallest tail value still greater than the pivot; swap.
+    //    (k ≤ n! guarantees a pivot exists on every step we take, so i >= 0.)
+    if i >= 0 {
+        let mut j = len - 1;
+        while a[j] <= a[i] {
+            j = j - 1;
+        }
+        let tmp = a[i];
+        a[i] = a[j];
+        a[j] = tmp;
+    }
+
+    // 3. Reverse the suffix a[i+1..] (descending -> ascending): the minimal tail.
+    let mut lo = i + 1;
+    let mut hi = len - 1;
+    while lo < hi {
+        let t = a[lo];
+        a[lo] = a[hi];
+        a[hi] = t;
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+}
+
+fn get_permutation(n: i64, k: i64) -> String {
+    // Start from the first permutation: 1, 2, …, n.
+    let mut a: Vec[i64] = Vec.new();
+    let mut d = 1;
+    while d <= n {
+        a.push(d);
+        d = d + 1;
+    }
+
+    // Step forward k-1 times.
+    let mut step = 0;
+    while step < k - 1 {
+        next_permutation(mut a, n);
+        step = step + 1;
+    }
+
+    let mut result: String = "";
+    for x in a.iter() {
+        result = f"{result}{x}";
+    }
+    result
+}
+
+fn report(n: i64, k: i64) {
+    let s = get_permutation(n, k);
+    println(f"n={n} k={k} -> {s}");
+}
+
+fn main() {
+    report(3, 3);         // "213"
+    report(4, 9);         // "2314"
+    report(3, 1);         // "123"
+    report(1, 1);         // "1"
+    report(3, 6);         // "321"
+    report(9, 1);         // "123456789"
+    report(9, 362880);    // "987654321"
+}

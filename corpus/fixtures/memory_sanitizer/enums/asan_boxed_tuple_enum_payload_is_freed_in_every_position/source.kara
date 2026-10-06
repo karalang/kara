@@ -1,0 +1,60 @@
+
+shared struct S { s: String }
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR") } }
+
+enum M { P((Array[String, 2], i64)), Q }
+enum M3 { P((Array[String, 3], i64)), Q }
+enum Mf { P((Array[String, 2], i64), i64), Q }
+enum Mv { P((Array[Vec[String], 2], i64)), Q }
+enum Ms { P((Array[S, 2], i64)), Q }
+enum Mr { P((Array[R, 2], i64)), Q }
+enum Bare { A(Array[String, 2]), B }
+enum Bare2 { A(Array[String, 2], i64), B }
+enum Tv { P((Vec[String], i64)), Q }
+
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+fn eat(m: M) -> i64 { return 1; }
+fn mk(i: i64) -> M { return M.P(([pay(i), pay(i + 1i64)], i)); }
+
+fn main() {
+    println(f"byval {eat(M.P(([pay(1), pay(2)], 7)))}");
+
+    let g = mk(3);
+    match g { M.P(t) => { println(f"ret {t.1}"); } M.Q => { println(f"q"); } }
+
+    let mut v: Vec[M] = [];
+    v.push(M.P(([pay(4), pay(5)], 8)));
+    v.push(M.P(([pay(6), pay(7)], 9)));
+    println(f"vec {v.len()}");
+
+    let h = M.P(([pay(10), pay(11)], 12));
+    match h { M.P(t) => { let u = t; println(f"move {u.1}"); } M.Q => { println(f"q"); } }
+
+    let a3 = M3.P(([pay(13), pay(14), pay(15)], 16));
+    match a3 { M3.P(t) => { println(f"n3 {t.1}"); } M3.Q => { println(f"q"); } }
+
+    let mf = Mf.P(([pay(17), pay(18)], 19), 20);
+    println(f"mf ok");
+
+    let mv = Mv.P(([[pay(21)], [pay(22)]], 23));
+    println(f"vecelem ok");
+
+    let x = S { s: f"shared-tttttttttt" };
+    let ms = Ms.P(([x, x], 24));
+    println(f"shared ok");
+
+    let mr = Mr.P(([R { s: pay(25) }, R { s: pay(26) }], 27));
+    println(f"dropelem ok");
+
+    let b1 = Bare.A([pay(28), pay(29)]);
+    println(f"bare ok");
+    let b2 = Bare2.A([pay(30), pay(31)], 32);
+    println(f"bare2 ok");
+
+    let tv = Tv.P(([pay(33), pay(34)], 35));
+    match tv { Tv.P(t) => { println(f"vectup {t.1}"); } Tv.Q => { println(f"q"); } }
+
+    let e = M.Q;
+    match e { M.P(t) => { println(f"p {t.1}"); } M.Q => { println(f"unit ok"); } }
+}

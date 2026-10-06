@@ -1,0 +1,74 @@
+// LeetCode 170 — Two Sum III - Data structure design. (Premium.)
+//
+// Design a structure supporting `add(number)` and `find(value)` — find returns
+// true iff SOME pair of the added numbers sums to `value`. Numbers can repeat,
+// and a value may pair with itself only if it was added at least twice.
+//
+// The corpus idiom is a struct + free functions (no impl blocks). Keep a
+// Map[number -> count]. `add` bumps the count. `find` scans the distinct keys:
+// for key k, the complement is `value - k`; if the complement differs from k it
+// just has to be present, but if it EQUALS k (a self-pair) the count must be
+// at least 2.
+
+struct TwoSum {
+    counts: Map[i64, i64],
+}
+
+fn new_two_sum() -> TwoSum {
+    return TwoSum { counts: Map.new() };
+}
+
+fn add(ds: mut ref TwoSum, number: i64) {
+    match ds.counts.get(number) {
+        Some(c) => { let _ = ds.counts.insert(number, c + 1); }
+        None => { let _ = ds.counts.insert(number, 1); }
+    }
+}
+
+fn find(ds: ref TwoSum, value: i64) -> bool {
+    for k in ds.counts.keys() {
+        let complement = value - k;
+        if complement == k {
+            match ds.counts.get(k) {
+                Some(c) => { if c >= 2 { return true; } }
+                None => {}
+            }
+        } else {
+            match ds.counts.get(complement) {
+                Some(_) => { return true; }
+                None => {}
+            }
+        }
+    }
+    return false;
+}
+
+fn report(ds: ref TwoSum, value: i64) {
+    if find(ds, value) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    let mut ds = new_two_sum();
+    add(mut ds, 1);
+    add(mut ds, 3);
+    add(mut ds, 5);
+    report(ds, 4);  // true  (1 + 3)
+    report(ds, 7);  // false
+    report(ds, 6);  // true  (1 + 5)
+    report(ds, 8);  // true  (3 + 5)
+
+    add(mut ds, 3); // now two 3s
+    report(ds, 6);  // true  (3 + 3)
+
+    report(ds, 2);  // false
+
+    add(mut ds, 0);
+    report(ds, 0);  // false (only one 0)
+    add(mut ds, 0);
+    report(ds, 0);  // true  (0 + 0)
+    report(ds, 10); // false (only one 5, so no 5 + 5)
+}

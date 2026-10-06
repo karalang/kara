@@ -1,0 +1,12 @@
+fn main() {
+    let a: i64 = 304;
+    let b: i64 = 0x141;
+    let c: u32 = 0x166;
+    let d: i32 = -208;
+    let e: i8 = -48;
+    println(f"{a.is_ascii_digit()} {b.is_ascii_alphabetic()} {c.is_ascii_hexdigit()} {d.is_ascii_digit()} {e.is_ascii_digit()}");
+    let f: u8 = 0x30;
+    let g: i64 = 0x41;
+    let h: u64 = 0x66;
+    println(f"{f.is_ascii_digit()} {g.is_ascii_alphabetic()} {h.is_ascii_hexdigit()}");
+}

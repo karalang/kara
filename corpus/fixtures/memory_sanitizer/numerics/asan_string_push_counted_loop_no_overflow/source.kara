@@ -1,0 +1,15 @@
+
+fn build(n: i64) -> String {
+    let mut out = "";
+    let mut i = 0;
+    while i < n {
+        out.push('x');
+        i = i + 1;
+    }
+    return out;
+}
+fn main() {
+    let s = build(7);
+    println(s);
+    println(s.len().to_string());
+}

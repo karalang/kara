@@ -1,0 +1,34 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+shared struct Sh { tag: String }
+struct F { id: i64, h: Sh, note: String }
+impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
+struct V { f: F, d: D }
+fn mkv(n: i64) -> V { return V { f: F { id: n, h: Sh { tag: f"shared-tag-longer-than-sso-{n}" }, note: f"note-string-longer-than-sso-{n}" }, d: mkd(n + 50) }; }
+fn keep(x: D) -> D { x }
+fn st(v: mut ref Vec[D], x: D) { v.push(x); }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn keepf(x: F) -> F { x }
+fn stf(v: mut ref Vec[F], x: F) { v.push(x); }
+fn main() {
+    let mut v: Vec[D] = Vec.new();
+    let a = mkw(1);
+    st(mut v, a.r);
+    let b = mkw(2);
+    gst(mut v, b.s);
+    let c = mkw(3);
+    let k = keep(c.r);
+    println(f"k{k.id} v{v.len()}");
+    let mut fs: Vec[F] = Vec.new();
+    let p = mkv(4);
+    let kf = keepf(p.f);
+    let q = mkv(5);
+    stf(mut fs, q.f);
+    let r = mkv(6);
+    if r.d.id > 100 { stf(mut fs, r.f); }
+    println(f"kf{kf.id} fs{fs.len()}");
+    println("end")
+}

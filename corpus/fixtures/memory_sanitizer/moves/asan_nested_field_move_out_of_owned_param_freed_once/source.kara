@@ -1,0 +1,21 @@
+
+struct Pair { word: String, n: i64 }
+struct Deep { inner: Pair, tag: i64 }
+struct Outer { mid: Deep, label: String }
+fn ret(d: Deep) -> String { d.inner.word }
+fn lit(d: Deep) -> Deep { Deep { inner: Pair { word: d.inner.word, n: d.inner.n + 1 }, tag: d.tag } }
+fn sink(s: String) -> String { s + "!" }
+fn arg(d: Deep) -> String { sink(d.inner.word) }
+fn bound(d: Deep) -> String { let s = d.inner.word; s }
+fn deeper(o: Outer) -> String { o.mid.inner.word }
+fn one_level(p: Pair) -> String { p.word }
+fn main() {
+    let k = env.args().len() as i64;
+    println(ret(Deep { inner: Pair { word: f"a{k}", n: 1 }, tag: 2 }));
+    let grown = lit(Deep { inner: Pair { word: f"b{k}", n: 3 }, tag: 4 });
+    println(grown.inner.word);
+    println(arg(Deep { inner: Pair { word: f"c{k}", n: 5 }, tag: 6 }));
+    println(bound(Deep { inner: Pair { word: f"d{k}", n: 7 }, tag: 8 }));
+    println(deeper(Outer { mid: Deep { inner: Pair { word: f"e{k}", n: 9 }, tag: 10 }, label: f"L{k}" }));
+    println(one_level(Pair { word: f"f{k}", n: 11 }));
+}

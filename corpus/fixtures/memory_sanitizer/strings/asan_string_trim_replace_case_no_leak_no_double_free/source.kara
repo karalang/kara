@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let s: String = "  abcdefghijklmnopqrstuvwxyz0123456789  ";
+        let t = s.trim();
+        let u = t.to_uppercase();
+        let l = u.to_lowercase();
+        let r = t.replace("abc", "XY");
+        total = total + t.len() + u.len() + l.len() + r.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

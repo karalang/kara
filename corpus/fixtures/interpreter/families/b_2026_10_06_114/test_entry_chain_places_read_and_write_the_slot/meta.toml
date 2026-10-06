@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_06_114.rs::test_entry_chain_places_read_and_write_the_slot"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

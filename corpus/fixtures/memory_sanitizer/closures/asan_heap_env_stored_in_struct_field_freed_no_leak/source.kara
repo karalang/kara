@@ -1,0 +1,9 @@
+
+struct H { f: Fn(i64) -> i64 }
+struct G { f: Fn(i64) -> i64, n: i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let h = H { f: make(21i64) };
+    let g = G { f: make(20i64), n: 2i64 };
+    println(f"{(h.f)(21i64) + (g.f)(20i64) + g.n}");
+}

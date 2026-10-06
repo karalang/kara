@@ -1,0 +1,13 @@
+source = "tests/codegen/rc_shared.rs::test_e2e_rc_fallback_binding_at_mut_ref_arg_write"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

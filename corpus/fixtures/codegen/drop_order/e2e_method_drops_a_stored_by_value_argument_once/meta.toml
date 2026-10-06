@@ -1,0 +1,13 @@
+source = "tests/codegen/drop_order.rs::e2e_method_drops_a_stored_by_value_argument_once"
+dedup_of = ["tests/interpreter/drop_order.rs::method_drops_a_stored_by_value_argument_once_parity"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

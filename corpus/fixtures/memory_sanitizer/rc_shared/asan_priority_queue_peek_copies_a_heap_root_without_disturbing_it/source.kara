@@ -1,0 +1,20 @@
+
+fn main() {
+    let mut q: PriorityQueue[String] = PriorityQueue.new();
+    q.push(f"pear{1}");
+    q.push(f"apple{2}");
+    q.push(f"fig{3}");
+
+    // Peek twice: the root is copied, never moved out, so the second read
+    // sees the same element and the queue still holds all three.
+    match q.peek() { Some(v) => { println(v); } None => { println("none"); } }
+    match q.peek() { Some(v) => { println(v); } None => { println("none"); } }
+    println(q.len());
+
+    // Drain: every element must still be there, in order.
+    while q.len() > 0 {
+        match q.pop() { Some(v) => { println(v); } None => {} }
+    }
+    match q.peek() { Some(v) => { println(v); } None => { println("none"); } }
+    println("end");
+}

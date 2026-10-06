@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 100 {
+        let cell: OnceLock[i64] = OnceLock.new();
+        let _ = cell.set(i);
+        match cell.get() { Some(v) => { total = total + v; }, None => {}, }
+        i = i + 1;
+    }
+    println(total);
+}

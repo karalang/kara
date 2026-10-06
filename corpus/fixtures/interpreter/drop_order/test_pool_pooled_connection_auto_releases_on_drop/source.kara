@@ -1,0 +1,12 @@
+fn make_int() -> i64 { 55 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_int, 1, 4);
+             {
+                 let c1 = pool.acquire(0).unwrap();
+                 println(c1.val);
+             }
+             match pool.acquire(0) {
+                 Ok(c2) => println(c2.val),
+                 Err(_) => println("TIMEOUT"),
+             }
+         }

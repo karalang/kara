@@ -1,0 +1,7 @@
+fn main() {
+            let s = "/todos/42";
+            if s.starts_with("/todos/") { println("yes"); } else { println("no"); }
+            if s.starts_with("/foo") { println("yes2"); } else { println("no2"); }
+            if s.starts_with("/todos/42/extra") { println("yes3"); } else { println("no3"); }
+            if s.starts_with("") { println("yes4"); } else { println("no4"); }
+        }

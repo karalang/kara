@@ -1,0 +1,25 @@
+
+struct Celsius { deg: i64 }
+struct Kelvin { k: i64 }
+impl From for Kelvin {
+    fn from(c: Celsius) -> Kelvin { Kelvin { k: c.deg + 273 } }
+}
+struct Reading { temp: Kelvin }
+fn pick(hot: bool) -> Kelvin {
+    if hot { (Celsius { deg: 100 }).into() }
+    else { (Celsius { deg: 0 }).into() }
+}
+fn classify(n: i64) -> Kelvin {
+    match n {
+        0 => (Celsius { deg: 0 }).into(),
+        _ => (Celsius { deg: n }).into(),
+    }
+}
+fn main() {
+    let r: Reading = Reading { temp: (Celsius { deg: 27 }).into() };
+    println(r.temp.k);
+    println(pick(true).k);
+    println(pick(false).k);
+    println(classify(0).k);
+    println(classify(50).k);
+}

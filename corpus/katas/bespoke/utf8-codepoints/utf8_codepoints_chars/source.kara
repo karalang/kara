@@ -1,0 +1,68 @@
+// Bespoke kata — UTF-8 codepoint analyzer (high-level `chars()` style).
+//
+// The L2 surface of the self-hosted lexer (kara/selfhost/src/main.kara) that
+// LeetCode's ASCII-centric corpus cannot reach: multi-byte codepoint handling.
+// For each input it reports the UTF-8 byte length, the codepoint count (which
+// the lexer tracks as `column`, advancing by ONE per codepoint regardless of
+// byte width — see `advance_codepoint`), each codepoint's Unicode scalar value,
+// and a letter/number/other tally via the Unicode-aware `char.is_alphabetic` /
+// `is_numeric` classifier the lexer's non-ASCII identifier recovery gates on.
+//
+// This style walks the string through `s.chars()` and reads each scalar with
+// `c as u32` — the idiomatic path that never touches raw bytes. The companion
+// `utf8_codepoints.kara` does the same by hand from the byte array (the real
+// decoder), and `utf8_codepoints_recursive.kara` does it as a recursive descent.
+//
+// The corpus is built from explicit scalar-value lists (codepoint -> char via
+// `char.try_from`, then `push` — the encode side, inverse of the decode) so the
+// source is pure ASCII and provably identical, codepoint for codepoint, to the
+// Python oracle. Dual oracle: the scalar values are Python's `ord`, the counts
+// its `len`, the classes its `str.isalpha` / `isnumeric`.
+
+// Unicode scalar values -> String: the `\u{..}` -> char -> UTF-8 encode path.
+fn from_cps(cps: Vec[i64]) -> String {
+    let mut s: String = "";
+    for cp in cps {
+        match char.try_from(cp as u32) {
+            Ok(c) => s.push(c),
+            Err(_) => {}
+        }
+    }
+    s
+}
+
+fn report(s: ref String) {
+    let b = s.bytes().len();
+    let mut count = 0;
+    let mut letters = 0;
+    let mut numbers = 0;
+    let mut other = 0;
+    let mut vals: String = "";
+    for ch in s.chars() {
+        if count > 0 { vals.push_str(" "); }
+        vals.push_str(f"{ch as u32 as i64}");
+        if ch.is_alphabetic() {
+            letters = letters + 1;
+        } else if ch.is_numeric() {
+            numbers = numbers + 1;
+        } else {
+            other = other + 1;
+        }
+        count = count + 1;
+    }
+    println(f"\"{s}\" B{b} C{count} | {vals} | L{letters} N{numbers} O{other}");
+}
+
+fn main() {
+    report("");
+    report(from_cps([104, 101, 108, 108, 111]));
+    report(from_cps([104, 0xe9, 108, 108, 111]));
+    report(from_cps([0x3a9, 0x3bc, 0x3ad, 0x3b3, 0x3b1]));
+    report(from_cps([0x41f, 0x440, 0x438, 0x432, 0x435, 0x442]));
+    report(from_cps([0x65e5, 0x672c, 0x8a9e]));
+    report(from_cps([99, 97, 102, 0xe9, 0x2615]));
+    report(from_cps([0x1d11e, 0x1f3b5]));
+    report(from_cps([97, 98, 99, 49, 50, 51, 0x3bb, 0x4e2d, 57, 0x1d11e]));
+    report(from_cps([65, 0xb7, 66]));
+    report(from_cps([0x7f, 0x80, 0x7ff, 0x800, 0xffff, 0x10000, 0x10ffff]));
+}

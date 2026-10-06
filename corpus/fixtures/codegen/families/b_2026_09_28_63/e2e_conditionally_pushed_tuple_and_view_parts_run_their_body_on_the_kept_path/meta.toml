@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_28_63.rs::e2e_conditionally_pushed_tuple_and_view_parts_run_their_body_on_the_kept_path"
+dedup_of = ["tests/interpreter/families/b_2026_09_28_63.rs::test_conditionally_pushed_tuple_and_view_parts_run_their_body_on_the_kept_path", "tests/memory_sanitizer/families/b_2026_09_28_63.rs::asan_conditionally_pushed_tuple_and_view_parts_free_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,91 @@
+// Benchmark workload — Permutation Sequence (LeetCode #60), NEXT-PERM solver.
+//
+// Same M = 9 rotated (n, k) cases and same position-weighted checksum sink as
+// bench/permutation_sequence.kara — but this solver reaches the k-th
+// permutation by iterating next_permutation k-1 times (permutation_sequence_
+// nextperm.kara's O(k·n) form), so per iter it does THOUSANDS of times more
+// work than the factorial closed form. K is therefore small (K = 333 = 9·37,
+// each case hit 37 times) to land in the same ~100 ms measurement window; the
+// two solvers are NOT directly wall-time comparable at equal K. The fair
+// cross-solver metric is permutations resolved per second = K · 1000 / mean_ms
+// (see README § Benchmarks) — identical (n, k) inputs, so it measures the real
+// speedup of picking the O(n²) closed form over the O(k·n) walk.
+//
+// Everything else matches the factorial mirror: rotating (n, k) defeats loop-
+// invariant code motion, the sink reads every output digit so no mirror can
+// dead-code the walk, and `total = total + <checksum>` is the auto-par
+// allow-list reduction shape (two-lane kata: seq vs auto-par).
+
+fn next_permutation(a: mut ref Vec[i64], len: i64) {
+    let mut i = len - 2;
+    while i >= 0 and a[i] >= a[i + 1] {
+        i = i - 1;
+    }
+    if i >= 0 {
+        let mut j = len - 1;
+        while a[j] <= a[i] {
+            j = j - 1;
+        }
+        let tmp = a[i];
+        a[i] = a[j];
+        a[j] = tmp;
+    }
+    let mut lo = i + 1;
+    let mut hi = len - 1;
+    while lo < hi {
+        let t = a[lo];
+        a[lo] = a[hi];
+        a[hi] = t;
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+}
+
+fn get_permutation(n: i64, k: i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    let mut d = 1;
+    while d <= n {
+        a.push(d);
+        d = d + 1;
+    }
+    let mut step = 0;
+    while step < k - 1 {
+        next_permutation(mut a, n);
+        step = step + 1;
+    }
+    a
+}
+
+// Position-weighted fold over every digit — forces the whole permutation to be
+// materialized and read (no dead-digit elision).
+fn checksum(perm: ref Vec[i64], n: i64) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < n {
+        s = s + perm[i] * (i + 1);
+        i = i + 1;
+    }
+    s
+}
+
+fn main() {
+    let m: i64 = 9;
+    let mut ntab: Vec[i64] = Vec.new();
+    ntab.push(9); ntab.push(8); ntab.push(9); ntab.push(7); ntab.push(8);
+    ntab.push(9); ntab.push(6); ntab.push(7); ntab.push(9);
+    let mut ktab: Vec[i64] = Vec.new();
+    ktab.push(362880); ktab.push(40320); ktab.push(181440); ktab.push(5040);
+    ktab.push(20160); ktab.push(300000); ktab.push(720); ktab.push(2520);
+    ktab.push(250000);
+
+    let k_iters: i64 = 333;
+    let mut total: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx = k % m;
+        let perm = get_permutation(ntab[idx], ktab[idx]);
+        total = total + checksum(perm, ntab[idx]);
+        k = k + 1;
+    }
+    println(total);
+}

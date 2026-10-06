@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    for n in v.iter().filter_map(|x| if x % 2 == 0 { Some(x * 10) } else { None }) {
+        println(n);
+    }
+}

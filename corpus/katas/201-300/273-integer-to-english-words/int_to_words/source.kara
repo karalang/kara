@@ -1,0 +1,123 @@
+// LeetCode 273 — Integer to English Words.
+//
+// Convert a non-negative integer (0 .. 2^31 - 1) to its English words spelling.
+// `123` is "One Hundred Twenty Three"; `1234567` is "One Million Two Hundred
+// Thirty Four Thousand Five Hundred Sixty Seven".
+//
+// THE ★ MECHANISM: SPLIT INTO THREE-DIGIT GROUPS, NAME EACH, TAG WITH A SCALE.
+// English numerals are periodic with period 1000 — every group of three digits
+// is spelled by the same rules and then labelled Thousand / Million / Billion.
+// So the whole problem is one function over 1..999 plus a loop that peels
+// `n % 1000` off the right, and the recursion inside a group is only two levels
+// deep (hundreds, then the remainder).
+//
+// THREE THINGS GO WRONG HERE, and none of them are the arithmetic.
+//
+// A ZERO GROUP EMITS NOTHING. `1000000` is "One Million", not "One Million Zero
+// Thousand Zero" — but `0` itself is "Zero". So the empty string is the natural
+// return for a zero group and the whole-number case has to special-case it
+// BEFORE the loop, not inside it.
+//
+// TEN THROUGH NINETEEN ARE NOT COMPOSITIONAL. "Fifteen" is not "Ten Five", so
+// 10..19 needs its own table and the tens digit cannot be handled uniformly.
+// This is the rule a table-driven solver forgets first.
+//
+// THE JOIN IS WHERE THE BUGS ACTUALLY LIVE. Every piece is separated by exactly
+// one space, with none leading and none trailing — and each piece is itself
+// possibly empty. This solver builds RIGHT TO LEFT, prepending each group in
+// front of what is already there, which is the direction that makes the
+// separator a property of the prepend rather than of the loop. The other two
+// solvers in this kata join differently on purpose, so a joining bug cannot be
+// shared by all three.
+
+fn small_name(n: i64) -> String {
+    if n == 1 { return "One"; }
+    if n == 2 { return "Two"; }
+    if n == 3 { return "Three"; }
+    if n == 4 { return "Four"; }
+    if n == 5 { return "Five"; }
+    if n == 6 { return "Six"; }
+    if n == 7 { return "Seven"; }
+    if n == 8 { return "Eight"; }
+    if n == 9 { return "Nine"; }
+    if n == 10 { return "Ten"; }
+    if n == 11 { return "Eleven"; }
+    if n == 12 { return "Twelve"; }
+    if n == 13 { return "Thirteen"; }
+    if n == 14 { return "Fourteen"; }
+    if n == 15 { return "Fifteen"; }
+    if n == 16 { return "Sixteen"; }
+    if n == 17 { return "Seventeen"; }
+    if n == 18 { return "Eighteen"; }
+    if n == 19 { return "Nineteen"; }
+    return "";
+}
+
+fn tens_name(t: i64) -> String {
+    if t == 2 { return "Twenty"; }
+    if t == 3 { return "Thirty"; }
+    if t == 4 { return "Forty"; }
+    if t == 5 { return "Fifty"; }
+    if t == 6 { return "Sixty"; }
+    if t == 7 { return "Seventy"; }
+    if t == 8 { return "Eighty"; }
+    if t == 9 { return "Ninety"; }
+    return "";
+}
+
+fn scale_name(s: i64) -> String {
+    if s == 1 { return "Thousand"; }
+    if s == 2 { return "Million"; }
+    if s == 3 { return "Billion"; }
+    return "";
+}
+
+// 0..999 -> words, with "" for 0. The empty return is what makes a zero group
+// vanish from the output instead of spelling itself.
+fn group_name(n: i64) -> String {
+    if n == 0 { return ""; }
+    if n < 20 { return small_name(n); }
+    if n < 100 {
+        let t = tens_name(n / 10);
+        let r = n % 10;
+        if r == 0 { return t; }
+        return t + " " + small_name(r);
+    }
+    let h = small_name(n / 100) + " Hundred";
+    let r = group_name(n % 100);
+    if r == "" { return h; }
+    return h + " " + r;
+}
+
+fn number_to_words(n: i64) -> String {
+    if n == 0 { return "Zero"; }
+    let mut out = "";
+    let mut rem = n;
+    let mut scale = 0;
+    while rem > 0 {
+        let part = rem % 1000;
+        if part > 0 {
+            let mut piece = group_name(part);
+            if scale > 0 { piece = piece + " " + scale_name(scale); }
+            // Prepend: the separator belongs to this step, so an empty `out`
+            // (the first group placed) contributes no trailing space.
+            if out == "" { out = piece; } else { out = piece + " " + out; }
+        }
+        rem = rem / 1000;
+        scale = scale + 1;
+    }
+    return out;
+}
+
+fn main() {
+    let cases: Vec[i64] = [
+        0, 5, 13, 20, 21, 100, 101, 110, 123,
+        1000, 1000000, 1000010, 12345, 1234567,
+        1000000000, 2147483647
+    ];
+    let mut i = 0;
+    while i < cases.len() {
+        println(f"{cases[i]} -> {number_to_words(cases[i])}");
+        i = i + 1;
+    }
+}

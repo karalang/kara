@@ -1,0 +1,50 @@
+// LeetCode 169 — Majority Element.
+//
+// Return the element that appears MORE than n/2 times (guaranteed to exist).
+// The Boyer-Moore voting algorithm does it in O(n) time and O(1) space: keep a
+// running `candidate` and a `count`. Each element that equals the candidate is a
+// vote for it (+1); each different element is a vote against (-1). When the count
+// hits 0, adopt the current element as the new candidate. Because the majority
+// element occupies more than half the array, its votes can never be fully
+// cancelled — so whoever is left standing at the end is the answer.
+
+fn majority_element(nums: Slice[i64]) -> i64 {
+    let mut candidate = nums[0];
+    let mut count = 0;
+    let n = nums.len();
+    let mut i = 0;
+    while i < n {
+        let x = nums[i];
+        if count == 0 {
+            candidate = x;
+        }
+        if x == candidate {
+            count = count + 1;
+        } else {
+            count = count - 1;
+        }
+        i = i + 1;
+    }
+    return candidate;
+}
+
+fn report(nums: Slice[i64]) {
+    println(majority_element(nums));
+}
+
+fn main() {
+    let a: Array[i64, 3] = [3, 2, 3];
+    report(a);                          // 3
+
+    let b: Array[i64, 7] = [2, 2, 1, 1, 1, 2, 2];
+    report(b);                          // 2
+
+    let c: Array[i64, 1] = [7];
+    report(c);                          // 7
+
+    let d: Array[i64, 5] = [5, 5, 5, 1, 1];
+    report(d);                          // 5
+
+    let e: Array[i64, 6] = [-1, -1, -1, 2, 2, -1];
+    report(e);                          // -1
+}

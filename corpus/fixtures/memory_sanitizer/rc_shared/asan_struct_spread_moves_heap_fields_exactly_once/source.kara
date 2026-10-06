@@ -1,0 +1,13 @@
+
+struct P { x: i64, s: String, v: Vec[i64] }
+fn main() {
+    let mut i = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let b = P { x: 1, s: "n" + "!", v: vec![7, 8] };
+        let p = P { x: 9, ..b };
+        last = p.s;
+        i = i + 1;
+    }
+    println(last);
+}

@@ -1,0 +1,19 @@
+
+fn double(n: i64) -> i64 { n * 2i64 }
+fn big(n: i64) -> bool { n > 2i64 }
+fn label(n: i64) -> String { n.to_string() }
+fn nlen(s: String) -> i64 { s.len() }
+fn main() {
+    let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];
+    let a: Vec[i64] = v.iter().map(double).collect();
+    println(f"{a.len()} {a[0]} {a[3]}");
+    let b: Vec[i64] = v.iter().filter(big).collect();
+    println(f"{b.len()} {b[0]} {b[1]}");
+    let c: Vec[i64] = v.iter().filter(big).map(double).collect();
+    println(f"{c.len()} {c[0]} {c[1]}");
+    let d: Vec[String] = v.iter().map(label).collect();
+    println(f"{d.len()} {d[0]}{d[3]}");
+    let words: Vec[String] = Vec["alpha".to_string(), "be".to_string(), "gamma".to_string()];
+    let e: Vec[i64] = words.iter().map(nlen).collect();
+    println(f"{e.len()} {e[0]} {e[1]} {e[2]} {words.len()}");
+}

@@ -1,0 +1,290 @@
+// vm.kara — a small stack-based bytecode VM in Kāra.
+//
+// A real little virtual machine: a data stack, indexed local slots, a
+// call/return stack for subroutines, arithmetic + comparison, and
+// conditional/unconditional jumps. It dogfoods the compiler's enum + match
+// dispatch HOT PATH (every instruction is an `Op` enum variant matched in the
+// fetch-decode-execute loop), `Vec[Op]` indexing (`program[pc]`), `Vec[i64]`
+// stack push/pop via `Option`, indexed-local store, and nested control flow.
+// The oracle is deterministic: each program prints known values.
+//
+//   karac run examples/vm.kara       # interpreter (or JIT)
+//   karac build examples/vm.kara     # native binary — byte-identical output
+//
+// Expected output: examples/vm.expected.
+
+// The instruction set. Payload-bearing variants carry an i64 immediate (a
+// constant, a local slot, or a jump/call target = instruction index); the rest
+// are nullary. Every one is decoded in `run`'s dispatch `match`.
+enum Op {
+    Push(i64),   // push the immediate
+    Pop,         // discard top
+    Dup,         // duplicate top
+    Swap,        // swap the top two
+    Add,         // a b -> (a + b)
+    Sub,         // a b -> (a - b)
+    Mul,         // a b -> (a * b)
+    Div,         // a b -> (a / b), 0 on divide-by-zero
+    Mod,         // a b -> (a % b), 0 on divide-by-zero
+    Neg,         // a -> (-a)
+    Lt,          // a b -> (a < b ? 1 : 0)
+    Eq,          // a b -> (a == b ? 1 : 0)
+    Gt,          // a b -> (a > b ? 1 : 0)
+    Load(i64),   // push locals[slot]
+    Store(i64),  // pop -> locals[slot]
+    Jmp(i64),    // pc = target
+    Jz(i64),     // pop v; if v == 0 then pc = target
+    Call(i64),   // push (pc+1) on the call stack; pc = target
+    Ret,         // pc = pop the call stack
+    Print,       // print top (leaving it on the stack)
+    Halt,        // stop
+}
+
+// Pop a value, or 0 on underflow (a well-formed program never underflows; the
+// guard keeps the VM total rather than trapping on a malformed one).
+fn popv(s: mut ref Vec[i64]) -> i64 {
+    match s.pop() {
+        Some(v) => v,
+        None => 0,
+    }
+}
+
+// Execute `program` with `n_locals` zero-initialized local slots. Prints each
+// `Print` instruction's top-of-stack; returns the number of instructions retired
+// (a second observable beyond the printed trace).
+fn run(program: ref Vec[Op], n_locals: i64) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut locals: Vec[i64] = Vec.new();
+    let mut li = 0;
+    while li < n_locals {
+        locals.push(0);
+        li = li + 1;
+    }
+    let mut calls: Vec[i64] = Vec.new();
+    let mut pc = 0;
+    let plen = program.len();
+    let mut steps = 0;
+    while pc < plen {
+        steps = steps + 1;
+        match program[pc] {
+            Push(n) => {
+                stack.push(n);
+                pc = pc + 1;
+            }
+            Pop => {
+                popv(mut stack);
+                pc = pc + 1;
+            }
+            Dup => {
+                let v = popv(mut stack);
+                stack.push(v);
+                stack.push(v);
+                pc = pc + 1;
+            }
+            Swap => {
+                let b = popv(mut stack);
+                let a = popv(mut stack);
+                stack.push(b);
+                stack.push(a);
+                pc = pc + 1;
+            }
+            Add => {
+                let b = popv(mut stack);
+                let a = popv(mut stack);
+                stack.push(a + b);
+                pc = pc + 1;
+            }
+            Sub => {
+                let b = popv(mut stack);
+                let a = popv(mut stack);
+                stack.push(a - b);
+                pc = pc + 1;
+            }
+            Mul => {
+                let b = popv(mut stack);
+                let a = popv(mut stack);
+                stack.push(a * b);
+                pc = pc + 1;
+            }
+            Div => {
+                let b = popv(mut stack);
+                let a = popv(mut stack);
+                if b == 0 {
+                    stack.push(0);
+                } else {
+                    stack.push(a / b);
+                }
+                pc = pc + 1;
+            }
+            Mod => {
+                let b = popv(mut stack);
+                let a = popv(mut stack);
+                if b == 0 {
+                    stack.push(0);
+                } else {
+                    stack.push(a % b);
+                }
+                pc = pc + 1;
+            }
+            Neg => {
+                let a = popv(mut stack);
+                stack.push(-a);
+                pc = pc + 1;
+            }
+            Lt => {
+                let b = popv(mut stack);
+                let a = popv(mut stack);
+                if a < b {
+                    stack.push(1);
+                } else {
+                    stack.push(0);
+                }
+                pc = pc + 1;
+            }
+            Eq => {
+                let b = popv(mut stack);
+                let a = popv(mut stack);
+                if a == b {
+                    stack.push(1);
+                } else {
+                    stack.push(0);
+                }
+                pc = pc + 1;
+            }
+            Gt => {
+                let b = popv(mut stack);
+                let a = popv(mut stack);
+                if a > b {
+                    stack.push(1);
+                } else {
+                    stack.push(0);
+                }
+                pc = pc + 1;
+            }
+            Load(slot) => {
+                stack.push(locals[slot]);
+                pc = pc + 1;
+            }
+            Store(slot) => {
+                let v = popv(mut stack);
+                locals[slot] = v;
+                pc = pc + 1;
+            }
+            Jmp(target) => {
+                pc = target;
+            }
+            Jz(target) => {
+                let v = popv(mut stack);
+                if v == 0 {
+                    pc = target;
+                } else {
+                    pc = pc + 1;
+                }
+            }
+            Call(target) => {
+                calls.push(pc + 1);
+                pc = target;
+            }
+            Ret => {
+                pc = popv(mut calls);
+            }
+            Print => {
+                let v = popv(mut stack);
+                println(f"{v}");
+                stack.push(v);
+                pc = pc + 1;
+            }
+            Halt => {
+                pc = plen;
+            }
+        }
+    }
+    steps
+}
+
+// ---- programs ---------------------------------------------------------------
+
+// (2 + 3) * 4  ->  20
+fn prog_arith() -> Vec[Op] {
+    let mut p: Vec[Op] = Vec.new();
+    p.push(Op.Push(2));
+    p.push(Op.Push(3));
+    p.push(Op.Add);
+    p.push(Op.Push(4));
+    p.push(Op.Mul);
+    p.push(Op.Print);
+    p.push(Op.Halt);
+    p
+}
+
+// sum(1..=5) = 15, via a counted loop over locals[0]=sum, locals[1]=i.
+fn prog_sum() -> Vec[Op] {
+    let mut p: Vec[Op] = Vec.new();
+    p.push(Op.Push(0));   // 0  sum = 0
+    p.push(Op.Store(0));  // 1
+    p.push(Op.Push(1));   // 2  i = 1
+    p.push(Op.Store(1));  // 3
+    p.push(Op.Load(1));   // 4  LOOP: i
+    p.push(Op.Push(6));   // 5
+    p.push(Op.Lt);        // 6  i < 6 ?
+    p.push(Op.Jz(17));    // 7  if not, exit
+    p.push(Op.Load(0));   // 8  sum
+    p.push(Op.Load(1));   // 9  i
+    p.push(Op.Add);       // 10
+    p.push(Op.Store(0));  // 11 sum += i
+    p.push(Op.Load(1));   // 12
+    p.push(Op.Push(1));   // 13
+    p.push(Op.Add);       // 14
+    p.push(Op.Store(1));  // 15 i += 1
+    p.push(Op.Jmp(4));    // 16 back to LOOP
+    p.push(Op.Load(0));   // 17 EXIT: sum
+    p.push(Op.Print);     // 18
+    p.push(Op.Halt);      // 19
+    p
+}
+
+// 5! = 120, same loop shape with Mul.
+fn prog_fact() -> Vec[Op] {
+    let mut p: Vec[Op] = Vec.new();
+    p.push(Op.Push(1));   // 0  fact = 1
+    p.push(Op.Store(0));  // 1
+    p.push(Op.Push(1));   // 2  i = 1
+    p.push(Op.Store(1));  // 3
+    p.push(Op.Load(1));   // 4  LOOP
+    p.push(Op.Push(6));   // 5
+    p.push(Op.Lt);        // 6
+    p.push(Op.Jz(17));    // 7
+    p.push(Op.Load(0));   // 8
+    p.push(Op.Load(1));   // 9
+    p.push(Op.Mul);       // 10 fact *= i
+    p.push(Op.Store(0));  // 11
+    p.push(Op.Load(1));   // 12
+    p.push(Op.Push(1));   // 13
+    p.push(Op.Add);       // 14
+    p.push(Op.Store(1));  // 15 i += 1
+    p.push(Op.Jmp(4));    // 16
+    p.push(Op.Load(0));   // 17 EXIT
+    p.push(Op.Print);     // 18
+    p.push(Op.Halt);      // 19
+    p
+}
+
+// A subroutine: `double` (×2) called on 21 -> 42, exercising Call/Ret.
+fn prog_double() -> Vec[Op] {
+    let mut p: Vec[Op] = Vec.new();
+    p.push(Op.Push(21));  // 0
+    p.push(Op.Call(4));   // 1  call double
+    p.push(Op.Print);     // 2  -> 42
+    p.push(Op.Halt);      // 3
+    p.push(Op.Push(2));   // 4  double:
+    p.push(Op.Mul);       // 5
+    p.push(Op.Ret);       // 6
+    p
+}
+
+fn main() {
+    run(prog_arith(), 0);
+    run(prog_sum(), 2);
+    run(prog_fact(), 2);
+    run(prog_double(), 0);
+}

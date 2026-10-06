@@ -1,0 +1,13 @@
+
+fn twice(v: Vec[i64]) -> i64 {
+    let a = v;
+    let b = v;
+    a[0] + b[1]
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(32);
+    println(twice(v));
+}

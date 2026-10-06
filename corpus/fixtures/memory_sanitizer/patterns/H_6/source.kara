@@ -1,0 +1,11 @@
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Holder] = Some(mkh(i));
+        match o {
+            Some(Holder { name, id }) => { println(name.len() + id); },
+            None => { println("missing"); },
+        }
+        i = i + 1;
+    };
+}

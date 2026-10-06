@@ -1,0 +1,7 @@
+fn take(s: String) { println(s); }
+fn main() {
+    let mut s = "a".to_string();
+    take(s);
+    s = "b".to_string();
+    println(s);
+}

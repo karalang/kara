@@ -1,0 +1,93 @@
+// LeetCode #48: Rotate Image — out-of-place index map into a fresh grid.
+//
+// The fourth factoring, and the one the LeetCode follow-up explicitly rules out: instead of
+// mutating the input, allocate a fresh n×n grid and SCATTER each source cell to its rotated home.
+// It earns its place in the kata because it states the rotation's index arithmetic outright — the
+// single line the three in-place forms encode implicitly:
+//
+//     dst[j][n-1-i] = src[i][j]
+//
+// i.e. the cell at row i, column j of the source lands at row j, column n-1-i of the result — a
+// 90°-clockwise quarter-turn. Reading that map the other way, `new[i][j] = old[n-1-j][i]`, is the
+// definition every sibling here agrees with. This form is O(n²) EXTRA space (the whole second
+// grid), so it would fail the in-place follow-up; it is kept purely as the explicit-mapping
+// contrast to the ★ ring rotation and the two transpose-based passes, all of which avoid the
+// second buffer. The result is identical to the other three solvers on every case.
+//
+// Building the destination first fills an n×n grid of zeros (push n rows of n zeros), then the
+// double loop scatters every source cell — `let row = src[i]` borrows each source row out of the
+// `ref Vec[Vec[i64]]` (B-2026-06-29-2) before reading its cells.
+//
+// LeetCode bounds: 1 ≤ n ≤ 20, -1000 ≤ matrix[i][j] ≤ 1000 — i64 throughout for corpus uniformity.
+
+fn rotate(src: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = src.len();
+    // Allocate the fresh n×n grid, zero-filled.
+    let mut dst: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r < n {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < n {
+            row.push(0);
+            c = c + 1;
+        }
+        dst.push(row);
+        r = r + 1;
+    }
+    // Scatter: the source cell (i, j) lands at (j, n-1-i).
+    let mut i = 0;
+    while i < n {
+        let row = ref src[i];
+        let mut j = 0;
+        while j < n {
+            dst[j][n - 1 - i] = row[j];
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    dst
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn print_grid(m: ref Vec[Vec[i64]]) {
+    let n = m.len();
+    let mut i = 0;
+    while i < n {
+        let row = ref m[i];
+        let mut s: String = "[";
+        let mut j = 0;
+        let w = row.len();
+        while j < w {
+            if j > 0 {
+                s.push_str(", ");
+            }
+            s.push_str(f"{row[j]}");
+            j = j + 1;
+        }
+        s.push(']');
+        println(s);
+        i = i + 1;
+    }
+}
+
+fn report(grid: Vec[Vec[i64]]) {
+    print_grid(grid);
+    println("->");
+    let rotated = rotate(grid);
+    print_grid(rotated);
+    println("---");
+}
+
+fn main() {
+    report([[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+    report([[5, 1, 9, 11], [2, 4, 8, 10], [13, 3, 6, 7], [15, 14, 12, 16]]);
+    report([[1]]);
+    report([[1, 2], [3, 4]]);
+    report([[-1, 2, -3, 4, -5],
+            [6, -7, 8, -9, 10],
+            [-11, 12, -13, 14, -15],
+            [16, -17, 18, -19, 20],
+            [-21, 22, -23, 24, -25]]);
+}

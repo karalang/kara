@@ -1,0 +1,13 @@
+source = "tests/interpreter/option_result.rs::test_result_ctor_tuple_temp_arg_keeps_its_payload_drop_body"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

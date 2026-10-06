@@ -1,0 +1,15 @@
+
+struct Data { value: i64 }
+fn consume(d: Data) -> i64 { d.value }
+fn use_d(d: Data) -> i64 { d.value }
+fn process(cond: bool, d: Data) -> i64 {
+    if cond { consume(d); }
+    par {
+        use_d(d);
+        let _throwaway = 0i64;
+    }
+    0i64
+}
+fn main() {
+    process(false, Data { value: 7 });
+}

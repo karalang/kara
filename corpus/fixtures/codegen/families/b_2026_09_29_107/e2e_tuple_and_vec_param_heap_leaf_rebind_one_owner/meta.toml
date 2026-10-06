@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_107.rs::e2e_tuple_and_vec_param_heap_leaf_rebind_one_owner"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_09_29_107.rs::asan_tuple_and_vec_param_heap_leaf_rebind_frees_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,69 @@
+// LeetCode #31 bench harness — Kāra, the canonical four-move next-permutation.
+//
+// The headline style: pivot scan, successor swap, tail reverse — all two-pointer,
+// in place, no allocation (the same shape as the solution's next_permutation.kara).
+//
+// This is a SEQUENTIAL enumeration benchmark — the algorithm's real shape: start
+// from the sorted array [0, 1, .., K-1] and call next_permutation K! times to walk
+// EVERY permutation in lexicographic order (the K!-th call wraps back to sorted),
+// folding a rolling checksum of each permutation into one accumulator. The whole
+// run is REPEAT such full enumerations. The loop carries a hard dependency — each
+// permutation is computed in place from the previous one — so it does not
+// auto-parallelize; this is a single-lane (seq) bench by construction. The
+// checksum is the un-elidable sink: every permutation must be produced and
+// observed, so no comparator can fold the enumeration away.
+
+fn next_permutation(nums: mut Slice[i64], len: i64) {
+    let mut i = len - 2;
+    while i >= 0 and nums[i] >= nums[i + 1] {
+        i = i - 1;
+    }
+    if i >= 0 {
+        let mut j = len - 1;
+        while nums[j] <= nums[i] {
+            j = j - 1;
+        }
+        let tmp = nums[i];
+        nums[i] = nums[j];
+        nums[j] = tmp;
+    }
+    let mut lo = i + 1;
+    let mut hi = len - 1;
+    while lo < hi {
+        let t = nums[lo];
+        nums[lo] = nums[hi];
+        nums[hi] = t;
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+}
+
+fn main() {
+    let k = 10;
+    let fact = 3628800;        // 10!
+    let repeat = 8;
+    let modulus = 2147483647;  // 2^31 - 1, keeps the checksum overflow-safe
+
+    let mut nums: Array[i64, 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    let mut acc = 0;
+
+    let mut r = 0;
+    while r < repeat {
+        let mut step = 0;
+        while step < fact {
+            // Rolling checksum of the current permutation.
+            let mut h = 0;
+            let mut i = 0;
+            while i < k {
+                h = (h * 131 + nums[i]) % modulus;
+                i = i + 1;
+            }
+            acc = (acc + h) % modulus;
+            next_permutation(mut nums, k);
+            step = step + 1;
+        }
+        r = r + 1;
+    }
+
+    println(f"{acc}");
+}

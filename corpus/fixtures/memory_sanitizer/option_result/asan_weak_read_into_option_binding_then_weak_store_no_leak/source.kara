@@ -1,0 +1,15 @@
+
+shared struct Node { val: i64, id: i64, mut next: weak Node }
+fn main() {
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: 1i64, id: 0i64, next: None });
+    nodes.push(Node { val: 2i64, id: 1i64, next: None });
+    nodes.push(Node { val: 3i64, id: 2i64, next: None });
+    nodes[0].next = nodes[1];
+    nodes[1].next = nodes[2];
+    let a: Option[Node] = nodes[0].next;
+    nodes[2].next = a;
+    let b: Option[Node] = nodes[1].next;
+    nodes[2].next = b;
+    println("ok");
+}

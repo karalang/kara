@@ -1,0 +1,30 @@
+struct S1 { v: i64, s: String }
+impl Drop for S1 { fn drop(mut ref self) { println(f"dS{self.v}") } }
+enum Ho { P(Option[S1]), Q }
+enum Hs { P(Option[String]), Q }
+struct Wo { o: Option[S1] }
+fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
+fn tako(o: Option[S1]) -> i64 { 1 }
+fn keep(o: Option[S1]) -> i64 { match o { Some(r) => r.v, None => 0 } }
+fn outo(h: Ho) -> Option[S1] { match h { Ho.P(o) => o, Ho.Q => None } }
+struct Ws { o: Option[String] }
+fn st(k: i64) -> String { f"ssssssss{k}" }
+fn takes(o: Option[String]) -> i64 { 1 }
+fn keeps(o: Option[String]) -> i64 { match o { Some(r) => r.len(), None => 0 } }
+fn main() {
+    { let h = Ho.P(Option.Some(s(1))); match h { Ho.P(o) => { let u = o; println("in") } Ho.Q => {} } }
+    { let h = Ho.P(Option.Some(s(2))); match h { Ho.P(o) => { println(f"{tako(o)}") } Ho.Q => {} } }
+    { let h = Ho.P(Option.Some(s(3))); match h { Ho.P(o) => { println(f"{keep(o)}") } Ho.Q => {} } }
+    { let h = Ho.P(Option.Some(s(4))); let o2 = match h { Ho.P(o) => o, Ho.Q => None }; println(f"{o2.is_some()}") }
+    { let h = Ho.P(Option.Some(s(6))); match h { Ho.P(o) => { let w = Wo { o: o }; println("in") } Ho.Q => {} } }
+    { let h = Ho.P(Option.Some(s(7))); match h { Ho.P(o) => { let v: Vec[Option[S1]] = [o]; println("in") } Ho.Q => {} } }
+    { let h = Ho.P(Option.Some(s(8))); match h { Ho.P(o) => { let c = true; if c { let u = o; println("a") } else { println("b") } } Ho.Q => {} } }
+    { let h = Hs.P(Option.Some(st(1))); match h { Hs.P(o) => { let u = o; println(f"{u.is_some()}") } Hs.Q => {} } }
+    { let h = Hs.P(Option.Some(st(2))); match h { Hs.P(o) => { println(f"{takes(o)}") } Hs.Q => {} } }
+    { let h = Hs.P(Option.Some(st(3))); match h { Hs.P(o) => { println(f"{keeps(o)}") } Hs.Q => {} } }
+    { let h = Hs.P(Option.Some(st(6))); match h { Hs.P(o) => { let w = Ws { o: o }; println("in") } Hs.Q => {} } }
+    { let h = Hs.P(Option.Some(st(7))); match h { Hs.P(o) => { let v: Vec[Option[String]] = [o]; println(f"{v.len()}") } Hs.Q => {} } }
+    { let h = Hs.P(Option.Some(st(12))); match h { Hs.P(o) => { let w = Some(o); println("in") } Hs.Q => {} } }
+    { let h = Hs.P(Option.Some(st(13))); match h { Hs.P(o) => { let mut v: Vec[Option[String]] = []; v.push(o); println(f"{v.len()}") } Hs.Q => {} } }
+    println("end")
+}

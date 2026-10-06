@@ -1,0 +1,14 @@
+
+        fn main() {
+            let x = 7;
+            if x == 0 {
+                println("zero");
+            } else {
+                let a = 1;
+                let b = 2;
+                let c = 3;
+                let d = a + b + c;
+                println(f"{d}");
+            }
+        }
+    

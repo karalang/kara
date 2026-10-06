@@ -1,0 +1,7 @@
+fn main() {
+    let u: u8 = 3;
+    let k: i64 = -1;
+    let w: u64 = 7;
+    let b: i8 = -2;
+    println(f"{u > 0} {u == 3} {w > 6} {b < k} {(u as i64) > k} {u > (k as u8)}");
+}

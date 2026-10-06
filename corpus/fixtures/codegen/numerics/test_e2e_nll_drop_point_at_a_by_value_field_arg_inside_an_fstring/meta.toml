@@ -1,0 +1,13 @@
+source = "tests/codegen/numerics.rs::test_e2e_nll_drop_point_at_a_by_value_field_arg_inside_an_fstring"
+dedup_of = ["tests/par_codegen.rs::test_e2e_auto_par_nll_drop_point_at_a_by_value_field_arg_inside_an_fstring"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

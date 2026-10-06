@@ -1,0 +1,13 @@
+source = "tests/interpreter/frames.rs::test_narrow_float_assoc_call_namespace_runs"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

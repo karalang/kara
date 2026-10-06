@@ -1,0 +1,15 @@
+
+fn ids() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha");
+    v.push("beta");
+    return v;
+}
+fn main() {
+    let a = ids();
+    let b = ids();
+    println(f"{a == b}");
+    println(f"{ids() == ids()}");
+    println(a[0]);
+    println(b[1]);
+}

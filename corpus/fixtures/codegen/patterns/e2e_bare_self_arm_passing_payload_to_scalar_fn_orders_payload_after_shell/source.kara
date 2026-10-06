@@ -1,0 +1,33 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" } }
+fn eat(r: R) -> i64 { return r.id; }
+fn eatg[T](x: T, k: i64) -> i64 { return k; }
+fn say(r: R) { println(f"  say{r.id}"); }
+fn id(r: R) -> R { return r; }
+fn keep(v: mut ref Vec[R], r: R) { v.push(r); }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+impl E {
+    fn call(self) -> i64 { match self { E.A(r) => { return eat(r); } E.B => { return 0; } } }
+    fn tailc(self) -> i64 { match self { E.A(r) => eat(r), E.B => 0 } }
+    fn gcall(self) -> i64 { match self { E.A(r) => { return eatg(r, 7); } E.B => { return 0; } } }
+    fn stmt(self) -> i64 { match self { E.A(r) => { say(r); return 1; } E.B => { return 0; } } }
+    fn iflet(self) -> i64 { if let E.A(r) = self { return eat(r); } return 0; }
+    fn opt(self) -> Option[R] { match self { E.A(r) => { return Some(r); } E.B => { return None; } } }
+    fn cid(self) -> i64 { match self { E.A(r) => { let q = id(r); return q.id; } E.B => { return 0; } } }
+    fn ckeep(self, v: mut ref Vec[R]) -> i64 { match self { E.A(r) => { keep(v, r); return 1; } E.B => { return 0; } } }
+}
+fn main() {
+    println("call");  { let a: E = E.A(mk(1)); println(f"  x{a.call()}") }
+    println("tail");  { let a: E = E.A(mk(2)); println(f"  x{a.tailc()}") }
+    println("gen");   { let a: E = E.A(mk(3)); println(f"  x{a.gcall()}") }
+    println("stmt");  { let a: E = E.A(mk(4)); println(f"  x{a.stmt()}") }
+    println("iflet"); { let a: E = E.A(mk(5)); println(f"  x{a.iflet()}") }
+    println("temp");  { println(f"  x{E.A(mk(7)).call()}") }
+    println("none");  { let a: E = E.B; println(f"  x{a.call()}") }
+    println("opt");   { let a: E = E.A(mk(8)); let o = a.opt(); println("  held") }
+    println("id");    { let a: E = E.A(mk(9)); println(f"  x{a.cid()}") }
+    println("keep");  { let mut v: Vec[R] = Vec.new(); { let a: E = E.A(mk(10)); println(f"  x{a.ckeep(mut v)}") } println(f"  n{v.len()}") }
+    println("end");
+}

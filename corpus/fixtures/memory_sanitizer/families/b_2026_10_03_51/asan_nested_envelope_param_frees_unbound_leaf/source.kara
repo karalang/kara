@@ -1,0 +1,14 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn wild(x: Result[Option[R], i64]) -> i64 { match x { Ok(_) => 1, Err(e) => e } }
+fn env(x: Result[Option[R], i64]) -> i64 { match x { Ok(o) => 2, Err(e) => e } }
+fn rd(x: Result[Option[R], i64]) -> i64 { match x { Ok(o) => if o.is_some() { 3 } else { 0 }, Err(e) => e } }
+fn none(x: Result[Option[R], i64]) -> i64 { return 4 }
+fn main() {
+    println(wild(Ok(Some(mk(1)))));
+    println(env(Ok(Some(mk(2)))));
+    println(rd(Ok(Some(mk(3)))));
+    println(none(Ok(Some(mk(4)))));
+    println("end");
+}

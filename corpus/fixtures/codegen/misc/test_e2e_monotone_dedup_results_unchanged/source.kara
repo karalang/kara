@@ -1,0 +1,22 @@
+
+fn remove_duplicates(nums: mut Slice[i64], len: i64) -> i64 {
+    if len == 0 {
+        return 0;
+    }
+    let mut k = 1;
+    for i in 1..len {
+        if nums[i] != nums[k - 1] {
+            nums[k] = nums[i];
+            k = k + 1;
+        }
+    }
+    k
+}
+fn main() {
+    let mut a: Array[i64, 10] = [0, 0, 1, 1, 1, 2, 2, 3, 3, 4];
+    let k = remove_duplicates(mut a, 10);
+    println(k);
+    for i in 0..k {
+        println(a[i]);
+    }
+}

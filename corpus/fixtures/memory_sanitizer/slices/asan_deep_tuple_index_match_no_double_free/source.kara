@@ -1,0 +1,27 @@
+
+enum Tok { Id(String), Num(i64) }
+struct Inner { tok: Tok, n: i64 }
+struct Hs { ps: (Inner, i64) }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 8 {
+        let h = Hs { ps: (Inner { tok: Tok.Id(f"id-{i}"), n: i }, i) };
+        // Consume arm — `s` owns the payload; h's tuple drop must skip it.
+        match h.ps.0.tok {
+            Id(s) => { acc = acc + s.len(); }
+            Num(n) => { acc = acc + n; }
+        }
+        // Borrow arm over a fresh value.
+        let h2 = Hs { ps: (Inner { tok: Tok.Id(f"v-{i}"), n: i }, i) };
+        match h2.ps.0.tok {
+            Id(s) => { acc = acc + s.len(); }
+            Num(n) => { acc = acc + n; }
+        }
+        // Scalar second element (regression guard).
+        acc = acc + h.ps.1;
+        i = i + 1;
+    }
+    if acc > 999999 { println("never"); }
+    println("done");
+}

@@ -1,0 +1,18 @@
+
+fn build_rows(n: i64) -> Vec[String] {
+    let mut m = 1;
+    loop {
+        let mut row: Vec[String] = Vec.new();
+        row.push(f"row{m}");
+        if m == n {
+            return row;
+        }
+        m = m + 1;
+    }
+}
+
+fn main() {
+    let rows = build_rows(3);
+    println(rows.len());
+    println(rows[0]);
+}

@@ -1,0 +1,123 @@
+// LeetCode 244 — Shortest Word Distance II, the index-pool phrasing.
+//
+// Same answer as `shortest_distance_ii.kara`, built differently. Instead of
+// mapping each word straight to its `Vec[i64]` of positions, map it to a SLOT
+// NUMBER and keep the lists in a side `Vec[Vec[i64]]`:
+//
+//     slot:  Map[String, i64]     word -> which list
+//     lists: Vec[Vec[i64]]        the lists themselves
+//
+// `lists[s].push(i)` appends in place, so construction is O(n).
+//
+// THIS FILE ONCE CLAIMED that indirection was REQUIRED — that "Kāra has no
+// in-place mutation of a map VALUE", so the direct `Map[String, Vec[i64]]`
+// phrasing was forced into a read-CLONE-modify-reinsert and an O(n²) build.
+// That was wrong. Kāra has two in-place paths, both of which shipped before this
+// file was written:
+//
+//     index.entry(w).or_insert(Vec.new()).push(i)   // Entry API
+//     index[w].push(i)                              // index-assign, as in #332
+//
+// `shortest_distance_ii.kara` now uses the first and builds in O(n) — measured
+// flat at 0.008 s for n=128,000 where the clone phrasing took 13.89 s. So the
+// direct phrasing scales, and the ~1000×-slower-than-CPython figure this comment
+// used to quote was the cost of the clone, not of the language. See kara
+// `B-2026-08-03-9` (reframed to a discoverability gap).
+//
+// The variant is kept because it is a genuinely distinct canonical phrasing
+// worth probing — a slot map plus a side pool is how you would write this in a
+// language without an entry API, and it exercises `Vec[Vec[i64]]` element
+// mutation, which the direct phrasing does not. It is NOT a workaround, and the
+// corpus rule against routing around gaps does not apply to it, because there is
+// no gap here to route around.
+
+struct WordDistance {
+    slot: Map[String, i64],
+    lists: Vec[Vec[i64]],
+    size: i64,
+}
+
+fn new_word_distance(words: ref Slice[String]) -> WordDistance {
+    let mut slot: Map[String, i64] = Map.new();
+    let mut lists: Vec[Vec[i64]] = Vec.new();
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        let w = words[i].clone();
+        match slot.get(w) {
+            // In-place append — the whole point of the indirection.
+            Some(s) => { lists[s].push(i); }
+            None => {
+                let mut fresh: Vec[i64] = Vec.new();
+                fresh.push(i);
+                let _ = slot.insert(w, lists.len());
+                lists.push(fresh);
+            }
+        }
+        i = i + 1;
+    }
+    return WordDistance { slot: slot, lists: lists, size: n };
+}
+
+fn shortest(wd: ref WordDistance, word1: ref String, word2: ref String) -> i64 {
+    match wd.slot.get(word1) {
+        None => { return wd.size; }
+        Some(s1) => {
+            match wd.slot.get(word2) {
+                None => { return wd.size; }
+                Some(s2) => {
+                    let p1 = ref wd.lists[s1];
+                    let p2 = ref wd.lists[s2];
+                    let mut best = wd.size;
+                    let mut a = 0;
+                    let mut b = 0;
+                    while a < p1.len() and b < p2.len() {
+                        best = min(best, (p1[a] - p2[b]).abs());
+                        if p1[a] < p2[b] {
+                            a = a + 1;
+                        } else {
+                            b = b + 1;
+                        }
+                    }
+                    return best;
+                }
+            }
+        }
+    }
+}
+
+fn report(wd: ref WordDistance, word1: ref String, word2: ref String) {
+    println(f"{word1} <-> {word2} : {shortest(wd, word1, word2)}");
+}
+
+fn main() {
+    let d1: Array[String, 5] = ["practice", "makes", "perfect", "coding", "makes"];
+    let wd1 = new_word_distance(d1);
+    report(wd1, "coding", "practice");   // 3
+    report(wd1, "makes", "coding");      // 1
+    report(wd1, "makes", "perfect");     // 1
+    report(wd1, "practice", "perfect");  // 2
+
+    let d2: Array[String, 7] = ["a", "b", "x", "x", "x", "a", "b"];
+    let wd2 = new_word_distance(d2);
+    report(wd2, "a", "b");               // 1
+    report(wd2, "b", "a");               // 1
+    report(wd2, "a", "x");               // 1
+
+    let d3: Array[String, 2] = ["a", "b"];
+    let wd3 = new_word_distance(d3);
+    report(wd3, "a", "b");               // 1
+
+    let d4: Array[String, 6] = ["p", "q", "p", "q", "p", "q"];
+    let wd4 = new_word_distance(d4);
+    report(wd4, "p", "q");               // 1
+
+    let d5: Array[String, 6] = ["m", "z", "z", "z", "n", "m"];
+    let wd5 = new_word_distance(d5);
+    report(wd5, "m", "n");               // 1
+    report(wd5, "z", "n");               // 1
+
+    let d6: Array[String, 3] = ["one", "two", "three"];
+    let wd6 = new_word_distance(d6);
+    report(wd6, "two", "four");          // 3
+}

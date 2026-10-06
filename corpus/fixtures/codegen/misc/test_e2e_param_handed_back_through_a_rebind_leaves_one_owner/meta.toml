@@ -1,0 +1,13 @@
+source = "tests/codegen/misc.rs::test_e2e_param_handed_back_through_a_rebind_leaves_one_owner"
+dedup_of = ["tests/par_codegen.rs::test_e2e_auto_par_param_handed_back_through_a_rebind_leaves_one_owner"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

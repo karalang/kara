@@ -1,0 +1,8 @@
+struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+fn mkh(i: i64) -> H { return H { id: i, s: "zzzzzzzzzzzz" } }
+fn eat(o: Option[(H, (H, H))]) -> H { match o { Option.Some(t) => { let a = t.1.0; let b = t.1.1; println(f"n:{b.id}"); return a; } Option.None => { return mkh(0); } } }
+fn main() {
+    let got = eat(Option.Some((H { id: 5, s: "aaaaaaaaaaaa" }, (H { id: 6, s: "bbbbbbbbbbbb" }, H { id: 7, s: "cccccccccccc" })))); println(f"got:{got.id}");
+    println("end");
+}

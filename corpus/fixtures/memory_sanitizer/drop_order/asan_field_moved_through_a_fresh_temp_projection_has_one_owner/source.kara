@@ -1,0 +1,23 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct P { name: String }
+struct W2 { p: P, b: i64 }
+fn mkw2(n: i64) -> W2 { return W2 { p: P { name: f"p-string-longer-than-sso-{n}" }, b: n }; }
+struct P3 { name: String, d: D }
+struct W3 { p: P3, q: D, b: i64 }
+fn mkw3(n: i64) -> W3 { return W3 { p: P3 { name: f"p3-string-longer-than-sso-{n}", d: mkd(n) }, q: mkd(n + 100), b: n }; }
+struct A4 { w: W3, k: i64 }
+fn mk4(n: i64) -> A4 { return A4 { w: mkw3(n), k: n }; }
+fn f5() -> String { mkw2(2).p.name }
+fn f7() -> D { mkw3(6).p.d }
+fn main() {
+    let s1 = mkw2(1).p.name; println(s1);
+    println(f5());
+    let s3 = mkw3(3).p.name; println(s3);
+    let s4 = mk4(4).w.p.name; println(s4);
+    let t = (mkw3(5).p.name, 1); println(t.0);
+    let d = f7(); println(d.name);
+    let mut s7 = f"x"; s7 = mkw3(7).p.name; println(s7);
+    println("end")
+}

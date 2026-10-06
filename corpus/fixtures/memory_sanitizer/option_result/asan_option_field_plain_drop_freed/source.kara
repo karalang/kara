@@ -1,0 +1,8 @@
+
+struct A { sv: Option[String] }
+fn main() {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { sv: Some("facet_a_plaindrop_option_string_payload_x".to_string()) }); i = i + 1; }
+    println(v.len());
+}

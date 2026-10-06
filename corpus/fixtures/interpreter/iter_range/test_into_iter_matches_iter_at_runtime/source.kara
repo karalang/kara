@@ -1,0 +1,10 @@
+
+fn main() {
+    let v = [1, 2];
+    let mut a = v.iter();
+    let mut b = v.into_iter();
+    println(a.next().unwrap());
+    println(b.next().unwrap());
+    println(a.next().unwrap());
+    println(b.next().unwrap());
+}

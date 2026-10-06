@@ -1,0 +1,21 @@
+
+struct Pair { a: Vec[i64], b: Vec[i64] }
+fn build(k: i64) -> i64 {
+    let mut x: Vec[i64] = Vec.new();
+    x.push(k * 10i64);
+    let mut y: Vec[i64] = Vec.new();
+    y.push(k * 20i64);
+    y.push(k * 30i64);
+    let p: Pair = Pair { a: x, b: y };
+    return p.a[0i64] + p.b[1i64];
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut s = 0i64;
+    let mut i = base;
+    while i < base + 5i64 {
+        s = s + build(i);
+        i = i + 1;
+    }
+    println(f"{s}");
+}

@@ -1,0 +1,7 @@
+
+fn main() {
+    let arr: Array[i64, 5] = [10, 20, 30, 40, 50];
+    let [first, ..rest] = arr;
+    println(first);
+    println(rest.len());
+}

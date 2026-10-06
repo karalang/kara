@@ -1,0 +1,119 @@
+// Benchmark workload for LeetCode #140 — Word Break II.
+//
+// #140 enumerates EVERY segmentation of the string into dictionary words — an
+// exponential backtracking search. This bench keeps the strings SHORT and the
+// dicts SMALL (so the search stays tractable) and, instead of building the
+// sentence strings, COUNTS the number of valid segmentations via the same naive
+// recursion: `count(start)` returns the number of ways the suffix `s[start..]`
+// segments, summing `count(end)` over every dictionary word `s[start..end]`.
+//
+// Work per case is the number of partial segmentations explored — genuinely
+// exponential in the string. Counts are bounded by the compositions of SLEN
+// into parts {1..maxlen} (≈ 10^4 for SLEN=16), so the i64 sink never overflows.
+// The dict is a SET, encoded as a flat stamped base-A table (C hand-rolls it;
+// see #139). Sink = Σ segmentation-counts over `cases` random small inputs.
+
+fn count(s: ref Vec[i64], table: ref Vec[bool], base: ref Vec[i64],
+         start: i64, slen: i64, alpha: i64, minlen: i64, maxlen: i64) -> i64 {
+    if start == slen {
+        return 1;
+    }
+    let mut total = 0;
+    let mut code = 0;
+    let mut end = start + 1;
+    while end <= slen and end - start <= maxlen {
+        code = code * alpha + s[end - 1];
+        let ln = end - start;
+        if ln >= minlen {
+            let key = base[ln] + code;
+            if table[key] {
+                total = total + count(s, table, base, end, slen, alpha, minlen, maxlen);
+            }
+        }
+        end = end + 1;
+    }
+    return total;
+}
+
+fn main() {
+    let alpha = 3;
+    let minlen = 1;
+    let maxlen = 3;
+    let slen = 16;      // string length per case (SHORT)
+    let dwords = 25;    // dictionary size per case (SMALL)
+    let cases = 80000;
+
+    // Per-length base offsets; table size = base[L] + A^L.
+    let mut base: Vec[i64] = Vec.new();
+    base.push(0);
+    base.push(0);
+    let mut pwr = alpha;
+    let mut acc = 0;
+    let mut b = 2;
+    while b <= maxlen {
+        acc = acc + pwr;
+        base.push(acc);
+        pwr = pwr * alpha;
+        b = b + 1;
+    }
+    let tsize = acc + pwr;
+
+    let mut table: Vec[bool] = Vec.new();
+    let mut t = 0;
+    while t < tsize {
+        table.push(false);
+        t = t + 1;
+    }
+
+    let mut s: Vec[i64] = Vec.new();
+    let mut si = 0;
+    while si < slen {
+        s.push(0);
+        si = si + 1;
+    }
+
+    let mut state = 12345;
+    let mut sink = 0;
+
+    let mut c = 0;
+    while c < cases {
+        // clear the dict table
+        let mut z = 0;
+        while z < tsize {
+            table[z] = false;
+            z = z + 1;
+        }
+        // build the string
+        let mut i = 0;
+        while i < slen {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let r = state >> 16;
+            s[i] = r % alpha;
+            i = i + 1;
+        }
+        // build the dictionary
+        let mut w = 0;
+        while w < dwords {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let rl = state >> 16;
+            let span = maxlen - minlen + 1;
+            let wlen = minlen + (rl % span);
+            let mut code = 0;
+            let mut k = 0;
+            while k < wlen {
+                state = (state * 1103515245 + 12345) & 2147483647;
+                let rc = state >> 16;
+                code = code * alpha + (rc % alpha);
+                k = k + 1;
+            }
+            let key = base[wlen] + code;
+            table[key] = true;
+            w = w + 1;
+        }
+
+        sink = sink + count(s, table, base, 0, slen, alpha, minlen, maxlen);
+        c = c + 1;
+    }
+
+    println(sink);
+}

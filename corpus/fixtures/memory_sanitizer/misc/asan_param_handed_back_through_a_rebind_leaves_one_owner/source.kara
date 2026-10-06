@@ -1,0 +1,33 @@
+
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
+struct Box2 { r: R }
+struct P { id: i64, name: String }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+fn mkP(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
+
+fn top(r: R) -> R { let m = r; return m; }
+fn two(r: R) -> R { let m = r; let n = m; return n; }
+fn tail(r: R) -> R { let m = r; m }
+fn pair(a: i64, r: R) -> R { let m = r; return m; }
+fn bx(r: R) -> Box2 { let m = r; return Box2 { r: m }; }
+fn rd(r: R) -> R { let m = r; println(f"in={m.name}"); return m; }
+fn ctl(p: P) -> P { let m = p; return m; }
+fn ret(r: R) -> R { return r; }
+
+fn main() {
+  let a = top(mk(41)); println(f"top={a.inner.v}");
+  let b = two(mk(42)); println(f"two={b.inner.v}");
+  let c = tail(mk(43)); println(f"tail={c.inner.v}");
+  let d = pair(7, mk(44)); println(f"pair={d.inner.v}");
+  let e = bx(mk(45)); println(f"bx={e.r.inner.v}");
+  let h = rd(mk(48)); println(f"rd={h.name}");
+  top(mk(49));
+  let mut i = 0;
+  while i < 2 { let z = top(mk(50)); println(f"lp={z.inner.v}"); i = i + 1; }
+  let p = ctl(mkP(52)); println(f"ctl={p.name}");
+  let r = ret(mk(53)); println(f"ret={r.inner.v}");
+  println("end");
+}

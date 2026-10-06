@@ -1,0 +1,16 @@
+
+struct Holder {{ f: File }}
+fn make(path: String) -> Holder with reads(FileSystem) panics {{
+    match File.open(path) {{
+        Ok(fh) => Holder {{ f: fh }},
+        Err(_) => panic("open-failed"),
+    }}
+}}
+fn main() with reads(FileSystem) writes(FileSystem) panics {{
+    let mut buf: Array[u8, 4] = [0u8; 4];
+    let h = make("{path}");
+    match h.f.read(mut buf) {{
+        Ok(_) => println(f"struct {{buf[0]}}"),
+        Err(_) => println("struct-failed"),
+    }}
+}}

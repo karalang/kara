@@ -1,0 +1,26 @@
+
+enum E { A(String), B(i64) }
+fn describe(e: E) -> String {
+    match e {
+        E.A(name) => f"A[{name}]",
+        E.B(k) => f"B[{k}]",
+    }
+}
+fn main() {
+    println(describe(E.A("x" + "y")));
+    println(describe(E.B(99)));
+    let e = E.A("hi");
+    let s = match e {
+        E.A(name) => f"<{name}>",
+        E.B(_) => "none",
+    };
+    println(s);
+    let r = describe(E.A("a" + "b"));
+    println(f"outer:{r}");
+    let d = E.A("z");
+    match d {
+        E.A(n) => f"[{n}]",
+        E.B(_) => "x",
+    };
+    println("done");
+}

@@ -1,0 +1,40 @@
+fn src() -> String {
+    "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUV"
+}
+
+fn p_push(n: i64) -> String {
+    let mut s = src().substring(0, n);
+    s.push('!');
+    s
+}
+
+fn p_pushstr_first(n: i64) -> String {
+    let mut s = src().substring(0, n);
+    s.push_str("xy");
+    s
+}
+
+fn p_self(n: i64) -> String {
+    let mut s = src().substring(0, n);
+    let t = s.clone();
+    s.push_str(t);
+    s
+}
+
+fn p_empty(n: i64) -> String {
+    let mut s = src().substring(0, n);
+    s.push_str("");
+    s
+}
+
+fn main() {
+    let mut n = 0;
+    while n <= 40 {
+        let a = p_push(n);
+        let b = p_pushstr_first(n);
+        let c = p_self(n);
+        let d = p_empty(n);
+        println(f"{n} {a.len()} {a} {b.len()} {b} {c.len()} {c} {d.len()} {d}");
+        n = n + 1;
+    }
+}

@@ -1,0 +1,20 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let v: Vec[String] = ["hi".to_string(), "".to_string(), "yo".to_string(), "there".to_string()];
+        let w: Vec[String] = v.iter().filter_map(|s| if s.len() > 0 { Some(s.to_uppercase()) } else { None }).collect();
+        let mut j: i64 = 0;
+        while j < w.len() {
+            acc = acc + w[j].len();
+            j = j + 1;
+        }
+        let u: Vec[String] = ["a".to_string(), "".to_string(), "bb".to_string()];
+        for t in u.iter().filter_map(|s| if s.len() > 0 { Some(s.to_uppercase()) } else { None }) {
+            acc = acc + t.len();
+        }
+        i = i + 1;
+    }
+    println(acc);
+}

@@ -1,0 +1,13 @@
+
+effect resource Display;
+
+fn paint() with writes(Display) {
+}
+
+fn helper() {
+    paint();
+}
+
+fn main() {
+    helper();
+}

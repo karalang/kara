@@ -1,0 +1,16 @@
+
+fn main() {
+    let p = Parser.new("greet")
+        .about("greets someone")
+        .version("2.1")
+        .arg("--name", Arg.string().required().help("who to greet"))
+        .flag("--loud", 'l', "shout it");
+    match p.parse() {
+        Ok(args) => { println("parsed"); }
+        Err(e) => { println(f"err {e.message}"); }
+    }
+    println(p.version_line());
+    let h = p.help_text();
+    if h.contains("greets someone") { println("about-ok"); } else { println("about-BAD"); }
+    if h.contains("who to greet") { println("help-ok"); } else { println("help-BAD"); }
+}

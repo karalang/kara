@@ -1,0 +1,6 @@
+plain-negzero-eq=true
+plain-nan-eq=false
+wrapper-negzero-eq=false
+wrapper-nan-eq=true
+wrapper-key-collides=1
+wrapper-key-get=2

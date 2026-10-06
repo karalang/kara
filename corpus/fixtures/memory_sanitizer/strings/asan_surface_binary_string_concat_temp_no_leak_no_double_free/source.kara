@@ -1,0 +1,29 @@
+
+fn tag_first(items: ref Vec[String]) -> String {
+    match items.first() {
+        Some(s) => { return "f:".to_string() + s; }
+        None => { return "empty".to_string(); }
+    }
+    return "?".to_string();
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    let v: Vec[String] = ["aa", "bb"];
+    while i < 40 {
+        acc = acc + tag_first(v).len();
+        match v.first() {
+            Some(s) => { acc = acc + ("p:".to_string() + s).len(); }
+            None => { acc = acc - 1; }
+        }
+        match v.first() {
+            Some(s) => {
+                let t = "pre".to_string() + s;
+                acc = acc + (t + "!".to_string()).len();
+            }
+            None => { acc = acc - 1; }
+        }
+        i = i + 1;
+    }
+    println(acc);
+}

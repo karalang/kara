@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_27_33.rs::e2e_closure_consuming_its_capture_in_the_body_frees_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

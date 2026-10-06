@@ -1,0 +1,22 @@
+
+        fn main() {
+            let mut lo: i64 = 1000i64;
+            let mut hi: i64 = -1000i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                let x: i64 = i * 7i64;
+                if lo > x {
+                    lo = x;
+                }
+                i = i + 1i64;
+            }
+            let mut j: i64 = 0i64;
+            while j < 100i64 {
+                let y: i64 = j * 7i64;
+                if hi < y {
+                    hi = y;
+                }
+                j = j + 1i64;
+            }
+        }
+        

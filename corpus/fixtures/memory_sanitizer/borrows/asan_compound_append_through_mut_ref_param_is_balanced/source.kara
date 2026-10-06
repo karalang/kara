@@ -1,0 +1,12 @@
+
+fn append(s: mut ref String, x: String) {
+    let mut i = 0i64;
+    while i < 200i64 { s += x; i = i + 1i64; }
+}
+fn main() {
+    let k = env.args().len() as i64;
+    let mut acc = String.new(); acc.push_str("seed"); acc.push_str(k.to_string());
+    let mut piece = String.new(); piece.push_str("abcdefgh");
+    append(mut acc, piece);
+    println(acc.len());
+}

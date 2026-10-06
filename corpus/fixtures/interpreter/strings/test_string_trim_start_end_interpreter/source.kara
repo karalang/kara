@@ -1,0 +1,13 @@
+fn main() {
+            let s: String = "  Hello  ";
+            println(f"[{s.trim_start()}]");
+            println(f"[{s.trim_end()}]");
+            // Receiver untouched (fresh owned copy).
+            println(f"[{s}]");
+            // Tabs / newlines are whitespace too.
+            println(f"[{"\t x \n".trim_start()}]");
+            println(f"[{"\t x \n".trim_end()}]");
+            // No whitespace → identity; all-whitespace → empty.
+            println(f"[{"none".trim_start()}]");
+            println(f"[{"   ".trim_end()}]");
+        }

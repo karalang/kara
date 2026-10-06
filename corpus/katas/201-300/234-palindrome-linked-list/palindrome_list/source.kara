@@ -1,0 +1,107 @@
+// LeetCode 234 — Palindrome Linked List.
+//
+// Return true iff a singly-linked list reads the same forwards and backwards,
+// using O(1) extra space.
+//
+// Three moves. (1) Find the middle with slow/fast pointers — fast advances two
+// nodes per step, so when it reaches the end, slow sits at the midpoint. (2)
+// Reverse the second half in place (the three-cursor rewire from #206). (3) Walk
+// the first half from the head and the reversed second half from its new head in
+// lockstep; any mismatch means it's not a palindrome. For odd length the middle
+// node is the pivot and is naturally skipped (the second half is the shorter
+// one). O(n) time, O(1) space.
+//
+// Index-pool list: `Vec[Node]` with an i64 `next` (-1 = null).
+
+struct Node {
+    val: i64,
+    mut next: i64,
+}
+
+fn build(vals: Slice[i64]) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let n = vals.len();
+    let mut i = 0;
+    while i < n {
+        let next = if i + 1 < n { i + 1 } else { -1 };
+        nodes.push(Node { val: vals[i], next: next });
+        i = i + 1;
+    }
+    return nodes;
+}
+
+fn reverse(nodes: mut ref Vec[Node], head: i64) -> i64 {
+    let mut prev = -1;
+    let mut cur = head;
+    while cur != -1 {
+        let nxt = nodes[cur].next;
+        nodes[cur].next = prev;
+        prev = cur;
+        cur = nxt;
+    }
+    return prev;
+}
+
+fn is_palindrome(nodes: mut ref Vec[Node], head: i64) -> bool {
+    if head == -1 { return true; }
+
+    // Find the midpoint.
+    let mut slow = head;
+    let mut fast = head;
+    while nodes[fast].next != -1 and nodes[nodes[fast].next].next != -1 {
+        slow = nodes[slow].next;
+        fast = nodes[nodes[fast].next].next;
+    }
+
+    // Reverse the second half (everything after `slow`) and compare.
+    let second = reverse(nodes, nodes[slow].next);
+    let mut p1 = head;
+    let mut p2 = second;
+    while p2 != -1 {
+        if nodes[p1].val != nodes[p2].val {
+            return false;
+        }
+        p1 = nodes[p1].next;
+        p2 = nodes[p2].next;
+    }
+    return true;
+}
+
+fn report(vals: Slice[i64]) {
+    let mut nodes = build(vals);
+    let head = if nodes.len() > 0 { 0 } else { -1 };
+    if is_palindrome(mut nodes, head) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 2, 1];
+    report(a);                              // true
+
+    let b: Array[i64, 2] = [1, 2];
+    report(b);                              // false
+
+    let c: Array[i64, 1] = [1];
+    report(c);                              // true
+
+    let d: Array[i64, 0] = [];
+    report(d);                              // true
+
+    let e: Array[i64, 5] = [1, 2, 3, 2, 1];
+    report(e);                              // true
+
+    let f: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(f);                              // false
+
+    let g: Array[i64, 3] = [1, 0, 1];
+    report(g);                              // true
+
+    let h: Array[i64, 4] = [1, 2, 2, 3];
+    report(h);                              // false
+
+    let i: Array[i64, 6] = [7, 7, 7, 7, 7, 7];
+    report(i);                              // true
+}

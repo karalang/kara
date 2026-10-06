@@ -1,0 +1,121 @@
+// LeetCode 306 — Additive Number, assuming nothing.
+//
+// THE ARM: enumerate every way to cut the string into numbers, and test each
+// cut against the definition. No claim that the first two numbers determine
+// the rest — that claim is exactly what this arm exists to check.
+//
+// WHY IT EARNS ITS COST. The other four arms are four spellings of ONE idea:
+// that once a and b are fixed the whole sequence follows, so the search runs
+// over two prefix lengths rather than over cuts. If that idea were wrong all
+// four would be wrong together and would agree with each other perfectly.
+// Their individual bugs are matching and offset bugs; none of them is the
+// premise.
+//
+// So this arm does the thing the premise makes unnecessary. It picks a length
+// for the first number, then for the second, then the third, all the way to
+// the end of the string, and only when the string is exhausted does it ask
+// whether what it collected is an additive sequence. Every cut is reachable,
+// including the ones the premise says cannot possibly work.
+//
+// THE COST IS THE POINT AND IT IS BRUTAL. The number of ways to cut an
+// n-digit string is 2^(n-1) — every gap is independently a cut or not — so
+// this is exponential where the others are cubic. At 20 digits that is half a
+// million cuts; at 35, the length the problem actually admits, it is 17
+// billion and this arm simply does not finish. It is not a fallback
+// implementation, it is an oracle with a short reach, and the differential
+// reports how far that reach extended.
+//
+// The leading-zero rule prunes hard in practice — a run of zeros kills every
+// cut that would swallow more than one of them — but the worst case is a
+// zero-free string, where nothing prunes at all.
+// Decimal digits of the input's [lo, hi) span, most significant first.
+fn digits_of(bytes: Slice[u8], lo: i64, hi: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in lo..hi { out.push((bytes[i] - b'0') as i64); }
+    return out;
+}
+// Schoolbook addition, most-significant-first, exact at any length.
+fn add_digits(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut rev: Vec[i64] = Vec.new();
+    let mut i = a.len() - 1;
+    let mut j = b.len() - 1;
+    let mut carry = 0;
+    // i and j are signed, so the "walked off the front" test is >= 0 rather
+    // than a wrapping comparison.
+    while i >= 0 or j >= 0 or carry > 0 {
+        let mut sum = carry;
+        if i >= 0 { sum = sum + a[i]; i = i - 1; }
+        if j >= 0 { sum = sum + b[j]; j = j - 1; }
+        rev.push(sum % 10);
+        carry = sum / 10;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = rev.len() - 1;
+    while k >= 0 { out.push(rev[k]); k = k - 1; }
+    return out;
+}
+// A number may not carry a leading zero unless it IS zero.
+fn no_leading_zero(bytes: Slice[u8], lo: i64, hi: i64) -> bool {
+    return hi - lo == 1 or bytes[lo] != b'0';
+}
+
+fn digits_eq(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() { return false; }
+    for i in 0..a.len() { if a[i] != b[i] { return false; } }
+    return true;
+}
+
+// The definition, applied to a completed cut.
+fn is_additive_list(nums: ref Vec[Vec[i64]]) -> bool {
+    if nums.len() < 3 { return false; }
+    for k in 2..nums.len() {
+        let want = add_digits(nums[k - 2], nums[k - 1]);
+        if not digits_eq(want, nums[k]) { return false; }
+    }
+    return true;
+}
+
+fn explore(bytes: Slice[u8], pos: i64, nums: mut ref Vec[Vec[i64]]) -> bool {
+    let n = bytes.len();
+    if pos == n { return is_additive_list(nums); }
+    for len in 1..(n - pos + 1) {
+        // A number longer than one digit may not start with '0', and once that
+        // fails for this `len` it fails for every longer one.
+        if not no_leading_zero(bytes, pos, pos + len) { break; }
+        nums.push(digits_of(bytes, pos, pos + len));
+        if explore(bytes, pos + len, nums) { return true; }
+        nums.pop();
+    }
+    return false;
+}
+
+fn is_additive(s: ref String) -> bool {
+    let bytes = s.bytes();
+    if bytes.len() < 3 { return false; }
+    let mut nums: Vec[Vec[i64]] = Vec.new();
+    return explore(bytes, 0, mut nums);
+}
+
+fn report(s: ref String) {
+    println("\"" + s + "\" -> " + is_additive(s).to_string());
+}
+
+fn main() {
+    // The same cases as the other arms, MINUS the long ones — 2^(n-1) cuts is
+    // out of reach past ~25 digits, which is the whole point of the arm.
+    report("112358".to_string());
+    report("199100199".to_string());
+    report("1023".to_string());
+    report("000".to_string());
+    report("011".to_string());
+    report("123".to_string());
+    report("122".to_string());
+    report("".to_string());
+    report("1".to_string());
+    report("12".to_string());
+    report("1023456".to_string());
+    report("0235".to_string());
+    report("0000".to_string());
+    report("00000".to_string());
+    report("199100".to_string());
+}

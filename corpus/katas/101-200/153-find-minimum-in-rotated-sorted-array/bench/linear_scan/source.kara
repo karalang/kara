@@ -1,0 +1,40 @@
+// Benchmark workload — linear scan find-min on a rotated sorted array.
+//
+// N=2_000_000 deterministic input: sorted [1..N], then rotated by pivot
+// R=N/3 so the minimum (1) sits in the middle. K=10 outer iterations
+// amortize per-process startup so algorithm time dominates wall-clock
+// measurement. Tune N / K in step with ../README.md § Benchmarks.
+
+fn find_min(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut m = nums[0];
+    for i in 1..n {
+        let x = nums[i];
+        if x < m {
+            m = x;
+        }
+    }
+    m
+}
+
+fn main() {
+    let n = 2000000;
+    let r = 666666;
+    // Pre-allocate to avoid log₂(N) realloc + copy churn during fill. The
+    // doubling-realloc pattern of Vec.new + push leaves old+new heap regions
+    // alive at the final doubling (transient 2× peak RSS); Vec.with_capacity
+    // takes one allocation. Mirrors rust's Vec::with_capacity(N).
+    let mut data: Vec[i64] = Vec.with_capacity(n);
+    for i in 0..n {
+        // data[i] = ((i + r) mod n) + 1  →  sorted [1..n] rotated by r.
+        // Values land in [1, n]; the minimum is 1, located at index n - r.
+        data.push(((i + r) % n) + 1);
+    }
+
+    // Sum-of-results sink so the optimizer cannot elide the K calls.
+    let mut sum = 0;
+    for _ in 0..10 {
+        sum = sum + find_min(data.as_slice());
+    }
+    println(sum);
+}

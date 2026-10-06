@@ -1,0 +1,20 @@
+
+fn main() {
+    let n = env.args().len() as i64;
+    let a: f16 = ((n + 3) as f32) as f16;
+    let b: f16 = ((n + 5) as f32) as f16;
+    let c: f16 = ((n + 6) as f32) as f16;
+    let d: f16 = ((n + 19) as f32) as f16;
+    let v: Vector[f16, 4] = Vector[f16, 4](a, b, c, d);
+    println(f"vt {v.tanh()[0]} {v.tanh()[1]} {v.tanh()[2]} {v.tanh()[3]}");
+    println(f"st {a.tanh()} {b.tanh()} {c.tanh()} {d.tanh()}");
+    let e: f16 = ((n + 1) as f32) as f16;
+    let s: Vector[f16, 4] = Vector[f16, 4](e, b, c, d);
+    println(f"sg {s.sigmoid()[0]} {s.sigmoid()[1]}");
+    println(f"ve {v.exp()[0]} {v.ln()[1]} {v.sqrt()[2]}");
+    println(f"se {a.exp()} {b.ln()} {c.sqrt()}");
+    let g: Vector[bf16, 4] = Vector[bf16, 4](1.0bf16, 2.0bf16, 3.0bf16, 7.0bf16);
+    println(f"bf {g.tanh()[0]} {g.sigmoid()[1]}");
+    let f: Vector[f32, 4] = Vector[f32, 4](2.0f32, 3.0f32, 5.0f32, 7.0f32);
+    println(f"f32 {f.tanh()[0]} {f.sigmoid()[1]}");
+}

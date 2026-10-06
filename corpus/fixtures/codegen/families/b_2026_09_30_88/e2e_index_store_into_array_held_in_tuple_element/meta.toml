@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_30_88.rs::e2e_index_store_into_array_held_in_tuple_element"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

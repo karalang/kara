@@ -1,0 +1,76 @@
+// Benchmark workload for LeetCode #205 — Isomorphic Strings.
+//
+// Build-once + punch: two length-L symbol streams `s` and `t` are generated once
+// with a shared PRNG (symbols in an A-letter alphabet). The isomorphism test then
+// slides a width-W window across them, counting windows for which `s`->`t` is a
+// consistent bijection. Both directions are enforced with two maps (`st`, `ts`),
+// exactly the kata's two-map rule. The maps use a per-window VERSION STAMP instead
+// of a memset reset (an entry counts as unset unless its stamp == the current
+// window), so the loop is pure map compute — data-dependent branches, loop-carried
+// map state, non-vectorizable, no refill loop. Sink = count of isomorphic windows.
+
+fn main() {
+    let len = 600000;
+    let w = 200;
+    let a = 20011;
+
+    let mut s: Vec[i64] = Vec.new();
+    let mut t: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < len {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        s.push(state % a);
+        i = i + 1;
+    }
+    i = 0;
+    while i < len {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        t.push(state % a);
+        i = i + 1;
+    }
+
+    let mut st_val: Vec[i64] = Vec.new();
+    let mut st_ver: Vec[i64] = Vec.new();
+    let mut ts_val: Vec[i64] = Vec.new();
+    let mut ts_ver: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < a {
+        st_val.push(0);
+        st_ver.push(-1);
+        ts_val.push(0);
+        ts_ver.push(-1);
+        z = z + 1;
+    }
+
+    let mut sink = 0;
+    let last = len - w + 1;
+    let mut start = 0;
+    while start < last {
+        let stamp = start;
+        let mut iso = true;
+        let mut k = 0;
+        while iso and k < w {
+            let ch = s[start + k];
+            let dh = t[start + k];
+            if st_ver[ch] != stamp {
+                st_ver[ch] = stamp;
+                st_val[ch] = dh;
+            } else {
+                if st_val[ch] != dh { iso = false; }
+            }
+            if iso {
+                if ts_ver[dh] != stamp {
+                    ts_ver[dh] = stamp;
+                    ts_val[dh] = ch;
+                } else {
+                    if ts_val[dh] != ch { iso = false; }
+                }
+            }
+            k = k + 1;
+        }
+        if iso { sink = sink + 1; }
+        start = start + 1;
+    }
+    println(sink);
+}

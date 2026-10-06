@@ -1,0 +1,23 @@
+
+struct Big { a: String, b: String }
+fn orphan(seed: Big) -> Sender[Big] {
+    let (tx, rx) = Channel.new();
+    let t2 = tx.clone();
+    t2.send(seed);
+    return tx;
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let s = orphan(Big { a: f"seed-{i}", b: f"sd-{i}" });
+        let y = Big { a: f"three-{i}", b: f"four-{i}" };
+        match s.try_send(y) {
+            Ok(u) => { total = total + 1; }
+            Err(SendError.Full(v)) => { total = total + v.a.len(); }
+            Err(SendError.Closed(v)) => { total = total + v.a.len() + v.b.len(); }
+        }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

@@ -1,0 +1,8 @@
+fn main() {
+             let mut tab: Interner = Interner.new();
+             let a = tab.intern("x");
+             let _s = tab.resolve(a);
+             let mut m: Map[Symbol, i64] = Map.new();
+             m.insert(a, 7);
+             println(m.get(a).unwrap_or(0));
+         }

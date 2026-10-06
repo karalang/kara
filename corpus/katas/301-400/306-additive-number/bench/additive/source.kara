@@ -1,0 +1,135 @@
+// Benchmark lane for LeetCode 306 — Additive Number.
+//
+// build-once + punch (see ../../../../BENCHMARKS.md): build the candidate
+// strings ONCE as digit arrays, then punch PASSES full additive scans over
+// them. The scan is the O(n^3) search — two prefix lengths, then verification
+// by exact digit-list addition — so the measured work is decimal arithmetic
+// and offset matching, not string allocation.
+//
+// THE INPUTS ARE HELD AS DIGITS, not as String, and rebuilt into no
+// intermediate objects: a candidate is a span of one flat i64 array. That
+// keeps the allocator out of the punch loop, which is what makes the five
+// language lanes comparable — Python and Go would otherwise be measured on
+// their string machinery rather than on the algorithm.
+//
+// EACH PASS PERTURBS ONE DIGIT at a site derived from the running checksum, so
+// the scan is a different computation every pass and nothing can be hoisted.
+// The sink is a masked running total carried ACROSS passes, which serialises
+// them.
+
+const CASES: i64 = 220;      // candidate strings
+const WIDTH: i64 = 18;       // digits each
+const PASSES: i64 = 90;
+const MASK: i64 = 1073741823;
+
+fn digits_span(flat: ref Vec[i64], base: i64, lo: i64, hi: i64) -> Vec[i64] {
+    // One right-sized allocation, matching the mirrors: C mallocs exactly
+    // `hi - lo` and Go's `append([]int64(nil), flat[lo:hi]...)` does the same.
+    // `Vec.new()` here grows 1->2->4->...->hi and costs 1.8x on the lane.
+    let mut out: Vec[i64] = Vec.with_capacity(hi - lo);
+    for i in lo..hi { out.push(flat[base + i]); }
+    return out;
+}
+
+fn add_digits(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    // Matches Go's `make([]int64, 0, 64)` and C's `long rev[64]` — the
+    // scratch buffer is reserved once, never grown.
+    let mut rev: Vec[i64] = Vec.with_capacity(64);
+    let mut i = a.len() - 1;
+    let mut j = b.len() - 1;
+    let mut carry = 0;
+    while i >= 0 or j >= 0 or carry > 0 {
+        let mut s = carry;
+        if i >= 0 { s = s + a[i]; i = i - 1; }
+        if j >= 0 { s = s + b[j]; j = j - 1; }
+        rev.push(s % 10);
+        carry = s / 10;
+    }
+    let mut out: Vec[i64] = Vec.with_capacity(rev.len());
+    let mut k = rev.len() - 1;
+    while k >= 0 { out.push(rev[k]); k = k - 1; }
+    return out;
+}
+
+fn matches_at(flat: ref Vec[i64], base: i64, n: i64, pos: i64, num: ref Vec[i64]) -> bool {
+    if pos + num.len() > n { return false; }
+    for k in 0..num.len() {
+        if flat[base + pos + k] != num[k] { return false; }
+    }
+    return true;
+}
+
+fn no_lead_zero(flat: ref Vec[i64], base: i64, lo: i64, hi: i64) -> bool {
+    return hi - lo == 1 or flat[base + lo] != 0;
+}
+
+fn is_additive(flat: ref Vec[i64], base: i64, n: i64) -> bool {
+    if n < 3 { return false; }
+    for len1 in 1..(n - 1) {
+        if not no_lead_zero(flat, base, 0, len1) { break; }
+        for len2 in 1..(n - len1) {
+            if not no_lead_zero(flat, base, len1, len1 + len2) { break; }
+            let mut a = digits_span(flat, base, 0, len1);
+            let mut b = digits_span(flat, base, len1, len1 + len2);
+            let mut pos = len1 + len2;
+            let mut ok = true;
+            let mut steps = 0;
+            while pos < n and ok {
+                let c = add_digits(a, b);
+                if matches_at(flat, base, n, pos, c) {
+                    pos = pos + c.len(); a = b; b = c; steps = steps + 1;
+                } else { ok = false; }
+            }
+            if ok and pos == n and steps > 0 { return true; }
+        }
+    }
+    return false;
+}
+
+fn main() {
+    // One flat digit array holding CASES strings of WIDTH digits, built once.
+    // Most are pseudorandom (and so not additive); PLANTED ones are genuine
+    // additive strings of exactly WIDTH digits, so the scan has real hits to
+    // find and the verification loop is exercised to completion rather than
+    // bailing on the first mismatch every time.
+    let mut planted: Vec[String] = Vec.new();
+    for p in ["022461016264268110",
+              "020204060100160260",
+              "021214263105168273",
+              "022224466110176286",
+              "023234669115184299",
+              "024244872120192312",
+              "025255075125200325",
+              "026265278130208338"] {
+        planted.push(p.to_string());
+    }
+
+    let mut flat: Vec[i64] = Vec.new();
+    let mut seed = 7;
+    for c in 0..CASES {
+        // Every 25th candidate is a planted positive.
+        if c % 25 == 0 {
+            let bytes = planted[(c / 25) % planted.len()].bytes();
+            for i in 0..WIDTH { flat.push((bytes[i] - b'0') as i64); }
+        } else {
+            for i in 0..WIDTH {
+                seed = (seed * 1103515245 + 12345) % 2147483647;
+                flat.push(seed % 10);
+            }
+        }
+    }
+
+    let mut checksum = 1;
+    for pass in 0..PASSES {
+        // Perturb one digit at a site that moves with the checksum, so no pass
+        // repeats another's work.
+        let site = (checksum * 31 + pass * 7919) % (CASES * WIDTH);
+        flat[site] = (flat[site] + 1) % 10;
+        let mut hits = 0;
+        for c in 0..CASES {
+            if is_additive(flat, c * WIDTH, WIDTH) { hits = hits + 1; }
+        }
+        checksum = (checksum * 131 + hits * 7919 + site) & MASK;
+    }
+    println("checksum " + checksum.to_string());
+}

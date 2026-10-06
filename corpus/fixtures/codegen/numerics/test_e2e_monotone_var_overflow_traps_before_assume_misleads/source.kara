@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.filled(4, 7);
+    let mut k = 0;
+    let mut i = 0;
+    while i < 100 {
+        if k < 4 {
+            println(v[k]);
+        }
+        k = k + 4611686018427387904;
+        i = i + 1;
+    }
+    println(k);
+}

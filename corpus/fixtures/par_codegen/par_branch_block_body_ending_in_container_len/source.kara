@@ -1,0 +1,9 @@
+
+fn main() {{
+    let (p, q) = par {{
+        let a = {body};
+        let b = 5;
+        (a, b)
+    }};
+    println(p + q);
+}}

@@ -1,0 +1,1 @@
+ERROR E0500 at line 6: `p` is partially moved (`p.b` moved at line 5)

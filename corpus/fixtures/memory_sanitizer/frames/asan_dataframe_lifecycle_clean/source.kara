@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("age", Column.from_vec([30, 25, 40]));
+    df.insert("score", Column.from_vec([1.5, 2.5, 3.5]));
+    // Replace an existing column (frees the old column's allocations).
+    df.insert("age", Column.from_vec([31, 26, 41]));
+    println(df.width());
+    println(df.height());
+    // Copy-out: a fresh independent column, mutated, then dropped.
+    let mut a: Column[i64] = df.column("age");
+    a.push(99);
+    println(a.len());
+    println(df.height());
+    // Move the frame (source slot nulled — drop runs exactly once).
+    let df2: DataFrame = df;
+    println(df2.width());
+}

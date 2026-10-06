@@ -1,0 +1,11 @@
+
+shared struct Node { mut kids: Vec[i64] }
+struct Tree { nodes: Vec[Node] }
+fn main() {
+    let mut t = Tree { nodes: Vec.new() };
+    t.nodes.push(Node { kids: Vec.new() });
+    t.nodes[0].kids.push(7);
+    t.nodes[0].kids.push(8);
+    println(t.nodes[0].kids.len());
+    println(t.nodes[0].kids[1]);
+}

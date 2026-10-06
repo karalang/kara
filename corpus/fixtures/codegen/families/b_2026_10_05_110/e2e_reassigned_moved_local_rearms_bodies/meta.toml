@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_05_110.rs::e2e_reassigned_moved_local_rearms_bodies"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

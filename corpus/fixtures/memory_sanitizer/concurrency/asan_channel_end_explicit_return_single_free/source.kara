@@ -1,0 +1,15 @@
+
+fn mk(cond: bool) -> Receiver[i64] {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    tx.send(11);
+    tx.send(22);
+    if cond {
+        return rx;
+    }
+    rx
+}
+fn main() {
+    let r = mk(true);
+    println(r.recv());
+    println(r.recv());
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_06_69.rs::e2e_set_clone_then_remove_keeps_frame"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["format-template"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"

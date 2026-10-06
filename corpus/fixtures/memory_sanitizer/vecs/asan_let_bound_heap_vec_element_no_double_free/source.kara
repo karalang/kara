@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < 8 { v.push(f"token-{i}-payload"); i = i + 1i64; }
+    let mut total = 0i64;
+    let mut j = 0i64;
+    while j < 4000 {
+        let w = v[j & 7i64].clone();          // deep-clone bind; v[j&7] stays valid
+        total = total + w.bytes().len();
+        j = j + 1i64;
+    }
+    println(total);
+    println(v[0i64]);                 // v still intact after 4000 binds
+    println(v.len());
+}

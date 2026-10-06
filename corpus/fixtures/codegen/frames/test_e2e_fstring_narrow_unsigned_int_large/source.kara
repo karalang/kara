@@ -1,0 +1,5 @@
+
+fn main() {
+    let x: u32 = 4000000000u32;
+    println(f"x={x}");
+}

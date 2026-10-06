@@ -1,0 +1,16 @@
+
+fn pick(cond: bool) -> i64 {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    tx.send(100);
+    if cond {
+        let keep = rx;
+        keep.recv()
+    } else {
+        rx.recv()
+    }
+}
+fn main() {
+    let a = pick(true);
+    let b = pick(false);
+    println(a + b);
+}

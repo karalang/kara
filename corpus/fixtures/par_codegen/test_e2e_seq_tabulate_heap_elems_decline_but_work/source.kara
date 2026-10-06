@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut out: Vec[String] = Vec.new();
+    let mut c: i64 = 0i64;
+    while c < 50i64 {
+        out.push(f"s{c}");
+        c = c + 1i64;
+    }
+    println(out.len());
+    println(out[49i64]);
+}

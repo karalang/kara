@@ -1,0 +1,6 @@
+
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let b = Vector[i64, 2](1, 2);
+    let _ = a.dot(b);
+}

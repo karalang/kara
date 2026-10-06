@@ -1,0 +1,35 @@
+p_read
+dR1
+  r0
+p_call
+dR2
+  r2
+p_rebind
+dR3
+  r3
+p_out
+  r4
+dR4
+p_field
+dR5
+  r0
+p_letelse
+dR6
+  r0
+p_while
+dR7
+  r0
+l_read
+dR21
+  r0
+l_rebind
+dR22
+  r22
+l_two
+dR23
+dR24
+  r23
+m_read
+dR8
+  r0
+end

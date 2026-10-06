@@ -1,0 +1,15 @@
+
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn main() with panics {
+    let mut cells: Vec[Cell] = Vec.new();
+    cells.push(Cell { id: 0, name: f"initial-placeholder-heap-string-value-{0}" });
+    cells.push(Cell { id: 1, name: f"initial-placeholder-heap-string-value-{1}" });
+    let mut i = 0;
+    while i < cells.len() {
+        cells[i] = Cell { id: i + 10, name: f"rewritten-soa-heap-string-element-{i}" };
+        i = i + 1;
+    }
+    println(cells[0].name);
+    println(cells[1].id);
+}

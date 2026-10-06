@@ -1,0 +1,121 @@
+// LeetCode #40: Combination Sum II — sorted DFS with same-level duplicate skip (★).
+//
+// Given candidates that MAY CONTAIN DUPLICATES and a `target`, return every unique
+// combination summing to `target` where each array element may be used AT MOST ONCE. Two
+// combinations are the same multiset of choices regardless of order, and the result must
+// contain no duplicate combinations — even when the input repeats a value.
+//
+// This is the once-each, duplicate-input twin of kata [#39](../39-combination-sum/). #39
+// had DISTINCT candidates with UNLIMITED reuse and got uniqueness from "recurse at `i`,
+// never look left"; #40 flips both knobs — each element is used once (recurse at `i+1`),
+// and the input itself repeats values, so the index walk alone no longer dedups. The fix
+// is the canonical one: SORT first, then at each tree level skip any candidate equal to
+// its predecessor *within this level's choices*:
+//
+//   if i > start and candidates[i] == candidates[i-1] { continue }
+//
+// The `i > start` guard is the whole trick. The FIRST occurrence of a value at a level
+// (i == start, or a fresh run) is taken and recurses normally; every LATER equal value at
+// the SAME level is skipped, because any combination it could start is already enumerated
+// by that first occurrence's subtree. Equal values are adjacent after the sort, so the
+// skip is a single backward look — no HashSet of seen combinations. (Deeper levels still
+// see the duplicates: a combination like [1,1,6] uses two 1s because the second 1 is
+// reached with `start` past the first, where `i == start` makes it the level's first pick.)
+//
+// Sorting also enables the kata-39 suffix prune: once `candidates[i] > remaining`, every
+// later candidate overshoots too, so `break`. The path is carried as one mutable
+// `Vec[i64]` with push / recurse-at-`i+1` / pop, and the leaf snapshot `out.push(path.clone())`
+// records a hit — the same mutable-path shape as #39's ★, with `i+1` (use once) and the
+// duplicate skip the only changes.
+//
+// LeetCode bounds: 1 ≤ candidates.length ≤ 100, 1 ≤ candidates[i] ≤ 50, 1 ≤ target ≤ 30.
+// i64 throughout for corpus uniformity.
+
+fn backtrack(
+    candidates: ref Vec[i64],
+    start: i64,
+    remaining: i64,
+    path: mut ref Vec[i64],
+    out: mut ref Vec[Vec[i64]],
+) {
+    if remaining == 0 {
+        out.push(path.clone());
+        return;
+    }
+    let n = candidates.len();
+    let mut i = start;
+    while i < n {
+        let c = candidates[i];
+        // Sorted ⇒ this candidate and all later ones overshoot — cut the suffix.
+        if c > remaining {
+            break;
+        }
+        // Same-level duplicate skip: only the first of a run of equal values may
+        // start a combination at this level.
+        if i > start and c == candidates[i - 1] {
+            i = i + 1;
+            continue;
+        }
+        path.push(c);
+        // Recurse at i+1 — each element is used at most once.
+        backtrack(candidates, i + 1, remaining - c, path, out);
+        path.pop();
+        i = i + 1;
+    }
+}
+
+fn combination_sum2(candidates: Slice[i64], target: i64) -> Vec[Vec[i64]] {
+    let mut cands: Vec[i64] = Vec.from_slice(candidates);
+    cands.sort_by(|a, b| a.cmp(b));
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    backtrack(cands, 0, target, mut path, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(combo: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = combo.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{combo[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn report(candidates: Slice[i64], target: i64) {
+    let combos = combination_sum2(candidates, target);
+    let count = combos.len();
+    println(f"target={target} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(show(combos[i]));
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    // LeetCode example 1: duplicates in input, each used once.
+    // [[1,1,6],[1,2,5],[1,7],[2,6]].
+    report([10, 1, 2, 7, 6, 1, 5], 8);
+
+    // LeetCode example 2: [[1,2,2],[5]].
+    report([2, 5, 2, 1, 2], 5);
+
+    // No combination reaches the target.
+    report([2, 4, 6], 3);
+
+    // All-equal input: a single combination using as many as the target allows.
+    report([1, 1, 1, 1], 3);
+
+    // Larger duplicate-heavy case, exercising deeper level-dedup.
+    report([1, 1, 2, 2, 3, 3, 5], 6);
+}

@@ -1,0 +1,138 @@
+// LeetCode 312 — Burst Balloons
+//
+// n balloons in a row, each with a number on it. Burst them all, one at a
+// time. Bursting balloon i pays
+//
+//     nums[left] * nums[i] * nums[right]
+//
+// where left and right are the nearest balloons STILL UNBURST on either side;
+// past the ends of the row, treat the missing balloon as a 1. Maximise the
+// total.
+//
+// THE ARM: ask which balloon is burst LAST, not which is burst first.
+//
+// This is the whole problem, and it is worth being precise about why the
+// obvious framing fails before showing the one that works.
+//
+// The obvious framing is "which balloon do I burst FIRST?". Pick i, collect
+// nums[i-1]*nums[i]*nums[i+1], and recurse on what is left. But what is left
+// is not two independent rows — removing balloon i makes i-1 and i+1 ADJACENT,
+// so a later burst in the left part can be paid a value that lives in the
+// right part. The two halves talk to each other. There is nothing to memoise
+// on, because "the left part" is not a subproblem: its answer depends on what
+// the right part still contains.
+//
+// Now ask which balloon is burst LAST within the open interval (i, j) — that
+// is, among the balloons strictly between the surviving boundary balloons i
+// and j. Say it is k. Two things follow, and both are exact:
+//
+//   1. When k is finally burst, every other balloon in (i, j) is already gone,
+//      so k's neighbours are precisely i and j. That burst pays
+//      a[i] * a[k] * a[j] — known outright, with no dependence on order.
+//
+//   2. Every balloon in (i, k) is burst while k is still standing. So k walls
+//      that group off from everything to its right, exactly as i walls it off
+//      to the left. Its world is bounded by i and k and nothing else — which
+//      is the subproblem (i, k), unchanged. Symmetrically for (k, j).
+//
+// So the halves are independent, and:
+//
+//     dp[i][j] = max over k in (i, j) of dp[i][k] + dp[k][j] + a[i]*a[k]*a[j]
+//
+// The reframing did not simplify the recurrence — it is the same shape either
+// way. What it bought is INDEPENDENCE, which is the thing that makes the
+// recurrence true at all.
+//
+// THE PADDING is not a convenience here, it is what lets the boundary be
+// stated in the same language as the interior. Prepending and appending a 1
+// turns "off the end of the row counts as 1" into an ordinary array read, so
+// dp[0][n+1] — the interval bounded by the two sentinels, i.e. all n real
+// balloons — is the answer with no special case anywhere.
+//
+// THE LOOP ORDER follows from the recurrence and is not free to choose:
+// dp[i][j] reads dp[i][k] and dp[k][j], both of which are STRICTLY SHORTER
+// intervals (i < k < j). So intervals must be filled shortest-first. Iterating
+// i and j in any row-major order reads cells that have not been written yet
+// and silently returns a too-small answer — the `_flat` arm iterates the same
+// recurrence over a different memory layout and has to honour the same
+// constraint, and the brute-force arm is what proves both of them right.
+
+fn max_coins(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+
+    // Padded: a[0] and a[n+1] are the sentinel 1s, a[1..n] are the balloons.
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    for i in 0..n { a.push(nums[i]); }
+    a.push(1);
+
+    let w = n + 2;
+    let mut dp: Vec[Vec[i64]] = Vec.new();
+    for i in 0..w {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..w { row.push(0); }
+        dp.push(row);
+    }
+
+    // Shortest interval first. `len` is j - i, so len == 2 is the first
+    // interval that contains a balloon at all.
+    for len in 2..w {
+        for i in 0..(w - len) {
+            let j = i + len;
+            let mut best = 0;
+            // k is burst last, so it is paid against the boundary a[i], a[j].
+            for k in (i + 1)..j {
+                let coins = dp[i][k] + dp[k][j] + a[i] * a[k] * a[j];
+                if coins > best { best = coins; }
+            }
+            dp[i][j] = best;
+        }
+    }
+
+    return dp[0][n + 1];
+}
+
+fn render(nums: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { s.push_str(","); }
+        s.push_str(nums[i].to_string());
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(vals: Slice[i64]) {
+    let mut nums: Vec[i64] = Vec.new();
+    for v in vals { nums.push(v); }
+    println(render(nums) + " -> " + max_coins(nums).to_string());
+}
+
+fn main() {
+    // The two examples from the LeetCode statement.
+    report([3, 1, 5, 8]);
+    report([1, 5]);
+    // Degenerate: nothing to burst, and a lone balloon paid 1*x*1.
+    report([]);
+    report([7]);
+    // A zero in the middle is worth nothing itself but still shields its
+    // neighbours from each other until it is burst.
+    report([3, 0, 5]);
+    report([0, 0, 0]);
+    // Ascending and descending runs — the order the greedy would pick differs.
+    report([1, 2, 3, 4, 5]);
+    report([5, 4, 3, 2, 1]);
+    // All equal, so every burst order pays the same by symmetry of value but
+    // not of position.
+    report([2, 2, 2, 2]);
+    // Ones only: every product is 1, so the total is exactly the count.
+    report([1, 1, 1, 1, 1, 1]);
+    // A single large value flanked by small ones — bursting it last is what
+    // lets it be multiplied by the sentinels rather than by its neighbours.
+    report([1, 100, 1]);
+    report([9, 76, 64, 21, 97, 60]);
+}

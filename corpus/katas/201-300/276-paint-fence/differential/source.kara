@@ -1,0 +1,179 @@
+// LeetCode 276 — differential harness.
+//
+// Three solvers: the ★ two-state DP, the same recurrence with a variable
+// eliminated, and brute-force enumeration of all `k^n` paintings.
+//
+// THE BRUTE FORCE IS THE DEFINITION, and it is why this harness can catch what a
+// two-solver comparison cannot. The other two are the SAME derivation at
+// different stages — the two-state form, and that form with `same` and `diff`
+// added together — so they share the `total[2] = k * k` fact and the "the rule
+// needs three posts" reading. A misunderstanding of the RULE, as opposed to an
+// off-by-one in a loop, would leave them agreeing confidently on a wrong count.
+// 272 measured that failure and 275 showed a definitional check catching what
+// three agreeing solvers could not.
+//
+// THE GENERATOR HAS TO KNOW WHERE THE ARITHMETIC STOPS FITTING. The answer grows
+// like `(k-1)^n`, so at `k = 100000` it leaves `i64` before `n = 5`. Kāra checks
+// integer overflow by default and TRAPS; C and Rust wrap and print a wrong answer
+// with no complaint. LeetCode papers over this by promising its testcases fit in
+// 32 bits. Here the harness computes its own envelope instead — `max_safe_n`
+// walks the recurrence with a pre-multiply guard and returns the largest `n`
+// whose answer still fits — and every case is drawn inside it. The walk is
+// capped at 200 purely so it terminates for `k = 1`, where the answer never
+// grows; every other `k` hits the arithmetic before the cap, so the numbers
+// below are the i64 envelope and not the harness's own bound. LeetCode's stated
+// limit is `n <= 50`, which sits inside the envelope for every `k` it allows. That is a
+// generator that has to understand the problem's arithmetic, not just its shape.
+//
+// THE EXHAUSTIVE ARM IS BOUNDED BY THE BRUTE FORCE, not by taste: every `(n, k)`
+// with `k^n` under 200,000 is enumerated, which is where the O(k^n) solver stops
+// being affordable and is exactly the region where the definition can still be
+// consulted directly.
+
+fn ways_two_state(n: i64, k: i64) -> i64 {
+    if n == 0 { return 0; }
+    if n == 1 { return k; }
+    let mut same = k;
+    let mut diff = k * (k - 1);
+    let mut i = 3;
+    while i <= n {
+        let next_same = diff;
+        let next_diff = (same + diff) * (k - 1);
+        same = next_same;
+        diff = next_diff;
+        i = i + 1;
+    }
+    return same + diff;
+}
+
+fn ways_recurrence(n: i64, k: i64) -> i64 {
+    if n == 0 { return 0; }
+    if n == 1 { return k; }
+    let mut prev2 = k;
+    let mut prev1 = k * k;
+    let mut i = 3;
+    while i <= n {
+        let cur = (prev1 + prev2) * (k - 1);
+        prev2 = prev1;
+        prev1 = cur;
+        i = i + 1;
+    }
+    return prev1;
+}
+
+fn ways_brute(n: i64, k: i64) -> i64 {
+    if n == 0 { return 0; }
+    let mut colours: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < n { colours.push(0); z = z + 1; }
+    let mut count = 0;
+    let mut more = true;
+    while more {
+        let mut ok = true;
+        let mut i = 2;
+        while i < n {
+            if colours[i] == colours[i - 1] and colours[i - 1] == colours[i - 2] {
+                ok = false;
+            }
+            i = i + 1;
+        }
+        if ok { count = count + 1; }
+        let mut p = n - 1;
+        while p >= 0 and colours[p] == k - 1 {
+            colours[p] = 0;
+            p = p - 1;
+        }
+        if p < 0 { more = false; } else { colours[p] = colours[p] + 1; }
+    }
+    return count;
+}
+
+// The largest `n` whose answer still fits in i64, for this `k`. Walks the same
+// recurrence the solvers do, but guards BEFORE each multiply rather than after —
+// checking afterwards is checking a value that has already trapped.
+fn max_safe_n(k: i64) -> i64 {
+    let limit = 9223372036854775807;
+    if k <= 1 { return 200; }         // k=1: the answer is 1 forever, never grows
+    if k > 3037000499 { return 1; }   // even `k * k` would not fit
+    let mut prev2 = k;
+    let mut prev1 = k * k;
+    let mut n = 2;
+    let mut more = true;
+    while more and n < 200 {
+        let sum_cap = limit - prev2;
+        if prev1 > sum_cap {
+            more = false;
+        } else {
+            let s = prev1 + prev2;
+            if s > limit / (k - 1) {
+                more = false;
+            } else {
+                prev2 = prev1;
+                prev1 = s * (k - 1);
+                n = n + 1;
+            }
+        }
+    }
+    return n;
+}
+
+fn main() {
+    let mut cases = 0;
+    let mut exhaustive = 0;
+    let mut mismatches = 0;
+    let mut brute_disagreements = 0;
+    let mut digest = 0;
+    let mut widest_n = 0;
+    let mut envelope_k2 = 0;
+    let mut envelope_k100000 = 0;
+
+    // ---- exhaustive, wherever the DEFINITION is still affordable ----------
+    let mut k = 1;
+    while k <= 12 {
+        let mut n = 1;
+        let mut size = k;
+        while n <= 12 and size <= 200000 {
+            let a = ways_two_state(n, k);
+            let b = ways_recurrence(n, k);
+            let c = ways_brute(n, k);
+            if a != b { mismatches = mismatches + 1; }
+            if a != c { brute_disagreements = brute_disagreements + 1; }
+            digest = (digest * 131 + a) % 1000000007;
+            cases = cases + 1;
+            exhaustive = exhaustive + 1;
+            n = n + 1;
+            size = size * k;
+            if k == 1 { size = 200001; }   // k=1 never grows; stop after n=1
+        }
+        k = k + 1;
+    }
+
+    // ---- the whole legal envelope, DP solvers only ------------------------
+    let ks: Vec[i64] = [1, 2, 3, 5, 10, 97, 1000, 65536, 100000];
+    let mut ki = 0;
+    while ki < ks.len() {
+        let kk = ks[ki];
+        let cap = max_safe_n(kk);
+        if kk == 2 { envelope_k2 = cap; }
+        if kk == 100000 { envelope_k100000 = cap; }
+        let mut n = 1;
+        while n <= cap {
+            let a = ways_two_state(n, kk);
+            let b = ways_recurrence(n, kk);
+            if a != b { mismatches = mismatches + 1; }
+            if n > widest_n { widest_n = n; }
+            digest = (digest * 131 + a) % 1000000007;
+            cases = cases + 1;
+            n = n + 1;
+        }
+        ki = ki + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"of which checked against the DEFINITION (brute force) {exhaustive}");
+    println(f"largest n reached, all k (k=1 never grows, so it runs to the walk cap) {widest_n}");
+    println(f"envelope at k=2 {envelope_k2}, at k=100000 {envelope_k100000}");
+    println(f"brute-force disagreements {brute_disagreements}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

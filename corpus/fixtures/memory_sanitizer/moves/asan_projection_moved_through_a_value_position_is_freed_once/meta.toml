@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/moves.rs::asan_projection_moved_through_a_value_position_is_freed_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

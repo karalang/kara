@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[String] = OnceLock.new();
+        let a = cell.get_or_init(|| "alpha".to_string());
+        let b = cell.get_or_init(|| "unused".to_string());
+        total = total + a.len() + b.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

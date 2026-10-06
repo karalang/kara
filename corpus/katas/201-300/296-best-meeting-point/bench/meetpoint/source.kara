@@ -1,0 +1,110 @@
+// Benchmark lane for LeetCode #296 — Best Meeting Point by separable medians.
+//
+// SHAPE. Build 400 grids of 128x128 once, then punch 12 solve passes through
+// them (BENCHMARKS.md § build-once + punch). The coordinate buffers are
+// allocated once at full capacity and reused by resetting a logical length, so
+// nothing allocates inside the timed loop — matching C's `long rows[N]` and
+// Rust's `Vec::with_capacity` + `clear()` exactly, which is the mirror-symmetry
+// discipline #299 and #300 each learned the hard way.
+//
+// WHAT IS ACTUALLY BEING MEASURED, and it is not the median. The two scans
+// dominate: 16,384 cells each, twice per grid. The first is ROW-MAJOR, the
+// second COLUMN-MAJOR — striding by `w` and touching a different cache line on
+// every read.
+//
+// The obvious guess is that the strided scan dominates. IT DOES NOT, and the
+// README records the measurement: rewriting the second scan row-major, changing
+// nothing else, moves clang by 1.2% and karac not at all. The reason is a size
+// the intuition skips over — a 128x128 grid of bytes is 16 KiB, so it is
+// L1-resident whichever order you walk it in, and a 128-byte stride inside a
+// resident block is something the prefetcher handles. The cost here is the
+// per-cell compare and the deviation loop, not the traversal order.
+//
+// That is also why the grid is 128x128 rather than something huge: this lane is
+// meant to time the ALGORITHM the kata teaches, and inflating the grid until it
+// spills L2 would turn every mirror into a memory-latency benchmark instead.
+//
+// The sink sums the minimum totals mod a prime, so every grid's whole answer is
+// consumed and nothing can be folded away as dead.
+
+fn main() {
+    let ncases = 400;
+    let dim = 128;
+    let passes = 30;
+    let cells = dim * dim;
+
+    // Build once.
+    let mut corpus: Vec[u8] = Vec.new();
+    let mut state = 24601;
+    let mut n = 0;
+    while n < ncases * cells {
+        state = (state * 1103515245 + 12345) & 0x7fffffff;
+        if (state / 65536) % 100 < 10 { corpus.push(1u8); } else { corpus.push(0u8); }
+        n = n + 1;
+    }
+
+    // Scratch, sized for the worst case (every cell a home), reused throughout.
+    let mut rows: Vec[i64] = Vec.filled(cells, 0);
+    let mut cols: Vec[i64] = Vec.filled(cells, 0);
+
+    let mut checksum = 0;
+
+    // Punch.
+    let mut p = 0;
+    while p < passes {
+        let mut ci = 0;
+        while ci < ncases {
+            let base = ci * cells;
+
+            // Row-major: sequential reads, row indices ascend for free.
+            let mut k = 0;
+            let mut r = 0;
+            while r < dim {
+                let mut c = 0;
+                while c < dim {
+                    if corpus[base + r * dim + c] == 1u8 {
+                        rows[k] = r;
+                        k = k + 1;
+                    }
+                    c = c + 1;
+                }
+                r = r + 1;
+            }
+
+            // Column-major: strided reads, column indices ascend for free.
+            let mut k2 = 0;
+            let mut c2 = 0;
+            while c2 < dim {
+                let mut r2 = 0;
+                while r2 < dim {
+                    if corpus[base + r2 * dim + c2] == 1u8 {
+                        cols[k2] = c2;
+                        k2 = k2 + 1;
+                    }
+                    r2 = r2 + 1;
+                }
+                c2 = c2 + 1;
+            }
+
+            let mut total = 0;
+            if k > 0 {
+                let mr = rows[k / 2];
+                let mc = cols[k / 2];
+                let mut i = 0;
+                while i < k {
+                    let dr = rows[i] - mr;
+                    if dr < 0 { total = total - dr; } else { total = total + dr; }
+                    let dc = cols[i] - mc;
+                    if dc < 0 { total = total - dc; } else { total = total + dc; }
+                    i = i + 1;
+                }
+            }
+
+            checksum = (checksum + total) % 1000000007;
+            ci = ci + 1;
+        }
+        p = p + 1;
+    }
+
+    println(f"checksum {checksum}");
+}

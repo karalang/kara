@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut src: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    a.push(2);
+    src.push(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(3);
+    src.push(b);
+    let mut dst: Vec[Vec[i64]] = Vec.new();
+    dst.extend_from_slice(src);
+    println(dst[0].len());
+    println(dst[1].len());
+}

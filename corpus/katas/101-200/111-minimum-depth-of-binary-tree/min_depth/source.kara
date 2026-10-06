@@ -1,0 +1,92 @@
+// LeetCode #111: Minimum Depth of Binary Tree — recursive DFS (★).
+//
+// The minimum depth is the number of nodes on the shortest root-to-LEAF path (a leaf has no
+// children). The subtlety that separates this from #104's maximum depth: a node with only one
+// child is NOT one step from a leaf — the empty side has no leaf to reach, so you must descend
+// the non-empty side. The recurrence handles it by treating an empty subtree's depth (0) as
+// "no path this way": if one side is empty take the other, otherwise take the smaller. O(n).
+// Node type mirrors kata [#104](../104-maximum-depth-of-binary-tree/) — a `shared struct
+// TreeNode` (RC).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+fn min_depth(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let ld = min_depth(n.left);
+            let rd = min_depth(n.right);
+            // An empty side has depth 0 = "no leaf this way"; take the other side then.
+            if ld == 0 {
+                1 + rd
+            } else if rd == 0 {
+                1 + ld
+            } else if ld < rd {
+                1 + ld
+            } else {
+                1 + rd
+            }
+        }
+    }
+}
+
+fn build_balanced(lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: mid, left: None, right: None };
+    node.left = build_balanced(lo, mid - 1);
+    node.right = build_balanced(mid + 1, hi);
+    Some(node)
+}
+
+// A right-skewed chain of length `len` (insert 0,1,…,len-1 ascending); its minimum depth is
+// `len` — every node has exactly one child until the single leaf, so the walk cannot cut short.
+fn build_chain(len: i64) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    let mut i = 0;
+    while i < len {
+        root = insert(root, i);
+        i = i + 1;
+    }
+    root
+}
+
+fn main() {
+    // Alternate balanced (even t) and skewed (odd t) trees so the min depth genuinely varies —
+    // and the skewed chains exercise the one-child subtlety (min depth = full chain length).
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        let n = 7 + t;
+        let root = if (t % 2) == 0 {
+            build_balanced(0, n - 1)
+        } else {
+            build_chain(n)
+        };
+        let d = min_depth(root);
+        acc = (acc * 131 + d + 1) % 1000000007;
+        println(f"tree {t}: min_depth {d}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

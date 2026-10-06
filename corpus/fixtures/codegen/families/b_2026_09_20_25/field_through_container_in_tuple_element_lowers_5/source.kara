@@ -1,0 +1,1 @@
+fn main() { let a: (Array[R, 1], i64) = ([R { n: 5 }], 7); println(f"r:{a.0[0].n}"); println("end") }

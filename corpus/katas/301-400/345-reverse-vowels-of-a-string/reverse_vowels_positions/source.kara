@@ -1,0 +1,79 @@
+// LeetCode #345: Reverse Vowels of a String — reverse the vowels' positions.
+//
+// Given a string s, reverse only its vowels and return the result. The vowels
+// are a, e, i, o and u, in lower and upper case, and may appear more than
+// once. Every other character keeps its place.
+//
+//   "IceCreAm"  ->  "AceCreIm"
+//   "leetcode"  ->  "leotcede"
+//
+// Record where each vowel sits, then swap the character at the k-th recorded
+// position with the one at the k-th from the end, for the first half of the
+// list. The consonants are never looked at again.
+//
+// O(n) time, O(n) space.
+
+fn is_vowel(c: char) -> bool {
+    return match c {
+        'a' | 'e' | 'i' | 'o' | 'u' | 'A' | 'E' | 'I' | 'O' | 'U' => true,
+        _ => false,
+    };
+}
+
+fn reverse_vowels(s: ref String) -> String {
+    let mut cs: Vec[char] = s.chars().collect();
+    let mut at: Vec[i64] = Vec.new();
+    for k in 0..cs.len() {
+        if is_vowel(cs[k]) {
+            at.push(k);
+        }
+    }
+    let m = at.len();
+    for k in 0..m / 2 {
+        cs.swap(at[k], at[m - 1 - k]);
+    }
+    let mut out = String.new();
+    for c in cs {
+        out.push(c);
+    }
+    return out;
+}
+
+fn report(s: String) {
+    let r = reverse_vowels(s);
+    println(f"\"{s}\" -> \"{r}\"");
+}
+
+fn main() {
+    // The examples from the problem statement.
+    report("IceCreAm");
+    report("leetcode");
+
+    // No vowels, one vowel, only vowels, and the two cases mixed.
+    report("");
+    report("a");
+    report("xyz");
+    report("aeiou");
+    report("aA");
+    report("Euston saw I was not Sue.");
+    report("hello, world!");
+    report("Programming in Kara");
+
+    // Accented letters are not vowels here: the set is the ten ASCII letters.
+    report("Kāra, señor, über alles");
+
+    // Reversing twice is the identity, on a long string.
+    let mut long = String.new();
+    for k in 0..100000 {
+        long.push(((k * 7919) % 26 + 97) as u8 as char);
+    }
+    let once = reverse_vowels(long);
+    let twice = reverse_vowels(once);
+    let mut vowels = 0;
+    for c in long.chars() {
+        if is_vowel(c) {
+            vowels += 1;
+        }
+    }
+    println(f"100000 letters, {vowels} vowels: changed by one reversal: {once != long}, twice restores: {twice == long}");
+}

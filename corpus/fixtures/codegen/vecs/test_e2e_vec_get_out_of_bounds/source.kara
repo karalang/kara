@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(100);
+    match v.get(5) {
+        Some(x) => println(x),
+        None => println(99),
+    }
+}

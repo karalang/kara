@@ -1,0 +1,6 @@
+
+fn main() {
+    let base: i64 = env.args().len();
+    let v: Vec[i64] = Vec.with_capacity(base + 15i64);
+    println(f"{v.len()}");
+}

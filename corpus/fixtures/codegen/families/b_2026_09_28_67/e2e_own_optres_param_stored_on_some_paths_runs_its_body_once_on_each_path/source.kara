@@ -1,0 +1,39 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { id: i64, a: String, b: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
+fn mkw(i: i64) -> W { return W { id: i, a: f"a-heap-string-longer-than-sso-{i}", b: f"b-heap-string-{i}" } }
+
+fn cp(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t) } }
+fn cpr(t: Option[R], v: mut ref Vec[Option[R]], c: bool) { if c { v.push(t) } }
+fn cw(t: Result[W, i64], v: mut ref Vec[Result[W, i64]], c: bool) { if c { v.push(t) } }
+fn cps2(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t); println("pushed") } else { println("kept") } }
+
+fn main() {
+    let mut u: Vec[Option[S]] = Vec.new();
+    cp(Option.Some(mks(1)), mut u, false);
+    cp(Option.Some(mks(2)), mut u, true);
+    let a = Option.Some(mks(3));
+    cp(a, mut u, false);
+    println("x");
+    let b = Option.Some(mks(4));
+    cp(b, mut u, true);
+    cps2(Option.Some(mks(5)), mut u, false);
+    cps2(Option.None, mut u, false);
+    println(f"n{u.len()}");
+    let mut w: Vec[Option[R]] = Vec.new();
+    cpr(Some(R { id: 6 }), mut w, false);
+    cpr(Some(R { id: 7 }), mut w, true);
+    println(f"m{w.len()}");
+    let mut z: Vec[Result[W, i64]] = Vec.new();
+    cw(Result.Ok(mkw(8)), mut z, false);
+    cw(Result.Ok(mkw(9)), mut z, true);
+    cw(Result.Err(0), mut z, false);
+    let e: Result[W, i64] = Result.Ok(mkw(10));
+    cw(e, mut z, false);
+    println(f"k{z.len()}");
+    println("end")
+}

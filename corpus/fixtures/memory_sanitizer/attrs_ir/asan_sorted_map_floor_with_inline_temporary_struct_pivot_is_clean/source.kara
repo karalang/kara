@@ -1,0 +1,17 @@
+
+#[derive(Hash, Eq, PartialEq, Ord)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut m: SortedMap[Item, i64] = SortedMap.new();
+    m.insert(Item { id: 5i64, name: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut acc = 0i64;
+    while j < 4i64 {
+        match m.floor(Item { id: j, name: f"f-{j}-padding-padding-padding" }) {
+            Some(kv) => { acc = acc + kv.1; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{acc}{m.len()}");
+}

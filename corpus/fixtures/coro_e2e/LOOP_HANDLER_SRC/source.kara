@@ -1,0 +1,16 @@
+
+        fn serve_n(listener: TcpListener, n: i64) {
+            let mut count: i64 = 0;
+            while count < n {
+                let _stream = listener.accept().unwrap();
+                println(1);
+                count = count + 1;
+            }
+            println(9);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            serve_n(listener, 2);
+            println(2);
+        }
+    

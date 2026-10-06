@@ -1,0 +1,28 @@
+
+struct Wide { tag: i64, payload: String }
+
+fn mk_wide() -> Wide {
+    Wide { tag: 7, payload: "boxed-option-payload-string-long-enough-aaaa".to_string() }
+}
+
+fn byte_sum(s: String) -> i64 {
+    let bs = s.bytes();
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < bs.len() { n = n + (bs[i] as i64); i = i + 1i64; }
+    return n;
+}
+
+fn read2() -> i64 {
+    let mut body: Option[Wide] = None;
+    body = Some(mk_wide());
+    let b2 = body;
+    match b2 { Some(w) => { w.tag + byte_sum(w.payload) } None => 0 }
+}
+
+fn main() {
+    let mut acc = 0i64;
+    let mut i = 0;
+    while i < 50 { acc = acc + read2(); i = i + 1; }
+    println(f"{acc}");
+}

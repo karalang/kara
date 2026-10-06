@@ -1,0 +1,16 @@
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+fn mk(id: i64) -> R { let mut v: Vec[i64] = Vec.new(); v.push(id); return R { id: id, tag: f"t{id}", xs: v } }
+
+fn a1() { let t = (0, mk(1));     println("  e1") }
+fn a2() { let t = ("sss", mk(2)); println("  e2") }
+fn a3() { let t = (mk(3), Option.Some(mk(33))); let x = t.0; println(f"  e3 {x.id}") }
+fn a4() { let t = (0, Option.Some(mk(4)));                   println("  e4") }
+
+fn main() {
+    println("scalar-first");  a1(); println("scalar-first end")
+    println("heap-first");    a2(); println("heap-first end")
+    println("masked");        a3(); println("masked end")
+    println("unmasked-peer"); a4(); println("unmasked-peer end")
+    println("done")
+}

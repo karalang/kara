@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_06_100.rs::interp_match_arm_payload_views_decided_per_arm"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_06_100.rs::asan_match_arm_payload_views_decided_per_arm"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

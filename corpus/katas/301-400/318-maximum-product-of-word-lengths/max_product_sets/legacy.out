@@ -1,0 +1,5 @@
+case 1 -> 16
+case 2 -> 4
+case 3 -> 0
+case 4 -> 9
+case 5 -> 125

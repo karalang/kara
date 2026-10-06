@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        s.insert(f"key-{i}-padding-padding-padding");
+        i = i + 1;
+    }
+    s.clear();
+    println(f"{s.len()}");
+}

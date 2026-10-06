@@ -1,0 +1,175 @@
+// LeetCode #18: 4Sum — sort + two nested fixes + two-pointer, O(n³) time,
+// O(1) extra (+ output).
+//
+// Given an integer array `nums` and an integer `target`, return every
+// distinct quadruplet [nums[a], nums[b], nums[c], nums[d]] (a, b, c, d
+// pairwise distinct) that sums to `target`. The result set must contain no
+// duplicate quadruplets.
+//
+// Brute force is O(n⁴). Sorting first unlocks an O(n³) shape that is the
+// natural generalization of kata [#15](../15-3sum/)'s 3Sum: fix the two
+// smallest elements `s[a]` and `s[b]`, then two-pointer the remaining
+// suffix `s[b+1 .. n)` for a pair summing to `target - s[a] - s[b]`. The
+// pair search steers by sign of `sum - target`, exactly as kata
+// [#16](../16-3sum-closest/) steered its closest-tracking crawl:
+//
+//   sum < target  ⇒  the low value is too small, advance `lo`.
+//   sum > target  ⇒  the high value is too big,  retreat `hi`.
+//   sum == target ⇒  record the quadruplet, then step *both* inward.
+//
+// Dedup is the kata-15 mechanism lifted one level: equal values are
+// adjacent after the sort, so "skip a value we already used" is a single
+// backward-look at *each* of the four positions —
+//
+//   - `a`: if `s[a] == s[a-1]` we already enumerated every quadruplet whose
+//     smallest element is this value — skip a.
+//   - `b`: if `b > a+1` and `s[b] == s[b-1]` likewise for the second slot.
+//   - `lo`/`hi` (after recording a hit): walk past any repeat of the two
+//     values just consumed, so the next pair uses fresh values. No HashSet
+//     of seen quadruplets needed.
+//
+// Two min/max-sum prunes replace kata 15's single `s[i] > 0` early-out.
+// With an arbitrary `target` (not fixed 0) the monotone wall kata 15 leaned
+// on is gone — the same shape change kata 16 called out — so instead we
+// bound each fixed prefix against the reachable window:
+//
+//   - After fixing `a`: the smallest quadruplet is `s[a]+s[a+1]+s[a+2]+
+//     s[a+3]`; if that already exceeds `target`, every larger `a` only
+//     overshoots further, so `break`. The largest is `s[a]+s[n-3]+s[n-2]+
+//     s[n-1]`; if that still undershoots, this `a` is too small, `continue`.
+//   - The same two prunes after fixing `b`, scoped to the `b` loop.
+//
+// These don't change the output — every mirror (kara/py/rust/c/go) emits
+// the identical quadruplet set — they just trim dead branches so the O(n³)
+// constant stays small.
+//
+// Values are i64 throughout, and here that width is *load-bearing*, not a
+// default: LeetCode bounds entries and target by 10⁹ in absolute value, so
+// a four-term sum can reach 4×10⁹ — past i32's 2.1×10⁹ ceiling but
+// comfortably inside i64. (Kata 15's 10⁵ bound left a three-term sum well
+// inside i32; 4Sum is the first kata in this run where i64 is forced by the
+// arithmetic, not chosen for uniformity.)
+
+fn four_sum(nums: Slice[i64], target: i64) -> Vec[Vec[i64]] {
+    let mut result: Vec[Vec[i64]] = Vec.new();
+    let mut s: Vec[i64] = Vec.from_slice(nums);
+    s.sort_by(|a, b| a.cmp(b));
+    let n = s.len();
+    let mut a = 0;
+    while a < n - 3 {
+        // Skip a smallest-element value we have already enumerated.
+        if a > 0 and s[a] == s[a - 1] {
+            a = a + 1;
+            continue;
+        }
+        // Smallest quadruplet starting at `a` already overshoots ⇒ done.
+        if s[a] + s[a + 1] + s[a + 2] + s[a + 3] > target {
+            break;
+        }
+        // Largest quadruplet starting at `a` still undershoots ⇒ skip `a`.
+        if s[a] + s[n - 1] + s[n - 2] + s[n - 3] < target {
+            a = a + 1;
+            continue;
+        }
+        let mut b = a + 1;
+        while b < n - 2 {
+            // Skip a second-element value already enumerated for this `a`.
+            if b > a + 1 and s[b] == s[b - 1] {
+                b = b + 1;
+                continue;
+            }
+            if s[a] + s[b] + s[b + 1] + s[b + 2] > target {
+                break;
+            }
+            if s[a] + s[b] + s[n - 1] + s[n - 2] < target {
+                b = b + 1;
+                continue;
+            }
+            let mut lo = b + 1;
+            let mut hi = n - 1;
+            while lo < hi {
+                let sum = s[a] + s[b] + s[lo] + s[hi];
+                if sum < target {
+                    lo = lo + 1;
+                } else if sum > target {
+                    hi = hi - 1;
+                } else {
+                    let mut q: Vec[i64] = Vec.new();
+                    q.push(s[a]);
+                    q.push(s[b]);
+                    q.push(s[lo]);
+                    q.push(s[hi]);
+                    result.push(q);
+                    lo = lo + 1;
+                    hi = hi - 1;
+                    // Skip repeats of the two values we just consumed.
+                    while lo < hi and s[lo] == s[lo - 1] {
+                        lo = lo + 1;
+                    }
+                    while lo < hi and s[hi] == s[hi + 1] {
+                        hi = hi - 1;
+                    }
+                }
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    result
+}
+
+fn report(nums: Slice[i64], target: i64) {
+    let quads = four_sum(nums, target);
+    println(quads.len());
+    for q in quads.iter() {
+        println(q[0]);
+        println(q[1]);
+        println(q[2]);
+        println(q[3]);
+    }
+}
+
+fn main() {
+    // LeetCode reference example — three quadruplets summing to 0:
+    // [-2,-1,1,2], [-2,0,0,2], [-1,0,0,1].
+    let case1: Array[i64, 6] = [1, 0, -1, 0, -2, 2];
+    report(case1, 0);                  // expect: 3 quads
+
+    // All-equal input — exactly one quadruplet [2,2,2,2]; the outer/second
+    // dedup skips collapse the four repeated 2s so it is emitted once.
+    let case2: Array[i64, 5] = [2, 2, 2, 2, 2];
+    report(case2, 8);                  // expect: 1 / 2 2 2 2
+
+    // Exactly four zeros — single [0,0,0,0]; n == 4 so both loops run once.
+    let case3: Array[i64, 4] = [0, 0, 0, 0];
+    report(case3, 0);                  // expect: 1 / 0 0 0 0
+
+    // Single quadruplet, distinct values — 1+2+3+4 = 10.
+    let case4: Array[i64, 4] = [1, 2, 3, 4];
+    report(case4, 10);                 // expect: 1 / 1 2 3 4
+
+    // Target far above the max reachable sum (10) — the after-`a` max-sum
+    // prune fires on the first `a` and `continue`s straight off the end.
+    let case5: Array[i64, 4] = [1, 2, 3, 4];
+    report(case5, 100);                // expect: 0
+
+    // Symmetric distinct range, target 0 — five quadruplets: [-3,-2,2,3],
+    // [-3,-1,1,3], [-3,0,1,2], [-2,-1,0,3], [-2,-1,1,2].
+    let case6: Array[i64, 7] = [-3, -2, -1, 0, 1, 2, 3];
+    report(case6, 0);                  // expect: 5 quads
+
+    // Six 1s, target 4 — single [1,1,1,1]; the heaviest dedup case, every
+    // skip-run collapses a long run of equal values.
+    let case7: Array[i64, 6] = [1, 1, 1, 1, 1, 1];
+    report(case7, 4);                  // expect: 1 / 1 1 1 1
+
+    // Fewer than four elements — `a < n - 3` is false immediately, no quad.
+    let case8: Array[i64, 3] = [1, 2, 3];
+    report(case8, 6);                  // expect: 0
+
+    // Repeats around zero — sorted [-2,-1,-1,1,1,2] yields [-2,-1,1,2] and
+    // [-1,-1,1,1]; the inner skip-runs collapse the doubled -1 and doubled
+    // 1 so neither quadruplet is emitted twice.
+    let case9: Array[i64, 6] = [-2, -1, -1, 1, 1, 2];
+    report(case9, 0);                  // expect: 2 quads
+}

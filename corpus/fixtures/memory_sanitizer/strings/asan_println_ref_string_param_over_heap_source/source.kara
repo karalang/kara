@@ -1,0 +1,10 @@
+
+fn show(s: ref String) {
+    println(s);
+}
+
+fn main() {
+    let a = "left ";
+    let b = "right";
+    show(a + b);
+}

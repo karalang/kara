@@ -1,0 +1,20 @@
+
+fn process(short_circuit: bool) -> i64 {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1i64);
+    v.push(2i64);
+    v.push(3i64);
+    if short_circuit {
+        return 0;
+    }
+    v.len()
+}
+fn main() {
+    let mut s = 0i64;
+    let mut i = 0i64;
+    while i < 5 {
+        s = s + process(true);
+        i = i + 1;
+    }
+    println(s);
+}

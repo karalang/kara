@@ -1,0 +1,6 @@
+
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let n = 2;
+    let _ = a.rotate_lanes_left(n);
+}

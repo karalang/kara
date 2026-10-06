@@ -1,0 +1,8 @@
+
+        trait DatabaseProvider { fn q(ref self, k: i64) -> i64; }
+        trait HealthCheckable { fn healthy(ref self) -> bool; }
+        effect resource UserDB: DatabaseProvider + HealthCheckable;
+        fn use_db(k: i64) -> i64 with reads(UserDB) { return UserDB.q(k); }
+        fn ping() -> bool with reads(UserDB) { return UserDB.healthy(); }
+        fn main() { use_db(1); ping(); }
+        

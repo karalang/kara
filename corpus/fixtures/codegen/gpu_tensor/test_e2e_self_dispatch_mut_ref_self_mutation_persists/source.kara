@@ -1,0 +1,7 @@
+
+struct Counter { n: i64 }
+impl Counter {
+    fn bump(mut ref self) { self.n = self.n + 5; }
+    pub fn run(mut ref self) -> i64 { self.bump(); self.bump(); self.n }
+}
+fn main() { let mut c = Counter { n: 0 }; println(c.run()); }

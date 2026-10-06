@@ -1,0 +1,17 @@
+
+fn right(name: ref String) -> String {
+    "hello " + name
+}
+fn left(name: ref String) -> String {
+    name + "!"
+}
+fn both(a: ref String, b: ref String) -> String {
+    a + b
+}
+fn main() {
+    let x = "foo";
+    let y = "bar";
+    println(right(x));
+    println(left(x));
+    println(both(x, y));
+}

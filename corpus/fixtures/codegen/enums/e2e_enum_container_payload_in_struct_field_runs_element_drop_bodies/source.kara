@@ -1,0 +1,29 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
+enum Mono { P(R), Q }
+enum Ea { P(Array[R, 2]), Q }
+enum Ev { P(Vec[R]), Q }
+enum Em { P(Vec[Mono]), Q }
+enum En { P(Array[Mono, 1]), Q }
+enum Et { P((R, R)), Q }
+struct Ha { h: Ea }
+struct Hv { h: Ev }
+struct Hm { h: Em }
+struct Hn { h: En }
+struct Ht { h: Et }
+struct Hw { lead: i64, h: Ea }
+
+fn main() {
+    println("f-arr");   { let a: Array[R, 2] = [mkr(1), mkr(2)]; let g = Ha { h: Ea.P(a) }; println("m") }
+    println("f-vec");   { let mut w: Vec[R] = []; w.push(mkr(3)); let g = Hv { h: Ev.P(w) }; println("m") }
+    println("f-venum"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(4))); let g = Hm { h: Em.P(w) }; println("m") }
+    println("f-bind");  { let a: Array[R, 2] = [mkr(5), mkr(6)]; let h = Ea.P(a); let g = Ha { h: h }; println("m") }
+    println("f-second"); { let a: Array[R, 2] = [mkr(7), mkr(8)]; let g = Hw { lead: 9, h: Ea.P(a) }; println("m") }
+    println("l-arr");   { let a: Array[R, 2] = [mkr(10), mkr(11)]; let h = Ea.P(a); println("m") }
+    println("l-vec");   { let mut w: Vec[R] = []; w.push(mkr(12)); let h = Ev.P(w); println("m") }
+    println("b-arrenum"); { let a: Array[Mono, 1] = [Mono.P(mkr(13))]; let g = Hn { h: En.P(a) }; println("m") }
+    println("b-tuple");  { let g = Ht { h: Et.P((mkr(14), mkr(15))) }; println("m") }
+    println("b-unit");   { let g = Ha { h: Ea.Q }; println("m") }
+    println("end")
+}

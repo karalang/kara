@@ -1,0 +1,7 @@
+
+distinct type Port = u16 where self >= 1 and self <= 65535;
+fn make(x: u16) -> Port { Port(x) }
+fn main() {
+    let p = make(40000);
+    println("built");
+}

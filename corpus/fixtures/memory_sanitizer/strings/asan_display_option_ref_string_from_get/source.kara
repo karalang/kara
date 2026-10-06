@@ -1,0 +1,11 @@
+
+fn main() {
+    let v: Vec[String] = ["alpha", "beta", "gamma"];
+    println(v.get(0));
+    println(v.first());
+    let x = v.get(1);
+    println(x);
+    println(f"{x}");
+    println(v.get(2));
+    println(v.len());
+}

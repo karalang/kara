@@ -1,0 +1,6 @@
+
+fn main() {
+    let v: Vec[i64] = Vec[];
+    let n: i64 = v.iter().count();
+    println(n);
+}

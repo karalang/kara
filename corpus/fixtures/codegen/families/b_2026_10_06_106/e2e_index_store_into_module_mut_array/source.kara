@@ -1,0 +1,12 @@
+let mut COUNTS: Array[i64, 3] = [1, 2, 3];
+let mut NAMES: Array[String, 2] = ["a", "bb"];
+fn bump() { COUNTS[2] = COUNTS[2] + 100; }
+fn main() {
+    COUNTS[1] = 40;
+    bump();
+    let mut s = 0;
+    for x in COUNTS { s = s + x; }
+    NAMES[0] = f"z{s}";
+    NAMES[0] = f"w{s}";
+    println(f"{s} {COUNTS[2]} {NAMES[0]} {NAMES[1]}");
+}

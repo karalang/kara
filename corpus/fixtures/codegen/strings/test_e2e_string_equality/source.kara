@@ -1,0 +1,9 @@
+
+fn main() {
+    let a = "hello";
+    let b = "hello";
+    let c = "world";
+    if a == b { println(1); } else { println(0); }
+    if a == c { println(1); } else { println(0); }
+    if a != c { println(1); } else { println(0); }
+}

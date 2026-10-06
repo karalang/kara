@@ -1,0 +1,139 @@
+// Benchmark workload — Valid Parentheses (LeetCode #20).
+//
+// Seq-only kata (BENCH.md two-lane discipline): the loop body builds a
+// fresh `2*depth`-byte bracket buffer, validates it with the stack
+// algorithm, and folds the boolean result into a counter. Per-call work
+// is a linear build + a single linear stack pass — the same small
+// alloc/scan/drop shape as kata [#71](../../71-simplify-path/)'s
+// component stack, narrowed to single bytes. A par lane over the K
+// reduction would mostly measure worker-pool dispatch against that body,
+// so this kata stays single-threaded and measures pure codegen quality.
+//
+// Workload. depth = 1000, so each input is a 2000-byte nested run:
+// `depth` openers followed by `depth` closers (e.g. "(((…)))"), valid by
+// construction. The bracket *type* rotates `kind = k % 3` over `()`,
+// `[]`, `{}` so the branch predictor can't memorize one opener/closer
+// pair. On 1/7 of the iters (`k % 7 == 0`) the final closer is flipped to
+// a wrong type, so the validator pushes all `depth` openers, pops
+// `depth-1` correct closers, then mismatches on the last — exercising the
+// `false` early-return path on a near-full stack. K = 500_000 iters.
+//
+// Sink. The count of *valid* inputs. corrupt fires on `k % 7 == 0` —
+// ⌈500000/7⌉ = 71429 of the 500000 iters — so the valid count is
+// 500000 − 71429 = 428571.
+//
+// Auto-par note (BENCH.md § Implicit auto-par): karac's
+// reduction-recognition pass DOES elevate this loop — the per-iter body
+// (build + validate, no cross-iteration dependency) folded into a
+// conditional `count` increment is recognized as a parallel
+// count-reduction, and the default `karac build` emits a
+// `karac_par_reduce` dispatch (≈9× wall-clock win on M5 Pro, real
+// allocator-bound work per iter). This is a *legitimate* auto-par win
+// (kata #4 path), so the bench builds two binaries: the seq lane uses
+// `KARAC_AUTO_PAR=0` for the apples-to-apples comparison against
+// `rustc -O` / `clang -O3` / `go build`, and the auto-par regime is
+// reported separately with the explicit cross-lane caveat. See
+// ../README.md § Benchmarks.
+//
+// The demo (`../valid_parentheses.kara`) validates a `ref String` via
+// `s.bytes()` to stay LeetCode-faithful; the bench builds and validates a
+// `Vec[u8]` buffer directly so the measured work is the bracket-stack
+// algorithm itself (allocator traffic + push/pop), not UTF-8 String
+// machinery — the four compiled mirrors all operate byte-for-byte.
+
+fn is_valid_bytes(bytes: ref Vec[u8]) -> bool {
+    let n = bytes.len();
+    // The stack holds the closer each open bracket demands, so the closer
+    // branch is a single byte equality against the top of stack.
+    let mut stack: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let b = bytes[i];
+        if b == b'(' or b == b'[' or b == b'{' {
+            if b == b'(' {
+                stack.push(b')');
+            } else if b == b'[' {
+                stack.push(b']');
+            } else {
+                stack.push(b'}');
+            }
+        } else {
+            match stack.pop() {
+                Some(top) => {
+                    if top != b {
+                        return false;
+                    }
+                }
+                None => {
+                    return false;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    stack.is_empty()
+}
+
+// Build a `2*depth`-byte nested bracket buffer of the given `kind`
+// (0 → (), 1 → [], 2 → {}). When `corrupt`, the final closer is flipped
+// to a different closer type so the buffer is invalid (mismatch at the
+// last byte, on a stack of depth 1). Otherwise it's valid by
+// construction. Avoids index-assignment by pushing the final closer
+// (correct or wrong) as a separate step.
+fn build_brackets(depth: i64, kind: i64, corrupt: bool) -> Vec[u8] {
+    let mut op: u8 = b'(';
+    let mut cl: u8 = b')';
+    let mut wrong: u8 = b']';
+    if kind == 1 {
+        op = b'[';
+        cl = b']';
+        wrong = b')';
+    } else if kind == 2 {
+        op = b'{';
+        cl = b'}';
+        wrong = b')';
+    }
+
+    let mut buf: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < depth {
+        buf.push(op);
+        i = i + 1;
+    }
+    // depth - 1 correct closers, then the final closer (correct or wrong).
+    i = 0;
+    while i < depth - 1 {
+        buf.push(cl);
+        i = i + 1;
+    }
+    if corrupt {
+        buf.push(wrong);
+    } else {
+        buf.push(cl);
+    }
+    buf
+}
+
+fn main() {
+    let depth: i64 = 1000;
+    let k_iters: i64 = 500000;
+
+    // Count of valid inputs across the K independent iterations. The
+    // per-iter body has no cross-iteration dependency, so karac's
+    // reduction-recognition pass folds this conditional increment into a
+    // `karac_par_reduce` count-reduction under the default build (see the
+    // header's auto-par note). The seq lane forces this off with
+    // `KARAC_AUTO_PAR=0`.
+    let mut count: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let kind: i64 = k % 3;
+        let corrupt: bool = (k % 7) == 0;
+        let buf = build_brackets(depth, kind, corrupt);
+        if is_valid_bytes(buf) {
+            count = count + 1;
+        }
+        k = k + 1;
+    }
+    println(count);
+}

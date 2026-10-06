@@ -1,0 +1,5 @@
+
+fn main() {
+    let (a, b) = ("aa", 1);
+    println(f"{a}{b}");
+}

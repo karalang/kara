@@ -1,0 +1,14 @@
+
+trait Channel {
+    fn send(ref self, v: i64) -> i64;
+}
+
+effect resource RequestCh: Channel;
+
+pub fn push(v: i64) -> i64 with sends(RequestCh) {
+    RequestCh.send(v)
+}
+
+fn main() {
+    let _ = 0;
+}

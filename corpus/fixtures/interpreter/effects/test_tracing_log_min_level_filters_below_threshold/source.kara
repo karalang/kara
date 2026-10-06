@@ -1,0 +1,8 @@
+fn main() {
+         Log.set_min_level("warn");
+         Log.trace("t");
+         Log.debug("d");
+         Log.info("i");
+         Log.warn("w");
+         Log.error("e");
+     }

@@ -1,0 +1,9 @@
+
+fn pick(a: String, b: String) -> String {
+    if a > b { a } else { b }
+}
+
+fn main() {
+    println(pick(f"apple", f"banana"));
+    println(pick(f"zebra", f"apple"));
+}

@@ -1,0 +1,131 @@
+// Benchmark workload — Text Justification (LeetCode #68), the greedy pack ★.
+//
+// A single `full_justify` is cheap, and materialising its `Vec[String]` output
+// every call would make the benchmark measure the ALLOCATOR, not the algorithm
+// (the alloc-domination pitfall BENCHMARKS.md warns against). So this runs the
+// IDENTICAL greedy-pack + even-spread logic of the kata ★
+// ([`../text_justification.kara`](../text_justification.kara)) but STREAMS the
+// bytes it would emit — word characters and gap spaces — straight into a rolling
+// hash instead of building line strings. No per-call allocation; the fixed word
+// list is built once. What's measured is the algorithm's core: the greedy pack
+// decision, the `total / gaps` + `total % gaps` spacing arithmetic, the
+// extra-spaces-to-the-left placement, and the word-byte reads.
+//
+// Workload. A fixed 40-word list, justified K = 300_000 times, each time at a
+// SWEPT width `max_width = 10 + k % 40` (widths 10..49). Sweeping the width
+// re-breaks the lines and re-spreads the spaces every iteration, so nothing is
+// hoistable; the longest word is 8 chars, so every word fits (no width < word).
+//
+// Sink. A rolling polynomial hash `h = (h*131 + byte) % 1e9+7` folded over every
+// emitted byte across all iterations — it captures the EXACT justified byte
+// stream (a one-space spacing error changes it), and is a loop-carried
+// dependency, so the loop is NOT a reduction karac's auto-par pass can split:
+// single-threaded by construction, comparable to the native mirrors per-core.
+// Seq-only kata, same discipline as #55/#62/#63/#64/#66.
+
+fn build_words() -> Vec[String] {
+    let mut w: Vec[String] = ["the", "quick", "brown", "fox", "jumps", "over", "a",
+        "lazy", "dog", "while", "gentle", "breeze", "carries", "autumn", "leaves",
+        "across", "quiet", "meadow", "near", "old", "stone", "bridge", "where",
+        "children", "often", "gather", "to", "watch", "river", "flow", "beneath",
+        "ancient", "willow", "trees", "and", "listen", "as", "the", "wind", "hums"];
+    w
+}
+
+fn justify_hash(words: ref Vec[String], max_width: i64, h: i64) -> i64 {
+    let mut hash = h;
+    let n = words.len();
+
+    let mut i = 0;
+    while i < n {
+        // Greedy pack: words[i .. j) is the widest run that fits.
+        let mut j = i;
+        let mut line_chars = 0;
+        let mut count = 0;
+        while j < n {
+            let wl = words[j].len();
+            if line_chars + wl + count <= max_width {
+                line_chars = line_chars + wl;
+                count = count + 1;
+                j = j + 1;
+            } else {
+                break;
+            }
+        }
+
+        let gaps = count - 1;
+        let total = max_width - line_chars;
+        let is_last = j == n;
+
+        if is_last or count == 1 {
+            // Left-justified: single spaces, then right-pad — fold the bytes.
+            let mut used = 0;
+            let mut g = 0;
+            while g < count {
+                let bytes = words[i + g].bytes();
+                let bl = words[i + g].len();
+                let mut b = 0;
+                while b < bl {
+                    hash = (hash * 131 + (bytes[b] as i64)) % 1000000007;
+                    used = used + 1;
+                    b = b + 1;
+                }
+                if g < count - 1 {
+                    hash = (hash * 131 + 32) % 1000000007;
+                    used = used + 1;
+                }
+                g = g + 1;
+            }
+            while used < max_width {
+                hash = (hash * 131 + 32) % 1000000007;
+                used = used + 1;
+            }
+        } else {
+            // Full-justified: spread `total` spaces over `gaps`, extra to the left.
+            let base = total / gaps;
+            let extra = total % gaps;
+            let mut g = 0;
+            while g < count {
+                let bytes = words[i + g].bytes();
+                let bl = words[i + g].len();
+                let mut b = 0;
+                while b < bl {
+                    hash = (hash * 131 + (bytes[b] as i64)) % 1000000007;
+                    b = b + 1;
+                }
+                if g < gaps {
+                    let mut sp = base;
+                    if g < extra {
+                        sp = sp + 1;
+                    }
+                    let mut s = 0;
+                    while s < sp {
+                        hash = (hash * 131 + 32) % 1000000007;
+                        s = s + 1;
+                    }
+                }
+                g = g + 1;
+            }
+        }
+
+        i = j;
+    }
+
+    hash
+}
+
+fn main() {
+    let total: i64 = 300000;
+    let span: i64 = 40;
+    let words = build_words();
+
+    let mut acc: i64 = 0;
+    let mut k: i64 = 0;
+    while k < total {
+        let width = 10 + (k % span);
+        acc = justify_hash(words, width, acc);
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

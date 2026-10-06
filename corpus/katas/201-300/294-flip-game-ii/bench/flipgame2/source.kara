@@ -1,0 +1,108 @@
+// Bench workload for LeetCode 294 — Flip Game II.
+//
+// The kata's ★ algorithm, run 900 times: 300 random boards of length 22 at each
+// of three `+` densities, each solved with a FRESH memo. The sink is the number
+// of first-player wins plus a checksum over the size each memo grew to.
+//
+// WHAT THIS MEASURES, and why it is a different benchmark from #293's. That one
+// was string building — one allocation per successor, no lookups. This one is
+// dominated by the HASH MAP: every node hashes a 22-character board, probes,
+// and on a miss inserts an owned copy. Each language uses its own map (Kāra
+// `Map[String, bool]`, Rust `HashMap<String, bool>`, Go `map[string]bool`,
+// Python `dict`, and a hand-rolled open-addressing table in C, which is what
+// idiomatic C for this looks like), so the comparison is between string-hashing
+// implementations as much as between code generators.
+//
+// THE DENSITY SWEEP IS THE WORKLOAD, not decoration. At 15% the runs are short,
+// most boards are decided in a handful of nodes. At 85% the board is nearly one
+// long run, the tree is deep, and the memo earns its keep — the same board
+// length costs two orders of magnitude more nodes. Averaging over one density
+// would measure only one of those regimes.
+//
+// NOT RUNNABLE UNDER `karac run --interp` — it exceeds ten minutes there
+// against 0.48 s compiled. An earlier version of this note blamed the
+// interpreter's association-list `Map` (B-2026-08-21-8). That was measured and
+// is wrong: the Map was given indexed storage the same day, and this workload
+// still exceeds ten minutes. What dominates is `next_states` building a fresh
+// successor `String` per node, which is simply what a tree-walk interpreter
+// costs. `bench.sh` builds, so this never bites the harness; it bites anyone
+// reaching for the tree-walk arm to sanity-check the workload.
+//
+// A FRESH MEMO PER BOARD is deliberate. Sharing one across all 900 boards would
+// be faster and would also be a different program: the map would grow to a size
+// where its own resizing dominates, and the measurement would drift toward
+// allocator behaviour and away from the search. Fresh-per-board keeps the
+// working set small, which is where hashing cost is actually visible.
+
+fn next_rand(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 2147483647;
+}
+
+fn next_states(s: ref String) -> Vec[String] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i + 1 < n {
+        if cs[i] == '+' and cs[i + 1] == '+' {
+            let mut t = String.new();
+            let mut j = 0;
+            while j < n {
+                if j == i or j == i + 1 { t.push('-'); } else { t.push(cs[j]); }
+                j = j + 1;
+            }
+            out.push(t);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn can_win(s: ref String, memo: mut ref Map[String, bool]) -> bool {
+    match memo.get(s) {
+        Some(v) => { return v; }
+        None => {}
+    }
+    let states = next_states(s);
+    let mut i = 0;
+    while i < states.len() {
+        if not can_win(states[i], memo) {
+            let _ = memo.insert(s.clone(), true);
+            return true;
+        }
+        i = i + 1;
+    }
+    let _ = memo.insert(s.clone(), false);
+    return false;
+}
+
+fn main() {
+    let len = 22;
+    let boards = 300;
+    let mut seed = 20260821;
+
+    let densities: Vec[i64] = [15, 50, 85];
+    let mut wins = 0;
+    let mut checksum = 0;
+
+    let mut di = 0;
+    while di < densities.len() {
+        let density = densities[di];
+        let mut b = 0;
+        while b < boards {
+            let mut s = String.new();
+            let mut i = 0;
+            while i < len {
+                seed = next_rand(seed);
+                if ((seed / 65536) % 100) < density { s.push('+'); } else { s.push('-'); }
+                i = i + 1;
+            }
+            let mut memo: Map[String, bool] = Map.new();
+            if can_win(s, mut memo) { wins = wins + 1; }
+            checksum = (checksum * 31 + memo.len()) % 1000000007;
+            b = b + 1;
+        }
+        di = di + 1;
+    }
+    println(f"wins {wins} checksum {checksum}");
+}

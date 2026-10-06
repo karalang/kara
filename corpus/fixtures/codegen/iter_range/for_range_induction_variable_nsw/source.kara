@@ -1,0 +1,5 @@
+
+fn excl(n: i64) -> i64 { let mut s = 0; for i in 0..n { s = s + i; } return s; }
+fn incl(n: i64) -> i64 { let mut s = 0; for i in 0..=n { s = s + i; } return s; }
+fn stepped(n: i64) -> i64 { let mut s = 0; for i in (0..n).step_by(2) { s = s + i; } return s; }
+fn main() { print(0); }

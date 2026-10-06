@@ -1,0 +1,59 @@
+
+struct Full { name: String, buf: Vec[i64] }
+struct Mid { name: String, pad: i64 }
+fn mkf(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    let mut s: String = String.new();
+    s.push_str("payload-string-data");
+    return Full { name: s, buf: b };
+}
+fn mkm(i: i64) -> Mid {
+    let mut s: String = String.new();
+    s.push_str("payload-string-data");
+    return Mid { name: s, pad: i };
+}
+fn resf(i: i64) -> Result[Full, String] { return Result.Ok(mkf(i)); }
+fn optf(i: i64) -> Option[Full] { return Option.Some(mkf(i)); }
+fn optm(i: i64) -> Option[Mid] { return Option.Some(mkm(i)); }
+
+fn step_res(i: i64) -> Result[i64, String] {
+    // 6 words — boxed at Result's 5-word area.
+    let a = resf(i)?;
+    return Result.Ok(a.name.len() + a.buf.len());
+}
+
+fn step_opt(i: i64) -> Option[i64] {
+    // 6 words — boxed at Option's 3-word area.
+    let b = optf(i)?;
+    // 4 words — fits Result inline, but BOXES here.
+    let c = optm(i)?;
+    return Option.Some(b.name.len() + b.buf.len() + c.name.len() + c.pad);
+}
+
+fn step_destructure(i: i64) -> Result[i64, String] {
+    // Destructured DIRECTLY on the `?`, with no binding in between.
+    let Full { name, buf } = resf(i)?;
+    return Result.Ok(name.len() + buf.len());
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        match step_res(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(_) => { n = n + 1000i64; }
+        }
+        match step_opt(i) {
+            Option.Some(v) => { n = n + v; }
+            Option.None => { n = n + 1000i64; }
+        }
+        match step_destructure(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(_) => { n = n + 1000i64; }
+        }
+        i = i + 1;
+    }
+    println(n);
+}

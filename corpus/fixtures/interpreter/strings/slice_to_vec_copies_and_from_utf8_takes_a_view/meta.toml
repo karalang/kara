@@ -1,0 +1,13 @@
+source = "tests/interpreter/strings.rs::slice_to_vec_copies_and_from_utf8_takes_a_view"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,23 @@
+
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn pushed() -> i64 { let t = mkp(9); let mut v: Vec[String] = Vec.new(); let mut i = 0i64;
+  while i < 3i64 { v.push(t.a); i = i + 1; }
+  return v.len(); }
+fn assigned() -> i64 { let t = mkp(9); let mut s = payload(); let mut i = 0i64;
+  while i < 3i64 { s = t.a; i = i + 1; }
+  return s.len(); }
+fn live() -> i64 { let t = mkp(9); let mut v: Vec[String] = Vec.new(); let mut i = 0i64; let mut n = 0i64;
+  while i < 3i64 { v.push(t.a); n = n + t.a.len(); i = i + 1; }
+  return n + v.len(); }
+fn letbound() -> i64 { let t = mkp(9); let mut i = 0i64; let mut n = 0i64;
+  while i < 3i64 { let s = t.a; n = n + s.len(); i = i + 1; }
+  return n; }
+fn main() {
+  println(pushed());
+  println(assigned());
+  println(live());
+  println(letbound());
+}

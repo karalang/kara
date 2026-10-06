@@ -1,0 +1,28 @@
+
+fn stable_violations(n: i64) -> i64 {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        v.push((i % 8, i));
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.0.cmp(b.0));
+    let mut bad: i64 = 0;
+    let mut j: i64 = 1;
+    while j < v.len() {
+        if v[j - 1].0 == v[j].0 {
+            if v[j - 1].1 > v[j].1 { bad = bad + 1; }
+        }
+        j = j + 1;
+    }
+    bad
+}
+
+fn main() {
+    println(stable_violations(31));
+    println(stable_violations(32));
+    println(stable_violations(33));
+    println(stable_violations(64));
+    println(stable_violations(65));
+    println(stable_violations(1000));
+}

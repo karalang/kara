@@ -1,0 +1,9 @@
+fn main() {
+                let tracer = StdoutExporter {};
+                tracer.export_event(LogEvent.info("plain"));
+                tracer.export_event(
+                    LogEvent.info("started")
+                        .with_field("user_id", "42")
+                        .with_field("ip", "127.0.0.1")
+                        .in_span(5));
+            }

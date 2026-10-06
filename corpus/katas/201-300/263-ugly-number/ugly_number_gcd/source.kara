@@ -1,0 +1,72 @@
+// LeetCode 263 — Ugly Number, by gcd peeling.
+//
+// The second mechanism, and it never mentions 2, 3 or 5 individually. Their
+// product is 30, and
+//
+//     gcd(m, 30)
+//
+// is exactly "one copy of each of 2, 3, 5 that m still has". Divide it out and
+// repeat: each round strips one layer of every allowed prime at once. When the
+// gcd reaches 1 there is nothing left to strip, and m is ugly iff it is 1.
+//
+// The n <= 0 guard is needed here for the same reason as in the trial-division
+// form, and it is worth noticing that the hang survives the change of mechanism:
+//
+//     gcd(0, 30) = 30   and   0 / 30 == 0
+//
+// so the loop divides 0 by 30 forever. Both algorithms fail on 0 identically
+// despite sharing no arithmetic — the trap is in the problem, not in either
+// implementation of it.
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x = a;
+    let mut y = b;
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    return x;
+}
+
+fn is_ugly(n: i64) -> bool {
+    if n <= 0 {
+        return false;
+    }
+    let mut m = n;
+    let mut g = gcd(m, 30);
+    while g > 1 {
+        m = m / g;
+        g = gcd(m, 30);
+    }
+    return m == 1;
+}
+
+fn report(n: i64) {
+    if is_ugly(n) {
+        println(f"{n} -> true");
+    } else {
+        println(f"{n} -> false");
+    }
+}
+
+fn main() {
+    report(1);
+    report(6);
+    report(8);
+    report(14);
+    report(0);
+    report(-6);
+    report(-1);
+    report(2);
+    report(3);
+    report(5);
+    report(7);
+    report(30);
+    report(1024);
+    report(59049);
+    report(9765625);
+    report(2147483647);
+    report(1259712);
+    report(1259711);
+}

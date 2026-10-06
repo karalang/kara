@@ -1,0 +1,131 @@
+// LeetCode #87: Scramble String — top-down memoized recursion.
+//
+// Same recursion as scramble_string.kara (the ★), but the (i1, i2, len) window result
+// is cached in a flat tri-state memo (-1 unknown, 0 false, 1 true), turning the
+// exponential fan-out into a polynomial O(n⁴) search: there are O(n²·n) distinct
+// windows and each does O(n) split work. The memo is a single `Vec[i64]` of length
+// n·n·(n+1), indexed by `(i1·n + i2)·(n+1) + len`, threaded `mut ref` through the
+// recursion and reset per string pair. The two cheap prunes (identical window, letter
+// multiset) run before the cache write, so the memo only ever stores the outcome of
+// the split fan-out. A distinct surface from the ★ — a flat 3D memo with tri-state
+// cells — that must agree with it byte-for-byte.
+
+fn scramble(s1: ref Vec[u8], i1: i64, s2: ref Vec[u8], i2: i64, len: i64,
+        memo: mut ref Vec[i64], n: i64) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let key = (i1 * n + i2) * (n + 1) + len;
+    if memo[key] != -1 {
+        return memo[key] == 1;
+    }
+
+    // Prune 1: identical window.
+    let mut equal = true;
+    let mut k = 0;
+    while k < len {
+        if s1[i1 + k] != s2[i2 + k] {
+            equal = false;
+            break;
+        }
+        k = k + 1;
+    }
+    if equal {
+        memo[key] = 1;
+        return true;
+    }
+
+    // Prune 2: different letter multiset → impossible.
+    // Fixed 26-slot count table on the stack (a fresh Array[i64, 26], re-zeroed each
+    // call) — the same shape C's `int64_t counts[26]` and Rust's `[0i64; 26]` use, so
+    // the hot recursion allocates nothing (contrast a per-call Vec.new(), which heap-
+    // allocates and grows every call — see ../87.. bench notes).
+    let mut counts: Array[i64, 26] = [0; 26];
+    let mut c = 0;
+    k = 0;
+    while k < len {
+        let a = (s1[i1 + k] as i64) - 97;
+        let b = (s2[i2 + k] as i64) - 97;
+        counts[a] = counts[a] + 1;
+        counts[b] = counts[b] - 1;
+        k = k + 1;
+    }
+    c = 0;
+    while c < 26 {
+        if counts[c] != 0 {
+            memo[key] = 0;
+            return false;
+        }
+        c = c + 1;
+    }
+
+    // Fan out over split points, each with and without the swap.
+    let mut split = 1;
+    while split < len {
+        if scramble(s1, i1, s2, i2, split, memo, n)
+            and scramble(s1, i1 + split, s2, i2 + split, len - split, memo, n) {
+            memo[key] = 1;
+            return true;
+        }
+        if scramble(s1, i1, s2, i2 + len - split, split, memo, n)
+            and scramble(s1, i1 + split, s2, i2, len - split, memo, n) {
+            memo[key] = 1;
+            return true;
+        }
+        split = split + 1;
+    }
+    memo[key] = 0;
+    false
+}
+
+fn to_vec(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        v.push(b[i]);
+        i = i + 1;
+    }
+    v
+}
+
+fn report(s1: String, s2: String, acc: mut ref i64) {
+    let a = to_vec(s1);
+    let b = to_vec(s2);
+    let n = a.len();
+    let found = if b.len() == n {
+        // Fresh memo of size n·n·(n+1), all -1.
+        let mut memo: Vec[i64] = Vec.new();
+        let cells = n * n * (n + 1);
+        let mut i = 0;
+        while i < cells {
+            memo.push(-1);
+            i = i + 1;
+        }
+        scramble(a, 0, b, 0, n, mut memo, n)
+    } else {
+        false
+    };
+    println(f"{s1} ~ {s2}: {found}");
+    let bit = if found { 1 } else { 0 };
+    acc = (acc * 131 + bit + 1) % 1000000007;
+}
+
+fn main() {
+    let mut acc = 0;
+    report("great", "rgeat", mut acc);
+    report("abcde", "caebd", mut acc);
+    report("a", "a", mut acc);
+    report("", "", mut acc);
+    report("ab", "ba", mut acc);
+    report("ab", "ab", mut acc);
+    report("abc", "bca", mut acc);
+    report("abcd", "badc", mut acc);
+    report("abcd", "cdab", mut acc);
+    report("aabb", "bbaa", mut acc);
+    report("abcd", "acbd", mut acc);
+    report("abcde", "edcba", mut acc);
+    report("abc", "abd", mut acc);
+    report("greatabc", "rgeatabc", mut acc);
+    println(f"sink: {acc}");
+}

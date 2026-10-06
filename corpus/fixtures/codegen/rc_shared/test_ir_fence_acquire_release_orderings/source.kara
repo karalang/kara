@@ -1,0 +1,10 @@
+
+fn barriers() {
+    // Safety: paired with matching accesses on other threads.
+    unsafe {
+        fence(MemoryOrdering.Acquire);
+        fence(MemoryOrdering.Release);
+        fence(MemoryOrdering.AcqRel);
+    }
+}
+fn main() { barriers(); }

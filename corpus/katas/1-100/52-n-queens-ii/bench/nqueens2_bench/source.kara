@@ -1,0 +1,56 @@
+// Bench spine of LeetCode #52 N-Queens II — see ../README.md § Benchmarks.
+//
+// Return-value counting backtracker (the ★ solver's kernel) swept over board
+// sizes n = N_LO..N_HI. Three integer occupancy masks (cols / ↘ diag / ↙ diag)
+// are threaded BY VALUE through the DFS; each leaf (row == n) returns `1 + partial`
+// where `partial = Σ_r queens[r] * (r + 1)` is a placement-dependent checksum
+// accumulated as columns are chosen — so the sink depends on the actual placements,
+// not just their count, and no shortcut can shortcut it. The recursion sums its
+// children's returns, so the whole search folds to one i64 with no `mut ref`.
+//
+// Each n contributes its subtree fold to one i64 sink that every language prints
+// identically (the counting DFS is deterministic and integer-only, so the value is
+// bit-exact across kara/rust/c/go/py). Over n = 9..13 the counts sum to 91_760 and
+// the folded sink is 47_557_170 — far inside i64, no `wrapping` needed.
+//
+// This is exactly the return-value reduction that tripped B-2026-07-03-13 (auto-par
+// nesting a reduction whose delta recurses); it is built KARAC_AUTO_PAR=0 here, and
+// post-fix the default auto-par build produces the same sink sequentially.
+
+fn search(n: i64, row: i64, cols: i64, diag1: i64, diag2: i64, partial: i64) -> i64 {
+    if row == n {
+        return 1 + partial;
+    }
+    let mut acc = 0;
+    let mut c = 0;
+    while c < n {
+        let bit_c = 1 << c;
+        let bit_d1 = 1 << (row + c);
+        let bit_d2 = 1 << (row - c + (n - 1));
+        if (cols & bit_c) == 0 and (diag1 & bit_d1) == 0 and (diag2 & bit_d2) == 0 {
+            acc = acc
+                + search(
+                    n,
+                    row + 1,
+                    cols | bit_c,
+                    diag1 | bit_d1,
+                    diag2 | bit_d2,
+                    partial + c * (row + 1),
+                );
+        }
+        c = c + 1;
+    }
+    acc
+}
+
+fn main() {
+    let n_lo: i64 = 9;
+    let n_hi: i64 = 13;
+    let mut total: i64 = 0;
+    let mut n = n_lo;
+    while n <= n_hi {
+        total = total + search(n, 0, 0, 0, 0, 0);
+        n = n + 1;
+    }
+    println(total);
+}

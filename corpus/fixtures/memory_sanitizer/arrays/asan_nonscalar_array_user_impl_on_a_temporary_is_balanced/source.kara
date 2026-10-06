@@ -1,0 +1,13 @@
+trait Tag { fn tag(self) -> i64; }
+impl Tag for Array[String, 2] { fn tag(self) -> i64 { return 42i64; } }
+fn mk(i: i64) -> Array[String, 2] { return [f"a{i}", f"b{i}"]; }
+
+fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    while i < 50i64 {
+        total = total + mk(i).tag();
+        i = i + 1;
+    }
+    println(total);
+}

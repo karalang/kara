@@ -1,0 +1,19 @@
+
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("first padded element string beyond thirty-six bytes ok");
+    v.push("middle padded element string beyond thirty-six bytes k");
+    v.push("last padded element string beyond thirty-six bytes okk");
+    return v;
+}
+
+fn main() {
+    match names().first() {
+        Some(s) => println(s),
+        None => println("none"),
+    };
+    match names().last() {
+        Some(s) => println(s),
+        None => println("none"),
+    };
+}

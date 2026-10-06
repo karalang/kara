@@ -1,0 +1,7 @@
+
+fn target() -> i64 { 42 }
+
+fn main() {
+    let _f = target;
+    println(target());
+}

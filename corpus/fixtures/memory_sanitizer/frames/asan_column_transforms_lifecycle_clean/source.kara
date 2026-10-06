@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut c: Column[i64] = Column.new();
+    c.push(10);
+    c.push_null();
+    c.push(30);
+    c.push_null();
+    let f = c.fillna(99);
+    println(f.len());
+    let d = c.dropna();
+    println(d.len());
+    // receiver still usable (borrowed, not consumed).
+    println(c.null_count());
+    let opts: Vec[Option[i64]] = [Some(1), None, Some(3)];
+    let e: Column[i64] = Column.from_iter_nullable(opts);
+    println(e.null_count());
+    match e[2] { Some(v) => println(v), None => println(-1) }
+}

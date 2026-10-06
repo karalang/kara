@@ -1,0 +1,9 @@
+fn main() {
+         let ch = BoundedChannel.new(2, OnFull.FailFast);
+         match ch.send(10) { Ok(_) => println("ok"), Err(_) => println("full") }
+         match ch.send(20) { Ok(_) => println("ok"), Err(_) => println("full") }
+         match ch.send(30) { Ok(_) => println("ok"), Err(ChannelError.Full) => println("full") }
+         match ch.recv() { Some(v) => println(v), None => println("none") }
+         match ch.recv() { Some(v) => println(v), None => println("none") }
+         match ch.recv() { Some(v) => println(v), None => println("none") }
+     }

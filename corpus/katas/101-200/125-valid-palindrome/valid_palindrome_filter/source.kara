@@ -1,0 +1,89 @@
+// LeetCode #125: Valid Palindrome — filter-then-compare (index-heavy).
+//
+// Where the two-pointer style classifies and compares in place, this variant
+// first builds a normalized buffer — every alphanumeric byte, lowercased —
+// then checks that buffer for symmetry by symmetric index pairs.
+//
+//   pass 1:  for each byte, if is_alnum, push to_lower(b) into a Vec[u8]
+//   pass 2:  for i in 0..len/2, compare clean[i] vs clean[n-1-i]
+//
+// The same `is_alpha` / `is_ascii_digit` predicate + ASCII case-fold surface
+// as the two-pointer style, but staged through an explicit `Vec[u8]`
+// accumulator — the shape a lexer takes when it must materialize a normalized
+// token (a lowercased identifier, a radix-stripped number) before dispatch,
+// rather than compare against the source in place.
+
+fn is_alnum(b: u8) -> bool {
+    (b >= b'0' and b <= b'9')
+        or (b >= b'a' and b <= b'z')
+        or (b >= b'A' and b <= b'Z')
+}
+
+fn to_lower(b: u8) -> u8 {
+    if b >= b'A' and b <= b'Z' { b + (b'a' - b'A') } else { b }
+}
+
+fn is_palindrome(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    // Pass 1: filter + case-fold into a normalized buffer.
+    let mut clean: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let b = bytes[i];
+        if is_alnum(b) {
+            clean.push(to_lower(b));
+        }
+        i = i + 1;
+    }
+
+    // Pass 2: symmetric-index compare over the normalized buffer.
+    let m = clean.len();
+    let mut lo = 0;
+    let mut hi = m - 1;
+    while lo < hi {
+        if clean[lo] != clean[hi] {
+            return false;
+        }
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    true
+}
+
+fn report(s: ref String) {
+    if is_palindrome(s) {
+        println(f"\"{s}\" -> true");
+    } else {
+        println(f"\"{s}\" -> false");
+    }
+}
+
+fn main() {
+    // LeetCode canonical examples.
+    report("A man, a plan, a canal: Panama");  // true
+    report("race a car");                       // false
+    report(" ");                                // true  (empty after filtering)
+
+    // Case folding.
+    report("Able was I ere I saw elBA");        // true
+    report("No lemon, no melon");               // true
+
+    // Digits participate.
+    report("0P");                               // false (0 vs p)
+    report("a1b2b1a");                          // true
+    report("1a2");                              // false
+
+    // Punctuation-only / single char / empty.
+    report(".,");                               // true
+    report("a");                                // true
+    report("");                                 // true
+    report("aa");                               // true
+    report("ab");                               // false
+
+    // Mixed punctuation between alnum.
+    report("Madam, I'm Adam");                  // true
+    report("Was it a car or a cat I saw?");     // true
+    report("Mr. Owl ate my metal worm");        // true
+}

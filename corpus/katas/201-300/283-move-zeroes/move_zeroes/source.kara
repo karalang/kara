@@ -1,0 +1,84 @@
+// LeetCode 283 — Move Zeroes.
+//
+// Move every 0 to the end while keeping the relative order of the non-zero
+// elements. In place.
+//
+//     [0,1,0,3,12]  ->  [1,3,12,0,0]
+//
+// THE ANSWER IS UNIQUE, which is unusual for this stretch of the corpus and
+// makes the harness simpler than katas 278, 280 and 282 needed: the non-zeros
+// keep their order, the zeros all go to the end, so there is exactly one correct
+// output for any input. Equality comparison is the right oracle here, not
+// validation.
+//
+// THE ★ MECHANISM: A WRITE CURSOR. Walk the array; every time a non-zero is
+// seen, store it at `write` and advance. When the walk ends, everything from
+// `write` to the end is zero — fill it.
+//
+//     for i in 0..n:  if a[i] != 0 { a[write] = a[i]; write += 1 }
+//     for j in write..n:  a[j] = 0
+//
+// The correctness argument is that `write <= i` always, so the store never
+// clobbers an element the walk has not read yet. That inequality is the whole
+// proof, and it is why the two loops cannot be fused into one pass that also
+// zeroes: zeroing at `i` before the walk reaches it would destroy data when
+// `write == i`.
+//
+// A NAMING NOTE: the counter is `stores`, not `writes`, because `writes` is one
+// of Kāra's eight effect verbs and is reserved. Worth knowing before you reach
+// for `reads`, `sends`, `receives`, `allocates`, `panics`, `blocks` or
+// `suspends` as a variable name either.
+//
+// THE FOLLOW-UP ASKS TO MINIMIZE OPERATIONS, and this version is deliberately
+// the naive answer to that: it stores EVERY position — `n` stores regardless of
+// input, even for an array with no zeros at all, where the correct number of
+// stores is zero. `move_zeroes_swap.kara` is the same algorithm arranged to skip
+// those, and the differential counts both rather than taking either on trust —
+// the same treatment kata 277 gave its API-call budget.
+
+fn move_zeroes(a: mut ref Vec[i64], stores: mut ref i64) {
+    let mut write = 0;
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != 0 {
+            a[write] = a[i];
+            stores = stores + 1;
+            write = write + 1;
+        }
+        i = i + 1;
+    }
+    while write < a.len() {
+        a[write] = 0;
+        stores = stores + 1;
+        write = write + 1;
+    }
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + f"{v[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn report(input: Vec[i64]) {
+    let mut a = input;
+    let before = show(a);
+    let mut w = 0;
+    move_zeroes(mut a, mut w);
+    println(f"{before} -> {show(a)}  ({w} stores)");
+}
+
+fn main() {
+    report([0, 1, 0, 3, 12]);
+    report([0]);
+    report([1, 2, 3]);
+    report([0, 0, 0]);
+    report([4, 0, 5, 0, 0, 6]);
+    report([1]);
+    report([0, 0, 1]);
+}

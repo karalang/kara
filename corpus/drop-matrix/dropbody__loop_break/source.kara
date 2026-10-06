@@ -1,0 +1,12 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+struct W { k: i64, a: R, b: R }
+impl Drop for W { fn drop(mut ref self) { println(f"w{self.k}"); } }
+fn main() {
+    for i in 0..3 {
+        let x = W { k: i + 0, a: R { id: i + 10 }, b: R { id: i + 20 } };
+        println("it");
+        break;
+    }
+    println("done");
+}

@@ -1,0 +1,21 @@
+
+struct Q { a: i64, b: i32 }
+fn main() {
+    let mut out: Vec[Q] = Vec.new();
+    out.push(Q { a: 0i64 - 5i64, b: 9i32 });
+    #[par_order_free]
+    for k in 0i64..1000i64 {
+        out.push(Q { a: k * 3i64, b: (k % 100i64) as i32 });
+    }
+    let mut ok: i64 = 1i64;
+    if out[0i64].a != 0i64 - 5i64 { ok = 0i64; }
+    if out[0i64].b != 9i32 { ok = 0i64; }
+    let mut i: i64 = 0i64;
+    while i < 1000i64 {
+        if out[i + 1i64].a != i * 3i64 { ok = 0i64; }
+        if out[i + 1i64].b != ((i % 100i64) as i32) { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+}

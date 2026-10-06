@@ -1,0 +1,28 @@
+
+struct Entity { x: f64, y: f64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+}
+fn make_entities() -> Vec[Entity] {
+    let mut out: Vec[Entity] = Vec.new();
+    out.push(Entity { x: 1.0, y: 2.0, hp: 100 });
+    out.push(Entity { x: 3.0, y: 4.0, hp: 200 });
+    out.push(Entity { x: 5.0, y: 6.0, hp: 300 });
+    out
+}
+fn main() {
+    let mut sum = 0;
+    let mut k = 0;
+    while k < 20 {
+        let entities: Vec[Entity] = make_entities();
+        let mut i = 0;
+        while i < entities.len() {
+            let e = entities[i];
+            sum = sum + e.hp;
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    println(sum);
+}

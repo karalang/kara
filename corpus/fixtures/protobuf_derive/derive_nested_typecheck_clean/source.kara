@@ -1,0 +1,12 @@
+
+#[derive(Message)]
+struct Inner { v: i64 }
+
+#[derive(Message)]
+struct Outer { inner: Inner }
+
+fn main() {
+    let o = Outer { inner: Inner { v: 1 } };
+    let back = Outer.decode(o.encode());
+    println(back.inner.v);
+}

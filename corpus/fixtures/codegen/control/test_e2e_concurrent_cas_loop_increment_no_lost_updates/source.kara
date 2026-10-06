@@ -1,0 +1,27 @@
+
+par struct Counter { v: Atomic[i64] }
+impl Counter {
+    fn get(ref self) -> i64 { self.v.load(MemoryOrdering.SeqCst) }
+    fn inc(ref self) {
+        let mut done = false;
+        while not done {
+            let cur = self.v.load(MemoryOrdering.SeqCst);
+            match self.v.compare_exchange(cur, cur + 1, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst) {
+                Ok(_) => { done = true; }
+                Err(_) => { }
+            }
+        }
+    }
+}
+fn bump(c: Counter, n: i64) {
+    let mut i = 0;
+    while i < n { c.inc(); i = i + 1; }
+}
+fn main() {
+    let c = Counter { v: Atomic.new(0) };
+    par {
+        bump(c, 50000);
+        bump(c, 50000);
+    }
+    println(c.get());
+}

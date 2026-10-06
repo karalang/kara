@@ -1,0 +1,15 @@
+
+struct P { x: i64, y: i64 }
+impl Display for P { fn to_string(ref self) -> String { f"({self.x}, {self.y})" } }
+fn describe[T: Display](item: T) -> String { f"item is {item} padded padded padded" }
+fn tag[T](item: T) -> String { f"constant tail padded padded padded" }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        println(describe(P { x: i, y: 2i64 }));
+        println(describe(42i64));
+        println(describe("hi".to_string()));
+        println(tag(7i64));
+        i = i + 1;
+    }
+}

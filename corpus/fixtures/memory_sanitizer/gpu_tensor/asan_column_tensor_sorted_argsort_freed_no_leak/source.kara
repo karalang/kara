@@ -1,0 +1,23 @@
+
+fn inner() -> i64 {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    let cs: Vec[i64] = c.sorted();
+    let ca: Vec[i64] = c.argsort();
+    let mut n: Column[i64] = Column.with_capacity(5);
+    n.push(10); n.push_null(); n.push(5); n.push_null(); n.push(20);
+    let ns: Vec[i64] = n.sorted();
+    let na: Vec[i64] = n.argsort();
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    let ts: Vec[i64] = t.sorted();
+    let ta: Vec[i64] = t.argsort();
+    cs[0] + ca[0] + ns[0] + na[0] + ts[0] + ta[0]
+}
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        acc = acc + inner();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}

@@ -1,0 +1,53 @@
+
+fn main() {
+    let mut froms: Vec[String] = Vec.new();
+    let mut tos: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < 200i64 {
+        froms.push(f"K{i % 7i64}");
+        tos.push(f"V{i}");
+        i = i + 1;
+    }
+
+    let mut adj: Map[String, Vec[String]] = Map.new();
+    let mut j = 0i64;
+    while j < froms.len() {
+        let k = froms[j].clone();
+        let present = match adj.get(k) { Some(_) => true, None => false };
+        if not present {
+            let empty: Vec[String] = Vec.new();
+            let _ = adj.insert(k, empty);
+        }
+        adj[k].push(tos[j]);
+        j = j + 1i64;
+    }
+
+    let mut total = 0i64;
+    for key in adj.keys() {
+        let d: Vec[String] = match adj.get(key) { Some(v) => v, None => Vec.new() };
+        total = total + d.len();
+    }
+    println(f"keys={adj.len()} total={total}");
+
+    // Scalar-keyed sibling: same lowering, no heap key half.
+    let mut mi: Map[i64, Vec[i64]] = Map.new();
+    let mut s = 0i64;
+    while s < 5i64 {
+        let empty: Vec[i64] = Vec.new();
+        let _ = mi.insert(s, empty);
+        s = s + 1i64;
+    }
+    let mut t = 0i64;
+    while t < 100i64 {
+        mi[t % 5i64].push(t);
+        t = t + 1i64;
+    }
+    let mut sum = 0i64;
+    let mut u = 0i64;
+    while u < 5i64 {
+        let d: Vec[i64] = match mi.get(u) { Some(v) => v, None => Vec.new() };
+        sum = sum + d.len();
+        u = u + 1i64;
+    }
+    println(f"scalar={sum}");
+}

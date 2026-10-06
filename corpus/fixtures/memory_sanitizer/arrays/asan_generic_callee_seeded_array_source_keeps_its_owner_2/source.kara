@@ -1,0 +1,12 @@
+struct S179 { tag: String }
+impl Drop for S179 { fn drop(mut ref self) { println(f"drop:{self.tag}") } }
+fn passthru[T](x: Option[T]) -> Option[T] { return x; }
+fn takesOpt[T](x: Option[T]) -> i64 {
+    match x { Some(_) => { println("o"); 1 } None => { println("n"); 0 } }
+}
+fn main() {
+    let e: Array[S179, 2] = [S179 { tag: f"b179-cccccccc0" }, S179 { tag: f"b179-dddddddd1" }];
+    let back = passthru(Some(e));
+    let c = takesOpt(back);
+    println(f"c{c}");
+}

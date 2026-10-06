@@ -1,0 +1,17 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+
+struct WrapO { inner: (R, Option[R]) }
+struct OuterO { h: WrapO }
+
+fn c_named() { let t: (R, Option[R]) = (mk(1), Option.Some(mk(101))); let (a1, b1) = t; println(f"  rd{a1.id}") }
+fn c_one()   { let w = WrapO { inner: (mk(2), Option.Some(mk(102))) }; let (a2, b2) = w.inner; println(f"  rd{a2.id}") }
+fn c_two()   { let g = OuterO { h: WrapO { inner: (mk(3), Option.Some(mk(103))) } }; let (a3, b3) = g.h.inner; println(f"  rd{a3.id}") }
+
+fn main() {
+    println("named"); c_named(); println("named end")
+    println("one");   c_one();   println("one end")
+    println("two");   c_two();   println("two end")
+    println("done")
+}

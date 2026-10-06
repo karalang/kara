@@ -1,0 +1,9 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+enum W2 { Two(R, R), None3 }
+fn take(r: R) -> i64 { let w = W2.Two(r, R { id: 2, name: f"fresh" }); 7 }
+fn main() {
+    let v = take(R { id: 1, name: f"heap-one" });
+    println(f"v={v}");
+}

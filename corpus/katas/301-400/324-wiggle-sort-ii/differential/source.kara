@@ -1,0 +1,361 @@
+// LeetCode #324: Wiggle Sort II — differential test of all three arms.
+//
+// The answer is not unique, so the arms are not compared with each other
+// line by line. Each is checked against what an answer MUST be (a wiggle that
+// uses exactly the input's values), and against a brute-force oracle that
+// decides whether any wiggle exists at all.
+//
+// The oracle is a backtracking search over the distinct values with their
+// counts. It is exponential, so it only sees small inputs, but over small
+// values those are where every repeat-heavy corner lives.
+//
+// Properties, each counted over every input it applies to:
+//   P1  sort arm: finds a wiggle exactly when the oracle says one exists
+//   P2  select arm: the same
+//   P3  count arm: the same
+//   P4  every arm's output is a permutation of its input, solvable or not
+//   P5  the count arm prints the sort arm's arrangement byte for byte
+//   P6  the sort arm's arrangement depends only on the values, not their order
+//   P7  feeding an arm's own wiggle back in gives a wiggle again
+//   P8  on large solvable inputs, all three arms find a wiggle
+
+fn ws_sort(nums: mut ref Vec[i64]) {
+    let n = nums.len();
+    let mut s = nums.clone();
+    s.sort();
+    let half = (n + 1) / 2;
+    let mut lo = half - 1;
+    let mut hi = n - 1;
+    let mut i = 0;
+    while i < n {
+        if i % 2 == 0 {
+            nums[i] = s[lo];
+            lo -= 1;
+        } else {
+            nums[i] = s[hi];
+            hi -= 1;
+        }
+        i += 1;
+    }
+}
+
+fn median3(x: i64, y: i64, z: i64) -> i64 {
+    if (x <= y and y <= z) or (z <= y and y <= x) {
+        return y;
+    }
+    if (y <= x and x <= z) or (z <= x and x <= y) {
+        return x;
+    }
+    return z;
+}
+
+fn select(a: mut ref Vec[i64], k: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = a.len() - 1;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let pivot = median3(a[lo], a[mid], a[hi]);
+        let mut lt = lo;
+        let mut i = lo;
+        let mut gt = hi;
+        while i <= gt {
+            if a[i] < pivot {
+                a.swap(lt, i);
+                lt += 1;
+                i += 1;
+            } else if a[i] > pivot {
+                a.swap(i, gt);
+                gt -= 1;
+            } else {
+                i += 1;
+            }
+        }
+        if k < lt {
+            hi = lt - 1;
+        } else if k > gt {
+            lo = gt + 1;
+        } else {
+            return pivot;
+        }
+    }
+    return a[k];
+}
+
+fn ws_select(nums: mut ref Vec[i64]) {
+    let n = nums.len();
+    let median = select(nums, n / 2);
+    let m = n | 1;
+    let mut left = 0;
+    let mut i = 0;
+    let mut right = n - 1;
+    while i <= right {
+        let vi = (1 + 2 * i) % m;
+        if nums[vi] > median {
+            nums.swap((1 + 2 * left) % m, vi);
+            left += 1;
+            i += 1;
+        } else if nums[vi] < median {
+            nums.swap(vi, (1 + 2 * right) % m);
+            right -= 1;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+fn ws_count(nums: mut ref Vec[i64]) {
+    let n = nums.len();
+    let mut count: Vec[i64] = Vec.filled(5001, 0);
+    for x in nums {
+        count[x] += 1;
+    }
+    let mut v = 5000;
+    let mut slot = 1;
+    while slot < n {
+        while count[v] == 0 {
+            v -= 1;
+        }
+        nums[slot] = v;
+        count[v] -= 1;
+        slot += 2;
+    }
+    slot = 0;
+    while slot < n {
+        while count[v] == 0 {
+            v -= 1;
+        }
+        nums[slot] = v;
+        count[v] -= 1;
+        slot += 2;
+    }
+}
+
+fn is_wiggle(a: ref Vec[i64]) -> bool {
+    for i in 1..a.len() {
+        if i % 2 == 1 and a[i] <= a[i - 1] {
+            return false;
+        }
+        if i % 2 == 0 and a[i] >= a[i - 1] {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn same_values(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut x = a.clone();
+    let mut y = b.clone();
+    x.sort();
+    y.sort();
+    for i in 0..x.len() {
+        if x[i] != y[i] {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn same_order(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Can slots pos.. be filled from `left` (counts of `vals`) so that the whole
+// prefix stays a wiggle, given the value at pos - 1 is `prev`?
+fn extend(vals: ref Vec[i64], left: mut ref Vec[i64], pos: i64, n: i64, prev: i64) -> bool {
+    if pos == n {
+        return true;
+    }
+    for j in 0..vals.len() {
+        if left[j] == 0 {
+            continue;
+        }
+        let v = vals[j];
+        let fits = pos == 0 or (pos % 2 == 1 and v > prev) or (pos % 2 == 0 and v < prev);
+        if fits {
+            left[j] -= 1;
+            let found = extend(vals, left, pos + 1, n, v);
+            left[j] += 1;
+            if found {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn wiggle_exists(a: ref Vec[i64]) -> bool {
+    let mut s = a.clone();
+    s.sort();
+    let mut vals: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    for x in s {
+        if vals.len() > 0 and vals[vals.len() - 1] == x {
+            left[left.len() - 1] += 1;
+        } else {
+            vals.push(x);
+            left.push(1);
+        }
+    }
+    return extend(vals, mut left, 0, a.len(), 0);
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn shuffled(a: ref Vec[i64], seed: mut ref i64) -> Vec[i64] {
+    let mut b = a.clone();
+    let mut i = b.len() - 1;
+    while i > 0 {
+        let j = next(seed) % (i + 1);
+        b.swap(i, j);
+        i -= 1;
+    }
+    return b;
+}
+
+fn wiggle_input(n: i64, k: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if i % 2 == 0 {
+            a.push(next(seed) % k);
+        } else {
+            a.push(k + next(seed) % k);
+        }
+    }
+    return shuffled(a, seed);
+}
+
+struct Tally {
+    checked: Vec[i64],
+    failed: Vec[i64],
+}
+
+impl Tally {
+    fn new() -> Tally {
+        return Tally { checked: Vec.filled(9, 0), failed: Vec.filled(9, 0) };
+    }
+
+    fn check(mut ref self, p: i64, holds: bool, what: ref String) {
+        self.checked[p] += 1;
+        if not holds {
+            if self.failed[p] < 3 {
+                println(f"P{p} FAILED: {what}");
+            }
+            self.failed[p] += 1;
+        }
+    }
+}
+
+fn show(a: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..a.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(f"{a[i]}");
+    }
+    s.push(']');
+    return s;
+}
+
+fn main() {
+    let mut t = Tally.new();
+    let mut seed = 3240;
+    let mut solvable = 0;
+    let mut unsolvable = 0;
+
+    // Small inputs over few distinct values: about a third have no answer.
+    // Sized for `--interp`, where each round costs ~135 ms, most of it the
+    // counting arm walking its 5001-slot table.
+    for round in 0..1000 {
+        let n = 1 + next(mut seed) % 8;
+        let k = 2 + round % 3;
+        let mut a: Vec[i64] = Vec.new();
+        for i in 0..n {
+            a.push(next(mut seed) % k);
+        }
+        let exists = wiggle_exists(a);
+        if exists { solvable += 1; } else { unsolvable += 1; }
+        let what = show(a);
+
+        let mut s = a.clone();
+        ws_sort(mut s);
+        let mut q = a.clone();
+        ws_select(mut q);
+        let mut c = a.clone();
+        ws_count(mut c);
+
+        t.check(1, is_wiggle(s) == exists, what);
+        t.check(2, is_wiggle(q) == exists, what);
+        t.check(3, is_wiggle(c) == exists, what);
+        t.check(4, same_values(s, a) and same_values(q, a) and same_values(c, a), what);
+        t.check(5, same_order(s, c), what);
+
+        let mut s2 = shuffled(a, mut seed);
+        ws_sort(mut s2);
+        t.check(6, same_order(s, s2), what);
+
+        if exists {
+            let mut ss = s.clone();
+            ws_sort(mut ss);
+            let mut qq = q.clone();
+            ws_select(mut qq);
+            let mut cc = c.clone();
+            ws_count(mut cc);
+            t.check(7, is_wiggle(ss) and is_wiggle(qq) and is_wiggle(cc), what);
+        }
+    }
+
+    // Large solvable inputs.
+    let mut sizes: Vec[i64] = [1, 2, 3, 100, 1001, 5000, 20000, 49999];
+    let mut ks: Vec[i64] = [1, 2, 3, 2, 3, 100, 2500, 7];
+    for i in 0..sizes.len() {
+        let a = wiggle_input(sizes[i], ks[i], mut seed);
+        let mut s = a.clone();
+        ws_sort(mut s);
+        let mut q = a.clone();
+        ws_select(mut q);
+        let mut c = a.clone();
+        ws_count(mut c);
+        let what = f"n={sizes[i]} k={ks[i]}";
+        t.check(8, is_wiggle(s) and is_wiggle(q) and is_wiggle(c), what);
+        t.check(4, same_values(s, a) and same_values(q, a) and same_values(c, a), what);
+        t.check(5, same_order(s, c), what);
+    }
+
+    // The largest value the problem allows. No generated input reaches it.
+    let edge: Vec[i64] = [0, 5000, 0, 5000, 4999, 5000, 1];
+    let mut s = edge.clone();
+    ws_sort(mut s);
+    let mut q = edge.clone();
+    ws_select(mut q);
+    let mut c = edge.clone();
+    ws_count(mut c);
+    let what = show(edge);
+    t.check(8, is_wiggle(s) and is_wiggle(q) and is_wiggle(c), what);
+    t.check(5, same_order(s, c), what);
+
+    println(f"small inputs: {solvable} solvable, {unsolvable} without an answer");
+    let mut bad = 0;
+    for p in 1..9 {
+        println(f"P{p}: {t.checked[p]} checked, {t.failed[p]} failed");
+        bad += t.failed[p];
+    }
+    if bad == 0 {
+        println("all properties hold");
+    } else {
+        println(f"{bad} property failures");
+    }
+}

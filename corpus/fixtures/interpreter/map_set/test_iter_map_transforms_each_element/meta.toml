@@ -1,0 +1,13 @@
+source = "tests/interpreter/map_set.rs::test_iter_map_transforms_each_element"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

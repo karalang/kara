@@ -1,0 +1,33 @@
+
+fn main() {
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    bucket.entry(2_i64).or_insert(Vec.new()).push(10_i64);
+    bucket.entry(2_i64).or_insert(Vec.new()).push(20_i64);
+    bucket.entry(2_i64).or_insert(Vec.new()).push(30_i64);
+    bucket.entry(3_i64).or_insert(Vec.new()).push(99_i64);
+
+    match bucket.get(2_i64) {
+        Some(v) => { println(v.len()); },
+        None    => { println(-1_i64); },
+    }
+    match bucket.get(3_i64) {
+        Some(v) => { println(v.len()); },
+        None    => { println(-1_i64); },
+    }
+
+    match bucket.remove(2_i64) {
+        Some(indices) => {
+            for j in indices.into_iter() {
+                println(j);
+            }
+        },
+        None => { println(-1_i64); },
+    }
+
+    println(bucket.len());
+
+    match bucket.remove(2_i64) {
+        Some(_) => { println(99_i64); },
+        None    => { println(0_i64); },
+    }
+}

@@ -1,0 +1,13 @@
+
+fn main() {
+    let big: u128 = 170141183460469231731687303715884105727u128;
+    let pow: i128 = 1267650600228229401496703205376i128;
+    let neg: i128 = -1267650600228229401496703205376i128;
+    let small: u128 = 42u128;
+    println(f"[{small:6}]");
+    println(f"[{pow}]");
+    println(f"[{pow:44}]");
+    println(f"[{neg:44}]");
+    println(f"[{big:44}]");
+    println(f"[{pow:<34}]");
+}

@@ -1,0 +1,22 @@
+
+fn main() {
+    let mut grid: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 262144 {
+        grid.push(i);
+        i = i + 1;
+    }
+    let mut step: i64 = 0;
+    while step < 4 {
+        let mut next: Vec[i64] = Vec.with_capacity(262144);
+        let mut j: i64 = 0;
+        while j < 262144 {
+            next.push(grid[j] + 1);
+            j = j + 1;
+        }
+        grid = next;
+        step = step + 1;
+    }
+    let out: i64 = grid[0] + grid[262143];
+    println(f"{out}");
+}

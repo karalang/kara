@@ -1,0 +1,22 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+struct H { v: i64 }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mka(k: i64) -> Array[R, 2] { return [mkr(k), mkr(k + 1)] }
+fn letif(a: Array[R, 2], c: bool) -> Array[R, 2] { let r: Array[R, 2] = if c { a } else { mka(8) }; println("  mid"); r }
+fn letmatch(a: Array[R, 2], c: bool) -> Array[R, 2] { let r: Array[R, 2] = match c { true => a, false => mka(8) }; println("  mid"); return r }
+fn someret(a: Array[R, 2], c: bool, d: bool) -> Array[R, 2] { let r: Array[R, 2] = if c { a } else { mka(8) }; if d { return r }; println("  mid"); mka(5) }
+fn sletif(a: R, c: bool) -> R { let r: R = if c { a } else { mkr(8) }; println("  mid"); r }
+impl H { fn m(self, a: R, c: bool) -> R { let r: R = match c { true => a, false => mkr(8) }; println("  mid"); r } }
+fn main() {
+    println("letif-t");   { let b = letif(mka(1), true); println(f"  y{b[0].id}"); }
+    println("letif-f");   { let b = letif(mka(1), false); println(f"  y{b[0].id}"); }
+    println("match-t");   { let a: Array[R, 2] = mka(1); let b = letmatch(a, true); println(f"  y{b[1].id}"); }
+    println("match-f");   { let a: Array[R, 2] = mka(1); let b = letmatch(a, false); println(f"  y{b[1].id}"); }
+    println("some-tt");   { let b = someret(mka(1), true, true); println(f"  y{b[0].id}"); }
+    println("some-tf");   { let b = someret(mka(1), true, false); println(f"  y{b[0].id}"); }
+    println("struct-t");  { let a = mkr(1); let b = sletif(a, true); println(f"  y{b.id}"); }
+    println("struct-f");  { let a = mkr(1); let b = sletif(a, false); println(f"  y{b.id}"); }
+    println("method-t");  { let h = H { v: 0 }; let b = h.m(mkr(1), true); println(f"  y{b.id}"); }
+    println("end")
+}

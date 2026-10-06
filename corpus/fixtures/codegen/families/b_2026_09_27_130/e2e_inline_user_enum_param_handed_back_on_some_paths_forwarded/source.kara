@@ -1,0 +1,25 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
+enum Hc { Full(S), Empty }
+fn shc(h: Hc) { match h { Hc.Full(r) => println(f"s{r.id}"), Hc.Empty => println("e") } }
+enum Ho[T] { Full(T), Empty }
+fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"t{r.id}"), Ho.Empty => println("te") } }
+struct K { z: i64 }
+impl K {
+    fn mp(ref self, h: Hc, k: bool) -> Hc { if k { return h } shc(h); return Hc.Empty }
+    fn ap(h: Hc, k: bool) -> Hc { if k { return h } shc(h); return Hc.Empty }
+}
+fn pk(h: Hc, k: bool) -> Hc { if k { return h } shc(h); return Hc.Empty }
+fn main() {
+    let kk = K { z: 0 };
+    let a = Hc.Full(mks(1)); let r1 = kk.mp(a, false); shc(r1);
+    let b = Hc.Full(mks(2)); let r2 = kk.mp(b, true); shc(r2);
+    let c = Hc.Full(mks(3)); let r3 = K.ap(c, false); shc(r3);
+    let d = Hc.Full(mks(4)); let r4 = K.ap(d, true); shc(r4);
+    let e = Hc.Full(mks(5)); let r5 = pk(e, false); shc(r5);
+    let f = Hc.Full(mks(6)); let r6 = pk(f, true); shc(r6);
+    let r7 = pk(Hc.Full(mks(7)), false); shc(r7);
+    shows(Ho.Full(mks(8)));
+    println("end")
+}

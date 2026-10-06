@@ -1,0 +1,13 @@
+
+        fn work(x: i64) -> i64 { x * 2i64 }
+        fn sum(n: i64) -> i64 {
+            let mut total: i64 = 0i64;
+            let mut c: i64 = 0i64;
+            while c < n {
+                total = total + work(c);
+                c = c + 1i64;
+            }
+            total
+        }
+        fn main() { let x: i64 = sum(10i64); }
+        

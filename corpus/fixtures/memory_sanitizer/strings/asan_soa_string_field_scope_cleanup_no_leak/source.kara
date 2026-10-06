@@ -1,0 +1,19 @@
+
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn main() with panics {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut cells: Vec[Cell] = Vec.new();
+        let mut i = 0;
+        while i < 8 {
+            cells.push(Cell { id: i, name: f"soa-heap-owning-string-payload-element-{i}" });
+            i = i + 1;
+        }
+        let mut j = 0;
+        while j < cells.len() { total = total + cells[j].id; j = j + 1; }
+        k = k + 1;
+    }
+    println(total);
+}

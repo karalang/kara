@@ -1,0 +1,16 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct G[T] { v: T, n: i64 }
+struct H { v: R, n: i64 }
+fn mk(k: i64) -> R { R { id: k, s: f"a-heap-string-longer-than-sso-{k}" } }
+fn c1() -> i64 { let o: Result[H, i64] = Result.Ok(H { v: mk(1), n: 10 }); match o { Result.Ok(H { n, .. }) => n, Result.Err(e) => e } }
+fn c2() -> i64 { let o: Result[H, i64] = Result.Ok(H { v: mk(2), n: 20 }); match o { Result.Ok(H { v: _, n }) => n, Result.Err(e) => e } }
+fn c3() -> i64 { let o: Result[i64, H] = Result.Err(H { v: mk(3), n: 30 }); match o { Result.Ok(k) => k, Result.Err(H { n, .. }) => n } }
+fn c4() -> i64 { let o: Result[G[R], i64] = Result.Ok(G { v: mk(4), n: 40 }); match o { Result.Ok(G { n, .. }) => n, Result.Err(e) => e } }
+fn c5() -> i64 { let o: Result[G[R], i64] = Result.Ok(G { v: mk(5), n: 50 }); match o { Result.Ok(G { v: _, n }) => n, Result.Err(e) => e } }
+fn c6() -> i64 { let o: Result[H, i64] = Result.Ok(H { v: mk(6), n: 60 }); let k = match o { Result.Ok(H { n, .. }) => n, Result.Err(e) => e }; println("mid"); k }
+fn c7() -> i64 { let o: Result[H, i64] = Result.Ok(H { v: mk(7), n: 70 }); match o { Result.Ok(H { v, n }) => v.id + n, Result.Err(e) => e } }
+fn main() {
+    println(c1()); println(c2()); println(c3()); println(c4()); println(c5()); println(c6()); println(c7());
+    println("end")
+}

@@ -1,0 +1,86 @@
+// LeetCode 298 — TOP-DOWN, carrying the run length INTO each node.
+//
+// The ★ arm asks each node "how long is the chain starting at me?" and answers
+// it from below. This one inverts the flow: it hands each node the length of
+// the chain that ARRIVES at it, and each node either extends that chain or
+// starts a fresh one of length 1.
+//
+//     visit(n, parent_val, arriving):
+//         run = arriving + 1   if n.val == parent_val + 1
+//         run = 1              otherwise
+//         best = max(best, run)
+//         visit(left,  n.val, run)
+//         visit(right, n.val, run)
+//
+// SO THE COMPARISON MOVES FROM THE PARENT TO THE CHILD. In the ★ arm a node
+// inspects its children's values to decide whether to absorb their chains;
+// here a node inspects the value it was handed. Same rule, opposite end of the
+// edge — and that is what makes this a genuinely independent implementation
+// rather than the same code reshaped: an off-by-one in the `+ 1` comparison
+// lands on a different edge in each arm.
+//
+// THE SENTINEL IS THE ONLY AWKWARD PART. The root has no parent, so it must be
+// given a `parent_val` that cannot possibly be one less than it. Passing a
+// magic number is a bug waiting for the test case that uses it, so the root's
+// arrival is spelled with an explicit `has_parent: bool` instead. This is the
+// standard place a top-down formulation goes wrong.
+//
+// NO ACCUMULATOR RETURN AT ALL. Because each node's answer is complete on the
+// way DOWN, nothing needs to come back up: the function returns nothing and
+// folds into a `mut ref best`. That is a structural difference from the ★ arm,
+// where the return value is load-bearing and the accumulator is the extra.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn node(v: i64, l: Option[TreeNode], r: Option[TreeNode]) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: None, right: None });
+}
+
+fn visit(t: Option[TreeNode], has_parent: bool, parent_val: i64, arriving: i64, best: mut ref i64) {
+    match t {
+        None => { }
+        Some(n) => {
+            let mut run = 1;
+            if has_parent and n.val == parent_val + 1 {
+                run = arriving + 1;
+            }
+            if run > best {
+                best = run;
+            }
+            visit(n.left, true, n.val, run, best);
+            visit(n.right, true, n.val, run, best);
+        }
+    }
+}
+
+fn longest_consecutive(t: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    visit(t, false, 0, 0, mut best);
+    return best;
+}
+
+fn report(name: String, t: Option[TreeNode]) {
+    println(f"{name} {longest_consecutive(t)}");
+}
+
+fn main() {
+    report("ascending-right", node(1, None, node(3, leaf(2), node(4, None, leaf(5)))));
+    report("descending", node(2, None, node(3, node(2, leaf(1), None), None)));
+    report("empty", None);
+    report("single", leaf(7));
+    report("left-spine", node(1, node(2, node(3, leaf(4), None), None), None));
+    report("two-branches", node(5, node(6, leaf(7), None), node(6, None, leaf(7))));
+    report("plateau", node(4, node(4, leaf(4), None), None));
+    report("crosses-zero", node(-2, node(-1, node(0, leaf(1), None), None), None));
+    // The sentinel case: a root whose value is 1, where a magic
+    // `parent_val = 0` would silently start the run at 2.
+    report("root-is-one", node(1, leaf(9), None));
+}

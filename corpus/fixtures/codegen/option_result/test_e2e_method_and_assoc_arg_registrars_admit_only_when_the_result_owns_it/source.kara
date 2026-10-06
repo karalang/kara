@@ -1,0 +1,38 @@
+
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
+struct P { id: i64, name: String }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+fn mkP(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
+struct Hold { n: i64 }
+impl R {
+  fn passa(r: R) -> R { return r; }
+  fn eata(r: R) -> i64 { return r.id; }
+  fn mka() -> R { return mk(31); }
+}
+impl P { fn passp(p: P) -> P { return p; } }
+impl Hold {
+  fn thru(ref self, r: R) -> R { return r; }
+  fn reb(ref self, r: R) -> R { let m = r; return m; }
+  fn thrup(ref self, p: P) -> P { return p; }
+  fn eat(ref self, r: R) -> i64 { return r.id; }
+}
+fn main() {
+  let h = Hold { n: 0 };
+  let a = R.passa(mk(16)); println(f"a={a.inner.v}");
+  let b = h.thru(mk(17)); println(f"b={b.inner.v}");
+  let c = h.reb(mk(18)); println(f"c={c.inner.v}");
+  let d = h.thru(R { id: 19, name: "h19", inner: Inner { v: 19 } }); println(f"d={d.inner.v}");
+  h.thru(mk(20));
+  R.passa(mk(21));
+  R.mka();
+  let mut i = 0;
+  while i < 2 { let z = R.passa(mk(22)); println(f"lp={z.inner.v}"); i = i + 1; }
+  let e = h.thrup(mkP(23)); println(f"e={e.name}");
+  let g = P.passp(mkP(24)); println(f"g={g.name}");
+  let k = h.eat(mk(25)); println(f"k={k}");
+  let l = R.eata(mk(26)); println(f"l={l}");
+  println("end");
+}

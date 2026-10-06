@@ -1,0 +1,33 @@
+
+fn cmp_ref(a: ref Vec[i64], b: ref Vec[i64]) -> bool { return a == b; }
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    a.push(2);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(1);
+    b.push(2);
+    let mut c: Vec[i64] = Vec.new();
+    c.push(1);
+    c.push(9);
+    let mut d: Vec[i64] = Vec.new();
+    d.push(1);
+    let e: Vec[i64] = Vec.new();
+    println(f"{a == b}");
+    println(f"{a == c}");
+    println(f"{a == d}");
+    println(f"{e == a}");
+    println(f"{a != c}");
+    println(f"{cmp_ref(a, c)}");
+    let mut p: Vec[String] = Vec.new();
+    p.push("hello");
+    p.push("world");
+    let mut q: Vec[String] = Vec.new();
+    q.push("hello");
+    q.push("world");
+    let mut r: Vec[String] = Vec.new();
+    r.push("hello");
+    r.push("there");
+    println(f"{p == q}");
+    println(f"{p == r}");
+}

@@ -1,0 +1,25 @@
+
+enum Tok2 {
+    Word(String),
+    Num(i64),
+}
+
+fn main() {
+    let mut v: Vec[Tok2] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 4i64 {
+        let x = Tok2.Word(f"w{i}");
+        v.push(x);
+        i = i + 1i64;
+    }
+    let mut total: i64 = 0;
+    let mut j: i64 = 0;
+    while j < 4i64 {
+        match v[j] {
+            Tok2.Word(s) => { total = total + (s.len() as i64); }
+            Tok2.Num(n) => { total = total + n; }
+        }
+        j = j + 1i64;
+    }
+    println(total);
+}

@@ -1,0 +1,9 @@
+
+fn a() { println(1); }
+fn b() { println(2); }
+fn main() {
+    par {
+        a();
+        b();
+    }
+}

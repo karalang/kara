@@ -1,0 +1,10 @@
+enum Cnt[T] { More(T, i64), Done }
+fn f[T: Clone](e: ref Cnt[T]) -> Option[T] {
+    let (v, n) = match e { Cnt.More(v, n) => (v.clone(), n), Cnt.Done => return None };
+    let w = v.clone();
+    Some(w)
+}
+fn main() {
+    let c = Cnt.More("ab".to_string(), 2);
+    match f(c) { Some(s) => println(f"e:{s}"), None => println("e:none") }
+}

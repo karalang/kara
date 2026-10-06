@@ -1,0 +1,80 @@
+// Benchmark harness for LeetCode #260 — Single Number III.
+//
+// Build-once + punch (BENCHMARKS.md): four arrays of 200,002 i64 are built
+// once, then each punch runs the full two-pass XOR partition over one of them.
+//
+// Each array is `vals ++ vals ++ [s1, s2]` — every value appears exactly twice
+// with its twin ~100k elements away, so the partition branch sees a fresh
+// bit pattern per element rather than a run of adjacent equal values.
+
+fn two_singles(nums: ref Vec[i64]) -> Array[i64, 2] {
+    let mut x = 0;
+    let mut i = 0;
+    while i < nums.len() {
+        x = x ^ nums[i];
+        i = i + 1;
+    }
+    let bit = x & (0 - x); // lowest set bit of x
+
+    let mut a = 0;
+    let mut b = 0;
+    let mut j = 0;
+    while j < nums.len() {
+        if (nums[j] & bit) != 0 {
+            a = a ^ nums[j];
+        } else {
+            b = b ^ nums[j];
+        }
+        j = j + 1;
+    }
+    if a <= b {
+        return [a, b];
+    }
+    return [b, a];
+}
+
+fn main() {
+    let np = 4;
+    let k = 100000;
+    let iters = 2600;
+
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut p = 0;
+    while p < np {
+        let mut vals: Vec[i64] = Vec.new();
+        let mut x = p + 1;
+        let mut t = 0;
+        while t < k {
+            x = (x * 1103515245 + 12345) % 2147483648;
+            let hi = x / 65536;
+            x = (x * 1103515245 + 12345) % 2147483648;
+            vals.push((hi * 32768 + x / 65536) % 100000);
+            t = t + 1;
+        }
+        let mut arr: Vec[i64] = Vec.new();
+        let mut pass = 0;
+        while pass < 2 {
+            let mut q = 0;
+            while q < k {
+                arr.push(vals[q]);
+                q = q + 1;
+            }
+            pass = pass + 1;
+        }
+        // Two loners, both outside the [0, 100000) value range.
+        arr.push(999983 + p);
+        arr.push(1000003 + p);
+        arrays.push(arr);
+        p = p + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 3) % np;
+        let r = two_singles(arrays[idx]);
+        sink = (sink * 31 + r[0] + r[1] * 7) % 1000000007;
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

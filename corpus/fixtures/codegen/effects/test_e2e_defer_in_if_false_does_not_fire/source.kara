@@ -1,0 +1,8 @@
+
+fn main() {
+    println("before");
+    if false {
+        defer { println("not-printed"); }
+    }
+    println("after");
+}

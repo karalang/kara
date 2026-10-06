@@ -1,0 +1,14 @@
+enum G1[T] { Y(T), N }
+impl G1[Vec[i64]] { fn show(self) -> i64 { println("v show"); return 1; } }
+impl G1[String] {
+    fn show(self) -> i64 { println("s show"); return 2; }
+    fn shm(self) -> i64 { println("s shm"); return 3; }
+}
+fn main() {
+    let a = G1.Y([4, 5]).show();
+    let b = G1.Y(f"a{1}").shm();
+    let c = G1.Y(f"b{2}").show();
+    let s: G1[String] = G1.Y(f"c{3}");
+    let d = s.show();
+    println(f"{a} {b} {c} {d}");
+}

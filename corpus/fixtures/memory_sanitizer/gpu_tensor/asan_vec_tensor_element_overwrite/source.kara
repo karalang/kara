@@ -1,0 +1,15 @@
+
+shared struct S { mut grads: Vec[Tensor[f32, [?]]] }
+fn go(s: S) {
+    let z: Tensor[f32, [?]] = Tensor.zeros([2]);
+    s.grads.push(z);
+    let g: Tensor[f32, [?]] = Tensor.ones([2]);
+    let old = ref s.grads[0];
+    s.grads[0] = old + g;
+}
+fn main() {
+    let s = S { grads: Vec.new() };
+    go(s);
+    let r = ref s.grads[0];
+    println(r[0]);
+}

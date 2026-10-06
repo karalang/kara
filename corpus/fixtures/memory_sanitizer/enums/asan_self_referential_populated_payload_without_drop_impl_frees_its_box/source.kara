@@ -1,0 +1,9 @@
+
+struct Plain { id: i64, next: Option[Plain], tag: String }
+
+fn mkp(i: i64) -> Plain { return Plain { id: i, next: Option.None, tag: f"p{i}" }; }
+
+fn main() {
+    let c: Plain = Plain { id: 9, next: Option.Some(mkp(10)), tag: "n" };
+    println(c.id);
+}

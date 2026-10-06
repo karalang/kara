@@ -1,0 +1,16 @@
+
+fn kmap() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("alpha key padded out well beyond thirty-six bytes ok", 11_i64);
+    m.insert("beta key padded out well beyond thirty-six bytes okk", 22_i64);
+    return m;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut s = 0;
+        for pair in kmap().entries() { s = s + pair.0.len() + pair.1; }
+        println(s);
+        i = i + 1;
+    };
+}

@@ -1,0 +1,18 @@
+
+fn make() -> (Vec[i64], Vec[String]) {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    let mut b: Vec[String] = Vec.new();
+    b.push("first");
+    b.push("second");
+    (a, b)
+}
+fn main() {
+    let mut acc: i64 = 0;
+    for _ in 0..50 {
+        let mut t = make();
+        t.1[0] = "overwritten";
+        acc = acc + t.1[0].len() + t.1[1].len();
+    }
+    println(acc);
+}

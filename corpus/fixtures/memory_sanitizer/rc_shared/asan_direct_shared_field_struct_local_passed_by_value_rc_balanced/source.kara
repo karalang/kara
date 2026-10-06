@@ -1,0 +1,35 @@
+
+shared enum Val { Nothing, Ident(String), Num(i64) }
+struct DirH { value: Val }
+struct OptH { value: Option[Val] }
+fn pay(i: i64) -> String { f"payload-{i}-long-enough-aaaa" }
+fn use_dir(h: DirH) -> i64 {
+    match h.value {
+        Val.Ident(s) => { if s.starts_with("payload") { s.len() + 1i64 } else { s.len() } }
+        Val.Num(n) => n,
+        Val.Nothing => 0i64,
+    }
+}
+fn use_opt(h: OptH) -> i64 {
+    match h.value { Some(_) => 1i64, None => 0i64 }
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < base + 39i64 {
+        // The leak: local, then passed by value.
+        let d = DirH { value: Val.Ident(pay(i)) };
+        t = t + use_dir(d);
+        // Control 1 — Option[shared] field, same local-then-pass shape.
+        let o = OptH { value: Some(Val.Ident(pay(i))) };
+        t = t + use_opt(o);
+        // Control 2 — fresh-temp arg.
+        t = t + use_dir(DirH { value: Val.Ident(pay(i)) });
+        // Control 3 — local moved to another local, never passed.
+        let m = DirH { value: Val.Ident(pay(i)) };
+        let _m2 = m;
+        i = i + 1;
+    }
+    println(t);
+}

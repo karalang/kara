@@ -1,0 +1,2 @@
+fn go() -> i64 { let t = mkp(9); return t.a.len(); }
+fn main() { println(go()); }

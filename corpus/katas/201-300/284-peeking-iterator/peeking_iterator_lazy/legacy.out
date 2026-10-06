@@ -1,0 +1,4 @@
+peek+next drain of [1,2,3] -> [1, 1, 2, 2, 3, 3] (3 pulls)
+peek thrice: 7 7 7 then next: 7
+empty: has_next=false
+single: got 42, has_next now false

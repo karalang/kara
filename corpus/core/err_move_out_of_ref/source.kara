@@ -1,0 +1,6 @@
+struct User { name: String }
+fn name_of(u: ref User) -> String { u.name }
+fn main() {
+    let u = User { name: "x".to_string() };
+    println(name_of(u));
+}

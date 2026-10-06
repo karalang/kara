@@ -1,0 +1,76 @@
+// LeetCode #415: Add Strings — recursive-descent variant.
+//
+// The base-10 sibling of `add_binary_recursive.kara`: `add_at(i, j, carry)`
+// returns the decimal sum of the prefixes `a[0..=i]` and `b[0..=j]` plus an
+// incoming carry, recursing on the higher-order digits first and appending the
+// current digit on the way out — so the answer builds MSB-first with no
+// reverse buffer.
+//
+//   sum    = carry + (a[i] - b'0') + (b[j] - b'0')
+//   prefix = add_at(i-1, j-1, sum / 10)        the higher-order digits
+//   answer = prefix ++ DIGITS[sum % 10]
+//
+// Same base-10 digit arithmetic and digit-table render as the iterative style
+// (the lexer's decimal radix arm + inverse nibble map), over recursion depth
+// instead of an explicit reverse. The base case returns "", which the caller
+// promotes to "0" for the all-zero input.
+
+fn add_at(ab: Slice[u8], bb: Slice[u8], i: i64, j: i64, carry: i64) -> String {
+    if i < 0 and j < 0 and carry == 0 {
+        return "";
+    }
+
+    let digits: String = "0123456789";
+
+    let mut sum = carry;
+    let mut ni = i;
+    let mut nj = j;
+    if i >= 0 {
+        sum = sum + ((ab[i] - b'0') as i64);
+        ni = i - 1;
+    }
+    if j >= 0 {
+        sum = sum + ((bb[j] - b'0') as i64);
+        nj = j - 1;
+    }
+
+    let mut out = add_at(ab, bb, ni, nj, sum / 10);
+    let d = sum % 10;
+    out.push_str(digits[d..d + 1]);
+    out
+}
+
+fn add_strings(a: ref String, b: ref String) -> String {
+    let ab = a.bytes();
+    let bb = b.bytes();
+    let r = add_at(ab, bb, ab.len() - 1, bb.len() - 1, 0);
+    if r.len() == 0 {
+        return "0";
+    }
+    r
+}
+
+fn report(a: ref String, b: ref String) {
+    println(f"\"{a}\" + \"{b}\" -> \"{add_strings(a, b)}\"");
+}
+
+fn main() {
+    report("11", "123");            // 134
+    report("456", "77");            // 533
+    report("0", "0");               // 0
+
+    report("9", "1");               // 10
+    report("99", "1");              // 100
+    report("999", "999");           // 1998
+    report("1", "999999999");       // 1000000000
+
+    report("1", "9999");            // 10000
+    report("12345", "54321");       // 66666
+    report("100", "23");            // 123
+
+    report("0", "12345");           // 12345
+    report("500", "500");           // 1000
+
+    report("9999999999999999999999999999999999999999", "1");
+    report("12345678901234567890", "98765432109876543210");
+}

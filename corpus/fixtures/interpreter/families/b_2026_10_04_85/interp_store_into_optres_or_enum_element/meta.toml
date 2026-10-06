@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_04_85.rs::interp_store_into_optres_or_enum_element"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_04_85.rs::asan_store_into_optres_or_enum_element"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

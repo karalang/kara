@@ -1,0 +1,12 @@
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedSet{10, 20, 30}
+SortedSet{10, 20, 30}
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedSet{10, 20, 30}
+SortedMap{apple: 2, mango: 3, zebra: 1}
+SortedSet{10, 20, 30}
+[SortedMap{apple: 2, mango: 3, zebra: 1}]
+[SortedSet{10, 20, 30}]
+SortedMap{}
+SortedSet{}

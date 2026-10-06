@@ -1,0 +1,11 @@
+
+        trait DatabaseProvider { fn q(ref self, k: i64) -> i64; }
+        trait HealthCheckable { fn healthy(ref self) -> bool; }
+        effect resource UserDB: DatabaseProvider + HealthCheckable;
+        struct Half { }
+        impl DatabaseProvider for Half { fn q(ref self, k: i64) -> i64 { return k; } }
+        fn use_db(k: i64) -> i64 with reads(UserDB) { return UserDB.q(k); }
+        fn main() {
+            with_provider[UserDB](Half { }, || { use_db(1); });
+        }
+        

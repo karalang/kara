@@ -1,0 +1,5 @@
+
+fn main() {
+    let m = Mutex.new(0);
+    lock m x { x = x + 1; }
+}

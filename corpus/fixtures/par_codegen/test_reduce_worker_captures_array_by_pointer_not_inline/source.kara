@@ -1,0 +1,21 @@
+
+fn inner(data: Array[i64, 2048]) -> i64 {
+    let mut s: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < 2048i64 {
+        s = s + data[i];
+        i = i + 1i64;
+    }
+    return s;
+}
+fn run(data: Array[i64, 2048]) -> i64 {
+    let mut acc: i64 = 0i64;
+    for _ in 0i64..100i64 {
+        acc = acc + inner(data);
+    }
+    return acc;
+}
+fn main() {
+    let data: Array[i64, 2048] = [1i64; 2048];
+    println(run(data));
+}

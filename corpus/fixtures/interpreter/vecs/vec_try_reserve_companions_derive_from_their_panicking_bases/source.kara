@@ -1,0 +1,14 @@
+
+fn build() -> Result[bool, AllocError] {
+    let mut v: Vec[i64] = Vec.new();
+    v.try_reserve(64)?;
+    let mut w: Vec[i64] = Vec.new();
+    w.try_reserve_exact(9)?;
+    return Ok(v.capacity() >= 64 and w.capacity() >= 9);
+}
+fn main() {
+    match build() {
+        Ok(n) => { println(f"ok {n}"); }
+        Err(e) => { println("alloc failed"); }
+    }
+}

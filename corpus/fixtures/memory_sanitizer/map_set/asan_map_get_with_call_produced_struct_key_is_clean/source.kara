@@ -1,0 +1,18 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn mk(i: i64) -> Item { return Item { id: i, name: f"m-{i}-padding-padding-padding" }; }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1i64, name: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut hits = 0i64;
+    while j < 5i64 {
+        match m.get(mk(j)) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{hits}{m.len()}");
+}

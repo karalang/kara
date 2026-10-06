@@ -1,0 +1,13 @@
+source = "tests/interpreter/io_runtime.rs::test_process_kill_terminates_child_and_wait_reports_failure"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

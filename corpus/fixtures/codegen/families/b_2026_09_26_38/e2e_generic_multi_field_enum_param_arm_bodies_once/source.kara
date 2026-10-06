@@ -1,0 +1,17 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { a: String, b: String, c: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.a.len()}") } }
+fn mkw(n: i64) -> W { return W { a: f"a{n}", b: f"bbb{n}", c: f"ccc{n}" } }
+enum G2[T] { X(T, i64), Y }
+enum X2[A, B] { Two(A, B), Nil }
+fn gv(w: G2[Vec[R]]) -> i64 { match w { G2.X(v, n) => v.len() + n, G2.Y => 0 } }
+fn cz(x: X2[W, i64]) -> i64 { match x { X2.Two(r, n) => { let z = r; n } X2.Nil => 0 } }
+fn main() {
+    let w: G2[Vec[R]] = G2.X([R { id: 1 }, R { id: 2 }], 31);
+    println(f"k3 {gv(w)}")
+    println(f"m8 {cz(X2.Two(mkw(77), 7))}")
+    let q = X2.Two(mkw(4444), 8);
+    println(f"m3 {cz(q)}")
+    println("end")
+}

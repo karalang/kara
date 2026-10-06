@@ -1,0 +1,25 @@
+al0
+drop 0 al0
+me0
+drop 0 me0
+di0
+drop 0 di0
+drop 0 kp0
+kp 0
+al1
+drop 1 al1
+me1
+drop 1 me1
+di1
+drop 1 di1
+drop 1 kp1
+kp 1
+al2
+drop 2 al2
+me2
+drop 2 me2
+di2
+drop 2 di2
+drop 2 kp2
+kp 2
+end

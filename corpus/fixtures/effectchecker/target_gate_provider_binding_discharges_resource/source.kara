@@ -1,0 +1,15 @@
+
+effect resource Display;
+
+struct HtmlBuilder { buf: String }
+
+fn render() with writes(Display) {
+}
+
+fn main() {
+    providers {
+        Display => HtmlBuilder { buf: "" },
+    } in {
+        render();
+    }
+}

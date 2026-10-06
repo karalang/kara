@@ -1,0 +1,13 @@
+
+struct Counter { n: i64 }
+impl Counter {
+    fn inc(mut ref self) { self.n = self.n + 1; }
+    fn bump_twice(mut ref self) { self.inc(); self.inc(); }
+    fn get(ref self) -> i64 { self.n }
+}
+fn main() {
+    let mut c = Counter { n: 0 };
+    c.bump_twice();
+    c.inc();
+    println(c.get());
+}

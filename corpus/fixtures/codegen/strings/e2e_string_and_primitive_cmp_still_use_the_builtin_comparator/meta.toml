@@ -1,0 +1,13 @@
+source = "tests/codegen/strings.rs::e2e_string_and_primitive_cmp_still_use_the_builtin_comparator"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

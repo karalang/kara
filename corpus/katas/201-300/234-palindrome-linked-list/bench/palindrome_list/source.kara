@@ -1,0 +1,95 @@
+// Benchmark workload for LeetCode #234 — Palindrome Linked List.
+//
+// Build-once + punch: one index-pool list of L nodes is built once whose values
+// form a palindrome (first half from a deterministic 32-bit LCG, second half its
+// mirror). Each pass first restores the forward `next` chain (the previous pass
+// reversed the second half in place), then flips a single middle value so that
+// odd passes are NOT palindromes — the mismatch sits at the innermost compared
+// pair, so `is_palindrome` still runs its full slow/fast midpoint search, its
+// in-place reversal of the second half, and the lock-step compare before it
+// answers. All three moves are loop-carried pointer chases over the `next`
+// array, so the kernel does not vectorize. Sink = number of palindromes found.
+
+struct Node {
+    mut val: i64,
+    mut next: i64,
+}
+
+fn reverse(nodes: mut ref Vec[Node], head: i64) -> i64 {
+    let mut prev = -1;
+    let mut cur = head;
+    while cur != -1 {
+        let nxt = nodes[cur].next;
+        nodes[cur].next = prev;
+        prev = cur;
+        cur = nxt;
+    }
+    return prev;
+}
+
+fn is_palindrome(nodes: mut ref Vec[Node], head: i64) -> bool {
+    if head == -1 { return true; }
+
+    let mut slow = head;
+    let mut fast = head;
+    while nodes[fast].next != -1 and nodes[nodes[fast].next].next != -1 {
+        slow = nodes[slow].next;
+        fast = nodes[nodes[fast].next].next;
+    }
+
+    let second = reverse(nodes, nodes[slow].next);
+    let mut p1 = head;
+    let mut p2 = second;
+    while p2 != -1 {
+        if nodes[p1].val != nodes[p2].val {
+            return false;
+        }
+        p1 = nodes[p1].next;
+        p2 = nodes[p2].next;
+    }
+    return true;
+}
+
+fn main() {
+    let l = 50000;
+    let passes = 1800;
+    let half = (l + 1) / 2;
+
+    let mut fh: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < half {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        fh.push(state % 1000);
+        i = i + 1;
+    }
+
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut j = 0;
+    while j < l {
+        let v = if j < half { fh[j] } else { fh[l - 1 - j] };
+        let next = if j + 1 < l { j + 1 } else { -1 };
+        nodes.push(Node { val: v, next: next });
+        j = j + 1;
+    }
+
+    let head = 0;
+    let mid = l / 2 - 1;
+    let base_mid = nodes[mid].val;
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let mut k = 0;
+        while k < l {
+            nodes[k].next = if k + 1 < l { k + 1 } else { -1 };
+            k = k + 1;
+        }
+        nodes[mid].val = base_mid + (p % 2);
+        if is_palindrome(mut nodes, head) {
+            sink = sink + 1;
+        }
+        p = p + 1;
+    }
+    println(sink);
+}

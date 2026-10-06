@@ -1,0 +1,16 @@
+
+fn work(seed: i64) -> Array[i64, 2] {
+    let mut a: i64 = 0i64;
+    for j in 0i64..64i64 {
+        a = a + (seed + j) * (seed - j);
+    }
+    Array[a, a + seed]
+}
+fn main() {
+    let mut sum: i64 = 0i64;
+    for _ in 0i64..5000i64 {
+        let r = work(7i64);
+        sum = sum + r[0] + r[1];
+    }
+    println(sum);
+}

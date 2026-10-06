@@ -1,0 +1,28 @@
+
+struct H { m: (Map[i64, i64], i64) }
+struct Hs { s: (Set[i64], i64) }
+fn mkm() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 10); m.insert(2, 20);
+    return m;
+}
+fn mks() -> Set[i64] {
+    let mut s: Set[i64] = Set.new();
+    s.insert(3); s.insert(4);
+    return s;
+}
+fn main() {
+    let mut h = H { m: (mkm(), 7) };
+    println(h.m.0.len().to_string());                 // 2
+    println(h.m.0.get(1).unwrap_or(0).to_string());   // 10
+    println(h.m.0.contains_key(2).to_string());       // true
+    println(h.m.1.to_string());                       // 7 (scalar elem regression)
+    // In-place mutation through the tuple element.
+    h.m.0.insert(9, 90);
+    println(h.m.0.len().to_string());                 // 3
+    println(h.m.0.get(9).unwrap_or(0).to_string());   // 90
+    // Set element methods.
+    let hs = Hs { s: (mks(), 1) };
+    println(hs.s.0.len().to_string());                // 2
+    println(hs.s.0.contains(3).to_string());          // true
+}

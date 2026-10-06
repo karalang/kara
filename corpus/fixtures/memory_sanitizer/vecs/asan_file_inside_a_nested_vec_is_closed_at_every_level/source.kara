@@ -1,0 +1,16 @@
+
+fn main() with reads(FileSystem) {{
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {{
+        let mut outer: Vec[Vec[File]] = Vec.new();
+        let mut inner: Vec[File] = Vec.new();
+        match File.open("{path}") {{
+            Ok(f) => {{ inner.push(f); n = n + 1i64; }}
+            Err(_) => {{ n = n - 1i64; }}
+        }}
+        outer.push(inner);
+        i = i + 1;
+    }}
+    println(n.to_string());
+}}

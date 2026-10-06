@@ -1,0 +1,15 @@
+
+        fn main() {
+            let mut m: i64 = 0i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                let x: i64 = i * 7i64;
+                let y: i64 = i * 11i64;
+                let z: i64 = i * 13i64;
+                if y < z {
+                    m = x;
+                }
+                i = i + 1i64;
+            }
+        }
+        

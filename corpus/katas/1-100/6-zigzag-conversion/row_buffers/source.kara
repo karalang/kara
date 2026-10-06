@@ -1,0 +1,101 @@
+// LeetCode #6: Zigzag Conversion — row-buffer (visit-by-row) approach.
+// O(n) time, O(n) extra space for the per-row Vec[char] buffers plus the
+// flattened result.
+//
+// Walk the input left-to-right; track a `cur` row index that bounces
+// between 0 and num_rows - 1 like a ball on rails. Each character is
+// appended to its row's buffer. After the walk, concatenating the rows
+// row-major yields the zigzag-read string. Total per-char work is one
+// push + one comparison + one increment, so the constant is small.
+//
+// num_rows <= 1 (no zigzag shape) and num_rows >= n (every char on its
+// own row → reading by row returns the input) both pass the input
+// through unchanged, mirroring the LeetCode reference.
+
+fn convert(s: ref String, num_rows: i64) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    // Walking s.chars() twice is awkward (no `len()` on the iterator
+    // and re-iterating a `ref String` is cheap), so we snapshot once
+    // into `chars` and use its length for the num_rows >= n check.
+    let mut chars: Vec[char] = Vec.new();
+    for c in s.chars() {
+        chars.push(c);
+    }
+    let n = chars.len();
+
+    if num_rows <= 1 or num_rows >= n {
+        let mut i = 0;
+        while i < n {
+            out.push(chars[i]);
+            i = i + 1;
+        }
+        return out;
+    }
+
+    // Per-row buffers. `Vec.filled` deep-clones the empty inner Vec into
+    // each slot, so the rows are independent. (This was a manual
+    // Vec.new()+push loop until 2026-06 — written around a Vec[Vec[T]]
+    // init coercion gap that karac has since fixed.)
+    let mut rows: Vec[Vec[char]] = Vec.filled(num_rows, Vec.new());
+
+    let mut cur = 0;
+    let mut going_down = false;
+    let mut i = 0;
+    while i < n {
+        rows[cur].push(chars[i]);
+        // Flip direction at the top and bottom rails. Doing this before
+        // the step (rather than after) keeps the first iteration's step
+        // downward for any num_rows > 1 — the loop seeds `going_down`
+        // as false, hits the `cur == 0` rail, flips to true, then steps
+        // down to row 1 on the next iter.
+        if cur == 0 or cur == num_rows - 1 {
+            going_down = not going_down;
+        }
+        if going_down {
+            cur = cur + 1;
+        } else {
+            cur = cur - 1;
+        }
+        i = i + 1;
+    }
+
+    let mut r2 = 0;
+    while r2 < num_rows {
+        let row_len = rows[r2].len();
+        let mut k = 0;
+        while k < row_len {
+            out.push(rows[r2][k]);
+            k = k + 1;
+        }
+        r2 = r2 + 1;
+    }
+    out
+}
+
+fn report(s: ref String, num_rows: i64) {
+    // One glyph per line, then `---` as a case separator. The empty
+    // input case ("") emits just the separator. See ../README.md
+    // § Output format for why we pick this shape over an inline
+    // string print.
+    let result = convert(s, num_rows);
+    let n = result.len();
+    let mut i = 0;
+    while i < n {
+        let c = result[i];
+        println(c);
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    report("PAYPALISHIRING", 3);    // expect: PAHNAPLSIIGYIR
+    report("PAYPALISHIRING", 4);    // expect: PINALSIGYAHRPI
+    report("A",              1);    // expect: A
+    report("AB",             1);    // expect: AB
+    report("",               3);    // expect: <empty>
+    report("ABCD",           2);    // expect: ACBD
+    report("ABCDE",          4);    // expect: ABCED
+    report("ABCDEFG",        100);  // expect: ABCDEFG (num_rows >= n)
+    report("ABCDEFGH",       3);    // expect: AEBDFHCG
+}

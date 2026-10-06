@@ -1,0 +1,43 @@
+
+struct Box[T] { xs: Vec[T] }
+impl[T] Box[T] {
+    fn one(mut ref self) -> Option[T] { self.xs.pop() }
+    fn probe(mut ref self) -> i64 {
+        match self.one() { Some(v) => { println(v); } None => {} }
+        self.xs.len()
+    }
+    fn drain(mut ref self) -> Vec[T] {
+        let mut out: Vec[T] = Vec.new();
+        while self.xs.len() > 0 {
+            match self.one() { Some(v) => { out.push(v); } None => {} }
+        }
+        out
+    }
+    fn peek(ref self) -> i64 { self.xs.len() }
+}
+struct Plain { xs: Vec[i64] }
+impl Plain {
+    fn one(mut ref self) -> Option[i64] { self.xs.pop() }
+    fn probe(mut ref self) -> i64 {
+        match self.one() { Some(v) => { println(v); } None => {} }
+        self.xs.len()
+    }
+}
+fn main() {
+    // (a) ONE sibling call: the receiver must be one shorter afterward.
+    let mut a = Box { xs: [7, 9] };
+    println(a.probe());
+    // (b) the filed shape — the drain loop must terminate and yield both.
+    let mut b = Box { xs: [7, 9] };
+    let o = b.drain();
+    println(o.len());
+    // (b2) same at a heap-carrying element type.
+    let mut s = Box { xs: ["x", "yy"] };
+    println(s.drain().len());
+    // (c) NON-generic control: always worked, must stay working.
+    let mut p = Plain { xs: [7, 9] };
+    println(p.probe());
+    // (d) `ref self` control: a read-only sibling receiver is unaffected.
+    let r = Box { xs: [7, 9, 11] };
+    println(r.peek());
+}

@@ -1,0 +1,6 @@
+
+        fn boom() -> bool { println("called"); true }
+        fn main() {
+            if true and boom() { println("then"); } else { println("else"); }
+        }
+    

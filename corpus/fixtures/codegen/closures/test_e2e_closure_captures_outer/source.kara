@@ -1,0 +1,6 @@
+
+fn main() {
+    let offset = 100;
+    let add_offset = |x: i64| x + offset;
+    println(add_offset(5));
+}

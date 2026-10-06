@@ -1,0 +1,19 @@
+
+fn tail30(s: ref String) -> String {
+    s[6..36]
+}
+
+fn main() {
+    let src = "abcdefghijklmnopqrstuvwxyz0123456789".to_string();
+    let mut i = 0;
+    while i < 3 {
+        let big = src[0..30];
+        let small = src[0..9];
+        println(big);
+        println(small);
+        i = i + 1;
+    }
+    println(src[0..5]);
+    let esc = tail30(src);
+    println(esc);
+}

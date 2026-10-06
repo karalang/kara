@@ -1,0 +1,49 @@
+
+struct Holder { sm: SortedMap[String, i64], ss: SortedSet[String] }
+
+fn mkm() -> SortedMap[String, i64] {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    let _ = m.insert("zz", 1);
+    let _ = m.insert("aa", 2);
+    let _ = m.insert("mm", 3);
+    return m;
+}
+fn mks() -> SortedSet[String] {
+    let mut s: SortedSet[String] = SortedSet.new();
+    let _ = s.insert("zz");
+    let _ = s.insert("aa");
+    let _ = s.insert("mm");
+    return s;
+}
+
+fn main() {
+    let m1: SortedMap[String, i64] = mkm();
+    println(f"01 {m1} {m1.len()}");
+
+    let m2 = mkm();
+    println(f"02 {m2} {m2.len()}");
+
+    let mut acc = "";
+    for k in m2.keys() { acc = acc + k + ","; }
+    println(f"03 {acc}");
+
+    let hit = m2.contains_key("mm");
+    println(f"04 {hit} {m2.is_empty()}");
+
+    let s2 = mks();
+    let shit = s2.contains("aa");
+    println(f"05 {s2} {s2.len()} {shit}");
+    let mut sacc = "";
+    for v in s2.iter() { sacc = sacc + v + ","; }
+    println(f"06 {sacc}");
+
+    let h = Holder { sm: mkm(), ss: mks() };
+    let bm = h.sm;
+    println(f"07 {bm} {bm.len()}");
+    let bs = h.ss;
+    println(f"08 {bs} {bs.len()}");
+
+    let mut pm: Map[String, i64] = Map.new();
+    let _ = pm.insert("zz", 1);
+    println(f"09 {pm} {pm.len()}");
+}

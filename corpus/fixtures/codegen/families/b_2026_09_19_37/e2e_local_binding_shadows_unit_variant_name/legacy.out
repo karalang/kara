@@ -1,0 +1,21 @@
+shadow-shared
+  n7
+  out
+shadow-plain
+  n9
+  out
+annotated
+  n4
+tuple
+  n5 6
+arith
+  n10
+string
+  n2
+struct
+  n3
+real-variant
+  c
+after-scope
+  c
+end

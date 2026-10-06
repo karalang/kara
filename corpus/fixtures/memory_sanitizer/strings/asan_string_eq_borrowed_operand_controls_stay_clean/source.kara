@@ -1,0 +1,3 @@
+
+fn f(hay: ref String) -> bool { let n = "abcd"; hay.substring(0, 4) == n }
+fn main() { let h = "abcdefgh"; println(f"{f(h)}"); }

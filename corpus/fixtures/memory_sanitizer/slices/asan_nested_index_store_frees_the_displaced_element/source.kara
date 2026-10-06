@@ -1,0 +1,28 @@
+
+fn main() {
+    let mut o: Vec[Vec[String]] = Vec.new();
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        let mut row: Vec[String] = Vec.new();
+        row.push(f"r{i}a");
+        row.push(f"r{i}b");
+        o.push(row);
+        i = i + 1;
+    }
+    let mut j: i64 = 0i64;
+    while j < 4i64 {
+        // Overwrite a heap leaf — the displaced buffer must be freed.
+        o[j][0] = f"n{j}";
+        // SELF-ALIAS — the release must not free the value being stored.
+        let row: Vec[String] = o[j].clone();
+        o[j][1] = row[1].clone();
+        j = j + 1i64;
+    }
+    let mut k: i64 = 0i64;
+    while k < 4i64 {
+        println(o[k][0]);
+        println(o[k][1]);
+        k = k + 1i64;
+    }
+    println("end");
+}

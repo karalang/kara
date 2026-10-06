@@ -1,0 +1,151 @@
+// LeetCode 269 — Alien Dictionary, by depth-first search.
+//
+// The same graph, ordered the other way round. Kahn's algorithm peels from the
+// FRONT — repeatedly emit a letter nothing depends on. A DFS builds from the
+// BACK: visit a letter, recurse into everything that must follow it, and record
+// the letter only once all of its successors are recorded. Reverse the recording
+// order and every letter precedes its successors.
+//
+// Cycle detection changes shape with it. Kahn discovers a cycle by exhaustion —
+// letters remain but nothing is ready. A DFS has to catch it in the act, with
+// three states rather than a visited flag:
+//
+//     0 unvisited   1 on the current path   2 finished
+//
+// Meeting a letter in state 1 means the path has come back on itself, which is a
+// cycle. Collapsing states 1 and 2 into one "visited" bit is the classic error
+// and it does not merely miss cycles — it reports success for them, because a
+// finished letter and an in-progress one become indistinguishable.
+//
+// THIS FILE'S OUTPUT IS NOT THE ★ FILE'S. Both are valid topological orders;
+// the problem accepts any. The ★ file pins down the lexicographically least so
+// that the answer is testable, and a DFS does not produce that order — reversed
+// post-order depends on the visit sequence, not on letter values. So the
+// differential checks this file by PROPERTY (does its output satisfy every
+// derived constraint, over the right letter set) rather than by string equality,
+// which is the honest comparison when an answer is not unique.
+
+fn visit(u: i64, adj: ref Vec[Vec[bool]], state: mut ref Vec[i64],
+         order: mut ref Vec[i64], ok: mut ref bool) {
+    state[u] = 1;                       // on the current path
+    let mut v = 0;
+    while v < 26 {
+        if adj[u][v] {
+            if state[v] == 1 {
+                ok = false;                // came back on ourselves
+            } else {
+                if state[v] == 0 {
+                    visit(v, adj, state, order, ok);
+                }
+            }
+        }
+        v = v + 1;
+    }
+    state[u] = 2;                       // finished
+    order.push(u);                         // recorded after all successors
+}
+
+fn alien_order(words: ref Vec[String]) -> String {
+    let mut present: Vec[bool] = Vec.new();
+    let mut adj: Vec[Vec[bool]] = Vec.new();
+    let mut i = 0;
+    while i < 26 {
+        present.push(false);
+        let mut row: Vec[bool] = Vec.new();
+        let mut j = 0;
+        while j < 26 { row.push(false); j = j + 1; }
+        adj.push(row);
+        i = i + 1;
+    }
+
+    let mut w = 0;
+    while w < words.len() {
+        for b in words[w].bytes() { present[b as i64 - 97] = true; }
+        w = w + 1;
+    }
+
+    let mut p = 0;
+    while p + 1 < words.len() {
+        let mut a: Vec[i64] = Vec.new();
+        for b in words[p].bytes() { a.push(b as i64 - 97); }
+        let mut c: Vec[i64] = Vec.new();
+        for b in words[p + 1].bytes() { c.push(b as i64 - 97); }
+        let mut k = 0;
+        let mut found = false;
+        let mut lim = a.len();
+        if c.len() < lim { lim = c.len(); }
+        while k < lim {
+            if a[k] != c[k] {
+                adj[a[k]][c[k]] = true;
+                found = true;
+                k = lim;
+            } else {
+                k = k + 1;
+            }
+        }
+        if not found and a.len() > c.len() {
+            return "";
+        }
+        p = p + 1;
+    }
+
+    let mut state: Vec[i64] = Vec.new();
+    let mut s = 0;
+    while s < 26 { state.push(0); s = s + 1; }
+
+    let mut order: Vec[i64] = Vec.new();
+    let mut ok = true;
+    let mut u = 0;
+    while u < 26 {
+        if present[u] and state[u] == 0 {
+            visit(u, adj, mut state, mut order, mut ok);
+        }
+        u = u + 1;
+    }
+    if not ok {
+        return "";
+    }
+
+    // Reverse the finish order.
+    let mut out = "";
+    let mut q = order.len() - 1;
+    while q >= 0 {
+        out = out + f"{(order[q] + 97) as u8 as char}";
+        q = q - 1;
+    }
+    return out;
+}
+
+fn report(label: ref String, words: ref Vec[String]) {
+    let r = alien_order(words);
+    println(f"{label} -> \"{r}\"");
+}
+
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("wrt"); a.push("wrf"); a.push("er"); a.push("ett"); a.push("rftt");
+    report("[wrt,wrf,er,ett,rftt]", a);
+    let mut b: Vec[String] = Vec.new();
+    b.push("z"); b.push("x");
+    report("[z,x]", b);
+    let mut c: Vec[String] = Vec.new();
+    c.push("abc"); c.push("ab");
+    report("[abc,ab]", c);
+    let mut d: Vec[String] = Vec.new();
+    d.push("ab"); d.push("abc");
+    report("[ab,abc]", d);
+    let mut e: Vec[String] = Vec.new();
+    e.push("z"); e.push("x"); e.push("z");
+    report("[z,x,z]", e);
+    let mut f: Vec[String] = Vec.new();
+    f.push("ab"); f.push("adc");
+    report("[ab,adc]", f);
+    let mut g: Vec[String] = Vec.new();
+    g.push("zy"); g.push("zx");
+    report("[zy,zx]", g);
+    let mut h: Vec[String] = Vec.new();
+    h.push("aaa");
+    report("[aaa]", h);
+    let mut i: Vec[String] = Vec.new();
+    report("[]", i);
+}

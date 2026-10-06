@@ -1,0 +1,6 @@
+
+fn barrier() {
+    // Safety: rejected before this matters.
+    unsafe { fence(MemoryOrdering.Relaxed); }
+}
+fn main() { barrier(); }

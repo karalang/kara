@@ -1,0 +1,8 @@
+
+fn main() {
+    let a = Vector[i64, 2](1, 2);
+    let b = a;
+    let c = a + b;
+    println(c[0]);
+    println(c[1]);
+}

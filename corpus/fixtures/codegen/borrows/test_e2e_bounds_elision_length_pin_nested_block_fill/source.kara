@@ -1,0 +1,19 @@
+
+fn main() {
+    let mut acc = 0i64;
+    let mut k = 0i64;
+    while k < 3i64 {
+        let mut dp: Vec[i64] = Vec.new();
+        let mut j = 0i64;
+        while j < 7i64 { dp.push(1i64); j = j + 1i64; }
+        let mut i = 1i64;
+        while i < 3i64 {
+            let mut c = 1i64;
+            while c < 7i64 { dp[c] = dp[c] + dp[c - 1i64]; c = c + 1i64; }
+            i = i + 1i64;
+        }
+        acc = acc + dp[6i64];
+        k = k + 1i64;
+    }
+    println(acc);
+}

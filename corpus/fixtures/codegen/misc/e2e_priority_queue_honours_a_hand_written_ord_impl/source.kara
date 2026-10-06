@@ -1,0 +1,13 @@
+
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) } }
+impl Ord for Item { fn cmp(ref self, other: ref Item) -> Ordering { other.id.cmp(self.id) } }
+fn main() {
+    let mut q: PriorityQueue[Item] = PriorityQueue.new();
+    q.push(Item { id: 1 });
+    q.push(Item { id: 3 });
+    q.push(Item { id: 2 });
+    while q.len() > 0 { match q.pop() { Some(it) => println(it.id), None => {} } }
+}

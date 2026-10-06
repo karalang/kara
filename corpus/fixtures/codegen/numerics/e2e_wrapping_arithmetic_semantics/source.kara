@@ -1,0 +1,10 @@
+
+fn main() {
+    let big: i64 = 9223372036854775807;   // i64::MAX
+    println(big.wrapping_add(1));          // wraps to i64::MIN
+    let a: i64 = 100;
+    println(a.wrapping_sub(250));          // -150
+    println(a.wrapping_mul(3));            // 300
+    let u: u64 = 5;
+    println(u.wrapping_add(2));            // 7 (literal arg promotes to u64)
+}

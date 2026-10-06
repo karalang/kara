@@ -1,0 +1,81 @@
+// LeetCode #45: Jump Game II — bottom-up DP over the min-jumps recurrence, O(n) space.
+//
+// The greedy ★ ([`jump_game_ii.kara`](jump_game_ii.kara)) and the explicit-layer
+// ([`_bfs`](jump_game_ii_bfs.kara)) files both exploit that the FIRST time BFS reaches an index
+// it does so in the fewest jumps. This file drops that shortcut and makes the recurrence
+// literal: `dp[j]` = the minimum jumps to reach index `j`. The answer is `dp[n-1]`.
+//
+//   - `dp[0] = 0`; every other cell starts at "infinity" (unreached).
+//   - relax forward: from each reached `i`, every `j` in `(i, i+nums[i]]` can be reached in
+//     `dp[i] + 1` jumps, so `dp[j] = min(dp[j], dp[i] + 1)`.
+//
+// Because `dp[i]` is finalized before `i` is used as a source (we sweep left to right and the
+// graph only ever points forward), one forward pass with inner relaxation suffices — no
+// re-sweeping. That is O(n²) time worst case (a long reach relaxes many cells) against the
+// greedy/BFS O(n), the price for not collapsing the layers. It allocates one `Vec[i64]` of
+// length n — O(n) space, the allocating contrast to the two scalar-only solvers (the same
+// table-vs-scan trade as [#42](../42-trapping-rain-water/)). n ≤ 10⁴, nums[i] ≤ 1000, and
+// jumps ≤ n, so a sentinel of n+1 is a safe "infinity" and every value stays inside i64.
+
+fn jump(nums: Slice[i64], n: i64) -> i64 {
+    let inf = n + 1; // unreachable sentinel: a real answer never exceeds n-1
+    let mut dp: Vec[i64] = Vec.new();
+    dp.push(0);
+    let mut t = 1;
+    while t < n {
+        dp.push(inf);
+        t = t + 1;
+    }
+
+    let mut i = 0;
+    while i < n {
+        let reach = i + nums[i];
+        let mut j = i + 1;
+        // Relax every index this one can jump to (clamped to the array end).
+        while j <= reach and j < n {
+            if dp[i] + 1 < dp[j] {
+                dp[j] = dp[i] + 1;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    dp[n - 1]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn report(nums: Slice[i64], n: i64) {
+    let ans = jump(nums, n);
+    println(f"{ans}");
+}
+
+fn main() {
+    let a1: Array[i64, 5] = [2, 3, 1, 1, 4];
+    report(a1, 5); // 2
+
+    let a2: Array[i64, 5] = [2, 3, 0, 1, 4];
+    report(a2, 5); // 2
+
+    let a3: Array[i64, 1] = [0];
+    report(a3, 1); // 0
+
+    let a4: Array[i64, 2] = [1, 2];
+    report(a4, 2); // 1
+    let a5: Array[i64, 2] = [2, 1];
+    report(a5, 2); // 1
+
+    let a6: Array[i64, 4] = [1, 1, 1, 1];
+    report(a6, 4); // 3
+
+    let a7: Array[i64, 5] = [5, 1, 1, 1, 1];
+    report(a7, 5); // 1
+    let a8: Array[i64, 5] = [4, 1, 1, 1, 1];
+    report(a8, 5); // 1
+
+    let a9: Array[i64, 3] = [1, 2, 3];
+    report(a9, 3); // 2
+    let a10: Array[i64, 5] = [2, 1, 1, 1, 1];
+    report(a10, 5); // 3
+}

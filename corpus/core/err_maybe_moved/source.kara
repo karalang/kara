@@ -1,0 +1,7 @@
+fn take(s: String) { println(s); }
+fn f(c: bool) {
+    let s = "hi".to_string();
+    if c { take(s); }
+    println(s);
+}
+fn main() { f(true); }

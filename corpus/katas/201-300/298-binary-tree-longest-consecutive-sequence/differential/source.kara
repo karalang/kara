@@ -1,0 +1,367 @@
+// LeetCode 298 — three-arm differential, against a formulation-independent oracle.
+//
+//   A  bottom-up, returns the chain starting here      longest_consecutive.kara
+//   B  top-down, carries the arriving chain in         longest_consecutive_topdown.kara
+//   C  iterative, explicit Vec of tuple frames         longest_consecutive_iter.kara
+//
+// THE THREE ARMS ARE NOT THE SAME CODE RESHAPED. A compares a node against its
+// CHILDREN's values; B compares a node against the value it was HANDED. Same
+// rule, opposite ends of the edge — an off-by-one lands on a different edge in
+// each. C is B with the call stack made into `Vec[(Option[TreeNode], bool, i64,
+// i64)]`, which is a different ownership shape for the compiler (a `shared`
+// handle nested in a tuple in a Vec) even though it is the same algorithm.
+//
+// SO C IS DELIBERATELY NOT INDEPENDENT OF B, and pretending otherwise would
+// overstate what agreement between them proves. C's job in this differential is
+// to exercise the tuple-in-Vec ownership path, not to be a third opinion on the
+// algorithm. The third opinion is the ORACLE:
+//
+//   P2  every root-to-leaf path is collected as a plain `Vec[i64]`, and each is
+//       scanned for its longest run of consecutive values. That is an ARRAY
+//       problem, not a tree problem: it shares no traversal, no accumulator and
+//       no comparison with any arm. It is correct because every downward path
+//       in a tree is a contiguous slice of some root-to-leaf path.
+//
+// The oracle is exponential in the wrong shape (a complete tree has n/2 leaves
+// each with a depth-log(n) path) and quadratic in the right one, which is why
+// the arms exist at all — but at these sizes it is affordable, and it is the
+// only member of the set whose correctness needs no argument.
+//
+//   P1  the three arms agree with each other
+//   P2  and with the path-enumeration oracle
+//   P3  structural bounds — 0 on an empty tree, 1 <= answer <= node count
+//       otherwise, and the answer never exceeds the tree's height
+//   P4  invariances the RULE implies: mirroring the tree changes nothing (the
+//       rule is per-edge and blind to which side a child is on), and adding a
+//       constant to every value changes nothing (the rule is about differences)
+//   P5  the shapes that break naive solutions: plateaus, descending spines,
+//       a best run buried in one subtree, and values crossing zero
+//
+// P4 IS THE PROPERTY THAT CATCHES A LEFT/RIGHT ASYMMETRY. P1 and P2 would both
+// pass an implementation that only ever looked at left children, as long as the
+// generator happened to put the best run on the left. Mirroring every tree and
+// demanding the same answer removes that luck.
+//
+// BANDS ARE SIZED BY THE TREE-WALK INTERPRETER, the slowest of the four
+// surfaces every kata must agree on.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn node(v: i64, l: Option[TreeNode], r: Option[TreeNode]) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: None, right: None });
+}
+
+// ------------------------------- arm A: bottom-up
+
+fn a_down(t: Option[TreeNode], best: mut ref i64) -> i64 {
+    match t {
+        None => {
+            return 0;
+        }
+        Some(n) => {
+            let l = a_down(n.left, best);
+            let r = a_down(n.right, best);
+            let mut run = 1;
+            match n.left {
+                None => { }
+                Some(c) => {
+                    if c.val == n.val + 1 and l + 1 > run { run = l + 1; }
+                }
+            }
+            match n.right {
+                None => { }
+                Some(c) => {
+                    if c.val == n.val + 1 and r + 1 > run { run = r + 1; }
+                }
+            }
+            if run > best { best = run; }
+            return run;
+        }
+    }
+}
+
+fn arm_a(t: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    let _ = a_down(t, mut best);
+    return best;
+}
+
+// ------------------------------- arm B: top-down
+
+fn b_visit(t: Option[TreeNode], has_parent: bool, parent_val: i64, arriving: i64, best: mut ref i64) {
+    match t {
+        None => { }
+        Some(n) => {
+            let mut run = 1;
+            if has_parent and n.val == parent_val + 1 { run = arriving + 1; }
+            if run > best { best = run; }
+            b_visit(n.left, true, n.val, run, best);
+            b_visit(n.right, true, n.val, run, best);
+        }
+    }
+}
+
+fn arm_b(t: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    b_visit(t, false, 0, 0, mut best);
+    return best;
+}
+
+// ------------------------------- arm C: iterative, tuple frames
+
+fn arm_c(t: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    let mut stack: Vec[(Option[TreeNode], bool, i64, i64)] = Vec.new();
+    stack.push((t, false, 0, 0));
+    while stack.len() > 0 {
+        let frame = stack.pop();
+        match frame {
+            None => { }
+            Some(f) => {
+                let (cur, has_parent, parent_val, arriving) = f;
+                match cur {
+                    None => { }
+                    Some(n) => {
+                        let mut run = 1;
+                        if has_parent and n.val == parent_val + 1 { run = arriving + 1; }
+                        if run > best { best = run; }
+                        stack.push((n.left, true, n.val, run));
+                        stack.push((n.right, true, n.val, run));
+                    }
+                }
+            }
+        }
+    }
+    return best;
+}
+
+// ------------------------------- the oracle: enumerate root-to-leaf paths
+
+fn collect_paths(t: Option[TreeNode], path: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    match t {
+        None => { }
+        Some(n) => {
+            path.push(n.val);
+            let has_l = match n.left { None => false, Some(_) => true };
+            let has_r = match n.right { None => false, Some(_) => true };
+            if has_l == false and has_r == false {
+                out.push(path.clone());
+            } else {
+                collect_paths(n.left, path, out);
+                collect_paths(n.right, path, out);
+            }
+            let _ = path.pop();
+        }
+    }
+}
+
+// Longest run of values increasing by exactly one, inside one flat path.
+fn longest_run(p: ref Vec[i64]) -> i64 {
+    if p.len() == 0 {
+        return 0;
+    }
+    let mut best = 1;
+    let mut run = 1;
+    let mut i = 1;
+    while i < p.len() {
+        if p[i] == p[i - 1] + 1 {
+            run = run + 1;
+        } else {
+            run = 1;
+        }
+        if run > best { best = run; }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn oracle(t: Option[TreeNode]) -> i64 {
+    let mut path: Vec[i64] = Vec.new();
+    let mut paths: Vec[Vec[i64]] = Vec.new();
+    collect_paths(t, mut path, mut paths);
+    let mut best = 0;
+    let mut i = 0;
+    while i < paths.len() {
+        let r = longest_run(paths[i]);
+        if r > best { best = r; }
+        i = i + 1;
+    }
+    return best;
+}
+
+// ------------------------------- structure helpers
+
+fn count_nodes(t: Option[TreeNode]) -> i64 {
+    match t {
+        None => { return 0; }
+        Some(n) => { return 1 + count_nodes(n.left) + count_nodes(n.right); }
+    }
+}
+
+fn height(t: Option[TreeNode]) -> i64 {
+    match t {
+        None => { return 0; }
+        Some(n) => {
+            let l = height(n.left);
+            let r = height(n.right);
+            if l > r { return 1 + l; }
+            return 1 + r;
+        }
+    }
+}
+
+fn mirror(t: Option[TreeNode]) -> Option[TreeNode] {
+    match t {
+        None => { return None; }
+        Some(n) => { return node(n.val, mirror(n.right), mirror(n.left)); }
+    }
+}
+
+fn shifted(t: Option[TreeNode], k: i64) -> Option[TreeNode] {
+    match t {
+        None => { return None; }
+        Some(n) => { return node(n.val + k, shifted(n.left, k), shifted(n.right, k)); }
+    }
+}
+
+// ------------------------------- generator
+
+// `spread` controls how often a child's value is exactly one more than its
+// parent's: a small spread makes long runs common, a large one makes them rare.
+// Both regimes matter — a bug that only mishandles LONG runs hides in sparse
+// trees, and one that mishandles the run-of-1 base case hides in dense ones.
+fn grow(n: i64, spread: i64, base: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if n <= 0 {
+        return None;
+    }
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    let left_size = seed % n;
+    let right_size = n - 1 - left_size;
+
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    let delta = seed % spread - 1;
+
+    let v = base + delta;
+    let l = grow(left_size, spread, v, seed);
+    let r = grow(right_size, spread, v, seed);
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn main() {
+    let trees = 700;
+    let mut seed = 90271;
+
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut total_nodes = 0;
+
+    let mut t = 0;
+    while t < trees {
+        let n = t % 26;
+        let spread = if t % 3 == 0 { 3 } else { 9 };
+        let tree = grow(n, spread, 0, mut seed);
+        let nodes = count_nodes(tree);
+        total_nodes = total_nodes + nodes;
+
+        let a = arm_a(tree);
+        let b = arm_b(tree);
+        let c = arm_c(tree);
+
+        // P1 — the arms agree.
+        if a != b or a != c {
+            p1 = p1 + 1;
+        }
+
+        // P2 — and so does the path-enumeration oracle.
+        if a != oracle(tree) {
+            p2 = p2 + 1;
+        }
+
+        // P3 — structural bounds.
+        if nodes == 0 {
+            if a != 0 { p3 = p3 + 1; }
+        } else {
+            if a < 1 or a > nodes or a > height(tree) { p3 = p3 + 1; }
+        }
+
+        // P4 — invariances the rule implies.
+        if arm_a(mirror(tree)) != a { p4 = p4 + 1; }
+        if arm_a(shifted(tree, 1000)) != a { p4 = p4 + 1; }
+        if arm_a(shifted(tree, -1000)) != a { p4 = p4 + 1; }
+
+        t = t + 1;
+    }
+
+    // P5 — the shapes that break naive solutions.
+    let mut p5 = 0;
+
+    // An ascending spine of length s, on each side in turn.
+    let mut s = 1;
+    while s <= 40 {
+        let mut up_l: Option[TreeNode] = None;
+        let mut up_r: Option[TreeNode] = None;
+        let mut down_l: Option[TreeNode] = None;
+        let mut k = 0;
+        while k < s {
+            up_l = node(s - k, up_l, None);
+            up_r = node(s - k, None, up_r);
+            down_l = node(k + 1, down_l, None);
+            k = k + 1;
+        }
+        // Ascending downward: the whole spine is one run.
+        if arm_a(up_l) != s or arm_b(up_l) != s or arm_c(up_l) != s { p5 = p5 + 1; }
+        if arm_a(up_r) != s or arm_b(up_r) != s or arm_c(up_r) != s { p5 = p5 + 1; }
+        // Descending downward: no run longer than 1, whatever the depth.
+        if s > 1 {
+            if arm_a(down_l) != 1 or arm_b(down_l) != 1 or arm_c(down_l) != 1 { p5 = p5 + 1; }
+        }
+        s = s + 1;
+    }
+
+    // A plateau: equal values are NOT consecutive.
+    let mut flat: Option[TreeNode] = None;
+    let mut f = 0;
+    while f < 20 {
+        flat = node(5, flat, None);
+        f = f + 1;
+    }
+    if arm_a(flat) != 1 or arm_b(flat) != 1 or arm_c(flat) != 1 { p5 = p5 + 1; }
+
+    // The best run buried in ONE subtree, with a longer path through the root
+    // that is not consecutive. An implementation that returns
+    // max(local, subtree_best) up the tree reports 5 here instead of 3.
+    let buried = node(100, node(7, node(8, leaf(9), None), None), leaf(200));
+    if arm_a(buried) != 3 or arm_b(buried) != 3 or arm_c(buried) != 3 { p5 = p5 + 1; }
+    if oracle(buried) != 3 { p5 = p5 + 1; }
+
+    // Two runs of equal length in different subtrees — the answer is one of
+    // them, never their sum.
+    let twins = node(0, node(10, node(11, leaf(12), None), None), node(20, node(21, leaf(22), None), None));
+    if arm_a(twins) != 3 or oracle(twins) != 3 { p5 = p5 + 1; }
+
+    // Values crossing zero, and a run that begins at a negative value.
+    let crosses = node(-3, node(-2, node(-1, node(0, leaf(1), None), None), None), None);
+    if arm_a(crosses) != 5 or arm_b(crosses) != 5 or arm_c(crosses) != 5 { p5 = p5 + 1; }
+
+    println(f"trees {trees} nodes {total_nodes}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 oracle mismatches {p2}");
+    println(f"P3 bound violations {p3}");
+    println(f"P4 invariance failures {p4}");
+    println(f"P5 adversarial-shape failures {p5}");
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

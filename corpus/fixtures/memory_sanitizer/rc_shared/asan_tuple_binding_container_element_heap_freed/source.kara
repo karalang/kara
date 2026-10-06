@@ -1,0 +1,32 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn mkv() -> Vec[Res] {
+    let mut v: Vec[Res] = Vec.new();
+    v.push(Res { id: 2, name: f"bb{2}" });
+    v
+}
+fn main() {
+    println("named:");
+    {
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"aa{1}" });
+        let t = (xs, 9);
+        println(t.1);
+    }
+    println("call:");
+    {
+        let u = (mkv(), 8);
+        println(u.1);
+    }
+    println("annot:");
+    {
+        let mut ys: Vec[Res] = Vec.new();
+        ys.push(Res { id: 3, name: f"cc{3}" });
+        let w: (Vec[Res], i64) = (ys, 7);
+        println(w.1);
+    }
+    println("end");
+}

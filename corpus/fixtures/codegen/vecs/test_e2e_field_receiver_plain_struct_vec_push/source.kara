@@ -1,0 +1,9 @@
+
+struct Holder { nums: Vec[i64] }
+fn main() {
+    let mut h = Holder { nums: Vec.new() };
+    h.nums.push(10);
+    h.nums.push(20);
+    h.nums.push(30);
+    println(h.nums.len());
+}

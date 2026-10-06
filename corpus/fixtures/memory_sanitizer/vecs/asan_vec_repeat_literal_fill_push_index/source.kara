@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut g: Vec[i64] = Vec[5; 8];
+    g.push(1);
+    g.push(2);
+    let mut total = 0;
+    for x in g { total = total + x; }
+    println(total);
+    let n = 100;
+    let r: Vec[i64] = vec![3; n];
+    println(r.len());
+    println(r[99]);
+}

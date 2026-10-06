@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_10_02_72.rs::asan_guarded_arm_over_boxed_nested_option_frees_on_fallthrough"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

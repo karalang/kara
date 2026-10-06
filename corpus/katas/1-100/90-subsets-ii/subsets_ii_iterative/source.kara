@@ -1,0 +1,184 @@
+// LeetCode #90: Subsets II — iterative cascade with duplicate handling.
+//
+// The same deduplicated power set as subsets_ii.kara (the ★), built bottom-up with no
+// recursion. Sort `nums`, start with `out = [[]]`, and for each value double the
+// collection — extend existing subsets with a copy that also contains `nums[i]`. The
+// twist for duplicates: when `nums[i]` equals its predecessor, extend ONLY the subsets
+// that the *previous* element just added (indices `[start, size)`), not all of them.
+// Extending everything would rebuild [2] from both the first and second 2; restricting
+// to the previous element's fresh subsets makes the run [2],[2,2] appear once.
+//
+//     out = [[]]; start = 0
+//     for each nums[i]:
+//         begin = (i > 0 and nums[i] == nums[i-1]) ? start : 0
+//         size  = out.len()
+//         for j in begin..size: out.push(out[j] + nums[i])
+//         start = size
+//
+// `start` is set to the length BEFORE this element's additions, so the next element (if
+// a duplicate) sees exactly this element's fresh subsets. The cascade order differs from
+// the ★'s lexicographic DFS order, so the result is sorted (the same `subset_less` +
+// selection sort as kata #78) to line up byte-for-byte. A distinct surface — a growing
+// `Vec[Vec[i64]]` cloned-and-extended in a doubling loop, plus the `Vec[Vec[i64]]` swap.
+
+fn sort_nums(nums: mut ref Vec[i64]) {
+    let n = nums.len();
+    let mut i = 0;
+    while i < n {
+        let mut mn = i;
+        let mut j = i + 1;
+        while j < n {
+            if nums[j] < nums[mn] {
+                mn = j;
+            }
+            j = j + 1;
+        }
+        if mn != i {
+            nums[i], nums[mn] = nums[mn], nums[i];
+        }
+        i = i + 1;
+    }
+}
+
+fn subset_less(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    let la = a.len();
+    let lb = b.len();
+    let mut i = 0;
+    while i < la and i < lb {
+        if a[i] < b[i] {
+            return true;
+        }
+        if a[i] > b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    la < lb
+}
+
+fn sort_subsets(out: mut ref Vec[Vec[i64]]) {
+    let m = out.len();
+    let mut i = 0;
+    while i < m {
+        let mut min_idx = i;
+        let mut j = i + 1;
+        while j < m {
+            if subset_less(out[j], out[min_idx]) {
+                min_idx = j;
+            }
+            j = j + 1;
+        }
+        if min_idx != i {
+            out.swap(i, min_idx);
+        }
+        i = i + 1;
+    }
+}
+
+fn subsets_with_dup(input: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut nums: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < input.len() {
+        nums.push(input[i]);
+        i = i + 1;
+    }
+    sort_nums(mut nums);
+    let n = nums.len();
+
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let empty: Vec[i64] = Vec.new();
+    out.push(empty);
+
+    let mut start = 0;
+    i = 0;
+    while i < n {
+        let begin = if i > 0 and nums[i] == nums[i - 1] {
+            start
+        } else {
+            0
+        };
+        let size = out.len();
+        let mut j = begin;
+        while j < size {
+            let mut ext = out[j].clone();
+            ext.push(nums[i]);
+            out.push(ext);
+            j = j + 1;
+        }
+        start = size;
+        i = i + 1;
+    }
+
+    sort_subsets(mut out);
+    out
+}
+
+fn show(subset: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < subset.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{subset[i]}");
+        i = i + 1;
+    }
+    s.push_str("]");
+    s
+}
+
+fn hash_subsets(subs: ref Vec[Vec[i64]]) -> i64 {
+    let mut acc = 0;
+    let mut i = 0;
+    while i < subs.len() {
+        let sub = ref subs[i];
+        acc = (acc * 131 + (sub.len() + 1)) % 1000000007;
+        let mut j = 0;
+        while j < sub.len() {
+            acc = (acc * 131 + (sub[j] + 1)) % 1000000007;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    acc
+}
+
+fn report(input: ref Vec[i64], acc: mut ref String) {
+    let subs = subsets_with_dup(input);
+    let count = subs.len();
+    println(f"subsets: {count}");
+    let mut i = 0;
+    while i < count {
+        println(show(subs[i]));
+        i = i + 1;
+    }
+    let h = hash_subsets(subs);
+    if acc.len() > 0 {
+        acc.push_str(" ");
+    }
+    acc.push_str(f"{count}:{h}");
+}
+
+fn make(vals: Array[i64, 6], len: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < len {
+        v.push(vals[i]);
+        i = i + 1;
+    }
+    v
+}
+
+fn main() {
+    let mut acc: String = "";
+    report(make([1, 2, 2, 0, 0, 0], 3), mut acc);
+    report(make([0, 0, 0, 0, 0, 0], 1), mut acc);
+    report(make([4, 4, 4, 1, 4, 0], 5), mut acc);
+    report(make([1, 1, 0, 0, 0, 0], 2), mut acc);
+    report(make([0, 0, 0, 0, 0, 0], 0), mut acc);
+    report(make([2, 1, 2, 0, 0, 0], 3), mut acc);
+    report(make([5, 5, 5, 5, 0, 0], 4), mut acc);
+    report(make([3, 1, 4, 2, 0, 0], 4), mut acc);
+    report(make([-1, -1, 2, 0, 0, 0], 3), mut acc);
+    println(f"sums: {acc}");
+}

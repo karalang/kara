@@ -1,0 +1,71 @@
+struct Four { a: i64, b: i64, c: i64, d: i64 }
+impl Display for Four {
+    fn to_string(ref self) -> String { f"4({self.a},{self.b},{self.c},{self.d})" }
+}
+struct Five { a: i64, b: i64, c: i64, d: i64, e: i64 }
+impl Display for Five {
+    fn to_string(ref self) -> String { f"5({self.a},{self.b},{self.c},{self.d},{self.e})" }
+}
+struct StrFirst { s: String, a: i64, b: i64 }
+impl Display for StrFirst {
+    fn to_string(ref self) -> String { f"SF({self.s},{self.a},{self.b})" }
+}
+struct StrMid { a: i64, s: String, b: i64 }
+impl Display for StrMid {
+    fn to_string(ref self) -> String { f"SM({self.a},{self.s},{self.b})" }
+}
+struct Inner { p: i64, q: i64 }
+struct Nested { a: i64, inner: Inner, b: i64 }
+impl Display for Nested {
+    fn to_string(ref self) -> String { f"N({self.a},{self.inner.p},{self.inner.q},{self.b})" }
+}
+struct Quad { a: f64, b: f64, c: f64, d: f64 }
+impl Display for Quad {
+    fn to_string(ref self) -> String { f"Q({self.a},{self.b},{self.c},{self.d})" }
+}
+struct Three { a: i64, b: i64, c: i64 }
+impl Display for Three {
+    fn to_string(ref self) -> String { f"3({self.a},{self.b},{self.c})" }
+}
+struct Boxed { a: String, b: String }
+impl Display for Boxed {
+    fn to_string(ref self) -> String { f"B({self.a}/{self.b})" }
+}
+
+fn mk4() -> Four { Four { a: 1, b: 2, c: 3, d: 4 } }
+fn mk5() -> Five { Five { a: 1, b: 2, c: 3, d: 4, e: 5 } }
+fn mksf() -> StrFirst { StrFirst { s: "hi".to_string(), a: 7, b: 9 } }
+fn mksm() -> StrMid { StrMid { a: 7, s: "hi".to_string(), b: 9 } }
+fn mkn() -> Nested { Nested { a: 1, inner: Inner { p: 2, q: 3 }, b: 4 } }
+fn mkq() -> Quad { Quad { a: 1.5, b: 2.5, c: 3.5, d: 4.5 } }
+fn mk3() -> Three { Three { a: 1, b: 2, c: 3 } }
+fn mkb() -> Boxed { Boxed { a: "x".to_string(), b: "y".to_string() } }
+
+fn f4() -> Result[i64, Four] { errdefer(x) { println(f"A {x}"); } return Err(mk4()) }
+fn f5() -> Result[i64, Five] { errdefer(x) { println(f"B {x}"); } return Err(mk5()) }
+fn fsf() -> Result[i64, StrFirst] { errdefer(x) { println(f"C {x}"); } return Err(mksf()) }
+fn fsm() -> Result[i64, StrMid] { errdefer(x) { println(f"D {x}"); } return Err(mksm()) }
+fn fn_() -> Result[i64, Nested] { errdefer(x) { println(f"E {x}"); } return Err(mkn()) }
+fn fq() -> Result[i64, Quad] { errdefer(x) { println(f"F {x}"); } return Err(mkq()) }
+fn f3() -> Result[i64, Three] { errdefer(x) { println(f"G {x}"); } return Err(mk3()) }
+fn fb() -> Result[i64, Boxed] { errdefer(x) { println(f"H {x}"); } return Err(mkb()) }
+
+fn inner4() -> Result[i64, Four] { Err(mk4()) }
+fn fq4() -> Result[i64, Four] {
+    errdefer(x) { println(f"I {x}"); }
+    let v = inner4()?;
+    return Ok(v)
+}
+
+fn main() {
+    let _ = f4();
+    let _ = f5();
+    let _ = fsf();
+    let _ = fsm();
+    let _ = fn_();
+    let _ = fq();
+    let _ = f3();
+    let _ = fb();
+    let _ = fq4();
+    println("done");
+}

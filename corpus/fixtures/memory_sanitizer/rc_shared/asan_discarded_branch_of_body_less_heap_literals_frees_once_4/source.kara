@@ -1,0 +1,14 @@
+
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn go() -> i64 {
+    let u = mkp(8);
+    let _ = if seed() > 0 { P { a: u.a.clone(), b: 1 } } else { P { a: payload(), b: 2 } };
+    let _ = if seed() > 0 { P { a: "lit-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", b: 1 } } else { P { a: payload(), b: 2 } };
+    let _ = if seed() > 0 { P { a: f"x{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", b: 1 } } else { P { a: payload(), b: 2 } };
+    let _ = if seed() > 0 { mkp(1) } else { mkp(2) };
+    return 1;
+}
+fn main() { println(go()); }

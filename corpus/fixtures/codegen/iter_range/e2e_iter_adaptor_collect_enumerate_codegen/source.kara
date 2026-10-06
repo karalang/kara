@@ -1,0 +1,45 @@
+
+fn main() {
+    let s: Vec[i64] = Vec[10i64, 20i64, 30i64, 40i64];
+    let e: Vec[(i64, i64)] = s.iter().enumerate().collect();
+    let e0 = e[0];
+    let e3 = e[3];
+    println(f"{e.len()} {e0.0} {e0.1} {e3.0} {e3.1}");
+    let m: Vec[i64] = s.iter().enumerate().map(|p| p.0 * 100i64 + p.1).collect();
+    println(f"{m[0]} {m[1]} {m[3]}");
+    let me: Vec[i64] = s.iter().map(|x| x + 1i64).enumerate().map(|p| p.0 + p.1).collect();
+    println(f"{me[0]} {me[3]}");
+    let et: Vec[(i64, i64)] = s.iter().enumerate().take(2i64).collect();
+    let t1 = et[1];
+    println(f"{et.len()} {t1.0} {t1.1}");
+    let se: Vec[(i64, i64)] = s.iter().skip(1i64).enumerate().collect();
+    let se0 = se[0];
+    println(f"{se.len()} {se0.0} {se0.1}");
+    let ef: Vec[(i64, i64)] = s.iter().enumerate().filter(|p| p.1 > 20i64).collect();
+    let f0 = ef[0];
+    println(f"{ef.len()} {f0.0} {f0.1}");
+    let hw: Vec[String] = Vec["red".to_string(), "green".to_string(), "blue".to_string()];
+    let he: Vec[(i64, String)] = hw.iter().enumerate().collect();
+    let h0 = ref he[0];
+    let h2 = ref he[2];
+    println(f"{he.len()} {h0.0} {h0.1} {h2.0} {h2.1}");
+    let hf: Vec[(i64, String)] = hw.iter().filter(|s| s.len() > 3i64).enumerate().collect();
+    let hf0 = ref hf[0];
+    println(f"{hf.len()} {hf0.0} {hf0.1}");
+    let hm: Vec[String] = hw.iter().enumerate().map(|p| p.1).collect();
+    println(f"{hm.len()} {hm[0]} {hm[2]}");
+    let hl: Vec[i64] = hw.iter().enumerate().map(|p| p.0 + p.1.len()).collect();
+    println(f"{hl[0]} {hl[1]} {hl[2]}");
+    let hs: Vec[String] = hw.iter().skip(1i64).enumerate().map(|p| p.1).collect();
+    println(f"{hs.len()} {hs[0]}");
+    let hef: Vec[(i64, String)] = hw.iter().enumerate().filter(|p| p.0 > 0i64).collect();
+    let hef0 = ref hef[0];
+    println(f"{hef.len()} {hef0.0} {hef0.1}");
+    let hetw: Vec[(i64, String)] = hw.iter().enumerate().take_while(|p| p.0 < 2i64).collect();
+    let hetw1 = ref hetw[1];
+    println(f"{hetw.len()} {hetw1.0} {hetw1.1}");
+    let htm: Vec[String] = hw.iter().enumerate().take(2i64).map(|p| p.1).collect();
+    println(f"{htm.len()} {htm[0]} {htm[1]}");
+    let hfm: Vec[String] = hw.iter().enumerate().filter(|p| p.0 > 0i64).map(|p| p.1).collect();
+    println(f"{hfm.len()} {hfm[0]} {hfm[1]}");
+}

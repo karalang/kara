@@ -1,0 +1,291 @@
+// LeetCode 303 — three arms against each other and against seven properties
+// that follow from the STATEMENT rather than from any implementation.
+//
+//   A  prefix sums          — O(n) build, O(1) query, by SUBTRACTING overlaps
+//   B  direct summation     — O(1) build, O(n) query, the definition verbatim
+//   C  sqrt decomposition   — O(n) build, O(sqrt n) query, by ADDING disjoints
+//
+// THE QUERY SPACE IS SMALL ENOUGH TO EXHAUST, so this differential does not
+// sample it. For an array of length n there are exactly n(n+1)/2 valid
+// (left, right) pairs, and every one of them is asked of every arm. That is a
+// stronger statement than a random differential can make: not "the arms agree
+// on 3,000 queries I happened to pick" but "the arms agree on EVERY query these
+// arrays admit". Range problems are one of the few places that is affordable,
+// and the boundary queries a random generator under-samples — l = 0, r = n - 1,
+// l = r — are exactly where the off-by-ones live.
+//
+// WHAT THE ARMS CANNOT SHARE. B is the definition transcribed, so it anchors
+// the other two to the statement. Between A and C the useful property is that
+// their characteristic bugs have no counterpart in each other: A's is an
+// off-by-one at the prefix boundary (`r + 1` versus `r`, `l` versus `l - 1`),
+// which is possible only because A indexes an array one longer than the input;
+// C's is a partial edge that swallows one element too many, which is possible
+// only because C decides per-step whether a whole block fits. Neither arm can
+// commit the other's mistake, and B can commit neither.
+//
+// P5 IS THE ONE NO ARM COMPUTES. Adding a constant c to every element must
+// raise every answer by exactly c * (r - l + 1) — a statement about how the
+// structure responds to a perturbation of its input, rather than about any
+// single answer. It catches a whole-array fault that is symmetric across the
+// arms, which is the failure mode three-way agreement is blind to.
+
+// -------------------------------------------------------------------- arm A
+
+struct PrefixArr { prefix: Vec[i64] }
+
+fn new_prefix(nums: ref Vec[i64]) -> PrefixArr {
+    let mut prefix: Vec[i64] = Vec.new();
+    prefix.push(0);
+    let mut i = 0;
+    while i < nums.len() {
+        prefix.push(prefix[i] + nums[i]);
+        i = i + 1;
+    }
+    return PrefixArr { prefix: prefix };
+}
+
+impl PrefixArr {
+    fn sum_range(ref self, left: i64, right: i64) -> i64 {
+        return self.prefix[right + 1] - self.prefix[left];
+    }
+}
+
+// -------------------------------------------------------------------- arm B
+
+struct NaiveArr { nums: Vec[i64] }
+
+fn new_naive(nums: ref Vec[i64]) -> NaiveArr {
+    let mut copy: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < nums.len() { copy.push(nums[i]); i = i + 1; }
+    return NaiveArr { nums: copy };
+}
+
+impl NaiveArr {
+    fn sum_range(ref self, left: i64, right: i64) -> i64 {
+        let mut total = 0;
+        let mut i = left;
+        while i <= right { total = total + self.nums[i]; i = i + 1; }
+        return total;
+    }
+}
+
+// -------------------------------------------------------------------- arm C
+
+struct BlockArr { nums: Vec[i64], block_sums: Vec[i64], bsize: i64 }
+
+fn isqrt_at_least_one(n: i64) -> i64 {
+    let mut k = 1;
+    while (k + 1) * (k + 1) <= n { k = k + 1; }
+    return k;
+}
+
+fn new_blocks(nums: ref Vec[i64]) -> BlockArr {
+    let n = nums.len();
+    let bsize = isqrt_at_least_one(n);
+    let mut copy: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { copy.push(nums[i]); i = i + 1; }
+    let mut sums: Vec[i64] = Vec.new();
+    let mut start = 0;
+    while start < n {
+        let mut total = 0;
+        let mut j = start;
+        while j < n and j < start + bsize { total = total + nums[j]; j = j + 1; }
+        sums.push(total);
+        start = start + bsize;
+    }
+    return BlockArr { nums: copy, block_sums: sums, bsize: bsize };
+}
+
+impl BlockArr {
+    fn sum_range(ref self, left: i64, right: i64) -> i64 {
+        let mut total = 0;
+        let mut i = left;
+        while i <= right {
+            if i % self.bsize == 0 and i + self.bsize - 1 <= right {
+                total = total + self.block_sums[i / self.bsize];
+                i = i + self.bsize;
+            } else {
+                total = total + self.nums[i];
+                i = i + 1;
+            }
+        }
+        return total;
+    }
+}
+
+// ---------------------------------------------------------------- harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn gen_arr(state: mut ref i64, len: i64, spread: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < len {
+        state = lcg(state);
+        out.push((state / 65536) % spread - spread / 2);
+        i = i + 1;
+    }
+    return out;
+}
+
+fn shifted(nums: ref Vec[i64], c: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < nums.len() { out.push(nums[i] + c); i = i + 1; }
+    return out;
+}
+
+fn reversed(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = nums.len();
+    let mut i = 0;
+    while i < n { out.push(nums[n - 1 - i]); i = i + 1; }
+    return out;
+}
+
+fn main() {
+    let mut state = 30300;
+
+    let mut arrays = 0;
+    let mut queries = 0;
+
+    let mut p1 = 0;   // the three arms disagree
+    let mut p2 = 0;   // a single-element range is not that element
+    let mut p3 = 0;   // additivity across a split point fails
+    let mut p4 = 0;   // the full range is not the independent total
+    let mut p5 = 0;   // shifting every element by c does not move the answer by c*width
+    let mut p6 = 0;   // reversing the array does not mirror the answers
+    let mut p7 = 0;   // a statement-fixed shape is wrong
+
+    let lengths: Vec[i64] = [1, 2, 3, 4, 5, 7, 9, 12, 17, 25, 40, 64];
+    let spreads: Vec[i64] = [1, 3, 200, 100000];
+
+    let mut round = 0;
+    while round < 25 {
+        let mut si = 0;
+        while si < spreads.len() {
+            let mut li = 0;
+            while li < lengths.len() {
+                let n = lengths[li];
+                let nums = gen_arr(mut state, n, spreads[si]);
+                arrays = arrays + 1;
+
+                let a = new_prefix(nums);
+                let b = new_naive(nums);
+                let c = new_blocks(nums);
+
+                // The full (left, right) space, exhaustively.
+                let mut l = 0;
+                while l < n {
+                    let mut r = l;
+                    while r < n {
+                        queries = queries + 1;
+                        let va = a.sum_range(l, r);
+                        let vb = b.sum_range(l, r);
+                        let vc = c.sum_range(l, r);
+
+                        // P1 — three unrelated cost models, one number.
+                        if va != vb or vb != vc { p1 = p1 + 1; }
+
+                        // P2 — a width-one range is the element itself.
+                        if l == r and va != nums[l] { p2 = p2 + 1; }
+
+                        // P3 — splitting a range anywhere inside it must add up.
+                        if r > l {
+                            let mid = l + (r - l) / 2;
+                            if a.sum_range(l, mid) + a.sum_range(mid + 1, r) != va {
+                                p3 = p3 + 1;
+                            }
+                        }
+                        r = r + 1;
+                    }
+                    l = l + 1;
+                }
+
+                // P4 — the whole array, totalled without any of the machinery.
+                let mut direct = 0;
+                let mut k = 0;
+                while k < n { direct = direct + nums[k]; k = k + 1; }
+                if a.sum_range(0, n - 1) != direct { p4 = p4 + 1; }
+
+                // P5 — a uniform shift moves every answer by c * width, and by
+                // nothing else. No arm computes this; it is a statement about
+                // the structure's response to its input changing.
+                let cshift = 7;
+                let sh = new_prefix(shifted(nums, cshift));
+                let mut l2 = 0;
+                while l2 < n {
+                    let mut r2 = l2;
+                    while r2 < n {
+                        let want = a.sum_range(l2, r2) + cshift * (r2 - l2 + 1);
+                        if sh.sum_range(l2, r2) != want { p5 = p5 + 1; }
+                        r2 = r2 + 1;
+                    }
+                    l2 = l2 + 1;
+                }
+
+                // P6 — reversing the array mirrors every range onto its twin.
+                let rv = new_prefix(reversed(nums));
+                let mut l3 = 0;
+                while l3 < n {
+                    let mut r3 = l3;
+                    while r3 < n {
+                        if rv.sum_range(n - 1 - r3, n - 1 - l3) != a.sum_range(l3, r3) {
+                            p6 = p6 + 1;
+                        }
+                        r3 = r3 + 1;
+                    }
+                    l3 = l3 + 1;
+                }
+
+                li = li + 1;
+            }
+            si = si + 1;
+        }
+        round = round + 1;
+    }
+
+    // P7 — shapes whose every answer the statement fixes outright.
+    let mut n = 1;
+    while n <= 30 {
+        let mut zeros: Vec[i64] = Vec.new();
+        let mut ones: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < n { zeros.push(0); ones.push(1); i = i + 1; }
+        let az = new_prefix(zeros);
+        let ao = new_prefix(ones);
+        let bo = new_blocks(ones);
+        let mut l = 0;
+        while l < n {
+            let mut r = l;
+            while r < n {
+                if az.sum_range(l, r) != 0 { p7 = p7 + 1; }
+                if ao.sum_range(l, r) != r - l + 1 { p7 = p7 + 1; }
+                if bo.sum_range(l, r) != r - l + 1 { p7 = p7 + 1; }
+                r = r + 1;
+            }
+            l = l + 1;
+        }
+        n = n + 1;
+    }
+
+    println(f"arrays {arrays}");
+    println(f"queries {queries}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 width-one failures {p2}");
+    println(f"P3 additivity failures {p3}");
+    println(f"P4 full-range failures {p4}");
+    println(f"P5 shift-response failures {p5}");
+    println(f"P6 reversal asymmetries {p6}");
+    println(f"P7 fixed-shape failures {p7}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

@@ -1,0 +1,19 @@
+
+fn make_vec(k: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(k);
+    v.push(k + 1_i64);
+    v.push(k + 2_i64);
+    return v;
+}
+
+fn main() {
+    let base: i64 = env.args().len();
+    let mut total = 0i64;
+    let mut i = base;
+    while i < base + 8i64 {
+        total = total + make_vec(i).len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

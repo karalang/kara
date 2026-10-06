@@ -1,0 +1,8 @@
+
+fn foo(p: i64) -> i64 {
+    let n = p;
+    let v: Vec[i64] = Vec.new();
+    let _ = v.len();
+    n
+}
+fn main() { println(foo(3)); }

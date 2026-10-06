@@ -1,0 +1,36 @@
+
+        struct WordCount {
+            total: u64,
+            unique: u64,
+        }
+
+        fn count_words(content: ref String) -> WordCount {
+            let words = content.split(" ");
+            let unique_words = HashSet.from(words);
+            WordCount {
+                total: words.len(),
+                unique: unique_words.len(),
+            }
+        }
+
+        fn format_report(filename: ref String, count: ref WordCount) -> String {
+            format("{}: {} total words, {} unique", filename, count.total, count.unique)
+        }
+
+        fn main() with reads(Env) reads(FileSystem) writes(FileSystem) {
+            let args = env.args();
+
+            let filename = match args.get(1) {
+                Some(f) => f,
+                None => {
+                    println("Usage: word_count <filename>");
+                    return;
+                },
+            };
+
+            let content = read_file(filename)?;
+            let count = count_words(content);
+            let report = format_report(filename, count);
+            println(report);
+        }
+    

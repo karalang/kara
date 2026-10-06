@@ -1,0 +1,39 @@
+
+shared enum Expr { Num(i64), Add(BinOp), Neg(Unary) }
+struct BinOp { left: Expr, right: Expr }
+struct Unary { operand: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+        Neg(u) => 0 - eval(u.operand),
+    }
+}
+fn fold(e: Expr) -> Expr {
+    match e {
+        Num(n) => Num(n),
+        Neg(u) => Neg(Unary { operand: fold(u.operand) }),
+        Add(b) => {
+            let l = fold(b.left);
+            let r = fold(b.right);
+            Add(BinOp { left: l, right: r })
+        }
+    }
+}
+fn build(n: i64) -> Expr {
+    if n <= 0 { Num(1) }
+    else { Add(BinOp { left: Num(n), right: build(n - 1) }) }
+}
+fn main() {
+    let t = build(15);
+    let t2 = fold(t);
+    let mut v: Vec[Expr] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 12 { v.push(build(i)); i = i + 1; }
+    let mut total: i64 = eval(t2);
+    for e in v {
+        let folded = fold(e);
+        total = total + eval(folded);
+    }
+    println(total);
+}

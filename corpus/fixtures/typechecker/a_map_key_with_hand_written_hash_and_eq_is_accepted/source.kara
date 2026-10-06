@@ -1,0 +1,11 @@
+
+struct Item { id: i64, tag: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_i64(self.id) } }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1, tag: 1 }, 10);
+    m.insert(Item { id: 1, tag: 2 }, 20);
+    println(f"{m.len()}");
+}

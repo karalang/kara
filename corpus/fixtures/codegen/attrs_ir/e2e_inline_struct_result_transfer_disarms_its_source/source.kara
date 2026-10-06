@@ -1,0 +1,64 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct W { id: i64, x: String, y: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.x}{self.y}") } }
+fn mkw(n: i64) -> W { return W { id: n, x: f"x{n}", y: f"y{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoW { a: R, b: Result[W, String] }
+fn eat(x: R) { println(f"  eat{x.id}") }
+
+fn rebind()   { let r: Result[R, String] = Result.Ok(mk(1)); let c = r;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn rebindu()  { let r: Result[R, String] = Result.Ok(mk(2)); let c = r; println("  m") }
+fn esc()      { let r: Result[R, String] = Result.Ok(mk(3)); let g = match r { Result.Ok(x) => x, Result.Err(e) => mk(0) }; println(f"  got{g.id}") }
+fn escerr()   { let r: Result[String, R] = Result.Err(mk(4)); let g = match r { Result.Ok(x) => mk(0), Result.Err(e) => e }; println(f"  got{g.id}") }
+fn esciflet() { let r: Result[R, String] = Result.Ok(mk(5)); let g = if let Result.Ok(x) = r { x } else { mk(0) }; println(f"  got{g.id}") }
+fn call()     { let r: Result[R, String] = Result.Ok(mk(6)); match r { Result.Ok(x) => eat(x), Result.Err(e) => println(f"  er{e}") } }
+fn inner()    { let r: Result[R, String] = Result.Ok(mk(7)); match r { Result.Ok(x) => { let g = x; println(f"  got{g.id}") }, Result.Err(e) => println(f"  er{e}") } }
+fn strreb()   { let r: Result[String, String] = Result.Ok("s8"); let c = r;
+                match c { Result.Ok(x) => println(f"  ok{x}"), Result.Err(e) => println(f"  er{e}") } }
+fn stresc()   { let r: Result[String, i64] = Result.Ok("s9"); let g = match r { Result.Ok(x) => x, Result.Err(e) => "z" }; println(f"  got{g}") }
+fn optesc()   { let r: Option[R] = Option.Some(mk(10)); let g = match r { Option.Some(x) => x, Option.None => mk(0) }; println(f"  got{g.id}") }
+fn treb()     { let t: (R, Result[R, String]) = (mk(11), Result.Ok(mk(111))); let (a, b) = t; let c = b;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn trebu()    { let t: (R, Result[R, String]) = (mk(12), Result.Ok(mk(112))); let (a, b) = t; let c = b; println("  m") }
+fn tesc()     { let t: (R, Result[R, String]) = (mk(13), Result.Ok(mk(113))); let (a, b) = t;
+                let g = match b { Result.Ok(x) => x, Result.Err(e) => mk(0) }; println(f"  got{g.id}") }
+fn freb()     { let h = HoRes { a: mk(14), b: Result.Ok(mk(114)) }; let HoRes { a, b } = h; let c = b;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn fesc()     { let h = HoRes { a: mk(15), b: Result.Ok(mk(115)) }; let HoRes { a, b } = h;
+                let g = match b { Result.Ok(x) => x, Result.Err(e) => mk(0) }; println(f"  got{g.id}") }
+fn wreb()     { let r: Result[W, String] = Result.Ok(mkw(16)); let c = r;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn wesc()     { let r: Result[W, String] = Result.Ok(mkw(17)); let g = match r { Result.Ok(x) => x, Result.Err(e) => mkw(0) }; println(f"  got{g.id}") }
+fn wtreb()    { let t: (R, Result[W, String]) = (mk(18), Result.Ok(mkw(118))); let (a, b) = t; let c = b;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn wfreb()    { let h = HoW { a: mk(19), b: Result.Ok(mkw(119)) }; let HoW { a, b } = h; let c = b;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn wfesc()    { let h = HoW { a: mk(20), b: Result.Ok(mkw(120)) }; let HoW { a, b } = h;
+                let g = match b { Result.Ok(x) => x, Result.Err(e) => mkw(0) }; println(f"  got{g.id}") }
+
+fn main() {
+  println("rebind");   rebind()
+  println("rebindu");  rebindu()
+  println("esc");      esc()
+  println("escerr");   escerr()
+  println("esciflet"); esciflet()
+  println("call");     call()
+  println("inner");    inner()
+  println("strreb");   strreb()
+  println("stresc");   stresc()
+  println("optesc");   optesc()
+  println("treb");     treb()
+  println("trebu");    trebu()
+  println("tesc");     tesc()
+  println("freb");     freb()
+  println("fesc");     fesc()
+  println("wreb");     wreb()
+  println("wesc");     wesc()
+  println("wtreb");    wtreb()
+  println("wfreb");    wfreb()
+  println("wfesc");    wfesc()
+  println("done")
+}

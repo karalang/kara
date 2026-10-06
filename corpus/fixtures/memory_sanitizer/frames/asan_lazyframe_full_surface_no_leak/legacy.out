@@ -1,0 +1,17 @@
+4
+== logical plan ==
+GROUP BY [city] AGG [count(pop) as cnt, sum(pop), mean(score), min(city), max(score)]
+  SCAN [city, pop, score]
+== optimized ==
+GROUP BY [city] AGG [count(pop) as cnt, sum(pop), mean(score), min(city), max(score)]
+  SCAN cols=[city, pop, score]
+6
+3
+2
+null-sum
+rome
+6
+c
+5
+3
+30

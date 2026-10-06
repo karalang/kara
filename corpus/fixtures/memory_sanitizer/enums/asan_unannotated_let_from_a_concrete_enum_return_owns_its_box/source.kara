@@ -1,0 +1,36 @@
+
+enum E { A(Array[String, 2]), B }
+enum E2 { A((String, String, String)), B }
+enum E3 { A(String), B }
+enum G[T] { Y(T), N }
+
+fn mk(i: i64) -> E { return E.A([f"aa-{i}-xxxxxxxxxxxx", f"bb-{i}-yyyyyyyyyyyy"]); }
+fn mk2(i: i64) -> E2 { return E2.A((f"cc-{i}-xxxxxxxxxxxx", f"dd-{i}-yyyyyyyyyyyy", f"ee-{i}-zzzzzzzzzzzz")); }
+fn mk3(i: i64) -> E3 { return E3.A(f"ff-{i}-xxxxxxxxxxxx"); }
+fn mkg(i: i64) -> G[Array[String, 2]] { return G.Y([f"gg-{i}-xxxxxxxxxxxx", f"hh-{i}-yyyyyyyyyyyy"]); }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 4 {
+        let bare = mk(i);
+        match bare { E.A(x) => { println(f"bare:{x[0]}"); } E.B => {} }
+
+        let annotated: E = mk(i);
+        match annotated { E.A(x) => { println(f"annotated:{x[0]}"); } E.B => {} }
+
+        let tuple = mk2(i);
+        match tuple { E2.A(t) => { println(f"tuple:{t.0}"); } E2.B => {} }
+
+        let strpay = mk3(i);
+        match strpay { E3.A(s) => { println(f"strpay:{s}"); } E3.B => {} }
+
+        let generic = mkg(i);
+        match generic { G.Y(x) => { println(f"generic:{x[0]}"); } G.N => {} }
+
+        let local: E = E.A([f"ii-{i}-xxxxxxxxxxxx", f"jj-{i}-yyyyyyyyyyyy"]);
+        match local { E.A(x) => { println(f"local:{x[0]}"); } E.B => {} }
+
+        i = i + 1;
+    }
+    println("end");
+}

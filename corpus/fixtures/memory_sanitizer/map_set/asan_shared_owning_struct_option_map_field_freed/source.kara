@@ -1,0 +1,50 @@
+
+shared struct Node { v: i64 }
+struct Sa { n: Option[Node], m: Option[Map[String, i64]] }
+struct Sd { n: Node, m: Option[Map[String, i64]] }
+struct Sb { n: Option[Node], m: Option[String] }
+struct Sc { n: Option[Node], m: Option[Vec[i64]] }
+struct Se { m: Option[Map[String, i64]] }
+struct Sf { n: Option[Node], s: Option[Set[String]] }
+fn mk(i: i64) -> Map[String, i64] {
+    let mut mm: Map[String, i64] = Map.new();
+    mm.insert("map_key_long_enough_to_force_a_heap_allocation".to_string(), i);
+    mm
+}
+fn mkset(i: i64) -> Set[String] {
+    let mut ss: Set[String] = Set.new();
+    ss.insert("set_key_long_enough_to_force_a_heap_allocation".to_string());
+    ss
+}
+fn main() {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let a: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        match a.n { Some(nn) => { t = t + nn.v; } None => {} }
+        let d: Sd = Sd { n: Node { v: i }, m: Option.Some(mk(i)) };
+        t = t + d.n.v;
+        let b: Sb = Sb { n: Option.Some(Node { v: i }), m: Option.Some("a_string_long_enough_to_force_heap_alloc_x".to_string()) };
+        match b.m { Some(x) => { t = t + x.len(); } None => {} }
+        let c: Sc = Sc { n: Option.Some(Node { v: i }), m: Option.Some(Vec.new()) };
+        match c.m { Some(x) => { t = t + x.len(); } None => {} }
+        let e: Se = Se { m: Option.Some(mk(i)) };
+        match e.m { Some(x) => { t = t + x.len(); } None => {} }
+        let f: Sf = Sf { n: Option.Some(Node { v: i }), s: Option.Some(mkset(i)) };
+        match f.s { Some(x) => { t = t + x.len(); } None => {} }
+        let p: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        match p.m { Some(x) => { t = t + x.len(); } None => {} }
+        let q: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        let qm = q.m;
+        match qm { Some(x) => { t = t + x.len(); } None => {} }
+        let r: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        let Sa { n, m } = r;
+        match n { Some(nn) => { t = t + nn.v; } None => {} }
+        match m { Some(x) => { t = t + x.len(); } None => {} }
+        let u: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        let Sa { n: un, m: um } = u;
+        match un { Some(nn) => { t = t + nn.v; } None => {} }
+        i = i + 1;
+    }
+    println(t);
+}

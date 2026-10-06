@@ -1,0 +1,22 @@
+
+struct Cell { v: i64 }
+impl Drop for Cell { fn drop(mut ref self) { println(f"dc{self.v}") } }
+
+enum One { P(Array[Cell, 1]), Q }
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let a: Array[Cell, 1] = [Cell { v: 10 + n }];
+        let g: One = One.P(a);
+        println("bound");
+        let b: Array[Cell, 1] = [Cell { v: 20 + n }];
+        One.P(b);
+        println("dropped");
+        let c: Array[Cell, 1] = [Cell { v: 30 + n }];
+        let o: Option[Array[Cell, 1]] = Some(c);
+        println("opt");
+        n = n + 1;
+    }
+    println("end");
+}

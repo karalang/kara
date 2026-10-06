@@ -1,0 +1,142 @@
+// Benchmark lane for LeetCode 302 — Smallest Rectangle Enclosing Black Pixels.
+//
+// ONE large sparse frame, built once; then many min-area queries from varying
+// seeds. That shape is deliberate on two counts BENCHMARKS.md cares about.
+//
+// BUILD-ONCE + PUNCH, so the measurement is the QUERY and not the allocation.
+// Rebuilding a 4096x4096 frame per iteration would be an O(m*n) memset
+// dominating an O(m log n) query — the classic way to accidentally benchmark
+// the wrong thing.
+//
+// A DEPENDENT-BRANCH SEARCH, so the optimizer cannot erase it. Each bisection
+// step's next index comes from the previous step's row scan, and the row scans
+// themselves early-exit on the first black pixel, so there is no fixed trip
+// count to vectorise and no way to hoist the probe out.
+//
+// THE SEED VARIES PER QUERY even though the ANSWER does not — the rectangle is
+// a property of the image, not the seed (differential P3). Varying it stops any
+// backend from CSE-ing 20k identical calls into one, while every call still
+// does the full four-search work.
+//
+// SPARSE ON PURPOSE. This is the regime where binary search is supposed to beat
+// the O(m*n) scan: a small connected blob in a big frame. The scan reads 16.7M
+// pixels per query; this reads a few thousand. The kata README reports what
+// that is actually worth once measured, which is not the same as what the
+// asymptotics promise.
+//
+// Mirrors: blackpixels.c / .rs / .py / go-seq/main.go — same algorithm.
+
+struct Image {
+    data: Vec[u8],
+    w: i64,
+    h: i64,
+}
+
+fn at(img: ref Image, r: i64, c: i64) -> u8 {
+    return img.data[r * img.w + c];
+}
+
+fn row_has_black(img: ref Image, r: i64) -> bool {
+    let mut c = 0;
+    while c < img.w {
+        if at(img, r, c) == 1u8 { return true; }
+        c = c + 1;
+    }
+    return false;
+}
+
+fn col_has_black(img: ref Image, c: i64) -> bool {
+    let mut r = 0;
+    while r < img.h {
+        if at(img, r, c) == 1u8 { return true; }
+        r = r + 1;
+    }
+    return false;
+}
+
+fn first_black_row(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if row_has_black(img, mid) { hi = mid; } else { lo = mid + 1; }
+    }
+    return lo;
+}
+
+fn first_white_row(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if row_has_black(img, mid) { lo = mid + 1; } else { hi = mid; }
+    }
+    return lo;
+}
+
+fn first_black_col(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if col_has_black(img, mid) { hi = mid; } else { lo = mid + 1; }
+    }
+    return lo;
+}
+
+fn first_white_col(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if col_has_black(img, mid) { lo = mid + 1; } else { hi = mid; }
+    }
+    return lo;
+}
+
+fn min_area(img: ref Image, x: i64, y: i64) -> i64 {
+    let top = first_black_row(img, 0, x + 1);
+    let bottom = first_white_row(img, x + 1, img.h);
+    let left = first_black_col(img, 0, y + 1);
+    let right = first_white_col(img, y + 1, img.w);
+    return (bottom - top) * (right - left);
+}
+
+fn main() {
+    let n = 4096;
+    let queries = 1200;
+
+    // One connected blob near the middle: a filled 40x40 block plus a short
+    // arm, so the projections are contiguous and the rectangle is non-square.
+    let mut data: Vec[u8] = Vec.filled(n * n, 0u8);
+    let r0 = n / 2;
+    let c0 = n / 2;
+    let mut r = 0;
+    while r < 40 {
+        let mut c = 0;
+        while c < 40 {
+            data[(r0 + r) * n + (c0 + c)] = 1u8;
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    let mut k = 0;
+    while k < 25 {
+        data[(r0 + 40 + k) * n + (c0 + 20)] = 1u8;
+        k = k + 1;
+    }
+    let img = Image { data: data, w: n, h: n };
+
+    // Seeds cycle over the blob's own pixels — all valid, all giving the same
+    // area (P3), none of them letting the backend collapse the calls.
+    let mut checksum = 0;
+    let mut q = 0;
+    while q < queries {
+        let sx = r0 + q % 40;
+        let sy = c0 + (q * 7) % 40;
+        checksum = (checksum * 31 + min_area(img, sx, sy)) % 1000000007;
+        q = q + 1;
+    }
+
+    println(f"queries {queries} checksum {checksum}");
+}

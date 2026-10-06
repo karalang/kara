@@ -1,0 +1,7 @@
+
+fn main() with reads(FileSystem) {{
+    match FileSystem.read_to_string("{path}") {{
+        Ok(s) => print(s),
+        Err(_) => println("read-err"),
+    }}
+}}

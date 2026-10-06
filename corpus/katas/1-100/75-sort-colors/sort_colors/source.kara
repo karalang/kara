@@ -1,0 +1,108 @@
+// LeetCode #75: Sort Colors — Dutch National Flag, one pass, O(1) space (★).
+//
+// The array holds only 0s (red), 1s (white), 2s (blue); sort it IN PLACE so all
+// 0s come first, then 1s, then 2s. The follow-up forbids the easy two-pass
+// counting sort ([`sort_colors_counting.kara`](sort_colors_counting.kara) is that
+// form) and asks for a ONE-PASS, constant-space solution — Dijkstra's Dutch
+// National Flag partition.
+//
+// Three pointers carve the array into four regions:
+//
+//   [0, low)      settled 0s
+//   [low, mid)    settled 1s
+//   [mid, high]   UNKNOWN — still to classify
+//   (high, n)     settled 2s
+//
+// Walk `mid` forward; at each step exactly one of three moves restores the
+// invariant:
+//   a[mid] == 0  ->  swap a[low], a[mid]; low++, mid++   (grow the 0s, the swapped-in
+//                                                         value is a known-1, so mid advances)
+//   a[mid] == 1  ->  mid++                               (already in place)
+//   a[mid] == 2  ->  swap a[mid], a[high]; high--        (send to the 2s; DON'T advance mid —
+//                                                         the swapped-in value is unclassified)
+//
+// One pass, no extra storage — the array is its own scratch. The lone subtlety is
+// that the `== 2` case must NOT advance `mid`: the value pulled from `high` has
+// not been examined yet. This is the three-way cousin of the two-pointer partition
+// in katas like [#26](../26-remove-duplicates-from-sorted-array/)/[#27](../27-remove-element/),
+// and the parallel-assignment swap `a[i], a[j] = a[j], a[i]` is the 1-D form of
+// kata [#48](../48-rotate-image/)'s four-way rotate.
+//
+// LeetCode bounds: 1 ≤ n ≤ 300, values ∈ {0,1,2} — every value fits i64 trivially.
+
+fn sort_colors(a: mut ref Vec[i64]) {
+    let n = a.len();
+    if n == 0 {
+        return;
+    }
+    let mut low = 0;
+    let mut mid = 0;
+    let mut high = n - 1;
+    while mid <= high {
+        if a[mid] == 0 {
+            a[low], a[mid] = a[mid], a[low];      // grow the 0s region
+            low = low + 1;
+            mid = mid + 1;
+        } else if a[mid] == 1 {
+            mid = mid + 1;                      // already settled
+        } else {
+            a[mid], a[high] = a[high], a[mid];     // send the 2 to the tail
+            high = high - 1;                    // note: mid is NOT advanced
+        }
+    }
+}
+
+// ---- test harness (shared verbatim by both solvers + the Python mirror) ---------
+
+fn print_arr(a: ref Vec[i64]) {
+    let n = a.len();
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{a[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    println(s);
+}
+
+fn hash_arr(a: ref Vec[i64]) -> i64 {
+    let mut acc = 0;
+    let n = a.len();
+    let mut i = 0;
+    while i < n {
+        acc = (acc * 131 + a[i]) % 1000000007;
+        i = i + 1;
+    }
+    acc
+}
+
+fn report(grid: Vec[i64], s: mut ref String) {
+    let mut a = grid;
+    sort_colors(mut a);
+    print_arr(a);
+    s.push(' ');
+    s.push_str(f"{hash_arr(a)}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report([2, 0, 2, 1, 1, 0], mut s);   // [0,0,1,1,2,2] — LeetCode example 1
+    report([2, 0, 1], mut s);            // [0,1,2]       — LeetCode example 2
+    report([0], mut s);                  // [0]           — single element
+    report([1], mut s);                  // [1]
+    report([2], mut s);                  // [2]
+    report([2, 2, 2], mut s);            // [2,2,2]       — all one colour
+    report([0, 0, 0], mut s);            // [0,0,0]
+    report([1, 1, 1], mut s);            // [1,1,1]
+    report([0, 1, 2], mut s);            // [0,1,2]       — already sorted
+    report([2, 1, 0], mut s);            // [0,1,2]       — reversed
+    report([2, 0, 1, 2, 1, 0, 0, 2, 1], mut s);  // [0,0,0,1,1,1,2,2,2]
+    report([1, 0, 2, 0, 1, 2, 1, 0], mut s);     // [0,0,0,1,1,1,2,2]
+
+    println(s);
+}

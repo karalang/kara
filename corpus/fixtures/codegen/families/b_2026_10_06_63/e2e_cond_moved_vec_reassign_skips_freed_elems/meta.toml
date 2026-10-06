@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_06_63.rs::e2e_cond_moved_vec_reassign_skips_freed_elems"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

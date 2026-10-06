@@ -1,0 +1,101 @@
+// LeetCode 143 — Reorder List.
+//
+// Reorder L0 -> L1 -> … -> Ln into L0 -> Ln -> L1 -> Ln-1 -> L2 -> Ln-2 -> …
+// (interleave the list with its reverse). The new visiting order of indices is
+// 0, n-1, 1, n-2, 2, n-3, … — two pointers walking inward from both ends.
+//
+// Same RC modeling as #141/#142: nodes are `Vec`-owned (strong) and `next` is a
+// `weak Node` overlay, so rewiring the links (even into the interleaved order)
+// stays leak-free. We rewrite the weak `next` chain to the new order, then walk
+// it from the head to emit the reordered values.
+
+shared struct Node {
+    val: i64,
+    id: i64,
+    mut next: weak Node,
+}
+
+fn reorder(vals: Vec[i64]) -> Vec[i64] {
+    let n: i64 = vals.len();
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        nodes.push(Node { val: vals[i], id: i, next: None });
+        i = i + 1;
+    }
+
+    // Interleaved index order: 0, n-1, 1, n-2, … via two inward pointers.
+    let mut order: Vec[i64] = Vec.new();
+    let mut lo: i64 = 0;
+    let mut hi: i64 = n - 1;
+    let mut take_lo: bool = true;
+    while lo <= hi {
+        if take_lo {
+            order.push(lo);
+            lo = lo + 1;
+        } else {
+            order.push(hi);
+            hi = hi - 1;
+        }
+        take_lo = not take_lo;
+    }
+
+    // Rewire the weak `next` chain to follow `order`.
+    let m: i64 = order.len();
+    i = 0;
+    while i + 1 < m {
+        nodes[order[i]].next = nodes[order[i + 1]];
+        i = i + 1;
+    }
+
+    // Walk from the head (order[0]) via `next` and collect the values.
+    let mut out: Vec[i64] = Vec.new();
+    if n == 0 {
+        return out;
+    }
+    let mut cur: Option[Node] = Some(nodes[order[0]]);
+    let mut go: bool = true;
+    while go {
+        match cur {
+            None => { go = false; }
+            Some(c) => {
+                out.push(c.val);
+                cur = c.next;
+            }
+        }
+    }
+    return out;
+}
+
+fn run(vals: Vec[i64]) {
+    let r: Vec[i64] = reorder(vals);
+    let n: i64 = r.len();
+    let mut s: String = "";
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 {
+            s = s + " ";
+        }
+        s = s + r[i].to_string();
+        i = i + 1;
+    }
+    println(s);
+}
+
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1); a.push(2); a.push(3); a.push(4);
+    run(a);
+
+    let mut b: Vec[i64] = Vec.new();
+    b.push(1); b.push(2); b.push(3); b.push(4); b.push(5);
+    run(b);
+
+    let mut c: Vec[i64] = Vec.new();
+    c.push(1);
+    run(c);
+
+    let mut d: Vec[i64] = Vec.new();
+    d.push(1); d.push(2);
+    run(d);
+}

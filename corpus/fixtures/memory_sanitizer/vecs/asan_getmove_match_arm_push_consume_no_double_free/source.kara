@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(i, f"map string payload padded beyond thirty-six bytes {i}");
+        match m.get(i) {
+            Some(x) => { out.push(x); },
+            None => {},
+        }
+        i = i + 1;
+    };
+    println(out.len());
+}

@@ -1,0 +1,55 @@
+// Benchmark harness for LeetCode #118 — additive Pascal's triangle (the ★).
+// See ../README.md § Benchmarks. Each rep generates a full triangle of a DATA-DEPENDENT row count
+// (rows = 30 + acc%16, so 30..45 — seeded by the running hash so the whole generate() can't be
+// hoisted out of the loop), building it as a nested `Vec[Vec[i64]]` row by row, and folds every
+// entry into a rolling hash. K = 80000 reps — the construction regime: nested-Vec ALLOCATION (~40
+// row Vecs, ~800 entries per rep) dominated by the row builds, cf. #115's DP table.
+
+fn generate(num_rows: i64) -> Vec[Vec[i64]] {
+    let mut tri: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < num_rows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j <= i {
+            if j == 0 or j == i {
+                row.push(1);
+            } else {
+                row.push(tri[i - 1][j - 1] + tri[i - 1][j]);
+            }
+            j = j + 1;
+        }
+        tri.push(row);
+        i = i + 1;
+    }
+    tri
+}
+
+fn triangle_hash(tri: ref Vec[Vec[i64]]) -> i64 {
+    let mut h = 1;
+    let mut i = 0;
+    while i < tri.len() {
+        let row = ref tri[i];
+        let mut j = 0;
+        while j < row.len() {
+            h = (h * 131 + row[j]) % 1000000007;
+            j = j + 1;
+        }
+        h = (h * 31 + row.len() + 7) % 1000000007;
+        i = i + 1;
+    }
+    h
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut rep = 0;
+    while rep < 80000 {
+        let rows = 30 + (acc % 16);
+        let tri = generate(rows);
+        let h = triangle_hash(tri);
+        acc = (acc * 131 + h) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}");
+}

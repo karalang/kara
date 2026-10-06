@@ -1,0 +1,39 @@
+shared struct Sh { n: i64 }
+impl Drop for Sh { fn drop(mut ref self) { println(f"  dSh{self.n}") } }
+par struct Pa { n: i64 }
+impl Drop for Pa { fn drop(mut ref self) { println(f"  dPa{self.n}") } }
+struct Pl { n: i64 }
+impl Drop for Pl { fn drop(mut ref self) { println(f"  dPl{self.n}") } }
+shared enum Sen { P(Pl), Q }
+enum Box2[T] { V(T), N }
+enum Pair[A, B] { L(A), R(B) }
+enum Et { A(Sh), B }
+
+fn pg(b: Box2[Sh]) -> Box2[Sh] { return b }
+fn pc(b: Et) -> Et { return b }
+fn eg(b: Box2[Sh]) { println("  eaten") }
+fn ec(b: Et) { println("  eaten") }
+
+fn main() {
+    println("G-bare"); { let ga: Box2[Sh] = Box2.V(Sh { n: 1 }); println("  x") }
+    println("C-bare"); { let ca: Et = Et.A(Sh { n: 1 }); println("  x") }
+    println("G-round"); { let gb = pg(Box2.V(Sh { n: 2 })); println("  x") }
+    println("C-round"); { let cb = pc(Et.A(Sh { n: 2 })); println("  x") }
+    println("G-arm"); { let gc: Box2[Sh] = Box2.V(Sh { n: 3 }); match gc { Box2.V(s) => { println(f"  got{s.n}") } Box2.N => { println("  no") } } }
+    println("C-arm"); { let cc: Et = Et.A(Sh { n: 3 }); match cc { Et.A(s) => { println(f"  got{s.n}") } Et.B => { println("  no") } } }
+    println("G-temp"); { eg(Box2.V(Sh { n: 4 })); println("  x") }
+    println("C-temp"); { ec(Et.A(Sh { n: 4 })); println("  x") }
+    println("G-named"); { let gd: Box2[Sh] = Box2.V(Sh { n: 5 }); eg(gd); println("  x") }
+    println("C-named"); { let cd: Et = Et.A(Sh { n: 5 }); ec(cd); println("  x") }
+    println("G-alias"); { let ge: Box2[Sh] = Box2.V(Sh { n: 6 }); let gf = ge; println("  x") }
+    println("C-alias"); { let ci: Et = Et.A(Sh { n: 6 }); let cj = ci; println("  x") }
+    println("par"); { let pz: Box2[Pa] = Box2.V(Pa { n: 7 }); println("  x") }
+    println("twoparam"); { let tp: Pair[Sh, i64] = Pair.L(Sh { n: 8 }); println("  x") }
+    println("otherarm"); { let oa: Pair[Sh, i64] = Pair.R(9); println("  x") }
+    println("unit"); { let uz: Box2[Sh] = Box2.N; println("  x") }
+    println("string"); { let sz: Box2[String] = Box2.V("aaaaaaaaa"); println("  x") }
+    println("scalar"); { let iz: Box2[i64] = Box2.V(11); println("  x") }
+    println("plain"); { let lz: Box2[Pl] = Box2.V(Pl { n: 13 }); println("  x") }
+    println("sharedenum"); { let ez: Box2[Sen] = Box2.V(Sen.P(Pl { n: 14 })); println("  x") }
+    println("end")
+}

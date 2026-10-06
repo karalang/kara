@@ -1,0 +1,26 @@
+
+enum E { A(Vec[String]), B }
+enum N { A(Vec[i64]), B }
+fn peek(e: ref E) {
+    match e { E.A(v) => { println(v[0]); } E.B => { println("-"); } }
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. The bug: read-only arm, nothing consumes the elements.
+        let e: E = E.A([f"aa{i}", f"bb{i}"]);
+        match e { E.A(v) => { println(v[0]); println(v[1]); } E.B => { println("-"); } }
+        // 2. The `ref`-param spelling of the same ownership.
+        let r: E = E.A([f"rr{i}"]);
+        peek(r);
+        // 3. CONTROL — the arm CONSUMES the elements, so the source's cap is
+        //    zeroed and this drop must stay a no-op (else: double free).
+        let c: E = E.A([f"cc{i}"]);
+        match c { E.A(v) => { for s in v { println(s); } } E.B => { println("-"); } }
+        // 4. CONTROL — scalar elements own no heap under the buffer.
+        let n: N = N.A([i, i]);
+        match n { N.A(v) => { println(v[0]); } N.B => { println("-"); } }
+        i = i + 1;
+    }
+    println("end");
+}

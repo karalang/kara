@@ -1,0 +1,18 @@
+
+fn sum(v: ref Vec[i64]) -> i64 {
+    let mut total = 0;
+    let mut i = 0;
+    while i < v.len() {
+        total = total + v[i];
+        i = i + 1;
+    }
+    total
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    println(sum(v));
+    println(v.len());
+}

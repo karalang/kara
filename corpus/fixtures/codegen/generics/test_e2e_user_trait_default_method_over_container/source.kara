@@ -1,0 +1,18 @@
+
+trait Stat[T: Add] {
+    fn total(ref self) -> T;
+    fn total_or(ref self, fallback: T) -> T { self.total() }
+    fn twice_total(ref self) -> T { self.total() + self.total() }
+}
+impl Stat[i64] for Column[i64] {
+    fn total(ref self) -> i64 { self.sum() }
+}
+impl Stat[i64] for Tensor[i64, [3]] {
+    fn total(ref self) -> i64 { self.sum() }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([4, 5, 6]);
+    let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{c.total_or(0)} {c.twice_total()}");
+    println(f"{t.total_or(0)} {t.twice_total()}");
+}

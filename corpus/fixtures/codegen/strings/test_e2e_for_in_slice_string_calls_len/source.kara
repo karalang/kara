@@ -1,0 +1,8 @@
+
+fn main() {
+    let a: Array[String, 2] = ["alice", "bobby"];
+    let s: Slice[String] = a.as_slice();
+    for elem in s {
+        println(elem.len());
+    }
+}

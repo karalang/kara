@@ -1,0 +1,100 @@
+// LeetCode #32: Longest Valid Parentheses — two-pass counter, O(1) space.
+//
+// Same answer as the stack form, but with NO auxiliary structure — two scalar
+// counters and two passes. The observation: a substring is valid iff its '(' and
+// ')' counts are equal AND no prefix of it ever has more ')' than '('.
+//
+//   Left-to-right: count `left`/`right`. When they tie, the run [reset .. i] is
+//   balanced — candidate length 2·right. When `right` overtakes `left`, the run
+//   can never recover (a ')' with no opener), so reset both to 0. This pass
+//   catches every valid run EXCEPT those that end while still left-heavy, e.g.
+//   "(()" — the counters never re-tie, so the trailing "()" is missed.
+//
+//   Right-to-left fixes exactly that blind spot: scan backwards with the roles
+//   mirrored (now `left` overtaking `right` is the unrecoverable case), so a
+//   left-heavy run measured from its right end re-ties and is counted.
+//
+// The two passes are duals: L→R misses left-heavy tails ("(()"), R→L misses
+// right-heavy tails ("())"); together they cover both. No stack, no dp array —
+// the cleanest space complexity for the problem, the counterpart to the stack
+// form's explicit boundary bookkeeping. Same zero-copy `s.bytes()` scan.
+
+fn longest_valid(s: ref String) -> i64 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut best = 0;
+
+    // Pass 1: left to right. `right > left` is the unrecoverable reset.
+    let mut left = 0;
+    let mut right = 0;
+    let mut i = 0;
+    while i < n {
+        if bytes[i] == b'(' {
+            left = left + 1;
+        } else {
+            right = right + 1;
+        }
+        if left == right {
+            let len = 2 * right;
+            if len > best {
+                best = len;
+            }
+        } else if right > left {
+            left = 0;
+            right = 0;
+        }
+        i = i + 1;
+    }
+
+    // Pass 2: right to left, roles mirrored. `left > right` is the reset.
+    left = 0;
+    right = 0;
+    let mut j = n - 1;
+    while j >= 0 {
+        if bytes[j] == b'(' {
+            left = left + 1;
+        } else {
+            right = right + 1;
+        }
+        if left == right {
+            let len = 2 * left;
+            if len > best {
+                best = len;
+            }
+        } else if left > right {
+            left = 0;
+            right = 0;
+        }
+        j = j - 1;
+    }
+
+    best
+}
+
+fn report(s: ref String) {
+    println(f"\"{s}\" -> {longest_valid(s)}");
+}
+
+fn main() {
+    // Same case battery as longest_valid_parentheses.kara — identical output.
+    report("(()");          // 2
+    report(")()())");       // 4
+    report("");             // 0
+    report("(");            // 0
+    report(")");            // 0
+    report("(((");          // 0
+    report(")))");          // 0
+    report(")(");           // 0
+    report("()");           // 2
+    report("()()");         // 4
+    report("(())");         // 4
+    report("((()))");       // 6
+    report("()(()");        // 2
+    report("()(())");       // 6
+    report("(()())");       // 6
+    report("())(())");      // 4
+    report(")()())()()(");  // 4
+    report("()(()))(()()");  // 6
+    report("((((((");        // 0
+    report("))))))");        // 0
+}

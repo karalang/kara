@@ -1,0 +1,20 @@
+
+fn nan64(z: f64) -> f64 { return z / z; }
+fn main() {
+    let q = nan64(0.0);
+    let c: F64 = F64 { value: q };
+    let r: F64 = F64.from(q);
+    println(f"nan-eq={c == r}");
+    let p: F64 = F64 { value: 2.5 };
+    println(f"display={p}");
+    let mut v: Vec[F64] = Vec.new();
+    v.push(F64 { value: 3.0 });
+    v.push(F64 { value: 1.0 });
+    v.push(F64 { value: 2.0 });
+    v.sort();
+    println(f"sorted={v[0].value} {v[1].value} {v[2].value}");
+    let mut m: Map[F64, i64] = Map.new();
+    let _ = m.insert(c, 1);
+    let _ = m.insert(r, 2);
+    println(f"keylen={m.len()}");
+}

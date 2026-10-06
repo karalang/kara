@@ -1,0 +1,20 @@
+
+fn step(n: i64) -> Result[i64, i64] {
+    if n < 3_i64 { Ok(n) } else { Err(n) }
+}
+fn run() -> Result[i64, i64] {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 5_i64 {
+        let v = step(i)?;
+        total = total + v;
+        i = i + 1;
+    }
+    Ok(total)
+}
+fn main() {
+    match run() {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}

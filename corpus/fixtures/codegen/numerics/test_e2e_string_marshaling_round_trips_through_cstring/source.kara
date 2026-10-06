@@ -1,0 +1,10 @@
+
+fn main() {
+    let s = "hello, " + "world";
+    let cs = s.to_cstring().unwrap();
+    let p = cs.as_ptr();
+    // Safety: `p` points into `cs`'s NUL-terminated buffer, live until main exits.
+    let back = unsafe { CStr.from_ptr(p) }.to_string().unwrap();
+    println(back);
+    println(back.len());
+}

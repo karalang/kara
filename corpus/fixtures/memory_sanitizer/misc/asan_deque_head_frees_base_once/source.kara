@@ -1,0 +1,39 @@
+
+fn main() {
+    let mut n = 0i64;
+    let mut it = 0i64;
+    while it < 200i64 {
+        let mut q: VecDeque[i64] = VecDeque.new();
+        let mut i = 0i64;
+        while i < 64i64 {
+            q.push_back(i);
+            i = i + 1i64;
+        }
+        while not q.is_empty() {
+            match q.pop_front() { Some(_) => {} None => {} }
+        }
+        n = n + 1i64;
+
+        let mut p: VecDeque[i64] = VecDeque.new();
+        let mut j = 0i64;
+        while j < 32i64 {
+            p.push_back(j);
+            j = j + 1i64;
+        }
+        match p.pop_front() { Some(_) => {} None => {} }
+        match p.pop_front() { Some(_) => {} None => {} }
+        n = n + 1i64;
+
+        let mut d: VecDeque[i64] = VecDeque.new();
+        d.push_back(1i64);
+        d.push_back(2i64);
+        while not d.is_empty() {
+            match d.pop_front() { Some(_) => {} None => {} }
+        }
+        d.push_back(3i64);
+        n = n + 1i64;
+
+        it = it + 1i64;
+    }
+    println(n);
+}

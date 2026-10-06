@@ -1,0 +1,36 @@
+fn mk(n: i64) -> Option[Vec[String]] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"abcdefghijklmnopqrstuvwxyz{n}");
+    return Some(v)
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut i = 0;
+    while i < 20 {
+        let o = mk(i + n);
+        println(f"call {o}");
+        i = i + 1;
+    }
+
+    let mut w: Vec[String] = Vec.new();
+    w.push(f"0123456789012345678901234567890123456789");
+    let ov: Option[Vec[String]] = Some(w);
+    println(f"var  {ov}");
+    println(f"var  {ov}");
+    match ov {
+        Some(v) => { println(f"len  {v.len()}"); }
+        None => { println("len  none"); }
+    }
+
+    let mut m: Map[String, String] = Map.new();
+    m.insert(f"kkkkkkkkkkkkkkkkkkkkkkkk", f"vvvvvvvvvvvvvvvvvvvvvvvv");
+    let om: Option[Map[String, String]] = Some(m);
+    println(f"map  {om}");
+
+    let mut e: Vec[String] = Vec.new();
+    e.push(f"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    let re: Result[i64, Vec[String]] = Err(e);
+    println(f"res  {re}");
+    println("end");
+}

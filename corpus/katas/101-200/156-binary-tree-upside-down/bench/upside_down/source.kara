@@ -1,0 +1,80 @@
+// Benchmark workload for LeetCode #156 — Binary Tree Upside Down.
+//
+// Build-once + punch. A left-spine tree of L spine nodes, each carrying one leaf
+// right child (N = 2L nodes total), lives in a flat index pool (left[]/right[]/
+// val[], -1 = null). Node values are filled once by a deterministic 32-bit LCG
+// (overflow-safe in i64). Each pass resets the spine links, punches one spine
+// node's right child to a different leaf (so the flip's input — and result —
+// differ every pass and cannot be hoisted), runs the #156 iterative pointer
+// rewire `flip` down the spine, then folds the whole resulting structure
+// (values + both link arrays + new root) into a rolling checksum (loop-carried
+// multiply chain — does NOT vectorize). Sink = the accumulated checksum over all
+// passes.
+
+fn flip(left: mut ref Vec[i64], right: mut ref Vec[i64], root: i64) -> i64 {
+    let mut cur = root;
+    let mut prev = -1;
+    let mut prev_right = -1;
+    while cur != -1 {
+        let next = left[cur];
+        left[cur] = prev_right;
+        prev_right = right[cur];
+        right[cur] = prev;
+        prev = cur;
+        cur = next;
+    }
+    return prev;
+}
+
+fn main() {
+    let l = 50000;
+    let n = 2 * l;
+    let passes = 1100;
+
+    let mut val: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut c = 0;
+    while c < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        val.push(state);
+        c = c + 1;
+    }
+
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < n {
+        left.push(-1);
+        right.push(-1);
+        z = z + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        // Reset the spine links (leaves stay -1; flip never writes them).
+        let mut i = 0;
+        while i < l {
+            if i < l - 1 { left[i] = i + 1; } else { left[i] = -1; }
+            right[i] = l + i;
+            i = i + 1;
+        }
+        // Punch: redirect one spine node's right child to a different leaf.
+        let pp = p % l;
+        right[pp] = l + ((p * 7 + 3) % l);
+
+        let new_root = flip(mut left, mut right, 0);
+
+        // Fold the resulting structure into a rolling checksum.
+        let mut chk = 0;
+        let mut j = 0;
+        while j < n {
+            chk = (chk * 1103515245 + val[j] * 3 + left[j] + 2 + right[j] + 5) & 2147483647;
+            j = j + 1;
+        }
+        chk = (chk * 1103515245 + new_root + 1) & 2147483647;
+        sink = (sink + chk) & 2147483647;
+        p = p + 1;
+    }
+    println(sink);
+}

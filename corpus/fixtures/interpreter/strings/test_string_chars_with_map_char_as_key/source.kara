@@ -1,0 +1,11 @@
+fn main() {
+            let mut last_idx: Map[char, i64] = Map.new();
+            let mut i = 0i64;
+            for c in "abca".chars() {
+                last_idx.insert(c, i);
+                i = i + 1;
+            }
+            match last_idx.get('a') { Some(v) => println(v), None => println(-1) }
+            match last_idx.get('b') { Some(v) => println(v), None => println(-1) }
+            match last_idx.get('c') { Some(v) => println(v), None => println(-1) }
+        }

@@ -1,0 +1,132 @@
+// LeetCode #30: Substring with Concatenation of All Words — brute force.
+//
+// `words` holds K strings, all of the same length L; a valid window is a
+// length-(L·K) slice of `s` that is the concatenation of every word exactly
+// once, in any order, with no gaps. Return the start index of every such
+// window. (Example: s = "barfoothefoobarman", words = ["foo","bar"] → 0, 9.)
+//
+// Brute force: build a `need` multiset (word → required count) once, then try
+// every start `i` in `0 ..= n - L·K`. At each start, chop the window into K
+// consecutive L-byte pieces and tally them into a fresh `seen` map, bailing
+// the instant a piece is (a) not in `need` or (b) already seen more times
+// than `need` allows. Because the window holds exactly K pieces and the
+// counts must sum to K, "no piece overflowed" is equivalent to "every word
+// matched exactly once" — so a window that survives all K pieces is a hit.
+// O((n − L·K)·K) map operations, O(L·K) extra space for `seen`. The
+// sliding_window.kara variant reuses work across starts for O(n).
+//
+// Kāra notes:
+//   * `words: Slice[String]` is the zero-copy read-only view (a `Vec[String]`
+//     argument coerces to it at the call site) — the corpus convention for a
+//     sequence parameter, shared with #1/#15. Indexed access `words[idx]` is
+//     O(1) and yields the element `String` directly, so the `need` map is
+//     keyed on the words themselves (`words[idx].clone()`), no substring
+//     construction.
+//   * `s[start .. start + wl]` is a String *slice* used directly as a
+//     `Map[String, i64]` key (design.md § String slicing). Written inline in
+//     the key slot — rather than `let piece = s[…]` — it lowers to a borrowed,
+//     allocation-free view into `s` for the `get`s and a deep-copy-on-fresh-key
+//     for `insert`, so the whole kata is map-lookup-driven with no per-window
+//     allocation. See README § "Why the slice is written inline".
+//   * All counts live in `i64`; the `req`/`cur` reads default a missing key to
+//     0 / −1 via `match … { Some(c) => c, None => … }`.
+
+fn find_substring(s: ref String, words: Slice[String]) -> Vec[i64] {
+    let mut result: Vec[i64] = Vec.new();
+    let k = words.len();
+    if k == 0 {
+        return result;
+    }
+    let wl = words[0].len();
+    let total = wl * k;
+    let n = s.len();
+    if wl == 0 or total > n {
+        return result;
+    }
+
+    // Required multiset of words. Keys are the words themselves — no
+    // substring of `s` is built here.
+    let mut need: Map[String, i64] = Map.new();
+    for idx in 0..k {
+        let cur = match need.get(words[idx]) {
+            Some(c) => c,
+            None => 0,
+        };
+        need.insert(words[idx].clone(), cur + 1);
+    }
+
+    let mut i = 0;
+    while i + total <= n {
+        let mut seen: Map[String, i64] = Map.new();
+        let mut j = 0;
+        let mut ok = true;
+        while j < k {
+            let start = i + j * wl;
+            // `s[start..start+wl]` is written inline at each map-key site (not
+            // bound to a `let piece = …`): a slice expression in key position
+            // lowers to a borrowed `{ptr,len,cap=0}` view into `s` — no
+            // allocation for the `get`s, and `insert` deep-copies only on a
+            // fresh key. See README § "Why the slice is written inline".
+            let req = match need.get(s[start..start + wl]) {
+                Some(c) => c,
+                None => -1,
+            };
+            if req < 0 {
+                // Piece is not one of the words — this start can't work.
+                ok = false;
+                j = k;
+            } else {
+                let cur = match seen.get(s[start..start + wl]) {
+                    Some(c) => c,
+                    None => 0,
+                };
+                if cur + 1 > req {
+                    // Saw this word more often than `need` allows.
+                    ok = false;
+                    j = k;
+                } else {
+                    seen.insert(s[start..start + wl], cur + 1);
+                    j = j + 1;
+                }
+            }
+        }
+        if ok {
+            result.push(i);
+        }
+        i = i + 1;
+    }
+    result
+}
+
+fn report(s: ref String, words: Slice[String]) {
+    let r = find_substring(s, words);
+    println(r.len());
+    for idx in r {
+        println(idx);
+    }
+}
+
+fn main() {
+    // Two-plus lines per case: the count, then each start index (ascending —
+    // the scan is left-to-right). See README § Output format.
+    let w1: Vec[String] = ["foo", "bar"];
+    report("barfoothefoobarman", w1); // 2: 0 9
+
+    let w2: Vec[String] = ["word", "good", "best", "word"];
+    report("wordgoodgoodgoodbestword", w2); // 0  ("word" needed twice, only one available run)
+
+    let w3: Vec[String] = ["bar", "foo", "the"];
+    report("barfoofoobarthefoobarman", w3); // 3: 6 9 12
+
+    let w4: Vec[String] = ["aa", "aa"];
+    report("aaaaaa", w4); // 3: 0 1 2  (overlapping windows of "aaaa")
+
+    let w5: Vec[String] = ["a", "b", "a"];
+    report("abababab", w5); // 3: 0 2 4  (need a:2, b:1)
+
+    let w6: Vec[String] = ["a"];
+    report("a", w6); // 1: 0
+
+    let w7: Vec[String] = ["ab", "ba"];
+    report("abbaab", w7); // 2: 0 2  (windows "abba" = ab+ba and "baab" = ba+ab)
+}

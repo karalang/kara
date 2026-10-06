@@ -1,0 +1,7 @@
+
+fn bump(m: mut ref Mutex[i64], n: i64) { lock m x { x = x + n; } }
+fn main() {
+    let mut m = Mutex.new(10);
+    bump(mut m, 5);
+    lock m v { println(v); }
+}

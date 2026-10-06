@@ -1,0 +1,6 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let n = v.iter().flat_map(|n| { let inner = [n, n, n]; inner.iter() }).count();
+    println(n);
+}

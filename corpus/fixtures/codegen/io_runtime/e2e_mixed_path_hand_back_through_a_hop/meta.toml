@@ -1,0 +1,13 @@
+source = "tests/codegen/io_runtime.rs::e2e_mixed_path_hand_back_through_a_hop"
+dedup_of = ["tests/interpreter/io_runtime.rs::test_mixed_path_hand_back_through_a_hop"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

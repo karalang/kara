@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut i = 0i64;
+    let mut hits = 0i64;
+    while i < 40i64 {
+        let mut p = String.from("^a");
+        p.push_str(".c$");
+        let re = Regex.compile(p).unwrap();
+        if re.is_match("abc") { hits = hits + 1i64; }
+        if re.is_match("xyz") { hits = hits + 100i64; }
+        i = i + 1;
+    }
+    println(f"{hits}");
+}

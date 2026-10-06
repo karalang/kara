@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut chars: Vec[char] = Vec.new();
+    chars.push('X');
+    chars.push('Y');
+    println(chars[0]);
+    println(f"{chars[1]}");
+    let c = chars[0];
+    println(c);
+    println(f"{c}");
+}

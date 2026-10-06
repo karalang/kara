@@ -1,0 +1,5 @@
+
+fn main() {
+    let big: f64 = 1e30;
+    println(big.trunc_to_i32());
+}

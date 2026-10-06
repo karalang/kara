@@ -1,0 +1,11 @@
+
+fn main() {
+    let s = "ab\u{0}cd";
+    match s.to_cstring() {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            NulError.InteriorNul => println("INTERIOR_NUL"),
+            NulError.Other(m) => println(m),
+        },
+    }
+}

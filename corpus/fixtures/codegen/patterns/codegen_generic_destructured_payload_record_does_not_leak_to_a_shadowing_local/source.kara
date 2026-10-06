@@ -1,0 +1,6 @@
+fn show[T: Display](x: Option[T]) {
+    match x { Some(t) => { println(f"{t}") } None => { println("n") } }
+    let t: i64 = 42;
+    println(f"{t}")
+}
+fn main() { let a: Array[i64, 2] = [1, 2]; show(Some(a)); show(Some(9)) }

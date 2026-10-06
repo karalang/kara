@@ -1,0 +1,6 @@
+
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let s: i64 = v.iter().fold(0, |acc, x| acc + x);
+    println(s);
+}

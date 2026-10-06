@@ -1,0 +1,5 @@
+
+fn main() {
+    assert_eq("hello", "hello")
+    println(1)
+}

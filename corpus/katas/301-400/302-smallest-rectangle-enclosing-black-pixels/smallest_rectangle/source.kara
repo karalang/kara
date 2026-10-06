@@ -1,0 +1,184 @@
+// LeetCode 302 — Smallest Rectangle Enclosing Black Pixels.
+//
+// A binary image: `1` is a black pixel, `0` is white. EVERY BLACK PIXEL IS
+// CONNECTED to every other (4-directionally), and you are handed the
+// coordinates of one of them. Return the area of the smallest axis-aligned
+// rectangle that encloses all the black pixels.
+//
+//     0 0 1 0        the black pixels span rows 0..2 and cols 1..2,
+//     0 1 1 0        so the rectangle is 3 x 2 and the area is 6
+//     0 1 0 0
+//
+// SCANNING THE WHOLE IMAGE IS THE OBVIOUS ANSWER AND IT IS O(m*n). Track the
+// min and max row and column over every black pixel you meet. That is
+// `smallest_rectangle_scan.kara`, it is the definition transcribed, and for a
+// dense image it is also the fastest thing here — a linear pass with perfect
+// locality beats anything clever.
+//
+// THE ★ MECHANISM: THE CONNECTIVITY PRECONDITION MAKES THE PROJECTIONS
+// CONTIGUOUS. Project the black pixels onto the row axis: "does row r contain
+// any black pixel?" Because the pixels form ONE connected region, the set of
+// rows answering yes is an unbroken INTERVAL — you cannot have a black row, a
+// white row, and another black row, because the region would have to jump the
+// gap. The same holds for columns.
+//
+//     rows:  . . # # # . . .        contiguous, so binary-searchable
+//                ↑seed
+//
+// A contiguous interval containing a known interior point (the seed pixel) is
+// exactly what binary search wants. Four searches — first black row at or
+// above the seed, first white row below it, and the two column twins — give
+// the four edges:
+//
+//     top    = first r in [0, x]    with a black pixel
+//     bottom = first r in (x, h]    with NO black pixel
+//     left   = first c in [0, y]    with a black pixel
+//     right  = first c in (y, w]    with NO black pixel
+//
+// Each probe costs a full row (or column) scan, and there are log-many probes,
+// so the total is O(m log n + n log m) against the scan's O(m*n).
+//
+// WHEN THAT IS ACTUALLY A WIN IS A MEASUREMENT, NOT A THEOREM. The binary
+// search reads whole rows per probe and jumps around the image doing it; the
+// scan reads every pixel once, in order, and vectorises. For a SPARSE image in
+// a large frame the search wins by the asymptotics. For a dense one it can
+// lose outright. `bench/` is where that gets settled rather than asserted.
+//
+// THE PRECONDITION IS LOAD-BEARING, AND THE DIFFERENTIAL PROVES IT. Feed a
+// DISCONNECTED image and this arm returns the wrong answer, because binary
+// search silently assumes the interval it is bisecting has no holes. That is
+// not a bug in the code — it is the hypothesis of the theorem being necessary,
+// and `differential.kara` P5 demonstrates it deliberately.
+
+struct Image {
+    data: Vec[u8],
+    w: i64,
+    h: i64,
+}
+
+fn at(img: ref Image, r: i64, c: i64) -> u8 {
+    return img.data[r * img.w + c];
+}
+
+fn row_has_black(img: ref Image, r: i64) -> bool {
+    let mut c = 0;
+    while c < img.w {
+        if at(img, r, c) == 1u8 {
+            return true;
+        }
+        c = c + 1;
+    }
+    return false;
+}
+
+fn col_has_black(img: ref Image, c: i64) -> bool {
+    let mut r = 0;
+    while r < img.h {
+        if at(img, r, c) == 1u8 {
+            return true;
+        }
+        r = r + 1;
+    }
+    return false;
+}
+
+// First row in [lo, hi) that has a black pixel. The caller guarantees the
+// answer exists in range, which the seed pixel is what establishes.
+fn first_black_row(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if row_has_black(img, mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    return lo;
+}
+
+// First row in [lo, hi) that has NO black pixel — one past the last black row.
+fn first_white_row(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if row_has_black(img, mid) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+fn first_black_col(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if col_has_black(img, mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    return lo;
+}
+
+fn first_white_col(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if col_has_black(img, mid) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+fn min_area(img: ref Image, x: i64, y: i64) -> i64 {
+    let top = first_black_row(img, 0, x + 1);
+    let bottom = first_white_row(img, x + 1, img.h);
+    let left = first_black_col(img, 0, y + 1);
+    let right = first_white_col(img, y + 1, img.w);
+    return (bottom - top) * (right - left);
+}
+
+fn image_of(rows: Vec[String]) -> Image {
+    let h = rows.len();
+    let w = if h > 0 { rows[0].len() } else { 0 };
+    let mut data: Vec[u8] = Vec.new();
+    let mut r = 0;
+    while r < h {
+        let bytes = rows[r].bytes();
+        let mut c = 0;
+        while c < w {
+            if bytes[c] == 49u8 {
+                data.push(1u8);
+            } else {
+                data.push(0u8);
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return Image { data: data, w: w, h: h };
+}
+
+fn report(rows: Vec[String], x: i64, y: i64) {
+    let img = image_of(rows);
+    println(f"seed ({x},{y}) -> area {min_area(img, x, y)}");
+}
+
+fn main() {
+    report(["0010", "0110", "0100"], 0, 2);   // 6
+    report(["1"], 0, 0);                       // 1
+    report(["11", "11"], 1, 1);                // 4
+    report(["0000", "0100", "0000"], 1, 1);    // 1
+    report(["111"], 0, 1);                     // 3
+}

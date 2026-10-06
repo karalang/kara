@@ -1,0 +1,61 @@
+shared struct Node { s: String }
+struct Holder { v: Node }
+struct Plain { t: String }
+struct Box[T] { v: T }
+
+fn mk(i: i64, n: i64) -> Node {
+    return Node { s: f"crp-{i}-padded-out-to-force-a-real-heap-buffer-{n}" };
+}
+
+fn score(x: Node) -> i64 {
+    let mut r: i64 = x.s.len();
+    if x.s.contains("padded") { r = r + 1i64; }
+    return r;
+}
+
+// CALLER-RETAINS regime: `Holder` transitively owns a shared field, so the
+// callee registers no drop and the caller keeps its ref.
+fn ret_byval(b: Holder) -> Node { return b.v; }
+fn tail_byval(b: Holder) -> Node { b.v }
+fn ret_ref(b: ref Holder) -> Node { return b.v; }
+
+// OWNED-BY-TRANSFER regime, the control an over-inc would turn into a leak:
+// `Box[Node]`'s gate is name-only, so it is owned by transfer and neutralized
+// via the source null-store instead.
+fn ret_generic(b: Box[Node]) -> Node { return b.v; }
+
+// A no-shared struct on the transfer path, unrelated to rc accounting.
+fn ret_plain(p: Plain) -> String { return p.t; }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40i64 {
+        // (a) by-value param, explicit return — the reported shape
+        let h1 = Holder { v: mk(i, n) };
+        let x1 = ret_byval(h1);
+        acc = acc + score(x1);
+        // (b) by-value param, TAIL spelling — a separate code path
+        let h2 = Holder { v: mk(i, n) };
+        let x2 = tail_byval(h2);
+        acc = acc + score(x2);
+        // (c) `ref` param — caller-retains by definition, and it reproduced too
+        let h3 = Holder { v: mk(i, n) };
+        let x3 = ret_ref(h3);
+        acc = acc + score(x3);
+        // (d) CONTROL, owned-by-transfer: an inc here would LEAK
+        let b4 = Box { v: mk(i, n) };
+        let x4 = ret_generic(b4);
+        acc = acc + score(x4);
+        // (e) CONTROL, a caller-retains struct whose field is NEVER handed out
+        let h5 = Holder { v: mk(i, n) };
+        acc = acc + 1i64;
+        // (f) CONTROL, a plain heap field on the transfer path
+        let p6 = Plain { t: f"plain-{i}-padded-out-to-force-a-real-heap-{n}" };
+        let s6 = ret_plain(p6);
+        acc = acc + s6.len();
+        i = i + 1i64;
+    }
+    println(acc);
+}

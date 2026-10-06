@@ -1,0 +1,97 @@
+// LeetCode 281 bench kernel — the cursor iterator, drained repeatedly.
+//
+// K MATTERS MORE THAN N HERE, which is what makes this worth benching at all.
+// Both iterators are O(1) amortized per element, but the ★ cursor version's
+// `settle` scans forward past exhausted lists — bounded by k, but only O(1) when
+// few lists are dead. As lists drop out at different rounds that scan lengthens,
+// so the interesting axis is MANY LISTS OF UNEQUAL LENGTH, not one long list.
+//
+// So: k = 64 lists whose lengths vary widely, drained end to end, repeated. Late
+// in each drain most lists are exhausted and `settle` walks past them, which is
+// exactly the cost the queue formulation exists to avoid — and the reason the
+// two are worth comparing rather than just timing one.
+//
+// BUILD ONCE, PUNCH MANY TIMES: the lists are constructed once and each round
+// re-drains them. Draining does not mutate the lists — only the iterator's own
+// cursors — so no refresh is needed, which is the opposite of kata 280 where the
+// reorder was in place and the refresh was load-bearing.
+//
+// THE SINK IS POSITION-WEIGHTED over the drained sequence. Interleaving is an
+// ordering problem, so a sum would be invariant under every reordering bug.
+//
+// NO STRUCT HERE, unlike the kata's solvers. A struct field is OWNED, so a
+// `Zigzag` holding the lists would have to take them by value and every round
+// would copy 64 lists before iterating — the bench would measure copying. The
+// state is three locals over a borrowed `ref Vec[Vec[i64]]` instead, which is
+// the same algorithm with the ownership arranged for repetition rather than for
+// the API the problem describes.
+
+fn drain_sink(lists: ref Vec[Vec[i64]]) -> i64 {
+    let k = lists.len();
+    let mut cursor: Vec[i64] = Vec.new();
+    let mut remaining = 0;
+    let mut i = 0;
+    while i < k {
+        cursor.push(0);
+        remaining = remaining + lists[i].len();
+        i = i + 1;
+    }
+
+    let mut turn = 0;
+    let mut tried = 0;
+    while tried < k and cursor[turn] >= lists[turn].len() {
+        turn = (turn + 1) % k;
+        tried = tried + 1;
+    }
+
+    let mut h = 0;
+    let mut pos = 1;
+    while remaining > 0 {
+        let t = turn;
+        let v = lists[t][cursor[t]];
+        cursor[t] = cursor[t] + 1;
+        remaining = remaining - 1;
+        h = (h * 31 + v * pos) % 1000000007;
+        pos = pos + 1;
+        // advance to the next list that still has elements, bounded by k
+        turn = (t + 1) % k;
+        let mut scan = 0;
+        while scan < k and cursor[turn] >= lists[turn].len() {
+            turn = (turn + 1) % k;
+            scan = scan + 1;
+        }
+    }
+    return h;
+}
+
+fn main() {
+    let k = 64;
+    let rounds = 2200;
+
+    let mut lists: Vec[Vec[i64]] = Vec.new();
+    let mut seed = 20260819;
+    let mut i = 0;
+    while i < k {
+        // lengths spread over three orders of magnitude, so lists die at very
+        // different rounds and `settle` has real work to do late in the drain
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let len = 1 + (seed / 7) % 2000;
+        let mut v: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < len {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            v.push(seed % 100003);
+            j = j + 1;
+        }
+        lists.push(v);
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        sink = (sink + drain_sink(lists)) % 1000000007;
+        r = r + 1;
+    }
+    println(sink);
+}

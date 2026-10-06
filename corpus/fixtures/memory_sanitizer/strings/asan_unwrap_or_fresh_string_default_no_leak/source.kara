@@ -1,0 +1,19 @@
+
+fn opt(i: i64) -> Option[String] {
+    if i % 2 == 0 { Some("even-value".to_string()) } else { None }
+}
+fn res(i: i64) -> Result[String, String] {
+    if i % 3 == 0 { Ok("ok-value".to_string()) } else { Err("e".to_string()) }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let a = opt(i).unwrap_or("odd-default".to_string());
+        total = total + (a.len() as i64);
+        let b = res(i).unwrap_or("res-default".to_string());
+        total = total + (b.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}

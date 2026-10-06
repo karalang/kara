@@ -1,0 +1,8 @@
+
+trait Default {
+    fn default() -> Self;
+}
+
+fn main() {
+    let x = default();
+}

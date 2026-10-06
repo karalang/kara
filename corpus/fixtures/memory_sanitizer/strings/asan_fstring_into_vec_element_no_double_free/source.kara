@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut v: Vec[String] = [f"aa-padding", f"bb-padding"];
+    v[0] = f"zz-padding";
+    println(v[0]);
+    println(v[1]);
+}

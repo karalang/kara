@@ -1,0 +1,16 @@
+
+fn make_grid(n: i64) -> Vec[Vec[i64]] {
+    let mut g: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    g[0].push(99);
+    g[0].push(11);
+    g[2].push(42);
+    g
+}
+fn main() {
+    let f: Vec[Vec[i64]] = make_grid(3);
+    println(f.len());
+    println(f[0].len());
+    println(f[0][0]);
+    println(f[0][1]);
+    println(f[2][0]);
+}

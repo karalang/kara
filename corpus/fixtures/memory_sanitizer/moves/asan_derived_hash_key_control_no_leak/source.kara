@@ -1,0 +1,12 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    let mut i = 0;
+    while i < 40 {
+        m.insert(Item { id: i, name: f"key-{i}-padding-padding-padding" }, i);
+        i = i + 1;
+    }
+    println(m.len());
+}

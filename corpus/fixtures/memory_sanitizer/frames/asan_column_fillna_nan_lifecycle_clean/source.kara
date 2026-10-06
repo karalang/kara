@@ -1,0 +1,16 @@
+
+fn main() {
+    let z: f64 = 0.0;
+    let nan: f64 = z / z;
+    let mut c: Column[f64] = Column.new();
+    c.push(1.5);
+    c.push_null();
+    c.push(nan);
+    c.push(4.0);
+    let a = c.fillna(0.0);
+    println(a.null_count());
+    let b = c.fillna(0.0, treat_nan_as_null: true);
+    println(b.null_count());
+    // receiver still usable (borrowed, not consumed).
+    println(c.null_count());
+}

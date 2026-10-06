@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut log: Vec[i64] = Vec.new();
+    defer { println("1"); }
+    defer { println("2"); }
+    defer { println("3"); }
+    log.push(99);
+    println("0");
+}

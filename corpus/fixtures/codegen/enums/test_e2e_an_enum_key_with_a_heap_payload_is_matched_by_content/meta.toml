@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::test_e2e_an_enum_key_with_a_heap_payload_is_matched_by_content"
+dedup_of = ["tests/interpreter/enums.rs::an_enum_key_with_a_heap_payload_is_matched_by_content"]
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

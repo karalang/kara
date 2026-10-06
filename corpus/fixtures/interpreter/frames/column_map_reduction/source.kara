@@ -1,0 +1,17 @@
+
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let d = c.map(|x| x * 2);
+    println(f"{d.sum()}");
+
+    let k: i64 = 100;
+    let e = c.map(|x| x + k);
+    println(f"{e.sum()}");
+
+    let mut n: Column[i64] = Column.new();
+    n.push(10);
+    n.push_null();
+    n.push(20);
+    let m = n.map(|x| x * 3);
+    println(f"{m.sum()} {m.valid_count()} {m.len()}");
+}

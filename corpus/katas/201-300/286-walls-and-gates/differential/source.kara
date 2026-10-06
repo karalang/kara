@@ -1,0 +1,402 @@
+// LeetCode 286 — the differential harness.
+//
+// Generates 1296 grids across three deliberately different wall/gate mixes and
+// runs all four solvers on every one of them, comparing against the definitional
+// oracle (`walls_and_gates_brute.kara`: one BFS per room).
+//
+// WHAT IT COMPARES, AND WHY IT IS NOT JUST THE GRID. Two things:
+//
+//   1. THE FILLED GRID, against the per-room oracle. The answer is unique — the
+//      distance to the nearest gate is a fact about the input, not a choice — so
+//      equality is the right test here, unlike katas 278 and 280 where a
+//      validator was needed.
+//
+//   2. THE RELAXATION COUNT, against a bound derived from the oracle. The BFS,
+//      the sum-type BFS and the oracle each write a reachable room EXACTLY ONCE,
+//      so all three must equal the reachable-room count. The DFS relaxes, so it
+//      is only bounded below by that count. This is the property an answer-only
+//      oracle cannot see: an implementation whose visited-marking is broken can
+//      still produce the right grid, and will produce it while doing a
+//      multiple of the work.
+//
+// The measured spread makes the second check worth having: across the whole run
+// the BFS performs 6373 relaxations and the DFS 25075 — 3.9x — for byte-identical
+// output on all 1296 grids.
+//
+// THE UNREACHABLE COUNT IS THE THIRD NUMBER. 659 of the 1296 grids contain at
+// least one room no gate can reach, 2731 such cells in total. A grid where every
+// room gets an answer never exercises the "stays INF" path, so the maze shape
+// exists specifically to keep that number large. If it ever dropped to zero, the
+// generator would have stopped testing the case, and the harness would be
+// quietly weaker while still reporting green.
+//
+// A Python mirror of this file (`differential.py`) generates the same grids from
+// the same LCG and runs the same four solvers; the two outputs must match line
+// for line.
+
+fn inf() -> i64 {
+    return 2147483647;
+}
+
+// ---- the shared generator ---------------------------------------------------
+
+// The LCG both harnesses run. `s * 1103515245` peaks near 2^61 for s < 2^31, so
+// it stays inside i64 — worth checking rather than assuming, since Kara traps on
+// overflow instead of wrapping and a generator that traps mid-run would look
+// like a solver bug.
+struct Rng {
+    s: i64,
+}
+
+fn next(rng: mut ref Rng) -> i64 {
+    rng.s = (rng.s * 1103515245 + 12345) % 2147483648;
+    return rng.s;
+}
+
+fn below(rng: mut ref Rng, n: i64) -> i64 {
+    return next(rng) % n;
+}
+
+// One grid. `shape` picks the wall/gate mix:
+//   0  ordinary   — some walls, a few gates
+//   1  maze       — dense walls, scarce gates, so rooms go unreached
+//   2  gate-rich  — many sources, short distances, waves colliding everywhere
+fn make_grid(rng: mut ref Rng, r: i64, c: i64, shape: i64) -> Vec[i64] {
+    let mut wall_pct = 25;
+    let mut gate_pct = 12;
+    if shape == 1 { wall_pct = 45; gate_pct = 5; }
+    if shape == 2 { wall_pct = 10; gate_pct = 30; }
+
+    let mut g: Vec[i64] = [];
+    let mut i = 0;
+    while i < r * c {
+        let roll = below(rng, 100);
+        if roll < wall_pct { g.push(-1); }
+        else if roll < wall_pct + gate_pct { g.push(0); }
+        else { g.push(inf()); }
+        i = i + 1;
+    }
+    return g;
+}
+
+// ---- solver 1: multi-source BFS ---------------------------------------------
+
+fn bfs(g: mut ref Vec[i64], r: i64, c: i64) -> i64 {
+    let mut relax = 0;
+    let mut q = VecDeque.new();
+
+    let mut i = 0;
+    while i < r * c {
+        if g[i] == 0 { q.push_back(i); }
+        i = i + 1;
+    }
+
+    loop {
+        match q.pop_front() {
+            None => { break; },
+            Some(cell) => {
+                let row = cell / c;
+                let col = cell % c;
+                let d = g[cell] + 1;
+                if row > 0 { bfs_relax(g, cell - c, d, mut q, mut relax); }
+                if row < r - 1 { bfs_relax(g, cell + c, d, mut q, mut relax); }
+                if col > 0 { bfs_relax(g, cell - 1, d, mut q, mut relax); }
+                if col < c - 1 { bfs_relax(g, cell + 1, d, mut q, mut relax); }
+            }
+        }
+    }
+    return relax;
+}
+
+fn bfs_relax(g: mut ref Vec[i64], n: i64, d: i64, q: mut ref VecDeque[i64], relax: mut ref i64) {
+    if g[n] == inf() {
+        g[n] = d;
+        relax = relax + 1;
+        q.push_back(n);
+    }
+}
+
+// ---- solver 2: the same BFS over a sum type ---------------------------------
+
+enum Cell {
+    Wall,
+    Reached(i64),
+    Room,
+}
+
+fn distance_at(cells: ref Vec[Cell], i: i64) -> i64 {
+    match cells[i] {
+        Reached(d) => { return d; }
+        Wall => { return -1; }
+        Room => { return -1; }
+    }
+}
+
+fn is_unreached_room(cells: ref Vec[Cell], i: i64) -> bool {
+    match cells[i] {
+        Room => { return true; }
+        Wall => { return false; }
+        Reached(_) => { return false; }
+    }
+}
+
+fn enum_solver(g: mut ref Vec[i64], r: i64, c: i64) -> i64 {
+    let mut cells: Vec[Cell] = [];
+    let mut i = 0;
+    while i < g.len() {
+        if g[i] == -1 { cells.push(Cell.Wall); }
+        else if g[i] == inf() { cells.push(Cell.Room); }
+        else { cells.push(Cell.Reached(g[i])); }
+        i = i + 1;
+    }
+
+    let mut relax = 0;
+    let mut q = VecDeque.new();
+    let mut k = 0;
+    while k < r * c {
+        if distance_at(cells, k) == 0 { q.push_back(k); }
+        k = k + 1;
+    }
+
+    loop {
+        match q.pop_front() {
+            None => { break; },
+            Some(cell) => {
+                let row = cell / c;
+                let col = cell % c;
+                let d = distance_at(cells, cell) + 1;
+                if row > 0 { enum_relax(mut cells, cell - c, d, mut q, mut relax); }
+                if row < r - 1 { enum_relax(mut cells, cell + c, d, mut q, mut relax); }
+                if col > 0 { enum_relax(mut cells, cell - 1, d, mut q, mut relax); }
+                if col < c - 1 { enum_relax(mut cells, cell + 1, d, mut q, mut relax); }
+            }
+        }
+    }
+
+    let mut j = 0;
+    while j < cells.len() {
+        match cells[j] {
+            Wall => { g[j] = -1; }
+            Reached(d) => { g[j] = d; }
+            Room => { g[j] = inf(); }
+        }
+        j = j + 1;
+    }
+    return relax;
+}
+
+fn enum_relax(cells: mut ref Vec[Cell], n: i64, d: i64, q: mut ref VecDeque[i64], relax: mut ref i64) {
+    if is_unreached_room(cells, n) {
+        cells[n] = Cell.Reached(d);
+        relax = relax + 1;
+        q.push_back(n);
+    }
+}
+
+// ---- solver 3: DFS relaxation -----------------------------------------------
+
+fn flood(g: mut ref Vec[i64], r: i64, c: i64, cell: i64, d: i64, relax: mut ref i64) {
+    if g[cell] == -1 { return; }
+    if g[cell] < d { return; }
+    g[cell] = d;
+    relax = relax + 1;
+
+    let row = cell / c;
+    let col = cell % c;
+    if row > 0 { flood(g, r, c, cell - c, d + 1, relax); }
+    if row < r - 1 { flood(g, r, c, cell + c, d + 1, relax); }
+    if col > 0 { flood(g, r, c, cell - 1, d + 1, relax); }
+    if col < c - 1 { flood(g, r, c, cell + 1, d + 1, relax); }
+}
+
+fn dfs(g: mut ref Vec[i64], r: i64, c: i64) -> i64 {
+    let mut relax = 0;
+    let mut i = 0;
+    while i < r * c {
+        if g[i] == 0 {
+            let row = i / c;
+            let col = i % c;
+            if row > 0 { flood(g, r, c, i - c, 1, mut relax); }
+            if row < r - 1 { flood(g, r, c, i + c, 1, mut relax); }
+            if col > 0 { flood(g, r, c, i - 1, 1, mut relax); }
+            if col < c - 1 { flood(g, r, c, i + 1, 1, mut relax); }
+        }
+        i = i + 1;
+    }
+    return relax;
+}
+
+// ---- solver 4: one BFS per room, the definitional oracle --------------------
+
+fn step(g: ref Vec[i64], seen: mut ref Vec[bool], q: mut ref VecDeque[i64], n: i64, d: i64) {
+    if g[n] == -1 { return; }
+    if seen[n] { return; }
+    seen[n] = true;
+    q.push_back(n);
+    q.push_back(d);
+}
+
+fn nearest_gate(g: ref Vec[i64], r: i64, c: i64, start: i64) -> i64 {
+    let mut seen: Vec[bool] = [];
+    let mut i = 0;
+    while i < r * c {
+        seen.push(false);
+        i = i + 1;
+    }
+
+    let mut q = VecDeque.new();
+    q.push_back(start);
+    q.push_back(0);
+    seen[start] = true;
+
+    loop {
+        match q.pop_front() {
+            None => { break; },
+            Some(cell) => {
+                match q.pop_front() {
+                    None => { break; },
+                    Some(d) => {
+                        if g[cell] == 0 { return d; }
+                        let row = cell / c;
+                        let col = cell % c;
+                        if row > 0 { step(g, mut seen, mut q, cell - c, d + 1); }
+                        if row < r - 1 { step(g, mut seen, mut q, cell + c, d + 1); }
+                        if col > 0 { step(g, mut seen, mut q, cell - 1, d + 1); }
+                        if col < c - 1 { step(g, mut seen, mut q, cell + 1, d + 1); }
+                    }
+                }
+            }
+        }
+    }
+    return inf();
+}
+
+fn brute(g: mut ref Vec[i64], r: i64, c: i64) -> i64 {
+    let source = g.clone();
+    let mut answers: Vec[i64] = [];
+    let mut i = 0;
+    while i < r * c {
+        if source[i] == inf() { answers.push(nearest_gate(source, r, c, i)); }
+        else { answers.push(source[i]); }
+        i = i + 1;
+    }
+
+    let mut relax = 0;
+    let mut j = 0;
+    while j < r * c {
+        if source[j] == inf() {
+            if answers[j] != inf() { relax = relax + 1; }
+        }
+        g[j] = answers[j];
+        j = j + 1;
+    }
+    return relax;
+}
+
+// ---- the harness ------------------------------------------------------------
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn main() {
+    let mut rng = Rng { s: 12345 };
+
+    let mut grids = 0;
+    let mut cells_total = 0;
+    let mut bfs_bad = 0;
+    let mut enum_bad = 0;
+    let mut dfs_bad = 0;
+    let mut relax_bad = 0;
+    let mut grids_with_unreachable = 0;
+    let mut unreachable_cells = 0;
+    let mut bfs_relax_total = 0;
+    let mut dfs_relax_total = 0;
+    let mut digest = 0;
+
+    let mut shape = 0;
+    while shape < 3 {
+        let mut r = 1;
+        while r < 7 {
+            let mut c = 1;
+            while c < 7 {
+                let mut t = 0;
+                while t < 12 {
+                    let g0 = make_grid(mut rng, r, c, shape);
+                    grids = grids + 1;
+                    cells_total = cells_total + r * c;
+
+                    let mut refg = g0.clone();
+                    let ref_relax = brute(mut refg, r, c);
+
+                    let mut a = g0.clone();
+                    let a_relax = bfs(mut a, r, c);
+                    let mut b = g0.clone();
+                    let b_relax = enum_solver(mut b, r, c);
+                    let mut d = g0.clone();
+                    let d_relax = dfs(mut d, r, c);
+
+                    if not same(a, refg) { bfs_bad = bfs_bad + 1; }
+                    if not same(b, refg) { enum_bad = enum_bad + 1; }
+                    if not same(d, refg) { dfs_bad = dfs_bad + 1; }
+
+                    // The reachable-room count, straight off the oracle.
+                    let mut reachable = 0;
+                    let mut unreach = 0;
+                    let mut i = 0;
+                    while i < r * c {
+                        if g0[i] == inf() {
+                            if refg[i] != inf() { reachable = reachable + 1; }
+                            else { unreach = unreach + 1; }
+                        }
+                        i = i + 1;
+                    }
+
+                    // Three exact equalities and one lower bound. Any of the four
+                    // failing means a visited-mark is wrong even if the grid is
+                    // right.
+                    let mut violated = false;
+                    if a_relax != reachable { violated = true; }
+                    if b_relax != reachable { violated = true; }
+                    if ref_relax != reachable { violated = true; }
+                    if d_relax < reachable { violated = true; }
+                    if violated { relax_bad = relax_bad + 1; }
+
+                    if unreach > 0 { grids_with_unreachable = grids_with_unreachable + 1; }
+                    unreachable_cells = unreachable_cells + unreach;
+                    bfs_relax_total = bfs_relax_total + a_relax;
+                    dfs_relax_total = dfs_relax_total + d_relax;
+
+                    let mut k = 0;
+                    while k < refg.len() {
+                        digest = (digest * 31 + (refg[k] % 1000)) % 1000000007;
+                        k = k + 1;
+                    }
+
+                    t = t + 1;
+                }
+                c = c + 1;
+            }
+            r = r + 1;
+        }
+        shape = shape + 1;
+    }
+
+    println(f"grids                {grids}");
+    println(f"cells                {cells_total}");
+    println(f"bfs disagreements    {bfs_bad}");
+    println(f"enum disagreements   {enum_bad}");
+    println(f"dfs disagreements    {dfs_bad}");
+    println(f"relaxation violations {relax_bad}");
+    println(f"grids w/ unreachable {grids_with_unreachable}");
+    println(f"unreachable cells    {unreachable_cells}");
+    println(f"bfs relaxations      {bfs_relax_total}");
+    println(f"dfs relaxations      {dfs_relax_total}");
+    println(f"digest               {digest}");
+}

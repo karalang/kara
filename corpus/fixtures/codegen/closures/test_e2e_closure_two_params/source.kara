@@ -1,0 +1,5 @@
+
+fn main() {
+    let add = |x: i64, y: i64| x + y;
+    println(add(10, 32));
+}

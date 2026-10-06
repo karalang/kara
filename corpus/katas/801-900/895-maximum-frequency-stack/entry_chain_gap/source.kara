@@ -1,0 +1,29 @@
+// STANDING PROBE for B-2026-08-18-34 — not a solution to #895.
+//
+// `map.entry(k).or_insert(default).push(v)` is the idiomatic way to append to
+// a container nested in a container. It works when the map is a LOCAL and
+// fails when it is a struct FIELD, on every backend, while `karac check`
+// accepts both. This file is the two spellings side by side so the difference
+// stays one `diff` apart.
+//
+// Expected once -34 closes: prints `1` then `1`.
+// Today: the local line prints 1; the field line fails at run time.
+
+struct Holder { buckets: Map[i64, Vec[i64]] }
+
+fn local_map() -> i64 {
+    let mut m: Map[i64, Vec[i64]] = Map.new();
+    m.entry(1).or_insert(Vec.new()).push(7);
+    return m.get_or(1, Vec.new()).len();
+}
+
+fn field_map() -> i64 {
+    let mut h = Holder { buckets: Map.new() };
+    h.buckets.entry(1).or_insert(Vec.new()).push(7);
+    return h.buckets.get_or(1, Vec.new()).len();
+}
+
+fn main() {
+    println(local_map().to_string());
+    println(field_map().to_string());
+}

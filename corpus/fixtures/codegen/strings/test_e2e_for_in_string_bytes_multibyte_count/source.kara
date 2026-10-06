@@ -1,0 +1,9 @@
+
+fn main() {
+    let s = "é";
+    let mut n: i64 = 0_i64;
+    for _b in s.bytes() {
+        n = n + 1_i64;
+    }
+    println(n);
+}

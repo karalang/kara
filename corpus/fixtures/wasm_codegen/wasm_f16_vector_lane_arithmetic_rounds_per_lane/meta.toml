@@ -1,0 +1,13 @@
+source = "tests/wasm_codegen.rs::wasm_f16_vector_lane_arithmetic_rounds_per_lane"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

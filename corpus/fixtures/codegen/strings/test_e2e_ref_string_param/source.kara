@@ -1,0 +1,9 @@
+
+fn greet(name: ref String) {
+    println(name);
+    println(name.len());
+}
+fn main() {
+    let s = "Alice";
+    greet(s);
+}

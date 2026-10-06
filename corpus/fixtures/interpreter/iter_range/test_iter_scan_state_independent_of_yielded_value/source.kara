@@ -1,0 +1,10 @@
+
+fn main() {
+    let v = [3, 1, 4, 1, 5, 9, 2, 6];
+    for x in v.iter().scan(0, |state, item| {
+        let new_state = if item > state { item } else { state };
+        Some((new_state, new_state))
+    }) {
+        println(x);
+    }
+}

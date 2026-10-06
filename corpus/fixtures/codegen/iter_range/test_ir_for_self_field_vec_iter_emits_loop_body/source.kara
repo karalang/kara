@@ -1,0 +1,14 @@
+
+struct Counter { items: Vec[String], base: i64 }
+impl Counter {
+    fn total_iter(ref self) -> i64 {
+        let mut t = self.base;
+        for s in self.items.iter() { t = t + s.len(); };
+        return t;
+    }
+}
+fn main() {
+    let mut c = Counter { items: Vec.new(), base: 0_i64 };
+    c.items.push("x");
+    println(c.total_iter());
+}

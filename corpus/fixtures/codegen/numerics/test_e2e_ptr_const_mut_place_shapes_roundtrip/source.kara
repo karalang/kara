@@ -1,0 +1,35 @@
+
+struct Reg { status: i32, control: i32 }
+struct Block { inner: Reg, id: i64 }
+fn main() {
+    let mut r: Reg = Reg { status: 10, control: 20 };
+    // Safety: every pointer addresses a live owned local for the duration of use.
+    unsafe {
+        let pw: *mut i32 = ptr.mut(r.status);
+        volatile_write(pw, 99);
+        let pr: *const i32 = ptr.const(r.status);
+        println(volatile_read(pr));
+    }
+    let mut b: Block = Block { inner: Reg { status: 1, control: 2 }, id: 7 };
+    unsafe {
+        let pw: *mut i32 = ptr.mut(b.inner.control);
+        volatile_write(pw, 500);
+        let pr: *const i32 = ptr.const(b.inner.control);
+        println(volatile_read(pr));
+    }
+    let mut pair: (i32, i32) = (11, 22);
+    unsafe {
+        let pw: *mut i32 = ptr.mut(pair.1);
+        volatile_write(pw, 222);
+        let pr: *const i32 = ptr.const(pair.1);
+        println(volatile_read(pr));
+    }
+    let mut v: Vec[i32] = Vec.new();
+    v.push(3);
+    v.push(4);
+    unsafe {
+        let pw: *mut i32 = ptr.mut(v[1]);
+        volatile_write(pw, 444);
+    }
+    println(v[1]);
+}

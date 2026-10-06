@@ -1,0 +1,164 @@
+// LeetCode #71: Simplify Path — one-pass scan over the input chars
+// with a stack of (start, end) index pairs naming the components on
+// the canonical path. O(n) time, O(n) extra space for the stack.
+//
+// A component is a maximal non-'/' run. Three cases per component:
+//
+//   '.'         → skip (same directory)
+//   '..'        → pop one entry (or stay at root if the stack is empty)
+//   anything    → push the (start, end) pair
+//
+// Multi-dot runs that aren't exactly 1 or 2 dots (e.g. "...", "....",
+// ".hidden") are file names, not navigation tokens — that's the
+// /.../a/../b/c/../d/./ LeetCode example's whole point. Length is part
+// of the discriminator, not just the leading byte.
+//
+// The stack stores positions into the snapshotted `Vec[char]` rather
+// than fresh `String` allocations — 16 bytes per stack entry regardless
+// of how long the component is, and no per-component allocation. The
+// output walk slices each component straight out of the input with
+// `s[start..end]`.
+//
+// LeetCode #71's input alphabet is English letters, digits, `'.'`,
+// `'/'`, `'_'` — all ASCII, all single-`char`. The `s.chars()` snapshot
+// gives cheap random access for the scan (`cs[i+1]` for the second dot of
+// '..'), and because every char is one byte the recorded char-indices
+// double as BYTE offsets for the `s[start..end]` output slice (a property
+// the output loop relies on — see its note below).
+
+fn simplify(s: ref String) -> String {
+    // Snapshot the input once into a char buffer. `s.chars()` is a
+    // forward iterator with no `len()` until consumed, and the
+    // algorithm needs both random access (`cs[i+1]` for the second
+    // dot of '..') and the post-scan output walk over recorded
+    // positions, so a single `Vec[char]` pass is the right shape.
+    let mut cs: Vec[char] = Vec.new();
+    for c in s.chars() {
+        cs.push(c);
+    }
+    let n = cs.len();
+
+    let dot:   char = '.';
+    let slash: char = '/';
+
+    // Parallel start/end stacks, both indexing into `cs`. `pop` on an
+    // empty Vec returns `None` and leaves the Vec unchanged, so the
+    // "/../" saturating-at-root rule falls out for free — no explicit
+    // `if !empty` guard needed.
+    let mut starts: Vec[i64] = Vec.new();
+    let mut ends:   Vec[i64] = Vec.new();
+
+    let mut i = 0;
+    while i < n {
+        // Skip the slash run between components. '//' and '///' both
+        // collapse to a single component boundary by construction.
+        while i < n and cs[i] == slash {
+            i = i + 1;
+        }
+        if i >= n {
+            break;
+        }
+        // Consume the non-slash run [i, j). `j - i` is the component
+        // length used to discriminate '.', '..', and everything else.
+        let mut j = i;
+        while j < n and cs[j] != slash {
+            j = j + 1;
+        }
+        let len = j - i;
+
+        let is_dot    = len == 1 and cs[i] == dot;
+        let is_dotdot = len == 2 and cs[i] == dot and cs[i + 1] == dot;
+
+        if is_dot {
+            // skip — '.' is the current directory
+        } else if is_dotdot {
+            // Pop one entry. `pop` is safe-on-empty (returns `None`),
+            // so the saturate-at-root rule is implicit. The two pops
+            // stay in lockstep because pushes always go to both vecs
+            // together.
+            let _ = starts.pop();
+            let _ = ends.pop();
+        } else {
+            starts.push(i);
+            ends.push(j);
+        }
+        i = j;
+    }
+
+    // Empty stack means the canonical path is the root.
+    if starts.is_empty() {
+        return "/";
+    }
+
+    // Reconstruct the output: "/" prefix per component, then the
+    // component's text sliced straight out of the input via `s[a..b]`
+    // (karac String slicing, phase-8 — the surface this kata motivated;
+    // see the README's § Benchmarks for the slicing-vs-char-push history).
+    // `(start, end)` are char-indices into `cs`, used here as BYTE offsets
+    // into `s` — valid because #71's input alphabet is all ASCII
+    // (one byte per char; see the snapshot note above), so char-index ==
+    // byte-offset and every component boundary (always at a '/') is a
+    // char boundary. `String.push_str` appends both the "/" separator and
+    // the sliced component in amortized O(1).
+    //
+    // Earlier shapes this replaced: f-string self-append
+    // `out = f"{out}{c}"` (O(n²), a fresh String per char), then a
+    // per-char `out.push(cs[p])` loop (O(n), 2026-05-25). Slicing collapses
+    // the inner loop to one call per component.
+    let mut out: String = "";
+    let mut k = 0;
+    while k < starts.len() {
+        out.push_str("/");
+        out.push_str(s[starts[k]..ends[k]]);
+        k = k + 1;
+    }
+    out
+}
+
+fn report(s: ref String) {
+    println(f"simplify \"{s}\" -> \"{simplify(s)}\"");
+}
+
+fn main() {
+    // Canonical LeetCode spec examples.
+    report("/home/");                                  // /home
+    report("/home//foo/");                             // /home/foo
+    report("/home/user/Documents/../Pictures");        // /home/user/Pictures
+    report("/../");                                    // /
+    report("/.../a/../b/c/../d/./");                   // /.../b/d
+
+    // Root edge cases — runs of slashes collapse, "/" itself is fixed.
+    report("/");                                       // /
+    report("//");                                      // /
+    report("///");                                     // /
+
+    // Many-slashes-and-dots compressions.
+    report("/a/./b/../../c/");                         // /c
+    report("/a//b////c/d//././/..");                   // /a/b/c
+
+    // Pop past root saturates at "/".
+    report("/../../../");                              // /
+    report("/a/../../b");                              // /b
+
+    // Single-component, single-slash retention rules.
+    report("/a");                                      // /a
+    report("/a/");                                     // /a
+    report("/abc_123");                                // /abc_123
+
+    // Multi-dot runs that are NOT '.' or '..' — they're file names.
+    // The (start, end, length) discriminator is what distinguishes
+    // these from the navigation tokens.
+    report("/...");                                    // /...
+    report("/....");                                   // /....
+    report("/.hidden");                                // /.hidden
+    report("/..hidden");                               // /..hidden
+    report("/...hidden");                              // /...hidden
+
+    // Single dot at end + middle, trailing-slash collapse.
+    report("/./");                                     // /
+    report("/a/./b/./c/.");                            // /a/b/c
+
+    // Dotdot interleaved with files — exercises pop-then-push churn.
+    report("/a/b/c/../..");                            // /a
+    report("/a/b/../c/../../d");                       // /d
+}

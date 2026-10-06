@@ -1,0 +1,13 @@
+
+fn binary_search[T](haystack: ref Vec[T], needle: ref T) -> Option[i64]
+    requires haystack.is_sorted()
+where T: Ord
+{
+    haystack.binary_search(needle)
+}
+fn main() {
+    let sorted: Vec[i64] = [1, 3, 5, 7];
+    match binary_search(sorted, 5) { Some(i) => { println(i); } None => { println("none"); } }
+    let unsorted: Vec[i64] = [7, 3, 5, 1];
+    match binary_search(unsorted, 5) { Some(i) => { println(i); } None => { println("none"); } }
+}

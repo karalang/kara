@@ -1,0 +1,59 @@
+// LeetCode #55 bench harness — Kāra, the greedy forward max-reach solver (★).
+//
+// The headline ★ style: one left-to-right scan with a single `farthest` scalar. If the cursor
+// ever passes `farthest` the end is unreachable; otherwise the horizon grows by `i + nums[i]`
+// and the scan stops the moment it covers the last index. O(1) space; O(n) time.
+//
+// Workload: build a reachable array `nums` (length n, each entry in 1..4 so every index can
+// always step at least one forward — the last index is always reachable) ONCE, then TOTAL times
+// punch a single slot (`nums[k%n] = 1 + k%9`, a bigger reach), run the greedy scan, and fold the
+// index at which it decided (the early-exit point where `farthest` first covers the last index)
+// into a rolling checksum. The punches are NOT reverted, so the array state carries forward and
+// the answer varies with the loop index (no hoisting); the checksum carries a loop-borne
+// dependency, so this is a single-lane (seq) bench by construction. All five language mirrors
+// fold the identical answer sequence and print the identical checksum.
+
+fn can_jump_work(nums: ref Vec[i64], n: i64) -> i64 {
+    let mut farthest = 0;
+    let mut i = 0;
+    while i < n {
+        if i > farthest {
+            return i; // unreachable — this index is past every reach
+        }
+        if i + nums[i] > farthest {
+            farthest = i + nums[i];
+        }
+        if farthest >= n - 1 {
+            return i; // the last index is covered — decided here
+        }
+        i = i + 1;
+    }
+    i
+}
+
+fn main() {
+    let total = 200000;
+    let modulus = 1000000007;
+
+    // Build nums, length n, each entry in 1..4 (last index always reachable).
+    let n = 1000;
+    let mut nums: Vec[i64] = Vec.new();
+    let mut a = 0;
+    while a < n {
+        nums.push(1 + (a % 4));
+        a = a + 1;
+    }
+
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        // O(1) punch: widen one slot's reach; not reverted, so the array evolves and the
+        // decision index varies with the loop index without an O(n) refill.
+        nums[k % n] = 1 + (k % 9);
+        let ans = can_jump_work(nums, n);
+        acc = (acc * 131 + ans) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

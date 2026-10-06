@@ -1,0 +1,123 @@
+// LeetCode #47: Permutations II — counted/grouped DFS over distinct (value, count) groups.
+//
+// Same problem as the ★ file ([`permutations_ii.kara`](permutations_ii.kara)) — an input with
+// duplicates, every UNIQUE ordering, no repeats — but the duplicate handling is STRUCTURAL rather
+// than a same-level adjacent skip. Sort, then COLLAPSE the multiset into distinct (value, count)
+// groups — e.g. [1,1,2,2] becomes values [1,2] with counts [2,2]. The DFS then fills the n
+// positions one at a time, and at each position iterates the DISTINCT values, placing one copy of
+// any value whose remaining count is still positive (decrement / recurse / increment). Because a
+// level offers each distinct value AT MOST ONCE, two siblings can never carry the same value, so
+// duplicate permutations are impossible by construction — there is no adjacent-equal skip and no
+// `used` array of per-index flags, only the per-value counters.
+//
+// This is the permutation analog of kata [#40](../40-combination-sum-ii/)'s `_counted` solver: the
+// counts ARE the availability test (a value with count 0 is fully spent on this branch), and the
+// counters double as the undo ledger — increment on the way back up restores the multiset exactly,
+// the count-based replacement for #46's `used[i] = false`. Iterating the distinct values in sorted
+// order and placing the smallest eligible value first makes this emit permutations in the SAME
+// lexicographic-by-value order as the ★ file — for [1,1,2]: [1,1,2],[1,2,1],[2,1,1].
+//
+// The grouping is the run-length read kata [#38](../38-count-and-say/)'s indexed style uses — a
+// left pointer at a run's first element, a right pointer walking while the value repeats — applied
+// to the sorted input to recover (value, count) pairs in two parallel `Vec[i64]`s, the same
+// run-group #40's `_counted` does.
+//
+//   - `permute_unique` sorts, then run-groups into `vals` / `cnts`, and seeds the DFS at depth 0.
+//   - `dfs` fills position `depth`; the leaf is `depth == n` (all positions filled) → snapshot.
+//   - the path is one mutable `Vec[i64]`: push a copy of `vals[i]`, recurse at `depth+1` with
+//     `cnts[i]` decremented, then pop and restore the count.
+//
+// LeetCode bounds: 1 ≤ n ≤ 8, -10 ≤ nums[i] ≤ 10. i64 throughout for corpus uniformity.
+
+fn dfs(
+    vals: ref Vec[i64],
+    cnts: mut ref Vec[i64],
+    depth: i64,
+    n: i64,
+    path: mut ref Vec[i64],
+    out: mut ref Vec[Vec[i64]],
+) {
+    if depth == n {
+        out.push(path.clone());
+        return;
+    }
+    let m = vals.len();
+    let mut i = 0;
+    while i < m {
+        // A value with copies left may fill this position; each distinct value is offered
+        // at most once per level, so siblings never collide → no duplicate permutations.
+        if cnts[i] > 0 {
+            cnts[i] = cnts[i] - 1;
+            path.push(vals[i]);
+            dfs(vals, cnts, depth + 1, n, path, out);
+            path.pop();
+            cnts[i] = cnts[i] + 1;
+        }
+        i = i + 1;
+    }
+}
+
+fn permute_unique(nums: Slice[i64]) -> Vec[Vec[i64]] {
+    let mut xs: Vec[i64] = Vec.from_slice(nums);
+    xs.sort_by(|a, b| a.cmp(b));
+    let n = xs.len();
+
+    // Run-group the sorted multiset into distinct values and their counts.
+    let mut vals: Vec[i64] = Vec.new();
+    let mut cnts: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let v = xs[i];
+        let mut j = i;
+        while j < n and xs[j] == v {
+            j = j + 1;
+        }
+        vals.push(v);
+        cnts.push(j - i);
+        i = j;
+    }
+
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    dfs(vals, mut cnts, 0, n, mut path, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(perm: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = perm.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{perm[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn report(nums: Slice[i64]) {
+    let perms = permute_unique(nums);
+    let count = perms.len();
+    let input: Vec[i64] = Vec.from_slice(nums);
+    println(f"{show(input)} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(show(perms[i]));
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    report([1, 1, 2]);
+    report([1, 2, 3]);
+    report([2, 2, 1, 1]);
+    report([3, 3, 0, 3]);
+    report([1]);
+    report([5, 5, 5]);
+}

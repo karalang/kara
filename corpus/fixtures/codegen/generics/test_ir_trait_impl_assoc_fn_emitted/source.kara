@@ -1,0 +1,9 @@
+
+trait Default {
+    fn default() -> Self;
+}
+struct Foo { value: i64 }
+impl Default for Foo {
+    fn default() -> Foo { Foo { value: 42 } }
+}
+fn main() {}

@@ -1,0 +1,20 @@
+
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+LAYOUT
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 6 {
+        entities.push(Entity { x: i, y: i * 10, vx: i * 100, vy: i * 1000 });
+        i = i + 1;
+    }
+    println(entities.len());
+    println(entities[0].x);
+    println(entities[4].y);
+    println(entities[5].vx);
+    println(entities[5].vy);
+    println(entities[3].x);
+    println(entities[3].y);
+    println(entities[3].vx);
+    println(entities[3].vy);
+}

@@ -1,0 +1,38 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+enum E { A(S), B(i64) }
+impl E {
+  fn m2(self) -> i64 { match self { E.A(s) => s.id, E.B(n) => n } }
+  fn t1(self, c: bool) -> i64 { if c { match self { E.A(s) => s.id, E.B(n) => n } } else { 0 } }
+  fn mb(self) -> i64 { let E.A(s) = self else { return 0 }; return s.id }
+  fn take(self) -> S { match self { E.A(s) => s, E.B(n) => mks(n) } }
+}
+struct H { k: i64 }
+impl H { fn q(ref self, t: E) -> i64 { return t.m2() + self.k } }
+fn p2(t: E) -> i64 { let x = t.m2(); println(f"p2 {x}"); return x }
+fn p6(t: E) -> i64 { return t.m2() }
+fn p7(t: E, c: bool) -> i64 { let x = t.t1(c); println(f"p7 {x}"); return x }
+fn fwd(t: E) -> i64 { return p2(t) }
+fn pa(t: E) -> i64 { let x = t.m2() + 1; println(f"pa {x}"); return x }
+fn pi(t: E) -> i64 { println(f"pi {t.m2()}"); return 0 }
+fn pb(t: E) -> i64 { let x = t.mb(); println(f"pb {x}"); return x }
+fn p9(t: E) -> S { return t.take() }
+fn main() {
+  println(f"r {p2(E.A(mks(1)))}")
+  let e = E.A(mks(2)); println(f"r {p2(e)}")
+  println(f"r {p6(E.A(mks(3)))}")
+  println(f"r {p7(E.A(mks(4)), false)}")
+  println(f"r {p7(E.A(mks(5)), true)}")
+  println(f"r {fwd(E.A(mks(6)))}")
+  let h = H { k: 100 }; println(f"r {h.q(E.A(mks(7)))}")
+  let e8 = E.A(mks(8)); println(f"r {h.q(e8)}")
+  println(f"r {pa(E.A(mks(9)))}")
+  println(f"r {pi(E.A(mks(10)))}")
+  println(f"r {pb(E.A(mks(11)))}")
+  let s = p9(E.A(mks(12))); println(f"got {s.id}")
+  let mut i = 0;
+  while i < 2 { let w = E.A(mks(13 + i)); println(f"r {p2(w)}"); i = i + 1; }
+  println(f"r {p2(E.B(15))}")
+  println("end")
+}

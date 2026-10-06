@@ -1,0 +1,50 @@
+// LeetCode 242 — Valid Anagram.
+//
+// `t` is an anagram of `s` iff they have the same multiset of characters. With a
+// lowercase-ASCII alphabet that's a single frequency pass: bump a 26-slot count
+// up for each letter of `s` and down for each letter of `t`; `t` is an anagram
+// exactly when every count returns to zero (which also forces equal lengths).
+// O(n) time, O(1) space.
+
+fn is_anagram(s: ref String, t: ref String) -> bool {
+    let sb = s.bytes();
+    let tb = t.bytes();
+    if sb.len() != tb.len() {
+        return false;
+    }
+    let mut count: Array[i64, 26] = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ];
+    let mut i = 0;
+    while i < sb.len() {
+        count[(sb[i] as i64) - 97] = count[(sb[i] as i64) - 97] + 1;
+        count[(tb[i] as i64) - 97] = count[(tb[i] as i64) - 97] - 1;
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < 26 {
+        if count[j] != 0 {
+            return false;
+        }
+        j = j + 1;
+    }
+    return true;
+}
+
+fn report(s: ref String, t: ref String) {
+    if is_anagram(s, t) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    report("anagram", "nagaram");                   // true
+    report("rat", "car");                           // false
+    report("ab", "ba");                             // true
+    report("a", "ab");                              // false  (length differs)
+    report("listen", "silent");                     // true
+    report("abc", "abd");                           // false  (same length, diff letters)
+}

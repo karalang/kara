@@ -1,0 +1,18 @@
+
+shared enum Expr { Lit(i64), Name(String) }
+impl Expr {
+    fn weight(self) -> i64 {
+        match self {
+            Expr.Lit(n) => return n,
+            Expr.Name(s) => return s.len(),
+        };
+    }
+}
+fn make() -> Expr { Expr.Name("an expr name payload padded beyond thirty-six bytes") }
+fn main() {
+    let mut p = 0;
+    while p < 3 {
+        println(make().weight());
+        p = p + 1;
+    };
+}

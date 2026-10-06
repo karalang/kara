@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_06_40.rs::e2e_array_len_and_is_empty_for_every_element_type"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

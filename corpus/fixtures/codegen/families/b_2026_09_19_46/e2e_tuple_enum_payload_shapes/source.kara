@@ -1,0 +1,24 @@
+struct S1 { v: i64, s: String }
+impl Drop for S1 { fn drop(mut ref self) { println(f"  dS{self.v}") } }
+enum Mono { P(S1), Q }
+enum Ht { P((S1, S1)), Q }
+enum He { P((Mono, i64)), Q }
+enum Hn { P(((S1, i64), S1)), Q }
+enum Ho { P((Option[S1], i64)), Q }
+enum Hs { P { t: (S1, S1), n: i64 }, Q }
+enum Hd { P((S1, S1)), Q }
+impl Drop for Hd { fn drop(mut ref self) { println("  dHd") } }
+fn takt(t: (S1, S1)) -> i64 { t.0.v }
+fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
+fn mk(v: i64) -> Ht { Ht.P((s(v), s(v + 1))) }
+fn main() {
+    println("nested"); { let h = Hn.P(((s(2), 1), s(3))); println("  x") }
+    println("structv"); { let h = Hs.P { t: (s(5), s(6)), n: 1 }; println("  x") }
+    println("ownbody"); { let h = Hd.P((s(7), s(8))); println("  x") }
+    println("vec"); { let v: Vec[Ht] = vec![Ht.P((s(9), s(10)))]; println("  x") }
+    println("opt"); { let o = Option.Some(Ht.P((s(11), s(12)))); println("  x") }
+    println("ret"); { let h = mk(15); println("  x") }
+    println("iflet"); { let h = Ht.P((s(19), s(20))); if let Ht.P(t) = h { println(f"  in {t.1.v}") } }
+    println("q"); { let h = Ht.Q; println("  x") }
+    println("end")
+}

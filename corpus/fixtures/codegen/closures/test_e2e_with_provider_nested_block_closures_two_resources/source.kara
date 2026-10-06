@@ -1,0 +1,17 @@
+
+effect resource ResA;
+effect resource ResB;
+struct A { t: i64 }
+impl A { fn now(self) -> i64 { self.t } }
+struct B { t: i64 }
+impl B { fn now(self) -> i64 { self.t } }
+fn main() reads(ResA) reads(ResB) {
+    let pa = A { t: 1 };
+    let pb = B { t: 2 };
+    with_provider[ResA](pa, || {
+        with_provider[ResB](pb, || {
+            println(ResA.now());
+            println(ResB.now());
+        });
+    });
+}

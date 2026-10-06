@@ -1,0 +1,136 @@
+// Benchmark workload for LeetCode #139 — Word Break.
+//
+// Build-once + punch: one big char-string (letters 0..A) and a word dictionary
+// are generated once with a deterministic 32-bit LCG (high bits, overflow-safe
+// in i64). The classic prefix-DP word-break is then run over `WINDOWS` random
+// length-WIN windows into the string; a window scores 1 if it segments cleanly.
+//
+// The dict is a SET of words; to keep the five language mirrors byte-identical
+// we encode each word (length 2..L over an A-letter alphabet) as a base-A
+// integer with a per-length base offset, and the set is a flat stamped bool
+// table indexed by that key (C hand-rolls exactly this table). Min word length
+// is 2, so segmentation is non-trivial and the DP does real scanning work — a
+// data-dependent inner `break` keeps the loop from vectorizing. Sink =
+// Σ over breakable windows of (offset + 1).
+
+fn main() {
+    let alpha = 5;      // alphabet size A
+    let maxlen = 4;     // L — max word length
+    let n = 5000;       // big-string length
+    let dwords = 120;   // dictionary word count
+    let win = 24;       // DP window length
+    let windows = 2200000;
+
+    // Per-length base offsets so length-k word keys never collide across k.
+    // base[len] = A^1 + A^2 + ... + A^(len-1); table size = base[L+1].
+    let mut base: Vec[i64] = Vec.new();
+    base.push(0);       // index 0 unused
+    base.push(0);       // len 1
+    let mut pwr = alpha;
+    let mut acc = 0;
+    let mut b = 2;
+    while b <= maxlen {
+        acc = acc + pwr;
+        base.push(acc);
+        pwr = pwr * alpha;
+        b = b + 1;
+    }
+    let tsize = acc + pwr;  // = base[L] + A^L
+
+    let mut table: Vec[bool] = Vec.new();
+    let mut t = 0;
+    while t < tsize {
+        table.push(false);
+        t = t + 1;
+    }
+
+    let mut state = 12345;
+
+    // Build the big string (chars 0..A).
+    let mut s: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let r = state >> 16;
+        s.push(r % alpha);
+        i = i + 1;
+    }
+
+    // Build the dictionary: dwords words of length 2..L, stamp the set table.
+    let mut w = 0;
+    while w < dwords {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let rl = state >> 16;
+        let wlen = 2 + (rl % (maxlen - 1));
+        let mut code = 0;
+        let mut k = 0;
+        while k < wlen {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let rc = state >> 16;
+            let ch = rc % alpha;
+            code = code * alpha + ch;
+            k = k + 1;
+        }
+        let key = base[wlen] + code;
+        table[key] = true;
+        w = w + 1;
+    }
+
+    // DP scratch (reused across windows).
+    let mut dp: Vec[bool] = Vec.new();
+    let mut d = 0;
+    while d <= win {
+        dp.push(false);
+        d = d + 1;
+    }
+
+    let mut sink = 0;
+    let mut wnd = 0;
+    while wnd < windows {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let ro = state >> 16;
+        let off = ro % (n - win);
+
+        // reset dp
+        let mut z = 0;
+        while z <= win {
+            dp[z] = false;
+            z = z + 1;
+        }
+        dp[0] = true;
+
+        let mut ii = 1;
+        while ii <= win {
+            let mut low = 0;
+            if ii > maxlen {
+                low = ii - maxlen;
+            }
+            let mut code = 0;
+            let mut pw = 1;
+            let mut ln = 0;
+            let mut j = ii - 1;
+            while j >= low {
+                let ch = s[off + j];
+                code = ch * pw + code;
+                pw = pw * alpha;
+                ln = ln + 1;
+                if dp[j] {
+                    let key = base[ln] + code;
+                    if table[key] {
+                        dp[ii] = true;
+                        break;
+                    }
+                }
+                j = j - 1;
+            }
+            ii = ii + 1;
+        }
+
+        if dp[win] {
+            sink = sink + off + 1;
+        }
+        wnd = wnd + 1;
+    }
+
+    println(sink);
+}

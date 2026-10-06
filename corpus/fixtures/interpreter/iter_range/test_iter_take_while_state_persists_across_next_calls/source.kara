@@ -1,0 +1,15 @@
+
+fn main() {
+    let v = [1, 2, 9, 3];
+    let mut it = v.iter().take_while(|x| x < 5);
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("still-done"),
+    }
+}

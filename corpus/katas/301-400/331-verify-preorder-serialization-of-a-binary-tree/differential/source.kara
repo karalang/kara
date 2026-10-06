@@ -1,0 +1,288 @@
+// Differential for LeetCode #331 (Verify Preorder Serialization).
+//
+// The four arms, copied verbatim apart from their names, against:
+//
+//   * an exhaustive oracle on short strings: every token string over {1, #}
+//     of 1 to 13 tokens, checked against the set of serializations of every
+//     tree shape with at most 6 nodes (a valid string of up to 13 tokens has
+//     at most 6 values), and
+//   * eight properties on 400 random trees with values in [0, 100] and on
+//     mutations of them.
+//
+//   P1  the four arms agree
+//   P2  an exhaustive string is valid exactly when it is in the shape set
+//   P3  a serialization produced by a walk is valid
+//   P4  dropping any one token from a valid string makes it invalid
+//   P5  appending any token to a valid string makes it invalid
+//   P6  a valid string has one more `#` than values
+//   P7  replacing any `#` with `v,#,#` keeps a valid string valid
+//   P8  when A is valid, `v,A,B` is valid exactly when B is (A and B random,
+//       each a walk or a mutated copy). A valid string has no valid proper
+//       prefix, so the left subtree's parse ends exactly where A does. With
+//       A invalid nothing follows: the split between A and B is not unique.
+
+fn slots(preorder: ref String) -> bool {
+    let mut slots = 1;
+    for tok in preorder.split(",") {
+        if slots == 0 {
+            return false;
+        }
+        if tok == "#" {
+            slots -= 1;
+        } else {
+            slots += 1;
+        }
+    }
+    return slots == 0;
+}
+
+fn folding(preorder: ref String) -> bool {
+    let mut stack: Vec[String] = Vec.new();
+    for tok in preorder.split(",") {
+        stack.push(tok);
+        while stack.len() >= 3 {
+            let n = stack.len();
+            if stack[n - 1] == "#" and stack[n - 2] == "#" and stack[n - 3] != "#" {
+                let _ = stack.pop();
+                let _ = stack.pop();
+                let _ = stack.pop();
+                stack.push("#");
+            } else {
+                break;
+            }
+        }
+    }
+    return stack.len() == 1 and stack[0] == "#";
+}
+
+fn parse_tree(tokens: ref Vec[String], pos: mut ref i64) -> bool {
+    if pos >= tokens.len() {
+        return false;
+    }
+    let is_null = tokens[pos] == "#";
+    pos += 1;
+    if is_null {
+        return true;
+    }
+    return parse_tree(tokens, pos) and parse_tree(tokens, pos);
+}
+
+fn recursive(preorder: ref String) -> bool {
+    let tokens = preorder.split(",");
+    let mut pos = 0;
+    return parse_tree(tokens, mut pos) and pos == tokens.len();
+}
+
+fn scanning(preorder: ref String) -> bool {
+    let b = preorder.bytes();
+    let mut slots = 1;
+    let mut at_start = true;
+    for c in b {
+        if at_start {
+            if slots == 0 {
+                return false;
+            }
+            if c == 35 {
+                slots -= 1;
+            } else {
+                slots += 1;
+            }
+            at_start = false;
+        }
+        if c == 44 {
+            at_start = true;
+        }
+    }
+    if at_start {
+        if slots == 0 {
+            return false;
+        }
+        slots += 1;
+    }
+    return slots == 0;
+}
+
+// P1: every arm's answer, or a failure line when they disagree.
+fn agreed(s: ref String, failures: mut ref i64) -> bool {
+    let a = slots(s);
+    let b = folding(s);
+    let c = recursive(s);
+    let d = scanning(s);
+    if a != b or a != c or a != d {
+        failures += 1;
+        println(f"P1 \"{s}\": slots {a} folding {b} recursive {c} scanning {d}");
+    }
+    return a;
+}
+
+fn check(ok: bool, what: String, s: ref String, failures: mut ref i64) {
+    if not ok {
+        failures += 1;
+        println(f"{what} \"{s}\"");
+    }
+}
+
+// Every serialization of a tree with exactly `n` nodes, all labelled 1.
+fn shapes(n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if n == 0 {
+        out.push("#");
+        return out;
+    }
+    for left in 0..n {
+        let ls = shapes(left);
+        let rs = shapes(n - 1 - left);
+        for l in ls.iter() {
+            for r in rs.iter() {
+                out.push(f"1,{l},{r}");
+            }
+        }
+    }
+    return out;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn random_tree(seed: mut ref i64, budget: mut ref i64, fill: i64, out: mut ref Vec[String]) {
+    if budget > 0 and next(seed) % 100 < fill {
+        budget -= 1;
+        out.push((next(seed) % 101).to_string());
+        random_tree(seed, budget, fill, out);
+        random_tree(seed, budget, fill, out);
+    } else {
+        out.push("#");
+    }
+}
+
+fn random_token(seed: mut ref i64) -> String {
+    if next(seed) % 2 == 0 {
+        return "#";
+    }
+    return (next(seed) % 101).to_string();
+}
+
+// A random tree's tokens, or (half the time) a copy with one random edit.
+fn maybe_broken(seed: mut ref i64) -> Vec[String] {
+    let mut budget = next(seed) % 8;
+    let mut parts: Vec[String] = Vec.new();
+    random_tree(seed, mut budget, 70, mut parts);
+    if next(seed) % 2 == 0 {
+        return parts;
+    }
+    let at = next(seed) % parts.len();
+    let kind = next(seed) % 3;
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..parts.len() {
+        if i == at and kind == 0 {
+            continue;
+        }
+        if i == at and kind == 1 {
+            out.push(random_token(seed));
+        }
+        if i == at and kind == 2 {
+            out.push(random_token(seed));
+            continue;
+        }
+        out.push(parts[i].clone());
+    }
+    return out;
+}
+
+fn main() {
+    let mut failures = 0;
+
+    // ── exhaustive over {1, #}, 1 to 13 tokens ──
+    let mut shape_set: Set[String] = Set.new();
+    for n in 0..7 {
+        for s in shapes(n).iter() {
+            shape_set.insert(s.clone());
+        }
+    }
+    let mut short = 0;
+    let mut short_valid = 0;
+    for len in 1..14 {
+        let mut mask = 0;
+        while mask < (1 << len) {
+            let mut toks: Vec[String] = Vec.new();
+            for i in 0..len {
+                if (mask >> i) % 2 == 1 {
+                    toks.push("1");
+                } else {
+                    toks.push("#");
+                }
+            }
+            let s = toks.join(",");
+            let got = agreed(s, mut failures);
+            check(got == shape_set.contains(s), "P2", s, mut failures);
+            short += 1;
+            if got {
+                short_valid += 1;
+            }
+            mask += 1;
+        }
+    }
+
+    // ── random trees and their mutations ──
+    let mut seed = 331;
+    let mut cases = 0;
+    let mut p8 = 0;
+    for round in 0..400 {
+        let mut budget = 1 + round % 40;
+        let mut parts: Vec[String] = Vec.new();
+        random_tree(mut seed, mut budget, 80, mut parts);
+        let s = parts.join(",");
+        check(agreed(s, mut failures), "P3", s, mut failures);
+        let mut nulls = 0;
+        for t in parts.iter() {
+            if t == "#" {
+                nulls += 1;
+            }
+        }
+        check(nulls * 2 == parts.len() + 1, "P6", s, mut failures);
+        for i in 0..parts.len() {
+            let mut dropped: Vec[String] = Vec.new();
+            let mut grown: Vec[String] = Vec.new();
+            for j in 0..parts.len() {
+                if j != i {
+                    dropped.push(parts[j].clone());
+                }
+                if j == i and parts[j] == "#" {
+                    grown.push("7");
+                    grown.push("#");
+                    grown.push("#");
+                } else {
+                    grown.push(parts[j].clone());
+                }
+            }
+            let d = dropped.join(",");
+            check(not agreed(d, mut failures), "P4", d, mut failures);
+            cases += 1;
+            if parts[i] == "#" {
+                let g = grown.join(",");
+                check(agreed(g, mut failures), "P7", g, mut failures);
+                cases += 1;
+            }
+        }
+        let tail = random_token(mut seed);
+        let longer = f"{s},{tail}";
+        check(not agreed(longer, mut failures), "P5", longer, mut failures);
+        let a = maybe_broken(mut seed);
+        let b = maybe_broken(mut seed);
+        let a_s = a.join(",");
+        let b_s = b.join(",");
+        let joined = f"5,{a_s},{b_s}";
+        let a_ok = agreed(a_s, mut failures);
+        let b_ok = agreed(b_s, mut failures);
+        let j_ok = agreed(joined, mut failures);
+        if a_ok {
+            check(j_ok == b_ok, "P8", joined, mut failures);
+            p8 += 1;
+            cases += 1;
+        }
+        cases += 2;
+    }
+    println(f"{short} exhaustive strings ({short_valid} valid), {cases} random cases ({p8} for P8), {failures} failures");
+}

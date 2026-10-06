@@ -1,0 +1,12 @@
+fn main() {
+    let mut v: Vec[(i32, i32)] = Vec.with_capacity(2);
+    v.push((1, 2));
+    v.push((3, 4));
+    println(f"{v[0].0} {v[0].1} {v[1].0} {v[1].1}");
+    let mut m: Map[i64, (u8, i16)] = Map.new();
+    m.insert(7, (200, -3));
+    let p = m.get(7).unwrap();
+    println(f"{p.0} {p.1}");
+    let w: Vec[(i32, u8, i64)] = vec![(-1, 200, 3), (5, 7, 9)];
+    println(f"{w[1].0} {w[1].1} {w[1].2}");
+}

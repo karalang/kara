@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let mut s = f"aaa-{i}-padding-padding";
+        let mut t = f"bbb-{i}-padding-padding";
+        swap(mut s, mut t);
+        let old = replace(mut s, f"ccc-{i}-padding-padding");
+        println(s);
+        println(t);
+        println(old);
+        i = i + 1;
+    }
+}

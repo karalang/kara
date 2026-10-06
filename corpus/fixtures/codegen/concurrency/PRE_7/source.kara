@@ -1,0 +1,10 @@
+fn takep(p: P) -> i64 { return p.b; }
+fn go() -> i64 {
+  par {
+    let t = mkp(9);
+    let k = seed() + 41i64;
+  }
+  let mut i = 0i64;
+  while i < 3i64 { takep(t); i = i + 1; }
+  return k; }
+fn main() { println(go()); }

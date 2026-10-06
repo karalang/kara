@@ -1,0 +1,20 @@
+
+fn find(haystack: ref Vec[i64], needle: i64) -> Option[i64]
+    requires haystack.is_sorted()
+{
+    haystack.binary_search(needle)
+}
+
+struct SortedVec {
+    data: Vec[i64],
+
+    invariant self.data.is_sorted()
+}
+
+fn main() {
+    let v: Vec[i64] = [1, 3, 5, 7];
+    match find(v, 5) { Some(i) => { println(i); } None => { println("none"); } }
+    match find(v, 4) { Some(i) => { println(i); } None => { println("none"); } }
+    let sv = SortedVec { data: [2, 4, 6] };
+    println(sv.data.len());
+}

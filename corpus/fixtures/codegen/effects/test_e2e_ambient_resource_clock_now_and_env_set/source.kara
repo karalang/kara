@@ -1,0 +1,6 @@
+
+fn main() writes(Env) reads(Clock) {
+    env.set("KARA_E2E_X", "y");
+    let t = clock.now();
+    if t > 0 { println("clock-ok"); } else { println("clock-bad"); }
+}

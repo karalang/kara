@@ -1,0 +1,6 @@
+
+fn main() {
+    let mut v: Vec[Option[i64]] = Vec.new();
+    v.push(Some(1));
+    println(v.len());
+}

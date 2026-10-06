@@ -1,0 +1,32 @@
+
+struct W { o: Option[Option[String]] }
+struct V { o: Option[Option[i64]] }
+fn bound(w: W) -> i64 {
+    match w.o { Option.Some(Option.Some(s)) => if s.len() > 0 { 1 } else { 0 }, _ => -1 }
+}
+fn unbound(w: W) -> i64 {
+    match w.o { Option.Some(Option.Some(_)) => 1, _ => -1 }
+}
+fn whole(w: W) -> i64 {
+    match w.o { Option.Some(inner) => match inner { Option.Some(s) => if s.len() > 0 { 1 } else { 0 }, Option.None => -1 }, Option.None => -1 }
+}
+fn scalar(v: V) -> i64 {
+    match v.o { Option.Some(Option.Some(x)) => x, _ => -1 }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        acc = acc + bound(W { o: Option.Some(Option.Some(f"p{n + i}")) });
+        acc = acc + unbound(W { o: Option.Some(Option.Some(f"p{n + i}")) });
+        acc = acc + whole(W { o: Option.Some(Option.Some(f"p{n + i}")) });
+        acc = acc + scalar(V { o: Option.Some(Option.Some(n + i)) }) - n;
+        let w2: W = W { o: Option.Some(Option.None) };
+        acc = acc + bound(w2);
+        let w3: W = W { o: Option.None };
+        acc = acc + bound(w3);
+        i = i + 1;
+    }
+    println(acc);
+}

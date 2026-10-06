@@ -1,0 +1,16 @@
+
+#[derive(Hash, Eq, PartialEq)]
+enum Tg { Named { s: String }, Num { n: i64 } }
+struct Mk { p: String }
+impl Mk { fn mke(ref self, n: i64) -> Tg {
+    return Tg.Named { s: f"aaaaaaaaaaaaaaaa-{n}" };
+} }
+fn main() {
+    let mut m: Map[Tg, i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.mke(0i64), 0i64);
+    match m.get(g.mke(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}

@@ -1,0 +1,17 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct H { r: Result[Res, i64], t: i64 }
+fn take(h: H) -> i64 { h.t }
+fn mk() -> H { H { r: Result.Ok(Res { id: 2, name: f"bb{2}" }), t: 20 } }
+fn consume(h: H) -> i64 { match h.r { Result.Ok(x) => x.id, Result.Err(e) => e } }
+fn main() {
+    { let h = H { r: Result.Ok(Res { id: 1, name: f"a{1}" }), t: 10 }; println(h.t); }
+    { let h = mk(); println(h.t); }
+    { let h = H { r: Result.Ok(Res { id: 3, name: f"ccc{3}" }), t: 30 }; println(take(h)); }
+    { let h = H { r: Result.Ok(Res { id: 4, name: f"dddd{4}" }), t: 40 }; let x = h.r; println(h.t); }
+    { let h = H { r: Result.Ok(Res { id: 5, name: f"eeeee{5}" }), t: 50 }; println(consume(h)); }
+    println("end");
+}

@@ -1,0 +1,58 @@
+// LeetCode #338: Counting Bits — Kernighan's loop for every number.
+//
+// Same spec as `counting_bits.kara`, counting each number's 1 bits on its own
+// by clearing the lowest one until none is left, so the loop runs once per
+// 1 bit.
+//
+// O(n log n) time in the worst case.
+
+fn ones(i: i64) -> i64 {
+    let mut x = i;
+    let mut c = 0;
+    while x != 0 {
+        x = x & (x - 1);
+        c = c + 1;
+    }
+    return c;
+}
+
+fn count_bits(n: i64) -> Vec[i64] {
+    return (0..=n).map(|i| ones(i)).collect();
+}
+
+fn show(n: i64) {
+    let ans = count_bits(n);
+    let parts: Vec[String] = ans.iter().map(|c| c.to_string()).collect();
+    let shown = parts.join(", ");
+    println(f"{n} -> [{shown}]");
+}
+
+// Summary of a long answer: its length, its total, its largest entry, and a
+// rolling hash of every entry.
+fn summary(n: i64) {
+    let ans = count_bits(n);
+    let mut total = 0;
+    let mut most = 0;
+    let mut hash = 0;
+    for c in ans.iter() {
+        total += c;
+        most = most.max(c);
+        hash = (hash * 31 + c) % 1000000007;
+    }
+    println(f"{n} -> {ans.len()} counts, total {total}, largest {most}, hash {hash}");
+}
+
+fn main() {
+    show(2);
+    show(5);
+    show(0);
+    show(1);
+    show(16);
+    show(31);
+    show(33);
+    summary(1000);
+    summary(65535);
+    summary(65536);
+    summary(100000);
+    summary(1048575);
+}

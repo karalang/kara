@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1i64);
+    v.push(2i64);
+    let mut base = 9223372036854775807i64;
+    if v.len() == 0i64 { base = 0i64; }
+    let mut lo = 1i64;
+    if v.len() == 99i64 { lo = 0i64; }
+    println(f"{v[base + lo]}");
+}

@@ -1,0 +1,20 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+fn c1(x: Option[Array[R, 2]]) { let mut h = x; h = None; println("c1"); }
+fn c2(x: Option[Array[R, 2]]) { let mut h = x; h = Some([mk(3), mk(4)]); println("c2"); }
+fn c3(x: Result[Array[R, 2], String]) { let mut h = x; h = Err("e"); println("c3"); }
+fn c5(x: Option[Array[R, 2]]) -> Option[Array[R, 2]] { let mut h = x; h = Some([mk(7), mk(8)]); return h; }
+fn c6(x: Option[(R, R)]) { let mut h = x; h = None; println("c6"); }
+fn c7(x: Option[Array[R, 2]]) { let mut h = x; println("c7a"); h = None; println("c7b"); }
+fn c9() { let mut h: Option[Array[R, 2]] = Some([mk(91), mk(92)]); h = None; println("c9"); }
+fn main() {
+  c1(Some([mk(11), mk(12)])); println("l1")
+  let a: Option[Array[R, 2]] = Some([mk(21), mk(22)]); c2(a); println("l2")
+  c3(Ok([mk(31), mk(32)])); println("l3")
+  let r = c5(Some([mk(51), mk(52)])); println("l5")
+  c6(Some((mk(61), mk(62)))); println("l6")
+  c7(Some([mk(71), mk(72)])); println("l7")
+  c9(); println("l9")
+  println("end")
+}

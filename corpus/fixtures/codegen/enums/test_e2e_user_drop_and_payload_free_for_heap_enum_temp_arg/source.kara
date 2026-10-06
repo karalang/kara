@@ -1,0 +1,11 @@
+
+enum Msg { Text(String), Nil }
+impl Drop for Msg {
+    fn drop(mut ref self) { println("msg dropped"); }
+}
+fn consume(m: Msg) {}
+fn main() {
+    consume(Msg.Text("this is a long heap string payload over 36 bytes"));
+    consume(Msg.Nil);
+    println("after");
+}

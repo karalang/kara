@@ -1,0 +1,10 @@
+
+        struct V3 { x: i32 }
+        impl V3 {
+            #[require_simd]
+            fn scaled(a: Vector[f32, 3], b: Vector[f32, 3]) -> Vector[f32, 3] {
+                a * b
+            }
+        }
+        fn main() {}
+    

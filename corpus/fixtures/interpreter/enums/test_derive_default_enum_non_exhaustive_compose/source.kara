@@ -1,0 +1,12 @@
+
+#[non_exhaustive]
+#[derive(Default)]
+pub enum M { #[default] A, B }
+
+fn main() {
+    let m = M.default();
+    match m {
+        M.A => { println("a"); }
+        M.B => { println("b"); }
+    }
+}

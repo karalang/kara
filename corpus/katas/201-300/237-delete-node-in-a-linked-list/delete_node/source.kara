@@ -1,0 +1,76 @@
+// LeetCode 237 — Delete Node in a Linked List.
+//
+// The twist: you are handed the node to delete and NOT the head, so the usual
+// unlink (`prev.next = node.next`) is off the table — nothing reaches `prev`
+// from here. The way out is to stop treating a node as an identity and start
+// treating it as a slot: copy the successor's value back into the slot you were
+// given, then splice the successor out. What the caller can observe is the
+// sequence of values, and that comes out exactly right — the node that actually
+// leaves the list is `node.next`, not `node`.
+//
+// The tree/list corpus idiom is an index-pool (`Vec[Node]` with an i64 `next`,
+// -1 = null), so "the node you were given" is a pool index and the delete is two
+// field writes with no allocation.
+
+struct Node {
+    mut val: i64,
+    mut next: i64,
+}
+
+// Build a singly-linked list 0 → 1 → … → n-1 in a fresh pool.
+fn build(vals: Slice[i64]) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let n = vals.len();
+    let mut i = 0;
+    while i < n {
+        let next = if i + 1 < n { i + 1 } else { -1 };
+        nodes.push(Node { val: vals[i], next: next });
+        i = i + 1;
+    }
+    return nodes;
+}
+
+// Delete `node` given only `node`. LeetCode guarantees it is not the tail, which
+// is exactly the condition this needs: there must be a successor to steal from.
+fn delete_node(nodes: mut ref Vec[Node], node: i64) {
+    let succ = nodes[node].next;
+    nodes[node].val = nodes[succ].val;
+    nodes[node].next = nodes[succ].next;
+}
+
+fn show(nodes: ref Vec[Node], head: i64) {
+    let mut out: String = "";
+    let mut cur = head;
+    let mut first = true;
+    while cur != -1 {
+        if first { first = false; } else { out.push_str(" "); }
+        out.push_str(f"{nodes[cur].val}");
+        cur = nodes[cur].next;
+    }
+    println(out);
+}
+
+fn report(vals: ref Slice[i64], node: i64) {
+    let mut nodes = build(vals);
+    delete_node(mut nodes, node);
+    show(nodes, 0);
+}
+
+fn main() {
+    let a: Array[i64, 4] = [4, 5, 1, 9];
+    report(a, 1);                       // 4 1 9    (delete the node holding 5)
+    report(a, 2);                       // 4 5 9    (delete the node holding 1)
+
+    let b: Array[i64, 2] = [1, 2];
+    report(b, 0);                       // 2        (the head, reached only as a node)
+
+    let c: Array[i64, 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+    report(c, 6);                       // 0 1 2 3 4 5 7   (second to last)
+
+    let d: Array[i64, 4] = [7, 7, 7, 7];
+    report(d, 2);                       // 7 7 7    (duplicates — position, not value)
+
+    let e: Array[i64, 3] = [1, 2, 3];
+    report(e, 0);                       // 2 3
+    report(e, 1);                       // 1 3
+}

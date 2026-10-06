@@ -1,0 +1,6 @@
+
+fn main() {
+    let a: Array[i64, 3] = [10, 20, 30];
+    let v = Vector[i64, 4].from_slice(a.as_slice());
+    println(v[0]);
+}

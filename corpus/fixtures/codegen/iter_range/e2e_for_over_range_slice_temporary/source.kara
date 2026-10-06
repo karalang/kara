@@ -1,0 +1,11 @@
+
+fn main() {
+    let v: Vec[i64] = [10, 20, 30, 40];
+    let n: i64 = 3;
+    let mut w = 0;
+    for x in v[1..] { w = w + x; }
+    for x in v[1..].iter() { w = w + x * 10; }
+    for x in v[..n] { w = w + x * 100; }
+    for x in v[1..=2].into_iter() { w = w + x * 1000; }
+    println(w);
+}

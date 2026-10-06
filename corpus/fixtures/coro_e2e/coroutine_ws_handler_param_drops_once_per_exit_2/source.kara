@@ -1,0 +1,12 @@
+
+            fn main() {
+                let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let mut tg: TaskGroup = TaskGroup.new();
+                loop {
+                    match WebSocket.accept(listener) {
+                        Result.Ok(ws) => { tg.spawn(|| handle_ws(ws)); }
+                        Result.Err(_) => {}
+                    }
+                }
+            }
+        

@@ -1,0 +1,11 @@
+
+struct FakeRng { v: i64 }
+impl FakeRng { fn next_u64(ref self) -> i64 { self.v } }
+fn draw() -> i64 reads(RandomSource) { rand.next_u64() as i64 }
+fn main() reads(RandomSource) {
+    with_provider[RandomSource](FakeRng { v: 777 }, || {
+        println(draw());
+        println(rand.next_u64());
+    });
+    println(rand.next_u64() == rand.next_u64());
+}

@@ -1,0 +1,36 @@
+
+struct H { n: i64 }
+struct W { f: Vec[String] }
+impl H { fn show(ref self, x: Option[String]) { println(f"{self.n} {x}"); } }
+fn mkv(n: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(f"payloadpayload{n}"); return v; }
+fn show(x: Option[Vec[String]]) { println(f"{x}"); }
+fn showr(x: Result[i64, Vec[String]]) { println(f"{x}"); }
+fn main() {
+    let h = H { n: 7 };
+    let mut i = 0;
+    while i < 3 {
+        let mut a: Vec[String] = Vec.new();
+        a.push(f"payloadpayload{i}");
+        show(Some(a));
+        let mut b: Vec[String] = Vec.new();
+        b.push(f"payloadpayload{i}");
+        show(Some(b.clone()));
+        println(f"{b.len()}");
+        show(Some(mkv(i)));
+        let mut c: Vec[String] = Vec.new();
+        c.push(f"payloadpayload{i}");
+        let w = W { f: c };
+        show(Some(w.f));
+        let mut d: Vec[String] = Vec.new();
+        d.push(f"payloadpayload{i}");
+        showr(Err(d));
+        let s: String = f"payloadpayload{i}";
+        h.show(Some(s));
+        let mut e: Vec[String] = Vec.new();
+        e.push(f"payloadpayload{i}");
+        let named: Option[Vec[String]] = Some(e);
+        show(named);
+        i = i + 1;
+    }
+    println("done");
+}

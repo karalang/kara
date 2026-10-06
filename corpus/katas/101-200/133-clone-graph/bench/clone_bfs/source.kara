@@ -1,0 +1,72 @@
+// Benchmark workload — BFS clone of a 10-regular ring of N=2000 nodes,
+// K=500 outer clones.
+//
+// Graph shape: each node i (val i+1) connects to i±1, i±2, ..., i±5 mod N
+// → exactly 10 neighbors per node, 10_000 directed adjacency entries (5000
+// undirected edges). The shape is undirected, connected, cycle-rich — the
+// canonical Clone Graph stress test. Workload-shape tuning lives in
+// ../README.md § Benchmarks.
+
+shared struct Node {
+    val: i64,
+    mut neighbors: Vec[Node],
+}
+
+fn clone_graph(root: Node) -> Node {
+    let mut visited: Map[i64, Node] = Map.new();
+    let mut queue: VecDeque[Node] = VecDeque.new();
+
+    let root_clone = Node { val: root.val, neighbors: Vec.new() };
+    let _ = visited.insert(root.val, root_clone);
+    queue.push_back(root);
+
+    loop {
+        if let Some(curr) = queue.pop_front() {
+            let curr_clone = visited.get(curr.val).unwrap();
+            for nb in curr.neighbors.iter() {
+                if let None = visited.get(nb.val) {
+                    let fresh = Node { val: nb.val, neighbors: Vec.new() };
+                    let _ = visited.insert(nb.val, fresh);
+                    queue.push_back(nb);
+                }
+                let nb_clone = visited.get(nb.val).unwrap();
+                curr_clone.neighbors.push(nb_clone);
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Return the held `root_clone` alias directly — the discarded
+    // `visited` map's references are compensated correctly since the
+    // 2026-06 shared-struct refcount fixes (this exact return shape was
+    // the bug-7 runtime hang that forced a `visited.get(root.val)`
+    // re-fetch here).
+    root_clone
+}
+
+fn main() {
+    let n: i64 = 2000;
+    let half_deg: i64 = 5;
+    let k: i64 = 500;
+
+    let mut nodes: Vec[Node] = Vec.new();
+    for i in 0..n {
+        nodes.push(Node { val: i + 1, neighbors: Vec.new() });
+    }
+    for i in 0..n {
+        for d in 1..(half_deg + 1) {
+            let j = (i + d) % n;
+            nodes[i as u64].neighbors.push(nodes[j as u64]);
+            nodes[j as u64].neighbors.push(nodes[i as u64]);
+        }
+    }
+
+    // Sum-of-results sink so the optimizer cannot elide the K clones.
+    let mut sum: i64 = 0;
+    for _ in 0..k {
+        let c = clone_graph(nodes[0]);
+        sum = sum + c.val;
+    }
+    println(sum);
+}

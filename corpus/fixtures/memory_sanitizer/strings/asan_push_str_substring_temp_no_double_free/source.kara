@@ -1,0 +1,12 @@
+
+fn main() {
+    let s: String = "alpha beta gamma delta";
+    let mut acc: String = "";
+    let mut k = 0i64;
+    while k < 4i64 {
+        acc.push_str(s.substring(0i64, 5i64));
+        acc.push_str("-");
+        k = k + 1i64;
+    }
+    println(acc);
+}

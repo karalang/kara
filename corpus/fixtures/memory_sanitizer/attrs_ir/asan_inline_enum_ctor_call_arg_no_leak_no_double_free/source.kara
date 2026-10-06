@@ -1,0 +1,35 @@
+
+enum Tok { V(String), Empty }
+struct Wrap { t: Tok, n: i64 }
+struct Maker { id: i64 }
+fn mk() -> String {
+    let mut s = "".to_string();
+    s.push_str("inline_enum_ctor_arg_payload");
+    s
+}
+fn wrap_free(t: Tok) -> Wrap {
+    Wrap { t: t, n: 1 }
+}
+impl Maker {
+    fn wrap(ref self, t: Tok) -> Wrap {
+        Wrap { t: t, n: self.id }
+    }
+}
+fn tlen(w: Wrap) -> i64 {
+    match w.t {
+        V(s) => s.len(),
+        Empty => 0,
+    }
+}
+fn main() {
+    let m = Maker { id: 1 };
+    let mut total: i64 = 0;
+    let mut i = 0;
+    while i < 50 {
+        let a = wrap_free(Tok.V(mk()));
+        let b = m.wrap(Tok.V(mk()));
+        total = total + tlen(a) + tlen(b);
+        i = i + 1;
+    }
+    println(total);
+}

@@ -1,0 +1,18 @@
+
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn clone_offset(node: Option[Node], delta: i64) -> Option[Node] {
+    match node {
+        None => None,
+        Some(n) => Some(Node { val: n.val + delta, left: clone_offset(n.left, delta), right: clone_offset(n.right, delta) }),
+    }
+}
+fn count_nodes(node: Option[Node]) -> i64 {
+    match node { None => 0, Some(n) => 1 + count_nodes(n.left) + count_nodes(n.right) }
+}
+fn main() {
+    let root: Option[Node] = Some(Node { val: 5, left: Some(Node { val: 6, left: None, right: None }), right: None });
+    let s = match root { None => None, Some(n) => n.left.clone() };
+    let l0 = clone_offset(s, 10);
+    let l1 = clone_offset(s, 20);
+    println(f"{count_nodes(l0) + count_nodes(l1)}");
+}

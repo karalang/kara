@@ -1,0 +1,10 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn pair() -> (R, R) { (R { id: 1 }, R { id: 2 }) }
+fn main() {
+    let x = R { id: 9 };
+    let _ = x;
+    let (a, _) = pair();
+    println(f"mid{a.id}");
+    println(f"x{x.id}");
+}

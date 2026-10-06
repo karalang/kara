@@ -1,0 +1,11 @@
+
+fn main() {
+    let v = [1, 1, 2, 2];
+    let groups: Vec[Vec[i64]] = v.iter()
+        .chunk_by(|x| {
+            println(f"k:{x}");
+            x
+        })
+        .collect();
+    println(groups.len());
+}

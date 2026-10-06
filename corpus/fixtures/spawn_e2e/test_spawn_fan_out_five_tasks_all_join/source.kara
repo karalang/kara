@@ -1,0 +1,13 @@
+
+            fn worker(n: i64) {
+                println(n);
+            }
+            fn main() {
+                let mut tg = TaskGroup.new();
+                tg.spawn(|| worker(1));
+                tg.spawn(|| worker(2));
+                tg.spawn(|| worker(3));
+                tg.spawn(|| worker(4));
+                tg.spawn(|| worker(5));
+            }
+        

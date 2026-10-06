@@ -1,0 +1,49 @@
+
+struct Full { name: String, buf: Vec[i64] }
+impl Drop for Full {
+    fn drop(mut ref self) {
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
+        self.buf.clear();
+    }
+}
+
+fn mk(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Full { name: "payload-string-data", buf: b };
+}
+
+fn opt(i: i64) -> Option[Full] {
+    return Option.Some(mk(i));
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Boxed payload held to the binding's end — the body fires through
+        // the box at the NLL point; the box + payload heap free exactly once.
+        let a = opt(i);
+        n = n + 1i64;
+
+        // Result Ok side, annotated ctor let.
+        let b: Result[Full, i64] = Ok(mk(i));
+        n = n + 1i64;
+
+        // Payload moved out by a match arm — the source walk must not read
+        // the moved-from slot.
+        let c = opt(i);
+        match c {
+            Some(r) => { n = n + 1i64; }
+            None => { n = n + 100i64; }
+        }
+
+        // Consuming combinator — the result binding owns the payload; the
+        // source walk must not fire over the moved-from slot.
+        let d = opt(i);
+        let r2 = d.unwrap();
+        n = n + 1i64;
+        i = i + 1;
+    }
+    println(n);
+}

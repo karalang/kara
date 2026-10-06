@@ -1,0 +1,13 @@
+source = "tests/codegen/numerics.rs::e2e_int_bf16_conversions_are_lowered_through_f32"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

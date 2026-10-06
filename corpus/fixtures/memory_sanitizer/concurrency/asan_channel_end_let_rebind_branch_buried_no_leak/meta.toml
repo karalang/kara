@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/concurrency.rs::asan_channel_end_let_rebind_branch_buried_no_leak"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

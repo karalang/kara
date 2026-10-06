@@ -1,0 +1,117 @@
+// LeetCode #22: Generate Parentheses — closure-number DP (bottom-up),
+// O(Catalan(n) · n) time / output.
+//
+// Every non-empty well-formed string decomposes UNIQUELY as
+//
+//     "(" A ")" B
+//
+// where A and B are themselves well-formed (possibly empty): the first
+// character is necessarily '(', and its matching ')' — at the position
+// where the running open-minus-close balance first returns to zero, the
+// "closure number" — splits the rest into the enclosed part A and the
+// trailing part B. Uniqueness of that first balance-zero position is
+// what makes this a partition, not just a cover: each string of m pairs
+// is generated exactly once from the (i, m-1-i) split where A has i
+// pairs and B has m-1-i.
+//
+// So  f(0) = [""]  and  f(m) = [ "(" + a + ")" + b
+//                                 for i in 0..m
+//                                 for a in f(i), b in f(m-1-i) ],
+//
+// computed bottom-up into a table — Vec[Vec[String]] indexed by pair
+// count — rather than by the recursion kata #22's backtracking form
+// uses. Same answer set as backtracking.kara, different order: this
+// enumerates by enclosed-size i ascending (n=3: ()()(), ()(()), (())(),
+// (()()), ((())) — backtracking's exact reverse, coincidentally, since
+// small-i splits front-load closers).
+//
+// The table rows are REUSED across m iterations (row m reads rows
+// 0..m-1, several of them twice per split), so the inner reads index
+// `table[i][ai]` directly into `push_str` — element reads, no
+// per-element `let` bindings. Contrast kata [#17](../17-letter-combinations-of-a-phone-number/),
+// whose per-iter `let prefix = out[i]` binding is a deliberate
+// free-early discipline for a frontier that is *discarded* each round;
+// here the earlier rows must survive the whole build, so the borrowing
+// is read-in-place.
+//
+// Output building is the post-fix amortized-O(1) idiom from kata
+// [#17](../17-letter-combinations-of-a-phone-number/) / [#71](../71-simplify-path/):
+// one fresh String per output, assembled with push_str — "(" + A + ")"
+// + B in four appends, no intermediate concat allocations.
+//
+// LeetCode bounds n to [1, 8]; the final row is returned directly when
+// m == n (it is never pushed into the table), so the table holds rows
+// 0..n-1 and the answer is moved out, not copied out.
+
+fn generate_parenthesis(n: i64) -> Vec[String] {
+    // table[m] = all well-formed strings of m pairs; seeded with f(0) = [""].
+    let mut table: Vec[Vec[String]] = Vec.new();
+    let mut base: Vec[String] = Vec.new();
+    base.push("");
+    table.push(base);
+
+    let mut m = 1;
+    loop {
+        let mut row: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < m {
+            // Split: A (enclosed) has i pairs, B (trailing) has m-1-i.
+            let j = m - 1 - i;
+            let a_count = table[i].len();
+            let b_count = table[j].len();
+            let mut ai = 0;
+            while ai < a_count {
+                let mut bi = 0;
+                while bi < b_count {
+                    // "(" + A + ")" + B — four appends into one fresh
+                    // String, reading the table elements in place.
+                    let mut s: String = "(";
+                    s.push_str(table[i][ai]);
+                    s.push_str(")");
+                    s.push_str(table[j][bi]);
+                    row.push(s);
+                    bi = bi + 1;
+                }
+                ai = ai + 1;
+            }
+            i = i + 1;
+        }
+        if m == n {
+            // The answer row is returned by move — never enters the table.
+            return row;
+        }
+        table.push(row);
+        m = m + 1;
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn report(n: i64) {
+    let combos = generate_parenthesis(n);
+    let count = combos.len();
+    println(f"n={n} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(combos[i]);
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    // LeetCode example 2 — the smallest case.
+    report(1); // 1: ()
+
+    // First case with a real split choice: i=0 vs i=1.
+    report(2); // 2: ()(), (())
+
+    // LeetCode example 1 — Catalan(3) = 5, in closure-number order.
+    report(3); // 5: ()()(), ()(()), (())(), (()()), ((()))
+
+    // Catalan(4) = 14.
+    report(4); // 14
+
+    // LeetCode upper bound — Catalan(8) = 1430 strings of length 16.
+    report(8); // 1430
+}

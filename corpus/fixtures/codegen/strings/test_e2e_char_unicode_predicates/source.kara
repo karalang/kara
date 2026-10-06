@@ -1,0 +1,13 @@
+
+fn main() {
+    println(f"{'a'.is_alphabetic()} {'5'.is_numeric()} {'5'.is_alphabetic()}");
+    println(f"{' '.is_whitespace()} {'_'.is_alphanumeric()} {'z'.is_alphanumeric()}");
+    match char.try_from(945) {
+        Ok(g) => { println(f"{g.is_alphabetic()} {g.is_numeric()}"); }
+        Err(e) => { println("err"); }
+    }
+    match char.try_from(2411) {
+        Ok(d) => { println(f"{d.is_numeric()} {d.is_alphabetic()}"); }
+        Err(e) => { println("err"); }
+    }
+}

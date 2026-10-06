@@ -1,0 +1,229 @@
+// LeetCode 277 — differential harness.
+//
+// Three solvers: the ★ linear elimination, the same elimination on an explicit
+// stack, and the O(n²) definition. Two things are checked on every case, not
+// one:
+//
+//   1. THE ANSWER — all three must agree.
+//   2. THE QUESTION COUNT — both elimination solvers must stay within
+//      `3(n - 1)`.
+//
+// The second is what makes this problem worth a harness. A solver can be
+// perfectly correct and still ask O(n²) questions, which is exactly what the
+// problem forbids, and no amount of answer-checking would notice. The brute
+// force is in here partly as a definition and partly as the demonstration:
+// it agrees on every answer and blows the bound constantly.
+//
+// EXHAUSTIVE OVER EVERY RELATION, for n ≤ 4. A knows-matrix has `n² - n`
+// off-diagonal entries, so there are `2^(n²-n)` of them — 4096 at n=4 — and the
+// harness enumerates all of them as a bitmask. This is the strongest arm here,
+// because the space is dominated by the case that breaks survivor-based
+// solvers: the overwhelming majority of relations have NO celebrity, and a
+// solver that returns its survivor without verifying is right on the rare
+// positive cases and wrong on almost everything else. The counters below report
+// the split.
+//
+// WHICH IS ALSO WHY RANDOM CASES MUST PLANT ONE. In a uniform random matrix the
+// probability that any particular person is a celebrity is `2^-(2n-2)`, so by
+// n=9 it is under one in sixty thousand — sample randomly and the positive path
+// essentially never runs. The larger-n arm therefore does both: uniformly random
+// relations (which test the negative path and the bound) and relations with a
+// celebrity PLANTED at a rotating index (which test the positive path at all).
+// Testing only the first would look thorough and cover half the problem.
+
+fn knows(m: ref Vec[Vec[bool]], a: i64, b: i64, calls: mut ref i64) -> bool {
+    calls = calls + 1;
+    return m[a][b];
+}
+
+fn solve_scan(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
+    let mut cand = 0;
+    let mut i = 1;
+    while i < n {
+        if knows(m, cand, i, calls) { cand = i; }
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < n {
+        if j != cand {
+            if knows(m, cand, j, calls) { return -1; }
+            if not knows(m, j, cand, calls) { return -1; }
+        }
+        j = j + 1;
+    }
+    return cand;
+}
+
+fn solve_stack(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
+    let mut st: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { st.push(i); i = i + 1; }
+    while st.len() > 1 {
+        let a = st.pop().unwrap();
+        let b = st.pop().unwrap();
+        if knows(m, a, b, calls) { st.push(b); } else { st.push(a); }
+    }
+    let cand = st[0];
+    let mut j = 0;
+    while j < n {
+        if j != cand {
+            if knows(m, cand, j, calls) { return -1; }
+            if not knows(m, j, cand, calls) { return -1; }
+        }
+        j = j + 1;
+    }
+    return cand;
+}
+
+fn solve_brute(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
+    let mut i = 0;
+    while i < n {
+        let mut ok = true;
+        let mut j = 0;
+        while j < n {
+            if i != j {
+                if knows(m, i, j, calls) { ok = false; }
+                if not knows(m, j, i, calls) { ok = false; }
+            }
+            j = j + 1;
+        }
+        if ok { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Build the matrix whose off-diagonal entries are the bits of `mask`, read in
+// row-major order skipping the diagonal.
+fn from_mask(n: i64, mask: i64) -> Vec[Vec[bool]] {
+    let mut m: Vec[Vec[bool]] = Vec.new();
+    let mut bit = 0;
+    let mut a = 0;
+    while a < n {
+        let mut r: Vec[bool] = Vec.new();
+        let mut b = 0;
+        while b < n {
+            if a == b {
+                r.push(false);
+            } else {
+                r.push((mask / pow2(bit)) % 2 == 1);
+                bit = bit + 1;
+            }
+            b = b + 1;
+        }
+        m.push(r);
+        a = a + 1;
+    }
+    return m;
+}
+
+fn pow2(e: i64) -> i64 {
+    let mut p = 1;
+    let mut i = 0;
+    while i < e { p = p * 2; i = i + 1; }
+    return p;
+}
+
+fn main() {
+    let mut cases = 0;
+    let mut exhaustive = 0;
+    let mut with_celebrity = 0;
+    let mut scan_vs_stack = 0;
+    let mut vs_definition = 0;
+    let mut bound_violations = 0;
+    let mut worst_scan = 0;
+    let mut worst_stack = 0;
+    let mut worst_brute_over = 0;
+    let mut digest = 0;
+
+    // ---- exhaustive: EVERY relation on n <= 4 ---------------------------
+    let mut n = 1;
+    while n <= 4 {
+        let total = pow2(n * n - n);
+        let mut mask = 0;
+        while mask < total {
+            let m = from_mask(n, mask);
+            let mut c1 = 0;
+            let mut c2 = 0;
+            let mut c3 = 0;
+            let a1 = solve_scan(m, n, mut c1);
+            let a2 = solve_stack(m, n, mut c2);
+            let a3 = solve_brute(m, n, mut c3);
+            if a1 != a2 { scan_vs_stack = scan_vs_stack + 1; }
+            if a1 != a3 or a2 != a3 { vs_definition = vs_definition + 1; }
+            if a3 >= 0 { with_celebrity = with_celebrity + 1; }
+            let bound = 3 * (n - 1);
+            if c1 > bound or c2 > bound { bound_violations = bound_violations + 1; }
+            if c1 > worst_scan { worst_scan = c1; }
+            if c2 > worst_stack { worst_stack = c2; }
+            if c3 > bound and c3 - bound > worst_brute_over { worst_brute_over = c3 - bound; }
+            digest = (digest * 131 + (a3 + 2)) % 1000000007;
+            cases = cases + 1;
+            exhaustive = exhaustive + 1;
+            mask = mask + 1;
+        }
+        n = n + 1;
+    }
+
+    // ---- larger n: uniform random, and with a celebrity PLANTED ----------
+    let mut seed = 20260816;
+    let mut nn = 5;
+    while nn <= 9 {
+        let mut t = 0;
+        while t < 120 {
+            let mut m: Vec[Vec[bool]] = Vec.new();
+            let mut a = 0;
+            while a < nn {
+                let mut r: Vec[bool] = Vec.new();
+                let mut b = 0;
+                while b < nn {
+                    seed = (seed * 1103515245 + 12345) % 2147483648;
+                    r.push(a != b and seed % 2 == 0);
+                    b = b + 1;
+                }
+                m.push(r);
+                a = a + 1;
+            }
+            // Half the cases get a real celebrity planted at a rotating index —
+            // uniform random matrices essentially never contain one.
+            if t % 2 == 0 {
+                let star = t % nn;
+                let mut p = 0;
+                while p < nn {
+                    if p != star {
+                        m[star][p] = false;   // the celebrity knows nobody
+                        m[p][star] = true;    // and is known by everyone
+                    }
+                    p = p + 1;
+                }
+            }
+            let mut c1 = 0;
+            let mut c2 = 0;
+            let mut c3 = 0;
+            let a1 = solve_scan(m, nn, mut c1);
+            let a2 = solve_stack(m, nn, mut c2);
+            let a3 = solve_brute(m, nn, mut c3);
+            if a1 != a2 { scan_vs_stack = scan_vs_stack + 1; }
+            if a1 != a3 or a2 != a3 { vs_definition = vs_definition + 1; }
+            if a3 >= 0 { with_celebrity = with_celebrity + 1; }
+            let bound = 3 * (nn - 1);
+            if c1 > bound or c2 > bound { bound_violations = bound_violations + 1; }
+            if c1 > worst_scan { worst_scan = c1; }
+            if c2 > worst_stack { worst_stack = c2; }
+            digest = (digest * 131 + (a3 + 2)) % 1000000007;
+            cases = cases + 1;
+            t = t + 1;
+        }
+        nn = nn + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"of which EVERY relation on n<=4 {exhaustive}");
+    println(f"cases that actually contain a celebrity {with_celebrity}");
+    println(f"worst question count: scan {worst_scan}, stack {worst_stack} (bound at n=9 is 24)");
+    println(f"brute force exceeded the bound by up to {worst_brute_over} questions");
+    println(f"bound violations by the elimination solvers {bound_violations}");
+    println(f"digest {digest}");
+    println(f"the two elimination solvers disagreeing with EACH OTHER {scan_vs_stack}");
+    println(f"either of them disagreeing with the DEFINITION {vs_definition}");
+}

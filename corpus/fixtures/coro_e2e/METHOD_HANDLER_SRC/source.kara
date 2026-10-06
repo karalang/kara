@@ -1,0 +1,15 @@
+
+        struct Acceptor { listener: TcpListener }
+        impl Acceptor {
+            fn run(self) {
+                let _stream = self.listener.accept().unwrap();
+                println(1);
+            }
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let a = Acceptor { listener: listener };
+            a.run();
+            println(2);
+        }
+    

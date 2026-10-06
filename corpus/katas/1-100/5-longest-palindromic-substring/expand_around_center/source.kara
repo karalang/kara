@@ -1,0 +1,81 @@
+// LeetCode #5: Longest Palindromic Substring — expand around center.
+// O(n²) time, O(1) extra space (zero-copy `s.bytes()` view; no
+// `Vec[char]` snapshot).
+//
+// For each position i, seed two windows — odd (lo=hi=i) and even (lo=i,
+// hi=i+1) — and expand outward while both bounds are in range and the
+// bytes match. The longest window seen is the answer. Every palindromic
+// substring has a unique center (a single char for odd lengths, a gap
+// between two chars for even lengths), so iterating both shapes at each
+// i covers all 2n − 1 possible centers in one pass.
+//
+// LeetCode #5's input alphabet is digits + English letters (ASCII), so
+// each byte is the codepoint and byte-equality is character-equality.
+// `s.bytes()` gives an O(1) positional `Slice[u8]` view over the
+// String's storage — perfect fit for the indexed access this algorithm
+// needs, without the O(n) `Vec[char]` snapshot earlier versions used.
+//
+// Result is returned as `[start, length]`. LeetCode #5 admits multiple
+// valid answers when several palindromes share the maximum length;
+// this algorithm's strict `>` update keeps the *first* such window in
+// left-to-right scan order — `"babad"` returns `(0, 3)` for `"bab"`,
+// never `(1, 3)` for `"aba"`.
+
+fn expand(bytes: Slice[u8], lo0: i64, hi0: i64) -> Array[i64, 2] {
+    let mut lo = lo0;
+    let mut hi = hi0;
+    let n = bytes.len();
+    while lo >= 0 and hi < n and bytes[lo] == bytes[hi] {
+        lo = lo - 1;
+        hi = hi + 1;
+    }
+    // Loop exits one step past the last valid window. The matched range is
+    // bytes[lo+1 ..= hi-1], so start = lo + 1 and length = hi - lo - 1.
+    // For the even seed where bytes[i] != bytes[i+1] the loop never enters
+    // and this yields length 0 — correctly rejected by the strict `>` below.
+    [lo + 1, hi - lo - 1]
+}
+
+fn longest_palindrome(s: ref String) -> Array[i64, 2] {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut best_start = 0;
+    let mut best_len = 0;
+    let mut i = 0;
+    while i < n {
+        let odd = expand(bytes, i, i);
+        if odd[1] > best_len {
+            best_start = odd[0];
+            best_len = odd[1];
+        }
+        let even = expand(bytes, i, i + 1);
+        if even[1] > best_len {
+            best_start = even[0];
+            best_len = even[1];
+        }
+        i = i + 1;
+    }
+    [best_start, best_len]
+}
+
+fn report(s: ref String) {
+    let result = longest_palindrome(s);
+    println(result[0]);
+    println(result[1]);
+}
+
+fn main() {
+    // Two lines per case: start index, then length. The substring is
+    // bytes[start .. start + length]. See README § Output format for why
+    // we report indices rather than the substring itself.
+    report("babad");             // expect: 0 3   ("bab"; LeetCode also accepts "aba")
+    report("cbbd");              // expect: 1 2   ("bb")
+    report("a");                 // expect: 0 1
+    report("ac");                // expect: 0 1   (any single char)
+    report("");                  // expect: 0 0   (empty input)
+    report("racecar");           // expect: 0 7
+    report("abacdfgdcaba");      // expect: 0 3   ("aba"; the "abacdcaba" near-match is not contiguous)
+    report("ababababa");         // expect: 0 9
+    report("forgeeksskeegfor");  // expect: 3 10  ("geeksskeeg")
+    report("aaa");               // expect: 0 3
+}

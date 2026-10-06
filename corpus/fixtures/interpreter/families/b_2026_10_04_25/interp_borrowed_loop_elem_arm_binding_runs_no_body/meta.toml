@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_04_25.rs::interp_borrowed_loop_elem_arm_binding_runs_no_body"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

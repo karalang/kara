@@ -1,0 +1,8 @@
+
+par struct C { v: Atomic[i64] }
+impl C {
+    fn cas(ref self) -> Result[i64, i64] {
+        self.v.compare_exchange(0, 5, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst)
+    }
+}
+fn main() { let c = C { v: Atomic.new(0) }; let _ = c.cas(); }

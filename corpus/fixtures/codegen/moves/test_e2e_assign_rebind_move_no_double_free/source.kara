@@ -1,0 +1,13 @@
+
+fn build() -> String {
+    let mut acc: String = String.new();
+    acc.push_str("first");
+    let mut extra: String = String.new();
+    extra.push_str("second");
+    acc = extra;
+    acc
+}
+fn main() {
+    let s: String = build();
+    println(s);
+}

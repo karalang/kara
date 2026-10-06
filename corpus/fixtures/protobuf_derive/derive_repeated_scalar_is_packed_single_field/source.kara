@@ -1,0 +1,15 @@
+
+#[derive(Message)]
+struct M { nums: Vec[i64], tags: Vec[String] }
+
+fn main() {
+    let m = M { nums: [10, 20, 30], tags: ["p", "q"] };
+    let mut r = ProtoReader.new(m.encode());
+    let mut desc = "";
+    while not r.at_end() {
+        let (fld, wire) = r.read_tag();
+        desc = desc + f"({fld},{wire})";
+        let _ = r.skip_field(wire);
+    }
+    println(desc);
+}

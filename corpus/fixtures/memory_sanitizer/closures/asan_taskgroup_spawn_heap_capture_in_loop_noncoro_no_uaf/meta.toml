@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/closures.rs::asan_taskgroup_spawn_heap_capture_in_loop_noncoro_no_uaf"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "par"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

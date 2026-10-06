@@ -1,0 +1,21 @@
+
+struct Pair { word: String, n: i64 }
+#[derive(Clone)]
+struct Deep { inner: Pair, tag: i64 }
+fn bump(d: Deep) -> Deep { Deep { inner: Pair { word: d.inner.word, n: d.inner.n + 1 }, tag: d.tag } }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 20 {
+        let mut ds: Vec[Deep] = Vec.new();
+        ds.push(Deep { inner: Pair { word: f"seed{k + i}", n: 0 }, tag: 5 });
+        let d0 = ds[0].clone();
+        ds[0] = bump(d0);
+        let d1 = ds[0].clone();
+        ds[0] = bump(d1);
+        acc = acc + ds[0].inner.n + ds[0].tag;
+        i = i + 1;
+    }
+    println(acc > 0);
+}

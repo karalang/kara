@@ -1,0 +1,10 @@
+
+#[derive(Hash, Eq)]
+shared struct K { id: i64 }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let _ = m.insert(K { id: 1 }, 10);
+    let _ = m.insert(K { id: 2 }, 20);
+    let _ = m.insert(K { id: 3 }, 30);
+    println(m.len());
+}

@@ -1,0 +1,75 @@
+struct Box[T] { v: T }
+struct Trip[T] { a: String, v: T, n: i64 }
+
+fn mk(i: i64, n: i64) -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(i, f"mapv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    m.insert(i + 100i64, f"mapw-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return m;
+}
+
+fn mkset(i: i64, n: i64) -> Set[String] {
+    let mut s: Set[String] = Set.new();
+    s.insert(f"setv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return s;
+}
+
+fn sink(b: Box[Map[i64, String]]) -> i64 { return b.v.len(); }
+fn take(b: Box[Map[i64, String]]) -> Map[i64, String] { return b.v; }
+fn eat(m: Map[i64, String]) -> i64 { return m.len(); }
+fn peek(b: ref Box[Map[i64, String]]) -> i64 { return b.v.len(); }
+fn sinkset(b: Box[Set[String]]) -> i64 { return b.v.len(); }
+fn sinkmid(t: Trip[Map[i64, String]]) -> i64 {
+    let mut r: i64 = t.v.len() + t.n;
+    if t.a.contains("padding") { r = r + 1i64; }
+    return r;
+}
+
+fn main() {
+    let n: i64 = 1i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40i64 {
+        // (a) read through a by-value param — the reported leak
+        let b1 = Box { v: mk(i, n) };
+        acc = acc + sink(b1);
+        // (b) read through a plain LOCAL — not param-specific
+        let b2 = Box { v: mk(i, n) };
+        acc = acc + b2.v.len();
+        // (c) the MID field of a multi-field wrapper (offset-sensitive)
+        let t1 = Trip { a: f"lead-{i}-padding-{n}", v: mk(i, n), n: 3i64 };
+        acc = acc + sinkmid(t1);
+        // (d) the field RETURNED out of a by-value param
+        let b3 = Box { v: mk(i, n) };
+        let m1 = take(b3);
+        acc = acc + m1.len();
+        // (e) the field moved into a local
+        let b4 = Box { v: mk(i, n) };
+        let m2 = b4.v;
+        acc = acc + m2.len();
+        // (f) the field passed to a consuming callee
+        let b5 = Box { v: mk(i, n) };
+        acc = acc + eat(b5.v);
+        // (g) a WHOLE-struct move
+        let b6 = Box { v: mk(i, n) };
+        let b7 = b6;
+        acc = acc + sink(b7);
+        // (h) a `ref` param read — the source keeps ownership
+        let b8 = Box { v: mk(i, n) };
+        acc = acc + peek(b8);
+        // (i) the Set instantiation
+        let b9 = Box { v: mkset(i, n) };
+        acc = acc + sinkset(b9);
+        // (j) a struct-pattern destructure
+        let ba = Box { v: mk(i, n) };
+        let Box { v } = ba;
+        acc = acc + eat(v);
+        // CONTROL, correct before and after: a struct that is never moved and
+        // whose fields are only READ, so it must still free everything itself.
+        let t2 = Trip { a: f"lead-{i}-padding-{n}", v: mk(i, n), n: 3i64 };
+        if t2.a.contains("padding") { acc = acc + 1i64; }
+        acc = acc + t2.v.len();
+        i = i + 1i64;
+    }
+    println(acc);
+}

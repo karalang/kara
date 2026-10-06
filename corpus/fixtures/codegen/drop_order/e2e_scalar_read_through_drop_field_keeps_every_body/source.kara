@@ -1,0 +1,45 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+impl R { fn idm(ref self) -> i64 { return self.id; } }
+
+struct H2 { a: R, b: R }
+struct H3 { a: R, b: R, c: R }
+struct Hn { a: R, n: i64 }
+struct HOwn { a: R, b: R }
+impl Drop for HOwn { fn drop(mut ref self) { println("dHOwn") } }
+struct Inner { r: R }
+struct Outer { h: Inner }
+shared struct Box1 { v: i64 }
+struct R2 { id: i64, sh: Box1 }
+impl Drop for R2 { fn drop(mut ref self) { println(f"dR2{self.id}/{self.sh.v}") } }
+struct Hb { a: R2, b: R2 }
+struct Mid { r: R, q: R }
+struct Top { m: Mid, s: R }
+
+fn cell_scalar() { let h = H2 { a: mk(1), b: mk(101) }; let z = h.a.id; println(f"  z{z}") }
+fn cell_method() { let h = H2 { a: mk(2), b: mk(102) }; let z = h.a.idm(); println(f"  z{z}") }
+fn cell_nodest() { let h = H2 { a: mk(3), b: mk(103) }; println("  no") }
+fn cell_three()  { let h = H3 { a: mk(4), b: mk(104), c: mk(204) }; let z = h.a.id; println(f"  z{z}") }
+fn cell_own()    { let h = HOwn { a: mk(5), b: mk(105) }; let z = h.a.id; println(f"  z{z}") }
+fn cell_whole()  { let h = H2 { a: mk(6), b: mk(106) }; let r = h.a; println(f"  z{r.id}") }
+fn cell_plain()  { let h = Hn { a: mk(7), n: 4 }; let z = h.n; println(f"  z{z}") }
+fn cell_move()   { let o = Outer { h: Inner { r: mk(8) } }; let x = o.h.r; println(f"  z{x.id}") }
+fn cell_three_hop() { let t = Top { m: Mid { r: mk(9), q: mk(109) }, s: mk(209) }; let z = t.m.r.id; println(f"  z{z}") }
+fn cell_shared() { let h = Hb { a: R2 { id: 11, sh: Box1 { v: 111 } }, b: R2 { id: 12, sh: Box1 { v: 112 } } }; let sv = h.a.sh; println(f"  s{sv.v}") }
+fn cell_live()   { let h = H2 { a: mk(10), b: mk(110) }; let z = h.a.id; println(f"  z{z}"); println(f"  b{h.b.id}") }
+
+fn main() {
+    println("scalar");   cell_scalar()
+    println("method");   cell_method()
+    println("nodest");   cell_nodest()
+    println("three");    cell_three()
+    println("own");      cell_own()
+    println("whole");    cell_whole()
+    println("plain");    cell_plain()
+    println("move");     cell_move()
+    println("threehop"); cell_three_hop()
+    println("shared");   cell_shared()
+    println("live");     cell_live()
+    println("done")
+}

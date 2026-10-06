@@ -1,0 +1,173 @@
+// LeetCode #36: Valid Sudoku — single pass, boolean "seen" matrices.
+//
+// Same single-pass structure as valid_sudoku.kara (the ★ bitmask style), but the
+// per-unit seen-set is a plain array of booleans instead of bits packed into an
+// integer. Where the bitmask style asks `(rows[r] & (1<<d)) != 0`, this one asks
+// `seen_row[r][d]` directly — no shift, no mask, just a 2D boolean lookup. The
+// state is three 9×10 boolean grids: seen_row[unit][digit], indexed by the digit
+// value 1..9 itself (slot 0 unused), for rows, columns, and boxes.
+//
+//   - For a filled cell (r, c) holding digit d, the box is (r/3)*3 + c/3.
+//   - If seen_row[r][d], seen_col[c][d], or seen_box[box][d] is already true, that
+//     digit repeats in its row, column, or box — invalid, return immediately.
+//   - Otherwise mark all three true and continue.
+//
+// Identical O(81) work and identical early-exit to the bitmask form; this is the
+// "no bit tricks" reading, the clearest mental model of what the masks encode. The
+// only cost is space (243 bools vs 27 integers) and a little more indexing — at a
+// 9×9 board, immaterial. Pedagogically it makes explicit that a "bitmask" is just a
+// boolean array whose indices are bit positions.
+
+fn box_index(r: i64, c: i64) -> i64 {
+    (r / 3) * 3 + c / 3
+}
+
+fn is_valid(board: ref Vec[Vec[i64]]) -> bool {
+    // seen_row[unit][digit] etc., digit in 1..9 (slot 0 unused). One row of 10
+    // bools per unit, nine units each.
+    let mut seen_row: Vec[Vec[bool]] = Vec.new();
+    let mut seen_col: Vec[Vec[bool]] = Vec.new();
+    let mut seen_box: Vec[Vec[bool]] = Vec.new();
+    let mut u = 0;
+    while u < 9 {
+        let mut rrow: Vec[bool] = Vec.new();
+        let mut crow: Vec[bool] = Vec.new();
+        let mut brow: Vec[bool] = Vec.new();
+        let mut d = 0;
+        while d < 10 {
+            rrow.push(false);
+            crow.push(false);
+            brow.push(false);
+            d = d + 1;
+        }
+        seen_row.push(rrow);
+        seen_col.push(crow);
+        seen_box.push(brow);
+        u = u + 1;
+    }
+
+    let mut r = 0;
+    while r < 9 {
+        let mut c = 0;
+        while c < 9 {
+            let d = board[r][c];
+            if d != 0 {
+                let b = box_index(r, c);
+                if seen_row[r][d] or seen_col[c][d] or seen_box[b][d] {
+                    return false;
+                }
+                seen_row[r][d] = true;
+                seen_col[c][d] = true;
+                seen_box[b][d] = true;
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    true
+}
+
+fn report(name: String, board: ref Vec[Vec[i64]]) {
+    if is_valid(board) {
+        println(f"{name} -> valid");
+    } else {
+        println(f"{name} -> invalid");
+    }
+}
+// LeetCode example 1 — a valid partial board.
+fn board_example1() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([5, 3, 0, 0, 7, 0, 0, 0, 0]);
+    b.push([6, 0, 0, 1, 9, 5, 0, 0, 0]);
+    b.push([0, 9, 8, 0, 0, 0, 0, 6, 0]);
+    b.push([8, 0, 0, 0, 6, 0, 0, 0, 3]);
+    b.push([4, 0, 0, 8, 0, 3, 0, 0, 1]);
+    b.push([7, 0, 0, 0, 2, 0, 0, 0, 6]);
+    b.push([0, 6, 0, 0, 0, 0, 2, 8, 0]);
+    b.push([0, 0, 0, 4, 1, 9, 0, 0, 5]);
+    b.push([0, 0, 0, 0, 8, 0, 0, 7, 9]);
+    b
+}
+
+// LeetCode example 2 — example 1 with the top-left 5 changed to 8. That 8 now
+// repeats in column 0 (row 3 is also 8) AND in the top-left box (cell (2,2) is 8).
+fn board_example2() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([8, 3, 0, 0, 7, 0, 0, 0, 0]);
+    b.push([6, 0, 0, 1, 9, 5, 0, 0, 0]);
+    b.push([0, 9, 8, 0, 0, 0, 0, 6, 0]);
+    b.push([8, 0, 0, 0, 6, 0, 0, 0, 3]);
+    b.push([4, 0, 0, 8, 0, 3, 0, 0, 1]);
+    b.push([7, 0, 0, 0, 2, 0, 0, 0, 6]);
+    b.push([0, 6, 0, 0, 0, 0, 2, 8, 0]);
+    b.push([0, 0, 0, 4, 1, 9, 0, 0, 5]);
+    b.push([0, 0, 0, 0, 8, 0, 0, 7, 9]);
+    b
+}
+
+// A fully empty board — vacuously valid (no constraint can fire).
+fn board_empty() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r < 9 {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < 9 {
+            row.push(0);
+            c = c + 1;
+        }
+        b.push(row);
+        r = r + 1;
+    }
+    b
+}
+
+// A complete, correctly solved board (the canonical solution of example 1) — valid.
+fn board_solved() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([5, 3, 4, 6, 7, 8, 9, 1, 2]);
+    b.push([6, 7, 2, 1, 9, 5, 3, 4, 8]);
+    b.push([1, 9, 8, 3, 4, 2, 5, 6, 7]);
+    b.push([8, 5, 9, 7, 6, 1, 4, 2, 3]);
+    b.push([4, 2, 6, 8, 5, 3, 7, 9, 1]);
+    b.push([7, 1, 3, 9, 2, 4, 8, 5, 6]);
+    b.push([9, 6, 1, 5, 3, 7, 2, 8, 4]);
+    b.push([2, 8, 7, 4, 1, 9, 6, 3, 5]);
+    b.push([3, 4, 5, 2, 8, 6, 1, 7, 9]);
+    b
+}
+
+// Duplicate confined to a ROW (same row, different column and box) — invalid.
+fn board_row_dup() -> Vec[Vec[i64]] {
+    let mut b = board_empty();
+    b[0][0] = 1;
+    b[0][8] = 1;
+    b
+}
+
+// Duplicate confined to a COLUMN (same column, different row and box) — invalid.
+fn board_col_dup() -> Vec[Vec[i64]] {
+    let mut b = board_empty();
+    b[0][0] = 2;
+    b[8][0] = 2;
+    b
+}
+
+// Duplicate confined to a BOX (same 3×3 box, different row and column) — invalid;
+// the case that defeats a row-and-column-only check.
+fn board_box_dup() -> Vec[Vec[i64]] {
+    let mut b = board_empty();
+    b[0][0] = 3;
+    b[1][1] = 3;
+    b
+}
+
+fn main() {
+    report("example1 (valid partial)", board_example1());     // valid
+    report("example2 (col+box dup)  ", board_example2());     // invalid
+    report("empty board            ", board_empty());         // valid
+    report("solved board           ", board_solved());        // valid
+    report("row-only duplicate     ", board_row_dup());       // invalid
+    report("col-only duplicate     ", board_col_dup());       // invalid
+    report("box-only duplicate     ", board_box_dup());       // invalid
+}

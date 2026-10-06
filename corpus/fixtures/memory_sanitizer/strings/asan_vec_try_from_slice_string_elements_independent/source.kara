@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut a: String = String.new();
+    a.push_str("alpha");
+    let mut b: String = String.new();
+    b.push_str("beta");
+    let mut src: Vec[String] = Vec.new();
+    src.push(a);
+    src.push(b);
+    match Vec.try_from_slice(src) {
+        Ok(dst) => { println(dst[0]); println(dst[1]); }
+        Err(_) => { println("err"); }
+    }
+}

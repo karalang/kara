@@ -1,0 +1,10 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    for x in v.iter().scan(0, |state, item| {
+        let new = state + item;
+        Some((new, new))
+    }) {
+        println(x);
+    }
+}

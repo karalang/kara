@@ -1,0 +1,17 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct W { r: R, n: i64, p: i64, q: i64 }
+fn mk(i: i64) -> R { return R { id: i } }
+fn mko() -> Option[(R, i64, i64, i64)] { return Some((mk(40), 1, 2, 3)) }
+
+fn main() {
+    println("one");      { let o: Option[(R, i64, i64, i64)] = Some((mk(1), 1, 2, 3)); match o { Some(t) => { let x = t.0; println("  mid") } None => { println("  n") } } println("  end") }
+    println("two");      { let o: Option[(R, R, i64, i64)] = Some((mk(2), mk(3), 2, 3)); match o { Some(t) => { let x = t.0; println("  mid") } None => { println("  n") } } println("  end") }
+    println("both");     { let o: Option[(R, R, i64, i64)] = Some((mk(4), mk(5), 2, 3)); match o { Some(t) => { let x = t.0; let y = t.1; println("  mid") } None => { println("  n") } } println("  end") }
+    println("second");   { let o: Option[(R, R, i64, i64)] = Some((mk(6), mk(7), 2, 3)); match o { Some(t) => { let y = t.1; println("  mid") } None => { println("  n") } } println("  end") }
+    println("readonly"); { let o: Option[(R, R, i64, i64)] = Some((mk(9), mk(10), 2, 3)); match o { Some(t) => { println(f"  mid{t.0.id}") } None => { println("  n") } } println("  end") }
+    println("inline");   { match mko() { Some(t) => { let x = t.0; println("  mid") } None => { println("  n") } } println("  end") }
+    println("struct");   { let o: Option[W] = Some(W { r: mk(12), n: 1, p: 2, q: 3 }); match o { Some(t) => { let x = t.r; println("  mid") } None => { println("  n") } } println("  end") }
+    println("none");     { let o: Option[(R, i64, i64, i64)] = None; match o { Some(t) => { let x = t.0; println("  mid") } None => { println("  n") } } println("  end") }
+    println("end")
+}

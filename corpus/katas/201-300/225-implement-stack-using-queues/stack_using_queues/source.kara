@@ -1,0 +1,95 @@
+// LeetCode 225 — Implement Stack using Queues.
+//
+// Build a LIFO stack using only FIFO queue operations (enqueue at the back,
+// dequeue from the front, peek front, size, empty).
+//
+// The trick is a "costly push": after enqueuing the new element at the back,
+// rotate the queue by dequeuing and re-enqueuing every OTHER element, so the
+// element just pushed ends up at the FRONT. Then `pop` and `top` are just the
+// queue's front operations — the queue's head always holds the most-recently
+// pushed value, which is exactly stack (LIFO) order. Push is O(n); pop/top/empty
+// are O(1).
+//
+// The underlying queue is an index-pool FIFO: a `Vec[i64]` plus a `head` cursor
+// (dequeue advances head, enqueue pushes at the back).
+
+struct Queue {
+    data: Vec[i64],
+    mut head: i64,
+}
+
+fn q_new() -> Queue {
+    return Queue { data: Vec.new(), head: 0 };
+}
+
+fn q_size(q: ref Queue) -> i64 {
+    return q.data.len() - q.head;
+}
+
+fn q_empty(q: ref Queue) -> bool {
+    return q.head >= q.data.len();
+}
+
+fn q_enqueue(q: mut ref Queue, x: i64) {
+    q.data.push(x);
+}
+
+fn q_dequeue(q: mut ref Queue) -> i64 {
+    let v = q.data[q.head];
+    q.head = q.head + 1;
+    return v;
+}
+
+fn q_front(q: ref Queue) -> i64 {
+    return q.data[q.head];
+}
+
+// Stack operations layered on the queue ---------------------------------------
+
+fn stack_push(q: mut ref Queue, x: i64) {
+    q_enqueue(q, x);
+    let mut rotations = q_size(q) - 1;      // bring x to the front
+    while rotations > 0 {
+        let front = q_dequeue(q);
+        q_enqueue(q, front);
+        rotations = rotations - 1;
+    }
+}
+
+fn stack_pop(q: mut ref Queue) -> i64 {
+    return q_dequeue(q);
+}
+
+fn stack_top(q: ref Queue) -> i64 {
+    return q_front(q);
+}
+
+fn stack_empty(q: ref Queue) -> bool {
+    return q_empty(q);
+}
+
+fn show_bool(b: bool) {
+    if b { println("true"); } else { println("false"); }
+}
+
+fn main() {
+    let mut s = q_new();
+
+    stack_push(mut s, 1);
+    stack_push(mut s, 2);
+    println(stack_top(s));          // 2
+    println(stack_pop(mut s));          // 2
+    show_bool(stack_empty(s));      // false — 1 remains
+
+    stack_push(mut s, 3);
+    stack_push(mut s, 4);
+    println(stack_top(s));          // 4
+    println(stack_pop(mut s));          // 4
+    println(stack_pop(mut s));          // 3
+    println(stack_pop(mut s));          // 1
+    show_bool(stack_empty(s));      // true
+
+    stack_push(mut s, 5);
+    println(stack_top(s));          // 5
+    show_bool(stack_empty(s));      // false
+}

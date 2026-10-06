@@ -1,0 +1,12 @@
+
+fn main() {
+    let opt = Some("hello");
+    match opt {
+        ref x @ Some(y) => { println(y); }
+        None => { println("none"); }
+    }
+    match opt {
+        Some(z) => { println(z); }
+        None => { }
+    }
+}

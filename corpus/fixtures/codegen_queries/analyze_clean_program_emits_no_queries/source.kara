@@ -1,0 +1,6 @@
+
+        fn main() {
+            let x = 42;
+            println(f"{x}");
+        }
+    

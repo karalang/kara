@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_e2e_par_group_serializes_for_iter_with_outer_mutable_write"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

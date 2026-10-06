@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 300 {
+        let a: String = String.from(f"fstr{i}");
+        total = total + a.len();
+        let s: String = f"owned{i}";
+        let b: String = String.from(s);
+        total = total + b.len();
+        let c: String = String.from("literal");
+        total = total + c.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

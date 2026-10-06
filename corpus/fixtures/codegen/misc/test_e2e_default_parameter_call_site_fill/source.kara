@@ -1,0 +1,11 @@
+
+fn create_server(host: i64, port: i64 = 8080, max_connections: i64 = 1000, timeout_ms: i64 = 5000) -> i64 {
+    host + port + max_connections + timeout_ms
+}
+
+fn main() {
+    println(create_server(1));
+    println(create_server(1, 9090));
+    println(create_server(1, max_connections: 100));
+    println(create_server(1, 9090, max_connections: 100, timeout_ms: 250));
+}

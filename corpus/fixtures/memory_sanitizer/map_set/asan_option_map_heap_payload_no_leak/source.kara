@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let mut v: Vec[i64] = Vec.new();
+        v.push(1i64); v.push(2i64); v.push(3i64);
+        let opt: Option[Vec[i64]] = Some(v);
+        total = total + opt.map(|xs| xs.len()).unwrap_or(0i64);
+        let s: Option[String] = Some(f"hello");
+        let same = s.map(|x| x);
+        match same { Some(x) => { total = total + x.len(); } None => {} }
+        let up: Option[String] = Some(f"hi");
+        match up.map(|x: String| x.to_uppercase()) { Some(x) => { total = total + x.len(); } None => {} }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

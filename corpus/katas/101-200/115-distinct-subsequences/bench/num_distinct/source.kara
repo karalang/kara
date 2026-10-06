@@ -1,0 +1,61 @@
+// Benchmark workload for LeetCode #115 — build 8 (s,t) string pairs once (distinct, small-alphabet
+// so subsequence counts are non-trivial but bounded), then K reps of the 2-D DP num_distinct on a
+// DATA-DEPENDENT-selected pair (idx = acc%8, seeded by the running hash so nothing hoists), folding
+// each count into a rolling hash. Compute-bound: each rep allocates an (m+1)×(n+1) Vec[Vec[i64]]
+// table (~28×7) and fills it O(m·n) — the nested-Vec DP regime (cf. #72 edit-distance). C/Go index
+// raw byte arrays, Rust &[u8]; Kara indexes String.bytes(). Default `karac build` is byte-equal to
+// KARAC_AUTO_PAR=0.
+fn num_distinct(s: ref String, t: ref String) -> i64 {
+    let sb = s.bytes();
+    let tb = t.bytes();
+    let m = s.len();
+    let n = t.len();
+    let mut dp: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i <= m {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j <= n {
+            if j == 0 { row.push(1); } else { row.push(0); }
+            j = j + 1;
+        }
+        dp.push(row);
+        i = i + 1;
+    }
+    let mut r = 1;
+    while r <= m {
+        let mut c = 1;
+        while c <= n {
+            let skip = dp[r - 1][c];
+            if sb[r - 1] == tb[c - 1] {
+                dp[r][c] = skip + dp[r - 1][c - 1];
+            } else {
+                dp[r][c] = skip;
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    dp[m][n]
+}
+fn main() {
+    let mut ss: Vec[String] = Vec.new();
+    let mut ts: Vec[String] = Vec.new();
+    ss.push("abcabcabcabcabcabcabcabc"); ts.push("abcabc");
+    ss.push("aabbccaabbccaabbccaabbcc"); ts.push("abcabc");
+    ss.push("abababababababababababab"); ts.push("ababa");
+    ss.push("xyzxyzxyzxyzxyzxyzxyzxyz"); ts.push("xyzxy");
+    ss.push("aaabbbcccaaabbbcccaaabbb"); ts.push("abcab");
+    ss.push("cbacbacbacbacbacbacbacba"); ts.push("cbacb");
+    ss.push("abcabcabcabcabcabcabcabc"); ts.push("cba");
+    ss.push("aabbaabbaabbaabbaabbaabb"); ts.push("abab");
+    let mut acc = 1;
+    let mut rep = 0;
+    while rep < 400000 {
+        let idx = acc % 8;
+        let c = num_distinct(ss[idx], ts[idx]);
+        acc = (acc * 1000003 + c + 1) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

@@ -1,0 +1,9 @@
+
+        fn main() {
+            let mut grid: Vec[Vec[i64]] = Vec.filled(3, Vec.new());
+            grid[0].push(99);
+            println(grid[0].len());
+            println(grid[1].len());
+            println(grid[2].len());
+        }
+    

@@ -1,0 +1,22 @@
+
+fn main() {
+    let mut out: Vec[i64] = Vec.with_capacity(102i64);
+    out.push(-7i64);
+    out.push(-9i64);
+    let mut c: i64 = 0i64;
+    #[par_order_free]
+    while c < 100i64 {
+        out.push(c * 3i64);
+        c = c + 1i64;
+    }
+    let mut ok: i64 = 1i64;
+    if out[0i64] != -7i64 { ok = 0i64; }
+    if out[1i64] != -9i64 { ok = 0i64; }
+    let mut i: i64 = 0i64;
+    while i < 100i64 {
+        if out[i + 2i64] != i * 3i64 { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+}

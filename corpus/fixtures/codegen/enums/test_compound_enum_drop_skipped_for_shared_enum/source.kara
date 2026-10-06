@@ -1,0 +1,8 @@
+
+shared enum Sel { V(String) }
+fn main() {
+    let mut s = String.new();
+    s.push_str("rc payload");
+    let _e = Sel.V(s);
+    println(1);
+}

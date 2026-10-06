@@ -1,0 +1,7 @@
+
+fn main() with reads(FileSystem) {
+    match File.open("/tmp/karac_b070703_owned") {
+        Ok(f) => println("ok"),
+        Err(_) => println("err"),
+    }
+}

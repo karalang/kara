@@ -1,0 +1,1 @@
+fn main() { let mut v: Vec[P] = Vec.new(); v.push(P { n: 6 }); let a: (Vec[P], i64) = (v, 7); println(f"r:{a.0[0].n}") }

@@ -1,0 +1,13 @@
+source = "tests/codegen/generics.rs::test_e2e_user_generic_trait_impl_over_container"
+dedup_of = ["tests/interpreter/gpu_tensor.rs::user_generic_trait_impl_over_container_dispatches"]
+expect = "skip"
+exit = 0
+tags = ["deferred:dataframe", "deferred:tensor"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

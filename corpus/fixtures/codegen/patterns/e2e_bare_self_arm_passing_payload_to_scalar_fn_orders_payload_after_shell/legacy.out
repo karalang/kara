@@ -1,0 +1,42 @@
+call
+  x1
+  dE
+  dR1
+tail
+  x2
+  dE
+  dR2
+gen
+  x7
+  dE
+  dR3
+stmt
+  say4
+  x1
+  dE
+  dR4
+iflet
+  x5
+  dE
+  dR5
+temp
+  dE
+  dR7
+  x7
+none
+  x0
+  dE
+opt
+  dR8
+  dE
+  held
+id
+  dR9
+  x9
+  dE
+keep
+  x1
+  dE
+  n1
+  dR10
+end

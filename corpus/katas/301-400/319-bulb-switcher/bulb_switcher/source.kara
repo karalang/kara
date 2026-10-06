@@ -1,0 +1,54 @@
+// LeetCode #319: Bulb Switcher — the closed form, via Newton's integer sqrt.
+//
+// `n` bulbs start off. Round 1 toggles every bulb, round 2 every second bulb,
+// round `i` every `i`-th bulb, up to round `n`. How many are on at the end?
+//
+// Bulb `b` is toggled once per DIVISOR of `b`, so it ends on exactly when `b`
+// has an odd number of divisors. Divisors come in pairs `(d, b/d)`, and the
+// only way a pair fails to be two distinct numbers is `d == b/d` — that is,
+// `b` is a perfect square. So the bulbs left on are precisely the squares
+// `1, 4, 9, …` not exceeding `n`, and the answer is `floor(sqrt(n))`.
+//
+// That leaves one real problem: computing an integer square root without ever
+// touching a float, because `(i64) sqrt((double) n)` is wrong near the top of
+// the range — a double has 53 bits of mantissa and an i64 has 63, so beyond
+// 2^53 the conversion rounds and the result can land one off. Newton's method
+// on integers has no such window. `x -> (x + n/x) / 2` converges downward from
+// any overestimate and, in integer arithmetic, settles exactly on
+// `floor(sqrt(n))`; the loop stops on the first step that fails to decrease.
+//
+// Overflow: the first iteration computes `n + n/n = n + 1`, which is the
+// largest value this ever forms, so every `n` below `i64::MAX` is safe.
+// Afterwards `x` only shrinks and `x + n/x` stays near `2*sqrt(n)`.
+//
+// Only half of the `n < 2` guard is load-bearing, and it is worth saying which:
+// `n == 0` must not reach `n / x`, because the first `x` is `n`. `n == 1` needs
+// no guard at all — the loop computes `y = (1 + 1) / 2 = 1`, fails to decrease,
+// and returns 1 on its own. Weakening the guard to `n < 1` is a mutation the
+// differential cannot kill (M1 in the README's table), which is the evidence
+// for that claim rather than an argument for making the change: `n < 2` states
+// "0 and 1 are their own square roots", which is the property a reader wants.
+
+fn isqrt(n: i64) -> i64 {
+    if n < 2 { return n; }
+    let mut x = n;
+    loop {
+        let y = (x + n / x) / 2;
+        if y >= x { break; }
+        x = y;
+    }
+    return x;
+}
+
+fn bulb_switch(n: i64) -> i64 {
+    return isqrt(n);
+}
+
+fn main() {
+    let cases: Vec[i64] = [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 15, 16, 99, 100, 101,
+                           999999, 1000000, 1000000000, 4503599761588224];
+    for i in 0..cases.len() {
+        let n = cases[i];
+        print("n = " + n.to_string() + " -> " + bulb_switch(n).to_string() + "\n");
+    }
+}

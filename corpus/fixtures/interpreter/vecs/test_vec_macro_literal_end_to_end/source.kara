@@ -1,0 +1,12 @@
+
+        fn main() {
+            let v = vec![10, 20, 30];
+            let mut total = 0;
+            for x in v {
+                total = total + x;
+            }
+            println(total);
+            let zeros = vec![0; 4];
+            println(zeros.len());
+        }
+    

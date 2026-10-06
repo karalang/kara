@@ -1,0 +1,19 @@
+
+enum E { A(Vec[String]), B }
+struct S { e: E }
+fn take(s: ref S) {
+    match s.e { E.A(x) => { for t in x { println(t); } } E.B => { println("-"); } }
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        let s: S = S { e: E.A([f"aa{i}", f"bb{i}"]) };
+        // Twice: the second call reads what the first would have freed.
+        take(s);
+        take(s);
+        // Drain the source's own elements — see the doc above.
+        match s.e { E.A(x) => { for t in x { println(t); } } E.B => { println("-"); } }
+        i = i + 1;
+    }
+    println("end");
+}

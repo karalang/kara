@@ -1,0 +1,89 @@
+// LeetCode 299 — Bulls and Cows, the O(n*m) consume-a-position version.
+//
+// Before the digit tally occurs to you, the obvious reading of the statement is
+// mechanical: a cow is a guess digit that finds SOME unclaimed secret position
+// holding the same digit. So mark the bulls, then for each remaining guess
+// digit go looking, and CROSS OFF whatever you find.
+//
+// The crossing-off is the entire algorithm. Without it this is the classic
+// wrong answer — every one of guess "0111"'s three 1s would independently
+// "find" a 1 in secret "1123" and report 1A2B. `used[j]` is what makes the
+// search a MATCHING rather than a membership test, and it is the direct
+// operational statement of the same `min(count, count)` the tally version
+// computes in closed form. Two spellings of one idea.
+//
+// It is quadratic where the others are linear, and it is here for two reasons
+// beyond honesty about how the problem is usually first solved. It shares NO
+// mechanism with the tally versions — no arithmetic on counts, no signed
+// balance, just position bookkeeping — so when the differential says all three
+// agree, that is three independent readings agreeing, not one idea written
+// three ways. And its cost curve is visible in the bench lane: at the 4-digit
+// board the statement actually specifies, quadratic over n=4 is nothing, and
+// this version is competitive. The gap only opens at lengths the game never
+// uses, which is worth seeing rather than assuming.
+
+fn bulls_and_cows(secret: ref String, guess: ref String) -> String {
+    let s: Vec[char] = secret.chars().collect();
+    let g: Vec[char] = guess.chars().collect();
+    let n = s.len();
+
+    // used[j] — secret position j has been spent, as a bull or as a cow.
+    let mut used: Vec[bool] = Vec.new();
+    let mut j = 0;
+    while j < n {
+        used.push(false);
+        j = j + 1;
+    }
+
+    let mut bulls = 0;
+    let mut i = 0;
+    while i < n {
+        if s[i] == g[i] {
+            bulls = bulls + 1;
+            used[i] = true;
+        }
+        i = i + 1;
+    }
+
+    let mut cows = 0;
+    i = 0;
+    while i < n {
+        // Skip the bulls; they are already spent on both sides.
+        if s[i] != g[i] {
+            let mut k = 0;
+            let mut found = false;
+            while k < n and not found {
+                // An unspent secret position, holding this digit, that is not
+                // itself a bull.
+                if not used[k] and s[k] == g[i] and s[k] != g[k] {
+                    used[k] = true;
+                    found = true;
+                    cows = cows + 1;
+                }
+                k = k + 1;
+            }
+        }
+        i = i + 1;
+    }
+
+    return f"{bulls}A{cows}B";
+}
+
+fn report(secret: String, guess: String) {
+    println(f"secret {secret}  guess {guess}  ->  {bulls_and_cows(secret, guess)}");
+}
+
+fn main() {
+    report("1807", "7810");
+    report("1123", "0111");
+    report("1", "0");
+    report("1", "1");
+    report("11", "10");
+    report("11", "01");
+    report("1122", "2211");
+    report("1122", "1222");
+    report("0000", "0000");
+    report("0000", "1111");
+    report("", "");
+    report("1234567890", "0987654321");
+}

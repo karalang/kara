@@ -1,0 +1,8 @@
+
+struct Leaf { mut n: i64 }
+struct Mid { leaf: Leaf }
+fn main() {
+    let mut m = Mid { leaf: Leaf { n: 1 } };
+    m.leaf.n = 5;
+    println(f"{m.leaf.n}");
+}

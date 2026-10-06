@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/control.rs::asan_provider_early_return_frees_body_local"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

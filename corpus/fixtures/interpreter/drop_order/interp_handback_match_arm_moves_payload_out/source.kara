@@ -1,0 +1,26 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct N { id: i64, s: String }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mkn(i: i64) -> N { return N { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn id(a: Option[R]) -> Option[R] { a }
+fn tl(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+fn idn(a: Option[N]) -> Option[N] { a }
+fn ids(a: Option[String]) -> Option[String] { a }
+fn eat(r: R) { println(f"eat{r.id}") }
+fn show(o: Option[R]) { match o { Some(x) => println(f"y{x.id}"), None => println("none") } }
+struct H { k: i64 }
+impl H { fn g(ref self, a: Option[R]) -> Option[R] { a } }
+fn main() {
+    { let a = Some(mkr(1)); let k = match id(a) { Some(x) => x, None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(2)); let b = id(a); let k = match b { Some(x) => x, None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(3)); let k = match tl(a, true) { Some(x) => x, None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(4)); let k = match tl(a, false) { Some(x) => x, None => mkr(94) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(5)); let b = tl(a, false); let k = match b { Some(x) => x, None => mkr(95) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(6)); let k = match id(a) { Some(x) => { println("in"); x } None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(7)); let k = match id(a) { Some(x) if x.id > 5 => x, Some(y) => mkr(y.id + 100), None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkn(8)); let k = match idn(a) { Some(x) => x, None => mkn(9) }; println(f"n{k.id} {k.s}"); }
+    let mut i = 10;
+    while i < 13 { let a = Some(mkr(i)); let k = match tl(a, i != 11) { Some(x) => x, None => mkr(90 + i) }; println(f"k{k.id}"); i = i + 1; }
+    println("end")
+}

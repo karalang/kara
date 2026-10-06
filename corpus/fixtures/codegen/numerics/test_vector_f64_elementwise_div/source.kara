@@ -1,0 +1,8 @@
+
+fn main() {
+    let a: Vector[f64, 2] = Vector[f64, 2](10.0, 9.0);
+    let b: Vector[f64, 2] = Vector[f64, 2](2.0, 3.0);
+    let q = a / b;
+    println(q[0]);
+    println(q[1]);
+}

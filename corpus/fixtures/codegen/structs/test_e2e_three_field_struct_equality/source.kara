@@ -1,0 +1,33 @@
+
+#[derive(PartialEq, Eq)]
+struct Plain3 { a: i64, b: i64, c: i64 }
+#[derive(PartialEq, Eq)]
+struct StrFirst { s: String, x: i64, y: i64 }
+#[derive(PartialEq, Eq)]
+struct StrLast { x: i64, y: i64, s: String }
+#[derive(PartialEq, Eq)]
+shared struct Node { v: i64 }
+#[derive(PartialEq, Eq)]
+struct Shared3 { h: Node, a: i64, b: i64 }
+#[derive(PartialEq, Eq)]
+struct Nested { i: Plain3, z: i64 }
+#[derive(PartialEq, Eq)]
+struct Two { a: i64, b: i64 }
+#[derive(PartialEq, Eq)]
+struct Four { a: i64, b: i64, c: i64, d: i64 }
+
+fn main() {
+    println(f"{Plain3 { a: 1, b: 2, c: 3 } == Plain3 { a: 1, b: 2, c: 3 }}");
+    println(f"{Plain3 { a: 1, b: 2, c: 3 } == Plain3 { a: 1, b: 2, c: 9 }}");
+    println(f"{StrFirst { s: "abc", x: 1, y: 0 } == StrFirst { s: "abc", x: 1, y: 0 }}");
+    println(f"{StrFirst { s: "abc", x: 1, y: 0 } == StrFirst { s: "axc", x: 1, y: 0 }}");
+    println(f"{StrFirst { s: "abc", x: 1, y: 0 } == StrFirst { s: "abc", x: 7, y: 0 }}");
+    println(f"{StrLast { x: 1, y: 2, s: "hi" } == StrLast { x: 1, y: 2, s: "hi" }}");
+    println(f"{StrLast { x: 1, y: 2, s: "hi" } == StrLast { x: 1, y: 2, s: "no" }}");
+    println(f"{Shared3 { h: Node { v: 1 }, a: 5, b: 6 } == Shared3 { h: Node { v: 1 }, a: 5, b: 6 }}");
+    println(f"{Shared3 { h: Node { v: 1 }, a: 5, b: 6 } == Shared3 { h: Node { v: 1 }, a: 5, b: 9 }}");
+    println(f"{Nested { i: Plain3 { a: 1, b: 2, c: 3 }, z: 7 } == Nested { i: Plain3 { a: 1, b: 2, c: 3 }, z: 7 }}");
+    println(f"{Nested { i: Plain3 { a: 1, b: 2, c: 3 }, z: 7 } == Nested { i: Plain3 { a: 1, b: 2, c: 9 }, z: 7 }}");
+    println(f"{Two { a: 1, b: 2 } == Two { a: 1, b: 9 }}");
+    println(f"{Four { a: 1, b: 2, c: 3, d: 4 } == Four { a: 1, b: 2, c: 3, d: 9 }}");
+}

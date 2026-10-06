@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = [10, 20, 30, 40];
+    match v.iter().position(|x| x == 30) { Some(i) => println(i), None => println(-1) }
+    match v.iter().position(|x| x == 99) { Some(i) => println(i), None => println(-1) }
+    match v.iter().filter(|x| x % 20 == 0).position(|x| x == 40) { Some(i) => println(i), None => println(-1) }
+}

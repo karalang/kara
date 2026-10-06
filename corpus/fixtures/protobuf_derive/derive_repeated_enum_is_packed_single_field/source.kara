@@ -1,0 +1,15 @@
+
+enum Color { Red, Green, Blue }
+
+#[derive(Message)]
+struct Pal { colors: Vec[Color] }
+
+fn main() {
+    let mut r = ProtoReader.new(Pal { colors: [Color.Red, Color.Green, Color.Blue] }.encode());
+    let (f, w) = r.read_tag();
+    let blob = r.read_len_delim();
+    println(f);
+    println(w);
+    println(blob.len());
+    println(r.at_end());
+}

@@ -1,0 +1,14 @@
+
+shared struct N { val: i64, mut left: Option[N], mut right: Option[N] }
+fn mk(v: i64) -> Option[N] { Some(N { val: v, left: None, right: None }) }
+fn readv(r: Option[N]) -> i64 { match r { None => 0i64, Some(n) => n.val } }
+fn main() {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < 100i64 {
+        let root = if (i % 2i64) == 0i64 { mk(7i64) } else { mk(9i64) };
+        acc = acc + readv(root) + readv(root);
+        i = i + 1;
+    }
+    println(acc)
+}

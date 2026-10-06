@@ -1,0 +1,20 @@
+
+fn mk(n: i64) -> String {
+    return f"item{n}";
+}
+
+fn main() {
+    let n = 3;
+    println(Array[f"aaaa{n}", f"b{n}"][0]);
+    println(Array["aa", "bb"][1]);
+    println(Array[mk(1), mk(2)][1]);
+    println(Array[n, n + 1][1]);
+    let s = f"sssss{n}";
+    let t = f"t{n}";
+    println(Array[s, t][0]);
+    for i in 0..3 {
+        println(Array[f"x{i}", f"y{i}"][1]);
+    }
+    println(f"{Array[f"p{n}", f"q{n}"] == Array[f"p{n}", f"q{n}"]}");
+    println(f"{Array["aa", "bb"] == Array["aa", "cc"]}");
+}

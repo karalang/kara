@@ -1,0 +1,17 @@
+
+trait FromI64 {
+    fn from_i64(n: i64) -> Self;
+}
+
+fn make[T: FromI64]() -> T {
+    from_i64(42)
+}
+
+struct Wrapper { value: i64 }
+impl FromI64 for Wrapper {
+    fn from_i64(n: i64) -> Wrapper { Wrapper { value: n } }
+}
+
+fn main() {
+    let w: Wrapper = make();
+}

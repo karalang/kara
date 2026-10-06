@@ -1,0 +1,12 @@
+
+fn main() {
+    let a: Vec[i64] = (0i64..5i64).collect();
+    println(f"{a.len()} {a[0]} {a[4]}");
+    let b: Vec[i64] = (1i64..=3i64).collect();
+    println(f"{b.len()} {b[0]} {b[2]}");
+    let n: i64 = 4i64;
+    let c: Vec[i64] = (0i64..n).collect();
+    println(f"{c.len()} {c[0]} {c[3]}");
+    let e: Vec[i64] = (5i64..5i64).collect();
+    println(f"{e.len()}");
+}

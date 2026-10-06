@@ -1,0 +1,8 @@
+
+        fn main() {
+            match result {
+                Ok(value) => value,
+                Err(e) => { return; },
+            };
+        }
+    

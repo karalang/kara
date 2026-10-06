@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut src: Vec[(i64, String)] = Vec.new();
+    src.push((1i64, f"p{1}"));
+    src.push((2i64, f"q{2}"));
+    let c = src.clone();
+    println(c[0].1);
+    println(c[1].1);
+    println(src.len());
+}

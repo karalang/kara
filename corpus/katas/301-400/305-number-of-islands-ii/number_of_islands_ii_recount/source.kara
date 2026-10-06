@@ -1,0 +1,149 @@
+// LeetCode 305 — arm B: the same forest, but the count is RECOMPUTED.
+//
+// Identical union-find to the ★ arm — union by rank, path compression, the same
+// `parent[x] == -1` water sentinel — with one difference: this arm keeps no
+// running count at all. After each operation it sweeps the whole array and
+// counts the cells that are their own parent. A root is an island; there is
+// nothing to increment or decrement.
+//
+// WHY IT EARNS ITS PLACE. The ★ arm's characteristic bug is a misplaced
+// `count -= 1`: decrementing on a union whose two roots were already equal,
+// or forgetting to decrement on one that genuinely merged. That bug is not
+// expressible here, because there is no counter to misplace. The structure can
+// still be wrong, but the count is a pure function of the structure, so the two
+// arms fail in disjoint ways: a disagreement between them localises the fault
+// to the counter (if the forests match) or to the forest (if they do not).
+//
+// It costs O(mn) per operation instead of O(alpha), which is why it is not the
+// ★ arm, and exactly why it is trustworthy.
+//
+// It also spells the merge `merge` rather than `r#union`, so the kata carries
+// one arm in each spelling of the name — see the ★ arm's note on the keyword.
+
+struct Forest {
+    parent: Vec[i64],
+    rank: Vec[i64],
+}
+
+impl Forest {
+    fn new(n: i64) -> Forest {
+        let mut parent: Vec[i64] = Vec.new();
+        let mut rank: Vec[i64] = Vec.new();
+        for i in 0..n {
+            parent.push(-1);
+            rank.push(0);
+        }
+        return Forest { parent: parent, rank: rank };
+    }
+
+    fn is_land(ref self, x: i64) -> bool {
+        return self.parent[x] >= 0;
+    }
+
+    fn add(mut ref self, x: i64) {
+        self.parent[x] = x;
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        let mut root = x;
+        while self.parent[root] != root {
+            root = self.parent[root];
+        }
+        let mut cur = x;
+        while self.parent[cur] != root {
+            let next = self.parent[cur];
+            self.parent[cur] = root;
+            cur = next;
+        }
+        return root;
+    }
+
+    fn merge(mut ref self, a: i64, b: i64) {
+        let ra = self.find(a);
+        let rb = self.find(b);
+        if ra == rb {
+            return;
+        }
+        if self.rank[ra] < self.rank[rb] {
+            self.parent[ra] = rb;
+        } else if self.rank[ra] > self.rank[rb] {
+            self.parent[rb] = ra;
+        } else {
+            self.parent[rb] = ra;
+            self.rank[ra] += 1;
+        }
+    }
+
+    // Every land cell that is its own parent is one island.
+    fn island_count(ref self) -> i64 {
+        let mut total = 0;
+        for i in 0..self.parent.len() {
+            if self.parent[i] == i {
+                total += 1;
+            }
+        }
+        return total;
+    }
+}
+
+fn num_islands2(m: i64, n: i64, positions: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut f = Forest.new(m * n);
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0..positions.len() {
+        let r = positions[k][0];
+        let c = positions[k][1];
+        let idx = r * n + c;
+        if not f.is_land(idx) {
+            f.add(idx);
+            if r > 0 and f.is_land(idx - n) { f.merge(idx, idx - n); }
+            if r < m - 1 and f.is_land(idx + n) { f.merge(idx, idx + n); }
+            if c > 0 and f.is_land(idx - 1) { f.merge(idx, idx - 1); }
+            if c < n - 1 and f.is_land(idx + 1) { f.merge(idx, idx + 1); }
+        }
+        out.push(f.island_count());
+    }
+    return out;
+}
+
+fn pairs_of(flat: Slice[i64]) -> Vec[Vec[i64]] {
+    let mut ps: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i + 1 < flat.len() {
+        let mut p: Vec[i64] = Vec.new();
+        p.push(flat[i]);
+        p.push(flat[i + 1]);
+        ps.push(p);
+        i = i + 2;
+    }
+    return ps;
+}
+
+fn report(m: i64, n: i64, flat: Slice[i64]) {
+    let positions = pairs_of(flat);
+    let counts = num_islands2(m, n, positions);
+    let mut line = String.new();
+    line.push_str(f"{m}x{n} ->");
+    for k in 0..counts.len() {
+        line.push_str(f" {counts[k]}");
+    }
+    println(line);
+}
+
+fn main() {
+    // The example from the LeetCode statement.
+    report(3, 3, [0, 0,  0, 1,  1, 2,  2, 1]);
+    // A repeated position must not change the answer.
+    report(3, 3, [0, 0,  0, 0,  0, 1,  0, 1]);
+    // One cell.
+    report(1, 1, [0, 0]);
+    // A row filled left to right, then the gap that joins two runs.
+    report(1, 5, [0, 0,  0, 2,  0, 4,  0, 1,  0, 3]);
+    // A column, same shape rotated.
+    report(5, 1, [0, 0,  2, 0,  4, 0,  1, 0,  3, 0]);
+    // The centre of a plus closes four islands at once.
+    report(3, 3, [0, 1,  1, 0,  1, 2,  2, 1,  1, 1]);
+    // Fill a 2x3 grid completely — must end at exactly one island.
+    report(2, 3, [0, 0,  1, 1,  0, 2,  1, 0,  0, 1,  1, 2]);
+    // A ring around a hole never closes into one until the last cell.
+    report(3, 3, [0, 0,  0, 1,  0, 2,  1, 2,  2, 2,  2, 1,  2, 0,  1, 0]);
+}

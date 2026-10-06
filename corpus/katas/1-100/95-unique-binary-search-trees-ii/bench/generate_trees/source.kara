@@ -1,0 +1,68 @@
+// Benchmark workload for LeetCode #95 — recursive divide & conquer, DEEP-COPY.
+// Mirrors the C/Rust/Go bench sources exactly: each (left, right) pair is
+// DEEP-CLONED into its root (clone_tree is a pure node-for-node copy),
+// NOT RC-shared, so every language does the identical allocation + copy work —
+// a fair same-work CPU comparison. (The kata's ★ generate_trees.kara shares
+// subtrees via RC; that is the idiomatic solver, benched here in deep-copy form
+// so the cross-language numbers measure codegen, not the sharing optimisation.)
+// 250 passes of building every BST over 1..8, folding each tree's canonical
+// preorder serialization into a rolling polynomial hash. See ../README.md.
+shared struct TreeNode { val: i64, mut left: Option[TreeNode], mut right: Option[TreeNode] }
+
+fn clone_tree(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: clone_tree(n.left), right: clone_tree(n.right) }),
+    }
+}
+
+fn build_all(lo: i64, hi: i64) -> Vec[Option[TreeNode]] {
+    let mut result: Vec[Option[TreeNode]] = Vec.new();
+    if lo > hi { result.push(None); return result; }
+    let mut i = lo;
+    while i <= hi {
+        let lefts = build_all(lo, i - 1);
+        let rights = build_all(i + 1, hi);
+        let mut li = 0;
+        while li < lefts.len() {
+            let mut ri = 0;
+            while ri < rights.len() {
+                result.push(Some(TreeNode { val: i, left: clone_tree(lefts[li].clone()), right: clone_tree(rights[ri].clone()) }));
+                ri = ri + 1;
+            }
+            li = li + 1;
+        }
+        i = i + 1;
+    }
+    result
+}
+
+fn serialize(node: Option[TreeNode], out: mut ref String) {
+    match node { None => { out.push_str("#,"); } Some(n) => { out.push_str(f"{n.val},"); serialize(n.left, out); serialize(n.right, out); } }
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut rep = 0;
+    while rep < 250 {
+        let mut n = 1;
+        while n <= 8 {
+            let trees = build_all(1, n);
+            let count = trees.len();
+            acc = (acc * 131 + (count + 1)) % 1000000007;
+            let mut t = 0;
+            while t < count {
+                let mut s: String = "";
+                serialize(trees[t].clone(), mut s);
+                let bytes = s.bytes();
+                let mut j = 0;
+                while j < bytes.len() { acc = (acc * 131 + (bytes[j] as i64)) % 1000000007; j = j + 1; }
+                acc = (acc * 131 + 7) % 1000000007;
+                t = t + 1;
+            }
+            n = n + 1;
+        }
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

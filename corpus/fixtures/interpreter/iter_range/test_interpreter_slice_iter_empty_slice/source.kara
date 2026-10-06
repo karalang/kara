@@ -1,0 +1,7 @@
+
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    let s: Slice[i64] = v.as_slice();
+    let xs: Vec[i64] = s.iter().collect();
+    println(xs.len());
+}

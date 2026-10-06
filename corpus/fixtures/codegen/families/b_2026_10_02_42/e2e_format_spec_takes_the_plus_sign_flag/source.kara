@@ -1,0 +1,22 @@
+fn twelve() -> i64 {
+    return 12;
+}
+
+fn main() {
+    let xs: Vec[i64] = vec![5, 0, -3];
+    for d in xs.iter() {
+        println(f"[{d:+}] [{d:+05}] [{d:<+5}] [{d:*^+7}] [{d:+x}]");
+    }
+    let u: u64 = 7;
+    let w: i32 = -9;
+    let big: i128 = 9223372036854775807 as i128 * 4;
+    println(f"{u:+} {w:+} {big:+}");
+    let fs: Vec[f64] = vec![1.5, 0.0, -0.25];
+    for f in fs.iter() {
+        println(f"[{f:+.2}] [{f:+08.2}] [{f:>+8.1}]");
+    }
+    let huge: f64 = 1e300;
+    let s = f"{huge:+.2}";
+    println(f"{s.len()} {s.starts_with("+100")} {s.ends_with("0.00")}");
+    println(f"{twelve():+}");
+}

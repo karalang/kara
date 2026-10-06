@@ -1,0 +1,13 @@
+
+fn main() {
+    let v = [1, 2];
+    let w = [9];
+    let mut it = v.iter().chain(w.iter());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}

@@ -1,0 +1,125 @@
+// Benchmark workload — Merge k Sorted Lists (LeetCode #23), divide and
+// conquer. Builds k = 8 fresh fully-interleaving N = 128-node lists every
+// iteration (the merge consumes/re-links them, so each iter needs fresh
+// inputs), pairwise-merges them down to one (log k = 3 rounds), and sums
+// the merged 1024-node list. K iterations. See ../README.md § Benchmarks.
+//
+// List j holds values j, j+k, j+2k, … (stride k), so at EVERY pairwise
+// merge level the two operand lists fully interleave — the worst case for
+// the splice at every round, the k-way generalization of kata #21's
+// evens/odds. The merged list is [0, 1, …, kN-1]; its sum is
+// (kN-1)·kN/2 = 523,776. The sink is the running total of that per-iter
+// sum, so all four compiled mirrors must agree before timing.
+//
+// Seq lane (BENCH.md two-lane discipline): the kara binary is built with
+// KARAC_AUTO_PAR=0 so the K-loop's `total = total + …` reduction stays
+// single-threaded and directly comparable to rustc -O / clang -O3 / go build.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn merge_two_lists(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    loop {
+        if let Some(na) = a {
+            if let Some(nb) = b {
+                if na.val <= nb.val {
+                    tail.next = Some(na);
+                    tail = na;
+                    a = na.next;
+                } else {
+                    tail.next = Some(nb);
+                    tail = nb;
+                    b = nb.next;
+                }
+            } else {
+                tail.next = a;
+                break;
+            }
+        } else {
+            tail.next = b;
+            break;
+        }
+    }
+    dummy.next
+}
+
+fn merge_k_lists(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+    let mut work = lists;
+    let k = work.len();
+    if k == 0 {
+        return None;
+    }
+    let mut interval = 1;
+    while interval < k {
+        let mut i = 0;
+        while i + interval < k {
+            work[i] = merge_two_lists(work[i].clone(), work[i + interval].clone());
+            i = i + 2 * interval;
+        }
+        interval = 2 * interval;
+    }
+    work[0]
+}
+
+// Build a fresh `count`-node list valued `start, start+step, …` via a tail
+// cursor (append order).
+fn build_list(start: i64, step: i64, count: i64) -> Option[ListNode] {
+    if count <= 0 {
+        return None;
+    }
+    let head = ListNode { val: start, next: None };
+    let mut tail = head;
+    let mut v = start;
+    let mut i = 1;
+    while i < count {
+        v = v + step;
+        let node = ListNode { val: v, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    Some(head)
+}
+
+fn sum_list(list: Option[ListNode]) -> i64 {
+    let mut s: i64 = 0;
+    let mut c = list;
+    loop {
+        match c {
+            Some(n) => {
+                s = s + n.val;
+                c = n.next;
+            }
+            None => break,
+        }
+    }
+    s
+}
+
+fn main() {
+    let k_lists: i64 = 8;
+    let n_values: i64 = 128;
+    let k_iters: i64 = 100000;
+
+    let mut total: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        // List j = [j, j+8, …, j + 8*127] — stride-k interleaving.
+        let mut lists: Vec[Option[ListNode]] = Vec.new();
+        let mut j: i64 = 0;
+        while j < k_lists {
+            lists.push(build_list(j, k_lists, n_values));
+            j = j + 1;
+        }
+        let merged = merge_k_lists(lists);
+        total = total + sum_list(merged);
+        k = k + 1;
+    }
+    println(total);
+}

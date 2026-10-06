@@ -1,0 +1,5 @@
+
+struct Bag[T] { xs: Vec[T] }
+fn mk[T](v: Vec[T]) -> (Bag[T], i64) { (Bag { xs: v }, 3) }
+fn use2[T](p: (Bag[T], i64)) -> i64 { let (b, n) = p; b.xs.len() + n }
+fn main() { println(f"{use2(mk(["x", "y"]))}"); }

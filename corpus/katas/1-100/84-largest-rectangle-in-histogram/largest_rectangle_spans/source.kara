@@ -1,0 +1,110 @@
+// LeetCode #84: Largest Rectangle in Histogram — two-pass nearest-smaller spans.
+//
+// Same O(n) idea as largest_rectangle.kara (the ★), but instead of settling each
+// rectangle during a single pop-driven pass, it precomputes, for every bar i, the two
+// boundaries of its maximal rectangle explicitly:
+//
+//   nsl[i] = index of the nearest bar to the LEFT that is strictly shorter, or -1
+//   nsr[i] = index of the nearest bar to the RIGHT that is strictly shorter, or n
+//
+// Then bar i can extend across (nsl[i], nsr[i]) at its own height, so its rectangle is
+// heights[i] · (nsr[i] - nsl[i] - 1); the answer is the max over all i. Each of nsl and
+// nsr is one monotonic-stack sweep (left-to-right, then right-to-left). Using `>=` when
+// popping on BOTH sides means a run of equal bars attributes the full-width rectangle
+// to a single representative, so no span is double-counted and the max is exact.
+//
+// It's the "compute the spans, then the areas" decomposition — a distinct surface from
+// the ★'s fused pop-and-settle: two stacks, an index-assigned nsr Vec, and a
+// right-to-left loop with an `i64` counter walking down to -1.
+
+fn largest_rectangle(heights: Slice[i64], n: i64) -> i64 {
+    if n == 0 {
+        return 0;
+    }
+
+    // Pass 1 (left to right): nearest strictly-shorter bar to the left.
+    let mut nsl: Vec[i64] = Vec.new();
+    let mut lstack: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        while lstack.len() > 0 and heights[lstack[lstack.len() - 1]] >= heights[i] {
+            lstack.pop();
+        }
+        let left = if lstack.len() == 0 {
+            -1
+        } else {
+            lstack[lstack.len() - 1]
+        };
+        nsl.push(left);
+        lstack.push(i);
+        i = i + 1;
+    }
+
+    // Pass 2 (right to left): nearest strictly-shorter bar to the right, into an
+    // index-assigned Vec pre-filled with the sentinel n.
+    let mut nsr: Vec[i64] = Vec.new();
+    let mut f = 0;
+    while f < n {
+        nsr.push(n);
+        f = f + 1;
+    }
+    let mut rstack: Vec[i64] = Vec.new();
+    let mut r = n - 1;
+    while r >= 0 {
+        while rstack.len() > 0 and heights[rstack[rstack.len() - 1]] >= heights[r] {
+            rstack.pop();
+        }
+        let right = if rstack.len() == 0 {
+            n
+        } else {
+            rstack[rstack.len() - 1]
+        };
+        nsr[r] = right;
+        rstack.push(r);
+        r = r - 1;
+    }
+
+    // Areas.
+    let mut max_area = 0;
+    let mut k = 0;
+    while k < n {
+        let width = nsr[k] - nsl[k] - 1;
+        let area = heights[k] * width;
+        if area > max_area {
+            max_area = area;
+        }
+        k = k + 1;
+    }
+    max_area
+}
+
+fn report(heights: Slice[i64], n: i64, acc: mut ref i64) {
+    let area = largest_rectangle(heights, n);
+    println(f"{area}");
+    acc = (acc * 131 + (area + 1)) % 1000000007;
+}
+
+fn main() {
+    let mut acc = 0;
+    let a1: Array[i64, 6] = [2, 1, 5, 6, 2, 3];
+    report(a1, 6, mut acc);
+    let a2: Array[i64, 2] = [2, 4];
+    report(a2, 2, mut acc);
+    let a3: Array[i64, 0] = [];
+    report(a3, 0, mut acc);
+    let a4: Array[i64, 1] = [5];
+    report(a4, 1, mut acc);
+    let a5: Array[i64, 4] = [1, 1, 1, 1];
+    report(a5, 4, mut acc);
+    let a6: Array[i64, 7] = [6, 2, 5, 4, 5, 1, 6];
+    report(a6, 7, mut acc);
+    let a7: Array[i64, 3] = [0, 0, 0];
+    report(a7, 3, mut acc);
+    let a8: Array[i64, 6] = [4, 2, 0, 3, 2, 5];
+    report(a8, 6, mut acc);
+    let a9: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(a9, 5, mut acc);
+    let a10: Array[i64, 5] = [5, 4, 3, 2, 1];
+    report(a10, 5, mut acc);
+    println(f"sink: {acc}");
+}

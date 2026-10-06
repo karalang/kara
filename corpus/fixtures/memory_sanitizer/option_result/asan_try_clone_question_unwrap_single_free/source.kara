@@ -1,0 +1,15 @@
+
+fn dup() -> Result[i64, AllocError] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"x{1}");
+    v.push(f"y{2}");
+    let c: Vec[String] = v.try_clone()?;
+    Ok(c.len())
+}
+
+fn main() {
+    match dup() {
+        Ok(n) => println(n),
+        Err(_) => println("err"),
+    }
+}

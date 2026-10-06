@@ -1,0 +1,8 @@
+
+shared struct Data { x: i64 }
+fn main() {
+    let a = Data { x: 100 };
+    let b = a;
+    println(a.x);
+    println(b.x);
+}

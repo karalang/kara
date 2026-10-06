@@ -1,0 +1,27 @@
+
+struct LitNode { name: String, val: i64 }
+shared enum Expr { Lit(LitNode), Bin(BinNode) }
+struct BinNode { left: Expr, right: Expr, op: i64 }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Lit(n) => n.val,
+        Bin(b) => {
+            let BinNode { left, right, op } = b;
+            eval(left) + eval(right) + op
+        }
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let a = Expr.Lit(LitNode { name: "a_long_name_for_heap_visibility_xxxxxxxx".to_string(), val: 3 });
+        let bn = Expr.Lit(LitNode { name: "b_long_name_for_heap_visibility_xxxxxxxx".to_string(), val: 4 });
+        let inner = Expr.Bin(BinNode { left: a, right: bn, op: 10 });
+        let c = Expr.Lit(LitNode { name: "c_long_name_for_heap_visibility_xxxxxxxx".to_string(), val: 5 });
+        let tree = Expr.Bin(BinNode { left: inner, right: c, op: 100 });
+        total = total + eval(tree);
+        i = i + 1;
+    }
+    println(total);
+}

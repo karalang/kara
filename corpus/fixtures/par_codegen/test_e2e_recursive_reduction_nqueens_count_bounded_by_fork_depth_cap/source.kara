@@ -1,0 +1,17 @@
+
+fn count(n: i64, row: i64, cols: i64, diag1: i64, diag2: i64) -> i64 {
+    if row == n { return 1i64; }
+    let mut total = 0i64;
+    let mut c = 0i64;
+    while c < n {
+        let bit_c = 1i64 << c;
+        let bit_d1 = 1i64 << (row + c);
+        let bit_d2 = 1i64 << (row - c + (n - 1i64));
+        if (cols & bit_c) == 0i64 and (diag1 & bit_d1) == 0i64 and (diag2 & bit_d2) == 0i64 {
+            total = total + count(n, row + 1i64, cols | bit_c, diag1 | bit_d1, diag2 | bit_d2);
+        }
+        c = c + 1i64;
+    }
+    total
+}
+fn main() { println(count(9i64, 0i64, 0i64, 0i64, 0i64)); }

@@ -1,0 +1,56 @@
+
+struct Wide { a: String, b: String, c: String, d: i64 }
+
+fn mkarr(j: i64) -> Option[Array[String, 2]] {
+    if j >= 0 { return Option.Some(Array[f"arr-aaaaaaaaaaaaaaaa-{j}", f"arr-bbbbbbbbbbbbbbbb-{j}"]); }
+    return Option.None;
+}
+fn mkvecarr(j: i64) -> Option[Array[Vec[String], 2]] {
+    let mut p: Vec[String] = Vec.new();
+    p.push(f"vec-cccccccccccccccc-{j}");
+    let mut q: Vec[String] = Vec.new();
+    q.push(f"vec-dddddddddddddddd-{j}");
+    if j >= 0 { return Option.Some(Array[p, q]); }
+    return Option.None;
+}
+fn mkerr(j: i64) -> Result[i64, Array[String, 2]] {
+    if j < 0 { return Result.Ok(1); }
+    return Result.Err(Array[f"err-eeeeeeeeeeeeeeee-{j}", f"err-ffffffffffffffff-{j}"]);
+}
+fn mkwide(j: i64) -> Option[Wide] {
+    if j >= 0 { return Option.Some(Wide { a: f"wid-gggggggggggggggg-{j}", b: f"wid-hhhhhhhhhhhhhhhh-{j}", c: f"wid-iiiiiiiiiiiiiiii-{j}", d: j }); }
+    return Option.None;
+}
+fn mkscalar(j: i64) -> Option[Array[i64, 6]] {
+    if j >= 0 { return Option.Some(Array[j, j+1, j+2, j+3, j+4, j+5]); }
+    return Option.None;
+}
+fn take(a: Array[String, 2]) -> i64 { println(f"moved-to-callee:{a[0]}"); return 1; }
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 2 {
+        match mkarr(j) { Option.Some(a) => { println(f"read:{a[0]}"); } Option.None => {} }
+        match mkarr(j) { Option.Some(_) => { println("wild"); } Option.None => {} }
+        match mkarr(j) { Option.Some(a) => { let _ = take(a); } Option.None => {} }
+        match mkvecarr(j) { Option.Some(a) => { println(f"vecarr:{a[0][0]}"); } Option.None => {} }
+        match mkerr(j) { Result.Ok(v) => { println(f"ok:{v}"); } Result.Err(e) => { println(f"err:{e[0]}"); } }
+        match mkwide(j) { Option.Some(w) => { println(f"wide:{w.a}"); } Option.None => {} }
+        match mkwide(j) { Option.Some(_) => { println("wide-wild"); } Option.None => {} }
+        match mkscalar(j) { Option.Some(s) => { println(f"scalar:{s[0]}"); } Option.None => {} }
+        let held = mkarr(j);
+        match held { Option.Some(a) => { println(f"held:{a[0]}"); } Option.None => {} }
+        j = j + 1;
+    }
+
+    let mut v: Vec[Array[String, 2]] = Vec.new();
+    match mkarr(0) { Option.Some(a) => { v.push(a); } Option.None => {} }
+    println(f"pushed:{v[0][0]}");
+
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    m.insert(5, Array[f"map-jjjjjjjjjjjjjjjj-0", f"map-kkkkkkkkkkkkkkkk-1"]);
+    match m.get(5) { Option.Some(a) => { println(f"borrow:{a[0]}"); } Option.None => {} }
+    println(f"maplen:{m.len()}");
+
+    println("end");
+}

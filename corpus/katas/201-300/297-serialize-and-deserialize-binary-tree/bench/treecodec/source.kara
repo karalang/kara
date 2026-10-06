@@ -1,0 +1,121 @@
+// Benchmark lane for LeetCode #297 — serialize/deserialize a binary tree.
+//
+// WORKLOAD: build ONE tree of 200,000 nodes, then round-trip it 24 times —
+// serialize to a string, hash the string, deserialize it back, and repeat on
+// the reconstruction. Build-once + punch, per BENCHMARKS.md: the tree is
+// constructed a single time so the measurement is the CODEC, not the
+// allocator warming up.
+//
+// THE TREE IS BUILT BALANCED, NOT BY INSERTION. A recursive split over an
+// index range gives a shape that is identical in all five languages and a
+// depth of log2(200000) ~= 18, which keeps every arm inside its default stack.
+// Random-BST insertion would have made the shape depend on each language's
+// integer arithmetic and the depth ~2.5x larger for no extra signal.
+//
+// THE ROUND TRIP IS CHAINED, not repeated against the original: round k+1
+// serializes what round k deserialized. A deserializer that dropped or
+// duplicated a subtree would drift the string length, and the sink would move.
+// Serializing the same original 24 times would not notice.
+//
+// SINK: a polynomial hash over the bytes of every encoded string. It reads the
+// whole output — a codec that got one token wrong changes it — and it stays a
+// single integer, so the cross-language comparison is exact.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// Balanced build over `vals[lo..hi)`.
+fn build(vals: ref Vec[i64], lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo >= hi {
+        return None;
+    }
+    let mid = lo + (hi - lo) / 2;
+    let l = build(vals, lo, mid);
+    let r = build(vals, mid + 1, hi);
+    return Some(TreeNode { val: vals[mid], left: l, right: r });
+}
+
+// Appends into ONE growing String, which is what the C, Rust and Go mirrors do.
+// An earlier draft pushed onto a `Vec[String]` and `join`ed at the end — a
+// different algorithm (one heap String per token, 400k of them per round), and
+// benchmarking it against four single-buffer mirrors would not have been honest.
+fn ser_into(t: Option[TreeNode], out: mut ref String) {
+    if out.len() > 0 {
+        out.push(',');
+    }
+    match t {
+        None => {
+            out.push('#');
+        }
+        Some(n) => {
+            out.push_str(n.val.to_string());
+            ser_into(n.left, out);
+            ser_into(n.right, out);
+        }
+    }
+}
+
+fn serialize(t: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    ser_into(t, mut out);
+    return out;
+}
+
+fn de_at(tokens: ref Vec[String], i: mut ref i64) -> Option[TreeNode] {
+    let tok = ref tokens[i];
+    i = i + 1;
+    if tok == "#" {
+        return None;
+    }
+    let v = match i64.parse(tok) {
+        Some(x) => x,
+        None => 0,
+    };
+    let l = de_at(tokens, i);
+    let r = de_at(tokens, i);
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn deserialize(s: ref String) -> Option[TreeNode] {
+    let tokens = s.split(",");
+    let mut i = 0;
+    return de_at(tokens, mut i);
+}
+
+fn hash_string(s: ref String, seed: i64) -> i64 {
+    let mut h = seed;
+    for b in s.bytes() {
+        h = (h * 131 + (b as i64)) % 1000000007;
+    }
+    return h;
+}
+
+fn main() {
+    let n = 200000;
+    let rounds = 24;
+
+    let mut vals: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 0x7fffffff;
+        vals.push(state % 1000003 - 500000);
+        i = i + 1;
+    }
+
+    let mut tree = build(vals, 0, n);
+    let mut checksum = 0;
+
+    let mut r = 0;
+    while r < rounds {
+        let s = serialize(tree);
+        checksum = hash_string(s, checksum);
+        tree = deserialize(s);
+        r = r + 1;
+    }
+
+    println(f"nodes {n} rounds {rounds} checksum {checksum}");
+}

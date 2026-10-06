@@ -1,0 +1,14 @@
+
+fn work(n: i64) -> Result[i64, String] {
+    if n > 0 { Result.Ok(n * 10) } else { Result.Err(f"neg:{n}") }
+}
+fn main() {
+    let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| work(1), || work(-2), || work(3)];
+    let results: Vec[Result[i64, String]] = collect_all_vec(fs);
+    for r in results {
+        match r {
+            Result.Ok(v) => { println(f"ok {v}"); }
+            Result.Err(e) => { println(f"err {e}"); }
+        }
+    }
+}

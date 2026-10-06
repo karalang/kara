@@ -1,0 +1,21 @@
+
+fn sink(addr: String) {
+    let mut held: Vec[String] = Vec.new();
+    held.push(addr);
+    if held[0] == "relay-upstream-127.0.0.1-9000" {
+    } else {
+        println("CORRUPT");
+    }
+}
+fn main() {
+    let base = "relay-upstream-127.0.0.1-9000";
+    let mut tg: TaskGroup = TaskGroup.new();
+    let mut i: i64 = 0;
+    loop {
+        let addr = base.clone();
+        i = i + 1;
+        tg.spawn(|| sink(addr));
+        if i >= 4 { break; }
+    }
+    println("ok");
+}

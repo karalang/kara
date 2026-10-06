@@ -1,0 +1,11 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
+fn mk(i: i64) -> R { return R { id: i }; }
+fn topagg(r: R) -> Option[(R, i64)] { return Option.Some((r, 9)); }
+fn topres(r: R) -> Result[(R, i64), i64] { return Result.Ok((r, 7)); }
+fn main() {
+    println("o-fn");   let _ = topagg(mk(1));
+    println("r-fn");   let _ = topres(mk(2));
+    println("o-ctor"); let _ = Option.Some((mk(3), 9));
+    println("done")
+}

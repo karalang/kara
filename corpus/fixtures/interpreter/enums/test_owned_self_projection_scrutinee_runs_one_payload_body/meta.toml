@@ -1,0 +1,13 @@
+source = "tests/interpreter/enums.rs::test_owned_self_projection_scrutinee_runs_one_payload_body"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["drop", "move-from-borrow"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

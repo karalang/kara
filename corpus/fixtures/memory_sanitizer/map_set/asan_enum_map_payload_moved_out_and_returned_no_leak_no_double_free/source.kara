@@ -1,0 +1,17 @@
+
+enum V { Table(Map[String, i64]) }
+fn unwrap(v: V) -> Map[String, i64] { match v { Table(m) => m } }
+fn main() {
+    let mut total: i64 = 0;
+    let mut i = 0;
+    while i < 40 {
+        let mut mp: Map[String, i64] = Map.new();
+        mp.insert("a", 1);
+        mp.insert("b", 2);
+        let t = V.Table(mp);
+        let m2 = unwrap(t);
+        total = total + (m2.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}

@@ -1,0 +1,24 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct P { x: i64, y: i64 }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(1i64, f"val-{i}-padding-padding-padding");
+        m.insert(2i64, f"other-{i}-padding-padding-padding");
+        let g = m.get(1i64);
+        match g {
+            Some(v) => println(v),
+            None => println("miss"),
+        };
+        let mut sm: Map[P, String] = Map.new();
+        sm.insert(P { x: 1i64, y: 2i64 }, f"struct-{i}-padding-padding-padding");
+        sm.insert(P { x: 3i64, y: 4i64 }, f"skey-{i}-padding-padding-padding");
+        let sg = sm.get(P { x: 1i64, y: 2i64 });
+        if let Some(v) = sg {
+            println(v);
+        };
+        i = i + 1;
+    }
+}

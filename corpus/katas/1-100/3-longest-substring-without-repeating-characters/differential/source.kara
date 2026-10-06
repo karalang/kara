@@ -1,0 +1,70 @@
+// Differential: three algorithms over random strings must agree.
+fn by_map(cs: ref Vec[char]) -> i64 {
+    let mut last: Map[char, i64] = Map.new();
+    let mut left = 0;
+    let mut best = 0;
+    for (i, c) in cs.iter().enumerate() {
+        if let Some(p) = last.get(c) {
+            if p >= left {
+                left = p + 1;
+            }
+        }
+        last.insert(c, i);
+        best = best.max(i - left + 1);
+    }
+    best
+}
+
+fn by_set(cs: ref Vec[char]) -> i64 {
+    let mut seen: Set[char] = Set.new();
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..cs.len() {
+        while seen.contains(cs[right]) {
+            seen.remove(cs[left]);
+            left += 1;
+        }
+        seen.insert(cs[right]);
+        best = best.max(right - left + 1);
+    }
+    best
+}
+
+fn brute(cs: ref Vec[char]) -> i64 {
+    let mut best = 0;
+    for i in 0..cs.len() {
+        let mut seen: Set[char] = Set.new();
+        let mut j = i;
+        while j < cs.len() and seen.insert(cs[j]) {
+            j += 1;
+        }
+        best = best.max(j - i);
+    }
+    best
+}
+
+fn main() {
+    let alphabet: Vec[char] = "abcdeé xyz".chars().collect();
+    let mut seed: i64 = 12345;
+    let mut checksum: i64 = 0;
+    let mut fails = 0;
+    for t in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = seed % 40;
+        let k = 1 + (seed / 64) % alphabet.len();
+        let mut cs: Vec[char] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            cs.push(alphabet[(seed / 16) % k]);
+        }
+        let a = by_map(cs);
+        let b = by_set(cs);
+        let c = brute(cs);
+        if a != b or b != c {
+            fails += 1;
+            println(f"mismatch at {t}: {a} {b} {c}");
+        }
+        checksum = (checksum * 31 + a * 7 + t) % 1000000007;
+    }
+    println(f"2000 cases, failures {fails}, checksum {checksum}");
+}

@@ -1,0 +1,91 @@
+struct Fault { code: i64, msg: String }
+impl Display for Fault {
+    fn to_string(ref self) -> String { f"Fault[{self.code}:{self.msg}]" }
+}
+
+enum Kind { Soft, Hard }
+impl Display for Kind {
+    fn to_string(ref self) -> String {
+        match self { Kind.Soft => { "Soft".to_string() } Kind.Hard => { "Hard".to_string() } }
+    }
+}
+
+fn str_method() -> Result[i64, String] {
+    errdefer(e) { println(f"A {e}"); }
+    return Err("built".to_string())
+}
+fn str_fstring(n: i64) -> Result[i64, String] {
+    errdefer(e) { println(f"B {e}"); }
+    return Err(f"code {n}")
+}
+fn str_tail() -> Result[i64, String] {
+    errdefer(e) { println(f"C {e}"); }
+    Err("tail".to_string())
+}
+fn float_computed(x: f64) -> Result[i64, f64] {
+    errdefer(e) { println(f"D {e}"); }
+    return Err(x * 2.5)
+}
+fn bool_computed(n: i64) -> Result[i64, bool] {
+    errdefer(e) { println(f"E {e}"); }
+    return Err(n > 1)
+}
+fn struct_payload() -> Result[i64, Fault] {
+    errdefer(e) { println(f"F {e}"); }
+    return Err(Fault { code: 3, msg: "bad".to_string() })
+}
+fn enum_payload() -> Result[i64, Kind] {
+    errdefer(e) { println(f"G {e}"); }
+    return Err(Kind.Hard)
+}
+fn int_literal() -> Result[i64, i64] {
+    errdefer(e) { println(f"H {e}"); }
+    return Err(7)
+}
+fn str_literal() -> Result[i64, String] {
+    errdefer(e) { println(f"I {e}"); }
+    return Err("lit")
+}
+fn inner() -> Result[i64, String] { Err("viaq".to_string()) }
+fn via_question() -> Result[i64, String] {
+    errdefer(e) { println(f"J {e}"); }
+    let v = inner()?;
+    return Ok(v)
+}
+struct Two { a: String, b: String }
+impl Display for Two {
+    fn to_string(ref self) -> String { f"T({self.a}/{self.b})" }
+}
+fn mk_two() -> Two { Two { a: "x".to_string(), b: "y".to_string() } }
+fn oversized_payload() -> Result[i64, Two] {
+    errdefer(e) { println(f"K {e}"); }
+    return Err(mk_two())
+}
+
+type Aliased = Result[i64, String];
+fn aliased_return() -> Aliased {
+    errdefer(e) { println(f"L {e}"); }
+    return Err("via-alias".to_string())
+}
+
+fn success() -> Result[i64, String] {
+    errdefer(e) { println(f"NEVER {e}"); }
+    return Ok(1)
+}
+
+fn main() {
+    let _ = str_method();
+    let _ = str_fstring(42);
+    let _ = str_tail();
+    let _ = float_computed(3.0);
+    let _ = bool_computed(5);
+    let _ = struct_payload();
+    let _ = enum_payload();
+    let _ = int_literal();
+    let _ = str_literal();
+    let _ = via_question();
+    let _ = oversized_payload();
+    let _ = aliased_return();
+    let _ = success();
+    println("done");
+}

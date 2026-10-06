@@ -1,0 +1,11 @@
+
+fn main() {
+    let make = |n: i64| |x: i64| x + n;
+    let mut fs: Vec[Fn(i64) -> i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 200 {
+        fs.push(make(i));
+        i = i + 1;
+    }
+    println(f"{fs[100](0)}");
+}

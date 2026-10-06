@@ -1,0 +1,22 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Hm { r: Result[Res, String], t: i64 }
+struct Hv { r: Result[Vec[String], Res], t: i64 }
+fn take(h: Hm) -> i64 { h.t }
+fn main() {
+    { let h = Hm { r: Result.Ok(Res { id: 1, name: f"aaaa{1}" }), t: 10 }; println(h.t); }
+    { let h = Hm { r: Result.Err(f"bbbbbb{2}"), t: 20 }; println(h.t); }
+    { let h = Hm { r: Result.Ok(Res { id: 3, name: f"ccc{3}" }), t: 30 }; println(take(h)); }
+    { let h = Hm { r: Result.Ok(Res { id: 4, name: f"dddd{4}" }), t: 40 }; let x = h.r; println(h.t); }
+    {
+      let mut v: Vec[String] = Vec.new();
+      v.push(f"eeeee{5}");
+      let h = Hv { r: Result.Ok(v), t: 50 };
+      println(h.t);
+    }
+    { let h = Hv { r: Result.Err(Res { id: 6, name: f"ffffff{6}" }), t: 60 }; println(h.t); }
+    println("end");
+}

@@ -1,0 +1,35 @@
+
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+impl R { fn idm(ref self) -> i64 { return self.id; } }
+struct H2 { a: R, b: R }
+struct H3 { a: R, b: R, c: R }
+struct HOwn { a: R, b: R }
+impl Drop for HOwn { fn drop(mut ref self) { println("dHOwn") } }
+shared struct Box1 { v: i64 }
+struct R2 { id: i64, sh: Box1 }
+impl Drop for R2 { fn drop(mut ref self) { println(f"dR2{self.id}/{self.sh.v}") } }
+struct Hb { a: R2, b: R2 }
+struct Inner { r: R }
+struct Outer { h: Inner }
+fn c_scalar() { let h = H2 { a: mk(1), b: mk(101) }; let z = h.a.id; println(f"  z{z}") }
+fn c_method() { let h = H2 { a: mk(2), b: mk(102) }; let z = h.a.idm(); println(f"  z{z}") }
+fn c_three()  { let h = H3 { a: mk(3), b: mk(103), c: mk(203) }; let z = h.a.id; println(f"  z{z}") }
+fn c_own()    { let h = HOwn { a: mk(4), b: mk(104) }; let z = h.a.id; println(f"  z{z}") }
+fn c_move()   { let o = Outer { h: Inner { r: mk(5) } }; let x = o.h.r; println(f"  z{x.id}") }
+fn c_shared() { let h = Hb { a: R2 { id: 7, sh: Box1 { v: 71 } }, b: R2 { id: 8, sh: Box1 { v: 81 } } }; let sv = h.a.sh; println(f"  s{sv.v}") }
+fn c_live()   { let h = H2 { a: mk(6), b: mk(106) }; let z = h.a.id; println(f"  z{z}"); println(f"  b{h.b.id}") }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        println("scalar"); c_scalar();
+        println("method"); c_method();
+        println("three"); c_three();
+        println("own"); c_own();
+        println("move"); c_move();
+        println("shared"); c_shared();
+        println("live"); c_live();
+        i = i + 1;
+    }
+}

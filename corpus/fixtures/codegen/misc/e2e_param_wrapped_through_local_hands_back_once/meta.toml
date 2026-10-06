@@ -1,0 +1,13 @@
+source = "tests/codegen/misc.rs::e2e_param_wrapped_through_local_hands_back_once"
+dedup_of = ["tests/interpreter/misc.rs::test_param_wrapped_through_local_hands_back_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

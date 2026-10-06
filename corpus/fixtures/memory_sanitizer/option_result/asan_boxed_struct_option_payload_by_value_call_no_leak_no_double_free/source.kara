@@ -1,0 +1,72 @@
+
+struct H { label: String, k: i64 }
+struct Node { hp: Option[H], k: i64 }
+
+fn readk(h: Option[H]) -> i64 {
+    match h {
+        Option.Some(x) => { if x.label.contains("row") { x.k } else { 0 - x.k } }
+        Option.None => 0,
+    }
+}
+fn take_label(h: Option[H]) -> String {
+    match h {
+        Option.Some(x) => { return x.label; }
+        Option.None => { return "none".to_string(); }
+    }
+}
+fn take_all(h: Option[H]) -> H {
+    match h {
+        Option.Some(x) => { return x; }
+        Option.None => { return H { label: "none".to_string(), k: 0 }; }
+    }
+}
+fn take_destructure(h: Option[H]) -> i64 {
+    match h {
+        Option.Some(x) => { let H { label, k } = x; if label.contains("row") { k } else { 0 - k } }
+        Option.None => 0,
+    }
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        // A — NAMED binding, read-only callee.
+        let a: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
+        acc = acc + readk(a) - n;
+        // B — NAMED binding, callee moves a FIELD out.
+        let b: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
+        if take_label(b).contains("row") { acc = acc + 1; }
+        // C — NAMED binding, callee moves the WHOLE payload out.
+        let c: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
+        let g: H = take_all(c);
+        acc = acc + g.k - n;
+        if g.label.contains("row") { acc = acc + 1; }
+        // C2 — NAMED binding, callee LET-DESTRUCTURES the payload. The
+        //      self-host `render_generics` shape; the third move-out mirror.
+        let c2: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
+        acc = acc + take_destructure(c2) - n;
+        // D — FRESH TEMP, read-only callee.
+        acc = acc + readk(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i })) - n;
+        // E — FRESH TEMP, callee moves a FIELD out.
+        if take_label(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i })).contains("row") { acc = acc + 1; }
+        // F — FRESH TEMP, callee moves the WHOLE payload out.
+        let g2: H = take_all(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i }));
+        acc = acc + g2.k - n;
+        // F2 — FRESH TEMP, callee LET-DESTRUCTURES the payload.
+        acc = acc + take_destructure(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i })) - n;
+        // G — FIELD ARGUMENT: the owning struct's drop stays in charge.
+        let nd = Node { hp: Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i }), k: 1 };
+        acc = acc + readk(nd.hp) - n;
+        // H — None sources on two callee shapes.
+        let z: Option[H] = Option.None;
+        acc = acc + readk(z) + take_destructure(Option.None);
+        if take_label(Option.None).contains("none") { acc = acc + 1; }
+        // I — NEVER passed: the let-site drop must still fire.
+        let keep: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
+        acc = acc + match keep { Option.Some(x) => x.k, Option.None => 0 } - n;
+        i = i + 1;
+    }
+    println(acc);
+}

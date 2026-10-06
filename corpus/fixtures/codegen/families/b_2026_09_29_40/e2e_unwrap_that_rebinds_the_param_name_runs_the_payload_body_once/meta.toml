@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_40.rs::e2e_unwrap_that_rebinds_the_param_name_runs_the_payload_body_once"
+dedup_of = ["tests/interpreter/families/b_2026_09_29_40.rs::interp_unwrap_that_rebinds_the_param_name_runs_the_payload_body_once", "tests/memory_sanitizer/families/b_2026_09_29_40.rs::asan_unwrap_that_rebinds_the_param_name_runs_the_payload_body_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

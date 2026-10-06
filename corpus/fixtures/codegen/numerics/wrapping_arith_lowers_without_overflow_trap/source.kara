@@ -1,0 +1,5 @@
+
+fn wadd(a: i64, b: i64) -> i64 { return a.wrapping_add(b); }
+fn wsub(a: i64, b: i64) -> i64 { return a.wrapping_sub(b); }
+fn wmul(a: i64, b: i64) -> i64 { return a.wrapping_mul(b); }
+fn main() { print(3.wrapping_add(4)); }

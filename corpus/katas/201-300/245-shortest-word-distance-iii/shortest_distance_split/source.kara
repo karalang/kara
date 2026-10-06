@@ -1,0 +1,103 @@
+// LeetCode 245 — Shortest Word Distance III, the explicit two-case split.
+//
+// The phrasing most people reach for first, and the honest one: #245 really is
+// two problems wearing one signature, so write them as two loops and dispatch.
+//
+//   * word1 == word2 — the answer is the smallest gap between CONSECUTIVE
+//     occurrences of that one word. Non-consecutive pairs can never win: if
+//     positions p < q < r all hold the word, then r - p > r - q, so any pair
+//     that skips an occurrence is beaten by one that does not. A single `prev`
+//     suffices.
+//   * word1 != word2 — #243 unchanged, two last-seen indices, `else if`
+//     branches because a slot cannot match both.
+//
+// Compared with the unified `shortest_distance_iii.kara`, this trades one
+// `String` comparison per matched slot for a branch taken once per call, and it
+// states the "consecutive occurrences suffice" argument in code rather than
+// folding it into a predicate. It is the clearer of the two to verify; the
+// unified one is the clearer to extend.
+//
+// Both must agree exactly on every input, which is what makes the pair worth
+// having: two independent implementations of one specification.
+
+// word1 == word2: smallest gap between consecutive occurrences.
+fn same_word_distance(words: ref Slice[String], word: ref String) -> i64 {
+    let n = words.len();
+    let mut best = n;
+    let mut prev = -1;
+    let mut i = 0;
+    while i < n {
+        if words[i] == word {
+            if prev >= 0 {
+                best = min(best, i - prev);
+            }
+            prev = i;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+// word1 != word2: #243's two-last-seen scan, verbatim.
+fn two_word_distance(words: ref Slice[String], word1: ref String, word2: ref String) -> i64 {
+    let n = words.len();
+    let mut last1 = -1;
+    let mut last2 = -1;
+    let mut best = n;
+    let mut i = 0;
+    while i < n {
+        if words[i] == word1 {
+            last1 = i;
+            if last2 >= 0 {
+                best = min(best, last1 - last2);
+            }
+        } else if words[i] == word2 {
+            last2 = i;
+            if last1 >= 0 {
+                best = min(best, last2 - last1);
+            }
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn shortest_word_distance(words: ref Slice[String], word1: ref String, word2: ref String) -> i64 {
+    if word1 == word2 {
+        return same_word_distance(words, word1);
+    }
+    return two_word_distance(words, word1, word2);
+}
+
+fn report(words: ref Slice[String], word1: ref String, word2: ref String) {
+    println(f"{word1} <-> {word2} : {shortest_word_distance(words, word1, word2)}");
+}
+
+fn main() {
+    let d1: Array[String, 5] = ["practice", "makes", "perfect", "coding", "makes"];
+    report(d1, "makes", "coding");      // 1
+    report(d1, "makes", "makes");       // 3
+    report(d1, "coding", "practice");   // 3
+
+    let d2: Array[String, 7] = ["a", "b", "x", "x", "x", "a", "b"];
+    report(d2, "a", "b");               // 1
+    report(d2, "a", "a");               // 5
+    report(d2, "x", "x");               // 1
+    report(d2, "b", "b");               // 5
+
+    let d3: Array[String, 2] = ["a", "b"];
+    report(d3, "a", "b");               // 1
+
+    let d4: Array[String, 6] = ["p", "q", "p", "q", "p", "q"];
+    report(d4, "p", "q");               // 1
+    report(d4, "p", "p");               // 2
+
+    let d5: Array[String, 6] = ["m", "z", "z", "z", "n", "m"];
+    report(d5, "m", "m");               // 5
+    report(d5, "z", "z");               // 1
+    report(d5, "m", "n");               // 1
+
+    let d6: Array[String, 3] = ["one", "two", "three"];
+    report(d6, "two", "two");           // 3
+    report(d6, "two", "four");          // 3
+}

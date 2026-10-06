@@ -1,0 +1,33 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
+struct B1 { v: Array[R, 2] }
+struct B2 { v: Array[R, 2], t: String }
+struct B3 { v: Array[R, 3] }
+struct B4 { v: Array[N, 2] }
+struct B6 { v: Array[String, 2] }
+fn s_bind(a: Array[R, 2]) -> i64 { let b = B1 { v: a }; println("  in"); return 7 }
+fn s_two(a: Array[R, 2]) -> i64 { let b = B2 { v: a, t: f"zz" }; println(f"  in:{b.t}"); return 7 }
+fn s_three(a: Array[R, 3]) -> i64 { let b = B3 { v: a }; println("  in"); return 7 }
+fn s_noheap(a: Array[N, 2]) -> i64 { let b = B4 { v: a }; println("  in"); return 7 }
+fn s_read(a: Array[R, 2]) -> i64 { let b = B1 { v: a }; println(f"  in:{b.v[0].id}"); return 7 }
+fn n_str(a: Array[String, 2]) -> i64 { let b = B6 { v: a }; println(f"  in:{b.v[0]}"); return 7 }
+fn n_tuple(a: Array[R, 2]) -> i64 { let b = (a, 1); println("  in"); return 7 }
+fn b_local() -> i64 { let a: Array[R, 2] = [mkr(91), mkr(92)]; let b = B1 { v: a }; println("  in"); return 7 }
+fn b_discard(a: Array[R, 2]) -> i64 { B1 { v: a }; println("  in"); return 7 }
+fn b_ctl(a: Array[R, 2]) -> i64 { println("  in"); return 7 }
+fn main() {
+    println("s/bind");    { let a: Array[R, 2] = [mkr(1), mkr(2)]; let z = s_bind(a); }
+    println("s/two");     { let a: Array[R, 2] = [mkr(11), mkr(12)]; let z = s_two(a); }
+    println("s/three");   { let a: Array[R, 3] = [mkr(21), mkr(22), mkr(23)]; let z = s_three(a); }
+    println("s/noheap");  { let a: Array[N, 2] = [N { id: 31 }, N { id: 32 }]; let z = s_noheap(a); }
+    println("s/read");    { let a: Array[R, 2] = [mkr(41), mkr(42)]; let z = s_read(a); }
+    println("n/str");     { let a: Array[String, 2] = [f"s51", f"s52"]; let z = n_str(a); }
+    println("n/tuple");   { let a: Array[R, 2] = [mkr(71), mkr(72)]; let z = n_tuple(a); }
+    println("b/local");   { let z = b_local(); }
+    println("b/discard"); { let a: Array[R, 2] = [mkr(101), mkr(102)]; let z = b_discard(a); }
+    println("b/ctl");     { let a: Array[R, 2] = [mkr(111), mkr(112)]; let z = b_ctl(a); }
+    println("end")
+}

@@ -1,0 +1,132 @@
+// LeetCode #51: N-Queens — conflict scan against placed queens (no marker arrays).
+//
+// Same row-by-row DFS as the ★ file ([`marker_arrays`](marker_arrays.kara)) — one queen
+// per row, descend row 0..n-1, snapshot at `row == n` — and the SAME canonical column
+// order, so it emits the identical solution listing. The one axis that changes is how a
+// candidate square is judged legal.
+//
+// Where ★ answers "does (row, col) attack anything?" in O(1) with three boolean marker
+// arrays (`cols`, `diag1`, `diag2`) flipped in lockstep, this variant keeps NO side arrays
+// at all: the only state is `queens`, where `queens[r]` is the column of the queen already
+// placed in row r. To test a candidate `col` for the current `row`, it SCANS every earlier
+// row `pr` and rejects on the first conflict:
+//
+//   - same column:   `pc == col`
+//   - same diagonal: `|row - pr| == |col - pc|`  — the row gap equals the column gap
+//
+// That second line is the whole diagonal test in one identity: two queens sit on a common
+// diagonal exactly when the vertical and horizontal distances between them are equal. Since
+// we place one queen per row and always scan strictly-earlier rows, `row - pr` is positive,
+// but `.abs()` keeps it symmetric and obviously correct.
+//
+// The trade mirrors [#46](../46-permutations/)'s used-array vs in-path-scan pair: ★ spends
+// O(n) auxiliary space on the three marker arrays for an O(1) legality test; this spends
+// ZERO auxiliary space for an O(row) scan per candidate. At n ≤ 9 the scan is trivially
+// cheap — the point is the contrast in mechanism. Only `is_safe` differs from the ★ file;
+// the push/pop bracketing and the leaf snapshot are unchanged.
+//
+// LeetCode bounds: 1 ≤ n ≤ 9. i64 throughout.
+
+// Legal iff the candidate square (row, col) is attacked by no already-placed queen.
+fn is_safe(queens: ref Vec[i64], row: i64, col: i64) -> bool {
+    let mut pr = 0;
+    while pr < row {
+        let pc = queens[pr];
+        if pc == col {
+            return false;                       // same column
+        }
+        if (row - pr).abs() == (col - pc).abs() {
+            return false;                       // same diagonal: equal row/col gaps
+        }
+        pr = pr + 1;
+    }
+    true
+}
+
+fn place(n: i64, row: i64, queens: mut ref Vec[i64], out: mut ref Vec[Vec[String]]) {
+    if row == n {
+        out.push(build_board(queens, n));
+        return;
+    }
+    let mut c = 0;
+    while c < n {
+        if is_safe(queens, row, c) {
+            queens.push(c);
+            place(n, row + 1, queens, out);
+            queens.pop();                       // undo: only the path entry to restore
+        }
+        c = c + 1;
+    }
+}
+
+// Render one solved placement (queens[r] = column of the queen in row r) as n board rows.
+fn build_board(queens: ref Vec[i64], n: i64) -> Vec[String] {
+    let mut board: Vec[String] = Vec.new();
+    let mut r = 0;
+    while r < n {
+        let qc = queens[r];
+        let mut row: String = "";
+        let mut c = 0;
+        while c < n {
+            if c == qc {
+                row.push('Q');
+            } else {
+                row.push('.');
+            }
+            c = c + 1;
+        }
+        board.push(row);
+        r = r + 1;
+    }
+    board
+}
+
+fn solve(n: i64) -> Vec[Vec[String]] {
+    let mut queens: Vec[i64] = Vec.new();
+    let mut out: Vec[Vec[String]] = Vec.new();
+    place(n, 0, mut queens, mut out);
+    out
+}
+
+// ---- test harness (identical to the ★ file) -------------------------------
+
+fn report(n: i64) {
+    let sols = solve(n);
+    let count = sols.len();
+    println(f"n={n} -> {count}");
+    let mut s = 0;
+    while s < count {
+        let board = ref sols[s];
+        let rows = board.len();
+        let mut r = 0;
+        while r < rows {
+            println(board[r]);
+            r = r + 1;
+        }
+        println("--");
+        s = s + 1;
+    }
+    println("====");
+}
+
+fn count_only(n: i64) -> i64 {
+    solve(n).len()
+}
+
+fn main() {
+    report(1);
+    report(2);
+    report(3);
+    report(4);
+    report(5);
+    report(6);
+
+    let mut s: String = "counts:";
+    let mut n = 1;
+    while n <= 9 {
+        s.push(' ');
+        s.push_str(f"{count_only(n)}");
+        n = n + 1;
+    }
+    println(s);
+}

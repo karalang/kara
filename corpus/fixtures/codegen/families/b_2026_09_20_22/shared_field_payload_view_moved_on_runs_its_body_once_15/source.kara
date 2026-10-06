@@ -1,0 +1,9 @@
+shared struct Sh { s: String }
+struct Wsh { h: Sh }
+impl Drop for Wsh { fn drop(mut ref self) { println(f"  dWsh-{self.h.s}") } }
+struct Wpl { a: String }
+impl Drop for Wpl { fn drop(mut ref self) { println(f"  dWpl-{self.a}") } }
+enum Esh { A(Wsh), B }
+enum Epl { A(Wpl), B }
+fn shl() -> i64 { let mut out: Wsh = Wsh { h: Sh { s: f"OUT" } }; let w = Wsh { h: Sh { s: f"PAY" } }; out = w; return 7; }
+fn main() { println(f"  r:{shl()}"); }

@@ -1,0 +1,17 @@
+struct Pair { a: String, b: String }
+impl Pair { fn take_a(self) -> String { return self.a; } }
+fn mk(i: i64) -> Pair { return Pair { a: f"a{i}", b: f"b{i}" }; }
+
+fn main() {
+    let mut i = 0i64;
+    let mut n = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let p = mk(i);
+        last = p.take_a();
+        n = n + last.len();
+        i = i + 1;
+    }
+    println(last);
+    println(n);
+}

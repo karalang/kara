@@ -1,0 +1,22 @@
+
+fn inner() -> i64 {
+    let ti: Tensor[i32, [4]] = Tensor.from([40, 10, 30, 20]);
+    let si: Vec[i32] = ti.sorted();
+    let ai: Vec[i64] = ti.argsort();
+    let tu: Tensor[u32, [3]] = Tensor.from([30, 10, 20]);
+    let us: Vec[u32] = tu.sorted();
+    let ua: Vec[i64] = tu.argsort();
+    let tf: Tensor[f32, [4]] = Tensor.from([2.5, 0.5, 3.5, 1.5]);
+    let fs: Vec[f32] = tf.sorted();
+    let fa: Vec[i64] = tf.argsort();
+    si.len() + ai[0] + us.len() + ua[0] + fs.len() + fa[0]
+}
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        acc = acc + inner();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}

@@ -1,0 +1,14 @@
+
+fn main() {
+    println(7i64.min(3i64));
+    println(7i64.max(3i64));
+    println((0 - 5i64).max(0i64));
+    let x: f64 = 1.5;
+    let y: f64 = 2.5;
+    println(x.min(y));
+    println(x.max(y));
+    let u: u8 = 200;
+    println(u.min(100u8));
+    let w: u32 = 4000000000;
+    println(w.max(1u32));
+}

@@ -1,0 +1,61 @@
+// Benchmark workload — Remove Duplicates from Sorted Array II (LeetCode #80).
+// The kata's in-place two-pointer sweep is a csel-on-converging-pointer — the
+// optimizer would vectorise the conditional write away, and mutating in place forces
+// a per-iteration copy (allocation domination). So the bench measures the *decision
+// logic* instead: the generalized run-scan (the kata's second solver) computes the
+// at-most-2 dedup and folds each kept value through a rolling polynomial hash. The
+// loop-carried hash serialises the scan (resisting vectorisation) and reads a fixed
+// array built once (no per-iteration allocation). A sorted N=3000 array with mixed
+// run lengths (1,2,3,… so the cap actually drops elements) is scanned K=67000 times,
+// the acc seeded with the iteration index so nothing hoists. See ../README.md.
+
+fn build(n: i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    let mut val = 0;
+    let mut pos = 0;
+    while pos < n {
+        let runlen = (val % 3) + 1;
+        let mut r = 0;
+        while r < runlen and pos < n {
+            arr.push(val);
+            pos = pos + 1;
+            r = r + 1;
+        }
+        val = val + 1;
+    }
+    arr
+}
+
+fn scan_fold(arr: ref Vec[i64], n: i64, seed: i64) -> i64 {
+    let mut acc = seed;
+    let mut i = 0;
+    while i < n {
+        let v = arr[i];
+        let mut run = 0;
+        while i < n and arr[i] == v {
+            if run < 2 {
+                acc = (acc * 131 + (v + 1)) % 1000000007;
+            }
+            run = run + 1;
+            i = i + 1;
+        }
+    }
+    acc
+}
+
+fn main() {
+    let n = 3000;
+    let total = 67000;
+    let modulus = 1000000007;
+
+    let arr = build(n);
+
+    let mut sum = 0;
+    let mut iter = 0;
+    while iter < total {
+        let r = scan_fold(arr, n, iter);
+        sum = (sum + r) % modulus;
+        iter = iter + 1;
+    }
+    println(f"{sum}");
+}

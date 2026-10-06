@@ -1,0 +1,23 @@
+
+#[derive(Message)]
+struct Sparse {
+    #[karac::field(5)] name: String,
+    #[karac::field(17)] id: i64,
+    active: bool,
+}
+
+fn main() {
+    let s = Sparse { name: "Ada", id: 99, active: true };
+    let mut r = ProtoReader.new(s.encode());
+    let mut desc = "";
+    while not r.at_end() {
+        let (f, w) = r.read_tag();
+        desc = desc + f"({f})";
+        let _ = r.skip_field(w);
+    }
+    println(desc);
+    let back = Sparse.decode(s.encode());
+    println(back.name);
+    println(back.id);
+    println(back.active);
+}

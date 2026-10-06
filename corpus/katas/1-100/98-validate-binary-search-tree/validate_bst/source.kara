@@ -1,0 +1,111 @@
+// LeetCode #98: Validate Binary Search Tree — recursive (min, max) bounds (★).
+//
+// A binary tree is a BST iff, for every node, its value is strictly greater than
+// EVERY value in its left subtree and strictly less than every value in its right
+// subtree — not merely greater than its immediate left child. The subtlety the
+// problem tests is exactly that "every value in the subtree" clause: a node can
+// satisfy the local `left < node < right` rule and still break the BST invariant
+// against a distant ancestor (`[5,4,6,null,null,3,7]` — the 3 sits in 5's right
+// subtree yet is < 5).
+//
+// The clean recursion threads a legal OPEN interval `(lo, hi)` down the tree:
+// a node's value must land strictly inside it, its left child inherits
+// `(lo, node.val)`, and its right child inherits `(node.val, hi)`. The bounds are
+// `Option[i64]` — `None` means "no bound on that side" (the root starts at
+// `(None, None)`), so there is no reliance on a sentinel i64::MIN/MAX that a node
+// value could legitimately equal.
+//
+// This exercises the tree surface end to end: a `shared struct TreeNode` (RC) with
+// `Option[TreeNode]` children, `match` on both the node and each bound, recursion
+// carrying `Option[i64]` accumulators, and short-circuiting `and`. The alternative
+// ([`validate_bst_inorder.kara`](validate_bst_inorder.kara)) collects an inorder
+// traversal and checks it is strictly increasing — the other classic route, and
+// an independent cross-check. Node type and construction mirror kata
+// [#226](../../201-300/226-invert-binary-tree/).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn is_valid(node: Option[TreeNode], lo: Option[i64], hi: Option[i64]) -> bool {
+    match node {
+        None => true,
+        Some(n) => {
+            let v = n.val;
+            // v must be strictly inside the open interval (lo, hi).
+            match lo {
+                Some(l) => {
+                    if v <= l {
+                        return false;
+                    }
+                }
+                None => {}
+            }
+            match hi {
+                Some(h) => {
+                    if v >= h {
+                        return false;
+                    }
+                }
+                None => {}
+            }
+            // Left subtree tightens the upper bound to v; right tightens the lower.
+            is_valid(n.left, lo, Some(v)) and is_valid(n.right, Some(v), hi)
+        }
+    }
+}
+
+// ---- test harness (shared verbatim by both solvers + the Python mirror) --------
+
+fn report(root: Option[TreeNode], s: mut ref String) {
+    let ok = is_valid(root, None, None);
+    if ok {
+        println("valid=true");
+        s.push_str(" 1");
+    } else {
+        println("valid=false");
+        s.push_str(" 0");
+    }
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    Some(TreeNode { val: v, left: None, right: None })
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report(None, mut s);                                            // empty -> true
+    report(leaf(1), mut s);                                     // single -> true
+    report(Some(TreeNode { val: 2, left: leaf(1), right: leaf(3) }), mut s);
+                                                                   // [2,1,3] -> true
+    report(Some(TreeNode { val: 5, left: leaf(1),
+        right: Some(TreeNode { val: 4, left: leaf(3), right: leaf(6) }) }), mut s);
+                                                                   // [5,1,4,_,_,3,6] -> false
+    report(Some(TreeNode { val: 1, left: leaf(1), right: None }), mut s);
+                                                                   // [1,1] duplicate -> false
+    report(Some(TreeNode { val: 5, left: leaf(4),
+        right: Some(TreeNode { val: 6, left: leaf(3), right: leaf(7) }) }), mut s);
+                                                                   // deep violation -> false
+    report(Some(TreeNode { val: 8,
+        left: Some(TreeNode { val: 4, left: leaf(2), right: leaf(6) }),
+        right: Some(TreeNode { val: 12, left: leaf(10), right: leaf(14) }) }), mut s);
+                                                                   // valid 7-node -> true
+    report(Some(TreeNode { val: 5,
+        left: Some(TreeNode { val: 4,
+            left: Some(TreeNode { val: 3,
+                left: Some(TreeNode { val: 2, left: leaf(1), right: None }),
+                right: None }),
+            right: None }),
+        right: None }), mut s);                                    // left-skew valid -> true
+    report(Some(TreeNode { val: 1, left: None,
+        right: Some(TreeNode { val: 2, left: None,
+            right: Some(TreeNode { val: 3, left: None, right: leaf(4) }) }) }), mut s);
+                                                                   // right-skew valid -> true
+    report(Some(TreeNode { val: 2, left: leaf(1), right: leaf(2) }), mut s);
+                                                                   // [2,1,2] equal on right -> false
+
+    println(s);
+}

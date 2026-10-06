@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut d: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push("aa");
+    a.push("bb");
+    d.push(a);
+    let row = ref d[0];
+    let c: String = row[0].clone();
+    println(c);
+    println(row[0].len());
+    println(row[0].starts_with("a"));
+    println(row[1].substring(0, 1));
+}

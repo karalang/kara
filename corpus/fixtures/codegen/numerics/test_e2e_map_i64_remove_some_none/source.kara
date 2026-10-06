@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(5_i64, 55_i64);
+    let r1 = m.remove(5_i64);
+    match r1 {
+        Some(x) => println(x),
+        None => println(0_i64),
+    }
+    let r2 = m.remove(5_i64);
+    match r2 {
+        Some(x) => println(x),
+        None => println(0_i64),
+    }
+}

@@ -1,0 +1,22 @@
+// Recursion + element read + deferred push, but NO Map anywhere.
+fn make() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("AAAAAAAA");
+    v.push("BBBBBBBB");
+    return v;
+}
+
+fn rec(depth: i64, s: String, out: mut ref Vec[String]) {
+    if depth > 0 {
+        let d = make();              // local Vec, dies when this frame ends
+        rec(depth - 1, d[0].clone(), out);
+    }
+    out.push(s);                     // deferred use, after the descent
+}
+
+fn main() {
+    let mut out: Vec[String] = Vec.new();
+    rec(4, "ROOT", mut out);
+    let mut i = 0;
+    while i < out.len() { println(f"[{i}]={out[i]}"); i = i + 1; }
+}

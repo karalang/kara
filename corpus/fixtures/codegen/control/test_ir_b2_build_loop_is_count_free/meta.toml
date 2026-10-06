@@ -1,0 +1,13 @@
+source = "tests/codegen/control.rs::test_ir_b2_build_loop_is_count_free"
+dedup_of = ["tests/codegen/drop_order.rs::test_ir_headerless_cluster_alloc_drops_rc_header"]
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

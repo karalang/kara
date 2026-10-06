@@ -1,0 +1,65 @@
+// Bench spine of LeetCode #51 N-Queens — see ../README.md § Benchmarks.
+//
+// Pure solution-COUNTING backtracker (the bitmask solver's kernel, minus the board
+// rendering) swept over board sizes n = N_LO..N_HI. Three integer occupancy masks
+// (cols / ↘ diag / ↙ diag) are threaded by value through the DFS; a leaf (row == n)
+// bumps a solution counter and folds a placement-dependent checksum. The checksum is
+// `partial = Σ_r queens[r] * (r + 1)` accumulated as columns are chosen, so the sink
+// depends on the actual placements, not just their count — no shortcut can shortcut it.
+//
+// Each n contributes `acc * 100003 + sink` to one i64 sink that every language prints
+// identically (the counting DFS is deterministic and integer-only, so the value is
+// bit-exact across kara/rust/c/go/py). The magnitudes stay far inside i64: over
+// n = 8..13 the counts sum to 91_760 and the checksums to well under 10^11, so the
+// folded sink never overflows and no `wrapping` is needed.
+
+fn count(
+    n: i64,
+    row: i64,
+    cols: i64,
+    diag1: i64,
+    diag2: i64,
+    partial: i64,
+    acc: mut ref i64,
+    sink: mut ref i64,
+) {
+    if row == n {
+        acc = acc + 1;
+        sink = sink + partial;
+        return;
+    }
+    let mut c = 0;
+    while c < n {
+        let bit_c = 1 << c;
+        let bit_d1 = 1 << (row + c);
+        let bit_d2 = 1 << (row - c + (n - 1));
+        if (cols & bit_c) == 0 and (diag1 & bit_d1) == 0 and (diag2 & bit_d2) == 0 {
+            count(
+                n,
+                row + 1,
+                cols | bit_c,
+                diag1 | bit_d1,
+                diag2 | bit_d2,
+                partial + c * (row + 1),
+                acc,
+                sink,
+            );
+        }
+        c = c + 1;
+    }
+}
+
+fn main() {
+    let n_lo: i64 = 8;
+    let n_hi: i64 = 13;
+    let mut total: i64 = 0;
+    let mut n = n_lo;
+    while n <= n_hi {
+        let mut acc: i64 = 0;
+        let mut sink: i64 = 0;
+        count(n, 0, 0, 0, 0, 0, mut acc, mut sink);
+        total = total + acc * 100003 + sink;
+        n = n + 1;
+    }
+    println(total);
+}

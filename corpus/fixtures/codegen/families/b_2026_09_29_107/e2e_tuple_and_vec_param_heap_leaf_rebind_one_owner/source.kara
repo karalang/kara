@@ -1,0 +1,22 @@
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+fn mkd(n: i64) -> D { return D { id: n, s: f"sssssssssssssssssssssssssssssssssss{n}" } }
+fn take(v: Vec[D]) -> i64 { return v.len() }
+fn pv(t: (Vec[D], i64)) -> i64 { let (a, j) = t; let b = a; return b.len() + j }
+fn pi(t: (Vec[i64], i64)) -> i64 { let (a, j) = t; let b = a; return b.len() + j }
+fn ps(t: (String, i64)) -> i64 { let (a, j) = t; let b = a; return b.len() + j }
+fn pm(t: (Vec[D], i64)) -> i64 { let (a, j) = t; let b = a; let c = b; return take(c) + j }
+fn pr(t: (Vec[D], i64)) -> Vec[D] { let (a, j) = t; let b = a; println(f"j{j}"); return b }
+fn vv(v: Vec[D]) -> i64 { let b = v; return b.len() }
+fn vk(v: Vec[D], k: bool) -> i64 { let b = v; if k { return take(b) } return 0 }
+fn main() {
+    { let t: (Vec[D], i64) = ([mkd(1), mkd(2)], 7); println(f"a {pv(t)}") }
+    println(f"b {pi(([1, 2, 3], 7))}")
+    println(f"c {ps((f"a-heap-string-longer-than-sso-{1}", 7))}")
+    { let t: (Vec[D], i64) = ([mkd(3)], 1); println(f"d {pm(t)}") }
+    { let r = pr(([mkd(4)], 5)); println(f"e {r.len()}") }
+    { let v: Vec[D] = [mkd(5), mkd(6)]; println(f"f {vv(v)}") }
+    { let v: Vec[D] = [mkd(7)]; println(f"g {vk(v, true)}") let u: Vec[D] = [mkd(8)]; println(f"h {vk(u, false)}") }
+    { let mut i = 0; while i < 3 { let t: (Vec[D], i64) = ([mkd(10 + i)], i); println(f"l {pv(t)}"); i = i + 1; } }
+    println("end")
+}

@@ -1,0 +1,506 @@
+// LeetCode 307 — five arms against each other and against seven properties
+// that follow from the STATEMENT rather than from any implementation.
+//
+//   A  Fenwick tree      — lowbit walks, absorbs a DELTA, keeps a shadow array
+//   B  segment tree      — child arithmetic, repairs from CHILDREN, no shadow
+//   C  sqrt decomposition— block totals, partial edges walked element by element
+//   D  naive             — the array itself, the definition transcribed
+//   E  generic Fenwick   — arm A over `T: Copy + Add + Sub`, same mathematics
+//
+// Arm E is arm A's twin under a different type discipline, so a disagreement
+// between THEM localises to how the compiler handles the abstraction rather
+// than to the algorithm. It could not be written when this kata was first
+// published — see its own file for the three defects that stood in the way,
+// all now fixed, all one root cause.
+//
+// WHAT THE ARMS CANNOT SHARE. Each maintains a SECOND representation of the
+// array and answers from it; keeping that second representation in step with
+// the first is the whole difficulty of this problem and the whole source of its
+// bugs. But no two of them can make the same mistake. A's is a swapped lowbit
+// direction (`x += x & -x` versus `x -= x & -x`) — B has no bit trick. B's is
+// the half-open frontier in its query walk — A never carries two pointers. C's
+// is a partial block taken whole, or a whole block walked element by element —
+// neither tree has a notion of a partial anything. D maintains nothing, so it
+// can commit none of the three.
+//
+// A and B differ in one more way that matters: A absorbs a DELTA and therefore
+// needs a shadow copy of the array to compute `val - old`, while B writes the
+// leaf and repairs upward from children. A corrupted shadow in A is invisible
+// to A's own internal consistency and shows up only as a disagreement with B.
+//
+// P7 IS THE ONE NO ARM COMPUTES, and it is the property this problem is really
+// about. A mutable structure's answers must depend ONLY on the array's current
+// contents — never on the sequence of writes that produced them. Every arm is
+// inherently history-dependent: each carries mutated state forward, and none
+// ever recomputes from scratch. So a history dependence is exactly the fault
+// four-way agreement is blind to, because all four would carry it. Building
+// the same final array by several different routes — different orders, junk
+// intermediate values, redundant writes — and demanding one answer tests a
+// property of the PROBLEM that no line of any arm is trying to satisfy.
+//
+// A PROPERTY THAT IS DELIBERATELY ABSENT, for the third kata running. Split
+// additivity — cutting a range and summing the halves — is unfalsifiable for
+// every prefix-shaped arm, because the shared boundary term cancels regardless
+// of what the table contains. #303 found it in one dimension and #304 measured
+// it in two (a table built WITHOUT EVER READING ITS INPUT still satisfied it on
+// all 432,000 queries). Arm A here is `prefix(r+1) - prefix(l)`, the same shape,
+// so it would be vacuous again; it is not re-derived, only not used.
+
+// ------------------------------------------------------------------- arm A
+
+struct FenA {
+    tree: Vec[i64],
+    data: Vec[i64],
+    n: i64,
+}
+
+impl FenA {
+    fn new(nums: ref Vec[i64]) -> FenA {
+        let n = nums.len();
+        let mut tree: Vec[i64] = Vec.new();
+        for i in 0..(n + 1) {
+            tree.push(0);
+        }
+        let mut data: Vec[i64] = Vec.new();
+        for i in 0..n {
+            data.push(0);
+        }
+        let mut st = FenA { tree: tree, data: data, n: n };
+        for i in 0..n {
+            st.update(i, nums[i]);
+        }
+        return st;
+    }
+
+    // Fold `delta` into every slot that covers index i, climbing by lowbit.
+    fn add(mut ref self, i: i64, delta: i64) {
+        let mut x = i + 1;
+        while x <= self.n {
+            self.tree[x] += delta;
+            x += x & -x;
+        }
+    }
+
+    fn update(mut ref self, i: i64, val: i64) {
+        let delta = val - self.data[i];
+        self.data[i] = val;
+        self.add(i, delta);
+    }
+
+    // Sum of [0, i), gathered from the disjoint slots that tile it.
+    fn prefix(ref self, i: i64) -> i64 {
+        let mut total = 0;
+        let mut x = i;
+        while x > 0 {
+            total += self.tree[x];
+            x -= x & -x;
+        }
+        return total;
+    }
+
+    fn sum_range(ref self, l: i64, r: i64) -> i64 {
+        return self.prefix(r + 1) - self.prefix(l);
+    }
+}
+
+fn new_a(nums: ref Vec[i64]) -> FenA {
+    return FenA.new(nums);
+}
+
+// ------------------------------------------------------------------- arm B
+
+struct SegB {
+    tree: Vec[i64],
+    n: i64,
+}
+
+impl SegB {
+    fn new(nums: ref Vec[i64]) -> SegB {
+        let n = nums.len();
+        let mut tree: Vec[i64] = Vec.new();
+        for i in 0..(2 * n) {
+            tree.push(0);
+        }
+        // Leaves first, then every internal node from the bottom up.
+        for i in 0..n {
+            tree[n + i] = nums[i];
+        }
+        let mut x = n - 1;
+        while x > 0 {
+            tree[x] = tree[2 * x] + tree[2 * x + 1];
+            x = x - 1;
+        }
+        return SegB { tree: tree, n: n };
+    }
+
+    fn update(mut ref self, i: i64, val: i64) {
+        let mut x = self.n + i;
+        self.tree[x] = val;
+        x = x / 2;
+        while x > 0 {
+            self.tree[x] = self.tree[2 * x] + self.tree[2 * x + 1];
+            x = x / 2;
+        }
+    }
+
+    fn sum_range(ref self, l: i64, r: i64) -> i64 {
+        let mut total = 0;
+        let mut lo = self.n + l;
+        let mut hi = self.n + r + 1;   // half-open on the right
+        while lo < hi {
+            // An odd low pointer is a right child: its sibling is out of range.
+            if lo % 2 == 1 {
+                total += self.tree[lo];
+                lo = lo + 1;
+            }
+            // An odd high pointer means the slot below it is in range.
+            if hi % 2 == 1 {
+                hi = hi - 1;
+                total += self.tree[hi];
+            }
+            lo = lo / 2;
+            hi = hi / 2;
+        }
+        return total;
+    }
+}
+
+fn new_b(nums: ref Vec[i64]) -> SegB {
+    return SegB.new(nums);
+}
+
+// ------------------------------------------------------------------- arm C
+
+struct BlkC {
+    data: Vec[i64],
+    sums: Vec[i64],
+    size: i64,
+    n: i64,
+}
+
+impl BlkC {
+    fn new(nums: ref Vec[i64]) -> BlkC {
+        let n = nums.len();
+        // Block size ~ sqrt(n), never zero.
+        let mut size = 1;
+        while size * size < n {
+            size = size + 1;
+        }
+        let count = (n + size - 1) / size;
+
+        let mut data: Vec[i64] = Vec.new();
+        for i in 0..n {
+            data.push(nums[i]);
+        }
+        let mut sums: Vec[i64] = Vec.new();
+        for b in 0..count {
+            sums.push(0);
+        }
+        for i in 0..n {
+            sums[i / size] += nums[i];
+        }
+        return BlkC { data: data, sums: sums, size: size, n: n };
+    }
+
+    fn update(mut ref self, i: i64, val: i64) {
+        let delta = val - self.data[i];
+        self.data[i] = val;
+        self.sums[i / self.size] += delta;
+    }
+
+    fn sum_range(ref self, l: i64, r: i64) -> i64 {
+        let mut total = 0;
+        let mut i = l;
+        while i <= r {
+            // Take a whole block only when the entire block fits in the range.
+            if i % self.size == 0 and i + self.size - 1 <= r {
+                total += self.sums[i / self.size];
+                i += self.size;
+            } else {
+                total += self.data[i];
+                i += 1;
+            }
+        }
+        return total;
+    }
+}
+
+fn new_c(nums: ref Vec[i64]) -> BlkC {
+    return BlkC.new(nums);
+}
+
+// ------------------------------------------------------------------- arm D
+
+struct NaiD {
+    data: Vec[i64],
+}
+
+impl NaiD {
+    fn new(nums: ref Vec[i64]) -> NaiD {
+        let mut data: Vec[i64] = Vec.new();
+        for i in 0..nums.len() {
+            data.push(nums[i]);
+        }
+        return NaiD { data: data };
+    }
+
+    fn update(mut ref self, i: i64, val: i64) {
+        self.data[i] = val;
+    }
+
+    fn sum_range(ref self, l: i64, r: i64) -> i64 {
+        let mut total = 0;
+        for i in l..(r + 1) {
+            total += self.data[i];
+        }
+        return total;
+    }
+}
+
+fn new_d(nums: ref Vec[i64]) -> NaiD {
+    return NaiD.new(nums);
+}
+
+// ------------------------------------------------------------------- arm E
+
+struct FenE[T] {
+    tree: Vec[T],
+    data: Vec[T],
+    zero: T,
+    n: i64,
+}
+
+impl[T: Copy + Add + Sub] FenE[T] {
+    fn new(nums: ref Vec[T], zero: T) -> FenE[T] {
+        let n = nums.len();
+        let mut tree: Vec[T] = Vec.new();
+        for i in 0..(n + 1) {
+            tree.push(zero);
+        }
+        let mut data: Vec[T] = Vec.new();
+        for i in 0..n {
+            data.push(zero);
+        }
+        let mut f = FenE { tree: tree, data: data, zero: zero, n: n };
+        for i in 0..n {
+            f.update(i, nums[i]);
+        }
+        return f;
+    }
+
+    fn add(mut ref self, i: i64, delta: T) {
+        let mut x = i + 1;
+        while x <= self.n {
+            self.tree[x] = self.tree[x] + delta;
+            x += x & -x;
+        }
+    }
+
+    fn update(mut ref self, i: i64, val: T) {
+        let delta = val - self.data[i];
+        self.data[i] = val;
+        self.add(i, delta);
+    }
+
+    fn prefix(ref self, i: i64) -> T {
+        let mut total = self.zero;
+        let mut x = i;
+        while x > 0 {
+            total = total + self.tree[x];
+            x -= x & -x;
+        }
+        return total;
+    }
+
+    fn sum_range(ref self, l: i64, r: i64) -> T {
+        return self.prefix(r + 1) - self.prefix(l);
+    }
+}
+
+fn new_e(nums: ref Vec[i64]) -> FenE[i64] {
+    return FenE.new(nums, 0);
+}
+
+// ------------------------------------------------------------------ harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) % 2147483648;
+}
+
+fn make_array(n: i64, seed: i64) -> Vec[i64] {
+    let mut state = seed;
+    let mut xs: Vec[i64] = Vec.new();
+    for i in 0..n {
+        state = lcg(state);
+        xs.push(state % 21 - 10);
+    }
+    return xs;
+}
+
+// An independent range sum over a plain array, sharing no code with any arm.
+fn oracle_sum(xs: ref Vec[i64], l: i64, r: i64) -> i64 {
+    let mut total = 0;
+    for i in l..(r + 1) {
+        total += xs[i];
+    }
+    return total;
+}
+
+fn main() {
+    let mut arrays = 0;
+    let mut queries = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6 = 0;
+    let mut p7 = 0;
+
+    let mut n = 1;
+    while n <= 8 {
+        let mut round = 0;
+        while round < 80 {
+            let seed = 7919 * n + round * 104729 + 1;
+            let base = make_array(n, seed);
+
+            let mut a = new_a(base);
+            let mut b = new_b(base);
+            let mut c = new_c(base);
+            let mut d = new_d(base);
+            let mut e = new_e(base);
+            // The reference array every arm is supposed to be tracking.
+            let mut ref_arr: Vec[i64] = Vec.new();
+            for i in 0..n { ref_arr.push(base[i]); }
+
+            let mut state = seed + 77;
+            let mut step = 0;
+            while step < 8 {
+                // ---- exhaust the query space at the CURRENT state
+                let mut l = 0;
+                while l < n {
+                    let mut r = l;
+                    while r < n {
+                        queries += 1;
+                        let va = a.sum_range(l, r);
+
+                        // P1 — four arms, one answer.
+                        if b.sum_range(l, r) != va { p1 += 1; }
+                        if c.sum_range(l, r) != va { p1 += 1; }
+                        if d.sum_range(l, r) != va { p1 += 1; }
+                        if e.sum_range(l, r) != va { p1 += 1; }
+
+                        // P2 — a width-one range is the element itself.
+                        if l == r and va != ref_arr[l] { p2 += 1; }
+
+                        // P3 — the whole array is the independent total.
+                        if l == 0 and r == n - 1 {
+                            if va != oracle_sum(ref_arr, 0, n - 1) { p3 += 1; }
+                        }
+
+                        // P5 — every answer matches an independent recount of
+                        // the reference array.
+                        if va != oracle_sum(ref_arr, l, r) { p5 += 1; }
+
+                        r = r + 1;
+                    }
+                    l = l + 1;
+                }
+
+                // ---- P6 — writing the value already there changes nothing.
+                state = lcg(state);
+                let idx6 = state % n;
+                let before6 = a.sum_range(0, n - 1);
+                a.update(idx6, ref_arr[idx6]);
+                b.update(idx6, ref_arr[idx6]);
+                c.update(idx6, ref_arr[idx6]);
+                d.update(idx6, ref_arr[idx6]);
+                e.update(idx6, ref_arr[idx6]);
+                if a.sum_range(0, n - 1) != before6 { p6 += 1; }
+
+                // ---- P4 — a write is invertible: put the old value back and
+                // every answer must return to what it was.
+                state = lcg(state);
+                let idx4 = state % n;
+                let old4 = ref_arr[idx4];
+                state = lcg(state);
+                let tmp4 = state % 41 - 20;
+                let snap = a.sum_range(0, n - 1);
+                a.update(idx4, tmp4);
+                a.update(idx4, old4);
+                if a.sum_range(0, n - 1) != snap { p4 += 1; }
+
+                // ---- perform a real write, and keep the reference in step
+                state = lcg(state);
+                let widx = state % n;
+                state = lcg(state);
+                let wval = state % 41 - 20;
+                a.update(widx, wval);
+                b.update(widx, wval);
+                c.update(widx, wval);
+                d.update(widx, wval);
+                e.update(widx, wval);
+                ref_arr[widx] = wval;
+
+                step = step + 1;
+            }
+
+            // ---- P7 — HISTORY INDEPENDENCE. `ref_arr` is now the array's
+            // contents. Reach that same content by three other routes and
+            // require every answer to agree.
+            let direct = new_a(ref_arr);
+
+            // route 1: build from zeros, write each cell once, left to right
+            let mut zeros: Vec[i64] = Vec.new();
+            for i in 0..n { zeros.push(0); }
+            let mut r1 = new_a(zeros);
+            for i in 0..n { r1.update(i, ref_arr[i]); }
+
+            // route 2: same, right to left
+            let mut r2 = new_a(zeros);
+            let mut j = n - 1;
+            while j >= 0 { r2.update(j, ref_arr[j]); j = j - 1; }
+
+            // route 3: junk intermediates and redundant writes, then correct
+            let mut r3 = new_a(zeros);
+            for i in 0..n { r3.update(i, 999); }
+            for i in 0..n { r3.update(i, -999); }
+            for i in 0..n { r3.update(i, ref_arr[i]); }
+            for i in 0..n { r3.update(i, ref_arr[i]); }
+
+            let mut l7 = 0;
+            while l7 < n {
+                let mut r7 = l7;
+                while r7 < n {
+                    let want = oracle_sum(ref_arr, l7, r7);
+                    if direct.sum_range(l7, r7) != want { p7 += 1; }
+                    if r1.sum_range(l7, r7) != want { p7 += 1; }
+                    if r2.sum_range(l7, r7) != want { p7 += 1; }
+                    if r3.sum_range(l7, r7) != want { p7 += 1; }
+                    r7 = r7 + 1;
+                }
+                l7 = l7 + 1;
+            }
+
+            arrays += 1;
+            round = round + 1;
+        }
+        n = n + 1;
+    }
+
+    println(f"arrays {arrays}");
+    println(f"queries {queries}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 width-one failures {p2}");
+    println(f"P3 whole-array failures {p3}");
+    println(f"P4 write-invertibility failures {p4}");
+    println(f"P5 independent-recount failures {p5}");
+    println(f"P6 idempotent-write failures {p6}");
+    println(f"P7 history-dependence failures {p7}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

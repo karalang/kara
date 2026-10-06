@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_103.rs::e2e_let_destructure_of_concrete_generic_struct_types_leaves_concretely"
+dedup_of = ["tests/interpreter/families/b_2026_09_29_103.rs::interp_let_destructure_of_concrete_generic_struct_types_leaves_concretely"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

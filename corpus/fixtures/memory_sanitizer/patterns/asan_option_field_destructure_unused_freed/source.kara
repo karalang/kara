@@ -1,0 +1,23 @@
+
+struct A { path: Vec[String], sv: Option[String] }
+fn f(a: A) -> i64 {
+    let A { path, sv } = a;
+    0
+}
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut p: Vec[String] = Vec.new();
+        p.push("facet_a_unused_vec_payload_gamma_cccccccccc".to_string());
+        v.push(A { path: p, sv: Some("facet_a_unused_option_payload_delta_dddddddd".to_string()) });
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let xs = build();
+    let mut t = 0;
+    for a in xs { t = t + f(a); }
+    println(t);
+}

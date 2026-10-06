@@ -1,0 +1,57 @@
+// LeetCode #338: Counting Bits — one pass, each count from a smaller one.
+//
+// Given n, return a list of n + 1 numbers whose i-th entry is the number of
+// 1 bits in i.
+//
+//   2  ->  [0, 1, 1]
+//   5  ->  [0, 1, 1, 2, 1, 2]
+//
+// Dropping the lowest bit of i gives i >> 1, which is smaller than i and so
+// already counted; i has the same 1 bits plus its lowest bit.
+//
+// O(n) time, no bit counting per number.
+
+fn count_bits(n: i64) -> Vec[i64] {
+    let mut ans: Vec[i64] = vec![0; n + 1];
+    for i in 1..=n {
+        ans[i] = ans[i >> 1] + (i & 1);
+    }
+    return ans;
+}
+
+fn show(n: i64) {
+    let ans = count_bits(n);
+    let parts: Vec[String] = ans.iter().map(|c| c.to_string()).collect();
+    let shown = parts.join(", ");
+    println(f"{n} -> [{shown}]");
+}
+
+// Summary of a long answer: its length, its total, its largest entry, and a
+// rolling hash of every entry.
+fn summary(n: i64) {
+    let ans = count_bits(n);
+    let mut total = 0;
+    let mut most = 0;
+    let mut hash = 0;
+    for c in ans.iter() {
+        total += c;
+        most = most.max(c);
+        hash = (hash * 31 + c) % 1000000007;
+    }
+    println(f"{n} -> {ans.len()} counts, total {total}, largest {most}, hash {hash}");
+}
+
+fn main() {
+    show(2);
+    show(5);
+    show(0);
+    show(1);
+    show(16);
+    show(31);
+    show(33);
+    summary(1000);
+    summary(65535);
+    summary(65536);
+    summary(100000);
+    summary(1048575);
+}

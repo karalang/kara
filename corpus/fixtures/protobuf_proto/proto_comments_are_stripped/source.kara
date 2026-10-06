@@ -1,0 +1,16 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    // this message describes a user; enum-like words here are ignored
+    message User {
+        string name = 1; /* the display name */
+        int64 id = 2;    // a unique id
+    }
+";
+
+fn main() {
+    let u = User { name: "z", id: 9 };
+    let back = User.decode(u.encode());
+    println(back.name);
+    println(back.id);
+}

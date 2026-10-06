@@ -1,0 +1,63 @@
+
+struct Ms { a: String, m: Map[String, i64] }
+struct Vs { a: Vec[i64], m: Map[String, i64] }
+struct Ss { a: String, s: Set[i64] }
+struct Mo { m: Map[String, i64] }
+struct Ps { a: String }
+struct Inner { m: Map[String, i64] }
+struct Outer { a: String, i: Inner }
+struct Ar { a: String, arr: Array[i64, 4] }
+struct Mix[T] { v: T, s: String }
+shared struct Shr { v: i64 }
+struct Sh2 { a: String, sh: Shr }
+struct Host { k: i64 }
+impl Host {
+    fn ig(ref self, x: Ms) -> i64 { 8 }
+}
+fn ig_ms(x: Ms) -> i64 { 1 }
+fn ig_vs(x: Vs) -> i64 { 2 }
+fn ig_ss(x: Ss) -> i64 { 4 }
+fn ig_mo(x: Mo) -> i64 { 16 }
+fn ig_ps(x: Ps) -> i64 { 32 }
+fn ig_sh(x: Sh2) -> i64 { 64 }
+fn ig_ref(x: ref Ms) -> i64 { 128 }
+fn ig_gen[T](x: Ms, t: T) -> i64 { 256 }
+fn ig_nest(x: Outer) -> i64 { 512 }
+fn ig_arr(x: Ar) -> i64 { 1024 }
+fn ig_mix_conc(x: Mix[String]) -> i64 { 2048 }
+fn ig_mix_mono[T](x: Mix[T]) -> i64 { 4096 }
+fn mk_map(k: i64) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"key-padded-out-so-it-heap-allocates-{k}", k);
+    m
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let h: Host = Host { k: n };
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        acc = acc + ig_ms(Ms { a: f"ms-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) });
+        let mut v: Vec[i64] = Vec.new();
+        v.push(n + i);
+        acc = acc + ig_vs(Vs { a: v, m: mk_map(n + i) });
+        let mut s: Set[i64] = Set.new();
+        s.insert(n + i);
+        acc = acc + ig_ss(Ss { a: f"ss-padded-out-so-it-heap-allocates-{n + i}", s: s });
+        acc = acc + h.ig(Ms { a: f"me-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) });
+        acc = acc + ig_mo(Mo { m: mk_map(n + i) });
+        acc = acc + ig_ps(Ps { a: f"ps-padded-out-so-it-heap-allocates-{n + i}" });
+        acc = acc + ig_sh(Sh2 { a: f"sh-padded-out-so-it-heap-allocates-{n + i}", sh: Shr { v: n + i } });
+        acc = acc + ig_ref(Ms { a: f"rf-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) });
+        acc = acc + ig_gen(Ms { a: f"gn-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) }, i);
+        acc = acc + ig_nest(Outer { a: f"nt-padded-out-so-it-heap-allocates-{n + i}", i: Inner { m: mk_map(n + i) } });
+        let arr: Array[i64, 4] = [n + i, 1, 2, 3];
+        acc = acc + ig_arr(Ar { a: f"ar-padded-out-so-it-heap-allocates-{n + i}", arr: arr });
+        acc = acc + ig_mix_conc(Mix { v: f"mc-padded-out-so-it-heap-allocates-{n + i}", s: f"mcs-padded-out-so-it-heap-allocates-{n + i}" });
+        acc = acc + ig_mix_mono(Mix { v: f"mm-padded-out-so-it-heap-allocates-{n + i}", s: f"mms-padded-out-so-it-heap-allocates-{n + i}" });
+        let named: Ms = Ms { a: f"nm-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) };
+        acc = acc + ig_ms(named);
+        i = i + 1;
+    }
+    println(acc);
+}

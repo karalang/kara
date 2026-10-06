@@ -1,0 +1,23 @@
+struct S { e: E }
+enum E { A(Vec[String]), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+
+fn mkv(n: i64) -> Vec[String] {
+    let mut v = Vec.new();
+    v.push("abcdefghijklmnopqrstuvwxyz0123456789");
+    v.push(f"tag{n}");
+    return v
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn take(s: ref S) -> String {
+    match s.e { E.A(v) => { let m = v; return m[1] } E.B => { return "none" } }
+}
+
+fn main() {
+    let s = S { e: E.A(mkv(7)) };
+    println(take(s));
+    println(take(s));
+    println(take(s));
+    println("end");
+}

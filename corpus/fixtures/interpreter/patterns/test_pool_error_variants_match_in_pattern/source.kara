@@ -1,0 +1,12 @@
+fn classify(e: PoolError) -> String {
+             match e {
+                 PoolError.Timeout => "timeout",
+                 PoolError.PoolClosed => "closed",
+                 PoolError.CreateFailed => "create_failed",
+             }
+         }
+         fn main() {
+             println(classify(PoolError.Timeout));
+             println(classify(PoolError.PoolClosed));
+             println(classify(PoolError.CreateFailed));
+         }

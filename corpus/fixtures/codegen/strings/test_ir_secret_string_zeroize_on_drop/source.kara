@@ -1,0 +1,6 @@
+
+import std.secret.{Secret};
+fn main() {
+    let s: Secret[String] = Secret.new("hunter2-token-01");
+    println(s.ct_eq(s));
+}

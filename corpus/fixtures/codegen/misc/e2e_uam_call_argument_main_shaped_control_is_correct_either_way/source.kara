@@ -1,0 +1,18 @@
+
+struct Stat { service: String }
+struct Entry { service: String }
+
+fn main() {
+    let mut es: Vec[Entry] = Vec.new();
+    es.push(Entry { service: "alphabetical" });
+    let mut index: Map[String, usize] = Map.new();
+    let mut stats: Vec[Stat] = Vec.new();
+    let mut i = 0;
+    while i < es.len() {
+        let e = ref es[i];
+        let _ = index.insert(e.service, 0 as usize);
+        stats.push(Stat { service: e.service });
+        i = i + 1;
+    }
+    println(stats[0].service);
+}

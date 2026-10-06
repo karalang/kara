@@ -1,0 +1,24 @@
+
+fn mk() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("from-vec-temp-call-delta-dddddddddddddddddddd".to_string());
+    v.push("from-vec-temp-call-echo-eeeeeeeeeeeeeeeeeeeeee".to_string());
+    v
+}
+fn main() {
+    let mut round: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while round < 40i64 {
+        let c: Column[String] = Column.from_vec([
+            "from-vec-temp-lit-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "from-vec-temp-lit-bravo-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "from-vec-temp-lit-charlie-cccccccccccccccccc".to_string()
+        ]);
+        let d: Column[String] = Column.from_vec(mk());
+        let a: String = c[0i64].unwrap();
+        let e: String = d[1i64].unwrap();
+        total = total + c.len() + d.len() + a.len() + e.len();
+        round = round + 1i64;
+    }
+    println(f"{total}");
+}

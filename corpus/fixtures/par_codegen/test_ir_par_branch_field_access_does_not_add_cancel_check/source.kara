@@ -1,0 +1,23 @@
+
+effect resource Log;
+fn helper(n: i64) -> i64 writes(Log) { n + 1 }
+struct Pair { a: i64, b: i64 }
+fn main() {
+    par {
+        let _ = {
+            let p = Pair { a: 1_i64, b: 2_i64 };
+            let r1 = p.a;
+            let r2 = p.b;
+            let r3 = helper(p.a);
+            let r4 = p.a;
+            r4
+        };
+        let _ = {
+            let q = Pair { a: 3_i64, b: 4_i64 };
+            let s1 = q.b;
+            let s2 = q.a;
+            let s3 = helper(q.b);
+            s3
+        };
+    }
+}

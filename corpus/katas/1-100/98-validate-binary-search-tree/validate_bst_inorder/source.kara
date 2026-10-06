@@ -1,0 +1,95 @@
+// LeetCode #98: Validate Binary Search Tree — inorder traversal is sorted.
+//
+// The other classic route to the same answer as the ★
+// ([`validate_bst.kara`](validate_bst.kara)): an inorder traversal of a BST visits
+// values in STRICTLY INCREASING order, and only a BST has that property. So walk
+// the tree left-node-right, collecting values into a `Vec[i64]`, then check the
+// sequence is strictly increasing (`vals[i] > vals[i-1]` everywhere). A single
+// equal or out-of-order pair means it is not a BST.
+//
+// Where the ★ threads `Option[i64]` bounds DOWN the recursion and returns a bool,
+// this threads a `mut ref Vec[i64]` accumulator through the recursion and pushes
+// each node's value as it is visited — a different codegen surface (a mutable
+// borrow carried across recursive calls over a `shared struct TreeNode`, versus
+// the ★'s by-value `Option` accumulators). Materialising the whole traversal
+// costs O(n) space the ★ avoids, but it is the most literal statement of the BST
+// property and an independent cross-check. Node type and construction mirror the
+// ★ and kata [#226](../../201-300/226-invert-binary-tree/).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn inorder(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    match node {
+        None => {}
+        Some(n) => {
+            inorder(n.left, out);      // forward the existing mut ref (no marker)
+            out.push(n.val);
+            inorder(n.right, out);
+        }
+    }
+}
+
+fn is_valid(root: Option[TreeNode]) -> bool {
+    let mut vals: Vec[i64] = Vec.new();
+    inorder(root, mut vals);           // fresh owned binding -> `mut` at call site
+
+    let n = vals.len();
+    let mut i = 1;
+    while i < n {
+        if vals[i] <= vals[i - 1] {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// ---- test harness (shared verbatim with validate_bst.kara) ---------------------
+
+fn report(root: Option[TreeNode], s: mut ref String) {
+    let ok = is_valid(root);
+    if ok {
+        println("valid=true");
+        s.push_str(" 1");
+    } else {
+        println("valid=false");
+        s.push_str(" 0");
+    }
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    Some(TreeNode { val: v, left: None, right: None })
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report(None, mut s);                                            // empty -> true
+    report(leaf(1), mut s);                                     // single -> true
+    report(Some(TreeNode { val: 2, left: leaf(1), right: leaf(3) }), mut s);
+    report(Some(TreeNode { val: 5, left: leaf(1),
+        right: Some(TreeNode { val: 4, left: leaf(3), right: leaf(6) }) }), mut s);
+    report(Some(TreeNode { val: 1, left: leaf(1), right: None }), mut s);
+    report(Some(TreeNode { val: 5, left: leaf(4),
+        right: Some(TreeNode { val: 6, left: leaf(3), right: leaf(7) }) }), mut s);
+    report(Some(TreeNode { val: 8,
+        left: Some(TreeNode { val: 4, left: leaf(2), right: leaf(6) }),
+        right: Some(TreeNode { val: 12, left: leaf(10), right: leaf(14) }) }), mut s);
+    report(Some(TreeNode { val: 5,
+        left: Some(TreeNode { val: 4,
+            left: Some(TreeNode { val: 3,
+                left: Some(TreeNode { val: 2, left: leaf(1), right: None }),
+                right: None }),
+            right: None }),
+        right: None }), mut s);
+    report(Some(TreeNode { val: 1, left: None,
+        right: Some(TreeNode { val: 2, left: None,
+            right: Some(TreeNode { val: 3, left: None, right: leaf(4) }) }) }), mut s);
+    report(Some(TreeNode { val: 2, left: leaf(1), right: leaf(2) }), mut s);
+
+    println(s);
+}

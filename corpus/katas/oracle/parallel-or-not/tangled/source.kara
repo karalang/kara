@@ -1,0 +1,85 @@
+// tangled — does the oracle hold up on a NON-obvious concurrency graph?
+//
+// main.kara had one hidden effect conflict; dataflow.kara had one value
+// dependency. This file tangles both axes across 8 statements and 4
+// resources so the right answer is not eyeballable. The point is to
+// check the grouping stays SOUND (never groups two statements that
+// must serialize) on a graph a reader can't hold in their head.
+//
+// The dependency structure of handle() (work it out and compare):
+//
+//   0: user   = db_load()          writes Db,    defines user
+//   1: cfg    = cache_get()        writes Cache, defines cfg
+//   2: prof   = net_fetch(user)    reads user,   writes Net,   -> RAW on 0
+//   3: merged = merge(cfg, prof)   reads cfg,prof,writes Cache -> RAW on 1,2 + Cache-effect on 1
+//   4: db_store(merged)            reads merged, writes Db      -> RAW on 3 + Db-effect on 0
+//   5: ev     = net_emit(merged)   reads merged, writes Net     -> RAW on 3 + Net-effect on 2
+//   6: log_audit(ev)               reads ev,     writes Log     -> RAW on 5
+//   7: log_flush()                 writes Log                   -> Log-effect on 6
+//
+// Two genuinely-independent pairs hide in that spine:
+//   * 0 and 1  — Db vs Cache, no shared value.
+//   * 4 and 5  — Db vs Net; both only READ `merged` (read-read never
+//                conflicts), and neither reads what the other defines.
+// Everything else is chained by a RAW edge or an effect conflict.
+// Sound expected grouping: [0,1] and [4,5]; the rest are singletons
+// (contiguous-greedy drops them). Run it and confirm the oracle agrees:
+//
+//   $ karac query concurrency tangled.kara.handle
+//   {... "parallel_groups":[{"statements":[0,1],...},{"statements":[4,5],...}]}
+
+pub trait Store { fn touch(mut ref self, n: i64) -> i64; }
+
+pub effect resource Db: Store;
+pub effect resource Cache: Store;
+pub effect resource Net: Store;
+pub effect resource Log: Store;
+
+pub struct Mem { acc: i64 }
+impl Mem { pub fn new() -> Mem { Mem { acc: 0 } } }
+impl Store for Mem {
+    fn touch(mut ref self, n: i64) -> i64 {
+        let mut i = 0;
+        while i < n { self.acc = self.acc + 1; i = i + 1; }
+        self.acc
+    }
+}
+
+const WORK: i64 = 1;
+
+fn db_load()            -> i64 with writes(Db)    { Db.touch(WORK) }
+fn cache_get()          -> i64 with writes(Cache) { Cache.touch(WORK) }
+fn net_fetch(u: i64)    -> i64 with writes(Net)   { Net.touch(WORK + u) }
+fn merge(a: i64, b: i64) -> i64 with writes(Cache) { Cache.touch(WORK + a + b) }
+fn db_store(m: i64)           with writes(Db)    { Db.touch(WORK + m); }
+fn net_emit(m: i64)     -> i64 with writes(Net)   { Net.touch(WORK + m) }
+fn log_audit(e: i64)          with writes(Log)   { Log.touch(WORK + e); }
+fn log_flush()                with writes(Log)   { Log.touch(WORK); }
+
+pub fn handle()
+    with writes(Db) writes(Cache) writes(Net) writes(Log)
+{
+    let user = db_load();          // 0
+    let cfg = cache_get();         // 1
+    let prof = net_fetch(user);    // 2  RAW on 0
+    let merged = merge(cfg, prof); // 3  RAW on 1,2
+    db_store(merged);              // 4  RAW on 3, Db-effect on 0
+    let ev = net_emit(merged);     // 5  RAW on 3, Net-effect on 2
+    log_audit(ev);                 // 6  RAW on 5
+    log_flush();                   // 7  Log-effect on 6
+}
+
+fn main() {
+    let mut a = Mem.new();
+    let mut b = Mem.new();
+    let mut c = Mem.new();
+    let mut d = Mem.new();
+    with_provider[Db](a, || {
+        with_provider[Cache](b, || {
+            with_provider[Net](c, || {
+                with_provider[Log](d, || { handle(); });
+            });
+        });
+    });
+    println("done");
+}

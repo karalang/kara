@@ -1,0 +1,92 @@
+// LeetCode #64: Minimum Path Sum — full DP table, O(m·n) time and space.
+//
+// The textbook form of the same `cost + min` recurrence the ★ file
+// ([`minimum_path_sum.kara`](minimum_path_sum.kara)) rolls onto one row. Here the
+// whole grid of best-costs is materialised: `best[i][j]` is the minimum cost of
+// any right/down route from the start to cell `(i, j)`,
+//
+//     best[i][j] = grid[i][j] + min(best[i-1][j], best[i][j-1])
+//
+// with `best[0][0] = grid[0][0]` and the borders forced to their single
+// in-neighbour (top row from the left, left column from above). The answer is
+// `best[m-1][n-1]`.
+//
+// Whereas the rolling version overwrites one array and reasons about
+// read-before-write ordering, the 2-D table has NO aliasing subtlety at all:
+// every cell is written exactly once, and the two cells it reads —
+// `best[i-1][j]` in the previous (already-complete) row and `best[i][j-1]`
+// earlier in the current row — are finalised before it is reached. The border
+// cells are handled by explicit branches (an absent neighbour has no value to
+// min against). Its cost is the O(m·n) grid it allocates, which the rolling form
+// trades away for O(n); keeping it here shows the space optimisation as a diff
+// and cross-checks the recurrence independently. The table is a `Vec[Vec[i64]]`,
+// the same 2-D shape as #62/#63's own 2-D variants and katas
+// [#54](../54-spiral-matrix/) / [#48](../48-rotate-image/).
+//
+// Costs ≤ 200 with m, n ≤ 200, so the answer is ≤ 80_000 — i64 for corpus
+// uniformity, nowhere near overflow.
+
+fn min_path_sum(grid: ref Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+
+    let mut best: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < rows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < cols {
+            if i == 0 and j == 0 {
+                row.push(grid[0][0]);
+            } else if i == 0 {
+                // top row: only the left neighbour (this row, already written)
+                let left = row[j - 1];
+                row.push(left + grid[0][j]);
+            } else if j == 0 {
+                // left column: only the neighbour above (previous row, finished)
+                let up = best[i - 1][0];
+                row.push(up + grid[i][0]);
+            } else {
+                let up = best[i - 1][j];
+                let left = row[j - 1];
+                row.push(grid[i][j] + min(up, left));
+            }
+            j = j + 1;
+        }
+        best.push(row);
+        i = i + 1;
+    }
+
+    best[rows - 1][cols - 1]
+}
+
+// ---- test harness (shared verbatim with minimum_path_sum.kara) ---------------
+
+fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+    let ans = min_path_sum(grid);
+    println(f"{ans}");
+    s.push(' ');
+    s.push_str(f"{ans}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report([[1, 3, 1], [1, 5, 1], [4, 2, 1]], mut s);   // 7
+    report([[1, 2, 3], [4, 5, 6]], mut s);              // 12
+    report([[5]], mut s);                               // 5
+    report([[1, 2, 3, 4]], mut s);                      // 10
+    report([[1], [2], [3]], mut s);                     // 6
+    report([[1, 2], [1, 1]], mut s);                    // 3
+    report([[0, 0, 0], [0, 0, 0], [0, 0, 0]], mut s);   // 0
+    report([[1, 9, 9], [1, 9, 9], [1, 1, 1]], mut s);   // 5
+    report([[1, 3, 1, 2],                               // 9
+            [2, 1, 3, 1],
+            [3, 2, 1, 4],
+            [1, 1, 1, 1]], mut s);
+    report([[200, 200], [200, 200]], mut s);            // 600
+    report([[7], [3], [9], [1], [5]], mut s);           // 25
+    report([[2, 2, 2, 2, 2, 2]], mut s);                // 12
+
+    println(s);
+}

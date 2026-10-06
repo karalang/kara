@@ -1,0 +1,38 @@
+
+#[derive(Clone)]
+struct Entry { service: String, weight: i64 }
+fn agg(entries: Vec[Entry]) -> String {
+    let mut index: Map[String, usize] = Map.new();
+    let e = entries[0].clone();
+    return e.service;
+}
+fn agg_two(entries: Vec[Entry]) -> String {
+    let mut index: Map[String, usize] = Map.new();
+    let a = entries[0].clone();
+    let b = entries[1].clone();
+    return a.service + "-" + b.service;
+}
+fn agg_nested(rows: Vec[Vec[Entry]]) -> String {
+    let mut index: Map[String, usize] = Map.new();
+    let inner = rows[0].clone();
+    let e = inner[1].clone();
+    return e.service;
+}
+fn main() {
+    let mut es: Vec[Entry] = Vec.new();
+    es.push(Entry { service: "alphaalphaalpha", weight: 3 });
+    es.push(Entry { service: "betabetabeta", weight: 5 });
+    let mut k = 0;
+    let mut t = 0;
+    while k < 20 {
+        t = t + agg(es.clone()).len();
+        t = t + agg_two(es.clone()).len();
+        let mut rows: Vec[Vec[Entry]] = Vec.new();
+        rows.push(es.clone());
+        t = t + agg_nested(rows).len();
+        k = k + 1;
+    }
+    println(t);
+    println(es[1].service);
+    println("done");
+}

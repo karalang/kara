@@ -1,0 +1,13 @@
+source = "tests/interpreter/patterns.rs::test_readonly_if_let_over_borrow_projection_binds_a_view"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "move-from-borrow"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

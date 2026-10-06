@@ -1,0 +1,18 @@
+
+struct Pair { a: Vec[i64], b: Vec[i64], n: i64 }
+fn mk(x: i64) -> Pair {
+    let mut va: Vec[i64] = Vec.new();
+    va.push(x);
+    let mut vb: Vec[i64] = Vec.new();
+    vb.push(x * 2);
+    return Pair { a: va, b: vb, n: x };
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let Pair { a, b: _, n } = mk(i);
+        println(a.len() + n);
+        i = i + 1;
+    }
+    println(99);
+}

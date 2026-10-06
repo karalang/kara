@@ -1,0 +1,15 @@
+
+fn main() {
+    let a: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    println(a.sum());
+    println(a.max());
+    let s0 = a.sum_axis(0);
+    println(s0[1]);
+    let s1 = a.sum_axis(1);
+    println(s1[0]);
+    let m = a.mean_axis(0);
+    println(m[2]);
+    let chained = m.sum_axis(0);
+    println(chained);
+    println(a[1, 2]);
+}

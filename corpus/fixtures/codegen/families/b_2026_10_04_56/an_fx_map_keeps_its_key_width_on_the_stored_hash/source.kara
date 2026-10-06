@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut fx: Map[i64, i64, FxBuildHasher] = Map.new();
+    fx.insert(1, fx.get(1).unwrap_or(0) + 1);
+    let mut d: Map[i64, i64] = Map.new();
+    d.insert(2, d.get(2).unwrap_or(0) + 1);
+    let mut c: Map[char, i64] = Map.new();
+    c.insert('x', c.get('x').unwrap_or(0) + 1);
+    println(f"{fx.len()} {d.len()} {c.len()}");
+}

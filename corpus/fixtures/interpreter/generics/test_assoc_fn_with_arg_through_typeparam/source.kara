@@ -1,0 +1,19 @@
+
+trait FromI64 {
+    fn from_i64(n: i64) -> Self;
+}
+
+struct Wrap { v: i64 }
+
+impl FromI64 for Wrap {
+    fn from_i64(n: i64) -> Wrap { Wrap { v: n } }
+}
+
+fn make[T: FromI64](n: i64) -> T {
+    T.from_i64(n)
+}
+
+fn main() {
+    let w: Wrap = make(7);
+    println(w.v);
+}

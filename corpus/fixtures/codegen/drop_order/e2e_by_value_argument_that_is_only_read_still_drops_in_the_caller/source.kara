@@ -1,0 +1,15 @@
+
+struct Item { id: i64 }
+impl Drop for Item {
+    fn drop(mut ref self) { println(f"drop {self.id}") }
+}
+struct Bag { n: i64 }
+impl Bag {
+    fn look(mut ref self, x: Item) { self.n = self.n + x.id; }
+}
+fn main() {
+    let mut b = Bag { n: 0 };
+    b.look(Item { id: 7 });
+    println(b.n);
+    println("end");
+}

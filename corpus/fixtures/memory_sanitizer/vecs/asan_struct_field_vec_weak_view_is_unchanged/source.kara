@@ -1,0 +1,18 @@
+
+shared struct N { v: i64 }
+
+struct Holder { kids: Vec[weak N] }
+
+fn probe(h: Holder) -> i64 {
+    let ks = h.kids;
+    match ks[0] { Some(x) => { x.v } None => { 0 - 1 } }
+}
+
+fn main() {
+    let a: N = N { v: 7 };
+    let mut w: Vec[weak N] = Vec.new();
+    w.push(a);
+    let h: Holder = Holder { kids: w };
+    println(probe(h));
+    println(a.v);
+}

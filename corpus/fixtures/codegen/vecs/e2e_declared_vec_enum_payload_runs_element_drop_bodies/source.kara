@@ -1,0 +1,27 @@
+struct R2 { s: String, t: String, u: String }
+    impl Drop for R2 { fn drop(mut ref self) { println(f"  d2:{self.s.len()}") } }
+    fn mkr(i: i64) -> R2 { return R2 { s: f"aaaaaaaaa", t: f"b", u: f"c" } }
+    struct S1 { v: i64 }
+    impl Drop for S1 { fn drop(mut ref self) { println(f"  dS{self.v}") } }
+    enum Mono { P(R2), Q }
+    shared enum SMono { P(R2), Q }
+    enum G[T] { X(T), Y }
+    enum H3 { P(SMono), Q }
+    enum H4 { P(Vec[Mono]), Q }
+    enum H5 { P(Vec[S1]), Q }
+    enum H6 { P(Vec[S1], i64), Q }
+    enum H7 { P(Array[S1, 2]), Q }
+
+    fn main() {
+        println("vecenum"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let h = H4.P(w); println("  x") }
+        println("vecstruct"); { let mut w: Vec[S1] = []; w.push(S1 { v: 7 }); w.push(S1 { v: 8 }); let h = H5.P(w); println("  x") }
+        println("vecmixed"); { let mut w: Vec[S1] = []; w.push(S1 { v: 9 }); let h = H6.P(w, 3); println("  x") }
+        println("vecempty"); { let w: Vec[S1] = []; let h = H5.P(w); println("  x") }
+        println("unitvar"); { let h = H5.Q; println("  x") }
+        println("array"); { let h = H7.P([S1 { v: 1 }, S1 { v: 2 }]); println("  x") }
+        println("struct"); { let g = G.X(mkr(1)); println("  x") }
+        println("sharedec"); { let h = H3.P(SMono.P(mkr(1))); println("  x") }
+        println("genvec"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let g = G.X(w); println("  x") }
+        println("gensh"); { let g = G.X(SMono.P(mkr(1))); println("  x") }
+        println("end")
+    }

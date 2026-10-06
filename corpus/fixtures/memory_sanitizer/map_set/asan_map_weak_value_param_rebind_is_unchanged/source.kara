@@ -1,0 +1,15 @@
+
+shared struct N { v: i64 }
+
+fn probe(m: Map[i64, weak N]) -> i64 {
+    let work = m;
+    match work.get(1) { Some(x) => { x.v } None => { 0 - 1 } }
+}
+
+fn main() {
+    let a: N = N { v: 7 };
+    let mut m: Map[i64, weak N] = Map.new();
+    m.insert(1, a);
+    println(probe(m));
+    println(a.v);
+}

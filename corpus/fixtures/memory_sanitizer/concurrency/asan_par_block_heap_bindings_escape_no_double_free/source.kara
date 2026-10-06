@@ -1,0 +1,10 @@
+
+fn label(n: i64) -> String { f"v{n}" }
+fn main() {
+    par {
+        let sa = label(1);
+        let sb = label(2);
+    }
+    println(sa);
+    println(sb);
+}

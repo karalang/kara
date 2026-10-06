@@ -1,0 +1,128 @@
+// LeetCode #40: Combination Sum II — counted/grouped backtracking over distinct values.
+//
+// Same problem as the ★ file (duplicates in the input, each element used at most once, no
+// duplicate combinations), but the duplicate handling is structural rather than a
+// same-level skip. Sort, then COLLAPSE the multiset into distinct (value, count) groups —
+// e.g. [1,1,2,2,3,3,5] becomes values [1,2,3,5] with counts [2,2,2,1]. The DFS then walks
+// the DISTINCT values once each, choosing how MANY copies of the current value to take —
+// from `count` down to 0 — before moving to the next value. Because each value is visited
+// exactly one tree level and the choice is "how many", duplicate combinations are
+// impossible by construction: there is no second branch that could re-emit the same
+// multiset, so no adjacent-equal skip is needed.
+//
+// The descending copy count (take `k`, then `k-1`, …, then 0) makes this emit combinations
+// in exactly the ★ file's lexicographic order: more copies of a smaller value sort before
+// fewer, so [1,1,2,2] precedes [1,2,3] precedes [1,5] precedes [3,3]. The grouping is the
+// run-length read kata [#38](../38-count-and-say/)'s indexed style uses — a left pointer at
+// a run's first element, a right pointer walking while the value repeats — applied to the
+// sorted candidates to recover (value, count) pairs in two parallel `Vec[i64]`s.
+//
+//   - `combination_sum2` sorts, then run-groups into `vals` / `cnts`.
+//   - `dfs` prunes `k` to `min(count, remaining / value)` copies (taking more overshoots),
+//     then recurses on each `k` from that max down to 0; `k == 0` skips the value entirely.
+//   - the path is the same mutable `Vec[i64]`: push `k` copies, recurse at the next value,
+//     pop `k` copies; the leaf snapshot `out.push(path.clone())` records a hit.
+//
+// LeetCode bounds: 1 ≤ candidates.length ≤ 100, 1 ≤ candidates[i] ≤ 50, 1 ≤ target ≤ 30.
+
+fn dfs(
+    vals: ref Vec[i64],
+    cnts: ref Vec[i64],
+    idx: i64,
+    remaining: i64,
+    path: mut ref Vec[i64],
+    out: mut ref Vec[Vec[i64]],
+) {
+    if remaining == 0 {
+        out.push(path.clone());
+        return;
+    }
+    let m = vals.len();
+    if idx == m {
+        return;
+    }
+    let v = vals[idx];
+    // Most copies of v we can take without overshooting, capped by availability.
+    let mut k = cnts[idx];
+    while k > 0 and k * v > remaining {
+        k = k - 1;
+    }
+    // Take k, k-1, …, 0 copies (descending → lexicographic output order).
+    while k >= 0 {
+        let mut t = 0;
+        while t < k {
+            path.push(v);
+            t = t + 1;
+        }
+        dfs(vals, cnts, idx + 1, remaining - k * v, path, out);
+        t = 0;
+        while t < k {
+            path.pop();
+            t = t + 1;
+        }
+        k = k - 1;
+    }
+}
+
+fn combination_sum2(candidates: Slice[i64], target: i64) -> Vec[Vec[i64]] {
+    let mut cands: Vec[i64] = Vec.from_slice(candidates);
+    cands.sort_by(|a, b| a.cmp(b));
+
+    // Run-group the sorted multiset into distinct values and their counts.
+    let mut vals: Vec[i64] = Vec.new();
+    let mut cnts: Vec[i64] = Vec.new();
+    let n = cands.len();
+    let mut i = 0;
+    while i < n {
+        let v = cands[i];
+        let mut j = i;
+        while j < n and cands[j] == v {
+            j = j + 1;
+        }
+        vals.push(v);
+        cnts.push(j - i);
+        i = j;
+    }
+
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    dfs(vals, cnts, 0, target, mut path, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(combo: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = combo.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{combo[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn report(candidates: Slice[i64], target: i64) {
+    let combos = combination_sum2(candidates, target);
+    let count = combos.len();
+    println(f"target={target} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(show(combos[i]));
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    report([10, 1, 2, 7, 6, 1, 5], 8);
+    report([2, 5, 2, 1, 2], 5);
+    report([2, 4, 6], 3);
+    report([1, 1, 1, 1], 3);
+    report([1, 1, 2, 2, 3, 3, 5], 6);
+}

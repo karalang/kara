@@ -1,0 +1,152 @@
+// LeetCode 251 — Flatten 2D Vector.
+//
+// Design an iterator over a 2D vector: `has_next` reports whether anything is
+// left, `next` yields the next element in row-major order. Rows may be EMPTY —
+// anywhere, consecutively, at the front, at the back, or all of them — and that
+// is the whole problem.
+//
+// This file is the lazy two-cursor form: a `(row, col)` pair that is advanced
+// past exhausted rows on demand. Nothing is copied; the iterator holds the data
+// and walks it in place, O(1) extra space beyond the input.
+//
+// The invariant is "the cursor is either at a real element or past the end", and
+// it is restored by `skip_empty` at the top of BOTH entry points — `has_next`
+// must be idempotent (callers may poll it repeatedly) and `next` must be correct
+// when called without a preceding `has_next`.
+
+struct Vector2D {
+    data: Vec[Vec[i64]],
+    mut row: i64,
+    mut col: i64,
+}
+
+fn v_new(data: Vec[Vec[i64]]) -> Vector2D {
+    return Vector2D { data: data, row: 0, col: 0 };
+}
+
+// Advance the cursor to the next real element, stepping over exhausted rows.
+// Idempotent: on an already-valid cursor it does nothing.
+//
+// `and` MUST short-circuit here. When `row == data.len()` the second operand
+// would index `data[row]` one past the end — the left test is a GUARD, not a
+// condition being combined. See the README: #250's recursion is broken BY the
+// same short-circuit that keeps this loop in bounds.
+fn skip_empty(v: mut ref Vector2D) {
+    while v.row < v.data.len() and v.col >= v.data[v.row].len() {
+        v.row = v.row + 1;
+        v.col = 0;
+    }
+}
+
+fn v_has_next(v: mut ref Vector2D) -> bool {
+    skip_empty(v);
+    return v.row < v.data.len();
+}
+
+fn v_next(v: mut ref Vector2D) -> i64 {
+    skip_empty(v);
+    if v.row >= v.data.len() {
+        return -1; // exhausted; LeetCode guarantees callers check has_next
+    }
+    let x = v.data[v.row][v.col];
+    v.col = v.col + 1;
+    return x;
+}
+
+// Drain the iterator into a printable line, polling has_next TWICE per element
+// to prove idempotence, and once more after exhaustion.
+fn drain(v: mut ref Vector2D) -> String {
+    let mut out: String = "";
+    let mut first = true;
+    while v_has_next(v) {
+        if not v_has_next(v) {
+            return "IDEMPOTENCE BROKEN";
+        }
+        let x = v_next(v);
+        if not first {
+            out.push_str(" ");
+        }
+        out.push_str(f"{x}");
+        first = false;
+    }
+    if v_has_next(v) {
+        return "EXHAUSTION BROKEN";
+    }
+    if out.len() == 0 {
+        return "(empty)";
+    }
+    return out;
+}
+
+fn row_of(a: Slice[i64]) -> Vec[i64] {
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < a.len() {
+        r.push(a[i]);
+        i = i + 1;
+    }
+    return r;
+}
+
+fn main() {
+    // [[1,2],[3],[4]] -> 1 2 3 4   (the LeetCode example)
+    let mut a: Vec[Vec[i64]] = Vec.new();
+    let r1: Array[i64, 2] = [1, 2];
+    let r2: Array[i64, 1] = [3];
+    let r3: Array[i64, 1] = [4];
+    a.push(row_of(r1));
+    a.push(row_of(r2));
+    a.push(row_of(r3));
+    let mut v1 = v_new(a);
+    println(drain(mut v1));
+
+    // [] -> (empty)
+    let b: Vec[Vec[i64]] = Vec.new();
+    let mut v2 = v_new(b);
+    println(drain(mut v2));
+
+    // [[]] -> (empty)   one empty row
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    let e0: Array[i64, 0] = [];
+    c.push(row_of(e0));
+    let mut v3 = v_new(c);
+    println(drain(mut v3));
+
+    // [[],[],[]] -> (empty)   all rows empty
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    d.push(row_of(e0));
+    d.push(row_of(e0));
+    d.push(row_of(e0));
+    let mut v4 = v_new(d);
+    println(drain(mut v4));
+
+    // [[],[1],[]] -> 1   empty rows at BOTH ends
+    let mut e: Vec[Vec[i64]] = Vec.new();
+    let one: Array[i64, 1] = [1];
+    e.push(row_of(e0));
+    e.push(row_of(one));
+    e.push(row_of(e0));
+    let mut v5 = v_new(e);
+    println(drain(mut v5));
+
+    // [[],[],[7,8],[],[],[9],[]] -> 7 8 9   consecutive empties everywhere
+    let mut f: Vec[Vec[i64]] = Vec.new();
+    let sev: Array[i64, 2] = [7, 8];
+    let nin: Array[i64, 1] = [9];
+    f.push(row_of(e0));
+    f.push(row_of(e0));
+    f.push(row_of(sev));
+    f.push(row_of(e0));
+    f.push(row_of(e0));
+    f.push(row_of(nin));
+    f.push(row_of(e0));
+    let mut v6 = v_new(f);
+    println(drain(mut v6));
+
+    // [[1,2,3]] -> 1 2 3   single row
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    let g1: Array[i64, 3] = [1, 2, 3];
+    g.push(row_of(g1));
+    let mut v7 = v_new(g);
+    println(drain(mut v7));
+}

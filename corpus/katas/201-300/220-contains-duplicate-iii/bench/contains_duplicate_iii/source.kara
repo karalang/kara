@@ -1,0 +1,81 @@
+// Benchmark workload for LeetCode #220 — Contains Duplicate III.
+//
+// Build-once + punch: a deterministic 32-bit LCG (overflow-safe in i64) fills ONE
+// array of N signed values, then the bucketed sliding-window check is run over
+// many (k, t) pairs. Each check partitions the number line into width-(t+1)
+// buckets in a Map[i64, i64], slides a k-wide window (insert on entry, evict on
+// exit), and probes the own + two adjacent buckets for a value within t. The map
+// churn (get / insert / remove per element) is the kernel — it does not vectorize
+// — and the "return true on the first near pair" gives a data-dependent early
+// exit, so the amount of work per pair varies with the data. Sink = the count of
+// (k, t) pairs that report true.
+
+fn abs_i64(x: i64) -> i64 {
+    if x < 0 { return -x; }
+    return x;
+}
+
+// Floor-divide x by w (w > 0); shift negatives so truncating `/` yields a floor.
+fn bucket_of(x: i64, w: i64) -> i64 {
+    if x >= 0 { return x / w; }
+    return (x + 1) / w - 1;
+}
+
+fn near_value(m: ref Map[i64, i64], b: i64, x: i64, t: i64) -> bool {
+    match m.get(b) {
+        Some(v) => {
+            if abs_i64(x - v) <= t { return true; }
+        }
+        None => {}
+    }
+    return false;
+}
+
+fn contains_nearby_almost_duplicate(nums: ref Vec[i64], n: i64, k: i64, t: i64) -> bool {
+    if k <= 0 { return false; }
+    let w = t + 1;
+    let mut buckets: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < n {
+        let x = nums[i];
+        let b = bucket_of(x, w);
+        if near_value(buckets, b, x, t) { return true; }
+        if near_value(buckets, b - 1, x, t) { return true; }
+        if near_value(buckets, b + 1, x, t) { return true; }
+        let _ = buckets.insert(b, x);
+        if i >= k {
+            let old = nums[i - k];
+            let _ = buckets.remove(bucket_of(old, w));
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn main() {
+    let n = 20000;
+    let pairs = 800;
+    let valrange = 8000000;
+    let half = 4000000;                   // center values around 0 (exercise negatives)
+
+    let mut nums: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut c = 0;
+    while c < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        nums.push((state % valrange) - half);
+        c = c + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < pairs {
+        let k = 32 + (p % 512);
+        let t = p % 3;
+        if contains_nearby_almost_duplicate(nums, n, k, t) {
+            sink = sink + 1;
+        }
+        p = p + 1;
+    }
+    println(sink);
+}

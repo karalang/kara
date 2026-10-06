@@ -1,0 +1,147 @@
+// LeetCode 265 — Paint House II. (Premium.)
+//
+// `n` houses in a row, `k` colours, `costs[i][c]` to paint house i colour c. No
+// two adjacent houses may share a colour. Minimise the total.
+//
+// The generalisation of #256 from k = 3 to arbitrary k, and the whole interest
+// is in the follow-up: do it in O(n·k) rather than the obvious O(n·k²).
+//
+// The obvious form asks, for each colour c of house i, for the cheapest way to
+// reach house i-1 in ANY OTHER colour — a scan over k-1 entries, k times, per
+// house. But that scan asks the same question k times over the same row, and its
+// answer only ever takes one of two values:
+//
+//     the row minimum                     ... for every c that is not its index
+//     the row's SECOND minimum            ... for the one c that is
+//
+// So one pass over the previous row for (min, its index, second-min) replaces
+// every one of those scans.
+//
+// THE SECOND MINIMUM IS WITH MULTIPLICITY, not "the smallest value strictly
+// greater than the minimum". Given a previous row of [3, 3, 5] the second
+// minimum is 3, not 5 — colour 0 can still reach 3, via index 1. Reading it the
+// other way inflates the answer only when the minimum is tied, which random
+// tests with wide value ranges almost never produce, so the bug survives
+// casual testing comfortably.
+//
+// Impossibility: k = 1 with n >= 2 admits no painting at all, and the problem's
+// constraints do not say what to return. Rather than let that case silently
+// produce a plausible finite number, INF propagates through the recurrence and
+// the answer is reported as -1 — a value that can be tested.
+
+fn min_cost(costs: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let n = costs.len();
+    if n == 0 {
+        return 0;
+    }
+    let inf = 1000000000000;
+
+    let mut prev: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < k {
+        prev.push(costs[0][c]);
+        c = c + 1;
+    }
+
+    let mut i = 1;
+    while i < n {
+        // One pass for the two smallest of the previous row, and where the
+        // smaller of them sits.
+        let mut min1 = inf;
+        let mut idx1 = -1;
+        let mut min2 = inf;
+        let mut j = 0;
+        while j < k {
+            if prev[j] < min1 {
+                min2 = min1;      // the old minimum is now the runner-up
+                min1 = prev[j];
+                idx1 = j;
+            } else {
+                // `<`, not "strictly greater than min1" — a tied value belongs
+                // here, and is exactly what colour idx1 falls back on.
+                if prev[j] < min2 {
+                    min2 = prev[j];
+                }
+            }
+            j = j + 1;
+        }
+
+        let mut cur: Vec[i64] = Vec.new();
+        let mut t = 0;
+        while t < k {
+            let mut best = min1;
+            if t == idx1 {
+                best = min2;
+            }
+            cur.push(costs[i][t] + best);
+            t = t + 1;
+        }
+        prev = cur;
+        i = i + 1;
+    }
+
+    let mut answer = inf;
+    let mut q = 0;
+    while q < k {
+        if prev[q] < answer { answer = prev[q]; }
+        q = q + 1;
+    }
+    if answer >= inf {
+        return -1;   // no valid painting exists
+    }
+    return answer;
+}
+
+fn report(label: ref String, costs: ref Vec[Vec[i64]], k: i64) {
+    println(f"{label} -> {min_cost(costs, k)}");
+}
+
+fn main() {
+    let empty: Vec[Vec[i64]] = Vec.new();
+    report("[] k=3", empty, 3);
+
+    // The LeetCode example: 1 + 5 = 6.
+    let mut a: Vec[Vec[i64]] = Vec.new();
+    a.push([1, 5, 3]);
+    a.push([2, 9, 4]);
+    report("[[1,5,3],[2,9,4]] k=3", a, 3);
+
+    // One house: just the cheapest colour.
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([7, 6, 2]);
+    report("[[7,6,2]] k=3", b, 3);
+
+    // One house, one colour.
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    c.push([4]);
+    report("[[4]] k=1", c, 1);
+
+    // ★ Two houses, one colour — no valid painting.
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    d.push([4]);
+    d.push([9]);
+    report("[[4],[9]] k=1", d, 1);
+
+    // Two colours, forced alternation.
+    let mut e: Vec[Vec[i64]] = Vec.new();
+    e.push([1, 100]);
+    e.push([1, 100]);
+    e.push([1, 100]);
+    report("[[1,100]x3] k=2", e, 2);
+
+    // ★ The tied-minimum case: row 0 is [3,3,5], so colour 0 at house 1 must
+    // still be able to reach 3 (via colour 1). A "strictly greater" second
+    // minimum would charge it 5.
+    let mut f: Vec[Vec[i64]] = Vec.new();
+    f.push([3, 3, 5]);
+    f.push([1, 50, 50]);
+    report("[[3,3,5],[1,50,50]] k=3", f, 3);
+
+    // Many colours, minimum drifting between rows.
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    g.push([8, 1, 6, 7, 9]);
+    g.push([2, 9, 3, 4, 1]);
+    g.push([5, 5, 5, 5, 5]);
+    g.push([9, 2, 8, 1, 7]);
+    report("5 colours, 4 houses", g, 5);
+}

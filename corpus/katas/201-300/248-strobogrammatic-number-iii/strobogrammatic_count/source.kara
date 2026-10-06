@@ -1,0 +1,184 @@
+// LeetCode 248 — counting variant.
+//
+// The generate-and-filter solution in strobogrammatic_iii.kara enumerates
+// every strobogrammatic number of every length in range. But only the two
+// BOUNDARY lengths ever need looking at: a candidate whose length sits
+// strictly between len(low) and len(high) is in range by construction. For
+// those interior lengths the count is a closed form, so they need not be
+// materialised at all.
+//
+// Count of strobogrammatic numbers with exactly L digits and no leading zero:
+//   L == 1          -> 3            ("0", "1", "8")
+//   L even          -> 4 * 5^(L/2 - 1)
+//   L odd, L >= 3   -> 4 * 5^((L-1)/2 - 1) * 3
+// The 4 is the outermost pair (five pairs minus the barred 0/0), each further
+// pair is a free 5, and an odd length adds a centre worth 3. That reproduces
+// 3, 4, 12, 20, 60, 100, 300 for L = 1..7 — the #247 counts.
+//
+// So this walks the same answer with generation confined to at most two
+// lengths. On a 15-digit bound that is the difference between enumerating
+// ~250k strings and enumerating the boundary lengths alone.
+//
+// Kept alongside the generate-and-filter version rather than replacing it:
+// they are different shapes for the compiler (closed-form integer arithmetic
+// with an exponent loop, versus allocation-heavy recursive string building),
+// and the corpus wants both. Their outputs must agree exactly.
+
+fn pow5(e: i64) -> i64 {
+    let mut acc = 1;
+    let mut i = 0;
+    while i < e {
+        acc = acc * 5;
+        i = i + 1;
+    }
+    return acc;
+}
+
+fn count_of_length(len: i64) -> i64 {
+    if len <= 0 {
+        return 0;
+    }
+    if len == 1 {
+        return 3;
+    }
+    let mut total = 4 * pow5(len / 2 - 1);
+    if len % 2 == 1 {
+        total = total * 3;
+    }
+    return total;
+}
+
+fn build(k: i64, n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if k == 0 {
+        out.push("");
+        return out;
+    }
+    if k == 1 {
+        out.push("0");
+        out.push("1");
+        out.push("8");
+        return out;
+    }
+
+    let mut pair_a: Vec[String] = Vec.new();
+    let mut pair_b: Vec[String] = Vec.new();
+    pair_a.push("0"); pair_b.push("0");
+    pair_a.push("1"); pair_b.push("1");
+    pair_a.push("6"); pair_b.push("9");
+    pair_a.push("8"); pair_b.push("8");
+    pair_a.push("9"); pair_b.push("6");
+
+    let inner = build(k - 2, n);
+    let mut i = 0;
+    while i < inner.len() {
+        let mut p = 0;
+        while p < 5 {
+            if pair_a[p] == "0" and k == n {
+                p = p + 1;
+            } else {
+                let mut s: String = pair_a[p].clone();
+                s.push_str(inner[i]);
+                s.push_str(pair_b[p]);
+                out.push(s);
+                p = p + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn cmp_digits(a: ref String, b: ref String) -> i64 {
+    let xs = a.bytes();
+    let ys = b.bytes();
+    if xs.len() != ys.len() {
+        if xs.len() < ys.len() { return -1; }
+        return 1;
+    }
+    let mut i = 0;
+    while i < xs.len() {
+        if xs[i] != ys[i] {
+            if xs[i] < ys[i] { return -1; }
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Candidates of exactly `len` digits that satisfy the active bounds. `use_lo`
+// / `use_hi` say whether this length is the low / high boundary; an interior
+// length never reaches here.
+fn count_bounded(len: i64, low: ref String, high: ref String, use_lo: bool, use_hi: bool) -> i64 {
+    let cands = build(len, len);
+    let mut n = 0;
+    let mut i = 0;
+    while i < cands.len() {
+        let s = ref cands[i];
+        let mut keep = true;
+        if use_lo and cmp_digits(s, low) < 0 {
+            keep = false;
+        }
+        if use_hi and cmp_digits(s, high) > 0 {
+            keep = false;
+        }
+        if keep {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    return n;
+}
+
+fn count_in_range(low: ref String, high: ref String) -> i64 {
+    let lo_len = low.bytes().len();
+    let hi_len = high.bytes().len();
+    if lo_len > hi_len {
+        return 0;
+    }
+    if lo_len == hi_len {
+        if cmp_digits(low, high) > 0 {
+            return 0;
+        }
+        // One length carries both bounds.
+        return count_bounded(lo_len, low, high, true, true);
+    }
+
+    let mut total = count_bounded(lo_len, low, high, true, false);
+    total = total + count_bounded(hi_len, low, high, false, true);
+    // Interior lengths are wholly in range — closed form, nothing built.
+    let mut len = lo_len + 1;
+    while len < hi_len {
+        total = total + count_of_length(len);
+        len = len + 1;
+    }
+    return total;
+}
+
+fn main() {
+    let mut lows: Vec[String] = Vec.new();
+    let mut highs: Vec[String] = Vec.new();
+    lows.push("50");   highs.push("100");
+    lows.push("0");    highs.push("0");
+    lows.push("0");    highs.push("9");
+    lows.push("1");    highs.push("1");
+    lows.push("8");    highs.push("8");
+    lows.push("0");    highs.push("100");
+    lows.push("10");   highs.push("1000");
+    lows.push("1");    highs.push("10000");
+    lows.push("100");  highs.push("999");
+    lows.push("11");   highs.push("69");
+    lows.push("69");   highs.push("69");
+    lows.push("609");  highs.push("906");
+    lows.push("2");    highs.push("3");
+    lows.push("1000"); highs.push("99999");
+    lows.push("6");    highs.push("9");
+
+    let mut c = 0;
+    while c < lows.len() {
+        let n = count_in_range(lows[c], highs[c]);
+        println(f"low={lows[c]} high={highs[c]} count={n}");
+        c = c + 1;
+    }
+}

@@ -1,0 +1,31 @@
+
+fn shadowed_by_match(v: ref Vec[i64]) {
+    match v.first().map(|x| x + 1) { Some(x) => println(x), None => println("-") }
+}
+
+fn shadowed_by_let(v: ref Vec[i64]) {
+    let q = v.first().map(|x| x + 1);
+    let x = 5i64;
+    println(x);
+    match q { Some(y) => println(y), None => println("-") }
+}
+
+fn len_after_map(v: ref Vec[i64]) {
+    let q = v.first().map(|x| x + 1);
+    let x: Vec[i64] = vec![1, 2, 3];
+    println(x.len());
+    match q { Some(y) => println(y), None => println("-") }
+}
+
+fn captured_borrow_still_derefs(w: ref Vec[i64]) -> i64 {
+    let f = |i: i64| w[i] + 1i64;
+    return f(0i64);
+}
+
+fn main() {
+    let v: Vec[i64] = vec![7, 9];
+    shadowed_by_match(v);
+    shadowed_by_let(v);
+    len_after_map(v);
+    println(captured_borrow_still_derefs(v));
+}

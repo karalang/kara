@@ -1,0 +1,19 @@
+
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(7);
+    s.insert(3);
+    s.insert(11);
+    let mut it = s.iter();
+    let mut sum = 0;
+    let mut count = 0;
+    let mut more = true;
+    while more {
+        match it.next() {
+            Some(n) => { sum = sum + n; count = count + 1; },
+            None    => { more = false; },
+        }
+    }
+    println(sum);
+    println(count);
+}

@@ -1,0 +1,158 @@
+// LeetCode 257 — Binary Tree Paths, numeric path with a join at the leaf.
+//
+// Same traversal, different carrier. Instead of extending a STRING at every
+// node, this file pushes the node value onto a `Vec[i64]` on the way down and
+// pops it on the way back up, rendering the string ONCE per leaf.
+//
+// The complexity difference is the point. The ★ file copies its accumulated
+// prefix at every node, so it moves O(n · depth) bytes to produce an answer that
+// is only O(leaves · depth). On a balanced tree those are within a constant of
+// each other; on a path-shaped tree — depth n, one leaf — the ★ file does O(n²)
+// byte-copying for a single output string, and this one does O(n). bench/
+// measures exactly that.
+//
+// The push/pop discipline is the classic backtracking undo: the `Vec` is shared
+// mutable state across the whole walk, so the pop is mandatory, unlike the ★
+// file where each recursion owns its own prefix and nothing needs undoing. That
+// is the trade — cheaper bytes, more careful state.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn build(vals: Slice[i64], null_val: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let len = vals.len();
+    if len == 0 or vals[0] == null_val {
+        return nodes;
+    }
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < len {
+        let cur = queue[head];
+        head = head + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let li = nodes.len() - 1;
+            nodes[cur].left = li;
+            queue.push(li);
+        }
+        i = i + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let ri = nodes.len() - 1;
+            nodes[cur].right = ri;
+            queue.push(ri);
+        }
+        i = i + 1;
+    }
+    return nodes;
+}
+
+fn walk(nodes: ref Vec[Node], node: i64, path: mut ref Vec[i64], out: mut ref Vec[String]) {
+    path.push(nodes[node].val);
+    let left = nodes[node].left;
+    let right = nodes[node].right;
+    if left == -1 and right == -1 {
+        // Render once, here, where the output actually is.
+        let mut s: String = "";
+        let mut i = 0;
+        while i < path.len() {
+            if i > 0 {
+                s.push_str("->");
+            }
+            s.push_str(f"{path[i]}");
+            i = i + 1;
+        }
+        out.push(s);
+    } else {
+        if left != -1 {
+            walk(nodes, left, path, out);
+        }
+        if right != -1 {
+            walk(nodes, right, path, out);
+        }
+    }
+    let _ = path.pop(); // mandatory: the Vec is shared across the whole walk
+}
+
+fn binary_tree_paths(vals: Slice[i64], null_val: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let nodes = build(vals, null_val);
+    if nodes.len() == 0 {
+        return out;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    walk(nodes, 0, mut path, mut out);
+    return out;
+}
+
+fn render(paths: ref Vec[String]) -> String {
+    if paths.len() == 0 {
+        return "[]";
+    }
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < paths.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(paths[i]);
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(vals: Slice[i64], null_val: i64, label: ref String) {
+    let paths = binary_tree_paths(vals, null_val);
+    println(f"{label} -> {render(paths)}");
+}
+
+fn main() {
+    let null = -1000;
+
+    // [1,2,3,null,5] -> ["1->2->5","1->3"]
+    let a: Array[i64, 5] = [1, 2, 3, -1000, 5];
+    report(a, null, "[1,2,3,null,5]");
+
+    // [1] -> ["1"]
+    let b: Array[i64, 1] = [1];
+    report(b, null, "[1]");
+
+    // [] -> []
+    let c: Array[i64, 0] = [];
+    report(c, null, "[]");
+
+    // [1,2] -> ["1->2"]  — the root has ONE child, so it is not a leaf
+    let d: Array[i64, 2] = [1, 2];
+    report(d, null, "[1,2]");
+
+    // [1,null,2] -> ["1->2"]  — the same, on the other side
+    let e: Array[i64, 3] = [1, -1000, 2];
+    report(e, null, "[1,null,2]");
+
+    // a full tree: every leaf is a path
+    let f: Array[i64, 7] = [1, 2, 3, 4, 5, 6, 7];
+    report(f, null, "[1,2,3,4,5,6,7]");
+
+    // a left spine — one path, depth 4. Level-order for a spine lists each
+    // node's absent sibling, so it is [1, 2,null, 3,null, 4,null] rather than
+    // a padded full-tree array (my first attempt padded to 15 and silently
+    // built 1-2-3, dropping the 4 — the array shape has to match the walk).
+    let g: Array[i64, 7] = [1, 2, -1000, 3, -1000, 4, -1000];
+    report(g, null, "[left spine 1-2-3-4]");
+
+    // negative values render with their sign
+    let h: Array[i64, 3] = [-1, -2, -3];
+    report(h, null, "[-1,-2,-3]");
+
+    // zero is a legitimate value, distinct from the null sentinel
+    let i: Array[i64, 3] = [0, 0, 0];
+    report(i, null, "[0,0,0]");
+}

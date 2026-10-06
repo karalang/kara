@@ -1,0 +1,88 @@
+// Two Sum differential: hash map, two pointers and a streaming struct against
+// a brute-force oracle over random arrays, including duplicates and negatives.
+fn by_map(nums: ref Vec[i64], target: i64) -> Option[(i64, i64)] {
+    let mut seen: Map[i64, i64] = Map.new();
+    for (i, x) in nums.iter().enumerate() {
+        if let Some(j) = seen.get(target - x) {
+            return Some((j, i));
+        }
+        if not seen.contains_key(x) {
+            seen.insert(x, i);
+        }
+    }
+    return None;
+}
+
+fn by_pointers(nums: ref Vec[i64], target: i64) -> bool {
+    if nums.len() < 2 {
+        return false;
+    }
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let mut lo = 0;
+    let mut hi = sorted.len() - 1;
+    while lo < hi {
+        let s = sorted[lo] + sorted[hi];
+        if s == target {
+            return true;
+        }
+        if s < target {
+            lo += 1;
+        } else {
+            hi -= 1;
+        }
+    }
+    return false;
+}
+
+// Oracle: every pair, in the order a single left-to-right pass would meet
+// the second element; the earliest such j wins, then the earliest i.
+fn oracle(nums: ref Vec[i64], target: i64) -> Option[(i64, i64)] {
+    for j in 0..nums.len() {
+        for i in 0..j {
+            if nums[i] + nums[j] == target {
+                return Some((i, j));
+            }
+        }
+    }
+    return None;
+}
+
+fn next(state: mut ref i64) -> i64 {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return state >> 8;
+}
+
+fn main() {
+    let mut state: i64 = 1;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut found = 0;
+    let mut checksum = 0;
+    for round in 0..3000 {
+        let n = next(mut state) % 12;
+        let span = 1 + next(mut state) % 40;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next(mut state) % (2 * span + 1) - span);
+        }
+        let target = next(mut state) % (4 * span + 1) - 2 * span;
+        let want = oracle(nums, target);
+        let got = by_map(nums, target);
+        checks += 1;
+        if got != want {
+            failures += 1;
+            println(f"MAP round {round}");
+        }
+        if by_pointers(nums, target) != want.is_some() {
+            failures += 1;
+            println(f"POINTERS round {round}");
+        }
+        if let Some((i, j)) = want {
+            found += 1;
+            checksum = (checksum * 31 + i * 17 + j + round) % 1000000007;
+        }
+    }
+    println(f"{checks} checks, {found} with a pair, checksum {checksum}");
+    println(f"failures {failures}");
+}

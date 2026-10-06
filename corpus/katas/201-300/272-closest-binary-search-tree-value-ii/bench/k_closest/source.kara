@@ -1,0 +1,199 @@
+// Benchmark workload for LeetCode #272 — Closest Binary Search Tree Value II.
+//
+// Build-once + punch. One 30,000-node BST and 100,000 f64 targets are generated
+// once, then the ★ two-stack merge answers the k=8 closest query for every
+// target, 10 times over — 1,000,000 queries.
+//
+// WHAT THIS LANE MEASURES: a POINTER CHASE WITH A STACK. Per query the work is
+// one root-to-leaf descent that partitions the path into two iterator stacks,
+// then k merge steps, each of which pops a stack and pushes a subtree spine back
+// onto it. The corpus already has a plain BST descent (#270, whose inner step is
+// float arithmetic and a data-dependent child choice) — this one keeps the
+// descent and adds the part #270 does not have: an explicit stack whose depth
+// varies per step, written and read in the same loop the branches depend on.
+//
+// THREE PARITY DECISIONS, taken up front rather than after a phantom result.
+//
+// THE STACKS ARE HOISTED, as flat arrays with integer tops, in every mirror.
+// Growing a Vec/vector/slice per query would measure five allocation
+// strategies — #267 turned exactly that into a 3x phantom. Nothing here
+// allocates once the punch loop starts.
+//
+// ABSOLUTE VALUE IS EACH LANGUAGE'S OWN — `.abs()`, `fabs`, `f64::abs`,
+// `math.Abs`. #270 measured the alternative: hand-writing `if x < 0.0 { 0.0 - x }`
+// in all five, on the theory that a shared spelling was parity-safe, cost C 23%
+// by itself, because every one of these languages HAS an absolute value and
+// hand-writing it is the unnatural spelling everywhere.
+//
+// TARGETS SPAN THE VALUE RANGE. #270's second fault was a generator that
+// confined every value to a 32K window — `state / 65536` on a 31-bit LCG is the
+// top 15 bits and maxes at 32,767 — which put every target below every node and
+// made all 2.2M descents run the left spine. Here the draw is `state / 256`,
+// and the harness prints the target span next to the sink so the distribution
+// is visible rather than assumed.
+
+fn main() {
+    let node_count = 30000;
+    let target_count = 100000;
+    let k = 8;
+    let rounds = 10;
+    let span = 1000000;
+
+    // ---- build once: a BST by random insertion, duplicates skipped --------
+    let mut val: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    let mut state = 272272;
+    let mut placed = 0;
+    let mut tries = 0;
+    while placed < node_count and tries < node_count * 4 {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let v = (state / 256) % span;
+        tries = tries + 1;
+        if val.len() == 0 {
+            val.push(v); left.push(-1); right.push(-1);
+            placed = placed + 1;
+        } else {
+            let mut cur = 0;
+            let mut dup = false;
+            let mut done = false;
+            while done == false {
+                if v == val[cur] {
+                    dup = true;
+                    done = true;
+                } else {
+                    if v < val[cur] {
+                        if left[cur] < 0 {
+                            val.push(v); left.push(-1); right.push(-1);
+                            left[cur] = val.len() - 1;
+                            done = true;
+                        } else { cur = left[cur]; }
+                    } else {
+                        if right[cur] < 0 {
+                            val.push(v); left.push(-1); right.push(-1);
+                            right[cur] = val.len() - 1;
+                            done = true;
+                        } else { cur = right[cur]; }
+                    }
+                }
+            }
+            if dup == false { placed = placed + 1; }
+        }
+    }
+
+    // ---- build once: the targets ------------------------------------------
+    let mut targets: Vec[f64] = Vec.new();
+    let mut tmin = 0.0;
+    let mut tmax = 0.0;
+    let mut t = 0;
+    while t < target_count {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let whole = (state / 256) % span;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let frac = ((state / 256) % 1000) as f64 / 1000.0;
+        let x = whole as f64 + frac;
+        if t == 0 { tmin = x; tmax = x; }
+        if x < tmin { tmin = x; }
+        if x > tmax { tmax = x; }
+        targets.push(x);
+        t = t + 1;
+    }
+
+    // ---- hoisted working buffers ------------------------------------------
+    // A random-insertion BST of 30,000 nodes is about 2*log2(n) ~ 30 deep; 256
+    // is room to spare and is allocated once.
+    let depth_cap = 256;
+    let mut pred: Vec[i64] = Vec.new();
+    let mut succ: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < depth_cap { pred.push(0); succ.push(0); z = z + 1; }
+    let mut lower: Vec[i64] = Vec.new();
+    let mut upper: Vec[i64] = Vec.new();
+    let mut outv: Vec[i64] = Vec.new();
+    z = 0;
+    while z < k { lower.push(0); upper.push(0); outv.push(0); z = z + 1; }
+
+    // ---- punch -------------------------------------------------------------
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut q = 0;
+        while q < target_count {
+            let target = targets[q];
+
+            // seed both iterators with one descent
+            let mut pt = 0;
+            let mut st = 0;
+            let mut cur = 0;
+            while cur >= 0 {
+                if (val[cur] as f64) < target {
+                    pred[pt] = cur;
+                    pt = pt + 1;
+                    cur = right[cur];
+                } else {
+                    succ[st] = cur;
+                    st = st + 1;
+                    cur = left[cur];
+                }
+            }
+
+            // merge the two distance-sorted streams, k steps
+            let mut nl = 0;
+            let mut nu = 0;
+            let mut taken = 0;
+            while taken < k and (pt > 0 or st > 0) {
+                let mut take_pred = pt > 0;
+                if pt > 0 and st > 0 {
+                    let dp = (val[pred[pt - 1]] as f64 - target).abs();
+                    let ds = (val[succ[st - 1]] as f64 - target).abs();
+                    take_pred = dp <= ds;
+                }
+                if take_pred {
+                    let node = pred[pt - 1];
+                    pt = pt - 1;
+                    let mut c = left[node];
+                    while c >= 0 { pred[pt] = c; pt = pt + 1; c = right[c]; }
+                    lower[nl] = val[node];
+                    nl = nl + 1;
+                } else {
+                    let node = succ[st - 1];
+                    st = st - 1;
+                    let mut c = right[node];
+                    while c >= 0 { succ[st] = c; st = st + 1; c = left[c]; }
+                    upper[nu] = val[node];
+                    nu = nu + 1;
+                }
+                taken = taken + 1;
+            }
+
+            // ascending: the taken predecessors reversed, then the successors
+            let mut w = 0;
+            let mut i = nl - 1;
+            while i >= 0 { outv[w] = lower[i]; w = w + 1; i = i - 1; }
+            let mut j = 0;
+            while j < nu { outv[w] = upper[j]; w = w + 1; j = j + 1; }
+
+            let mut acc = 0;
+            let mut p = 0;
+            while p < w { acc = (acc * 31 + outv[p]) % 1000000007; p = p + 1; }
+            sink = (sink * 131 + acc) % 1000000007;
+
+            q = q + 1;
+        }
+        r = r + 1;
+    }
+
+    // The distribution, printed rather than assumed — #270's second fault was a
+    // generator that silently put every target below every node. All integers,
+    // so the line is byte-identical across five languages.
+    let mut vlo = val[0];
+    let mut vhi = val[0];
+    let mut m = 1;
+    while m < val.len() {
+        if val[m] < vlo { vlo = val[m]; }
+        if val[m] > vhi { vhi = val[m]; }
+        m = m + 1;
+    }
+    println(sink);
+    println(f"nodes {val.len()} values {vlo}..{vhi} targets {tmin as i64}..{tmax as i64}");
+}

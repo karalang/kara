@@ -1,0 +1,15 @@
+struct P[A, B] { a: A, b: B }
+impl P[String, Vec[i64]] {
+    fn take(self) -> Vec[i64] { self.b }
+    fn name(self) -> String { self.a }
+    fn wrap(self) -> Option[Self] { Some(self) }
+}
+fn main() {
+    let p = P { a: "nm-heap-string-long-xx".to_string(), b: vec![1, 2, 3] };
+    let v = p.take();
+    println(f"{v.len()}");
+    let q = P { a: "q-heap-string-long-xxx".to_string(), b: vec![4] };
+    println(q.name());
+    let w = P { a: "w".to_string(), b: vec![8] };
+    match w.wrap() { Some(z) => println(f"{z.take().len()}"), None => println("none") }
+}

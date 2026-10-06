@@ -1,0 +1,13 @@
+source = "tests/interpreter/misc.rs::test_expect_with_message"
+dedup_of = []
+expect = "error:E0238"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

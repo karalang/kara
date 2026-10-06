@@ -1,0 +1,102 @@
+// LeetCode #32: Longest Valid Parentheses — stack of indices.
+//
+// Given a string of only '(' and ')', return the length of the longest
+// well-formed (balanced, properly nested) substring. O(n) time, O(n) extra
+// space for the stack (worst case all-opens, "((((").
+//
+// The canonical stack form, and the natural sequel to kata #20 (valid
+// parentheses): #20 asked *is the whole string valid* with a stack of expected
+// closers; #32 asks *how long is the longest valid run*, which needs the stack
+// to remember **positions**, not bracket types. The trick is a base sentinel:
+//
+//   - Seed the stack with -1 — the index "just before" a valid run, so the
+//     first matched pair measures its length against it.
+//   - On '(' → push the index i (a pending opener).
+//   - On ')' → pop the top (the opener it closes, or the sentinel). If the
+//     stack is now empty, this ')' is unmatched and becomes the new base:
+//     push i. Otherwise the new top is the index just before the current valid
+//     run, so `i - top` is that run's length — take the running max.
+//
+// Pushing indices (not bracket bytes) is what turns the validity check into a
+// length measurement: the gap between i and the last unmatched boundary on the
+// stack *is* the valid-substring length, read off in O(1) per character. The
+// sentinel removes the empty-stack special case from the length arm — there is
+// always a boundary below a matched pair.
+//
+// `s.bytes()` is the O(1)-indexed zero-copy `Slice[u8]` view #20/#13/#8 scan;
+// the alphabet is single-byte ASCII '(' ')', so the byte view is exact. The
+// stack is a `Vec[i64]` of indices — the same positional `Vec` stack #71 uses
+// for path components and #20 narrows to single bytes, here holding `i64`
+// indices instead.
+
+fn longest_valid(s: ref String) -> i64 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    // The stack holds indices of unmatched boundaries; -1 seeds the base
+    // "just before a valid run" so the first matched pair has something to
+    // measure against.
+    let mut stack: Vec[i64] = Vec.new();
+    stack.push(-1);
+
+    let mut best = 0;
+    let mut i = 0;
+    while i < n {
+        if bytes[i] == b'(' {
+            stack.push(i);
+        } else {
+            // Closer: discard the matched opener (or the sentinel).
+            let _ = stack.pop();
+            if stack.is_empty() {
+                // Unmatched ')' — it is the new base boundary.
+                stack.push(i);
+            } else {
+                // The new top is the boundary just before this valid run.
+                let top = stack[stack.len() - 1];
+                let len = i - top;
+                if len > best {
+                    best = len;
+                }
+            }
+        }
+        i = i + 1;
+    }
+
+    best
+}
+
+fn report(s: ref String) {
+    println(f"\"{s}\" -> {longest_valid(s)}");
+}
+
+fn main() {
+    // LeetCode examples.
+    report("(()");          // 2
+    report(")()())");       // 4
+    report("");             // 0
+
+    // Singles and trivially invalid.
+    report("(");            // 0
+    report(")");            // 0
+    report("(((");          // 0
+    report(")))");          // 0
+    report(")(");           // 0
+
+    // Simple matched runs.
+    report("()");           // 2
+    report("()()");         // 4
+    report("(())");         // 4
+    report("((()))");       // 6
+
+    // Resets and recoveries — the base-sentinel cases.
+    report("()(()");        // 2
+    report("()(())");       // 6
+    report("(()())");       // 6
+    report("())(())");      // 4
+    report(")()())()()(");  // 4
+
+    // Longer mixed run.
+    report("()(()))(()()");  // 6
+    report("((((((");        // 0
+    report("))))))");        // 0
+}

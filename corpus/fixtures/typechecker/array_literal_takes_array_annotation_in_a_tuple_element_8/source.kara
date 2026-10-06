@@ -1,0 +1,2 @@
+fn take(a: Array[String, 2]) -> i64 { 1 }
+fn main() { let k = take([f"a", f"b"]); println(f"{k}"); }

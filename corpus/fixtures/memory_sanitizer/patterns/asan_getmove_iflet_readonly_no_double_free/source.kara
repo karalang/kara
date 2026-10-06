@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(i, f"map string payload padded beyond thirty-six bytes {i}");
+        if let Some(x) = m.get(i) {
+            println(x.len());
+        }
+        i = i + 1;
+    };
+}

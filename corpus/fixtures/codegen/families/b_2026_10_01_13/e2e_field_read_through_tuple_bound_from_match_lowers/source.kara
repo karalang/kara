@@ -1,0 +1,47 @@
+struct W1 { v: i64, s: String }
+impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
+fn mk(n: i64) -> W1 { return W1 { v: n, s: f"ssssssssssssssssssssssssssssss{n}" } }
+fn some_first(n: i64) {
+    let o = Some(mk(n));
+    let t = match o { Some(w) => (w, 1), None => (mk(0), 0) };
+    println(f"sf{t.0.v} {t.1}")
+}
+fn none_first(n: i64) {
+    let o = Some(mk(n));
+    let t = match o { None => (mk(0), 0), Some(w) => (w, 1) };
+    println(f"nf{t.0.v} {t.1}")
+}
+fn param(o: Option[W1]) {
+    let t = match o { Some(w) => (w, 1), None => (mk(0), 0) };
+    println(f"pa{t.0.v} {t.1}")
+}
+fn if_let(n: i64) {
+    let o = Some(mk(n));
+    let t = if let Some(w) = o { (w, 1) } else { (mk(0), 0) };
+    println(f"il{t.0.v} {t.0.s.len()}")
+}
+fn braced(n: i64) {
+    let o = Some(mk(n));
+    let t = { let z = 3; match o { Some(w) => (w, z), None => (mk(0), 0) } };
+    println(f"bl{t.0.v} {t.1}")
+}
+fn payload_only(n: i64) {
+    let r: Result[W1, W1] = Err(mk(n));
+    let t = match r { Ok(w) => (w, 1), Err(w) => (w, 2) };
+    println(f"po{t.0.v} {t.1}")
+}
+fn second(c: i64) {
+    let t = match c { 1 => (1, mk(1)), _ => (2, mk(c)) };
+    println(f"se{t.0} {t.1.v}")
+}
+fn main() {
+    some_first(1);
+    none_first(2);
+    param(Some(mk(3)));
+    param(None);
+    if_let(4);
+    braced(5);
+    payload_only(6);
+    second(7);
+    println("end")
+}

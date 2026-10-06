@@ -1,0 +1,20 @@
+
+fn combine[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
+    a.zip_with(b, |x, y| x + y).sum()
+}
+fn main() {
+    let a1: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]);
+    let b1: Tensor[f32, [3]] = Tensor.from([4.0f32, 5.0f32, 6.0f32]);
+    println(f"{a1.zip_with(b1, |x, y| x + y).sum()}");
+    let a2: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]);
+    let b2: Tensor[f32, [3]] = Tensor.from([4.0f32, 5.0f32, 6.0f32]);
+    println(f"{a2.zip_with(b2, |x, y| x * y).prod()}");
+    let a3: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]);
+    println(f"{a3.map(|x| x * 2.0f32).max()}");
+    let ia: Tensor[i64, [3]] = Tensor.from([10, 20, 30]);
+    let ib: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{ia.zip_with(ib, |x, y| x - y).sum()}");
+    let ga: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]);
+    let gb: Tensor[f32, [3]] = Tensor.from([4.0f32, 5.0f32, 6.0f32]);
+    println(f"{combine(ga, gb)}");
+}

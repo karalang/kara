@@ -1,0 +1,9 @@
+
+fn main() {
+    let dbg = Runtime.has_debug_metadata();
+    if dbg {
+        println(1);
+    } else {
+        println(0);
+    }
+}

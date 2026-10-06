@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("alpha");
+    s.insert("alpha");
+    s.insert("beta");
+    println(s.len());            // 2
+    println(s.contains("alpha")); // true
+}

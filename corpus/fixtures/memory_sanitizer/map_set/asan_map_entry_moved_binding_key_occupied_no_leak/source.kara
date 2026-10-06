@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("dup-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 5_i64);
+    let mut k = String.new();
+    k.push_str("dup-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    *m.entry(k).or_insert(0_i64) += 1_i64;
+    println(m.get_or("dup-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 0_i64));
+}

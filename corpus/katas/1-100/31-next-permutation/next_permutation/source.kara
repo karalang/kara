@@ -1,0 +1,122 @@
+// LeetCode #31: Next Permutation — the in-place lexicographic step.
+//
+// Rearrange nums into the next greater permutation in lexicographic order. If
+// nums is already the greatest (strictly descending), wrap to the least (fully
+// ascending). Must be in place, O(1) extra space, O(n) time.
+//
+// The canonical four-move scan. The key observation: a permutation is "next"
+// when exactly one position from the right is bumped up to the smallest value
+// that still exceeds it, and everything to its right is reset to ascending (the
+// smallest tail). The four moves realize that:
+//
+//   1. PIVOT   — walk from the right while the run is non-increasing; the first
+//                position i with nums[i] < nums[i+1] is the pivot. The suffix
+//                nums[i+1..] is then the longest descending (= maximal) tail.
+//   2. WRAP    — if no pivot exists the whole array descends (already maximal);
+//                fall through to the reverse, which flips it to fully ascending.
+//   3. SUCCESSOR — scan the descending suffix from the right for the first j
+//                with nums[j] > nums[i] (the smallest value still > the pivot,
+//                since the tail descends) and swap nums[i] <-> nums[j]. The
+//                tail stays descending: the swapped-in value sits in sorted slot.
+//   4. REVERSE — the suffix nums[i+1..] is descending; reversing it makes it
+//                ascending, i.e. the smallest tail — completing the minimal bump.
+//
+// Two pointers throughout, no allocation. The same two-pointer reverse closes
+// kata #27/#88's compaction family from the other side — here it is the tail
+// reset, not a keep-compaction.
+
+fn next_permutation(nums: mut Slice[i64], len: i64) {
+    // 1. Find the pivot: the rightmost i with nums[i] < nums[i + 1].
+    let mut i = len - 2;
+    while i >= 0 and nums[i] >= nums[i + 1] {
+        i = i - 1;
+    }
+
+    // 3. Pivot found — find its successor in the descending suffix and swap.
+    //    (i < 0 means the whole array descends; skip straight to the reverse.)
+    if i >= 0 {
+        let mut j = len - 1;
+        while nums[j] <= nums[i] {
+            j = j - 1;
+        }
+        let tmp = nums[i];
+        nums[i] = nums[j];
+        nums[j] = tmp;
+    }
+
+    // 4. Reverse the suffix nums[i + 1 ..] (descending -> ascending). When no
+    //    pivot was found, i = -1, so this reverses the whole array — the wrap.
+    let mut lo = i + 1;
+    let mut hi = len - 1;
+    while lo < hi {
+        let t = nums[lo];
+        nums[lo] = nums[hi];
+        nums[hi] = t;
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+}
+
+fn fmt(nums: mut Slice[i64], len: i64) -> String {
+    let mut s: String = "[";
+    for i in 0..len {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(nums: mut Slice[i64], len: i64) {
+    // nums is an in-scope mut Slice — forwards to fmt/next_permutation without
+    // a call-site marker (design.md Feature 4 Part 1½, Rule 2).
+    let before = fmt(nums, len);
+    next_permutation(nums, len);
+    println(f"{before} -> {fmt(nums, len)}");
+}
+
+fn main() {
+    // Case 1: LeetCode example 1 — middle bump.
+    let mut a1: Array[i64, 3] = [1, 2, 3];
+    report(mut a1, 3);                 // [1, 2, 3] -> [1, 3, 2]
+
+    // Case 2: LeetCode example 2 — already greatest, wraps to least.
+    let mut a2: Array[i64, 3] = [3, 2, 1];
+    report(mut a2, 3);                 // [3, 2, 1] -> [1, 2, 3]
+
+    // Case 3: LeetCode example 3 — single trailing swap.
+    let mut a3: Array[i64, 3] = [1, 1, 5];
+    report(mut a3, 3);                 // [1, 1, 5] -> [1, 5, 1]
+
+    // Case 4: pivot at index 0, long descending tail reversed.
+    let mut a4: Array[i64, 5] = [1, 5, 4, 3, 2];
+    report(mut a4, 5);                 // [1, 5, 4, 3, 2] -> [2, 1, 3, 4, 5]
+
+    // Case 5: successor is not the last element (duplicates in the tail).
+    let mut a5: Array[i64, 6] = [1, 3, 2, 2, 2, 1];
+    report(mut a5, 6);                 // [1, 3, 2, 2, 2, 1] -> [2, 1, 1, 2, 2, 3]
+
+    // Case 6: two elements, ascending then the wrap.
+    let mut a6: Array[i64, 2] = [1, 2];
+    report(mut a6, 2);                 // [1, 2] -> [2, 1]
+    let mut a7: Array[i64, 2] = [2, 1];
+    report(mut a7, 2);                 // [2, 1] -> [1, 2]
+
+    // Case 7: single element — no pivot, no tail, identity.
+    let mut a8: Array[i64, 1] = [7];
+    report(mut a8, 1);                 // [7] -> [7]
+
+    // Case 8: all equal — every step is the wrap (identity here).
+    let mut a9: Array[i64, 4] = [2, 2, 2, 2];
+    report(mut a9, 4);                 // [2, 2, 2, 2] -> [2, 2, 2, 2]
+
+    // Case 9: pivot deep, minimal trailing change.
+    let mut a10: Array[i64, 6] = [1, 2, 3, 6, 5, 4];
+    report(mut a10, 6);               // [1, 2, 3, 6, 5, 4] -> [1, 2, 4, 3, 5, 6]
+
+    // Case 10: negatives mixed in.
+    let mut a11: Array[i64, 4] = [-1, 0, -2, 3];
+    report(mut a11, 4);              // [-1, 0, -2, 3] -> [-1, 0, 3, -2]
+}

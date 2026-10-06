@@ -1,0 +1,31 @@
+
+struct FreqStack { freq: Map[i64, i64], buckets: Map[i64, Vec[i64]], maxfreq: i64 }
+
+impl FreqStack {
+    fn push_val(mut ref self, v: i64) {
+        let f = self.freq.get_or(v, 0) + 1;
+        self.freq.insert(v, f);
+        if f > self.maxfreq { self.maxfreq = f; }
+        self.buckets.entry(f).or_insert(Vec.new()).push(v);
+    }
+
+    fn pop_val(mut ref self) -> i64 {
+        let mut b = self.buckets.get_or(self.maxfreq, Vec.new());
+        let top = b[b.len() - 1];
+        b.pop();
+        let blen = b.len() as i64;
+        self.buckets.insert(self.maxfreq, b);
+        self.freq.insert(top, self.freq.get_or(top, 0) - 1);
+        if blen == 0 { self.maxfreq = self.maxfreq - 1; }
+        return top;
+    }
+}
+
+fn main() {
+    let mut s = FreqStack { freq: Map.new(), buckets: Map.new(), maxfreq: 0 };
+    s.push_val(5); s.push_val(7); s.push_val(5); s.push_val(7); s.push_val(4); s.push_val(5);
+    println(s.pop_val());
+    println(s.pop_val());
+    println(s.pop_val());
+    println(s.pop_val());
+}

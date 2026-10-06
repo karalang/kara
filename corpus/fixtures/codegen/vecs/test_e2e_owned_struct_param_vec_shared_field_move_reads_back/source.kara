@@ -1,0 +1,18 @@
+
+shared struct Node { val: i64 }
+struct Bag { kids: Vec[Node] }
+
+fn probe(p: Bag) -> i64 {
+    let ks = p.kids;
+    ks[0].val + ks[1].val
+}
+
+fn main() {
+    let a = Node { val: 7 };
+    let b = Node { val: 9 };
+    let mut v: Vec[Node] = Vec.new();
+    v.push(a);
+    v.push(b);
+    let bag = Bag { kids: v };
+    println(probe(bag));
+}

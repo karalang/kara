@@ -1,0 +1,12 @@
+fn pick(k: i64) -> Option[i64] { println(f"pick{k}"); if k > 5 { return None } return Some(k) }
+fn store(w: mut ref Vec[Vec[i64]], k: i64) -> Option[i64] {
+    w[pick(0)?][pick(k)?] = 7;
+    w[pick(k - 1)?][0] += 1;
+    return Some(w[0][0])
+}
+fn main() {
+    let mut w: Vec[Vec[i64]] = [[1, 2]];
+    println(f"{store(mut w, 1)}");
+    println(f"{store(mut w, 9)}");
+    println(f"{w[0][0]} {w[0][1]}");
+}

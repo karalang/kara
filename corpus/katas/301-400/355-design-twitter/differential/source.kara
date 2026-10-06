@@ -1,0 +1,404 @@
+// Differential for #355: the four arms against an oracle that shares no
+// data structure with them -- every post in one list and the follow relation
+// as a boolean matrix, the feed found by walking the list backwards. Random
+// operation sequences over 1, 2, 4 or 8 users, 0 to 60 operations each, with
+// following yourself, following twice and unfollowing a stranger all common.
+//
+//   P1  every arm's feed equals the oracle's after every operation
+//   P2  a feed has min(10, visible tweets) entries
+//   P3  a feed is newest-first: tweet ids rise with posting order, so each
+//       feed is strictly decreasing
+//   P4  a user's own newest tweet is in their feed exactly when fewer than
+//       ten visible tweets are newer than it
+//   P5  right after `unfollow(a, b)` with a != b, a's feed holds no tweet of b
+//
+// The arms are copied from the kata's four files, renamed.
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct HeapCandidate {
+    time: i64,
+    tweet: i64,
+    author: i64,
+    index: i64,
+}
+
+struct HeapTwitter {
+    clock: i64,
+    tweets: Map[i64, Vec[(i64, i64)]],
+    follows: Map[i64, Set[i64]],
+}
+
+impl HeapTwitter {
+    fn new() -> HeapTwitter {
+        HeapTwitter { clock: 0, tweets: Map.new(), follows: Map.new() }
+    }
+
+    fn post_tweet(mut ref self, user: i64, tweet: i64) {
+        self.clock += 1;
+        // design.md writes this `or_insert_with(Vec.new)`; a builtin
+        // constructor is not accepted as a function value yet (kara
+        // B-2026-10-06-118). Revert once that is fixed.
+        self.tweets.entry(user).or_insert(Vec.new()).push((self.clock, tweet));
+    }
+
+    fn news_feed(ref self, user: i64) -> Vec[i64] {
+        let mut authors: Vec[i64] = vec![user];
+        if let Some(followed) = self.follows.get(user) {
+            for f in followed.iter() {
+                if f != user {
+                    authors.push(f);
+                }
+            }
+        }
+        let mut queue: PriorityQueue[HeapCandidate] = PriorityQueue.max_first();
+        for a in authors {
+            if let Some(list) = self.tweets.get(a) {
+                if list.len() > 0 {
+                    let last = list.len() - 1;
+                    let (time, tweet) = list[last];
+                    queue.push(HeapCandidate { time, tweet, author: a, index: last });
+                }
+            }
+        }
+        let mut feed: Vec[i64] = Vec.new();
+        while feed.len() < 10 {
+            match queue.pop() {
+                Some(c) => {
+                    feed.push(c.tweet);
+                    if c.index > 0 {
+                        let (time, tweet) = self.tweets.get(c.author).unwrap()[c.index - 1];
+                        queue.push(HeapCandidate { time, tweet, author: c.author, index: c.index - 1 });
+                    }
+                }
+                None => break,
+            }
+        }
+        feed
+    }
+
+    fn follow(mut ref self, follower: i64, followee: i64) {
+        self.follows.entry(follower).or_insert(Set.new()).insert(followee);
+    }
+
+    fn unfollow(mut ref self, follower: i64, followee: i64) {
+        // `self.follows.entry(follower).and_modify(|set| { set.remove(followee); })`
+        // is the entry-API spelling; a method on a collection-valued
+        // `and_modify` parameter does not build yet (kara B-2026-10-06-119).
+        // Revert once that is fixed.
+        if self.follows.contains_key(follower) {
+            self.follows[follower].remove(followee);
+        }
+    }
+}
+
+struct ScanTwitter {
+    log: Vec[(i64, i64)],
+    follows: Map[i64, Set[i64]],
+}
+
+impl ScanTwitter {
+    fn new() -> ScanTwitter {
+        ScanTwitter { log: Vec.new(), follows: Map.new() }
+    }
+
+    fn post_tweet(mut ref self, user: i64, tweet: i64) {
+        self.log.push((user, tweet));
+    }
+
+    fn news_feed(ref self, user: i64) -> Vec[i64] {
+        let mut feed: Vec[i64] = Vec.new();
+        let mut i = self.log.len();
+        while i > 0 and feed.len() < 10 {
+            i -= 1;
+            let (author, tweet) = self.log[i];
+            let followed = match self.follows.get(user) {
+                Some(set) => set.contains(author),
+                None => false,
+            };
+            if author == user or followed {
+                feed.push(tweet);
+            }
+        }
+        feed
+    }
+
+    fn follow(mut ref self, follower: i64, followee: i64) {
+        self.follows.entry(follower).or_insert(Set.new()).insert(followee);
+    }
+
+    fn unfollow(mut ref self, follower: i64, followee: i64) {
+        if let Some(set) = self.follows.get(follower) {
+            if set.contains(followee) {
+                self.follows[follower].remove(followee);
+            }
+        }
+    }
+}
+
+shared struct LinkedNode {
+    time: i64,
+    tweet: i64,
+    next: Option[LinkedNode],
+}
+
+struct LinkedTwitter {
+    clock: i64,
+    heads: Map[i64, LinkedNode],
+    follows: Map[i64, Set[i64]],
+}
+
+impl LinkedTwitter {
+    fn new() -> LinkedTwitter {
+        LinkedTwitter { clock: 0, heads: Map.new(), follows: Map.new() }
+    }
+
+    fn post_tweet(mut ref self, user: i64, tweet: i64) {
+        self.clock += 1;
+        let next = self.heads.get(user);
+        self.heads.insert(user, LinkedNode { time: self.clock, tweet, next });
+    }
+
+    fn news_feed(ref self, user: i64) -> Vec[i64] {
+        // One cursor per author with tweets left; an exhausted author drops
+        // out of the list.
+        //
+        // `Vec[Option[LinkedNode]]` cursors advanced with `cursors[i] = node.next` is
+        // the first spelling to reach for, and it frees nodes that are still
+        // linked under `karac build` (kara B-2026-10-06-121). Revert
+        // once that is fixed.
+        let mut cursors: Vec[LinkedNode] = Vec.new();
+        if let Some(head) = self.heads.get(user) {
+            cursors.push(head);
+        }
+        if let Some(followed) = self.follows.get(user) {
+            for f in followed.iter() {
+                if f != user {
+                    if let Some(head) = self.heads.get(f) {
+                        cursors.push(head);
+                    }
+                }
+            }
+        }
+        let mut feed: Vec[i64] = Vec.new();
+        while feed.len() < 10 and cursors.len() > 0 {
+            let mut best = 0;
+            for i in 1..cursors.len() {
+                if cursors[i].time > cursors[best].time {
+                    best = i;
+                }
+            }
+            feed.push(cursors[best].tweet);
+            match cursors[best].next {
+                Some(older) => { cursors[best] = older; }
+                None => {
+                    cursors.remove(best);
+                }
+            }
+        }
+        feed
+    }
+
+    fn follow(mut ref self, follower: i64, followee: i64) {
+        self.follows.entry(follower).or_insert(Set.new()).insert(followee);
+    }
+
+    fn unfollow(mut ref self, follower: i64, followee: i64) {
+        if self.follows.contains_key(follower) {
+            self.follows[follower].remove(followee);
+        }
+    }
+}
+
+struct SortTwitter {
+    clock: i64,
+    tweets: Map[i64, Vec[(i64, i64)]],
+    follows: Map[i64, Set[i64]],
+}
+
+impl SortTwitter {
+    fn new() -> SortTwitter {
+        SortTwitter { clock: 0, tweets: Map.new(), follows: Map.new() }
+    }
+
+    fn post_tweet(mut ref self, user: i64, tweet: i64) {
+        self.clock += 1;
+        self.tweets.entry(user).or_insert(Vec.new()).push((self.clock, tweet));
+    }
+
+    fn news_feed(ref self, user: i64) -> Vec[i64] {
+        let mut authors: Set[i64] = Set.new();
+        authors.insert(user);
+        if let Some(followed) = self.follows.get(user) {
+            for f in followed.iter() {
+                authors.insert(f);
+            }
+        }
+        let mut pool: Vec[(i64, i64)] = Vec.new();
+        for a in authors.iter() {
+            if let Some(list) = self.tweets.get(a) {
+                let from = if list.len() > 10 { list.len() - 10 } else { 0 };
+                for i in from..list.len() {
+                    pool.push(list[i]);
+                }
+            }
+        }
+        pool.sort();
+        pool.reverse();
+        let mut feed: Vec[i64] = Vec.new();
+        for (_, tweet) in pool.iter().take(10) {
+            feed.push(tweet);
+        }
+        feed
+    }
+
+    fn follow(mut ref self, follower: i64, followee: i64) {
+        self.follows.entry(follower).or_insert(Set.new()).insert(followee);
+    }
+
+    fn unfollow(mut ref self, follower: i64, followee: i64) {
+        if self.follows.contains_key(follower) {
+            self.follows[follower].remove(followee);
+        }
+    }
+}
+
+struct Oracle {
+    posts: Vec[(i64, i64)],
+    follows: Vec[Vec[bool]],
+}
+
+impl Oracle {
+    fn new(users: i64) -> Oracle {
+        let mut follows: Vec[Vec[bool]] = Vec.new();
+        for _ in 0..users {
+            follows.push(vec![false; users]);
+        }
+        Oracle { posts: Vec.new(), follows }
+    }
+
+    fn sees(ref self, user: i64, author: i64) -> bool {
+        user == author or self.follows[user][author]
+    }
+
+    fn feed(ref self, user: i64) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        let mut i = self.posts.len() - 1;
+        while i >= 0 and out.len() < 10 {
+            if self.sees(user, self.posts[i].0) {
+                out.push(self.posts[i].1);
+            }
+            i -= 1;
+        }
+        out
+    }
+
+    fn visible(ref self, user: i64) -> i64 {
+        let mut n = 0;
+        for (author, _) in self.posts.iter() {
+            if self.sees(user, author) {
+                n += 1;
+            }
+        }
+        n
+    }
+}
+
+fn check(case: i64, step: i64, what: String, ok: bool, failures: mut ref i64) {
+    if not ok {
+        failures += 1;
+        if failures <= 10 {
+            println(f"FAIL case {case} step {step}: {what}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 3550;
+    let mut failures = 0;
+    let mut feeds = 0;
+    let mut cases = 0;
+    // The draws take the generator's high bits: its low bits have short
+    // periods, and with a power-of-two user count `a` and `b` drawn from
+    // consecutive states were never equal, so nobody ever followed themself.
+    let sizes = [1, 2, 4, 8];
+    for case in 0..600 {
+        let users = sizes[case % 4];
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let ops = (seed / 65536) % 61;
+        let mut heap = HeapTwitter.new();
+        let mut scan = ScanTwitter.new();
+        let mut linked = LinkedTwitter.new();
+        let mut sorted = SortTwitter.new();
+        let mut oracle = Oracle.new(users);
+        let mut next_tweet = 0;
+        let mut posted: Vec[i64] = vec![-1; users];
+        for step in 0..ops {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let op = (seed / 65536) % 8;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let a = (seed / 65536) % users;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let b = (seed / 65536) % users;
+            if op < 3 {
+                heap.post_tweet(a, next_tweet);
+                scan.post_tweet(a, next_tweet);
+                linked.post_tweet(a, next_tweet);
+                sorted.post_tweet(a, next_tweet);
+                oracle.posts.push((a, next_tweet));
+                posted[a] = next_tweet;
+                next_tweet += 1;
+            } else if op < 5 {
+                heap.follow(a, b);
+                scan.follow(a, b);
+                linked.follow(a, b);
+                sorted.follow(a, b);
+                oracle.follows[a][b] = true;
+            } else if op < 6 {
+                heap.unfollow(a, b);
+                scan.unfollow(a, b);
+                linked.unfollow(a, b);
+                sorted.unfollow(a, b);
+                oracle.follows[a][b] = false;
+                if a != b {
+                    let mut clean = true;
+                    for id in heap.news_feed(a) {
+                        for (author, tweet) in oracle.posts.iter() {
+                            if tweet == id and author == b {
+                                clean = false;
+                            }
+                        }
+                    }
+                    check(case, step, "P5 unfollowed author still in feed", clean, mut failures);
+                }
+            }
+            // Every step ends with a feed read for user `a`.
+            let want = oracle.feed(a);
+            feeds += 1;
+            check(case, step, f"P1 heap {heap.news_feed(a)} != {want}", heap.news_feed(a) == want, mut failures);
+            check(case, step, f"P1 scan {scan.news_feed(a)} != {want}", scan.news_feed(a) == want, mut failures);
+            check(case, step, f"P1 linked {linked.news_feed(a)} != {want}", linked.news_feed(a) == want, mut failures);
+            check(case, step, f"P1 sort {sorted.news_feed(a)} != {want}", sorted.news_feed(a) == want, mut failures);
+            let visible = oracle.visible(a);
+            let expect_len = if visible < 10 { visible } else { 10 };
+            check(case, step, "P2 feed length", want.len() == expect_len, mut failures);
+            let mut decreasing = true;
+            for i in 1..want.len() {
+                if want[i] >= want[i - 1] {
+                    decreasing = false;
+                }
+            }
+            check(case, step, "P3 newest first", decreasing, mut failures);
+            if posted[a] >= 0 {
+                let mut newer = 0;
+                for (author, tweet) in oracle.posts.iter() {
+                    if tweet > posted[a] and oracle.sees(a, author) {
+                        newer += 1;
+                    }
+                }
+                check(case, step, "P4 own newest tweet present", want.contains(posted[a]) == (newer < 10), mut failures);
+            }
+        }
+        cases += 1;
+    }
+    println(f"{cases} cases, {feeds} feed checks, {failures} failures");
+}

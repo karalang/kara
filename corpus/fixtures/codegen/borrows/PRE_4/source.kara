@@ -1,0 +1,2 @@
+fn go() -> i64 { let mut t = mkp(9); bumpi(mut t.b); return t.b; }
+fn main() { println(go()); }

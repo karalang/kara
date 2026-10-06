@@ -1,0 +1,2 @@
+enum Col { A(i64), B }
+fn main() { let g = Col.B; match g { A(r) => { println(f"a:{r}") } B => { println("b") } } }

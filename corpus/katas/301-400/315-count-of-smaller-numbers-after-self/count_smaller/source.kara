@@ -1,0 +1,96 @@
+// LeetCode #315: Count of Smaller Numbers After Self — a Fenwick tree over ranks (★).
+//
+// For every position i, count the elements to its RIGHT that are strictly
+// smaller. Walk the array right to left, keeping a frequency table of the
+// values already seen; the answer at i is "how many seen values are below
+// nums[i]" — a prefix sum over the table — and then nums[i] joins it. A
+// Fenwick tree makes both the prefix query and the point update O(log m).
+//
+// Values are first COMPRESSED to their rank among the ranks values, so the
+// table is indexed by rank rather than by value: it costs one sort and one
+// binary search per element, and makes the tree's size the number of ranks
+// values rather than the value range (which may be negative or huge).
+//
+// The tree is 1-indexed internally, exactly as in kata [#307](../307-range-sum-query-mutable/):
+// `lowbit(0) == 0`, so rank r lives at slot r + 1. `prefix(r)` sums the slots
+// tiling [1, r], i.e. the ranks strictly below r — which is precisely "strictly
+// smaller".
+
+fn lower_bound(sorted: ref Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < x { lo = mid + 1; } else { hi = mid; }
+    }
+    return lo;
+}
+
+fn count_smaller(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut ranks = nums.clone();
+    ranks.sort();
+    ranks.dedup();
+    let m = ranks.len();
+
+    let mut tree: Vec[i64] = Vec.new();
+    for i in 0..(m + 1) { tree.push(0); }
+
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..n { counts.push(0); }
+
+    let mut i = n - 1;
+    while i >= 0 {
+        let r = lower_bound(ranks, nums[i]);
+        // Strictly smaller seen so far: the ranks in [0, r), which are slots 1..r.
+        let mut total = 0;
+        let mut x = r;
+        while x > 0 {
+            total = total + tree[x];
+            x -= x & -x;
+        }
+        counts[i] = total;
+        // Record nums[i] at slot r + 1 and every slot covering it.
+        x = r + 1;
+        while x <= m {
+            tree[x] = tree[x] + 1;
+            x += x & -x;
+        }
+        i = i - 1;
+    }
+    return counts;
+}
+
+// ------------------------------------------------------------- demo ---
+
+fn fmt(v: ref Vec[i64]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..v.len() {
+        if i > 0 { s = s + ","; }
+        s = s + v[i].to_string();
+    }
+    return s + "]";
+}
+
+fn main() {
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    cases.push([5, 2, 6, 1]);            // LeetCode: [2,1,1,0]
+    cases.push([-1]);                    // [0]
+    cases.push([-1, -1]);                // [0,0] — equal is not smaller
+    cases.push([]);
+    cases.push([3, 3, 3, 3]);
+    cases.push([1, 2, 3, 4, 5]);         // ascending: all zero
+    cases.push([5, 4, 3, 2, 1]);         // descending: n-1-i
+    cases.push([-10000, 10000, 0, -10000, 7, 7, -3]);
+    cases.push([2, 0, 1]);
+
+    let mut acc = 0;
+    for c in 0..cases.len() {
+        let counts = count_smaller(cases[c]);
+        for j in 0..counts.len() {
+            acc = (acc * 131 + counts[j] + 1) % 1000000007;
+        }
+        println(f"case {c}: {fmt(counts)}");
+    }
+    println(f"sink: {acc}");
+}

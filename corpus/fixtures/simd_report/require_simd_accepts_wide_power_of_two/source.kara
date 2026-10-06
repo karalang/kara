@@ -1,0 +1,7 @@
+
+        #[require_simd]
+        fn add8(a: Vector[i32, 8], b: Vector[i32, 8]) -> Vector[i32, 8] {
+            a + b
+        }
+        fn main() {}
+    

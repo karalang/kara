@@ -1,0 +1,9 @@
+
+enum E { V1(i64), V2(String) }
+fn main() {
+    let e = V1(42);
+    match e {
+        V1(x) => println(x),
+        V2(_s) => println(99),
+    }
+}

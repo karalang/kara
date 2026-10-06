@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("set-contains-element-aaaaaaaaaaaaaaaaaa".to_string());
+    if s.contains("set-contains-element-aaaaaaaaaaaaaaaaaa".to_string()) {
+        println("present");
+    }
+    println(s.len());
+}

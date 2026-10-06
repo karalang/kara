@@ -1,0 +1,51 @@
+// Benchmark workload for LeetCode #198 — House Robber.
+//
+// Build-once + punch: a large value array is generated once with a deterministic
+// 32-bit LCG (overflow-safe in i64), then the O(1)-space rob() DP is run `PASSES`
+// times, each preceded by a single element flip so the optimizer cannot hoist the
+// repeated scan. rob()'s recurrence cur = max(prev, prev2 + nums[i]) is loop-carried
+// (each step depends on the two prior running maxima) and data-dependent (max), so
+// it does NOT vectorize and cannot be reduced below its O(n) walk. Sink = sum of the
+// per-pass best-robbery totals.
+
+fn max_i64(a: i64, b: i64) -> i64 { if a > b { return a; } return b; }
+
+fn rob(nums: ref Vec[i64], n: i64) -> i64 {
+    let mut prev2 = 0; // best up to i-2
+    let mut prev = 0;  // best up to i-1
+    let mut i = 0;
+    while i < n {
+        let cur = max_i64(prev, prev2 + nums[i]);
+        prev2 = prev;
+        prev = cur;
+        i = i + 1;
+    }
+    return prev;
+}
+
+fn main() {
+    let n = 5000;
+    let passes = 90000;
+
+    // Build the value array once (PRNG, values 0..999).
+    let mut nums: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut b = 0;
+    while b < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        nums.push((state >> 16) % 1000);
+        b = b + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        // Punch one house so the scan can't be hoisted across passes.
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let idx = state % n;
+        nums[idx] = (state >> 16) % 1000;
+        sink = sink + rob(nums, n);
+        p = p + 1;
+    }
+    println(sink);
+}

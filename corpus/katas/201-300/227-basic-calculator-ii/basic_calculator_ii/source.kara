@@ -1,0 +1,79 @@
+// LeetCode 227 — Basic Calculator II.
+//
+// Evaluate a string expression of non-negative integers with '+', '-', '*', '/'
+// and spaces (no parentheses). Multiplication and division bind tighter than
+// addition and subtraction, and integer division truncates toward zero.
+//
+// A term stack resolves precedence in one pass. Scan the bytes, accumulating the
+// current number; when the next operator (or the end of the string) is reached,
+// apply the PREVIOUS operator to that number:
+//   '+' -> push  num          '-' -> push -num
+//   '*' -> pop t, push t*num   '/' -> pop t, push t/num   (truncating)
+// So '*' and '/' fold into the top of the stack immediately (tight binding),
+// while '+' and '-' leave signed terms to be summed at the end. The answer is the
+// sum of the stack. Kāra's `/` truncates toward zero, which is exactly the
+// required division semantics. O(n).
+
+fn pop_or_zero(stack: mut ref Vec[i64]) -> i64 {
+    match stack.pop() {
+        Some(v) => v,
+        None => 0,
+    }
+}
+
+fn calculate(s: String) -> i64 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut num = 0;
+    let mut op = b'+';                       // operator preceding `num`
+    let mut i = 0;
+    while i < n {
+        let b = bytes[i];
+        if b >= b'0' and b <= b'9' {
+            num = num * 10 + (b as i64 - b'0' as i64);
+        }
+        let is_op = b == b'+' or b == b'-' or b == b'*' or b == b'/';
+        if is_op or i == n - 1 {
+            if op == b'+' {
+                stack.push(num);
+            } else if op == b'-' {
+                stack.push(-num);
+            } else if op == b'*' {
+                let t = pop_or_zero(mut stack);
+                stack.push(t * num);
+            } else {                          // '/'
+                let t = pop_or_zero(mut stack);
+                stack.push(t / num);          // truncates toward zero
+            }
+            op = b;
+            num = 0;
+        }
+        i = i + 1;
+    }
+
+    let mut total = 0;
+    let mut k = 0;
+    while k < stack.len() {
+        total = total + stack[k];
+        k = k + 1;
+    }
+    return total;
+}
+
+fn report(s: String) {
+    println(calculate(s));
+}
+
+fn main() {
+    report("3+2*2");                         // 7
+    report(" 3/2 ");                         // 1
+    report(" 3+5 / 2 ");                     // 5
+    report("1-1+1");                         // 1
+    report("14-3/2");                        // 13
+    report("2*3+4");                         // 10
+    report("100000000/1/2");                 // 50000000
+    report("0");                             // 0
+    report("6-4/2");                         // 4
+    report("1*2-3/4+5*6-7*8+9/10");          // -24
+}

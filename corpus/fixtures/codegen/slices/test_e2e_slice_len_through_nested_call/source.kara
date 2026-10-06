@@ -1,0 +1,10 @@
+
+fn inner(xs: Slice[i64]) -> i64 { xs[0] + xs[1] }
+fn outer(xs: Slice[i64]) {
+    println(inner(xs));
+    println(xs.len());
+}
+fn main() {
+    let a: Array[i64, 4] = [2, 7, 11, 15];
+    outer(a);
+}

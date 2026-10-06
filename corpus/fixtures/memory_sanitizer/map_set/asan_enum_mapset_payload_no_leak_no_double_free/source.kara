@@ -1,0 +1,36 @@
+
+enum V { Table(Map[String, i64]) }
+enum S { Names(Set[String]) }
+enum W { Pairs(Map[String, String]) }
+fn size(v: ref V) -> i64 { match v { Table(m) => m.len() as i64 } }
+fn consume(v: V) -> i64 { match v { Table(m) => m.len() as i64 } }
+fn main() {
+    let mut total: i64 = 0;
+    let mut i = 0;
+    while i < 40 {
+        let mut mp: Map[String, i64] = Map.new();
+        mp.insert("a", 1);
+        mp.insert("b", 2);
+        let t = V.Table(mp);           // (1) construct
+        total = total + size(t);       // (2) ref read; t dropped at loop end
+
+        let mut mp2: Map[String, i64] = Map.new();
+        mp2.insert("x", 9);
+        let t2 = V.Table(mp2);
+        total = total + consume(t2);   // (3) by-value consume (deep-clone entry)
+
+        let mut names: Set[String] = Set.new();
+        names.insert("alice".to_string());
+        names.insert("bob".to_string());
+        let sn = S.Names(names);       // Set[String] payload
+        total = total + match sn { Names(nm) => nm.len() as i64 };
+
+        let mut pm: Map[String, String] = Map.new();
+        pm.insert("k".to_string(), "value_payload".to_string());
+        let w = W.Pairs(pm);           // (4) heap-valued Map
+        total = total + match w { Pairs(pp) => pp.len() as i64 };
+
+        i = i + 1;
+    }
+    println(total);
+}

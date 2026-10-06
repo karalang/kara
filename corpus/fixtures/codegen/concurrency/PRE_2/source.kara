@@ -1,0 +1,5 @@
+fn takes(s: String) -> i64 { return s.len(); }
+fn go() -> i64 { let t = mkp(9); let mut r = payload(); let mut i = 0i64; let mut acc = 0i64;
+  while i < 3i64 { acc = acc + takes(t.a); i = i + 1; }
+  return r.len() + acc; }
+fn main() { println(go()); }

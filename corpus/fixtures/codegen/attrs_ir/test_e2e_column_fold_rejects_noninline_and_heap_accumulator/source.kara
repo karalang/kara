@@ -1,0 +1,6 @@
+
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3]);
+    let g = |a: i64, x: i64| a + x;
+    println(f"{c.fold(0, g)}");
+}

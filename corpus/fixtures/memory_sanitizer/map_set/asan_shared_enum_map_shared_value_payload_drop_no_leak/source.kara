@@ -1,0 +1,19 @@
+
+shared struct Node { mut val: i64 }
+shared enum Store { Empty, Full(Map[i64, Node]) }
+fn build(n: i64) -> Store {
+    let mut m: Map[i64, Node] = Map.new();
+    m.insert(1, Node { val: n });
+    m.insert(2, Node { val: n + 1 });
+    Store.Full(m)
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        let s = build(i);
+        total = total + 1;
+        i = i + 1;
+    }
+    println(total.to_string());
+}

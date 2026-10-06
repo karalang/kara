@@ -1,0 +1,6 @@
+
+fn main() {
+    let m: Map[String, i64] = ["x": 10_i64, "y": 20_i64];
+    println(m.len());
+    println(m["x"]);
+}

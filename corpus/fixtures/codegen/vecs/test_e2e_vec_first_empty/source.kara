@@ -1,0 +1,8 @@
+
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    match v.first() {
+        Some(x) => println(x),
+        None => println(99),
+    }
+}

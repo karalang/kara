@@ -1,0 +1,30 @@
+
+struct Builder { parts: Vec[i64] }
+
+impl Builder {
+    fn add(self, p: i64) -> Builder {
+        let mut b = self;
+        b.parts.push(p);
+        b
+    }
+}
+
+struct Sb { text: String, n: i64 }
+
+impl Sb {
+    fn append(self, s: String) -> Sb {
+        let mut b = self;
+        b.text = s;
+        b.n = b.n + 1;
+        b
+    }
+}
+
+fn main() {
+    let b0 = Builder { parts: Vec.new() };
+    let b3 = b0.add(1).add(2).add(3);
+    println(b3.parts.len());
+    let s0 = Sb { text: "start-with-a-heap-sized-string-payload", n: 0 };
+    let s2 = s0.append("-a").append("-b");
+    println(s2.n);
+}

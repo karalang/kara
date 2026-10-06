@@ -1,0 +1,22 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct H  { pe: (R, i64) }
+struct Hs { pe: (R, i64), name: String }
+struct G  { h: H }
+
+fn f1(h: H)   { let (r, k) = h.pe;   let m = r; println(f"  b{m.id}") }
+fn f2(hs: Hs) { let (r, k) = hs.pe;  let m = r; println(f"  b{m.id} {hs.name}") }
+fn f3(g: G)   { let (r, k) = g.h.pe; let m = r; println(f"  b{m.id}") }
+fn f4(h: H)   { let (r, k) = h.pe;   println(f"  b{r.id}") }
+fn f5(h: H)   { let h2 = h; let (r, k) = h2.pe; let m = r; println(f"  b{m.id}") }
+fn f6(h: ref H) { println(f"  b{h.pe.0.id}") }
+
+fn main() {
+    println("plain");    f1(H  { pe: (R { id: 1 }, 0) });                println("plain end")
+    println("ownstr");   f2(Hs { pe: (R { id: 2 }, 0), name: "n" });     println("ownstr end")
+    println("twohop");   f3(G  { h: H { pe: (R { id: 3 }, 0) } });       println("twohop end")
+    println("norebind"); f4(H  { pe: (R { id: 4 }, 0) });                println("norebind end")
+    println("rebind");   f5(H  { pe: (R { id: 5 }, 0) });                println("rebind end")
+    println("refparam"); let h6 = H { pe: (R { id: 6 }, 0) }; f6(h6);    println("refparam end")
+    println("done")
+}

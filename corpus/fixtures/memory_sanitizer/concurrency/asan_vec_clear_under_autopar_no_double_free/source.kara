@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let mut a: Vec[String] = Vec.new();
+        a.push(f"a-{i}-padding-padding");
+        a.push(f"b-{i}-padding-padding");
+        a.clear();
+        println(a.len());
+        let mut b: Vec[String] = Vec.new();
+        b.push(f"c-{i}-padding-padding");
+        println(b.len());
+        println(b[0]);
+        i = i + 1;
+    }
+}

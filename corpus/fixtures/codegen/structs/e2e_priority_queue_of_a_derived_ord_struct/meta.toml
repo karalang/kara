@@ -1,0 +1,13 @@
+source = "tests/codegen/structs.rs::e2e_priority_queue_of_a_derived_ord_struct"
+dedup_of = ["tests/interpreter/structs.rs::test_priority_queue_of_a_derived_ord_struct"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

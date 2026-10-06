@@ -1,0 +1,7 @@
+
+fn main() {
+    let xs: Vec[i64] = (0..5).iter().collect();
+    for x in xs {
+        println(x);
+    }
+}

@@ -1,0 +1,9 @@
+
+fn main() {
+    let k_iters: i32 = 1000i32;
+    let mut sum: i32 = 0i32;
+    for k in 0i32..k_iters {
+        sum = sum + k;
+    }
+    println(sum);
+}

@@ -1,0 +1,23 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+struct K { n: i64 }
+impl K {
+    fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }
+    fn ok(ref self, r: R, keep: bool) -> Result[R, i64] { if keep { return Result.Ok(r); } return Result.Err(0); }
+    fn er(ref self, r: R, keep: bool) -> Result[i64, R] { if keep { return Result.Err(r); } return Result.Ok(0); }
+    fn t(ref self, r: R, keep: bool) -> Option[R] { if keep { Option.Some(r) } else { Option.None } }
+}
+fn freefn_opt(r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }
+fn ft(r: R, keep: bool) -> Option[R] { if keep { Option.Some(r) } else { Option.None } }
+fn main() {
+    let k = K { n: 0 };
+    println("S1"); let _ = k.f(mk(3), false); let _ = k.f(mk(4), true); let _ = k.f(mk(5), false);
+    println("S2"); let a1 = mk(14); let _ = k.f(a1, true);
+    println("S3"); let _ = freefn_opt(mk(24), true);
+    println("S4"); let a2 = mk(34); let _ = freefn_opt(a2, true);
+    println("Rok"); let _ = k.ok(mk(41), false); let _ = k.ok(mk(42), true);
+    println("Rer"); let _ = k.er(mk(43), false); let _ = k.er(mk(44), true);
+    println("tail"); let _ = k.t(mk(51), false); let _ = k.t(mk(52), true); let _ = ft(mk(53), false); let _ = ft(mk(54), true);
+    println("done")
+}

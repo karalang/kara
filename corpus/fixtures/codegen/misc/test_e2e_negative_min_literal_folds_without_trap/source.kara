@@ -1,0 +1,7 @@
+
+fn main() {
+    let int_min: i32 = -2147483648i32;
+    println(int_min);
+    let i64_min = -9223372036854775807 - 1;
+    println(i64_min);
+}

@@ -1,0 +1,90 @@
+// LeetCode 312 — Burst Balloons, on a flat table.
+//
+// THE ARM: the same recurrence, one Vec instead of a Vec of Vecs.
+//
+// dp[i][j] becomes dp[i * w + j]. The recurrence is untouched; what changes
+// is that the table is one allocation with one bounds check per access rather
+// than a row lookup followed by a column lookup.
+//
+// THE LOOP ORDER IS STILL SHORTEST-FIRST, and this arm is where that is worth
+// restating, because flattening makes it tempting to iterate the table the
+// way it is laid out in memory. It cannot: dp[i*w+j] reads dp[i*w+k] and
+// dp[k*w+j] for i < k < j, and dp[k*w+j] sits in a LATER row than the cell
+// being written. Row-major order would read it before it is written. The
+// length-ordered nest walks the table diagonally — strided, not sequential —
+// so the flat layout buys the cheaper indexing and none of the locality that
+// usually motivates flattening.
+//
+// Which is the interesting part of this arm as a benchmark: it is the case
+// where flattening is a WASH, and measuring it is the only way to know. The
+// nested arm's row lookups are hoisted out of the innermost loop by the
+// optimiser (dp[i] and a[i] are invariant in k), so the indirection it pays
+// for is not per-access, while this arm pays a multiply per access that the
+// nested arm does not. See the README for the measured margin.
+
+fn max_coins(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    for i in 0..n { a.push(nums[i]); }
+    a.push(1);
+
+    let w = n + 2;
+    let mut dp: Vec[i64] = Vec.new();
+    for i in 0..(w * w) { dp.push(0); }
+
+    for len in 2..w {
+        for i in 0..(w - len) {
+            let j = i + len;
+            let ai = a[i];
+            let aj = a[j];
+            let base = i * w;
+            let mut best = 0;
+            for k in (i + 1)..j {
+                // dp[k][j] lives in row k, which is below row i — hence the
+                // shortest-first outer loop.
+                let coins = dp[base + k] + dp[k * w + j] + ai * a[k] * aj;
+                if coins > best { best = coins; }
+            }
+            dp[base + j] = best;
+        }
+    }
+
+    return dp[n + 1];
+}
+
+fn render(nums: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { s.push_str(","); }
+        s.push_str(nums[i].to_string());
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(vals: Slice[i64]) {
+    let mut nums: Vec[i64] = Vec.new();
+    for v in vals { nums.push(v); }
+    println(render(nums) + " -> " + max_coins(nums).to_string());
+}
+
+fn main() {
+    report([3, 1, 5, 8]);
+    report([1, 5]);
+    report([]);
+    report([7]);
+    report([3, 0, 5]);
+    report([0, 0, 0]);
+    report([1, 2, 3, 4, 5]);
+    report([5, 4, 3, 2, 1]);
+    report([2, 2, 2, 2]);
+    report([1, 1, 1, 1, 1, 1]);
+    report([1, 100, 1]);
+    report([9, 76, 64, 21, 97, 60]);
+}

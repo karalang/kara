@@ -1,0 +1,76 @@
+// LeetCode #45: Jump Game II — explicit BFS layers via a sliding window, O(1) space.
+//
+// The ★ file ([`jump_game_ii.kara`](jump_game_ii.kara)) collapses the layered BFS into three
+// scalars; this file keeps the layers VISIBLE. Minimum jumps = number of BFS layers in the
+// graph "i → any j in (i, i+nums[i]]", so process the frontier one layer at a time. Track the
+// current layer as an index window `[lo, hi]` and, in one sweep of that window, compute the
+// rightmost index any of its members can reach — that range `[hi+1, next_hi]` is the next
+// layer. Each layer costs one jump:
+//
+//   - `lo`, `hi` — inclusive bounds of the current layer's index window. Layer 0 is `[0, 0]`.
+//   - per layer: `next_hi = max(i + nums[i])` over `i` in `[lo, hi]`; then the next window is
+//     `[hi+1, next_hi]` and `jumps` increments.
+//
+// Loop until `hi` reaches the last index. Although there is a nested scan, `lo` advances to
+// `hi+1` after every layer, so each index is visited by exactly one window — the total work is
+// one linear pass over `nums`, O(n) time, and only the four scalars `jumps/lo/hi/next_hi`, so
+// O(1) space. It is the same span of indices the ★ scan sweeps, just with the layer boundaries
+// written out instead of folded into `current_end`. n ≤ 10⁴ and nums[i] ≤ 1000, so every index
+// fits i64.
+
+fn jump(nums: Slice[i64], n: i64) -> i64 {
+    let mut jumps = 0;
+    let mut lo = 0; // current layer's left bound
+    let mut hi = 0; // current layer's right bound (the frontier)
+    while hi < n - 1 {
+        let mut next_hi = hi;
+        let mut i = lo;
+        // Sweep the current layer; the farthest reach is the next frontier.
+        while i <= hi {
+            if i + nums[i] > next_hi {
+                next_hi = i + nums[i];
+            }
+            i = i + 1;
+        }
+        lo = hi + 1;
+        hi = next_hi;
+        jumps = jumps + 1;
+    }
+    jumps
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn report(nums: Slice[i64], n: i64) {
+    let ans = jump(nums, n);
+    println(f"{ans}");
+}
+
+fn main() {
+    let a1: Array[i64, 5] = [2, 3, 1, 1, 4];
+    report(a1, 5); // 2
+
+    let a2: Array[i64, 5] = [2, 3, 0, 1, 4];
+    report(a2, 5); // 2
+
+    let a3: Array[i64, 1] = [0];
+    report(a3, 1); // 0
+
+    let a4: Array[i64, 2] = [1, 2];
+    report(a4, 2); // 1
+    let a5: Array[i64, 2] = [2, 1];
+    report(a5, 2); // 1
+
+    let a6: Array[i64, 4] = [1, 1, 1, 1];
+    report(a6, 4); // 3
+
+    let a7: Array[i64, 5] = [5, 1, 1, 1, 1];
+    report(a7, 5); // 1
+    let a8: Array[i64, 5] = [4, 1, 1, 1, 1];
+    report(a8, 5); // 1
+
+    let a9: Array[i64, 3] = [1, 2, 3];
+    report(a9, 3); // 2
+    let a10: Array[i64, 5] = [2, 1, 1, 1, 1];
+    report(a10, 5); // 3
+}

@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7);
+    v.push(8);
+    v.push(9);
+    v.push(10);
+    match v {
+        [_, ..rest] => {
+            println(rest.len());
+            println(rest[0]);
+            println(rest[1]);
+            println(rest[2]);
+        },
+        [] => println(-1),
+    }
+}

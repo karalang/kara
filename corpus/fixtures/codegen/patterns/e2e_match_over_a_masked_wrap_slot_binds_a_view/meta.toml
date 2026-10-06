@@ -1,0 +1,13 @@
+source = "tests/codegen/patterns.rs::e2e_match_over_a_masked_wrap_slot_binds_a_view"
+dedup_of = ["tests/interpreter/patterns.rs::test_match_over_a_masked_wrap_slot_binds_a_view", "tests/memory_sanitizer/patterns.rs::asan_match_over_a_masked_wrap_slot_clean"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

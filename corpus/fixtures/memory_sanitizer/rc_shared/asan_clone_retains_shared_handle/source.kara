@@ -1,0 +1,11 @@
+
+shared enum E { V(i64) }
+struct Row { e: E, n: i64 }
+fn main() {
+    let mut v: Vec[Row] = Vec.new();
+    v.push(Row { e: E.V(1), n: 10 });
+    v.push(Row { e: E.V(2), n: 20 });
+    let mut t = 0;
+    for r in v.clone() { t = t + r.n; }
+    println(t);
+}

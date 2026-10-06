@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
+    let d: Tensor[f32, [?]] = Tensor.from([1.0, 1.0, 1.0]);
+    let mut k = 0;
+    while k < 5 {
+        w = w + d;
+        k = k + 1;
+    }
+    let w0 = w[0];
+    println(f"{w0}");
+}

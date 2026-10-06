@@ -1,0 +1,13 @@
+source = "tests/typechecker.rs::a_body_annotated_concrete_type_still_fails_an_unsatisfied_bound"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,11 @@
+
+shared struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(self.id);
+    }
+}
+fn main() {
+    let r = Res { id: 7 };
+    println(0);
+}

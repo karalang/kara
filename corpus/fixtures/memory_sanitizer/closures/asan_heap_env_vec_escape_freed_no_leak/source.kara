@@ -1,0 +1,26 @@
+
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(n: i64) -> Vec[Fn(i64) -> i64] {
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    let mut i = 0i64;
+    while i < n { v.push(make(i)); i = i + 1i64; }
+    v
+}
+fn build_bf(k: i64) -> Vec[Fn(i64) -> i64] {
+    let f = make(k);
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    v.push(f);
+    v
+}
+fn relay(n: i64) -> Vec[Fn(i64) -> i64] { let q = build(n); q }
+fn main() {
+    let r = build(3i64);
+    let w = build_bf(20i64);
+    let z = relay(2i64);
+    let mut acc = 0i64;
+    let mut j = 0i64;
+    while j < r.len() { acc = acc + (r[j])(10i64); j = j + 1i64; }
+    acc = acc + (w[0])(2i64);
+    acc = acc + (z[0])(5i64) + (z[1])(6i64);
+    println(f"{acc}");
+}

@@ -1,0 +1,12 @@
+case 0: bcabc -> abc
+case 1: cbacdcbc -> acdb
+case 2: a -> a
+case 3: aaaa -> a
+case 4: abcabc -> abc
+case 5: cba -> cba
+case 6: bbcaac -> bac
+case 7: leetcode -> letcod
+case 8: zyxzyxzyx -> xyz
+case 9: ecbacba -> eacb
+case 10: bcac -> bac
+sink: 65316347

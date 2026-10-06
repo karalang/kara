@@ -1,0 +1,28 @@
+
+fn mkm() -> SortedMap[String, i64] {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    let _ = m.insert("zzzzzzzzzzzzzzzzzzzz", 1);
+    let _ = m.insert("aaaaaaaaaaaaaaaaaaaa", 2);
+    return m;
+}
+fn mks() -> SortedSet[String] {
+    let mut s: SortedSet[String] = SortedSet.new();
+    let _ = s.insert("zzzzzzzzzzzzzzzzzzzz");
+    let _ = s.insert("aaaaaaaaaaaaaaaaaaaa");
+    return s;
+}
+
+fn main() {
+    let m1: SortedMap[String, i64] = mkm();
+    println(f"{m1.len()}");
+    let m2 = mkm();
+    println(f"{m2.len()}");
+    let mut acc = "";
+    for k in m2.keys() { acc = acc + k + ","; }
+    println(f"{acc.len()}");
+    let s1: SortedSet[String] = mks();
+    println(f"{s1.len()}");
+    let s2 = mks();
+    println(f"{s2.len()}");
+    println("end");
+}

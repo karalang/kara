@@ -1,0 +1,22 @@
+
+struct Entity { x: i64, y: i64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    entities.push(Entity { x: 1, y: 10, hp: 100 });
+    entities.push(Entity { x: 2, y: 20, hp: 200 });
+    entities.push(Entity { x: 3, y: 30, hp: 300 });
+    println(entities.len());
+    match entities.pop() {
+        Some(e) => {
+            println(e.x);
+            println(e.y);
+            println(e.hp);
+        }
+        None => println(-1),
+    }
+    println(entities.len());
+}

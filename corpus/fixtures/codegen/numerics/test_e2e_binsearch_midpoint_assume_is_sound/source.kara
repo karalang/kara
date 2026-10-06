@@ -1,0 +1,38 @@
+
+fn lower_bound(nums: ref Vec[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0i64;
+    let mut hi = len;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2i64;
+        if nums[mid] < target { lo = mid + 1i64; } else { hi = mid; }
+    }
+    lo
+}
+fn upper_bound(nums: ref Vec[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0i64;
+    let mut hi = len;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2i64;
+        if nums[mid] <= target { lo = mid + 1i64; } else { hi = mid; }
+    }
+    lo
+}
+fn report(nums: ref Vec[i64], len: i64, target: i64) {
+    let lo = lower_bound(nums, len, target);
+    if lo == len or nums[lo] != target {
+        println(f"{target}: -1 -1");
+    } else {
+        println(f"{target}: {lo} {upper_bound(nums, len, target) - 1i64}");
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    // [5, 7, 7, 8, 8, 10]
+    v.push(5i64); v.push(7i64); v.push(7i64); v.push(8i64); v.push(8i64); v.push(10i64);
+    report(v, 6i64, 8i64);   // 3 4
+    report(v, 6i64, 7i64);   // 1 2
+    report(v, 6i64, 5i64);   // 0 0
+    report(v, 6i64, 10i64);  // 5 5
+    report(v, 6i64, 6i64);   // -1 -1
+    report(v, 6i64, 11i64);  // -1 -1
+}

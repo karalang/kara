@@ -1,0 +1,118 @@
+// LeetCode #33: Search in Rotated Sorted Array — one-pass modified binary search.
+//
+// A sorted ascending array of distinct values has been rotated at an unknown
+// pivot (e.g. [0,1,2,4,5,6,7] -> [4,5,6,7,0,1,2]). Find a target's index, or -1.
+// Must run in O(log n) — a linear scan is the thing the rotation tempts you into
+// and the constraint forbids.
+//
+// The canonical single-pass form. At any window [lo, hi] with midpoint mid, the
+// rotation guarantees that AT LEAST ONE of the two halves [lo, mid] / [mid, hi]
+// is fully sorted (the pivot can sit in only one of them). So each step:
+//
+//   - If nums[mid] == target, done.
+//   - Else figure out which half is sorted (compare nums[lo] to nums[mid]):
+//       * nums[lo] <= nums[mid]  ->  the LEFT half is sorted. If target lies in
+//         [nums[lo], nums[mid]) go left, else go right.
+//       * otherwise               ->  the RIGHT half is sorted. If target lies in
+//         (nums[mid], nums[hi]] go right, else go left.
+//
+// The trick is that you only ever range-test against the SORTED half — where a
+// simple `lo <= target < mid` bound is valid — and recurse into the other half
+// by elimination. The unsorted half's disorder never has to be reasoned about
+// directly; it is always "the other one". One comparison picks the sorted side,
+// one bound test picks the direction, so the window still halves every step:
+// O(log n), no pivot-finding pre-pass (contrast search_rotated_pivot.kara).
+//
+// `nums[lo] <= nums[mid]` (<=, not <) is the load-bearing boundary: when lo==mid
+// the left "half" is the single sorted element nums[lo], and <= keeps that the
+// sorted side so the empty-right case is handled by the same branch.
+
+fn search(nums: Slice[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = len - 1;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] == target {
+            return mid;
+        }
+        if nums[lo] <= nums[mid] {
+            // Left half [lo, mid] is sorted.
+            if nums[lo] <= target and target < nums[mid] {
+                hi = mid - 1;
+            } else {
+                lo = mid + 1;
+            }
+        } else {
+            // Right half [mid, hi] is sorted.
+            if nums[mid] < target and target <= nums[hi] {
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+    }
+    -1
+}
+
+fn fmt(nums: Slice[i64], len: i64) -> String {
+    let mut s: String = "[";
+    for i in 0..len {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(nums: Slice[i64], len: i64, target: i64) {
+    println(f"{fmt(nums, len)} target={target} -> {search(nums, len, target)}");
+}
+
+fn main() {
+    // LeetCode examples.
+    let a1: Array[i64, 7] = [4, 5, 6, 7, 0, 1, 2];
+    report(a1, 7, 0);                // 4
+    report(a1, 7, 3);                // -1
+
+    let a2: Array[i64, 1] = [1];
+    report(a2, 1, 0);                // -1
+    report(a2, 1, 1);                // 0
+
+    // Every position of a rotated 7-array, plus a miss.
+    let a3: Array[i64, 7] = [6, 7, 0, 1, 2, 4, 5];
+    report(a3, 7, 6);               // 0
+    report(a3, 7, 7);               // 1
+    report(a3, 7, 0);               // 2
+    report(a3, 7, 2);               // 4
+    report(a3, 7, 5);               // 6
+    report(a3, 7, 3);               // -1 (gap — 3 is not present)
+
+    // Not actually rotated (rotation = 0) — plain sorted.
+    let a4: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(a4, 5, 4);               // 3
+    report(a4, 5, 1);               // 0
+    report(a4, 5, 5);               // 4
+    report(a4, 5, 6);               // -1
+
+    // Two elements, both rotations.
+    let a5: Array[i64, 2] = [3, 1];
+    report(a5, 2, 1);               // 1
+    report(a5, 2, 3);               // 0
+    report(a5, 2, 2);               // -1
+
+    // Rotated at the very last position.
+    let a6: Array[i64, 4] = [2, 3, 4, 1];
+    report(a6, 4, 1);               // 3
+    report(a6, 4, 2);               // 0
+
+    // Empty — vacuous miss (constraint says len >= 1, but the loop must be safe).
+    let a7: Array[i64, 0] = [];
+    report(a7, 0, 5);              // -1
+
+    // Negatives, rotated.
+    let a8: Array[i64, 5] = [3, 4, -2, -1, 2];
+    report(a8, 5, -2);            // 2
+    report(a8, 5, 3);             // 0
+}

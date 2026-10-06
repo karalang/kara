@@ -1,0 +1,157 @@
+// LeetCode 307 — arm E: the SAME Fenwick tree, generic over its element type.
+//
+// Identical arithmetic to the ★ arm, identical lowbit walks, identical
+// 1-indexing, identical delta absorption. The only difference is that the
+// element type is a parameter bounded by `Copy + Add + Sub` rather than a fixed
+// `i64`, so the structure works for any type with an associative `+`, an
+// inverse, and cheap copies.
+//
+// WHY IT EARNS ITS PLACE. A Fenwick tree is not really about integers — it is
+// about a group, and writing it generically is what a reader who knows the
+// structure reaches for. It plays the role here that #304's flat/nested pair
+// plays there: same mathematics, different discipline, so a disagreement
+// between it and the ★ arm localises to how the compiler handles the
+// abstraction rather than to the algorithm.
+//
+// THIS ARM HAS A HISTORY, AND THAT IS THE POINT OF KEEPING IT. It could not be
+// written when this kata was first published, on 2026-09-02. Two separate
+// compiler defects stood in the way, both found from katas in this range and
+// both since fixed:
+//
+//   * kara B-2026-09-02-18 / -19 (found from #304, fixed in fe82c7b) — generic
+//     arithmetic rejected `pre[i] + xs[i]` as "both operands must have the same
+//     type, found 'T' and 'T'", and a declared `T: Copy` bound was ignored, so
+//     every use of a bounded value was treated as a move.
+//
+//   * kara B-2026-09-02-42 (found from THIS kata, fixed in a7c8af7) — a body
+//     annotation naming the parameter, as in the `let mut tree: Vec[T] =
+//     Vec.new();` below, poisoned every later bounded call on that value. The
+//     kata shipped with four arms and this one documented as absent rather than
+//     rewritten to drop the annotation, because dropping it would have been
+//     routing around the gap.
+//
+// All three defects were one root cause: a type parameter has two internal
+// spellings, `Type::TypeParam("T")` from a signature and `Type::Named{"T"}`
+// from a body annotation, and `Type` compares structurally. Carrying a generic
+// container in the corpus is how that stays fixed.
+//
+// `zero` is stored rather than threaded through every call: `prefix` folds from
+// an identity, and a generic `T` has no literal `0`.
+
+struct Fenwick[T] {
+    tree: Vec[T],
+    data: Vec[T],
+    zero: T,
+    n: i64,
+}
+
+impl[T: Copy + Add + Sub] Fenwick[T] {
+    fn new(nums: ref Vec[T], zero: T) -> Fenwick[T] {
+        let n = nums.len();
+        let mut tree: Vec[T] = Vec.new();
+        for i in 0..(n + 1) {
+            tree.push(zero);
+        }
+        let mut data: Vec[T] = Vec.new();
+        for i in 0..n {
+            data.push(zero);
+        }
+        let mut f = Fenwick { tree: tree, data: data, zero: zero, n: n };
+        for i in 0..n {
+            f.update(i, nums[i]);
+        }
+        return f;
+    }
+
+    fn add(mut ref self, i: i64, delta: T) {
+        let mut x = i + 1;
+        while x <= self.n {
+            self.tree[x] = self.tree[x] + delta;
+            x += x & -x;
+        }
+    }
+
+    fn update(mut ref self, i: i64, val: T) {
+        let delta = val - self.data[i];
+        self.data[i] = val;
+        self.add(i, delta);
+    }
+
+    fn prefix(ref self, i: i64) -> T {
+        let mut total = self.zero;
+        let mut x = i;
+        while x > 0 {
+            total = total + self.tree[x];
+            x -= x & -x;
+        }
+        return total;
+    }
+
+    fn sum_range(ref self, l: i64, r: i64) -> T {
+        return self.prefix(r + 1) - self.prefix(l);
+    }
+}
+
+fn new_structure(nums: ref Vec[i64]) -> Fenwick[i64] {
+    return Fenwick.new(nums, 0);
+}
+
+fn render(nums: Slice[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(f"{nums[i]}");
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+// `ops` is a flat list of (kind, a, b) triples: kind 0 = update(a, b),
+// kind 1 = sum_range(a, b).
+fn report(nums: Slice[i64], ops: Slice[i64]) {
+    let mut arr: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        arr.push(nums[i]);
+    }
+    let mut st = new_structure(arr);
+    let mut line = String.new();
+    line.push_str(render(nums));
+    line.push_str(" ->");
+    let mut k = 0;
+    while k + 2 < ops.len() {
+        let kind = ops[k];
+        let a = ops[k + 1];
+        let b = ops[k + 2];
+        if kind == 0 {
+            st.update(a, b);
+            line.push_str(f" u({a},{b})");
+        } else {
+            line.push_str(f" {st.sum_range(a, b)}");
+        }
+        k = k + 3;
+    }
+    println(line);
+}
+
+fn main() {
+    // The example from the LeetCode statement.
+    report([1, 3, 5], [1, 0, 2,  0, 1, 2,  1, 0, 2]);
+    // Every single-element read, before and after a write.
+    report([2, 7, 4], [1, 0, 0,  1, 1, 1,  1, 2, 2,  0, 1, 9,  1, 1, 1,  1, 0, 2]);
+    // One element.
+    report([42], [1, 0, 0,  0, 0, -5,  1, 0, 0]);
+    // Writing the value that is already there must change nothing.
+    report([4, 4, 4, 4], [1, 0, 3,  0, 2, 4,  1, 0, 3,  1, 2, 2]);
+    // Negatives, and a write that flips a sign.
+    report([-1, -2, -3, -4], [1, 0, 3,  1, 1, 2,  0, 0, 10,  1, 0, 3,  1, 0, 0]);
+    // Every prefix of a longer array, then a write in the middle.
+    report([5, 1, 8, 2, 9, 3], [1, 0, 0,  1, 0, 1,  1, 0, 2,  1, 0, 3,  1, 0, 4,  1, 0, 5,
+                               0, 3, 100,  1, 0, 5,  1, 3, 3,  1, 4, 5]);
+    // Large magnitudes that cancel.
+    report([100000, -100000, 100000], [1, 0, 2,  0, 1, 100000,  1, 0, 2,  1, 1, 1]);
+    // A power-of-two length, where the Fenwick and segment trees are widest.
+    report([1, 2, 3, 4, 5, 6, 7, 8], [1, 0, 7,  0, 7, 0,  1, 0, 7,  1, 7, 7,  1, 4, 6]);
+}

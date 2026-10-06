@@ -1,0 +1,40 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct H { s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.s}") } }
+enum E { A(R), B }
+
+fn sink(r: R) -> i64 { r.id }
+
+fn p6()  { let t = (R { id: 6 }, 0); match t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+fn e6()  { let t = E.A(R { id: 16 }); match t { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => {} } }
+fn r6()  { let t = (R { id: 26 }, 0); match t { (r, k) => { println(f"  b{r.id}"); } } }
+fn s6()  { let t = (R { id: 36 }, 0); match t { (r, k) => { println(f"  b{sink(r)}"); } } }
+fn t6()  { let t = (R { id: 56 }, R { id: 57 }); match t { (r, q) => { let m = r; println(f"  b{m.id}"); } } }
+fn h6()  { let t = (H { s: "x" }, 0); match t { (h, k) => { let m = h; println(f"  b{m.s}"); } } }
+fn l4() -> R { let t = (R { id: 74 }, 0); match t { (r, k) => { r } } }
+fn ol()  {
+    let t = (R { id: 91 }, R { id: 92 });
+    match t { (r, q) => { let m = r; println(f"  mv{m.id}") } }
+    println("  after match");
+}
+fn g6(n: i64) {
+    let t = (R { id: 86 }, n);
+    match t {
+        (r, k) if k > 0 => { let m = r; println(f"  mv{m.id}"); }
+        (r, k) => { println(f"  rd{r.id}"); }
+    }
+}
+
+fn main() {
+    println("p6"); p6(); println("p6 end");
+    println("e6"); e6(); println("e6 end");
+    println("r6"); r6(); println("r6 end");
+    println("s6"); s6(); println("s6 end");
+    println("t6"); t6(); println("t6 end");
+    println("h6"); h6(); println("h6 end");
+    println("l4"); let q = l4(); println(f"  got{q.id}"); println("l4 end");
+    println("ol"); ol(); println("ol end");
+    println("g6"); g6(0); println("g6 end");
+    println("done");
+}

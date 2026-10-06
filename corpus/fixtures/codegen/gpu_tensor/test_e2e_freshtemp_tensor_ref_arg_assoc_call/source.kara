@@ -1,0 +1,4 @@
+
+struct P {}
+impl P { fn second(v: ref Tensor[f32, [?]]) -> f32 { v[1] } }
+fn main() { println(P.second(Tensor.from([-1.0, 2.0, 3.0]))); }

@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut m = -9223372036854775807;
+    m = m - 1;
+    let mut d = -1;
+    d = d + 0;
+    let r = m % d;
+    println(r);
+}

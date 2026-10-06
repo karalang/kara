@@ -1,0 +1,155 @@
+// Benchmark workload — 4Sum (LeetCode #18).
+//
+// M = 8 distinct test cases, each a Vec[i64] of N = 16 values drawn from a
+// deterministic LCG into the range [-10, 10]. Built once into a
+// Vec[Vec[i64]] before the timed loop. Per outer iter we rotate
+// `idx = k % M` and call four_sum on that case with a per-case target from
+// a small bag {-20, -8, -3, 0, 2, 6, 12, 24} — some targets land inside the
+// reachable four-term-sum window for N=16 draws in [-10, 10] (the inner
+// crawl emits quadruplets and the min/max prunes rarely fire), some sit at
+// the edge or outside (the prunes short-circuit whole `a`/`b` prefixes).
+// The eight (case, target) pairs keep the call from being loop-invariant
+// (LLVM can't hoist it) and stop the branch predictor from learning any one
+// sort/two-pointer/prune trajectory.
+//
+// K = 1_000_000 outer iters. Per-iter work: a Vec.from_slice copy of N
+// values, an O(N log N) sort, an O(N³) two-fix + two-pointer scan, and one
+// Vec[Vec[i64]] output of however many target-sum quadruplets the case
+// holds (each quad a 4-element Vec[i64]). This is the same per-iter +
+// small-nested-output-alloc shape class as kata [#15](../../15-3sum/) — the
+// allocator stress kata 16 deliberately dropped — but one polynomial order
+// heavier in the scan (O(N³) vs O(N²)) and four-wide rows instead of three.
+// So this kata is the natural O(N³) peer to kata 15's O(N²): same
+// Vec[Vec[i64]] alloc/free path, more arithmetic per output.
+//
+// The LCG stays inside i64 with no wraparound: 1103515245 * state never
+// exceeds ~2.37e18 < i64::MAX, and the explicit `% 2^31` keeps state in
+// [0, 2^31). Every mirror (kara/rust/c/go/py) reproduces the same stream
+// and the same quadruplet counts, so all five must print the same sink
+// before timing starts; bench.sh fails loudly on mismatch.
+//
+// Two-lane kata: `sum = sum + r.len()` is the slice-1 allow-list reduction
+// shape, so karac emits a karac_par_reduce dispatch by default.
+// KARAC_AUTO_PAR=0 builds the seq-lane comparator — see bench/bench.sh.
+
+fn four_sum(nums: Slice[i64], target: i64) -> Vec[Vec[i64]] {
+    let mut result: Vec[Vec[i64]] = Vec.new();
+    let mut s: Vec[i64] = Vec.from_slice(nums);
+    s.sort_by(|a, b| a.cmp(b));
+    let n = s.len();
+    let mut a = 0;
+    while a < n - 3 {
+        if a > 0 and s[a] == s[a - 1] {
+            a = a + 1;
+            continue;
+        }
+        if s[a] + s[a + 1] + s[a + 2] + s[a + 3] > target {
+            break;
+        }
+        if s[a] + s[n - 1] + s[n - 2] + s[n - 3] < target {
+            a = a + 1;
+            continue;
+        }
+        let mut b = a + 1;
+        while b < n - 2 {
+            if b > a + 1 and s[b] == s[b - 1] {
+                b = b + 1;
+                continue;
+            }
+            if s[a] + s[b] + s[b + 1] + s[b + 2] > target {
+                break;
+            }
+            if s[a] + s[b] + s[n - 1] + s[n - 2] < target {
+                b = b + 1;
+                continue;
+            }
+            let mut lo = b + 1;
+            let mut hi = n - 1;
+            while lo < hi {
+                let sum = s[a] + s[b] + s[lo] + s[hi];
+                if sum < target {
+                    lo = lo + 1;
+                } else if sum > target {
+                    hi = hi - 1;
+                } else {
+                    let mut q: Vec[i64] = Vec.new();
+                    q.push(s[a]);
+                    q.push(s[b]);
+                    q.push(s[lo]);
+                    q.push(s[hi]);
+                    result.push(q);
+                    lo = lo + 1;
+                    hi = hi - 1;
+                    while lo < hi and s[lo] == s[lo - 1] {
+                        lo = lo + 1;
+                    }
+                    while lo < hi and s[hi] == s[hi + 1] {
+                        hi = hi - 1;
+                    }
+                }
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    result
+}
+
+// Overflow-free 31-bit LCG: 1103515245 * state + 12345 (mod 2^31).
+fn lcg_next(state: i64) -> i64 {
+    (1103515245 * state + 12345) % 2147483648
+}
+
+// One case = `count` values mapped into [-10, 10] from the LCG stream.
+fn build_case(seed: i64, count: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut state = seed;
+    let mut j = 0;
+    while j < count {
+        state = lcg_next(state);
+        v.push((state % 21) - 10);
+        j = j + 1;
+    }
+    v
+}
+
+fn target_for(idx: i64) -> i64 {
+    // Eight per-case targets spanning the reachable four-term-sum range for
+    // N=16 draws in [-10, 10]: some inside (quadruplets emitted, prunes
+    // quiet), some at the edge/outside (min/max prunes short-circuit).
+    if idx == 0       { -20 }
+    else if idx == 1  { -8 }
+    else if idx == 2  { -3 }
+    else if idx == 3  { 0 }
+    else if idx == 4  { 2 }
+    else if idx == 5  { 6 }
+    else if idx == 6  { 12 }
+    else                 { 24 }
+}
+
+fn main() {
+    let m_cases: i64 = 8;
+    let n_values: i64 = 16;
+    let k_iters: i64 = 1000000;
+
+    let mut sets: Vec[Vec[i64]] = Vec.new();
+    let mut m = 0;
+    while m < m_cases {
+        sets.push(build_case(m * 1000003 + 12345, n_values));
+        m = m + 1;
+    }
+
+    // Reduction shape: `sum = sum + r.len()` per iter. The analyzer
+    // recognizes the allow-listed `+` accumulator and karac's default build
+    // emits a karac_par_reduce dispatch. `r` is a Vec[Vec[i64]] allocated
+    // fresh inside four_sum and dropped at end-of-iter scope.
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % m_cases;
+        let r = four_sum(sets[idx].as_slice(), target_for(idx));
+        sum = sum + r.len();
+        k = k + 1;
+    }
+    println(sum);
+}

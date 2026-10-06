@@ -1,0 +1,10 @@
+
+shared struct Holder { label: String }
+fn make(n: i64) -> Holder {
+    Holder { label: f"n={n}" }
+}
+fn main() {
+    let h = make(42);
+    println(h.label);
+    println(h.label);
+}

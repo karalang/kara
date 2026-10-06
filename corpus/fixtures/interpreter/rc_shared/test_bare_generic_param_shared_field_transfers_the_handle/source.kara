@@ -1,0 +1,24 @@
+shared struct Node { s: String }
+struct Box[T] { v: T }
+struct Holder { v: Node }
+
+fn consume(b: Box[Node]) -> i64 { let x = b.v; return x.s.len(); }
+
+fn main() {
+    let mut acc: i64 = 0;
+    // the field escaping a value-position block, both spellings
+    let x1 = { let b = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } }; b.v };
+    acc = acc + x1.s.len();
+    let x2 = { let h = Holder { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } }; h.v };
+    acc = acc + x2.s.len();
+    // the plain move-out, a whole-struct move, and a never-moved control
+    let b3 = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } };
+    let x3 = b3.v;
+    acc = acc + x3.s.len();
+    let b4 = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } };
+    let b5 = b4;
+    acc = acc + consume(b5);
+    let b6 = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } };
+    acc = acc + 1;
+    println(acc);
+}

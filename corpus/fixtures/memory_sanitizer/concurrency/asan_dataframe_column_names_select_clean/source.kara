@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("a", Column.from_vec([1, 2]));
+    df.insert("b", Column.from_vec([3, 4]));
+    let names: Vec[String] = df.column_names();
+    println(names.len());
+    let sub: DataFrame = df.select(["b", "a"]);
+    println(sub.width());
+    let col: Column[i64] = sub.column("b");
+    println(col.len());
+    println(df.width());
+}

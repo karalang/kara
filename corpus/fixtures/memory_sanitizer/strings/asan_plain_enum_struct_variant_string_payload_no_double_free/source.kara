@@ -1,0 +1,30 @@
+
+enum E { Empty, NoAt { value: String } }
+impl Display for E {
+    fn to_string(ref self) -> String {
+        match self { Empty => "empty", NoAt { value } => f"no-at '{value}'" }
+    }
+}
+fn make(raw: String) -> E {
+    let v = raw.clone();
+    if not v.contains("@") { return E.NoAt { value: v }; }
+    E.Empty
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut count: i64 = 0;
+    while i < 50 {
+        let raw = f"bad-no-at-{i}";
+        let e = make(raw);
+        // Render through Display(ref self) — borrowed-scrutinee match ...
+        let s = e.to_string();
+        if s.len() > 0 { count = count + 1; }
+        // ... then destructure externally — owned-scrutinee match.
+        match e {
+            NoAt { value } => { if value.len() > 0 { count = count + 1; } },
+            Empty          => { count = count + 0; }
+        }
+        i = i + 1;
+    }
+    println(count);
+}

@@ -1,0 +1,52 @@
+
+fn mkstr(n: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("envelope-");
+    s.push_str(n.to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn tri(b: Option[Option[Option[i64]]]) -> i64 {
+    match b { Option.Some(Option.Some(Option.Some(x))) => x, _ => 0 }
+}
+fn quad(b: Option[Option[Option[Option[i64]]]]) -> i64 {
+    match b { Option.Some(Option.Some(Option.Some(Option.Some(x)))) => x, _ => 0 }
+}
+fn duo(b: Option[Option[i64]]) -> i64 {
+    match b { Option.Some(Option.Some(x)) => x, _ => 0 }
+}
+fn tristr(b: Option[Option[Option[String]]]) -> i64 {
+    match b { Option.Some(Option.Some(Option.Some(s))) => { if s.contains("envelope-") { 1 } else { 0 } } _ => -1 }
+}
+fn idc(o: Option[Option[Option[i64]]]) -> Option[Option[Option[i64]]] { o }
+fn deep(o: Option[Option[Option[i64]]]) -> i64 {
+    match o { Option.Some(Option.Some(Option.Some(x))) => x, _ => 0 }
+}
+fn fwd(o: Option[Option[Option[i64]]]) -> i64 { deep(o) }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        acc = acc + tri(a) - n;
+
+        let b: Option[Option[Option[Option[i64]]]] = Option.Some(Option.Some(Option.Some(Option.Some(n + i))));
+        acc = acc + quad(b) - n;
+
+        acc = acc + tristr(Option.Some(Option.Some(Option.Some(mkstr(n + i)))));
+
+        let d: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        acc = acc + duo(d) - n;
+
+        let p: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        let back = idc(p);
+        match back { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let f: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        acc = acc + fwd(f) - n;
+
+        i = i + 1;
+    }
+    println(acc);
+}

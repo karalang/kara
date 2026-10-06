@@ -1,0 +1,5 @@
+
+fn main() {
+    println((-2.5f64).abs());
+    println((2.5f64).abs());
+}

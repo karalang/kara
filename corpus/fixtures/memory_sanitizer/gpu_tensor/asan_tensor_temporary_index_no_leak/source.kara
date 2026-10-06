@@ -1,0 +1,14 @@
+
+fn main() {
+    let t: Tensor[f64, [3]] = Tensor.from([1.0, 2.0, 3.0]);
+    let mut acc: f64 = 0.0;
+    let mut k = 0;
+    while k < 50 {
+        acc = acc + (t * 2.0)[0];
+        acc = acc + ((t + t) * 2.0)[1];
+        acc = acc + Tensor.from([7.0, 8.0])[1];
+        acc = acc + (0.0 - t)[2];
+        k = k + 1;
+    }
+    println(f"{acc}");
+}

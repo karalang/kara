@@ -1,0 +1,12 @@
+
+fn main() {
+    let v = Vector[f32, 4].from_array([2.5f32, -2.5f32, 2.7f32, -2.3f32]);
+    let fl = v.floor();
+    println(fl[0]); println(fl[1]);
+    let ce = v.ceil();
+    println(ce[0]); println(ce[1]);
+    let ro = v.round();
+    println(ro[0]); println(ro[1]);
+    let tr = v.trunc();
+    println(tr[0]); println(tr[1]);
+}

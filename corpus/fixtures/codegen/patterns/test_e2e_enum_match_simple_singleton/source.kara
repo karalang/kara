@@ -1,0 +1,11 @@
+
+#[derive(Hash, Eq)]
+enum Color { Red, Green, Blue }
+
+fn main() {
+    let g: Color = Color.Green;
+    match g {
+        Color.Green => println(11_i64),
+        _ => println(99_i64),
+    }
+}

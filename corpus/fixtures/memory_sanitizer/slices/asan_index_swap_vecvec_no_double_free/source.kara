@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut v: Vec[Vec[i64]] = [[10, 11], [20, 21], [30, 31]];
+    let t = v[0].clone();
+    v[0] = v[1].clone();
+    v[1] = t;
+    println(v[0][0]);
+    println(v[1][0]);
+    println(v[2][0]);
+}

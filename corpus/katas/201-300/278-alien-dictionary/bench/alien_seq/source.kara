@@ -1,0 +1,154 @@
+// Sequential twin of alien.kara — identical apart from the missing
+// `#[par_order_free]`.
+//
+// THE TOPOLOGICAL SORT IS NOT THE WORKLOAD. It runs over 26 letters: O(26²)
+// however many words you feed it, which is a rounding error. All the time is in
+// PHASE 1 — walking adjacent word pairs to find each first difference — and that
+// is O(total input length), so the workload is a big dictionary, not a big
+// alphabet.
+//
+// THE WORDS ARE GENERATED AND THEN SORTED UNDER A PLANTED ALPHABET, so the input
+// is a genuine dictionary rather than a list that fails on its second pair. An
+// unsorted list would make every lane return "" after a handful of comparisons
+// and measure nothing. Sorting is done once, outside the timed comparison, by
+// construction: words are emitted in planted-alphabet order directly.
+//
+// LONG SHARED PREFIXES ARE THE POINT. Each word shares a prefix with its
+// neighbour, so finding the first difference actually costs something. Draw
+// words independently at random and almost every adjacent pair differs at
+// position 0, the scan exits immediately, and the bench measures loop overhead
+// instead of the comparison it is supposed to.
+//
+// PARALLEL LANE. Edge extraction over pairs is not a recognized reduction shape
+// — it ORs into a shared 676-entry matrix — so the fan-out is over independent
+// DICTIONARIES, the same instance split kata 277 uses. Each of the 48 dictionary
+// instances is solved end to end by one branch.
+
+fn solve(words: ref Vec[String]) -> String {
+    let mut present: Vec[bool] = Vec.new();
+    let mut indeg: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < 26 { present.push(false); indeg.push(0); z = z + 1; }
+    let mut adj: Vec[bool] = Vec.new();
+    let mut y = 0;
+    while y < 676 { adj.push(false); y = y + 1; }
+
+    let mut w = 0;
+    while w < words.len() {
+        let b = words[w].bytes();
+        let mut i = 0;
+        while i < b.len() { present[(b[i] as i64) - 97] = true; i = i + 1; }
+        w = w + 1;
+    }
+    let mut p = 0;
+    while p + 1 < words.len() {
+        let a = words[p].bytes();
+        let c = words[p + 1].bytes();
+        let mut k = 0;
+        let mut found = false;
+        let mut shorter = a.len();
+        if c.len() < shorter { shorter = c.len(); }
+        while k < shorter {
+            if a[k] != c[k] {
+                let u = (a[k] as i64) - 97;
+                let v = (c[k] as i64) - 97;
+                if not adj[u * 26 + v] {
+                    adj[u * 26 + v] = true;
+                    indeg[v] = indeg[v] + 1;
+                }
+                found = true;
+                k = shorter;
+            } else {
+                k = k + 1;
+            }
+        }
+        if not found and a.len() > c.len() { return ""; }
+        p = p + 1;
+    }
+
+    let mut out: String = "";
+    let mut done: Vec[bool] = Vec.new();
+    let mut d = 0;
+    while d < 26 { done.push(false); d = d + 1; }
+    let mut remaining = 0;
+    let mut r = 0;
+    while r < 26 { if present[r] { remaining = remaining + 1; } r = r + 1; }
+    while remaining > 0 {
+        let mut pick = -1;
+        let mut s = 0;
+        while s < 26 {
+            if present[s] and not done[s] and indeg[s] == 0 and pick < 0 { pick = s; }
+            s = s + 1;
+        }
+        if pick < 0 { return ""; }
+        done[pick] = true;
+        out = out + letter(pick);
+        let mut t = 0;
+        while t < 26 {
+            if adj[pick * 26 + t] { indeg[t] = indeg[t] - 1; }
+            t = t + 1;
+        }
+        remaining = remaining - 1;
+    }
+    return out;
+}
+
+fn letter(i: i64) -> String {
+    let alphabet: String = "abcdefghijklmnopqrstuvwxyz";
+    return alphabet.substring(i, i + 1);
+}
+
+// A dictionary of `count` words over the first `alpha` letters of a REVERSED
+// alphabet, emitted already in that alphabet's order: the words are the
+// base-`alpha` numerals of 0..count, most-significant digit first, mapped so
+// that digit 0 is the alphabet's first letter. Consecutive numerals share long
+// prefixes, which is what makes the first-difference scan cost anything.
+fn make_dict(count: i64, alpha: i64, width: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut n = 0;
+    while n < count {
+        let mut s: String = "";
+        let mut rem = n;
+        let mut pos = 0;
+        let mut digits: Vec[i64] = Vec.new();
+        while pos < width {
+            digits.push(rem % alpha);
+            rem = rem / alpha;
+            pos = pos + 1;
+        }
+        let mut q = width - 1;
+        while q >= 0 {
+            s = s + letter((alpha - 1) - digits[q]);
+            q = q - 1;
+        }
+        out.push(s);
+        n = n + 1;
+    }
+    return out;
+}
+
+fn main() {
+    let instances = 48;
+    let words = 250000;
+    let alpha = 6;
+    let width = 8;
+
+    // BUILD ONCE, PUNCH 48 TIMES. Constructing the dictionary is string work,
+    // not the algorithm; leaving it inside the loop would have the bench measure
+    // allocation alongside the scan it is supposed to time.
+    let dict = make_dict(words, alpha, width);
+
+    let mut parts: Vec[i64] = Vec.new();
+    for i in 0..instances {
+        let ans = solve(dict);
+        parts.push((i * 1000003 + ans.len()) % 1000000007);
+    }
+
+    let mut sink = 0;
+    let mut k = 0;
+    while k < parts.len() {
+        sink = (sink + parts[k]) % 1000000007;
+        k = k + 1;
+    }
+    println(sink);
+}

@@ -1,0 +1,13 @@
+source = "tests/interpreter/patterns.rs::test_match_arm_element_forwarded_or_stashed_keeps_one_owner_interp"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

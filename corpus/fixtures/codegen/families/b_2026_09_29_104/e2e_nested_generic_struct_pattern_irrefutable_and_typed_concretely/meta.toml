@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_104.rs::e2e_nested_generic_struct_pattern_irrefutable_and_typed_concretely"
+dedup_of = ["tests/interpreter/families/b_2026_09_29_104.rs::interp_nested_generic_struct_pattern_irrefutable_and_typed_concretely", "tests/memory_sanitizer/families/b_2026_09_29_104.rs::asan_nested_generic_struct_pattern_irrefutable_and_typed_concretely"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

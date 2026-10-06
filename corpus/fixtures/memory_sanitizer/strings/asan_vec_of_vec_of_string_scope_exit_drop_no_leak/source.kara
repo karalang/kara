@@ -1,0 +1,20 @@
+
+fn build(n: i64) -> Vec[Vec[String]] {
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push(f"alpha string padded out well beyond thirty-six bytes {n}");
+    a.push(f"beta string padded out well beyond thirty-six bytes {n}");
+    outer.push(a);
+    let mut b: Vec[String] = Vec.new();
+    b.push(f"gamma string padded out well beyond thirty-six byte {n}");
+    outer.push(b);
+    return outer;
+}
+fn main() {
+    let mut i = 0;
+    while i < 4 {
+        let vv = build(i);
+        println(vv.len());
+        i = i + 1;
+    };
+}

@@ -1,0 +1,18 @@
+
+struct Box[T] { v: T }
+fn take[T](b: Box[T]) -> T { b.v }
+fn takeu[U](b: Box[U]) -> U { b.v }
+fn main() {
+    // Runtime-derived payload — a constant-folded one is a dead allocation the
+    // optimizer deletes, and the fixture then passes vacuously against the
+    // unfixed compiler (B-2026-08-04-17).
+    let n: i64 = env.args().len();
+    let mut i: i64 = 0;
+    while i < 4 {
+        println(take(Box { v: "generic-literal-payload-past-inline".repeat(n) }).len());
+        let bx = Box { v: "generic-named-payload-past-inlin".repeat(n) };
+        println(take(bx).len());
+        println(takeu(Box { v: "diverging-param-name-payload-xy".repeat(n) }).len());
+        i = i + 1;
+    }
+}

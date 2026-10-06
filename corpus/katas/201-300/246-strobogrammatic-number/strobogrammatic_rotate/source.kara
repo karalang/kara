@@ -1,0 +1,99 @@
+// LeetCode 246 — Strobogrammatic Number, the build-and-compare phrasing.
+//
+// Instead of testing pairs, actually PERFORM the rotation and compare. Rotating
+// the page maps each digit and reverses the order, so:
+//
+//     rotated = reverse(map(num))       strobogrammatic  <=>  rotated == num
+//
+// This is the phrasing that makes the reversal impossible to forget, because
+// you have to write it down. The two-pointer version hides it inside the index
+// arithmetic (`rot(num[lo]) == num[hi]`), which reads fine and is easy to get
+// subtly wrong; here `.reverse()` is right there in the pipeline.
+//
+// It costs O(n) space and two passes where the two-pointer form uses O(1) and
+// bails on the first bad digit, so it is the slower way to answer the question.
+// It earns its place as an independent implementation — the two must agree on
+// every input, which is what the randomized differential checks — and as a
+// distinct compiler surface: `Vec[char]` construction, `.reverse()`, and
+// element-wise `Vec[char]` equality rather than index-pair comparison.
+
+fn rotate_digit(c: char) -> Option[char] {
+    if c == '0' { return Some('0'); }
+    if c == '1' { return Some('1'); }
+    if c == '8' { return Some('8'); }
+    if c == '6' { return Some('9'); }
+    if c == '9' { return Some('6'); }
+    return None;
+}
+
+fn is_strobogrammatic(num: ref String) -> bool {
+    let cs: Vec[char] = num.chars().collect();
+    let n = cs.len();
+
+    // Map every digit first. A digit that does not survive rotation ends the
+    // question immediately — there is no rotated string to compare against.
+    let mut mapped: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        match rotate_digit(cs[i]) {
+            None => { return false; }
+            Some(r) => { mapped.push(r); }
+        }
+        i = i + 1;
+    }
+
+    // Rotating the page also reverses the order — this is the half that the
+    // two-pointer form buries in its indices.
+    mapped.reverse();
+
+    let mut j = 0;
+    while j < n {
+        if mapped[j] != cs[j] {
+            return false;
+        }
+        j = j + 1;
+    }
+    return true;
+}
+
+fn report(num: ref String) {
+    if is_strobogrammatic(num) {
+        println(f"{num} : true");
+    } else {
+        println(f"{num} : false");
+    }
+}
+
+fn main() {
+    report("0");
+    report("1");
+    report("8");
+    report("6");
+    report("9");
+    report("2");
+
+    report("69");
+    report("88");
+    report("962");
+
+    report("96");
+    report("11");
+    report("18");
+    report("00");
+
+    report("101");
+    report("181");
+    report("609");
+    report("916");
+    report("619");
+    report("689");
+
+    report("6009");
+    report("6996");
+    report("1001");
+    report("88088");
+    report("69896");
+
+    report("10501");
+    report("6739");
+}

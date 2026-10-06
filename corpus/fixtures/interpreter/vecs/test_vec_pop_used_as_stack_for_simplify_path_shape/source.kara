@@ -1,0 +1,15 @@
+
+        fn main() {
+            let mut stack: Vec[i64] = Vec.new();
+            stack.push(1);
+            stack.push(2);
+            stack.push(3);
+            let _ = stack.pop();
+            stack.push(4);
+            let _ = stack.pop();
+            let _ = stack.pop();
+            println(stack.len());
+            println(stack.pop());
+            println(stack.pop());
+        }
+    

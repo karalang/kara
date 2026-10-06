@@ -1,0 +1,14 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn consume(x: Option[R]) {
+    let l = R { id: 9 };
+    println("in");
+}
+fn main() {
+    let mut x = Some(R { id: 5 });
+    for i in 0..2 {
+        consume(x);
+        x = Some(R { id: i + 0 });
+    }
+    println("done");
+}

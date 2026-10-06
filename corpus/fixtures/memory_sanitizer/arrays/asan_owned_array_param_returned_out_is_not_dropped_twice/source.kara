@@ -1,0 +1,12 @@
+fn pass(a: Array[String, 2]) -> Array[String, 2] { return a; }
+fn mk(i: i64) -> Array[String, 2] {
+    let x = f"a{i}";
+    let y = f"b{i}";
+    let a: Array[String, 2] = [x, y];
+    return a;
+}
+fn main() {
+    let mut i = 0i64; let mut n = 0i64;
+    while i < 50i64 { let r = pass(mk(i)); n = n + r[0].len(); i = i + 1i64; }
+    println(n);
+}

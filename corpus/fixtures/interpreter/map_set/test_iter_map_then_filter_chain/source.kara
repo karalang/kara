@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    for n in v.iter().map(|x| x * 3).filter(|y| y > 5) {
+        println(n);
+    }
+}

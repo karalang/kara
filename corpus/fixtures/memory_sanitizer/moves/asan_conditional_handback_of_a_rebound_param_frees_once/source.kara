@@ -1,0 +1,44 @@
+
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
+struct N { id: i64, name: String, next: Option[N] }
+impl Drop for N { fn drop(mut ref self) { println(f"dN{self.id}") } }
+fn mkn(i: i64) -> N { return N { id: i, name: f"h{i}", next: Option.None }; }
+struct P { id: i64, name: String }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+fn mkP(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
+
+fn reb(r: R, c: bool) -> R { let m = r; if c { return m; } return mk(99); }
+fn bare(r: R, c: bool) -> R { if c { return r; } return mk(98); }
+fn arm(r: R, c: bool) -> R { let m = r; match c { true => m, false => mk(97) } }
+fn two(r: R, c: bool) -> R { let m = r; let n = m; if c { return n; } return mk(96); }
+fn rd(r: R, c: bool) -> R { let m = r; if c { return m; } println(f"in={m.name}"); return mk(95); }
+fn selfref(n: N, c: bool) -> N { let m = n; if c { return m; } return mkn(94); }
+fn copyok(p: P, c: bool) -> P { let m = p; if c { return m; } return mkP(93); }
+fn never(r: R, c: bool) -> i64 { let m = r; if c { return m.id; } return 0; }
+
+fn main() {
+  let a = reb(mk(1), true);  println(f"a={a.inner.v}");
+  let b = reb(mk(2), false); println(f"b={b.inner.v}");
+  let c = bare(mk(3), true);  println(f"c={c.inner.v}");
+  let d = bare(mk(4), false); println(f"d={d.inner.v}");
+  let e = arm(mk(5), true);  println(f"e={e.inner.v}");
+  let f = arm(mk(6), false); println(f"f={f.inner.v}");
+  let g = two(mk(7), true);  println(f"g={g.inner.v}");
+  let h = two(mk(8), false); println(f"h={h.inner.v}");
+  let i2 = rd(mk(9), true);  println(f"i={i2.inner.v}");
+  let j = rd(mk(10), false); println(f"j={j.inner.v}");
+  let m2 = selfref(mkn(13), true);  println(f"m={m2.name}");
+  let n2 = selfref(mkn(14), false); println(f"n={n2.name}");
+  let o = copyok(mkP(15), true);  println(f"o={o.name}");
+  let p2 = copyok(mkP(16), false); println(f"p={p2.name}");
+  println(f"q={never(mk(17), true)}");
+  println(f"r={never(mk(18), false)}");
+  reb(mk(19), true);
+  reb(mk(20), false);
+  let mut z = 0;
+  while z < 2 { let w = reb(mk(21), z == 0); println(f"w={w.inner.v}"); z = z + 1; }
+  println("end");
+}

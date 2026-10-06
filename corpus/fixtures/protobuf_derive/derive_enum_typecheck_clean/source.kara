@@ -1,0 +1,11 @@
+
+enum Status { Pending, Active }
+
+#[derive(Message)]
+struct Task { status: Status }
+
+fn main() {
+    let t = Task { status: Status.Active };
+    let back = Task.decode(t.encode());
+    println(match back.status { Status.Active => "a", _ => "?" });
+}

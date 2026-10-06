@@ -1,0 +1,10 @@
+
+struct W { v: i64 }
+trait Dbl { fn twice(self) -> Self; }
+impl W { fn make() -> Self { W { v: 7 } } }
+impl Dbl for W { fn twice(self) -> Self { W { v: self.v + self.v } } }
+fn main() {
+    let c = W.make();
+    let d = c.twice();
+    println(d.v);
+}

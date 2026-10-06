@@ -1,0 +1,20 @@
+shared enum U { Ua, Ub }
+impl Drop for U { fn drop(mut ref self) { println(f"  dU") } }
+shared enum V { Va, Vb }
+par enum W { Wa, Wb }
+impl Drop for W { fn drop(mut ref self) { println(f"  dW") } }
+enum Plain { Pa, Pb }
+impl Drop for Plain { fn drop(mut ref self) { println(f"  dP") } }
+fn tag(u: ref U) -> i64 { match u { U.Ua => { return 1 } U.Ub => { return 0 } } }
+fn main() {
+    println("qual");     { let s = U.Ua; println("  mid") } println("  out")
+    println("bare");     { let s = Ub; println("  mid") } println("  out")
+    println("two");      { let s = U.Ua; let t = U.Ub; println("  mid") } println("  out")
+    println("alias");    { let s = U.Ua; let t = s; println("  mid") } println("  out")
+    println("uselater"); { let s = U.Ua; println("  mid"); println(f"  t{tag(s)}") } println("  out")
+    println("reassign"); { let mut s = U.Ua; s = U.Ub; println("  mid") } println("  out")
+    println("nodrop");   { let s = V.Va; println("  mid") } println("  out")
+    println("par");      { let s = W.Wa; println("  mid") } println("  out")
+    println("plain");    { let s = Plain.Pa; println("  mid") } println("  out")
+    println("end")
+}

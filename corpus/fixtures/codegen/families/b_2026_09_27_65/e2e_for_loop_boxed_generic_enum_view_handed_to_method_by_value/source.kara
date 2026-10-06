@@ -1,0 +1,62 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
+fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}{r.s}"), Ho.Empty => println("e") } }
+struct K { k: i64 }
+impl K {
+    fn take(self, h: Ho[S]) { shows(h) }
+    fn takr(ref self, h: Ho[S]) { shows(h) }
+    fn st(h: Ho[S]) { shows(h) }
+    fn id(h: Ho[S]) -> Ho[S] { return h }
+}
+fn mkv(a: i64, b: i64) -> Vec[Ho[S]] {
+    let mut v: Vec[Ho[S]] = Vec.new();
+    v.push(Ho.Full(mks(a)));
+    v.push(Ho.Empty);
+    v.push(Ho.Full(mks(b)));
+    return v
+}
+fn main() {
+    println("method");
+    {
+        let v = mkv(1, 2);
+        for h in v { let k = K { k: 1 }; k.take(h) }
+        println(f"n{v.len()}");
+    }
+    println("refself");
+    {
+        let v = mkv(3, 4);
+        let k = K { k: 2 };
+        for h in v { k.takr(h) }
+        println(f"n{v.len()}");
+    }
+    println("static");
+    {
+        let v = mkv(5, 6);
+        for h in v { K.st(h) }
+        println(f"n{v.len()}");
+    }
+    println("twice");
+    {
+        let v = mkv(7, 8);
+        let k = K { k: 3 };
+        for h in v { K.st(h); K.st(h); k.takr(h) }
+        println(f"n{v.len()}");
+    }
+    println("handback");
+    {
+        let v = mkv(9, 10);
+        for h in v { let j = K.id(h); shows(j) }
+        println(f"n{v.len()}");
+    }
+    println("local");
+    {
+        let h: Ho[S] = Ho.Full(mks(11));
+        K.st(h);
+        let g: Ho[S] = Ho.Full(mks(12));
+        let j = K.id(g);
+        shows(j);
+    }
+    println("end")
+}

@@ -1,0 +1,100 @@
+// Benchmark workload for LeetCode #210 — Course Schedule II.
+//
+// Build-once + punch: a large random DAG (edges always low->high index, so it is
+// acyclic by construction) is built ONCE into CSR adjacency. Kahn's topological
+// sort is then run PASSES times; each pass copies the base in-degrees, "punches"
+// one course by inflating its in-degree so it (and everything downstream) is
+// starved from the order — exactly the kata's cycle-becomes-partial-order path —
+// and folds the emitted order into a checksum. The queue relaxation is a
+// data-dependent scatter (indeg[nb]-- then a gated push) that does NOT vectorize.
+// Sink = sum over passes of (emitted count + order checksum).
+
+fn main() {
+    let n = 20000;
+    let e = 80000;
+    let passes = 800;
+    let mod_v = 1000000007;
+    let big = 1000000;
+
+    let mut eb: Vec[i64] = Vec.new();
+    let mut ea: Vec[i64] = Vec.new();
+    let mut outdeg: Vec[i64] = Vec.new();
+    let mut indeg0: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { outdeg.push(0); indeg0.push(0); i = i + 1; }
+
+    let mut state = 12345;
+    let mut k = 0;
+    while k < e {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let b = state % (n - 1);                 // 0 .. n-2
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let a = b + 1 + state % (n - 1 - b);  // b+1 .. n-1 (b < a => DAG)
+        eb.push(b);
+        ea.push(a);
+        outdeg[b] = outdeg[b] + 1;
+        indeg0[a] = indeg0[a] + 1;
+        k = k + 1;
+    }
+
+    // CSR build.
+    let mut adj_start: Vec[i64] = Vec.new();
+    adj_start.push(0);
+    let mut c = 0;
+    while c < n { adj_start.push(adj_start[c] + outdeg[c]); c = c + 1; }
+    let mut adj_flat: Vec[i64] = Vec.new();
+    let mut f = 0;
+    while f < e { adj_flat.push(0); f = f + 1; }
+    let mut cursor: Vec[i64] = Vec.new();
+    let mut cc = 0;
+    while cc < n { cursor.push(adj_start[cc]); cc = cc + 1; }
+    let mut ff = 0;
+    while ff < e {
+        let src = eb[ff];
+        adj_flat[cursor[src]] = ea[ff];
+        cursor[src] = cursor[src] + 1;
+        ff = ff + 1;
+    }
+
+    let mut indeg: Vec[i64] = Vec.new();
+    let mut queue: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < n { indeg.push(0); queue.push(0); z = z + 1; }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let mut ci = 0;
+        while ci < n { indeg[ci] = indeg0[ci]; ci = ci + 1; }
+        let blocked = p % n;
+        indeg[blocked] = indeg[blocked] + big;
+
+        let mut head = 0;
+        let mut tail = 0;
+        let mut c2 = 0;
+        while c2 < n {
+            if indeg[c2] == 0 { queue[tail] = c2; tail = tail + 1; }
+            c2 = c2 + 1;
+        }
+        let mut checksum = 0;
+        let mut cnt = 0;
+        while head < tail {
+            let node = queue[head];
+            head = head + 1;
+            checksum = (checksum + node * (cnt + 1)) % mod_v;
+            cnt = cnt + 1;
+            let mut j = adj_start[node];
+            let end = adj_start[node + 1];
+            while j < end {
+                let nb = adj_flat[j];
+                indeg[nb] = indeg[nb] - 1;
+                if indeg[nb] == 0 { queue[tail] = nb; tail = tail + 1; }
+                j = j + 1;
+            }
+        }
+        sink = sink + cnt + checksum;
+        p = p + 1;
+    }
+
+    println(sink);
+}

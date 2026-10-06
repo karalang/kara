@@ -1,0 +1,8 @@
+
+struct Holder { s: String }
+struct Box[T] { v: T }
+impl[T: Copy] Box[T] { fn get(ref self) -> bool { return true; } }
+fn main() {
+    let b = Box { v: Holder { s: "x".to_string() } };
+    println(f"{b.get()}");
+}

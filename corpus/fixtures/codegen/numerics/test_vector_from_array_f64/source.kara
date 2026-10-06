@@ -1,0 +1,6 @@
+
+fn main() {
+    let v = Vector[f64, 2].from_array([1.5, 2.5]);
+    println(v[0]);
+    println(v[1]);
+}

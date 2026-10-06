@@ -1,0 +1,18 @@
+struct S1 { v: i64, s: String }
+impl Drop for S1 { fn drop(mut ref self) { println(f"  dS{self.v}") } }
+enum Mono { P(S1), Q }
+enum Ht { P((S1, S1)), Q }
+enum He { P((Mono, i64)), Q }
+enum Hn { P(((S1, i64), S1)), Q }
+enum Ho { P((Option[S1], i64)), Q }
+enum Hs { P { t: (S1, S1), n: i64 }, Q }
+enum Hd { P((S1, S1)), Q }
+impl Drop for Hd { fn drop(mut ref self) { println("  dHd") } }
+fn takt(t: (S1, S1)) -> i64 { t.0.v }
+fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
+fn mk(v: i64) -> Ht { Ht.P((s(v), s(v + 1))) }
+fn main() {
+    println("enumelem"); { let h = He.P((Mono.P(s(1)), 2)); println("  x") }
+    println("optelem"); { let h = Ho.P((Option.Some(s(4)), 1)); println("  x") }
+    println("end")
+}

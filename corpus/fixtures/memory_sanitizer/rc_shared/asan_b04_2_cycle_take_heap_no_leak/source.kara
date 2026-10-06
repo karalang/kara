@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let v: Vec[String] = Vec[
+            "cycle-take-alpha-aaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "cycle-take-bravo-bbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()
+        ];
+        let r: Vec[String] = v.iter().cycle().take(5i64).collect();
+        println(f"{r.len()} {r[0i64]} {r[4i64]} {v.len()}");
+        round = round + 1i64;
+    }
+}

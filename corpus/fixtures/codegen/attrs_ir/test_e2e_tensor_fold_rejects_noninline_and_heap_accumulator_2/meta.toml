@@ -1,0 +1,13 @@
+source = "tests/codegen/attrs_ir.rs::test_e2e_tensor_fold_rejects_noninline_and_heap_accumulator"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["closure", "deferred:tensor"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

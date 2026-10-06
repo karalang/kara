@@ -1,0 +1,23 @@
+
+enum Ve { A(String), B }
+enum Vv { A(Vec[i64]), B }
+fn mkVe(n: i64) -> Ve { return Ve.A(f"payloadpayload{n}") }
+fn mkVv(n: i64) -> Vv { let mut v: Vec[i64] = Vec.new(); v.push(n); v.push(n); return Vv.A(v) }
+fn takeIf(o: Ve) -> String { if let Ve.A(s) = o { s } else { "none".to_string() } }
+fn takeMatch(o: Ve) -> String { match o { Ve.A(s) => s, Ve.B => "none".to_string() } }
+fn takeVec(o: Vv) -> Vec[i64] { if let Vv.A(s) = o { s } else { Vec.new() } }
+fn main() {
+    let mut i = 0; let mut t = 0; let mut u = 0; let mut w = 0;
+    while i < 20 {
+        t = t + takeIf(mkVe(i)).len();
+        u = u + takeMatch(mkVe(i)).len();
+        w = w + takeVec(mkVv(i)).len();
+        i = i + 1;
+    }
+    println(f"t {t}");
+    println(f"u {u}");
+    println(f"w {w}");
+    let v = mkVe(3);
+    println(f"named {takeIf(v).len()}");
+    println(f"none {takeIf(Ve.B).len()}");
+}

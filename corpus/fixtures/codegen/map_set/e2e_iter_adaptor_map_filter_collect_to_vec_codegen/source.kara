@@ -1,0 +1,15 @@
+
+fn main() {
+    let s: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64, 5i64];
+    let doubled: Vec[i64] = s.iter().map(|n| n * 2i64).collect();
+    println(f"{doubled[0]} {doubled[4]}");
+    let big: Vec[i64] = s.iter().filter(|x| x > 2i64).collect();
+    println(f"{big.len()} {big[0]}");
+    let chain: Vec[i64] = s.iter().filter(|x| x > 2i64).map(|y| y * 10i64).collect();
+    println(f"{chain.len()} {chain[0]} {chain[2]}");
+    let strs: Vec[String] = s.iter().map(|n| n.to_string()).collect();
+    println(f"{strs[0]}{strs[4]}");
+    let words: Vec[String] = Vec["apple".to_string(), "berry".to_string(), "fig".to_string()];
+    let lens: Vec[i64] = words.iter().map(|w| w.len()).collect();
+    println(f"{lens[0]} {lens[1]} {lens[2]}");
+}

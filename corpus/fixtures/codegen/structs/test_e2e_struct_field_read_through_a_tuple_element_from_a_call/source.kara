@@ -1,0 +1,43 @@
+
+struct Other { a: i64, n: i64 }
+struct Tag { n: i64, a: i64 }
+struct Inner { m: i64 }
+struct Outer { inner: Inner, k: i64 }
+
+struct Holder { seed: i64 }
+impl Holder {
+    fn pair(ref self) -> (Tag, i64) { return (Tag { n: self.seed, a: 51 }, 2); }
+    fn origin() -> (Tag, i64) { return (Tag { n: 100, a: 52 }, 3); }
+}
+
+fn make() -> (Tag, i64) { return (Tag { n: 7, a: 99 }, 1); }
+fn deep() -> (Outer, i64) { return (Outer { inner: Inner { m: 5 }, k: 6 }, 8); }
+
+fn main() {
+    let x = (Other { a: 5, n: 42 }, 0);
+    println(x.0.n);
+
+    let q = make();
+    println(q.0.n);
+    println(q.0.a);
+    println(make().0.n);
+
+    {
+        let x = make();
+        println(x.0.n);
+    }
+    println(x.0.n);
+
+    println(deep().0.inner.m);
+    let d = deep();
+    println(d.0.inner.m);
+    println(d.0.k);
+
+    let h = Holder { seed: 11 };
+    let p = h.pair();
+    println(p.0.n);
+    println(h.pair().0.n);
+    println(Holder.origin().0.n);
+    let o = Holder.origin();
+    println(o.0.n);
+}

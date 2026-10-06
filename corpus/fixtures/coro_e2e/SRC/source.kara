@@ -1,0 +1,11 @@
+
+            fn serve(l: TcpListener) {
+                let s = l.accept().unwrap();
+                println(1);
+                println(2);
+            }
+            fn main() {
+                let l = TcpListener.bind("127.0.0.1:0").unwrap();
+                serve(l);
+            }
+        

@@ -1,0 +1,24 @@
+
+struct R { id: i64, names: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, names: [f"a{i}", f"b{i}"] }; }
+shared struct Sh { v: i64 }
+struct D { s: Sh, tag: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.tag}") } }
+fn mkd(i: i64) -> D { return D { s: Sh { v: i }, tag: f"x{i}" }; }
+fn passG[T](x: T) -> T { println("inP"); return x; }
+fn passN(x: R) -> R { println("inN"); return x; }
+fn maybeG[T](x: T, k: bool) -> T { println("inM"); if k { return x; } return x; }
+fn scalarG[T](x: T) -> i64 { println("inS"); return 3; }
+fn main() {
+  let g1 = mk(82); let _ = passG(g1);          println("a");
+  let g2 = mk(88); let o2 = passG(g2);         println(f"k{o2.id}");
+  let g3 = mk(89); let _ = maybeG(g3, true);   println("c");
+  let g4 = mk(90); let o4 = maybeG(g4, false); println(f"m{o4.id}");
+  let g5 = mk(91); let _ = passN(g5);          println("e");
+  let g6 = mk(92); let _ = scalarG(g6);        println("f");
+  let d7 = mkd(93); let _ = passG(d7);         println("g");
+  let _ = passG(mk(94));                       println("h");
+  let mut i = 0; while i < 3 { let gl = mk(95 + i); let _ = passG(gl); i = i + 1; } println("j");
+  println("end");
+}

@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/concurrency.rs::asan_vec_resize_and_append_are_seeded_against_the_auto_parallelizer"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,7 @@
+
+fn main() {
+    let a = "abc";
+    let b = "abd";
+    if a < b { println(1); } else { println(0); }
+    if b > a { println(1); } else { println(0); }
+}

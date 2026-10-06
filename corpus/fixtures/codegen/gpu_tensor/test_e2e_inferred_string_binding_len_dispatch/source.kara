@@ -1,0 +1,6 @@
+
+fn make() -> String { "fl" }
+fn main() {
+    let r = make();
+    println(r.len());
+}

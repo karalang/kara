@@ -1,0 +1,220 @@
+// LeetCode #23: Merge k Sorted Lists — divide and conquer, O(N log k)
+// (N = total nodes across all k lists).
+//
+// Given a Vec of k sorted linked-list heads, splice all of them into one
+// sorted list. Like kata [#21](../21-merge-two-sorted-lists/) — whose
+// two-list merge is the entire inner kernel here — the result reuses the
+// input nodes; no node is allocated.
+//
+// The naive fold (merge list 0 with list 1, that result with list 2, …)
+// re-walks the growing accumulator on every step: O(kN). Pairwise
+// divide-and-conquer fixes the imbalance by merging lists of *equal*
+// pedigree: round 1 merges neighbors at distance 1 (k → k/2 lists),
+// round 2 at distance 2 (k/2 → k/4), and so on — log k rounds, each
+// touching every live node once, so O(N log k) total.
+//
+// The merging is done in place over the input Vec with the classic
+// interval walk: after the round with interval d, slot i (i a multiple
+// of 2d) holds the merge of old slots i and i+d. Source slots at odd
+// multiples of d are consumed exactly once and never read again — their
+// stale handles simply sit in the Vec until it drops. The answer ends in
+// slot 0.
+//
+// `<=` on the tie in merge_two_lists keeps each pairwise merge stable,
+// and the interval pairing always merges a lower-indexed list as the
+// left operand, so the k-way merge is stable overall: equal keys come
+// out in input-list order. (Contrast heap.kara, where pop order among
+// equal keys follows heap shape, not list index.)
+//
+// LeetCode bounds: 0 ≤ k ≤ 10^4 lists, each ≤ 500 nodes, total ≤ 10^4,
+// values in [-10^4, 10^4] — i64 for corpus uniformity, as in kata #21.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+// Kata #21's iterative dummy-anchored splice, verbatim — the inner kernel.
+fn merge_two_lists(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+
+    loop {
+        if let Some(na) = a {
+            if let Some(nb) = b {
+                // `<=` keeps the merge stable on ties (left list wins).
+                if na.val <= nb.val {
+                    tail.next = Some(na);
+                    tail = na;
+                    a = na.next;
+                } else {
+                    tail.next = Some(nb);
+                    tail = nb;
+                    b = nb.next;
+                }
+            } else {
+                tail.next = a;
+                break;
+            }
+        } else {
+            tail.next = b;
+            break;
+        }
+    }
+
+    dummy.next
+}
+
+fn merge_k_lists(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+    let mut work = lists;
+    let k = work.len();
+    if k == 0 {
+        return None;
+    }
+
+    // log k rounds of pairwise merges, in place: each round halves the
+    // number of live lists by merging slot i with slot i + interval.
+    let mut interval = 1;
+    while interval < k {
+        let mut i = 0;
+        while i + interval < k {
+            work[i] = merge_two_lists(work[i].clone(), work[i + interval].clone());
+            i = i + 2 * interval;
+        }
+        interval = 2 * interval;
+    }
+
+    work[0]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn main() {
+    // LeetCode example 1 — three lists, interleaved, with a cross-list tie.
+    let a1: Array[i64, 3] = [1, 4, 5];
+    let b1: Array[i64, 3] = [1, 3, 4];
+    let c1: Array[i64, 2] = [2, 6];
+    let mut lists1: Vec[Option[ListNode]] = Vec.new();
+    lists1.push(from_array(a1));
+    lists1.push(from_array(b1));
+    lists1.push(from_array(c1));
+    println(to_string(merge_k_lists(lists1))); // [1, 1, 2, 3, 4, 4, 5, 6]
+
+    // LeetCode example 2 — no lists at all (k = 0).
+    let lists2: Vec[Option[ListNode]] = Vec.new();
+    println(to_string(merge_k_lists(lists2))); // []
+
+    // LeetCode example 3 — one list, itself empty.
+    let mut lists3: Vec[Option[ListNode]] = Vec.new();
+    lists3.push(None);
+    println(to_string(merge_k_lists(lists3))); // []
+
+    // k = 1 — identity: the interval loop never runs.
+    let a4: Array[i64, 3] = [1, 2, 3];
+    let mut lists4: Vec[Option[ListNode]] = Vec.new();
+    lists4.push(from_array(a4));
+    println(to_string(merge_k_lists(lists4))); // [1, 2, 3]
+
+    // Empty lists surrounding one singleton.
+    let a5: Array[i64, 1] = [1];
+    let mut lists5: Vec[Option[ListNode]] = Vec.new();
+    lists5.push(None);
+    lists5.push(from_array(a5));
+    lists5.push(None);
+    println(to_string(merge_k_lists(lists5))); // [1]
+
+    // Disjoint ranges, deliberately out of order — every pairwise merge
+    // ends in a whole-suffix graft.
+    let a6: Array[i64, 3] = [7, 8, 9];
+    let b6: Array[i64, 3] = [1, 2, 3];
+    let c6: Array[i64, 3] = [4, 5, 6];
+    let mut lists6: Vec[Option[ListNode]] = Vec.new();
+    lists6.push(from_array(a6));
+    lists6.push(from_array(b6));
+    lists6.push(from_array(c6));
+    println(to_string(merge_k_lists(lists6))); // [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    // All keys equal — output is value-identical regardless of tie order.
+    let a7: Array[i64, 2] = [2, 2];
+    let b7: Array[i64, 1] = [2];
+    let c7: Array[i64, 3] = [2, 2, 2];
+    let mut lists7: Vec[Option[ListNode]] = Vec.new();
+    lists7.push(from_array(a7));
+    lists7.push(from_array(b7));
+    lists7.push(from_array(c7));
+    println(to_string(merge_k_lists(lists7))); // [2, 2, 2, 2, 2, 2]
+
+    // Negatives, including a duplicate inside one list.
+    let a8: Array[i64, 3] = [-10, -5, 0];
+    let b8: Array[i64, 2] = [-7, 3];
+    let c8: Array[i64, 2] = [-6, -6];
+    let mut lists8: Vec[Option[ListNode]] = Vec.new();
+    lists8.push(from_array(a8));
+    lists8.push(from_array(b8));
+    lists8.push(from_array(c8));
+    println(to_string(merge_k_lists(lists8))); // [-10, -7, -6, -6, -5, 0, 3]
+
+    // k = 6 (even, > 4) — exercises multiple full interval rounds.
+    let a9: Array[i64, 1] = [5];
+    let b9: Array[i64, 2] = [1, 6];
+    let c9: Array[i64, 1] = [3];
+    let d9: Array[i64, 2] = [2, 7];
+    let e9: Array[i64, 1] = [4];
+    let f9: Array[i64, 1] = [0];
+    let mut lists9: Vec[Option[ListNode]] = Vec.new();
+    lists9.push(from_array(a9));
+    lists9.push(from_array(b9));
+    lists9.push(from_array(c9));
+    lists9.push(from_array(d9));
+    lists9.push(from_array(e9));
+    lists9.push(from_array(f9));
+    println(to_string(merge_k_lists(lists9))); // [0, 1, 2, 3, 4, 5, 6, 7]
+
+    // Sharply uneven lengths — the long list's suffix grafts in one move.
+    let a10: Array[i64, 3] = [1, 10, 20];
+    let b10: Array[i64, 1] = [2];
+    let c10: Array[i64, 5] = [3, 4, 5, 6, 7];
+    let mut lists10: Vec[Option[ListNode]] = Vec.new();
+    lists10.push(from_array(a10));
+    lists10.push(from_array(b10));
+    lists10.push(from_array(c10));
+    println(to_string(merge_k_lists(lists10))); // [1, 2, 3, 4, 5, 6, 7, 10, 20]
+}

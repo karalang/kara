@@ -1,0 +1,9 @@
+fn main() {
+         let cmd = Command.new("/no/such/path/karac-test-nonexistent");
+         match cmd.spawn() {
+             Ok(_) => println("ok??"),
+             Err(IoError.NotFound) => println("not_found"),
+             Err(IoError.Other(_)) => println("other"),
+             Err(_) => println("other_err"),
+         }
+     }

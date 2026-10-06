@@ -1,0 +1,328 @@
+// LeetCode #319 — differential + property harness.
+//
+// Four arms, twelve properties.
+//
+//   arm A  Newton integer sqrt                 bulb_switcher.kara            ★
+//   arm B  count k with k*k <= n               bulb_switcher_count.kara
+//   arm C  simulate every round, then count    bulb_switcher_simulate.kara
+//   arm D  divisor-count parity per bulb       bulb_switcher_divisors.kara
+//
+// Arm C is the primary oracle: it runs the statement literally and knows
+// nothing about divisors, squares or square roots. Arm D is a second,
+// independent one — it knows about divisors but not about squares, so a
+// mistake in the "divisors pair up except at a square" argument shows as a
+// C-vs-D disagreement rather than hiding in a shared step.
+//
+//   P1   arm A agrees with the simulation
+//   P2   arm B agrees with the simulation
+//   P3   arm D agrees with the simulation
+//   P4   the answer is non-decreasing in n
+//   P5   f(n) - f(n-1) is 1 exactly at perfect squares and 0 everywhere else
+//   P6   f(n)^2 <= n < (f(n) + 1)^2 — the defining bracket of an integer sqrt
+//   P7   f(k*k) == k and f(k*k - 1) == k - 1, swept over k
+//   P8   in the final simulated state, bulb b is on iff b is a perfect square
+//   P9   b has an odd number of divisors iff b is a perfect square
+//   P10  after r rounds, bulb b is on iff b has an odd number of divisors <= r
+//   P11  the final state does not depend on the ORDER the rounds are run in —
+//        reversed, and a seeded shuffle
+//   P12  running the whole round set twice returns every bulb to off
+//
+// P10 is the one that watches the machine rather than the answer: it pins the
+// INTERMEDIATE state after every prefix of rounds, so an off-by-one in the
+// round loop is caught at the round it happens rather than being absorbed into
+// a final count that happens to come out right.
+
+const EXHAUSTIVE: i64 = 520;
+const SQ_K: i64 = 20000;
+const PARTIAL_N: i64 = 70;
+
+// --------------------------------------------------------------- arms ---
+
+// Only the `n == 0` half of this guard is load-bearing — n = 1 converges on
+// its own — which mutation M1 established by weakening it to `n < 1` and
+// surviving the whole sweep. See the README's mutation table.
+fn isqrt(n: i64) -> i64 {
+    if n < 2 { return n; }
+    let mut x = n;
+    loop {
+        let y = (x + n / x) / 2;
+        if y >= x { break; }
+        x = y;
+    }
+    return x;
+}
+
+fn solve_newton(n: i64) -> i64 {
+    return isqrt(n);
+}
+
+fn solve_count(n: i64) -> i64 {
+    let mut k = 0;
+    while (k + 1) * (k + 1) <= n { k += 1; }
+    return k;
+}
+
+fn fresh(n: i64) -> Vec[bool] {
+    let mut on: Vec[bool] = Vec.new();
+    for _ in 0..(n + 1) { on.push(false); }
+    return on;
+}
+
+fn run_rounds(n: i64, order: ref Vec[i64], on: mut ref Vec[bool]) {
+    for t in 0..order.len() {
+        let step = order[t];
+        let mut b = step;
+        while b <= n {
+            on[b] = not on[b];
+            b += step;
+        }
+    }
+}
+
+fn forward_order(n: i64) -> Vec[i64] {
+    let mut o: Vec[i64] = Vec.new();
+    for i in 1..(n + 1) { o.push(i); }
+    return o;
+}
+
+fn simulate(n: i64) -> Vec[bool] {
+    let mut on = fresh(n);
+    run_rounds(n, forward_order(n), mut on);
+    return on;
+}
+
+fn count_on(on: ref Vec[bool]) -> i64 {
+    let mut c = 0;
+    for b in 1..on.len() { if on[b] { c += 1; } }
+    return c;
+}
+
+fn solve_simulate(n: i64) -> i64 {
+    return count_on(simulate(n));
+}
+
+fn divisor_count(b: i64) -> i64 {
+    let mut c = 0;
+    let mut d = 1;
+    while d * d <= b {
+        if b % d == 0 {
+            c += 1;
+            if d * d != b { c += 1; }
+        }
+        d += 1;
+    }
+    return c;
+}
+
+fn solve_divisors(n: i64) -> i64 {
+    let mut count = 0;
+    for b in 1..(n + 1) {
+        if divisor_count(b) % 2 == 1 { count += 1; }
+    }
+    return count;
+}
+
+// ---------------------------------------------------------- utilities ---
+
+// Deliberately not `isqrt(b) * isqrt(b) == b`: the properties that use this
+// must not be able to agree with arm A by sharing its code.
+fn is_square(b: i64) -> bool {
+    let mut k = 0;
+    while k * k < b { k += 1; }
+    return k * k == b;
+}
+
+// The bracket check squares r + 1, which does not fit for the very largest n.
+// ISQRT_MAX is floor(sqrt(i64::MAX)); at r == ISQRT_MAX the claim
+// "(r + 1)^2 > n" holds for every representable n, so there is nothing left to
+// check there and nothing lost by not checking it. Kara traps integer overflow
+// rather than wrapping, so writing this guard is not optional politeness — the
+// unguarded form panics on n = ISQRT_MAX^2.
+const ISQRT_MAX: i64 = 3037000499;
+
+fn bracket_ok(n: i64, r: i64) -> bool {
+    if r * r > n { return false; }
+    if r >= ISQRT_MAX { return true; }
+    return (r + 1) * (r + 1) > n;
+}
+
+// Divisors of b that are at most r — the count P10 compares the round-r state
+// against.
+fn divisors_upto(b: i64, r: i64) -> i64 {
+    let mut c = 0;
+    let mut d = 1;
+    while d <= r and d <= b {
+        if b % d == 0 { c += 1; }
+        d += 1;
+    }
+    return c;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn shuffled_order(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut o = forward_order(n);
+    let len = o.len();
+    if len < 2 { return o; }
+    let mut i = len - 1;
+    while i > 0 {
+        let j = next(seed) % (i + 1);
+        o.swap(i, j);
+        i -= 1;
+    }
+    return o;
+}
+
+fn reversed_order(n: i64) -> Vec[i64] {
+    let mut o: Vec[i64] = Vec.new();
+    let mut i = n;
+    while i >= 1 { o.push(i); i -= 1; }
+    return o;
+}
+
+fn same_state(a: ref Vec[bool], b: ref Vec[bool]) -> bool {
+    if a.len() != b.len() { return false; }
+    for i in 0..a.len() { if a[i] != b[i] { return false; } }
+    return true;
+}
+
+// -------------------------------------------------------------- main ---
+
+fn main() {
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6 = 0;
+    let mut p7: Vec[i64] = [0, 0, 0, 0];
+    let mut p8 = 0;
+    let mut p9 = 0;
+    let mut p10 = 0;
+    let mut p11: Vec[i64] = [0, 0];
+    let mut p12 = 0;
+
+    let mut cases = 0;
+    let mut squares_seen = 0;
+    let mut bulbs_checked = 0;
+    let mut rounds_checked = 0;
+
+    // ---- exhaustive band: every n from 0 to EXHAUSTIVE, all four arms ----
+    let mut prev = 0;
+    for n in 0..(EXHAUSTIVE + 1) {
+        cases += 1;
+        let mut seed = n * 7919 + 319;
+
+        let on = simulate(n);
+        let ans = count_on(on);
+
+        if solve_newton(n) != ans { p1 += 1; }
+        if solve_count(n) != ans { p2 += 1; }
+        if solve_divisors(n) != ans { p3 += 1; }
+
+        // P4/P5: monotone, and stepping by exactly one at each square.
+        if ans < prev { p4 += 1; }
+        if n > 0 {
+            let step = ans - prev;
+            let want = if is_square(n) { 1 } else { 0 };
+            if step != want { p5 += 1; }
+        }
+        if is_square(n) and n > 0 { squares_seen += 1; }
+        prev = ans;
+
+        // P6: the isqrt bracket.
+        if not bracket_ok(n, ans) { p6 += 1; }
+
+        // P8/P9: the state and the divisor parity, bulb by bulb.
+        for b in 1..(n + 1) {
+            bulbs_checked += 1;
+            if on[b] != is_square(b) { p8 += 1; }
+            if (divisor_count(b) % 2 == 1) != is_square(b) { p9 += 1; }
+        }
+
+        // P11: the order of the rounds cannot matter — toggles commute.
+        let mut rev = fresh(n);
+        run_rounds(n, reversed_order(n), mut rev);
+        if not same_state(on, rev) { p11[0] += 1; }
+        let mut shuf = fresh(n);
+        run_rounds(n, shuffled_order(n, mut seed), mut shuf);
+        if not same_state(on, shuf) { p11[1] += 1; }
+
+        // P12: every bulb is toggled an even number of times by two passes.
+        let mut twice = fresh(n);
+        run_rounds(n, forward_order(n), mut twice);
+        run_rounds(n, forward_order(n), mut twice);
+        if count_on(twice) != 0 { p12 += 1; }
+    }
+
+    // ---- P10: the state after EVERY prefix of rounds ----
+    for n in 0..(PARTIAL_N + 1) {
+        let mut on = fresh(n);
+        for r in 1..(n + 1) {
+            let mut one: Vec[i64] = Vec.new();
+            one.push(r);
+            run_rounds(n, one, mut on);
+            rounds_checked += 1;
+            for b in 1..(n + 1) {
+                if on[b] != (divisors_upto(b, r) % 2 == 1) { p10 += 1; }
+            }
+        }
+    }
+
+    // ---- P7: the square band, on the two cheap arms ----
+    for k in 1..(SQ_K + 1) {
+        let sq = k * k;
+        if solve_newton(sq) != k { p7[0] += 1; }
+        if solve_count(sq) != k { p7[1] += 1; }
+        if solve_newton(sq - 1) != k - 1 { p7[2] += 1; }
+        if solve_count(sq - 1) != k - 1 { p7[3] += 1; }
+    }
+
+    // ---- P6 again, out where a double would start rounding ----
+    // 2^52 and up: a float sqrt loses the low bits here, so these are exactly
+    // the n an isqrt built on `(i64) sqrt((double) n)` gets wrong.
+    let mut big: Vec[i64] = [1000000000, 999999999999, 1000000000000,
+                             4503599627370496, 4503599761588224,
+                             4503599761588225, 9007199254740992,
+                             9223372030926249001, 4611686014132420609];
+    let mut seed = 319319;
+    // Four 15-bit draws stacked into ~60 bits, so the sample actually reaches
+    // the range where a double-backed sqrt starts rounding.
+    for _ in 0..400 {
+        let mut v = next(mut seed) % 32768;
+        for _ in 0..3 { v = v * 32768 + next(mut seed) % 32768; }
+        big.push(v);
+    }
+    let mut bigs = 0;
+    for i in 0..big.len() {
+        let n = big[i];
+        let r = solve_newton(n);
+        bigs += 1;
+        if not bracket_ok(n, r) { p6 += 1; }
+        if solve_newton(r * r) != r { p7[0] += 1; }
+    }
+
+    println(f"cases {cases} squares {squares_seen} bulbs {bulbs_checked} prefix-rounds {rounds_checked} big-n {bigs}");
+    println(f"P1 newton-vs-simulation disagreements {p1}");
+    println(f"P2 count-vs-simulation disagreements {p2}");
+    println(f"P3 divisors-vs-simulation disagreements {p3}");
+    println(f"P4 monotonicity failures {p4}");
+    println(f"P5 step-at-squares failures {p5}");
+    println(f"P6 isqrt-bracket failures {p6}");
+    println(f"P7 f(k*k)==k newton failures {p7[0]}");
+    println(f"P7 f(k*k)==k count failures {p7[1]}");
+    println(f"P7 f(k*k-1)==k-1 newton failures {p7[2]}");
+    println(f"P7 f(k*k-1)==k-1 count failures {p7[3]}");
+    println(f"P8 final-state-is-squares failures {p8}");
+    println(f"P9 odd-divisors-iff-square failures {p9}");
+    println(f"P10 partial-state failures {p10}");
+    println(f"P11 reversed-order failures {p11[0]}");
+    println(f"P11 shuffled-order failures {p11[1]}");
+    println(f"P12 double-pass-clears failures {p12}");
+    let total = p1 + p2 + p3 + p4 + p5 + p6 + p7[0] + p7[1] + p7[2] + p7[3]
+        + p8 + p9 + p10 + p11[0] + p11[1] + p12;
+    if total == 0 { println("DIFFERENTIAL OK"); } else { println("DIFFERENTIAL FAILED"); }
+}

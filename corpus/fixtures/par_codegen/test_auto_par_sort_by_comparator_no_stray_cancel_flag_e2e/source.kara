@@ -1,0 +1,14 @@
+
+fn solve(input: Slice[i64]) -> i64 {
+    let mut v: Vec[i64] = Vec.from_slice(input);
+    v.sort_by(|a, b| a.cmp(b));
+    let mut p: Vec[i64] = Vec.new();
+    p.push(10i64);
+    p.push(20i64);
+    let q = p.clone();
+    v[0] + q[0] + q[1]
+}
+fn main() {
+    // sorted [1,2,3,5,8] -> v[0]=1; q=[10,20]; 1 + 10 + 20 = 31.
+    println(f"{solve([5, 3, 8, 1, 2])}");
+}

@@ -1,0 +1,12 @@
+
+        fn serve_one(listener: TcpListener) {
+            let _stream = listener.accept().unwrap();
+            Log.info("after-resume");
+        }
+        fn main() {
+            let s = Span.root("req", 7);
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            with_span(s, || { serve_one(listener); });
+            println(2);
+        }
+    

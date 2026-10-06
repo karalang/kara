@@ -1,0 +1,127 @@
+// LeetCode 298 — Binary Tree Longest Consecutive Sequence.
+//
+// Find the longest path down the tree whose values increase by exactly one at
+// every step. The path runs PARENT TO CHILD only — it may start anywhere and
+// end anywhere, but it may never turn around.
+//
+//        1              longest is 3-4-5, length 3
+//         \
+//          3
+//         / \
+//        2   4
+//             \
+//              5
+//
+// THE DIRECTION RULE IS THE WHOLE PROBLEM. Drop it and this is the tree
+// diameter problem: you would join a chain coming UP the left subtree to one
+// going DOWN the right and get a path through the node. Here you cannot. A
+// path is a suffix of a root-to-leaf walk, so every candidate path has exactly
+// one topmost node, and the answer is the best over all of them.
+//
+//        2              longest is 2, not 3: the 3-2-1 chain DESCENDS,
+//         \             and 2-3 is the only ascending pair
+//          3
+//         /
+//        2
+//       /
+//      1
+//
+// THE ★ MECHANISM: BOTTOM-UP, RETURN THE CHAIN THAT STARTS HERE. Each node
+// answers one question about itself — "how long is the consecutive run whose
+// first node is me?" — and that is answerable from its children's answers:
+//
+//     down(n) = 1 + max( down(l) if l.val == n.val + 1 else 0,
+//                        down(r) if r.val == n.val + 1 else 0 )
+//
+// A child whose value is not exactly one more contributes nothing, so the
+// `else 0` is where the direction rule lives. The global answer is the maximum
+// of `down` over every node, which the walk accumulates as it goes.
+//
+// WHY THE MAXIMUM IS TAKEN DURING THE WALK AND NOT RETURNED. `down(n)` is a
+// LOCAL fact — the chain starting at `n` — while the answer is a GLOBAL one.
+// They are different quantities and conflating them is the classic wrong
+// solution: returning `max(down(n), best_in_subtree)` up the tree makes the
+// parent extend a chain that does not touch it. Threading a `mut ref` best
+// alongside the return keeps the two separate, which is what the shape of this
+// function is really about.
+//
+// COMPLEXITY: O(n) time, O(h) stack. Every node is visited once and does
+// constant work; the recursion depth is the tree height.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn node(v: i64, l: Option[TreeNode], r: Option[TreeNode]) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: None, right: None });
+}
+
+// Returns the length of the consecutive run whose FIRST node is `t`, and folds
+// the global best into `best` on the way back up.
+fn down(t: Option[TreeNode], best: mut ref i64) -> i64 {
+    match t {
+        None => {
+            return 0;
+        }
+        Some(n) => {
+            let l = down(n.left, best);
+            let r = down(n.right, best);
+
+            let mut run = 1;
+            match n.left {
+                None => { }
+                Some(c) => {
+                    if c.val == n.val + 1 and l + 1 > run {
+                        run = l + 1;
+                    }
+                }
+            }
+            match n.right {
+                None => { }
+                Some(c) => {
+                    if c.val == n.val + 1 and r + 1 > run {
+                        run = r + 1;
+                    }
+                }
+            }
+
+            if run > best {
+                best = run;
+            }
+            return run;
+        }
+    }
+}
+
+fn longest_consecutive(t: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    let _ = down(t, mut best);
+    return best;
+}
+
+fn report(name: String, t: Option[TreeNode]) {
+    println(f"{name} {longest_consecutive(t)}");
+}
+
+fn main() {
+    // 1 -> 3 -> 4 -> 5, with a 2 hanging off the 3.
+    report("ascending-right", node(1, None, node(3, leaf(2), node(4, None, leaf(5)))));
+    // The descending 3-2-1 chain must not count.
+    report("descending", node(2, None, node(3, node(2, leaf(1), None), None)));
+    report("empty", None);
+    report("single", leaf(7));
+    // A whole left spine that ascends downward: 1-2-3-4.
+    report("left-spine", node(1, node(2, node(3, leaf(4), None), None), None));
+    // Two runs of 3, one per subtree; the answer is 3, not 6.
+    report("two-branches", node(5, node(6, leaf(7), None), node(6, None, leaf(7))));
+    // Equal values break a run — consecutive means +1, not >=.
+    report("plateau", node(4, node(4, leaf(4), None), None));
+    // Negative values, and the run crossing zero.
+    report("crosses-zero", node(-2, node(-1, node(0, leaf(1), None), None), None));
+}

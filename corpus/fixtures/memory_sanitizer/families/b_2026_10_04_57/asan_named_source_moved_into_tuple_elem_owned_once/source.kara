@@ -1,0 +1,10 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+fn mk(i: i64) -> R { R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn main() {
+    let mut t: (i64, R) = (0, mk(5)); let n = mk(6); t.1 = n; println(f"t {t.1.s}");
+    let mut e: (i64, E) = (0, E.A(mk(7))); let m = E.A(mk(8)); e.1 = m; println("e");
+    let mut u: (Option[R], i64) = (Some(mk(9)), 1); let o = Some(mk(10)); u.0 = o; println(f"u{u.1}");
+    println(f"end{t.0}{e.0}");
+}

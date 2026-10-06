@@ -1,0 +1,141 @@
+// Benchmark workload — Insert Interval (LeetCode #57).
+//
+// M = 8 distinct test cases, each a Vec[(i64, i64)] of N = 16 intervals
+// that are ALREADY sorted by start and pairwise DISJOINT — #57's stated
+// precondition. `build_case` walks a cursor forward: each interval is
+// `(cursor + gap, cursor + gap + width)` with gap in [2, 5] and width in
+// [1, 6] drawn from a deterministic 31-bit LCG, so consecutive intervals
+// never touch (gap >= 2 guarantees a real hole) and the list is sorted by
+// construction. Built once into a Vec[Vec[(i64, i64)]] before the timed
+// loop, alongside a per-case `new_interval` (see pick_new below).
+//
+// K = 1,000,000 outer iters. Per-iter work: a linear three-phase insert
+// (walk the left run, absorb the overlap window into the new interval,
+// walk the right run) producing one fresh Vec[(i64, i64)] output — NO
+// sort (the precondition removes it, which is the whole point of #57 vs
+// #56). Same M/N/K shape as kata 56 so cross-kata wall-time comparisons
+// stay meaningful; the difference is this kata's per-call cost is a pure
+// O(N) sweep with no O(N log N) sort, so it isolates the tuple index +
+// field-access + Vec.push allocation path from the sort-dispatch story.
+//
+// Sink: total count of intervals across all K outputs. The `sum = sum +
+// r.len()` accumulator is the slice-1 allow-list reduction shape, so
+// karac's default build emits a karac_par_reduce dispatch.
+//
+// The LCG stays inside i64 with no wraparound. Every mirror
+// (kara/rust/c/go/py) reproduces the same stream, the same per-case new
+// interval, and the same output counts; all print the same sink before
+// timing starts.
+
+fn insert_interval(intervals: Slice[(i64, i64)], new_interval: (i64, i64)) -> Vec[(i64, i64)] {
+    let mut result: Vec[(i64, i64)] = Vec.new();
+    let n = intervals.len();
+    let mut new_start = new_interval.0;
+    let mut new_end = new_interval.1;
+    let mut i = 0;
+
+    // Phase 1 — intervals entirely left of the new one.
+    while i < n {
+        let cur = intervals[i];
+        if cur.1 >= new_start {
+            break;
+        }
+        result.push(cur);
+        i = i + 1;
+    }
+    // Phase 2 — absorb every overlapping/touching interval.
+    while i < n {
+        let cur = intervals[i];
+        if cur.0 > new_end {
+            break;
+        }
+        if cur.0 < new_start {
+            new_start = cur.0;
+        }
+        if cur.1 > new_end {
+            new_end = cur.1;
+        }
+        i = i + 1;
+    }
+    result.push((new_start, new_end));
+    // Phase 3 — the untouched tail.
+    while i < n {
+        result.push(intervals[i]);
+        i = i + 1;
+    }
+    result
+}
+
+// Overflow-free 31-bit LCG: 1103515245 * state + 12345 (mod 2^31).
+fn lcg_next(state: i64) -> i64 {
+    (1103515245 * state + 12345) % 2147483648
+}
+
+// One case = `count` disjoint sorted intervals. Cursor starts at 0; each
+// interval leaves a gap of [2, 5] before it (so the list is strictly
+// disjoint) and has width [1, 6].
+fn build_case(seed: i64, count: i64) -> Vec[(i64, i64)] {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut state = seed;
+    let mut cursor = 0;
+    let mut j = 0;
+    while j < count {
+        state = lcg_next(state);
+        let gap = (state % 4) + 2;
+        state = lcg_next(state);
+        let width = (state % 6) + 1;
+        let start = cursor + gap;
+        let end = start + width;
+        v.push((start, end));
+        cursor = end;
+        j = j + 1;
+    }
+    v
+}
+
+// Per-case new interval: overlaps intervals[lo .. hi] (inclusive), lo/hi
+// drawn from an independent seed so cases merge different-width spans.
+// new_start = intervals[lo].start, new_end = intervals[hi].end — because
+// the case is disjoint with gap >= 2, this overlaps exactly lo..hi.
+fn pick_new(case: Slice[(i64, i64)], m: i64, count: i64) -> (i64, i64) {
+    let half = count / 2;
+    let mut st = lcg_next(m * 7919 + 101);
+    let lo = st % half;
+    st = lcg_next(st);
+    let span = st % half;
+    let mut hi = lo + 1 + span;
+    if hi > count - 1 {
+        hi = count - 1;
+    }
+    let ns = case[lo].0;
+    let ne = case[hi].1;
+    (ns, ne)
+}
+
+fn main() {
+    let m_cases: i64 = 8;
+    let n_values: i64 = 16;
+    let k_iters: i64 = 1000000;
+
+    let mut sets: Vec[Vec[(i64, i64)]] = Vec.new();
+    let mut news: Vec[(i64, i64)] = Vec.new();
+    let mut m = 0;
+    while m < m_cases {
+        let case = build_case(m * 1000003 + 12345, n_values);
+        news.push(pick_new(case.as_slice(), m, n_values));
+        sets.push(case);
+        m = m + 1;
+    }
+
+    // Reduction shape: sum = sum + r.len() per iter — the allow-listed
+    // accumulator karac's default build lowers to a karac_par_reduce.
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % m_cases;
+        let r = insert_interval(sets[idx].as_slice(), news[idx]);
+        sum = sum + r.len();
+        k = k + 1;
+    }
+    println(sum);
+}

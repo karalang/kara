@@ -1,0 +1,8 @@
+
+fn consume(v: Vec[i64]) -> i64 { v.len() }
+fn main() {
+    let data: Vec[i64] = Vec.new();
+    let mut g: TaskGroup = TaskGroup.new();
+    g.spawn(|| consume(data));
+    println("ok");
+}

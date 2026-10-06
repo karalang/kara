@@ -1,0 +1,145 @@
+// LeetCode #78: Subsets — iterative cascade (no recursion).
+//
+// The power set built bottom-up: start with `[[]]`, and for each `num` in `nums`
+// EXTEND every subset seen so far with a copy that also contains `num`. Each new
+// element doubles the collection, so after all `n` elements there are 2ⁿ subsets.
+//
+//   out = [[]]
+//   for num in nums:
+//     for each existing subset s (the ones present BEFORE this num):
+//       out.push(s.clone() + num)
+//
+// The `cur = out.len()` snapshot taken before the inner loop is load-bearing: only
+// the subsets present at the start of the round are extended, never the ones this
+// round appends. This visits the same 2ⁿ subsets as the ★
+// ([`subsets.kara`](subsets.kara)) but in cascade order (by highest element added),
+// NOT the DFS lexicographic order — so the result is sorted (a small selection sort
+// with a `Vec[Vec[i64]]` element swap) to line up byte-for-byte with the ★ and the
+// Python mirror. It agrees with the ★ on every case; kept as the recursion-free
+// cross-check and a distinct surface (Vec `clone`-and-extend in a doubling loop).
+//
+// LeetCode bounds: 1 ≤ nums.length ≤ 10, distinct — 2ⁿ ≤ 1024 subsets, all fit i64.
+
+// Lexicographic order on subsets: compare element-wise; if one is a prefix of the
+// other, the shorter is smaller ([1] < [1,2], [] < anything).
+fn subset_less(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    let la = a.len();
+    let lb = b.len();
+    let mut i = 0;
+    while i < la and i < lb {
+        if a[i] < b[i] {
+            return true;
+        }
+        if a[i] > b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    la < lb
+}
+
+fn sort_subsets(out: mut ref Vec[Vec[i64]]) {
+    let m = out.len();
+    let mut i = 0;
+    while i < m {
+        let mut min_idx = i;
+        let mut j = i + 1;
+        while j < m {
+            if subset_less(out[j], out[min_idx]) {
+                min_idx = j;
+            }
+            j = j + 1;
+        }
+        if min_idx != i {
+            out.swap(i, min_idx);
+        }
+        i = i + 1;
+    }
+}
+
+fn subsets(nums: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let empty: Vec[i64] = Vec.new();
+    out.push(empty);                          // start with the single empty subset
+
+    let n = nums.len();
+    let mut i = 0;
+    while i < n {
+        let num = nums[i];
+        let cur = out.len();                  // only extend subsets present before this round
+        let mut j = 0;
+        while j < cur {
+            let mut extended: Vec[i64] = out[j].clone();
+            extended.push(num);
+            out.push(extended);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    sort_subsets(mut out);
+    out
+}
+
+// ---- test harness (shared verbatim with subsets.kara) --------------------------
+
+fn show(subset: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = subset.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{subset[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn hash_subsets(subs: ref Vec[Vec[i64]]) -> i64 {
+    let mut acc = 0;
+    let count = subs.len();
+    let mut c = 0;
+    while c < count {
+        let sub = ref subs[c];
+        let m = sub.len();
+        acc = (acc * 131 + (m + 1)) % 1000000007;
+        let mut j = 0;
+        while j < m {
+            acc = (acc * 131 + (sub[j] + 1)) % 1000000007;
+            j = j + 1;
+        }
+        c = c + 1;
+    }
+    acc
+}
+
+fn report(nums: Vec[i64], acc: mut ref String) {
+    let subs = subsets(nums);
+    let count = subs.len();
+    println(f"subsets: {count}");
+    let mut c = 0;
+    while c < count {
+        println(show(subs[c]));
+        c = c + 1;
+    }
+    acc.push(' ');
+    acc.push_str(f"{count}");
+    acc.push(':');
+    acc.push_str(f"{hash_subsets(subs)}");
+}
+
+fn main() {
+    let mut acc: String = "sums:";
+
+    report([1, 2, 3], mut acc);
+    report([0], mut acc);
+    report([1, 2], mut acc);
+    report([2, 4, 6, 8, 10], mut acc);  // 32 — distinct ascending values
+    report([7], mut acc);
+    report([1, 2, 3, 4], mut acc);
+
+    println(acc);
+}

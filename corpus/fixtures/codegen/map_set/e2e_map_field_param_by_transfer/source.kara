@@ -1,0 +1,25 @@
+struct Q { id: i64, name: String, tbl: Map[i64, i64] }
+impl Drop for Q { fn drop(mut ref self) { println(f"  dQ{self.id}") } }
+struct QNoDrop { id: i64, name: String, tbl: Map[i64, i64] }
+struct P { id: i64, name: String, xs: Vec[i64] }
+impl Drop for P { fn drop(mut ref self) { println(f"  dP{self.id}") } }
+
+fn mkq(i: i64) -> Q { let mut t = Map[i64, i64].new(); t.insert(i, i); return Q { id: i, name: f"h{i}", tbl: t }; }
+fn mkqn(i: i64) -> QNoDrop { let mut t = Map[i64, i64].new(); t.insert(i, i); return QNoDrop { id: i, name: f"h{i}", tbl: t }; }
+fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
+
+fn norebind(q: Q) -> i64 { return q.id; }
+fn readmap(q: Q) -> i64 { return q.tbl.len(); }
+fn rebind(q: Q) -> i64 { let m = q; return m.id; }
+fn nodrop(q: QNoDrop) -> i64 { return q.id; }
+fn copyable(p: P) -> i64 { let m = p; return m.id; }
+
+fn main() {
+    println("temp_arg"); println(f"  v={norebind(mkq(1))}");
+    println("temp_arg_reads_map"); println(f"  v={readmap(mkq(2))}");
+    println("temp_arg_rebind"); println(f"  v={rebind(mkq(3))}");
+    println("no_drop_struct"); println(f"  v={nodrop(mkqn(4))}");
+    println("copy_supported"); println(f"  v={copyable(mkp(5))}");
+    println("no_call"); let a = mkq(6); println(f"  v={a.id}");
+    println("end");
+}

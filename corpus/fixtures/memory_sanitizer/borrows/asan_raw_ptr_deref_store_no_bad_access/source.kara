@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut a: Array[u8, 3] = [65u8, 66u8, 67u8];
+    let p = a.as_mut_ptr();
+    // Safety: `p` addresses element 0 of the live mutable owned array.
+    unsafe { *p = 90u8; }
+    let b: u8 = unsafe { *p };
+    println(b);
+    println(a[0]);
+}

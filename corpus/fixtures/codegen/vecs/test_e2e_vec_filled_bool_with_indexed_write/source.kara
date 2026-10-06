@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut v: Vec[bool] = Vec.filled(4, false);
+    v[2] = true;
+    let mut i = 0i64;
+    while i < 4 {
+        println(v[i]);
+        i = i + 1;
+    }
+}

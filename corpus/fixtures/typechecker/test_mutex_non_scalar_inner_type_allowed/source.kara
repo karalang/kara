@@ -1,0 +1,1 @@
+fn main() { let _m: Mutex[String] = Mutex.new("hi"); }

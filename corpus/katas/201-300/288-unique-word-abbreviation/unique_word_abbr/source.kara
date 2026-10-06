@@ -1,0 +1,118 @@
+// LeetCode 288 — Unique Word Abbreviation.
+//
+// Abbreviate a word as first-letter + middle-length + last-letter, so "deer"
+// becomes "d2r" and "internationalization" becomes "i18n". A word of two
+// characters or fewer has no middle to shrink and abbreviates to ITSELF ("it"
+// stays "it") — the encoding would otherwise be longer than the word.
+//
+// Build a dictionary once, then answer `is_unique(word)` many times. The word is
+// unique when NO dictionary word shares its abbreviation, OR when every
+// dictionary word that shares it IS that same word.
+//
+// THE INDEX IS A THREE-WAY CHOICE, AND THIS FILE SAYS SO. Per abbreviation the
+// dictionary is in exactly one of three states: nothing has it, exactly one
+// distinct word has it, or two or more do. Only the middle state needs to
+// remember anything — which word — so:
+//
+//     enum Bucket { Sole(String), Conflicted }
+//
+// with "nothing has it" left to the map's own absence. That is the whole index:
+// once two distinct words collide, WHICH words they were stops mattering, so
+// `Conflicted` carries no payload and the strings are dropped. A bucket-list
+// index (`unique_word_abbr_buckets.kara`) keeps every colliding word alive for
+// an answer it can no longer change.
+//
+// THE TRAP IS DUPLICATES. The dictionary is a MULTISET on input but a SET in
+// meaning: given ["deer", "deer"], `is_unique("deer")` is TRUE, because the only
+// word abbreviating to "d2r" is "deer" itself. An index that counts occurrences
+// instead of distinct words reads 2 and answers false. Here the `prev != w` test
+// in `build` is what collapses the duplicate — a repeat of the word already in
+// `Sole` is not a conflict, and the state does not move.
+
+enum Bucket {
+    Sole(String),
+    Conflicted,
+}
+
+// first + (len - 2) + last, or the word itself when there is no middle.
+fn abbrev(w: ref String) -> String {
+    let cs: Vec[char] = w.chars().collect();
+    let n = cs.len();
+    if n <= 2 {
+        return w.clone();
+    }
+    let mut out = String.new();
+    out.push(cs[0]);
+    out.push_str(f"{n - 2}");
+    out.push(cs[n - 1]);
+    return out;
+}
+
+// One pass over the dictionary. A word already sitting in `Sole` is a duplicate,
+// not a collision, so the state only advances on a DIFFERENT word.
+fn build(dict: Slice[String]) -> Map[String, Bucket] {
+    let mut idx: Map[String, Bucket] = Map.new();
+    let n = dict.len();
+    let mut i = 0;
+    while i < n {
+        let w = ref dict[i];
+        let a = abbrev(w);
+        match idx.get(a) {
+            None => {
+                let _ = idx.insert(a, Bucket.Sole(w.clone()));
+            }
+            Some(Bucket.Sole(prev)) => {
+                if prev != w {
+                    let _ = idx.insert(a, Bucket.Conflicted);
+                }
+            }
+            Some(Bucket.Conflicted) => {}
+        }
+        i = i + 1;
+    }
+    return idx;
+}
+
+fn is_unique(idx: ref Map[String, Bucket], word: ref String) -> bool {
+    let a = abbrev(word);
+    match idx.get(a) {
+        None => return true,
+        Some(Bucket.Sole(w)) => return w == word,
+        Some(Bucket.Conflicted) => return false,
+    }
+}
+
+fn report(idx: ref Map[String, Bucket], word: String) {
+    println(f"is_unique({word}) = {is_unique(idx, word)}");
+}
+
+fn main() {
+    let dict: Vec[String] = ["deer", "door", "cake", "card"];
+    let idx = build(dict);
+
+    report(idx, "dear");   // expect: false  — "d2r" is also "deer"
+    report(idx, "cart");   // expect: true   — "c2t" is nobody's
+    report(idx, "cane");   // expect: false  — "c2e" is "cake"
+    report(idx, "make");   // expect: true   — "m2e" is nobody's
+    report(idx, "cake");   // expect: true   — "c2e" is "cake", which IS the word
+
+    // Two words, one abbreviation: neither is unique, not even against itself.
+    let pair: Vec[String] = ["deer", "door"];
+    let pidx = build(pair);
+    report(pidx, "deer");  // expect: false
+    report(pidx, "dear");  // expect: false
+
+    // The duplicate trap: a repeated word is ONE word.
+    let dup: Vec[String] = ["deer", "deer", "deer"];
+    let didx = build(dup);
+    report(didx, "deer");  // expect: true
+    report(didx, "dear");  // expect: false
+
+    // No middle to shrink: these abbreviate to themselves.
+    let shorts: Vec[String] = ["it", "a", "do"];
+    let sidx = build(shorts);
+    report(sidx, "it");    // expect: true
+    report(sidx, "is");    // expect: true   — "is" != "it", no collision
+    report(sidx, "a");     // expect: true
+    report(sidx, "hello"); // expect: true   — "h3o" is nobody's
+}

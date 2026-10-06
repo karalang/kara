@@ -1,0 +1,8 @@
+
+struct Item { id: i64, tag: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+fn main() {
+    let a = Item { id: 1, tag: 5 };
+    let b = Item { id: 1, tag: 9 };
+    println(f"{a == b}");
+}

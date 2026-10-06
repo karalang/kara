@@ -1,0 +1,12 @@
+
+struct Foo { age: i64 }
+fn read_int(n: ref i64) -> i64 { n + 1 }
+fn show(f: ref Foo) -> i64 {
+    match f {
+        Foo { age } => read_int(age),
+    }
+}
+fn main() {
+    let f = Foo { age: 41 };
+    println(show(f));
+}

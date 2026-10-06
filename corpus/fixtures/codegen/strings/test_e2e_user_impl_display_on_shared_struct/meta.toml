@@ -1,0 +1,13 @@
+source = "tests/codegen/strings.rs::test_e2e_user_impl_display_on_shared_struct"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

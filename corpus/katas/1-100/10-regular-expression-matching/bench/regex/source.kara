@@ -1,0 +1,91 @@
+// Benchmark workload — recursive Regular Expression Matching (LeetCode #10).
+//
+// N = 8 (string, pattern) pairs cycled by `k % N`, each chosen to
+// exercise a different branch of the recursive matcher so no single
+// shape dominates the predictor's history:
+//
+//   1. "aa"            , "a*"                — fast `*` path, true
+//   2. "ab"            , ".*"                — wildcard `.*` path, true
+//   3. "aab"           , "c*a*b"             — chained `*` zero-match, true
+//   4. "mississippi"   , "mis*is*p*."        — long mismatch, false
+//   5. "aaaaaaaaaab"   , "a*a*a*a*a*b"       — chained `*` backtracking, true
+//   6. "aaa"           , "ab*a"              — mid-recursion failure, false
+//   7. "abc"           , "..."               — pure `.` path, true
+//   8. "aaab"          , "a*b"               — anchor `b`, true
+//
+// K = 10_000_000 outer iters. Per-call work varies widely with branch
+// (case 4 explores deep before failing, case 5 hits the worst-case
+// exponential backtracking shape), so the average per-iter cost is
+// dominated by the heaviest few cases. Sink = sum of `is_match` as i64
+// across K iters — count of true matches. Six of the eight pairs match
+// (cases 1-3, 5, 7, 8), so the expected sink is K * 6 / 8 = 7_500_000.
+//
+// The accumulator is i64 and the per-call result is widened from bool
+// to i64 via `if r { 1 } else { 0 }` so the auto-par-on-reduction
+// analyzer (slice-1 allow-list: associative + commutative +)
+// recognizes the `sum += inc` shape and lowers it to karac_par_reduce
+// in the default build. Sink doubles as the silent-drift gate — three
+// impls printing different numbers means one of them is wrong.
+
+fn is_match_at(s: Slice[u8], i: i64, p: Slice[u8], j: i64) -> bool {
+    let n = s.len();
+    let m = p.len();
+
+    if j == m {
+        return i == n;
+    }
+
+    let first_match: bool = i < n and (p[j] == s[i] or p[j] == b'.');
+
+    if j + 1 < m and p[j + 1] == b'*' {
+        return is_match_at(s, i, p, j + 2)
+            or (first_match and is_match_at(s, i + 1, p, j));
+    }
+
+    first_match and is_match_at(s, i + 1, p, j + 1)
+}
+
+fn is_match(s: ref String, p: ref String) -> bool {
+    is_match_at(s.bytes(), 0, p.bytes(), 0)
+}
+
+fn main() {
+    let n: i64 = 8;
+    let k_iters: i64 = 10000000;
+
+    let mut strs: Vec[String] = Vec.new();
+    strs.push("aa");
+    strs.push("ab");
+    strs.push("aab");
+    strs.push("mississippi");
+    strs.push("aaaaaaaaaab");
+    strs.push("aaa");
+    strs.push("abc");
+    strs.push("aaab");
+
+    let mut pats: Vec[String] = Vec.new();
+    pats.push("a*");
+    pats.push(".*");
+    pats.push("c*a*b");
+    pats.push("mis*is*p*.");
+    pats.push("a*a*a*a*a*b");
+    pats.push("ab*a");
+    pats.push("...");
+    pats.push("a*b");
+
+    // Reduction shape: `sum = sum + expr` per iter so the auto-par
+    // analyzer recognizes it (slice-1 allow-list: associative +
+    // commutative +). Conditional-mutation `if r { sum += 1 }` would
+    // not match. The if-expression `if r { 1 } else { 0 }` keeps the
+    // accumulation unconditional.
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % n;
+        let r: bool = is_match(strs[idx], pats[idx]);
+        let inc: i64 = if r { 1 } else { 0 };
+        sum = sum + inc;
+        k = k + 1;
+    }
+    println(sum);
+}

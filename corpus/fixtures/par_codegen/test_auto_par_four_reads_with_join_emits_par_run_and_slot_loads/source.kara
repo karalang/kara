@@ -1,0 +1,22 @@
+
+effect resource Net;
+effect resource Disk;
+effect resource Db;
+effect resource Cache;
+
+fn fetch_net() -> i64 reads(Net) { 1 }
+fn fetch_disk() -> i64 reads(Disk) { 2 }
+fn fetch_db() -> i64 reads(Db) { 3 }
+fn fetch_cache() -> i64 reads(Cache) { 4 }
+
+fn combine(a: i64, b: i64, c: i64, d: i64) -> i64 {
+    a + b + c + d
+}
+
+fn main() {
+    let result_1 = fetch_net();
+    let result_2 = fetch_disk();
+    let result_3 = fetch_db();
+    let result_4 = fetch_cache();
+    println(combine(result_1, result_2, result_3, result_4));
+}

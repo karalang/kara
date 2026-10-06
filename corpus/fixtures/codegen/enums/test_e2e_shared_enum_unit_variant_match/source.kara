@@ -1,0 +1,14 @@
+
+shared enum Dir { North, South, East, West }
+fn to_num(d: Dir) -> i64 {
+    match d {
+        Dir.North => 0,
+        Dir.South => 1,
+        Dir.East => 2,
+        Dir.West => 3,
+    }
+}
+fn main() {
+    println(to_num(East));
+    println(to_num(North));
+}

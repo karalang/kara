@@ -1,0 +1,127 @@
+// LeetCode 286 — Walls and Gates.
+//
+// A grid of rooms. `-1` is a wall, `0` is a gate, and INF is an empty room.
+// Fill every empty room with the distance to its NEAREST gate, walking only up,
+// down, left and right. A room no gate can reach stays INF.
+//
+//     INF  -1   0  INF        3  -1   0   1
+//     INF INF INF  -1   ->    2   2   1  -1
+//     INF  -1 INF  -1         1  -1   2  -1
+//       0  -1 INF INF         0  -1   3   4
+//
+// THE ★ MECHANISM: MULTI-SOURCE BFS. The obvious reading of "distance to the
+// nearest gate" is a search FROM each room, and that reading is O((mn)^2) — it
+// is `walls_and_gates_brute.kara`, kept as the definitional oracle. Turning it
+// around costs nothing and buys everything: seed ONE queue with EVERY gate at
+// once and expand. A room is first reached on the wave that started at whichever
+// gate is nearest to it, so the first arrival is the answer, and the whole grid
+// is filled in a single O(mn) sweep no matter how many gates there are.
+//
+// The subtle part is not the queue, it is WHY THE FIRST ARRIVAL WINS. Ordinary
+// BFS from a single source is layer-by-layer, so the argument is the familiar
+// one. With many sources it still holds, because seeding all gates at distance 0
+// makes the queue a merge of every gate's wave: the queue's distances are still
+// non-decreasing, so a cell popped at distance d has no shorter route from any
+// gate. That property — not the specific gates — is what makes one pass enough.
+//
+// WHY INF DOUBLES AS THE VISITED MARK. There is no separate `seen` array here.
+// A room still holding INF has not been reached; the instant it is reached it
+// takes a finite distance, which is both its answer and its mark. That is only
+// sound because the first arrival is already final — with a relaxing search
+// (`walls_and_gates_dfs.kara`) the same trick would be wrong, and that file has
+// to carry a real comparison instead.
+//
+// THE SECOND MEASURED PROPERTY: RELAXATIONS. Every solver reports how many times
+// it wrote a distance into a room. For this BFS the count is EXACTLY the number
+// of gate-reachable rooms — each is written once and never revisited. That is a
+// stronger statement than "the output is right", and the differential checks it:
+// an implementation whose answer is correct but whose relaxation count exceeds
+// the room count has a broken visited-mark and is one input away from quadratic.
+
+// LeetCode's INF. Any room left holding this is unreachable.
+fn inf() -> i64 {
+    return 2147483647;
+}
+
+// Fill `g` (row-major, `r` x `c`) in place. `relaxations` counts distance writes.
+fn walls_and_gates(g: mut ref Vec[i64], r: i64, c: i64, relaxations: mut ref i64) {
+    let mut q = VecDeque.new();
+
+    // Seed EVERY gate. This is the entire difference from a single-source BFS.
+    let mut i = 0;
+    while i < r * c {
+        if g[i] == 0 { q.push_back(i); }
+        i = i + 1;
+    }
+
+    loop {
+        match q.pop_front() {
+            None => { break; },
+            Some(cell) => {
+                let row = cell / c;
+                let col = cell % c;
+                let d = g[cell] + 1;
+
+                if row > 0 { relax(g, cell - c, d, mut q, relaxations); }
+                if row < r - 1 { relax(g, cell + c, d, mut q, relaxations); }
+                if col > 0 { relax(g, cell - 1, d, mut q, relaxations); }
+                if col < c - 1 { relax(g, cell + 1, d, mut q, relaxations); }
+            }
+        }
+    }
+}
+
+// Claim `n` for the wave if it is still an untouched room. Walls (-1) and gates
+// (0) fail the test, so no bounds-flavoured special case is needed for them —
+// only the grid EDGE needs guarding, which the caller does.
+fn relax(g: mut ref Vec[i64], n: i64, d: i64, q: mut ref VecDeque[i64], relaxations: mut ref i64) {
+    if g[n] == inf() {
+        g[n] = d;
+        relaxations = relaxations + 1;
+        q.push_back(n);
+    }
+}
+
+fn show(g: ref Vec[i64], r: i64, c: i64) -> String {
+    let mut s: String = "";
+    let mut row = 0;
+    while row < r {
+        let mut col = 0;
+        while col < c {
+            if col > 0 { s = s + " "; }
+            let v = g[row * c + col];
+            if v == inf() { s = s + "INF"; }
+            else { s = s + f"{v}"; }
+            col = col + 1;
+        }
+        if row < r - 1 { s = s + " / "; }
+        row = row + 1;
+    }
+    return s;
+}
+
+fn report(grid: Vec[i64], r: i64, c: i64) {
+    let mut g = grid;
+    let mut n = 0;
+    walls_and_gates(mut g, r, c, mut n);
+    println(f"{show(g, r, c)}  ({n} relaxations)");
+}
+
+fn main() {
+    let w = -1;
+    let f = 2147483647;
+
+    // The canonical example.
+    report([f, w, 0, f,
+            f, f, f, w,
+            f, w, f, w,
+            0, w, f, f], 4, 4);
+
+    report([w], 1, 1);           // a lone wall
+    report([0], 1, 1);        // a lone gate
+    report([f], 1, 1);           // a room no gate can reach
+    report([0, f, f, f], 1, 4);   // one row, one gate at the left
+    report([f, f, 0, f, f], 1, 5); // one row, a gate in the middle
+    report([0, f, w, f], 2, 2);   // a wall isolating one room
+    report([f, f, f, f], 2, 2);      // no gates at all — nothing changes
+}

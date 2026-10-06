@@ -1,0 +1,22 @@
+enum G1[T] { Y(T), N }
+struct H[T] { g: G1[T] }
+struct H2[T] { h: H[T] }
+fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }
+fn wrapAll[T](g: G1[T]) -> H[T] { return H { g: g } }
+fn wrapTup[T](g: G1[T], c: bool) -> (G1[T], i64) { if c { return (g, 7) } return (G1.N, 7) }
+fn wrapNest[T](g: G1[T], c: bool) -> H2[T] { if c { return H2 { h: H { g: g } } } return H2 { h: H { g: G1.N } } }
+fn bare[T](g: G1[T], c: bool) -> G1[T] { if c { return g } return G1.N }
+fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
+
+fn main() {
+    println("struct");  { let g: G1[String] = G1.Y(f"aaaaaaaa-1"); let h = wrap(g, true); shw(h.g) }
+    println("structF"); { let g: G1[String] = G1.Y(f"aaaaaaaa-2"); let h = wrap(g, false); shw(h.g) }
+    println("allpaths");{ let g: G1[String] = G1.Y(f"aaaaaaaa-3"); let h = wrapAll(g); shw(h.g) }
+    println("tuple");   { let g: G1[String] = G1.Y(f"aaaaaaaa-4"); let t = wrapTup(g, true); shw(t.0) }
+    println("tupleF");  { let g: G1[String] = G1.Y(f"aaaaaaaa-5"); let t = wrapTup(g, false); shw(t.0) }
+    println("nested");  { let g: G1[String] = G1.Y(f"aaaaaaaa-6"); let h = wrapNest(g, true); shw(h.h.g) }
+    println("bare");    { let g: G1[String] = G1.Y(f"aaaaaaaa-7"); let b = bare(g, true); shw(b) }
+    println("bareF");   { let g: G1[String] = G1.Y(f"aaaaaaaa-8"); let b = bare(g, false); shw(b) }
+    println("discard"); { let g: G1[String] = G1.Y(f"aaaaaaaa-9"); wrap(g, true); println("  x") }
+    println("end")
+}

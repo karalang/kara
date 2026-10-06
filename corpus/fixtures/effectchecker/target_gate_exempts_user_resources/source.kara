@@ -1,0 +1,9 @@
+
+effect resource UserDB;
+
+fn query() with reads(UserDB) {
+}
+
+fn main() {
+    query();
+}

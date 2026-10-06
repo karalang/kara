@@ -1,0 +1,18 @@
+
+fn show(o: Option[i64]) {
+    match o {
+        Some(i) => println(f"{i}"),
+        None => println("none"),
+    }
+}
+fn main() {
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    show(t.argmin());
+    show(t.argmax());
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[3, 1, 4], [1, 5, 9]]);
+    show(m.argmin());
+    show(m.argmax());
+    let tf: Tensor[f64, [4]] = Tensor.from([2.5, 8.0, 1.0, 8.0]);
+    show(tf.argmin());
+    show(tf.argmax());
+}

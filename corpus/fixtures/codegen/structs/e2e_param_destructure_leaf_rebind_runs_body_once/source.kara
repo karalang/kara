@@ -1,0 +1,36 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoOpt { a: R, b: Option[R] }
+struct WrapR { inner: HoRes }
+struct WrapO { inner: HoOpt }
+fn eat(x: R) { println(f"  eat{x.id}") }
+
+fn rebind(h: HoRes)    { let HoRes { a, b } = h; let c = b;
+                         match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn rebindu(h: HoRes)   { let HoRes { a, b } = h; let c = b; println("  m") }
+fn rebindcall(h: HoRes){ let HoRes { a, b } = h; let c = b;
+                         match c { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
+fn orebind(h: HoOpt)   { let HoOpt { a, b } = h; let c = b;
+                         match c { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn prebind(w: WrapR)   { let HoRes { a, b } = w.inner; let c = b;
+                         match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn porebind(w: WrapO)  { let HoOpt { a, b } = w.inner; let c = b;
+                         match c { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn direct(h: HoRes)    { let HoRes { a, b } = h;
+                         match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn twice(h: HoRes)     { let HoRes { a, b } = h; let c = b; let d = c;
+                         match d { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+
+fn main() {
+  println("rebind");     rebind(HoRes { a: mk(1), b: Result.Ok(mk(101)) })
+  println("rebindu");    rebindu(HoRes { a: mk(2), b: Result.Ok(mk(102)) })
+  println("rebindcall"); rebindcall(HoRes { a: mk(3), b: Result.Ok(mk(103)) })
+  println("orebind");    orebind(HoOpt { a: mk(4), b: Option.Some(mk(104)) })
+  println("prebind");    prebind(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } })
+  println("porebind");   porebind(WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } })
+  println("direct");     direct(HoRes { a: mk(7), b: Result.Ok(mk(107)) })
+  println("twice");      twice(HoRes { a: mk(8), b: Result.Ok(mk(108)) })
+  println("done")
+}

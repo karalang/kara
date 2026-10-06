@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/drop_order.rs::asan_cond_stored_rc_promoted_param_stays_readable_and_drops_once"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["drop", "format-template", "shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"

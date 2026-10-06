@@ -1,0 +1,11 @@
+
+fn main() {
+    let a: Vec[i64] = Vec[1i64, 2i64, 3i64];
+    let b: Vec[i64] = Vec[10i64, 20i64];
+    // receiver side carries a map; min(3,2)=2 pairs
+    let r: Vec[(i64, i64)] = a.iter().map(|x| x * 2i64).zip(b.iter()).collect();
+    println(f"{r.len()} {r[0i64].0} {r[0i64].1} {r[1i64].0} {r[1i64].1} {a.len()} {b.len()}");
+    // arg side carries a filter
+    let s: Vec[(i64, i64)] = a.iter().zip(b.iter().filter(|y| y > 5i64)).collect();
+    println(f"{s.len()} {s[0i64].0} {s[0i64].1} {s[1i64].1}");
+}

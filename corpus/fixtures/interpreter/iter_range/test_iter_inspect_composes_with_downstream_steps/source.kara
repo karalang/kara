@@ -1,0 +1,12 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let xs: Vec[i64] = v.iter()
+        .inspect(|x| println(f"raw:{x}"))
+        .map(|x| x * 10)
+        .inspect(|x| println(f"mapped:{x}"))
+        .collect();
+    for x in xs {
+        println(x);
+    }
+}

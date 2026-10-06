@@ -1,0 +1,24 @@
+
+struct Tag { n: i64 }
+struct Inner { m: i64 }
+struct Outer { inner: Inner, k: i64 }
+
+fn make(k: i64) -> Tag { return Tag { n: k }; }
+fn make2() -> Outer { return Outer { inner: Inner { m: 3 }, k: 4 }; }
+
+impl Tag { fn doubled(self) -> i64 { return self.n * 2; } }
+
+fn main() {
+    let c = true;
+    println(if c { make(1) } else { make(2) }.n);
+    println(if not c { make(1) } else { make(2) }.n);
+    println(if c { make(1) } else { make(2) }.n + 10);
+    println(if c { make2() } else { make2() }.inner.m);
+    println(if c { make2() } else { make2() }.k);
+    println(if c { make(5) } else { make(6) }.doubled());
+    let k = if c { make(7) } else { make(8) }.n;
+    println(k);
+    println(if c { make(1) } else if not c { make(2) } else { make(3) }.n);
+    let o: Option[i64] = Option.Some(9);
+    println(if let Option.Some(v) = o { Tag { n: v } } else { Tag { n: 0 } }.n);
+}

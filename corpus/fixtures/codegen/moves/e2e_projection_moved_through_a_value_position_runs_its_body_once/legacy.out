@@ -1,0 +1,80 @@
+if-field-true
+dRb-heap
+  x:a-heap
+  got:a-heap
+dRa-heap
+if-field-false
+dRb-heap
+dRa-heap
+  x:z-heap
+  got:z-heap
+dRz-heap
+if-both-true
+dRb-heap
+  got:a-heap
+dRa-heap
+if-both-false
+dRa-heap
+  got:b-heap
+dRb-heap
+block-elem
+dRb-heap
+  x:a-heap
+  got:a-heap
+dRa-heap
+match-0
+dRb-heap
+  got:a-heap
+dRa-heap
+match-1
+dRa-heap
+  got:b-heap
+dRb-heap
+match-2
+dRa-heap
+dRb-heap
+  got:z-heap
+dRz-heap
+nested-tt
+dRb-heap
+  got:a-heap
+dRa-heap
+nested-tf
+dRa-heap
+  got:b-heap
+dRb-heap
+nested-f
+dRa-heap
+dRb-heap
+  got:z-heap
+dRz-heap
+push-elem
+dRb-heap
+  n:1
+dRa-heap
+some-elem
+dRb-heap
+  o:a-heap
+dRa-heap
+assign
+dRx0-heap
+dRb-heap
+  x:a-heap
+dRa-heap
+loop
+dRa0-heap
+dRb0-heap
+  x:z0-heap
+dRz0-heap
+dRb1-heap
+  x:a1-heap
+dRa1-heap
+dRa2-heap
+dRb2-heap
+  x:z2-heap
+dRz2-heap
+guard-call-arg
+  show:a-heap
+dRa-heap
+dRb-heap
+end

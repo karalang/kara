@@ -1,0 +1,10 @@
+
+struct H { f: Fn(i64) -> i64, name: String }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn use_it(h: H) -> i64 { (h.f)(1i64) }
+fn main() {
+    let a = H { f: make(10i64), name: "an independently long heap string payload here" };
+    let r = use_it(a);
+    println(f"{r + (a.f)(2i64)}");
+    println(a.name);
+}

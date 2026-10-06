@@ -1,0 +1,8 @@
+fn main() {
+    let e: Option[u8] = Option.Some(5i64);
+    println(f"{e}");
+    let g: Option[u8] = Option.Some(255i64);
+    println(f"{g}");
+    let h: Option[u8] = Option.Some(300i64 as u8);
+    println(f"{h}");
+}

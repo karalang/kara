@@ -1,0 +1,5 @@
+
+fn main() {
+    let x: i64 = lbl: { 99 };
+    println(x);
+}

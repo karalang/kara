@@ -1,0 +1,6 @@
+
+fn main() {
+    let c: char = 'A';
+    let n: i64 = c as i64;
+    println(n);
+}

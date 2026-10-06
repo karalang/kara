@@ -1,0 +1,13 @@
+
+fn sum_first_two(v: ref Tensor[f32, [?]]) -> f32 {
+    let s: Tensor[f32, [?]] = v + 0.0;
+    s[0] + s[1]
+}
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let r = sum_first_two(Tensor.from([1.0, 2.0, 3.0]));
+        println(f"{r}");
+        n = n + 1;
+    }
+}

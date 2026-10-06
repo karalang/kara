@@ -1,0 +1,98 @@
+// Benchmark workload — one-pass atoi (LeetCode #8).
+//
+// N = 8 distinct inputs cycled by `k % N`, chosen to exercise every
+// arm of the three-phase scan so no single branch dominates the
+// predictor's history:
+//
+//   1. "42"                          — bare positive, no whitespace/sign
+//   2. "   -42"                      — whitespace prefix + sign
+//   3. "4193 with words"             — phase-3 early-exit at first non-digit
+//   4. "91283472332"                 — positive overflow rail fires
+//   5. "+1"                          — explicit '+' sign
+//   6. "  0000000000012345678"       — leading zeros after sign
+//   7. "-2147483648"                 — INT_MIN boundary (digit 8 with sign=-1)
+//   8. "  -0012a42"                  — whitespace + sign + leading-zero
+//                                      digits + non-digit break
+//
+// K = 10_000_000 outer iters. Per-call work averages ~15 bytes × ~5
+// ops/byte ≈ ~75 ops, so total ~7.5 × 10⁸ ops, sized to land near
+// ~50-200 ms on rust depending on `inputs[idx]` borrow overhead. Sink
+// = sum of my_atoi(inputs[k % N]) widened to i64 so K iters of
+// i32-range values don't overflow the accumulator. All three impls
+// (kara / rust / python) print the same sink for the same N/K —
+// output gates the bench against "fast but wrong".
+//
+// Built via `karac build`; pairs with bench/atoi.py and bench/atoi.rs
+// for the codegen-vs-Python-vs-Rust harness in bench.sh.
+
+fn my_atoi(s: ref String) -> i32 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    let space: u8 = b' ';
+    let plus:  u8 = b'+';
+    let minus: u8 = b'-';
+    let zero:  u8 = b'0';
+    let nine:  u8 = b'9';
+
+    let mut i = 0;
+    while i < n and bytes[i] == space {
+        i = i + 1;
+    }
+
+    let mut sign: i32 = 1i32;
+    if i < n and bytes[i] == plus {
+        i = i + 1;
+    } else if i < n and bytes[i] == minus {
+        sign = -1i32;
+        i = i + 1;
+    }
+
+    let int_max: i32 = 2147483647i32;
+    let int_min: i32 = -2147483648i32;
+    let max_div: i32 = int_max / 10i32;
+
+    let mut result: i32 = 0i32;
+    while i < n {
+        let b = bytes[i];
+        if b < zero or b > nine {
+            break;
+        }
+        let digit: i32 = (b as i32) - (zero as i32);
+        if result > max_div or (result == max_div and digit > 7i32) {
+            if sign == 1i32 {
+                return int_max;
+            }
+            return int_min;
+        }
+        result = result * 10i32 + digit;
+        i = i + 1;
+    }
+
+    sign * result
+}
+
+fn main() {
+    let n: i64 = 8;
+    let k_iters: i64 = 10000000;
+
+    let mut inputs: Vec[String] = Vec.new();
+    inputs.push("42");
+    inputs.push("   -42");
+    inputs.push("4193 with words");
+    inputs.push("91283472332");
+    inputs.push("+1");
+    inputs.push("  0000000000012345678");
+    inputs.push("-2147483648");
+    inputs.push("  -0012a42");
+
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % n;
+        let r: i32 = my_atoi(inputs[idx]);
+        sum = sum + (r as i64);
+        k = k + 1;
+    }
+    println(sum);
+}

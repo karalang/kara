@@ -1,0 +1,19 @@
+fn main() {
+            let a = "  the  quick   brown fox  ";
+            let v = a.split_whitespace();
+            println(f"{v.len()}");
+            println(v[0]);
+            println(v[3]);
+            // Tab and newline are whitespace too.
+            let e = "tab\tand\nnewline";
+            let w = e.split_whitespace();
+            println(f"{w.len()}");
+            println(w[1]);
+            // Single token, all-whitespace, and empty → 1 / 0 / 0.
+            let one = "single".split_whitespace();
+            println(f"{one.len()}");
+            let ws = "   ".split_whitespace();
+            println(f"{ws.len()}");
+            let empty = "".split_whitespace();
+            println(f"{empty.len()}");
+        }

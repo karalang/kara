@@ -1,0 +1,11 @@
+
+fn main() {
+    let tasks = Runtime.list_tasks();
+    println(tasks.len());
+    par {
+        println(1);
+        println(2);
+    }
+    let after = Runtime.list_tasks();
+    println(after.len());
+}

@@ -1,0 +1,29 @@
+
+        shared struct Node {
+            val: i64,
+            next: Option[Node],
+        }
+
+        fn main() {
+            let mut head: Option[Node] = None;
+            let mut i = 0;
+            while i < 8 {
+                head = Some(Node { val: i, next: head });
+                i = i + 1;
+            }
+            let mut sum = 0;
+            let mut k = 0;
+            while k < 100000 {
+                let mut acc = 0;
+                let mut cur = head;
+                while cur.is_some() {
+                    let n = cur.unwrap();
+                    acc = acc + n.val + k;
+                    cur = n.next;
+                }
+                sum = sum + acc;
+                k = k + 1;
+            }
+            println(sum);
+        }
+        

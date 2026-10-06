@@ -1,0 +1,27 @@
+
+fn make(v: f64) -> Tensor[f64, [2, 2]] {
+    let t: Tensor[f64, [2, 2]] = Tensor.full([2, 2], v);
+    t
+}
+
+fn total(t: Tensor[f64, [2, 2]]) -> f64 { t.sum() }
+
+fn id(t: Tensor[f64, [2, 2]]) -> Tensor[f64, [2, 2]] { t }
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: f64 = 0.0;
+    while i < 40 {
+        // the leaking shape: fresh temp into an owned param
+        acc = acc + total(make(1.0));
+        // control 1 — caller binding owns it (always clean)
+        let m = make(2.0);
+        acc = acc + total(m);
+        // control 2 — passthrough callee; the RESULT binding owns the block,
+        // so the caller-side free must NOT also fire
+        let p = id(make(3.0));
+        acc = acc + p.sum();
+        i = i + 1;
+    }
+    println(acc);
+}

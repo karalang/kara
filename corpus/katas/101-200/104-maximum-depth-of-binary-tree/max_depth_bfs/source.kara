@@ -1,0 +1,87 @@
+// LeetCode #104: Maximum Depth of Binary Tree — iterative BFS level count.
+//
+// The maximum depth is just the number of LEVELS in a breadth-first walk. Hold the current
+// level as a `Vec[TreeNode]` frontier, and each time it is non-empty bump the depth and
+// advance to the next level (all children of the frontier). When the frontier empties, the
+// count of levels seen is the depth. A distinct mechanism from the recursive one-liner (an
+// explicit level-by-level queue vs the depth recurrence), landing on the identical number.
+// Node type mirrors kata [#102](../102-binary-tree-level-order-traversal/) — a `shared struct
+// TreeNode` (RC); the frontier is a `Vec[TreeNode]` advanced by `current = next`.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+fn max_depth(root: Option[TreeNode]) -> i64 {
+    let mut depth = 0;
+    let mut current: Vec[TreeNode] = Vec.new();
+    match root {
+        None => {}
+        Some(n) => { current.push(n); }
+    }
+    while current.len() > 0 {
+        depth = depth + 1;
+        let mut next: Vec[TreeNode] = Vec.new();
+        let mut i = 0;
+        while i < current.len() {
+            let node = current[i];
+            match node.left {
+                None => {}
+                Some(l) => { next.push(l); }
+            }
+            match node.right {
+                None => {}
+                Some(r) => { next.push(r); }
+            }
+            i = i + 1;
+        }
+        current = next;
+    }
+    depth
+}
+
+fn build(nums: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    let mut i = 0;
+    while i < nums.len() {
+        root = insert(root, nums[i]);
+        i = i + 1;
+    }
+    root
+}
+
+fn main() {
+    let base = [8, 4, 12, 2, 6, 10, 14, 1, 3, 5, 7];
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        let mut nums: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < base.len() {
+            nums.push(base[(k + t) % base.len()]);
+            k = k + 1;
+        }
+        let root = build(nums);
+        let d = max_depth(root);
+        acc = (acc * 131 + d) % 1000000007;
+        println(f"tree {t}: depth {d}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

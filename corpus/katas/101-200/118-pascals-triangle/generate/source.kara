@@ -1,0 +1,74 @@
+// LeetCode #118: Pascal's Triangle — additive row-building (★).
+//
+// Row `i` has `i+1` entries; the edges are 1 and every interior entry is the sum of the two entries
+// diagonally above it: `row[j] = prev[j-1] + prev[j]`. Build the triangle row by row, each row from
+// the one already in the table — a natural `Vec[Vec[i64]]` construction (cf. the DP table of #115).
+// A shift from the tree/next-pointer stretch (#112–#117) to nested-Vec building.
+
+fn generate(num_rows: i64) -> Vec[Vec[i64]] {
+    let mut tri: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < num_rows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j <= i {
+            if j == 0 or j == i {
+                row.push(1);
+            } else {
+                row.push(tri[i - 1][j - 1] + tri[i - 1][j]);
+            }
+            j = j + 1;
+        }
+        tri.push(row);
+        i = i + 1;
+    }
+    tri
+}
+
+// Fold every triangle entry (row-major) into a rolling hash, mixing the row length in as a separator
+// so a mis-shaped row (wrong count) shows in the sink.
+fn triangle_hash(tri: ref Vec[Vec[i64]]) -> i64 {
+    let mut h = 1;
+    let mut i = 0;
+    while i < tri.len() {
+        let row = ref tri[i];
+        let mut j = 0;
+        while j < row.len() {
+            h = (h * 131 + row[j]) % 1000000007;
+            j = j + 1;
+        }
+        h = (h * 31 + row.len() + 7) % 1000000007;
+        i = i + 1;
+    }
+    h
+}
+
+fn main() {
+    // Print the first few rows of the 8-row triangle to show the shape, then fold a battery.
+    let small = generate(8);
+    let mut r = 0;
+    while r < small.len() {
+        let row = ref small[r];
+        let mut line = "";
+        let mut c = 0;
+        while c < row.len() {
+            if c > 0 {
+                line = line + " ";
+            }
+            line = line + f"{row[c]}";
+            c = c + 1;
+        }
+        println(f"row {r}: {line}");
+        r = r + 1;
+    }
+
+    let mut acc = 0;
+    let mut n = 1;
+    while n <= 30 {
+        let tri = generate(n);
+        let h = triangle_hash(tri);
+        acc = (acc * 131 + h) % 1000000007;
+        n = n + 1;
+    }
+    println(f"sink: {acc}");
+}

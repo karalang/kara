@@ -1,0 +1,19 @@
+
+fn make_map() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("first map key padded out beyond thirty-six bytes ok", 10_i64);
+    m.insert("second map key padded out beyond thirty-six bytes o", 20_i64);
+    return m;
+}
+
+fn main() {
+    let mut pass = 0;
+    while pass < 3 {
+        let mut total = 0_i64;
+        for (k, v) in make_map().iter() {
+            total = total + v + k.len();
+        };
+        println(total);
+        pass = pass + 1;
+    };
+}

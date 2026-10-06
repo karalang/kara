@@ -1,0 +1,13 @@
+source = "tests/interpreter/concurrency.rs::test_semaphore_acquire_grants_up_to_permit_count_then_times_out"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,117 @@
+// Benchmark workload — 3Sum (LeetCode #15).
+//
+// M = 8 distinct test cases, each a Vec[i64] of N = 16 values drawn from a
+// deterministic LCG into the range [-10, 10]. Built once into a
+// Vec[Vec[i64]] before the timed loop. Per outer iter we rotate
+// `idx = k % M` and call three_sum on that case, so the call is never
+// loop-invariant (LLVM can't hoist it out of the K loop) and the eight
+// distinct inputs keep the branch predictor from fully learning any single
+// sort/two-pointer pattern.
+//
+// K = 1_000_000 outer iters. Per-iter work: a Vec.from_slice copy of N
+// values, an O(N log N) sort, an O(N^2) two-pointer scan, and one
+// Vec[Vec[i64]] output of however many zero-sum triplets the case holds
+// (each triplet a 3-element Vec[i64]). At K=1M and N=16 that's on the order
+// of 10^8 compares plus ~10^6 small-Vec allocations — the same per-iter +
+// small-output-alloc shape class as kata 13 / 14 / 71, so cross-kata
+// wall-time comparisons stay meaningful. This kata leans harder on the
+// allocator than those (nested Vec[Vec[i64]] output, freed at end-of-iter
+// scope) — a deliberate stress of the Vec[Vec[T]] alloc/free path.
+//
+// The LCG stays inside i64 with no wraparound: 1103515245 * state never
+// exceeds ~2.37e18 < i64::MAX, and the explicit `% 2^31` keeps state in
+// [0, 2^31). Every mirror (kara/rust/c/go/py) reproduces the same stream
+// and the same triplet counts, so all five must print the same sink before
+// timing starts; bench.sh fails loudly on mismatch.
+//
+// Two-lane kata: `sum = sum + r.len()` is the slice-1 allow-list reduction
+// shape, so karac emits a karac_par_reduce dispatch by default.
+// KARAC_AUTO_PAR=0 builds the seq-lane comparator — see bench/bench.sh.
+
+fn three_sum(nums: Slice[i64]) -> Vec[Vec[i64]] {
+    let mut result: Vec[Vec[i64]] = Vec.new();
+    let mut s: Vec[i64] = Vec.from_slice(nums);
+    s.sort_by(|a, b| a.cmp(b));
+    let n = s.len();
+    let mut i = 0;
+    while i < n - 2 {
+        if i > 0 and s[i] == s[i - 1] {
+            i = i + 1;
+            continue;
+        }
+        if s[i] > 0 {
+            break;
+        }
+        let mut lo = i + 1;
+        let mut hi = n - 1;
+        while lo < hi {
+            let sum = s[i] + s[lo] + s[hi];
+            if sum < 0 {
+                lo = lo + 1;
+            } else if sum > 0 {
+                hi = hi - 1;
+            } else {
+                let mut t: Vec[i64] = Vec.new();
+                t.push(s[i]);
+                t.push(s[lo]);
+                t.push(s[hi]);
+                result.push(t);
+                lo = lo + 1;
+                hi = hi - 1;
+                while lo < hi and s[lo] == s[lo - 1] {
+                    lo = lo + 1;
+                }
+                while lo < hi and s[hi] == s[hi + 1] {
+                    hi = hi - 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    result
+}
+
+// Overflow-free 31-bit LCG: 1103515245 * state + 12345 (mod 2^31).
+fn lcg_next(state: i64) -> i64 {
+    (1103515245 * state + 12345) % 2147483648
+}
+
+// One case = `count` values mapped into [-10, 10] from the LCG stream.
+fn build_case(seed: i64, count: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut state = seed;
+    let mut j = 0;
+    while j < count {
+        state = lcg_next(state);
+        v.push((state % 21) - 10);
+        j = j + 1;
+    }
+    v
+}
+
+fn main() {
+    let m_cases: i64 = 8;
+    let n_values: i64 = 16;
+    let k_iters: i64 = 1000000;
+
+    let mut sets: Vec[Vec[i64]] = Vec.new();
+    let mut m = 0;
+    while m < m_cases {
+        sets.push(build_case(m * 1000003 + 12345, n_values));
+        m = m + 1;
+    }
+
+    // Reduction shape: `sum = sum + r.len()` per iter. The analyzer
+    // recognizes the allow-listed `+` accumulator and karac's default build
+    // emits a karac_par_reduce dispatch. `r` is a Vec[Vec[i64]] allocated
+    // fresh inside three_sum and dropped at end-of-iter scope.
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % m_cases;
+        let r = three_sum(sets[idx].as_slice());
+        sum = sum + r.len();
+        k = k + 1;
+    }
+    println(sum);
+}

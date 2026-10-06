@@ -1,0 +1,16 @@
+
+pub struct ElementHandle { id: i64 }
+
+#[derive(Copy, Clone)]
+pub struct Point { x: f64, y: f64 }
+
+#[target(wasm_browser)]
+pub fn ok_prim(a: i32, b: i32) -> i32 { a + b }
+
+#[target(wasm_browser)]
+pub fn ok_handle(el: ElementHandle) -> ElementHandle { el }
+
+#[target(wasm_wasi)]
+pub fn ok_copy(p: Point) -> Point { p }
+
+fn main() {}

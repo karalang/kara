@@ -1,0 +1,7 @@
+
+fn main() {
+    let v: Vec[String] = ["a", "b"];
+    let c: Column[String] = Column.from_vec(v);
+    let d = c.map(|x| x);
+    println(f"{d.len()}");
+}

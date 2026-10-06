@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(4_i64, 10_i64);
+    m.entry(4_i64).and_modify(|v| { v += 1; });
+    let v = m.get(4_i64);
+    match v {
+        Some(x) => println(x),
+        None => println(0_i64),
+    }
+}

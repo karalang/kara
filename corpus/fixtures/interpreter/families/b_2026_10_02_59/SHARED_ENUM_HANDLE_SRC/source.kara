@@ -1,0 +1,19 @@
+shared struct S { id: i64 }
+impl S { fn get(self) -> i64 { return self.id; } }
+shared enum Sh { A(i64), B }
+impl Sh { fn read(self) -> i64 { match self { Sh.A(r) => { return r; } Sh.B => { return 0; } } } }
+shared enum L { Nil, C(i64, L) }
+fn sg(s: S) -> i64 { return s.id; }
+fn rd(s: Sh) -> i64 { match s { Sh.A(r) => { return r; } Sh.B => { return 0; } } }
+fn g(l: L) -> i64 { match l { L.Nil => { return 0; } L.C(v, rest) => { return v + g(rest); } } }
+fn mk(n: i64) -> L { if n == 0 { return L.Nil; } return L.C(n, mk(n - 1)); }
+fn main() {
+    let d = S { id: 3 }; println(f"{sg(d)} {sg(d)}");
+    let e: Sh = Sh.A(4); println(f"{e.read()} {e.read()}");
+    let f: Sh = Sh.A(5); println(f"{rd(f)} {rd(f)}");
+    let h: Sh = Sh.B; let h2 = h; println(f"{rd(h)} {rd(h2)}");
+    let a = mk(3);
+    println(f"{g(a) + g(a)}");
+    let b = a.clone();
+    println(f"{g(b)} {g(a.clone())} {g(a)}");
+}

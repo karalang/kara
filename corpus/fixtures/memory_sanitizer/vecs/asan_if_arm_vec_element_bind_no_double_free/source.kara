@@ -1,0 +1,23 @@
+
+fn fresh() -> String { "zetazetazetazeta" }
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alphabetalphabet");
+    v.push("gammagammagamma");
+    v.push("deltadeltadeltad");
+    let mut n: Vec[Vec[i64]] = Vec.new();
+    n.push([1, 2]);
+    n.push([3, 4]);
+    let mut k = 0;
+    while k < 20 {
+        let a = if v.len() > 1 { v[1] } else { "x" };
+        let b = if v.len() > 1 { v[1] } else { v[0] };
+        let c = if v.len() > 9 { v[0] } else { fresh() };
+        let d = match v.len() > 1 { true => v[2], false => "x" };
+        let e = if v.len() > 2 { if v.len() > 9 { v[0] } else { v[1] } } else { "x" };
+        let g = if n.len() > 1 { n[1] } else { n[0] };
+        println(f"{a} {b} {c} {d} {e} {g[0]} {v[1]}");
+        k = k + 1;
+    }
+    println("done");
+}

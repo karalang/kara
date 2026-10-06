@@ -1,0 +1,66 @@
+// LeetCode 275 — the backward linear scan.
+//
+// O(n), which the problem statement explicitly rules out — and that is the
+// point of keeping it. It is the direct reading of the definition against a
+// sorted array, so it cannot inherit an off-by-one from a binary search, and it
+// is the reference the ★ solver's index arithmetic is checked against.
+//
+// WALK FROM THE MOST-CITED END. After `h` steps the papers seen are the `h`
+// most-cited, and the smallest of them is `citations[n - h]`. So `h` is
+// achievable exactly when `citations[n - h] >= h`, and since the first failure
+// is final — one more step adds a paper with FEWER citations while raising the
+// bar — the answer is the last `h` that held.
+//
+// WRITTEN AS AN INCREMENTAL COUNT rather than as the same predicate the ★
+// solver tests. Deliberately: a solver that evaluated `citations[n - h] >= h`
+// over a loop would be the binary search without the search, and an error in
+// that expression would appear in both. This one grows `h` only when the paper
+// it just stepped onto clears the bar the growth would create, which is the
+// definition read forwards and involves no `n - i` arithmetic at all.
+
+fn h_index(citations: ref Vec[i64]) -> i64 {
+    let n = citations.len();
+    let mut h = 0;
+    let mut i = n - 1;                // most-cited first
+    while i >= 0 {
+        // Taking this paper would make the count `h + 1`; it only helps if the
+        // paper itself has at least that many citations.
+        if citations[i] >= h + 1 {
+            h = h + 1;
+        } else {
+            i = -1;                   // sorted, so nothing further can qualify
+        }
+        i = i - 1;
+    }
+    return h;
+}
+
+fn show(xs: ref Vec[i64]) -> String {
+    let mut s = "[";
+    let mut i = 0;
+    while i < xs.len() {
+        if i > 0 { s = s + ","; }
+        s = s + f"{xs[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    let cases: Vec[Vec[i64]] = [
+        [0, 1, 3, 5, 6],
+        [1, 2, 100],
+        [0],
+        [100],
+        [0, 0, 0],
+        [5, 5, 5],
+        [0, 0, 4, 4],
+        [1, 1, 1, 1, 1],
+        [0, 1, 2, 3, 4],
+    ];
+    let mut i = 0;
+    while i < cases.len() {
+        println(f"{show(cases[i])} -> {h_index(cases[i])}");
+        i = i + 1;
+    }
+}

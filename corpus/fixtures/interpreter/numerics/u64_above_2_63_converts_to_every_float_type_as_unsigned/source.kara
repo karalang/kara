@@ -1,0 +1,30 @@
+
+fn tailf(v: u64) -> f64 { v }
+fn retf(v: u64) -> f64 { return v; }
+fn takef(x: f64) -> f64 { x }
+struct S { f: f64 }
+impl S { fn setm(mut ref self, x: f64) -> f64 { self.f = x; self.f } }
+fn main() {
+    let n = 1i64;
+    let zero: i64 = n - 1;
+    let mx: u64 = (18446744073709551615u64 + (zero as u64));
+    let hi: u64 = (9223372036854775808u64 + (zero as u64));
+    let lo: u64 = (9223372036854775807u64 + (zero as u64));
+    println(f"cast {(mx as f64)} {(hi as f64)} {(lo as f64)}");
+    println(f"f32  {(mx as f32)} {(hi as f32)}");
+    println(f"half {(mx as f16)} {(mx as bf16)}");
+    println(f"meth {mx.to_f64()} {mx.to_f32()}");
+    let slot: f64 = mx;
+    println(f"slot {slot}");
+    println(f"call {takef(mx)} {tailf(mx)} {retf(mx)}");
+    let mut s: S = S { f: mx };
+    println(f"fldi {s.f}");
+    s.f = hi;
+    println(f"flda {s.f} {s.setm(mx)}");
+    let w: u128 = (mx as u128);
+    println(f"u128 {w} {(w as f64)}");
+    let mut vf: Vec[f64] = [];
+    vf.push(mx);
+    println(f"push {vf[0]}");
+    println(f"ints {mx} {(mx as i64)} {(mx as u32)} {(mx / 3u64)}");
+}

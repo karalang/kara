@@ -1,0 +1,111 @@
+// LeetCode 312 — Burst Balloons, top-down.
+//
+// THE ARM: the same last-burst recurrence, but recursive and memoised.
+//
+// The bottom-up arm's defining constraint is that dp[i][j] reads only
+// STRICTLY SHORTER intervals, which forces it to fill the table
+// shortest-first. Recursion has no such constraint to honour, because it does
+// not choose an order at all — it asks for dp[i][k] and dp[k][j] at the
+// moment it needs them, and the shorter-interval property that the bottom-up
+// arm has to encode as a loop bound is here just the reason the recursion
+// terminates.
+//
+// That makes this the arm where the recurrence is most legible and the
+// scheduling least so. It is the mirror image of the flat arm, where the
+// scheduling is explicit and the recurrence is buried in index arithmetic.
+//
+// THE MEMO IS Option[i64], NOT A SENTINEL. Burst totals are non-negative and
+// an empty interval legitimately scores 0, so 0 cannot mean "not yet
+// computed" — an interval of width 1 contains no balloon and its true answer
+// IS 0. Using 0 as the sentinel would not be wrong here (recomputing a 0 is
+// harmless), but it would be wrong for the same shape of problem with
+// negative values, and the type is what makes the distinction unnecessary to
+// reason about: None means unvisited, Some(v) means v, and there is no value
+// of v that could be confused for absence.
+
+struct Solver {
+    a: Vec[i64],
+    w: i64,
+    memo: Vec[Option[i64]],
+}
+
+impl Solver {
+    // dp for the open interval (i, j): the best total from bursting every
+    // balloon strictly between the surviving boundaries i and j.
+    fn solve(mut ref self, i: i64, j: i64) -> i64 {
+        // No balloon between adjacent boundaries: nothing to burst, nothing
+        // to pay. This is a real answer of 0, not a missing one.
+        if j - i < 2 { return 0; }
+
+        let slot = i * self.w + j;
+        match self.memo[slot] {
+            Some(v) => { return v; }
+            None => {}
+        }
+
+        let mut best = 0;
+        let mut k = i + 1;
+        while k < j {
+            // k burst last => paid against the boundaries, and the two sides
+            // are independent because k walls them off from each other.
+            let coins = self.solve(i, k) + self.solve(k, j)
+                      + self.a[i] * self.a[k] * self.a[j];
+            if coins > best { best = coins; }
+            k = k + 1;
+        }
+
+        self.memo[slot] = Some(best);
+        return best;
+    }
+}
+
+fn max_coins(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    for i in 0..n { a.push(nums[i]); }
+    a.push(1);
+
+    let w = n + 2;
+    let mut memo: Vec[Option[i64]] = Vec.new();
+    for i in 0..(w * w) { memo.push(None); }
+
+    let mut s = Solver { a: a, w: w, memo: memo };
+    return s.solve(0, n + 1);
+}
+
+fn render(nums: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { s.push_str(","); }
+        s.push_str(nums[i].to_string());
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(vals: Slice[i64]) {
+    let mut nums: Vec[i64] = Vec.new();
+    for v in vals { nums.push(v); }
+    println(render(nums) + " -> " + max_coins(nums).to_string());
+}
+
+fn main() {
+    report([3, 1, 5, 8]);
+    report([1, 5]);
+    report([]);
+    report([7]);
+    report([3, 0, 5]);
+    report([0, 0, 0]);
+    report([1, 2, 3, 4, 5]);
+    report([5, 4, 3, 2, 1]);
+    report([2, 2, 2, 2]);
+    report([1, 1, 1, 1, 1, 1]);
+    report([1, 100, 1]);
+    report([9, 76, 64, 21, 97, 60]);
+}

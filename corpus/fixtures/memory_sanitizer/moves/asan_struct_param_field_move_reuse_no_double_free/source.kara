@@ -1,0 +1,5 @@
+
+struct Holder { v: Vec[i64] }
+fn build() -> Holder { let mut inner: Vec[i64] = Vec.new(); inner.push(7i64); let h: Holder = Holder { v: inner }; h }
+fn first_elem(h: Holder) -> i64 { let inner = h.v; inner[0] }
+fn main() { let h = build(); let a = first_elem(h); let b = first_elem(h); println(a + b); }

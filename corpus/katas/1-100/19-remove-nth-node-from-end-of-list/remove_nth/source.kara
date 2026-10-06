@@ -1,0 +1,163 @@
+// LeetCode #19: Remove Nth Node From End of List — one-pass two-pointer,
+// O(L) time, O(1) extra.
+//
+// Given the head of a singly linked list and an integer `n`, remove the
+// n-th node counting from the *end* (1-indexed: n == 1 is the tail) and
+// return the head of the modified list.
+//
+// The naive route is two passes: walk once to measure the length L, then
+// walk again to the (L - n)-th node and splice. LeetCode's follow-up asks
+// for one pass — that's the gap two-pointer used here, the same
+// fast/slow index-cursor idea as kata [#2](../2-add-two-numbers/)'s lockstep
+// walk, but with a fixed *lead* between the two cursors instead of stepping
+// them together from the start:
+//
+//   1. Advance `fast` n nodes into the list from the head. It now sits so
+//      that there are exactly (L - n) nodes still ahead of it.
+//   2. Walk `fast` and `slow` in lockstep until `fast` falls off the end
+//      (becomes None). `slow` starts at a dummy node placed before the head,
+//      so when `fast` is None, `slow` rests on the node *just before* the
+//      one to delete — the (L - n - 1)-th real node, or the dummy itself
+//      when the head is the target.
+//   3. Splice: `slow.next = slow.next.next`.
+//
+// The dummy node is the load-bearing trick. Without it, deleting the head
+// (n == L) is a special case needing its own branch; with a dummy sitting
+// before the head, the node to remove is *always* `slow.next`, head or not,
+// so the splice is uniform. This is the same role the dummy plays in kata
+// [#2](../2-add-two-numbers/), where it anchors the output tail so the first
+// real node isn't a special case.
+//
+// `shared struct ListNode` gives the nodes reference (Rc-like) semantics, so
+// `let mut slow = dummy; ... slow = snode;` re-points the cursor without
+// copying nodes, and `slow.next = target.next` mutates through the shared
+// reference — exactly the model kata 2 introduced. Reassigning `slow.next`
+// drops the spliced-out node's last reference, so it's freed with no manual
+// bookkeeping.
+//
+// LeetCode bounds the list length by 30 and node values by 100, so i32 would
+// suffice for the arithmetic; values are i64 here for uniformity with the
+// rest of the corpus, not because the width is forced (contrast kata
+// [#18](../18-4sum/), where the 10⁹ bound makes i64 load-bearing).
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn remove_nth_from_end(head: Option[ListNode], n: i64) -> Option[ListNode] {
+    // Dummy before the head: the node to delete is always `slow.next`, so
+    // removing the head needs no special case.
+    let dummy = ListNode { val: 0, next: head };
+
+    // Step 1 — lead `fast` n nodes into the list from the head.
+    let mut fast = head;
+    let mut i = 0;
+    while i < n {
+        if let Some(node) = fast {
+            fast = node.next;
+        }
+        i = i + 1;
+    }
+
+    // Step 2 — walk `slow` (from the dummy) and `fast` in lockstep until
+    // `fast` runs off the end. `slow` then rests just before the target.
+    let mut slow = dummy;
+    loop {
+        match fast {
+            Some(node) => {
+                fast = node.next;
+                if let Some(snode) = slow.next {
+                    slow = snode;
+                }
+            }
+            None => break,
+        }
+    }
+
+    // Step 3 — splice out `slow.next` (the n-th node from the end).
+    if let Some(target) = slow.next {
+        slow.next = target.next;
+    }
+
+    dummy.next
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn report(arr: Slice[i64], n: i64) {
+    let head = from_array(arr);
+    let out = remove_nth_from_end(head, n);
+    println(to_string(out));
+}
+
+fn main() {
+    // LeetCode example 1 — remove the 2nd-from-end (the 4) → [1, 2, 3, 5].
+    let case1: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case1, 2);
+
+    // LeetCode example 2 — single node, n == 1 → [] (empty list).
+    let case2: Array[i64, 1] = [1];
+    report(case2, 1);
+
+    // LeetCode example 3 — two nodes, remove the tail → [1].
+    let case3: Array[i64, 2] = [1, 2];
+    report(case3, 1);
+
+    // Remove the head via n == L (two nodes) → [2]. Exercises the dummy:
+    // the target is `dummy.next`, so no head special case.
+    let case4: Array[i64, 2] = [1, 2];
+    report(case4, 2);
+
+    // Remove the head of a longer list (n == L == 5) → [2, 3, 4, 5].
+    let case5: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case5, 5);
+
+    // Remove the tail of a longer list (n == 1) → [1, 2, 3, 4].
+    let case6: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case6, 1);
+
+    // Remove a middle node (n == 3 of 5) → [1, 2, 4, 5].
+    let case7: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case7, 3);
+
+    // Three nodes, remove the head (n == 3) → [2, 3].
+    let case8: Array[i64, 3] = [7, 8, 9];
+    report(case8, 3);
+}

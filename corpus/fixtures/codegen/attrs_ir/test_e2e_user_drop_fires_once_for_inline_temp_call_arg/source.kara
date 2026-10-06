@@ -1,0 +1,10 @@
+
+struct Guard { id: i64 }
+impl Drop for Guard {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+fn consume(g: Guard) {}
+fn main() {
+    consume(Guard { id: 7 });
+    println("after");
+}

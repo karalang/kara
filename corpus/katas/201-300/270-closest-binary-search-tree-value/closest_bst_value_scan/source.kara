@@ -1,0 +1,82 @@
+// LeetCode 270 — Closest BST Value, by scanning every node.
+//
+// The reference. Walk the whole tree, keep the best value under the same
+// comparison, and never use the search-tree property at all — no descent, no
+// interval narrowing, no claim about where the answer can be. O(n) instead of
+// O(h), and it cannot be wrong about ancestors because it never skips anything.
+//
+// It shares exactly one thing with the ★ file: the comparison, including the
+// value tie-break. That is deliberate and it is the point — the two differ in
+// VISIT ORDER, so if the tie-break were dropped they would disagree on every
+// midpoint target, which is precisely what the differential is for. A tie rule
+// that resolves on value rather than on arrival order is the only way two
+// traversals can be required to agree.
+
+fn abs_f(x: f64) -> f64 {
+    if x < 0.0 { return 0.0 - x; }
+    return x;
+}
+
+fn closest(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+           root: i64, target: f64) -> i64 {
+    // Explicit stack: every node, in whatever order it pops.
+    let mut stack: Vec[i64] = Vec.new();
+    stack.push(root);
+    let mut best = val[root];
+    let mut best_diff = abs_f(val[root] as f64 - target);
+    while stack.len() > 0 {
+        let cur = stack[stack.len() - 1];
+        stack.pop();
+        let v = val[cur];
+        let d = abs_f(v as f64 - target);
+        if d < best_diff or (d == best_diff and v < best) {
+            best = v;
+            best_diff = d;
+        }
+        if left[cur] >= 0 { stack.push(left[cur]); }
+        if right[cur] >= 0 { stack.push(right[cur]); }
+    }
+    return best;
+}
+
+fn report(label: ref String, val: ref Vec[i64], left: ref Vec[i64],
+          right: ref Vec[i64], root: i64, target: f64) {
+    println(f"{label} target={target} -> {closest(val, left, right, root, target)}");
+}
+
+fn main() {
+    let mut val: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    val.push(4); left.push(1); right.push(2);
+    val.push(2); left.push(3); right.push(4);
+    val.push(5); left.push(-1); right.push(-1);
+    val.push(1); left.push(-1); right.push(-1);
+    val.push(3); left.push(-1); right.push(-1);
+
+    report("[4,2,5,1,3]", val, left, right, 0, 3.714286);
+    report("[4,2,5,1,3]", val, left, right, 0, 0.5);
+    report("[4,2,5,1,3]", val, left, right, 0, 100.0);
+    report("[4,2,5,1,3]", val, left, right, 0, 2.5);
+    report("[4,2,5,1,3]", val, left, right, 0, 4.5);
+    report("[4,2,5,1,3]", val, left, right, 0, 1.5);
+    report("[4,2,5,1,3]", val, left, right, 0, 3.4);
+    report("[4,2,5,1,3]", val, left, right, 0, 3.6);
+    report("[4,2,5,1,3]", val, left, right, 0, 2.0);
+    report("[4,2,5,1,3]", val, left, right, 0, 5.0);
+
+    let mut v2: Vec[i64] = Vec.new();
+    let mut l2: Vec[i64] = Vec.new();
+    let mut r2: Vec[i64] = Vec.new();
+    v2.push(7); l2.push(-1); r2.push(-1);
+    report("[7]", v2, l2, r2, 0, -3.25);
+
+    let mut v3: Vec[i64] = Vec.new();
+    let mut l3: Vec[i64] = Vec.new();
+    let mut r3: Vec[i64] = Vec.new();
+    v3.push(1); l3.push(-1); r3.push(1);
+    v3.push(10); l3.push(-1); r3.push(2);
+    v3.push(100); l3.push(-1); r3.push(-1);
+    report("[1,10,100] spine", v3, l3, r3, 0, 6.0);
+    report("[1,10,100] spine", v3, l3, r3, 0, 5.5);
+}

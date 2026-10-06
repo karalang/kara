@@ -1,0 +1,20 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mks(i: i64) -> String { return f"heap-string-longer-than-sso-{i}" }
+fn last() -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; println("  dies"); return x }
+fn tail() -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; println(f"  a{x[0].id}"); let x: Array[R, 2] = [mkr(8), mkr(9)]; x }
+fn three() -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(4), mkr(5)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; println("  dies"); x }
+fn wrap() -> Option[Array[R, 2]] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; println("  dies"); return Some(x) }
+fn early(c: bool) -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; if c { return x }; println("  dies"); x }
+fn strs() -> Array[String, 2] { let x: Array[String, 2] = [mks(1), mks(2)]; let x: Array[String, 2] = [mks(8), mks(9)]; println("  dies"); x }
+fn main() {
+    println("last");    { let y = last(); println(f"  y{y[0].id}"); }
+    println("tail");    { let y = tail(); println(f"  y{y[1].id}"); }
+    println("three");   { let y = three(); println(f"  y{y[0].id}"); }
+    println("wrap");    { let y = wrap(); match y { Some(a) => { println(f"  y{a[0].id}") }, None => println("  n") } }
+    println("early-t"); { let y = early(true); println(f"  y{y[0].id}"); }
+    println("early-f"); { let y = early(false); println(f"  y{y[0].id}"); }
+    println("strs");    { let y = strs(); println(f"  y{y[0].len()}"); }
+    println("end")
+}

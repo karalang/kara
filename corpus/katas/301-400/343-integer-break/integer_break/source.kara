@@ -1,0 +1,54 @@
+// LeetCode #343: Integer Break — dynamic programming over every total.
+//
+// Given an integer n (2 <= n <= 58), break it into the sum of at least two
+// positive integers and return the largest product of those integers.
+//
+//   n = 2   ->  1     (1 + 1)
+//   n = 10  ->  36    (3 + 3 + 4)
+//
+// best[i] is the largest product of a break of i into at least two parts.
+// The first part j is split off, and the rest i - j is either kept whole
+// (product j * (i - j)) or broken further (product j * best[i - j]). Keeping
+// the rest whole matters: best[3] is 2, but as a part of a larger total a 3
+// is worth 3.
+//
+// O(n^2) time, O(n) space.
+
+fn integer_break(n: i64) -> i64 {
+    let mut best: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 2..n + 1 {
+        for j in 1..i {
+            let whole = j * (i - j);
+            let broken = j * best[i - j];
+            if whole > best[i] {
+                best[i] = whole;
+            }
+            if broken > best[i] {
+                best[i] = broken;
+            }
+        }
+    }
+    return best[n];
+}
+
+fn main() {
+    // The examples from the problem statement.
+    println(f"2 -> {integer_break(2)}");
+    println(f"10 -> {integer_break(10)}");
+
+    // Every n the problem allows, one line each, and their sum.
+    let mut sum = 0;
+    for n in 2..59 {
+        let p = integer_break(n);
+        println(f"{n} -> {p}");
+        sum += p;
+    }
+    println(f"sum over 2..58: {sum}");
+
+    // Past the problem's bound. Every candidate a step compares is the
+    // product of a real break, so none exceeds the answer, and nothing
+    // overflows before the answer itself does: 119 is the largest n whose
+    // answer, 2 * 3^39, fits in an i64.
+    println(f"100 -> {integer_break(100)}");
+    println(f"119 -> {integer_break(119)}");
+}

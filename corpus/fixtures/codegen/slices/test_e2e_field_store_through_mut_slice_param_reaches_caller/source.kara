@@ -1,0 +1,24 @@
+
+struct P { x: i64, y: i64 }
+fn bump_slice(s: mut Slice[P]) { s[0].x = s[0].x + 1; println(f"inside={s[0].x}"); }
+fn bump_at(s: mut Slice[P], i: i64) { s[i].y = 99; }
+fn bump_vec(v: mut ref Vec[P]) { v[0].x = v[0].x + 100; }
+fn set_whole(s: mut Slice[P]) { s[1] = P { x: 70, y: 80 }; }
+fn bump_scalar(s: mut Slice[i64]) { s[0] = s[0] + 1; }
+fn main() {
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { x: 3, y: 7 });
+    ps.push(P { x: 5, y: 11 });
+    bump_slice(mut ps);
+    println(f"{ps[0].x}");
+    bump_at(mut ps, 1);
+    println(f"{ps[1].y}");
+    bump_vec(mut ps);
+    println(f"{ps[0].x}");
+    set_whole(mut ps);
+    println(f"{ps[1].x} {ps[1].y}");
+    let mut ns: Vec[i64] = Vec.new();
+    ns.push(41);
+    bump_scalar(mut ns);
+    println(f"{ns[0]}");
+}

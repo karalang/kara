@@ -1,0 +1,12 @@
+
+unsafe extern "C" {
+    #[link_name("strlen")]
+    fn measure(s: *const u8) -> i64;
+}
+
+fn main() {
+    let s = c"hello, world";
+    // Safety: `c"..."` is NUL-terminated; strlen reads to the NUL.
+    let n = unsafe { measure(s.as_ptr()) };
+    println(n);
+}

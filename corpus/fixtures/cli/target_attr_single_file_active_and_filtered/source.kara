@@ -1,0 +1,14 @@
+
+#[target(native)]
+fn platform_name() -> String { "native" }
+
+#[target(not(gpu))]
+fn io_helper() -> i64 { 7 }
+
+#[target(wasm_browser, wasm_wasi)]
+fn wasm_only() -> i64 { 1 }
+
+fn main() {
+    println(platform_name());
+    println(f"{io_helper()}");
+}

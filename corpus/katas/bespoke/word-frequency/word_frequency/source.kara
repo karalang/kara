@@ -1,0 +1,72 @@
+// Bespoke kata — word-frequency report (the canonical hash-histogram). ★
+//
+// Counts word occurrences with the flagship write-through idiom
+// `*m.entry(w).or_insert(0) += 1`, reads the tallies back with `Map.get_or`,
+// and emits an ASCENDING-by-word report via `Map.keys` + `Vec.sort`. A second
+// pass uses `entry(...).and_modify(...)` to bump one word's count in place.
+// String prep is `to_lowercase` + `split` + `trim`.
+//
+// Every collection/string move here was a recent Kāra gap fix — this is the
+// natural single program that exercises them together:
+//   - Map.entry(k).or_insert(d) write-through (the `mut ref V` contract)
+//   - moved-binding key into entry (`for w in words { ...entry(w)... }`)
+//   - Map.get_or(k, default) -> owned V
+//   - Map.keys -> Vec[String], Vec.sort, String.to_lowercase/split/trim
+//
+// `SortedMap[String, i64]` would give the ordered report directly, but it is
+// interpreter-only in codegen v1 (no B-tree runtime yet), so the A/B-portable
+// form is `keys() + sort()`. A/B: `karac run` and the `karac build` binary
+// print byte-identical output.
+
+// Lower-case, whitespace-split, trim each piece; drop empties.
+fn tokenize(raw: String) -> Vec[String] {
+    let lowered = raw.to_lowercase();
+    let mut out: Vec[String] = Vec.new();
+    for piece in lowered.split(" ") {
+        let w = piece.trim();
+        if w.len() > 0 {
+            out.push(w.to_string());
+        }
+    }
+    out
+}
+
+fn main() {
+    let corpus = "the quick brown fox the lazy dog the QUICK fox the the Brown";
+    let words = tokenize(corpus);
+
+    // 1) Histogram: the moved-binding key `w` flows into entry().or_insert,
+    //    and the deref-compound-assign writes the new count back through the
+    //    slot. Repeated keys take the occupied (no-adopt) path.
+    let mut freq: Map[String, i64] = Map.new();
+    for w in words {
+        *freq.entry(w).or_insert(0) += 1;
+    }
+
+    // 2) Ascending-by-word report; each count read back with get_or.
+    //    (The binding is annotated `Vec[String]` so codegen's `.sort()` sees
+    //    the String element type — inferring it from `keys()` is a separate
+    //    type-inference follow-up.)
+    let mut keys: Vec[String] = freq.keys();
+    keys.sort();
+    println("-- frequency (ascending) --");
+    let mut best_word = "";
+    let mut best_count = 0;
+    for k in keys {
+        let c = freq.get_or(k.clone(), 0);
+        println(f"{k} {c}");
+        if c > best_count {
+            best_count = c;
+            best_word = k.clone();
+        }
+    }
+    println(f"top {best_word} {best_count}");
+
+    // 3) and_modify: bump an existing count in place (occupied → lookup slot).
+    let fox = "fox";
+    freq.entry(fox.to_string()).and_modify(|v| {
+        *v += 10;
+    });
+    let fox_key = "fox";
+    println(f"fox-after-bonus {freq.get_or(fox_key.to_string(), 0)}");
+}

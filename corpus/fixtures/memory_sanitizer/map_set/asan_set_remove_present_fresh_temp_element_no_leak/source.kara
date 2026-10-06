@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("set-remove-element-aaaaaaaaaaaaaaaaaaaa".to_string());
+    if s.remove("set-remove-element-aaaaaaaaaaaaaaaaaaaa".to_string()) {
+        println("removed");
+    }
+    println(s.len());
+}

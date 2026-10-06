@@ -1,0 +1,108 @@
+// Benchmark — LeetCode 304, Range Sum Query 2D (Immutable).
+//
+// Build-once + punch, per BENCHMARKS.md: a 256x256 matrix and its 257x257
+// prefix table are built once, 100,000 random rectangles are generated once
+// into four query arrays, and the timed work is PASSES sweeps over those
+// arrays. Nothing is allocated or generated inside the timed loop.
+//
+// SIZED TO STAY IN CACHE ON PURPOSE. The prefix table is 257*257*8 = 528 KB,
+// which is L2-resident on every machine in the corpus. That is the point: a
+// table large enough to miss to DRAM would measure memory latency, and four
+// scattered loads to DRAM cost the same in every language, which would hide
+// exactly the thing this kata is here to measure — the per-access overhead of
+// four bounds-checked indexed loads against four raw ones.
+//
+// THE SINK IS A MASK, NOT A MODULO. Learned the hard way on #303, whose first
+// draft used `% 1000000007` and measured its own sink: two 64-bit divisions
+// per query are a fixed hardware cost no backend can optimise, they dominated
+// the loop, and every language tied to within 3%. `& 0x3FFFFFFF` is one
+// instruction and lets the actual query work show. A masked total is also
+// order-insensitive in the same way a sum is, so it stays a valid cross-
+// language checksum.
+//
+// The flat layout is used here rather than the nested Vec[Vec[i64]] of the ★
+// arm, because it is what the C/Rust/Go mirrors would naturally write and
+// honest benchmarking requires the same algorithm on both sides. The nested-
+// versus-flat cost inside kāra is reported separately in the README.
+
+fn main() {
+    let n = 256;
+    let stride = n + 1;
+    let queries = 100000;
+    let passes = 1800;
+
+    let mut state = 20304;
+
+    // ---- build the matrix, then its prefix table (both once, untimed intent)
+    let mut m: Vec[i64] = Vec.new();
+    let cells = n * n;
+    let mut i = 0;
+    while i < cells {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        m.push(state % 21 - 10);
+        i = i + 1;
+    }
+
+    let mut pre: Vec[i64] = Vec.new();
+    let table = (n + 1) * stride;
+    i = 0;
+    while i < table {
+        pre.push(0);
+        i = i + 1;
+    }
+
+    let mut r = 0;
+    while r < n {
+        let mut c = 0;
+        while c < n {
+            pre[(r + 1) * stride + (c + 1)] = pre[r * stride + (c + 1)]
+                                            + pre[(r + 1) * stride + c]
+                                            - pre[r * stride + c]
+                                            + m[r * n + c];
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+
+    // ---- generate the query set once
+    let mut qr1: Vec[i64] = Vec.new();
+    let mut qc1: Vec[i64] = Vec.new();
+    let mut qr2: Vec[i64] = Vec.new();
+    let mut qc2: Vec[i64] = Vec.new();
+    let mut q = 0;
+    while q < queries {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let a = state % n;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let b = state % n;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let c = state % n;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let d = state % n;
+        if a <= b { qr1.push(a); qr2.push(b); } else { qr1.push(b); qr2.push(a); }
+        if c <= d { qc1.push(c); qc2.push(d); } else { qc1.push(d); qc2.push(c); }
+        q = q + 1;
+    }
+
+    // ---- the timed work
+    let mut checksum = 0;
+    let mut p = 0;
+    while p < passes {
+        let mut k = 0;
+        while k < queries {
+            let r1 = qr1[k];
+            let c1 = qc1[k];
+            let r2 = qr2[k];
+            let c2 = qc2[k];
+            let v = pre[(r2 + 1) * stride + (c2 + 1)]
+                  - pre[r1 * stride + (c2 + 1)]
+                  - pre[(r2 + 1) * stride + c1]
+                  + pre[r1 * stride + c1];
+            checksum = (checksum + v) & 0x3FFFFFFF;
+            k = k + 1;
+        }
+        p = p + 1;
+    }
+
+    println(f"checksum {checksum}");
+}

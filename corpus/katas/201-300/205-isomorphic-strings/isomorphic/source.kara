@@ -1,0 +1,52 @@
+// LeetCode 205 — Isomorphic Strings.
+//
+// `s` and `t` are isomorphic if there is a CONSISTENT one-to-one character
+// mapping turning `s` into `t`: every occurrence of a character maps to the same
+// character, and no two source characters map to the same target (a bijection).
+// Enforce both halves with two maps — `s→t` catches an inconsistent forward
+// mapping, `t→s` catches two sources colliding on one target. Walk the strings in
+// lockstep; the first contradiction fails.
+
+fn is_isomorphic(s: String, t: String) -> bool {
+    let sc: Vec[char] = s.chars().collect();
+    let tc: Vec[char] = t.chars().collect();
+    let n = sc.len();
+    if n != tc.len() {
+        return false;
+    }
+    let mut st: Map[char, char] = Map.new();
+    let mut ts: Map[char, char] = Map.new();
+    let mut i = 0;
+    while i < n {
+        let a = sc[i];
+        let b = tc[i];
+        match st.get(a) {
+            Some(x) => { if x != b { return false; } }
+            None => { let _ = st.insert(a, b); }
+        }
+        match ts.get(b) {
+            Some(y) => { if y != a { return false; } }
+            None => { let _ = ts.insert(b, a); }
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn report(s: String, t: String) {
+    if is_isomorphic(s, t) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    report("egg", "add");       // true
+    report("foo", "bar");       // false  (o->a and o->r conflict)
+    report("paper", "title");   // true
+    report("badc", "baba");     // false  (d,c both -> a,b collide)
+    report("", "");             // true
+    report("ab", "aa");         // false  (a,b -> a collides on target)
+    report("abcabc", "xyzxyz"); // true
+}

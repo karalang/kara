@@ -1,0 +1,1 @@
+unsafe extern "C" { fn peek(p: ref i64) -> i64; } fn main() {}

@@ -1,0 +1,9 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum Gh[T] { Y(T, String), N }
+fn gh(g: Gh[Array[R, 2]]) { println("  in") }
+fn main() {
+    { let a: Array[R, 2] = [R { id: 1 }, R { id: 2 }];
+      let w: Gh[Array[R, 2]] = Gh.Y(a, f"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"); gh(w); println("  mid") }
+    println("done")
+}

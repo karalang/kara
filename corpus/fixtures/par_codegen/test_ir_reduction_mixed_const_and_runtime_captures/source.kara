@@ -1,0 +1,13 @@
+
+fn main() {
+    let n: i64 = 8i64;
+    let mut factor: i64 = 3i64;
+    factor = 5i64;
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        sum = sum + (k % n) * factor;
+        k = k + 1i64;
+    }
+    println(sum);
+}

@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("x".to_string(), 7_i64);
+    println(m.get_or("x".to_string(), -1_i64));
+    println(m.get_or("y".to_string(), -1_i64));
+}

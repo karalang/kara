@@ -1,0 +1,105 @@
+// LeetCode 208 — Implement Trie (Prefix Tree).
+//
+// A trie supporting `insert(word)`, `search(word)` (exact word present), and
+// `starts_with(prefix)` (any inserted word has this prefix). Each node owns a
+// map from the next character to a child node, plus an `is_end` flag marking a
+// node where an inserted word terminates.
+//
+// Index-pool representation: all nodes live in one `Vec[TrieNode]`, and children
+// are referenced by their integer index (root is node 0). Inserting walks the
+// characters, creating a fresh node — pushed to the pool — whenever the needed
+// child edge is missing, and flags the final node as a word end. `search` walks
+// the same way and checks `is_end`; `starts_with` only needs the walk to reach
+// the end of the prefix.
+
+struct TrieNode {
+    children: Map[char, i64],   // next char -> child node index
+    mut is_end: bool,
+}
+
+fn new_node() -> TrieNode {
+    return TrieNode { children: Map.new(), is_end: false };
+}
+
+// Child index for character `c` under node `idx`, or -1 if no such edge.
+fn child_of(nodes: ref Vec[TrieNode], idx: i64, c: char) -> i64 {
+    match nodes[idx].children.get(c) {
+        Some(v) => v,
+        None => -1,
+    }
+}
+
+fn insert(nodes: mut ref Vec[TrieNode], word: String) {
+    let cs: Vec[char] = word.chars().collect();
+    let n = cs.len();
+    let mut cur = 0;
+    let mut i = 0;
+    while i < n {
+        let c = cs[i];
+        let child = child_of(nodes, cur, c);
+        if child == -1 {
+            let new_idx = nodes.len();
+            nodes.push(new_node());
+            let _ = nodes[cur].children.insert(c, new_idx);
+            cur = new_idx;
+        } else {
+            cur = child;
+        }
+        i = i + 1;
+    }
+    nodes[cur].is_end = true;
+}
+
+// Walk the characters of `s`; return the node index reached, or -1 if any edge
+// is missing along the way.
+fn walk(nodes: ref Vec[TrieNode], s: String) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut cur = 0;
+    let mut i = 0;
+    while i < n {
+        let child = child_of(nodes, cur, cs[i]);
+        if child == -1 { return -1; }
+        cur = child;
+        i = i + 1;
+    }
+    return cur;
+}
+
+fn search(nodes: ref Vec[TrieNode], word: String) -> bool {
+    let node = walk(nodes, word);
+    if node == -1 { return false; }
+    return nodes[node].is_end;
+}
+
+fn starts_with(nodes: ref Vec[TrieNode], prefix: String) -> bool {
+    return walk(nodes, prefix) != -1;
+}
+
+fn show(b: bool) {
+    if b { println("true"); } else { println("false"); }
+}
+
+fn main() {
+    let mut trie: Vec[TrieNode] = Vec.new();
+    trie.push(new_node());              // root at index 0
+
+    insert(mut trie, "apple");
+    show(search(trie, "apple"));        // true
+    show(search(trie, "app"));          // false — prefix, not a full word
+    show(starts_with(trie, "app"));     // true
+    insert(mut trie, "app");
+    show(search(trie, "app"));          // true — now inserted
+
+    insert(mut trie, "application");
+    insert(mut trie, "apply");
+    show(search(trie, "apply"));        // true
+    show(search(trie, "appl"));         // false
+    show(starts_with(trie, "appl"));    // true
+    show(starts_with(trie, "banana"));  // false
+    show(search(trie, "banana"));       // false
+
+    insert(mut trie, "banana");
+    show(search(trie, "banana"));       // true
+    show(starts_with(trie, "ban"));     // true
+}

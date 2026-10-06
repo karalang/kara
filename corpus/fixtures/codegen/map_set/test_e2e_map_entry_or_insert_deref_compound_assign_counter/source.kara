@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let words = ["a", "b", "a", "c", "a", "b"];
+    for w in words {
+        *m.entry(w.to_string()).or_insert(0_i64) += 1;
+    }
+    println(m.get_or("a".to_string(), 0_i64));
+    println(m.get_or("b".to_string(), 0_i64));
+    println(m.get_or("c".to_string(), 0_i64));
+}

@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/enums.rs::asan_shared_payload_in_plain_enum_is_rc_released"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

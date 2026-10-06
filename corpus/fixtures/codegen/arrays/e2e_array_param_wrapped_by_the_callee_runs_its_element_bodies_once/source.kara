@@ -1,0 +1,43 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaaaaaaa{i}" } }
+enum Pw { P(Array[R, 2]), Q }
+enum Pw2 { P2(Array[R, 2], Array[R, 2]), Q2 }
+enum Pv { Pv1(Vec[R]), Qv }
+struct Bx { v: Array[R, 2] }
+struct Hm { k: i64 }
+impl Hm {
+    fn seeded(ref self, a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  arm"); return 1 }, Option.None => { return 0 } } }
+    fn named(ref self, a: Array[R, 2]) -> i64 { let o = Option.Some(a); println("  mid"); return 1 }
+}
+fn c_opt(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println(f"  r{v[0].id}"); return 1 }, Option.None => { return 0 } } }
+fn c_bare(a: Array[R, 2]) -> i64 { match Some(a) { Some(v) => { println("  arm"); return 1 }, None => { return 0 } } }
+fn c_res(a: Array[R, 2]) -> i64 { match Result.Ok(a) { Result.Ok(v) => { println("  arm"); return 1 }, Result.Err(e) => { return 0 } } }
+fn c_user(a: Array[R, 2]) -> i64 { match Pw.P(a) { Pw.P(v) => { println(f"  r{v[1].id}"); return 1 }, Pw.Q => { return 0 } } }
+fn c_vec(a: Vec[R]) -> i64 { match Pv.Pv1(a) { Pv.Pv1(v) => { println("  arm"); return 1 }, Pv.Qv => { return 0 } } }
+fn c_iflet(a: Array[R, 2]) -> i64 { if let Option.Some(v) = Option.Some(a) { println(f"  r{v[1].id}"); return 1 } return 0 }
+fn c_letelse(a: Array[R, 2]) -> i64 { let Option.Some(v) = Option.Some(a) else { return 0 }; println(f"  r{v[0].id}"); return 1 }
+fn c_named(a: Array[R, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  arm"); return 1 }, Option.None => { return 0 } } }
+fn c_named_user(a: Array[R, 2]) -> i64 { let o = Pw.P(a); println("  mid"); return 1 }
+fn c_named_mixed(a: Array[R, 2]) -> i64 { let o = Pw2.P2(a, [mkr(90), mkr(91)]); println("  mid"); return 1 }
+fn c_named_rebind(a: Array[R, 2]) -> i64 { let o = Option.Some(a); let o2 = o; println("  mid"); return 1 }
+fn c_struct(a: Array[R, 2]) -> i64 { let b = Bx { v: a }; println(f"  r{b.v[0].id}"); return 1 }
+fn c_tuple(a: Array[R, 2]) -> i64 { let t = (a, 5); println(f"  r{t.1}"); return 1 }
+fn main() {
+    println("opt");         { let a: Array[R, 2] = [mkr(1), mkr(2)]; let z = c_opt(a); }
+    println("bare");        { let a: Array[R, 2] = [mkr(3), mkr(4)]; let z = c_bare(a); }
+    println("res");         { let a: Array[R, 2] = [mkr(5), mkr(6)]; let z = c_res(a); }
+    println("user");        { let a: Array[R, 2] = [mkr(7), mkr(8)]; let z = c_user(a); }
+    println("vec");         { let a: Vec[R] = [mkr(9), mkr(10)]; let z = c_vec(a); }
+    println("iflet");       { let a: Array[R, 2] = [mkr(11), mkr(12)]; let z = c_iflet(a); }
+    println("letelse");     { let a: Array[R, 2] = [mkr(13), mkr(14)]; let z = c_letelse(a); }
+    println("named");       { let a: Array[R, 2] = [mkr(15), mkr(16)]; let z = c_named(a); }
+    println("named_user");  { let a: Array[R, 2] = [mkr(17), mkr(18)]; let z = c_named_user(a); }
+    println("named_mixed"); { let a: Array[R, 2] = [mkr(19), mkr(20)]; let z = c_named_mixed(a); }
+    println("named_rebind");{ let a: Array[R, 2] = [mkr(21), mkr(22)]; let z = c_named_rebind(a); }
+    println("struct");      { let a: Array[R, 2] = [mkr(23), mkr(24)]; let z = c_struct(a); }
+    println("tuple");       { let a: Array[R, 2] = [mkr(25), mkr(26)]; let z = c_tuple(a); }
+    println("m_seeded");    { let h = Hm { k: 1 }; let a: Array[R, 2] = [mkr(27), mkr(28)]; let z = h.seeded(a); }
+    println("m_named");     { let h = Hm { k: 1 }; let a: Array[R, 2] = [mkr(29), mkr(30)]; let z = h.named(a); }
+    println("end")
+}

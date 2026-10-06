@@ -1,0 +1,7 @@
+images 1400 black 3924
+P1 three-arm disagreements 0
+P2 bound/area mismatches 0
+P3 seed-dependence failures 0
+P4 transpose-invariance failures 0
+P5 disconnected: B wrong 0, A wrong 200, C wrong 200, overcounts 0
+DIFFERENTIAL OK

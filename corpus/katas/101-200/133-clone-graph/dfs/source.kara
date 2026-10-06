@@ -1,0 +1,155 @@
+// LeetCode #133: Clone Graph — DFS / recursive O(N + M).
+//
+// Each visited original node maps to its clone via a Map[i64, Node],
+// keyed by val (LeetCode guarantees vals are unique 1..n). The map
+// breaks recursion on cycles: a second visit to a node returns the
+// existing clone instead of recursing.
+
+shared struct Node {
+    val: i64,
+    mut neighbors: Vec[Node],
+}
+
+fn clone_graph(root: Option[Node]) -> Option[Node] {
+    match root {
+        None => None,
+        Some(n) => {
+            let mut visited: Map[i64, Node] = Map.new();
+            let cloned = dfs(n, mut visited);
+            Some(cloned)
+        }
+    }
+}
+
+fn dfs(node: Node, visited: mut ref Map[i64, Node]) -> Node {
+    match visited.get(node.val) {
+        Some(existing) => existing,
+        None => {
+            // `copy` stays usable after the insert — `shared struct`
+            // handles are RC aliases, so the map holds one reference and
+            // this binding another; mutations through either are visible
+            // to both. (This natural shape was blocked until the 2026-06
+            // refcount fixes: returning a handle whose only other RC
+            // reference lived in a discarded local Map hung at runtime,
+            // so the original code re-fetched via `visited.get(...)` on
+            // every push and at the return.)
+            let copy = Node { val: node.val, neighbors: Vec.new() };
+            let _ = visited.insert(node.val, copy);
+            for nb in node.neighbors.iter() {
+                let cloned_nb = dfs(nb, visited);
+                copy.neighbors.push(cloned_nb);
+            }
+            copy
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Convert an array literal to Vec[i64] so call sites read like adjacency
+// rows (Vec literal syntax not in the surface yet — see
+// examples/elevator_project/src/scheduler_test.kara note).
+fn row(arr: Slice[i64]) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let n = arr.len();
+    for i in 0..n {
+        v.push(arr[i]);
+    }
+    v
+}
+
+// Build a graph from an adjacency list. `adj[i]` is the neighbor-val list
+// for node val `i + 1`. Returns the node with val 1, or None if empty.
+fn build_graph(adj: ref Vec[Vec[i64]]) -> Option[Node] {
+    let n = adj.len();
+    if n == 0 {
+        return None;
+    }
+    let mut nodes: Vec[Node] = Vec.new();
+    for i in 0..n {
+        nodes.push(Node { val: (i as i64) + 1, neighbors: Vec.new() });
+    }
+    for i in 0..n {
+        let m = adj[i].len();
+        for j in 0..m {
+            let v = adj[i][j];
+            nodes[i].neighbors.push(nodes[(v - 1) as u64]);
+        }
+    }
+    Some(nodes[0])
+}
+
+// BFS adjacency-list dump. Deterministic: start at root, push neighbors in
+// stored order, mark visited by val. Prints `val: [n1, n2, ...]` per line.
+fn print_graph(root: Option[Node]) {
+    match root {
+        None => println("(empty)"),
+        Some(start) => bfs_print(start),
+    }
+}
+
+fn bfs_print(start: Node) {
+    let mut queue: VecDeque[Node] = VecDeque.new();
+    let mut visited: Map[i64, bool] = Map.new();
+    queue.push_back(start);
+    let _ = visited.insert(start.val, true);
+    loop {
+        match queue.pop_front() {
+            None => break,
+            Some(curr) => {
+                let mut nvals: Vec[i64] = Vec.new();
+                for nb in curr.neighbors.iter() {
+                    nvals.push(nb.val);
+                    match visited.get(nb.val) {
+                        None => {
+                            let _ = visited.insert(nb.val, true);
+                            queue.push_back(nb);
+                        }
+                        Some(_) => {}
+                    }
+                }
+                println(f"{curr.val}: {nvals}");
+            }
+        }
+    }
+}
+
+fn report(adj: ref Vec[Vec[i64]]) {
+    let original = build_graph(adj);
+    let cloned = clone_graph(original);
+    print_graph(cloned);
+    println("---");
+}
+
+fn main() {
+    // Case 1: 4-cycle (LeetCode default example)
+    let mut a1: Vec[Vec[i64]] = Vec.new();
+    a1.push(row([2, 4]));
+    a1.push(row([1, 3]));
+    a1.push(row([2, 4]));
+    a1.push(row([1, 3]));
+    report(a1);
+
+    // Case 2: single node, no neighbors
+    let mut a2: Vec[Vec[i64]] = Vec.new();
+    a2.push(row([]));
+    report(a2);
+
+    // Case 3: empty graph
+    let a3: Vec[Vec[i64]] = Vec.new();
+    report(a3);
+
+    // Case 4: two nodes mutually connected
+    let mut a4: Vec[Vec[i64]] = Vec.new();
+    a4.push(row([2]));
+    a4.push(row([1]));
+    report(a4);
+
+    // Case 5: path 1-2-3-4
+    let mut a5: Vec[Vec[i64]] = Vec.new();
+    a5.push(row([2]));
+    a5.push(row([1, 3]));
+    a5.push(row([2, 4]));
+    a5.push(row([3]));
+    report(a5);
+}

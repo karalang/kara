@@ -1,0 +1,12 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+fn rb(a: Option[S], c: bool) -> i64 { let mut v: Vec[Option[S]] = Vec.new(); if c { v.push(a) }; println("in"); 5 }
+fn main() {
+  let a = Some(mk(1)); println(f"k{rb(a, true)}");
+  let b = Some(mk(2)); println(f"k{rb(b, false)}");
+  println(f"k{rb(Some(mk(3)), true)}");
+  println(f"k{rb(Some(mk(4)), false)}");
+  println("end")
+}

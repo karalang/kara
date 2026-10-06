@@ -1,0 +1,10 @@
+enum Tok { Eof, ByteTok(u8) }
+fn code(t: ref Tok, k: i64) -> bool {
+    match t {
+        ByteTok(b) => b > -1 or b == k,
+        Eof => false,
+    }
+}
+fn main() {
+    println(f"{code(Tok.ByteTok(4), 4)}");
+}

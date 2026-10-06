@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let words: Vec[String] = ["apple".to_string(), "banana".to_string(), "avocado".to_string(), "cherry".to_string()];
+        let (a, other): (Vec[String], Vec[String]) = words.iter().partition(|w| w.starts_with("a"));
+        for w in a { acc = acc + w.len(); }
+        for w in other { acc = acc + w.len(); }
+        // Source survives and is used, so its buffers must still be live here.
+        acc = acc + words.len();
+        i = i + 1;
+    }
+    println(acc);
+}

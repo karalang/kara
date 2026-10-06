@@ -1,0 +1,9 @@
+
+fn sum(xs: Slice[u8]) -> i64 {
+    let mut s = 0_i64;
+    for x in xs { s = s + (x as i64); }
+    s
+}
+fn main() {
+    println(sum([4u8, 5u8, 6u8]));
+}

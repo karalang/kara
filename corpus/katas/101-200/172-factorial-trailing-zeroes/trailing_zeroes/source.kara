@@ -1,0 +1,34 @@
+// LeetCode 172 — Factorial Trailing Zeroes.
+//
+// Count the trailing zeros of n!. A trailing zero comes from a factor of 10 = 2·5,
+// and in n! factors of 2 are far more plentiful than factors of 5, so the count
+// is just the number of times 5 divides into n! — i.e. ⌊n/5⌋ + ⌊n/25⌋ + ⌊n/125⌋ +
+// … (multiples of 5 each contribute one 5, multiples of 25 an extra one, and so
+// on). Summing `m = n/5, n/25, …` by repeatedly dividing keeps every intermediate
+// SMALLER than n, so there is no overflow even for large n (unlike accumulating
+// `5, 25, 125, …` which would overflow).
+
+fn trailing_zeroes(n: i64) -> i64 {
+    let mut count = 0;
+    let mut m = n / 5;
+    while m > 0 {
+        count = count + m;
+        m = m / 5;
+    }
+    return count;
+}
+
+fn report(n: i64) {
+    println(trailing_zeroes(n));
+}
+
+fn main() {
+    report(3);        // 0  (3! = 6)
+    report(5);        // 1  (5! = 120)
+    report(0);        // 0
+    report(10);       // 2  (10! = 3628800)
+    report(25);       // 6
+    report(100);      // 24
+    report(1000);     // 249
+    report(10000);    // 2499
+}

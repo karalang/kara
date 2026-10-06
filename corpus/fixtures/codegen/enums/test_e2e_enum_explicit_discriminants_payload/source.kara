@@ -1,0 +1,16 @@
+
+#[repr(u8)] enum Op { Reset = 1, Ping(u32) = 5, Stop = 255 }
+
+fn code(o: Op) -> i64 {
+    match o {
+        Op.Reset => 1_i64,
+        Op.Ping(n) => n as i64,
+        Op.Stop => 255_i64,
+    }
+}
+
+fn main() {
+    println(code(Op.Reset));
+    println(code(Op.Ping(42_u32)));
+    println(code(Op.Stop));
+}

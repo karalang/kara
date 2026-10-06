@@ -1,0 +1,24 @@
+
+struct Plain { a: u8, c: u16, e: u32 }
+struct Wide { a: u8, b: i64, c: u16, d: i8, e: u32, f: i32 }
+struct Boxg[T] { v: T }
+
+fn main() {
+    let m = Plain { a: 200u8, c: 60000u16, e: 4000000000u32 };
+    println(f"01 {m.a} {m.c} {m.e}");
+    let mut v: Vec[Plain] = Vec.new();
+    v.push(m);
+    println(f"02 {v[0i64].a} {v[0i64].c} {v[0i64].e}");
+    let w = Wide { a: 200u8, b: -7i64, c: 60000u16, d: -8i8, e: 4000000000u32, f: -9i32 };
+    let mut vw: Vec[Wide] = Vec.new();
+    vw.push(w);
+    println(f"03 {vw[0i64].a} {vw[0i64].b} {vw[0i64].c} {vw[0i64].d} {vw[0i64].e} {vw[0i64].f}");
+    let bp: Boxg[Plain] = Boxg { v: Plain { a: 200u8, c: 60000u16, e: 4000000000u32 } };
+    println(f"04 {bp.v.a}");
+    println(f"05 {v[0i64].a as i64}");
+    let arr: Array[u8, 2] = [200u8, 201u8];
+    let arrs: Array[i8, 2] = [-56i8, -57i8];
+    println(f"06 {arr[0i64]} {arr[1i64]} {arrs[0i64]}");
+    let e = ref v[0i64];
+    println(f"07 {e.a}");
+}

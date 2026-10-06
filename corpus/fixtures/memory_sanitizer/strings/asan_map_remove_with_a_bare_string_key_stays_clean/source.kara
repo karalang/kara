@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        m.insert(f"key-{i}-padding-padding-padding", i);
+        m.remove(f"key-{i}-padding-padding-padding");
+        i = i + 1;
+    }
+    println(f"{m.len()}");
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/drop_order.rs::test_ir_user_drops_nll_placement_never_used_bindings"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

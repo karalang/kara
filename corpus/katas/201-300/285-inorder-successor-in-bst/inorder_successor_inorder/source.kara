@@ -1,0 +1,106 @@
+// LeetCode 285 — the definition: walk the tree in order and take the next key.
+//
+// An inorder traversal of a BST yields its keys in ascending order. The
+// successor of `target` is then simply the first key in that sequence strictly
+// greater than it — no descent, no candidate tracking, no fallback.
+//
+// O(n) against the other two solvers' O(h), and it visits nodes the descent
+// never touches. That is the trade, and it is not competing.
+//
+// WHAT IT IS FOR is that both other solvers implement the SAME descent — one
+// carrying a mutable `best`, one carrying it in the return value — and both rest
+// on the same claim: that going right can never pass the answer. A misreading of
+// that claim is shared between them and invisible in a comparison. This version
+// makes no claim about the tree's shape at all; it reads every key in order and
+// takes the first one that qualifies, which is the problem statement with the
+// BST property removed.
+//
+// The traversal is explicit-stack rather than recursive so that the definitional
+// solver is also the one that cannot blow the stack on a degenerate tree — a
+// sorted insertion sequence makes this BST a linked list, which the differential
+// generates on purpose.
+
+struct Bst {
+    key: Vec[i64],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+fn bst_insert(t: mut ref Bst, k: i64) {
+    if t.key.len() == 0 {
+        t.key.push(k);
+        t.left.push(0 - 1);
+        t.right.push(0 - 1);
+        return;
+    }
+    let mut cur = 0;
+    let mut more = true;
+    while more {
+        if k < t.key[cur] {
+            if t.left[cur] < 0 {
+                t.key.push(k);
+                t.left.push(0 - 1);
+                t.right.push(0 - 1);
+                t.left[cur] = t.key.len() - 1;
+                more = false;
+            } else {
+                cur = t.left[cur];
+            }
+        } else {
+            if t.right[cur] < 0 {
+                t.key.push(k);
+                t.left.push(0 - 1);
+                t.right.push(0 - 1);
+                t.right[cur] = t.key.len() - 1;
+                more = false;
+            } else {
+                cur = t.right[cur];
+            }
+        }
+    }
+}
+
+fn build(keys: ref Vec[i64]) -> Bst {
+    let mut t = Bst { key: Vec.new(), left: Vec.new(), right: Vec.new() };
+    let mut i = 0;
+    while i < keys.len() {
+        bst_insert(mut t, keys[i]);
+        i = i + 1;
+    }
+    return t;
+}
+
+fn successor(t: ref Bst, target: i64) -> Option[i64] {
+    if t.key.len() == 0 { return None; }
+    let mut stack: Vec[i64] = Vec.new();
+    let mut cur = 0;
+    while cur >= 0 or stack.len() > 0 {
+        while cur >= 0 {
+            stack.push(cur);
+            cur = t.left[cur];
+        }
+        let node = stack.pop().unwrap();
+        if t.key[node] > target {
+            return Some(t.key[node]);
+        }
+        cur = t.right[node];
+    }
+    return None;
+}
+
+fn main() {
+    let keys: Vec[i64] = [20, 9, 25, 5, 12, 11, 14];
+    let t = build(keys);
+
+    // `?.` reads naturally here: "the successor's value, if there is one"
+    let mut probes: Vec[i64] = [5, 9, 11, 14, 20, 25, 13];
+    let mut i = 0;
+    while i < probes.len() {
+        let p = probes[i];
+        let s = successor(t, p);
+        println(f"successor of {p} -> {s}");
+        i = i + 1;
+    }
+    let empty = build([]);
+    println(f"successor in an empty tree -> {successor(empty, 1)}");
+}

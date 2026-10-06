@@ -1,0 +1,12 @@
+
+struct Inner { name: String, age: i64 }
+fn main() {
+    let nt = (1i64, (2i64, 3i64));
+    println(nt.1.0);
+    println(nt.1.1);
+    let t = (9i64, Inner { name: f"in-{2}", age: 7i64 });
+    println(t.1.name);
+    println(t.1.age);
+    let a: (i64, Inner) = (5i64, Inner { name: f"ann-{4}", age: 8i64 });
+    println(a.1.name);
+}

@@ -1,0 +1,8 @@
+
+fn main() {
+    println("user main");
+}
+
+fn test_synthesized() {
+    println("synth-main ran me");
+}

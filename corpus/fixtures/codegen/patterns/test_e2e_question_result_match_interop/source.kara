@@ -1,0 +1,18 @@
+
+fn check(n: i64) -> Result[i64, i64] {
+    if n > 0 { Ok(n) } else { Err(0_i64 - n) }
+}
+fn double(n: i64) -> Result[i64, i64] {
+    let x = check(n)?;
+    Ok(x * 2)
+}
+fn main() {
+    match double(7_i64) {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+    match double(-5_i64) {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}

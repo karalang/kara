@@ -1,0 +1,316 @@
+// LeetCode 315 — four arms against each other and against properties that
+// relate SEPARATE invocations, which is the failure class an oracle that
+// checks one answer at a time cannot see.
+//
+//   A  Fenwick tree over compressed ranks, right to left    count_smaller.kara ★
+//   B  merge sort on indices, counting during the merge     count_smaller_mergesort.kara
+//   C  a sorted Vec grown by binary-search insertion        count_smaller_insertion.kara
+//   D  the definition: scan everything to the right         count_smaller_brute.kara
+//
+// D IS A COMPLETE ORACLE FOR EVERY CASE HERE. It is O(n^2) and the bands are
+// sized for the tree-walk interpreter, so it never falls out of range the way
+// #313's trial division did. Be exact about what that means: wherever an arm
+// equals D, any property that is a function of THAT ONE ANSWER is implied —
+// P2 and P6 below can only localise a fault D has already detected. They are
+// kept because a differential that only says "A != D" has not said WHERE.
+//
+// THE PROPERTIES THAT STAND ON THEIR OWN are the ones that relate two runs.
+// A fault symmetric across all four arms — and D is simple enough that the one
+// fault it could plausibly share is the STRICTNESS of the comparison — shows
+// up only there:
+//
+//   P3  reversal: an element's smaller-AFTER count plus its smaller-BEFORE
+//       count (the after-count of the REVERSED array, read from the mirrored
+//       index) is the number of strictly smaller values in the whole array,
+//       an external answer from the sorted copy.
+//   P4  negation: smaller-after plus GREATER-after (the after-count of the
+//       negated array) plus equal-after is everything to the right, n-1-i.
+//       Equal-after is a direct scan, so this is where a `<` that had drifted
+//       to `<=` would be caught in every arm at once.
+//   P5  order-preserving maps leave the answer alone: shifting every value by
+//       a constant, or scaling by a positive one, changes nothing. A rank
+//       compression that leaked the VALUE rather than the rank would fail.
+//   P7  tie-breaking: map a[i] to a[i]*n + i. Equal values become strictly
+//       ordered with the LATER one larger, so it must still not be counted —
+//       the answer is unchanged, and EACH ARM is compared with itself on the
+//       two inputs. The one property that isolates the tie rule: a merge that
+//       took from the right on equality is wrong on the original and right on
+//       the mapped array, so P7 names the arm where P1 only sees a
+//       disagreement — and it fires even when every arm shares the fault.
+//
+// Bands cover the shapes that matter: tiny value alphabets (mostly ties),
+// wide ones (few ties), negatives, and the closed-form extremes.
+
+const NMAX: i64 = 48;
+const SEEDS: i64 = 24;
+
+// ------------------------------------------------------------- arm A ---
+
+fn lower_bound(sorted: ref Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < x { lo = mid + 1; } else { hi = mid; }
+    }
+    return lo;
+}
+
+fn solve_a(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut ranks = nums.clone();
+    ranks.sort();
+    ranks.dedup();
+    let m = ranks.len();
+    let mut tree: Vec[i64] = Vec.new();
+    for i in 0..(m + 1) { tree.push(0); }
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..n { counts.push(0); }
+    let mut i = n - 1;
+    while i >= 0 {
+        let r = lower_bound(ranks, nums[i]);
+        let mut total = 0;
+        let mut x = r;
+        while x > 0 {
+            total = total + tree[x];
+            x -= x & -x;
+        }
+        counts[i] = total;
+        x = r + 1;
+        while x <= m {
+            tree[x] = tree[x] + 1;
+            x += x & -x;
+        }
+        i = i - 1;
+    }
+    return counts;
+}
+
+// ------------------------------------------------------------- arm B ---
+
+fn sort_count(idx: mut ref Vec[i64], lo: i64, hi: i64, nums: ref Vec[i64], counts: mut ref Vec[i64]) {
+    if hi - lo <= 1 { return; }
+    let mid = (lo + hi) / 2;
+    sort_count(idx, lo, mid, nums, counts);
+    sort_count(idx, mid, hi, nums, counts);
+    let mut merged: Vec[i64] = Vec.new();
+    let mut a = lo;
+    let mut b = mid;
+    let mut taken_right = 0;
+    while a < mid or b < hi {
+        if b >= hi or (a < mid and nums[idx[a]] <= nums[idx[b]]) {
+            counts[idx[a]] = counts[idx[a]] + taken_right;
+            merged.push(idx[a]);
+            a = a + 1;
+        } else {
+            taken_right = taken_right + 1;
+            merged.push(idx[b]);
+            b = b + 1;
+        }
+    }
+    for k in 0..merged.len() {
+        idx[lo + k] = merged[k];
+    }
+}
+
+fn solve_b(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut idx: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..n { idx.push(i); counts.push(0); }
+    sort_count(mut idx, 0, n, nums, mut counts);
+    return counts;
+}
+
+// ------------------------------------------------------------- arm C ---
+
+fn solve_c(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..n { counts.push(0); }
+    let mut seen: Vec[i64] = Vec.new();
+    let mut i = n - 1;
+    while i >= 0 {
+        let pos = lower_bound(seen, nums[i]);
+        counts[i] = pos;
+        seen.insert(pos, nums[i]);
+        i = i - 1;
+    }
+    return counts;
+}
+
+// ------------------------------------------------------------- arm D ---
+
+fn solve_d(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let mut c = 0;
+        for j in (i + 1)..n {
+            if nums[j] < nums[i] { c = c + 1; }
+        }
+        counts.push(c);
+    }
+    return counts;
+}
+
+// ----------------------------------------------------------- harness ---
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() { return false; }
+    for i in 0..a.len() {
+        if a[i] != b[i] { return false; }
+    }
+    return true;
+}
+
+fn reversed(v: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = v.len() - 1;
+    while i >= 0 { out.push(v[i]); i = i - 1; }
+    return out;
+}
+
+fn mapped(v: ref Vec[i64], scale: i64, shift: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..v.len() { out.push(v[i] * scale + shift); }
+    return out;
+}
+
+// a[i] * n + i: ties become strict, the later element larger.
+fn tie_broken(v: ref Vec[i64]) -> Vec[i64] {
+    let n = v.len();
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..n { out.push(v[i] * n + i); }
+    return out;
+}
+
+fn random_case(n: i64, spread: i64, offset: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..n {
+        seed = lcg(seed);
+        out.push(seed % spread + offset);
+    }
+    return out;
+}
+
+fn main() {
+    let mut cases = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6 = 0;
+    let mut p7 = 0;
+
+    // Value alphabets: two symbols (mostly ties), five, a thousand (few ties),
+    // and a wide negative range.
+    let mut spreads: Vec[i64] = Vec.new();
+    let mut offsets: Vec[i64] = Vec.new();
+    spreads.push(2);    offsets.push(0);
+    spreads.push(5);    offsets.push(-2);
+    spreads.push(1000); offsets.push(-500);
+    spreads.push(100000); offsets.push(-99999);
+
+    let mut seed = 315315;
+    for band in 0..spreads.len() {
+        for n in 0..(NMAX + 1) {
+            for s in 0..SEEDS {
+                let a = random_case(n, spreads[band], offsets[band], mut seed);
+                let ra = solve_a(a);
+                let rb = solve_b(a);
+                let rc = solve_c(a);
+                let rd = solve_d(a);
+
+                // P1 — the arms agree, and with the oracle.
+                if not same(ra, rb) or not same(ra, rc) or not same(ra, rd) { p1 += 1; }
+
+                // P2 — bounds: 0 <= c[i] <= n-1-i, and the last is 0.
+                if ra.len() != n { p2 += 1; }
+                for i in 0..ra.len() {
+                    if ra[i] < 0 or ra[i] > n - 1 - i { p2 += 1; }
+                }
+
+                // Sorted copy for the whole-array count of strictly smaller values.
+                let mut sorted = a.clone();
+                sorted.sort();
+
+                // P3 — after + before == strictly smaller in the whole array.
+                let rrev = solve_a(reversed(a));
+                for i in 0..n {
+                    let before = rrev[n - 1 - i];
+                    if ra[i] + before != lower_bound(sorted, a[i]) { p3 += 1; }
+                }
+
+                // P4 — smaller-after + greater-after + equal-after == n-1-i.
+                let rneg = solve_a(mapped(a, -1, 0));
+                for i in 0..n {
+                    let mut eq = 0;
+                    for j in (i + 1)..n {
+                        if a[j] == a[i] { eq = eq + 1; }
+                    }
+                    if ra[i] + rneg[i] + eq != n - 1 - i { p4 += 1; }
+                }
+
+                // P5 — order-preserving maps change nothing.
+                if not same(solve_a(mapped(a, 1, 1000)), ra) { p5 += 1; }
+                if not same(solve_a(mapped(a, 3, -7)), ra) { p5 += 1; }
+                if not same(solve_b(mapped(a, 1, 1000)), ra) { p5 += 1; }
+
+                // P7 — breaking ties with the later element larger changes
+                // nothing. Each arm is compared with ITSELF on the two
+                // inputs, not with arm A: an arm whose tie rule is wrong is
+                // wrong on `a` and right on `tb`, and that self-disagreement
+                // is what names the arm. Comparing with A would only repeat
+                // P1 on a second input.
+                let tb = tie_broken(a);
+                if not same(solve_a(tb), ra) { p7 += 1; }
+                if not same(solve_b(tb), rb) { p7 += 1; }
+                if not same(solve_c(tb), rc) { p7 += 1; }
+                if not same(solve_d(tb), rd) { p7 += 1; }
+
+                cases += 1;
+            }
+        }
+    }
+
+    // P6 — closed forms.
+    for n in 1..41 {
+        let mut asc: Vec[i64] = Vec.new();
+        let mut desc: Vec[i64] = Vec.new();
+        let mut flat: Vec[i64] = Vec.new();
+        for i in 0..n { asc.push(i * 2); desc.push(-i * 3); flat.push(9); }
+        let ra = solve_a(asc);
+        let rd = solve_a(desc);
+        let rf = solve_a(flat);
+        for i in 0..n {
+            if ra[i] != 0 { p6 += 1; }
+            if rd[i] != n - 1 - i { p6 += 1; }
+            if rf[i] != 0 { p6 += 1; }
+        }
+        // The total over a strictly descending array is the number of pairs.
+        let mut total = 0;
+        for i in 0..n { total = total + rd[i]; }
+        if total != n * (n - 1) / 2 { p6 += 1; }
+        cases += 3;
+    }
+
+    println(f"cases {cases}");
+    println(f"P1 arm/oracle disagreements {p1}");
+    println(f"P2 bound failures {p2}");
+    println(f"P3 reversal failures {p3}");
+    println(f"P4 negation failures {p4}");
+    println(f"P5 order-map failures {p5}");
+    println(f"P6 closed-form failures {p6}");
+    println(f"P7 tie-break failures {p7}");
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

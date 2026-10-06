@@ -1,0 +1,73 @@
+// LeetCode #318 — collapse duplicate letter sets before pairing.
+//
+// The ★ arm pairs every input word with every other. But the disjointness test
+// only ever looks at the MASK, so two words with the same letter set are
+// interchangeable in every pair they take part in — and between two such words
+// the longer one dominates, because it wins every product the shorter one
+// would. So the shorter one can be dropped outright before the pair loop runs.
+//
+// That turns the quadratic factor from "number of words" into "number of
+// DISTINCT letter sets", which is bounded by both. On an anagram-heavy input
+// (`eat`/`tea`/`ate` are one mask, not three) the collapse is dramatic; on an
+// input of all-distinct masks it costs one map build and saves nothing. The
+// map is a `SortedMap`, not a `Map`: the walk feeds `masks`/`lens` in key
+// order, so the pair loop visits pairs in a defined sequence on every backend
+// and every run. Nothing here depends on that order — `best` is a maximum, and
+// a maximum is order-independent — but a kata that walks a hash map at all is
+// one refactor away from printing in hash order, and the fix is to not have
+// the surface.
+
+fn word_mask(w: ref String) -> i64 {
+    let bs = w.bytes();
+    let mut m = 0;
+    for i in 0..bs.len() {
+        m = m | (1 << ((bs[i] - b'a') as i64));
+    }
+    return m;
+}
+
+fn max_product(words: ref Vec[String]) -> i64 {
+    let mut longest: SortedMap[i64, i64] = SortedMap.new();
+    for i in 0..words.len() {
+        let m = word_mask(words[i]);
+        let l = words[i].len() as i64;
+        if not longest.contains_key(m) {
+            longest.insert(m, l);
+        } else {
+            if l > longest[m] { longest[m] = l; }
+        }
+    }
+
+    let mut masks: Vec[i64] = Vec.new();
+    let mut lens: Vec[i64] = Vec.new();
+    for m in longest.keys() {
+        masks.push(m);
+        lens.push(longest[m]);
+    }
+
+    let mut best = 0;
+    let n = masks.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if masks[i] & masks[j] == 0 {
+                let p = lens[i] * lens[j];
+                if p > best { best = p; }
+            }
+        }
+    }
+    return best;
+}
+
+fn main() {
+    let cases: Vec[Vec[String]] = [
+        ["abcw", "baz", "foo", "bar", "xtfn", "abcdef"],
+        ["a", "ab", "abc", "d", "cd", "bcd", "abcd"],
+        ["eat", "tea", "tan", "ate", "nat", "bat"],
+        ["ab", "ba", "abab", "cd", "dc", "cdcd"],
+        ["a", "aa", "aaa", "aaaa"],
+    ];
+    for k in 0..cases.len() {
+        print("case " + (k + 1).to_string() + " -> "
+              + max_product(cases[k].clone()).to_string() + "\n");
+    }
+}

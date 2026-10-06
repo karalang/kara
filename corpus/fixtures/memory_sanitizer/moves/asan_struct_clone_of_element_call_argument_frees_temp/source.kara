@@ -1,0 +1,12 @@
+
+#[derive(Clone)]
+struct It { id: i64, name: String }
+fn take(x: It) -> i64 { return x.name.len(); }
+fn main() {
+    let mut v: Vec[It] = Vec.new();
+    v.push(It { id: 1, name: f"payload_aaaaaaaaaaaaaaaaaaaaaaaa{1}" });
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < 20i64 { t = t + take(v[0].clone()); i = i + 1i64; }
+    println(f"{t}");
+}

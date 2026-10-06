@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::e2e_variant_name_shared_by_two_enums_binds_at_its_own_offsets"
+dedup_of = ["tests/memory_sanitizer/enums.rs::asan_variant_name_shared_by_two_enums_binds_at_its_own_offsets"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,7 @@
+
+        fn main() {
+            let visited: Vec[bool] = Vec.new();
+            let i = 0;
+            if i > 0 and visited[i - 1] { println("then"); } else { println("else"); }
+        }
+    

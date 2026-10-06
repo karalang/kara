@@ -1,0 +1,13 @@
+source = "tests/monomorphization.rs::compound_polymorphic_call_records_resolved_effect_set"
+dedup_of = []
+expect = "error:E0286"
+exit = 1
+tags = ["closure"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

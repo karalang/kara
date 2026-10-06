@@ -1,0 +1,18 @@
+
+fn id[T](x: T) -> T { x }
+fn twice[T](x: T) -> T { id(x) }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 200i64 {
+        let s = twice(f"str{i}");
+        total = total + s.len();
+        let mut v: Vec[i64] = Vec.new();
+        v.push(i);
+        v.push(i);
+        let w = twice(v);
+        total = total + w.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

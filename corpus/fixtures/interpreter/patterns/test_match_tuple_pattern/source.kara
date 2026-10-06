@@ -1,0 +1,9 @@
+
+fn f(a: i64, b: i64) -> i64 { match (a, b) { (0i64, 0i64) => 10i64, (1i64, 2i64) => 20i64, _ => 30i64 } }
+fn nested(a: i64, b: i64, c: i64) -> i64 {
+    match (a, (b, c)) { (0i64, (1i64, 2i64)) => 1i64, (0i64, (_, _)) => 2i64, _ => 3i64 }
+}
+fn main() {
+    println(f"{f(0i64, 0i64)} {f(1i64, 2i64)} {f(5i64, 5i64)}");
+    println(f"{nested(0i64, 1i64, 2i64)} {nested(0i64, 4i64, 5i64)} {nested(8i64, 1i64, 2i64)}");
+}

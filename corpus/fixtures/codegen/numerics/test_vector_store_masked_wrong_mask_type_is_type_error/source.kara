@@ -1,0 +1,10 @@
+
+fn fill(xs: mut Slice[i64]) {
+    let v = Vector[i64, 4](10, 20, 30, 40);
+    let bad = Vector[i64, 4](1, 0, 1, 0);
+    v.store_masked(xs, bad);
+}
+fn main() {
+    let mut a: Array[i64, 4] = [1, 2, 3, 4];
+    fill(mut a);
+}

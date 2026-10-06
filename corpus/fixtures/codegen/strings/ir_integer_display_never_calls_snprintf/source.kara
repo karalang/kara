@@ -1,0 +1,11 @@
+
+fn main() {
+    let a: i64 = -5;
+    let b: u64 = 7;
+    let v: Vec[i64] = [1, -2];
+    println(a);
+    println(b);
+    println(f"{a}{b}");
+    println(f"{v}");
+    println(f"{a:6}{b:06}{b:<4x}");
+}

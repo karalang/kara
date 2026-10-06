@@ -1,0 +1,6 @@
+
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let r = a.replace(9, 0);
+    println(r[0]);
+}

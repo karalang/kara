@@ -1,0 +1,18 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn one() -> Array[R, 1] { let x: Array[R, 1] = [mkr(1)]; return x }
+fn two(k: i64) -> Array[R, 2] { let x: Array[R, 2] = [mkr(k), mkr(k + 1)]; return x }
+fn tail() -> Array[R, 2] { let x: Array[R, 2] = [mkr(5), mkr(6)]; x }
+fn both(c: bool) -> Array[R, 2] { let x: Array[R, 2] = [mkr(7), mkr(8)]; if c { return x }; return x }
+fn strs() -> Array[String, 2] { let x: Array[String, 2] = [f"heap-string-longer-than-sso-p", f"heap-string-longer-than-sso-qq"]; return x }
+fn main() {
+    println("one");    { let b = one(); println(f"  y{b[0].id}:{b[0].s.len()}"); }
+    println("two");    { let b = two(2); let c = two(20); println(f"  y{b[1].id}{c[0].id}"); }
+    println("tail");   { let b = tail(); println(f"  y{b[1].id}"); }
+    println("both-t"); { let b = both(true); println(f"  y{b[0].id}"); }
+    println("both-f"); { let b = both(false); println(f"  y{b[1].id}"); }
+    println("discard"); { two(40); let _ = strs(); strs(); }
+    println("str");    { let b = strs(); println(f"  y{b[1].len()}"); }
+    println("end")
+}

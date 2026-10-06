@@ -1,0 +1,10 @@
+
+struct Point { x: i64, y: i64 }
+impl Display for Point {
+    fn to_string(ref self) -> String { f"({self.x}, {self.y})" }
+}
+fn main() {
+    let p = Point { x: 3, y: 4 };
+    let o = Some(p);
+    println(f"{o}")
+}

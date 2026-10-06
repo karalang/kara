@@ -1,0 +1,5 @@
+
+fn main() {
+    let triple = |x: i64| x * 3;
+    println(triple(4));
+}

@@ -1,0 +1,31 @@
+
+enum Node { Empty, Ident(String), Nums(Vec[i64]) }
+fn describe(n: ref Node) -> String {
+    match n {
+        Ident(name) => { return "id ".to_string() + name; }
+        Nums(v) => { return "nums ".to_string() + v.len().to_string(); }
+        Empty => {}
+    }
+    return "empty".to_string();
+}
+fn mk_nums() -> Node {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(3);
+    return Node.Nums(v);
+}
+fn main() {
+    let mut total = 0i64;
+    let mut i = 0i64;
+    while i < 200 {
+        let d1 = describe(Node.Ident("foo".to_string()));
+        total = total + d1.len();
+        let a = mk_nums();
+        let d2 = describe(a);
+        total = total + d2.len();
+        let c = a;
+        let d3 = describe(c);
+        total = total + d3.len();
+        i = i + 1;
+    }
+    println(total);
+}

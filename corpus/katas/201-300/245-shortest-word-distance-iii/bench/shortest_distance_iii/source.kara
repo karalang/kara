@@ -1,0 +1,106 @@
+// Benchmark harness for LeetCode #245 — Shortest Word Distance III.
+//
+// Deliberately the SAME workload as #243's bench — same 256-word vocabulary,
+// same LCG, same 20,000-word list, same 2,000 punches — so the two are directly
+// comparable. #245's per-query scan is #243's with one constraint dropped, so
+// the difference between the two benches is exactly the cost of supporting the
+// same-word case: one extra `String` comparison per MATCHED slot, plus a
+// short-circuit `or` in the hot test instead of an `else if` chain.
+//
+// Half the punches are same-word queries (`word1 == word2`), which is the case
+// #243 cannot answer at all. Alternating rather than segregating them keeps the
+// branch predictor from learning the pattern and turning half the run into a
+// different measurement from the other half.
+//
+// Three choices carried over from #243 keep the read honest:
+//
+//   * Every word is 9 bytes sharing the 5-byte prefix "delta", so no comparison
+//     exits on a length or first-byte mismatch — each one walks into the suffix.
+//   * Every one of the 20,000 slots holds its OWN copy, so no language can
+//     shortcut an equality test by noticing the operands share a data pointer.
+//   * The scan has no early exit; the walk visits every slot, so the measured
+//     work is data-independent.
+//
+// Sink: a rolling polynomial hash of the 2,000 distances. Loop-carried, so the
+// punch loop is not a reduction the auto-par pass can split — sequential by
+// construction and directly comparable per-core.
+
+fn shortest_word_distance(words: ref Vec[String], word1: ref String, word2: ref String) -> i64 {
+    let n = words.len();
+    let same = word1 == word2;
+    let mut best = n;
+    let mut prev = -1;
+    let mut i = 0;
+    while i < n {
+        if words[i] == word1 or words[i] == word2 {
+            if prev >= 0 and (same or words[prev] != words[i]) {
+                best = min(best, i - prev);
+            }
+            prev = i;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+// Overflow-free 31-bit LCG: 1103515245 * state + 12345 (mod 2^31). The low bits
+// of an LCG are weak, so every draw below uses bits 16..23 (`/ 65536 % 256`).
+fn lcg(state: i64) -> i64 {
+    (state * 1103515245 + 12345) & 2147483647
+}
+
+fn main() {
+    let vocab_n = 256;
+    let n = 20000;
+    let iters = 2000;
+
+    // 256 distinct 9-byte words: "delta" + 4 letters over a 4-letter alphabet.
+    let mut alpha: Vec[String] = Vec.new();
+    alpha.push("a"); alpha.push("b"); alpha.push("c"); alpha.push("d");
+
+    let mut vocab: Vec[String] = Vec.new();
+    let mut v = 0;
+    while v < vocab_n {
+        let mut w: String = "delta";
+        w.push_str(alpha[(v / 64) % 4]);
+        w.push_str(alpha[(v / 16) % 4]);
+        w.push_str(alpha[(v / 4) % 4]);
+        w.push_str(alpha[v % 4]);
+        vocab.push(w);
+        v = v + 1;
+    }
+
+    // The list: each slot gets its own copy.
+    let mut list: Vec[String] = Vec.new();
+    let mut state = 1;
+    let mut i = 0;
+    while i < n {
+        state = lcg(state);
+        list.push(vocab[(state / 65536) % vocab_n].clone());
+        i = i + 1;
+    }
+
+    // Each vocabulary word lands in ~78 of the 20,000 slots, so both the
+    // same-word and different-word queries always have pairs to find.
+    let mut acc = 0;
+    let mut qstate = 7;
+    let mut k = 0;
+    while k < iters {
+        qstate = lcg(qstate);
+        let a = (qstate / 65536) % vocab_n;
+        qstate = lcg(qstate);
+        let mut b = (qstate / 65536) % vocab_n;
+        if b == a {
+            b = (b + 1) % vocab_n;
+        }
+        // Alternate: even punches ask the same-word question #243 cannot.
+        let d = if k % 2 == 0 {
+            shortest_word_distance(list, vocab[a], vocab[a])
+        } else {
+            shortest_word_distance(list, vocab[a], vocab[b])
+        };
+        acc = (acc * 131 + d) % 1000000007;
+        k = k + 1;
+    }
+    println(f"{acc}");
+}

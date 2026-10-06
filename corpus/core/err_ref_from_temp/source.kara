@@ -1,0 +1,6 @@
+fn longer(a: ref String, b: ref String) -> ref String { if a.len() > b.len() { a } else { b } }
+fn main() {
+    let s = "abc".to_string();
+    let r = longer(s, "de".to_string());
+    println(r);
+}

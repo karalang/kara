@@ -1,0 +1,95 @@
+// LeetCode #69: Sqrt(x) — bit-by-bit (digit-by-digit) method, O(log x), no square.
+//
+// The same floor(sqrt(x)) as the ★ ([`sqrtx.kara`](sqrtx.kara)), built one binary
+// digit of the result at a time from the most significant down — the base-2 form
+// of long-division square root. It NEVER multiplies: the only operations are
+// shifts, adds, and compares, so unlike binary search and Newton there is no
+// `r*r` term to keep inside i64 at all.
+//
+// The idea: try to set each bit of the answer from high to low. Maintain a
+// running result `res` and a probe `bit` that walks down the powers of four
+// (a squared power of two). At each step, `res + bit` is a candidate for
+// "(current answer) with this bit set, squared"; if the remaining `x` still
+// covers it, subtract it and set the bit:
+//
+//   bit starts at the largest power of 4 <= x   (4^k = (2^k)^2)
+//   if x >= res + bit:  x -= res + bit;  res = (res >> 1) + bit    (accept the bit)
+//   else:               res = res >> 1                             (reject it)
+//   bit >>= 2                                                      (next power of 4)
+//
+// After the last bit, `res` is floor(√x). The `res >> 1` each step rescales the
+// partial root as the place value drops by a factor of four — the mechanical core
+// of the algorithm, and the reason it needs no multiplication. Every value stays
+// ≤ x ≤ 2^31, so nothing approaches an i64 overflow (and none of the intermediate
+// terms is a product, so Kāra's overflow checking is never even exercised here).
+//
+// Kept as the third, multiplication-free view: binary search reads the predicate
+// directly, Newton converges fastest, and this one is the pure bit-twiddling
+// method a fixed-point/embedded context would reach for. `1073741824` is 2^30,
+// the largest power of four ≤ 2^31 − 1 that seeds `bit`.
+
+fn my_sqrt(x: i64) -> i64 {
+    let mut rem = x;                 // the part of x not yet accounted for
+    let mut res = 0;
+    let mut bit = 1073741824;     // 2^30, the top power of 4 within i32 range
+
+    // Drop the probe to the largest power of four not exceeding x.
+    while bit > rem {
+        bit = bit / 4;
+    }
+
+    while bit != 0 {
+        if rem >= res + bit {
+            rem = rem - (res + bit);
+            res = (res / 2) + bit;
+        } else {
+            res = res / 2;
+        }
+        bit = bit / 4;
+    }
+
+    res
+}
+
+// ---- test harness (shared verbatim with sqrtx.kara) --------------------------
+
+fn report(x: i64, s: mut ref String) {
+    let r = my_sqrt(x);
+    println(f"sqrt({x}) = {r}");
+    s.push(' ');
+    s.push_str(f"{r}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report(0, mut s);            // 0
+    report(1, mut s);            // 1
+    report(2, mut s);            // 1
+    report(3, mut s);            // 1
+    report(4, mut s);            // 2
+    report(5, mut s);            // 2
+    report(8, mut s);            // 2
+    report(9, mut s);            // 3
+    report(10, mut s);           // 3
+    report(15, mut s);           // 3
+    report(16, mut s);           // 4
+    report(17, mut s);           // 4
+    report(24, mut s);           // 4
+    report(25, mut s);           // 5
+    report(26, mut s);           // 5
+    report(35, mut s);           // 5
+    report(36, mut s);           // 6
+    report(48, mut s);           // 6
+    report(49, mut s);           // 7
+    report(99, mut s);           // 9
+    report(100, mut s);          // 10
+    report(101, mut s);          // 10
+    report(2147395600, mut s);   // 46340
+    report(2147483647, mut s);   // 46340
+    report(1000000000, mut s);   // 31622
+    report(46340, mut s);        // 215
+    report(46341, mut s);        // 215
+
+    println(s);
+}

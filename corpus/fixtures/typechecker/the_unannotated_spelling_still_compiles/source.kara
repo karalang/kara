@@ -1,0 +1,12 @@
+
+struct Box[T] { v: T }
+impl[T: Copy] Box[T] {
+    fn set(mut ref self, v: T) { self.v = v; }
+    fn make(v: T) -> Box[T] {
+        let w = v;
+        let mut b = Box { v: w };
+        b.set(v);
+        return b;
+    }
+}
+fn main() { let b = Box.make(5); println(f"{b.v}"); }

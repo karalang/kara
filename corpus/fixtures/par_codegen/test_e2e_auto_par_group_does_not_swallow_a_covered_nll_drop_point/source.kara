@@ -1,0 +1,46 @@
+
+struct S { e: E }
+enum E { A(Vec[String]), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+
+fn mkv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("xyz");
+    return v
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn ret_str(s: ref S) -> String {
+    match s.e {
+        E.A(v) => { let m = v; return m[0] }
+        E.B => { return "n" }
+    }
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn ret_i64(s: ref S) -> i64 {
+    match s.e {
+        E.A(v) => { let m = v; return m.len() }
+        E.B => { return 0 }
+    }
+}
+
+fn c_i64() {
+    println("i64");
+    let s = S { e: E.A(mkv()) };
+    println(f"{ret_i64(s)}");
+    println("i64 end");
+}
+
+fn c_str() {
+    println("str");
+    let s = S { e: E.A(mkv()) };
+    println(f"{ret_str(s)}");
+    println("str end");
+}
+
+fn main() {
+    c_i64();
+    c_str();
+    println("end");
+}

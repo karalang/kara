@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alice");
+    v.push("bobby");
+    for s in v {
+        println(s.len());
+    }
+}

@@ -1,0 +1,65 @@
+fn mks(n: i64) -> Option[String] {
+    return Some(f"abcdefghijklmnopqrstuvwxyz{n}")
+}
+
+fn mkv(n: i64) -> Option[Vec[String]] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"abcdefghijklmnopqrstuvwxyz{n}");
+    return Some(v)
+}
+
+fn mkr(n: i64) -> Result[String, i64] {
+    return Ok(f"rrrrrrrrrrrrrrrrrrrrrrrrrr{n}")
+}
+
+fn mke(n: i64) -> Result[i64, String] {
+    return Err(f"eeeeeeeeeeeeeeeeeeeeeeeeee{n}")
+}
+
+struct H { o: Option[String], r: Result[String, i64] }
+
+fn main() {
+    let n: i64 = env.args().len();
+
+    let mut i = 0;
+    while i < 20 {
+        println(f"call {mks(i + n)}");
+        i = i + 1;
+    }
+
+    let mut j = 0;
+    while j < 20 {
+        println(f"deep {mkv(j + n)}");
+        j = j + 1;
+    }
+
+    let mut k = 0;
+    while k < 20 {
+        println(f"ok   {mkr(k + n)} err {mke(k + n)}");
+        k = k + 1;
+    }
+
+    let mut m = 0;
+    while m < 20 {
+        println(f"inln {Some(f"iiiiiiiiiiiiiiiiiiiiiiiiii{m + n}")}");
+        m = m + 1;
+    }
+
+    let o = mks(n);
+    println(f"var  {o}");
+    println(f"var  {o}");
+
+    let h = H { o: mks(n), r: mkr(n) };
+    println(f"fld  {h.o} {h.r}");
+    println(f"fld  {h.o} {h.r}");
+
+    let mut vo: Vec[Option[String]] = Vec.new();
+    vo.push(mks(n));
+    println(f"elem {vo[0]}");
+    println(f"elem {vo[0]}");
+
+    let t: (Option[String], i64) = (mks(n), 1);
+    println(f"tup  {t.0}");
+    println(f"tup  {t.0}");
+    println("end");
+}

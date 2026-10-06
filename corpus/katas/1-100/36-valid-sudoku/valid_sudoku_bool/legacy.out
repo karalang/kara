@@ -1,0 +1,7 @@
+example1 (valid partial) -> valid
+example2 (col+box dup)   -> invalid
+empty board             -> valid
+solved board            -> valid
+row-only duplicate      -> invalid
+col-only duplicate      -> invalid
+box-only duplicate      -> invalid

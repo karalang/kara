@@ -1,0 +1,41 @@
+
+fn mkA(n: i64) -> String { return f"A{n}-aaaaaaaaaaaa"; }
+fn mkB(n: i64) -> String { return f"B{n}-bbbbbbbbbbbbbbbbbbbbbbbb"; }
+fn wrapped(n: i64, c: bool, t: String) -> String { { if c { mkA(n) } else { t } } }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let c = n > 0;
+
+    let t1 = mkB(n);
+    let r1 = if c { mkA(n) } else { t1 }.contains("aaa");
+    println(f"r1={r1}");
+
+    let t2 = mkB(n);
+    let r2 = match n { 1 => mkA(n), _ => t2 }.contains("aaa");
+    println(f"r2={r2}");
+
+    let t3 = mkB(n);
+    let r3 = f"[{if c { mkA(n) } else { t3 }}]";
+    println(f"r3={r3.len()}");
+
+    let t4 = mkB(n);
+    let w1 = wrapped(n, c, t4);
+    println(f"w1={w1.len()}");
+
+    let t5 = mkB(n);
+    let e1 = if c { mkA(n) } else { t5 };
+    println(f"e1={e1.len()}");
+
+    let a1 = if c { mkA(n) } else { mkB(n) }.contains("aaa");
+    println(f"a1={a1}");
+
+    let t6 = mkB(n);
+    let u6 = mkB(n + 1);
+    let b1 = if c { u6 } else { t6 }.contains("bbb");
+    println(f"b1={b1}");
+
+    let t7 = mkB(n);
+    let o1 = if not c { mkA(n) } else { f"keep" }.contains("aaa");
+    println(f"o1={o1} {t7}");
+}

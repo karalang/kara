@@ -1,0 +1,6 @@
+
+fn main() {
+    let h = "abcdefgh";
+    let n = "abcd";
+    println(f"{h.substring(0, 4) == n}");
+}

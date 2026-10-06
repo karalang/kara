@@ -1,0 +1,16 @@
+
+fn mk(n: i64) -> Array[String, 2] { return Array[f"item{n}", f"item{n + 1}"]; }
+
+fn main() {
+    let n = 3;
+    println(f"{Array[f"aaaa{n}", f"b{n}"] == Array[f"cccccc{n}", f"d{n}"]}");
+    println(f"{Array[f"aaaa{n}", f"b{n}"] == Array[f"aaaa{n}", f"b{n}"]}");
+    println(f"{Array["aa", "bb"] == Array["aa", "bb"]}");
+    println(f"{Array[f"item5", f"item6"] == mk(5)}");
+    let p = mk(7);
+    println(f"{Array[f"item7", f"item8"] == p}");
+    println(p[0]);
+    for i in 0..3 {
+        println(f"{Array[f"x{i}", f"y{i}"] == Array[f"x{i}", f"y{i}"]}");
+    }
+}

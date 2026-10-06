@@ -1,0 +1,4 @@
+
+fn sum_vec(v: Vec[i64]) -> i64 { let mut s = 0; for x in v { s = s + x; } return s; }
+fn sum_slice(v: mut Slice[i64]) -> i64 { let mut s = 0; for x in v { s = s + x; } return s; }
+fn main() { print(0); }

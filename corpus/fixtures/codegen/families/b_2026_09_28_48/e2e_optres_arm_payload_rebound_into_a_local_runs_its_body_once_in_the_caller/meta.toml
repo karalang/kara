@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_28_48.rs::e2e_optres_arm_payload_rebound_into_a_local_runs_its_body_once_in_the_caller"
+dedup_of = ["tests/interpreter/families/b_2026_09_28_48.rs::interp_optres_arm_payload_rebound_into_a_local_runs_its_body_once_in_the_caller", "tests/memory_sanitizer/families/b_2026_09_28_48.rs::asan_optres_arm_payload_rebound_into_a_local_runs_its_body_once_in_the_caller"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

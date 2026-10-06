@@ -1,0 +1,17 @@
+
+shared struct Hub {
+    id: i64,
+}
+
+pub fn fetch_data() with sends(Network) receives(Network) {
+}
+
+fn driver(h: Hub) {
+    fetch_data();
+}
+
+fn main() {
+    let h = Hub { id: 1 };
+    driver(h);
+    println("should not print");
+}

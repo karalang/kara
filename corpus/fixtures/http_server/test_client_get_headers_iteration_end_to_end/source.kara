@@ -1,0 +1,17 @@
+
+fn main() with sends(Network) receives(Network) {{
+    let url: String = "{url}";
+    let c = Client.new();
+    match c.get(url) {{
+        Ok(resp) => {{
+            let hs: Vec[(String, String)] = resp.headers();
+            for (k, v) in hs {{
+                println(k + "=" + v);
+            }}
+        }}
+        Err(e) => {{
+            println("ERR");
+            println(e.message());
+        }}
+    }}
+}}

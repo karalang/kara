@@ -1,0 +1,11 @@
+D: pad section
+arm sees 4
+drop 4
+W: wrapper overwrite
+drop 5
+after overwrite
+F: pad map
+drop 7
+drop 8
+after displace
+end

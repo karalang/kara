@@ -1,0 +1,4 @@
+shared struct ShIn { s: String }
+struct Q { i: ShIn, n: i64, s: String }
+fn mkq(k: i64) -> Q { Q { i: ShIn { s: f"inner-heap-string-longer-than-sso-{k}" }, n: k, s: f"outer-heap-string-longer-than-sso-{k}" } }
+fn main() { let a = Some(mkq(1)); let r = match a { Some(Q { i, n, s }) => n, None => 0 }; println(f"a{r}"); println("end"); }

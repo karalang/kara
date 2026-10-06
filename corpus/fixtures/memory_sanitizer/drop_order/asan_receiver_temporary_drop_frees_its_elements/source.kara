@@ -1,0 +1,27 @@
+
+struct Heap[T] { xs: Vec[T] }
+impl[T] Heap[T] {
+    fn take(self) -> Option[T] { let mut h = self; h.xs.pop() }
+}
+struct PlainHeap { xs: Vec[Vec[i64]] }
+impl PlainHeap {
+    fn take(self) -> Option[Vec[i64]] { let mut h = self; h.xs.pop() }
+}
+fn main() {
+    // (a) TEMPORARY receiver, nested-Vec elements at three distinct sizes.
+    match Heap { xs: [[1], [2, 2], [3, 3, 3]] }.take() {
+        Some(v) => { println(f"a={v.len()}"); } None => {}
+    }
+    // (b) TEMPORARY receiver, HEAP-allocated String elements.
+    let mut ss: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 3 { ss.push(f"item{i}"); i = i + 1; }
+    match Heap { xs: ss }.take() { Some(v) => { println(f"b={v}"); } None => {} }
+    // (c) control: BOUND receiver, same everything. Clean before the fix.
+    let c = Heap { xs: [[9], [8, 8]] };
+    match c.take() { Some(v) => { println(f"c={v.len()}"); } None => {} }
+    // (d) control: NON-generic twin with a temporary receiver.
+    match PlainHeap { xs: [[1], [2]] }.take() { Some(v) => { println(f"d={v.len()}"); } None => {} }
+    // (e) control: scalar element, nothing inner to own.
+    match Heap { xs: [5, 6, 7] }.take() { Some(v) => { println(f"e={v}"); } None => {} }
+}

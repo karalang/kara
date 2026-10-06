@@ -1,0 +1,13 @@
+source = "tests/http_client_codegen.rs::user_response_struct_is_refused_on_the_client_path"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

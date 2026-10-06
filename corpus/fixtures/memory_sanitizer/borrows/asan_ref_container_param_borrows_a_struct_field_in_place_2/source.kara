@@ -1,0 +1,8 @@
+
+struct Bag { xs: Vec[String] }
+fn vlen[T](v: ref Vec[T]) -> i64 { return v.len(); }
+fn main() {
+    let mut a: Bag = Bag { xs: Vec.new() };
+    a.xs.push("aa"); a.xs.push("bb");
+    println(f"len={vlen(a.xs)}");
+}

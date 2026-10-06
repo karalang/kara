@@ -1,0 +1,36 @@
+
+struct Inner { m: i64 }
+struct Outer { inner: Inner, k: i64 }
+struct Tag { n: i64 }
+
+enum Color { Red, Green }
+
+fn make() -> Tag { return Tag { n: 7 }; }
+fn make2() -> Outer { return Outer { inner: Inner { m: 3 }, k: 4 }; }
+
+impl Tag {
+    fn doubled(self) -> i64 { return self.n * 2; }
+}
+
+impl Color {
+    fn to_tag(self) -> Tag {
+        match self {
+            Red => { return Tag { n: 1 }; }
+            Green => { return Tag { n: 2 }; }
+        }
+    }
+}
+
+fn main() {
+    println({ let x = make(); x }.n);
+    println({ let x = make(); x }.n + 1);
+    println({ Tag { n: 5 } }.n);
+    println({ let x = make2(); x }.inner.m);
+    println({ let x = make2(); x }.k);
+    println({ let x = make(); x }.doubled());
+    println({ let a = make(); { let b = a; b } }.n);
+    println(Color.Red.to_tag().n);
+    println(Color.Green.to_tag().n);
+    let c = Color.Green;
+    println(c.to_tag().n);
+}

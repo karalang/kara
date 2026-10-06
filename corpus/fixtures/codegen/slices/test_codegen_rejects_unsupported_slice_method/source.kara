@@ -1,0 +1,6 @@
+
+fn main() {
+    let xs: Array[i64, 3] = [1, 2, 3];
+    let s: Slice[i64] = xs.as_slice();
+    let _ = s.no_such_slice_method(2i64);
+}

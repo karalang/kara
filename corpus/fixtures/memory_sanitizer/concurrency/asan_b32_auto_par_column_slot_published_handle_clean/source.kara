@@ -1,0 +1,9 @@
+
+fn hd(v: Vec[i64]) -> i64 { v[0] }
+fn main() {
+    let av: Vec[i64] = [4, 2, 7, 1];
+    println(hd(av));
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 1]);
+    println(c.len());
+    println(c.iter_valid()[3]);
+}

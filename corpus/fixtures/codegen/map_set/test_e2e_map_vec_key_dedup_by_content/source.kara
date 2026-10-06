@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut m: Map[Vec[i64], i64] = Map.new();
+    let mut k1: Vec[i64] = Vec.new(); k1.push(1i64); k1.push(2i64);
+    m.insert(k1, 10);
+    let mut k2: Vec[i64] = Vec.new(); k2.push(1i64); k2.push(2i64);
+    m.insert(k2, 20);           // same key by content → overwrites
+    println(m.len());           // 1
+    let mut probe: Vec[i64] = Vec.new(); probe.push(1i64); probe.push(2i64);
+    println(m.get_or(probe, -1)); // 20
+}

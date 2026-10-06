@@ -1,0 +1,29 @@
+enum G1[T] { Y(T), N }
+enum N1 { Y(String), N }
+struct Conc { g: G1[String] }
+fn wrapC(g: G1[String], c: bool) -> Conc { if c { return Conc { g: g } } return Conc { g: G1.N } }
+fn ident(g: G1[String]) -> G1[String] { return g }
+fn other(g: G1[String]) -> G1[String] { return G1.Y("zzzzzzzzzzzzzzzzzzzzzzzz") }
+fn pick(a: G1[String], b: G1[String]) -> G1[String] { return a }
+fn usz(g: G1[String]) -> i64 { match g { G1.Y(v) => { return v.len() } G1.N => { return 0 } } }
+fn sink(g: G1[String]) { match g { G1.Y(v) => { println(f"  s{v.len()}") } G1.N => { println("  s0") } } }
+fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
+fn identn(g: N1) -> N1 { return g }
+fn shwn(g: N1) { match g { N1.Y(v) => { println(f"  nx {v.len()}") } N1.N => { println("  nx 0") } } }
+
+fn main() {
+    println("holder");    { let h: Conc = Conc { g: G1.Y("abcdefghijklmnopqrstuvwx") }; println("  x") }
+    println("handon");    { let h: Conc = Conc { g: G1.Y("abcdefghijklmnopqrstuvwx") }; shw(h.g) }
+    println("wrapbind");  { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); let h = wrapC(g, true); shw(h.g) }
+    println("wrapnone");  { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); let h = wrapC(g, false); shw(h.g) }
+    println("wrapdisc");  { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); wrapC(g, true); println("  x") }
+    println("identbind"); { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); let k: G1[String] = ident(g); shw(k) }
+    println("identdisc"); { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); ident(g); println("  x") }
+    println("identtmp");  { let k: G1[String] = ident(G1.Y("abcdefghijklmnopqrstuvwx")); shw(k) }
+    println("fresh");     { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); let k: G1[String] = other(g); shw(k) }
+    println("scalar");    { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); let n: i64 = usz(g); println(f"  n{n}") }
+    println("unit");      { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); sink(g) }
+    println("twoargs");   { let x: G1[String] = G1.Y("aaaaaaaaaaaaaaaaaaaaaaaa"); let y: G1[String] = G1.Y("bbbbbbbbbbbbbbbbbbbbbbbbbbbb"); let k: G1[String] = pick(x, y); shw(k) }
+    println("nongen");    { let g: N1 = N1.Y("abcdefghijklmnopqrstuvwx"); let k: N1 = identn(g); shwn(k) }
+    println("end")
+}

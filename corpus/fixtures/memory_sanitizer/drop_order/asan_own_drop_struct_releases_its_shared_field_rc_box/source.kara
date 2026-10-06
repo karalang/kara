@@ -1,0 +1,36 @@
+
+shared struct Sd { m: i64, note: String }
+impl Drop for Sd { fn drop(mut ref self) { println(f"dSd{self.m}-{self.note.len()}") } }
+
+struct H { id: i64, s: Sd, tag: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}-{self.tag.len()}") } }
+
+struct G { id: i64, s: Option[Sd], tag: String }
+impl Drop for G { fn drop(mut ref self) { println(f"dG{self.id}-{self.tag.len()}") } }
+
+struct T2 { id: i64, a: Sd, b: Sd }
+impl Drop for T2 { fn drop(mut ref self) { println(f"dT{self.id}") } }
+
+fn mk(n: i64) -> Sd { return Sd { m: n, note: f"note-payloadpayloadpayload-{n}" } }
+fn tg(n: i64) -> String { return f"tag-payloadpayloadpayload-{n}" }
+
+fn one(k: i64) -> i64 { let h: H = H { id: k, s: mk(10 * k), tag: tg(k) }; return h.tag.len() }
+fn two_owners(k: i64) -> i64 { let g: Sd = mk(20 * k); let a: H = H { id: 2 * k, s: g, tag: tg(2) }; let b: H = H { id: 3 * k, s: g, tag: tg(3) }; return a.tag.len() + b.tag.len() }
+fn opt(k: i64) -> i64 { let q: G = G { id: 4 * k, s: Option.Some(mk(30 * k)), tag: tg(4) }; return q.tag.len() }
+fn two_fields(k: i64) -> i64 { let t: T2 = T2 { id: 5 * k, a: mk(40 * k), b: mk(41 * k) }; return t.id }
+fn eat(x: H) -> i64 { return x.tag.len() }
+
+fn main() {
+    let k: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 3 {
+        acc = acc + one(k);
+        acc = acc + two_owners(k);
+        acc = acc + opt(k);
+        acc = acc + two_fields(k);
+        acc = acc + eat(H { id: 6 * k, s: mk(50 * k), tag: tg(6) });
+        i = i + 1;
+    }
+    println(f"acc{acc}");
+}

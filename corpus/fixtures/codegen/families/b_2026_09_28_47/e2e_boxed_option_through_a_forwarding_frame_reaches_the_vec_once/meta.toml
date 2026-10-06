@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_28_47.rs::e2e_boxed_option_through_a_forwarding_frame_reaches_the_vec_once"
+dedup_of = ["tests/interpreter/families/b_2026_09_28_47.rs::interp_boxed_option_through_a_forwarding_frame_reaches_the_vec_once", "tests/memory_sanitizer/families/b_2026_09_28_47.rs::asan_boxed_option_through_a_forwarding_frame_reaches_the_vec_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

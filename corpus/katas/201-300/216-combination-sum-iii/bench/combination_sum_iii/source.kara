@@ -1,0 +1,44 @@
+// Benchmark workload for LeetCode #216 — Combination Sum III.
+//
+// The kata backtracks over ascending digits 1..9 to list every combination of
+// exactly k distinct digits summing to n. One (k,n) query is tiny. The bench
+// scales it two ways: it COUNTS combinations instead of materializing them, and
+// it widens the digit pool to 1..D so the search tree is large, then sums the
+// count over a whole grid of (k,n) pairs. The recursion's ascending-digit prune
+// (`d > remaining => stop`) is data-dependent branching that does not vectorize.
+// This kernel is exhaustive enumeration, so it needs no PRNG — it is identical
+// across all five languages by construction. Sink = total combinations summed
+// over the (k,n) grid.
+
+fn count_combos(start: i64, k: i64, remaining: i64, d_pool: i64) -> i64 {
+    if k == 0 {
+        if remaining == 0 { return 1; }
+        return 0;
+    }
+    let mut total = 0;
+    let mut d = start;
+    while d <= d_pool {
+        if d > remaining { return total; }   // ascending digits: no later d fits
+        total = total + count_combos(d + 1, k - 1, remaining - d, d_pool);
+        d = d + 1;
+    }
+    return total;
+}
+
+fn main() {
+    let d_pool = 36;
+    let kmax = 6;
+    let nmax = 150;
+
+    let mut sink = 0;
+    let mut k = 1;
+    while k <= kmax {
+        let mut n = 1;
+        while n <= nmax {
+            sink = sink + count_combos(1, k, n, d_pool);
+            n = n + 1;
+        }
+        k = k + 1;
+    }
+    println(sink);
+}

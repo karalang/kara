@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_06_34.rs::e2e_generic_closure_hands_back_t_param"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_06_34.rs::asan_generic_closure_hands_back_t_param"]
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

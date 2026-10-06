@@ -1,0 +1,6 @@
+
+fn handle(ws: WebSocket) {}
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    handle(ws);
+}

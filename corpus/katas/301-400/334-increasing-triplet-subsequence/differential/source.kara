@@ -1,0 +1,254 @@
+// Differential for LeetCode #334 (Increasing Triplet Subsequence).
+//
+// The four arms, copied verbatim apart from their names (the tails arm's
+// general `has_increasing(nums, k)` is called with k = 3), against:
+//
+//   * an exhaustive oracle: every array of 0 to 7 values from {0, 1, 2, 3}
+//     (21,845 arrays), answered by trying every triple of indices, and
+//   * eight properties on 2,000 random arrays of 0 to 60 values, with value
+//     ranges from 2 to 1,000,000.
+//
+//   P1  the four arms agree
+//   P2  the answer equals the brute-force oracle (exhaustive and random)
+//   P3  an increasing subsequence of length 4 implies one of length 3, and
+//       one of length 3 implies one of length 2
+//   P4  reversing the array and negating every value keeps the answer
+//   P5  if a prefix has a triplet, the whole array does
+//   P6  an array with an increasing pair gains a triplet when its maximum
+//       plus one is appended
+//   P7  `x -> 3x + 7` (strictly increasing) keeps the answer
+//   P8  the sorted, de-duplicated values have a triplet exactly when there
+//       are at least three distinct values
+
+fn thresholds(nums: ref Vec[i64]) -> bool {
+    let mut first: Option[i64] = None;
+    let mut second: Option[i64] = None;
+    for x in nums {
+        match second {
+            Some(s) if x > s => {
+                return true;
+            }
+            _ => {}
+        }
+        match first {
+            Some(f) if x > f => {
+                second = Some(x);
+            }
+            _ => {
+                first = Some(x);
+            }
+        }
+    }
+    return false;
+}
+
+fn sentinels(nums: ref Vec[i64]) -> bool {
+    let mut first = i64.MAX;
+    let mut second = i64.MAX;
+    for x in nums {
+        if x <= first {
+            first = x;
+        } else if x <= second {
+            second = x;
+        } else {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn bounds(nums: ref Vec[i64]) -> bool {
+    let n = nums.len();
+    if n < 3 {
+        return false;
+    }
+    let mut after: Vec[i64] = Vec.filled(n, 0);
+    after[n - 1] = nums[n - 1];
+    let mut i = n - 2;
+    while i >= 0 {
+        after[i] = if nums[i] > after[i + 1] { nums[i] } else { after[i + 1] };
+        i -= 1;
+    }
+    let mut before = nums[0];
+    for j in 1..(n - 1) {
+        if before < nums[j] and nums[j] < after[j + 1] {
+            return true;
+        }
+        if nums[j] < before {
+            before = nums[j];
+        }
+    }
+    return false;
+}
+
+fn has_increasing(nums: ref Vec[i64], k: i64) -> bool {
+    let mut tails: Vec[i64] = Vec.new();
+    for x in nums {
+        let mut m = 0;
+        while m < tails.len() and tails[m] < x {
+            m += 1;
+        }
+        if m == tails.len() {
+            tails.push(x);
+            if tails.len() >= k {
+                return true;
+            }
+        } else {
+            tails[m] = x;
+        }
+    }
+    return false;
+}
+
+fn brute(nums: ref Vec[i64]) -> bool {
+    let n = nums.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if nums[i] < nums[j] {
+                for k in (j + 1)..n {
+                    if nums[j] < nums[k] {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+fn describe(nums: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in nums.iter() {
+        parts.push(x.to_string());
+    }
+    let joined = parts.join(",");
+    return f"[{joined}]";
+}
+
+// P1: every arm's answer, or a failure line when they disagree.
+fn agreed(nums: ref Vec[i64], failures: mut ref i64) -> bool {
+    let a = thresholds(nums);
+    let b = sentinels(nums);
+    let c = bounds(nums);
+    let d = has_increasing(nums, 3);
+    if a != b or a != c or a != d {
+        failures += 1;
+        let what = describe(nums);
+        println(f"P1 {what}: thresholds {a} sentinels {b} bounds {c} tails {d}");
+    }
+    return a;
+}
+
+fn check(ok: bool, prop: String, nums: ref Vec[i64], failures: mut ref i64) {
+    if not ok {
+        failures += 1;
+        let what = describe(nums);
+        println(f"{prop} {what}");
+    }
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn properties(nums: ref Vec[i64], failures: mut ref i64) {
+    let ans = agreed(nums, failures);
+    check(ans == brute(nums), "P2", nums, failures);
+    let four = has_increasing(nums, 4);
+    let two = has_increasing(nums, 2);
+    check((not four or ans) and (not ans or two), "P3", nums, failures);
+    let mut rev: Vec[i64] = Vec.new();
+    let mut i = nums.len() - 1;
+    while i >= 0 {
+        rev.push(0 - nums[i]);
+        i -= 1;
+    }
+    check(agreed(rev, failures) == ans, "P4", nums, failures);
+    let mut prefix: Vec[i64] = Vec.new();
+    for k in 0..(nums.len() / 2) {
+        prefix.push(nums[k]);
+    }
+    check(not agreed(prefix, failures) or ans, "P5", nums, failures);
+    if two {
+        let mut top = nums[0];
+        for x in nums.iter() {
+            if x > top {
+                top = x;
+            }
+        }
+        let mut grown = nums.clone();
+        grown.push(top + 1);
+        check(agreed(grown, failures), "P6", nums, failures);
+    }
+    let mut scaled: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        scaled.push(3 * x + 7);
+    }
+    check(agreed(scaled, failures) == ans, "P7", nums, failures);
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let mut uniq: Vec[i64] = Vec.new();
+    for x in sorted {
+        if uniq.len() == 0 or uniq[uniq.len() - 1] != x {
+            uniq.push(x);
+        }
+    }
+    check(agreed(uniq, failures) == (uniq.len() >= 3), "P8", nums, failures);
+}
+
+fn main() {
+    let mut failures = 0;
+    let mut exhaustive = 0;
+    let mut with_triplet = 0;
+    for n in 0..8 {
+        let mut combos = 1;
+        for _ in 0..n {
+            combos *= 4;
+        }
+        for c in 0..combos {
+            let mut nums: Vec[i64] = Vec.new();
+            let mut rest = c;
+            for _ in 0..n {
+                nums.push(rest % 4);
+                rest = rest / 4;
+            }
+            let ans = agreed(nums, mut failures);
+            check(ans == brute(nums), "P2", nums, mut failures);
+            if ans {
+                with_triplet += 1;
+            }
+            exhaustive += 1;
+        }
+    }
+    let mut seed = 334;
+    let mut random_cases = 0;
+    let mut random_true = 0;
+    for round in 0..2000 {
+        let n = next(mut seed) % 61;
+        let range = if round % 4 == 0 { 2 } else if round % 4 == 1 { 5 } else if round % 4 == 2 { 50 } else { 1000000 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let hi = next(mut seed);
+            nums.push((hi * 32768 + next(mut seed)) % range);
+        }
+        if round % 10 == 9 {
+            // Mostly decreasing, where triplets are rare.
+            nums.sort();
+            nums.reverse();
+            if n > 3 {
+                let a = next(mut seed) % n;
+                let b = next(mut seed) % n;
+                let t = nums[a];
+                nums[a] = nums[b];
+                nums[b] = t;
+            }
+        }
+        properties(nums, mut failures);
+        if brute(nums) {
+            random_true += 1;
+        }
+        random_cases += 1;
+    }
+    println(f"{exhaustive} exhaustive arrays ({with_triplet} with a triplet), {random_cases} random arrays ({random_true} with a triplet), {failures} failures");
+}

@@ -1,0 +1,20 @@
+
+fn get_row(row_index: i64) -> Vec[i64] {
+    let mut row: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j <= row_index { row.push(1i64); j = j + 1i64; }
+    let mut i = 2i64;
+    while i <= row_index {
+        let mut k = i - 1i64;
+        while k >= 1i64 { row[k] = row[k] + row[k - 1i64]; k = k - 1i64; }
+        i = i + 1;
+    }
+    row
+}
+fn main() {
+    let row = get_row(30i64);
+    let mut sum = 0i64;
+    let mut j = 0i64;
+    while j < row.len() { sum = sum + row[j]; j = j + 1i64; }
+    println(sum);
+}

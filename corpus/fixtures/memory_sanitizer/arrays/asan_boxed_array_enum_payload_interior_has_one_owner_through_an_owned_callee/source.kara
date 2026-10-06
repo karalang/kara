@@ -1,0 +1,31 @@
+
+enum Slot[T] { Filled(T), Blank }
+
+fn take(s: Slot[Array[String, 2]]) -> bool {
+    match s { Filled(x) => x[0].contains("row"), Blank => false, }
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 4 {
+        let g: Slot[Array[String, 2]] =
+            Filled([f"row-bbbbbbbbbbbb-{i}", f"row-cccccccccccc-{i}"]);
+        println(f"callee_inplace:{take(g)}");
+
+        let a: Array[String, 2] = [f"row-dddddddddddd-{i}", f"row-eeeeeeeeeeee-{i}"];
+        let h: Slot[Array[String, 2]] = Filled(a);
+        println(f"callee_named:{take(h)}");
+
+        let b: Array[String, 2] = [f"row-ffffffffffff-{i}", f"row-gggggggggggg-{i}"];
+        println(f"arg_named:{take(Filled(b))}");
+
+        println(f"arg_inline:{take(Filled([f"row-hhhhhhhhhhhh-{i}", f"row-iiiiiiiiiiii-{i}"]))}");
+
+        let c: Array[String, 2] = [f"row-jjjjjjjjjjjj-{i}", f"row-kkkkkkkkkkkk-{i}"];
+        let k: Slot[Array[String, 2]] = Filled(c);
+        match k { Filled(x) => { println(f"no_callee:{x[0]}"); } Blank => {} }
+
+        i = i + 1;
+    }
+    println("end");
+}

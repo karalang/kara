@@ -1,0 +1,140 @@
+// LeetCode 261 — Graph Valid Tree. (Premium.)
+//
+// `n` nodes labelled 0..n, and a list of undirected edges. Return true iff the
+// graph is a tree.
+//
+// A graph on n nodes is a tree iff it satisfies all three of:
+//
+//     (1) acyclic
+//     (2) connected
+//     (3) exactly n - 1 edges
+//
+// ...and ANY TWO of those imply the third. That is the whole problem, and it is
+// why a solution can look complete while checking only one: `edges.len() == n-1`
+// alone accepts a triangle plus an isolated node; "no cycle" alone accepts any
+// forest; "connected" alone accepts anything with a cycle bolted on.
+//
+// Union-Find establishes (1) and (2) together, in one pass and without ever
+// consulting the edge count. Each edge attempts to merge its endpoints: if they
+// already share a root the edge closes a cycle, so reject immediately. Survive
+// every edge and the graph is a forest; require one component and it is a tree.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    // Walk to the root...
+    let mut r = x;
+    while parent[r] != r {
+        r = parent[r];
+    }
+    // ...then flatten the path behind us, so the next find on any node along it
+    // is one hop. Without this the chain can degrade to O(n) per query.
+    let mut c = x;
+    while parent[c] != r {
+        let nxt = parent[c];
+        parent[c] = r;
+        c = nxt;
+    }
+    return r;
+}
+
+fn valid_tree(n: i64, edges: ref Vec[Vec[i64]]) -> bool {
+    let mut parent: Vec[i64] = Vec.new();
+    let mut size: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        parent.push(i);
+        size.push(1);
+        i = i + 1;
+    }
+
+    let mut components = n;
+    let m = edges.len();
+    let mut e = 0;
+    while e < m {
+        let edge = ref edges[e];
+        let ra = find(mut parent, edge[0]);
+        let rb = find(mut parent, edge[1]);
+        if ra == rb {
+            // Both endpoints already reachable from each other — this edge
+            // closes a cycle. (1) fails.
+            return false;
+        }
+        // Union by size: hang the smaller tree under the larger, which bounds
+        // the pre-compression depth.
+        if size[ra] < size[rb] {
+            parent[ra] = rb;
+            size[rb] = size[rb] + size[ra];
+        } else {
+            parent[rb] = ra;
+            size[ra] = size[ra] + size[rb];
+        }
+        components = components - 1;
+        e = e + 1;
+    }
+
+    // Acyclic by construction at this point; a tree also needs (2).
+    return components == 1;
+}
+
+fn report(label: ref String, n: i64, edges: ref Vec[Vec[i64]]) {
+    if valid_tree(n, edges) {
+        println(f"{label} -> true");
+    } else {
+        println(f"{label} -> false");
+    }
+}
+
+fn main() {
+    // A single node with no edges is a tree.
+    let none: Vec[Vec[i64]] = Vec.new();
+    report("n=1 []", 1, none);
+
+    // Two nodes, no edge — acyclic, but not connected.
+    report("n=2 []", 2, none);
+
+    // The canonical star.
+    let mut a: Vec[Vec[i64]] = Vec.new();
+    a.push([0, 1]);
+    a.push([0, 2]);
+    a.push([0, 3]);
+    a.push([0, 4]);
+    report("n=5 star", 5, a);
+
+    // A path — same edge count, different shape, still a tree.
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([0, 1]);
+    b.push([1, 2]);
+    b.push([2, 3]);
+    b.push([3, 4]);
+    report("n=5 path", 5, b);
+
+    // Connected, but one edge too many: 0-1-2-3-0 is a cycle.
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    c.push([0, 1]);
+    c.push([1, 2]);
+    c.push([2, 3]);
+    c.push([0, 3]);
+    report("n=4 cycle", 4, c);
+
+    // ★ The case that defeats an edge-count-only check: exactly n-1 = 3 edges,
+    // but they form a triangle on {0,1,2} and leave node 3 stranded.
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    d.push([0, 1]);
+    d.push([1, 2]);
+    d.push([0, 2]);
+    report("n=4 triangle + isolated", 4, d);
+
+    // The case that defeats an acyclic-only check: a forest of two paths.
+    let mut e: Vec[Vec[i64]] = Vec.new();
+    e.push([0, 1]);
+    e.push([2, 3]);
+    e.push([3, 4]);
+    report("n=5 forest", 5, e);
+
+    // Edges listed out of any traversal order — union-find does not care.
+    let mut f: Vec[Vec[i64]] = Vec.new();
+    f.push([3, 4]);
+    f.push([0, 1]);
+    f.push([2, 3]);
+    f.push([1, 2]);
+    report("n=5 path, shuffled edges", 5, f);
+}

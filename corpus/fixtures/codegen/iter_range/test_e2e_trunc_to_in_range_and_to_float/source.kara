@@ -1,0 +1,6 @@
+
+fn main() {
+    println((42.9f64).trunc_to_i32());
+    println((42i64).to_f64());
+    println((200u8).to_f32());
+}

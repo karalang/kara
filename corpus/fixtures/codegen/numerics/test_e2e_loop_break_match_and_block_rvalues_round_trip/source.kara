@@ -1,0 +1,20 @@
+
+shared struct Node { v: i64 }
+
+fn pick_match() -> Node {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break match i { 2 => Node { v: 7 }, _ => Node { v: 9 } } }
+    }
+}
+
+fn pick_block() -> Node {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break { let k = i * 3; Node { v: k } } }
+    }
+}
+
+fn main() { println(pick_match().v); println(pick_block().v); }

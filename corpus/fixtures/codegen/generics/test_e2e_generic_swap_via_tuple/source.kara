@@ -1,0 +1,7 @@
+
+fn swap[T](a: T, b: T) -> (T, T) { (b, a) }
+fn main() {
+    let result = swap(1, 2);
+    println(result.0);
+    println(result.1);
+}

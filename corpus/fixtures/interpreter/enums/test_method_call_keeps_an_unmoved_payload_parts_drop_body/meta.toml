@@ -1,0 +1,13 @@
+source = "tests/interpreter/enums.rs::test_method_call_keeps_an_unmoved_payload_parts_drop_body"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

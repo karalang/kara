@@ -1,0 +1,87 @@
+// Benchmark workload for LeetCode #337 — the post-order arm
+// (house_robber_iii.kara), timed as written.
+//
+// Build once, then punch (BENCHMARKS.md). One random tree of HOUSES houses,
+// each holding 0 to 10,000, is built once: every new house walks down from
+// the root, turning left or right at random, and settles in the first empty
+// place. Each of PUNCHES punches gives one random house new money, solves
+// the whole tree, and puts the money back.
+//
+// Each answer is folded into a rolling hash, which is the sink.
+
+const HOUSES: i64 = 500000;
+const PUNCHES: i64 = 100;
+const MODULUS: i64 = 1073741789;
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+// (robbed, not robbed) for the subtree at `node`.
+fn visit(nodes: ref Vec[Node], node: i64) -> (i64, i64) {
+    if node == -1 {
+        return (0, 0);
+    }
+    let (lr, ls) = visit(nodes, nodes[node].left);
+    let (rr, rs) = visit(nodes, nodes[node].right);
+    let robbed = nodes[node].val + ls + rs;
+    let skipped = lr.max(ls) + rr.max(rs);
+    return (robbed, skipped);
+}
+
+fn rob(nodes: ref Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    let (r, s) = visit(nodes, 0);
+    return r.max(s);
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn wide(seed: mut ref i64) -> i64 {
+    let hi = next(seed);
+    return hi * 32768 + next(seed);
+}
+
+fn main() {
+    let mut seed = 337;
+    let mut nodes: Vec[Node] = Vec.new();
+    for i in 0..HOUSES {
+        nodes.push(Node { val: next(mut seed) % 10001, left: -1, right: -1 });
+        if i == 0 {
+            continue;
+        }
+        let mut cur = 0;
+        while true {
+            if next(mut seed) % 2 == 0 {
+                if nodes[cur].left == -1 {
+                    nodes[cur].left = i;
+                    break;
+                }
+                cur = nodes[cur].left;
+            } else {
+                if nodes[cur].right == -1 {
+                    nodes[cur].right = i;
+                    break;
+                }
+                cur = nodes[cur].right;
+            }
+        }
+    }
+    let mut sink = 0;
+    for _ in 0..PUNCHES {
+        let at = wide(mut seed) % HOUSES;
+        let old = nodes[at].val;
+        nodes[at].val = next(mut seed) % 10001;
+        let answer = rob(nodes);
+        nodes[at].val = old;
+        sink = (sink * 1000003 + answer) % MODULUS;
+    }
+    println(f"{sink}");
+}

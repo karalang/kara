@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_27_106.rs::e2e_fresh_temp_field_returned_by_method_runs_siblings_once"
+dedup_of = ["tests/interpreter/families/b_2026_09_27_106.rs::test_fresh_temp_field_returned_by_method_runs_siblings_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

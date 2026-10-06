@@ -1,0 +1,121 @@
+// LeetCode 210 — Course Schedule II.
+//
+// Like #207, but instead of a yes/no answer, return a valid order in which to
+// take all `num_courses` courses given the prerequisite pairs `[a, b]` ("b
+// before a"). If the graph has a cycle no order exists — return an empty result.
+//
+// Kahn's topological sort, recording the finish order. Build the edge b -> a and
+// each node's in-degree, seed a queue with the in-degree-0 courses (scanned in
+// ascending label order for a deterministic result), then repeatedly pop a
+// course, append it to the order, and relax its out-edges. If every course is
+// emitted the order is a valid topological sort; if a cycle starves the queue
+// early, fewer than `num_courses` are emitted and the answer is empty.
+
+fn find_order(num_courses: i64, prereqs: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    let mut indeg: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < num_courses {
+        adj.push(Vec.new());
+        indeg.push(0);
+        i = i + 1;
+    }
+
+    let m = prereqs.len();
+    let mut e = 0;
+    while e < m {
+        let pair = ref prereqs[e];
+        let a = pair[0];
+        let b = pair[1];
+        adj[b].push(a);             // edge b -> a
+        indeg[a] = indeg[a] + 1;
+        e = e + 1;
+    }
+
+    let mut queue: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < num_courses {
+        if indeg[c] == 0 { queue.push(c); }
+        c = c + 1;
+    }
+
+    let mut order: Vec[i64] = Vec.new();
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head = head + 1;
+        order.push(node);
+        let neighbors = ref adj[node];
+        let mut k = 0;
+        while k < neighbors.len() {
+            let nb = neighbors[k];
+            indeg[nb] = indeg[nb] - 1;
+            if indeg[nb] == 0 { queue.push(nb); }
+            k = k + 1;
+        }
+    }
+
+    if order.len() == num_courses {
+        return order;
+    }
+    let empty: Vec[i64] = Vec.new();     // cycle: no valid order
+    return empty;
+}
+
+fn report(num_courses: i64, prereqs: ref Vec[Vec[i64]]) {
+    let order = find_order(num_courses, prereqs);
+    if order.len() == 0 {
+        println("impossible");
+        return;
+    }
+    let mut out: String = "";
+    let mut i = 0;
+    let mut first = true;
+    while i < order.len() {
+        if first { first = false; } else { out.push_str(" "); }
+        out.push_str(f"{order[i]}");
+        i = i + 1;
+    }
+    println(out);
+}
+
+fn main() {
+    let single: Vec[Vec[i64]] = Vec.new();
+    report(1, single);                       // 0
+
+    let mut a: Vec[Vec[i64]] = Vec.new();
+    a.push([1, 0]);
+    report(2, a);                            // 0 1
+
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([1, 0]);
+    b.push([2, 0]);
+    b.push([3, 1]);
+    b.push([3, 2]);
+    report(4, b);                            // 0 1 2 3
+
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    c.push([1, 0]);
+    c.push([0, 1]);
+    report(2, c);                            // impossible — cycle
+
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    d.push([1, 0]);
+    d.push([2, 1]);
+    report(3, d);                            // 0 1 2
+
+    let mut e: Vec[Vec[i64]] = Vec.new();
+    e.push([0, 1]);
+    e.push([1, 2]);
+    e.push([2, 0]);
+    report(3, e);                            // impossible — 3-cycle
+
+    let mut f: Vec[Vec[i64]] = Vec.new();
+    f.push([2, 5]);
+    f.push([0, 5]);
+    f.push([0, 4]);
+    f.push([1, 4]);
+    f.push([3, 2]);
+    f.push([1, 3]);
+    report(6, f);                            // a valid topo order
+}

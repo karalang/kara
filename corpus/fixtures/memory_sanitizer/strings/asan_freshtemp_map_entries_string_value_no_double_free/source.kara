@@ -1,0 +1,16 @@
+
+fn vmap() -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1_i64, "alpha value padded out beyond thirty-six bytes okay");
+    m.insert(2_i64, "beta value padded out beyond thirty-six bytes okayy");
+    return m;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut s = 0;
+        for pair in vmap().entries() { s = s + pair.0 + pair.1.len(); }
+        println(s);
+        i = i + 1;
+    };
+}

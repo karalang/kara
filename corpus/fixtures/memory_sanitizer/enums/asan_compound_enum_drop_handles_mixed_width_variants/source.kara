@@ -1,0 +1,13 @@
+
+enum E { V1(i64), V2(String) }
+fn main() {
+    {
+        let _a = V1(42);
+    }
+    {
+        let mut s = String.new();
+        s.push_str("hello");
+        let _b = V2(s);
+    }
+    println(1);
+}

@@ -1,0 +1,14 @@
+struct Collector { }
+            impl Exporter for Collector {
+                fn export_event(ref self, event: LogEvent) {
+                    println(f"E {event.level}/{event.message}/{event.span_id}");
+                }
+                fn export_span(ref self, span: Span) {
+                    println(f"S {span.name}/{span.span_id}/{span.parent_id}");
+                }
+            }
+            fn main() {
+                let c = Collector {};
+                c.export_event(LogEvent.warn("disk").in_span(3));
+                c.export_span(Span.root("req", 7).child("inner", 9));
+            }

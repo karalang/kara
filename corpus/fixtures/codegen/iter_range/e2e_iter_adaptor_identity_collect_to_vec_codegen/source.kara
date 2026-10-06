@@ -1,0 +1,18 @@
+
+fn build() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha".to_string());
+    v.push("beta".to_string());
+    v.push("gamma".to_string());
+    v
+}
+fn main() {
+    let a: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];
+    let b: Vec[i64] = a.iter().collect();
+    println(f"{b.len()} {a.len()} {b[0]} {b[3]}");
+    let s: Vec[String] = Vec["one".to_string(), "two".to_string()];
+    let t: Vec[String] = s.iter().collect();
+    println(f"{t.len()} {s.len()} {t[0]}{t[1]}");
+    let ft: Vec[String] = build().iter().collect();
+    println(f"{ft.len()} {ft[0]}");
+}

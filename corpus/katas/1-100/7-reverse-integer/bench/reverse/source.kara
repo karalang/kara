@@ -1,0 +1,72 @@
+// Benchmark workload — pop-and-push Reverse Integer (LeetCode #7).
+//
+// N = 1024 distinct i32 inputs, K = 50_000_000 outer iters. Per-call
+// work is ≤10 iters of (mod, compare, mul-add, div), so ~40 ops per
+// call → ~2 × 10⁹ ops total, sized to land near ~100 ms on Rust.
+//
+// Per-iter input variation comes from `inputs[k % N]`; the inputs are
+// a deterministic LCG fill spanning both signs and varying digit
+// counts, so reverse()'s digit-walk loop count varies across iters
+// and the optimizer cannot hoist a constant-fold. K and N are both
+// powers of two (well, N is) so `k % N` lowers to a bitmask, keeping
+// the dispatch overhead negligible vs the reverse() body.
+//
+// The fill loop builds `inputs: Vec[i32]` once outside the timed loop
+// — this matches the rust mirror's `Vec::with_capacity` + push, and
+// the python mirror's list comp. Sink = sum of `reverse(inputs[k%N])`
+// widened to i64 (so K iters of i32-range values don't overflow the
+// accumulator). All three impls print the same sink for the same N/K
+// — output gates the bench against "fast but wrong".
+
+fn reverse(x: i32) -> i32 {
+    let mut x = x;
+    let mut result: i32 = 0i32;
+    let int_max: i32 = 2147483647i32;
+    let int_min: i32 = -2147483648i32;
+    let max_div: i32 = int_max / 10i32;
+    let min_div: i32 = int_min / 10i32;
+    while x != 0i32 {
+        let digit: i32 = x % 10i32;
+        if result > max_div or (result == max_div and digit > 7i32) {
+            return 0i32;
+        }
+        if result < min_div or (result == min_div and digit < -8i32) {
+            return 0i32;
+        }
+        result = result * 10i32 + digit;
+        x = x / 10i32;
+    }
+    result
+}
+
+fn main() {
+    let n: i64 = 1024;
+    let k_iters: i64 = 50000000;
+
+    // Deterministic LCG-style fill: inputs[i] = (i * 0x9E3779B9 + 0x12345678) as i32.
+    // The multiply-add wraps in i32 to give a spread of values across
+    // both signs and 4-10 digit widths. Computed in i64 then cast so
+    // there is no overflow trap inside the build loop itself.
+    let mut inputs: Vec[i32] = Vec.with_capacity(n);
+    let mut i: i64 = 0;
+    while i < n {
+        let raw: i64 = i * 2654435769 + 305419896;
+        // Mask to 32 bits then re-interpret as signed via the round-trip
+        // through i32 truncation — `as i32` here truncates the low 32
+        // bits, preserving the two-complement sign bit.
+        let v32: i32 = raw as i32;
+        inputs.push(v32);
+        i = i + 1;
+    }
+
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % n;
+        let x: i32 = inputs[idx];
+        let r: i32 = reverse(x);
+        sum = sum + (r as i64);
+        k = k + 1;
+    }
+    println(sum);
+}

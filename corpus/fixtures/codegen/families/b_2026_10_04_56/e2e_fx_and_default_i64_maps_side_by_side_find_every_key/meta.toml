@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_04_56.rs::e2e_fx_and_default_i64_maps_side_by_side_find_every_key"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

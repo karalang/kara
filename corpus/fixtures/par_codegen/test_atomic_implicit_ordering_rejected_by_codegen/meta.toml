@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_atomic_implicit_ordering_rejected_by_codegen"
+dedup_of = []
+expect = "error:E0270"
+exit = 1
+tags = ["shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

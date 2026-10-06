@@ -1,0 +1,14 @@
+
+shared struct N { v: i64 }
+
+fn main() {
+    let a: N = N { v: 7 };
+    let mut lvl0: Vec[weak N] = Vec.new();
+    lvl0.push(a);
+    let mut lvl1: Vec[Vec[weak N]] = Vec.new();
+    lvl1.push(lvl0);
+    let mut lvl2: Vec[Vec[Vec[weak N]]] = Vec.new();
+    lvl2.push(lvl1);
+    match lvl2[0][0][0] { Some(x) => { println(x.v) } None => { println(0 - 1) } }
+    println(a.v);
+}

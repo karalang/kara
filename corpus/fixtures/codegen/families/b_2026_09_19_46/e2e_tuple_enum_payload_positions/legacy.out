@@ -1,0 +1,53 @@
+let
+  dS1
+  dS2
+  x
+disc
+  dS3
+  dS4
+  x
+stmt
+  dS5
+  dS6
+  x
+move
+  dS7
+  dS8
+  x
+arg
+  dS9
+  dS10
+  1
+field
+  dS11
+  dS12
+  x
+arm
+  in
+  dS13
+  dS14
+armelem
+  in 15
+  dS15
+  dS16
+mixed
+  dS17
+  x
+wide
+  dS18
+  dS19
+  dS20
+  x
+glet
+  dS21
+  dS22
+  x
+gdisc
+  dS23
+  dS24
+  x
+garg
+  dS25
+  dS26
+  1
+end

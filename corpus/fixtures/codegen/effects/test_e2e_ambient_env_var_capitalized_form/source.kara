@@ -1,0 +1,8 @@
+
+fn main() writes(Env) reads(Env) {
+    Env.set("KARAC_E2E_VAR_CAP", "cap-val");
+    match Env.var("KARAC_E2E_VAR_CAP") {
+        Ok(v) => { println(v); }
+        Err(_) => { println("missing"); }
+    }
+}

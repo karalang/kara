@@ -1,0 +1,13 @@
+
+fn add(t: ref Interner, s: ref String) -> Symbol {
+    t.intern(s)
+}
+fn main() {
+    let mut t: Interner = Interner.new();
+    let a = add(t, "x");
+    let b = add(t, "x");
+    let c = add(t, "y");
+    println(a == b);
+    println(a == c);
+    println(t.len());
+}

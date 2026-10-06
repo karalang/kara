@@ -1,0 +1,55 @@
+
+struct R { id: i64, xs: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}-{self.xs.len()}") } }
+
+fn mk(n: i64) -> R {
+    let mut v: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 8 { v.push(f"payloadpayload-{n}-{i}"); i = i + 1; }
+    return R { id: n, xs: v }
+}
+
+fn while_first(p: R) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 3 {
+        let mut out: R = mk(90 + i);
+        if i == 0 { out = p; }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+
+fn while_middle(p: R) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 3 {
+        let mut out: R = mk(60 + i);
+        if i == 1 { out = p; }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+
+fn outside(p: R) -> i64 {
+    let mut out: R = mk(70);
+    let mut i: i64 = 0;
+    while i < 3 {
+        if i == 1 { out = p; }
+        i = i + 1;
+    }
+    return out.id
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        println(f"a{while_first(mk(5))}");
+        println(f"b{while_middle(mk(6))}");
+        println(f"c{outside(mk(7))}");
+        i = i + 1;
+    }
+    println("done");
+}

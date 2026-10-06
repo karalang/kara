@@ -1,0 +1,21 @@
+
+fn compute(x: i64) -> i64 {
+    x * x + 1i64
+}
+
+fn main() {
+    let n: i64 = 4i64;
+    let mut inputs: Vec[i64] = Vec.new();
+    inputs.push(10i64);
+    inputs.push(20i64);
+    inputs.push(30i64);
+    inputs.push(40i64);
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        let idx: i64 = k % n;
+        sum = sum + compute(inputs[idx]);
+        k = k + 1i64;
+    }
+    println(sum);
+}

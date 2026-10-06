@@ -1,0 +1,13 @@
+source = "tests/codegen/structs.rs::e2e_two_step_destructure_of_a_nested_tuple_field_has_one_owner"
+dedup_of = ["tests/interpreter/structs.rs::test_two_step_destructure_of_a_nested_tuple_field_has_one_owner", "tests/memory_sanitizer/structs.rs::asan_two_step_destructure_of_a_nested_tuple_field_clean"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

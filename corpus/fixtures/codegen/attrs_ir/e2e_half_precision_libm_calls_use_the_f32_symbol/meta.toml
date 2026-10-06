@@ -1,0 +1,13 @@
+source = "tests/codegen/attrs_ir.rs::e2e_half_precision_libm_calls_use_the_f32_symbol"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["format-template"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"

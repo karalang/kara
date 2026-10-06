@@ -1,0 +1,373 @@
+// LeetCode 311 — four arms against each other and against seven properties
+// that follow from the ALGEBRA rather than from any implementation.
+//
+//   A  skip-zero, loops reordered (i,k,j) — hoists the zero test out of j
+//   B  A compressed to CSR, B dense       — the nonzeros walked, never tested
+//   C  BOTH operands compressed           — no multiplication by zero anywhere
+//   D  naive triple loop (i,j,k)          — the definition, skipping nothing
+//
+// WHAT THE ARMS CANNOT SHARE. A's characteristic bug is a loop-ORDER slip:
+// reverting (i,k,j) to (i,j,k) leaves the answer correct while making the zero
+// test useless, so no test of OUTPUT can see it — which is exactly why the
+// benchmark and not the differential is where that one shows. B has no order to
+// revert; its signature bug is the CSR boundary, `offsets[i+1]` against
+// `offsets[i]`, which silently reads a neighbouring row's nonzeros. C reaches
+// its accumulator through two levels of indirection — A's column index picks
+// B's row, B's column index picks the output column — so transposing either
+// lookup is its own unique failure. D forms every term.
+//
+// D IS THE ARM THAT SKIPS NOTHING, and that is why it earns its O(m*n*k). The
+// other three all rest on the same claim: omitting terms where a factor is zero
+// cannot change the sum. The claim is true, but all three depend on it the same
+// way, so a misapplication — skipping on the wrong operand, hoisting a test
+// past a loop it does not dominate — could make them wrong TOGETHER and still
+// agree.
+//
+// P4, P5 AND P7 ARE THE ONES NO ARM COMPUTES. Matrix multiplication is not
+// merely a function to be checked pointwise; it satisfies an algebra, and none
+// of these arms knows that. Distributivity A(B+C) = AB+AC, associativity
+// (AB)C = A(BC), and the transpose law (AB)^T = B^T A^T each relate SEPARATE
+// invocations to one another, so they catch a fault that is symmetric across
+// every arm — the failure mode four-way agreement is blind to. Associativity is
+// the strongest of the three: it constrains two entirely different bracketings
+// of three matrices, and nothing in any arm is trying to make them equal.
+
+// ------------------------------------------------------------------- arm A
+
+fn mul_a(a: ref Vec[Vec[i64]], b: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = a.len();
+    let mut k_dim = 0;
+    if m > 0 { k_dim = a[0].len(); }
+    let mut n = 0;
+    if b.len() > 0 { n = b[0].len(); }
+
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    for i in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(0);
+        }
+        c.push(row);
+    }
+
+    for i in 0..m {
+        for k in 0..k_dim {
+            let av = a[i][k];
+            // One zero in A skips an entire row of B.
+            if av != 0 {
+                for j in 0..n {
+                    c[i][j] += av * b[k][j];
+                }
+            }
+        }
+    }
+    return c;
+}
+
+// ------------------------------------------------------------------- arm B
+
+fn mul_b(a: ref Vec[Vec[i64]], b: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = a.len();
+    let mut k_dim = 0;
+    if m > 0 { k_dim = a[0].len(); }
+    let mut n = 0;
+    if b.len() > 0 { n = b[0].len(); }
+
+    // ---- compress A: offsets / cols / vals
+    let mut offsets: Vec[i64] = Vec.new();
+    let mut cols: Vec[i64] = Vec.new();
+    let mut vals: Vec[i64] = Vec.new();
+    offsets.push(0);
+    for i in 0..m {
+        for k in 0..k_dim {
+            if a[i][k] != 0 {
+                cols.push(k);
+                vals.push(a[i][k]);
+            }
+        }
+        offsets.push(cols.len());
+    }
+
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    for i in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(0);
+        }
+        c.push(row);
+    }
+
+    for i in 0..m {
+        let mut p = offsets[i];
+        while p < offsets[i + 1] {
+            let k = cols[p];
+            let av = vals[p];
+            for j in 0..n {
+                c[i][j] += av * b[k][j];
+            }
+            p = p + 1;
+        }
+    }
+    return c;
+}
+
+// ------------------------------------------------------------------- arm C
+
+fn compress_c(m: ref Vec[Vec[i64]], rows: i64, cols_n: i64) -> Vec[Vec[i64]] {
+    // Returns [offsets, cols, vals] as three rows of one Vec.
+    let mut offsets: Vec[i64] = Vec.new();
+    let mut cols: Vec[i64] = Vec.new();
+    let mut vals: Vec[i64] = Vec.new();
+    offsets.push(0);
+    for r in 0..rows {
+        for c in 0..cols_n {
+            if m[r][c] != 0 {
+                cols.push(c);
+                vals.push(m[r][c]);
+            }
+        }
+        offsets.push(cols.len());
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    out.push(offsets);
+    out.push(cols);
+    out.push(vals);
+    return out;
+}
+
+fn mul_c(a: ref Vec[Vec[i64]], b: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = a.len();
+    let mut k_dim = 0;
+    if m > 0 { k_dim = a[0].len(); }
+    let mut n = 0;
+    if b.len() > 0 { n = b[0].len(); }
+
+    let ca = compress_c(a, m, k_dim);
+    let cb = compress_c(b, b.len(), n);
+
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    for i in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(0);
+        }
+        c.push(row);
+    }
+
+    for i in 0..m {
+        let mut p = ca[0][i];
+        while p < ca[0][i + 1] {
+            let k = ca[1][p];
+            let av = ca[2][p];
+            // Only the nonzeros of B's row k.
+            let mut q = cb[0][k];
+            while q < cb[0][k + 1] {
+                c[i][cb[1][q]] += av * cb[2][q];
+                q = q + 1;
+            }
+            p = p + 1;
+        }
+    }
+    return c;
+}
+
+// ------------------------------------------------------------------- arm D
+
+fn mul_d(a: ref Vec[Vec[i64]], b: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = a.len();
+    let mut k_dim = 0;
+    if m > 0 { k_dim = a[0].len(); }
+    let mut n = 0;
+    if b.len() > 0 { n = b[0].len(); }
+
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    for i in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            let mut total = 0;
+            for k in 0..k_dim {
+                total += a[i][k] * b[k][j];
+            }
+            row.push(total);
+        }
+        c.push(row);
+    }
+    return c;
+}
+
+// ------------------------------------------------------------------ harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) % 2147483648;
+}
+
+// density is out of 16: 1 is very sparse, 16 is fully dense.
+fn make_matrix(rows: i64, cols: i64, seed: i64, density: i64) -> Vec[Vec[i64]] {
+    let mut state = seed;
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for r in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..cols {
+            state = lcg(state);
+            if state % 16 < density {
+                state = lcg(state);
+                row.push(state % 13 - 6);
+            } else {
+                row.push(0);
+            }
+        }
+        m.push(row);
+    }
+    return m;
+}
+
+fn identity(n: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            if r == c { row.push(1); } else { row.push(0); }
+        }
+        m.push(row);
+    }
+    return m;
+}
+
+fn zeros(rows: i64, cols: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for r in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..cols { row.push(0); }
+        m.push(row);
+    }
+    return m;
+}
+
+fn add(x: ref Vec[Vec[i64]], y: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for r in 0..x.len() {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..x[r].len() { row.push(x[r][c] + y[r][c]); }
+        m.push(row);
+    }
+    return m;
+}
+
+fn scale(x: ref Vec[Vec[i64]], s: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for r in 0..x.len() {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..x[r].len() { row.push(x[r][c] * s); }
+        m.push(row);
+    }
+    return m;
+}
+
+fn transpose(x: ref Vec[Vec[i64]], rows: i64, cols: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for c in 0..cols {
+        let mut row: Vec[i64] = Vec.new();
+        for r in 0..rows { row.push(x[r][c]); }
+        m.push(row);
+    }
+    return m;
+}
+
+fn same(x: ref Vec[Vec[i64]], y: ref Vec[Vec[i64]]) -> bool {
+    if x.len() != y.len() { return false; }
+    for r in 0..x.len() {
+        if x[r].len() != y[r].len() { return false; }
+        for c in 0..x[r].len() {
+            if x[r][c] != y[r][c] { return false; }
+        }
+    }
+    return true;
+}
+
+fn main() {
+    let mut cases = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6 = 0;
+    let mut p7 = 0;
+
+    // Every dimension is at least 1. A zero inner dimension makes the
+    // product's SHAPE unrecoverable from the operands — a 2x0 times a 0x3 is
+    // mathematically a 2x3 of zeros, but an empty B carries no record of n —
+    // so it is excluded as ill-posed rather than papered over.
+    let mut m = 1;
+    while m <= 5 {
+        let mut k = 1;
+        while k <= 5 {
+            let mut n = 1;
+            while n <= 5 {
+                let mut density = 1;
+                while density <= 16 {
+                    let mut round = 0;
+                    while round < 4 {
+                        let seed = 7919 * (m * 121 + k * 11 + n) + density * 104729 + round * 7717 + 1;
+                        let a = make_matrix(m, k, seed, density);
+                        let b = make_matrix(k, n, seed + 331, density);
+
+                        let ra = mul_a(a, b);
+
+                        // P1 — four arms, one answer.
+                        if not same(mul_b(a, b), ra) { p1 += 1; }
+                        if not same(mul_c(a, b), ra) { p1 += 1; }
+                        if not same(mul_d(a, b), ra) { p1 += 1; }
+
+                        // P2 — multiplying by the identity is a no-op.
+                        if not same(mul_a(a, identity(k)), a) { p2 += 1; }
+                        if not same(mul_a(identity(m), a), a) { p2 += 1; }
+
+                        // P3 — a zero operand annihilates.
+                        if not same(mul_a(a, zeros(k, n)), zeros(m, n)) { p3 += 1; }
+                        if not same(mul_a(zeros(m, k), b), zeros(m, n)) { p3 += 1; }
+
+                        // P4 — distributivity: A(B + C) = AB + AC.
+                        let b2 = make_matrix(k, n, seed + 977, density);
+                        if not same(mul_a(a, add(b, b2)), add(ra, mul_a(a, b2))) { p4 += 1; }
+
+                        // P5 — associativity: (AB)C = A(BC).
+                        let c3 = make_matrix(n, k, seed + 1531, density);
+                        if not same(mul_a(ra, c3), mul_a(a, mul_a(b, c3))) { p5 += 1; }
+
+                        // P6 — scaling passes through: (sA)B = s(AB).
+                        let s = 1 + round * 2;
+                        if not same(mul_a(scale(a, s), b), scale(ra, s)) { p6 += 1; }
+
+                        // P7 — the transpose law: (AB)^T = B^T A^T.
+                        let bt = transpose(b, k, n);
+                        let at = transpose(a, m, k);
+                        if not same(transpose(ra, m, n), mul_a(bt, at)) { p7 += 1; }
+
+                        cases += 1;
+                        round = round + 1;
+                    }
+                    density = density + 3;
+                }
+                n = n + 1;
+            }
+            k = k + 1;
+        }
+        m = m + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 identity failures {p2}");
+    println(f"P3 annihilation failures {p3}");
+    println(f"P4 distributivity failures {p4}");
+    println(f"P5 associativity failures {p5}");
+    println(f"P6 scaling failures {p6}");
+    println(f"P7 transpose-law failures {p7}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

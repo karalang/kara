@@ -1,0 +1,166 @@
+// LeetCode 278 — the DFS formulation.
+//
+// Same graph, same two pre-conditions (one edge per adjacent pair, and the
+// prefix rule). What differs is the sort: instead of repeatedly taking a
+// zero-in-degree letter, this walks the graph depth-first and emits each letter
+// AFTER all of its successors, producing a reverse postorder. Cycles are caught
+// with three colours — white unvisited, GREY on the current stack, black
+// finished — and meeting a grey letter means a back edge, so the answer is "".
+//
+// IT DOES NOT PRODUCE THE SAME STRING AS THE ★ SOLVER, and that is the point of
+// keeping it. Kahn's with a smallest-first tie-break yields the
+// LEXICOGRAPHICALLY SMALLEST valid order; DFS reverse postorder yields *a* valid
+// order, and no choice of visit order makes it the lex-smallest one in general —
+// that greedy property belongs to the repeated-minimum formulation and cannot be
+// recovered by ordering DFS roots.
+//
+// So this solver cannot be checked by string comparison, and pretending
+// otherwise would mean either weakening the ★ solver to match it or asserting
+// something false. It is checked by a VALIDATOR instead: whatever it emits must
+// contain every present letter exactly once and must satisfy every pairwise
+// constraint the words impose. Different solvers, different oracles — see
+// differential.kara, where the choice is forced by the problem rather than
+// chosen for variety.
+
+fn alien_order(words: ref Vec[String]) -> String {
+    // present[c] — letter c occurs somewhere in the input
+    let mut present: Vec[bool] = Vec.new();
+    let mut indeg: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < 26 {
+        present.push(false);
+        indeg.push(0);
+        z = z + 1;
+    }
+    // adj[a*26+b] — a precedes b (deduplicated: a repeated pair must not
+    // inflate the in-degree, or the count never reaches zero)
+    let mut adj: Vec[bool] = Vec.new();
+    let mut y = 0;
+    while y < 676 {
+        adj.push(false);
+        y = y + 1;
+    }
+
+    let mut w = 0;
+    while w < words.len() {
+        let b = words[w].bytes();
+        let mut i = 0;
+        while i < b.len() {
+            present[(b[i] as i64) - 97] = true;
+            i = i + 1;
+        }
+        w = w + 1;
+    }
+
+    let mut p = 0;
+    while p + 1 < words.len() {
+        let a = words[p].bytes();
+        let c = words[p + 1].bytes();
+        let mut k = 0;
+        let mut found = false;
+        let mut shorter = a.len();
+        if c.len() < shorter { shorter = c.len(); }
+        while k < shorter {
+            if a[k] != c[k] {
+                let u = (a[k] as i64) - 97;
+                let v = (c[k] as i64) - 97;
+                if not adj[u * 26 + v] {
+                    adj[u * 26 + v] = true;
+                    indeg[v] = indeg[v] + 1;
+                }
+                found = true;
+                k = shorter;          // exactly one edge per adjacent pair
+            } else {
+                k = k + 1;
+            }
+        }
+        // No differing character within the common prefix: legal only if the
+        // earlier word is the shorter one.
+        if not found and a.len() > c.len() {
+            return "";
+        }
+        p = p + 1;
+    }
+
+    // Reverse postorder DFS with three colours. colour: 0 white, 1 grey, 2 black.
+    let mut colour: Vec[i64] = Vec.new();
+    let mut q = 0;
+    while q < 26 {
+        colour.push(0);
+        q = q + 1;
+    }
+    let mut rev: Vec[i64] = Vec.new();
+    let mut root = 0;
+    while root < 26 {
+        if present[root] and colour[root] == 0 {
+            // explicit stack of (letter, next-successor-to-try)
+            let mut st: Vec[i64] = Vec.new();
+            let mut ix: Vec[i64] = Vec.new();
+            st.push(root);
+            ix.push(0);
+            colour[root] = 1;
+            while st.len() > 0 {
+                let top = st[st.len() - 1];
+                let mut t = ix[ix.len() - 1];
+                let mut advanced = false;
+                while t < 26 and not advanced {
+                    if adj[top * 26 + t] {
+                        if colour[t] == 1 {
+                            return "";            // back edge -> cycle
+                        }
+                        if colour[t] == 0 {
+                            ix[ix.len() - 1] = t + 1;
+                            colour[t] = 1;
+                            st.push(t);
+                            ix.push(0);
+                            advanced = true;
+                        }
+                    }
+                    if not advanced { t = t + 1; }
+                }
+                if not advanced {
+                    colour[top] = 2;
+                    rev.push(top);
+                    st.pop();
+                    ix.pop();
+                } else {
+                    // the successor's frame is on top now; nothing to do
+                }
+            }
+        }
+        root = root + 1;
+    }
+
+    let mut out: String = "";
+    let mut e = rev.len() - 1;
+    while e >= 0 {
+        out = out + byte_to_str(rev[e] + 97);
+        e = e - 1;
+    }
+    return out;
+}
+
+fn byte_to_str(b: i64) -> String {
+    let alphabet: String = "abcdefghijklmnopqrstuvwxyz";
+    return alphabet.substring(b - 97, b - 96);
+}
+
+fn main() {
+    let c1: Vec[String] = ["wrt", "wrf", "er", "ett", "rftt"];
+    let c2: Vec[String] = ["z", "x"];
+    let c3: Vec[String] = ["z", "x", "z"];               // cycle -> ""
+    let c4: Vec[String] = ["abc", "ab"];                 // prefix rule -> ""
+    let c5: Vec[String] = ["ab", "abc"];                 // legal prefix
+    let c6: Vec[String] = ["zy", "zx"];
+    let c7: Vec[String] = ["ac", "ab", "zc", "zb"];
+    let c8: Vec[String] = ["a"];
+
+    println(f"[wrt wrf er ett rftt] -> {alien_order(c1)}");
+    println(f"[z x]                 -> {alien_order(c2)}");
+    println(f"[z x z]               -> {alien_order(c3)}");
+    println(f"[abc ab]              -> {alien_order(c4)}");
+    println(f"[ab abc]              -> {alien_order(c5)}");
+    println(f"[zy zx]               -> {alien_order(c6)}");
+    println(f"[ac ab zc zb]         -> {alien_order(c7)}");
+    println(f"[a]                   -> {alien_order(c8)}");
+}

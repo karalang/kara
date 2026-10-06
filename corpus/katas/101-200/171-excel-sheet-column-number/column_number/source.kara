@@ -1,0 +1,73 @@
+// LeetCode #171: Excel Sheet Column Number — Horner fold (bijective base-26).
+//
+// Map an Excel column title to its 1-based number: A->1 .. Z->26, AA->27,
+// AB->28, .., ZY->701. This is *bijective* base-26 (there is no zero digit) —
+// the parse direction, char -> value, exactly the self-hosted lexer's
+// `from_str_radix` accumulation but over a 1-offset alphabet:
+//
+//   n = n * 26 + (c - 'A' + 1)       for each title byte, most-significant first
+//
+// Where #405 convert-to-hex renders a value back into glyphs, this runs the same
+// radix machinery the other way — the digit-char -> value half of the lexer's
+// number arm. The companion `to_title` (the LeetCode #168 render direction)
+// closes the loop: it is the #405/#415 digit-table slice `LETTERS[d..d+1]` over
+// bijective base-26, where each emitted digit subtracts one before the modulus.
+// The round-trip `to_title(to_number(t)) == t` is a second, self-checking oracle
+// on top of the external reference output.
+
+fn to_number(title: ref String) -> i64 {
+    let tb = title.bytes();
+    let mut n = 0;
+    let mut i = 0;
+    while i < tb.len() {
+        n = n * 26 + ((tb[i] - b'A') as i64) + 1;
+        i = i + 1;
+    }
+    n
+}
+
+fn to_title(num: i64) -> String {
+    let letters: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    // Emit least-significant letter first into a buffer of digit indices.
+    let mut buf: Vec[i64] = Vec.new();
+    let mut n = num;
+    while n > 0 {
+        n = n - 1;                 // bijective: shift into 0..25 before the mod
+        buf.push(n % 26);
+        n = n / 26;
+    }
+
+    // Reverse and render each index through the letter table.
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        let d = buf[k];
+        out.push_str(letters[d..d + 1]);
+        k = k - 1;
+    }
+    out
+}
+
+fn main() {
+    let titles: Vec[String] = ["A", "B", "Z", "AA", "AB", "AZ", "BA", "ZY",
+        "ZZ", "AAA", "FXSHRXW"];
+
+    // Parse direction (#171): title -> number.
+    let mut i = 0;
+    while i < titles.len() {
+        let t = ref titles[i];
+        println(f"\"{t}\" -> {to_number(t)}");
+        i = i + 1;
+    }
+
+    // Round-trip render (#168 direction): number -> title, must reproduce input.
+    println("--- round-trip ---");
+    let mut j = 0;
+    while j < titles.len() {
+        let t = ref titles[j];
+        let n = to_number(t);
+        println(f"{n} -> \"{to_title(n)}\"");
+        j = j + 1;
+    }
+}

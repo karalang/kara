@@ -1,0 +1,14 @@
+
+enum Color { Red, Green, Blue }
+impl Color {
+    fn code(self) -> i64 { match self { Color.Red => 0, Color.Green => 1, Color.Blue => 2 } }
+    fn name(self) -> String { match self { Color.Red => f"red", Color.Green => f"green", Color.Blue => f"blue" } }
+    fn plus(self, n: i64) -> i64 { self.code() + n }
+}
+fn main() {
+    println(Color.Green.code().to_string());
+    println(Color.Blue.name());
+    println(Color.Red.plus(10).to_string());
+    let z = Color.Blue.code() + 5;
+    println(z.to_string());
+}

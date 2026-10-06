@@ -1,0 +1,16 @@
+
+struct P2 { a: f32, b: f32 }
+
+#[gpu]
+fn stepp(p: P2) -> P2 {
+    P2 { a: p.a + p.b, b: p.b }
+}
+
+fn main() {
+    let mut v: Vec[P2] = Vec.new();
+    v.push(P2 { a: 1.0, b: 2.0 });
+    let buf = gpu.upload(v);
+    let buf2 = gpu.dispatch(stepp, buf);
+    let back = gpu.download(buf2);
+    println(back.len());
+}

@@ -1,0 +1,8 @@
+
+fn main() {
+    let c = Client.new();
+    match c.get("not-a-url") {
+        Ok(_) => println("ok"),
+        Err(_) => println("err"),
+    }
+}

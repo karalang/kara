@@ -1,0 +1,8 @@
+
+fn main() {
+    let a = "AB\0";
+    let b = "CD";
+    let s = a + b;
+    println(s);
+    println('\0');
+}

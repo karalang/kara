@@ -1,0 +1,14 @@
+
+par struct Counter { count: Atomic[i64] }
+impl Counter {
+    fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
+}
+fn read(c: Counter) -> i64 { c.get() }
+fn main() {
+    let c = Counter { count: Atomic.new(5) };
+    par {
+        let _a = read(c);
+        let _b = read(c);
+    }
+    println(c.get());
+}

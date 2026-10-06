@@ -1,0 +1,99 @@
+// LeetCode #40 bench harness — Kāra, the sorted same-level-dedup backtracker (★).
+//
+// The headline ★ style: sort the (duplicate-bearing) candidates, then an index-bounded DFS
+// recursing at i+1 (each element used once) that skips `candidates[i] == candidates[i-1]`
+// at i > start (same-level duplicate dedup) and suffix-`break`s once a candidate exceeds
+// the remaining target. Each solution leaf snapshots the mutable path (`path.clone()`) into
+// a `Vec[Vec[i64]]`. So this exercises sort_by + duplicate-skip backtracking + per-node
+// push/pop + the leaf clone + nested-Vec heap growth.
+//
+// Workload: enumerate once-each combinations for a per-iteration target. TOTAL times, with
+// a fixed duplicate-heavy candidate multiset, set target = 10 + (k % 13) (a per-iteration
+// target, so nothing hoists), solve, and fold a POSITION-WEIGHTED signature of every
+// combination plus the count into a rolling checksum. The target varies with the loop index
+// (no hoisting) and the checksum carries a loop-borne dependency, so this is a single-lane
+// (seq) bench by construction. All five language mirrors fold the identical integer
+// signature and must print the identical checksum before timing.
+
+fn backtrack(
+    candidates: ref Vec[i64],
+    start: i64,
+    remaining: i64,
+    path: mut ref Vec[i64],
+    out: mut ref Vec[Vec[i64]],
+) {
+    if remaining == 0 {
+        out.push(path.clone());
+        return;
+    }
+    let n = candidates.len();
+    let mut i = start;
+    while i < n {
+        let c = candidates[i];
+        if c > remaining {
+            break;
+        }
+        if i > start and c == candidates[i - 1] {
+            i = i + 1;
+            continue;
+        }
+        path.push(c);
+        backtrack(candidates, i + 1, remaining - c, path, out);
+        path.pop();
+        i = i + 1;
+    }
+}
+
+fn combination_sum2(candidates: ref Vec[i64], target: i64) -> Vec[Vec[i64]] {
+    // The candidates are pre-sorted by the caller; this is the inner solve.
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    backtrack(candidates, 0, target, mut path, mut out);
+    out
+}
+
+fn main() {
+    let total = 30000;
+    let modulus = 1000000007;
+
+    // Fixed duplicate-heavy multiset, sorted once (the per-call sort is the same on every
+    // iteration, so it is hoisted out of the timed loop here to isolate the backtracking;
+    // the C/Rust/Go/Py mirrors sort the same array once too).
+    let mut candidates: Vec[i64] = Vec.new();
+    let base = [1, 1, 2, 2, 3, 3, 4, 5, 6, 7];
+    let mut b = 0;
+    while b < 10 {
+        candidates.push(base[b]);
+        b = b + 1;
+    }
+    candidates.sort_by(|a, b| a.cmp(b));
+
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        // Per-iteration target (no hoisting): sweeps 10..=22.
+        let target = 10 + (k % 13);
+        let combos = combination_sum2(candidates, target);
+
+        let mut sig = 0;
+        let m = combos.len();
+        let mut j = 0;
+        while j < m {
+            let combo = ref combos[j];
+            let mut s = 0;
+            let mut i = 0;
+            let cl = combo.len();
+            while i < cl {
+                s = s + combo[i] * (i + 1);
+                i = i + 1;
+            }
+            sig = (sig * 31 + s) % modulus;
+            j = j + 1;
+        }
+        sig = (sig + m) % modulus;
+        acc = (acc * 131 + sig) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

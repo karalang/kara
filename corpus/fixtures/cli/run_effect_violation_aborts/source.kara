@@ -1,0 +1,14 @@
+
+effect resource Db;
+
+fn touch() with writes(Db) {
+}
+
+pub fn api() {
+    touch()
+}
+
+fn main() {
+    api();
+    println("ran anyway");
+}

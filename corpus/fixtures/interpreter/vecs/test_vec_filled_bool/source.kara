@@ -1,0 +1,10 @@
+
+        fn main() {
+            let mut visited: Vec[bool] = Vec.filled(5, false);
+            visited[2] = true;
+            println(visited.len());
+            println(visited[0]);
+            println(visited[2]);
+            println(visited[4]);
+        }
+    

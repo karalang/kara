@@ -1,0 +1,87 @@
+// Benchmark workload for LeetCode #160 — Intersection of Two Linked Lists.
+//
+// Build-once + punch-free. A single node pool of N nodes is linked once into ONE
+// chain whose traversal order is a coprime-stride permutation of the indices
+// (order[k] = (k*48271) % N, N prime) — so `next` is a scrambled, cache-hostile
+// pointer chase, NOT a predictable next=i+1 stride. Any two chain positions sa,
+// sb give two lists that are suffixes of the chain sharing the tail from
+// max(sa,sb) on. The kernel runs the classic two-pointer intersection-find
+// (length each, advance the longer by the difference, walk together to the
+// meeting node) over K passes with sa,sb varied each pass. The three walks are
+// data-dependent pointer chases — they do NOT vectorize. Sink = sum of the
+// intersection node ids over all passes.
+
+fn length(next: ref Vec[i64], head: i64) -> i64 {
+    let mut n = 0;
+    let mut cur = head;
+    while cur != -1 {
+        n = n + 1;
+        cur = next[cur];
+    }
+    return n;
+}
+
+fn advance(next: ref Vec[i64], head: i64, k: i64) -> i64 {
+    let mut cur = head;
+    let mut i = 0;
+    while i < k {
+        cur = next[cur];
+        i = i + 1;
+    }
+    return cur;
+}
+
+fn intersection(next: ref Vec[i64], head_a: i64, head_b: i64) -> i64 {
+    let la = length(next, head_a);
+    let lb = length(next, head_b);
+    let mut a = head_a;
+    let mut b = head_b;
+    if la > lb {
+        a = advance(next, a, la - lb);
+    } else {
+        b = advance(next, b, lb - la);
+    }
+    while a != -1 and b != -1 {
+        if a == b {
+            return a;
+        }
+        a = next[a];
+        b = next[b];
+    }
+    return -1;
+}
+
+fn main() {
+    let n = 100003;
+    let heads = n / 8;
+    let passes = 280;
+
+    let mut order: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        order.push((k * 48271) % n);
+        k = k + 1;
+    }
+
+    let mut next: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < n { next.push(-1); z = z + 1; }
+    let mut j = 0;
+    while j < n - 1 {
+        next[order[j]] = order[j + 1];
+        j = j + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let sa = p % heads;
+        let sb = (p * 131 + 7) % heads;
+        let ha = order[sa];
+        let hb = order[sb];
+        let idx = intersection(next, ha, hb);
+        sink = sink + idx;
+        p = p + 1;
+    }
+    println(sink);
+}

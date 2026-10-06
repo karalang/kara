@@ -1,0 +1,18 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    syntax = \"proto3\";
+    message Person {
+        string name = 1;
+        int64 age = 2;
+        bool active = 3;
+    }
+";
+
+fn main() {
+    let p = Person { name: "Ada", age: 36, active: true };
+    let q = Person.decode(p.encode());
+    println(q.name);
+    println(q.age);
+    println(q.active);
+}

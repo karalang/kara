@@ -1,0 +1,29 @@
+
+struct Entity { x: i64, y: i64, label: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    cold { label }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    entities.push(Entity { x: 1, y: 10, label: 100 });
+    entities.push(Entity { x: 2, y: 20, label: 200 });
+    entities.push(Entity { x: 3, y: 30, label: 300 });
+    entities.push(Entity { x: 4, y: 40, label: 400 });
+    match entities.pop_front() {
+        Some(e) => println(e.x),
+        None => println(-1),
+    }
+    let head = entities[0];
+    println(head.x);
+    println(head.y);
+    println(head.label);
+    match entities.pop_front() {
+        Some(e) => println(e.x),
+        None => println(-1),
+    }
+    let head2 = entities[0];
+    println(head2.x);
+    println(head2.label);
+    println(entities.len());
+}

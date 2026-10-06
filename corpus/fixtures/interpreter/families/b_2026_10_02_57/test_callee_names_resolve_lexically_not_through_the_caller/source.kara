@@ -1,0 +1,41 @@
+fn helper() -> i64 {
+    return 1;
+}
+fn f() -> i64 {
+    return helper();
+}
+const LIMIT: i64 = 10;
+fn g() -> i64 {
+    return LIMIT;
+}
+struct P {
+    n: i64,
+}
+impl P {
+    fn get(self) -> i64 {
+        return self.n + helper();
+    }
+}
+fn twice(h: Fn() -> i64) -> i64 {
+    let helper = 50;
+    return h() + h() + helper;
+}
+fn d(n: i64) -> i64 {
+    if n == 0 {
+        return 0;
+    }
+    return 1 + d(n - 1);
+}
+fn main() {
+    let helper = || 99;
+    println(f"a{f()} {helper()}");
+    let LIMIT = 5;
+    println(f"b{g()} {LIMIT}");
+    let p = P { n: 3 };
+    println(f"c{p.get()}");
+    let k = || helper() + 1;
+    println(f"d{k()} {twice(k)}");
+    let f = 7;
+    println(f"e{f} {g()}");
+    println(f"f{d(3000)}");
+}

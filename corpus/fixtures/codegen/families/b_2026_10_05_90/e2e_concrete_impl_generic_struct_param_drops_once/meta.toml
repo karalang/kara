@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_05_90.rs::e2e_concrete_impl_generic_struct_param_drops_once"
+dedup_of = ["tests/interpreter/families/b_2026_10_05_90.rs::interp_concrete_impl_generic_struct_param_drops_once", "tests/memory_sanitizer/families/b_2026_10_05_90.rs::asan_concrete_impl_generic_struct_param_drops_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

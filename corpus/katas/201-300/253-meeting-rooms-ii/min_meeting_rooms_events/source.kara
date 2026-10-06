@@ -1,0 +1,86 @@
+// LeetCode 253 — Meeting Rooms II, event list.
+//
+// Flatten every meeting into two events — `(start, +1)` and `(end, -1)` — sort
+// them chronologically, then sweep the running sum. Its maximum is the answer.
+//
+// **The tie-break IS the algorithm.** At a shared timestamp the `-1` must be
+// processed before the `+1`, otherwise a meeting ending exactly as another
+// begins is counted as two concurrent rooms instead of one. Sorting the pairs
+// lexicographically gets this for free: at equal times `-1 < +1`, so releases
+// sort first.
+//
+// Dropping the tie-break to `a.0.cmp(b.0)` does NOT fail loudly, and that is
+// what makes it dangerous. The sort is stable, so the result then depends on the
+// order events happened to be PUSHED in, which depends on the input order:
+//
+//   [[1,5],[5,10]]        push order puts (5,-1) before (5,+1)  -> 1, correct
+//   [[9,10],[4,9],[4,17]] push order puts (9,+1) before (9,-1)  -> 3, WRONG (2)
+//
+// So a timestamp-only comparator passes the obvious touching test and fails on a
+// case that looks unrelated. Both are in the tests below; the second is the
+// LeetCode follow-up example, which is a fair warning about how easy this is to
+// ship. Measured, not assumed — see the README.
+//
+// That makes this file the most fragile of the three and the most instructive:
+// the other two encode the touching rule in a `<=`, and this one encodes it in a
+// sort order.
+//
+// It also generalises furthest: with `+k`/`-k` deltas the same sweep answers
+// weighted-capacity questions the heap form cannot express.
+
+fn min_meeting_rooms(intervals: Slice[(i64, i64)]) -> i64 {
+    let n = intervals.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut events: Vec[(i64, i64)] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        events.push((intervals[i].0, 1));
+        events.push((intervals[i].1, -1));
+        i = i + 1;
+    }
+    // Lexicographic: by time, then by delta so -1 (release) precedes +1 (take).
+    events.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) } else { a.1.cmp(b.1) });
+
+    let mut active = 0;
+    let mut best = 0;
+    let mut k = 0;
+    while k < events.len() {
+        active = active + events[k].1;
+        if active > best {
+            best = active;
+        }
+        k = k + 1;
+    }
+    return best;
+}
+
+fn report(intervals: Slice[(i64, i64)], label: ref String) {
+    println(f"{label} -> {min_meeting_rooms(intervals)}");
+}
+
+fn main() {
+    let a: Array[(i64, i64), 3] = [(0, 30), (5, 10), (15, 20)];
+    report(a, "[[0,30],[5,10],[15,20]]");
+    let b: Array[(i64, i64), 2] = [(7, 10), (2, 4)];
+    report(b, "[[7,10],[2,4]]");
+    let c: Array[(i64, i64), 0] = [];
+    report(c, "[]");
+    let d: Array[(i64, i64), 1] = [(1, 5)];
+    report(d, "[[1,5]]");
+    let e: Array[(i64, i64), 2] = [(1, 5), (5, 10)];
+    report(e, "[[1,5],[5,10]]");
+    let f: Array[(i64, i64), 2] = [(1, 10), (2, 3)];
+    report(f, "[[1,10],[2,3]]");
+    let g: Array[(i64, i64), 4] = [(1, 3), (3, 5), (5, 7), (7, 9)];
+    report(g, "[[1,3],[3,5],[5,7],[7,9]]");
+    let h: Array[(i64, i64), 3] = [(1, 4), (2, 5), (3, 6)];
+    report(h, "[[1,4],[2,5],[3,6]]");
+    let i: Array[(i64, i64), 3] = [(1, 2), (1, 2), (1, 2)];
+    report(i, "[[1,2],[1,2],[1,2]]");
+    let j: Array[(i64, i64), 3] = [(9, 10), (4, 9), (4, 17)];
+    report(j, "[[9,10],[4,9],[4,17]]");
+    let k: Array[(i64, i64), 3] = [(2, 11), (6, 16), (11, 16)];
+    report(k, "[[2,11],[6,16],[11,16]]");
+}

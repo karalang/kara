@@ -1,0 +1,6 @@
+
+enum E { V1(String), V2 }
+fn main() {
+    let _e = V2;
+    println(1);
+}

@@ -1,0 +1,179 @@
+// Randomized differential for LeetCode 248 — see differential.py for the
+// design. Two answers per case that share no code path:
+//
+//   A. the kata algorithm — generate every strobogrammatic number of each
+//      length in range, keep those inside the bounds (never parses a number);
+//   B. brute force — walk every integer in [low, high] and re-derive the
+//      property with the #246 two-pointer predicate (never generates one).
+//
+// Ranges are narrow (width <= 500) so B stays cheap while A still has to get
+// lengths, boundaries and the leading-zero rule right. Prints a rolling hash
+// of all 3000 counts; must match differential.py exactly, and must be
+// identical across run/interp, run, build, and KARAC_AUTO_PAR=0 build.
+
+fn lcg(state: i64) -> i64 {
+    (state * 1103515245 + 12345) & 2147483647
+}
+
+fn build(k: i64, n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if k == 0 {
+        out.push("");
+        return out;
+    }
+    if k == 1 {
+        out.push("0");
+        out.push("1");
+        out.push("8");
+        return out;
+    }
+
+    let mut pair_a: Vec[String] = Vec.new();
+    let mut pair_b: Vec[String] = Vec.new();
+    pair_a.push("0"); pair_b.push("0");
+    pair_a.push("1"); pair_b.push("1");
+    pair_a.push("6"); pair_b.push("9");
+    pair_a.push("8"); pair_b.push("8");
+    pair_a.push("9"); pair_b.push("6");
+
+    let inner = build(k - 2, n);
+    let mut i = 0;
+    while i < inner.len() {
+        let mut p = 0;
+        while p < 5 {
+            if pair_a[p] == "0" and k == n {
+                p = p + 1;
+            } else {
+                let mut s: String = pair_a[p].clone();
+                s.push_str(inner[i]);
+                s.push_str(pair_b[p]);
+                out.push(s);
+                p = p + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn cmp_digits(a: ref String, b: ref String) -> i64 {
+    let xs = a.bytes();
+    let ys = b.bytes();
+    if xs.len() != ys.len() {
+        if xs.len() < ys.len() { return -1; }
+        return 1;
+    }
+    let mut i = 0;
+    while i < xs.len() {
+        if xs[i] != ys[i] {
+            if xs[i] < ys[i] { return -1; }
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn count_gen(low: ref String, high: ref String) -> i64 {
+    let lo_len = low.bytes().len();
+    let hi_len = high.bytes().len();
+    if lo_len > hi_len {
+        return 0;
+    }
+    if lo_len == hi_len and cmp_digits(low, high) > 0 {
+        return 0;
+    }
+    let mut total = 0;
+    let mut len = lo_len;
+    while len <= hi_len {
+        let cands = build(len, len);
+        let mut i = 0;
+        while i < cands.len() {
+            let s = ref cands[i];
+            let mut keep = true;
+            if len == lo_len and cmp_digits(s, low) < 0 {
+                keep = false;
+            }
+            if len == hi_len and cmp_digits(s, high) > 0 {
+                keep = false;
+            }
+            if keep {
+                total = total + 1;
+            }
+            i = i + 1;
+        }
+        len = len + 1;
+    }
+    return total;
+}
+
+fn rotate_byte(b: u8) -> u8 {
+    if b == 48u8 { return 48u8; }
+    if b == 49u8 { return 49u8; }
+    if b == 56u8 { return 56u8; }
+    if b == 54u8 { return 57u8; }
+    if b == 57u8 { return 54u8; }
+    return 0u8;
+}
+
+fn is_strobo(num: ref String) -> bool {
+    let bs = num.bytes();
+    let mut lo = 0;
+    let mut hi = bs.len() - 1;
+    while lo <= hi {
+        let r = rotate_byte(bs[lo]);
+        if r == 0u8 or r != bs[hi] {
+            return false;
+        }
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    return true;
+}
+
+fn count_brute(lo_v: i64, hi_v: i64) -> i64 {
+    let mut n = 0;
+    let mut v = lo_v;
+    while v <= hi_v {
+        let s = f"{v}";
+        if is_strobo(s) {
+            n = n + 1;
+        }
+        v = v + 1;
+    }
+    return n;
+}
+
+fn main() {
+    let mut state = 1;
+    let mut acc = 0;
+    let mut cases = 0;
+    let mut mismatch = 0;
+
+    let mut t = 0;
+    while t < 3000 {
+        state = lcg(state);
+        let lo_hi = state / 65536;
+        state = lcg(state);
+        let lo_v = (lo_hi * 32768 + state / 65536) % 100000;
+        state = lcg(state);
+        let width = (state / 65536) % 501;
+        let hi_v = lo_v + width;
+
+        let low = f"{lo_v}";
+        let high = f"{hi_v}";
+
+        let g = count_gen(low, high);
+        let b = count_brute(lo_v, hi_v);
+        if g != b {
+            if mismatch < 5 {
+                println(f"MISMATCH low={low} high={high} gen={g} brute={b}");
+            }
+            mismatch = mismatch + 1;
+        }
+        acc = (acc * 131 + g) % 1000000007;
+        cases = cases + 1;
+        t = t + 1;
+    }
+    println(f"cases={cases} mismatch={mismatch} hash={acc}");
+}

@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 200 {
+        let a: String = String.from('A');
+        total = total + a.len();
+        let c: char = '😀';
+        let b: String = c.into();
+        total = total + b.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

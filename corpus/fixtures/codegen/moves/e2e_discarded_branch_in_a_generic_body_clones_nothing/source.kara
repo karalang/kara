@@ -1,0 +1,27 @@
+fn stmtDiscard[T](v: Vec[String], c: bool, t: T) -> T { if c { v[0] } else { v[1] }; return t; }
+fn loopDiscard[T](v: Vec[String], t: T) -> T { for i in 0..2 { if i == 0 { v[0] } else { v[1] } } return t; }
+fn blockDiscard[T](v: Vec[String], c: bool, t: T) -> T { { if c { v[0] } else { v[1] } }; return t; }
+fn matchDiscard[T](v: Vec[String], c: i64, t: T) -> T { match c { 0 => { v[0] } _ => { v[1] } }; return t; }
+fn keptValue[T](v: Vec[String], c: bool, t: T) -> T { let s = if c { v[0] } else { v[1] }; println(f"  kept {s.len()}"); return t; }
+fn innerDiscard[T](v: Vec[String], c: bool, t: T) -> T { if c { v[0] } else { v[1] }; return t; }
+fn outerCalls[T](v: Vec[String], c: bool, t: T) -> T { let r = innerDiscard(v, c, t); return r; }
+fn ident[T](t: T) -> T { return t; }
+fn mkVec() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"aaaaaaaaaaaaaaaaaaaaaaaa-0");
+    v.push(f"bbbbbbbbbbbbbbbbbbbbbbbb-1");
+    return v;
+}
+
+fn main() {
+    println("stmt");   println(f"  {stmtDiscard(mkVec(), true, 1)}");
+    println("loop");   println(f"  {loopDiscard(mkVec(), 2)}");
+    println("block");  println(f"  {blockDiscard(mkVec(), true, 3)}");
+    println("match");  println(f"  {matchDiscard(mkVec(), 0, 4)}");
+    println("kept");   println(f"  {keptValue(mkVec(), true, 5)}");
+    println("nested"); println(f"  {outerCalls(mkVec(), true, 6)}");
+    { let vc = mkVec(); let c = ident(true); if c { vc[0] } else { vc[1] }; println("callerdiscard"); println(f"  {vc[0].len()}") }
+    { let vk = mkVec(); let ck = ident(true); let s = if ck { vk[0] } else { vk[1] }; println("callerkept"); println(f"  {s.len()}"); println(f"  {vk[0].len()}") }
+    println("twoinst"); println(f"  {stmtDiscard(mkVec(), true, 7)}"); println(f"  {stmtDiscard(mkVec(), false, 8)}");
+    println("end")
+}

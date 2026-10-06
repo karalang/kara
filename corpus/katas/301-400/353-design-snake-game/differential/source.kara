@@ -1,0 +1,460 @@
+// Differential for #353: the four arms against an oracle that shares no code
+// with them -- the body as a plain `Vec` of (row, col), head last, searched
+// linearly. Random boards (1..=7 by 1..=7), random food lists (a piece may
+// even lie on the body when it comes up, which every arm and the oracle treat
+// as a bite), and random moves (nine in ten steered away from walls and the body) until the
+// game ends or 60 moves pass.
+//
+//   P1  every arm returns the oracle's answer on every move
+//   P2  while alive, the score is the number of pieces eaten and the length
+//       is score + 1
+//   P3  while alive, the oracle's body is a simple path: in bounds, distinct,
+//       each cell next to the one before
+//   P4  a move off the board returns -1
+//   P5  on a board with an even number of rows, a snake that follows the
+//       Hamiltonian cycle with food three cells ahead never dies in three laps
+//
+// The arms are copied from the kata's four files, renamed.
+
+struct SetGame {
+    width: i64,
+    height: i64,
+    food: Vec[(i64, i64)],
+    next_food: i64,
+    body: VecDeque[i64],
+    covered: Set[i64],
+}
+
+impl SetGame {
+    fn new(width: i64, height: i64, food: Vec[(i64, i64)]) -> SetGame {
+        let mut body: VecDeque[i64] = VecDeque.new();
+        body.push_back(0);
+        let mut covered: Set[i64] = Set.new();
+        covered.insert(0);
+        SetGame { width, height, food, next_food: 0, body, covered }
+    }
+
+    fn step(mut ref self, dir: char) -> i64 {
+        let head = self.body[self.body.len() - 1];
+        let (r, c) = (head / self.width, head % self.width);
+        let (nr, nc) = match dir {
+            'U' => (r - 1, c),
+            'D' => (r + 1, c),
+            'L' => (r, c - 1),
+            _ => (r, c + 1),
+        };
+        if nr < 0 or nr >= self.height or nc < 0 or nc >= self.width {
+            return -1;
+        }
+        let cell = nr * self.width + nc;
+        let eats = self.next_food < self.food.len() and self.food[self.next_food] == (nr, nc);
+        if eats {
+            self.next_food += 1;
+        } else {
+            let tail = self.body.pop_front().unwrap();
+            self.covered.remove(tail);
+        }
+        if self.covered.contains(cell) {
+            return -1;
+        }
+        self.body.push_back(cell);
+        self.covered.insert(cell);
+        self.next_food
+    }
+}
+
+struct GridGame {
+    width: i64,
+    height: i64,
+    food: Vec[(i64, i64)],
+    next_food: i64,
+    ring: Vec[i64],
+    start: i64,
+    len: i64,
+    covered: Vec[bool],
+}
+
+impl GridGame {
+    fn new(width: i64, height: i64, food: Vec[(i64, i64)]) -> GridGame {
+        let cap = width * height;
+        let mut covered = vec![false; cap];
+        covered[0] = true;
+        GridGame { width, height, food, next_food: 0, ring: vec![0; cap], start: 0, len: 1, covered }
+    }
+
+    fn step(mut ref self, dir: char) -> i64 {
+        let cap = self.ring.len();
+        let head = self.ring[(self.start + self.len - 1) % cap];
+        let r = head / self.width;
+        let c = head % self.width;
+        let (nr, nc) = match dir {
+            'U' => (r - 1, c),
+            'D' => (r + 1, c),
+            'L' => (r, c - 1),
+            _ => (r, c + 1),
+        };
+        if nr < 0 or nr >= self.height or nc < 0 or nc >= self.width {
+            return -1;
+        }
+        let cell = nr * self.width + nc;
+        if self.next_food < self.food.len() and self.food[self.next_food] == (nr, nc) {
+            self.next_food += 1;
+        } else {
+            self.covered[self.ring[self.start]] = false;
+            self.start = (self.start + 1) % cap;
+            self.len -= 1;
+        }
+        if self.covered[cell] {
+            return -1;
+        }
+        self.ring[(self.start + self.len) % cap] = cell;
+        self.len += 1;
+        self.covered[cell] = true;
+        self.next_food
+    }
+
+    fn length(ref self) -> i64 {
+        self.len
+    }
+}
+
+struct StampGame {
+    width: i64,
+    height: i64,
+    food: Vec[(i64, i64)],
+    next_food: i64,
+    entered: Vec[i64],
+    moves: i64,
+    len: i64,
+    head: (i64, i64),
+}
+
+impl StampGame {
+    fn new(width: i64, height: i64, food: Vec[(i64, i64)]) -> StampGame {
+        let mut entered = vec![-1; width * height];
+        entered[0] = 0;
+        StampGame { width, height, food, next_food: 0, entered, moves: 0, len: 1, head: (0, 0) }
+    }
+
+    fn step(mut ref self, dir: char) -> i64 {
+        let (r, c) = self.head;
+        let (nr, nc) = match dir {
+            'U' => (r - 1, c),
+            'D' => (r + 1, c),
+            'L' => (r, c - 1),
+            _ => (r, c + 1),
+        };
+        if nr < 0 or nr >= self.height or nc < 0 or nc >= self.width {
+            return -1;
+        }
+        let t = self.moves + 1;
+        if self.next_food < self.food.len() and self.food[self.next_food] == (nr, nc) {
+            self.next_food += 1;
+            self.len += 1;
+        }
+        let cell = nr * self.width + nc;
+        if self.entered[cell] > t - self.len {
+            return -1;
+        }
+        self.entered[cell] = t;
+        self.moves = t;
+        self.head = (nr, nc);
+        self.next_food
+    }
+
+    fn length(ref self) -> i64 {
+        self.len
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Point {
+    r: i64,
+    c: i64,
+}
+
+enum Dir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl Dir {
+    fn parse(ch: char) -> Option[Dir] {
+        match ch {
+            'U' => Some(Dir.Up),
+            'D' => Some(Dir.Down),
+            'L' => Some(Dir.Left),
+            'R' => Some(Dir.Right),
+            _ => None,
+        }
+    }
+}
+
+impl Point {
+    fn moved(self, d: Dir, width: i64, height: i64) -> Option[Point] {
+        let p = match d {
+            Dir.Up => Point { r: self.r - 1, c: self.c },
+            Dir.Down => Point { r: self.r + 1, c: self.c },
+            Dir.Left => Point { r: self.r, c: self.c - 1 },
+            Dir.Right => Point { r: self.r, c: self.c + 1 },
+        };
+        if p.r >= 0 and p.r < height and p.c >= 0 and p.c < width { Some(p) } else { None }
+    }
+}
+
+struct PointGame {
+    width: i64,
+    height: i64,
+    food: VecDeque[Point],
+    score: i64,
+    body: VecDeque[Point],
+    covered: Set[Point],
+}
+
+impl PointGame {
+    fn new(width: i64, height: i64, food: Vec[(i64, i64)]) -> PointGame {
+        let mut queue: VecDeque[Point] = VecDeque.new();
+        for (r, c) in food {
+            queue.push_back(Point { r, c });
+        }
+        let start = Point { r: 0, c: 0 };
+        let mut body: VecDeque[Point] = VecDeque.new();
+        body.push_back(start);
+        let mut covered: Set[Point] = Set.new();
+        covered.insert(start);
+        PointGame { width, height, food: queue, score: 0, body, covered }
+    }
+
+    fn step(mut ref self, ch: char) -> i64 {
+        let d = Dir.parse(ch).unwrap();
+        let head = self.body[self.body.len() - 1];
+        let next = match head.moved(d, self.width, self.height) {
+            Some(p) => p,
+            None => return -1,
+        };
+        let eats = match self.food.get(0) {
+            Some(f) => f == next,
+            None => false,
+        };
+        if eats {
+            self.food.pop_front();
+            self.score += 1;
+        } else {
+            let tail = self.body.pop_front().unwrap();
+            self.covered.remove(tail);
+        }
+        if not self.covered.insert(next) {
+            return -1;
+        }
+        self.body.push_back(next);
+        self.score
+    }
+
+    fn length(ref self) -> i64 {
+        self.body.len()
+    }
+}
+
+struct Oracle {
+    width: i64,
+    height: i64,
+    food: Vec[(i64, i64)],
+    eaten: i64,
+    body: Vec[(i64, i64)],
+}
+
+impl Oracle {
+    // Would `dir` keep the snake alive? Used only to steer the random walk.
+    fn safe(ref self, dir: char) -> bool {
+        let (r, c) = self.body[self.body.len() - 1];
+        let (nr, nc) = if dir == 'U' { (r - 1, c) } else if dir == 'D' { (r + 1, c) } else if dir == 'L' { (r, c - 1) } else { (r, c + 1) };
+        if nr < 0 or nc < 0 or nr >= self.height or nc >= self.width {
+            return false;
+        }
+        for i in 1..self.body.len() {
+            if self.body[i] == (nr, nc) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn step(mut ref self, dir: char) -> i64 {
+        let (r, c) = self.body[self.body.len() - 1];
+        let mut nr = r;
+        let mut nc = c;
+        if dir == 'U' {
+            nr -= 1;
+        } else if dir == 'D' {
+            nr += 1;
+        } else if dir == 'L' {
+            nc -= 1;
+        } else {
+            nc += 1;
+        }
+        if nr < 0 or nc < 0 or nr >= self.height or nc >= self.width {
+            return -1;
+        }
+        let grows = self.eaten < self.food.len() and self.food[self.eaten].0 == nr and self.food[self.eaten].1 == nc;
+        let first = if grows { 0 } else { 1 };
+        for i in first..self.body.len() {
+            if self.body[i].0 == nr and self.body[i].1 == nc {
+                return -1;
+            }
+        }
+        if grows {
+            self.eaten += 1;
+        } else {
+            self.body.remove(0);
+        }
+        self.body.push((nr, nc));
+        self.eaten
+    }
+}
+
+fn next(state: mut ref i64) -> i64 {
+    *state = (*state * 1103515245 + 12345) % 2147483648;
+    *state / 16
+}
+
+fn cycle_moves(width: i64, height: i64) -> String {
+    let mut m = String.new();
+    for _ in 0..width - 1 {
+        m.push('R');
+    }
+    for row in 1..height {
+        m.push('D');
+        let d = if row % 2 == 1 { 'L' } else { 'R' };
+        for _ in 0..width - 2 {
+            m.push(d);
+        }
+    }
+    m.push('L');
+    for _ in 0..height - 1 {
+        m.push('U');
+    }
+    m
+}
+
+fn main() {
+    let dirs = ['U', 'D', 'L', 'R'];
+    let mut seed: i64 = 353;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0, 0];
+    let mut checksum: i64 = 0;
+    let mut deaths = 0;
+    let mut eaten = 0;
+    for game in 0..1500 {
+        let w = 1 + next(mut seed) % 7;
+        let h = 1 + next(mut seed) % 7;
+        let nfood = next(mut seed) % 12;
+        let mut food: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..nfood {
+            food.push((next(mut seed) % h, next(mut seed) % w));
+        }
+        let mut o = Oracle { width: w, height: h, food: food.clone(), eaten: 0, body: vec![(0, 0)] };
+        let mut a = SetGame.new(w, h, food.clone());
+        let mut b = GridGame.new(w, h, food.clone());
+        let mut c = StampGame.new(w, h, food.clone());
+        let mut d = PointGame.new(w, h, food);
+        for t in 0..60 {
+            // Nine moves in ten look for a safe direction first, so games run
+            // long enough to eat; the tenth is blind, so walls and bites still
+            // happen.
+            let mut dir = dirs[next(mut seed) % 4];
+            if next(mut seed) % 10 != 0 {
+                for k in 0..4 {
+                    if not o.safe(dir) {
+                        dir = dirs[(next(mut seed) + k) % 4];
+                    }
+                }
+            }
+            let (hr, hc) = o.body[o.body.len() - 1];
+            let off = (dir == 'U' and hr == 0) or (dir == 'D' and hr == h - 1) or (dir == 'L' and hc == 0) or (dir == 'R' and hc == w - 1);
+            let want = o.step(dir);
+            let got = [a.step(dir), b.step(dir), c.step(dir), d.step(dir)];
+            checks += 1;
+            for g in got {
+                if g != want {
+                    fails[0] += 1;
+                    println(f"P1 game {game} move {t} {dir}: arm {g} oracle {want}");
+                }
+            }
+            if off and want != -1 {
+                fails[3] += 1;
+            }
+            checksum = (checksum * 7 + want + 2 + t) % 1000000007;
+            if want < 0 {
+                deaths += 1;
+                break;
+            }
+            if o.body.len() != want + 1 or b.length() != want + 1 or c.length() != want + 1 or d.length() != want + 1 {
+                fails[1] += 1;
+            }
+            for i in 0..o.body.len() {
+                let (r, col) = o.body[i];
+                if r < 0 or r >= h or col < 0 or col >= w {
+                    fails[2] += 1;
+                }
+                if i > 0 {
+                    let (pr, pc) = o.body[i - 1];
+                    if (pr - r).abs() + (pc - col).abs() != 1 {
+                        fails[2] += 1;
+                    }
+                }
+                for j in i + 1..o.body.len() {
+                    if o.body[j] == o.body[i] {
+                        fails[2] += 1;
+                    }
+                }
+            }
+        }
+        eaten += o.eaten;
+    }
+    // P5: Hamiltonian cycles on every even-height board up to 8 x 8.
+    let mut laps = 0;
+    for w in 2..9 {
+        for h in [2, 4, 6, 8] {
+            let cyc: Vec[char] = cycle_moves(w, h).chars().collect();
+            let n = cyc.len();
+            let mut pos: Vec[(i64, i64)] = Vec.new();
+            let mut r = 0;
+            let mut c = 0;
+            for ch in cyc.iter() {
+                if ch == 'U' {
+                    r -= 1;
+                } else if ch == 'D' {
+                    r += 1;
+                } else if ch == 'L' {
+                    c -= 1;
+                } else {
+                    c += 1;
+                }
+                pos.push((r, c));
+            }
+            let mut food: Vec[(i64, i64)] = Vec.new();
+            for i in 0..(n - 4) / 3 {
+                food.push(pos[(3 * i + 2) % n]);
+            }
+            let mut a = SetGame.new(w, h, food.clone());
+            let mut s = StampGame.new(w, h, food);
+            for t in 0..3 * n {
+                let x = a.step(cyc[t % n]);
+                let y = s.step(cyc[t % n]);
+                checks += 1;
+                if x < 0 or x != y {
+                    fails[4] += 1;
+                }
+            }
+            laps += 3;
+        }
+    }
+    println(f"{checks} checks, {deaths} deaths, {eaten} pieces eaten, {laps} laps, checksum {checksum}");
+    for p in 0..5 {
+        println(f"P{p + 1}: {fails[p]} failures");
+    }
+    let total = fails[0] + fails[1] + fails[2] + fails[3] + fails[4];
+    println(f"failures {total}");
+}

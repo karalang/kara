@@ -1,0 +1,15 @@
+
+shared struct N { v: i64 }
+
+fn hand_back(xs: Vec[weak N]) -> Vec[weak N] {
+    xs
+}
+
+fn main() {
+    let a: N = N { v: 7 };
+    let mut w: Vec[weak N] = Vec.new();
+    w.push(a);
+    let back = hand_back(w);
+    match back[0] { Some(x) => { println(x.v) } None => { println(0 - 1) } }
+    println(a.v);
+}

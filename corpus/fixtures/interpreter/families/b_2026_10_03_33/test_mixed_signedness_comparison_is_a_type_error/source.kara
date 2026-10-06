@@ -1,0 +1,11 @@
+fn main() {
+    let u: u8 = 3;
+    let k: i64 = -1;
+    println(f"{u > k}");
+    println(f"{u == k}");
+    println(f"{u > -1}");
+    let s: i32 = -5;
+    let t: u32 = 4000000000;
+    println(f"{s < t}");
+    println(f"{t != s}");
+}

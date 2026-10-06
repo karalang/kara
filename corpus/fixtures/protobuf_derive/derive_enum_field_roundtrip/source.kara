@@ -1,0 +1,12 @@
+
+enum Status { Pending, Active, Closed }
+
+#[derive(Message)]
+struct Task { id: i64, status: Status }
+
+fn main() {
+    let t = Task { id: 5, status: Status.Active };
+    let back = Task.decode(t.encode());
+    println(back.id);
+    println(match back.status { Status.Pending => "p", Status.Active => "a", Status.Closed => "c" });
+}

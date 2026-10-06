@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_09_30_34.rs::asan_array_literal_arg_with_moved_local_frees_it_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

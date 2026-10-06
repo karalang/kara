@@ -1,0 +1,17 @@
+fn need1(a: Array[String, 1]) -> i64 { return 1 }
+fn need2(a: Array[i64, 2]) -> i64 { return 2 }
+fn need3(a: Array[i64, 3]) -> i64 { return 3 }
+fn mk() -> Array[i64, 2] { return [1, 2] }
+fn pick[T](a: Option[T], d: T) -> T { return match a { Some(x) => x, None => d } }
+fn main() {
+    let a: Option[Array[String, 1]] = None;
+    let r = match a { Some(s) => s, None => [f"e"] };
+    let b: Option[Array[i64, 2]] = None;
+    let q = match b { Some(s) => s, None => { let k = 4; [k, 5] } };
+    let c = true;
+    let w = if c { mk() } else { [7, 8] };
+    let d: Option[Array[i64, 3]] = None;
+    let z = match d { Some(s) => s, None => [0; 3] };
+    let g = pick(b, [3, 4]);
+    println(f"{need1(r)}{need2(q)}{need2(w)}{need3(z)}{need2(g)}");
+}

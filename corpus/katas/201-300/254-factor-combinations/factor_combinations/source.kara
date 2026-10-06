@@ -1,0 +1,113 @@
+// LeetCode 254 — Factor Combinations. (Premium.)
+//
+// Every way to write `n` as a product of factors, each factor in `[2, n-1]`, so
+// the trivial `[n]` is excluded. `12` gives `[2,6]`, `[2,2,3]` and `[3,4]`.
+//
+// Backtracking with a NON-DECREASING factor rule: each recursive level may only
+// use divisors at least as large as the one above it. That single constraint is
+// what makes the answers combinations rather than permutations — without it
+// `[2,6]` and `[6,2]` would both be produced, and de-duplicating afterwards is
+// far more work than never generating the duplicate.
+//
+// The divisor loop stops at `i * i > remaining`. Beyond that point the cofactor
+// `remaining / i` would be SMALLER than `i`, which the non-decreasing rule has
+// already forbidden — so the bound is not an optimisation bolted on, it is the
+// same rule expressed in the loop condition.
+//
+// At each divisor the pair `path + [i, remaining/i]` is emitted immediately and
+// then the recursion continues on `remaining/i` to split the cofactor further.
+// That ordering is why `[2,6]` appears before `[2,2,3]`.
+//
+// `i * i <= remaining` rather than `i <= remaining / i`: LeetCode bounds n by
+// 2^31 - 1, so `i * i` cannot overflow i64 here. Kāra traps on overflow by
+// default, so a version of this that could overflow would abort rather than
+// silently wrap.
+
+fn helper(remaining: i64, start: i64, path: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    let mut i = start;
+    while i * i <= remaining {
+        if remaining % i == 0 {
+            // Emit `path + [i, remaining/i]` — the two-factor split at this level.
+            let mut combo: Vec[i64] = Vec.new();
+            let mut k = 0;
+            while k < path.len() {
+                combo.push(path[k]);
+                k = k + 1;
+            }
+            combo.push(i);
+            combo.push(remaining / i);
+            out.push(combo);
+
+            // Then split the cofactor further, never going below `i`.
+            path.push(i);
+            helper(remaining / i, i, path, out);
+            let _ = path.pop();
+        }
+        i = i + 1;
+    }
+}
+
+fn factor_combinations(n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if n < 4 {
+        return out; // 1, 2, 3 have no factorisation inside [2, n-1]
+    }
+    let mut path: Vec[i64] = Vec.new();
+    helper(n, 2, mut path, mut out);
+    return out;
+}
+
+// Render as `[[2,6],[2,2,3],[3,4]]`, canonicalised: each combination is already
+// non-decreasing, and the LIST is sorted lexicographically so that all three
+// solvers — which generate in genuinely different orders — print identically.
+fn render(combos: mut ref Vec[Vec[i64]]) -> String {
+    combos.sort_by(|a, b| {
+        let mut i = 0;
+        while i < a.len() and i < b.len() {
+            if a[i] != b[i] {
+                return a[i].cmp(b[i]);
+            }
+            i = i + 1;
+        }
+        return a.len().cmp(b.len())
+    });
+    let mut s: String = "[";
+    let mut c = 0;
+    while c < combos.len() {
+        if c > 0 {
+            s.push_str(",");
+        }
+        s.push_str("[");
+        let mut k = 0;
+        while k < combos[c].len() {
+            if k > 0 {
+                s.push_str(",");
+            }
+            s.push_str(f"{combos[c][k]}");
+            k = k + 1;
+        }
+        s.push_str("]");
+        c = c + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(n: i64) {
+    let mut got = factor_combinations(n);
+    println(f"{n} -> {render(mut got)}");
+}
+
+fn main() {
+    report(1);   // []
+    report(2);   // []  prime
+    report(12);  // [[2,2,3],[2,6],[3,4]]
+    report(32);  // powers of two, the deepest small case
+    report(37);  // []  prime
+    report(1);   // []
+    report(16);
+    report(24);
+    report(36);
+    report(100);
+    report(96);
+}

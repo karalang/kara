@@ -1,0 +1,58 @@
+// LeetCode 159 — Longest Substring with At Most Two Distinct Characters. (Premium.)
+//
+// Classic sliding window. Grow the window to the right one char at a time,
+// tracking the count of each distinct char inside it with a Map[char, i64].
+// Whenever the window holds MORE than two distinct chars, shrink from the left —
+// decrementing the leftmost char's count and dropping it from the map when it
+// hits zero — until only two distinct chars remain. The answer is the widest
+// window ever seen.
+
+fn max_i64(a: i64, b: i64) -> i64 {
+    if a > b { return a; }
+    return b;
+}
+
+fn count_of(m: ref Map[char, i64], c: char) -> i64 {
+    match m.get(c) {
+        Some(v) => v,
+        None => 0,
+    }
+}
+
+fn longest(s: String) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut counts: Map[char, i64] = Map.new();
+    let mut left = 0;
+    let mut best = 0;
+    let mut right = 0;
+    while right < n {
+        let c = cs[right];
+        let cur = count_of(counts, c);
+        let _ = counts.insert(c, cur + 1);
+        while counts.len() > 2 {
+            let lc = cs[left];
+            let lv = count_of(counts, lc);
+            if lv <= 1 {
+                let _ = counts.remove(lc);
+            } else {
+                let _ = counts.insert(lc, lv - 1);
+            }
+            left = left + 1;
+        }
+        best = max_i64(best, right - left + 1);
+        right = right + 1;
+    }
+    return best;
+}
+
+fn main() {
+    println(longest("eceba"));      // 3  ("ece")
+    println(longest("ccaabbb"));    // 5  ("aabbb")
+    println(longest("a"));          // 1
+    println(longest("ab"));         // 2
+    println(longest("abaccc"));     // 4  ("accc")
+    println(longest(""));           // 0
+    println(longest("aaaaaa"));     // 6
+    println(longest("abcabcabc"));  // 2
+}

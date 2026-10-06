@@ -1,0 +1,13 @@
+source = "tests/codegen/misc.rs::natural_run_sort_keeps_descending_runs_stable"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

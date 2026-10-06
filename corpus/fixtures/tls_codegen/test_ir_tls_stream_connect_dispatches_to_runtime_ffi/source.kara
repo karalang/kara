@@ -1,0 +1,7 @@
+
+fn main() {
+    let addr: String = "127.0.0.1:8443";
+    let name: String = "localhost";
+    let roots: String = "fake-pem";
+    let stream: TlsStream = TlsStream.connect(addr, name, roots).unwrap();
+}

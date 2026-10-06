@@ -1,0 +1,23 @@
+
+struct Wide { tag: i64, payload: String }
+struct Holder { name: String, body: Option[Wide] }
+fn build(i: i64) -> Holder {
+    let body: Option[Wide] = Some(Wide { tag: 7, payload: f"pay-{i}-long-enough-aaaa" });
+    Holder { name: f"holder-{i}-long-enough", body: body }
+}
+fn read(h: Holder) -> i64 {
+    let Holder { name, body } = h;
+    let mut n = name.len() as i64;
+    if name.starts_with("holder") { n = n + 1i64; }
+    match body {
+        Some(w) => { let Wide { tag, payload } = w; tag + (payload.len() as i64) + n }
+        None => n,
+    }
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut acc = 0i64;
+    let mut i = 0;
+    while i < base + 49 { acc = acc + read(build(i)); i = i + 1; }
+    println(acc);
+}

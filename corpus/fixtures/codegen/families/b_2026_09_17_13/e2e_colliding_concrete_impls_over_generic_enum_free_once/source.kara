@@ -1,0 +1,11 @@
+enum G1[T] { Y(T), N }
+impl G1[Vec[i64]] { fn show(self) { match self { G1.Y(v) => { println(f"vec {v}") } G1.N => { println("vec NONE") } } } }
+impl G1[String] { fn show(self) { match self { G1.Y(v) => { println(f"str {v}") } G1.N => { println("str NONE") } } } }
+fn main() {
+    let a: G1[Vec[i64]] = G1.Y([1, 2, 3]);
+    a.show();
+    let b: G1[String] = G1.Y(f"collide-payload-theta");
+    b.show();
+    for i in 0..2 { let w: G1[Vec[i64]] = G1.Y([i, i]); w.show(); }
+    println("end");
+}

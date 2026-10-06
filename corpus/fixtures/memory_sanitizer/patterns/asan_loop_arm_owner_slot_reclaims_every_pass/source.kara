@@ -1,0 +1,24 @@
+
+fn mkA(n: i64) -> String { return f"A{n}-aaaaaaaaaaaa"; }
+fn mkB(n: i64) -> String { return f"B{n}-bbbbbbbbbbbbbbbbbbbbbbbb"; }
+
+fn main() {
+    let n: i64 = env.args().len();
+
+    let t = mkB(n);
+    let mut i: i64 = 0;
+    while i < 3 {
+        let k = if i > 0 { mkA(n) } else { t }.contains("aaa");
+        println(f"L{i}={k}");
+        i = i + 1;
+    }
+    println(f"t={t.len()}");
+
+    let mut j: i64 = 0;
+    while j < 3 {
+        let u = mkB(n);
+        let s1 = if j > 0 { mkA(n) } else { u }.contains("aaa");
+        println(f"S{j}={s1}");
+        j = j + 1;
+    }
+}

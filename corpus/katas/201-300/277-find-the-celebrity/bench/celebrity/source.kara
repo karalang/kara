@@ -1,0 +1,75 @@
+// LeetCode 277 bench kernel — the elimination at scale.
+//
+// THE MATRIX IS THE WRONG WORKLOAD. Representing `knows` as `Vec[Vec[bool]]`
+// makes the bench measure O(n²) construction and O(n²) memory, while the
+// algorithm being timed is O(n). At n = 100000 the matrix alone is 10 GB and
+// the 300000 calls that actually matter vanish into the noise of building it.
+//
+// So `knows` is a FUNCTION, which is what the problem actually hands you — an
+// API, not a table. Here it is a planted celebrity plus a cheap hash for every
+// other pair:
+//
+//     knows(a, b) = true   if b == star      (everyone knows the celebrity)
+//                 = false  if a == star      (the celebrity knows nobody)
+//                 = hash(a, b) is even       otherwise
+//
+// O(1) per call, O(1) memory, and the timed work is exactly the ~3n calls the
+// algorithm makes. The hash is arithmetic the optimizer cannot fold away,
+// because `a` and `b` come from a loop the answer depends on.
+//
+// PARALLEL LANE. The elimination WITHIN one instance is inherently sequential —
+// each question's answer picks the next candidate — so the fan-out is over
+// INSTANCES: K independent celebrity problems, each with its own planted index.
+// That is the honest place to parallelize this problem, and it is the same shape
+// kata 276 used for its enumeration prefixes.
+//
+// THE SINK IS ORDER-INVARIANT: each instance contributes
+// `(i * 1000003 + found)` and those are summed, so the answer does not depend on
+// which worker finished first, while the `i` factor still catches two instances
+// swapping answers — a plain sum of `found` would not, since the planted index
+// repeats across instances.
+
+fn knows(n: i64, star: i64, a: i64, b: i64) -> bool {
+    if b == star { return true; }
+    if a == star { return false; }
+    let h = (a * 1103515245 + b * 12345) % 2147483647;
+    return h % 2 == 0;
+}
+
+fn find_celebrity(n: i64, star: i64) -> i64 {
+    let mut cand = 0;
+    let mut i = 1;
+    while i < n {
+        if knows(n, star, cand, i) { cand = i; }
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < n {
+        if j != cand {
+            if knows(n, star, cand, j) { return -1; }
+            if not knows(n, star, j, cand) { return -1; }
+        }
+        j = j + 1;
+    }
+    return cand;
+}
+
+fn main() {
+    let n = 2500000;
+    let instances = 64;
+
+    let mut parts: Vec[i64] = Vec.new();
+    #[par_order_free]
+    for i in 0..instances {
+        let star = (i * 7919) % n;
+        parts.push((i * 1000003 + find_celebrity(n, star)) % 1000000007);
+    }
+
+    let mut sink = 0;
+    let mut k = 0;
+    while k < parts.len() {
+        sink = (sink + parts[k]) % 1000000007;
+        k = k + 1;
+    }
+    println(sink);
+}

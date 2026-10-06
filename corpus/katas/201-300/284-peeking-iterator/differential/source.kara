@@ -1,0 +1,292 @@
+// LeetCode 284 — differential harness.
+//
+// Three wrappers: a one-slot buffer filled eagerly, the same filled lazily, and
+// the underlying iterator drained into a `Vec` up front.
+//
+// THE OBJECT IS STATEFUL, SO THE HARNESS DRIVES IT RATHER THAN CALLING IT. Every
+// other kata in this stretch maps one input to one output and compares the
+// results. That shape cannot test this problem: a peeking iterator is a state
+// machine, and its bugs live in the TRANSITIONS — a slot left full after the last
+// element, a `has_next` that consults the wrong one of two states, a `peek` that
+// quietly advances. None of those is visible from a single drain.
+//
+// So the harness generates RANDOM SEQUENCES OF INTERLEAVED OPERATIONS —
+// `peek`, `next`, `has_next` in random order — replays each sequence against all
+// three implementations, and compares every response at every step. A divergence
+// is reported at the operation that produced it, not at the end.
+//
+// TWO RULES THE GENERATOR HAS TO RESPECT. `peek` and `next` are only defined
+// when there IS a next element, so the harness calls `has_next` first and skips
+// the operation when it is false — LeetCode guarantees valid calls and an
+// implementation is free to do anything otherwise. And `has_next` must be asked
+// of all three separately rather than of one and assumed: whether the wrapper
+// still has an element IS the thing most likely to differ, so using one
+// implementation's answer to drive the others would hide exactly the bug the
+// harness exists to find.
+//
+// AND OPERATIONS RUN ONLY WHEN ALL THREE AGREE there is a next element. Gating
+// on one implementation's `has_next` drives a divergent one past its end, where
+// it traps rather than being reported — the first version of this harness did
+// exactly that, and three of its five injections crashed instead of producing a
+// count. A harness that turns a reportable disagreement into a crash has thrown
+// away the information it exists to collect.
+//
+// PEEK IDEMPOTENCE IS CHECKED DIRECTLY. Calling `peek` twice must return the
+// same value and leave the following `next` unchanged — that is the whole
+// specification of "without advancing", and a wrapper that advances on peek
+// still produces a plausible-looking sequence when peeks and nexts alternate
+// one-for-one, which is how a hand-written test usually calls it.
+//
+// PULLS ARE COUNTED per implementation, and the sequence lengths VARY so that
+// many callers stop before draining — all three pull exactly n times if you
+// drain them, so a drain-only generator would report identical counts and hide
+// the difference entirely.
+//
+// PULLS ARE COUNTED per implementation. The eager wrapper pulls one element at
+// construction whether or not the caller asks for anything; the lazy one pulls
+// only on demand. That is a real, observable difference between two
+// implementations that agree on every response, and it is the same kind of
+// second property katas 277 and 283 measured.
+
+struct Source {
+    data: Vec[i64],
+    mut pos: i64,
+    mut pulls: i64,
+}
+
+fn src_has_next(s: ref Source) -> bool {
+    return s.pos < s.data.len();
+}
+
+fn src_next(s: mut ref Source) -> i64 {
+    let v = s.data[s.pos];
+    s.pos = s.pos + 1;
+    s.pulls = s.pulls + 1;
+    return v;
+}
+
+struct EagerP {
+    mut src: Source,
+    mut slot: i64,
+    mut full: bool,
+}
+
+fn make_peeking_eager(data: ref Vec[i64]) -> EagerP {
+    let mut buf: Vec[i64] = Vec.new();
+    let mut ci = 0;
+    while ci < data.len() { buf.push(data[ci]); ci = ci + 1; }
+    let mut s = Source { data: buf, pos: 0, pulls: 0 };
+    let mut full = false;
+    let mut slot = 0;
+    if src_has_next(s) {
+        slot = src_next(mut s);
+        full = true;
+    }
+    return EagerP { src: s, slot: slot, full: full };
+}
+
+fn peek_eager(p: ref EagerP) -> i64 {
+    return p.slot;
+}
+
+fn has_next_eager(p: ref EagerP) -> bool {
+    return p.full;
+}
+
+fn next_eager(p: mut ref EagerP) -> i64 {
+    let v = p.slot;
+    if src_has_next(p.src) {
+        p.slot = src_next(p.src);
+    } else {
+        p.full = false;
+    }
+    return v;
+}
+
+struct LazyP {
+    mut src: Source,
+    mut slot: i64,
+    mut full: bool,
+}
+
+fn make_peeking_lazy(data: ref Vec[i64]) -> LazyP {
+    let mut buf: Vec[i64] = Vec.new();
+    let mut ci = 0;
+    while ci < data.len() { buf.push(data[ci]); ci = ci + 1; }
+    let s = Source { data: buf, pos: 0, pulls: 0 };
+    return LazyP { src: s, slot: 0, full: false };
+}
+
+fn peek_lazy(p: mut ref LazyP) -> i64 {
+    if not p.full {
+        p.slot = src_next(p.src);
+        p.full = true;
+    }
+    return p.slot;
+}
+
+fn has_next_lazy(p: ref LazyP) -> bool {
+    if p.full { return true; }
+    return src_has_next(p.src);
+}
+
+fn next_lazy(p: mut ref LazyP) -> i64 {
+    if p.full {
+        p.full = false;
+        return p.slot;
+    }
+    return src_next(p.src);
+}
+
+struct MatP {
+    mut src: Source,
+    mut all: Vec[i64],
+    mut pos: i64,
+}
+
+fn make_peeking_mat(data: ref Vec[i64]) -> MatP {
+    let mut buf: Vec[i64] = Vec.new();
+    let mut ci = 0;
+    while ci < data.len() { buf.push(data[ci]); ci = ci + 1; }
+    let mut s = Source { data: buf, pos: 0, pulls: 0 };
+    let mut all: Vec[i64] = Vec.new();
+    while src_has_next(s) {
+        all.push(src_next(mut s));
+    }
+    return MatP { src: s, all: all, pos: 0 };
+}
+
+fn peek_mat(p: ref MatP) -> i64 {
+    return p.all[p.pos];
+}
+
+fn has_next_mat(p: ref MatP) -> bool {
+    return p.pos < p.all.len();
+}
+
+fn next_mat(p: mut ref MatP) -> i64 {
+    let v = p.all[p.pos];
+    p.pos = p.pos + 1;
+    return v;
+}
+
+
+fn main() {
+    let mut sequences = 0;
+    let mut operations = 0;
+    let mut has_next_mismatch = 0;
+    let mut peek_mismatch = 0;
+    let mut next_mismatch = 0;
+    let mut peek_advanced = 0;
+    let mut eager_pulls = 0;
+    let mut lazy_pulls = 0;
+    let mut mat_pulls = 0;
+    let mut digest = 0;
+
+    let mut seed = 20260822;
+    let mut len = 0;
+    while len <= 6 {
+        let mut t = 0;
+        while t < 120 {
+            // the underlying data
+            let mut data: Vec[i64] = Vec.new();
+            let mut d = 0;
+            while d < len {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                data.push(seed % 1000);
+                d = d + 1;
+            }
+
+            let mut a = make_peeking_eager(data);
+            let mut b = make_peeking_lazy(data);
+            let mut c = make_peeking_mat(data);
+
+            // Sequence length VARIES, and short ones are the point: eager,
+            // lazy and materialized all pull exactly n times if the caller
+            // drains, so the pull difference is only observable when the caller
+            // STOPS EARLY — which is the realistic case for a wrapper and the
+            // one a drain-only generator never reaches.
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let steps = (seed / 31) % (3 * len + 7);
+            let mut step = 0;
+            while step < steps {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                let op = (seed / 29) % 4;
+
+                // has_next is asked of all three independently — never asked of
+                // one and assumed for the others
+                let ha = has_next_eager(a);
+                let hb = has_next_lazy(b);
+                let hc = has_next_mat(c);
+                if ha != hb or ha != hc { has_next_mismatch = has_next_mismatch + 1; }
+                digest = (digest * 131 + step) % 1000000007;
+                if ha { digest = (digest + 7) % 1000000007; }
+
+                // Operations run only when ALL THREE agree there is a next
+                // element. Gating on one implementation's answer would drive a
+                // divergent one past its end and TRAP instead of reporting —
+                // which is what the first version of this harness did, despite
+                // the note above saying not to.
+                let all_ready = ha and hb and hc;
+                if op == 0 {
+                    // has_next only — already compared above
+                    operations = operations + 1;
+                } else {
+                    if all_ready {
+                        if op == 1 {
+                            let pa = peek_eager(a);
+                            let pb = peek_lazy(mut b);
+                            let pc = peek_mat(c);
+                            if pa != pb or pa != pc { peek_mismatch = peek_mismatch + 1; }
+                            digest = (digest * 131 + pa) % 1000000007;
+                        } else {
+                            if op == 2 {
+                                // peek twice, then next: peek must not advance
+                                let p1 = peek_eager(a);
+                                let p2 = peek_eager(a);
+                                let q1 = peek_lazy(mut b);
+                                let q2 = peek_lazy(mut b);
+                                let r1 = peek_mat(c);
+                                let r2 = peek_mat(c);
+                                if p1 != p2 or q1 != q2 or r1 != r2 {
+                                    peek_advanced = peek_advanced + 1;
+                                }
+                                let na = next_eager(mut a);
+                                let nb = next_lazy(mut b);
+                                let nc = next_mat(mut c);
+                                if na != p1 or nb != q1 or nc != r1 {
+                                    peek_advanced = peek_advanced + 1;
+                                }
+                                if na != nb or na != nc { next_mismatch = next_mismatch + 1; }
+                                digest = (digest * 131 + na) % 1000000007;
+                            } else {
+                                let na = next_eager(mut a);
+                                let nb = next_lazy(mut b);
+                                let nc = next_mat(mut c);
+                                if na != nb or na != nc { next_mismatch = next_mismatch + 1; }
+                                digest = (digest * 131 + na) % 1000000007;
+                            }
+                        }
+                        operations = operations + 1;
+                    }
+                }
+                step = step + 1;
+            }
+
+            eager_pulls = eager_pulls + a.src.pulls;
+            lazy_pulls = lazy_pulls + b.src.pulls;
+            mat_pulls = mat_pulls + c.src.pulls;
+            sequences = sequences + 1;
+            t = t + 1;
+        }
+        len = len + 1;
+    }
+
+    println(f"sequences {sequences}, operations executed {operations}");
+    println(f"underlying pulls: eager {eager_pulls}, lazy {lazy_pulls}, materialized {mat_pulls}");
+    println(f"digest {digest}");
+    println(f"has_next disagreements {has_next_mismatch}");
+    println(f"peek disagreements {peek_mismatch}");
+    println(f"next disagreements {next_mismatch}");
+    println(f"peek that advanced {peek_advanced}");
+}

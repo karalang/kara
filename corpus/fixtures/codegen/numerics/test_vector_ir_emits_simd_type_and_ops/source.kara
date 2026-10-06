@@ -1,0 +1,8 @@
+
+fn lane0_of_sum(p: i64, q: i64) -> i64 {
+    let a: Vector[i64, 4] = Vector[i64, 4](p, p, p, p);
+    let b: Vector[i64, 4] = Vector[i64, 4](q, q, q, q);
+    let c = a + b;
+    c[0]
+}
+fn main() { println(lane0_of_sum(1, 10)); }

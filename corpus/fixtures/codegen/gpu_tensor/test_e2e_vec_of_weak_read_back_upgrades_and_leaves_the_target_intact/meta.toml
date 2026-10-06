@@ -1,0 +1,13 @@
+source = "tests/codegen/gpu_tensor.rs::test_e2e_vec_of_weak_read_back_upgrades_and_leaves_the_target_intact"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

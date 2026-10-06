@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    let mut c: i64 = 0i64;
+    #[par_order_free]
+    while c < 100000i64 {
+        out.push(c * 2i64);
+        c = c + 1i64;
+    }
+    println(out.len());
+}

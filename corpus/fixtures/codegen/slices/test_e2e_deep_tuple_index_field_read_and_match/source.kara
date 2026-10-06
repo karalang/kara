@@ -1,0 +1,22 @@
+
+enum Tok { Id(String), Num(i64) }
+struct Inner { tok: Tok, n: i64 }
+struct Hs { ps: (Inner, i64) }
+fn main() {
+    let h = Hs { ps: (Inner { tok: Tok.Id("hello".to_string()), n: 42 }, 7) };
+    // Scalar field through the tuple chain (was 0).
+    println(h.ps.0.n.to_string());
+    // Scalar second element (always worked — regression guard).
+    println(h.ps.1.to_string());
+    // Enum field as a match scrutinee — the arm binding dispatch (was build-fail).
+    match h.ps.0.tok {
+        Id(s) => { println(s.len().to_string()); }
+        Num(n) => { println(n.to_string()); }
+    }
+    // Borrow arm (prints the payload directly).
+    let h2 = Hs { ps: (Inner { tok: Tok.Id("world".to_string()), n: 1 }, 2) };
+    match h2.ps.0.tok {
+        Id(s) => { println(s); }
+        Num(n) => { println(n.to_string()); }
+    }
+}

@@ -1,0 +1,9 @@
+
+enum E { A { n: i64 }, B }
+impl E { fn code(ref self) -> i64 { match self { A { n } => n, B => 0 } } }
+fn main() {
+    let a = A { n: 7 };
+    let b: E = A { n: 9 };
+    println(a.code());
+    println(b.code());
+}

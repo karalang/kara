@@ -1,0 +1,25 @@
+
+struct City { name: String, zip: i64 }
+struct Address { city: Option[City], tag: String }
+struct User { address: Option[Address] }
+
+fn mk(i: i64) -> User {
+    if i % 2 == 0 {
+        return User { address: Some(Address { city: Some(City { name: f"city-{i}", zip: i }), tag: f"t{i}" }) };
+    }
+    return User { address: None };
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 200 {
+        let u = mk(i);
+        match u.address?.city?.name {
+            Some(v) => { total = total + (v.len() as i64); }
+            None => { total = total + 1; }
+        }
+        i = i + 1;
+    }
+    println(total);
+}

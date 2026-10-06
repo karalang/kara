@@ -1,0 +1,84 @@
+// LeetCode #67: Add Binary — two-pointer column add, least-significant first.
+//
+// Add two binary strings, return the sum as a binary string. Two index
+// pointers walk both inputs from the right; each column sum is
+//
+//   sum   = carry + (a[i] - b'0') + (b[j] - b'0')     missing operand -> 0
+//   bit   = sum % 2                                     emitted digit
+//   carry = sum / 2                                     ripples left
+//
+// Bits come out least-significant first, so they accumulate into a `Vec[u8]`
+// and the final String is built by walking that buffer back-to-front.
+//
+// This is the corpus's most direct hit on the lexer's **radix arm**: the same
+// `b - b'0'` digit-value extraction and base-N carry arithmetic that
+// `from_str_radix` runs for a `0b…` literal, here at base 2. Inputs are read
+// through the zero-copy `bytes()` view with `b'0'`/`b'1'` byte literals — no
+// per-char allocation on the scan side.
+
+fn add_binary(a: ref String, b: ref String) -> String {
+    let ab = a.bytes();
+    let bb = b.bytes();
+
+    let mut i = ab.len() - 1;
+    let mut j = bb.len() - 1;
+    let mut carry = 0;
+
+    // Digit values (0 or 1), least-significant first.
+    let mut buf: Vec[u8] = Vec.new();
+    while i >= 0 or j >= 0 or carry > 0 {
+        let mut sum = carry;
+        if i >= 0 {
+            sum = sum + ((ab[i] - b'0') as i64);
+            i = i - 1;
+        }
+        if j >= 0 {
+            sum = sum + ((bb[j] - b'0') as i64);
+            j = j - 1;
+        }
+        buf.push((sum % 2) as u8);
+        carry = sum / 2;
+    }
+
+    // Reverse the LSB-first buffer into the MSB-first answer. Binary has only
+    // two digit symbols, so a char-literal push is the natural emit — no digit
+    // table needed (cf. #415 add-strings, where base 10 motivates the table).
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        if buf[k] == 1u8 {
+            out.push('1');
+        } else {
+            out.push('0');
+        }
+        k = k - 1;
+    }
+    out
+}
+
+fn report(a: ref String, b: ref String) {
+    println(f"\"{a}\" + \"{b}\" -> \"{add_binary(a, b)}\"");
+}
+
+fn main() {
+    // LeetCode canonical examples.
+    report("11", "1");              // 100
+    report("1010", "1011");         // 10101
+
+    // Carry ripples the whole width.
+    report("1", "1");               // 10
+    report("111", "1");             // 1000
+    report("1111", "1111");         // 11110
+
+    // Unequal lengths, no carry past the shorter operand.
+    report("100", "110010");        // 110110
+    report("1", "111");             // 1000
+
+    // Zeros.
+    report("0", "0");               // 0
+    report("0", "10101");           // 10101
+    report("1101", "0");            // 1101
+
+    // Longer mixed widths.
+    report("10100000100100110110010000010101111011011001101110111111111101000000101111001110001111100001101", "110101001011101110001111100110001010111011010000100110101111100110001000111001000101111101110001100001110000000001");
+}

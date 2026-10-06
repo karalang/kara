@@ -1,0 +1,12 @@
+
+fn vsum(v: Vec[i64]) -> i64 {
+    let mut s = 0; let n = v.len(); let mut i = 0;
+    while i < n { s = s + v[i]; i = i + 1; }
+    return s;
+}
+fn sset(xs: mut Slice[i64]) {
+    let n = xs.len(); let mut i = 0;
+    while i < n { xs[i] = i; i = i + 1; }
+}
+fn aget(a: Array[i64, 4], i: i64) -> i64 { return a[i]; }
+fn main() { print(0); }

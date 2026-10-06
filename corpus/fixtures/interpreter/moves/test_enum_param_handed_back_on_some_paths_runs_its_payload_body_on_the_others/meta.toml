@@ -1,0 +1,13 @@
+source = "tests/interpreter/moves.rs::test_enum_param_handed_back_on_some_paths_runs_its_payload_body_on_the_others"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

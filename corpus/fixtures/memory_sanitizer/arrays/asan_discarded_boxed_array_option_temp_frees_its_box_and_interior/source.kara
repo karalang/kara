@@ -1,0 +1,26 @@
+
+fn mk(n: i64) -> Option[Array[String, 2]] {
+    if n < 0 { return None; }
+    return Some([f"row-aaaaaaaaaaaaaaaa-{n}", f"col-bbbbbbbbbbbbbbbb-{n}"]);
+}
+fn mk1(n: i64) -> Option[Array[String, 1]] {
+    if n < 0 { return None; }
+    return Some(Array[f"one-aaaaaaaaaaaaaaaa-{n}"]);
+}
+fn mkstr(n: i64) -> Option[String] {
+    if n < 0 { return None; }
+    return Some(f"str-aaaaaaaaaaaaaaaa-{n}");
+}
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 4 {
+        mk(j);
+        mk1(j);
+        mkstr(j);
+        let o = mk(j);
+        match o { Some(a) => { println(f"bound:{a[0]}"); } None => { println("none"); } }
+        j = j + 1;
+    }
+    println("end");
+}

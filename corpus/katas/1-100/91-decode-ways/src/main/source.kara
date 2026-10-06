@@ -1,0 +1,100 @@
+// LeetCode #91: Decode Ways — bottom-up DP with a 2-cell rolling window.
+// O(n) time, O(1) extra space (no `Vec[i64]` dp table — only two prevs).
+//
+// '1'..'9' decode to one letter; '10'..'26' decode to one letter; everything
+// else (incl. '0' standalone, '0X', '27'..'99') decodes to zero ways. At
+// position i (1-indexed over the byte stream) the count splits into:
+//
+//   dp[i] = (one-digit ok ? dp[i-1] : 0) + (two-digit ok ? dp[i-2] : 0)
+//
+// with dp[0] = 1 (empty suffix has one decoding) and dp[1] = 1 iff bytes[0]
+// is in '1'..'9'. The full table is never needed — only prev2 and prev1.
+//
+// The single early-exit on a leading '0' is what makes the loop invariant
+// hold: once we know bytes[0] != '0', dp[1] = 1, and every subsequent step
+// derives strictly from the previous two cells. A mid-stream "X0" pair with
+// X not in {'1','2'} drives dp[i] to 0 (neither one-digit nor two-digit
+// branch fires), which then propagates forward — exactly the right answer.
+//
+// Input alphabet is digits only per the LeetCode constraints; `s.bytes()`
+// gives the right O(1) byte view and avoids a `Vec[char]` snapshot.
+
+fn decode_ways(s: ref String) -> i64 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    if n == 0 {
+        return 0;
+    }
+
+    let zero: u8 = b'0';
+
+    // Leading '0' has no decoding — bail before seeding the window.
+    if bytes[0] == zero {
+        return 0;
+    }
+
+    // prev2 = dp[i-2], prev1 = dp[i-1]. Seeded for i = 1:
+    //   dp[0] = 1 (empty prefix), dp[1] = 1 (we've ruled out '0').
+    let mut prev2: i64 = 1;
+    let mut prev1: i64 = 1;
+
+    let mut i = 1;
+    while i < n {
+        let d1: i32 = (bytes[i] as i32) - (zero as i32);
+        let d0: i32 = (bytes[i - 1] as i32) - (zero as i32);
+        let two: i32 = d0 * 10i32 + d1;
+
+        let mut cur: i64 = 0;
+        if d1 >= 1i32 and d1 <= 9i32 {
+            cur = cur + prev1;
+        }
+        if two >= 10i32 and two <= 26i32 {
+            cur = cur + prev2;
+        }
+
+        prev2 = prev1;
+        prev1 = cur;
+        i = i + 1;
+    }
+
+    prev1
+}
+
+fn report(s: ref String) {
+    println(f"decode_ways \"{s}\": {decode_ways(s)}");
+}
+
+fn main() {
+    // The LeetCode reference cases.
+    report("12");        // expect: 2   ("AB" = 1,2 | "L" = 12)
+    report("226");       // expect: 3   ("BBF" | "BZ" | "VF")
+    report("06");        // expect: 0   (leading zero — invalid)
+
+    // Mid-stream zero behaviour — the load-bearing edge.
+    report("10");        // expect: 1   ("J")
+    report("100");       // expect: 0   ('00' invalid; '0' standalone invalid)
+    report("101");       // expect: 1   ("JA")
+    report("110");       // expect: 1   ("KJ" — 11,0 has bare 0; only K,J path)
+    report("301");       // expect: 0   ("30" invalid as two-digit, '0' invalid alone)
+    report("230");       // expect: 0   ('30' invalid; 23,0 has bare 0)
+    report("27");        // expect: 1   ("BG" only — 27 out of range)
+
+    // Empty and single-digit.
+    report("");          // expect: 0   (no input)
+    report("0");         // expect: 0   (single zero — invalid)
+    report("1");         // expect: 1   ("A")
+    report("9");         // expect: 1   ("I")
+
+    // All twos and ones — every adjacent pair is two-digit valid, so the
+    // count is the (n+1)th Fibonacci number.
+    report("11");        // expect: 2   (F(3))
+    report("111");       // expect: 3   (F(4))
+    report("1111");      // expect: 5   (F(5))
+    report("11111");     // expect: 8   (F(6))
+    report("111111");    // expect: 13  (F(7))
+
+    // Long mixed cases — exercises the rolling window over many steps.
+    report("123123");    // expect: 9
+    report("1234567");   // expect: 3   (only 12,3,4,5,6,7 | 1,23,4,5,6,7 | 1,2,3,4,5,6,7)
+    report("2611055971756562");  // expect: 4
+}

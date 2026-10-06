@@ -1,0 +1,14 @@
+
+#[derive(Eq, Ord)]
+struct P { a: i64, b: i64 }
+#[derive(Eq, Ord)]
+enum Pri { Low, Med, High }
+fn main() {
+    let x = P { a: 1, b: 2 };
+    let y = P { a: 1, b: 3 };
+    println(f"{x < y}");
+    println(f"{y > x}");
+    println(f"{y < x}");
+    println(f"{Pri.Low < Pri.High}");
+    println(f"{Pri.High < Pri.Low}");
+}

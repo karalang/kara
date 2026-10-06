@@ -1,0 +1,27 @@
+
+struct Pair { a: String, b: String }
+struct Hold { arr: Array[String, 2] }
+struct Named { p: Pair }
+struct Seq { v: Vec[String] }
+impl Hold { fn peek(ref self) -> ref Array[String, 2] { return self.arr; } }
+impl Named { fn peek(ref self) -> ref Pair { return self.p; } }
+impl Seq { fn peek(ref self) -> ref Vec[String] { return self.v; } }
+fn peekh(h: ref Hold) -> ref Array[String, 2] { return h.arr; }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+        let h = Hold { arr: [f"b151212-arr-aaaaaaaaaaaaaaaa-{i}", f"b151212-arr-bbbbbbbbbbbbbbbb-{i}"] };
+        println(f"arr:{h.peek()[0]}");
+        println(f"free:{peekh(h)[1]}");
+        println(f"orig:{h.arr[0]}");
+
+        let n = Named { p: Pair { a: f"b151212-pair-cccccccccccccccc-{i}", b: f"b151212-pair-dddddddddddddddd-{i}" } };
+        println(f"fld:{n.peek().a}");
+
+        let q = Seq { v: [f"b151212-vec-eeeeeeeeeeeeeeee-{i}"] };
+        println(f"vec:{q.peek()[0]}");
+
+        i = i + 1;
+    }
+}

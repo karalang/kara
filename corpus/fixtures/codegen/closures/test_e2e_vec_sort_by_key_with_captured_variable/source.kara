@@ -1,0 +1,8 @@
+
+fn main() {
+    let offset = 100i64;
+    let mut v: Vec[i64] = Vec.new();
+    v.push(5); v.push(2); v.push(8); v.push(1);
+    v.sort_by_key(|x| x - offset);
+    for x in v.iter() { println(x); }
+}

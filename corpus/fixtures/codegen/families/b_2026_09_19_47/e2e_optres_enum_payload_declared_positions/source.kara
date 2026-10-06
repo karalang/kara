@@ -1,0 +1,29 @@
+struct S1 { v: i64, s: String }
+impl Drop for S1 { fn drop(mut ref self) { println(f"  dS{self.v}") } }
+enum Hq { P(Option[Vec[S1]]), Q }
+enum Ha { P(Option[Array[S1, 1]]), Q }
+enum Hr { P(Result[Vec[S1], i64]), Q }
+enum Ho { P(Option[S1]), Q }
+enum Hoo { P(Option[Option[S1]]), Q }
+enum Hot { P(Option[(S1, i64)]), Q }
+enum Hm { P(Option[S1], i64), Q }
+struct W { h: Ho }
+fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
+fn mk(v: i64) -> Ho { Ho.P(Option.Some(s(v))) }
+fn eat(h: Ho) -> i64 { 1 }
+fn main() {
+    println("dvec"); { let mut w: Vec[S1] = []; w.push(s(6)); let h = Hq.P(Option.Some(w)); println("  x") }
+    println("darr"); { let h = Ha.P(Option.Some([s(7)])); println("  x") }
+    println("dres"); { let mut w: Vec[S1] = []; w.push(s(8)); let h = Hr.P(Result.Ok(w)); println("  x") }
+    println("dopt"); { let h = Ho.P(Option.Some(s(9))); println("  x") }
+    println("dnone"); { let h = Ho.P(Option.None); println("  x") }
+    println("dopt2"); { let h = Hoo.P(Option.Some(Option.Some(s(10)))); println("  x") }
+    println("dtup"); { let h = Hot.P(Option.Some((s(11), 2))); println("  x") }
+    println("dmulti"); { let h = Hm.P(Option.Some(s(12)), 3); println("  x") }
+    println("disc"); { let _ = Ho.P(Option.Some(s(13))); println("  x") }
+    println("ret"); { let h = mk(14); println("  x") }
+    println("arg"); { let n = eat(Ho.P(Option.Some(s(15)))); println(f"  {n}") }
+    println("field"); { let w = W { h: Ho.P(Option.Some(s(16))) }; println("  x") }
+    println("move"); { let h = Ho.P(Option.Some(s(17))); let h2 = h; println("  x") }
+    println("end")
+}

@@ -1,0 +1,28 @@
+
+            fn handle_ws(ws: WebSocket) {{
+                let mut buf: Array[u8, 4096] = [0u8; 4096];
+                loop {{
+                    let r = ws.recv_text(mut buf);
+                    match r {{
+                        Result.Ok(n) => {{
+                            if n == 0 {{ break; }}
+                            let _s = ws.send_text(buf);
+                        }}
+                        Result.Err(_) => {{ break; }}
+                    }}
+                }}
+            }}
+            fn main() {{
+                let cert: String = "{cert}";
+                let key: String = "{key}";
+                let listener: TlsListener =
+                    TlsListener.bind_tls("127.0.0.1:0", cert, key).unwrap();
+                let mut tg: TaskGroup = TaskGroup.new();
+                loop {{
+                    match WebSocket.accept_tls(listener) {{
+                        Result.Ok(ws) => {{ tg.spawn(|| handle_ws(ws)); }}
+                        Result.Err(_) => {{}}
+                    }}
+                }}
+            }}
+        

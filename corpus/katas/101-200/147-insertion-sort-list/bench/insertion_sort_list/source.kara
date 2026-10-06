@@ -1,0 +1,79 @@
+// Benchmark workload for LeetCode #147 — Insertion Sort List.
+//
+// Build-once + punch: N node values are generated once with a deterministic
+// 32-bit LCG (overflow-safe in i64 — no wrapping needed), stored in an index-pool
+// linked list (parallel `val` / `nxt` i64 arrays, -1 = null). Each pass first
+// PERTURBS one node value (so the optimizer cannot hoist the repeated sort), then
+// rebuilds the sorted order with insertion sort: for each node, walk the sorted
+// prefix from the head to find its slot and splice it in by rewriting `nxt`. The
+// prefix walk is data-dependent pointer chasing — it does NOT vectorize. After
+// each pass we traverse the chain from the head accumulating a position-weighted
+// checksum. Sink = that checksum summed over all passes.
+
+fn main() {
+    let n = 3000;
+    let passes = 60;
+    let vr = 100000;
+
+    let mut val: Vec[i64] = Vec.new();
+    let mut nxt: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        val.push(state % vr);
+        nxt.push(-1);
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        // Perturb one node value so the sort cannot be hoisted across passes.
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let idx = state % n;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        val[idx] = state % vr;
+
+        // Insertion sort into the index-pool linked list.
+        let mut head = -1;
+        i = 0;
+        while i < n {
+            let v = val[i];
+            if head == -1 {
+                head = i;
+                nxt[i] = -1;
+            } else if val[head] >= v {
+                nxt[i] = head;
+                head = i;
+            } else {
+                let mut prev = head;
+                let mut scanning = true;
+                while scanning {
+                    let np = nxt[prev];
+                    if np == -1 {
+                        scanning = false;
+                    } else if val[np] < v {
+                        prev = np;
+                    } else {
+                        scanning = false;
+                    }
+                }
+                nxt[i] = nxt[prev];
+                nxt[prev] = i;
+            }
+            i = i + 1;
+        }
+
+        // Traverse the sorted chain, accumulating a position-weighted checksum.
+        let mut cur = head;
+        let mut pos = 1;
+        while cur != -1 {
+            sink = sink + pos * val[cur];
+            pos = pos + 1;
+            cur = nxt[cur];
+        }
+        p = p + 1;
+    }
+    println(sink);
+}

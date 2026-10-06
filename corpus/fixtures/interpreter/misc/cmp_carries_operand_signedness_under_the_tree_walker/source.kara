@@ -1,0 +1,24 @@
+
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    let a: u8 = 200;
+    let b: u8 = 100;
+    let c: u64 = 18446744073709551615u64;
+    let d: u64 = 1;
+    let e: usize = 9223372036854775808u64 as usize;
+    let f: usize = 1;
+    let g: i64 = 0 - 5;
+    let h: i64 = 1;
+    println(f"{tag(a.cmp(b))}");
+    println(f"{tag(c.cmp(d))}");
+    println(f"{tag(e.cmp(f))}");
+    println(f"{tag(g.cmp(h))}");
+    println(f"{tag(false.cmp(true))}");
+    println(f"{tag(true.cmp(false))}");
+    println(f"{tag(true.cmp(true))}");
+}

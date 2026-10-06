@@ -1,0 +1,37 @@
+
+fn mk_bytes() -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    v.push(104u8); v.push(105u8); v.push(106u8);
+    v
+}
+
+fn main() {
+    let s = "a-fairly-long-subject-string";
+    match String.from_utf8(s.bytes()) { Ok(t) => println(f"{t.len()}"), Err(_) => println("bad") }
+    match String.from_utf8(s.bytes().to_vec()) { Ok(t) => println(f"{t.len()}"), Err(_) => println("bad") }
+    match String.from_utf8(mk_bytes()) { Ok(t) => println(t), Err(_) => println("bad") }
+    let mut named: Vec[u8] = Vec.new();
+    named.push(120u8); named.push(121u8);
+    match String.from_utf8(named.as_slice()) { Ok(t) => println(t), Err(_) => println("bad") }
+    println(f"{named.len()}");
+
+    let words: Vec[String] = ["alphabetical", "betamax", "gamma-ray-burst"];
+    let mut wc = words.as_slice().to_vec();
+    wc[0i64] = "zulu-time-signal";
+    println(f"{wc[0i64]} {words[0i64]}");
+    let again = wc.as_slice().to_vec();
+    println(f"{again[2i64]}");
+    let win = words[1..3].to_vec();
+    println(f"{win.len()} {win[0i64]}");
+
+    let rows: Vec[Vec[i64]] = [[1i64, 2i64, 3i64], [4i64, 5i64, 6i64]];
+    let mut rc = rows.as_slice().to_vec();
+    rc[0i64][0i64] = 77i64;
+    println(f"{rc[0i64][0i64]} {rows[0i64][0i64]}");
+
+    let empty: Vec[String] = Vec.new();
+    println(f"{empty.as_slice().to_vec().len()}");
+    let es = empty.as_slice();
+    println(f"{es.chunks(2i64).len()} {es.windows(2i64).len()}");
+    println("end");
+}

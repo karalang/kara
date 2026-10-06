@@ -1,0 +1,27 @@
+
+struct Entry { service: String, weight: i64 }
+
+fn main() {
+    let mut es: Vec[Entry] = Vec.new();
+    es.push(Entry { service: "alphabetical", weight: 3 });
+    es.push(Entry { service: "betamaximum", weight: 5 });
+
+    // The bug's own shape: a range slice of a struct Vec with a heap field.
+    let s = es[0..2];
+    println(f"{s.len()} {s[0].service} {s[1].service}");
+
+    // The whole-container spelling of the same view.
+    let a = es.as_slice();
+    println(f"{a.len()} {a[1].service}");
+
+    // The element kind whose misread was silent: no `struct_types` entry, so
+    // no drop was registered and nothing was freed twice.
+    let mut ns: Vec[i64] = Vec.new();
+    ns.push(3); ns.push(5);
+    let t = ns[0..2];
+    println(f"{t.len()}");
+
+    // The source must still own and free its own elements afterwards.
+    println(f"{es.len()} {es[0].service}");
+    println("end");
+}

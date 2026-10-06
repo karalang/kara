@@ -1,0 +1,13 @@
+
+fn main() {
+    let a: Option[i32] = (1.5f64).checked_to_i32();
+    match a { Some(v) => println(v), None => println(-1) };
+    let b: Option[i32] = (1e30f64).checked_to_i32();
+    match b { Some(v) => println(v), None => println(-1) };
+    let c: Option[i32] = (f64.NAN).checked_to_i32();
+    match c { Some(v) => println(v), None => println(-1) };
+    let d: Option[u8] = (-1.0f64).checked_to_u8();
+    match d { Some(v) => println(v), None => println(-1) };
+    let e: Option[u8] = (200.0f64).checked_to_u8();
+    match e { Some(v) => println(v), None => println(-1) };
+}

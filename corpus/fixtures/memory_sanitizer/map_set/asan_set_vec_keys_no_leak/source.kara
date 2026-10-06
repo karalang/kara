@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut s: Set[Vec[i64]] = Set.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1i64);
+    a.push(2i64);
+    s.insert(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(3i64);
+    s.insert(b);
+    println(s.len());
+}

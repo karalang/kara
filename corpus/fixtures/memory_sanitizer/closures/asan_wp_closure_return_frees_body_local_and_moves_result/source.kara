@@ -1,0 +1,26 @@
+
+trait Counter { fn get(ref self) -> i64; }
+effect resource Ctr: Counter;
+struct InMem { n: i64 }
+impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+fn read() -> i64 with reads(Ctr) { Ctr.get() }
+fn local(n: i64) -> i64 with reads(Ctr) {
+    let x = with_provider[Ctr](InMem { n: n }, || {
+        let pad = f"pad-{read()}";
+        if read() == 9i64 { return pad.len() * 100i64; }
+        read()
+    });
+    x + 1i64
+}
+fn heap() -> String with reads(Ctr) {
+    with_provider[Ctr](InMem { n: 42i64 }, || { return f"v-{read()}"; })
+}
+fn main() with reads(Ctr) {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        acc = acc + local(9i64) + local(4i64) + heap().len();
+        i = i + 1;
+    }
+    println(acc);
+}

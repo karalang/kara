@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut src: Vec[(i64, i64)] = Vec.new();
+    src.push((1i64, 2i64));
+    src.push((3i64, 4i64));
+    match src.try_clone() {
+        Ok(c) => {
+            println(c[0].0); println(c[0].1);
+            println(c[1].0); println(c[1].1);
+        }
+        Err(_) => println("err"),
+    }
+    src.push((5i64, 6i64));
+    println(src.len());
+}

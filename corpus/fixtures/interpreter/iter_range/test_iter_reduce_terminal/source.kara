@@ -1,0 +1,9 @@
+
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4];
+    match v.iter().reduce(|a: i64, x: i64| a + x) { Some(s) => { println(s.to_string()); } None => { println("none"); } }
+    match v.iter().reduce(|a: i64, x: i64| if a > x { a } else { x }) { Some(s) => { println(s.to_string()); } None => { println("none"); } }
+    let e: Vec[i64] = [];
+    match e.iter().reduce(|a: i64, x: i64| a + x) { Some(s) => { println(s.to_string()); } None => { println("none"); } }
+    match v.iter().map(|x: i64| x * 2i64).reduce(|a: i64, x: i64| a + x) { Some(s) => { println(s.to_string()); } None => { println("none"); } }
+}

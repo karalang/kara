@@ -1,0 +1,129 @@
+// LeetCode #99: Recover Binary Search Tree — inorder scan + value swap (★).
+//
+// Exactly two nodes of a BST had their values swapped by mistake; restore the tree
+// WITHOUT changing its structure. The key fact: an inorder walk of a *correct* BST
+// visits values in strictly ascending order, so the two mistakes show up as the (at
+// most two) places where a value is followed by a smaller one. Collect the nodes in
+// inorder, find the misordered pair, and swap their two VALUES back — the shape is
+// untouched, only the payloads move.
+//
+//   - one descent  (adjacent swap):  the two culprits are that pair.
+//   - two descents (non-adjacent):   first culprit is the earlier descent's LEFT node,
+//                                     second is the later descent's RIGHT node.
+//
+// Node type mirrors kata [#98](../98-validate-binary-search-tree/) — a `shared struct
+// TreeNode` (RC), whose values we mutate in place through `Vec[TreeNode]` handles.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+fn inorder_collect(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    match node {
+        None => {}
+        Some(n) => {
+            inorder_collect(n.left, out);
+            out.push(n);
+            inorder_collect(n.right, out);
+        }
+    }
+}
+
+fn recover(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    inorder_collect(root, mut nodes);
+    let mut fi = -1;
+    let mut si = -1;
+    let mut i = 1;
+    while i < nodes.len() {
+        if nodes[i - 1].val > nodes[i].val {
+            if fi < 0 {
+                fi = i - 1;
+            }
+            si = i;
+        }
+        i = i + 1;
+    }
+    if fi >= 0 {
+        let t = nodes[fi].val;
+        nodes[fi].val = nodes[si].val;
+        nodes[si].val = t;
+    }
+    root
+}
+
+
+fn corrupt(root: Option[TreeNode], trial: i64) -> Option[TreeNode] {
+    let mut ns: Vec[TreeNode] = Vec.new();
+    inorder_collect(root, mut ns);
+    let a = trial % ns.len();
+    let b = (trial * 3 + 2) % ns.len();
+    if a != b {
+        let t = ns[a].val;
+        ns[a].val = ns[b].val;
+        ns[b].val = t;
+    }
+    root
+}
+
+fn serialize(node: Option[TreeNode], out: mut ref String) {
+    match node {
+        None => {
+            out.push_str("#,");
+        }
+        Some(n) => {
+            out.push_str(f"{n.val},");
+            serialize(n.left, out);
+            serialize(n.right, out);
+        }
+    }
+}
+
+fn main() {
+    // Build BSTs by insertion, swap two node values to corrupt, recover, serialize.
+    let vals = [5, 3, 8, 2, 4, 7, 9, 1, 6];
+    let mut acc = 0;
+    let mut trial = 0;
+    while trial < 8 {
+        // Build a fresh tree from `vals` rotated by `trial` (varied shapes).
+        let mut root: Option[TreeNode] = None;
+        let mut k = 0;
+        while k < vals.len() {
+            let idx = (k + trial) % vals.len();
+            root = insert(root, vals[idx]);
+            k = k + 1;
+        }
+        // Corrupt (swap two node values), recover, serialize. Each consuming
+        // step threads `root` back out so the shared tree stays a single
+        // ownership path; serialize is the last use.
+        root = corrupt(root, trial);
+        root = recover(root);
+        let mut s: String = "";
+        serialize(root, mut s);
+        let bytes = s.bytes();
+        let mut j = 0;
+        while j < bytes.len() {
+            acc = (acc * 131 + (bytes[j] as i64)) % 1000000007;
+            j = j + 1;
+        }
+        println(f"trial {trial}: {s}");
+        trial = trial + 1;
+    }
+    println(f"sink: {acc}");
+}

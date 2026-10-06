@@ -1,0 +1,8 @@
+
+struct H { f: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut h = H { f: make(10i64) };
+    h.f = make(20i64);
+    println(f"{(h.f)(5i64)}");
+}

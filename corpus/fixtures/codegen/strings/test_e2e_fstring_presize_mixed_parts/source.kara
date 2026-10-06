@@ -1,0 +1,16 @@
+
+fn main() {
+    let s = "world";
+    let n = -42;
+    let u: u8 = 200;
+    let f = 2.5;
+    let b = true;
+    let c = 'é';
+    println(f"hello {s}! n={n} u={u} f={f} b={b} c={c}");
+    let v: Array[i64, 3] = [10, 20, 30];
+    println(f"idx={v[1]} sum={v[0] + v[2]}");
+    let e = "";
+    println(f"[{e}]");
+    let empty = f"{e}";
+    println(empty.len());
+}

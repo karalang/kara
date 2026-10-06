@@ -1,0 +1,8 @@
+
+fn main() {
+    let v: Vec[i64] = Vec[];
+    let w = [7, 8];
+    for x in v.iter().chain(w.iter()) {
+        println(x);
+    }
+}

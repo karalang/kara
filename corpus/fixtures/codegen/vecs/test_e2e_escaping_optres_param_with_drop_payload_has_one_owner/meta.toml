@@ -1,0 +1,13 @@
+source = "tests/codegen/vecs.rs::test_e2e_escaping_optres_param_with_drop_payload_has_one_owner"
+dedup_of = ["tests/interpreter/drop_order.rs::test_escaping_optres_param_with_drop_payload_runs_one_body", "tests/memory_sanitizer/vecs.rs::asan_escaping_optres_param_with_drop_payload_frees_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

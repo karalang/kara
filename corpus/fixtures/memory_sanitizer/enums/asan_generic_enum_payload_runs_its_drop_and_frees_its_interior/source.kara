@@ -1,0 +1,35 @@
+
+struct R2 { s: String, t: String, u: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"d2:{self.s.len()}") } }
+struct R3 { id: i64 }
+impl Drop for R3 { fn drop(mut ref self) { println(f"d3:{self.id}") } }
+
+enum G[T] { X(T), Y }
+enum Two[T] { A(T), B(T), C }
+enum Mono { P(R2), Q }
+
+fn mkr(n: i64) -> R2 { return R2 { s: f"aaaaaaaa{n}", t: f"bbbbbbbb{n}", u: f"cccccccc{n}" }; }
+fn holdgen(g: G[R2]) { println("hg"); }
+fn holdmono(m: Mono) { println("hm"); }
+
+fn main() {
+    let p = G.X(mkr(1));                    println("c1");
+    let q = Mono.P(mkr(2));                 println("c2");
+    holdgen(G.X(mkr(3)));                   println("c3");
+    holdmono(Mono.P(mkr(4)));               println("c4");
+    let a = G.X(mkr(5)); holdgen(a);        println("c5");
+    let b = Mono.P(mkr(6)); holdmono(b);    println("c6");
+
+    let r1 = G.X(mkr(7));
+    match r1 { G.X(r) => { println(f"k1:{r.s.len()}"); }, G.Y => { println("y"); } }
+    let r2 = G.X(mkr(8));
+    match r2 { G.X(r) => { let z = r; println("k2"); }, G.Y => { println("y"); } }
+    let r3 = G.X(mkr(9));
+    match r3 { G.X(_) => { println("k3"); }, G.Y => { println("y"); } }
+
+    let w = G.X(R3 { id: 7 });              println("k4");
+    let t1 = Two.A(mkr(10));
+    let t2 = Two.B(mkr(11));                println("k5");
+    let u: G[R2] = G.Y;                     println("k6");
+    println("end");
+}

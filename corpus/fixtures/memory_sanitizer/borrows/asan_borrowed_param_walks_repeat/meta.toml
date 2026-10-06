@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/borrows.rs::asan_borrowed_param_walks_repeat"
+dedup_of = ["tests/memory_sanitizer/structs.rs::asan_headerless_abi_full_pipeline_repeat"]
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

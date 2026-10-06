@@ -1,0 +1,15 @@
+
+fn main() {
+    let v = [1, 3, 5, 2, 4, 7, 9];
+    for g in v.iter().chunk_by(|x| x % 2) {
+        let mut s = "[";
+        let mut first = true;
+        for x in g {
+            if not first { s = s + ","; }
+            s = s + f"{x}";
+            first = false;
+        }
+        s = s + "]";
+        println(s);
+    }
+}

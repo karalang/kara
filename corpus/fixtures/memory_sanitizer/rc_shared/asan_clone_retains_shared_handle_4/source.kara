@@ -1,0 +1,9 @@
+
+shared struct Cell { mut v: i64 }
+struct Row { c: Cell, n: i64 }
+fn main() {
+    let mut v: Vec[Row] = Vec.new();
+    v.push(Row { c: Cell { v: 1 }, n: 7 });
+    let w = v.clone();
+    println(w.len());
+}

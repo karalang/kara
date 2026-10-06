@@ -1,0 +1,20 @@
+
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn is_mirror(a: Option[Node], b: Option[Node]) -> bool {
+    match a {
+        None => { match b { None => true, Some(_) => false } }
+        Some(an) => { match b { None => false, Some(bn) => an.val == bn.val and is_mirror(an.left, bn.right) and is_mirror(an.right, bn.left) } }
+    }
+}
+fn is_symmetric(root: Option[Node]) -> bool { match root { None => true, Some(n) => is_mirror(n.left, n.right) } }
+fn main() {
+    let leftsub = Some(Node { val: 2i64, left: Some(Node { val: 3i64, left: None, right: None }), right: None });
+    let rightsub = Some(Node { val: 2i64, left: None, right: Some(Node { val: 3i64, left: None, right: None }) });
+    let root = Some(Node { val: 1i64, left: leftsub, right: rightsub });
+    let mut pool: Vec[Option[Node]] = Vec.new();
+    pool.push(root);
+    let mut t: i64 = 0i64;
+    let mut rep: i64 = 0i64;
+    while rep < 200i64 { let sym = is_symmetric(pool[0i64].clone()); t = t + (if sym { 1i64 } else { 0i64 }); rep = rep + 1i64; }
+    println(f"{t}")
+}

@@ -1,0 +1,16 @@
+m=1 n=1 -> 9
+m=1 n=2 -> 65
+length 1: 9
+length 2: 56
+length 3: 320
+length 4: 1624
+length 5: 7152
+length 6: 26016
+length 7: 72912
+length 8: 140704
+length 9: 140704
+lengths 1..9 one at a time: 389497
+m=1 n=9 -> 389497
+m=4 n=9 -> 389112
+m=3 n=5 -> 9096
+m=9 n=1 -> 0

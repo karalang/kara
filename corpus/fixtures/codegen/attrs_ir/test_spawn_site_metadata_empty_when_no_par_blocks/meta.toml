@@ -1,0 +1,13 @@
+source = "tests/codegen/attrs_ir.rs::test_spawn_site_metadata_empty_when_no_par_blocks"
+dedup_of = ["tests/codegen/misc.rs::test_compile_to_object_hello_world", "tests/codegen/numerics.rs::test_ir_main_returns_i32", "tests/karac_jit_runner_repl.rs::repl_runner_passes_one_cell", "tests/memory_sanitizer/misc.rs::asan_baseline_no_allocations"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

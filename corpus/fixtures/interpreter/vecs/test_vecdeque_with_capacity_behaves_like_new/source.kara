@@ -1,0 +1,7 @@
+fn main() {
+            let mut q: VecDeque[i64] = VecDeque.with_capacity(4);
+            q.push_back(7);
+            q.push_front(3);
+            println(q.len());
+            println(q.pop_front().unwrap());
+        }

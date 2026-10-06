@@ -1,0 +1,11 @@
+
+enum E { V(((i64, i64), String)) }
+fn main() {
+    let e = V(((10, 20), "nested"));
+    match e {
+        V(((a, b), s)) => {
+            println(a + b);
+            println(s);
+        }
+    }
+}

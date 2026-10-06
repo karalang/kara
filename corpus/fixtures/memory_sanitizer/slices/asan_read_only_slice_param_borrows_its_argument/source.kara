@@ -1,0 +1,22 @@
+
+fn count(xs: Slice[String]) -> i64 { xs.len() }
+fn scount(xs: Slice[i64]) -> i64 { xs.len() }
+fn twice(f: Fn() -> i64) -> i64 { f() + f() }
+fn mk() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alphabetical"); v.push("betamax");
+    v
+}
+
+fn main() {
+    let words: Vec[String] = ["alphabetical", "betamax", "gamma-ray-burst"];
+    println(f"{count(words)} {count(words)} {count(words)}");
+    println(f"{words[0i64]} {words.len()}");
+
+    let nums: Vec[i64] = [10i64, 20i64, 30i64];
+    println(f"{twice(|| scount(nums))} {nums.len()}");
+
+    println(f"{count(mk())}");
+    println(f"{count(words.as_slice())} {count(words[0..2])}");
+    println("end");
+}

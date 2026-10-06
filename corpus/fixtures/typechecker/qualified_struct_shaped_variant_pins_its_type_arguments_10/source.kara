@@ -1,0 +1,2 @@
+enum Sh[T] { S { v: T }, E }
+fn main() { let x: Sh[i64] = S { v: 3 }; match x { S { v } => { println(f"{v}") } E => { println("e") } } }

@@ -1,0 +1,90 @@
+// LeetCode #64: Minimum Path Sum — in place, O(m·n) time, O(1) extra space.
+//
+// The same `cost + min` recurrence as the ★ ([`minimum_path_sum.kara`](minimum_path_sum.kara)),
+// but written onto the grid ITSELF instead of a separate buffer. Because
+// `best[i][j]` only ever depends on cells above and to the left — both already
+// converted to best-costs by the time this cell is reached, in a top-to-bottom
+// left-to-right scan — the grid can be overwritten in place: after the scan,
+// `grid[i][j]` holds `best[i][j]`, and `grid[m-1][n-1]` is the answer.
+//
+//     grid[i][j] += min(grid[i-1][j], grid[i][j-1])
+//
+// This trades the rolling form's O(n) buffer for O(1) EXTRA space (it reuses the
+// caller's grid, which it takes by value and consumes). It is the classic
+// "mutate the input as your DP table" trick; correctness rests on the same scan
+// order as the other two — every cell it reads (above, left) was finalised on an
+// earlier step, and every cell is written exactly once. The borders are the same
+// single-in-neighbour prefix sums, done as two seed passes before the interior.
+//
+// Note this is the one solver that mutates a `Vec[Vec[i64]]` in place — nested
+// index-assignment `grid[i][j] = …`, the write-side counterpart to the read-only
+// `grid[i-1][j]` indexing the 2-D variants use. The shared `report` harness
+// hands each solver an owned grid, so consuming it here is free.
+//
+// Costs ≤ 200 with m, n ≤ 200, so the answer is ≤ 80_000 — i64 for corpus
+// uniformity, nowhere near overflow.
+
+fn min_path_sum(grid: Vec[Vec[i64]]) -> i64 {
+    let mut g = grid;                   // take ownership, rebind as mutable
+    let rows = g.len();
+    let cols = g[0].len();
+
+    // Top row: prefix sums along the left-only in-neighbour.
+    let mut j = 1;
+    while j < cols {
+        g[0][j] = g[0][j] + g[0][j - 1];
+        j = j + 1;
+    }
+
+    // Left column: prefix sums along the above-only in-neighbour.
+    let mut i = 1;
+    while i < rows {
+        g[i][0] = g[i][0] + g[i - 1][0];
+        i = i + 1;
+    }
+
+    // Interior: each cell adds the cheaper of (above, left), both already
+    // rewritten to best-costs earlier in this same scan.
+    let mut r = 1;
+    while r < rows {
+        let mut c = 1;
+        while c < cols {
+            g[r][c] = g[r][c] + min(g[r - 1][c], g[r][c - 1]);
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+
+    g[rows - 1][cols - 1]
+}
+
+// ---- test harness (shared verbatim with minimum_path_sum.kara) ---------------
+
+fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+    let ans = min_path_sum(grid);
+    println(f"{ans}");
+    s.push(' ');
+    s.push_str(f"{ans}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report([[1, 3, 1], [1, 5, 1], [4, 2, 1]], mut s);   // 7
+    report([[1, 2, 3], [4, 5, 6]], mut s);              // 12
+    report([[5]], mut s);                               // 5
+    report([[1, 2, 3, 4]], mut s);                      // 10
+    report([[1], [2], [3]], mut s);                     // 6
+    report([[1, 2], [1, 1]], mut s);                    // 3
+    report([[0, 0, 0], [0, 0, 0], [0, 0, 0]], mut s);   // 0
+    report([[1, 9, 9], [1, 9, 9], [1, 1, 1]], mut s);   // 5
+    report([[1, 3, 1, 2],                               // 9
+            [2, 1, 3, 1],
+            [3, 2, 1, 4],
+            [1, 1, 1, 1]], mut s);
+    report([[200, 200], [200, 200]], mut s);            // 600
+    report([[7], [3], [9], [1], [5]], mut s);           // 25
+    report([[2, 2, 2, 2, 2, 2]], mut s);                // 12
+
+    println(s);
+}

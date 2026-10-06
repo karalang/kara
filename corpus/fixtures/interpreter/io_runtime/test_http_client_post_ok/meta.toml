@@ -1,0 +1,13 @@
+source = "tests/interpreter/io_runtime.rs::test_http_client_post_ok"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

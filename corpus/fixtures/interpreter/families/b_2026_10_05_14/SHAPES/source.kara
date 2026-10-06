@@ -1,0 +1,37 @@
+struct W { s: String }
+fn add(out: mut ref String, c: char) { out.push(c); out.push_str("-"); }
+fn tick(n: mut ref i64) -> char { n += 1; return 'k'; }
+fn main() {
+    let mut a = String.new();
+    for i in 0..5 { a.push('a'); }
+    a.push_str("bc");
+    println(a);
+    let mut b = String.new();
+    add(mut b, 'x');
+    add(mut b, 'y');
+    println(b);
+    let mut c = String.from("c");
+    let mut app = |t: String| { c.push_str(t); };
+    app("1");
+    app("2");
+    println(c);
+    let mut d = String.from("outer");
+    {
+        let mut d = String.from("inner");
+        d.push('!');
+        println(d);
+    }
+    d.push('?');
+    println(d);
+    let mut v: Vec[String] = [String.from("p"), String.from("q")];
+    for s in v.iter_mut() { s.push('+'); }
+    println(f"{v[0]} {v[1]}");
+    let mut w = W { s: String.from("w") };
+    w.s.push('.');
+    println(w.s);
+    let mut n = 0;
+    let mut e = String.new();
+    e.push(tick(mut n));
+    e.push(tick(mut n));
+    println(f"{e} {n}");
+}

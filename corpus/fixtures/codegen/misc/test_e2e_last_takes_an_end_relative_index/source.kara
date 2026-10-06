@@ -1,0 +1,36 @@
+
+fn main() {
+    let v: Vec[i64] = [10, 20, 30];
+    match v.last()   { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(0)  { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(1)  { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(2)  { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(3)  { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(-1) { Some(x) => { println(x); } None => { println("none"); } }
+
+    let s = v.as_slice();
+    match s.last(1)  { Some(x) => { println(x); } None => { println("none"); } }
+
+    let a: Array[i64, 3] = [7, 8, 9];
+    match a.last(0)  { Some(x) => { println(x); } None => { println("none"); } }
+    match a.last(2)  { Some(x) => { println(x); } None => { println("none"); } }
+    match a.last(3)  { Some(x) => { println(x); } None => { println("none"); } }
+    match a.last(-1) { Some(x) => { println(x); } None => { println("none"); } }
+
+    // An empty receiver has no element at any n, including the default.
+    let e: Vec[i64] = [];
+    match e.last()   { Some(x) => { println(x); } None => { println("none"); } }
+    match e.last(0)  { Some(x) => { println(x); } None => { println("none"); } }
+    match e.last(1)  { Some(x) => { println(x); } None => { println("none"); } }
+
+    // A RUNTIME n, so the index is not a constant the backend can fold —
+    // and one that walks past the front on the last iteration.
+    let mut i = 0i64;
+    while i < 4 {
+        match v.last(i) { Some(x) => { println(x); } None => { println("none"); } }
+        i = i + 1;
+    }
+
+    // `first` is unaffected by the arm split.
+    match v.first()  { Some(x) => { println(x); } None => { println("none"); } }
+}

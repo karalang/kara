@@ -1,0 +1,44 @@
+
+shared struct P { v: i64 }
+shared struct Q { a: i64, b: i64, c: i64 }
+
+// B-2026-09-03-40 — `mix` exists to keep the p/q initializers ABOVE the
+// par_run band gate's dispatch threshold. Before that row the band formed
+// even for three bare struct literals, because the gate's visibility floor
+// was inverted and never declined a cheap group; it now declines one whose
+// work is fully visible and under 500 units, which is these three
+// initializers exactly. Without this the band never forms and the fixture
+// goes vacuous — `par_slot_shared_struct_fixtures_actually_parallelize`
+// (tests/codegen.rs) is the guard that says so, and it compiles this source
+// verbatim, so EDIT BOTH.
+//
+// It does not perturb what is being tested: `mix` is pure and heap-free, the
+// two boxes and the Vec buffer are unchanged (min-allocs still 3), and the
+// printed answer is unchanged because it is `w.len() + q.a - q.a`.
+fn mix(seed: i64) -> i64 {
+    let mut s: i64 = seed;
+    let mut i: i64 = 0;
+    while i < 8 { s = s + i * 3; i = i + 1; }
+    return s;
+}
+
+fn build(seed: i64) -> i64 {
+    let p: P = P { v: mix(seed) };
+    let q: Q = Q { a: mix(seed), b: mix(seed), c: mix(seed) };
+    let mut w: Vec[i64] = Vec.new();
+    w.push(p.v);
+    return w.len() + q.a - q.a;
+}
+
+fn churn(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    let pad: i64 = n * 3;
+    return pad + churn(n - 1);
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let k = build(seed);
+    let noise = churn(2000);
+    println(k + noise - noise);
+}

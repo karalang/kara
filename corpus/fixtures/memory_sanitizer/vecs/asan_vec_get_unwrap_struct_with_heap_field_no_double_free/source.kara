@@ -1,0 +1,16 @@
+
+struct Person { name: String, age: i64 }
+fn main() {
+    let mut people: Vec[Person] = Vec.new();
+    let mut n1 = String.from("");
+    n1.push_str("Alice");
+    people.push(Person { name: n1, age: 30 });
+    let mut n2 = String.from("");
+    n2.push_str("Bob");
+    people.push(Person { name: n2, age: 25 });
+    let p = people.get(0).unwrap();
+    println(p.name);
+    println(p.age);
+    let f = people.first().unwrap();
+    println(f.age);
+}

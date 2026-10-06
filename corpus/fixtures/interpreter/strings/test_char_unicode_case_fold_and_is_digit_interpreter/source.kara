@@ -1,0 +1,21 @@
+fn main() {
+            println(f"{'A'.to_lowercase()} {'a'.to_uppercase()} {'7'.to_uppercase()}");
+            println(f"{'é'.to_uppercase()} {'É'.to_lowercase()} {'ß'.to_uppercase()}");
+            match char.try_from(64257) {
+                Ok(l) => { println(f"{l.to_uppercase()} {l.to_lowercase()}"); }
+                Err(e) => { println("err"); }
+            }
+            match char.try_from(304) {
+                Ok(i) => { println(f"{i.to_lowercase()}"); }
+                Err(e) => { println("err"); }
+            }
+            let sharp = 'ß';
+            println(sharp.to_string().to_uppercase());
+            println(f"{'7'.is_digit(10)} {'f'.is_digit(16)} {'f'.is_digit(10)}");
+            println(f"{'z'.is_digit(36)} {' '.is_digit(10)} {'0'.is_digit(2)}");
+            let mut out = "".to_string();
+            for ch in "HeLLo Wörld".chars() {
+                out = out + ch.to_lowercase().to_string();
+            }
+            println(out);
+        }

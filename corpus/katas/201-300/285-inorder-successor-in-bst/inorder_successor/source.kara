@@ -1,0 +1,117 @@
+// LeetCode 285 — Inorder Successor in BST.
+//
+// Given a BST and a node `p`, return the node with the smallest key strictly
+// greater than `p`'s. Return nothing if `p` is the largest.
+//
+// THE ANSWER IS OPTIONAL BY NATURE, which is what this kata is built around: the
+// successor of the maximum does not exist, and that is not an error condition —
+// it is a legitimate answer that the type has to carry. So every solver returns
+// `Option[i64]` and the callers use `?.` rather than a sentinel, which is the
+// thing a `-1` return would quietly get wrong the moment `-1` is a real key.
+//
+// THE ★ MECHANISM: DESCEND, REMEMBERING THE LAST LEFT TURN.
+//
+//     cur = root; best = None
+//     while cur exists:
+//         if cur.key > target:  best = cur.key;  cur = cur.left    // a candidate
+//         else:                                  cur = cur.right   // too small
+//
+// O(h), no parent pointers, no stack. Every time the walk goes LEFT it has just
+// passed a key greater than the target, and every later left turn passes a
+// smaller such key — so the last one recorded is the smallest key greater than
+// the target, which is the definition of the successor.
+//
+// WHY THE `else` BRANCH TAKES NO CANDIDATE. When `cur.key <= target` the whole
+// left subtree is smaller still, so nothing there can be the answer; the walk
+// goes right and records nothing. Recording a candidate on that branch — an easy
+// slip, since it looks symmetric — returns the target itself whenever the target
+// is present, which is wrong and looks right on every example where the answer
+// happens to be the next key anyway.
+//
+// STRICTLY GREATER MATTERS. `>` and not `>=`: the successor of a key that IS in
+// the tree must be the next one, not itself. With duplicate keys the distinction
+// is what decides whether you loop forever.
+
+// A BST as a flat arena: node i has key `key[i]` and children by index, -1 for
+// absent. No pointers, no `shared`, so the kata stays about the algorithm.
+struct Bst {
+    key: Vec[i64],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+fn bst_insert(t: mut ref Bst, k: i64) {
+    if t.key.len() == 0 {
+        t.key.push(k);
+        t.left.push(0 - 1);
+        t.right.push(0 - 1);
+        return;
+    }
+    let mut cur = 0;
+    let mut more = true;
+    while more {
+        if k < t.key[cur] {
+            if t.left[cur] < 0 {
+                t.key.push(k);
+                t.left.push(0 - 1);
+                t.right.push(0 - 1);
+                t.left[cur] = t.key.len() - 1;
+                more = false;
+            } else {
+                cur = t.left[cur];
+            }
+        } else {
+            if t.right[cur] < 0 {
+                t.key.push(k);
+                t.left.push(0 - 1);
+                t.right.push(0 - 1);
+                t.right[cur] = t.key.len() - 1;
+                more = false;
+            } else {
+                cur = t.right[cur];
+            }
+        }
+    }
+}
+
+fn build(keys: ref Vec[i64]) -> Bst {
+    let mut t = Bst { key: Vec.new(), left: Vec.new(), right: Vec.new() };
+    let mut i = 0;
+    while i < keys.len() {
+        bst_insert(mut t, keys[i]);
+        i = i + 1;
+    }
+    return t;
+}
+
+fn successor(t: ref Bst, target: i64) -> Option[i64] {
+    let mut cur = 0;
+    let mut best: Option[i64] = None;
+    if t.key.len() == 0 { return None; }
+    while cur >= 0 {
+        if t.key[cur] > target {
+            best = Some(t.key[cur]);
+            cur = t.left[cur];
+        } else {
+            cur = t.right[cur];
+        }
+    }
+    return best;
+}
+
+fn main() {
+    let keys: Vec[i64] = [20, 9, 25, 5, 12, 11, 14];
+    let t = build(keys);
+
+    // `?.` reads naturally here: "the successor's value, if there is one"
+    let mut probes: Vec[i64] = [5, 9, 11, 14, 20, 25, 13];
+    let mut i = 0;
+    while i < probes.len() {
+        let p = probes[i];
+        let s = successor(t, p);
+        println(f"successor of {p} -> {s}");
+        i = i + 1;
+    }
+    let empty = build([]);
+    println(f"successor in an empty tree -> {successor(empty, 1)}");
+}

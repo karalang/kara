@@ -1,0 +1,13 @@
+
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn relay(k: i64) -> Fn(i64) -> i64 { let f = make(k); return f; }
+fn relay_tail(k: i64) -> Fn(i64) -> i64 { let f = make(k); f }
+fn relay2(k: i64) -> Fn(i64) -> i64 { let g = relay_tail(k); g }
+fn relay_copy(k: i64) -> Fn(i64) -> i64 { let f = make(k); let g = f; g }
+fn main() {
+    let a = relay(10i64);
+    let b = relay_tail(20i64);
+    let c = relay2(30i64);
+    let d = relay_copy(40i64);
+    println(f"{a(1i64) + b(2i64) + c(3i64) + d(4i64)}");
+}

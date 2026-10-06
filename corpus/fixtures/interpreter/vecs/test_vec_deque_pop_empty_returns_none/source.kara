@@ -1,0 +1,9 @@
+
+        fn main() {
+            let mut q: VecDeque[i64] = VecDeque.new();
+            let f = q.pop_front();
+            let b = q.pop_back();
+            println(f);
+            println(b);
+        }
+    

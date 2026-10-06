@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut a = 20;
+    a = a + 0;
+    let b = 22;
+    println(a + b);
+    println(a - b);
+    println(a * b);
+    println(b / a);
+    println(b % a);
+    println(-a);
+}

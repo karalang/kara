@@ -1,0 +1,141 @@
+// LeetCode 148 — Sort List.
+//
+// Sort a singly linked list in O(n log n) with top-down MERGE SORT. Nodes are
+// `Vec`-owned (strong) with a `weak Node` next overlay (the #141/#142/#143/#147
+// cluster), so every split (cut a `next` link) and merge (re-point `next` in
+// sorted order) only rewrites weak links and stays leak-free. Chains are tracked
+// by head index (`-1` = empty); the recursion sorts sub-chains and merges them.
+
+shared struct Node {
+    val: i64,
+    id: i64,
+    mut next: weak Node,
+}
+
+// Index of `nodes[i].next` in the Vec, or -1 when it is None.
+fn next_idx(nodes: ref Vec[Node], i: i64) -> i64 {
+    match nodes[i].next {
+        None => { return -1; }
+        Some(nx) => { return nx.id; }
+    }
+}
+
+// Split the chain at `head` into two halves via slow/fast pointers; cut the
+// first half's tail (`slow.next = None`) and return the second half's head.
+fn split_mid(nodes: mut ref Vec[Node], head: i64) -> i64 {
+    let mut slow: i64 = head;
+    let mut fast: i64 = next_idx(nodes, head);
+    while fast != -1 {
+        fast = next_idx(nodes, fast);
+        if fast != -1 {
+            slow = next_idx(nodes, slow);
+            fast = next_idx(nodes, fast);
+        }
+    }
+    let mid: i64 = next_idx(nodes, slow);
+    nodes[slow].next = None;
+    return mid;
+}
+
+// Merge two sorted chains (heads `a`, `b`) into one; return the merged head.
+// Each link write is a weak-from-strong store (`nodes[tail].next = nodes[pick]`),
+// the leak-free #143 shape.
+fn merge(nodes: mut ref Vec[Node], a: i64, b: i64) -> i64 {
+    let mut ai: i64 = a;
+    let mut bi: i64 = b;
+    let mut head: i64 = -1;
+    let mut tail: i64 = -1;
+    while ai != -1 and bi != -1 {
+        if nodes[ai].val <= nodes[bi].val {
+            if head == -1 { head = ai; } else { nodes[tail].next = nodes[ai]; }
+            tail = ai;
+            ai = next_idx(nodes, ai);
+        } else {
+            if head == -1 { head = bi; } else { nodes[tail].next = nodes[bi]; }
+            tail = bi;
+            bi = next_idx(nodes, bi);
+        }
+    }
+    let rest: i64 = if ai != -1 { ai } else { bi };
+    if tail != -1 {
+        if rest == -1 { nodes[tail].next = None; } else { nodes[tail].next = nodes[rest]; }
+    }
+    return head;
+}
+
+// Recursively merge-sort the chain at `head`; return the sorted head.
+fn sort_chain(nodes: mut ref Vec[Node], head: i64) -> i64 {
+    if head == -1 { return -1; }
+    if next_idx(nodes, head) == -1 { return head; }
+    let mid: i64 = split_mid(nodes, head);
+    let left: i64 = sort_chain(nodes, head);
+    let right: i64 = sort_chain(nodes, mid);
+    return merge(nodes, left, right);
+}
+
+fn sort_list(vals: Vec[i64]) -> Vec[i64] {
+    let n: i64 = vals.len();
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        nodes.push(Node { val: vals[i], id: i, next: None });
+        i = i + 1;
+    }
+    // Link the initial chain 0 -> 1 -> … -> n-1.
+    i = 0;
+    while i + 1 < n {
+        nodes[i].next = nodes[i + 1];
+        i = i + 1;
+    }
+
+    let mut out: Vec[i64] = Vec.new();
+    if n == 0 {
+        return out;
+    }
+    let mut cur: i64 = sort_chain(mut nodes, 0);
+    while cur != -1 {
+        out.push(nodes[cur].val);
+        cur = next_idx(nodes, cur);
+    }
+    return out;
+}
+
+fn run(vals: Vec[i64]) {
+    let r: Vec[i64] = sort_list(vals);
+    let n: i64 = r.len();
+    let mut s: String = "";
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 {
+            s = s + " ";
+        }
+        s = s + r[i].to_string();
+        i = i + 1;
+    }
+    println(s);
+}
+
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(4); a.push(2); a.push(1); a.push(3);
+    run(a);
+
+    let mut b: Vec[i64] = Vec.new();
+    b.push(-1); b.push(5); b.push(3); b.push(4); b.push(0);
+    run(b);
+
+    let mut c: Vec[i64] = Vec.new();
+    run(c);
+
+    let mut d: Vec[i64] = Vec.new();
+    d.push(1);
+    run(d);
+
+    let mut e: Vec[i64] = Vec.new();
+    e.push(3); e.push(3); e.push(1); e.push(2); e.push(2);
+    run(e);
+
+    let mut f: Vec[i64] = Vec.new();
+    f.push(5); f.push(4); f.push(3); f.push(2); f.push(1);
+    run(f);
+}

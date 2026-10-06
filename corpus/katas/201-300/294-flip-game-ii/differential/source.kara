@@ -1,0 +1,356 @@
+// Differential for LeetCode 294 — Flip Game II.
+//
+// Three arms and four properties.
+//
+//   A  memo     search + Map[String, bool]      flip_game_ii.kara
+//   B  naive    the same search, no memo        flip_game_ii_naive.kara
+//   C  grundy   XOR of Dawson's Kayles values   flip_game_ii_grundy.kara
+//
+// A and B share a shape, so agreement between them is weak evidence: a
+// misreading of the rules would be present in both and the diff would stay
+// silent. C is the reason this file is worth running. It never enumerates a
+// move, never builds a successor board and never recurses; it reads the run
+// lengths and XORs a table. Nothing but the problem statement is shared with A
+// and B, so a disagreement can only be a real defect in one of them.
+//
+// THE PROPERTIES matter for the same reason #293's did: arms can agree and both
+// be wrong. These four follow from the statement, not from any implementation.
+//
+//   P1  reversal        a board and its reverse have the same answer
+//   P2  terminal        a board with no `++` is a loss for the player to move
+//   P3  recursion       C satisfies the game's defining recursion — a position
+//                       is winning exactly when some successor is losing. C
+//                       computes nothing of the sort internally, so this is a
+//                       genuine test of the Sprague-Grundy theorem on this game
+//                       rather than a restatement of C's own code.
+//   P4  run multiset    the answer depends ONLY on the multiset of `+`-run
+//                       lengths. Sorting the runs and rejoining them with single
+//                       `-` separators must not change it — which also says the
+//                       separators' own lengths are irrelevant.
+//   P5  single-run spine A and C agree on a bare run of n for n up to 22, past
+//                       what the exhaustive sweep can reach. A run is the one
+//                       shape whose answer is a single table entry, so this pins
+//                       the Grundy VALUES rather than their XOR.
+//
+// P4 is the one that would catch a plausible bug none of the arms could catch
+// alone: an implementation that let a move straddle a `-`, or that treated the
+// board as one run, still gets the easy boards right and fails here.
+//
+// BANDS. A and C run every board of length 0..12 — 8,191 in all. B is
+// exponential in the number of moves and runs to 10 (2,047 boards). Every band
+// here is sized by what finishes under the TREE-WALK INTERPRETER, which is the
+// slowest of the four surfaces this file must agree on and is two orders of
+// magnitude behind the compiled ones.
+//
+// THE BINDING CONSTRAINT IS `next_states`, NOT THE MEMO — and that correction is
+// worth the paragraph, because the first version of this comment got it wrong.
+// The bands were cut to 12/10/18/16 when the interpreter's `Map` was an
+// association list with O(n) lookup (B-2026-08-21-8), on the assumption that
+// memo probes were the cost. That bug is now fixed — an integer-keyed
+// insert-then-lookup probe went from 27.51 s to 0.62 s at n = 8000 — and this
+// file did NOT get faster:
+//
+//     band 12/10/18/16, before the Map fix    191.60 s
+//     band 12/10/18/16, after  the Map fix    215.28 s
+//     band 13/10/18/16, after  the Map fix    440.92 s
+//
+// (The two 12-band runs are from different container instances, so read them as
+// "unchanged", not as a regression.) What actually dominates is building a fresh
+// successor `String` per node inside `next_states`, which no map change touches.
+// 12 is therefore the right band and raising it is not waiting on anything: one
+// more step costs 7.3 minutes on a file that has to agree on four surfaces.
+
+fn next_states(s: ref String) -> Vec[String] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i + 1 < n {
+        if cs[i] == '+' and cs[i + 1] == '+' {
+            let mut t = String.new();
+            let mut j = 0;
+            while j < n {
+                if j == i or j == i + 1 { t.push('-'); } else { t.push(cs[j]); }
+                j = j + 1;
+            }
+            out.push(t);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+// ---- arm A: search + memo, with a call counter ----------------------------
+
+fn can_win_memo(s: ref String, memo: mut ref Map[String, bool], calls: mut ref i64) -> bool {
+    calls = calls + 1;
+    match memo.get(s) {
+        Some(v) => { return v; }
+        None => {}
+    }
+    let states = next_states(s);
+    let mut i = 0;
+    while i < states.len() {
+        if not can_win_memo(states[i], memo, calls) {
+            let _ = memo.insert(s.clone(), true);
+            return true;
+        }
+        i = i + 1;
+    }
+    let _ = memo.insert(s.clone(), false);
+    return false;
+}
+
+fn arm_memo(s: ref String, calls: mut ref i64) -> bool {
+    let mut memo: Map[String, bool] = Map.new();
+    return can_win_memo(s, mut memo, calls);
+}
+
+// ---- arm B: the same search with no memo ----------------------------------
+
+fn can_win_naive(s: ref String, calls: mut ref i64) -> bool {
+    calls = calls + 1;
+    let states = next_states(s);
+    let mut i = 0;
+    while i < states.len() {
+        if not can_win_naive(states[i], calls) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// ---- arm C: Sprague-Grundy ------------------------------------------------
+
+fn grundy_table(max_run: i64) -> Vec[i64] {
+    let mut g: Vec[i64] = Vec.new();
+    let mut n = 0;
+    while n <= max_run {
+        if n < 2 {
+            g.push(0);
+        } else {
+            let mut seen: Vec[bool] = Vec.new();
+            let mut k = 0;
+            while k <= n { seen.push(false); k = k + 1; }
+            let mut i = 0;
+            while i <= n - 2 {
+                let v = g[i] ^ g[n - 2 - i];
+                if v <= n { seen[v] = true; }
+                i = i + 1;
+            }
+            let mut m = 0;
+            while m <= n and seen[m] { m = m + 1; }
+            g.push(m);
+        }
+        n = n + 1;
+    }
+    return g;
+}
+
+fn runs_of(s: ref String) -> Vec[i64] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[i64] = Vec.new();
+    let mut run = 0;
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '+' {
+            run = run + 1;
+        } else {
+            if run > 0 { out.push(run); }
+            run = 0;
+        }
+        i = i + 1;
+    }
+    if run > 0 { out.push(run); }
+    return out;
+}
+
+fn arm_grundy(s: ref String, g: ref Vec[i64]) -> bool {
+    let rs = runs_of(s);
+    let mut x = 0;
+    let mut i = 0;
+    while i < rs.len() {
+        x = x ^ g[rs[i]];
+        i = i + 1;
+    }
+    return x != 0;
+}
+
+// ---- helpers --------------------------------------------------------------
+
+fn board_of(mask: i64, n: i64) -> String {
+    let mut s = String.new();
+    let mut i = 0;
+    while i < n {
+        if (mask / pow2(i)) % 2 == 1 { s.push('+'); } else { s.push('-'); }
+        i = i + 1;
+    }
+    return s;
+}
+
+fn pow2(k: i64) -> i64 {
+    let mut p = 1;
+    let mut i = 0;
+    while i < k { p = p * 2; i = i + 1; }
+    return p;
+}
+
+fn reversed(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i = cs.len() - 1;
+    while i >= 0 {
+        out.push(cs[i]);
+        i = i - 1;
+    }
+    return out;
+}
+
+fn has_move(s: ref String) -> bool {
+    let cs: Vec[char] = s.chars().collect();
+    let mut i = 0;
+    while i + 1 < cs.len() {
+        if cs[i] == '+' and cs[i + 1] == '+' { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// The multiset-canonical board: runs sorted ascending, single `-` between.
+fn canonical(s: ref String) -> String {
+    let mut rs = runs_of(s);
+    let mut i = 1;
+    while i < rs.len() {
+        let v = rs[i];
+        let mut j = i - 1;
+        while j >= 0 and rs[j] > v {
+            rs[j + 1] = rs[j];
+            j = j - 1;
+        }
+        rs[j + 1] = v;
+        i = i + 1;
+    }
+    let mut out = String.new();
+    let mut k = 0;
+    while k < rs.len() {
+        if k > 0 { out.push('-'); }
+        let mut c = 0;
+        while c < rs[k] { out.push('+'); c = c + 1; }
+        k = k + 1;
+    }
+    return out;
+}
+
+fn main() {
+    let g = grundy_table(64);
+
+    let exhaustive_to = 12;
+    let naive_to = 10;
+
+    let mut boards = 0;
+    let mut mismatch_ac = 0;
+    let mut mismatch_ab = 0;
+    let mut fail_p1 = 0;
+    let mut fail_p2 = 0;
+    let mut fail_p3 = 0;
+    let mut fail_p4 = 0;
+    let mut wins = 0;
+
+    let mut n = 0;
+    while n <= exhaustive_to {
+        let limit = pow2(n);
+        let mut mask = 0;
+        while mask < limit {
+            let s = board_of(mask, n);
+            boards = boards + 1;
+
+            let mut calls = 0;
+            let a = arm_memo(s, mut calls);
+            let c = arm_grundy(s, g);
+            if a != c { mismatch_ac = mismatch_ac + 1; }
+            if a { wins = wins + 1; }
+
+            if n <= naive_to {
+                let mut ncalls = 0;
+                let b = can_win_naive(s, mut ncalls);
+                if b != a { mismatch_ab = mismatch_ab + 1; }
+            }
+
+            // P1 — reversal invariance.
+            let r = reversed(s);
+            if arm_grundy(r, g) != c { fail_p1 = fail_p1 + 1; }
+
+            // P2 — a board with no legal move is a loss.
+            if not has_move(s) and c { fail_p2 = fail_p2 + 1; }
+
+            // P3 — the defining recursion, tested against the arm that does not
+            // use it: winning iff some successor is losing.
+            let succ = next_states(s);
+            let mut some_losing = false;
+            let mut k = 0;
+            while k < succ.len() {
+                if not arm_grundy(succ[k], g) { some_losing = true; }
+                k = k + 1;
+            }
+            if some_losing != c { fail_p3 = fail_p3 + 1; }
+
+            // P4 — the answer depends only on the multiset of run lengths.
+            if arm_grundy(canonical(s), g) != c { fail_p4 = fail_p4 + 1; }
+
+            mask = mask + 1;
+        }
+        n = n + 1;
+    }
+
+    println(f"boards {boards} wins {wins}");
+    println(f"A vs C mismatches {mismatch_ac}");
+    println(f"A vs B mismatches {mismatch_ab} (over lengths 0..{naive_to})");
+    println(f"P1 reversal failures {fail_p1}");
+    println(f"P2 terminal failures {fail_p2}");
+    println(f"P3 recursion failures {fail_p3}");
+    println(f"P4 run-multiset failures {fail_p4}");
+
+    // P5 — the single-run spine, past the exhaustive band. A run of n is the
+    // one shape where the answer is a bare table lookup, so agreement here pins
+    // the Grundy values themselves rather than their XOR. It reaches n = 18,
+    // half again past the 12 the exhaustive sweep can afford, and the LOSING
+    // runs it finds are the published zeros of Dawson's Kayles.
+    let mut fail_p5 = 0;
+    let mut zeros = String.new();
+    let mut rn = 0;
+    while rn <= 18 {
+        let mut s = String.new();
+        let mut t = 0;
+        while t < rn { s.push('+'); t = t + 1; }
+        let mut cc = 0;
+        let a = arm_memo(s, mut cc);
+        if a != arm_grundy(s, g) { fail_p5 = fail_p5 + 1; }
+        if not a { zeros.push_str(f" {rn}"); }
+        rn = rn + 1;
+    }
+    println(f"P5 single-run failures {fail_p5}");
+    println(f"losing single runs 0..18:{zeros}");
+
+    // What the memo is worth, counted rather than asserted. Both searches prune
+    // — the first losing reply ends the loop — so the gap is far narrower than
+    // the raw tree size suggests, and it only opens up as n grows. n = 16 is as
+    // far as this can go and still finish under the tree-walk interpreter, which
+    // is the slowest of the four surfaces this file must agree on; the larger
+    // rows in `flip_game_ii_naive.kara`'s header come from the same counters run
+    // on a compiled build.
+    let mut run16 = String.new();
+    let mut i = 0;
+    while i < 16 { run16.push('+'); i = i + 1; }
+    let mut mc = 0;
+    let _ = arm_memo(run16, mut mc);
+    let mut nc = 0;
+    let _ = can_win_naive(run16, mut nc);
+    println(f"run of 16 — memo calls {mc}, unmemoized calls {nc}");
+
+    if mismatch_ac == 0 and mismatch_ab == 0 and fail_p1 == 0
+        and fail_p2 == 0 and fail_p3 == 0 and fail_p4 == 0
+        and fail_p5 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

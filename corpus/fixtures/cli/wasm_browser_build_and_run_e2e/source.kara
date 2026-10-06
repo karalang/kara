@@ -1,0 +1,14 @@
+
+effect resource Reporter;
+
+host fn report(x: i64) -> i64 with writes(Reporter);
+host fn log_str(ptr: *const u8, len: i64) with writes(Reporter);
+
+fn main() {
+    let doubled = report(21);
+    let tripled = report(doubled);
+    report(tripled);
+    let msg = c"hello from k\u{101}ra guest";
+    log_str(msg.as_ptr(), msg.len());
+    println("done");
+}

@@ -1,0 +1,10 @@
+
+        effect resource Db;
+        effect resource Cache;
+        fn read_db() reads(Db) { }
+        fn read_cache() reads(Cache) { }
+        fn main() {
+            read_db();
+            read_cache();
+        }
+        

@@ -1,0 +1,83 @@
+// LeetCode 294 — Flip Game II, WITHOUT the memo.
+//
+// Structurally identical to `flip_game_ii.kara` with the `Map[String, bool]`
+// deleted. Kept because "memoization helps here" is the kind of claim that is
+// easy to assert and easy to get wrong — the memo only pays if distinct move
+// ORDERS reach the same board, and whether they do is a property of the game,
+// not of the code. They do: flipping the pair at 0 then the pair at 4 gives the
+// same string as flipping 4 then 0, so the tree is a DAG that this file walks
+// as if it were a tree.
+//
+// The blow-up is real, but slower to arrive than the raw tree size suggests,
+// because BOTH searches prune — the first losing reply ends the loop, so
+// neither arm walks the whole tree. Counted on a single run of n (the
+// differential prints the n = 20 row):
+//
+//     n            14      16      18        20
+//     memo        516   1,492   2,856    11,488
+//     unmemoized 1,530   7,426  13,396   180,022
+//     ratio        3.0x    5.0x    4.7x     15.7x
+//
+// The memoized count tracks the number of distinct BOARDS, the unmemoized one
+// the number of distinct move SEQUENCES, and the second grows away from the
+// first. The ratio is not monotone: n = 15 is a LOSING run, so proving it needs
+// every branch refuted rather than one lucky reply found, and n = 16..18 carry
+// that cost. This file is therefore only usable on small inputs, and `main`
+// stops where it stops for that reason.
+
+fn next_states(s: ref String) -> Vec[String] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut out: Vec[String] = Vec.new();
+
+    let mut i = 0;
+    while i + 1 < n {
+        if cs[i] == '+' and cs[i + 1] == '+' {
+            let mut t = String.new();
+            let mut j = 0;
+            while j < n {
+                if j == i or j == i + 1 {
+                    t.push('-');
+                } else {
+                    t.push(cs[j]);
+                }
+                j = j + 1;
+            }
+            out.push(t);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn can_win(s: ref String) -> bool {
+    let states = next_states(s);
+    let mut i = 0;
+    while i < states.len() {
+        if not can_win(states[i]) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn report(s: String) {
+    println(f"{s} -> {can_win(s)}");
+}
+
+fn main() {
+    report("++++");
+    report("+++++");
+    report("+");
+    report("-");
+    report("");
+    report("++");
+    report("+++");
+    report("+-+-+");
+    report("++-++");
+    report("++-+");
+    report("+++-+++");
+    report("++++++");
+    report("-++-++-++-");
+}

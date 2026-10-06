@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/enums.rs::asan_generic_enum_narrow_variant_boxed_payload_freed"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

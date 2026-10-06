@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: f32 = 0.0f32;
+    while i < 300 {
+        let m: Tensor[f32, [2, 3]] = Tensor.from([[1.0f32, 2.0f32, 3.0f32], [4.0f32, 5.0f32, 6.0f32]]);
+        let rows = m.iter_axis(0);
+        let r0 = ref rows[0];
+        let r1 = ref rows[1];
+        total = total + r0.sum() + r1.sum();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

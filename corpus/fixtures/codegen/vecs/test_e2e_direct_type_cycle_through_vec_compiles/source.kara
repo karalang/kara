@@ -1,0 +1,9 @@
+
+struct Node { kids: Vec[Node], name: String }
+
+fn count(n: Node) -> i64 { n.kids.len() }
+
+fn main() {
+    let n = Node { kids: [], name: "r" };
+    println(count(n));
+}

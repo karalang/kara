@@ -1,0 +1,103 @@
+// LeetCode 294 — Flip Game II.
+//
+// Same board as #293: a string of `+` and `-`, a move flips two CONSECUTIVE
+// `+` to `--`. Two players alternate, and a player who cannot move LOSES.
+// Return whether the player to move can force a win.
+//
+//     "++++"   ->  true    flip the middle pair; whatever is left, they lose
+//     "+++++"  ->  false   every first move hands back a winning position
+//     "+"      ->  false   no move available
+//     "+-+-+"  ->  false   no two adjacent
+//
+// This is #293's `next_states` called on every node of a game tree, which is
+// why that kata's test-before-allocate ordering was worth being fussy about:
+// most nodes here are move-poor, and a version that allocates a copy per
+// position before checking pays for the whole tree.
+//
+// THE RECURSION is the definition of a win, verbatim: a position is winning
+// exactly when SOME move leads to a position that is losing for the opponent.
+// Nothing about `+`/`-` enters into it — this is the general theory of finite
+// impartial games, and it is worth writing that way because
+// `flip_game_ii_grundy.kara` then solves the same problem by a completely
+// different route (Sprague-Grundy over the runs) and the two must agree.
+//
+// THE MEMO is what makes it finish. The tree is enormous — "+++++++++++++++++"
+// has a first-move branching factor of 16 and a depth of 8 — but the number of
+// distinct BOARDS is far smaller, because different move orders reach the same
+// state. Keying a `Map[String, bool]` on the board collapses the tree to a DAG.
+// `flip_game_ii_naive.kara` is this same file with the map deleted, so the cost
+// of that one line is measurable rather than asserted.
+
+fn next_states(s: ref String) -> Vec[String] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut out: Vec[String] = Vec.new();
+
+    let mut i = 0;
+    while i + 1 < n {
+        if cs[i] == '+' and cs[i + 1] == '+' {
+            let mut t = String.new();
+            let mut j = 0;
+            while j < n {
+                if j == i or j == i + 1 {
+                    t.push('-');
+                } else {
+                    t.push(cs[j]);
+                }
+                j = j + 1;
+            }
+            out.push(t);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn can_win(s: ref String, memo: mut ref Map[String, bool]) -> bool {
+    match memo.get(s) {
+        Some(v) => { return v; }
+        None => {}
+    }
+
+    // Note the asymmetry: a WIN can be returned the moment one losing reply is
+    // found, but a LOSS is only established after every move has been refuted.
+    // So the early return below is not a shortcut bolted onto the loop — it is
+    // the existential quantifier in the definition.
+    let states = next_states(s);
+    let mut i = 0;
+    while i < states.len() {
+        if not can_win(states[i], memo) {
+            let _ = memo.insert(s.clone(), true);
+            return true;
+        }
+        i = i + 1;
+    }
+
+    let _ = memo.insert(s.clone(), false);
+    return false;
+}
+
+fn first_player_wins(s: String) -> bool {
+    let mut memo: Map[String, bool] = Map.new();
+    return can_win(s, mut memo);
+}
+
+fn report(s: String) {
+    println(f"{s} -> {first_player_wins(s)}");
+}
+
+fn main() {
+    report("++++");        // true  — flip the middle pair
+    report("+++++");       // false — every opening move loses
+    report("+");           // false — no move
+    report("-");           // false
+    report("");            // false
+    report("++");          // true  — the only move ends the game
+    report("+++");         // true
+    report("+-+-+");       // false — no two adjacent
+    report("++-++");       // false — two independent runs of 2, they cancel
+    report("++-+");        // true
+    report("+++-+++");     // false — two runs of 3, they cancel
+    report("++++++");      // true
+    report("-++-++-++-");  // true  — three runs of 2
+}

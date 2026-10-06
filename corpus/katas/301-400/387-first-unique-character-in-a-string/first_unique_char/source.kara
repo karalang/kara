@@ -1,0 +1,61 @@
+// LeetCode 387 — First Unique Character in a String.
+//
+// Two passes over the byte view: tally each character, then return the index
+// of the first one whose tally is 1. A Map keeps the solution general (it does
+// not assume the lowercase-only constraint); see first_unique_char_counts.kara
+// for the fixed-alphabet variant.
+
+fn first_uniq_char(s: ref String) -> i64 {
+    let bs = s.bytes();
+    let mut counts: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < bs.len() {
+        let c = bs[i] as i64;
+        let n = match counts.get(c) { Some(v) => v, None => 0 };
+        let _ = counts.insert(c, n + 1);
+        i = i + 1;
+    }
+
+    let mut j = 0;
+    while j < bs.len() {
+        let c = bs[j] as i64;
+        let n = match counts.get(c) { Some(v) => v, None => 0 };
+        if n == 1 { return j; }
+        j = j + 1;
+    }
+    -1
+}
+
+// Sum of the tallies for characters that appear exactly once — drives a
+// `keys()` walk over the same Map, which is the surface the inline bucket
+// walk (ledger B-2026-07-24-2) lowers.
+fn unique_count(s: ref String) -> i64 {
+    let bs = s.bytes();
+    let mut counts: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < bs.len() {
+        let c = bs[i] as i64;
+        let n = match counts.get(c) { Some(v) => v, None => 0 };
+        let _ = counts.insert(c, n + 1);
+        i = i + 1;
+    }
+    let mut uniq = 0;
+    for k in counts.keys() {
+        let n = match counts.get(k) { Some(v) => v, None => 0 };
+        if n == 1 { uniq = uniq + 1; }
+    }
+    uniq
+}
+
+fn report(s: ref String) {
+    println(f"{s} -> {first_uniq_char(s)} (uniq={unique_count(s)})");
+}
+
+fn main() {
+    report("leetcode");
+    report("loveleetcode");
+    report("aabb");
+    report("z");
+    report("");
+    report("abcabcd");
+}

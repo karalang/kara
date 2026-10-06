@@ -1,0 +1,83 @@
+// LeetCode #38 bench harness — Kāra, the streaming run-length "say" (★).
+//
+// The headline ★ style: encode one count-and-say step in a single left-to-right pass
+// with a (run_digit, run_len) state machine — extend the run on a match, else emit the
+// run's "<count><digit>" and open a new run; one final emit. The term is a growing digit
+// String built with `push`, so this exercises String HEAP GROWTH + per-`char` iteration
+// codegen, NOT a fixed-size scratch buffer (the contrast with #36/#37, which are
+// allocation-free).
+//
+// Run lengths in this workload never exceed 9 (the seeds are ≤ 5 digits and the
+// count-and-say map keeps runs short — verified: max run length 5), so the count is a
+// SINGLE decimal digit, appended as one `char` via `digit_char`. This keeps the hot path
+// allocation-free across all five language mirrors (C / Go / Rust / Python append the
+// count digit in place too) — the bench measures the run-length-encode + string-growth
+// codegen, not each stdlib's integer-to-string path. The pedagogical files
+// (../count_and_say.kara) keep the general `push_str(f"{count}")` form that handles any
+// count width.
+//
+// Workload: count-and-say generalized to an arbitrary digit seed (the say-transform is
+// well-defined on any digit string). TOTAL times, seed with the decimal digits of k+1 (a
+// per-iteration seed, so nothing hoists), apply STEPS say-steps, and fold a
+// POSITION-WEIGHTED digit signature of the final term — sum of digit_value*(i+1) — into a
+// rolling checksum. The seed varies with the loop index (no hoisting), and the checksum
+// carries a loop-borne dependency, so this is a single-lane (seq) bench by construction.
+
+fn digit_char(n: i64) -> char {
+    // n in 0..=9 → its decimal digit character.
+    char.try_from((n + 48) as u32).unwrap()
+}
+
+fn say(s: ref String) -> String {
+    let mut out: String = "";
+    let mut run_digit: char = '0';
+    let mut run_len = 0;
+    for c in s.chars() {
+        if run_len != 0 and c == run_digit {
+            run_len = run_len + 1;
+        } else {
+            if run_len != 0 {
+                out.push(digit_char(run_len));
+                out.push(run_digit);
+            }
+            run_digit = c;
+            run_len = 1;
+        }
+    }
+    if run_len != 0 {
+        out.push(digit_char(run_len));
+        out.push(run_digit);
+    }
+    out
+}
+
+fn main() {
+    let total = 12000;
+    let steps = 14;
+    let modulus = 1000000007;
+
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        // Per-iteration digit seed: the decimal text of k + 1 (≤ 5 digits here).
+        let mut cur: String = f"{k + 1}";
+        let mut step = 0;
+        while step < steps {
+            cur = say(cur);
+            step = step + 1;
+        }
+
+        // Position-weighted signature of the final term.
+        let mut sig = 0;
+        let mut i = 0;
+        for c in cur.chars() {
+            let dv = (c as i64) - ('0' as i64);
+            sig = sig + dv * (i + 1);
+            i = i + 1;
+        }
+        acc = (acc * 31 + sig) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

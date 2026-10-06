@@ -1,0 +1,13 @@
+
+struct R6 { id: i64, name: String }
+struct H6 { r: R6 }
+struct O6 { h: H6 }
+fn main() {
+    let o = O6 { h: H6 { r: R6 { id: 9, name: f"z{9}" } } };
+    let x = o.h.r;
+    println(f"x {x.name}");
+    let o2 = O6 { h: H6 { r: R6 { id: 7, name: f"q{7}" } } };
+    let s = o2.h.r.name;
+    println(f"s {s}");
+    println("end");
+}

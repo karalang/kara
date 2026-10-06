@@ -1,0 +1,7 @@
+
+fn maybe() -> Result[i64, String] { return Ok(5); }
+fn use_it() -> Result[i64, String] {
+    let n = maybe()?;
+    return Ok(n + 1);
+}
+fn main() { print(0); }

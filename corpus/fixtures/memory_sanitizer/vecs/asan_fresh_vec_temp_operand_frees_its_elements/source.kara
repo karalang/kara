@@ -1,0 +1,30 @@
+
+fn ids(n: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"item{n}");
+    v.push(f"item{n + 1}");
+    return v;
+}
+fn rows(n: i64) -> Vec[Vec[i64]] {
+    let mut r: Vec[i64] = Vec.new();
+    r.push(n);
+    r.push(n + 1);
+    let mut v: Vec[Vec[i64]] = Vec.new();
+    v.push(r);
+    return v;
+}
+fn name(n: i64) -> String { return f"item{n}"; }
+
+fn main() {
+    println(f"{ids(1) == ids(1)}");
+    println(f"{rows(1) == rows(1)}");
+    println(f"{name(1) == name(1)}");
+
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    outer.push(ids(1));
+    println(outer[0][0]);
+
+    let mut m: Map[Vec[String], i64] = Map.new();
+    m.insert(ids(3), 10);
+    println(f"{m.get(ids(3))}");
+}

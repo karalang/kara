@@ -1,0 +1,90 @@
+
+fn mk(n: i64) -> String {
+    return f"p{n}-aaaaaaaaaaaaaaaaaaaaaaaa";
+}
+
+fn mkv(n: i64) -> Vec[i64] {
+    return [n, n + 1, n + 2, n + 3];
+}
+
+fn use_it(s: String) -> i64 {
+    return s.len();
+}
+
+fn use_v(v: Vec[i64]) -> i64 {
+    return v.len();
+}
+
+fn pick(c: bool, n: i64) -> String {
+    return if c { mk(n) } else { mk(n + 1) };
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let c = n > 0;
+    let d = n > 5;
+
+    let a1 = if c { mk(n) } else { mk(n + 1) }.contains("p");
+    println(f"a1={a1}");
+    let a2 = match n { 1 => mk(n), _ => mk(n + 1) }.contains("p");
+    println(f"a2={a2}");
+    let a3 = { mk(n) }.contains("p");
+    println(f"a3={a3}");
+    let a4 = if c { mk(n) } else { mk(n + 1) }.len();
+    println(f"a4={a4}");
+    let a5 = { mkv(n) }.len();
+    println(f"a5={a5}");
+    let a6 = if c { mkv(n) } else { mkv(n + 1) }.len();
+    println(f"a6={a6}");
+    let a7 = { mk(n) }.to_string();
+    println(f"a7={a7}");
+    let a8 = if c { mk(n) } else { mk(n + 1) }.to_uppercase();
+    println(f"a8={a8}");
+
+    println(f"b1={use_it(if c { mk(n) } else { mk(n + 1) })}");
+    println(f"b2={use_it(match n { 1 => mk(n), _ => mk(n + 1) })}");
+    println(f"b3={use_it({ mk(n) })}");
+    println(f"b4={use_v(if c { mkv(n) } else { mkv(n + 1) })}");
+
+    println(f"c1={if c { mk(n) } else { mk(n + 1) }}");
+    println(f"c2={{ mk(n) }}");
+
+    let e1 = if c { { mk(n) } } else { mk(n + 1) }.contains("p");
+    println(f"e1={e1}");
+    let e2 = if d { mk(n) } else if c { mk(n + 1) } else { mk(n + 2) }.contains("p");
+    println(f"e2={e2}");
+    let e3 = match n { 1 => { mk(n) }, _ => { mk(n + 1) } }.contains("p");
+    println(f"e3={e3}");
+    let e4 = if d { mk(n) } else { mk(n + 7) }.contains("p8");
+    println(f"e4={e4}");
+
+    let f1 = if c { mk(n) } else { mk(n + 1) };
+    println(f"f1={f1}");
+    let f2 = { mk(n) };
+    println(f"f2={f2}");
+    let mut out: Vec[String] = Vec.new();
+    out.push(if c { mk(n) } else { mk(n + 1) });
+    out.push({ mk(n) });
+    println(f"f3={out[0]}/{out[1]}");
+    println(f"f4={pick(c, n)}");
+    let mut f5 = if c { mk(n) } else { mk(n + 1) };
+    f5 = { mk(n + 3) };
+    println(f"f5={f5}");
+
+    if c { mk(n) } else { mk(n + 1) };
+    { mk(n) };
+
+    for x in { mkv(n) } {
+        println(f"h1={x}");
+    }
+    for x in if c { mkv(n) } else { mkv(n + 1) } {
+        println(f"h2={x}");
+    }
+    let h3 = if c { mk(n) } else { mk(n + 1) } + "!";
+    println(f"h3={h3}");
+
+    for i in 0..3 {
+        let g = if c { mk(n + i) } else { mk(n + i + 1) }.contains("p");
+        println(f"g={g}");
+    }
+}

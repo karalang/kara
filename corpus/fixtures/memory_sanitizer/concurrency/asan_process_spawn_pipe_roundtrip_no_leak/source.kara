@@ -1,0 +1,33 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 8i64 {
+        let cmd = Command.new("echo").arg("asan-pipe").env("KARA_ASAN", "1").stdout(Stdio.Piped);
+        match cmd.spawn() {
+            Ok(child) => {
+                match child.stdout() {
+                    Some(o) => {
+                        match o.read_to_string() {
+                            Ok(text) => { total = total + text.len(); }
+                            Err(e) => {}
+                        }
+                    }
+                    None => {}
+                }
+                match child.wait() {
+                    Ok(st) => { total = total + st.code; }
+                    Err(e) => {}
+                }
+            }
+            Err(e) => {}
+        }
+        let bad = Command.new("definitely-not-a-binary-kara");
+        match bad.spawn() {
+            Ok(c) => {}
+            Err(e) => { total = total + 1i64; }
+        }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

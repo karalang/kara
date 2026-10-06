@@ -1,0 +1,33 @@
+let
+  dR1
+  x
+disc
+  dR2
+  x
+move
+  dR3
+  x
+arm
+  in
+  dR4
+arg
+  dR5
+  1
+field
+  dR6
+  x
+wlet
+  dR7
+  x
+warg
+  dR8
+  dR9
+  1
+mlet
+  dR10
+  x
+slet
+  dR11
+  dR12
+  x
+end

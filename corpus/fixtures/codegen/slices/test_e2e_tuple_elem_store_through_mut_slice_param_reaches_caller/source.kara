@@ -1,0 +1,33 @@
+
+fn bump_first(s: mut Slice[(i64, i64)]) { s[0].0 = s[0].0 + 1; }
+fn bump_second(s: mut Slice[(i64, i64)]) { s[0].1 = 99; }
+fn bump_at(s: mut Slice[(i64, i64)], i: i64) { s[i].0 = 70; }
+fn bump_all(s: mut Slice[(i64, i64, i64)]) {
+    let mut i = 0;
+    while i < s.len() { s[i].2 = i * 10; i = i + 1; }
+}
+fn swap_text(s: mut Slice[(String, i64)]) { s[0].0 = "replaced"; }
+fn bump_vec(v: mut ref Vec[(i64, i64)]) { v[0].0 = v[0].0 + 100; }
+fn main() {
+    let mut ps: Vec[(i64, i64)] = Vec.new();
+    ps.push((3, 7));
+    ps.push((4, 8));
+    bump_first(mut ps);
+    println(f"{ps[0].0}");
+    bump_second(mut ps);
+    println(f"{ps[0].1}");
+    bump_at(mut ps, 1);
+    println(f"{ps[1].0} {ps[0].0}");
+    bump_vec(mut ps);
+    println(f"{ps[0].0}");
+    let mut ts: Vec[(i64, i64, i64)] = Vec.new();
+    ts.push((0, 0, 0));
+    ts.push((0, 0, 0));
+    ts.push((0, 0, 0));
+    bump_all(mut ts);
+    println(f"{ts[0].2} {ts[1].2} {ts[2].2}");
+    let mut ss: Vec[(String, i64)] = Vec.new();
+    ss.push(("original", 5));
+    swap_text(mut ss);
+    println(f"{ss[0].0} {ss[0].1}");
+}

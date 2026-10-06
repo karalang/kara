@@ -1,0 +1,31 @@
+
+fn gray(src: ref Vec[u8], px: i64) -> Vec[u8] {
+    let n = px * 4i64;
+    let mut out: Vec[u8] = Vec.filled(n, 0u8);
+    for p in 0i64..px {
+        let i = p * 4i64;
+        let r = src[i] as i64;
+        let g = src[i + 1i64] as i64;
+        let b = src[i + 2i64] as i64;
+        let y = (r * 30i64 + g * 59i64 + b * 11i64) / 100i64;
+        out[i] = y as u8;
+        out[i + 1i64] = y as u8;
+        out[i + 2i64] = y as u8;
+        out[i + 3i64] = src[i + 3i64];
+    }
+    out
+}
+
+fn main() {
+    let px: i64 = 120i64;
+    let n = px * 4i64;
+    let mut src: Vec[u8] = Vec.filled(n, 100u8);
+    let out = gray(src, px);
+    let mut sum: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < n {
+        sum = sum + (out[i] as i64);
+        i = i + 1i64;
+    }
+    println(sum);
+}

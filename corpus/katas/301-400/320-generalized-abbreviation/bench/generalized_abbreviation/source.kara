@@ -1,0 +1,80 @@
+// Benchmark workload for LeetCode #320 — the enumeration itself.
+//
+// PASSES passes, each walking all 2^WORD_LEN masks of a WORD_LEN-letter word
+// and run-length encoding every one of them into a reusable byte buffer, then
+// folding the emitted bytes into a rolling hash. The word changes each pass so
+// the answer moves rather than being one constant.
+//
+// What this measures is the ★ arm's inner loop and nothing else. The
+// abbreviations are written into a fixed buffer instead of freshly allocated
+// strings, and the run length is emitted digit by digit instead of through
+// each language's integer formatter — both deliberately, so that five mirrors
+// measure the same mask walk rather than five allocator and stdlib policies.
+// The fold reads every emitted byte back, so no mirror can skip the encoding.
+//
+// A run can be at most WORD_LEN letters long, so two digits always suffice.
+
+const WORD_LEN: i64 = 20;
+const PASSES: i64 = 8;
+const MODULUS: i64 = 1073741789;
+
+fn main() {
+    let mut sink = 0;
+    let mut total_chars = 0;
+
+    for p in 0..PASSES {
+        let mut bs: Vec[u8] = Vec.new();
+        for i in 0..WORD_LEN {
+            bs.push(((((i * 7 + p * 11) % 26) as u8)) + b'a');
+        }
+
+        let mut buf: Vec[u8] = Vec.new();
+        for i in 0..(WORD_LEN + 8) { buf.push(0u8); }
+
+        let limit = 1 << WORD_LEN;
+        let mut acc = 0;
+        let mut chars = 0;
+        let mut mask = 0;
+        while mask < limit {
+            let mut len = 0;
+            let mut run = 0;
+            for i in 0..WORD_LEN {
+                if (mask & (1 << i)) != 0 {
+                    run = run + 1;
+                } else {
+                    if run > 0 {
+                        if run >= 10 {
+                            buf[len] = ((run / 10) as u8) + b'0';
+                            len = len + 1;
+                        }
+                        buf[len] = ((run % 10) as u8) + b'0';
+                        len = len + 1;
+                        run = 0;
+                    }
+                    buf[len] = bs[i];
+                    len = len + 1;
+                }
+            }
+            if run > 0 {
+                if run >= 10 {
+                    buf[len] = ((run / 10) as u8) + b'0';
+                    len = len + 1;
+                }
+                buf[len] = ((run % 10) as u8) + b'0';
+                len = len + 1;
+            }
+
+            for j in 0..len {
+                acc = (acc * 131 + (buf[j] as i64)) % MODULUS;
+            }
+            acc = (acc * 131 + 7) % MODULUS;
+            chars = chars + len;
+            mask = mask + 1;
+        }
+
+        sink = (sink * 1000003 + acc) % MODULUS;
+        total_chars = total_chars + chars;
+    }
+
+    println(f"sink {sink} chars {total_chars}");
+}

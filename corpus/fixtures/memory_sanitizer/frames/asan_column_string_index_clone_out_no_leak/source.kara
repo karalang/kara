@@ -1,0 +1,20 @@
+
+trait Pick { fn at(ref self, i: i64) -> String; }
+impl Pick for Column[String] {
+    fn at(ref self, i: i64) -> String { self[i].unwrap() }
+}
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let v: Vec[String] = Vec[
+            "col-string-index-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "col-string-index-bravo-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "col-string-index-charlie-cccccccccccccccccc".to_string()
+        ];
+        let c: Column[String] = Column.from_vec(v);
+        let a: String = c[0i64].unwrap();
+        let b: String = c.at(2i64);
+        println(f"{c.len()} {a} {b}");
+        round = round + 1i64;
+    }
+}

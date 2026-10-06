@@ -1,0 +1,17 @@
+
+        fn serve_buf(listener: TcpListener) {
+            let mut buf: Vec[i64] = Vec.new();
+            buf.push(1);
+            buf.push(2);
+            buf.push(3);
+            let _stream = listener.accept().unwrap();
+            println(buf.len());
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let mut tg = TaskGroup.new();
+            tg.spawn(|| serve_buf(listener));
+            tg.cancel();
+            println(7);
+        }
+    

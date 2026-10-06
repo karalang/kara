@@ -1,0 +1,154 @@
+// LeetCode 288 — Unique Word Abbreviation, with the index as BUCKET LISTS.
+//
+// Same answers as `unique_word_abbr.kara`; a different index. Here an
+// abbreviation maps to the list of DISTINCT dictionary words that produce it:
+//
+//     Map[String, Vec[String]]
+//
+// `is_unique(word)` then asks whether that list is empty, or is exactly the
+// one-element list [word].
+//
+// WHAT IT COSTS. The ★ file's `Conflicted` throws the colliding words away the
+// moment a second one arrives, because no later query can be answered
+// differently by knowing them. This index keeps them all, so a dictionary of
+// many mutually-colliding words holds every one of them to support an answer
+// that was already decided. That is the honest trade: bucket lists are the
+// obvious first index, and they are strictly more memory for strictly no more
+// answers.
+//
+// WHAT IT BUYS. It is the natural place to ask a question the ★ file's index can
+// no longer answer — WHICH words collide — so `collisions_of` here is a real
+// function rather than one that would need the dictionary re-scanned.
+//
+// THE DUPLICATE TRAP LIVES HERE TOO, and it is easier to get wrong than in the
+// ★ file: a bucket list built by pushing every occurrence turns ["deer","deer"]
+// into a 2-element bucket and answers `is_unique("deer")` FALSE. It must push
+// only words not already present — the `contains` guard in `build` — so the
+// bucket is a SET that happens to be stored as a list.
+
+fn abbrev(w: ref String) -> String {
+    let cs: Vec[char] = w.chars().collect();
+    let n = cs.len();
+    if n <= 2 {
+        return w.clone();
+    }
+    let mut out = String.new();
+    out.push(cs[0]);
+    out.push_str(f"{n - 2}");
+    out.push(cs[n - 1]);
+    return out;
+}
+
+fn contains(bucket: ref Vec[String], w: ref String) -> bool {
+    let n = bucket.len();
+    let mut i = 0;
+    while i < n {
+        if bucket[i] == w {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn build(dict: Slice[String]) -> Map[String, Vec[String]] {
+    let mut idx: Map[String, Vec[String]] = Map.new();
+    let n = dict.len();
+    let mut i = 0;
+    while i < n {
+        let w = ref dict[i];
+        let a = abbrev(w);
+        match idx.get(a) {
+            None => {
+                let mut fresh: Vec[String] = Vec.new();
+                fresh.push(w.clone());
+                let _ = idx.insert(a, fresh);
+            }
+            Some(existing) => {
+                if not contains(existing, w) {
+                    let mut grown = existing.clone();
+                    grown.push(w.clone());
+                    let _ = idx.insert(a, grown);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return idx;
+}
+
+fn is_unique(idx: ref Map[String, Vec[String]], word: ref String) -> bool {
+    let a = abbrev(word);
+    match idx.get(a) {
+        None => return true,
+        Some(bucket) => {
+            if bucket.len() != 1 {
+                return false;
+            }
+            return bucket[0] == word;
+        }
+    }
+}
+
+// The question the ★ file's index CANNOT answer any more: which words share an
+// abbreviation? `Conflicted` has thrown them away by the time anyone asks. Here
+// they are still on hand, which is this index's one genuine advantage over the
+// smaller ones — it is not merely a costlier way to get the same answers.
+fn collisions_of(idx: ref Map[String, Vec[String]], word: ref String) -> Vec[String] {
+    match idx.get(abbrev(word)) {
+        None => return Vec.new(),
+        Some(bucket) => {
+            if bucket.len() < 2 {
+                return Vec.new();
+            }
+            return bucket.clone();
+        }
+    }
+}
+
+fn report(idx: ref Map[String, Vec[String]], word: String) {
+    println(f"is_unique({word}) = {is_unique(idx, word)}");
+}
+
+fn main() {
+    let dict: Vec[String] = ["deer", "door", "cake", "card"];
+    let idx = build(dict);
+
+    report(idx, "dear");
+    report(idx, "cart");
+    report(idx, "cane");
+    report(idx, "make");
+    report(idx, "cake");
+
+    let pair: Vec[String] = ["deer", "door"];
+    let pidx = build(pair);
+    report(pidx, "deer");
+    report(pidx, "dear");
+
+    let dup: Vec[String] = ["deer", "deer", "deer"];
+    let didx = build(dup);
+    report(didx, "deer");
+    report(didx, "dear");
+
+    let shorts: Vec[String] = ["it", "a", "do"];
+    let sidx = build(shorts);
+    report(sidx, "it");
+    report(sidx, "is");
+    report(sidx, "a");
+    report(sidx, "hello");
+
+    // What this index can say and the others cannot.
+    let colliding: Vec[String] = ["deer", "door", "dear", "cake", "card"];
+    let cidx = build(colliding);
+    let sharing = collisions_of(cidx, "deer");
+    let mut line = String.new();
+    let mut i = 0;
+    while i < sharing.len() {
+        if i > 0 {
+            line.push_str(" ");
+        }
+        line.push_str(sharing[i]);
+        i = i + 1;
+    }
+    println(f"sharing d2r: {line}");
+}

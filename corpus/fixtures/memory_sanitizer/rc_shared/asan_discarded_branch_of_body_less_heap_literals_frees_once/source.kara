@@ -1,0 +1,14 @@
+
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload(i: i64) -> String { f"payload-{seed()}-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn go() -> i64 {
+    let mut i = 0i64;
+    while i < 20i64 {
+        if seed() > 0 { P { a: payload(i), b: 1 } } else { P { a: payload(i), b: 2 } };
+        let _ = match seed() { 1 => { P { a: payload(i), b: 3 } } _ => { P { a: payload(i), b: 4 } } };
+        i = i + 1;
+    }
+    return 1;
+}
+fn main() { println(go()); }

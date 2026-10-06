@@ -1,0 +1,216 @@
+// Differential and property check for LeetCode #350.
+//
+// Four intersections, plus an oracle that counts every candidate value in
+// both arrays by a linear scan:
+//
+//   by_map           count the first array in a Map   (intersect.kara)
+//   by_sorted_map    two SortedMaps of counts          (intersect_sorted_map.kara)
+//   by_two_pointers  sort both, merge                  (intersect_two_pointers.kara)
+//   by_counts        two count tables over 0..=1000    (intersect_counting.kara)
+//   by_oracle        for v in 0..=1000, keep v min(count in a, count in b) times
+//
+// Inputs: every pair of lengths 0..24 x 0..24, with values drawn from 0..=hi
+// for hi in 0, 3, 12 and 1000, so the arrays range from one repeated value
+// to almost disjoint, and once more from {0, 250, 500, 750, 1000}, so the
+// two ends of the value range are common.
+//
+// Properties:
+//   P1  all four equal the oracle exactly
+//   P2  the intersection of a and b equals the intersection of b and a
+//   P3  the answer is ascending, and no value in it occurs more often than
+//       in a or in b
+//   P4  the intersection of a with itself is a, sorted
+//   P5  the intersection with an empty array is empty
+//   P6  the intersection of a with a followed by b is a, sorted
+
+const MAX_VALUE: i64 = 1000;
+
+fn by_map(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut counts: Map[i64, i64] = Map.new();
+    for x in a {
+        *counts.entry(x).or_insert(0) += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for y in b {
+        let left = counts.get_or(y, 0);
+        if left > 0 {
+            counts.insert(y, left - 1);
+            out.push(y);
+        }
+    }
+    out.sort();
+    return out;
+}
+
+fn by_sorted_map(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut ca: SortedMap[i64, i64] = SortedMap.new();
+    for x in a {
+        *ca.entry(x).or_insert(0) += 1;
+    }
+    let mut cb: SortedMap[i64, i64] = SortedMap.new();
+    for y in b {
+        *cb.entry(y).or_insert(0) += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for (v, n) in ca {
+        if let Some(m) = cb.get(v) {
+            for _ in 0..n.min(m) {
+                out.push(v);
+            }
+        }
+    }
+    return out;
+}
+
+fn by_two_pointers(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut x = a.clone();
+    let mut y = b.clone();
+    x.sort();
+    y.sort();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < x.len() and j < y.len() {
+        if x[i] < y[j] {
+            i += 1;
+        } else if x[i] > y[j] {
+            j += 1;
+        } else {
+            out.push(x[i]);
+            i += 1;
+            j += 1;
+        }
+    }
+    return out;
+}
+
+fn by_counts(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut ca = [0; MAX_VALUE + 1];
+    let mut cb = [0; MAX_VALUE + 1];
+    for x in a {
+        ca[x] += 1;
+    }
+    for y in b {
+        cb[y] += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for v in 0..=MAX_VALUE {
+        let k = if ca[v] < cb[v] { ca[v] } else { cb[v] };
+        for _ in 0..k {
+            out.push(v);
+        }
+    }
+    return out;
+}
+
+fn count(xs: ref Vec[i64], v: i64) -> i64 {
+    let mut c = 0;
+    for x in xs {
+        if x == v {
+            c += 1;
+        }
+    }
+    return c;
+}
+
+fn by_oracle(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for v in 0..MAX_VALUE + 1 {
+        let ka = count(a, v);
+        let kb = count(b, v);
+        let k = if ka < kb { ka } else { kb };
+        for _ in 0..k {
+            out.push(v);
+        }
+    }
+    return out;
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for k in 0..a.len() {
+        if a[k] != b[k] {
+            return false;
+        }
+    }
+    return true;
+}
+
+// `n` values, each a multiple of `step` from 0 up to `hi * step`.
+fn fill(n: i64, hi: i64, step: i64, seed: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = seed * 2654435761 % 4294967296 + 1;
+    for _ in 0..n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        out.push(x / 16 % (hi + 1) * step);
+    }
+    return out;
+}
+
+fn main() {
+    // (hi, step): values 0..=hi, scaled by step. The last pair draws only
+    // 0, 250, 500, 750 and 1000, so both ends of the range turn up often.
+    let draws = [(0, 1), (3, 1), (12, 1), (1000, 1), (4, 250)];
+    let empty: Vec[i64] = Vec.new();
+    let mut failures = 0;
+    let mut cases = 0;
+    let mut found = 0;
+    let mut checksum = 0;
+    for (hi, step) in draws {
+        for n in 0..24 {
+            for m in 0..24 {
+                cases += 1;
+                let a = fill(n, hi, step, hi * 10000 + n * 100 + m);
+                let b = fill(m, hi, step, hi * 10000 + m * 100 + n + 50);
+                let want = by_oracle(a, b);
+                if not same(by_map(a, b), want) or not same(by_sorted_map(a, b), want)
+                    or not same(by_two_pointers(a, b), want) or not same(by_counts(a, b), want) {
+                    println(f"P1 FAIL hi={hi} n={n} m={m}");
+                    failures += 1;
+                }
+                if not same(by_map(b, a), want) {
+                    println(f"P2 FAIL hi={hi} n={n} m={m}");
+                    failures += 1;
+                }
+                let got = by_map(a, b);
+                for k in 0..got.len() {
+                    let v = got[k];
+                    if (k > 0 and got[k - 1] > v) or count(got, v) > count(a, v)
+                        or count(got, v) > count(b, v) {
+                        println(f"P3 FAIL hi={hi} n={n} m={m} k={k}");
+                        failures += 1;
+                    }
+                }
+                let mut sorted_a = a.clone();
+                sorted_a.sort();
+                if not same(by_map(a, a), sorted_a) {
+                    println(f"P4 FAIL hi={hi} n={n} m={m}");
+                    failures += 1;
+                }
+                if by_map(a, empty).len() != 0 or by_map(empty, a).len() != 0 {
+                    println(f"P5 FAIL hi={hi} n={n} m={m}");
+                    failures += 1;
+                }
+                let mut ab = a.clone();
+                for y in b {
+                    ab.push(y);
+                }
+                if not same(by_map(a, ab), sorted_a) {
+                    println(f"P6 FAIL hi={hi} n={n} m={m}");
+                    failures += 1;
+                }
+                found += want.len();
+                for v in want {
+                    checksum = (checksum * 31 + v + 1) % 1000000007;
+                }
+            }
+        }
+    }
+    println(f"{cases} cases: {found} values in all, checksum {checksum}");
+    println(f"failures {failures}");
+    if failures == 0 {
+        println("all properties hold");
+    }
+}

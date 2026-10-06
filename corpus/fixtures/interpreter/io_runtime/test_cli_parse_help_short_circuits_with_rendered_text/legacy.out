@@ -1,0 +1,12 @@
+greet - Greets a name
+
+USAGE:
+    greet [OPTIONS]
+
+ARGS:
+    --name <VALUE>  [required]
+
+OPTIONS:
+    -h, --help     Print help
+    -V, --version  Print version
+

@@ -1,0 +1,32 @@
+// Discriminator for B-2026-07-24-2: isolate the map KEY WALK from map PROBING.
+// Same shape as LeetCode #170's `find` loop, but with NO `get` in the body —
+// so the only per-key work is the iterator step itself.
+//
+// The body xors each key with the outer index so the inner walk genuinely
+// depends on `i` and neither compiler can hoist it out of the outer loop.
+// Both language versions pay that identical extra xor.
+
+fn walk(m: ref Map[i64, i64], i: i64) -> i64 {
+    let mut s = 0;
+    for k in m.keys() {
+        s = s ^ (k + i);
+    }
+    s
+}
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let mut j = 0;
+    while j < 170 {
+        let _ = m.insert(j * 7919, j);
+        j = j + 1;
+    }
+
+    let mut total = 0;
+    let mut i = 0;
+    while i < 1200000 {
+        total = total + walk(m, i);
+        i = i + 1;
+    }
+    println(total);
+}

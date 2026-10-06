@@ -1,0 +1,16 @@
+
+fn main() {
+    let original = c"hello, world";
+    let p = original.as_ptr();
+    // Safety: `p` is a NUL-terminated rodata pointer from a c"..." literal.
+    let rebuilt = unsafe { CStr.from_ptr(p) };
+    println(rebuilt.len());
+    println(rebuilt.is_empty());
+    let bytes = rebuilt.as_bytes();
+    println(bytes[0]);
+    println(bytes[4]);
+    // An empty C string round-trips to len 0 / is_empty true.
+    let ep = c"".as_ptr();
+    let rebuilt_empty = unsafe { CStr.from_ptr(ep) };
+    println(rebuilt_empty.is_empty());
+}

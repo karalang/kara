@@ -1,0 +1,8 @@
+
+        fn send_on(c: ref Conn) -> i64 with sends(Network) receives(Network) { return 1; }
+        fn main() {
+            let conn = 0;
+            let x = send_on(conn);
+            let y = send_on(conn);
+        }
+        

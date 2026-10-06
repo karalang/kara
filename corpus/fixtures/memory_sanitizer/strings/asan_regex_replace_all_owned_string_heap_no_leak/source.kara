@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    while i < 40i64 {
+        let mut p = String.from("[0-9]");
+        p.push_str("+");
+        let re = Regex.compile(p).unwrap();
+        let out = re.replace_all("a1b22c333", "#");
+        total = total + out.len();
+        let empty = re.replace_all("999", "");
+        total = total + empty.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

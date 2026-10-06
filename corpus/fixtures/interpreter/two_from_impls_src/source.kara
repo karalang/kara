@@ -1,0 +1,26 @@
+
+struct ParseError {{ tag: String }}
+struct DbError {{ code: i64 }}
+enum AppError {{ Parse(ParseError), Db(DbError) }}
+{a}
+{b}
+fn label(a: AppError) -> String {{
+    match a {{
+        AppError.Parse(p) => return f"PARSE:{{p.tag}}",
+        AppError.Db(d) => return f"DB:{{d.code}}",
+    }}
+}}
+fn fails_parse() -> Result[i64, ParseError] {{ return Err(ParseError {{ tag: "p" }}); }}
+fn fails_db() -> Result[i64, DbError] {{ return Err(DbError {{ code: 7 }}); }}
+fn q_parse() -> Result[i64, AppError] {{ let n = fails_parse()?; return Ok(n); }}
+fn q_db() -> Result[i64, AppError] {{ let n = fails_db()?; return Ok(n); }}
+fn main() {{
+    match q_parse() {{ Ok(_) => println("ok"), Err(e) => println(label(e)), }}
+    match q_db() {{ Ok(_) => println("ok"), Err(e) => println(label(e)), }}
+    println(label(AppError.from(ParseError {{ tag: "p" }})));
+    println(label(AppError.from(DbError {{ code: 7 }})));
+    let a: AppError = (ParseError {{ tag: "p" }}).into();
+    let b: AppError = (DbError {{ code: 7 }}).into();
+    println(label(a));
+    println(label(b));
+}}

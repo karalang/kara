@@ -1,0 +1,9 @@
+
+shared struct Node { val: i64 }
+fn helper() -> Node {
+    let n = Node { val: 42 };
+    n
+}
+fn main() {
+    println(helper().val);
+}

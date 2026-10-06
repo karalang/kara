@@ -1,0 +1,16 @@
+
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    let url = "http://127.0.0.1:65535/";
+    match c.get(url) {
+        Ok(resp) => {
+            let t: String = resp.body();
+            let b: Vec[u8] = resp.bytes();
+            println(t);
+            println(b.len());
+        }
+        Err(e) => {
+            println(e.message());
+        }
+    }
+}

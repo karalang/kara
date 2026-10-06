@@ -1,0 +1,89 @@
+// LeetCode #335: Self Crossing — an outward phase, then an inward one.
+//
+// While every move is longer than the one two before it, the path is an
+// outward spiral and cannot cross. The first move that is not longer
+// turns it inward. From there on the spiral must keep shrinking: any move
+// at least as long as the one two before it crosses. The one subtlety is
+// the turning move itself. If it ends close enough to the segment four
+// back that the inward spiral would be squeezed against it, the segment
+// one back is effectively shortened by the segment three back, which is
+// what the copy below does before the inward phase starts.
+//
+// O(n) time, O(n) space for the copy (O(1) if the input could be edited).
+
+fn is_self_crossing(dist: ref Vec[i64]) -> bool {
+    let mut d = dist.clone();
+    let n = d.len();
+    let mut i: i64 = 0;
+    while i < n and (i < 2 or d[i] > d[i - 2]) {
+        i += 1;
+    }
+    if i == n {
+        return false;
+    }
+    if (i >= 4 and d[i] >= d[i - 2] - d[i - 4]) or (i == 3 and d[i] == d[i - 2]) {
+        d[i - 1] -= d[i - 3];
+    }
+    i += 1;
+    while i < n {
+        if d[i] >= d[i - 2] {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn show(d: Vec[i64]) {
+    let mut parts: Vec[String] = Vec.new();
+    for x in d.iter() {
+        parts.push(x.to_string());
+    }
+    let shown = parts.join(", ");
+    println(f"[{shown}] -> {is_self_crossing(d)}");
+}
+
+fn main() {
+    show(vec![2, 1, 1, 2]);
+    show(vec![1, 2, 3, 4]);
+    show(vec![1, 1, 1, 2]);
+    show(vec![]);
+    show(vec![1]);
+    show(vec![1, 1, 1]);
+    show(vec![1, 1, 2, 1, 1]);
+    show(vec![3, 3, 4, 2, 2]);
+    show(vec![1, 1, 2, 2, 1, 1]);
+    show(vec![3, 3, 3, 2, 1, 1]);
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    show(vec![9, 8, 7, 6, 5, 4, 3, 2, 1]);
+    show(vec![1, 2, 3, 4, 3, 3, 1]);
+    show(vec![2, 2, 4, 3, 3, 1, 4]);
+    show(vec![1000000000, 1000000000, 1000000000, 999999999]);
+    let mut seed = 335;
+    for round in 0..8 {
+        let n = 4 + round * 2;
+        let mut d: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            d.push(1 + next(mut seed) % (3 + round));
+        }
+        show(d);
+    }
+    // An outward spiral never crosses; turning it inward early enough
+    // makes the next segment come back across an old one.
+    let mut spiral: Vec[i64] = Vec.new();
+    for k in 1..100001 {
+        spiral.push(k);
+    }
+    let count = spiral.len();
+    let out = is_self_crossing(spiral);
+    spiral.push(1);
+    let still = is_self_crossing(spiral);
+    spiral.push(100002);
+    let crossed = is_self_crossing(spiral);
+    println(f"spiral: {count} moves -> {out}, turn in -> {still}, then out -> {crossed}");
+}

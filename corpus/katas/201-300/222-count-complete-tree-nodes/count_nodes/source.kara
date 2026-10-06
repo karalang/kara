@@ -1,0 +1,93 @@
+// LeetCode 222 — Count Complete Tree Nodes.
+//
+// Count the nodes of a COMPLETE binary tree in better than O(n). In a complete
+// tree every level is full except possibly the last, which fills left to right.
+// The trick: walk the far-left spine and the far-right spine of a subtree. If
+// both heights match, the subtree is PERFECT, so it has exactly 2^h - 1 nodes —
+// no need to visit them. If they differ, the last level is partial; recurse into
+// the two children and add them plus this node. Each recursion halves the tree
+// and does O(log n) height work, so the whole count is O(log^2 n).
+//
+// The tree is stored as an index pool (`Vec[Node]`, i64 left/right, -1 = null),
+// built from a complete-tree level-order array (node i has children 2i+1, 2i+2).
+
+struct Node {
+    val: i64,
+    left: i64,
+    right: i64,
+}
+
+fn build(vals: Slice[i64]) -> Vec[Node] {
+    let n = vals.len();
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let l = 2 * i + 1;
+        let r = 2 * i + 2;
+        let lc = if l < n { l } else { -1 };
+        let rc = if r < n { r } else { -1 };
+        nodes.push(Node { val: vals[i], left: lc, right: rc });
+        i = i + 1;
+    }
+    return nodes;
+}
+
+fn left_height(nodes: ref Vec[Node], idx: i64) -> i64 {
+    let mut h = 0;
+    let mut cur = idx;
+    while cur != -1 {
+        h = h + 1;
+        cur = nodes[cur].left;
+    }
+    return h;
+}
+
+fn right_height(nodes: ref Vec[Node], idx: i64) -> i64 {
+    let mut h = 0;
+    let mut cur = idx;
+    while cur != -1 {
+        h = h + 1;
+        cur = nodes[cur].right;
+    }
+    return h;
+}
+
+fn count_nodes(nodes: ref Vec[Node], idx: i64) -> i64 {
+    if idx == -1 { return 0; }
+    let lh = left_height(nodes, idx);
+    let rh = right_height(nodes, idx);
+    if lh == rh {
+        // Perfect subtree of height lh -> 2^lh - 1 nodes.
+        return (1 << lh) - 1;
+    }
+    return 1 + count_nodes(nodes, nodes[idx].left) + count_nodes(nodes, nodes[idx].right);
+}
+
+fn report(vals: Slice[i64]) {
+    let nodes = build(vals);
+    let root = if nodes.len() > 0 { 0 } else { -1 };
+    println(count_nodes(nodes, root));
+}
+
+fn main() {
+    let a: Array[i64, 6] = [1, 2, 3, 4, 5, 6];
+    report(a);                                      // 6
+
+    let b: Array[i64, 7] = [1, 2, 3, 4, 5, 6, 7];
+    report(b);                                      // 7  — perfect tree
+
+    let c: Array[i64, 0] = [];
+    report(c);                                      // 0
+
+    let d: Array[i64, 1] = [1];
+    report(d);                                      // 1
+
+    let e: Array[i64, 12] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    report(e);                                      // 12
+
+    let f: Array[i64, 2] = [1, 2];
+    report(f);                                      // 2
+
+    let g: Array[i64, 15] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    report(g);                                      // 15 — perfect, 4 levels
+}

@@ -1,0 +1,120 @@
+disc-field-t
+dRb-heap
+dRa-heap
+  after
+disc-field-f
+dRz-heap
+dRb-heap
+dRa-heap
+  after
+disc-elem-t
+dRa-heap
+dRb-heap
+  after
+disc-elem-f
+dRz-heap
+dRa-heap
+dRb-heap
+  after
+disc-match-0
+dRb-heap
+dRa-heap
+  after
+disc-match-1
+dRb-heap
+dRa-heap
+  after
+disc-match-2
+dRz-heap
+dRb-heap
+dRa-heap
+  after
+disc-deep-t
+dRc-heap
+dRb-heap
+dRa-heap
+  after
+arg-field-t
+  show:a-heap
+dRa-heap
+dRb-heap
+  after
+arg-field-f
+  show:z-heap
+dRz-heap
+dRb-heap
+dRa-heap
+  after
+arg-elem-t
+  show:a-heap
+dRa-heap
+dRb-heap
+  after
+arg-elem-f
+  show:z-heap
+dRz-heap
+dRa-heap
+dRb-heap
+  after
+arg-match-0
+  show:a-heap
+dRa-heap
+dRb-heap
+  after
+arg-match-1
+  show:b-heap
+dRb-heap
+dRa-heap
+  after
+arg-match-2
+  show:z-heap
+dRz-heap
+dRb-heap
+dRa-heap
+  after
+arg-nested-tf
+  show:b-heap
+dRb-heap
+dRa-heap
+  after
+arg-nested-tt
+  show:y-heap
+dRy-heap
+dRb-heap
+dRa-heap
+  after
+arg-method-t
+  take:a-heap
+dRa-heap
+dRb-heap
+  after
+arg-method-f
+  take:z-heap
+dRz-heap
+dRb-heap
+dRa-heap
+  after
+arg-push-t
+dRb-heap
+  n:1
+dRa-heap
+arg-push-f
+dRb-heap
+dRa-heap
+  n:1
+dRz-heap
+arg-some-t
+dRb-heap
+  o:a-heap
+dRa-heap
+arg-some-f
+dRb-heap
+dRa-heap
+  o:z-heap
+dRz-heap
+arg-direct
+  show:a-heap
+dRb-heap
+dRa-heap
+  after
+end

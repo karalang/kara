@@ -1,0 +1,5 @@
+--before--
+--after-remove--
+keep still 1
+dropK 1
+--end--

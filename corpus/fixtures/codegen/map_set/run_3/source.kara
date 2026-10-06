@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let _ = m.insert(1, 100);
+    q.push_back(42);
+    if let Some(v) = q.pop_front() {
+        println(v);
+    } else {
+        println(-1);
+    }
+}

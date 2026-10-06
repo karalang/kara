@@ -1,0 +1,48 @@
+// LeetCode 168 — Excel Sheet Column Title.
+//
+// Convert a 1-based column number to its Excel title: 1->A, 26->Z, 27->AA,
+// 28->AB, 701->ZY, 2147483647->FXSHRXW. This is BIJECTIVE base-26: there is no
+// "zero digit", so before taking each digit we subtract 1 to shift the range
+// 1..26 down to 0..25 (A..Z), then divide by 26. Digits come out least-
+// significant first, so collect and reverse.
+
+fn letter(rem: i64) -> char {
+    let code: u8 = b'A' + (rem as u8);
+    match char.try_from(code) {
+        Ok(c) => c,
+        Err(_) => '?', // unreachable — rem is always 0..25
+    }
+}
+
+fn column_title(column_number: i64) -> String {
+    let mut chars: Vec[char] = Vec.new();
+    let mut x = column_number;
+    while x > 0 {
+        x = x - 1;             // shift to 0-based digit (bijective base-26)
+        chars.push(letter(x % 26));
+        x = x / 26;
+    }
+    let mut out: String = "";
+    let mut i = chars.len() - 1;
+    while i >= 0 {
+        out.push(chars[i]);
+        i = i - 1;
+    }
+    return out;
+}
+
+fn report(n: i64) {
+    println(column_title(n));
+}
+
+fn main() {
+    report(1);           // A
+    report(26);          // Z
+    report(27);          // AA
+    report(28);          // AB
+    report(52);          // AZ
+    report(701);         // ZY
+    report(702);         // ZZ
+    report(703);         // AAA
+    report(2147483647);  // FXSHRXW
+}

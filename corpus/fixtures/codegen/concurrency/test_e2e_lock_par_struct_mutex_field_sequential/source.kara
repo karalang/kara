@@ -1,0 +1,12 @@
+
+par struct Counter { total: Mutex[i64] }
+impl Counter {
+    fn add(ref self, n: i64) { lock self.total t { t = t + n; } }
+    fn get(ref self) -> i64 { lock self.total t { t } }
+}
+fn main() {
+    let c = Counter { total: Mutex.new(0) };
+    c.add(5);
+    c.add(37);
+    println(c.get());
+}

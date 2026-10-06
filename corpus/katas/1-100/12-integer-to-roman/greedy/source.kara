@@ -1,0 +1,83 @@
+// LeetCode #12: Integer to Roman — greedy table approach.
+// O(1) time (table size is constant 13), O(1) extra space modulo output.
+//
+// Walk the table top-to-bottom; while `n >= value`, append the symbol and
+// subtract value. The "table" is unrolled into the function body so each
+// row is a single comparison + a fixed pair of constants, which is what a
+// hand-written greedy looks like in any low-level language. With the
+// LeetCode bound `1 <= num <= 3999`:
+//
+//   - The pure-additive cases (M / C / X / I) loop up to 3 times each —
+//     because the next subtractive case above (CM / XC / IX, and 4) would
+//     have absorbed any 4th repetition.
+//   - The six subtractive cases (CM / CD / XC / XL / IX / IV) each fire
+//     at most once, because the digit they encode (4 or 9) is unique
+//     within its decimal place.
+//
+// Per-call work is bounded by O(15) char-pushes (the worst output is
+// `MMMDCCCLXXXVIII` = 3888 at 15 chars; 3999 is shorter at 9). No
+// allocations besides the result `Vec[char]`.
+//
+// This is the same shape LeetCode's "Approach 1" reference uses, except
+// that one stores parallel arrays of values + symbol strings and runs a
+// loop. The unrolled-chain form here is structurally identical at the
+// cost of explicit lines, but it (a) makes the LeetCode subtractive-pair
+// rule visible at every step instead of buried in the data, and (b)
+// compiles to the same straight-line code as the chained branches under
+// any optimizer that constant-folds the table.
+
+fn int_to_roman(num: i64) -> Vec[char] {
+    let mut out: Vec[char] = Vec.with_capacity(15);
+    let mut n = num;
+
+    while n >= 1000 { out.push('M'); n = n - 1000; }
+    if    n >= 900  { out.push('C'); out.push('M'); n = n - 900; }
+    if    n >= 500  { out.push('D'); n = n - 500; }
+    if    n >= 400  { out.push('C'); out.push('D'); n = n - 400; }
+    while n >= 100  { out.push('C'); n = n - 100; }
+    if    n >= 90   { out.push('X'); out.push('C'); n = n - 90; }
+    if    n >= 50   { out.push('L'); n = n - 50; }
+    if    n >= 40   { out.push('X'); out.push('L'); n = n - 40; }
+    while n >= 10   { out.push('X'); n = n - 10; }
+    if    n >= 9    { out.push('I'); out.push('X'); n = n - 9; }
+    if    n >= 5    { out.push('V'); n = n - 5; }
+    if    n >= 4    { out.push('I'); out.push('V'); n = n - 4; }
+    while n >= 1    { out.push('I'); n = n - 1; }
+
+    out
+}
+
+fn report(n: i64) {
+    // One Roman numeral per line. `print(c)` emits the UTF-8 glyph for
+    // each char without a newline; the trailing `println("")` closes the
+    // line. Matches the "one case per line" output shape the Python
+    // mirror prints with a single `print(''.join(roman))`.
+    let result = int_to_roman(n);
+    let len = result.len();
+    let mut i = 0;
+    while i < len {
+        print(result[i]);
+        i = i + 1;
+    }
+    println("");
+}
+
+fn main() {
+    // LeetCode samples
+    report(3);     // III
+    report(4);     // IV
+    report(9);     // IX
+    report(58);    // LVIII
+    report(1994);  // MCMXCIV
+    // Subtractive corner cases — one per place (units/tens/hundreds)
+    report(1);     // I
+    report(40);    // XL
+    report(900);   // CM
+    report(444);   // CDXLIV       (4-4-4 pattern across all three places)
+    // Year-shaped (common test fodder)
+    report(2024);  // MMXXIV
+    // Maximum output length: 15 chars
+    report(3888);  // MMMDCCCLXXXVIII
+    // Upper bound per LeetCode constraints
+    report(3999);  // MMMCMXCIX
+}

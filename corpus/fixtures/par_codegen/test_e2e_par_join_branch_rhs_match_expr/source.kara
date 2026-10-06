@@ -1,0 +1,10 @@
+
+fn main() {
+    let base = 2;
+    let total = par {
+        let x = match base { 1 => 10, 2 => 20, _ => 30 };
+        let y = base + 5;
+        x + y
+    };
+    println(total);
+}

@@ -1,0 +1,38 @@
+
+shared struct N { v: i64, mut next: Option[N] }
+fn build(k: i64) -> Option[N] {
+    let mut nodes: Vec[N] = Vec.new();
+    let mut i: i64 = 0;
+    while i < k {
+        nodes.push(N { v: i, next: None });
+        i = i + 1;
+    }
+    let mut j: i64 = 1;
+    while j < k {
+        let mut cur = nodes[j - 1];
+        cur.next = Some(nodes[j]);
+        j = j + 1;
+    }
+    return Some(nodes[0]);
+}
+fn sum_chain(root: Option[N]) -> i64 {
+    let mut s: i64 = 0;
+    let mut cur = root;
+    loop {
+        match cur {
+            None => { break; },
+            Some(n) => { s = s + n.v; cur = n.next; },
+        }
+    }
+    return s;
+}
+fn main() {
+    let mut iter: i64 = 0;
+    let mut total: i64 = 0;
+    while iter < 50 {
+        let r = build(20);
+        total = total + sum_chain(r);
+        iter = iter + 1;
+    }
+    println(total);
+}

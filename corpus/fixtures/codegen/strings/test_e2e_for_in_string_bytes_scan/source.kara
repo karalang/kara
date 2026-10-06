@@ -1,0 +1,15 @@
+
+fn main() {
+    let s = "/a/b/";
+    let mut n: i64 = 0_i64;
+    let mut slashes: i64 = 0_i64;
+    let slash: u8 = 47_u8;
+    for b in s.bytes() {
+        n = n + 1_i64;
+        if b == slash {
+            slashes = slashes + 1_i64;
+        }
+    }
+    println(n);
+    println(slashes);
+}

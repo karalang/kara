@@ -1,0 +1,37 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct S { a: i64, s: String }
+#[derive(Hash, Eq, PartialEq)]
+enum E { A(String), Pair(i64, String), B }
+#[derive(Hash, Eq, PartialEq)]
+shared struct Sh { id: i64, name: String }
+
+fn mk(n: i64) -> String { return f"v{n}"; }
+
+fn main() {
+    let ve: Vec[E] = vec![E.A(mk(1)), E.Pair(2, mk(3)), E.B];
+    println(f"enum={ve.contains(E.A(mk(1)))}");
+    println(f"enum-ne={ve.contains(E.A(mk(2)))}");
+    println(f"enum-pair={ve.contains(E.Pair(2, mk(3)))}");
+    println(f"enum-pair-ne={ve.contains(E.Pair(2, mk(4)))}");
+    println(f"enum-unit={ve.contains(E.B)}");
+
+    let vo: Vec[Option[String]] = vec![Some(mk(5)), None];
+    println(f"generic={vo.contains(Some(mk(5)))}");
+    println(f"generic-ne={vo.contains(Some(mk(6)))}");
+    println(f"generic-none={vo.contains(None)}");
+
+    let vh: Vec[Sh] = vec![Sh { id: 1, name: mk(7) }];
+    println(f"shared={vh.contains(Sh { id: 1, name: mk(7) })}");
+    println(f"shared-ne={vh.contains(Sh { id: 1, name: mk(8) })}");
+
+    let vs: Vec[String] = vec![mk(9), mk(10)];
+    println(f"str={vs.contains(mk(9))}");
+    println(f"str-ne={vs.contains(mk(11))}");
+    let vt: Vec[S] = vec![S { a: 1, s: mk(12) }];
+    println(f"struct={vt.contains(S { a: 1, s: mk(12) })}");
+    println(f"struct-ne={vt.contains(S { a: 1, s: mk(13) })}");
+    let vi: Vec[i64] = vec![1, 2];
+    println(f"int={vi.contains(2)}");
+    println(f"int-ne={vi.contains(3)}");
+}

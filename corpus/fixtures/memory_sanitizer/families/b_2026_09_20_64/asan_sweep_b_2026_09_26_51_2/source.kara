@@ -1,0 +1,8 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}n{self.id}") } }
+fn mkd(n: i64) -> D { D { id: n, name: f"heap-name-string-longer-than-sso-{n}" } }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
+fn maybew(x: W, c: bool) -> Option[W] { if c { return Some(x); } None }
+fn gcsw[T](v: mut ref Vec[T], x: T, c: bool) { if c { v.push(x); } }
+fn main() { let mut v: Vec[W] = Vec.new(); let w = mkw(7); gcsw(mut v, w, true); println(f"o{v.len()}"); println("end") }

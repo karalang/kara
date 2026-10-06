@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("row-alpha".to_string());
+    v.push("row-bravo".to_string());
+    v.push("row-charlie".to_string());
+    let m: Vec[Vec[String]] = v.iter().chunks(2i64).collect();
+    let r0: Vec[String] = m[0i64].clone();
+    let r1: Vec[String] = m[1i64].clone();
+    let a: String = r0[0i64].clone();
+    let b: String = r0[1i64].clone();
+    let c: String = r1[0i64].clone();
+    println(f"{a} {b} {c} {m.len()} {v.len()}");
+}

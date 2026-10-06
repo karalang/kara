@@ -1,0 +1,147 @@
+// LeetCode 271 — Encode and Decode Strings. (Premium.)
+//
+// Encode a list of strings into ONE string, and decode it back. The list may
+// contain any bytes at all — including whatever character you were hoping to use
+// as a separator.
+//
+// THAT IS THE WHOLE PROBLEM. "Join with a comma and split on commas" is the
+// first idea everyone has and it is wrong for the obvious reason: a string
+// containing a comma splits into two. Escaping fixes it at the cost of a scan,
+// and length-prefixing avoids the question entirely — if you know a payload is
+// exactly n bytes long, nothing inside it can be misread, because nothing inside
+// it is ever examined.
+//
+//     ["abc", "de"]  ->  "3#abc2#de"
+//
+// The length is written in decimal and terminated by a character that cannot
+// appear in a decimal number, so the header is self-delimiting. `#` is a fine
+// choice and so is any non-digit; what matters is that the SEPARATOR IS ONLY
+// EVER SEARCHED FOR INSIDE THE HEADER, never in the payload.
+//
+// THE LENGTH IS IN BYTES, AND THE PAYLOAD IS REBUILT FROM BYTES. Writing the
+// decoder as `s.push(b as char)` looks right and is correct for ASCII, but a
+// `char` is a CODEPOINT: pushing byte 200 appends U+00C8, which is two UTF-8
+// bytes, so any input above 127 comes back longer than it went in and every
+// subsequent offset is wrong. The payload is a byte range and has to be
+// reassembled as one — `String.from_utf8` on the exact slice. The test cases
+// below include multi-byte text for exactly this reason.
+//
+// TWO EMPTY CASES, AND THEY MUST NOT COLLIDE. The empty list encodes to "" and
+// the one-element list containing the empty string encodes to "0#". A codec that
+// renders both as "" round-trips one of them wrongly, and it is the single most
+// common bug in this problem — a joined-with-delimiter encoding cannot tell them
+// apart at all.
+
+fn encode(items: ref Vec[String]) -> String {
+    let mut out = "";
+    let mut i = 0;
+    while i < items.len() {
+        let s = ref items[i];
+        // byte length, not character count — the payload is copied verbatim
+        let mut n = 0;
+        for b in s.bytes() { n = n + 1; }
+        out = out + f"{n}" + "#" + s;
+        i = i + 1;
+    }
+    return out;
+}
+
+fn decode(data: ref String) -> Vec[String] {
+    // Work over bytes; the payload is never interpreted.
+    let mut bytes: Vec[u8] = Vec.new();
+    for b in data.bytes() { bytes.push(b); }
+
+    let mut out: Vec[String] = Vec.new();
+    let mut p = 0;
+    while p < bytes.len() {
+        // read decimal digits up to the '#'
+        let mut n = 0;
+        while bytes[p] != 35u8 {            // '#'
+            n = n * 10 + (bytes[p] as i64 - 48);
+            p = p + 1;
+        }
+        p = p + 1;                       // skip the '#'
+        // The payload is a byte RANGE — reassembled as bytes, not pushed as
+        // codepoints, so multi-byte text survives unchanged.
+        let mut raw: Vec[u8] = Vec.new();
+        let mut k = 0;
+        while k < n {
+            raw.push(bytes[p + k]);
+            k = k + 1;
+        }
+        p = p + n;
+        match String.from_utf8(raw) {
+            Ok(s) => { out.push(s); }
+            Err(e) => { out.push(""); }     // unreachable: input was a String
+        }
+    }
+    return out;
+}
+
+fn show(items: ref Vec[String]) -> String {
+    let mut s = "[";
+    let mut i = 0;
+    while i < items.len() {
+        if i > 0 { s = s + ","; }
+        s = s + "\"" + items[i] + "\"";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn report(items: ref Vec[String]) {
+    let enc = encode(items);
+    let dec = decode(enc);
+    let mut ok = "OK";
+    if show(dec) != show(items) { ok = "ROUND-TRIP FAILED"; }
+    println(f"{show(items)} -> \"{enc}\" -> {show(dec)} {ok}");
+}
+
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("abc"); a.push("de");
+    report(a);
+
+    // ★ the two empty cases, which must not collide
+    let empty: Vec[String] = Vec.new();
+    report(empty);                                  // "" 
+    let mut b: Vec[String] = Vec.new();
+    b.push("");
+    report(b);                                      // "0#"
+
+    let mut c: Vec[String] = Vec.new();
+    c.push(""); c.push("");
+    report(c);                                      // "0#0#"
+
+    // ★ payloads containing the separator and digits — never examined
+    let mut d: Vec[String] = Vec.new();
+    d.push("a#b"); d.push("3#c");
+    report(d);
+
+    let mut e: Vec[String] = Vec.new();
+    e.push("12345"); e.push("#");
+    report(e);
+
+    // a payload that looks like a complete encoding of something else
+    let mut f: Vec[String] = Vec.new();
+    f.push("2#hi"); f.push("x");
+    report(f);
+
+    // commas and pipes — whatever a naive join would have chosen
+    let mut g: Vec[String] = Vec.new();
+    g.push("a,b"); g.push("c|d"); g.push(",,,");
+    report(g);
+
+    // ★ multi-byte UTF-8 — the case a `push(b as char)` decoder corrupts
+    let mut u: Vec[String] = Vec.new();
+    u.push("héllo"); u.push("wörld"); u.push("日本語");
+    report(u);
+
+    // a long payload, so the length runs to several digits
+    let mut h: Vec[String] = Vec.new();
+    let mut long = "";
+    let mut q = 0;
+    while q < 120 { long = long + "z"; q = q + 1; }
+    h.push(long); h.push("end");
+    report(h);
+}

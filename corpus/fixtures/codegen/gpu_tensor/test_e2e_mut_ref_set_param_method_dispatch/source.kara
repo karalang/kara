@@ -1,0 +1,11 @@
+
+fn add_to(s: mut ref Set[i64], x: i64) -> i64 {
+    let _ = s.insert(x);
+    s.len()
+}
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    let _ = add_to(mut s, 5);
+    let n = add_to(mut s, 10);
+    println(n);
+}

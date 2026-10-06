@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut c: i64 = 0;
+    let f = |x: i64| { c = c + x; };
+    f(3i64);
+    f(4i64);
+    println(f"{c}");
+}

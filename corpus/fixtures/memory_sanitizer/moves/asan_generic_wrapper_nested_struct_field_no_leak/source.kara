@@ -1,0 +1,23 @@
+
+struct Box[T] {
+    v: T,
+}
+struct Outer {
+    inner: Box[String],
+}
+struct Gen[U] {
+    inner: Box[U],
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let o = Outer { inner: Box { v: i.to_string() } };
+        let o2 = o;
+        acc = acc + o2.inner.v.len();
+        let g = Gen { inner: Box { v: i.to_string() } };
+        acc = acc + g.inner.v.len();
+        i = i + 1;
+    }
+    println(acc);
+}

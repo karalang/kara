@@ -1,0 +1,6 @@
+
+fn main() {
+    let a = "left ";
+    let b = "right";
+    println(a + b);
+}

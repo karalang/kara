@@ -1,0 +1,23 @@
+
+struct S { m: Map[String, i64] }
+fn mkm(i: i64) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"k{i}", i); m.insert(f"j{i}", i);
+    return m;
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 8 {
+        let s = S { m: mkm(i) };
+        let mut mm = s.m;
+        acc = acc + mm.len();
+        if mm.contains_key(f"k{i}") { acc = acc + 1; }
+        // In-place mutation through the bound local (mutates the shared handle).
+        mm.insert(f"x{i}", i);
+        acc = acc + mm.len();
+        i = i + 1;
+    }
+    if acc > 999999 { println("never"); }
+    println("done");
+}

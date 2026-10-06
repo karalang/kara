@@ -1,0 +1,8 @@
+
+fn main() {
+    let req = Request { };
+    let h = req.headers();
+    let q = req.query();
+    println(h.len());
+    println(q.len());
+}

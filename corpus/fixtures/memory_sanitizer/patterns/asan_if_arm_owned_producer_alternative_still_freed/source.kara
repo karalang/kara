@@ -1,0 +1,16 @@
+
+fn mk() -> String { "alphabetalphabet" }
+fn mkv() -> Vec[i64] { [5, 6, 7] }
+fn main() {
+    let mut k = 0;
+    while k < 20 {
+        let even = k % 2 == 0;
+        let a = if even { mk() } else { "gammagammagamma" };
+        let b = match even { true => mkv(), false => [8, 9, 10] };
+        let local = "deltadeltadeltad";
+        let c = if even { local } else { mk() };
+        println(f"{a.len()} {b[0]} {c.len()}");
+        k = k + 1;
+    }
+    println("done");
+}

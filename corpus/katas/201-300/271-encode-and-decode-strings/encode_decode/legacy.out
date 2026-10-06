@@ -1,0 +1,10 @@
+["abc","de"] -> "3#abc2#de" -> ["abc","de"] OK
+[] -> "" -> [] OK
+[""] -> "0#" -> [""] OK
+["",""] -> "0#0#" -> ["",""] OK
+["a#b","3#c"] -> "3#a#b3#3#c" -> ["a#b","3#c"] OK
+["12345","#"] -> "5#123451##" -> ["12345","#"] OK
+["2#hi","x"] -> "4#2#hi1#x" -> ["2#hi","x"] OK
+["a,b","c|d",",,,"] -> "3#a,b3#c|d3#,,," -> ["a,b","c|d",",,,"] OK
+["héllo","wörld","日本語"] -> "6#héllo6#wörld9#日本語" -> ["héllo","wörld","日本語"] OK
+["zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz","end"] -> "120#zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz3#end" -> ["zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz","end"] OK

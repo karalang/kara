@@ -1,0 +1,19 @@
+
+shared struct Node { val: i64 }
+
+fn probe(xs: Vec[Option[Node]]) -> i64 {
+    let mut work = xs;
+    match work[0] {
+        Option.Some(n) => n.val,
+        Option.None => 0,
+    }
+}
+
+fn main() {
+    let a = Node { val: 7 };
+    let b = Node { val: 9 };
+    let mut v: Vec[Option[Node]] = Vec.new();
+    v.push(Option.Some(a));
+    v.push(Option.Some(b));
+    println(probe(v));
+}

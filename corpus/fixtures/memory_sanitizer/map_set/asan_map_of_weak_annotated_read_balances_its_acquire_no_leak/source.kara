@@ -1,0 +1,29 @@
+
+shared struct N { mut v: i64 }
+
+fn build(seed: i64) -> i64 {
+    let mut m: Map[i64, weak N] = Map.new();
+    let a: N = N { v: seed };
+    m.insert(1i64, a);
+    let o: Option[N] = m.get(1i64);
+    let p: Option[N] = m.get(1i64);
+    let mut hits: i64 = 0;
+    match o { Some(x) => { hits = hits + x.v; } None => {} }
+    match p { Some(y) => { hits = hits + y.v; } None => {} }
+    return hits + a.v;
+}
+
+// Overwrites the dead frame the handles lived in, so LSan cannot mistake
+// stack residue for reachability (B-2026-08-08-4).
+fn churn(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    let pad: i64 = n * 3;
+    return pad + churn(n - 1);
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let hits = build(seed);
+    let noise = churn(2000);
+    println(hits + noise - noise);
+}

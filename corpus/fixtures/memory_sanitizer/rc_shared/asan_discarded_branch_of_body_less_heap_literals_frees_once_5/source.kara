@@ -1,0 +1,12 @@
+
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn slen(s: String) -> i64 { if s.contains("payload") { s.len() } else { 0 } }
+fn go() -> i64 {
+    let t = mkp(9);
+    let s = payload();
+    return slen(t.a) - slen(s) + 1;
+}
+fn main() { println(go()); }

@@ -1,0 +1,13 @@
+source = "tests/codegen/iter_range.rs::e2e_named_struct_optres_payload_part_drops_at_its_own_live_range_end"
+dedup_of = ["tests/interpreter/iter_range.rs::test_named_struct_optres_payload_part_drops_at_its_own_live_range_end"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,21 @@
+
+struct Reg { status: i32, control: i32 }
+fn bump(r: mut ref Reg) -> i32 {
+    // Safety: r is a live borrow of the caller's Reg.
+    unsafe {
+        let pw: *mut i32 = ptr.mut(r.control);
+        volatile_write(pw, 777);
+        let pr: *const i32 = ptr.const(r.control);
+        volatile_read(pr)
+    }
+}
+fn main() {
+    let mut r: Reg = Reg { status: 10, control: 20 };
+    let inside = bump(mut r);
+    println(inside);
+    // Safety: r is still live here.
+    unsafe {
+        let pr: *const i32 = ptr.const(r.control);
+        println(volatile_read(pr));
+    }
+}

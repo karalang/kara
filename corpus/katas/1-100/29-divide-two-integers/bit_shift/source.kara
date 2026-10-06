@@ -1,0 +1,68 @@
+// LeetCode #29: Divide Two Integers — bit-shift long division.
+//
+// Divide `dividend` by `divisor` and return the quotient truncated toward
+// zero, WITHOUT using `*`, `/`, or `%`. Inputs are 32-bit signed integers in
+// [-2^31, 2^31 - 1]; the quotient is clamped to that same range, so the one
+// overflow case — INT_MIN / -1 = 2^31 — saturates to INT_MAX (2^31 - 1).
+//
+// Algorithm: classic exponential long division. Work in magnitudes. For each
+// step, double the divisor (`temp << 1`) and a running `multiple` (also a
+// shift) until one more doubling would overshoot the remaining dividend, then
+// subtract that largest shifted divisor and add its multiple to the result.
+// Each outer step removes the top set bit of the quotient, so the whole thing
+// is O(log(quotient)^2) compares — no repeated subtraction, no multiply.
+//
+// Magnitudes are held in i64 so that `.abs()` of INT_MIN (whose magnitude 2^31
+// does not fit back into i32) never traps under Kāra's default arithmetic
+// overflow checking (design.md § Arithmetic Overflow): the only true overflow,
+// INT_MIN / -1, is special-cased before any `.abs()` runs.
+
+fn divide(dividend: i64, divisor: i64) -> i64 {
+    let int_max = 2147483647;
+    let int_min = -2147483648;
+
+    // The sole result that overflows the signed 32-bit range — saturate.
+    if dividend == int_min and divisor == -1 {
+        return int_max;
+    }
+
+    // Sign of the quotient is the XOR of the operand signs; `!=` on two bools
+    // is exactly that XOR.
+    let negative = (dividend < 0) != (divisor < 0);
+
+    // Reduce to magnitudes (safe in i64 — for 32-bit-range inputs `abs` never
+    // overflows, and the one true-overflow case, INT_MIN / -1, returned above).
+    let mut a = dividend.abs();
+    let b = divisor.abs();
+
+    let mut result = 0;
+    while a >= b {
+        // Largest shifted divisor that still fits under the remainder.
+        let mut temp = b;
+        let mut multiple = 1;
+        while a >= (temp << 1) {
+            temp = temp << 1;
+            multiple = multiple << 1;
+        }
+        a = a - temp;
+        result = result + multiple;
+    }
+
+    if negative { -result } else { result }
+}
+
+fn main() {
+    println(divide(10, 3));            // 3   (3.33… truncates toward zero)
+    println(divide(7, -3));            // -2  (-2.33… truncates toward zero)
+    println(divide(-2147483648, -1));  // 2147483647  (overflow → clamp)
+    println(divide(-2147483648, 1));   // -2147483648 (INT_MIN passes through)
+    println(divide(-2147483648, 2));   // -1073741824
+    println(divide(2147483647, 1));    // 2147483647
+    println(divide(0, 5));             // 0
+    println(divide(1, 1));             // 1
+    println(divide(-7, -3));           // 2   (both negative → positive)
+    println(divide(15, 4));            // 3
+    println(divide(-15, 4));           // -3
+    println(divide(1, -1));            // -1
+    println(divide(-2147483648, -2));  // 1073741824  (no overflow, fits)
+}

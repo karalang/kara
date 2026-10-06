@@ -1,0 +1,19 @@
+
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 100_i64);
+    m.insert(2_i64, 200_i64);
+    m.insert(3_i64, 300_i64);
+    return m;
+}
+
+fn main() {
+    let mut i = 1;
+    while i < 4 {
+        match make_map().get(i) {
+            Some(v) => println(v),
+            None => println(0_i64),
+        };
+        i = i + 1;
+    };
+}

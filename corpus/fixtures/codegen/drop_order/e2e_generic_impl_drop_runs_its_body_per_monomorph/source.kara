@@ -1,0 +1,40 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+
+struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}") } }
+
+struct G[T] { v: T, r: R }
+impl[T] Drop for G[T] { fn drop(mut ref self) { println("dG") } }
+
+struct H[T] { items: Vec[T] }
+impl[T] Drop for H[T] { fn drop(mut ref self) { println(f"dH{self.items.len()}") } }
+
+struct P { s: String }
+impl Drop for P { fn drop(mut ref self) { println("dP") } }
+
+fn cell_str() {
+    let b: Box3[String] = Box3 { v: f"vvvvvvvv", tag: f"ttttttt" };
+    println(f"  v{b.v.len()}");
+    println("  after");
+}
+fn cell_two() {
+    let a: Box3[String] = Box3 { v: f"aaaaaaaa", tag: f"ttttttttt" };
+    println(f"  a{a.v.len()}");
+    let b: Box3[i64] = Box3 { v: 7, tag: f"uuuuuuuu" };
+    println(f"  b{b.v}");
+}
+fn cell_field() { let g: G[String] = G { v: f"gggggggg", r: R { id: 3 } }; println(f"  g{g.v.len()}"); }
+fn cell_vec()   { let h: H[String] = H { items: [f"aaaaaaaa", f"bbbbbbbb"] }; println(f"  h{h.items.len()}"); }
+fn cell_nest()  { let d: Box3[Vec[String]] = Box3 { v: [f"zzzzzzzz"], tag: f"wwwwww" }; println(f"  d{d.v.len()}"); }
+fn cell_plain() { let p = P { s: f"pppppppp" }; println(f"  p{p.s.len()}"); }
+
+fn main() {
+    println("str");   cell_str();
+    println("two");   cell_two();
+    println("field"); cell_field();
+    println("vec");   cell_vec();
+    println("nest");  cell_nest();
+    println("plain"); cell_plain();
+    println("done");
+}

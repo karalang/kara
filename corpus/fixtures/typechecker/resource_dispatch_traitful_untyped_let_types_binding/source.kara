@@ -1,0 +1,29 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+trait KvStore {
+    fn lookup(ref self, k: i64) -> Option[ListNode];
+}
+effect resource Store: KvStore;
+struct FakeStore { n: i64 }
+impl KvStore for FakeStore {
+    fn lookup(ref self, k: i64) -> Option[ListNode] {
+        if k == 1 {
+            return Some(ListNode { val: self.n, next: None });
+        }
+        None
+    }
+}
+fn probe() -> i64 reads(Store) {
+    let got = Store.lookup(1);
+    let mut t = 0;
+    if got.is_some() {
+        let node = got.unwrap();
+        t = t + node.val;
+    }
+    t
+}
+fn main() reads(Store) {
+    with_provider[Store](FakeStore { n: 7 }, || {
+        println(probe());
+    });
+}

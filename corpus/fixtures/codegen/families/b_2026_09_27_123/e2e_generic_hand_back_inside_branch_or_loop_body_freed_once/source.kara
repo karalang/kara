@@ -1,0 +1,19 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum G[T] { X(T), Y }
+impl[T] G[T] { fn id(self) -> Self { return self; } }
+fn idg[T](g: G[T]) -> G[T] { return g }
+fn mid[T](g: G[T], c: bool) -> G[T] { if c { return g } return G.Y }
+fn mk(n: i64) -> G[R] { return G.X(R { id: n, tag: f"t" }) }
+fn show(g: G[R]) { match g { G.X(t) => { println(f"s{t.id}") } G.Y => { println("sy") } } }
+fn main() {
+    let c = true;
+    if c { let d = mk(1); let d2 = idg(d); show(d2) }
+    match c { true => { let d = mk(2); let d2 = idg(d); show(d2) } false => {} }
+    for k in 0..2 { let d = mk(3 + k); let d2 = idg(d); show(d2) }
+    let mut j = 0; loop { let d = mk(5 + j); let d2 = idg(d); show(d2); j = j + 1; if j > 1 { break } }
+    let mut o: Option[i64] = Some(1); while let Some(z) = o { let d = mk(7); let d2 = mid(d, true); show(d2); o = None; }
+    if c { let d = mk(8); let d2 = d.id(); show(d2) }
+    { let d = mk(19); if c { let d2 = mid(d, true); show(d2) } }
+    println("end")
+}

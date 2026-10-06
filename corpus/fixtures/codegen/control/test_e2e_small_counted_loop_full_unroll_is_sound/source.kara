@@ -1,0 +1,22 @@
+
+fn f(start: i64) -> i64 {
+    let mut acc = 0i64;
+    let mut d = 1i64;
+    while d <= 9i64 {
+        let bit = 1i64 << d;
+        if (acc & 1i64) == 0i64 {
+            acc = acc + bit * d + start;
+        }
+        d = d + 1i64;
+    }
+    acc
+}
+fn main() {
+    let mut total = 0i64;
+    let mut i = 0i64;
+    while i < 5i64 {
+        total = total + f(i);
+        i = i + 1i64;
+    }
+    println(f"{total}");
+}

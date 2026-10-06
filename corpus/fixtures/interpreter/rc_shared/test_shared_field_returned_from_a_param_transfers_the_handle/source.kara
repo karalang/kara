@@ -1,0 +1,29 @@
+shared struct Node { s: String }
+struct Holder { v: Node }
+struct Box[T] { v: T }
+
+fn mk(i: i64) -> Node { return Node { s: f"crp-{i}-padded-out-to-force-a-real-heap-buffer" }; }
+
+fn ret_byval(b: Holder) -> Node { return b.v; }
+fn tail_byval(b: Holder) -> Node { b.v }
+fn ret_ref(b: ref Holder) -> Node { return b.v; }
+fn ret_generic(b: Box[Node]) -> Node { return b.v; }
+
+fn main() {
+    let mut acc: i64 = 0;
+    // caller-retains: by-value return, by-value tail, and `ref`
+    let h1 = Holder { v: mk(1) };
+    let x1 = ret_byval(h1);
+    acc = acc + x1.s.len();
+    let h2 = Holder { v: mk(2) };
+    let x2 = tail_byval(h2);
+    acc = acc + x2.s.len();
+    let h3 = Holder { v: mk(3) };
+    let x3 = ret_ref(h3);
+    acc = acc + x3.s.len();
+    // owned-by-transfer control
+    let b4 = Box { v: mk(4) };
+    let x4 = ret_generic(b4);
+    acc = acc + x4.s.len();
+    println(acc);
+}

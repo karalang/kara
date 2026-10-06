@@ -1,0 +1,21 @@
+
+struct Celsius { deg: i64 }
+struct Kelvin { deg: i64 }
+impl TryFrom for Kelvin {
+    type Error = String;
+    fn try_from(c: Celsius) -> Result[Kelvin, String] {
+        if c.deg < -273 { Err("below absolute zero") }
+        else { Ok(Kelvin { deg: c.deg + 273 }) }
+    }
+}
+fn main() {
+    match Kelvin.try_from(Celsius { deg: 27 }) {
+        Ok(k) => println(k.deg),
+        Err(e) => println(e),
+    }
+    let r: Result[Kelvin, String] = (Celsius { deg: -300 }).try_into();
+    match r {
+        Ok(k) => println(k.deg),
+        Err(e) => println(e),
+    }
+}

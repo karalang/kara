@@ -1,0 +1,30 @@
+fn sink[T: Display](x: Option[T]) { match x { Some(t) => { println(f"s:{t}") } None => { println("n") } } }
+fn fwd[T: Display](x: Option[T]) { sink(x) }
+fn mid[T: Display](x: Option[T]) { sink(x) }
+fn outer[T: Display](x: Option[T]) { mid(x) }
+fn fwdU[U: Display](x: Option[U]) { sink(x) }
+struct H { }
+impl H {
+    fn m[T: Display](ref self, x: Option[T]) { match x { Some(t) => { println(f"m:{t}") } None => { println("n") } } }
+}
+fn fwdm[T: Display](h: ref H, x: Option[T]) { h.m(x) }
+fn main() {
+    let a: Array[String, 2] = ["uv", "wx"];
+    fwd(Some(a));
+    fwd(Some(7));
+    let b: Array[String, 2] = ["yz", "ab"];
+    outer(Some(b));
+    let c: Array[String, 2] = ["cd", "ef"];
+    fwdU(Some(c));
+    let h = H { };
+    let d: Array[String, 2] = ["gh", "ij"];
+    fwdm(h, Some(d));
+    let e: Array[String, 2] = ["kl", "mn"];
+    fwd(Some(e));
+    let t: (i64, i64) = (5, 6);
+    fwd(Some(t));
+    let g: Array[i64, 3] = [1, 2, 3];
+    fwd(Some(g));
+    let sl: Slice[i64] = g[0..2];
+    fwd(Some(sl));
+}

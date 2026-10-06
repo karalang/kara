@@ -1,0 +1,15 @@
+
+        fn probe(listener: TcpListener) -> bool {
+            let _stream = listener.accept().unwrap();
+            return true;
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            if not probe(listener) {
+                println(7);
+            } else {
+                println(8);
+            }
+            println(9);
+        }
+    

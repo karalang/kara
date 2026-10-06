@@ -1,0 +1,9 @@
+
+#[derive(Eq)]
+struct P { name: String }
+fn mk() -> P { P { name: "abcd" } }
+fn f(other: ref P) -> bool { mk() == other }
+fn main() {
+    let p = P { name: "abcd" };
+    println(f"{f(p)}");
+}

@@ -1,0 +1,86 @@
+// LeetCode 313 — Super Ugly Number, assuming nothing.
+//
+// THE ARM: the definition, verbatim. Walk the integers upward; for each one,
+// ask whether it is super ugly; stop at the nth that is. No merge, no closure,
+// no pointers, no ordered set.
+//
+// WHY IT EARNS ITS COST. The other four arms are four schedulings of one
+// premise — that every super ugly number x > 1 factors as p * u for a prime p
+// in the list and a SMALLER super ugly u, so the sequence can be generated
+// from its own prefix. If that premise were wrong, all four would be wrong
+// together and would agree perfectly with each other while disagreeing with
+// reality. Their individual bugs are tie-handling and pointer bugs; none of
+// them is the premise.
+//
+// So this arm never generates anything. It TESTS membership instead, one
+// integer at a time, and the test is the literal reading of the statement:
+// divide out every listed prime as often as it goes, and see whether what is
+// left is 1. Unique factorisation is what makes that decisive — if any prime
+// NOT in the list divides m, it survives every division and the residue is
+// greater than 1; if every prime factor is in the list, they are all removed
+// and the residue is exactly 1. The order the primes are divided out in does
+// not matter, for the same reason.
+//
+// 1 is super ugly because the residue starts at 1 and no division changes it,
+// so the base case needs no special handling — which is the sense in which
+// "1 has no prime factors, so the condition holds vacuously" is not a
+// convention bolted on but a consequence of the test.
+//
+// THE COST is enormous and deliberate: it scans every integer up to the
+// answer, dividing by up to k primes each time, so it is roughly O(answer * k)
+// against the star arm's O(n * k) — and `answer` grows far faster than n. That
+// is fine. Its job is to be the arm with nothing to be clever about.
+
+fn is_super_ugly(m: i64, primes: ref Vec[i64]) -> bool {
+    let mut r = m;
+    let k = primes.len();
+    for i in 0..k {
+        let p = primes[i];
+        while r % p == 0 { r = r / p; }
+    }
+    return r == 1;
+}
+
+fn nth_super_ugly(n: i64, primes: ref Vec[i64]) -> i64 {
+    if n <= 0 { return 0; }
+    let mut seen = 0;
+    let mut m = 0;
+    while seen < n {
+        m = m + 1;
+        if is_super_ugly(m, primes) { seen = seen + 1; }
+    }
+    return m;
+}
+
+fn render(primes: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < primes.len() {
+        if i > 0 { s.push_str(","); }
+        s.push_str(primes[i].to_string());
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(n: i64, vals: Slice[i64]) {
+    let mut primes: Vec[i64] = Vec.new();
+    for v in vals { primes.push(v); }
+    println("n=" + n.to_string() + " " + render(primes) + " -> "
+        + nth_super_ugly(n, primes).to_string());
+}
+
+fn main() {
+    report(12, [2, 7, 13, 19]);
+    report(1, [2, 3, 5]);
+    report(11, [2, 3, 5]);
+    report(20, [2, 3, 5]);
+    report(1, [7]);
+    report(6, [7]);
+    report(15, [2, 101]);
+    report(25, [2, 3, 5, 7, 11, 13]);
+    report(20, [5, 2, 3]);
+    report(100, [2, 7, 13, 19]);
+}

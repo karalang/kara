@@ -1,0 +1,117 @@
+// LeetCode #322: Coin Change — top-down recursion with a memo.
+//
+// The same recurrence as the ★ arm, asked the other way round:
+//
+//   fewest(0) = Some(0)
+//   fewest(a) = 1 + min over coins c <= a of fewest(a - c), or None if every
+//               `a - c` is None
+//
+// The ★ arm fills that table from 0 upwards and marks unreachable amounts with
+// a sentinel number. This arm starts at the target, recurses only into the
+// amounts it actually needs, and says "unreachable" with `None` instead of a
+// number. So a sentinel that is off by one, or that leaks into a sum, cannot
+// hide here the way it can in a table.
+//
+// The memo maps an amount to its answer, and an answer is itself an
+// `Option[i64]`. An amount that is absent from the memo has not been solved
+// yet. One that is present with `None` has been solved and is unreachable, and
+// caching that is what keeps the recursion from re-proving it.
+//
+// The recursion is `amount / min(coins)` deep, so the large cases stay with the
+// ★ arm.
+
+fn fewest(coins: ref Vec[i64], a: i64, memo: mut ref Map[i64, Option[i64]]) -> Option[i64] {
+    if a == 0 {
+        return Some(0);
+    }
+    if memo.contains_key(a) {
+        return memo[a];
+    }
+    let mut best: Option[i64] = None;
+    for i in 0..coins.len() {
+        let c = coins[i];
+        if c > a {
+            continue;
+        }
+        match fewest(coins, a - c, memo) {
+            Some(n) => {
+                best = match best {
+                    Some(b) if b <= n + 1 => Some(b),
+                    _ => Some(n + 1),
+                };
+            }
+            None => {}
+        }
+    }
+    memo.insert(a, best);
+    return best;
+}
+
+fn coin_change(coins: ref Vec[i64], amount: i64) -> i64 {
+    let mut memo: Map[i64, Option[i64]] = Map.new();
+    return match fewest(coins, amount, mut memo) {
+        Some(n) => n,
+        None => -1,
+    };
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..v.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(v[i].to_string());
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(coins: Vec[i64], amount: i64) {
+    let answer = coin_change(coins, amount);
+    println(f"{show(coins)} amount={amount} -> {answer}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn denominations(count: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    while v.len() < count {
+        let c = next(seed) % top + 1;
+        if not v.contains(c) {
+            v.push(c);
+        }
+    }
+    return v;
+}
+
+fn main() {
+    report([1, 2, 5], 11);
+    report([2], 3);
+    report([1], 0);
+
+    report([1, 3, 4], 6);
+    report([1, 5, 6, 9], 11);
+    report([186, 419, 83, 408], 6249);
+
+    report([4, 6], 9);
+    report([4, 6], 14);
+    report([7, 11], 59);
+    report([7, 11], 60);
+
+    report([13], 13);
+    report([50, 20], 10);
+    report([9, 2, 7, 3], 23);
+    report([5, 7], 0);
+
+    let mut seed = 322;
+    let mut small: Vec[i64] = [2, 3, 4];
+    for t in 0..small.len() {
+        let count = small[t];
+        let coins = denominations(count, 12, mut seed);
+        let amount = next(mut seed) % 40;
+        report(coins, amount);
+    }
+}

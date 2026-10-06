@@ -1,0 +1,22 @@
+
+fn spin(n: i64) -> i64 {
+    let mut s: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n { s = s + i; i = i + 1; }
+    return s;
+}
+
+fn main() {
+    let name = "ka" + "ra";
+    let mut m: Map[String, i64] = Map.new();
+    let heavy = spin(8);
+    m.insert("c", heavy - heavy);
+    m.insert("a", 1);
+    m.insert("b", 2);
+    let b = m.get("b");
+    match b {
+        Some(val) => println(val),
+        None => println(0),
+    }
+    println(name);
+}

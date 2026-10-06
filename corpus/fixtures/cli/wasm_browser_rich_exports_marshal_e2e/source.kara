@@ -1,0 +1,40 @@
+
+#[derive(Copy, Clone)]
+pub struct Point { x: f64, y: f64 }
+
+#[target(wasm_browser)]
+pub fn mk(x: f64, y: f64) -> Point { return Point { x: x, y: y }; }
+
+#[target(wasm_browser)]
+pub fn area(p: Point) -> f64 { return p.x * p.y; }
+
+#[target(wasm_browser)]
+pub fn checked_div(a: i32, b: i32) -> Option[i32] {
+    if b == 0 { return Option.None; }
+    return Option.Some(a / b);
+}
+
+#[target(wasm_browser)]
+pub fn safe_div(a: i32, b: i32) -> Result[i32, i32] {
+    if b == 0 { return Result.Err(-1); }
+    return Result.Ok(a / b);
+}
+
+#[target(wasm_browser)]
+pub fn shout(s: String) -> String { return s + "!"; }
+
+#[target(wasm_browser)]
+pub fn squares(n: i32) -> Vec[i32] {
+    let mut o: Vec[i32] = Vec.new();
+    // `i` is annotated because `let mut i = 0` defaults to `i64`, and pushing
+    // an `i64` into a `Vec[i32]` is an implicit NARROWING the language refuses
+    // (B-2026-08-14-1). It compiled here only because `Vec.push` was one of
+    // five slots that never ran the narrowing gate — the same `i * i` was
+    // already rejected at an annotated `let`, a call argument, and `Vec`'s own
+    // index-assign. Nothing about the wasm marshalling changes.
+    let mut i: i32 = 0;
+    while i < n { o.push(i * i); i += 1; }
+    return o;
+}
+
+fn main() {}

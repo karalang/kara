@@ -1,0 +1,9 @@
+scalar 30
+vector 10
+struct 3 4
+alias 99
+vec 8
+slice 30
+slicearith 35
+slicestruct 3 4
+slicealias 77

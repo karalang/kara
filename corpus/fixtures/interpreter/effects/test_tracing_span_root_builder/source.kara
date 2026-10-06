@@ -1,0 +1,7 @@
+fn main() {
+         let s = Span.root("request", 7).with_field("method", "GET");
+         println(s.name);
+         println(s.span_id);
+         println(s.parent_id);
+         println(s.fields.len());
+     }

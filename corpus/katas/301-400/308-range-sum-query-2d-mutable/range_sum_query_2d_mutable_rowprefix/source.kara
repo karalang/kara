@@ -1,0 +1,154 @@
+// LeetCode 308 — arm C: eager per-row prefix arrays, rebuilt on every write.
+//
+// Each row carries a plain 1D prefix array with a leading zero — the #303
+// structure, one per row. A query is the same row-slice sum arm B computes, but
+// each row answers in O(1) instead of O(log w). The price is the write: a
+// change at (r, c) invalidates every prefix entry to its right, so the row is
+// rebuilt in O(w).
+//
+//     update  O(w)          query  O(h)
+//
+// WHAT IT CANNOT GET WRONG: there is no bit trick anywhere in this file. Arms A
+// and B both walk lowbits, so a fault in that idiom — the one thing they share
+// — would show up in both AND could look like agreement. This arm is the
+// control for exactly that: it reaches the same answers with nothing but
+// running sums, so if A and B agree with each other and disagree with C and D,
+// the lowbit walk is the suspect.
+//
+// Rebuilding eagerly rather than lazily is deliberate. A dirty-flag scheme
+// would be faster and would introduce a third failure mode (a stale row read
+// before its rebuild) that none of the other arms can commit — interesting, but
+// it would make this arm a second source of bugs rather than a control.
+
+struct RowPrefix {
+    data: Vec[i64],
+    pre: Vec[i64],
+    h: i64,
+    w: i64,
+}
+
+impl RowPrefix {
+    fn new(m: ref Vec[Vec[i64]]) -> RowPrefix {
+        let h = m.len();
+        let mut w = 0;
+        if h > 0 { w = m[0].len(); }
+        let mut data: Vec[i64] = Vec.new();
+        for r in 0..h {
+            for c in 0..w {
+                data.push(m[r][c]);
+            }
+        }
+        let mut pre: Vec[i64] = Vec.new();
+        for i in 0..(h * (w + 1)) {
+            pre.push(0);
+        }
+        let mut st = RowPrefix { data: data, pre: pre, h: h, w: w };
+        for r in 0..h {
+            st.rebuild_row(r);
+        }
+        return st;
+    }
+
+    fn rebuild_row(mut ref self, r: i64) {
+        let base = r * (self.w + 1);
+        self.pre[base] = 0;
+        for c in 0..self.w {
+            self.pre[base + c + 1] = self.pre[base + c] + self.data[r * self.w + c];
+        }
+    }
+
+    fn update(mut ref self, r: i64, c: i64, val: i64) {
+        self.data[r * self.w + c] = val;
+        self.rebuild_row(r);
+    }
+
+    fn sum_region(ref self, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+        let mut total = 0;
+        let mut r = r1;
+        while r <= r2 {
+            let base = r * (self.w + 1);
+            total += self.pre[base + c2 + 1] - self.pre[base + c1];
+            r = r + 1;
+        }
+        return total;
+    }
+}
+
+fn new_structure(m: ref Vec[Vec[i64]]) -> RowPrefix {
+    return RowPrefix.new(m);
+}
+
+fn matrix_of(flat: Slice[i64], w: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < flat.len() {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < w {
+            row.push(flat[i + c]);
+            c = c + 1;
+        }
+        m.push(row);
+        i = i + w;
+    }
+    return m;
+}
+
+// `ops` is a flat list of (kind, a, b, c, d) 5-tuples:
+//   kind 0 = update(a, b, c)        — write value c at (a, b); d ignored
+//   kind 1 = sum_region(a, b, c, d) — the rectangle (a,b)..(c,d)
+fn report(flat: Slice[i64], w: i64, ops: Slice[i64]) {
+    let m = matrix_of(flat, w);
+    let h = m.len();
+    let mut st = new_structure(m);
+    let mut line = String.new();
+    line.push_str(f"{h}x{w} ->");
+    let mut k = 0;
+    while k + 4 < ops.len() {
+        let kind = ops[k];
+        let a = ops[k + 1];
+        let b = ops[k + 2];
+        let c = ops[k + 3];
+        let d = ops[k + 4];
+        if kind == 0 {
+            st.update(a, b, c);
+            line.push_str(f" u({a},{b},{c})");
+        } else {
+            line.push_str(f" {st.sum_region(a, b, c, d)}");
+        }
+        k = k + 5;
+    }
+    println(line);
+}
+
+fn main() {
+    // The matrix from the LeetCode statement.
+    report([3, 0, 1, 4, 2,
+            5, 6, 3, 2, 1,
+            1, 2, 0, 1, 5,
+            4, 1, 0, 1, 7,
+            1, 0, 3, 0, 5], 5,
+           [1, 2, 1, 4, 3,   0, 3, 2, 2, 0,   1, 2, 1, 4, 3,
+            1, 0, 0, 4, 4,   1, 1, 1, 2, 2]);
+    // A single cell, written and re-read.
+    report([42], 1, [1, 0, 0, 0, 0,  0, 0, 0, -5, 0,  1, 0, 0, 0, 0]);
+    // One row and one column of the same values.
+    report([1, 2, 3, 4], 4, [1, 0, 0, 0, 3,  0, 0, 2, 10, 0,  1, 0, 0, 0, 3,  1, 0, 2, 0, 2]);
+    report([1, 2, 3, 4], 1, [1, 0, 0, 3, 0,  0, 2, 0, 10, 0,  1, 0, 0, 3, 0,  1, 2, 0, 2, 0]);
+    // Writing the value already present must change nothing.
+    report([4, 4, 4, 4], 2, [1, 0, 0, 1, 1,  0, 1, 1, 4, 0,  1, 0, 0, 1, 1,  1, 1, 1, 1, 1]);
+    // All negative, then a write that flips a sign.
+    report([-1, -2, -3,
+            -4, -5, -6,
+            -7, -8, -9], 3,
+           [1, 0, 0, 2, 2,  1, 1, 1, 2, 2,  0, 0, 0, 100, 0,  1, 0, 0, 2, 2,  1, 0, 0, 0, 0]);
+    // Every cell of a 2x3 written in turn, reading the whole matrix each time.
+    report([0, 0, 0,
+            0, 0, 0], 3,
+           [0, 0, 0, 1, 0,  1, 0, 0, 1, 2,  0, 1, 2, 5, 0,  1, 0, 0, 1, 2,
+            0, 0, 2, 3, 0,  1, 0, 0, 1, 2,  1, 0, 1, 1, 2]);
+    // Large magnitudes that cancel.
+    report([100000, -100000,
+            -100000, 100000], 2,
+           [1, 0, 0, 1, 1,  0, 0, 1, 100000, 0,  1, 0, 0, 1, 1,  1, 0, 0, 0, 1]);
+}

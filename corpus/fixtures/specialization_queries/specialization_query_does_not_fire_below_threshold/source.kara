@@ -1,0 +1,7 @@
+
+fn identity[T](x: T) -> T { x }
+fn main() {
+    let _ = identity(1i64);
+    let _ = identity(2i32);
+    let _ = identity(3u8);
+}

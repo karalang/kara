@@ -1,0 +1,12 @@
+
+#[derive(Display)]
+struct Point { x: i64, y: i64 }
+impl Point { fn describe(ref self) -> String { self.to_string() } }
+trait Show { fn show(ref self) -> String; }
+impl Show for Point { fn show(ref self) -> String { self.to_string() } }
+fn main() {
+    let p: Point = Point { x: 3, y: 4 };
+    println(p.describe());
+    println(p.show());
+    println(f"{p}");
+}

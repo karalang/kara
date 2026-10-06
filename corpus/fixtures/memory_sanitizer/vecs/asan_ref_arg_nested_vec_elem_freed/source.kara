@@ -1,0 +1,19 @@
+
+fn make_vv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha");
+    v.push("beta");
+    return v;
+}
+
+fn show(v: ref Vec[String]) {
+    println(v.len());
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        show(make_vv());
+        i = i + 1;
+    }
+}

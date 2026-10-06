@@ -1,0 +1,44 @@
+
+trait MyReduce[T] {
+    fn sum(ref self) -> T;
+    fn min(ref self) -> T;
+    fn max(ref self) -> T;
+    fn mean(ref self) -> f64;
+}
+impl[T] MyReduce[T] for Column[T] {
+    fn sum(ref self) -> T {
+        self.sum()
+    }
+    fn min(ref self) -> T {
+        self.min()
+    }
+    fn max(ref self) -> T {
+        self.max()
+    }
+    fn mean(ref self) -> f64 {
+        self.mean()
+    }
+}
+impl[T, ...S] MyReduce[T] for Tensor[T, S] {
+    fn sum(ref self) -> T {
+        self.sum()
+    }
+    fn min(ref self) -> T {
+        self.min()
+    }
+    fn max(ref self) -> T {
+        self.max()
+    }
+    fn mean(ref self) -> f64 {
+        self.mean()
+    }
+}
+fn report[C: MyReduce[i64]](c: ref C) -> i64 {
+    println(f"{c.sum()} {c.min()} {c.max()} {c.mean()}");
+    c.sum()
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([10, 20, 30]);
+    let t: Tensor[i64, [4]] = Tensor.from([2, 4, 6, 8]);
+    println(f"{report(c) + report(t)}");
+}

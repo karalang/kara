@@ -1,0 +1,4 @@
+fn main() {
+    let t: (Array[i64, 3], i64) = ([0; 3], 7);
+    println(f"s:{t.1}");
+}

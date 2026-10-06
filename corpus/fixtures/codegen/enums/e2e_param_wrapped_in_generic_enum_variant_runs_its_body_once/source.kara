@@ -1,0 +1,29 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"x{i}" } }
+enum Ho[T] { Full(T), Empty }
+impl[T] Ho[T] { fn mk(v: T) -> Ho[T] { return Ho.Full(v); } }
+fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }
+fn mkt[T](v: T) -> Ho[T] { Ho.Full(v) }
+fn mkcg(v: R) -> Ho[R] { return Ho.Full(v); }
+fn mko[T](v: T) -> Option[T] { return Some(v); }
+fn takeit(x: Ho[R]) { match x { Full(r) => { println(f"f:{r.id}{r.s}") } Empty => { println("e") } } }
+fn main() {
+    let r1 = mkr(1);
+    takeit(Ho.mk(r1));
+    let r2 = mkr(2);
+    takeit(mkh(r2));
+    let r3 = mkr(3);
+    takeit(mkt(r3));
+    let r4 = mkr(4);
+    takeit(Ho[R].mk(r4));
+    let r5 = mkr(5);
+    let h5 = mkh(r5);
+    println("mid");
+    takeit(h5);
+    let r6 = mkr(6);
+    match mko(r6) { Some(q) => { println(f"o:{q.id}") } None => { println("n") } }
+    let r7 = mkr(7);
+    takeit(mkcg(r7));
+    println("end");
+}

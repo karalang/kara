@@ -1,0 +1,202 @@
+// LeetCode #726: Number of Atoms — a mini chemical-formula tokenizer.
+//
+// A formula is a sequence of elements and parenthesised groups:
+//
+//   element  =  Uppercase Lowercase*  Digit*        // "Mg", "O2", "H"
+//   group    =  '(' formula ')'  Digit*             // "(OH)2"
+//
+// "K4(ON(SO3)2)2" -> "K4N2O14S4". Output: element names in sorted order, each
+// followed by its total count when that count is > 1.
+//
+// This is the corpus's closest analog to the self-hosted lexer's *combined*
+// surface — every move the lexer makes when it reads an identifier-then-number
+// run inside nested delimiters happens here in one left-to-right byte scan:
+//
+//   Uppercase/lowercase run  ->  s[i..j] zero-copy slice          (name token)
+//   digit run -> integer     ->  c = c*10 + (b - b'0')            (count token)
+//   '(' / ')' nesting        ->  Vec[i64] paren stack             (group depth)
+//   group multiplier         ->  counts[k] *= mult over a range   (fold-back)
+//
+// Counts live in a parallel `Vec[String]` / `Vec[i64]` emit list (not a Map):
+// a group's trailing multiplier scales every atom emitted since its '(' — a
+// range mutation that wants indexed assignment, not tuple-field mutation. The
+// final tally + sorted render stay on the hardened byte-compare + slice surface
+// the lexer's keyword dispatch already stands on (no Map / TreeMap dependency,
+// whose iteration order is unspecified anyway).
+
+fn is_upper(b: u8) -> bool { b >= b'A' and b <= b'Z' }
+fn is_lower(b: u8) -> bool { b >= b'a' and b <= b'z' }
+fn is_digit(b: u8) -> bool { b >= b'0' and b <= b'9' }
+
+// Byte-lexicographic `a < b` over two element names — the keyword-dispatch
+// comparison surface, done by hand so the sort needs no String `<` operator.
+fn str_less(a: ref String, b: ref String) -> bool {
+    let ab = a.bytes();
+    let bb = b.bytes();
+    let an = ab.len();
+    let bn = bb.len();
+    let mut i = 0;
+    while i < an and i < bn {
+        let x = ab[i];
+        let y = bb[i];
+        if x < y { return true; }
+        if x > y { return false; }
+        i = i + 1;
+    }
+    an < bn
+}
+
+fn number_of_atoms(s: ref String) -> String {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    // Emit list: one (name, count) entry per element occurrence, in source order.
+    let mut names: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    // paren_stack[d] = names.len() at the matching '(' — the start of the group.
+    let mut paren_stack: Vec[i64] = Vec.new();
+
+    let mut i = 0;
+    while i < n {
+        let b = bytes[i];
+        if b == b'(' {
+            paren_stack.push(names.len());
+            i = i + 1;
+        } else if b == b')' {
+            i = i + 1;
+            // Trailing multiplier (default 1), then scale the whole group.
+            let mut mult = 0;
+            let mut have = false;
+            while i < n and is_digit(bytes[i]) {
+                mult = mult * 10 + ((bytes[i] - b'0') as i64);
+                have = true;
+                i = i + 1;
+            }
+            if not have { mult = 1; }
+            let start = paren_stack.pop().unwrap();
+            let mut k = start;
+            while k < names.len() {
+                counts[k] = counts[k] * mult;
+                k = k + 1;
+            }
+        } else if is_upper(b) {
+            // Element name: one uppercase + a maximal lowercase run -> one slice.
+            let mut j = i + 1;
+            while j < n and is_lower(bytes[j]) {
+                j = j + 1;
+            }
+            let name = s[i..j];
+            i = j;
+            // Trailing count (default 1).
+            let mut c = 0;
+            let mut have = false;
+            while i < n and is_digit(bytes[i]) {
+                c = c * 10 + ((bytes[i] - b'0') as i64);
+                have = true;
+                i = i + 1;
+            }
+            if not have { c = 1; }
+            names.push(name);
+            counts.push(c);
+        } else {
+            // Well-formed input has nothing else; skip defensively.
+            i = i + 1;
+        }
+    }
+
+    // Tally the emit list into a deduplicated (name, total) table.
+    let mut agg_names: Vec[String] = Vec.new();
+    let mut agg_counts: Vec[i64] = Vec.new();
+    let mut e = 0;
+    let m = names.len();
+    while e < m {
+        // Linear find — element alphabets are tiny. The name is borrowed for
+        // the search and only cloned into the table on a first sighting, so the
+        // merge case never copies (conditional move would force an RC otherwise).
+        let mut found = -1;
+        let mut t = 0;
+        let an = agg_names.len();
+        while t < an {
+            if agg_names[t] == names[e] {
+                found = t;
+                t = an;
+            } else {
+                t = t + 1;
+            }
+        }
+        if found < 0 {
+            agg_names.push(names[e].clone());
+            agg_counts.push(counts[e]);
+        } else {
+            agg_counts[found] = agg_counts[found] + counts[e];
+        }
+        e = e + 1;
+    }
+
+    // Insertion-sort an index permutation by name (no String moves out of Vec).
+    let g = agg_names.len();
+    let mut order: Vec[i64] = Vec.new();
+    let mut p = 0;
+    while p < g {
+        order.push(p);
+        p = p + 1;
+    }
+    let mut a = 1;
+    while a < g {
+        let cur = order[a];
+        let mut b2 = a - 1;
+        while b2 >= 0 and str_less(agg_names[cur], agg_names[order[b2]]) {
+            order[b2 + 1] = order[b2];
+            b2 = b2 - 1;
+        }
+        order[b2 + 1] = cur;
+        a = a + 1;
+    }
+
+    // Render: name, then count when > 1.
+    let mut out: String = "";
+    let mut q = 0;
+    while q < g {
+        let idx = order[q];
+        out.push_str(agg_names[idx]);
+        let c = agg_counts[idx];
+        if c > 1 {
+            out.push_str(f"{c}");
+        }
+        q = q + 1;
+    }
+    out
+}
+
+fn report(s: ref String) {
+    println(f"\"{s}\" -> \"{number_of_atoms(s)}\"");
+}
+
+fn main() {
+    // LeetCode canonical examples.
+    report("H2O");              // H2O
+    report("Mg(OH)2");          // H2MgO2
+    report("K4(ON(SO3)2)2");    // K4N2O14S4
+
+    // Single atoms / implicit count 1.
+    report("H");                // H
+    report("O2");               // O2
+    report("HOH");              // H2O   (two H tallied)
+
+    // Multi-letter names + sorting.
+    report("Mg");               // Mg
+    report("MgO");              // MgO
+    report("NaCl");             // ClNa  (Cl < Na)
+    report("CaCO3");            // C1 -> CCaO3  (C, Ca, O3; C before Ca)
+
+    // Nesting + multipliers.
+    report("(NB3)33");          // B99N33
+    report("(N(B3)2)2");        // B12N2
+    report("K4(ON(SO3)2)2");    // K4N2O14S4
+    report("A2B(C3)2");         // A2BC6
+
+    // Deep nest, multiplier folds compound.
+    report("((H)2O)2");         // H4O2
+    report("Be32");             // Be32
+    report("(Be32)1");          // Be32
+}

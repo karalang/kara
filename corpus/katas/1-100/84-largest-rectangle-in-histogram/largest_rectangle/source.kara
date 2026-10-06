@@ -1,0 +1,94 @@
+// LeetCode #84: Largest Rectangle in Histogram — monotonic stack, O(n).
+//
+// Given bar heights, find the area of the largest axis-aligned rectangle that fits
+// under the histogram. The rectangle spanning bars [l, r] has height min(heights[l..r])
+// and width r-l+1; the answer maximises height·width over all spans.
+//
+// The O(n) trick: keep a stack of bar indices whose heights are strictly INCREASING.
+// When the current bar is shorter than the stack top, that top bar can extend no
+// further right — so pop it and settle its largest rectangle NOW. The popped bar's
+// height is heights[top]; its rectangle stretches from just past the new stack top
+// (the nearest shorter bar to the LEFT) to just before the current bar (the nearest
+// shorter bar to the RIGHT), so width = i - stack.top - 1 (or i, if the stack emptied,
+// meaning nothing to the left was shorter). A virtual height-0 sentinel bar at index n
+// flushes everything still on the stack at the end. Each index is pushed and popped
+// once → O(n).
+
+fn largest_rectangle(heights: Slice[i64], n: i64) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut max_area = 0;
+    let mut i = 0;
+    while i <= n {
+        // Sentinel 0 at i == n flushes the remaining increasing run.
+        let h = if i < n { heights[i] } else { 0 };
+        while stack.len() > 0 and heights[stack[stack.len() - 1]] > h {
+            let top = stack[stack.len() - 1];
+            stack.pop();
+            let height = heights[top];
+            let width = if stack.len() == 0 {
+                i
+            } else {
+                i - stack[stack.len() - 1] - 1
+            };
+            let area = height * width;
+            if area > max_area {
+                max_area = area;
+            }
+        }
+        stack.push(i);
+        i = i + 1;
+    }
+    max_area
+}
+
+fn report(heights: Slice[i64], n: i64, acc: mut ref i64) {
+    let area = largest_rectangle(heights, n);
+    println(f"{area}");
+    acc = (acc * 131 + (area + 1)) % 1000000007;
+}
+
+fn main() {
+    let mut acc = 0;
+
+    // LeetCode example 1 — the 5,6 pair gives 2·5=10 beating the lone 6.
+    let a1: Array[i64, 6] = [2, 1, 5, 6, 2, 3];
+    report(a1, 6, mut acc);          // 10
+
+    // LeetCode example 2.
+    let a2: Array[i64, 2] = [2, 4];
+    report(a2, 2, mut acc);          // 4
+
+    // Empty histogram.
+    let a3: Array[i64, 0] = [];
+    report(a3, 0, mut acc);          // 0
+
+    // Single bar.
+    let a4: Array[i64, 1] = [5];
+    report(a4, 1, mut acc);          // 5
+
+    // Flat — width·height = 4·1.
+    let a5: Array[i64, 4] = [1, 1, 1, 1];
+    report(a5, 4, mut acc);          // 4
+
+    // Valley then peak — the two 5s bracket a 4 for 3·4=12.
+    let a6: Array[i64, 7] = [6, 2, 5, 4, 5, 1, 6];
+    report(a6, 7, mut acc);          // 12
+
+    // All zero height.
+    let a7: Array[i64, 3] = [0, 0, 0];
+    report(a7, 3, mut acc);          // 0
+
+    // A zero splits the histogram; best is 2·3 on the right? -> 6.
+    let a8: Array[i64, 6] = [4, 2, 0, 3, 2, 5];
+    report(a8, 6, mut acc);          // 6
+
+    // Monotone increasing — best is the 3·3 tail (heights 3,4,5).
+    let a9: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(a9, 5, mut acc);          // 9
+
+    // Monotone decreasing — symmetric, also 9.
+    let a10: Array[i64, 5] = [5, 4, 3, 2, 1];
+    report(a10, 5, mut acc);         // 9
+
+    println(f"sink: {acc}");
+}

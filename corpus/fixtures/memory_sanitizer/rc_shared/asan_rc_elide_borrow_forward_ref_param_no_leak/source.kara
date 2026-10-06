@@ -1,0 +1,29 @@
+
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn check(node: Option[Node]) -> i64 {
+    match node {
+        None => 0i64,
+        Some(n) => {
+            let lh = check(n.left);
+            if lh == -1i64 { return -1i64; }
+            let rh = check(n.right);
+            if rh == -1i64 { return -1i64; }
+            let d = lh - rh;
+            let ad = if d < 0i64 { -d } else { d };
+            if ad > 1i64 { return -1i64; }
+            if lh > rh { 1i64 + lh } else { 1i64 + rh }
+        }
+    }
+}
+fn is_balanced(root: Option[Node]) -> bool { check(root) != -1i64 }
+fn main() {
+    let bal = Some(Node { val: 4i64, left: Some(Node { val: 2i64, left: Some(Node{val:1i64,left:None,right:None}), right: Some(Node{val:3i64,left:None,right:None}) }), right: Some(Node { val: 6i64, left: Some(Node{val:5i64,left:None,right:None}), right: Some(Node{val:7i64,left:None,right:None}) }) });
+    let unb = Some(Node { val: 1i64, left: None, right: Some(Node { val: 2i64, left: None, right: Some(Node{val:3i64,left:None,right:None}) }) });
+    let mut pool: Vec[Option[Node]] = Vec.new();
+    pool.push(bal);
+    pool.push(unb);
+    let mut t = 0i64;
+    let mut rep = 0i64;
+    while rep < 200i64 { let idx = rep % 2i64; if is_balanced(pool[idx].clone()) { t = t + 1i64; } rep = rep + 1i64; }
+    println(f"{t}")
+}

@@ -1,0 +1,29 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+enum Mono { P(R), Q }
+enum Md { P(R), Q }
+impl Drop for Md { fn drop(mut ref self) { println("  dMd") } }
+enum Ha { P(Array[Mono, 1]), Q }
+enum Hd { P(Array[Md, 1]), Q }
+enum G[T] { X(T), Y }
+struct Ga { h: Ha }
+struct Gb { g: Ga, k: i64 }
+fn r(i: i64) -> R { R { id: i, s: f"ssssssss{i}" } }
+fn mk(i: i64) -> Ha { Ha.P([Mono.P(r(i))]) }
+fn taka(a: Array[Mono, 1]) -> i64 { 1 }
+fn main() {
+    println("stmt"); { Ha.P([Mono.P(r(1))]); println("  x") }
+    println("unit"); { let h = Ha.P([Mono.Q]); println("  x") }
+    println("ret"); { let h = mk(2); println("  x") }
+    println("armpass"); { let h = Ha.P([Mono.P(r(4))]); match h { Ha.P(a) => { let n = taka(a); println(f"  n{n}") } Ha.Q => {} } }
+    println("armelem"); { let h = Ha.P([Mono.P(r(5))]); match h { Ha.P(a) => { match a[0] { Mono.P(x) => println(f"  in {x.id}"), Mono.Q => {} } } Ha.Q => {} } }
+    println("iflet"); { let h = Ha.P([Mono.P(r(6))]); if let Ha.P(a) = h { println("  in") } }
+    println("vec"); { let mut v: Vec[Ha] = []; v.push(Ha.P([Mono.P(r(7))])); println("  x") }
+    println("opt"); { let o = Option.Some(Ha.P([Mono.P(r(8))])); println("  x") }
+    println("tup"); { let t = (Ha.P([Mono.P(r(9))]), 1); println("  x") }
+    println("nested"); { let b = Gb { g: Ga { h: Ha.P([Mono.P(r(10))]) }, k: 1 }; println("  x") }
+    println("owndrop"); { let h = Hd.P([Md.P(r(11))]); println("  x") }
+    println("generic"); { let g = G.X([Mono.P(r(13))]); println("  x") }
+    println("fieldmv"); { let g = Ga { h: Ha.P([Mono.P(r(14))]) }; let h = g.h; println("  x") }
+    println("end")
+}

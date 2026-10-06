@@ -1,0 +1,11 @@
+
+fn main() {
+    let lo: i64 = 7i64;
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = lo;
+    while k < 1000i64 {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}

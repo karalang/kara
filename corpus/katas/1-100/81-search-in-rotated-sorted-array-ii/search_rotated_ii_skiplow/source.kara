@@ -1,0 +1,112 @@
+// LeetCode #81: Search in Rotated Sorted Array II — single-sided duplicate skip.
+//
+// Same problem as search_rotated_ii.kara (the ★), same O(n)-worst-case membership
+// test, but a different way to resolve the duplicate ambiguity. The ★ compares all
+// three ends (nums[lo] == nums[mid] == nums[hi]) and shrinks BOTH when they collide.
+// This variant instead splits on nums[lo] vs nums[mid] with STRICT inequalities and
+// treats the only remaining case — nums[lo] == nums[mid] — by dropping the low end
+// alone:
+//
+//   nums[lo] <  nums[mid]  ->  left half strictly sorted, range-test and recurse
+//   nums[lo] >  nums[mid]  ->  right half sorted, range-test and recurse
+//   nums[lo] == nums[mid]  ->  lo += 1   (nums[lo] != target here, so it's safe to drop)
+//
+// It's safe to skip nums[lo] on the tie because we only reach this branch after
+// nums[mid] != target, and nums[lo] == nums[mid], so nums[lo] can't be the target
+// either. A distinct control-flow surface (three-way strict split, single-sided
+// shrink) that must agree with the ★ and the linear ground truth on every query.
+
+fn search(nums: Slice[i64], len: i64, target: i64) -> bool {
+    let mut lo = 0;
+    let mut hi = len - 1;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] == target {
+            return true;
+        }
+        if nums[lo] < nums[mid] {
+            // Left half [lo, mid] is strictly sorted.
+            if nums[lo] <= target and target < nums[mid] {
+                hi = mid - 1;
+            } else {
+                lo = mid + 1;
+            }
+        } else if nums[lo] > nums[mid] {
+            // Right half [mid, hi] is sorted.
+            if nums[mid] < target and target <= nums[hi] {
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        } else {
+            // nums[lo] == nums[mid] (and != target): drop the low end and retry.
+            lo = lo + 1;
+        }
+    }
+    false
+}
+
+fn fmt(nums: Slice[i64], len: i64) -> String {
+    let mut s: String = "[";
+    for i in 0..len {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(nums: Slice[i64], len: i64, target: i64, acc: mut ref i64) {
+    let found = search(nums, len, target);
+    println(f"{fmt(nums, len)} target={target} -> {found}");
+    let bit = if found { 1 } else { 0 };
+    acc = (acc * 131 + (target + 1000) * 2 + bit) % 1000000007;
+}
+
+fn main() {
+    let mut acc = 0;
+
+    let a1: Array[i64, 7] = [2, 5, 6, 0, 0, 1, 2];
+    report(a1, 7, 0, mut acc);
+    report(a1, 7, 3, mut acc);
+
+    let a2: Array[i64, 7] = [1, 1, 1, 2, 1, 1, 1];
+    report(a2, 7, 2, mut acc);
+    report(a2, 7, 3, mut acc);
+
+    let a3: Array[i64, 6] = [5, 5, 5, 5, 5, 5];
+    report(a3, 6, 5, mut acc);
+    report(a3, 6, 7, mut acc);
+
+    let a4: Array[i64, 9] = [4, 5, 6, 6, 7, 0, 1, 2, 4];
+    report(a4, 9, 6, mut acc);
+    report(a4, 9, 0, mut acc);
+    report(a4, 9, 3, mut acc);
+
+    let a5: Array[i64, 8] = [1, 1, 1, 1, 2, 3, 1, 1];
+    report(a5, 8, 3, mut acc);
+    report(a5, 8, 0, mut acc);
+
+    let a6: Array[i64, 5] = [1, 2, 2, 3, 4];
+    report(a6, 5, 2, mut acc);
+    report(a6, 5, 5, mut acc);
+
+    let a7: Array[i64, 2] = [1, 3];
+    report(a7, 2, 3, mut acc);
+    report(a7, 2, 2, mut acc);
+
+    let a8: Array[i64, 1] = [1];
+    report(a8, 1, 1, mut acc);
+    report(a8, 1, 0, mut acc);
+
+    let a9: Array[i64, 0] = [];
+    report(a9, 0, 5, mut acc);
+
+    let a10: Array[i64, 6] = [-1, -1, 3, 3, -2, -1];
+    report(a10, 6, -2, mut acc);
+    report(a10, 6, 0, mut acc);
+
+    println(f"sink: {acc}");
+}

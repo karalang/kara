@@ -1,0 +1,17 @@
+
+struct InMemOrders { seed: i64 }
+
+impl InMemOrders {
+    fn get_orders(ref self, user_id: i64) -> Vec[i64] {
+        let s: i64 = self.seed + user_id;
+        let mut v: Vec[i64] = Vec.new();
+        v.push(s);
+        v
+    }
+}
+
+fn main() {
+    let db = InMemOrders { seed: 100 };
+    let _ = db.get_orders(42);
+    println("done");
+}

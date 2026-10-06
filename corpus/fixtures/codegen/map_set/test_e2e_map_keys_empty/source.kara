@@ -1,0 +1,7 @@
+
+fn main() {
+    let m: Map[i64, i64] = Map.new();
+    let ks: Vec[i64] = m.keys();
+    println(ks.len());
+    println(ks.is_empty());
+}

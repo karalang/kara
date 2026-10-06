@@ -1,0 +1,15 @@
+
+fn main() {
+    let n = env.args().len() as i64;
+    let s: bf16 = (n as f32) as bf16;
+    let t: bf16 = ((n + 1) as f32) as bf16;
+    let a: Vector[bf16, 4] = Vector[bf16, 4](s, t, s, t);
+    let b: Vector[bf16, 4] = Vector[bf16, 4].splat(t);
+    println(f"arith={(a + b).reduce_sum()} {(a - b).reduce_sum()} {(a * b).reduce_sum()} {(a / b).reduce_sum()} {(a % b).reduce_sum()}");
+    println(f"cmp={(a < b)[0]} {(a == b)[0]} {(a != b)[0]} {(a <= b)[0]} {(a > b)[0]} {(a >= b)[0]}");
+    println(f"math={a.sqrt().reduce_sum()} {a.exp().reduce_sum()} {b.ln().reduce_sum()}");
+    println(f"act={a.sigmoid().reduce_sum()} {a.tanh().reduce_sum()}");
+    println(f"round={a.floor().reduce_sum()} {a.ceil().reduce_sum()} {a.round().reduce_sum()} {a.trunc().reduce_sum()}");
+    println(f"red={a.reduce_min()} {a.reduce_max()} {a.reduce_product()} {a.dot(b)}");
+    println(f"lanes={a.reverse().reduce_sum()} {a.rotate_lanes_left(1).reduce_sum()} {a.replace(0, 1.0bf16).reduce_sum()} {a[0]}");
+}

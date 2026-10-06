@@ -1,0 +1,23 @@
+
+fn main() {
+    let mut vs: Vec[String] = Vec.new();
+    vs.push("alpha".to_string());
+    vs.push("bb".to_string());
+    let mut vv: Vec[Vec[i64]] = Vec.new();
+    vv.push([1, 2, 3, 4]);
+    vv.push([9]);
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 60 {
+        acc = acc + vs.first().unwrap().len();
+        acc = acc + vs.last().unwrap().len();
+        acc = acc + vv.first().unwrap().len();
+        acc = acc + vv.last().unwrap().len();
+        acc = acc + vs.get(0).unwrap().len();
+        i = i + 1;
+    }
+    println(acc);
+    println(vs.first().unwrap());
+    println(vs.last().expect("empty"));
+    println(f"[{vs.first().unwrap()}]");
+}

@@ -1,0 +1,4 @@
+cases 3600
+mismatches 0
+dictionaries 360, of which with a repeated word 140
+answers true 3202, false 398

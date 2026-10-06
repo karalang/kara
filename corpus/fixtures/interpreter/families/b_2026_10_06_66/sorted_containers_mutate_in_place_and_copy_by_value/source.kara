@@ -1,0 +1,52 @@
+struct Holder {
+    m: SortedMap[i64, i64],
+    s: SortedSet[i64],
+}
+
+fn bump(m: mut ref SortedMap[i64, i64]) {
+    m.insert(100, 1000);
+}
+
+fn takes(m: SortedMap[i64, i64]) -> i64 {
+    return m.len();
+}
+
+fn main() {
+    let mut a: SortedMap[i64, i64] = SortedMap.new();
+    a.insert(1, 10);
+    let mut b = a;
+    b.insert(2, 20);
+    let mut c = b.clone();
+    c.insert(3, 30);
+    println(f"b={b.len()} c={c.len()}");
+    let mut s: SortedSet[i64] = SortedSet.new();
+    s.insert(5);
+    let mut t = s.clone();
+    t.insert(6);
+    println(f"s={s.len()} t={t.len()}");
+    let mut h = Holder { m: c.clone(), s: t.clone() };
+    h.m.insert(4, 40);
+    h.s.insert(7);
+    println(f"c={c.len()} h.m={h.m.len()} t={t.len()} h.s={h.s.len()}");
+    let mut h2 = Holder { m: h.m.clone(), s: h.s.clone() };
+    h2.m.remove(1);
+    h2.s.remove(5);
+    println(f"h.m={h.m.len()} h2.m={h2.m.len()} h.s={h.s.len()} h2.s={h2.s.len()}");
+    bump(mut c);
+    println(f"c after bump={c.len()} takes={takes(c.clone())}");
+    let mut v: Vec[SortedSet[i64]] = Vec.new();
+    v.push(t.clone());
+    v[0].insert(99);
+    println(f"t={t.len()} v0={v[0].len()}");
+    let mut w = v.clone();
+    w[0].insert(98);
+    println(f"v0={v[0].len()} w0={w[0].len()}");
+    h.m.clear();
+    println(f"h.m={h.m.len()} h2.m={h2.m.len()}");
+    let mut e: SortedMap[i64, i64] = SortedMap.new();
+    e.entry(7).or_insert(0);
+    e.entry(7).and_modify(|x| { x += 5; });
+    if let Some((k, x)) = e.floor(9) {
+        println(f"floor {k}={x}");
+    }
+}

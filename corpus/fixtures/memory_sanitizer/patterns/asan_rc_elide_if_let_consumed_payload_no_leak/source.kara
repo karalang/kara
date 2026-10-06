@@ -1,0 +1,13 @@
+
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn sink(x: Node) -> i64 { x.val }
+fn probe3(p: Option[Node]) -> i64 { let mut r = 0i64; if let Some(n) = p { r = sink(n); } r }
+fn main() {
+    let mut pool: Vec[Option[Node]] = Vec.new();
+    pool.push(Some(Node { val: 5i64, left: None, right: None }));
+    pool.push(Some(Node { val: 9i64, left: None, right: None }));
+    let mut t: i64 = 0i64;
+    let mut rep: i64 = 0i64;
+    while rep < 200i64 { let idx = rep % 2i64; t = t + probe3(pool[idx].clone()); rep = rep + 1i64; }
+    println(f"{t}")
+}

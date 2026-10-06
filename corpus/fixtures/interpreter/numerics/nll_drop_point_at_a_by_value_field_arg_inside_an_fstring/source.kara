@@ -1,0 +1,22 @@
+struct Res { id: i64, buf: Vec[i64] }
+impl Drop for Res { fn drop(mut ref self) { println(f"drop {self.id}") } }
+struct Holder { r: Res }
+
+fn mk(n: i64) -> Res {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 8 { v.push(n + i); i = i + 1; }
+    return Res { id: n, buf: v }
+}
+
+fn hand(r: Res) -> Res { return r }
+fn readf(r: Res) -> i64 { return r.buf[3] }
+
+fn main() {
+    let b = mk(20);
+    let hb = hand(b);
+    println(f"hand={hb.buf[1]}");
+    let h = Holder { r: mk(40) };
+    println(f"field={readf(h.r)}");
+    println("end");
+}

@@ -1,0 +1,9 @@
+
+fn z() -> i64 { 42 }
+fn main() {
+    let mut g: TaskGroup = TaskGroup.new();
+    let h: TaskHandle[i64] = g.spawn(|| z());
+    let r: i64 = h.join();
+    println(r);
+    println("done");
+}

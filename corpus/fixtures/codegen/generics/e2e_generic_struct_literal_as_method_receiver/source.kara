@@ -1,0 +1,19 @@
+
+struct Box[T] { v: T }
+struct Pair[T] { a: T, b: i64 }
+struct Num[T] { n: T }
+impl[T] Box[T] { fn take(self) -> T { self.v } }
+impl[T] Box[T] { fn peek(ref self) -> i64 { 7 } }
+impl[T] Pair[T] { fn first(self) -> T { self.a } }
+impl[T] Num[T] { fn get(self) -> T { self.n } }
+fn takefn[T](b: Box[T]) -> T { b.v }
+fn main() {
+    let n: i64 = env.args().len();
+    println(Box { v: "payload-past-inline-width-here".repeat(n) }.take().len());
+    println(Pair { a: "second-field-shape".repeat(n), b: 7 }.first().len());
+    println(Box { v: "ignored-by-the-body".repeat(n) }.peek());
+    println(takefn(Box { v: "free-fn-arg-position".repeat(n) }).len());
+    let b = Box { v: "named-receiver-still-works".repeat(n) };
+    println(b.take().len());
+    println(Num { n: n + 41 }.get());
+}

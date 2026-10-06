@@ -1,0 +1,13 @@
+source = "tests/codegen/vecs.rs::test_e2e_vec_from_fn_computes_each_slot_by_index"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

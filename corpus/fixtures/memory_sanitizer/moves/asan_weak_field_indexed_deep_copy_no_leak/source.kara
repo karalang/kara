@@ -1,0 +1,35 @@
+
+shared struct Node { val: i64, id: i64, mut next: Option[Node], mut random: weak Node }
+fn deep_copy(orig: Vec[Node]) -> Vec[Node] {
+    let n: i64 = orig.len();
+    let mut copies: Vec[Node] = Vec.new();
+    let mut i: i64 = 0i64;
+    while i < n {
+        copies.push(Node { val: orig[i].val, id: orig[i].id, next: None, random: None });
+        i = i + 1;
+    }
+    i = 0i64;
+    while i < n {
+        if i + 1i64 < n { copies[i].next = Some(copies[i + 1i64]); }
+        match orig[i].random { Some(r) => { copies[i].random = copies[r.id]; } None => {} }
+        i = i + 1;
+    }
+    return copies;
+}
+fn main() {
+    let mut orig: Vec[Node] = Vec.new();
+    orig.push(Node { val: 7i64, id: 0i64, next: None, random: None });
+    orig.push(Node { val: 13i64, id: 1i64, next: None, random: None });
+    orig.push(Node { val: 11i64, id: 2i64, next: None, random: None });
+    orig[0i64].next = Some(orig[1i64]);
+    orig[1i64].next = Some(orig[2i64]);
+    orig[1i64].random = orig[0i64];
+    orig[2i64].random = orig[1i64];
+    let copies: Vec[Node] = deep_copy(orig);
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let rv: i64 = match copies[i].random { Some(r) => r.val, None => 0i64 - 1i64 };
+        println(copies[i].val.to_string() + "|" + rv.to_string());
+        i = i + 1;
+    }
+}

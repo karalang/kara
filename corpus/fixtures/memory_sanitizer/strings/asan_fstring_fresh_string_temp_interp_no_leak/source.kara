@@ -1,0 +1,29 @@
+
+struct Dog { name: String }
+impl Dog {
+    fn describe(ref self) -> String { f"dog {self.name}" }
+}
+fn greet(n: String) -> String { f"hi {n}" }
+fn make(n: i64) -> String { f"item-{n}" }
+fn main() {
+    let d: Dog = Dog { name: "Rex" };
+    // method-call String temp, twice in one f-string
+    println(f"{d.describe()} and {d.describe()}");
+    // free-fn String temp
+    println(f"[{greet("bob")}]");
+    // identifier String (owned) must not double-free
+    let name: String = f"world";
+    println(f"hi {name}");
+    println(name);
+    // String slice temp
+    let s: String = "hello world";
+    println(f"[{s[0..5]}]");
+    // fresh-temp interp in a loop, result moved into a Vec (no double-free)
+    let mut v: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5 {
+        v.push(f"row {make(i)}");
+        i = i + 1;
+    }
+    println(f"{v.len()}");
+}

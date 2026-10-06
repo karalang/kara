@@ -1,0 +1,24 @@
+
+fn work(k: i64) -> i64 {
+    let mut t = 0i64;
+    let mut j = 0i64;
+    while j < 64i64 {
+        t = (t + (k * 7919i64 + j) % 977i64 * (j + 1i64)) % 1000003i64;
+        j = j + 1i64;
+    }
+    return t;
+}
+fn main() {
+    let mut total = 0i64;
+    let mut i = 0i64;
+    while i < 3i64 {
+        total = total + i;
+        i = i + 1i64;
+    }
+    i = 0i64;
+    while i < 200000i64 {
+        total = total + work(i);
+        i = i + 1i64;
+    }
+    println(f"{total} {i}");
+}

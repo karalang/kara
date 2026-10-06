@@ -1,0 +1,33 @@
+
+fn idopt(o: Option[String]) -> Option[String] { o }
+fn idres(r: Result[String, i64]) -> Result[String, i64] { r }
+fn peek(o: Option[String]) -> i64 { match o { Option.Some(s) => s.len(), Option.None => -1 } }
+fn mk(n: i64, i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str((n + i).to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        let a: Option[String] = Option.Some(mk(n, i));
+        let abk = idopt(a);
+        match abk { Option.Some(x) => { if x.contains("payload") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        let b: Option[String] = Option.Some(mk(n, i));
+        let bbk = idopt(b);
+        match bbk { Option.Some(_) => { acc = acc + 1; } _ => { acc = acc - 1; } }
+        let r: Result[String, i64] = Result.Ok(mk(n, i));
+        let rbk = idres(r);
+        match rbk { Result.Ok(x) => { if x.ends_with("heap") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        let e: Option[String] = Option.Some(mk(n, i));
+        acc = acc + peek(e);
+        let t = idopt(Option.Some(mk(n, i)));
+        match t { Option.Some(x) => { if x.contains("payload") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        i = i + 1;
+    }
+    println(acc);
+}

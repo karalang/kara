@@ -1,0 +1,27 @@
+
+shared struct Node { val: i64, id: i64, mut next: Option[Node] }
+fn main() {
+    let mut v: Vec[Node] = Vec.new();
+    let mut i = 0i64;
+    while i < 5i64 {
+        v.push(Node { val: i * 2i64, id: i, next: None });
+        i = i + 1;
+    }
+    i = 0i64;
+    while i < 5i64 {
+        if i + 1i64 < 5i64 {
+            v[i].next = Some(v[i + 1i64]);
+        }
+        i = i + 1;
+    }
+    let mut h = 0i64;
+    let mut cur: Option[Node] = Some(v[0i64]);
+    let mut go = true;
+    while go {
+        match cur {
+            None => { go = false; }
+            Some(n) => { h = h + n.val; cur = n.next; }
+        }
+    }
+    println(h.to_string());
+}

@@ -1,0 +1,9 @@
+
+struct Inner { v: i64 }
+struct Outer { a: Inner, b: Inner }
+fn main() {
+    let o = Outer { a: Inner { v: 3 }, b: Inner { v: 5 } };
+    let f = || o.a.v;
+    let g = || o.b.v;
+    println(f() + g());
+}

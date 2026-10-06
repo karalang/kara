@@ -1,0 +1,16 @@
+
+struct Counter { n: i64 }
+impl Counter {
+    fn bump(mut ref self) { self.n = self.n + 1; }
+    fn read(ref self) -> i64 { self.n }
+}
+fn main() {
+    let mut v: Vec[Counter] = Vec.new();
+    v.push(Counter { n: 10 });
+    v.push(Counter { n: 20 });
+    v[0].bump();
+    v[0].bump();
+    v[1].bump();
+    println(v[0].read());
+    println(v[1].read());
+}

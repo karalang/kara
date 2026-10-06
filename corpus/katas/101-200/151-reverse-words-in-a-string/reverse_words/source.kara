@@ -1,0 +1,54 @@
+// LeetCode 151 — Reverse Words in a String.
+//
+// Reverse the ORDER of the words in `s`. A word is a maximal run of non-space
+// characters; the result joins the words in reverse order with a single space,
+// with no leading/trailing spaces and no repeated spaces — regardless of how the
+// input was spaced. One byte scan collects each word as a `s[start..i]` slice
+// into a `Vec[String]`, then we emit them back-to-front joined by " ".
+
+fn reverse_words(s: String) -> String {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let space: u8 = b' ';
+
+    let mut words: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        while i < n and bytes[i] == space {
+            i = i + 1;
+        }
+        if i >= n {
+            break;
+        }
+        let start = i;
+        while i < n and bytes[i] != space {
+            i = i + 1;
+        }
+        words.push(s[start..i].to_string());
+    }
+
+    let mut out: String = "";
+    let m = words.len();
+    let mut k = m - 1;
+    while k >= 0 {
+        if k < m - 1 {
+            out.push_str(" ");
+        }
+        out.push_str(words[k]);
+        k = k - 1;
+    }
+    return out;
+}
+
+fn run(s: String) {
+    println(reverse_words(s));
+}
+
+fn main() {
+    run("the sky is blue");
+    run("  hello world  ");
+    run("a good   example");
+    run("single");
+    run("   ");
+    run("  leading and trailing  ");
+}

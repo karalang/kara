@@ -1,0 +1,19 @@
+
+fn main() {
+    let mut c: Column[i64] = Column.new();
+    c.push(10);
+    c.push_null();
+    c.push(30);
+    let all: Vec[Option[i64]] = c.iter();
+    println(all.len());
+    let mut sum = 0;
+    for o in all { match o { Some(v) => { sum = sum + v; }, None => { sum = sum - 1; } } }
+    println(sum);
+    let valid: Vec[i64] = c.iter_valid();
+    println(valid.len());
+    let mut vs = 0;
+    for x in c.iter_valid() { vs = vs + x; }
+    println(vs);
+    // source column still usable (borrowed, not consumed).
+    println(c.null_count());
+}

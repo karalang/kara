@@ -1,0 +1,22 @@
+
+struct Row { tag: i64, data: Vec[i64] }
+layout rows: Vec[Row] { group tags { tag } group bulk { data } }
+fn make(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { v.push(i); i = i + 1; }
+    v
+}
+fn main() with panics {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut rows: Vec[Row] = Vec.new();
+        let mut i = 0;
+        while i < 8 { rows.push(Row { tag: i, data: make(12) }); i = i + 1; }
+        let mut j = 0;
+        while j < rows.len() { total = total + rows[j].tag; j = j + 1; }
+        k = k + 1;
+    }
+    println(total);
+}

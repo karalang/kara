@@ -1,0 +1,23 @@
+fn main() {
+            let csv = "a,b,c";
+            let parts = csv.split(',');
+            let n = parts.len();
+            println(f"{n}");
+            println(parts[0]);
+            println(parts[2]);
+
+            let path = "x::y::z";
+            let seg = path.split("::");
+            let sn = seg.len();
+            println(f"{sn}");
+
+            let edges = ",lead,trail,";
+            let en = edges.split(',').len();
+            println(f"{en}");
+
+            let whole = "nosep";
+            let one = whole.split(',');
+            let on = one.len();
+            println(f"{on}");
+            println(one[0]);
+        }

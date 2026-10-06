@@ -1,0 +1,11 @@
+
+#[target(wasm_browser)]
+pub fn shout(s: String) -> String { return s; }
+
+#[target(wasm_wasi)]
+pub fn pick(b: bool) -> Option[i32] { return Option.None; }
+
+#[target(wasm_wasi)]
+pub fn nums(xs: Vec[i32]) -> Vec[i32] { return xs; }
+
+fn main() {}

@@ -1,0 +1,4 @@
+
+fn mk(s: ref String) -> String { s.substring(0, 4) }
+fn f(hay: ref String, needle: ref String) -> bool { mk(hay) == needle }
+fn main() { let h = "abcdefgh"; let n = "abcd"; println(f"{f(h, n)}"); }

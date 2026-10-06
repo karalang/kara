@@ -1,0 +1,23 @@
+fn s8(o: Option[u8]) -> String { match o { Some(v) => f"S{v}", None => "N" } }
+fn main() {
+    println(f"{s8(u8.parse("300".to_string()))} {s8(u8.parse("-1".to_string()))} {s8(u8.parse(" 255 ".to_string()))} {s8(u8.from_str_radix("1ff".to_string(), 16))} {s8(u8.from_str_radix("ff".to_string(), 16))}");
+    let a: Option[u64] = u64.parse("18446744073709551615".to_string());
+    match a { Some(v) => println(f"S{v}"), None => println("N") }
+    let b: Option[i32] = i32.parse("3000000000".to_string());
+    match b { Some(v) => println(f"S{v}"), None => println("N") }
+    let c: Option[i32] = i32.parse("-2147483648".to_string());
+    match c { Some(v) => println(f"S{v}"), None => println("N") }
+    let d = i128.parse("-170141183460469231731687303715884105728".to_string());
+    match d { Some(v) => println(f"S{v}"), None => println("N") }
+    let e = u128.parse("340282366920938463463374607431768211455".to_string());
+    match e { Some(v) => println(f"S{v}"), None => println("N") }
+    let f = i128.from_str_radix("-ff".to_string(), 16);
+    match f { Some(v) => println(f"S{v}"), None => println("N") }
+    let g = u128.parse("340282366920938463463374607431768211456".to_string());
+    match g { Some(v) => println(f"S{v}"), None => println("N") }
+    let h = i64.parse("abc".to_string());
+    match h { Some(v) => println(f"S{v}"), None => println("N") }
+    let k = i8.from_str_radix("-80".to_string(), 16);
+    match k { Some(v) => println(f"S{v}"), None => println("N") }
+    match u16.parse("65536".to_string()) { Some(v) => println(f"S{v}"), None => println("N") }
+}

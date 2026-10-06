@@ -1,0 +1,7 @@
+
+fn main() {
+    println((300.0f64).wrapping_to_i8());
+    println((256.0f64).wrapping_to_u8());
+    println((257.9f64).wrapping_to_u8());
+    println((-3.7f64).wrapping_to_i32());
+}

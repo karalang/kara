@@ -1,0 +1,19 @@
+fn helper() -> i64 {
+    return 1;
+}
+struct P {
+    n: i64,
+}
+impl P {
+    fn get(self) -> i64 {
+        return self.n + helper();
+    }
+}
+fn main() {
+    let helper = || 99;
+    let p = P { n: 3 };
+    println(f"{f()} {helper()} {p.get()}");
+}
+fn f() -> i64 {
+    return helper();
+}

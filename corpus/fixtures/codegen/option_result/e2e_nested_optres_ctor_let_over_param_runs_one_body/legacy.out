@@ -1,0 +1,48 @@
+fl-f
+drop 1 h1
+fl-t
+held
+drop 2 h2
+flb-t
+held
+drop 3 h3
+flt
+held
+drop 4 h4
+flr-t
+held
+drop 5 h5
+flu-t
+held
+used
+drop 6 h6
+fln
+held
+drop 7 h7
+fl-n
+held
+drop 8 h8
+ml-f
+drop 11 h11
+ml-t
+held
+drop 12 h12
+mlb-t
+held
+drop 13 h13
+mlt
+held
+drop 14 h14
+mlr-t
+held
+drop 15 h15
+mln
+held
+drop 16 h16
+ml-n
+held
+drop 17 h17
+ml-var
+held
+drop 18 h18
+end

@@ -1,0 +1,119 @@
+// LeetCode 254 — Factor Combinations, iterative worklist.
+//
+// The ★ recursion transcribed to an explicit stack of frames. Each frame carries
+// what the call stack would have held: the remaining product, the smallest
+// divisor still allowed, and the path built so far.
+//
+// The path must be COPIED into each child frame rather than shared and undone.
+// A recursion can push a divisor, recurse, and pop it on the way back because
+// the undo happens at a known point; a worklist has no such point — the child
+// frame is consumed later, long after the parent has moved on. That copy is the
+// real cost of going iterative here, and it is the thing worth seeing in a
+// language with explicit ownership: `path.push(i)` / `path.pop()` in the ★ file
+// becomes a fresh `Vec[i64]` per frame in this one.
+//
+// The stack is LIFO, so combinations come out in yet another order — a third
+// independent traversal, canonicalised by the shared `render`.
+
+struct Frame {
+    remaining: i64,
+    start: i64,
+    path: Vec[i64],
+}
+
+fn factor_combinations(n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if n < 4 {
+        return out;
+    }
+    let mut stack: Vec[Frame] = Vec.new();
+    stack.push(Frame { remaining: n, start: 2, path: Vec.new() });
+
+    while stack.len() > 0 {
+        let f = match stack.pop() {
+            Some(v) => v,
+            None => Frame { remaining: 0, start: 2, path: Vec.new() },
+        };
+        let mut i = f.start;
+        while i * i <= f.remaining {
+            if f.remaining % i == 0 {
+                let mut combo: Vec[i64] = Vec.new();
+                let mut k = 0;
+                while k < f.path.len() {
+                    combo.push(f.path[k]);
+                    k = k + 1;
+                }
+                combo.push(i);
+                combo.push(f.remaining / i);
+                out.push(combo);
+
+                // Child frame gets its OWN copy of the path.
+                let mut child: Vec[i64] = Vec.new();
+                let mut m = 0;
+                while m < f.path.len() {
+                    child.push(f.path[m]);
+                    m = m + 1;
+                }
+                child.push(i);
+                stack.push(Frame { remaining: f.remaining / i, start: i, path: child });
+            }
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+// Render as `[[2,6],[2,2,3],[3,4]]`, canonicalised: each combination is already
+// non-decreasing, and the LIST is sorted lexicographically so that all three
+// solvers — which generate in genuinely different orders — print identically.
+fn render(combos: mut ref Vec[Vec[i64]]) -> String {
+    combos.sort_by(|a, b| {
+        let mut i = 0;
+        while i < a.len() and i < b.len() {
+            if a[i] != b[i] {
+                return a[i].cmp(b[i]);
+            }
+            i = i + 1;
+        }
+        return a.len().cmp(b.len())
+    });
+    let mut s: String = "[";
+    let mut c = 0;
+    while c < combos.len() {
+        if c > 0 {
+            s.push_str(",");
+        }
+        s.push_str("[");
+        let mut k = 0;
+        while k < combos[c].len() {
+            if k > 0 {
+                s.push_str(",");
+            }
+            s.push_str(f"{combos[c][k]}");
+            k = k + 1;
+        }
+        s.push_str("]");
+        c = c + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(n: i64) {
+    let mut got = factor_combinations(n);
+    println(f"{n} -> {render(mut got)}");
+}
+
+fn main() {
+    report(1);   // []
+    report(2);   // []  prime
+    report(12);  // [[2,2,3],[2,6],[3,4]]
+    report(32);  // powers of two, the deepest small case
+    report(37);  // []  prime
+    report(1);   // []
+    report(16);
+    report(24);
+    report(36);
+    report(100);
+    report(96);
+}

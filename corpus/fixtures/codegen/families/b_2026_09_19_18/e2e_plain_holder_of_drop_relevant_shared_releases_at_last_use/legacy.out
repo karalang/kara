@@ -1,0 +1,75 @@
+field
+  d2:10
+  mid
+  out
+fuse
+  n=2
+  d2:10
+  mid
+  out
+fmove
+  eat
+  d2:10
+  mid
+  out
+vec
+  d2:10
+  mid
+  out
+vuse
+  n=2
+  d2:10
+  mid
+  out
+opt
+  d2:10
+  mid
+  out
+ouse
+  s=true
+  d2:10
+  mid
+  out
+enum
+  d2:10
+  mid
+  out
+tuple
+  d2:10
+  mid
+  out
+pushed
+  n=1
+  d2:10
+  mid
+  out
+ret
+  built
+  d2:10
+  mid
+  out
+reass
+  a
+  d2:10
+  n=2
+  d2:11
+  mid
+  out
+rebind
+  n=1
+  d2:10
+  mid
+  out
+shadow
+  d2:10
+  d2:11
+  mid
+  out
+loop
+  d2:10
+  it0
+  d2:10
+  it1
+  mid
+  out
+end

@@ -1,0 +1,10 @@
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Item { id: i64 }
+fn main() {
+    let mut q: PriorityQueue[Item] = PriorityQueue.new();
+    q.push(Item { id: 1 });
+    q.push(Item { id: 3 });
+    q.push(Item { id: 2 });
+    while q.len() > 0 { match q.pop() { Some(it) => println(it.id), None => {} } }
+}

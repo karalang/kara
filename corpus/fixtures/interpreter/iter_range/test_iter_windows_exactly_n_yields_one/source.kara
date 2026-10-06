@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let wins: Vec[Vec[i64]] = v.iter().windows(3).collect();
+    println(wins.len());
+    println(wins[0].len());
+}

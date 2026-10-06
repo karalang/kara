@@ -1,0 +1,178 @@
+// LeetCode #249 differential: 4,000 randomized word lists through BOTH
+// groupings, which must agree with each other and with the Python twin.
+//
+// The two solvers key on different invariants — canonical shift-to-`a` form vs
+// the gap sequence — and use different containers (`Map[String, Vec[String]]`
+// vs `Map[String, i64]` + `Vec[Vec[String]]`), so agreement across 4,000 cases
+// is a real cross-check rather than the same code run twice.
+//
+// HOW THE CASES ARE DRAWN MATTERS MORE THAN HOW MANY THERE ARE. A uniform draw
+// over 26 letters makes almost every word its own group, so the grouping path
+// would barely run. Instead each list is built from a small set of SEED words,
+// and every word is a random SHIFT of a seed — so collisions are the common
+// case and groups are genuinely populated. Lengths stay short (1..4) so that
+// single-character words, which all share the empty key, appear often.
+
+fn canonical(word: ref String) -> String {
+    let bytes = word.bytes();
+    let n = bytes.len();
+    if n == 0 {
+        return "";
+    }
+    let shift = (bytes[0] as i64) - (b'a' as i64);
+    let mut out: String = "";
+    let mut i = 0;
+    while i < n {
+        let c = (((bytes[i] as i64) - (b'a' as i64) - shift) + 26) % 26;
+        out.push_str(f"{c},");
+        i = i + 1;
+    }
+    out
+}
+
+fn gap_key(word: ref String) -> String {
+    let bytes = word.bytes();
+    let n = bytes.len();
+    let mut key: String = "";
+    let mut i = 1;
+    while i < n {
+        let d = (((bytes[i] as i64) - (bytes[i - 1] as i64)) + 26) % 26;
+        key.push_str(f"{d},");
+        i = i + 1;
+    }
+    key
+}
+
+fn group_by_canonical(words: Vec[String]) -> Vec[Vec[String]] {
+    let mut table: Map[String, Vec[String]] = Map.new();
+    let mut order: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < words.len() {
+        let key = canonical(words[i]);
+        if not table.contains_key(key) {
+            order.push(key.clone());
+        }
+        table.entry(key).or_insert(Vec.new()).push(words[i]);
+        i = i + 1;
+    }
+    let mut out: Vec[Vec[String]] = Vec.new();
+    let mut k = 0;
+    while k < order.len() {
+        match table.get(order[k]) {
+            Some(bucket) => out.push(bucket.clone()),
+            None => {}
+        }
+        k = k + 1;
+    }
+    out
+}
+
+fn group_by_gaps(words: Vec[String]) -> Vec[Vec[String]] {
+    let mut index: Map[String, i64] = Map.new();
+    let mut out: Vec[Vec[String]] = Vec.new();
+    let mut i = 0;
+    while i < words.len() {
+        let key = gap_key(words[i]);
+        match index.get(key) {
+            Some(g) => { out[g].push(words[i]); }
+            None => {
+                let slot = out.len();
+                let mut fresh: Vec[String] = Vec.new();
+                fresh.push(words[i]);
+                out.push(fresh);
+                let _ = index.insert(key, slot);
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn render(groups: Vec[Vec[String]]) -> String {
+    let mut s: String = "";
+    let mut i = 0;
+    while i < groups.len() {
+        let g = ref groups[i];
+        s.push_str("[");
+        let mut j = 0;
+        while j < g.len() {
+            if j > 0 { s.push_str(","); }
+            s.push_str(g[j]);
+            j = j + 1;
+        }
+        s.push_str("]");
+        i = i + 1;
+    }
+    s
+}
+
+fn main() {
+    let cases = 4000;
+    let mut state = 20260249;
+    let mut disagree = 0;
+    let mut hash = 0;
+    let mut total_groups = 0;
+    let mut total_words = 0;
+
+    let mut c = 0;
+    while c < cases {
+        // 1..=6 words per list, drawn as shifts of 1..=3 seed words.
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let n_words = ((state / 65536) % 6) + 1;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let n_seeds = ((state / 65536) % 3) + 1;
+
+        // Build the seeds first, then emit random shifts of them.
+        let mut seeds: Vec[String] = Vec.new();
+        let mut s = 0;
+        while s < n_seeds {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let len = ((state / 65536) % 4) + 1;
+            let mut w: String = "";
+            let mut k = 0;
+            while k < len {
+                state = (state * 1103515245 + 12345) & 2147483647;
+                let ch = ((state / 65536) % 26) + (b'a' as i64);
+                w.push_str(f"{(ch as u8) as char}");
+                k = k + 1;
+            }
+            seeds.push(w);
+            s = s + 1;
+        }
+
+        let mut words: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < n_words {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let pick = (state / 65536) % n_seeds;
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let shift = (state / 65536) % 26;
+            let src = seeds[pick].bytes();
+            let mut w: String = "";
+            let mut k = 0;
+            while k < src.len() {
+                let ch = ((((src[k] as i64) - (b'a' as i64)) + shift) % 26) + (b'a' as i64);
+                w.push_str(f"{(ch as u8) as char}");
+                k = k + 1;
+            }
+            words.push(w);
+            i = i + 1;
+        }
+
+        let a = render(group_by_canonical(words.clone()));
+        let b = render(group_by_gaps(words.clone()));
+        if a != b {
+            disagree = disagree + 1;
+        }
+        total_groups = total_groups + group_by_canonical(words.clone()).len();
+        total_words = total_words + words.len();
+        for ch in a.bytes() {
+            hash = (hash * 131 + (ch as i64)) % 1000000007;
+        }
+        c = c + 1;
+    }
+
+    println(f"groupings disagree on {disagree} of {cases} cases");
+    println(f"{total_groups} groups over {total_words} words");
+    println(f"{hash}");
+}

@@ -1,0 +1,93 @@
+// LeetCode 230 — Kth Smallest Element in a BST.
+//
+// Return the k-th smallest value (1-indexed) in a binary search tree. An
+// in-order traversal of a BST visits values in ascending order, so the k-th node
+// visited is the answer — and we can stop the moment the count reaches k.
+//
+// The tree is an index pool (`Vec[Node]`, i64 left/right, -1 = null); it's built
+// here by BST insertion from a value list, then walked in-order ITERATIVELY with
+// an explicit stack: push the whole left spine, visit a node, then move to its
+// right child. O(h + k).
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn insert(nodes: mut ref Vec[Node], root: i64, v: i64) -> i64 {
+    if root == -1 {
+        let idx = nodes.len();
+        nodes.push(Node { val: v, left: -1, right: -1 });
+        return idx;
+    }
+    if v < nodes[root].val {
+        let l = insert(nodes, nodes[root].left, v);
+        nodes[root].left = l;
+    } else {
+        let r = insert(nodes, nodes[root].right, v);
+        nodes[root].right = r;
+    }
+    return root;
+}
+
+fn build(vals: Slice[i64]) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut root = -1;
+    let mut i = 0;
+    while i < vals.len() {
+        root = insert(mut nodes, root, vals[i]);
+        i = i + 1;
+    }
+    return nodes;
+}
+
+fn kth_smallest(nodes: ref Vec[Node], root: i64, k: i64) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut cur = root;
+    let mut count = 0;
+    while cur != -1 or stack.len() > 0 {
+        while cur != -1 {
+            stack.push(cur);
+            cur = nodes[cur].left;
+        }
+        let node = match stack.pop() {
+            Some(v) => v,
+            None => -1,
+        };
+        count = count + 1;
+        if count == k {
+            return nodes[node].val;
+        }
+        cur = nodes[node].right;
+    }
+    return -1;               // k out of range (not exercised by valid inputs)
+}
+
+fn report(vals: Slice[i64], k: i64) {
+    let nodes = build(vals);
+    let root = if nodes.len() > 0 { 0 } else { -1 };
+    println(kth_smallest(nodes, root, k));
+}
+
+fn main() {
+    let a: Array[i64, 4] = [3, 1, 4, 2];
+    report(a, 1);                                // 1
+    report(a, 3);                                // 3
+
+    let b: Array[i64, 6] = [5, 3, 6, 2, 4, 1];
+    report(b, 3);                                // 3
+    report(b, 6);                                // 6
+
+    let c: Array[i64, 1] = [1];
+    report(c, 1);                                // 1
+
+    let d: Array[i64, 2] = [2, 1];
+    report(d, 2);                                // 2
+
+    let e: Array[i64, 6] = [10, 5, 15, 3, 7, 18];
+    report(e, 4);                                // 10
+
+    let f: Array[i64, 7] = [8, 3, 10, 1, 6, 14, 4];
+    report(f, 5);                                // 8
+}

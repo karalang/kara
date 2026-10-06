@@ -1,0 +1,18 @@
+
+fn take(s: String) -> i64 { s.len() as i64 }
+fn main() {
+    let mut grid: Vec[Vec[String]] = Vec.new();
+    let mut row: Vec[String] = Vec.new();
+    row.push("hello".to_string());
+    row.push("world".to_string());
+    grid.push(row);
+    let mut total = 0;
+    let mut i = 0;
+    while i < grid.len() {
+        let r = grid[i].clone();
+        let mut j = 0;
+        while j < r.len() { total = total + take(r[j].clone()); j = j + 1; }
+        i = i + 1;
+    }
+    println(total);
+}

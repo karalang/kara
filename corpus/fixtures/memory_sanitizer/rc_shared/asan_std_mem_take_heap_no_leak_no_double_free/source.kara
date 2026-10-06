@@ -1,0 +1,17 @@
+
+#[derive(Default)]
+struct S { x: i64, name: String }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let mut a = S { x: i, name: f"held-{i}-padding-padding" };
+        let old = take(mut a);
+        println(old.name);
+        println(f"[{a.name}]");
+        let mut s = f"bare-{i}-padding-padding";
+        let got = take(mut s);
+        println(got);
+        println(f"[{s}]");
+        i = i + 1;
+    }
+}

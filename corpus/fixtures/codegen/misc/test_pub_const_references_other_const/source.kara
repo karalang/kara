@@ -1,0 +1,7 @@
+
+pub const BASE: i64 = 10;
+pub const SCALED: i64 = BASE + BASE;
+
+fn main() {
+    println(SCALED);
+}

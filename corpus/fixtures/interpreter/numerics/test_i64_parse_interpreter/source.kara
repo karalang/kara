@@ -1,0 +1,22 @@
+fn main() {
+            match i64.parse("42") {
+                Some(n) => println(n),
+                None => println(-1),
+            }
+            match i64.parse("not a number") {
+                Some(n) => println(n),
+                None => println(-1),
+            }
+            match i64.parse("-7") {
+                Some(n) => println(n),
+                None => println(-1),
+            }
+            match i64.parse("  100  ") {
+                Some(n) => println(n),
+                None => println(-1),
+            }
+            match i64.parse("") {
+                Some(n) => println(n),
+                None => println(-1),
+            }
+        }

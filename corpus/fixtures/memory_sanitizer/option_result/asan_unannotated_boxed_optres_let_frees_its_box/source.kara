@@ -1,0 +1,24 @@
+
+struct Res { name: String, buf: Vec[i64] }
+
+fn mkres(tag: i64) -> Res {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(tag);
+    return Res { name: "boxed-payload-wide-enough-to-spill", buf: b };
+}
+
+fn mkok(tag: i64) -> Result[Res, i64] { return Result.Ok(mkres(tag)); }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        let a: Option[Res] = Option.Some(mkres(i));   // annotated — always worked
+        let b = Option.Some(mkres(i));                // unannotated — leaked
+        let c: Result[Res, i64] = Result.Ok(mkres(i));
+        let d = mkok(i);                             // unannotated — leaked
+        n = n + 4i64;
+        i = i + 1;
+    }
+    println(n);
+}

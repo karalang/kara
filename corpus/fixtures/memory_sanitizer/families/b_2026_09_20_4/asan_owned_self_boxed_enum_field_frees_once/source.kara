@@ -1,0 +1,31 @@
+enum Eb { A(Array[String, 2]), B }
+struct Hb { g: Eb, n: i64 }
+fn eatb(g: Eb) { println("  ate") }
+fn mk() -> Array[String, 2] { return [f"aaaaaaaa-1", f"bbbbbbbb-2"] }
+impl Hb {
+    fn give(self) { eatb(self.g) }
+    fn held(self) { println(f"  held {self.n}") }
+    fn read(self) -> i64 { match self.g { Eb.A(a) => a[0].len(), Eb.B => 0 } }
+    fn two(self) { self.give() }
+    fn peek(ref self) -> i64 { return self.n }
+}
+fn give2(h: Hb) { println(f"  took {h.n}") }
+fn main() {
+    println("start");
+    let h = Hb { g: Eb.A(mk()), n: 1 };
+    h.give();
+    let k = Hb { g: Eb.A(mk()), n: 2 };
+    k.held();
+    let r = Hb { g: Eb.A(mk()), n: 3 };
+    println(f"read {r.read()}");
+    let w = Hb { g: Eb.A(mk()), n: 4 };
+    println(f"peek {w.peek()}");
+    w.two();
+    let u = Hb { g: Eb.B, n: 5 };
+    u.give();
+    let mut m = Hb { g: Eb.A(mk()), n: 6 };
+    give2(m);
+    m = Hb { g: Eb.A(mk()), n: 7 };
+    give2(m);
+    println("end")
+}

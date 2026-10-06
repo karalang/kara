@@ -1,0 +1,8 @@
+
+struct FakeClock {}
+impl FakeClock { fn now(ref self) -> i64 { 42 } }
+fn main() reads(Clock) {
+    with_provider[Clock](FakeClock {}, || {
+        println(Clock.now());
+    });
+}

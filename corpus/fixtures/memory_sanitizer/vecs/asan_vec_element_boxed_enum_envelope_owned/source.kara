@@ -1,0 +1,43 @@
+
+fn mkstr(n: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("envelope-");
+    s.push_str(n.to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut v2: Vec[Option[Option[i64]]] = Vec.new();
+        v2.push(Option.Some(Option.Some(n + i)));
+        v2.push(Option.Some(Option.None));
+        v2.push(Option.None);
+        match v2[0] { Option.Some(Option.Some(x)) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let a: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        let mut v3: Vec[Option[Option[Option[i64]]]] = Vec.new();
+        v3.push(a);
+        match v3[0] { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let mut v4: Vec[Option[Option[Option[Option[i64]]]]] = Vec.new();
+        v4.push(Option.Some(Option.Some(Option.Some(Option.Some(n + i)))));
+        match v4[0] { Option.Some(Option.Some(Option.Some(Option.Some(x)))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let mut vs: Vec[Option[String]] = Vec.new();
+        vs.push(Option.Some(mkstr(n + i)));
+        match vs[0] { Option.Some(t) => { if t.contains("envelope-") { acc = acc + 1; } } Option.None => { acc = acc - 1; } }
+
+        let mut vp: Vec[Option[i64]] = Vec.new();
+        vp.push(Option.Some(n + i));
+        match vp[0] { Option.Some(x) => { acc = acc + x - n; } Option.None => { acc = acc - 1; } }
+
+        let mut vu: Vec[Option[Option[Option[i64]]]] = Vec.new();
+        vu.push(Option.Some(Option.Some(Option.Some(n + i))));
+
+        i = i + 1;
+    }
+    println(acc);
+}

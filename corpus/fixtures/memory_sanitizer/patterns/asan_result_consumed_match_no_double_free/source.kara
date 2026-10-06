@@ -1,0 +1,9 @@
+
+fn mk() -> Result[String, i64] { Ok(f"consumed-ok-runtime-heap") }
+fn main() {
+    let r = mk();
+    match r {
+        Ok(v) => { println(v); }
+        Err(_e) => { println("err"); }
+    };
+}

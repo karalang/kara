@@ -1,0 +1,78 @@
+bind_plain
+  k9
+bind_drop
+  k9
+  d9
+bind_own
+  dOwn
+  k9
+  dOwn
+bind_inner
+  k9
+bind_taken
+  k9
+bind_untaken
+  dOwn
+  dOwn
+  mid
+bind_disp
+  k9
+fld_plain
+  k9
+fld_drop
+  k9
+  d9
+fld_shared
+  k9
+  d9
+fld_shared_inner
+  mid
+  k9
+  d9
+fld_shared_disp
+  d10
+  x
+  d9
+  y
+fld_shared_loop
+  d9
+  d9
+  d9
+  mid
+fld_shared_untaken
+  d9
+  mid
+fld_shared_method
+  k9
+  d9
+fld_own
+  dOwn
+  k9
+  dOwn
+fld_own_untaken
+  dOwn
+  dOwn
+  mid
+fld_taken
+  d9
+  mid
+fld_loop
+  k9
+fld_opt
+  k9
+fld_opt_taken
+  k9
+fld_opt_drop
+  d9
+  mid
+fld_opt_loop
+  d9
+  d9
+  d9
+  mid
+fld_res
+  d9
+  mid
+fld_gen
+  k9
+end

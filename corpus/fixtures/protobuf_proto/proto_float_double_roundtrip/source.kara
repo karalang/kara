@@ -1,0 +1,10 @@
+
+#[proto_schema]
+const SCHEMA: String = "message Sample { double precise = 1; float approx = 2; }";
+
+fn main() {
+    let s = Sample { precise: 1.25, approx: 0.5 };
+    let back = Sample.decode(s.encode());
+    println(back.precise == 1.25);
+    println(back.approx == 0.5);
+}

@@ -1,0 +1,15 @@
+
+trait Pick { fn at(ref self, i: i64) -> String; }
+impl Pick for Column[String] {
+    fn at(ref self, i: i64) -> String { self[i].unwrap() }
+}
+fn main() {
+    let v: Vec[String] = ["alpha", "beta", "gamma"];
+    let c: Column[String] = Column.from_vec(v);
+    println(f"{c[1].unwrap()}");
+    println(f"{c.at(0)} {c.at(2)}");
+    match c[2] {
+        Some(s) => { println(f"some {s}"); }
+        None => { println("none"); }
+    }
+}

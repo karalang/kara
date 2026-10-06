@@ -1,0 +1,9 @@
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Holder] = Some(mkh(i));
+        let Some(Holder { name, id }) = o else { return; };
+        println(name.len() + id);
+        i = i + 1;
+    };
+}

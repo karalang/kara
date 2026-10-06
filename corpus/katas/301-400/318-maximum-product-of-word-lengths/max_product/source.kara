@@ -1,0 +1,78 @@
+// LeetCode #318: Maximum Product of Word Lengths — the bitmask pairwise scan.
+//
+// Given a list of lowercase words, return the largest `len(a) * len(b)` over
+// pairs that share no letter, or 0 if every pair collides.
+//
+// The naive test — "do these two words share a letter?" — is a set
+// intersection, and running it inside an O(n^2) pair loop makes the whole
+// thing O(n^2 * L). The observation that collapses it: there are only 26
+// letters, so a word's LETTER SET is 26 bits, and the intersection test is one
+// AND against zero. Building the masks costs one pass over the input; after
+// that every pair is answered in constant time regardless of how long the
+// words are.
+//
+// Note what the mask throws away and why that is safe: it forgets both the
+// ORDER and the MULTIPLICITY of letters, neither of which the disjointness
+// test can see. It does NOT forget the length — that is kept separately, in
+// `lens`, precisely because the mask cannot reconstruct it (`"aaaa"` and `"a"`
+// share a mask and differ in the answer).
+
+fn word_mask(w: ref String) -> i64 {
+    let bs = w.bytes();
+    let mut m = 0;
+    for i in 0..bs.len() {
+        m = m | (1 << ((bs[i] - b'a') as i64));
+    }
+    return m;
+}
+
+fn max_product(words: ref Vec[String]) -> i64 {
+    let n = words.len();
+    let mut masks: Vec[i64] = Vec.new();
+    let mut lens: Vec[i64] = Vec.new();
+    for i in 0..n {
+        masks.push(word_mask(words[i]));
+        lens.push(words[i].len() as i64);
+    }
+
+    let mut best = 0;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if masks[i] & masks[j] == 0 {
+                let p = lens[i] * lens[j];
+                if p > best { best = p; }
+            }
+        }
+    }
+    return best;
+}
+
+fn words_of(items: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for i in 0..items.len() {
+        if i > 0 { out.push_str(" "); }
+        out.push_str(items[i]);
+    }
+    return out;
+}
+
+fn main() {
+    let cases: Vec[Vec[String]] = [
+        ["abcw", "baz", "foo", "bar", "xtfn", "abcdef"],
+        ["a", "ab", "abc", "d", "cd", "bcd", "abcd"],
+        ["a", "aa", "aaa", "aaaa"],
+        [],
+        ["solo"],
+        ["abc", "def"],
+        ["abcdefghijklmnopqrstuvwxyz", "abcdefghijklmnopqrstuvwxyz"],
+        ["aaaaaaaaaa", "bb", "cc", "bbcc"],
+        ["eat", "tea", "tan", "ate", "nat", "bat"],
+        ["qwer", "tyui", "opas", "dfgh"],
+    ];
+
+    for k in 0..cases.len() {
+        let ws = cases[k].clone();
+        print("case " + (k + 1).to_string() + ": [" + words_of(ws) + "] -> "
+              + max_product(ws).to_string() + "\n");
+    }
+}

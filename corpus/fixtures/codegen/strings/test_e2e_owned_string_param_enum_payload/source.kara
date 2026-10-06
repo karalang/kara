@@ -1,0 +1,12 @@
+
+fn wrap(s: String) -> Option[String] {
+    Some(s)
+}
+
+fn main() {
+    let w = wrap(f"pay{9}");
+    match w {
+        Some(s) => println(s),
+        None => println("none"),
+    }
+}

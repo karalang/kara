@@ -1,0 +1,8 @@
+
+fn f(v: ref Vec[i64]) -> i64 ensures(result) v[result] >= 0 { 99 }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(3);
+    println(f(v));
+    println(42);
+}

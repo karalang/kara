@@ -1,0 +1,29 @@
+
+fn main() with reads(FileSystem) writes(FileSystem) {{
+    match File.create("{path}") {{
+        Ok(f) => {{
+            let mut data: Vec[u8] = Vec.new();
+            data.push(72u8); data.push(73u8); data.push(10u8);
+            match f.write(data) {{
+                Ok(_) => println("wrote"),
+                Err(_) => println("write-err"),
+            }}
+            match f.flush() {{
+                Ok(_) => println("flushed"),
+                Err(_) => println("flush-err"),
+            }}
+        }}
+        Err(_) => println("create-err"),
+    }}
+    match File.open("{path}") {{
+        Ok(f) => {{
+            let mut buf: Vec[u8] = Vec.with_capacity(8);
+            buf.push(0u8); buf.push(0u8); buf.push(0u8); buf.push(0u8);
+            match f.read(mut buf) {{
+                Ok(_) => println("read"),
+                Err(_) => println("read-err"),
+            }}
+        }}
+        Err(_) => println("open-err"),
+    }}
+}}

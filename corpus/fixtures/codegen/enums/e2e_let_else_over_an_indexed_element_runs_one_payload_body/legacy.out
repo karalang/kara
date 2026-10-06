@@ -1,0 +1,44 @@
+bare
+dE
+dR1
+got 2
+bare end
+liveafter
+got 3
+len 1
+dE
+dR2
+liveafter end
+field
+dE
+dR3
+got 4
+field end
+two
+dE
+dR4
+dE
+dR5
+got 6
+two end
+opt
+dR6
+got 7
+opt end
+struct
+dR7
+got 14
+struct end
+temp
+got 9
+dR8
+temp end
+iflet
+got 10
+dE
+dR9
+iflet end
+elsetaken
+no
+dE
+end

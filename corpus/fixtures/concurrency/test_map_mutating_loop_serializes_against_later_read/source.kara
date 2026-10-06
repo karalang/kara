@@ -1,0 +1,10 @@
+
+        fn main() {
+            let mut m: Map[i64, i64] = Map.new();
+            let xs = [1, 2, 1];
+            for x in xs {
+                *m.entry(x).or_insert(0_i64) += 1_i64;
+            }
+            let ks = m.keys();
+        }
+        

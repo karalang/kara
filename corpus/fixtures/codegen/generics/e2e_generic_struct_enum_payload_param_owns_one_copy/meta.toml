@@ -1,0 +1,13 @@
+source = "tests/codegen/generics.rs::e2e_generic_struct_enum_payload_param_owns_one_copy"
+dedup_of = ["tests/interpreter/generics.rs::test_generic_struct_enum_payload_param_owns_one_copy", "tests/memory_sanitizer/generics.rs::asan_generic_struct_enum_payload_param_owns_one_copy"]
+expect = "stdout"
+exit = 0
+tags = ["uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

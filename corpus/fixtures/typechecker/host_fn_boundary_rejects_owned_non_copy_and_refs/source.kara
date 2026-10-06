@@ -1,0 +1,13 @@
+
+struct Config { name: String, retries: i64 }
+
+#[derive(Copy, Clone)]
+struct Point { x: f64, y: f64 }
+
+host fn bad_string(s: String) with reads(Clock);
+host fn bad_ref(p: ref Point) with reads(Clock);
+host fn bad_mutref(p: mut ref Point) with reads(Clock);
+host fn bad_owned(c: Config) with reads(Clock);
+host fn bad_vec_ret() -> Vec[i64] with reads(Clock);
+
+fn main() {}

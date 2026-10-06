@@ -1,0 +1,17 @@
+
+#[derive(Message)]
+struct Person {
+    name: String,
+    age: i64,
+    active: bool,
+    score: u32,
+}
+
+fn main() {
+    let p = Person { name: "Ada", age: 36, active: true, score: 99u32 };
+    let q = Person.decode(p.encode());
+    println(q.name);
+    println(q.age);
+    println(q.active);
+    println(q.score);
+}

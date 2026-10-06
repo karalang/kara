@@ -1,0 +1,75 @@
+
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.s}") } }
+struct P { a: R, b: R }
+fn mk(s: String) -> R { R { s: f"{s}-heap" } }
+fn show(r: R) { println(f"  show:{r.s}"); }
+fn if_field(k: bool) -> R {
+    let p = P { a: mk("a"), b: mk("b") };
+    let x = if k { p.a } else { mk("z") };
+    println(f"  x:{x.s}");
+    x
+}
+fn if_both(k: bool) -> R {
+    let p = P { a: mk("a"), b: mk("b") };
+    if k { p.a } else { p.b }
+}
+fn block_elem() -> R {
+    let t = (mk("a"), mk("b"));
+    let x = { t.0 };
+    println(f"  x:{x.s}");
+    x
+}
+fn match_elem(k: i64) -> R {
+    let t = (mk("a"), mk("b"));
+    let x = match k { 0 => t.0, 1 => t.1, _ => mk("z") };
+    x
+}
+fn nested(k: bool, m: bool) -> R {
+    let t = (mk("a"), mk("b"));
+    if k { if m { t.0 } else { t.1 } } else { mk("z") }
+}
+fn main() {
+    println("if-field-true"); { let g = if_field(true); println(f"  got:{g.s}") }
+    println("if-field-false"); { let g = if_field(false); println(f"  got:{g.s}") }
+    println("if-both-true"); { let g = if_both(true); println(f"  got:{g.s}") }
+    println("if-both-false"); { let g = if_both(false); println(f"  got:{g.s}") }
+    println("block-elem"); { let g = block_elem(); println(f"  got:{g.s}") }
+    let mut k = 0;
+    while k < 3 { println(f"match-{k}"); { let g = match_elem(k); println(f"  got:{g.s}") } k = k + 1; }
+    println("nested-tt"); { let g = nested(true, true); println(f"  got:{g.s}") }
+    println("nested-tf"); { let g = nested(true, false); println(f"  got:{g.s}") }
+    println("nested-f"); { let g = nested(false, true); println(f"  got:{g.s}") }
+    println("push-elem"); {
+        let t = (mk("a"), mk("b"));
+        let mut v: Vec[R] = Vec.new();
+        v.push(t.0);
+        println(f"  n:{v.len()}");
+    }
+    println("some-elem"); {
+        let t = (mk("a"), mk("b"));
+        let o = Option.Some(t.0);
+        match o { Some(r) => println(f"  o:{r.s}"), None => println("  none") }
+    }
+    println("assign"); {
+        let p = P { a: mk("a"), b: mk("b") };
+        let mut x = mk("x0");
+        let k = true;
+        x = if k { p.a } else { mk("z") };
+        println(f"  x:{x.s}");
+    }
+    println("loop");
+    let mut i = 0;
+    while i < 3 {
+        let t = (mk(f"a{i}"), mk(f"b{i}"));
+        let x = if i == 1 { t.0 } else { mk(f"z{i}") };
+        println(f"  x:{x.s}");
+        i = i + 1;
+    }
+    println("guard-call-arg"); {
+        let t = (mk("a"), mk("b"));
+        let k = true;
+        show(if k { t.0 } else { mk("z") });
+    }
+    println("end")
+}

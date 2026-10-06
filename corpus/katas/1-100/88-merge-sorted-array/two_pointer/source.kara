@@ -1,0 +1,60 @@
+// LeetCode #88: Merge Sorted Array — two pointers from the back, in-place.
+//
+// nums1 has length m + n; its first m slots hold the sorted prefix and the
+// last n slots are scratch. nums2 holds n sorted values. After merge, nums1
+// holds the merged, sorted m + n values. O(m + n) time, O(1) extra space.
+//
+// Writing from the back avoids overwriting unread nums1 entries: the write
+// head k = m + n - 1 always points at or past both read heads i and j, so
+// every cell is written before it would be read.
+
+fn merge(nums1: mut Slice[i64], m: i64, nums2: Slice[i64], n: i64) {
+    let mut i = m - 1;
+    let mut j = n - 1;
+    let mut k = m + n - 1;
+    while j >= 0 {
+        if i >= 0 and nums1[i] > nums2[j] {
+            nums1[k] = nums1[i];
+            i = i - 1;
+        } else {
+            nums1[k] = nums2[j];
+            j = j - 1;
+        }
+        k = k - 1;
+    }
+}
+
+fn report(nums1: mut Slice[i64], m: i64, nums2: Slice[i64], n: i64) {
+    merge(nums1, m, nums2, n);
+    let total = m + n;
+    for i in 0..total {
+        println(nums1[i]);
+    }
+}
+
+fn main() {
+    // Case 1: classic interleave.
+    let mut a1: Array[i64, 6] = [1, 2, 3, 0, 0, 0];
+    let b1: Array[i64, 3] = [2, 5, 6];
+    report(mut a1, 3, b1, 3);   // expect: 1 2 2 3 5 6
+
+    // Case 2: nums2 empty — nums1 unchanged.
+    let mut a2: Array[i64, 1] = [1];
+    let b2: Array[i64, 0] = [];
+    report(mut a2, 1, b2, 0);   // expect: 1
+
+    // Case 3: nums1 empty prefix — answer is just nums2.
+    let mut a3: Array[i64, 1] = [0];
+    let b3: Array[i64, 1] = [1];
+    report(mut a3, 0, b3, 1);   // expect: 1
+
+    // Case 4: nums2 all smaller than nums1 (front-loaded).
+    let mut a4: Array[i64, 6] = [4, 5, 6, 0, 0, 0];
+    let b4: Array[i64, 3] = [1, 2, 3];
+    report(mut a4, 3, b4, 3);   // expect: 1 2 3 4 5 6
+
+    // Case 5: nums2 all larger than nums1 (back-loaded).
+    let mut a5: Array[i64, 6] = [1, 2, 3, 0, 0, 0];
+    let b5: Array[i64, 3] = [4, 5, 6];
+    report(mut a5, 3, b5, 3);   // expect: 1 2 3 4 5 6
+}

@@ -1,0 +1,7 @@
+
+fn zeta[T](x: T) -> T { x }
+fn alpha[T](x: T) -> T { x }
+fn main() {
+    let _ = zeta(1);
+    let _ = alpha(2);
+}

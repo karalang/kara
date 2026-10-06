@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/rc_shared.rs::test_heap_field_read_on_a_fresh_tuple_temp_is_leak_free"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

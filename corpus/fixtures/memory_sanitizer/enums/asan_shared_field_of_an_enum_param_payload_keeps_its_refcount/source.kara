@@ -1,0 +1,42 @@
+
+shared struct ShIn { s: String }
+struct One { i: ShIn }
+struct Two { a: ShIn, b: ShIn }
+struct Mixed { i: ShIn, t: String }
+struct Extra { i: ShIn, n: i64 }
+
+enum W1 { Full(One), Empty }
+enum W2 { Full(Two), Empty }
+enum Wm { Full(Mixed), Empty }
+enum We { Full(Extra), Empty }
+enum Wt { Full((ShIn, i64)), Empty }
+
+fn e1(w: W1) -> i64 { return 7; }
+fn e2(w: W2) -> i64 { return 7; }
+fn em(w: Wm) -> i64 { return 7; }
+fn ee(w: We) -> i64 { return 7; }
+fn et(w: Wt) -> i64 { return 7; }
+fn eread(w: W1) -> i64 {
+    match w { W1.Full(q) => { let i = q.i; return i.s.len(); } W1.Empty => { return 0; } }
+}
+fn estruct(o: One) -> i64 { return 7; }
+
+fn main() {
+    println(f"one {e1(W1.Full(One { i: ShIn { s: f"b1634-one-aaaaaaaaaa" } }))}");
+
+    let x = ShIn { s: f"b1634-two-bbbbbbbbbb" };
+    println(f"two {e2(W2.Full(Two { a: x, b: x }))}");
+
+    println(f"mixed {em(Wm.Full(Mixed { i: ShIn { s: f"b1634-m1-cccccccccc" }, t: f"b1634-m2-dddddddddd" }))}");
+    println(f"extra {ee(We.Full(Extra { i: ShIn { s: f"b1634-ex-eeeeeeeeee" }, n: 3 }))}");
+    println(f"tuple {et(Wt.Full((ShIn { s: f"b1634-tu-ffffffffff" }, 3)))}");
+
+    let w = W1.Full(One { i: ShIn { s: f"b1634-named-hhhhhhhh" } });
+    println(f"named {e1(w)}");
+
+    println(f"read {eread(W1.Full(One { i: ShIn { s: f"b1634-read-iiiiiiiiii" } }))}");
+    println(f"struct {estruct(One { i: ShIn { s: f"b1634-st-jjjjjjjjjj" } })}");
+
+    let k = W1.Full(One { i: ShIn { s: f"b1634-nocall-kkkkkkkk" } });
+    println(f"nocall ok");
+}

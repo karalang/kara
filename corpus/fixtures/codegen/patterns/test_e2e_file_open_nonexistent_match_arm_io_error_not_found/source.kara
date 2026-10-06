@@ -1,0 +1,11 @@
+
+fn main() with reads(FileSystem) {
+    match File.open("/nonexistent_karac_f6_test.txt") {
+        Ok(_) => println("unexpected-ok"),
+        Err(e) => match e {
+            IoError.NotFound => println("not-found"),
+            IoError.PermissionDenied => println("permission-denied"),
+            _ => println("other"),
+        },
+    }
+}

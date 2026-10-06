@@ -1,0 +1,6 @@
+
+fn first[A, B](a: A, b: B) -> A { a }
+fn main() {
+    let x = first(10, 3.14);
+    println(x);
+}

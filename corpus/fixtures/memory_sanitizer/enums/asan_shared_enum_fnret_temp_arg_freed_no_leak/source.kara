@@ -1,0 +1,41 @@
+
+struct Span { line: i64, column: i64, offset: i64, length: i64 }
+struct BinData { left: Expr, right: Expr, span: Span }
+shared enum Expr { Int(Span), Bin(BinData) }
+fn build(depth: i64, v: i64) -> Expr {
+    if depth <= 0 {
+        return Expr.Int(Span { line: v, column: 0, offset: v, length: 1 });
+    }
+    let l = build(depth - 1, v);
+    let r = build(depth - 1, v + 1);
+    return Expr.Bin(BinData { left: l, right: r, span: Span { line: 0, column: 0, offset: 0, length: 2 } });
+}
+fn render(e: Expr) -> String {
+    let mut out = "".to_string();
+    match e {
+        Int(n) => { out.push_str("(int "); out.push_str(n.line.to_string()); out.push_str(")"); }
+        Bin(b) => {
+            let BinData { left, right, span } = b;
+            out.push_str("(bin ");
+            out.push_str(span.length.to_string());
+            out.push_str(" ");
+            out.push_str(render(left));
+            out.push_str(" ");
+            out.push_str(render(right));
+            out.push_str(")");
+        }
+    }
+    out
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        // render(build(..)) — the tree is a function-return temporary passed by
+        // value; render(Expr.Int(..)) — an inline variant-ctor temporary.
+        total = total + render(build(3, i)).len();
+        total = total + render(Expr.Int(Span { line: i, column: 0, offset: i, length: 1 })).len();
+        i = i + 1;
+    }
+    if total > 0 { println("ok"); } else { println("bad"); }
+}

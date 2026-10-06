@@ -1,0 +1,68 @@
+
+fn readsIt[T: Display](x: Option[T]) -> i64 {
+    match x {
+        Some(t) => { println(f"o:{t}"); return 1; }
+        None => { return 0; }
+    }
+}
+
+fn takesIt[T: Display](x: Option[T]) -> i64 {
+    match x {
+        Some(t) => { let u = t; println("took"); return 1; }
+        None => { return 0; }
+    }
+}
+
+fn wildArm[T: Display](x: Option[T]) -> i64 {
+    match x {
+        Some(_) => { println("some"); return 1; }
+        None => { return 0; }
+    }
+}
+
+fn readsRes[T: Display](x: Result[T, i64]) -> i64 {
+    match x {
+        Ok(t) => { println(f"r:{t}"); return 1; }
+        Err(e) => { return e; }
+    }
+}
+
+fn main() {
+    let n = env.args().len();
+
+    // Cell 1 — the row's own shape: a two-`String` tuple through a fresh-temp
+    // `Option` argument, read-only in the arm. This is the 54 B.
+    let p = (f"aaaa{n}", f"bbbb{n}");
+    let c1 = readsIt(Some(p));
+
+    // Cell 2 — a THREE-element payload, so a fix that frees only the first
+    // element is caught (the row measured 81 B in 9 for this one).
+    let q = (f"cccc{n}", f"dddd{n}", f"eeee{n}");
+    let c2 = readsIt(Some(q));
+
+    // Cell 3 — a MIXED payload: the scalar words must not be walked as heap.
+    let r = (f"ffff{n}", n, n + 1, n + 2);
+    let c3 = readsIt(Some(r));
+
+    // Cell 4 — the CONSUMING-arm control. Aborts on a double free if the
+    // caller arms an interior drop the callee already owns.
+    let s = (f"gggg{n}", f"hhhh{n}");
+    let c4 = takesIt(Some(s));
+
+    // Cell 5 — a wildcard arm binds nothing, so nothing in the callee can own
+    // the interior and the caller must.
+    let t = (f"iiii{n}", f"jjjj{n}");
+    let c5 = wildArm(Some(t));
+
+    // Cell 6 — `Result` rather than `Option`, boxing against the 5-word area.
+    let u = (f"kkkk{n}", f"llll{n}", f"mmmm{n}", f"nnnn{n}");
+    let c6 = readsRes(Ok(u));
+
+    // Cell 7 — the BINDING control: sole owner is the let site, before and
+    // after.
+    let v = (f"oooo{n}", f"pppp{n}");
+    let bound: Option[(String, String)] = Some(v);
+    let c7 = readsIt(bound);
+
+    println(f"acc{c1 + c2 + c3 + c4 + c5 + c6 + c7}");
+}

@@ -1,0 +1,26 @@
+
+fn work(k: i64) -> i64 {
+    let mut acc: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < 400i64 {
+        acc.push((k * 31i64 + i) % 977i64);
+        i = i + 1i64;
+    }
+    let mut t = 0i64;
+    let mut j = 0i64;
+    while j < acc.len() {
+        t = (t + acc[j]) % 1000003i64;
+        j = j + 1i64;
+    }
+    t
+}
+fn main() {
+    let mut parts: Vec[i64] = Vec.new();
+    let mut k = 0i64;
+    #[par_order_free]
+    while k < 24i64 {
+        parts.push((k * 1000003i64 + work(k)) % 1000000007i64);
+        k = k + 1i64;
+    }
+    println(f"{parts.len()} {k}");
+}

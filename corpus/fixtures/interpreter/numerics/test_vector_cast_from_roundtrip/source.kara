@@ -1,0 +1,8 @@
+
+fn main() {
+    let f = Vector[f64, 4](1.7, 2.2, 3.9, 4.0);
+    let i = Vector[i64, 4].cast_from(f);
+    println(i[0]); println(i[1]); println(i[2]); println(i[3]);
+    let back = Vector[f64, 4].cast_from(i);
+    println(back[0]); println(back[3]);
+}

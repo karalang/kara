@@ -1,0 +1,15 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+enum E { Two(R, R), One(R) }
+fn consume(x: E) {
+    let l = R { id: 9 };
+    println("in");
+}
+fn main() {
+    let mut x = E.Two(R { id: 5 }, R { id: 15 });
+    for i in 0..2 {
+        consume(x);
+        x = E.Two(R { id: i + 0 }, R { id: i + 10 });
+    }
+    println("done");
+}

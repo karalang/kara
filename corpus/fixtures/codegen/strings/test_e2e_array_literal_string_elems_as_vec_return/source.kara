@@ -1,0 +1,3 @@
+
+fn names() -> Vec[String] { ["alpha", "beta", "gamma"] }
+fn main() { println(names().len()); }

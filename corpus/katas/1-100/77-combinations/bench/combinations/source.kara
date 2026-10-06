@@ -1,0 +1,47 @@
+// Benchmark workload — Combinations (LeetCode #77).
+// Start-indexed backtracking (the kata's ★, pruned form). To measure the DFS
+// ENUMERATION rather than Vec-of-Vec allocation, the bench folds each complete
+// combination's values into a threaded accumulator instead of snapshotting it —
+// the same recursion tree, no per-leaf allocation. One reused `path` buffer carries
+// the current branch. C(16,8) = 12870 leaves are enumerated K=1500 times; the acc
+// is seeded with the iteration index so nothing hoists. See ../README.md § Benchmarks.
+
+fn enumerate(n: i64, k: i64, start: i64, path: mut ref Vec[i64], acc: i64) -> i64 {
+    if path.len() == k {
+        let mut a = acc;
+        let mut j = 0;
+        while j < k {
+            a = (a * 131 + path[j]) % 1000000007;
+            j = j + 1;
+        }
+        return a;
+    }
+    let need = k - path.len();
+    let limit = n - need + 1;
+    let mut a = acc;
+    let mut i = start;
+    while i <= limit {
+        path.push(i);
+        a = enumerate(n, k, i + 1, path, a);
+        path.pop();
+        i = i + 1;
+    }
+    a
+}
+
+fn main() {
+    let n = 16;
+    let k = 8;
+    let total = 1500;
+    let modulus = 1000000007;
+
+    let mut path: Vec[i64] = Vec.new();
+    let mut sum = 0;
+    let mut iter = 0;
+    while iter < total {
+        let r = enumerate(n, k, 1, mut path, iter);
+        sum = (sum + r) % modulus;
+        iter = iter + 1;
+    }
+    println(f"{sum}");
+}

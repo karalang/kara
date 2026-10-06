@@ -1,0 +1,6 @@
+
+fn main() {
+    let s = TcpStream.connect("127.0.0.1:8080").unwrap();
+    let _ = s.shutdown_write();
+    println(s.fd);
+}

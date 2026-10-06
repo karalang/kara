@@ -1,0 +1,12 @@
+fn mks(i: i64) -> String { return f"heap-string-longer-than-sso-{i}" }
+fn older(c: bool, b: i64) -> Array[String, 2] { let x: Array[String, 2] = [mks(b+1), mks(b+2)]; if c { return x }; let x: Array[String, 2] = [mks(b+8), mks(b+9)]; println("dies"); return x }
+fn two_some(c: i64, b: i64) -> Array[String, 2] { let x: Array[String, 2] = [mks(b+1), mks(b+2)]; if c == 1 { return x }; let x: Array[String, 2] = [mks(b+3), mks(b+4)]; if c == 2 { return x }; println("dies"); let w: Array[String, 2] = [mks(b+5), mks(b+6)]; return w }
+fn nested(c: bool, b: i64) -> Array[String, 2] { let x: Array[String, 2] = [mks(b+1), mks(b+2)]; { let x: Array[String, 2] = [mks(b+8), mks(b+9)]; if c { return x }; println("in") }; println("dies"); return x }
+fn main() {
+    let a = older(true, 10); println(a[1]);
+    let b = older(false, 20); println(b[1]);
+    for k in 1..4 { let t = two_some(k, 100 * k); println(t[0]) };
+    let n = nested(true, 30); println(n[0]);
+    let m = nested(false, 40); println(m[0]);
+    println("end")
+}

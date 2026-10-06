@@ -1,0 +1,527 @@
+// LeetCode 278 — differential harness.
+//
+// Three solvers: Kahn with a smallest-first tie-break, DFS reverse postorder,
+// and the brute-force permutation search. The interesting part of this kata is
+// that they CANNOT all be checked the same way.
+//
+// THE ANSWER IS NOT UNIQUE. Letters the words never relate may appear in any
+// relative order, so `["ab", "abc"]` admits every permutation of {a,b,c} and the
+// problem accepts any of them. Comparing solver output as strings is therefore
+// wrong in general — it would fail correct solvers.
+//
+// So the harness uses TWO oracles, and which one applies is forced by the
+// solver rather than chosen:
+//
+//   * KAHN vs BRUTE — STRING EQUALITY. Both commit to the lexicographically
+//     smallest valid order, Kahn by always taking the smallest available letter
+//     and brute by enumerating permutations in order. Two independent routes to
+//     the same canonical form is the strongest check available, and it is the
+//     whole reason the ★ solver bothers with a tie-break.
+//
+//   * DFS — VALIDATION. Reverse postorder yields *a* valid order and no visit
+//     order makes it the lex-smallest in general, so it is checked against the
+//     PROBLEM instead: whatever it emits must be a permutation of exactly the
+//     present letters, and must order every adjacent word pair correctly.
+//
+//   * ALL THREE — AGREEMENT ON EXISTENCE. Empty versus non-empty is the sharp
+//     binary the problem is really about, and it is comparable across all three
+//     regardless of tie-break.
+//
+// THE VALIDATOR IS NOT A THIRD SOLVER. It never constructs an order; it only
+// checks one, which is why it can adjudicate between solvers that legitimately
+// disagree. A pure equality harness would have had to drop DFS or weaken it.
+//
+// WHY THE INVALID CASES ARE COUNTED SEPARATELY. There are two ways to be
+// unsatisfiable and they are missed by different bugs: a CYCLE (z<x and x<z),
+// and the PREFIX RULE (`["abc","ab"]` — a word before its own prefix, which
+// yields no constraint at all and so slips past any solver that only looks for
+// differing characters). The generator manufactures both, and the counters keep
+// them apart so a harness that stopped producing one would be visible.
+
+fn solve_kahn(words: ref Vec[String]) -> String {
+    // present[c] — letter c occurs somewhere in the input
+    let mut present: Vec[bool] = Vec.new();
+    let mut indeg: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < 26 {
+        present.push(false);
+        indeg.push(0);
+        z = z + 1;
+    }
+    // adj[a*26+b] — a precedes b (deduplicated: a repeated pair must not
+    // inflate the in-degree, or the count never reaches zero)
+    let mut adj: Vec[bool] = Vec.new();
+    let mut y = 0;
+    while y < 676 {
+        adj.push(false);
+        y = y + 1;
+    }
+
+    let mut w = 0;
+    while w < words.len() {
+        let b = words[w].bytes();
+        let mut i = 0;
+        while i < b.len() {
+            present[(b[i] as i64) - 97] = true;
+            i = i + 1;
+        }
+        w = w + 1;
+    }
+
+    let mut p = 0;
+    while p + 1 < words.len() {
+        let a = words[p].bytes();
+        let c = words[p + 1].bytes();
+        let mut k = 0;
+        let mut found = false;
+        let mut shorter = a.len();
+        if c.len() < shorter { shorter = c.len(); }
+        while k < shorter {
+            if a[k] != c[k] {
+                let u = (a[k] as i64) - 97;
+                let v = (c[k] as i64) - 97;
+                if not adj[u * 26 + v] {
+                    adj[u * 26 + v] = true;
+                    indeg[v] = indeg[v] + 1;
+                }
+                found = true;
+                k = shorter;          // exactly one edge per adjacent pair
+            } else {
+                k = k + 1;
+            }
+        }
+        // No differing character within the common prefix: legal only if the
+        // earlier word is the shorter one.
+        if not found and a.len() > c.len() {
+            return "";
+        }
+        p = p + 1;
+    }
+
+    let mut out: String = "";
+    let mut done: Vec[bool] = Vec.new();
+    let mut d = 0;
+    while d < 26 {
+        done.push(false);
+        d = d + 1;
+    }
+    let mut remaining = 0;
+    let mut r = 0;
+    while r < 26 {
+        if present[r] { remaining = remaining + 1; }
+        r = r + 1;
+    }
+
+    while remaining > 0 {
+        // smallest available letter — the canonical tie-break
+        let mut pick = -1;
+        let mut s = 0;
+        while s < 26 {
+            if present[s] and not done[s] and indeg[s] == 0 and pick < 0 {
+                pick = s;
+            }
+            s = s + 1;
+        }
+        if pick < 0 {
+            return "";                // cycle
+        }
+        done[pick] = true;
+        out = out + byte_to_str(pick + 97);
+        let mut t = 0;
+        while t < 26 {
+            if adj[pick * 26 + t] {
+                indeg[t] = indeg[t] - 1;
+            }
+            t = t + 1;
+        }
+        remaining = remaining - 1;
+    }
+    return out;
+}
+
+fn solve_dfs(words: ref Vec[String]) -> String {
+    // present[c] — letter c occurs somewhere in the input
+    let mut present: Vec[bool] = Vec.new();
+    let mut indeg: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < 26 {
+        present.push(false);
+        indeg.push(0);
+        z = z + 1;
+    }
+    // adj[a*26+b] — a precedes b (deduplicated: a repeated pair must not
+    // inflate the in-degree, or the count never reaches zero)
+    let mut adj: Vec[bool] = Vec.new();
+    let mut y = 0;
+    while y < 676 {
+        adj.push(false);
+        y = y + 1;
+    }
+
+    let mut w = 0;
+    while w < words.len() {
+        let b = words[w].bytes();
+        let mut i = 0;
+        while i < b.len() {
+            present[(b[i] as i64) - 97] = true;
+            i = i + 1;
+        }
+        w = w + 1;
+    }
+
+    let mut p = 0;
+    while p + 1 < words.len() {
+        let a = words[p].bytes();
+        let c = words[p + 1].bytes();
+        let mut k = 0;
+        let mut found = false;
+        let mut shorter = a.len();
+        if c.len() < shorter { shorter = c.len(); }
+        while k < shorter {
+            if a[k] != c[k] {
+                let u = (a[k] as i64) - 97;
+                let v = (c[k] as i64) - 97;
+                if not adj[u * 26 + v] {
+                    adj[u * 26 + v] = true;
+                    indeg[v] = indeg[v] + 1;
+                }
+                found = true;
+                k = shorter;          // exactly one edge per adjacent pair
+            } else {
+                k = k + 1;
+            }
+        }
+        // No differing character within the common prefix: legal only if the
+        // earlier word is the shorter one.
+        if not found and a.len() > c.len() {
+            return "";
+        }
+        p = p + 1;
+    }
+
+    // Reverse postorder DFS with three colours. colour: 0 white, 1 grey, 2 black.
+    let mut colour: Vec[i64] = Vec.new();
+    let mut q = 0;
+    while q < 26 {
+        colour.push(0);
+        q = q + 1;
+    }
+    let mut rev: Vec[i64] = Vec.new();
+    let mut root = 0;
+    while root < 26 {
+        if present[root] and colour[root] == 0 {
+            // explicit stack of (letter, next-successor-to-try)
+            let mut st: Vec[i64] = Vec.new();
+            let mut ix: Vec[i64] = Vec.new();
+            st.push(root);
+            ix.push(0);
+            colour[root] = 1;
+            while st.len() > 0 {
+                let top = st[st.len() - 1];
+                let mut t = ix[ix.len() - 1];
+                let mut advanced = false;
+                while t < 26 and not advanced {
+                    if adj[top * 26 + t] {
+                        if colour[t] == 1 {
+                            return "";            // back edge -> cycle
+                        }
+                        if colour[t] == 0 {
+                            ix[ix.len() - 1] = t + 1;
+                            colour[t] = 1;
+                            st.push(t);
+                            ix.push(0);
+                            advanced = true;
+                        }
+                    }
+                    if not advanced { t = t + 1; }
+                }
+                if not advanced {
+                    colour[top] = 2;
+                    rev.push(top);
+                    st.pop();
+                    ix.pop();
+                } else {
+                    // the successor's frame is on top now; nothing to do
+                }
+            }
+        }
+        root = root + 1;
+    }
+
+    let mut out: String = "";
+    let mut e = rev.len() - 1;
+    while e >= 0 {
+        out = out + byte_to_str(rev[e] + 97);
+        e = e - 1;
+    }
+    return out;
+}
+
+fn solve_brute(words: ref Vec[String]) -> String {
+    let mut present: Vec[bool] = Vec.new();
+    let mut z = 0;
+    while z < 26 { present.push(false); z = z + 1; }
+    let mut w = 0;
+    while w < words.len() {
+        let b = words[w].bytes();
+        let mut i = 0;
+        while i < b.len() {
+            present[(b[i] as i64) - 97] = true;
+            i = i + 1;
+        }
+        w = w + 1;
+    }
+    let mut letters: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < 26 {
+        if present[c] { letters.push(c); }
+        c = c + 1;
+    }
+
+    // permutations of `letters` in lexicographic order, by repeated next-permutation
+    let mut perm: Vec[i64] = Vec.new();
+    let mut i2 = 0;
+    while i2 < letters.len() { perm.push(letters[i2]); i2 = i2 + 1; }
+
+    let mut more = true;
+    while more {
+        let mut rank: Vec[i64] = Vec.new();
+        let mut r = 0;
+        while r < 26 { rank.push(0); r = r + 1; }
+        let mut j = 0;
+        while j < perm.len() { rank[perm[j]] = j; j = j + 1; }
+        if words_ordered_under(words, rank) {
+            let mut out: String = "";
+            let mut e = 0;
+            while e < perm.len() {
+                out = out + byte_to_str(perm[e] + 97);
+                e = e + 1;
+            }
+            return out;
+        }
+        // next permutation
+        let mut p2 = perm.len() - 2;
+        while p2 >= 0 and perm[p2] >= perm[p2 + 1] { p2 = p2 - 1; }
+        if p2 < 0 {
+            more = false;
+        } else {
+            let mut s2 = perm.len() - 1;
+            while perm[s2] <= perm[p2] { s2 = s2 - 1; }
+            let tmp = perm[p2];
+            perm[p2] = perm[s2];
+            perm[s2] = tmp;
+            let mut lo = p2 + 1;
+            let mut hi = perm.len() - 1;
+            while lo < hi {
+                let t2 = perm[lo];
+                perm[lo] = perm[hi];
+                perm[hi] = t2;
+                lo = lo + 1;
+                hi = hi - 1;
+            }
+        }
+    }
+    return "";
+}
+
+fn words_ordered_under(words: ref Vec[String], rank: ref Vec[i64]) -> bool {
+    let mut p = 0;
+    while p + 1 < words.len() {
+        let a = words[p].bytes();
+        let c = words[p + 1].bytes();
+        let mut k = 0;
+        let mut shorter = a.len();
+        if c.len() < shorter { shorter = c.len(); }
+        let mut decided = false;
+        let mut ok = true;
+        while k < shorter and not decided {
+            if a[k] != c[k] {
+                decided = true;
+                if rank[(a[k] as i64) - 97] > rank[(c[k] as i64) - 97] {
+                    ok = false;
+                }
+            }
+            k = k + 1;
+        }
+        if not decided and a.len() > c.len() {
+            ok = false;                 // a longer word before its own prefix
+        }
+        if not ok { return false; }
+        p = p + 1;
+    }
+    return true;
+}
+
+fn byte_to_str(b: i64) -> String {
+    let alphabet: String = "abcdefghijklmnopqrstuvwxyz";
+    return alphabet.substring(b - 97, b - 96);
+}
+
+
+fn is_valid_answer(words: ref Vec[String], ans: ref String) -> bool {
+    // (a) exactly the present letters, each once
+    let mut present: Vec[bool] = Vec.new();
+    let mut seen: Vec[bool] = Vec.new();
+    let mut z = 0;
+    while z < 26 { present.push(false); seen.push(false); z = z + 1; }
+    let mut w = 0;
+    while w < words.len() {
+        let b = words[w].bytes();
+        let mut i = 0;
+        while i < b.len() { present[(b[i] as i64) - 97] = true; i = i + 1; }
+        w = w + 1;
+    }
+    let ab = ans.bytes();
+    let mut rank: Vec[i64] = Vec.new();
+    let mut r = 0;
+    while r < 26 { rank.push(-1); r = r + 1; }
+    let mut k = 0;
+    while k < ab.len() {
+        let c = (ab[k] as i64) - 97;
+        if not present[c] { return false; }
+        if seen[c] { return false; }
+        seen[c] = true;
+        rank[c] = k;
+        k = k + 1;
+    }
+    let mut c2 = 0;
+    while c2 < 26 {
+        if present[c2] and not seen[c2] { return false; }
+        c2 = c2 + 1;
+    }
+    // (b) every adjacent pair correctly ordered
+    return words_ordered_under(words, rank);
+}
+
+fn main() {
+    let mut cases = 0;
+    let mut satisfiable = 0;
+    let mut invalid_cycle = 0;
+    let mut invalid_prefix = 0;
+    let mut kahn_vs_brute = 0;
+    let mut dfs_invalid = 0;
+    let mut existence_disagreements = 0;
+    let mut dfs_differed_from_kahn = 0;
+    let mut digest = 0;
+
+    let mut seed = 20260817;
+    let mut alpha = 2;
+    while alpha <= 5 {
+        let mut t = 0;
+        while t < 300 {
+            let nwords = 2 + (t % 4);
+            let mut words: Vec[String] = Vec.new();
+            let mut i = 0;
+            while i < nwords {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                let wlen = 1 + (seed / 7) % 3;
+                let mut s: String = "";
+                let mut j = 0;
+                while j < wlen {
+                    seed = (seed * 1103515245 + 12345) % 2147483648;
+                    s = s + byte_to_str(97 + (seed / 11) % alpha);
+                    j = j + 1;
+                }
+                words.push(s);
+                i = i + 1;
+            }
+
+            // A third of the cases are made SATISFIABLE by sorting the words
+            // under a planted alphabet — random word lists are unsatisfiable
+            // far more often than not, so the positive path needs manufacturing
+            // exactly as kata 277's celebrity did.
+            if t % 3 == 0 {
+                let mut rank: Vec[i64] = Vec.new();
+                let mut r = 0;
+                while r < 26 { rank.push(0); r = r + 1; }
+                let mut q = 0;
+                while q < alpha {
+                    rank[(alpha - 1) - q] = q;      // reversed alphabet
+                    q = q + 1;
+                }
+                // insertion sort the words under `rank`
+                let mut a2 = 1;
+                while a2 < words.len() {
+                    let mut b2 = a2;
+                    while b2 > 0 and not pair_ok(words[b2 - 1].clone(), words[b2].clone(), rank) {
+                        let tmp = words[b2 - 1].clone();
+                        words[b2 - 1] = words[b2].clone();
+                        words[b2] = tmp;
+                        b2 = b2 - 1;
+                    }
+                    a2 = a2 + 1;
+                }
+            }
+
+            let k_ans = solve_kahn(words);
+            let d_ans = solve_dfs(words);
+            let b_ans = solve_brute(words);
+
+            if k_ans != b_ans { kahn_vs_brute = kahn_vs_brute + 1; }
+            let ke = k_ans.len() == 0;
+            let de = d_ans.len() == 0;
+            let be = b_ans.len() == 0;
+            if ke != be or de != be { existence_disagreements = existence_disagreements + 1; }
+            if not de {
+                if not is_valid_answer(words, d_ans) { dfs_invalid = dfs_invalid + 1; }
+                if d_ans != k_ans { dfs_differed_from_kahn = dfs_differed_from_kahn + 1; }
+            }
+            if be {
+                // unsatisfiable — which of the two reasons?
+                if has_prefix_violation(words) {
+                    invalid_prefix = invalid_prefix + 1;
+                } else {
+                    invalid_cycle = invalid_cycle + 1;
+                }
+            } else {
+                satisfiable = satisfiable + 1;
+            }
+            digest = (digest * 131 + b_ans.len() + 7) % 1000000007;
+            cases = cases + 1;
+            t = t + 1;
+        }
+        alpha = alpha + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"satisfiable {satisfiable}");
+    println(f"unsatisfiable by CYCLE {invalid_cycle}, by the PREFIX RULE {invalid_prefix}");
+    println(f"DFS answers that differed from the lex-smallest {dfs_differed_from_kahn}");
+    println(f"DFS answers that failed VALIDATION {dfs_invalid}");
+    println(f"digest {digest}");
+    println(f"kahn vs brute, as strings {kahn_vs_brute}");
+    println(f"existence disagreements {existence_disagreements}");
+}
+
+fn pair_ok(x: String, y: String, rank: ref Vec[i64]) -> bool {
+    let a = x.bytes();
+    let c = y.bytes();
+    let mut k = 0;
+    let mut shorter = a.len();
+    if c.len() < shorter { shorter = c.len(); }
+    while k < shorter {
+        if a[k] != c[k] {
+            return rank[(a[k] as i64) - 97] <= rank[(c[k] as i64) - 97];
+        }
+        k = k + 1;
+    }
+    return a.len() <= c.len();
+}
+
+fn has_prefix_violation(words: ref Vec[String]) -> bool {
+    let mut p = 0;
+    while p + 1 < words.len() {
+        let a = words[p].bytes();
+        let c = words[p + 1].bytes();
+        let mut k = 0;
+        let mut shorter = a.len();
+        if c.len() < shorter { shorter = c.len(); }
+        let mut differs = false;
+        while k < shorter {
+            if a[k] != c[k] { differs = true; k = shorter; } else { k = k + 1; }
+        }
+        if not differs and a.len() > c.len() { return true; }
+        p = p + 1;
+    }
+    return false;
+}

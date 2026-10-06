@@ -1,0 +1,22 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { t: (R, i64) }
+
+fn sink(x: R) { println(f"  sank{x.id}") }
+
+fn s1(t: (R, i64))       { match t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+fn s1b(t: (R, i64))      { match t { (r, k) => { println(f"  b{r.id}"); } } }
+fn s1c(s: W)             { match s.t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+fn s1d(s: W)             { match s.t { (r, k) => { println(f"  b{r.id}"); } } }
+fn s1e(t: (R, i64))      { match t { (r, k) => { sink(r); } } }
+fn s1f() { let t = (R { id: 6 }, 0); match t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+
+fn main() {
+    println("param");          s1((R { id: 1 }, 0));           println("param end");
+    println("norebind");       s1b((R { id: 2 }, 0));          println("norebind end");
+    println("proj");           s1c(W { t: (R { id: 3 }, 0) }); println("proj end");
+    println("norebind_proj");  s1d(W { t: (R { id: 4 }, 0) }); println("norebind_proj end");
+    println("consumed");       s1e((R { id: 5 }, 0));          println("consumed end");
+    println("local");          s1f();                          println("local end");
+    println("done");
+}

@@ -1,0 +1,49 @@
+shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+enum Ho[T] { Full(T), Empty }
+enum HoS { FullS(S2), EmptyS }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn wrapS(v: S2) -> Option[S2] { return Some(v) }
+fn mkhS(v: S2) -> Ho[S2] { return Ho.Full(v) }
+fn mkHoS(v: S2) -> HoS { return HoS.FullS(v) }
+fn midS(v: S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
+struct H { n: i64 }
+impl H {
+    fn wrapm(ref self, v: S2) -> Option[S2] { return Some(v) }
+    fn midm(ref self, v: S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
+    fn wrapa(v: S2) -> Option[S2] { return Some(v) }
+}
+fn a_wrap() { let s = mk2(1); let o = wrapS(s); println("a") }
+fn b_mkh() { let s = mk2(2); let h = mkhS(s); println("b") }
+fn c_mid_some() { let s = mk2(3); let o = midS(s, true); println("c") }
+fn d_mid_none() { let s = mk2(4); let o = midS(s, false); println("d") }
+fn f_wrap_unwrap() { let s = mk2(6); let o = wrapS(s); let v = o.unwrap(); println(f"f{v.id}") }
+fn g_mid_move() { let s = mk2(7); let o = midS(s, true); match o { Some(x) => { let y = x; println(f"g{y.id}") }, None => println("n") } }
+fn h_mkh_read() { let s = mk2(8); let h = mkhS(s); match h { Ho.Full(x) => println(f"h{x.id}"), Ho.Empty => println("e") } }
+fn i_mono_read() { let s = mk2(9); let o = mkHoS(s); match o { HoS.FullS(x) => println(f"i{x.id}"), HoS.EmptyS => println("e") } }
+fn j_mono_move() { let s = mk2(10); let o = mkHoS(s); match o { HoS.FullS(x) => { let y = x; println(f"j{y.id}") }, HoS.EmptyS => println("e") } }
+fn k_meth() { let h = H { n: 0 }; let s = mk2(11); let o = h.wrapm(s); println("k") }
+fn l_meth_mid_none() { let h = H { n: 0 }; let s = mk2(12); let o = h.midm(s, false); println("l") }
+fn m_meth_mid_unwrap() { let h = H { n: 0 }; let s = mk2(13); let o = h.midm(s, true); let v = o.unwrap(); println(f"m{v.id}") }
+fn n_assoc() { let s = mk2(14); let o = H.wrapa(s); println("n") }
+fn o_loop() { for i in 15..19 { let s = mk2(i); let o = midS(s, i % 2 == 0); match o { Some(x) => println(f"o{x.id}"), None => println(f"on{i}") } } }
+fn main() {
+    a_wrap(); println("a.")
+    b_mkh(); println("b.")
+    c_mid_some(); println("c.")
+    d_mid_none(); println("d.")
+    f_wrap_unwrap(); println("f.")
+    g_mid_move(); println("g.")
+    h_mkh_read(); println("h.")
+    i_mono_read(); println("i.")
+    j_mono_move(); println("j.")
+    k_meth(); println("k.")
+    l_meth_mid_none(); println("l.")
+    m_meth_mid_unwrap(); println("m.")
+    n_assoc(); println("n.")
+    o_loop(); println("o.")
+    println("end")
+}

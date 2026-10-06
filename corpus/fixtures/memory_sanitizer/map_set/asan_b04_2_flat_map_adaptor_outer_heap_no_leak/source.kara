@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 30i64 {
+        let a: Vec[Vec[String]] = Vec[
+            Vec["flat-outer-alpha-aaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                "flat-outer-bravo-bbbbbbbbbbbbbbbbbbbbbb".to_string()],
+            Vec["flat-outer-charlie-cccccccccccccccccccc".to_string()]
+        ];
+        let r: Vec[String] = a.iter().filter(|v| v.len() > 0i64).flat_map(|p| p.iter()).collect();
+        println(f"{r.len()} {r[0i64]} {r[2i64]}");
+        round = round + 1i64;
+    }
+}

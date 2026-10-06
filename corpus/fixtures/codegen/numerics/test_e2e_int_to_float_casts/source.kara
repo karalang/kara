@@ -1,0 +1,7 @@
+
+fn main() {
+    println(5i64 as f64);
+    println(255u8 as f64);
+    let x: i64 = 1152921504606846977;
+    println((x as f64) as i64);
+}

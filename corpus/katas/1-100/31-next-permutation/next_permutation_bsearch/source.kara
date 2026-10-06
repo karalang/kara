@@ -1,0 +1,110 @@
+// LeetCode #31: Next Permutation — binary-search successor variant.
+//
+// Same four-move shape as next_permutation.kara (pivot, swap successor, reverse
+// tail), but the SUCCESSOR step exploits a property the linear scan leaves on
+// the table: once the pivot i is found, the suffix nums[i+1..] is guaranteed
+// non-increasing (descending). The successor is the smallest tail value still
+// greater than nums[i] — and in a descending run that is the *rightmost* index
+// j with nums[j] > nums[i]. A monotone predicate over a sorted run is exactly
+// what binary search answers, so the O(n) successor scan collapses to O(log n).
+//
+// Predicate `nums[j] > nums[i]` is true on a prefix of the descending suffix
+// and false after it (values only fall left-to-right); we want the last true
+// index. Upper-mid bisection (`mid = lo + (hi - lo + 1) / 2`) walks lo up to it
+// without overshoot. The true region is non-empty by construction — the pivot
+// guarantees nums[i+1] > nums[i] — so the search always lands on a real
+// successor. Overall the algorithm is still O(n) (the pivot find and the tail
+// reverse dominate); the binary search is the instructive contrast, not a
+// complexity win — the kata's "two ways to find the successor" pairing.
+
+fn next_permutation(nums: mut Slice[i64], len: i64) {
+    // 1. Pivot: rightmost i with nums[i] < nums[i + 1].
+    let mut i = len - 2;
+    while i >= 0 and nums[i] >= nums[i + 1] {
+        i = i - 1;
+    }
+
+    // 3. Pivot found — binary-search the descending suffix for the rightmost
+    //    j with nums[j] > nums[i], then swap. The suffix [i+1, len-1] descends,
+    //    so the predicate holds on a prefix; upper-mid bisection finds its end.
+    if i >= 0 {
+        let mut lo = i + 1;
+        let mut hi = len - 1;
+        while lo < hi {
+            let mid = lo + (hi - lo + 1) / 2;
+            if nums[mid] > nums[i] {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        let tmp = nums[i];
+        nums[i] = nums[lo];
+        nums[lo] = tmp;
+    }
+
+    // 4. Reverse the suffix nums[i + 1 ..] (descending -> ascending). i = -1
+    //    when no pivot exists, reversing the whole array — the wrap.
+    let mut a = i + 1;
+    let mut b = len - 1;
+    while a < b {
+        let t = nums[a];
+        nums[a] = nums[b];
+        nums[b] = t;
+        a = a + 1;
+        b = b - 1;
+    }
+}
+
+fn fmt(nums: mut Slice[i64], len: i64) -> String {
+    let mut s: String = "[";
+    for i in 0..len {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(nums: mut Slice[i64], len: i64) {
+    let before = fmt(nums, len);
+    next_permutation(nums, len);
+    println(f"{before} -> {fmt(nums, len)}");
+}
+
+fn main() {
+    // Same case battery as next_permutation.kara — byte-identical output.
+    let mut a1: Array[i64, 3] = [1, 2, 3];
+    report(mut a1, 3);                 // [1, 2, 3] -> [1, 3, 2]
+
+    let mut a2: Array[i64, 3] = [3, 2, 1];
+    report(mut a2, 3);                 // [3, 2, 1] -> [1, 2, 3]
+
+    let mut a3: Array[i64, 3] = [1, 1, 5];
+    report(mut a3, 3);                 // [1, 1, 5] -> [1, 5, 1]
+
+    let mut a4: Array[i64, 5] = [1, 5, 4, 3, 2];
+    report(mut a4, 5);                 // [1, 5, 4, 3, 2] -> [2, 1, 3, 4, 5]
+
+    let mut a5: Array[i64, 6] = [1, 3, 2, 2, 2, 1];
+    report(mut a5, 6);                 // [1, 3, 2, 2, 2, 1] -> [2, 1, 1, 2, 2, 3]
+
+    let mut a6: Array[i64, 2] = [1, 2];
+    report(mut a6, 2);                 // [1, 2] -> [2, 1]
+    let mut a7: Array[i64, 2] = [2, 1];
+    report(mut a7, 2);                 // [2, 1] -> [1, 2]
+
+    let mut a8: Array[i64, 1] = [7];
+    report(mut a8, 1);                 // [7] -> [7]
+
+    let mut a9: Array[i64, 4] = [2, 2, 2, 2];
+    report(mut a9, 4);                 // [2, 2, 2, 2] -> [2, 2, 2, 2]
+
+    let mut a10: Array[i64, 6] = [1, 2, 3, 6, 5, 4];
+    report(mut a10, 6);               // [1, 2, 3, 6, 5, 4] -> [1, 2, 4, 3, 5, 6]
+
+    let mut a11: Array[i64, 4] = [-1, 0, -2, 3];
+    report(mut a11, 4);              // [-1, 0, -2, 3] -> [-1, 0, 3, -2]
+}

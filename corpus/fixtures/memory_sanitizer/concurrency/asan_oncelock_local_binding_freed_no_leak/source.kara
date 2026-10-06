@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut sum: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[i64] = OnceLock.new();
+        match cell.set(i) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set(i) { Ok(_) => {}, Err(_) => {}, }
+        match cell.get() { Some(v) => { sum = sum + v; }, None => {}, }
+        i = i + 1;
+    }
+    println(sum.to_string());
+}

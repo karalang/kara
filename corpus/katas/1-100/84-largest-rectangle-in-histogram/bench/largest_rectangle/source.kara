@@ -1,0 +1,66 @@
+// Benchmark workload — Largest Rectangle in Histogram (LeetCode #84).
+// Two lanes over ONE workload: a batch of K=108000 INDEPENDENT largest-rectangle
+// computations (the ★). Each iteration builds a fresh sawtooth histogram whose phase
+// depends on the iteration index — heights[j] = (j + iter) % 50, N=2000, so no call
+// hoists — runs the monotonic-stack pass, and the K areas are combined through a plain
+// associative SUM (order-independent, so parallel == sequential).
+//
+//   - SEQ lane: the batch run single-threaded — kara (KARAC_AUTO_PAR=0) vs
+//     rustc -O / clang -O3 / go build per-core.
+//   - PAR lane: the SAME batch, parallel — the default `karac build` AUTO-PARALLELIZES
+//     the `for k in 0..K` sum reduction with NO hand-written parallel code, raced
+//     against hand-tuned C-pthreads / rayon / goroutines (kata #75's framing).
+//
+// The per-iteration build (a Vec[i64]) and per-call stack (a Vec[i64]) allocation are
+// part of the measured work, alongside the double-indexed heights[stack[..]] chase.
+// See ../README.md § Benchmarks.
+
+fn largest_rectangle(heights: ref Vec[i64], n: i64) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut max_area = 0;
+    let mut i = 0;
+    while i <= n {
+        let h = if i < n { heights[i] } else { 0 };
+        while stack.len() > 0 and heights[stack[stack.len() - 1]] > h {
+            let top = stack[stack.len() - 1];
+            stack.pop();
+            let height = heights[top];
+            let width = if stack.len() == 0 {
+                i
+            } else {
+                i - stack[stack.len() - 1] - 1
+            };
+            let area = height * width;
+            if area > max_area {
+                max_area = area;
+            }
+        }
+        stack.push(i);
+        i = i + 1;
+    }
+    max_area
+}
+
+fn build(n: i64, iter: i64) -> Vec[i64] {
+    let mut h: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < n {
+        h.push((j + iter) % 50);
+        j = j + 1;
+    }
+    h
+}
+
+fn main() {
+    let n = 2000;
+    let total = 108000;
+
+    // Associative sum over K independent largest-rectangle computations; the default
+    // build auto-parallelizes this `for` reduction, KARAC_AUTO_PAR=0 keeps it seq.
+    let mut sum = 0;
+    for k in 0..total {
+        let h = build(n, k);
+        sum = sum + largest_rectangle(h, n);
+    }
+    println(f"{sum}");
+}

@@ -1,0 +1,58 @@
+// LeetCode 266 — Palindrome Permutation, in one integer.
+//
+// The parity of 26 counters is 26 bits, so the whole state fits in a single
+// i64 and the toggle becomes an XOR:
+//
+//     mask = mask ^ (1 << (byte - 'a'))
+//
+// After the pass, bit c is set iff character c occurred an odd number of times,
+// so the answer is "mask has at most one bit set" — which is the classic
+// power-of-two test, extended to admit zero:
+//
+//     mask & (mask - 1) == 0
+//
+// Clearing the lowest set bit leaves zero exactly when there was at most one.
+// The `== 0` case is what makes it "at most" rather than "exactly": `0 & -1`
+// is 0, so an all-even string passes. Writing the test as `popcount(mask) == 1`
+// reintroduces the very off-by-one the counting form invites — and the two
+// forms would then agree with each other while both being wrong, which is why
+// the differential runs a reference that counts no parities at all.
+//
+// This one is NOT alphabet-agnostic, and that is the trade. It assumes bytes in
+// 'a'..'z', which the problem's constraints guarantee; the differential feeds it
+// only inputs that honour them, and the other two forms carry the general case.
+
+fn can_permute_palindrome(s: ref String) -> bool {
+    let mut mask = 0;
+    for b in s.bytes() {
+        let bit = 1 << (b as i64 - 97);   // 'a' == 97
+        mask = mask ^ bit;
+    }
+    // At most one bit set. Zero qualifies, which is the whole point.
+    return mask & (mask - 1) == 0;
+}
+
+fn report(s: ref String) {
+    if can_permute_palindrome(s) {
+        println(f"\"{s}\" -> true");
+    } else {
+        println(f"\"{s}\" -> false");
+    }
+}
+
+fn main() {
+    report("code");
+    report("aab");
+    report("carerac");
+    report("");
+    report("a");
+    report("aa");
+    report("ab");
+    report("aabb");
+    report("aabbcc");
+    report("aaabbb");
+    report("aaabbbb");
+    report("zzzzzzzz");
+    report("abcabcabc");
+    report("abcabcabcd");
+}

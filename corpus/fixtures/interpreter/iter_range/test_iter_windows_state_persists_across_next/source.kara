@@ -1,0 +1,12 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    let mut it = v.iter().windows(2);
+    println(it.next().unwrap()[0]);
+    println(it.next().unwrap()[0]);
+    println(it.next().unwrap()[0]);
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}

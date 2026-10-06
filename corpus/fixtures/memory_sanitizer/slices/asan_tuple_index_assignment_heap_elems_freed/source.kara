@@ -1,0 +1,15 @@
+
+struct Ph { id: i64, name: String }
+struct Oh { t: (String, Ph) }
+fn main() {
+    let mut t = (f"a{1}", 2);
+    println(f"pre {t.0}");
+    t.0 = f"b{3}";
+    println(f"post {t.0}");
+    let mut o = Oh { t: (f"c{4}", Ph { id: 9, name: f"z{9}" }) };
+    println(f"opre {o.t.0} {o.t.1.name}");
+    o.t.0 = f"d{5}";
+    o.t.1 = Ph { id: 6, name: f"w{6}" };
+    println(f"opost {o.t.0} {o.t.1.id} {o.t.1.name}");
+    println("end");
+}

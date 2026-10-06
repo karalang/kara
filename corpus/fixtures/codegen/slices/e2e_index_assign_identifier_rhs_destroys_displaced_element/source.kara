@@ -1,0 +1,28 @@
+
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct Holder { xs: Vec[D] }
+struct Bag { xs: Vec[D] }
+impl Bag {
+  fn put(mut ref self, t: D) { self.xs[0] = t; }
+}
+fn mk(k: i64) -> D { return D { id: k, s: f"m{k}" } }
+fn one() { let mut a: Vec[D] = [D { id: 11, s: f"a" }]; let t: D = D { id: 12, s: f"b" }; a[0] = t; println(f"one:{a[0].id}") }
+fn two() { let mut a: Array[D, 2] = [D { id: 21, s: f"a" }, D { id: 22, s: f"b" }]; let t: D = D { id: 23, s: f"c" }; a[0] = t; println(f"two:{a[0].id}") }
+fn three() { let mut h: Holder = Holder { xs: [D { id: 31, s: f"a" }] }; let t: D = D { id: 32, s: f"b" }; h.xs[0] = t; println(f"three:{h.xs[0].id}") }
+fn four(a: mut ref Vec[D]) { let t: D = D { id: 42, s: f"b" }; a[0] = t; println(f"four:{a[0].id}") }
+fn five() { let mut a: Vec[D] = [D { id: 51, s: f"a" }, D { id: 52, s: f"b" }]; let t: D = a.pop().unwrap(); a[0] = t; println(f"five:{a[0].id}") }
+fn six() { let mut a: Vec[D] = [D { id: 61, s: f"a" }]; let p: D = D { id: 62, s: f"b" }; let q: D = D { id: 63, s: f"c" }; a[0] = p; a[0] = q; println(f"six:{a[0].id}") }
+fn seven() { let mut a: Vec[D] = [D { id: 71, s: f"a" }]; let t: D = mk(72); a[0] = t; println(f"seven:{a[0].id}") }
+fn eight() { let mut b: Bag = Bag { xs: [D { id: 81, s: f"a" }] }; b.put(D { id: 82, s: f"b" }); println(f"eight:{b.xs[0].id}") }
+fn main() {
+  one();
+  two();
+  three();
+  { let mut a: Vec[D] = [D { id: 41, s: f"a" }]; four(mut a); }
+  five();
+  six();
+  seven();
+  eight();
+  println("end")
+}

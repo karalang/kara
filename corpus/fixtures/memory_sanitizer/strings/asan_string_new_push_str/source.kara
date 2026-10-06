@@ -1,0 +1,9 @@
+
+fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut s = String.new();
+    s.push_str("hello ");
+    s.push_str(f"world-{base}");
+    if s.contains(digits(base)) { println(f"{s.len()}"); } else { println("BAD"); }
+}

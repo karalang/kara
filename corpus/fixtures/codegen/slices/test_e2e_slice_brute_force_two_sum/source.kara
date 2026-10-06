@@ -1,0 +1,18 @@
+
+fn two_sum(nums: Slice[i64], target: i64) -> Array[i64, 2] {
+    let n = nums.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if nums[i] + nums[j] == target {
+                return [i, j];
+            }
+        }
+    }
+    [-1, -1]
+}
+fn main() {
+    let nums: Array[i64, 4] = [2, 7, 11, 15];
+    let r = two_sum(nums, 9);
+    println(r[0]);
+    println(r[1]);
+}

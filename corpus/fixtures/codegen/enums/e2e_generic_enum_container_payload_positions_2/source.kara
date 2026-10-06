@@ -1,0 +1,19 @@
+
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+Slot.S(a);
+println("mid");
+println("end");
+}

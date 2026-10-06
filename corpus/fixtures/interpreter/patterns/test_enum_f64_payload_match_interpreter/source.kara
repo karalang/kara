@@ -1,0 +1,7 @@
+enum Tok { Float(f64, i64), Nil }
+        fn main() {
+            match Some(3.14) { Some(x) => println(x), None => println(0.0), }
+            let o: Option[f64] = Some(1.5);
+            match o { Some(x) => println(x), None => println(0.0), }
+            match Tok.Float(2.5, 7) { Float(x, y) => { println(x); println(y); } Nil => println(0.0), }
+        }

@@ -1,0 +1,23 @@
+
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(5_i64, 50_i64);
+    return m;
+}
+
+fn make_set() -> Set[i64] {
+    let mut s: Set[i64] = Set.new();
+    s.insert(7_i64);
+    s.insert(9_i64);
+    return s;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 2 {
+        println(make_map().contains_key(5_i64));
+        println(make_set().contains(7_i64));
+        println(make_set().contains(42_i64));
+        i = i + 1;
+    };
+}

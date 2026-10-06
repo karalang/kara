@@ -1,0 +1,1 @@
+fn main() { let a: (i64, Array[P, 2]) = (7, [P { n: 5 }, P { n: 8 }]); println(f"r:{a.1[1].n}") }

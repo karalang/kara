@@ -1,0 +1,34 @@
+
+fn mk(i: i64) -> String { f"alpha-{i}-long-enough-to-heap" }
+fn main() {
+    let mut mm: Map[i64, String] = Map.new();
+    mm.insert(1, mk(1));
+    let o: Option[Map[i64, String]] = Some(mm);
+    let mut c = o.clone();
+    match c { Some(ref_m) => { let mut m2 = ref_m; m2.insert(2, mk(2)); println(f"c {m2.len()}"); } None => {} }
+    match o { Some(m) => println(f"o {m.len()}"), None => println("none") }
+    let mut st: Set[String] = Set.new();
+    st.insert(mk(3));
+    let os: Option[Set[String]] = Some(st);
+    let cs = os.clone();
+    match cs { Some(s) => println(f"cs {s.len()}"), None => {} }
+    match os { Some(s) => println(f"os {s.len()}"), None => {} }
+    let ot: Option[(Vec[String], i64)] = Some(([mk(4), mk(5)], 9));
+    let ct = ot.clone();
+    match ct { Some((v, k)) => println(f"ct {v.len()} {k} {v[1]}"), None => {} }
+    match ot { Some((v, k)) => println(f"ot {v.len()} {k}"), None => {} }
+    let oa: Option[Array[String, 2]] = Some([mk(6), mk(7)]);
+    let ca = oa.clone();
+    match ca { Some(a) => println(f"ca {a[0]}"), None => {} }
+    match oa { Some(a) => println(f"oa {a[1]}"), None => {} }
+    let on: Option[Map[i64, String]] = None;
+    let cn = on.clone();
+    println(f"none {cn.is_none()}");
+    let mut m9: Map[i64, String] = Map.new(); m9.insert(9, mk(9)); let ow: Option[(String, Map[i64, String])] = Some((mk(8), m9));
+    let cw = ow.clone();
+    match cw { Some((s, m)) => println(f"cw {s} {m.len()}"), None => {} }
+    match ow { Some((s, m)) => println(f"ow {s.len()} {m.len()}"), None => {} }
+    let os2: Option[String] = Some(mk(10));
+    let cs2 = os2.clone();
+    println(f"str {cs2.is_some()} {os2.is_some()}");
+}

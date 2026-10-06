@@ -1,0 +1,13 @@
+source = "tests/codegen/structs.rs::e2e_tuple_elem_bodies_walker_is_keyed_by_layout"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

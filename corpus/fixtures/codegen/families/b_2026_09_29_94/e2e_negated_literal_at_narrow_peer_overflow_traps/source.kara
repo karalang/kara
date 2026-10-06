@@ -1,0 +1,5 @@
+fn main() {
+    let h: i8 = -128;
+    let z = h + -1;
+    println(f"{z}");
+}

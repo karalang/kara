@@ -1,0 +1,5 @@
+fn two(x: P, y: P) -> i64 { return x.b + y.b; }
+fn go() -> i64 { let t = mkp(9); let mut i = 0i64; let mut n = 0i64;
+  while i < 3i64 { n = n + two(mkp(1), t); i = i + 1; }
+  return n; }
+fn main() { println(go()); }

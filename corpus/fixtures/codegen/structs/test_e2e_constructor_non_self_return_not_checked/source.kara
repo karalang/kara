@@ -1,0 +1,4 @@
+
+struct Counter { n: i64, invariant self.n >= 0 }
+impl Counter { pub fn answer() -> i64 { 0 - 9 } }
+fn main() { println(Counter.answer()); }

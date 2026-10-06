@@ -1,0 +1,2 @@
+struct C[T] { v: T }
+fn main() { let c: C[i64] = C[i64] { v: 3 }; println(f"{c.v}"); }

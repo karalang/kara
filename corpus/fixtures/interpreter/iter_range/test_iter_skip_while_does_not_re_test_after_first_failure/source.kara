@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = [1, 2, 9, 3, 4];
+    for x in v.iter().skip_while(|x| { println(f"p:{x}"); x < 5 }) {
+        println(f"y:{x}");
+    }
+}

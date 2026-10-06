@@ -1,0 +1,39 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Hd3 { r: R, n: i64 }
+struct Q { z: i64 }
+fn eat(o: Option[Hd3], k: bool) -> R {
+    match o { Some(t) => { if k { return t.r; } return R { id: 1 }; } None => { return R { id: 0 }; } }
+}
+fn eatres(o: Result[Hd3, i64], k: bool) -> R {
+    match o { Ok(t) => { if k { return t.r; } return R { id: 1 }; } Err(e) => { return R { id: 0 }; } }
+}
+fn keep(o: Option[Hd3], k: bool) -> R {
+    match o { Some(t) => { let x = t.n; if k { println("  k"); } return R { id: x }; } None => { return R { id: 0 }; } }
+}
+fn idof(o: Option[Hd3], k: bool) -> i64 {
+    match o { Some(t) => { if k { return t.r.id; } return 1; } None => { return 0; } }
+}
+impl Q {
+    fn take(ref self, o: Option[Hd3], k: bool) -> R {
+        match o { Some(t) => { if k { return t.r; } return R { id: 1 }; } None => { return R { id: 0 }; } }
+    }
+    fn make(o: Option[Hd3], k: bool) -> R {
+        match o { Some(t) => { if k { return t.r; } return R { id: 1 }; } None => { return R { id: 0 }; } }
+    }
+}
+fn main() {
+    println("temp-false"); { let g = eat(Option.Some(Hd3 { r: R { id: 5 }, n: 2 }), false); println(f"  got:{g.id}") }
+    println("temp-true"); { let g = eat(Option.Some(Hd3 { r: R { id: 5 }, n: 2 }), true); println(f"  got:{g.id}") }
+    println("named-false"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = eat(a, false); println(f"  got:{g.id}") }
+    println("named-true"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = eat(a, true); println(f"  got:{g.id}") }
+    println("result-named-true"); { let a: Result[Hd3, i64] = Result.Ok(Hd3 { r: R { id: 5 }, n: 2 }); let g = eatres(a, true); println(f"  got:{g.id}") }
+    println("result-temp-true"); { let g = eatres(Result.Ok(Hd3 { r: R { id: 5 }, n: 2 }), true); println(f"  got:{g.id}") }
+    println("method-named-true"); { let q = Q { z: 1 }; let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = q.take(a, true); println(f"  got:{g.id}") }
+    println("method-named-false"); { let q = Q { z: 1 }; let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = q.take(a, false); println(f"  got:{g.id}") }
+    println("assoc-named-true"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = Q.make(a, true); println(f"  got:{g.id}") }
+    println("assoc-temp-true"); { let g = Q.make(Option.Some(Hd3 { r: R { id: 5 }, n: 2 }), true); println(f"  got:{g.id}") }
+    println("guard-no-escape"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = keep(a, true); println(f"  got:{g.id}") }
+    println("guard-scalar-leaf"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = idof(a, true); println(f"  got:{g}") }
+    println("end")
+}

@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut i = 0;
+    while i < 4 {
+        let mut v: Vec[Option[String]] = Vec.new();
+        let o = Some(f"a payload string padded beyond thirty-six bytes {i}");
+        v.push(o);
+        println(v.len());
+        i = i + 1;
+    };
+}

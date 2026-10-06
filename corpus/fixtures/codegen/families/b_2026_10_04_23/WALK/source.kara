@@ -1,0 +1,30 @@
+enum Nested {
+    Int(i64),
+    List(Vec[Nested]),
+}
+
+fn depth_sum(items: ref Vec[Nested], depth: i64) -> i64 {
+    let mut total = 0;
+    for item in items.iter() {
+        match item {
+            Int(v) => { total += v * depth; }
+            List(inner) => { total += depth_sum(inner, depth + 1); }
+        }
+    }
+    return total;
+}
+
+fn main() {
+    let mut deep: Vec[Nested] = Vec.new();
+    deep.push(Int(6));
+    let mut mid: Vec[Nested] = Vec.new();
+    mid.push(Int(4));
+    mid.push(List(deep));
+    let mut top: Vec[Nested] = Vec.new();
+    top.push(Int(1));
+    top.push(List(mid));
+    top.push(List(Vec.new()));
+    println(depth_sum(top, 1));
+    println(depth_sum(top, 2));
+    println(top.len());
+}

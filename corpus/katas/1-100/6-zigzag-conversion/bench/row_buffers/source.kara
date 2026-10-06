@@ -1,0 +1,97 @@
+// Benchmark workload — row-buffer (visit-by-row) Zigzag Conversion.
+//
+// N = 10_000 input chars, num_rows = 4, R = 1_000 rotation period, K = 10_000
+// outer iters. Total per-call work is O(N) (one push per input char + one
+// flatten copy = 2N ops); K iters at N = 10K yields ~200 M char-ops.
+//
+// Per-iter input variation comes from the rotation: each outer iter k picks
+// `off = k % R` and runs `convert_off(chars, off, N, num_rows)`. The result
+// depends on `off` (it's a function of the input chars at positions
+// off..off+N), so the same-call CSE cannot hoist the call out of the loop;
+// the optimizer would have to unroll the K/R cycle (R distinct calls
+// minimum) to fold it. The algorithmic shape stays identical to a fixed-
+// input call.
+//
+// Inputs are a 14-char pattern ("PAYPALISHIRING" — the LeetCode canonical
+// example) repeated to fill N+R chars. The pattern is all ASCII so each
+// char encodes as 1 UTF-8 byte; that keeps `karac_string_encode_char` on
+// its fast-path arm and makes the codepoint arithmetic match cleanly
+// across languages.
+//
+// Sink: sum over k in [0, K) of (codepoint(result[0]) + codepoint(result[N-1])).
+// Two reads per iter, so the sink computation itself is negligible next
+// to the algorithm. Cumulative sink value is the same across all three
+// implementations as long as the algorithm matches — output gates the
+// bench against "fast but wrong".
+//
+// Built via `karac build`; pairs with bench/row_buffers.py and
+// bench/row_buffers.rs for the codegen-vs-Python-vs-Rust harness in
+// bench.sh.
+
+fn convert_off(chars: ref Vec[char], off: i64, len: i64, num_rows: i64) -> Vec[char] {
+    let mut out: Vec[char] = Vec.with_capacity(len);
+    if num_rows <= 1 or num_rows >= len {
+        let mut i = 0;
+        while i < len {
+            out.push(chars[off + i]);
+            i = i + 1;
+        }
+        return out;
+    }
+
+    let mut rows: Vec[Vec[char]] = Vec.filled(num_rows, Vec.new());
+
+    let mut cur = 0;
+    let mut going_down = false;
+    let mut i = 0;
+    while i < len {
+        rows[cur].push(chars[off + i]);
+        if cur == 0 or cur == num_rows - 1 {
+            going_down = not going_down;
+        }
+        if going_down {
+            cur = cur + 1;
+        } else {
+            cur = cur - 1;
+        }
+        i = i + 1;
+    }
+
+    let mut r2 = 0;
+    while r2 < num_rows {
+        out.extend_from_slice(rows[r2]);
+        r2 = r2 + 1;
+    }
+    out
+}
+
+fn main() {
+    let n = 10000;
+    let r_period = 1000;
+    let k_iters = 10000;
+    let num_rows = 4;
+
+    // Build the base char buffer of length N+R from a repeating 14-char
+    // pattern. The bench algorithm never reads past index N+R-1, so the
+    // exact length tail beyond N+R doesn't matter as long as len() >=
+    // N+R; we overshoot by at most 13.
+    let mut chars: Vec[char] = Vec.new();
+    let pattern = "PAYPALISHIRING";
+    let need = n + r_period;
+    while chars.len() < need {
+        for c in pattern.chars() {
+            chars.push(c);
+        }
+    }
+
+    let mut sum = 0;
+    let mut k = 0;
+    while k < k_iters {
+        let off = k % r_period;
+        let result = convert_off(chars, off, n, num_rows);
+        let last = result.len() - 1;
+        sum = sum + (result[0] as i64) + (result[last] as i64);
+        k = k + 1;
+    }
+    println(sum);
+}

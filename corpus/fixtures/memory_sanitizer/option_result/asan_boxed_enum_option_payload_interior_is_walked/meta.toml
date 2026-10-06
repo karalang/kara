@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/option_result.rs::asan_boxed_enum_option_payload_interior_is_walked"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

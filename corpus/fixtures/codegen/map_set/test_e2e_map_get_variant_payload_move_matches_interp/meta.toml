@@ -1,0 +1,13 @@
+source = "tests/codegen/map_set.rs::test_e2e_map_get_variant_payload_move_matches_interp"
+dedup_of = ["tests/memory_sanitizer/map_set.rs::asan_map_get_variant_payload_move_has_one_owner"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

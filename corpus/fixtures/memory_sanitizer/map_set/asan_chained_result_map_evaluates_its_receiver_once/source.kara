@@ -1,0 +1,21 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let r: Result[String, String] = Ok(f"hi");
+        // Chained without an intervening `let` — the shape that re-ran the
+        // inner map over a source it had already moved out of.
+        match r.map(|x| x.to_uppercase()).map(|x| x.to_uppercase()) {
+            Ok(v) => { total = total + v.len(); }
+            Err(e) => { total = total + e.len(); }
+        }
+        let s: Result[String, String] = Err(f"boom");
+        match s.map(|x| x.to_uppercase()).map(|x| x.to_uppercase()) {
+            Ok(v) => { total = total + v.len(); }
+            Err(e) => { total = total + e.len(); }
+        }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

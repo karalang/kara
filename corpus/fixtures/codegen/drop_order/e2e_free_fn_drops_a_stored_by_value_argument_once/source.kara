@@ -1,0 +1,15 @@
+
+struct Item { id: i64 }
+impl Drop for Item {
+    fn drop(mut ref self) { println(f"drop {self.id}") }
+}
+fn add_to(v: mut ref Vec[Item], x: Item) { v.push(x); }
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    add_to(mut v, Item { id: 7 });
+    println("stored");
+    while v.len() > 0 {
+        match v.pop() { Some(e) => { println(f"pop {e.id}"); } None => {} }
+    }
+    println("end");
+}

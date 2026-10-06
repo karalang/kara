@@ -1,0 +1,5 @@
+
+fn main() reads(Env) {
+    let a = Env.args();
+    if a.len() > 0 { println("args-ok"); } else { println("args-empty"); }
+}

@@ -1,0 +1,1 @@
+fn main() { let t: (Vec[String], i64) = ([f"a", f"b"], 7); println(f"{t.1}"); }

@@ -1,0 +1,137 @@
+// LeetCode #3629: Minimum Jumps to Reach End via Prime Teleportation
+//
+// BFS over indices. Two edge kinds:
+//   - adjacent: i ↔ i±1
+//   - prime teleport: from any i where nums[i] is itself prime p,
+//     to every j with nums[j] % p == 0
+//
+// Naive teleport expansion is O(n²) when many entries share a prime factor.
+// The standard trick keeps BFS linear:
+//
+//   1. Build a per-number prime-factor table: factors[k] holds the ascending
+//      distinct prime factors of k. The same sieve pass that identifies
+//      primes also stamps each composite's distinct primes — one structure,
+//      no separate factorization step needed.
+//   2. For every j, walk factors[nums[j]] and append j to bucket[p] for
+//      each prime p.
+//   3. The first time BFS visits an index whose value *is* the prime p
+//      (detected by factors[v][0] == v — the smallest prime factor of a
+//      prime is itself), drain bucket[p] via Map.remove. Each prime's
+//      whole bucket contributes at most once across the entire search.
+//
+// Total work: O(cap log log cap) for the sieve (which now also yields the
+// per-number factor lists) and O(n + Σ|bucket[p]|) for the BFS — each index
+// is enqueued at most O(1) times via adjacency and at most once across all
+// teleports.
+
+fn build_factors(cap: i64) -> Vec[Vec[i64]] {
+    // factors[k] = ascending distinct prime factors of k for k >= 2;
+    // factors[0] = factors[1] = empty.
+    let mut factors: Vec[Vec[i64]] = Vec.filled(cap + 1, Vec.new());
+    for i in 2..=cap {
+        if factors[i].is_empty() {
+            // i has no smaller prime stamped — i is prime. Stamp every
+            // multiple.
+            for j in (i..=cap).step_by(i) {
+                factors[j].push(i);
+            }
+        }
+    }
+    factors
+}
+
+fn min_jumps(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    if n <= 1 {
+        return 0;
+    }
+
+    let mut cap = 1;
+    for v in nums.iter() {
+        if v > cap {
+            cap = v;
+        }
+    }
+
+    let factors = build_factors(cap);
+
+    // bucket[p] = indices j such that p | nums[j].
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    for j in 0..n {
+        let v = nums[j];
+        if v >= 2 {
+            for p in factors[v].iter() {
+                bucket.entry(p).or_insert(Vec.new()).push(j);
+            }
+        }
+    }
+
+    let mut visited: Vec[bool] = Vec.filled(n, false);
+    visited[0] = true;
+
+    // BFS frontier. Total enqueues across the whole search are
+    // O(n + Σ|bucket[p]|), so monotonically growing memory is fine.
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((0, 0));
+
+    loop {
+        let popped = queue.pop_front();
+        match popped {
+            None => { break; },
+            Some(node) => {
+                let (i, d) = node;
+                if i == n - 1 {
+                    return d;
+                }
+                if i > 0 and not visited[i - 1] {
+                    visited[i - 1] = true;
+                    queue.push_back((i - 1, d + 1));
+                }
+                if i + 1 < n and not visited[i + 1] {
+                    visited[i + 1] = true;
+                    queue.push_back((i + 1, d + 1));
+                }
+                // Teleport: only fires when nums[i] is itself prime.
+                // factors[v][0] is the smallest prime factor of v;
+                // for prime v it equals v. Short-circuit `and` guards
+                // the indexed access when v < 2 (factors[0] / factors[1]
+                // are empty).
+                let v = nums[i];
+                if v >= 2 and factors[v][0] == v {
+                    // Consume bucket[v] exactly once across the whole BFS.
+                    match bucket.remove(v) {
+                        Some(indices) => {
+                            for j in indices.into_iter() {
+                                if not visited[j] {
+                                    visited[j] = true;
+                                    queue.push_back((j, d + 1));
+                                }
+                            }
+                        },
+                        None => {},
+                    }
+                }
+            },
+        }
+    }
+
+    -1   // Constraints guarantee reachability; sentinel is defensive.
+}
+
+fn report(nums: Slice[i64]) {
+    println(min_jumps(nums));
+}
+
+fn main() {
+    let case1: Array[i64, 4] = [1, 2, 4, 6];
+    report(case1);   // expect: 2
+
+    let case2: Array[i64, 5] = [2, 3, 4, 7, 9];
+    report(case2);   // expect: 2
+
+    let case3: Array[i64, 4] = [4, 6, 5, 8];
+    report(case3);   // expect: 3
+
+    let case4: Array[i64, 1] = [42];
+    report(case4);   // expect: 0
+}

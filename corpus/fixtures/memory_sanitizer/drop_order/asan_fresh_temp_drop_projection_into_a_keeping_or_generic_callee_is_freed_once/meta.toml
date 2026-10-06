@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/drop_order.rs::asan_fresh_temp_drop_projection_into_a_keeping_or_generic_callee_is_freed_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

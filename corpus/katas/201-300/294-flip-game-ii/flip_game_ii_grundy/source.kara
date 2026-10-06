@@ -1,0 +1,117 @@
+// LeetCode 294 — Flip Game II by Sprague-Grundy, not by search.
+//
+// The searching arms treat the board as one monolithic state. It isn't. A move
+// needs two adjacent `+`, so it lives entirely inside one maximal RUN of `+`
+// and can never involve two runs at once. The board is therefore a SUM of
+// independent games — one per run — and the `-` characters are not part of the
+// game at all, only separators.
+//
+// Sprague-Grundy says every finite impartial game under normal play (the player
+// unable to move loses) is equivalent to a Nim heap, and the value of a sum of
+// games is the XOR of the values of its parts. So the whole board collapses to
+//
+//     g(run_1) ^ g(run_2) ^ ... ^ g(run_k)  != 0
+//
+// and the ENTIRE search disappears. What is left is one table.
+//
+// THE TABLE. A move inside a run of length n picks a pair at offset i (with
+// 0 <= i <= n-2) and splits the run into two independent runs of lengths i and
+// n-2-i. So
+//
+//     g(0) = g(1) = 0                                  no move exists
+//     g(n) = mex { g(i) ^ g(n-2-i) : 0 <= i <= n-2 }
+//
+// where `mex` is the least non-negative integer not in the set. That recurrence
+// is the octal game **0.07**, known as Dawson's Kayles; its values are eventually
+// periodic with period 34, though nothing here depends on that. The first
+// dozen:
+//
+//     n  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14
+//     g  0  0  1  1  2  0  3  1  1  0  3  3  2  2  4
+//
+// Read off the zeros: a single run of 5 is a LOSS for the mover, and so is a
+// single run of 9. That is the whole explanation of `"+++++" -> false`, which
+// from inside the search looks like an accident of the tree.
+//
+// WHY THIS FILE EARNS ITS PLACE. It is not a faster version of the search — it
+// is a different theorem, and it shares no code, no data structure and no
+// failure mode with the other two arms. When `differential.kara` runs all 2^n
+// boards through search-with-memo, search-without-memo and this file and gets
+// three identical answers, that is real evidence, in a way that two arms
+// differing only by a `Map` would not be.
+
+fn grundy_table(max_run: i64) -> Vec[i64] {
+    let mut g: Vec[i64] = Vec.new();
+    let mut n = 0;
+    while n <= max_run {
+        if n < 2 {
+            g.push(0);
+        } else {
+            // A run of n has n-1 moves, so its mex is at most n-1; a `seen`
+            // table of n+1 slots is always big enough.
+            let mut seen: Vec[bool] = Vec.new();
+            let mut k = 0;
+            while k <= n {
+                seen.push(false);
+                k = k + 1;
+            }
+            let mut i = 0;
+            while i <= n - 2 {
+                let v = g[i] ^ g[n - 2 - i];
+                if v <= n {
+                    seen[v] = true;
+                }
+                i = i + 1;
+            }
+            let mut m = 0;
+            while m <= n and seen[m] {
+                m = m + 1;
+            }
+            g.push(m);
+        }
+        n = n + 1;
+    }
+    return g;
+}
+
+fn first_player_wins(s: ref String, g: ref Vec[i64]) -> bool {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut x = 0;
+    let mut run = 0;
+    let mut i = 0;
+    while i < n {
+        if cs[i] == '+' {
+            run = run + 1;
+        } else {
+            x = x ^ g[run];
+            run = 0;
+        }
+        i = i + 1;
+    }
+    // The trailing run ends at the end of the string, not at a separator.
+    x = x ^ g[run];
+    return x != 0;
+}
+
+fn main() {
+    let g = grundy_table(40);
+
+    let mut line = String.new();
+    line.push_str("g(0..14) =");
+    let mut i = 0;
+    while i <= 14 {
+        line.push_str(f" {g[i]}");
+        i = i + 1;
+    }
+    println(line);
+
+    let boards: Vec[String] = ["++++", "+++++", "+", "-", "", "++", "+++",
+                               "+-+-+", "++-++", "++-+", "+++-+++", "++++++",
+                               "-++-++-++-"];
+    let mut b = 0;
+    while b < boards.len() {
+        println(f"{boards[b]} -> {first_player_wins(boards[b], g)}");
+        b = b + 1;
+    }
+}

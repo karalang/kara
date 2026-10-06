@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_28_36.rs::e2e_narrow_tuple_payload_destructure_output"
+dedup_of = ["tests/interpreter/families/b_2026_09_28_36.rs::test_narrow_tuple_payload_destructure_output", "tests/memory_sanitizer/families/b_2026_09_28_36.rs::asan_narrow_tuple_payload_destructure_clean"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

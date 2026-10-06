@@ -1,0 +1,8 @@
+n from 1 to 1200
+answers: 1 -> 34, 2 -> 354, 3 -> 614, 4 -> 198
+Lagrange violations (an answer above 4) 0
+Legendre numbers counted independently 198
+...and answers of 4 198 — these must be equal
+digest 947958474
+DP vs BFS 0
+DP vs closed form 0

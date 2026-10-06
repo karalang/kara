@@ -1,0 +1,24 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { xs: Vec[Res], tag: i64 }
+fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
+fn use_it(h: Holder) -> i64 { h.tag }
+fn main() {
+    println("bound:");
+    {
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"nn{1}" });
+        let n = use_it(mk(xs));
+        println(n);
+    }
+    println("discard:");
+    {
+        let mut ys: Vec[Res] = Vec.new();
+        ys.push(Res { id: 2, name: f"oo{2}" });
+        use_it(mk(ys));
+    }
+    println("end");
+}

@@ -1,0 +1,7 @@
+
+fn main() {
+    let a = Vector[f32, 4](1.0, 2.0, 3.0, 4.0);
+    let b = Vector[f32, 4](0.5, 0.5, 0.5, 0.5);
+    let c = a * b;
+    println(c[0]); println(c[3]);
+}

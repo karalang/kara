@@ -1,0 +1,15 @@
+
+effect resource AuditLog;
+struct FakeLog { n: i64 }
+impl FakeLog {
+    fn count(self) -> i64 { self.n }
+    fn bump(self) -> i64 { self.n + 7 }
+}
+fn tally() -> i64 reads(AuditLog) {
+    AuditLog.count() + AuditLog.bump()
+}
+fn main() reads(AuditLog) {
+    with_provider[AuditLog](FakeLog { n: 1 }, || {
+        println(tally());
+    });
+}

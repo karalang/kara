@@ -1,0 +1,109 @@
+// LeetCode 313 — Super Ugly Number, through a priority queue.
+//
+// THE ARM: the same k-way merge, but the k stream heads live in a binary heap
+// instead of being rescanned linearly every step.
+//
+// The star arm's per-step cost is two linear passes over the k streams, so the
+// whole run is O(n * k). Here each step is one pop and one push, O(log k), for
+// O(n * log k) overall — a real asymptotic difference once k is large, and the
+// reason this shape is worth having even though the recurrence is identical.
+//
+// It is also the arm with the widest COMPILER surface: a `#[derive(Ord)]`
+// struct as the element type of a stdlib `PriorityQueue[T: Ord]`, so the
+// derived comparison has to thread through the heap's sift operations. The
+// derived order is by field declaration order, which is why `val` is declared
+// first — the heap must order by value, with the two indices along for the
+// ride as payload.
+//
+// THE TIE IS HANDLED A THIRD WAY. The star arm advances every pointer that
+// offered the minimum; the `_canonical` arm makes the tie impossible. A heap
+// can do neither, because its k entries are not addressable — there is no way
+// to reach into it and advance "every stream that matched". So this arm lets
+// duplicates enter the queue and discards them ON THE WAY OUT: a popped value
+// equal to the last one emitted is dropped, but its stream is still advanced.
+// Dropping the duplicate WITHOUT advancing its stream would re-offer the same
+// value forever and hang, and dropping it without emitting is what keeps the
+// output strictly increasing.
+//
+// THE REPLACEMENT PUSH IS ALWAYS IN RANGE. After popping (val, pi, ui) the arm
+// pushes stream pi's next head, primes[pi] * ugly[ui + 1], which needs
+// ugly[ui + 1] to exist already. It does: primes[pi] >= 2, so
+// ugly[ui] < val, and `val` is at that point the last element of `ugly` (it
+// was either just appended, or it duplicates the element already there). So
+// ugly[ui] is strictly before the end and ui + 1 is a valid index.
+
+#[derive(Ord, Eq)]
+struct Cand {
+    val: i64,
+    pi: i64,
+    ui: i64,
+}
+
+fn nth_super_ugly(n: i64, primes: ref Vec[i64]) -> i64 {
+    if n <= 0 { return 0; }
+    let k = primes.len();
+    if k == 0 { return 1; }
+
+    let mut ugly: Vec[i64] = Vec.new();
+    ugly.push(1);
+
+    // One head per stream: primes[i] * ugly[0].
+    let mut pq: PriorityQueue[Cand] = PriorityQueue.new();
+    for i in 0..k {
+        pq.push(Cand { val: primes[i], pi: i, ui: 0 });
+    }
+
+    while ugly.len() < n {
+        match pq.pop() {
+            Some(c) => {
+                // Duplicates are discarded here rather than prevented; the
+                // stream still advances, or the same value returns forever.
+                if c.val > ugly[ugly.len() - 1] {
+                    ugly.push(c.val);
+                }
+                let next = c.ui + 1;
+                pq.push(Cand { val: primes[c.pi] * ugly[next], pi: c.pi, ui: next });
+            },
+            None => {
+                // Unreachable: every pop is matched by a push, so the queue
+                // holds exactly k entries for the whole run.
+                return 0;
+            }
+        }
+    }
+
+    return ugly[n - 1];
+}
+
+fn render(primes: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < primes.len() {
+        if i > 0 { s.push_str(","); }
+        s.push_str(primes[i].to_string());
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(n: i64, vals: Slice[i64]) {
+    let mut primes: Vec[i64] = Vec.new();
+    for v in vals { primes.push(v); }
+    println("n=" + n.to_string() + " " + render(primes) + " -> "
+        + nth_super_ugly(n, primes).to_string());
+}
+
+fn main() {
+    report(12, [2, 7, 13, 19]);
+    report(1, [2, 3, 5]);
+    report(11, [2, 3, 5]);
+    report(20, [2, 3, 5]);
+    report(1, [7]);
+    report(6, [7]);
+    report(15, [2, 101]);
+    report(25, [2, 3, 5, 7, 11, 13]);
+    report(20, [5, 2, 3]);
+    report(100, [2, 7, 13, 19]);
+}

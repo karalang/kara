@@ -1,0 +1,64 @@
+// LeetCode #58: Length of Last Word — reverse scan, O(n) time, O(1) space.
+//
+// Given a string of words separated by spaces, return the length of the LAST
+// word (a maximal run of non-space characters). The trailing spaces in
+// `"   fly me   to   the moon  "` are skipped before the last word `moon` is
+// measured.
+//
+// Scanning from the RIGHT is the tightest form: skip any trailing spaces,
+// then count non-space characters until the next space (or the start of the
+// string). One pass, no allocation, and it touches only the tail — it never
+// looks at the earlier words at all.
+//
+// `bytes()` is a zero-copy `Slice[u8]` view with O(1) positional access.
+// LeetCode restricts the input to printable ASCII (letters + spaces), so one
+// character is one byte and the byte index equals the char index — the byte
+// view is exact, no `Vec[char]` snapshot needed. Space is byte `0x20` (`32`).
+
+fn length_of_last_word(s: ref String) -> i64 {
+    let b = s.bytes();
+    let mut i = s.len() - 1;
+
+    // Skip trailing spaces.
+    while i >= 0 and b[i] == 32u8 {
+        i = i - 1;
+    }
+
+    // Count the run of non-space characters ending at `i`.
+    let mut len = 0;
+    while i >= 0 and b[i] != 32u8 {
+        len = len + 1;
+        i = i - 1;
+    }
+    len
+}
+
+fn report(s: ref String) {
+    let r = length_of_last_word(s);
+    println(f"{s}: {r}");
+}
+
+fn main() {
+    // LeetCode reference examples.
+    report("Hello World");                 // expect: 5   (World)
+    report("   fly me   to   the moon  "); // expect: 4   (moon, trailing spaces skipped)
+    report("luffy is still joyboy");       // expect: 6   (joyboy)
+
+    // Single word, no spaces at all.
+    report("word");                        // expect: 4
+
+    // One character.
+    report("a");                           // expect: 1
+
+    // Leading spaces before the only word.
+    report("   lead");                     // expect: 4
+
+    // A single trailing space after one word.
+    report("day ");                        // expect: 3
+
+    // Many interior + trailing spaces — only the final word counts.
+    report("a   bb   ccc   ");             // expect: 3   (ccc)
+
+    // The last word is one character.
+    report("hello a");                     // expect: 1
+}

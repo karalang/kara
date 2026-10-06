@@ -1,0 +1,8 @@
+
+fn shout(s: String) -> String { f"{s}!" }
+fn pick() -> Fn(String) -> String { shout }
+fn main() {
+    let f = pick();
+    let r = f("hello-this-is-a-fairly-long-payload-string");
+    println(r);
+}

@@ -1,0 +1,49 @@
+
+#[derive(Hash, Eq)]
+struct K { id: i64 }
+struct V { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"K{self.id}"); } }
+impl Drop for V { fn drop(mut ref self) { println(f"V{self.id}"); } }
+enum Payload { Wrap(V), Empty }
+
+fn vec_case() {
+    let mut v: Vec[V] = Vec.new();
+    v.push(V { id: 1 });
+    println(f"[vec {v.len()}]");
+    println("|vec");
+}
+fn tuple_case() {
+    let t: (V, i64) = (V { id: 2 }, 7);
+    println(f"[tup {t.1}]");
+    println("|tup");
+}
+fn enum_case() {
+    let e: Payload = Payload.Wrap(V { id: 3 });
+    println("[enum]");
+    println("|enum");
+}
+fn opt_case() {
+    let o: Option[V] = Some(V { id: 4 });
+    println(f"[opt {o.is_some()}]");
+    println("|opt");
+}
+fn map_case() {
+    let mut m: Map[K, V] = Map.new();
+    m.insert(K { id: 5 }, V { id: 5 });
+    println(f"[map {m.len()}]");
+    println("|map");
+}
+fn set_case() {
+    let mut s: Set[K] = Set.new();
+    s.insert(K { id: 6 });
+    println(f"[set {s.len()}]");
+    println("|set");
+}
+fn main() {
+    vec_case();
+    tuple_case();
+    enum_case();
+    opt_case();
+    map_case();
+    set_case();
+}

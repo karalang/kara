@@ -1,0 +1,22 @@
+
+shared struct DNode { key: i64, val: i64 }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut m: Map[i64, DNode] = Map.new();
+        m.insert(1, DNode { key: 1, val: 10 });
+        m.insert(1, DNode { key: 1, val: 11 });
+        m.insert(2, DNode { key: 2, val: 20 });
+        m.remove(1);
+        m.remove(99);
+        let removed = m.remove(2);
+        match removed {
+            Some(n) => { acc = acc + n.val; }
+            None => { acc = acc - 1; }
+        }
+        acc = acc + m.len();
+        i = i + 1;
+    }
+    println(acc);
+}

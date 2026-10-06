@@ -1,0 +1,54 @@
+
+struct R { id: i64, s: String }
+
+impl Drop for R {
+    fn drop(mut ref self) { println(f"dR{self.id}"); }
+}
+
+enum Ea { A(Array[String, 2]), B }
+enum Eg { A(Array[i64, 3]), B }
+enum Ed { A(Array[R, 2]), B }
+enum Es { A(String), B }
+
+impl Ea {
+    fn mk(n: i64) -> Ea {
+        let p: Array[String, 2] = [f"bx-aaaaaaaaaaaaaaaa-{n}", f"bx-bbbbbbbbbbbbbbbb-{n}"];
+        return Ea.A(p);
+    }
+}
+impl Eg {
+    fn mk(n: i64) -> Eg {
+        let p: Array[i64, 3] = [n, n + 1, n + 2];
+        return Eg.A(p);
+    }
+}
+impl Ed {
+    fn mk(n: i64) -> Ed {
+        let p: Array[R, 2] = [R { id: n, s: f"dr-cccccccccccccccc-{n}" }, R { id: n + 100, s: f"dr-dddddddddddddddd-{n}" }];
+        return Ed.A(p);
+    }
+}
+impl Es {
+    fn mk(n: i64) -> Es { return Es.A(f"st-eeeeeeeeeeeeeeee-{n}"); }
+}
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 2 {
+        Ea.mk(j);
+        Eg.mk(j);
+        Ed.mk(j);
+        Es.mk(j);
+
+        let c: bool = j > 0;
+        let _ = if c { Ea.mk(j) } else { Ea.mk(j) };
+        let _ = match j {
+            0 => { Ea.mk(j) }
+            _ => { Ea.mk(j) }
+        };
+
+        println(f"round:{j}");
+        j = j + 1;
+    }
+    println("end");
+}

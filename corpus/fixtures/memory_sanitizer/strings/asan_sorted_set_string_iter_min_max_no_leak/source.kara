@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut n: i64 = 0i64;
+    while n < 3i64 {
+        let mut s: SortedSet[String] = SortedSet.new();
+        let _ = s.insert(f"banana-{n}-pad-pad");
+        let _ = s.insert(f"apple-{n}-pad-pad");
+        let _ = s.insert(f"cherry-{n}-pad-pad");
+        let mut out: String = "";
+        for w in s { out.push_str(w); out.push_str("|"); }
+        println(out);
+        match s.min() { Some(v) => println(v), None => println("none") }
+        match s.max() { Some(v) => println(v), None => println("none") }
+        n = n + 1i64;
+    }
+}

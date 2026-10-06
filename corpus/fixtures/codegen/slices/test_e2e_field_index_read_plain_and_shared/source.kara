@@ -1,0 +1,24 @@
+
+struct Holder { tag: i64, mut items: Vec[i64] }
+shared struct Cell { mut vals: Vec[i64] }
+fn read_ref(h: ref Holder) -> i64 { h.items[1] }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(41);
+    v.push(42);
+    let h = Holder { tag: 7, items: v };
+    println(h.items[0]);
+    println(read_ref(h));
+
+    let mut w: Vec[i64] = Vec.new();
+    w.push(5);
+    let c = Cell { vals: w };
+    println(c.vals[0]);
+
+    let mut outer: Vec[Holder] = Vec.new();
+    let mut v2: Vec[i64] = Vec.new();
+    v2.push(10);
+    v2.push(20);
+    outer.push(Holder { tag: 1, items: v2 });
+    println(outer[0].items[1]);
+}

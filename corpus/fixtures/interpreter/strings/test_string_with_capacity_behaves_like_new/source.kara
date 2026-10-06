@@ -1,0 +1,6 @@
+fn main() {
+            let mut s = String.with_capacity(8);
+            s.push_str("ok");
+            println(s);
+            println(s.len());
+        }

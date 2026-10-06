@@ -1,0 +1,10 @@
+
+fn a(n: i64) -> i64 { if n > 0 { b(n - 1i64) } else { 0i64 } }
+fn b(n: i64) -> i64 { if n > 0 { a(n - 1i64) } else { 0i64 } }
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..10i64 {
+        sum = sum + a(k);
+    }
+    println(sum);
+}

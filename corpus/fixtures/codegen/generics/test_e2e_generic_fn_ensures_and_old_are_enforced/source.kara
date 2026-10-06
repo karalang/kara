@@ -1,0 +1,9 @@
+
+fn gen_ens[T](v: ref Vec[T]) -> i64
+    ensures(result) result > 100
+where T: Ord
+{ v.len() }
+fn main() {
+    let a: Vec[i64] = [1, 2, 3];
+    println(gen_ens(a));
+}

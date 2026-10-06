@@ -1,0 +1,12 @@
+
+fn totalprod[C: Reduce[i64]](c: ref C) -> i64 { c.prod() }
+fn fprod[C: Reduce[f64]](c: ref C) -> f64 { c.prod() }
+fn sumprod[C: Reduce[i64]](c: ref C) -> i64 { c.sum() + c.prod() }
+fn main() {
+    let ci: Column[i64] = Column.from_vec([2, 3, 4]);
+    let ti: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 5]);
+    let cf: Column[f64] = Column.from_vec([1.5, 2.0, 4.0]);
+    println(f"{totalprod(ci)} {totalprod(ti)}");
+    println(f"{fprod(cf)}");
+    println(f"{sumprod(ci)}");
+}

@@ -1,0 +1,8 @@
+
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn use_a(a: Array[Fn(i64) -> i64, 2]) -> i64 { (a[0])(1i64) + (a[1])(2i64) }
+fn main() {
+    let a: Array[Fn(i64) -> i64, 2] = [make(10i64), make(20i64)];
+    let r = use_a(a);
+    println(f"{r + (a[0])(1i64) + (a[1])(1i64)}");
+}

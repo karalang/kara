@@ -1,0 +1,175 @@
+// LeetCode #337: House Robber III — bottom-up, no recursion.
+//
+// Same spec and same two totals as `house_robber_iii.kara`, without the call
+// stack. A breadth-first walk lists every node after its parent, so walking
+// that list backwards reaches every node after both of its children, and
+// each node's (robbed, not robbed) totals are filled into two arrays from
+// its children's.
+//
+// O(n) time and memory, no recursion.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn rob(nodes: ref Vec[Node]) -> i64 {
+    let n = nodes.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut order: Vec[i64] = Vec.with_capacity(n);
+    order.push(0);
+    let mut head = 0;
+    while head < order.len() {
+        let cur = order[head];
+        head += 1;
+        if nodes[cur].left != -1 {
+            order.push(nodes[cur].left);
+        }
+        if nodes[cur].right != -1 {
+            order.push(nodes[cur].right);
+        }
+    }
+    let mut robbed: Vec[i64] = vec![0; n];
+    let mut skipped: Vec[i64] = vec![0; n];
+    for k in (0..n).rev() {
+        let cur = order[k];
+        let mut r = nodes[cur].val;
+        let mut s = 0;
+        for child in [nodes[cur].left, nodes[cur].right] {
+            if child != -1 {
+                r += skipped[child];
+                s += robbed[child].max(skipped[child]);
+            }
+        }
+        robbed[cur] = r;
+        skipped[cur] = s;
+    }
+    return robbed[0].max(skipped[0]);
+}
+
+const NULL: i64 = -1000000007;
+
+// The index pool from a level-order array; the root is index 0.
+fn build(vals: Slice[i64]) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    if vals.len() == 0 or vals[0] == NULL {
+        return nodes;
+    }
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < vals.len() {
+        let cur = queue[head];
+        head += 1;
+        if vals[i] != NULL {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let id = nodes.len() - 1;
+            nodes[cur].left = id;
+            queue.push(id);
+        }
+        i += 1;
+        if i < vals.len() and vals[i] != NULL {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let id = nodes.len() - 1;
+            nodes[cur].right = id;
+            queue.push(id);
+        }
+        i += 1;
+    }
+    return nodes;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// A random tree of `n` houses holding 0 to `most` each. Every new house walks
+// down from the root, turning left or right at random, and settles in the
+// first empty place it reaches.
+fn random_tree(seed: mut ref i64, n: i64, most: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    for i in 0..n {
+        nodes.push(Node { val: next(seed) % (most + 1), left: -1, right: -1 });
+        if i == 0 {
+            continue;
+        }
+        let mut cur = 0;
+        while true {
+            if next(seed) % 2 == 0 {
+                if nodes[cur].left == -1 {
+                    nodes[cur].left = i;
+                    break;
+                }
+                cur = nodes[cur].left;
+            } else {
+                if nodes[cur].right == -1 {
+                    nodes[cur].right = i;
+                    break;
+                }
+                cur = nodes[cur].right;
+            }
+        }
+    }
+    return nodes;
+}
+
+// `n` houses in a line, each the only child of the one before it, holding
+// 1, 2, 3, ... money.
+fn chain(n: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    for i in 0..n {
+        nodes.push(Node { val: i + 1, left: -1, right: -1 });
+        if i > 0 {
+            if i % 2 == 0 {
+                nodes[i - 1].left = i;
+            } else {
+                nodes[i - 1].right = i;
+            }
+        }
+    }
+    return nodes;
+}
+
+fn show(vals: Vec[i64]) {
+    let nodes = build(vals.as_slice());
+    let mut parts: Vec[String] = Vec.new();
+    for v in vals {
+        if v == NULL {
+            parts.push("null");
+        } else {
+            parts.push(v.to_string());
+        }
+    }
+    let shown = parts.join(",");
+    println(f"[{shown}] -> {rob(nodes)}");
+}
+
+fn main() {
+    show(vec![3, 2, 3, NULL, 3, NULL, 1]);
+    show(vec![3, 4, 5, 1, 3, NULL, 1]);
+    show(vec![]);
+    show(vec![0]);
+    show(vec![7]);
+    show(vec![1, 2]);
+    show(vec![2, 1, 1]);
+    show(vec![1, 2, 3]);
+    show(vec![4, 1, NULL, 2, NULL, 3]);
+    show(vec![2, 1, 3, NULL, 4]);
+    show(vec![0, 0, 0, 0, 0]);
+    show(vec![10, 1, 1, 10, 10, 10, 10]);
+    let mut seed = 337;
+    for round in 0..6 {
+        let n = 3 + round * 5;
+        let nodes = random_tree(mut seed, n, 10);
+        println(f"random {round}: {n} houses -> {rob(nodes)}");
+    }
+    let big = random_tree(mut seed, 10000, 10000);
+    let line = chain(10000);
+    println(f"big: {big.len()} houses -> {rob(big)}, chain of {line.len()} -> {rob(line)}");
+}

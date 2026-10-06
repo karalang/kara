@@ -1,0 +1,90 @@
+// Benchmark workload for the utf8-codepoints kata — the ★ byte-indexed manual
+// UTF-8 decoder run as a SEQUENTIAL scan-and-accumulate over a large buffer.
+//
+// Build a multilingual base string (all four UTF-8 byte-lengths) once, repeat
+// it to a ~330 KB buffer, then decode every codepoint ITERS times, folding each
+// Unicode scalar into a modular running sink. Printing the sink keeps the work
+// honest: the loop carries a data dependency on `sink`, so it cannot be elided
+// or auto-parallelized — this is a single-lane (seq) bench by construction.
+//
+// The benched move is the lexer's hot path: utf8_byte_len + lead-mask +
+// `(cp << 6) | (cont & 0x3F)` continuation fold, identical algorithm in every
+// language. Classification is NOT in the sink (its Unicode tables don't agree
+// byte-for-byte across C/Go), so the sink is pure decode arithmetic.
+
+fn utf8_byte_len(lead: u8) -> i64 {
+    if lead < 0x80u8 {
+        1
+    } else if lead >= 0xC0u8 and lead <= 0xDFu8 {
+        2
+    } else if lead >= 0xE0u8 and lead <= 0xEFu8 {
+        3
+    } else if lead >= 0xF0u8 and lead <= 0xF7u8 {
+        4
+    } else {
+        1
+    }
+}
+
+fn from_cps(cps: Vec[i64]) -> String {
+    let mut s: String = "";
+    for cp in cps {
+        match char.try_from(cp as u32) {
+            Ok(c) => s.push(c),
+            Err(_) => {}
+        }
+    }
+    s
+}
+
+fn main() {
+    let modulus = 1000000007;
+    let repeat = 9523;
+    let iters = 400;
+
+    // Base: ASCII + Latin-1 + Greek + Cyrillic + CJK + astral (all 4 lengths).
+    let base = from_cps([
+        0x61, 0x62, 0x63, 0x20, 0x31, 0x32, 0x33, 0x20,
+        0xe9, 0xf1, 0x3b1, 0x3b2, 0x434, 0x436,
+        0x65e5, 0x672c, 0x1d11e, 0x1f980, 0x20,
+    ]);
+    let mut buf: String = "";
+    let mut r = 0;
+    while r < repeat {
+        buf.push_str(base);
+        r = r + 1;
+    }
+    let bytes = buf.bytes();
+    let n = bytes.len();
+
+    let mut sink = 0;
+    let mut count = 0;
+    let mut t = 0;
+    while t < iters {
+        let mut i = 0;
+        while i < n {
+            let lead = bytes[i];
+            let len = utf8_byte_len(lead);
+            let mut cp: i64 = if len == 1 {
+                lead as i64
+            } else if len == 2 {
+                (lead & 0x1Fu8) as i64
+            } else if len == 3 {
+                (lead & 0x0Fu8) as i64
+            } else {
+                (lead & 0x07u8) as i64
+            };
+            let mut k = 1;
+            while k < len and i + k < n {
+                let cont = bytes[i + k];
+                cp = (cp << 6) | ((cont & 0x3Fu8) as i64);
+                k = k + 1;
+            }
+            sink = (sink + cp) % modulus;
+            count = count + 1;
+            i = i + len;
+        }
+        t = t + 1;
+    }
+    println(f"{count} {sink}");
+}

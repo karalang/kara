@@ -1,0 +1,30 @@
+
+struct Holder { n: i64 }
+
+impl Holder {
+    pub fn scaled(self, k: bf16) -> bf16 {
+        return k + (self.n as bf16)
+    }
+}
+
+pub fn addb(a: bf16, b: bf16) -> bf16 { return a + b }
+pub fn widen(a: bf16) -> f32 { return a as f32 }
+pub fn mixed(a: i64, b: bf16, c: f32, d: bf16) -> bf16 {
+    return b + d + (a as bf16) + (c as bf16)
+}
+pub fn lit() -> bf16 { return 0.5 }
+fn pick[T](a: T, b: T) -> T { return a }
+pub fn addh(a: f16, b: f16) -> f16 { return a + b }
+
+fn main() {
+    let x: bf16 = 0.5;
+    let y: bf16 = 0.25;
+    println(f"add {addb(x, y)}");
+    println(f"wide {widen(x)}");
+    println(f"mix {mixed(1, x, 2.0, y)}");
+    println(f"lit {lit()}");
+    println(f"nest {addb(addb(x, y), x)}");
+    println(f"gen {pick(x, y)}");
+    println(f"meth {Holder { n: 2 }.scaled(x)}");
+    println(f"h16 {addh(0.5, 0.25)}");
+}

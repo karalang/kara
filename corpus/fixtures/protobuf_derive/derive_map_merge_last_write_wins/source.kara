@@ -1,0 +1,16 @@
+
+#[derive(Message)]
+struct D { m: Map[String, i64] }
+
+fn main() {
+    let mut base: Map[String, i64] = Map.new();
+    base.insert("a", 1);
+    let mut acc = D { m: base };
+    let mut other: Map[String, i64] = Map.new();
+    other.insert("a", 9);
+    other.insert("b", 2);
+    acc.merge(D { m: other }.encode());
+    println(acc.m.len());
+    println(match acc.m.get("a") { Option.Some(x) => x, Option.None => -1 });
+    println(match acc.m.get("b") { Option.Some(x) => x, Option.None => -1 });
+}

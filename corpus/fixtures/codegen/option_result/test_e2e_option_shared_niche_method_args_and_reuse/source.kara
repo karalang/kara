@@ -1,0 +1,52 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+shared struct Merger { count: i64 }
+impl Merger {
+    fn total(ref self, head: Option[ListNode]) -> i64 {
+        let mut t = 0;
+        let mut cur = head;
+        while cur.is_some() {
+            let n = cur.unwrap();
+            t = t + n.val;
+            cur = n.next;
+        }
+        t
+    }
+    fn first_or_make(ref self, head: Option[ListNode]) -> Option[ListNode] {
+        if head.is_some() {
+            return head;
+        }
+        Some(ListNode { val: 99, next: None })
+    }
+}
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut t = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let n = cur.unwrap();
+        t = t + n.val;
+        cur = n.next;
+    }
+    t
+}
+fn main() {
+    let m = Merger { count: 0 };
+    let chain = make(3);
+    println(m.total(chain));
+    println(m.total(chain));
+    println(m.total(make(4)));
+    let got = m.first_or_make(make(2));
+    println(sum(got));
+    let fresh = m.first_or_make(None);
+    println(sum(fresh));
+}

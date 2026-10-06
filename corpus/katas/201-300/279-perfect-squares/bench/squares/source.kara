@@ -1,0 +1,54 @@
+// LeetCode 279 bench kernel — the DP, at a size where the table is the point.
+//
+// WHICH SOLVER TO BENCH IS ITSELF THE INTERESTING CHOICE. The closed form is
+// O(√n) and answers n = 10^7 in microseconds; benching it would measure process
+// startup. The DP is O(n√n) and builds a table of n entries, so it is the one
+// with real work in it — and it is also the one anyone actually writes, since
+// the closed form requires knowing two theorems.
+//
+// SO THE WORKLOAD IS ONE BIG TABLE, NOT MANY SMALL QUERIES. A single
+// `least_squares(n)` at n = 300,000 does ~300k·√300k/2 ≈ 82 million inner steps.
+// That is the shape the DP is for: the table is built once and every entry is
+// used by later entries, so there is nothing to hoist out and nothing the
+// optimizer can erase — each `least[i]` genuinely depends on up to √i earlier
+// ones.
+//
+// PARALLEL LANE: NONE, AND THAT IS THE HONEST ANSWER. The DP is strictly
+// sequential — `least[i]` reads `least[i - j*j]` for j up to √i, so every entry
+// depends on earlier ones and no prefix can be computed independently. Splitting
+// it would require a different algorithm, not an annotation. Katas 276 and 277
+// fan out over independent instances because they HAVE independent instances;
+// this one does not, and adding a fake outer loop over repeated identical
+// queries would manufacture parallelism the problem does not contain.
+//
+// The sink is `least[n]` plus a checksum over the table, so a lane that computed
+// only the last entry — or skipped entries — would be caught.
+
+fn least_squares_with_checksum(n: i64) -> i64 {
+    let mut least: Vec[i64] = Vec.new();
+    least.push(0);
+    let mut i = 1;
+    while i <= n {
+        let mut best = i;
+        let mut j = 1;
+        while j * j <= i {
+            let cand = least[i - j * j] + 1;
+            if cand < best { best = cand; }
+            j = j + 1;
+        }
+        least.push(best);
+        i = i + 1;
+    }
+    // checksum every entry, so the whole table has to be right
+    let mut sum = 0;
+    let mut k = 0;
+    while k <= n {
+        sum = (sum * 31 + least[k]) % 1000000007;
+        k = k + 1;
+    }
+    return (sum * 10 + least[n]) % 1000000007;
+}
+
+fn main() {
+    println(least_squares_with_checksum(300000));
+}

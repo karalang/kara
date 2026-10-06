@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let mut v: Vec[String] = Vec[
+            "windows-heap-collect-alpha-aaaaaaaaaaaaaaaa".to_string(),
+            "windows-heap-collect-bravo-bbbbbbbbbbbbbbbb".to_string(),
+            "windows-heap-collect-charlie-cccccccccccccc".to_string(),
+            "windows-heap-collect-delta-dddddddddddddddd".to_string()
+        ];
+        let ws: Vec[Vec[String]] = v.iter().windows(2i64).collect();
+        println(f"{ws.len()} {ws[0i64].len()} {ws[0i64][0i64]} {ws[2i64][1i64]} {v.len()}");
+        round = round + 1i64;
+    }
+}

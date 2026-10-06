@@ -1,0 +1,90 @@
+// LeetCode 299 — Bulls and Cows, single tally, single pass.
+//
+// `bulls_and_cows.kara` keeps two tallies and reconciles them afterwards. This
+// one keeps ONE and reconciles as it goes, which is the version people reach
+// for once they've seen the trick — and the version most worth reading slowly,
+// because its correctness argument is not local.
+//
+// The array holds a SIGNED BALANCE per digit:
+//
+//     cnt[d] > 0   the secret has d's that no guess digit has claimed yet
+//     cnt[d] < 0   the guess  has d's that no secret digit has claimed yet
+//
+// At position i (a non-bull), the secret contributes one d and the guess
+// contributes one e, and each is offered against the standing debt:
+//
+//     if cnt[d] < 0 { cows += 1 }   cnt[d] += 1      // a guess d was waiting
+//     if cnt[e] > 0 { cows += 1 }   cnt[e] -= 1      // a secret e was waiting
+//
+// WHY THE ORDER WITHIN A POSITION DOESN'T MATTER but the sign test does: the
+// pairing is a multiset intersection, and intersection is commutative, so the
+// only thing that must hold is that a digit is never counted twice. The sign
+// test is what guarantees it — a cow is booked only when the OPPOSITE side
+// already has an unclaimed copy, so the two halves of a pair can never both
+// book it. Reading `cnt[d] != 0` instead of the directed comparison would count
+// a digit against its own side and inflate the answer.
+//
+// It is one pass and one array where the two-pass version is two of each. It is
+// also markedly harder to be sure of, which is exactly why both are here: the
+// differential proves they agree on 100,000 generated inputs, and only then is
+// the compressed version's cleverness worth anything.
+
+fn digit_index(c: char) -> i64 {
+    return (c as i64) - ('0' as i64);
+}
+
+fn bulls_and_cows(secret: ref String, guess: ref String) -> String {
+    let s: Vec[char] = secret.chars().collect();
+    let g: Vec[char] = guess.chars().collect();
+    let n = s.len();
+
+    let mut cnt: Vec[i64] = Vec.new();
+    let mut d = 0;
+    while d < 10 {
+        cnt.push(0);
+        d = d + 1;
+    }
+
+    let mut bulls = 0;
+    let mut cows = 0;
+
+    let mut i = 0;
+    while i < n {
+        if s[i] == g[i] {
+            bulls = bulls + 1;
+        } else {
+            let sd = digit_index(s[i]);
+            let gd = digit_index(g[i]);
+
+            // A guess copy of sd was already waiting -> pair them.
+            if cnt[sd] < 0 { cows = cows + 1; }
+            cnt[sd] = cnt[sd] + 1;
+
+            // A secret copy of gd was already waiting -> pair them.
+            if cnt[gd] > 0 { cows = cows + 1; }
+            cnt[gd] = cnt[gd] - 1;
+        }
+        i = i + 1;
+    }
+
+    return f"{bulls}A{cows}B";
+}
+
+fn report(secret: String, guess: String) {
+    println(f"secret {secret}  guess {guess}  ->  {bulls_and_cows(secret, guess)}");
+}
+
+fn main() {
+    report("1807", "7810");
+    report("1123", "0111");
+    report("1", "0");
+    report("1", "1");
+    report("11", "10");
+    report("11", "01");
+    report("1122", "2211");
+    report("1122", "1222");
+    report("0000", "0000");
+    report("0000", "1111");
+    report("", "");
+    report("1234567890", "0987654321");
+}

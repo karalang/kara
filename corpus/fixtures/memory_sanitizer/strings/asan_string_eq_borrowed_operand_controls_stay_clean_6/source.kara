@@ -1,0 +1,3 @@
+
+fn f(hay: ref String, suffix: ref String) -> i64 { let s = hay.substring(0, 4) + suffix; s.len() }
+fn main() { let h = "abcdefgh"; let x = "!!"; println(f"{f(h, x)}"); }

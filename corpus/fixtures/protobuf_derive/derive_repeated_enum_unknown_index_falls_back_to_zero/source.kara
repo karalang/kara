@@ -1,0 +1,19 @@
+
+enum Color { Red, Green, Blue }
+
+#[derive(Message)]
+struct Pal { colors: Vec[Color] }
+
+fn main() {
+    let mut blob = Vec.new();
+    blob.extend_from_slice(ProtoBuf.encode_varint(1u64));
+    blob.extend_from_slice(ProtoBuf.encode_varint(99u64));
+    let mut buf = Vec.new();
+    buf.extend_from_slice(ProtoBuf.encode_tag(1, 2));
+    buf.extend_from_slice(ProtoBuf.encode_varint(blob.len() as u64));
+    buf.extend_from_slice(blob);
+    let back = Pal.decode(buf);
+    println(back.colors.len());
+    println(match back.colors[0] { Color.Green => "green", _ => "?" });
+    println(match back.colors[1] { Color.Red => "red(fallback)", _ => "?" });
+}

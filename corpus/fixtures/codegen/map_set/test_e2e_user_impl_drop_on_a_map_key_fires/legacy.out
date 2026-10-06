@@ -1,0 +1,8 @@
+--before-clear--
+dropK 1
+dropV 1
+--after-clear--
+dropK 2
+dropV 2
+--field-in-scope--
+--field-gone--

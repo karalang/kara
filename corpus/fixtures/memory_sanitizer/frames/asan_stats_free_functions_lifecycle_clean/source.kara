@@ -1,0 +1,12 @@
+
+fn main() {
+    let v: Vec[f64] = vec![4.0, 1.0, 3.0, 2.0, 5.0];
+    // median mallocs/frees a scratch buffer; the others read in place.
+    println(Stats.median(v));
+    println(Stats.mean(v));
+    println(Stats.stddev(v));
+    // v borrowed, not consumed — still usable.
+    println(Stats.sum(v));
+    // fresh vec![…] temp argument: read then freed (no leak).
+    println(Stats.median(vec![30.0, 10.0, 20.0, 40.0]));
+}

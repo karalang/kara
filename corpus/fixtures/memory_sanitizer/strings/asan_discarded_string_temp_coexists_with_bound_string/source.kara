@@ -1,0 +1,12 @@
+
+fn make_str() -> String {
+    let a = "discarded ";
+    let b = "temp";
+    return a + b;
+}
+
+fn main() {
+    let keep = "kept value";
+    make_str();
+    println(keep);
+}

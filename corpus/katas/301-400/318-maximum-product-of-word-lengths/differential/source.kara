@@ -1,0 +1,473 @@
+// LeetCode #318 — differential + property harness.
+//
+// Four arms, twelve properties, over a swept space of random word lists plus a
+// set of patterned ones the sweep is unlikely to produce.
+//
+//   arm A  bitmask, all pairs                      max_product.kara        ★
+//   arm B  bitmask, duplicate letter sets collapsed max_product_dedup.kara
+//   arm C  26-slot presence table, no bit ops       max_product_sets.kara
+//   arm D  length-sorted, product-bound pruning     max_product_sorted.kara
+//
+// Arm C is the oracle: it is the only arm that never builds a mask, so it
+// cannot share a mask bug with the others. Arms A, B and D all encode a letter
+// set as a 26-bit integer and would agree with each other about a shift that
+// was off by one.
+//
+//   P1   arm A agrees with the set oracle
+//   P2   arm B agrees with the set oracle
+//   P3   arm D agrees with the set oracle
+//   P4   the answer is invariant under reordering the words (reverse, shuffle)
+//   P5   appending a copy of a word already present changes nothing
+//   P6   the answer is invariant under a bijective relabelling of the alphabet
+//   P7   deleting a word never increases the answer
+//   P8   appending a word never decreases the answer
+//   P9   the witness pair is disjoint and realises the answer; and when the
+//        answer is 0, no disjoint pair exists at all
+//   P10  lengthening a word with a letter it already holds leaves the answer
+//        in [old, old + longest], because the mask does not move
+//   P11  when every word owns a private alphabet, the answer is the product of
+//        the two longest lengths
+//   P12  mask and presence table describe the same set, pairwise and bitwise
+//
+// P4-P8 and P10 relate two invocations of the same arm, which is weight the
+// oracle cannot carry: a mutant wrong in the same direction on both inputs
+// still has to be wrong CONSISTENTLY under relabelling and reordering to slip
+// them. P12 is the one property that pins the two representations to each
+// other directly rather than through an answer.
+
+const NMAX: i64 = 9;
+const SEEDS: i64 = 12;
+
+// --------------------------------------------------------------- arms ---
+
+fn word_mask(w: ref String) -> i64 {
+    let bs = w.bytes();
+    let mut m = 0;
+    for i in 0..bs.len() {
+        m = m | (1 << ((bs[i] - b'a') as i64));
+    }
+    return m;
+}
+
+// arm A — bitmask over every pair.
+fn solve_mask(words: ref Vec[String]) -> i64 {
+    let n = words.len();
+    let mut masks: Vec[i64] = Vec.new();
+    let mut lens: Vec[i64] = Vec.new();
+    for i in 0..n {
+        masks.push(word_mask(words[i]));
+        lens.push(words[i].len() as i64);
+    }
+    let mut best = 0;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if masks[i] & masks[j] == 0 {
+                let p = lens[i] * lens[j];
+                if p > best { best = p; }
+            }
+        }
+    }
+    return best;
+}
+
+// arm B — collapse equal letter sets, keeping the longest of each.
+fn solve_dedup(words: ref Vec[String]) -> i64 {
+    let mut longest: SortedMap[i64, i64] = SortedMap.new();
+    for i in 0..words.len() {
+        let m = word_mask(words[i]);
+        let l = words[i].len() as i64;
+        if not longest.contains_key(m) {
+            longest.insert(m, l);
+        } else {
+            if l > longest[m] { longest[m] = l; }
+        }
+    }
+    let mut masks: Vec[i64] = Vec.new();
+    let mut lens: Vec[i64] = Vec.new();
+    for m in longest.keys() {
+        masks.push(m);
+        lens.push(longest[m]);
+    }
+    let mut best = 0;
+    let n = masks.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if masks[i] & masks[j] == 0 {
+                let p = lens[i] * lens[j];
+                if p > best { best = p; }
+            }
+        }
+    }
+    return best;
+}
+
+// arm C — the oracle: presence table per pair, no bit arithmetic at all.
+fn shares_letter(a: ref String, b: ref String) -> bool {
+    let ab = a.bytes();
+    let bb = b.bytes();
+    let mut present: Vec[bool] = Vec.new();
+    for k in 0..26 { present.push(false); }
+    for i in 0..ab.len() {
+        present[(ab[i] - b'a') as i64] = true;
+    }
+    for j in 0..bb.len() {
+        if present[(bb[j] - b'a') as i64] { return true; }
+    }
+    return false;
+}
+
+fn solve_sets(words: ref Vec[String]) -> i64 {
+    let n = words.len();
+    let mut best = 0;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if not shares_letter(words[i], words[j]) {
+                let p = (words[i].len() * words[j].len()) as i64;
+                if p > best { best = p; }
+            }
+        }
+    }
+    return best;
+}
+
+// arm D — descending length, with the product bound cutting each row.
+fn solve_sorted(words: ref Vec[String]) -> i64 {
+    let mut entries: Vec[(i64, i64)] = Vec.new();
+    for i in 0..words.len() {
+        entries.push((words[i].len() as i64, word_mask(words[i])));
+    }
+    entries.sort_by(|a, b| b.0.cmp(a.0));
+    let n = entries.len();
+    let mut best = 0;
+    for i in 0..n {
+        let (li, mi) = entries[i];
+        if li * li <= best { break; }
+        for j in (i + 1)..n {
+            let (lj, mj) = entries[j];
+            if li * lj <= best { break; }
+            if mi & mj == 0 { best = li * lj; }
+        }
+    }
+    return best;
+}
+
+// The witness: the same scan as arm A, but reporting WHICH pair won.
+// Returns (best, i, j) with i = j = -1 when no pair is disjoint.
+fn witness(words: ref Vec[String]) -> (i64, i64, i64) {
+    let n = words.len();
+    let mut masks: Vec[i64] = Vec.new();
+    let mut lens: Vec[i64] = Vec.new();
+    for i in 0..n {
+        masks.push(word_mask(words[i]));
+        lens.push(words[i].len() as i64);
+    }
+    let mut best = 0;
+    let mut bi = -1;
+    let mut bj = -1;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if masks[i] & masks[j] == 0 {
+                let p = lens[i] * lens[j];
+                if bi < 0 or p > best { best = p; bi = i; bj = j; }
+            }
+        }
+    }
+    return (best, bi, bj);
+}
+
+// --------------------------------------------------------- generator ---
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// `n` words, each 1..=lmax letters drawn from the first `alpha` of the
+// alphabet. A small `alpha` makes collisions the rule and 0 a common answer;
+// a large one makes disjoint pairs cheap. Both regimes matter — the pruning
+// arm behaves differently in each.
+fn make_words(n: i64, lmax: i64, alpha: i64, seed: mut ref i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..n {
+        let len = next(seed) % lmax + 1;
+        let mut w = String.new();
+        for _ in 0..len {
+            let c = next(seed) % alpha;
+            w.push((b'a' + (c as u8)) as char);
+        }
+        out.push(w);
+    }
+    return out;
+}
+
+fn copy_words(words: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..words.len() { out.push(words[i].clone()); }
+    return out;
+}
+
+fn reversed(words: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let n = words.len();
+    for i in 0..n { out.push(words[n - 1 - i].clone()); }
+    return out;
+}
+
+fn shuffled(words: ref Vec[String], seed: mut ref i64) -> Vec[String] {
+    let mut out = copy_words(words);
+    let n = out.len();
+    if n < 2 { return out; }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next(seed) % (i + 1);
+        out.swap(i, j);
+        i -= 1;
+    }
+    return out;
+}
+
+// A bijection on the 26 letters, applied to every word. Disjointness is a
+// statement about letter IDENTITY only, so renaming the alphabet must leave
+// every answer exactly where it was.
+fn relabelled(words: ref Vec[String], seed: mut ref i64) -> Vec[String] {
+    let mut perm: Vec[i64] = Vec.new();
+    for k in 0..26 { perm.push(k); }
+    let mut i = 25;
+    while i > 0 {
+        let j = next(seed) % (i + 1);
+        perm.swap(i, j);
+        i -= 1;
+    }
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..words.len() {
+        let bs = words[k].bytes();
+        let mut w = String.new();
+        for t in 0..bs.len() {
+            w.push((b'a' + (perm[(bs[t] - b'a') as i64] as u8)) as char);
+        }
+        out.push(w);
+    }
+    return out;
+}
+
+fn max_len(words: ref Vec[String]) -> i64 {
+    let mut m = 0;
+    for i in 0..words.len() {
+        let l = words[i].len() as i64;
+        if l > m { m = l; }
+    }
+    return m;
+}
+
+fn repeat_letter(c: char, times: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..times { w.push(c); }
+    return w;
+}
+
+// -------------------------------------------------------------- main ---
+
+fn main() {
+    let mut inputs: Vec[Vec[String]] = Vec.new();
+
+    // Swept: every list size, four word-length caps, five alphabet widths.
+    let lmaxes: Vec[i64] = [1, 2, 4, 6];
+    let alphas: Vec[i64] = [2, 3, 5, 8, 26];
+    for n in 0..NMAX {
+        for li in 0..lmaxes.len() {
+            for ai in 0..alphas.len() {
+                for sd in 0..SEEDS {
+                    let mut seed = n * 7919 + lmaxes[li] * 104729 + alphas[ai] * 31
+                        + sd * 65537 + 318;
+                    inputs.push(make_words(n, lmaxes[li], alphas[ai], mut seed));
+                }
+            }
+        }
+    }
+
+    // Patterned: shapes the sweep will not reliably produce.
+    inputs.push([]);
+    inputs.push(["solo"]);
+    inputs.push(["abcw", "baz", "foo", "bar", "xtfn", "abcdef"]);
+    inputs.push(["a", "ab", "abc", "d", "cd", "bcd", "abcd"]);
+    inputs.push(["a", "aa", "aaa", "aaaa"]);
+    inputs.push(["eat", "tea", "tan", "ate", "nat", "bat"]);
+    // Every word is the whole alphabet: no pair is ever disjoint.
+    inputs.push(["abcdefghijklmnopqrstuvwxyz", "abcdefghijklmnopqrstuvwxyz",
+                 "zyxwvutsrqponmlkjihgfedcba"]);
+    // Two long colliding words hiding a shorter disjoint pair below them —
+    // the input arm D's outer break is most likely to get wrong.
+    inputs.push(["abcdefgh", "abcdefgz", "ij", "kl"]);
+    // Anagram families: arm B collapses nine words to three masks.
+    inputs.push(["abc", "bca", "cab", "def", "efd", "fde", "ghi", "hig", "igh"]);
+    // One giant word plus singles, half of which it collides with.
+    {
+        let mut ws: Vec[String] = Vec.new();
+        ws.push(repeat_letter('a', 20));
+        for k in 0..8 {
+            ws.push(repeat_letter((b'a' + (k as u8)) as char, k + 1));
+        }
+        inputs.push(ws);
+    }
+    // A private-alphabet family, kept for P11 as well.
+    for span in 2..7 {
+        let mut ws: Vec[String] = Vec.new();
+        for k in 0..span {
+            ws.push(repeat_letter((b'a' + (k as u8)) as char, span - k));
+        }
+        inputs.push(ws);
+    }
+
+    let mut cases = 0;
+    let mut nonzero = 0;
+    let mut pruned_rows = 0;
+    let mut collapsed = 0;
+    let mut private_alpha = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4: Vec[i64] = [0, 0];
+    let mut p5 = 0;
+    let mut p6: Vec[i64] = [0, 0, 0, 0];
+    let mut p7 = 0;
+    let mut p8 = 0;
+    let mut p9: Vec[i64] = [0, 0, 0];
+    let mut p10 = 0;
+    let mut p11 = 0;
+    let mut p12: Vec[i64] = [0, 0];
+
+    for ci in 0..inputs.len() {
+        let ws = inputs[ci].clone();
+        let n = ws.len();
+        cases += 1;
+        let mut seed = ci * 2654435761 % 2147483648 + 7;
+
+        // P1-P3: three arms against the set oracle.
+        let ans = solve_sets(ws);
+        if solve_mask(ws) != ans { p1 += 1; }
+        if solve_dedup(ws) != ans { p2 += 1; }
+        if solve_sorted(ws) != ans { p3 += 1; }
+        if ans > 0 { nonzero += 1; }
+        if n >= 2 { pruned_rows += 1; }
+
+        // P4: order does not matter — reversed, then a seeded shuffle.
+        if solve_sets(reversed(ws)) != ans { p4[0] += 1; }
+        if solve_sorted(shuffled(ws, mut seed)) != ans { p4[1] += 1; }
+
+        // P5: a duplicate word is dominated by its twin and adds nothing.
+        if n > 0 {
+            let mut dup = copy_words(ws);
+            dup.push(ws[0].clone());
+            if solve_mask(dup) != ans { p5 += 1; }
+        }
+
+        // P6: renaming the alphabet moves nothing.
+        let rl = relabelled(ws, mut seed);
+        if solve_mask(rl) != ans { p6[0] += 1; }
+        if solve_dedup(rl) != ans { p6[1] += 1; }
+        if solve_sets(rl) != ans { p6[2] += 1; }
+        if solve_sorted(rl) != ans { p6[3] += 1; }
+
+        // P7/P8: dropping a word cannot help, adding one cannot hurt.
+        if n > 0 {
+            let mut fewer = copy_words(ws);
+            let dropped = fewer.pop();
+            if solve_mask(fewer) > ans { p7 += 1; }
+            match dropped {
+                None => {}
+                Some(w) => {
+                    let mut more = copy_words(ws);
+                    more.push(w);
+                    more.push(repeat_letter('z', 3));
+                    if solve_mask(more) < ans { p8 += 1; }
+                }
+            }
+        }
+
+        // P9: the winning pair must be real, and a zero answer must mean no
+        // disjoint pair exists anywhere.
+        let (wbest, wi, wj) = witness(ws);
+        if wi >= 0 {
+            if shares_letter(ws[wi], ws[wj]) { p9[0] += 1; }
+            if wbest != ans or (ws[wi].len() * ws[wj].len()) as i64 != ans { p9[1] += 1; }
+        } else {
+            if ans != 0 { p9[2] += 1; }
+        }
+
+        // P10: growing a word with a letter it already holds keeps its mask,
+        // so the answer rises by at most one partner length.
+        if n > 0 and ws[0].len() > 0 {
+            let mut grown = copy_words(ws);
+            let head = ws[0].bytes();
+            let mut w0 = ws[0].clone();
+            w0.push(head[0] as char);
+            grown[0] = w0;
+            let after = solve_mask(grown);
+            if after < ans or after > ans + max_len(ws) { p10 += 1; }
+        }
+
+        // P12: the mask and the presence table agree, pairwise.
+        for i in 0..n {
+            let mi = word_mask(ws[i]);
+            let bs = ws[i].bytes();
+            let mut seen: Vec[bool] = Vec.new();
+            for k in 0..26 { seen.push(false); }
+            for t in 0..bs.len() { seen[(bs[t] - b'a') as i64] = true; }
+            for k in 0..26 {
+                let bit = (mi / (1 << k)) % 2 == 1;
+                if bit != seen[k] { p12[0] += 1; }
+            }
+            for j in (i + 1)..n {
+                if (mi & word_mask(ws[j]) != 0) != shares_letter(ws[i], ws[j]) {
+                    p12[1] += 1;
+                }
+            }
+        }
+        if n > 0 { collapsed += 1; }
+    }
+
+    // P11: a private alphabet per word makes the answer the product of the two
+    // longest lengths, with no disjointness test involved at all.
+    for span in 2..9 {
+        for shape in 0..4 {
+            let mut ws: Vec[String] = Vec.new();
+            let mut lens: Vec[i64] = Vec.new();
+            for k in 0..span {
+                let l = if shape == 0 { span - k }
+                        else if shape == 1 { k + 1 }
+                        else if shape == 2 { (k * 3) % 5 + 1 }
+                        else { 4 };
+                ws.push(repeat_letter((b'a' + (k as u8)) as char, l));
+                lens.push(l);
+            }
+            lens.sort();
+            let expect = lens[span - 1] * lens[span - 2];
+            private_alpha += 1;
+            if solve_mask(ws) != expect or solve_sorted(ws) != expect { p11 += 1; }
+        }
+    }
+
+    println(f"cases {cases} nonzero {nonzero} pairable {pruned_rows} nonempty {collapsed} private-alphabet {private_alpha}");
+    println(f"P1 mask-vs-oracle disagreements {p1}");
+    println(f"P2 dedup-vs-oracle disagreements {p2}");
+    println(f"P3 sorted-vs-oracle disagreements {p3}");
+    println(f"P4 reversed failures {p4[0]}");
+    println(f"P4 shuffled failures {p4[1]}");
+    println(f"P5 duplicate-word failures {p5}");
+    println(f"P6 relabel mask failures {p6[0]}");
+    println(f"P6 relabel dedup failures {p6[1]}");
+    println(f"P6 relabel sets failures {p6[2]}");
+    println(f"P6 relabel sorted failures {p6[3]}");
+    println(f"P7 drop-never-helps failures {p7}");
+    println(f"P8 add-never-hurts failures {p8}");
+    println(f"P9 witness collides {p9[0]}");
+    println(f"P9 witness product mismatch {p9[1]}");
+    println(f"P9 zero-answer-with-disjoint-pair {p9[2]}");
+    println(f"P10 repeat-growth out of range {p10}");
+    println(f"P11 private-alphabet closed form failures {p11}");
+    println(f"P12 mask/table bit mismatch {p12[0]}");
+    println(f"P12 mask/table pair mismatch {p12[1]}");
+    let total = p1 + p2 + p3 + p4[0] + p4[1] + p5 + p6[0] + p6[1] + p6[2] + p6[3]
+        + p7 + p8 + p9[0] + p9[1] + p9[2] + p10 + p11 + p12[0] + p12[1];
+    if total == 0 { println("DIFFERENTIAL OK"); } else { println("DIFFERENTIAL FAILED"); }
+}

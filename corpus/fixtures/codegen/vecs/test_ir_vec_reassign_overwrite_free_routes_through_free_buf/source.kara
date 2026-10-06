@@ -1,0 +1,12 @@
+
+fn build(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(n);
+    return v;
+}
+
+fn main() {
+    let mut g: Vec[i64] = build(1);
+    g = build(2);
+    println(f"{g[0]}");
+}

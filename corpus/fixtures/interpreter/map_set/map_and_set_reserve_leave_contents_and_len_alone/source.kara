@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.reserve(1000);
+    let mut i = 0;
+    while i < 200 { m.insert(i, i * 2); i = i + 1; }
+    m.reserve(-5);
+    m.reserve(0);
+    println(f"{m.len()} {m.get(7).unwrap()} {m.get(199).unwrap()}");
+    let mut s: Set[i64] = Set.new();
+    s.reserve(500);
+    s.insert(1); s.insert(2);
+    s.reserve(-3);
+    println(f"{s.len()} {s.contains(1)} {s.contains(9)}");
+}

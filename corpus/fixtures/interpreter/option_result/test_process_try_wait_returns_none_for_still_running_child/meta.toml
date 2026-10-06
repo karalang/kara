@@ -1,0 +1,13 @@
+source = "tests/interpreter/option_result.rs::test_process_try_wait_returns_none_for_still_running_child"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

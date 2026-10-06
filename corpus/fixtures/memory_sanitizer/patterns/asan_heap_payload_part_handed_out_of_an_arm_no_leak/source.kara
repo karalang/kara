@@ -1,0 +1,15 @@
+
+struct P { k: i64, name: String, xs: Vec[i64] }
+impl Drop for P { fn drop(mut ref self) { println(f"d{self.k}n{self.name.len()}x{self.xs.len()}") } }
+
+fn fp(o: Option[(P, P)]) -> P { match o { Some(t) => { return t.0; } None => { return P { k: 0, name: "z", xs: [0] }; } } }
+fn sink(r: P) { println(f"s{r.k}n{r.name.len()}x{r.xs.len()}") }
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        sink(fp(Some((P { k: n * 2, name: "alpha-padded-out-well-past-any-inline-capacity", xs: [n, n, n] }, P { k: n * 2 + 1, name: "beta-padded-out-well-past-any-inline-capacity-too", xs: [n, n] }))));
+        n = n + 1;
+    }
+    println("end");
+}

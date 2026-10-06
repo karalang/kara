@@ -1,0 +1,17 @@
+
+        fn main() {
+            let mut data: Vec[i64] = Vec.new();
+            let mut i = 0;
+            while i < 8 {
+                data.push(i);
+                i = i + 1;
+            }
+            let mut total = 0;
+            let mut k = 0;
+            while k < 100000 {
+                total = total + data[k % 8];
+                k = k + 1;
+            }
+            println(total);
+        }
+        

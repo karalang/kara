@@ -1,0 +1,11 @@
+struct Bx[T] { a: T, b: i64 }
+shared struct S { v: i64, t: String }
+fn main() {
+    let h = |x: Bx[String]| x;
+    println(f"a:{h(Bx { a: "s".to_string(), b: 1 }).a} {h(Bx { a: f"w{2}", b: 4 }).b}");
+    let k = |n: i64| Bx { a: f"q{n}", b: n };
+    println(f"b:{k(3).a} {k(5).b}");
+    let m = |n: i64| S { v: n, t: f"t{n}" };
+    println(f"c:{m(3).v} {m(4).t}");
+    println("end");
+}

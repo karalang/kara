@@ -1,0 +1,4 @@
+
+fn mk(s: ref String) -> String { s.substring(0, 4) }
+fn f(hay: ref String, other: ref String) -> bool { other.contains(mk(hay)) }
+fn main() { let h = "abcdefgh"; let o = "xxabcdyy"; println(f"{f(h, o)}"); }

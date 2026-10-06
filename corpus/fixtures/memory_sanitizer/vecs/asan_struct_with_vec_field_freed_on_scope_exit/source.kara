@@ -1,0 +1,20 @@
+
+struct Holder { v: Vec[i64] }
+fn build(k: i64) -> i64 {
+    let mut inner: Vec[i64] = Vec.new();
+    inner.push(k);
+    inner.push(k + 1i64);
+    inner.push(k + 2i64);
+    let h: Holder = Holder { v: inner };
+    return h.v[0i64] + h.v[2i64];
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut s = 0i64;
+    let mut i = base;
+    while i < base + 10i64 {
+        s = s + build(i);
+        i = i + 1;
+    }
+    println(f"{s}");
+}

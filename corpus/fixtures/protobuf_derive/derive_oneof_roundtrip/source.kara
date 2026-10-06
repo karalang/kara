@@ -1,0 +1,20 @@
+
+enum Payload { NotSet, Num(i64), Text(String), Flag(bool) }
+
+#[derive(Message)]
+struct Event { id: i64, body: Payload }
+
+fn main() {
+    let e1 = Event { id: 1, body: Payload.Num(42) };
+    let b1 = Event.decode(e1.encode());
+    println(b1.id);
+    println(match b1.body { Payload.Num(x) => x, _ => -1 });
+
+    let e2 = Event { id: 2, body: Payload.Text("hi") };
+    let b2 = Event.decode(e2.encode());
+    println(match b2.body { Payload.Text(s) => s, _ => "?" });
+
+    let e3 = Event { id: 3, body: Payload.Flag(true) };
+    let b3 = Event.decode(e3.encode());
+    println(match b3.body { Payload.Flag(f) => f, _ => false });
+}

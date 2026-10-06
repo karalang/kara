@@ -1,0 +1,46 @@
+
+struct Bag[=T] { xs: Vec[T] }
+impl[T] Bag[T] {
+    fn n(ref self) -> i64 { let v = self.xs; return v.len(); }
+}
+struct Plain { xs: Vec[i64] }
+impl Plain {
+    fn n(ref self) -> i64 { let v = self.xs; return v.len(); }
+}
+struct Named[=T] { name: String, xs: Vec[T] }
+impl[T] Named[T] {
+    fn nm(ref self) -> i64 { let s = self.name; return s.len(); }
+}
+fn free_n[T](b: ref Bag[T]) -> i64 { let v = b.xs; return v.len(); }
+fn main() {
+    let base: i64 = env.args().len();
+    // (a) the filed shape: scalar element, generic `ref self` receiver.
+    let mut a: Bag[i64] = Bag { xs: Vec.new() };
+    a.xs.push(base);
+    a.xs.push(base + 1);
+    println(f"a={a.n()} {a.xs[0]} {a.xs[1]}");
+    // (b) HEAP-allocated String elements (literals are rodata with cap 0 and
+    // would make the second free a silent no-op).
+    let mut ss: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 3 { ss.push(f"item{i + base}"); i = i + 1; }
+    let b: Bag[String] = Bag { xs: ss };
+    println(f"b={b.n()} {b.xs[0]}");
+    // (c) generic FREE fn with a `ref` param — not about the `self` receiver.
+    println(f"c={free_n(a)} {a.xs[1]}");
+    // (d) nested-generic concrete: `T = Vec[i64]`, the param bound to a type
+    // that itself carries generic args.
+    let mut inner: Vec[i64] = Vec.new();
+    inner.push(base + 6);
+    let mut d: Bag[Vec[i64]] = Bag { xs: Vec.new() };
+    d.xs.push(inner);
+    println(f"d={d.n()} {d.xs[0][0]}");
+    // (e) NON-generic control: clean pre-fix.
+    let mut e: Plain = Plain { xs: Vec.new() };
+    e.xs.push(base + 8);
+    println(f"e={e.n()} {e.xs[0]}");
+    // (f) bare `String` field of a generic struct: no param to substitute, so
+    // this reached the clone pre-fix too.
+    let f: Named[i64] = Named { name: f"nm{base}", xs: Vec.new() };
+    println(f"f={f.nm()} {f.name}");
+}

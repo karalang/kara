@@ -1,0 +1,30 @@
+
+struct IdentExpr { name: String, val: i64 }
+shared enum Expr { Ident(IdentExpr), Blk(Block) }
+struct ExprStmt { expr: Expr }
+enum Stmt { Exp(ExprStmt) }
+struct Block { stmts: Vec[Stmt], tail: Option[Expr], span: i64 }
+fn render_expr(e: Expr) -> i64 {
+    match e {
+        Ident(n) => n.val,
+        Blk(b) => {
+            let Block { stmts, tail, span } = b;
+            let mut acc = span;
+            for s in stmts { match s { Exp(n) => { let ExprStmt { expr } = n; acc = acc + render_expr(expr); } } }
+            acc
+        }
+    }
+}
+fn mk_expr() -> Expr {
+    let mut stmts: Vec[Stmt] = Vec.new();
+    stmts.push(Stmt.Exp(ExprStmt { expr: Expr.Ident(IdentExpr { name: "aaaaaaaaaaaaaaaaaaaaaaaa".to_string(), val: 7 }) }));
+    stmts.push(Stmt.Exp(ExprStmt { expr: Expr.Ident(IdentExpr { name: "bbbbbbbbbbbbbbbbbbbbbbbb".to_string(), val: 11 }) }));
+    let block = Block { stmts: stmts, tail: None, span: 100 };
+    Expr.Blk(block)
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 { total = total + render_expr(mk_expr()); i = i + 1; }
+    println(total);
+}

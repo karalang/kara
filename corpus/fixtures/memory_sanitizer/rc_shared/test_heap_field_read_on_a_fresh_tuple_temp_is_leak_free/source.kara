@@ -1,0 +1,24 @@
+
+struct Person { name: String, note: String, age: i64 }
+
+fn make(k: i64) -> (Person, i64) {
+    return (
+        Person { name: "ada".to_string(), note: "unread".to_string(), age: k },
+        k + 1,
+    );
+}
+
+fn plain(k: i64) -> Person {
+    return Person { name: "ada".to_string(), note: "unread".to_string(), age: k };
+}
+
+fn main() {
+    println(make(1).0.name);
+    println(make(2).0.note);
+    println(make(3).0.age);
+    let w = make(4).0.name;
+    println(w);
+    let q = make(5);
+    println(q.0.name);
+    println(plain(6).name);
+}

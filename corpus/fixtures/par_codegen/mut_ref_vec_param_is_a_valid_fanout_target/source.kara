@@ -1,0 +1,21 @@
+
+fn work(k: i64) -> i64 {
+    let mut acc: i64 = 0;
+    let mut t: i64 = 0;
+    while t < 500 { acc = acc + k * 7 + t; t = t + 1; }
+    acc
+}
+fn fill(out: mut ref Vec[i64]) {
+    for i in 0..4096 { out[i] = work(i); }
+}
+fn main() {
+    let mut a: Vec[i64] = Vec.filled(4096, 0);
+    fill(mut a);
+    let mut bad: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 4096 {
+        if a[i] != work(i) { bad = bad + 1; }
+        i = i + 1;
+    }
+    println(bad);
+}

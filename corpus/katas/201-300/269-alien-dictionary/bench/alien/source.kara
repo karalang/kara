@@ -1,0 +1,241 @@
+// Benchmark workload for LeetCode #269 — Alien Dictionary.
+//
+// Build-once + punch. A corpus of 20,000 small word lists is generated once and
+// the ★ Kahn ordering is punched over all of them 60 times — 1,200,000 solver
+// calls, each on an input of a handful of short words.
+//
+// WHAT THIS LANE MEASURES: many small fixed-cost passes rather than one big one.
+// Every call clears a 676-slot adjacency matrix and a 26-slot in-degree vector,
+// scans a few adjacent word pairs for their first differing byte, then runs a
+// selection loop that is O(26) per emitted letter. The input is tiny and the
+// per-call overhead is not — which is the opposite balance from #261 (one huge
+// structure) or #266 (one long stream), and the shape a lot of real code
+// actually has.
+//
+// EVERYTHING IS FLAT AND HOISTED, in every mirror. The corpus is three parallel
+// index arrays plus one byte array — no array of strings, no array of arrays —
+// and the working structures are allocated once and cleared per call. That is a
+// parity decision made after #267, where a per-leaf string turned into four
+// different allocation strategies and a 3x phantom result: kāra's `Vec[Vec[bool]]`
+// would allocate 26 inner vectors per call while C wrote into a stack `char[26][26]`
+// and allocated nothing. A flat, hoisted buffer is the one spelling all five
+// languages express identically, so the lane measures the algorithm.
+//
+// The corpus is drawn so that roughly half the lists are solvable: words are
+// generated over a small alphabet and sorted under a hidden permutation, then
+// some lists have an adjacent pair swapped. A corpus that was all-unsolvable
+// would exit early on most calls and never reach the selection loop.
+
+fn main() {
+    let lists = 20000;
+    let rounds = 60;
+    let alpha = 8;
+
+    // ---- build once: a flat corpus ---------------------------------------
+    let mut letters: Vec[i64] = Vec.new();   // every word's bytes, concatenated
+    let mut wstart: Vec[i64] = Vec.new();    // per word
+    let mut wlen: Vec[i64] = Vec.new();
+    let mut lstart: Vec[i64] = Vec.new();    // per list: first word index
+    let mut lcount: Vec[i64] = Vec.new();
+
+    let mut state = 269269;
+    let mut li = 0;
+    while li < lists {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let m = (state / 65536) % 5 + 2;      // 2..6 words
+
+        // hidden alphabet for this list
+        let mut rank: Vec[i64] = Vec.new();
+        let mut z = 0;
+        while z < alpha { rank.push(z); z = z + 1; }
+        let mut sh = alpha - 1;
+        while sh > 0 {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let j = (state / 65536) % (sh + 1);
+            let t = rank[sh]; rank[sh] = rank[j]; rank[j] = t;
+            sh = sh - 1;
+        }
+
+        // words as index ranges into a scratch buffer
+        let mut buf: Vec[i64] = Vec.new();
+        let mut st: Vec[i64] = Vec.new();
+        let mut ln: Vec[i64] = Vec.new();
+        let mut wi = 0;
+        while wi < m {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let L = (state / 65536) % 4 + 1;
+            st.push(buf.len());
+            ln.push(L);
+            let mut p = 0;
+            while p < L {
+                state = (state * 1103515245 + 12345) & 2147483647;
+                buf.push((state / 65536) % alpha);
+                p = p + 1;
+            }
+            wi = wi + 1;
+        }
+
+        // insertion-sort the words under the hidden alphabet
+        let mut a = 1;
+        while a < m {
+            let mut b = a;
+            while b > 0 {
+                // compare word b-1 against word b
+                let s1 = st[b - 1]; let n1 = ln[b - 1];
+                let s2 = st[b];        let n2 = ln[b];
+                let mut lim = n1;
+                if n2 < lim { lim = n2; }
+                let mut k = 0;
+                let mut swap = false;
+                let mut decided = false;
+                while k < lim {
+                    if buf[s1 + k] != buf[s2 + k] {
+                        if rank[buf[s1 + k]] > rank[buf[s2 + k]] { swap = true; }
+                        decided = true;
+                        k = lim;
+                    } else {
+                        k = k + 1;
+                    }
+                }
+                if not decided and n1 > n2 { swap = true; }
+                if swap {
+                    let ts = st[b - 1]; st[b - 1] = st[b]; st[b] = ts;
+                    let tl = ln[b - 1]; ln[b - 1] = ln[b]; ln[b] = tl;
+                    b = b - 1;
+                } else {
+                    b = 0;
+                }
+            }
+            a = a + 1;
+        }
+
+        // half the lists get an adjacent pair swapped back out of order
+        state = (state * 1103515245 + 12345) & 2147483647;
+        if (state / 65536) % 2 == 0 and m >= 2 {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let at = (state / 65536) % (m - 1);
+            let ts = st[at]; st[at] = st[at + 1]; st[at + 1] = ts;
+            let tl = ln[at]; ln[at] = ln[at + 1]; ln[at + 1] = tl;
+        }
+
+        // flatten into the corpus
+        lstart.push(wstart.len());
+        lcount.push(m);
+        let mut q = 0;
+        while q < m {
+            wstart.push(letters.len());
+            wlen.push(ln[q]);
+            let mut r = 0;
+            while r < ln[q] {
+                letters.push(buf[st[q] + r]);
+                r = r + 1;
+            }
+            q = q + 1;
+        }
+        li = li + 1;
+    }
+
+    // ---- hoisted working structures --------------------------------------
+    let mut adj: Vec[bool] = Vec.new();      // flat 26x26
+    let mut z2 = 0;
+    while z2 < 676 { adj.push(false); z2 = z2 + 1; }
+    let mut indeg: Vec[i64] = Vec.new();
+    let mut present: Vec[bool] = Vec.new();
+    let mut done: Vec[bool] = Vec.new();
+    let mut z3 = 0;
+    while z3 < 26 {
+        indeg.push(0); present.push(false); done.push(false);
+        z3 = z3 + 1;
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let mut sink = 0;
+    let mut r0 = 0;
+    while r0 < rounds {
+        let mut idx = 0;
+        while idx < lists {
+            let base = lstart[idx];
+            let n = lcount[idx];
+
+            let mut c = 0;
+            while c < 26 {
+                indeg[c] = 0; present[c] = false; done[c] = false;
+                c = c + 1;
+            }
+            let mut e = 0;
+            while e < 676 { adj[e] = false; e = e + 1; }
+
+            let mut w = 0;
+            while w < n {
+                let s = wstart[base + w];
+                let L = wlen[base + w];
+                let mut p = 0;
+                while p < L { present[letters[s + p]] = true; p = p + 1; }
+                w = w + 1;
+            }
+
+            let mut bad = false;
+            let mut p2 = 0;
+            while p2 + 1 < n {
+                let s1 = wstart[base + p2];      let n1 = wlen[base + p2];
+                let s2 = wstart[base + p2 + 1]; let n2 = wlen[base + p2 + 1];
+                let mut lim = n1;
+                if n2 < lim { lim = n2; }
+                let mut k = 0;
+                let mut found = false;
+                while k < lim {
+                    let x = letters[s1 + k];
+                    let y = letters[s2 + k];
+                    if x != y {
+                        if not adj[x * 26 + y] {
+                            adj[x * 26 + y] = true;
+                            indeg[y] = indeg[y] + 1;
+                        }
+                        found = true;
+                        k = lim;
+                    } else {
+                        k = k + 1;
+                    }
+                }
+                if not found and n1 > n2 { bad = true; p2 = n; }
+                else { p2 = p2 + 1; }
+            }
+
+            let mut acc = 0;
+            if not bad {
+                let mut remaining = 0;
+                let mut d = 0;
+                while d < 26 {
+                    if present[d] { remaining = remaining + 1; }
+                    d = d + 1;
+                }
+                let mut placed = 0;
+                while placed < remaining {
+                    let mut pick = -1;
+                    let mut s3 = 0;
+                    while s3 < 26 {
+                        if present[s3] and not done[s3] and indeg[s3] == 0 {
+                            pick = s3; s3 = 26;
+                        } else { s3 = s3 + 1; }
+                    }
+                    if pick < 0 { acc = 0; placed = remaining; }
+                    else {
+                        done[pick] = true;
+                        acc = (acc * 31 + pick + 1) % 1000000007;
+                        placed = placed + 1;
+                        let mut t = 0;
+                        while t < 26 {
+                            if adj[pick * 26 + t] { indeg[t] = indeg[t] - 1; }
+                            t = t + 1;
+                        }
+                    }
+                }
+            }
+            sink = (sink * 131 + acc) % 1000000007;
+            idx = idx + 1;
+        }
+        r0 = r0 + 1;
+    }
+
+    println(sink);
+}

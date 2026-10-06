@@ -1,0 +1,16 @@
+
+enum E { A(i64), B(String), C }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 200i64 {
+        let e: E = E.B(f"payload{i}");
+        if let B(t) = e {
+            total = total + t.len();
+        } else {
+            total = total + 1i64;
+        }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

@@ -1,0 +1,46 @@
+// LeetCode #357: Count Numbers with Unique Digits -- count by digit set.
+//
+// A number with distinct digits is a set of digits written in some order.
+// For a set of k digits there are k! orders, and if the set holds 0 then the
+// (k - 1)! orders that start with it are not numbers. Walk every subset of
+// the base's digits with at most n members, as a bitmask, and add those
+// counts. The number 0 is the one exception -- its spelling starts with 0 --
+// so it is added once by hand.
+
+fn factorial(k: i64) -> i64 {
+    let mut f = 1;
+    for i in 2..=k {
+        f *= i;
+    }
+    f
+}
+
+fn count_unique(n: i64, base: i64) -> i64 {
+    let mut total = 1;
+    for mask in 1..(1 << base) {
+        let k = mask.count_ones() as i64;
+        if k > n {
+            continue;
+        }
+        total += factorial(k);
+        if mask & 1 == 1 {
+            total -= factorial(k - 1);
+        }
+    }
+    total
+}
+
+fn main() {
+    for n in 0..=8 {
+        println(f"n = {n}: {count_unique(n, 10)}");
+    }
+    for base in 2..=7 {
+        let mut row: Vec[String] = Vec.new();
+        // One length past the base: no number has more distinct digits than
+        // the base has digits, so the last two entries agree.
+        for n in 0..=(base + 1) {
+            row.push(f"{count_unique(n, base)}");
+        }
+        println(f"base {base}: {row.join(" ")}");
+    }
+}

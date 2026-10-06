@@ -1,0 +1,15 @@
+
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let i1: Array[R, 1] = [mkr(1)];
+let i2: Array[R, 1] = [mkr(2)];
+let a: Array[Array[R, 1], 2] = [i1, i2];
+let s: Slot[Array[Array[R, 1], 2]] = Slot.S(a);
+println("mid");
+println("end");
+}

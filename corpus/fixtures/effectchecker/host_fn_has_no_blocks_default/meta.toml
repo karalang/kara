@@ -1,0 +1,13 @@
+source = "tests/effectchecker.rs::host_fn_has_no_blocks_default"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

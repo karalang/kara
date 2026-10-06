@@ -1,0 +1,13 @@
+source = "tests/codegen/vecs.rs::e2e_generic_enum_loop_view_passed_by_value_runs_its_body_once"
+dedup_of = ["tests/interpreter/drop_order.rs::interp_generic_enum_loop_view_passed_by_value_runs_its_body_once", "tests/memory_sanitizer/vecs.rs::asan_generic_enum_loop_view_passed_by_value_runs_its_body_once"]
+expect = "error:E0514"
+exit = 1
+tags = ["drop"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

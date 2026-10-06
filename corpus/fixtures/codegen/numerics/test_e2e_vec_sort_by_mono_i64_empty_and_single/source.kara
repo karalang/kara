@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut empty: Vec[i64] = Vec.new();
+    empty.sort_by(|a, b| a.cmp(b));
+    println(empty.len());
+
+    let mut one: Vec[i64] = Vec.new();
+    one.push(42);
+    one.sort_by(|a, b| a.cmp(b));
+    println(one[0i64]);
+}

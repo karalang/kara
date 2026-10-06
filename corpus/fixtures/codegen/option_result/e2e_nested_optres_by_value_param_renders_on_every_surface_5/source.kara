@@ -1,0 +1,6 @@
+
+fn show(x: Result[Option[String], String]) { println(f"{x}"); }
+fn main() {
+    show(Ok(None));
+    println("done");
+}

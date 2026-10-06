@@ -1,0 +1,9 @@
+
+fn main() {
+    let c = Atomic.new(0);
+    par {
+        c.fetch_add(1, MemoryOrdering.SeqCst);
+        c.fetch_add(1, MemoryOrdering.SeqCst);
+    }
+    print(c.load(MemoryOrdering.SeqCst));
+}

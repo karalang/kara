@@ -1,0 +1,239 @@
+// LeetCode 265 — differential harness.
+//
+// Runs all THREE solvers — the O(n·k²) definition, the ★ min/second-min form,
+// and the prefix/suffix form — over randomized cost tables.
+//
+// The O(n·k²) file is the reference. It makes no claim about WHERE the best
+// previous colour is; it scans for it. Both O(n·k) files replace that scan with
+// an argument, and an argument can be subtly wrong in a way that still yields a
+// finite, plausible, slightly-too-large total — which is the failure mode no
+// single implementation can catch on its own.
+//
+// GENERATOR DESIGN turns on one observation: THE SEPARATING CASE IS A TIE.
+//
+// The ★ form is correct only if its second minimum counts multiplicity — given a
+// previous row of [3, 3, 5] the second minimum is 3, not 5, because colour 0 can
+// still reach 3 via index 1. Reading it as "the smallest value strictly greater
+// than the minimum" is wrong ONLY when the row minimum is tied. Costs drawn from
+// a wide range essentially never tie, so that bug survives a naive random
+// harness untouched: it is not rare, it is absent.
+//
+// So most cases here draw from a deliberately NARROW value range — often 1..3
+// across k up to 6 colours, where a tied row minimum is the common case rather
+// than the exception. Wide-range cases are still drawn, but as the minority.
+// The harness counts the rows it generated with a tied minimum, so the claim
+// "the separating condition occurred" is a number rather than a hope.
+//
+// Two structural families round it out: k = 1 with n >= 2, which admits no
+// painting at all (all three report -1, and the harness checks they agree on
+// that rather than each inventing a plausible finite total), and k = 2, where
+// "any colour but this one" degenerates to a single choice and the min/second-
+// min bookkeeping has no slack.
+
+fn min_cost_quad(costs: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let n = costs.len();
+    if n == 0 { return 0; }
+    let inf = 1000000000000;
+    let mut prev: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < k { prev.push(costs[0][c]); c = c + 1; }
+    let mut i = 1;
+    while i < n {
+        let mut cur: Vec[i64] = Vec.new();
+        let mut t = 0;
+        while t < k {
+            let mut best = inf;
+            let mut j = 0;
+            while j < k {
+                if j != t and prev[j] < best { best = prev[j]; }
+                j = j + 1;
+            }
+            cur.push(costs[i][t] + best);
+            t = t + 1;
+        }
+        prev = cur;
+        i = i + 1;
+    }
+    let mut answer = inf;
+    let mut q = 0;
+    while q < k {
+        if prev[q] < answer { answer = prev[q]; }
+        q = q + 1;
+    }
+    if answer >= inf { return -1; }
+    return answer;
+}
+
+fn min_cost_minmin(costs: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let n = costs.len();
+    if n == 0 { return 0; }
+    let inf = 1000000000000;
+    let mut prev: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < k { prev.push(costs[0][c]); c = c + 1; }
+    let mut i = 1;
+    while i < n {
+        let mut min1 = inf;
+        let mut idx1 = -1;
+        let mut min2 = inf;
+        let mut j = 0;
+        while j < k {
+            if prev[j] < min1 {
+                min2 = min1;
+                min1 = prev[j];
+                idx1 = j;
+            } else {
+                if prev[j] < min2 { min2 = prev[j]; }
+            }
+            j = j + 1;
+        }
+        let mut cur: Vec[i64] = Vec.new();
+        let mut t = 0;
+        while t < k {
+            let mut best = min1;
+            if t == idx1 { best = min2; }
+            cur.push(costs[i][t] + best);
+            t = t + 1;
+        }
+        prev = cur;
+        i = i + 1;
+    }
+    let mut answer = inf;
+    let mut q = 0;
+    while q < k {
+        if prev[q] < answer { answer = prev[q]; }
+        q = q + 1;
+    }
+    if answer >= inf { return -1; }
+    return answer;
+}
+
+fn min_cost_prefix(costs: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let n = costs.len();
+    if n == 0 { return 0; }
+    let inf = 1000000000000;
+    let mut prev: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < k { prev.push(costs[0][c]); c = c + 1; }
+    let mut i = 1;
+    while i < n {
+        let mut pre: Vec[i64] = Vec.new();
+        let mut running = inf;
+        let mut j = 0;
+        while j < k {
+            if prev[j] < running { running = prev[j]; }
+            pre.push(running);
+            j = j + 1;
+        }
+        let mut suf: Vec[i64] = Vec.new();
+        let mut s = 0;
+        while s < k { suf.push(inf); s = s + 1; }
+        running = inf;
+        let mut b = k - 1;
+        while b >= 0 {
+            if prev[b] < running { running = prev[b]; }
+            suf[b] = running;
+            b = b - 1;
+        }
+        let mut cur: Vec[i64] = Vec.new();
+        let mut t = 0;
+        while t < k {
+            let mut best = inf;
+            if t > 0 and pre[t - 1] < best { best = pre[t - 1]; }
+            if t + 1 < k and suf[t + 1] < best { best = suf[t + 1]; }
+            cur.push(costs[i][t] + best);
+            t = t + 1;
+        }
+        prev = cur;
+        i = i + 1;
+    }
+    let mut answer = inf;
+    let mut q = 0;
+    while q < k {
+        if prev[q] < answer { answer = prev[q]; }
+        q = q + 1;
+    }
+    if answer >= inf { return -1; }
+    return answer;
+}
+
+fn main() {
+    let cases = 4000;
+    let mut seed = 265265;
+
+    let mut mismatches = 0;
+    let mut impossible = 0;
+    let mut tied_rows = 0;
+    let mut total_rows = 0;
+    let mut digest = 0;
+
+    let mut c = 0;
+    while c < cases {
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let family = (seed / 65536) % 10;
+
+        // Value range: narrow most of the time, so tied row minima are common.
+        let mut span = 3;
+        if family == 8 { span = 10; }
+        if family == 9 { span = 1000; }
+
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let mut n = (seed / 65536) % 13;      // 0..12
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let mut k = (seed / 65536) % 6 + 1; // 1..6
+        if family == 6 { k = 1; if n < 2 { n = 2; } }
+        if family == 7 { k = 2; }
+
+        let mut costs: Vec[Vec[i64]] = Vec.new();
+        let mut i = 0;
+        while i < n {
+            let mut row: Vec[i64] = Vec.new();
+            let mut j = 0;
+            while j < k {
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                row.push((seed / 65536) % span + 1);
+                j = j + 1;
+            }
+            costs.push(row);
+            i = i + 1;
+        }
+
+        // Did any generated row have a tied minimum? That is the condition the
+        // ★ form's second-minimum rule turns on.
+        let mut r = 0;
+        while r < n {
+            let row = ref costs[r];
+            let mut lo = row[0];
+            let mut j = 1;
+            while j < k {
+                if row[j] < lo { lo = row[j]; }
+                j = j + 1;
+            }
+            let mut hits = 0;
+            j = 0;
+            while j < k {
+                if row[j] == lo { hits = hits + 1; }
+                j = j + 1;
+            }
+            if hits > 1 { tied_rows = tied_rows + 1; }
+            total_rows = total_rows + 1;
+            r = r + 1;
+        }
+
+        let a = min_cost_quad(costs, k);
+        let b = min_cost_minmin(costs, k);
+        let d = min_cost_prefix(costs, k);
+
+        if a != b or a != d { mismatches = mismatches + 1; }
+        if a == -1 { impossible = impossible + 1; }
+        digest = (digest * 131 + a + 3) % 1000000007;
+        c = c + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"rows generated {total_rows}");
+    println(f"rows with a tied minimum {tied_rows}");
+    println(f"impossible (k=1, n>=2) {impossible}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

@@ -1,0 +1,9 @@
+
+fn main() {
+    let a: Option[i64] = "42".parse();
+    match a { Some(n) => println(n), None => println(-1) }
+    let b: Option[i64] = "bad".parse();
+    match b { Some(n) => println(n), None => println(-1) }
+    let f: Option[f64] = "2.5".parse();
+    match f { Some(x) => println(x), None => println(-1.0) }
+}

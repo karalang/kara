@@ -1,0 +1,26 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = 0;
+    while i < n {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i + 1;
+    }
+    head
+}
+fn walk(head: Option[ListNode]) -> i64 {
+    let mut cur = head;
+    let mut sum = 0;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        sum = sum + node.val;
+        cur = node.next;
+    }
+    sum
+}
+fn main() {
+    let chain = make(100);
+    println(walk(chain));
+}

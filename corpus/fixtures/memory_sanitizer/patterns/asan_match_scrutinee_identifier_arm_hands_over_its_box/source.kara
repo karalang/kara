@@ -1,0 +1,16 @@
+
+struct City { name: String, zip: i64 }
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 200 {
+        let o: Option[City] = if i % 2 == 0 { Some(City { name: f"c{i}", zip: i }) } else { None };
+        match (match i % 3 { 0 => o, _ => None }) {
+            Some(v) => { total = total + (v.name.len() as i64); }
+            None => { total = total + 1; }
+        }
+        i = i + 1;
+    }
+    println(total);
+}

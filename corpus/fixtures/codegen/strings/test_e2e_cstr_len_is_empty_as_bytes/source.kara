@@ -1,0 +1,12 @@
+
+fn main() {
+    let msg = c"hello, world";
+    println(msg.len());
+    if c"".is_empty() { println("empty"); }
+    let bytes = c"abc".as_bytes();
+    println(bytes.len());
+    println(bytes[0]);
+    println(bytes[2]);
+    let annotated: ref CStr = c"hi";
+    println(annotated.len());
+}

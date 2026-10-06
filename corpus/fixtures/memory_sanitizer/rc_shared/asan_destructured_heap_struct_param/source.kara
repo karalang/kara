@@ -1,0 +1,16 @@
+struct H { s: String, n: i64 }
+struct P { a: String, b: String }
+fn take(H { s, n }: H) -> String { s + n.to_string() }
+fn both(P { a, b }: P) -> String { a + b }
+fn pair((l, r): (String, String)) -> String { l + r }
+fn main() {
+    let mut i = 0i64;
+    let mut last: String = "";
+    while i < 40i64 {
+        last = take(H { s: "v", n: i });
+        last = both(P { a: "x", b: "y" });
+        last = pair(("p", "q"));
+        i = i + 1;
+    }
+    println(last);
+}

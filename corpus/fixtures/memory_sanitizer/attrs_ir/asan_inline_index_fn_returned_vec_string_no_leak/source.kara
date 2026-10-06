@@ -1,0 +1,10 @@
+
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alice"); v.push("bob"); v.push("carol");
+    v
+}
+fn main() {
+    println(names()[0]);
+    println(names()[2]);
+}

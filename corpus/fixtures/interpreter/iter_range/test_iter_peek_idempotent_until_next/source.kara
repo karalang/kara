@@ -1,0 +1,10 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let mut p = v.iter().peekable();
+    println(p.peek().unwrap());
+    println(p.peek().unwrap());
+    println(p.peek().unwrap());
+    println(p.next().unwrap());
+    println(p.peek().unwrap());
+}

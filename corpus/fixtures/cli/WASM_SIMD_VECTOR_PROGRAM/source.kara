@@ -1,0 +1,19 @@
+
+fn lane_sum(p: i64, q: i64) -> i64 {
+    let a: Vector[i64, 2] = Vector[i64, 2](p, p);
+    let b: Vector[i64, 2] = Vector[i64, 2](q, q);
+    let c = a + b;
+    c[0] + c[1]
+}
+
+fn f32_fma(x: f32) -> f32 {
+    let a: Vector[f32, 4] = Vector[f32, 4](x, x, x, x);
+    let b: Vector[f32, 4] = Vector[f32, 4](0.5, 0.5, 0.5, 0.5);
+    let c = a * b + a;
+    c[0] + c[1] + c[2] + c[3]
+}
+
+fn main() {
+    println(lane_sum(1, 10));
+    println(f32_fma(2.0));
+}

@@ -1,0 +1,16 @@
+
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR[{self.s}]"); } }
+struct S { r: R }
+impl Drop for S { fn drop(mut ref self) { println("dS"); } }
+fn mkS(n: i64) -> S { return S { r: R { s: f"payloadpayload{n}" } }; }
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        match mkS(i) { S { r: _ } => { println(f"w{i}"); } }
+        i = i + 1;
+    }
+    if let S { r: _ } = mkS(9) { println("g"); }
+    println("done");
+}

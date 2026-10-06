@@ -1,0 +1,30 @@
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct S { id: i64, name: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
+fn mks(i: i64) -> S { return S { id: i, name: f"s{i}" }; }
+struct Box2 { mut xs: Vec[R] }
+impl Box2 { fn push(mut ref self, r: R) { self.xs.push(r); } }
+struct BoxS { mut ys: Vec[S] }
+impl BoxS { fn add(mut ref self, s: S) { self.ys.push(s); } }
+fn take(b: mut ref Box2, r: R) { b.xs.push(r); }
+fn main() {
+  println("named_method");
+  let mut b = Box2 { xs: Vec.new() };
+  let a = mk(1); b.push(a); println(f"  len={b.xs.len()}");
+  println("fresh_method");
+  let mut c = Box2 { xs: Vec.new() };
+  c.push(mk(2)); println(f"  len={c.xs.len()}");
+  println("named_free_fn");
+  let mut d = Box2 { xs: Vec.new() };
+  let e = mk(3); take(mut d, e); println(f"  len={d.xs.len()}");
+  println("copy_supported_method");
+  let mut g = BoxS { ys: Vec.new() };
+  let h = mks(4); g.add(h); println(f"  len={g.ys.len()}");
+  println("two_named");
+  let mut i = Box2 { xs: Vec.new() };
+  let j = mk(5); i.push(j); let k = mk(6); i.push(k); println(f"  len={i.xs.len()}");
+  println("end");
+}

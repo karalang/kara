@@ -1,0 +1,20 @@
+
+fn main() {
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("age", Column.from_vec([20, 30, 40, 50]));
+    // a String column (skipped by describe) + a null-bearing float column.
+    let names: Vec[String] = ["alpha_padding_aaaaaaaaaaaaaaa", "beta_padding_bbbbbbbbbbbbbbbb", "gamma_padding_ccccccccccccccc", "delta_padding_ddddddddddddddd"];
+    df.insert("name", Column.from_vec(names));
+    let score: Column[f64] = Column.from_iter_nullable([Some(1.0), None, Some(3.0), Some(5.0)]);
+    df.insert("score", score);
+    // describe builds a fresh frame (statistic + age + score).
+    let d: DataFrame = df.describe();
+    println(d.width());
+    println(d.height());
+    let lab: Column[String] = d.column("statistic");
+    println(lab.valid_count());
+    let a: Column[f64] = d.column("age");
+    for v in a.iter_valid() { println(v); }
+    // source frame still usable (borrowed by describe, not consumed).
+    println(df.width());
+}

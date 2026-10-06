@@ -1,0 +1,9 @@
+
+effect resource Display;
+
+fn paint() with writes(Display) {
+}
+
+fn main() {
+    println("ok");
+}

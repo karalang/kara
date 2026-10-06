@@ -1,0 +1,40 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+enum Sv { Hold { inner: R }, Nil }
+impl Drop for Sv { fn drop(mut ref self) { println("dSv") } }
+
+struct S { e: E }
+struct Ob { o: Option[R] }
+struct Rb { r: Result[R, i64] }
+struct Tb { t: (R, i64) }
+struct W2 { s: S }
+struct Hs { v: Sv }
+
+fn mk(n: i64) -> E { return E.A(R { id: n }) }
+
+fn f_enum(s: S)  { match s.e { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+fn f_opt(s: Ob)  { match s.o { Option.Some(r) => { let m = r; println(f"  b{m.id}"); } Option.None => { } } }
+fn f_res(s: Rb)  { match s.r { Result.Ok(r) => { let m = r; println(f"  b{m.id}"); } Result.Err(e) => { } } }
+fn f_two(w: W2)  { match w.s.e { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+fn f_sv(h: Hs)   { match h.v { Sv.Hold { inner } => { let m = inner; println(f"  b{m.id}"); } Sv.Nil => { } } }
+fn f_tup(s: Tb)  { match s.t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+fn f_ref(s: ref S) { match s.e { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+fn f_norebind(s: S) { match s.e { E.A(r) => { println(f"  b{r.id}"); } E.B => { } } }
+fn f_local() { let s = S { e: mk(8) }; match s.e { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+fn f_fresh() { match mk(9) { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+
+fn main() {
+    println("enum");     f_enum(S { e: mk(1) });                              println("enum end");
+    println("opt");      f_opt(Ob { o: Option.Some(R { id: 2 }) });           println("opt end");
+    println("res");      f_res(Rb { r: Result.Ok(R { id: 3 }) });             println("res end");
+    println("two");      f_two(W2 { s: S { e: mk(4) } });                     println("two end");
+    println("sv");       f_sv(Hs { v: Sv.Hold { inner: R { id: 5 } } });      println("sv end");
+    println("tup");      f_tup(Tb { t: (R { id: 6 }, 0) });                   println("tup end");
+    println("ref");      let a = S { e: mk(7) }; f_ref(a);                    println("ref end");
+    println("local");    f_local();                                           println("local end");
+    println("fresh");    f_fresh();                                           println("fresh end");
+    println("norebind"); f_norebind(S { e: mk(10) });                         println("norebind end");
+    println("done");
+}

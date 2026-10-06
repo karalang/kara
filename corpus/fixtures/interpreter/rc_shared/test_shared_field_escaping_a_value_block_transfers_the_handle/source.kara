@@ -1,0 +1,22 @@
+shared struct Node { s: String }
+struct Box[T] { v: T }
+struct Holder { v: Node }
+
+fn mk(i: i64) -> Node { return Node { s: f"blk-{i}-padded-out-to-force-a-real-heap-buffer" }; }
+
+fn main() {
+    let mut acc: i64 = 0;
+    // generic and concrete spellings of the escaping block tail
+    let x1 = { let b = Box { v: mk(1) }; b.v };
+    acc = acc + x1.s.len();
+    let x2 = { let h = Holder { v: mk(2) }; h.v };
+    acc = acc + x2.s.len();
+    // a nested value block
+    let x3 = { { let b = Box { v: mk(3) }; b.v } };
+    acc = acc + x3.s.len();
+    // the non-block control, whose receive-inc must stay
+    let b4 = Box { v: mk(4) };
+    let x4 = b4.v;
+    acc = acc + x4.s.len();
+    println(acc);
+}

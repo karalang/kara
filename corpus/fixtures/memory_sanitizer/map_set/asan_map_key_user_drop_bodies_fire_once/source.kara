@@ -1,0 +1,22 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct K { s: String }
+struct V { s: String }
+impl Drop for K { fn drop(mut ref self) { karac_bump() } }
+impl Drop for V { fn drop(mut ref self) { karac_bump() } }
+let mut FIRED: i64 = 0;
+fn karac_bump() { FIRED = FIRED + 1; }
+fn main() {
+    let mut round = 0;
+    while round < 30 {
+        let mut m: Map[K, V] = Map.new();
+        let mut i = 0;
+        while i < 5 {
+            let k = K { s: f"key-{i}-padding-padding" };
+            m.insert(k, V { s: f"val-{i}-padding-padding" });
+            i = i + 1;
+        }
+        round = round + 1;
+    }
+    println(f"fired={FIRED}");
+}

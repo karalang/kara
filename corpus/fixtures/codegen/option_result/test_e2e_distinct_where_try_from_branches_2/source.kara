@@ -1,0 +1,5 @@
+
+distinct type Even = i64 where self % 2 == 0;
+fn main() {
+    match Even.try_from(7) { Ok(e) => println(e.raw()), Err(_) => println(-1) }
+}

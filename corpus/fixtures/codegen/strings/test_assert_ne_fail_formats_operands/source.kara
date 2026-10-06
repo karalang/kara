@@ -1,0 +1,4 @@
+
+fn main() {
+    assert_ne(7, 7)
+}

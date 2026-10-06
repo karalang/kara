@@ -1,0 +1,12 @@
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Item { id: i64 }
+impl Drop for Item { fn drop(mut ref self) { println(f"drop {self.id}") } }
+fn main() {
+    let mut q: PriorityQueue[Item] = PriorityQueue.new();
+    q.push(Item { id: 3 });
+    q.push(Item { id: 1 });
+    println("built");
+    while q.len() > 0 { match q.pop() { Some(v) => { println(f"pop {v.id}"); } None => {} } }
+    println("end");
+}

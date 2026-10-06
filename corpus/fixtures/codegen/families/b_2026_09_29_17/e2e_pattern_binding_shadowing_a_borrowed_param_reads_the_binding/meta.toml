@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_17.rs::e2e_pattern_binding_shadowing_a_borrowed_param_reads_the_binding"
+dedup_of = ["tests/interpreter/families/b_2026_09_29_17.rs::interp_pattern_binding_shadowing_a_borrowed_param_reads_the_binding"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,5 @@
+
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    println(v.is_empty());
+}

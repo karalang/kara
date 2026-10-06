@@ -1,0 +1,63 @@
+struct Sp {
+    offset: i64,
+    length: i64,
+}
+
+struct Lit {
+    value: i128,
+    suffix: String,
+    span: Sp,
+}
+
+shared enum Ex {
+    Int(Lit),
+    Neg(Ex),
+    Leaf,
+}
+
+enum Tok {
+    Integer(i128, String),
+    Word(String),
+}
+
+struct Spanned {
+    token: Tok,
+    at: i64,
+}
+
+fn render(e: Ex) -> String {
+    match e {
+        Int(l) => {
+            let Lit { value, suffix, span } = l;
+            value.to_string() + suffix + "@" + span.offset.to_string()
+        }
+        Neg(inner) => "-(" + render(inner) + ")",
+        Leaf => "leaf".to_string(),
+    }
+}
+
+fn main() {
+    println("start")
+    let mut toks: Vec[Spanned] = Vec.new();
+    toks.push(Spanned { token: Tok.Integer(100000000000000000000i128, "i128".to_string()), at: 0 });
+    toks.push(Spanned { token: Tok.Word("w".to_string()), at: 1 });
+    toks.push(Spanned { token: Tok.Integer(-170141183460469231731687303715884105727i128 - 1, "".to_string()), at: 2 });
+    let mut exprs: Vec[Ex] = Vec.new();
+    let mut i = 0;
+    while i < toks.len() {
+        let e = match toks[i].token {
+            Integer(v, sfx) => Ex.Int(Lit { value: v, suffix: sfx, span: Sp { offset: i as i64, length: 1 } }),
+            Word(w) => Ex.Leaf,
+        };
+        exprs.push(e);
+        i += 1;
+    }
+    for e in exprs {
+        println(render(Ex.Neg(e)))
+    }
+    let o: Option[Lit] = Some(Lit { value: 18446744073709551616i128, suffix: "o".to_string(), span: Sp { offset: 9, length: 2 } });
+    match o {
+        Some(l) => println(l.value.to_string() + l.suffix),
+        None => println("none"),
+    }
+}

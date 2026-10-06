@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut total: i64 = 0;
+    let mut i = 9000000i64;
+    while i < 4000000 {
+        total = total + i % 7;
+        i = i + 1;
+    }
+    println(f"{total} {i}");
+}

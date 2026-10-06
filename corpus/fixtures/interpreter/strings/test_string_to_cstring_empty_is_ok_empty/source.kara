@@ -1,0 +1,11 @@
+
+fn main() {
+    let s = "";
+    match s.to_cstring() {
+        Ok(cs) => {
+            println(cs.len());
+            if cs.is_empty() { println("empty"); } else { println("non-empty"); }
+        }
+        Err(_) => println("ERR"),
+    }
+}

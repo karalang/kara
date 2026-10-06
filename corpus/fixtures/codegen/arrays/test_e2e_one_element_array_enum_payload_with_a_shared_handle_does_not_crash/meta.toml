@@ -1,0 +1,13 @@
+source = "tests/codegen/arrays.rs::test_e2e_one_element_array_enum_payload_with_a_shared_handle_does_not_crash"
+dedup_of = ["tests/interpreter/arrays.rs::one_element_array_enum_payload_with_a_shared_handle_does_not_crash"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

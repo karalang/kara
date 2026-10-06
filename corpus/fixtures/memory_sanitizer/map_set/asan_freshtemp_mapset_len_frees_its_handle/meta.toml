@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/map_set.rs::asan_freshtemp_mapset_len_frees_its_handle"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

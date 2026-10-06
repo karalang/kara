@@ -1,0 +1,31 @@
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+
+struct H  { pe: (R, i64) }
+struct Hi { pe: (i64, R) }
+struct Hw { pe: (i64, Option[R]) }
+struct Hn { pe: ((R, i64), i64) }
+struct Hd { pe: (R, i64), n: i64 }
+impl Drop for Hd { fn drop(mut ref self) { println(f"dHd{self.n}") } }
+
+fn mk(id: i64) -> R { let mut v: Vec[i64] = Vec.new(); v.push(id); return R { id: id, tag: f"t{id}", xs: v } }
+
+fn w1() { let h = H  { pe: (mk(1), 0) };            let (_, k) = h.pe;      println("  end") }
+fn w2() { let h = Hi { pe: (0, mk(2)) };            let (k, _) = h.pe;      println("  end") }
+fn w3() { let h = Hw { pe: (0, Option.Some(mk(3))) }; let (k, _) = h.pe;    println("  end") }
+fn n1() { let h = Hn { pe: ((mk(4), 0), 1) };       let ((r, a), b) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
+#[allow(partial_move_of_drop_struct)]
+fn d1() { let h = Hd { pe: (mk(5), 0), n: 5 };      let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
+fn c1() { let h = H  { pe: (mk(6), 0) };            let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
+fn c2(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
+
+fn main() {
+    println("wild");     w1();                      println("wild end")
+    println("wildidx");  w2();                      println("wildidx end")
+    println("wildopt");  w3();                      println("wildopt end")
+    println("nested");   n1();                      println("nested end")
+    println("owndrop");  d1();                      println("owndrop end")
+    println("plain");    c1();                      println("plain end")
+    println("param");    c2(H { pe: (mk(7), 0) });  println("param end")
+    println("done")
+}

@@ -1,0 +1,14 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+enum Mr { P((Array[R, 2], i64)), Q }
+enum Mv { P((Vec[R], i64)), Q }
+enum G[T] { X(T), Y }
+fn r(i: i64) -> R { R { id: i, s: f"ssssssssss{i}" } }
+fn main() {
+    println("arr"); { let m = Mr.P(([r(1), r(2)], 3)); println("  x") }
+    println("vec"); { let m = Mv.P(([r(4), r(5)], 3)); println("  x") }
+    println("arm"); { let m = Mr.P(([r(6), r(7)], 3)); match m { Mr.P(t) => { println(f"  in {t.1}") } Mr.Q => {} } }
+    println("genarr"); { let g = G.X(([r(8), r(9)], 3)); println("  x") }
+    println("genvec"); { let g: G[(Vec[R], i64)] = G.X(([r(10)], 3)); println("  x") }
+    println("end")
+}

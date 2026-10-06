@@ -1,0 +1,7 @@
+fn main() {
+             let mut tab: Interner = Interner.new();
+             let a = tab.intern("alpha");
+             let b = tab.intern("beta");
+             println(tab.resolve(a));
+             println(tab.resolve(b));
+         }

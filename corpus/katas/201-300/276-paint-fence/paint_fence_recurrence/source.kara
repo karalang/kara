@@ -1,0 +1,56 @@
+// LeetCode 276 — the single linear recurrence.
+//
+// The ★ solver carries two states because the rule is stated over two states.
+// Add them together once and the states disappear:
+//
+//     total[i] = same[i] + diff[i]
+//              = diff[i-1] + (same[i-1] + diff[i-1]) * (k - 1)
+//              = diff[i-1] + total[i-1] * (k - 1)
+//     and diff[i-1] = total[i-2] * (k - 1)          -- every painting of i-2
+//                                                      posts, extended by a
+//                                                      different colour
+//     so   total[i] = (total[i-1] + total[i-2]) * (k - 1)
+//
+// A two-term linear recurrence with `total[1] = k` and `total[2] = k²` — the
+// same shape as Fibonacci, scaled by `k - 1`. At `k = 2` it IS Fibonacci
+// doubled: 2, 4, 6, 10, 16, 26, 42, …
+//
+// WHY BOTH SOLVERS EARN THEIR PLACE. This one is not a rewrite of the ★ solver;
+// it is the ★ solver's recurrence with a variable eliminated, and eliminating it
+// moves where the mistakes live. The ★ version can seed `same` and `diff`
+// wrongly while the loop is right; this version has no states to seed wrongly
+// but must get `total[2] = k * k` — not `k * (k - 1)` — and must start the loop
+// at 3. Two different off-by-one surfaces reaching the same answer, which is the
+// whole reason to keep both.
+//
+// It also costs one multiply per step instead of two, which the bench lane
+// measures.
+
+fn num_ways(n: i64, k: i64) -> i64 {
+    if n == 0 { return 0; }
+    if n == 1 { return k; }
+    let mut prev2 = k;                // total[1]
+    let mut prev1 = k * k;            // total[2] — every 2-post painting is legal
+    let mut i = 3;
+    while i <= n {
+        let cur = (prev1 + prev2) * (k - 1);
+        prev2 = prev1;
+        prev1 = cur;
+        i = i + 1;
+    }
+    return prev1;
+}
+
+fn main() {
+    let cases: Vec[Vec[i64]] = [
+        [1, 1], [1, 5], [2, 2], [3, 2], [7, 2],
+        [2, 4], [3, 4], [4, 3], [10, 3], [20, 2],
+    ];
+    let mut i = 0;
+    while i < cases.len() {
+        let n = cases[i][0];
+        let k = cases[i][1];
+        println(f"n={n} k={k} -> {num_ways(n, k)}");
+        i = i + 1;
+    }
+}

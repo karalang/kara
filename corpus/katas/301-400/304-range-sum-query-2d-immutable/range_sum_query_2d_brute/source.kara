@@ -1,0 +1,108 @@
+// LeetCode 304 — arm D: the definition, transcribed.
+//
+// No precomputation at all. The constructor keeps the matrix; a query walks
+// every cell of the rectangle and adds it up. O(1) to build, O(area) to query,
+// which is the trade the other three arms exist to escape.
+//
+// Its job in the differential is to be the arm with no cleverness to be wrong
+// about. Arms A, B and C all answer a question the statement never asks —
+// "what is the sum from the origin to here?" — and derive the real answer from
+// it. This arm answers the question that was asked. When the three agree with
+// each other and disagree with this one, the shared idea is what is broken.
+
+struct BruteMatrix { m: Vec[Vec[i64]] }
+
+fn new_brute_matrix(src: ref Vec[Vec[i64]]) -> BruteMatrix {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r < src.len() {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < src[r].len() {
+            row.push(src[r][c]);
+            c = c + 1;
+        }
+        m.push(row);
+        r = r + 1;
+    }
+    return BruteMatrix { m: m };
+}
+
+impl BruteMatrix {
+    fn sum_region(ref self, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+        let mut total = 0;
+        let mut r = r1;
+        while r <= r2 {
+            let mut c = c1;
+            while c <= c2 {
+                total = total + self.m[r][c];
+                c = c + 1;
+            }
+            r = r + 1;
+        }
+        return total;
+    }
+}
+
+fn matrix_of(flat: Slice[i64], w: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < flat.len() {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < w {
+            row.push(flat[i + c]);
+            c = c + 1;
+        }
+        m.push(row);
+        i = i + w;
+    }
+    return m;
+}
+
+// `qs` is a flat list of (r1, c1, r2, c2) quadruples.
+fn report(flat: Slice[i64], w: i64, qs: Slice[i64]) {
+    let m = matrix_of(flat, w);
+    let h = m.len();
+    let nm = new_brute_matrix(m);
+    let mut line = String.new();
+    line.push_str(f"{h}x{w} ->");
+    let mut q = 0;
+    while q + 3 < qs.len() {
+        let r1 = qs[q];
+        let c1 = qs[q + 1];
+        let r2 = qs[q + 2];
+        let c2 = qs[q + 3];
+        line.push_str(f" [{r1},{c1},{r2},{c2}]={nm.sum_region(r1, c1, r2, c2)}");
+        q = q + 4;
+    }
+    println(line);
+}
+
+fn main() {
+    // The matrix from the LeetCode statement.
+    report([3, 0, 1, 4, 2,
+            5, 6, 3, 2, 1,
+            1, 2, 0, 1, 5,
+            4, 1, 0, 1, 7,
+            1, 0, 3, 0, 5], 5,
+           [2, 1, 4, 3,  1, 1, 2, 2,  1, 2, 2, 4,  0, 0, 4, 4,  0, 0, 0, 0]);
+    // A single cell.
+    report([7], 1, [0, 0, 0, 0]);
+    // One row, and the same values as one column.
+    report([1, 2, 3, 4, 5], 5, [0, 0, 0, 4,  0, 1, 0, 3,  0, 2, 0, 2]);
+    report([1, 2, 3, 4, 5], 1, [0, 0, 4, 0,  1, 0, 3, 0,  2, 0, 2, 0]);
+    // All negative — sign errors are invisible on non-negative data.
+    report([0 - 1, 0 - 2, 0 - 3,
+            0 - 4, 0 - 5, 0 - 6,
+            0 - 7, 0 - 8, 0 - 9], 3,
+           [0, 0, 2, 2,  1, 1, 2, 2,  0, 0, 0, 0,  2, 2, 2, 2]);
+    // Every answer zero.
+    report([0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0], 4, [0, 0, 2, 3,  1, 1, 1, 2]);
+    // Large magnitudes that cancel.
+    report([100000, 0 - 100000, 100000,
+            0 - 100000, 100000, 0 - 100000], 3,
+           [0, 0, 1, 2,  0, 0, 0, 2,  1, 0, 1, 2]);
+}

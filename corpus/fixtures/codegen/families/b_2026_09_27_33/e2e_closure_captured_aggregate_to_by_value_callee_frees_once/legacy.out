@@ -1,0 +1,18 @@
+c1 25
+c2 26
+c2 0
+c3 27
+c4 25 25
+c5 25 25
+c6 25
+c7 125
+c8 25
+c8 26
+c9 25
+c10 never called
+c11 25
+c12 25
+c13 25
+c13 25
+c14 26 n-heap-string-long-enough
+end

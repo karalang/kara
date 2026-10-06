@@ -1,0 +1,10 @@
+
+struct Plain { a: i64 }
+struct HasAtomic { c: Atomic[i64] }
+fn rgen[T](x: ref T) -> i64 { return 0; }
+fn main() {
+    let p: Plain = Plain { a: 1 };
+    print(rgen(p));
+    let h: HasAtomic = HasAtomic { c: Atomic.new(2) };
+    print(rgen(h));
+}

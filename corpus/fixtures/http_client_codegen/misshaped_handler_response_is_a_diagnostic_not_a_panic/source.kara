@@ -1,0 +1,6 @@
+
+struct Response { status: i64 }
+fn handle(req: Request) -> Response { Response { status: 200 } }
+fn main() with sends(Network) receives(Network) {
+    Server.serve("127.0.0.1:0", handle);
+}

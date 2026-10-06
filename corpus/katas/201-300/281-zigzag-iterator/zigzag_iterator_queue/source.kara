@@ -1,0 +1,90 @@
+// LeetCode 281 — a QUEUE of live cursors.
+//
+// Instead of a turn pointer that has to skip exhausted lists, keep a queue of
+// the lists that still have elements. `next()` pops the front, emits its current
+// element, and pushes it back only if it has more.
+//
+// THE SKIP PROBLEM DISAPPEARS RATHER THAN BEING SOLVED. Exhausted lists are
+// never in the queue, so there is nothing to skip past and no wrap-around to get
+// wrong — the ★ solver's `settle` loop, which is where its bugs live, has no
+// counterpart here. That is the trade: this version spends a queue to buy away a
+// class of state bug, and it is the formulation most people arrive at second,
+// after being bitten by the first.
+//
+// EMPTY LISTS ARE HANDLED AT CONSTRUCTION, not during iteration: a list with no
+// elements simply never enters the queue. `[[1],[],[2,3]]` starts with two
+// entries, not three.
+//
+// It is O(1) per element like the cursor version, but with a queue's memory
+// traffic instead of a scan bounded by k. For small k the scan wins; the bench
+// lane measures where that crosses.
+
+struct QZigzag {
+    lists: Vec[Vec[i64]],
+    mut cursor: Vec[i64],
+    mut queue: Vec[i64],      // list indices with elements left, in turn order
+    mut head: i64,            // read cursor into `queue`
+}
+
+fn make_zigzag(lists: Vec[Vec[i64]]) -> QZigzag {
+    let mut cursor: Vec[i64] = Vec.new();
+    let mut queue: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < lists.len() {
+        cursor.push(0);
+        if lists[i].len() > 0 { queue.push(i); }
+        i = i + 1;
+    }
+    return QZigzag { lists: lists, cursor: cursor, queue: queue, head: 0 };
+}
+
+fn has_next(z: ref QZigzag) -> bool {
+    return z.head < z.queue.len();
+}
+
+fn next(z: mut ref QZigzag) -> i64 {
+    let t = z.queue[z.head];
+    z.head = z.head + 1;
+    let v = z.lists[t][z.cursor[t]];
+    z.cursor[t] = z.cursor[t] + 1;
+    if z.cursor[t] < z.lists[t].len() {
+        z.queue.push(t);
+    }
+    return v;
+}
+
+fn drain(lists: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut z = make_zigzag(lists);
+    let mut out: Vec[i64] = Vec.new();
+    while has_next(z) {
+        out.push(next(mut z));
+    }
+    return out;
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + f"{v[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    let c1: Vec[Vec[i64]] = [[1, 2], [3, 4, 5, 6]];
+    let c2: Vec[Vec[i64]] = [[1], [], [2, 3]];
+    let c3: Vec[Vec[i64]] = [[1, 2, 3], [4], [5, 6]];
+    let c4: Vec[Vec[i64]] = [[], []];
+    let c5: Vec[Vec[i64]] = [[7]];
+    let c6: Vec[Vec[i64]] = [[], [1, 2], []];
+
+    println(f"{show(drain(c1))}");
+    println(f"{show(drain(c2))}");
+    println(f"{show(drain(c3))}");
+    println(f"{show(drain(c4))}");
+    println(f"{show(drain(c5))}");
+    println(f"{show(drain(c6))}");
+}

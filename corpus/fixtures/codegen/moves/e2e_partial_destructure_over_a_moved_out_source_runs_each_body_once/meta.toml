@@ -1,0 +1,13 @@
+source = "tests/codegen/moves.rs::e2e_partial_destructure_over_a_moved_out_source_runs_each_body_once"
+dedup_of = ["tests/interpreter/moves.rs::test_let_destructure_discard_skips_a_moved_out_field", "tests/memory_sanitizer/moves.rs::asan_partial_destructure_over_a_moved_out_source_runs_each_body_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

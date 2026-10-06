@@ -1,0 +1,6 @@
+
+fn main() {
+    let m: Map[i64, i64] = Map[1_i64: 100_i64, 2_i64: 200_i64];
+    println(m.len());
+    println(m[2_i64]);
+}

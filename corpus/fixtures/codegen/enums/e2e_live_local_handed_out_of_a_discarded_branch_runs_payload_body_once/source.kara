@@ -1,0 +1,52 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct W { r: R, n: i64 }
+impl Drop for W { fn drop(mut ref self) { println("dW") } }
+struct P { r: R, n: i64 }
+enum E2 { A(R), B }
+fn mk(n: i64) -> R { return R { id: n }; }
+fn if_let_e2(c: bool) { let e = E2.A(mk(21)); let _ = if c { E2.A(mk(8)) } else { e }; println("mid") }
+fn direct_let_e2() { let e = E2.A(mk(22)); let _ = e; println("mid") }
+fn direct_bare_e2() { let e = E2.A(mk(23)); e; println("mid") }
+fn direct_let_read(c: bool) { let e = E.A(mk(24)); let _ = e; println("mid") }
+fn direct_let_e_unit() { let e = E.B; let _ = e; println("mid") }
+fn if_let(c: bool) { let e = E.A(mk(1)); let _ = if c { E.A(mk(8)) } else { e }; println("mid") }
+fn if_bare(c: bool) { let e = E.A(mk(2)); if c { E.A(mk(8)) } else { e }; println("mid") }
+fn match_let(c: bool) { let e = E.A(mk(3)); let _ = match c { true => E.A(mk(8)), _ => e }; println("mid") }
+fn match_bare(c: bool) { let e = E.A(mk(4)); match c { true => E.A(mk(8)), _ => e }; println("mid") }
+fn direct_let() { let e = E.A(mk(5)); let _ = e; println("mid") }
+fn direct_bare() { let e = E.A(mk(6)); e; println("mid") }
+fn if_let_w(c: bool) { let w = W { r: mk(11), n: 1 }; let _ = if c { W { r: mk(8), n: 2 } } else { w }; println("mid") }
+fn direct_let_w() { let w = W { r: mk(12), n: 1 }; let _ = w; println("mid") }
+fn if_let_p(c: bool) { let p = P { r: mk(13), n: 1 }; let _ = if c { P { r: mk(8), n: 2 } } else { p }; println("mid") }
+fn direct_let_p() { let p = P { r: mk(14), n: 1 }; let _ = p; println("mid") }
+fn if_let_r(c: bool) { let r = mk(15); let _ = if c { mk(8) } else { r }; println("mid") }
+fn direct_let_r() { let r = mk(16); let _ = r; println("mid") }
+fn if_let_nested(c: bool) { let e = E.A(mk(17)); let _ = if c { E.A(mk(8)) } else { if c { E.B } else { e } }; println("mid") }
+fn main() {
+    println("if_let-f"); if_let(false);
+    println("if_let-t"); if_let(true);
+    println("if_bare-f"); if_bare(false);
+    println("if_bare-t"); if_bare(true);
+    println("match_let-f"); match_let(false);
+    println("match_let-t"); match_let(true);
+    println("match_bare-f"); match_bare(false);
+    println("direct_let"); direct_let();
+    println("direct_bare"); direct_bare();
+    println("if_let_w-f"); if_let_w(false);
+    println("if_let_w-t"); if_let_w(true);
+    println("direct_let_w"); direct_let_w();
+    println("if_let_p-f"); if_let_p(false);
+    println("if_let_p-t"); if_let_p(true);
+    println("direct_let_p"); direct_let_p();
+    println("if_let_r-f"); if_let_r(false);
+    println("direct_let_r"); direct_let_r();
+    println("if_let_nested-f"); if_let_nested(false);
+    println("if_let_e2-f"); if_let_e2(false);
+    println("direct_let_e2"); direct_let_e2();
+    println("direct_bare_e2"); direct_bare_e2();
+    println("direct_let_e_unit"); direct_let_e_unit();
+    println("end");
+}

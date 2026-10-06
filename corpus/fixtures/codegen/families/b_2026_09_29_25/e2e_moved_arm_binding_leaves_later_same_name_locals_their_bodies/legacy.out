@@ -1,0 +1,37 @@
+n1
+dS1
+k2
+dS2
+n3
+dS3
+k40
+dS4
+n50
+dS5
+r 0
+dS10
+n20
+dS20
+dS11
+n21
+dS21
+r 0
+m10
+dS10
+n20
+dS20
+m11
+dS11
+n21
+dS21
+r 0
+n40
+dS40
+n41
+dS41
+r42
+dS42
+n43
+dS43
+r 0
+end

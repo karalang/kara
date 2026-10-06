@@ -1,0 +1,4 @@
+
+pub struct Counter { n: i64, impl invariant self.n >= 0 }
+impl Counter { pub fn bad() -> Counter { Counter { n: 0 - 1 } } }
+fn main() { let c = Counter.bad(); println(c.n); }

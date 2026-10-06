@@ -1,0 +1,17 @@
+
+fn count_from(hay: ref String, needle: ref String) -> i64 {
+    let h = hay.len();
+    let n = needle.len();
+    let mut i = 0;
+    let mut hits = 0;
+    while i + n <= h {
+        if hay.substring(i, i + n) == needle { hits = hits + 1; }
+        i = i + 1;
+    }
+    hits
+}
+fn main() {
+    let hay = "abcabcabcabcabc";
+    let needle = "abc";
+    println(f"{count_from(hay, needle)}");
+}

@@ -1,0 +1,260 @@
+// Differential and property check for LeetCode #346.
+//
+// Five moving averages, plus an oracle that sums each window from scratch:
+//
+//   by_queue    a VecDeque and a running sum          (moving_average.kara)
+//   by_ring     a fixed ring and a running sum        (moving_average_ring.kara)
+//   by_prefix   prefix sums over the whole history    (moving_average_prefix.kara)
+//   by_naive    keep everything, sum the last `size`  (moving_average_naive.kara)
+//   by_closure  a closure over a captured window      (moving_average_closure.kara)
+//   by_oracle   for position n, add vals[max(0, n + 1 - size)..=n] and divide
+//
+// Inputs: every window size 1..12 against every stream length 0..60, each
+// filled pseudo-randomly across the problem's range, -100000..=100000.
+//
+// Properties:
+//   P1  all five equal the oracle exactly, bit for bit
+//   P2  every average lies between the smallest and largest value in its window
+//   P3  with a window at least as long as the stream, each average is the
+//       mean of everything so far
+//   P4  with a window of one, each average is the value just read
+//   P5  adding 7 to every value adds 7 to every average
+
+struct MaQueue {
+    size: i64,
+    window: VecDeque[i64],
+    sum: i64,
+}
+
+impl MaQueue {
+    fn next(mut ref self, val: i64) -> f64 {
+        self.window.push_back(val);
+        self.sum += val;
+        if self.window.len() > self.size {
+            self.sum -= self.window.pop_front().unwrap();
+        }
+        return self.sum as f64 / self.window.len() as f64;
+    }
+}
+
+struct MaRing {
+    ring: Vec[i64],
+    head: i64,
+    count: i64,
+    sum: i64,
+}
+
+impl MaRing {
+    fn next(mut ref self, val: i64) -> f64 {
+        if self.count == self.ring.len() {
+            self.sum -= self.ring[self.head];
+        } else {
+            self.count += 1;
+        }
+        self.ring[self.head] = val;
+        self.sum += val;
+        self.head = (self.head + 1) % self.ring.len();
+        return self.sum as f64 / self.count as f64;
+    }
+}
+
+struct MaPrefix {
+    size: i64,
+    prefix: Vec[i64],
+}
+
+impl MaPrefix {
+    fn next(mut ref self, val: i64) -> f64 {
+        let n = self.prefix.len();
+        let total = self.prefix[n - 1] + val;
+        self.prefix.push(total);
+        let k = if n < self.size { n } else { self.size };
+        return (total - self.prefix[n - k]) as f64 / k as f64;
+    }
+}
+
+struct MaNaive {
+    size: i64,
+    seen: Vec[i64],
+}
+
+impl MaNaive {
+    fn next(mut ref self, val: i64) -> f64 {
+        self.seen.push(val);
+        let n = self.seen.len();
+        let start = if n > self.size { n - self.size } else { 0 };
+        let mut sum = 0;
+        for k in start..n {
+            sum += self.seen[k];
+        }
+        return sum as f64 / (n - start) as f64;
+    }
+}
+
+fn by_queue(size: i64, vals: ref Vec[i64]) -> Vec[f64] {
+    let mut m = MaQueue { size: size, window: VecDeque.new(), sum: 0 };
+    let mut out: Vec[f64] = Vec.new();
+    for v in vals {
+        out.push(m.next(v));
+    }
+    return out;
+}
+
+fn by_ring(size: i64, vals: ref Vec[i64]) -> Vec[f64] {
+    let mut ring: Vec[i64] = Vec.new();
+    for _ in 0..size {
+        ring.push(0);
+    }
+    let mut m = MaRing { ring: ring, head: 0, count: 0, sum: 0 };
+    let mut out: Vec[f64] = Vec.new();
+    for v in vals {
+        out.push(m.next(v));
+    }
+    return out;
+}
+
+fn by_prefix(size: i64, vals: ref Vec[i64]) -> Vec[f64] {
+    let mut m = MaPrefix { size: size, prefix: [0] };
+    let mut out: Vec[f64] = Vec.new();
+    for v in vals {
+        out.push(m.next(v));
+    }
+    return out;
+}
+
+fn by_naive(size: i64, vals: ref Vec[i64]) -> Vec[f64] {
+    let mut m = MaNaive { size: size, seen: Vec.new() };
+    let mut out: Vec[f64] = Vec.new();
+    for v in vals {
+        out.push(m.next(v));
+    }
+    return out;
+}
+
+fn by_closure(size: i64, vals: ref Vec[i64]) -> Vec[f64] {
+    let mut window: VecDeque[i64] = VecDeque.new();
+    let mut sum = 0;
+    let mut next = |val: i64| {
+        window.push_back(val);
+        sum += val;
+        if window.len() > size {
+            sum -= window.pop_front().unwrap();
+        }
+        return sum as f64 / window.len() as f64;
+    };
+    let mut out: Vec[f64] = Vec.new();
+    for v in vals {
+        out.push(next(v));
+    }
+    return out;
+}
+
+fn by_oracle(size: i64, vals: ref Vec[i64]) -> Vec[f64] {
+    let mut out: Vec[f64] = Vec.new();
+    for n in 0..vals.len() {
+        let lo = if n + 1 > size { n + 1 - size } else { 0 };
+        let mut sum = 0;
+        for k in lo..n + 1 {
+            sum += vals[k];
+        }
+        out.push(sum as f64 / (n + 1 - lo) as f64);
+    }
+    return out;
+}
+
+fn same(a: ref Vec[f64], b: ref Vec[f64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for k in 0..a.len() {
+        if a[k] != b[k] {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn fill(n: i64, seed: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = seed * 2654435761 % 4294967296 + 1;
+    for _ in 0..n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        out.push((x / 16) % 200001 - 100000);
+    }
+    return out;
+}
+
+fn main() {
+    let mut failures = 0;
+    let mut cases = 0;
+    let mut checksum = 0.0;
+    for size in 1..13 {
+        for n in 0..61 {
+            cases += 1;
+            let vals = fill(n, size * 100 + n);
+            let want = by_oracle(size, vals);
+            if not same(by_queue(size, vals), want) or not same(by_ring(size, vals), want)
+                or not same(by_prefix(size, vals), want) or not same(by_naive(size, vals), want)
+                or not same(by_closure(size, vals), want) {
+                println(f"P1 FAIL size={size} n={n}");
+                failures += 1;
+            }
+
+            for k in 0..n {
+                let lo = if k + 1 > size { k + 1 - size } else { 0 };
+                let mut mn = vals[k];
+                let mut mx = vals[k];
+                for j in lo..k + 1 {
+                    if vals[j] < mn {
+                        mn = vals[j];
+                    }
+                    if vals[j] > mx {
+                        mx = vals[j];
+                    }
+                }
+                if want[k] < mn as f64 or want[k] > mx as f64 {
+                    println(f"P2 FAIL size={size} n={n} k={k}");
+                    failures += 1;
+                }
+                checksum += want[k];
+            }
+
+            let whole = by_queue(n + 1, vals);
+            let mut sum = 0;
+            for k in 0..n {
+                sum += vals[k];
+                if whole[k] != sum as f64 / (k + 1) as f64 {
+                    println(f"P3 FAIL size={size} n={n} k={k}");
+                    failures += 1;
+                }
+            }
+
+            let ones = by_ring(1, vals);
+            for k in 0..n {
+                if ones[k] != vals[k] as f64 {
+                    println(f"P4 FAIL size={size} n={n} k={k}");
+                    failures += 1;
+                }
+            }
+
+            let mut shifted: Vec[i64] = Vec.new();
+            for v in vals {
+                shifted.push(v + 7);
+            }
+            let moved = by_prefix(size, shifted);
+            for k in 0..n {
+                let d = moved[k] - want[k] - 7.0;
+                if d > 0.000001 or d < -0.000001 {
+                    println(f"P5 FAIL size={size} n={n} k={k}");
+                    failures += 1;
+                }
+            }
+        }
+    }
+
+    println(f"{cases} cases: sum of averages {checksum:.4}");
+    println(f"failures {failures}");
+    if failures == 0 {
+        println("all properties hold");
+    }
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_30_18.rs::e2e_discarded_assoc_fn_tuple_and_array_results_run_element_bodies"
+dedup_of = ["tests/interpreter/families/b_2026_09_30_18.rs::interp_discarded_assoc_fn_tuple_and_array_results_run_element_bodies", "tests/memory_sanitizer/families/b_2026_09_30_18.rs::asan_discarded_assoc_fn_tuple_and_array_results_run_element_bodies"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

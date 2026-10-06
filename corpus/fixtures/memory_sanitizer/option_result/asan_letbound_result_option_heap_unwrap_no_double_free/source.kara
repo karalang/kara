@@ -1,0 +1,25 @@
+
+fn rok(ok: bool) -> Result[String, i64] {
+    if ok { Result.Ok("the ok payload padded out".to_string()) } else { Result.Err(1) }
+}
+fn rerr(ok: bool) -> Result[i64, String] {
+    if ok { Result.Ok(1) } else { Result.Err("the err payload padded out".to_string()) }
+}
+fn opt(some: bool) -> Option[String] {
+    if some { Some("the some payload padded".to_string()) } else { None }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let a = rok(true);
+        let sa = a.unwrap();
+        let b = rerr(false);
+        let sb = b.unwrap_err();
+        let c = opt(true);
+        let sc = c.expect("wanted some");
+        total = total + (sa.len() as i64) + (sb.len() as i64) + (sc.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}

@@ -1,0 +1,9 @@
+
+fn boom(a: i64, b: i64, m: i64) -> i64 {
+    let c = (a + 1) / (m + 0);
+    return c;
+}
+
+fn main() {
+    println(boom(1, 1, 0));
+}

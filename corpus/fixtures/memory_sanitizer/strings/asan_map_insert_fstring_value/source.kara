@@ -1,0 +1,12 @@
+
+fn store(m: mut ref Map[i64, String], n: i64) {
+    m.insert(n, f"value-{n}-suffix");
+}
+
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    store(mut m, 1i64);
+    store(mut m, 2i64);
+    println(m.len());
+    match m.get(1i64) { Some(g) => println(g), None => println("missing") }
+}

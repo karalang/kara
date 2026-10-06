@@ -1,0 +1,21 @@
+
+fn maybe(empty: bool) -> Option[i64] {
+    if empty {
+        return Option.None;
+    }
+    return Option.Some(7_i64);
+}
+
+fn run(empty: bool) {
+    let Some(x) = maybe(empty) else {
+        println("else fired");
+        return
+    }
+    println(f"bound {x}");
+}
+
+fn main() {
+    run(false);
+    run(true);
+    println("done");
+}

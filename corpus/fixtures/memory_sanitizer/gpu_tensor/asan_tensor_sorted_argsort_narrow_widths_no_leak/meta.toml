@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/gpu_tensor.rs::asan_tensor_sorted_argsort_narrow_widths_no_leak"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:tensor"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

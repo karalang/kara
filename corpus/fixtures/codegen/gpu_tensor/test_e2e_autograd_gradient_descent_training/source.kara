@@ -1,0 +1,40 @@
+
+import std.autograd.{TensorTape, TensorVar};
+fn loss_of(w: ref Tensor[f32, [?]], target: ref Tensor[f32, [?]]) -> f32 {
+    let tape = TensorTape.new();
+    let wv = TensorVar.leaf(tape, w);
+    let tv = TensorVar.leaf(tape, target);
+    let loss = wv.mse(tv);
+    let lv = loss.value();
+    lv[0]
+}
+fn main() {
+    let target: Tensor[f32, [?]] = Tensor.from([3.0, 5.0, 7.0]);
+    let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
+    // B-2026-08-14-14: annotated at the tensors' element type. Unannotated the
+    // literal is f64, and `grad * lr` below narrowed it silently into an f32
+    // element-wise op. 0.75 is exact in both widths, so no printed value moves.
+    let lr: f32 = 0.75;
+    let l0 = loss_of(w, target);
+    println(f"{l0.round()}");
+    let mut step = 0;
+    while step < 40 {
+        let tape = TensorTape.new();
+        let wv = TensorVar.leaf(tape, w);
+        let tv = TensorVar.leaf(tape, target);
+        let loss = wv.mse(tv);
+        loss.backward();
+        let grad: Tensor[f32, [?]] = wv.grad();
+        let step_dir: Tensor[f32, [?]] = grad * lr;
+        w = w - step_dir;
+        step = step + 1;
+    }
+    let lf = loss_of(w, target);
+    println(f"{lf.round()}");
+    let w0 = w[0];
+    let w1 = w[1];
+    let w2 = w[2];
+    println(f"{w0.round()}");
+    println(f"{w1.round()}");
+    println(f"{w2.round()}");
+}

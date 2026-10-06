@@ -1,0 +1,36 @@
+one
+  dR1
+  mid
+  end
+two
+  dR2
+  mid
+  dR3
+  end
+both
+  dR4
+  dR5
+  mid
+  end
+second
+  dR7
+  mid
+  dR6
+  end
+readonly
+  mid9
+  dR9
+  dR10
+  end
+inline
+  dR40
+  mid
+  end
+struct
+  dR12
+  mid
+  end
+none
+  n
+  end
+end

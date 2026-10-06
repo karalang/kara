@@ -1,0 +1,19 @@
+
+enum Token { Ident(String), Eof }
+struct Spanned { start: i64, tok: Token }
+fn main() {
+    let mut toks: Vec[Spanned] = Vec.new();
+    let mut i = 0i64;
+    while i < 3i64 {
+        toks.push(Spanned { start: i, tok: Token.Ident(f"id-{i}") });
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < toks.len() {
+        match toks[j].tok {
+            Ident(name) => println(name),
+            Eof => println("eof"),
+        }
+        j = j + 1;
+    }
+}

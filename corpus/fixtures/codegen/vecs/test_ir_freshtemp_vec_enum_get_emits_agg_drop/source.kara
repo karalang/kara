@@ -1,0 +1,18 @@
+
+enum Tok { Word { s: String }, Num { n: i64 } }
+
+fn make_toks() -> Vec[Tok] {
+    let mut v: Vec[Tok] = Vec.new();
+    v.push(Tok.Word { s: "a token payload string padded beyond thirty-six bytes" });
+    return v;
+}
+
+fn main() {
+    match make_toks().get(0) {
+        Some(t) => match t {
+            Word { s } => println(s.len()),
+            Num { n } => println(n),
+        },
+        None => println(0_i64),
+    };
+}

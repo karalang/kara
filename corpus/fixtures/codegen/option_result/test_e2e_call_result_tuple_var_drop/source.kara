@@ -1,0 +1,31 @@
+
+enum Tok { Id(String), Num(i64) }
+fn ret_tuple(i: i64) -> (Tok, i64) { return (Tok.Id(f"id{i}"), i); }
+fn ret_imap(i: i64) -> (Map[i64, i64], i64) {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(i, i * 10);
+    return (m, i);
+}
+fn ret_smap(i: i64) -> (Map[String, i64], i64) {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"k{i}", i);
+    return (m, i);
+}
+fn use_tok(t: Tok) -> String {
+    match t { Id(s) => s, Num(n) => n.to_string() }
+}
+fn main() {
+    // Call-sourced enum-leaf tuple var, then destructure + consume.
+    let p = ret_tuple(2);
+    let (t, n) = p;
+    println(f"{use_tok(t)}-{n}");
+    // Call-sourced scalar-map tuple var, consumed by-value.
+    let q = ret_imap(4);
+    let (m1, a) = q;
+    println(f"{m1.len()}-{a}");
+    // Call-sourced String-key-map tuple var (distinct memo key from scalar map).
+    let r = ret_smap(6);
+    let (m2, b) = r;
+    println(f"{m2.len()}-{b}");
+    println("ok");
+}

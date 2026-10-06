@@ -1,0 +1,7 @@
+enum Et { S(String), B }
+impl Et { fn passm(self) -> Et { return self; } }
+fn main() {
+    let a = Et.S(f"b1011-buffer-aaaaaaaa");
+    let z = a.passm();
+    match z { Et.S(s) => { println(f"s:{s}") } Et.B => { println("b") } }
+}

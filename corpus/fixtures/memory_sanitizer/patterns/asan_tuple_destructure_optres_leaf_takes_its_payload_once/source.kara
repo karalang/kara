@@ -1,0 +1,24 @@
+
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+struct Ho { pe: (R, Option[R]) }
+fn mk(id: i64) -> R { let mut xs = Vec[i64].new(); xs.push(id); return R { id: id, tag: f"t{id}", xs: xs } }
+
+fn loc(b: i64)  { let t = (mk(b + 0), Option.Some(mk(b + 1))); let (r, o) = t; println(f"rd{r.id}") }
+fn proj(b: i64) { let h = Ho { pe: (mk(b + 3), Option.Some(mk(b + 4))) }; let (r, o) = h.pe; println(f"rd{r.id}") }
+fn used(b: i64) { let t = (mk(b + 5), Option.Some(mk(b + 6)));
+                  let (r, o) = t;
+                  match o { Option.Some(x) => println(f"got{x.id}/{x.tag}"), Option.None => println("none") }
+                  println(f"rd{r.id}") }
+fn strp(b: i64) { let t = (mk(b + 7), Option.Some("heapstr")); let (r, o) = t; println(f"rd{r.id}") }
+fn annres(b: i64) { let t: (R, Result[R, String]) = (mk(b + 8), Result[R, String].Ok(mk(b + 9)));
+                    let (r, o) = t; println(f"rd{r.id}") }
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let b = i * 10;
+        loc(b); proj(b); used(b); strp(b); annres(b);
+        i = i + 1;
+    }
+}

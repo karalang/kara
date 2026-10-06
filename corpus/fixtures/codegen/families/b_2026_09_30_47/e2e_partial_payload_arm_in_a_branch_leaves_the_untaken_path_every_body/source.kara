@@ -1,0 +1,48 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"s{i}" } }
+enum F { P(S, S), Q(S, S), R(i64) }
+fn h1(c: bool) -> i64 {
+  let t = F.P(mks(10), mks(11));
+  if c { match t { F.P(x, _) => { let k = x; println(f"k{k.id}") } F.Q(_, y) => { let k = y; println("q") } F.R(n) => {} } }
+  return 0
+}
+fn h2(c: bool) -> i64 {
+  let t = F.Q(mks(20), mks(21));
+  if c { match t { F.P(x, _) => { let k = x; println(f"k{k.id}") } F.Q(_, y) => { let k = y; println(f"q{k.id}") } F.R(n) => {} } }
+  return 0
+}
+fn h3(c: bool) -> i64 {
+  let t = F.P(mks(30), mks(31));
+  match t { F.P(x, _) => { let k = x; println(f"k{k.id}") } F.Q(_, y) => {} F.R(n) => {} }
+  return 0
+}
+fn h4(c: bool, d: bool) -> i64 {
+  let t = F.P(mks(40), mks(41));
+  if c { if d { match t { F.P(_, y) => { let k = y; println(f"k{k.id}") } _ => {} } } else { println("nd") } }
+  return 0
+}
+fn h5(c: bool) -> i64 {
+  let t = F.P(mks(50), mks(51));
+  if c { match t { F.P(x, _) => { let k = x; return k.id } _ => {} } }
+  return 0
+}
+fn h6(c: bool) -> i64 {
+  let t = F.P(mks(60), mks(61));
+  if c { match t { F.P(x, y) => { let k = x; println(f"k{k.id}") } _ => {} } }
+  return 0
+}
+fn h7(c: bool) -> i64 {
+  let t = F.P(mks(70), mks(71));
+  if c { match t { F.P(x, _) => { if x.id > 100 { let k = x; println("big") } } _ => {} } }
+  return 0
+}
+fn main() {
+  println(f"r {h1(false)}"); println(f"r {h1(true)}")
+  println(f"r {h2(false)}"); println(f"r {h2(true)}")
+  println(f"r {h3(false)}")
+  println(f"r {h4(false, false)}"); println(f"r {h4(true, false)}"); println(f"r {h4(true, true)}")
+  println(f"r {h5(false)}"); println(f"r {h5(true)}")
+  println(f"r {h6(false)}"); println(f"r {h6(true)}")
+  println(f"r {h7(false)}"); println(f"r {h7(true)}")
+}

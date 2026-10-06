@@ -1,0 +1,10 @@
+
+shared struct Node { mut val: i64, mut next: Option[Node] }
+struct H { mut head: Option[Node] }
+fn main() {
+    let mut h = H { head: None };
+    let a = Node { val: 7, next: None };
+    h.head = Some(a);
+    h.head = h.head;
+    match h.head { None => { println("none") } Some(m) => { println(m.val) } }
+}

@@ -1,0 +1,22 @@
+
+fn classify(v: Vec[i64]) -> String {
+    match v {
+        [] => "0",
+        [_] => "1",
+        [_, _] => "2",
+        [_, .., _] => "3+",
+    }
+}
+fn main() {
+    let a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    b.push(1);
+    let mut c: Vec[i64] = Vec.new();
+    c.push(1); c.push(2);
+    let mut d: Vec[i64] = Vec.new();
+    d.push(1); d.push(2); d.push(3); d.push(4);
+    println(classify(a));
+    println(classify(b));
+    println(classify(c));
+    println(classify(d));
+}

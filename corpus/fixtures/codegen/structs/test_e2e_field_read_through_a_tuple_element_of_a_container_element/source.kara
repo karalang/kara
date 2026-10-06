@@ -1,0 +1,25 @@
+
+struct Other { a: i64, n: i64 }
+struct Tag { n: i64, a: i64 }
+struct R { id: i64, name: String }
+struct H { xs: Vec[(R, i64)] }
+
+impl H { fn peek(ref self) -> i64 { return self.xs[0].0.id; } }
+
+fn take(v: Vec[(R, i64)]) -> i64 { return v[0].0.id; }
+
+fn main() {
+    let v: Vec[(Tag, i64)] = [(Tag { n: 7, a: 99 }, 1)];
+    let w: Vec[(Other, i64)] = [(Other { a: 5, n: 42 }, 2)];
+    println(v[0].0.n);
+    println(v[0].0.a);
+    println(w[0].0.n);
+    println(w[0].0.a);
+
+    let r: Vec[(R, i64)] = [(R { id: 41, name: f"n{41}" }, 1)];
+    println(r[0].0.id);
+    println(r[0].0.name);
+    println(take(r));
+    let h = H { xs: [(R { id: 8, name: f"m{8}" }, 1)] };
+    println(h.peek());
+}

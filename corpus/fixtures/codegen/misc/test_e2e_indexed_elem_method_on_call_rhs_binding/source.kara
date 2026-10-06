@@ -1,0 +1,11 @@
+
+fn make() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("hello");
+    v
+}
+
+fn main() {
+    let combos = make();
+    println(combos[0].len());
+}

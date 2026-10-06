@@ -1,0 +1,17 @@
+fn main() {
+             let cell: OnceLock[i64] = OnceLock.new();
+             println(cell.is_set());
+             match cell.get() {
+                 Some(v) => println(v),
+                 None => println(-1),
+             }
+             match cell.set(42) {
+                 Ok(_) => println(1),
+                 Err(_) => println(0),
+             }
+             println(cell.is_set());
+             match cell.get() {
+                 Some(v) => println(v),
+                 None => println(-1),
+             }
+         }

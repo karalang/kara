@@ -1,0 +1,58 @@
+
+trait Reads {
+    fn v_get(self) -> i64;
+    fn v_first(self) -> i64;
+    fn v_last(self) -> i64;
+    fn v_len(self) -> i64;
+    fn v_empty(self) -> bool;
+    fn v_has(self, x: i64) -> bool;
+    fn v_sorted(self) -> bool;
+    fn v_index(self) -> i64;
+    fn v_loop(self) -> i64;
+    fn v_chain(self) -> i64;
+    fn b_get(ref self) -> i64;
+    fn b_len(ref self) -> i64;
+    fn b_loop(ref self) -> i64;
+}
+impl Reads for Array[i64, 3] {
+    fn v_get(self) -> i64 { return self.get(0).unwrap(); }
+    fn v_first(self) -> i64 { return self.first().unwrap(); }
+    fn v_last(self) -> i64 { return self.last().unwrap(); }
+    fn v_len(self) -> i64 { return self.len(); }
+    fn v_empty(self) -> bool { return self.is_empty(); }
+    fn v_has(self, x: i64) -> bool { return self.contains(x); }
+    fn v_sorted(self) -> bool { return self.is_sorted(); }
+    fn v_index(self) -> i64 { return self[1]; }
+    fn v_loop(self) -> i64 { let mut n = 0; for x in self { n = n + x; } return n; }
+    fn v_chain(self) -> i64 { return self.v_len() + self.v_get(); }
+    fn b_get(ref self) -> i64 { return self.get(2).unwrap(); }
+    fn b_len(ref self) -> i64 { return self.len(); }
+    fn b_loop(ref self) -> i64 { let mut n = 0; for x in self { n = n + x * 2; } return n; }
+}
+
+trait Fl { fn top(self) -> f64; }
+impl Fl for Array[f64, 2] { fn top(self) -> f64 { return self.first().unwrap(); } }
+
+fn free_get(a: ref Array[i64, 3]) -> i64 { return a.get(0).unwrap(); }
+fn free_len(a: ref Array[i64, 3]) -> i64 { return a.len(); }
+
+fn main() {
+    let a: Array[i64, 3] = [7, 8, 9];
+    println(a.v_get());
+    println(a.v_first());
+    println(a.v_last());
+    println(a.v_len());
+    println(a.v_empty());
+    println(a.v_has(8));
+    println(a.v_sorted());
+    println(a.v_index());
+    println(a.v_loop());
+    println(a.v_chain());
+    println(a.b_get());
+    println(a.b_len());
+    println(a.b_loop());
+    let f: Array[f64, 2] = [1.5, 2.5];
+    println(f.top());
+    println(free_get(a));
+    println(free_len(a));
+}

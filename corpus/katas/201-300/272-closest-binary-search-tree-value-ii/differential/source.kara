@@ -1,0 +1,373 @@
+// LeetCode 272 — differential harness.
+//
+// Three solvers over randomized BSTs: the ★ two-stack merge (O(h + k), takes
+// the closer of two iterator heads), the sorted-array window (O(n), grows a
+// contiguous range by index arithmetic) and the distance ranking (O(n²), orders
+// every value by an explicit (distance, value) key).
+//
+// WHAT EACH IS A REFERENCE FOR. The ranking is the reference for CORRECTNESS —
+// it cannot be wrong about which values are closest, because it measures all of
+// them and skips nothing. The window is the reference for CONTIGUITY, the claim
+// the ★ merge leans on without stating: that the k closest values are adjacent
+// in sorted order. And the ★ merge is the reference for the two of them
+// together, since it is the only one that never materializes the whole value set.
+//
+// THE TIE RULE IS THE SPLIT THAT MATTERS. Both structural solvers get it for
+// free — the predecessor and the left index are necessarily the smaller value,
+// so `<=` on a distance is the entire rule. The ranking has no such structure and
+// must compare values outright. So a tie-rule bug cannot be shared by all three,
+// which is 270's lesson applied: the third solver has to disagree about METHOD.
+//
+// GENERATOR DESIGN turns on the same fact 270 established: RANDOM FLOAT TARGETS
+// NEVER TIE. Two values are equidistant only when the target sits exactly at
+// their midpoint, which a uniform draw hits with probability zero — so the
+// tie-break would be exercised zero times and a `<` would pass forever. The
+// midpoints are therefore CONSTRUCTED, and the harness counts how many cases had
+// a tie AT A DECISION STEP, which is the only place the rule can change an
+// answer. Not "a tie existed somewhere" — a tie the algorithm had to rule on.
+//
+// `k` IS ITS OWN AXIS. Drawn as 1, a small value, about half the tree, exactly
+// n, and n + 2 — so the window running off both ends and `k` exceeding the node
+// count are hit on purpose rather than by luck.
+
+fn advance_pred(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+                pred: mut ref Vec[i64]) -> i64 {
+    let node = pred[pred.len() - 1];
+    pred.pop();
+    let mut cur = left[node];
+    while cur >= 0 { pred.push(cur); cur = right[cur]; }
+    return val[node];
+}
+
+fn advance_succ(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+                succ: mut ref Vec[i64]) -> i64 {
+    let node = succ[succ.len() - 1];
+    succ.pop();
+    let mut cur = right[node];
+    while cur >= 0 { succ.push(cur); cur = left[cur]; }
+    return val[node];
+}
+
+fn merge_k(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+           root: i64, target: f64, k: i64) -> Vec[i64] {
+    let mut pred: Vec[i64] = Vec.new();
+    let mut succ: Vec[i64] = Vec.new();
+    let mut cur = root;
+    while cur >= 0 {
+        if (val[cur] as f64) < target { pred.push(cur); cur = right[cur]; }
+        else { succ.push(cur); cur = left[cur]; }
+    }
+    let mut lower: Vec[i64] = Vec.new();
+    let mut upper: Vec[i64] = Vec.new();
+    let mut taken = 0;
+    while taken < k {
+        let have_p = pred.len() > 0;
+        let have_s = succ.len() > 0;
+        if have_p == false and have_s == false {
+            taken = k;
+        } else {
+            let mut take_pred = have_p;
+            if have_p and have_s {
+                let dp = (val[pred[pred.len() - 1]] as f64 - target).abs();
+                let ds = (val[succ[succ.len() - 1]] as f64 - target).abs();
+                take_pred = dp <= ds;
+            }
+            if take_pred { lower.push(advance_pred(val, left, right, mut pred)); }
+            else { upper.push(advance_succ(val, left, right, mut succ)); }
+            taken = taken + 1;
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = lower.len() - 1;
+    while i >= 0 { out.push(lower[i]); i = i - 1; }
+    let mut j = 0;
+    while j < upper.len() { out.push(upper[j]); j = j + 1; }
+    return out;
+}
+
+// The ranking solver is fed the DFS order, NOT the in-order array. Handing it
+// `sorted` would have quietly disabled the very check it exists to perform: a
+// selection sort scanning an ASCENDING array with a strict `<` already keeps the
+// first minimum it meets, which is the smaller value — so the explicit
+// (distance, value) key becomes redundant and dropping it costs nothing.
+// Measured: with sorted input, deleting the tie-break scored ZERO mismatches out
+// of 4,000. With this order it scores 97. Same shape as 269's shared-helper
+// defect — a harness convenience that removes a solver's independence.
+fn collect(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+           root: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    stack.push(root);
+    while stack.len() > 0 {
+        let node = stack[stack.len() - 1];
+        stack.pop();
+        out.push(val[node]);
+        if left[node] >= 0 { stack.push(left[node]); }
+        if right[node] >= 0 { stack.push(right[node]); }
+    }
+    return out;
+}
+
+fn inorder(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+           root: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut cur = root;
+    while cur >= 0 or stack.len() > 0 {
+        while cur >= 0 { stack.push(cur); cur = left[cur]; }
+        let node = stack[stack.len() - 1];
+        stack.pop();
+        out.push(val[node]);
+        cur = right[node];
+    }
+    return out;
+}
+
+fn lower_bound(sorted: ref Vec[i64], target: f64) -> i64 {
+    let mut a = 0;
+    let mut b = sorted.len();
+    while a < b {
+        let mid = a + (b - a) / 2;
+        if (sorted[mid] as f64) < target { a = mid + 1; } else { b = mid; }
+    }
+    return a;
+}
+
+fn window_k(sorted: ref Vec[i64], target: f64, k: i64) -> Vec[i64] {
+    let n = sorted.len();
+    let mut hi = lower_bound(sorted, target);
+    let mut lo = hi - 1;
+    let mut taken = 0;
+    while taken < k {
+        if lo < 0 and hi >= n {
+            taken = k;
+        } else {
+            let mut take_lo = hi >= n;
+            if lo >= 0 and hi < n {
+                let dl = (sorted[lo] as f64 - target).abs();
+                let dh = (sorted[hi] as f64 - target).abs();
+                take_lo = dl <= dh;
+            }
+            if take_lo { lo = lo - 1; } else { hi = hi + 1; }
+            taken = taken + 1;
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = lo + 1;
+    while i < hi { out.push(sorted[i]); i = i + 1; }
+    return out;
+}
+
+// Did a DECISION STEP see two equidistant candidates? That — not "a tie exists
+// among the values" — is the only situation in which the tie rule can change an
+// answer, so it is what the harness counts.
+fn window_had_tie_step(sorted: ref Vec[i64], target: f64, k: i64) -> bool {
+    let n = sorted.len();
+    let mut hi = lower_bound(sorted, target);
+    let mut lo = hi - 1;
+    let mut taken = 0;
+    let mut saw = false;
+    while taken < k {
+        if lo < 0 and hi >= n {
+            taken = k;
+        } else {
+            let mut take_lo = hi >= n;
+            if lo >= 0 and hi < n {
+                let dl = (sorted[lo] as f64 - target).abs();
+                let dh = (sorted[hi] as f64 - target).abs();
+                if dl == dh { saw = true; }
+                take_lo = dl <= dh;
+            }
+            if take_lo { lo = lo - 1; } else { hi = hi + 1; }
+            taken = taken + 1;
+        }
+    }
+    return saw;
+}
+
+fn rank_k(vals_in: ref Vec[i64], target: f64, k: i64) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < vals_in.len() { vals.push(vals_in[c]); c = c + 1; }
+    let n = vals.len();
+    let mut want = k;
+    if want > n { want = n; }
+    let mut i = 0;
+    while i < want {
+        let mut best = i;
+        let mut best_d = (vals[i] as f64 - target).abs();
+        let mut j = i + 1;
+        while j < n {
+            let d = (vals[j] as f64 - target).abs();
+            if d < best_d or (d == best_d and vals[j] < vals[best]) {
+                best = j;
+                best_d = d;
+            }
+            j = j + 1;
+        }
+        let tmp = vals[i];
+        vals[i] = vals[best];
+        vals[best] = tmp;
+        i = i + 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut p = 0;
+    while p < want { out.push(vals[p]); p = p + 1; }
+    let mut a = 0;
+    while a < out.len() {
+        let mut small = a;
+        let mut b = a + 1;
+        while b < out.len() {
+            if out[b] < out[small] { small = b; }
+            b = b + 1;
+        }
+        let t = out[a];
+        out[a] = out[small];
+        out[small] = t;
+        a = a + 1;
+    }
+    return out;
+}
+
+fn same(x: ref Vec[i64], y: ref Vec[i64]) -> bool {
+    if x.len() != y.len() { return false; }
+    let mut i = 0;
+    while i < x.len() {
+        if x[i] != y[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn main() {
+    let cases = 4000;
+    let mut seed = 272272;
+    let mut mismatches = 0;
+    let mut tie_steps = 0;
+    let mut open_side = 0;
+    let mut k_over_n = 0;
+    let mut nodes_total = 0;
+    let mut digest = 0;
+
+    let mut c = 0;
+    while c < cases {
+        // ---- build a BST by insertion, skipping duplicates ---------------
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let want_n = 1 + (seed / 256) % 40;
+        let mut val: Vec[i64] = Vec.new();
+        let mut left: Vec[i64] = Vec.new();
+        let mut right: Vec[i64] = Vec.new();
+        let mut placed = 0;
+        let mut tries = 0;
+        while placed < want_n and tries < want_n * 4 {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let v = (seed / 256) % 400;
+            tries = tries + 1;
+            if val.len() == 0 {
+                val.push(v); left.push(-1); right.push(-1);
+                placed = placed + 1;
+            } else {
+                let mut cur = 0;
+                let mut dup = false;
+                let mut done = false;
+                while done == false {
+                    if v == val[cur] {
+                        dup = true;
+                        done = true;
+                    } else {
+                        if v < val[cur] {
+                            if left[cur] < 0 {
+                                val.push(v); left.push(-1); right.push(-1);
+                                left[cur] = val.len() - 1;
+                                done = true;
+                            } else { cur = left[cur]; }
+                        } else {
+                            if right[cur] < 0 {
+                                val.push(v); left.push(-1); right.push(-1);
+                                right[cur] = val.len() - 1;
+                                done = true;
+                            } else { cur = right[cur]; }
+                        }
+                    }
+                }
+                if dup == false { placed = placed + 1; }
+            }
+        }
+
+        let sorted = inorder(val, left, right, 0);
+        let n = sorted.len();
+
+        // ---- the target ---------------------------------------------------
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let family = (seed / 256) % 5;
+        let mut target = 0.0;
+        if family == 0 and n >= 2 {
+            // ★ exact midpoint of two adjacent values — a guaranteed tie
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let at = (seed / 256) % (n - 1);
+            target = (sorted[at] as f64 + sorted[at + 1] as f64) / 2.0;
+        }
+        if family == 1 and n >= 2 {
+            // the same midpoint nudged either way — the boundary from both sides
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let at = (seed / 256) % (n - 1);
+            let mid = (sorted[at] as f64 + sorted[at + 1] as f64) / 2.0;
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            if (seed / 256) % 2 == 0 { target = mid - 0.125; }
+            else { target = mid + 0.125; }
+        }
+        if family == 2 {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            target = sorted[(seed / 256) % n] as f64;
+        }
+        if family == 3 {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            if (seed / 256) % 2 == 0 { target = sorted[0] as f64 - 7.5; }
+            else { target = sorted[n - 1] as f64 + 7.5; }
+        }
+        if family == 4 or (family <= 1 and n < 2) {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            target = ((seed / 256) % 48000) as f64 / 100.0 - 40.0;
+        }
+
+        // ---- k ------------------------------------------------------------
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let kfam = (seed / 256) % 5;
+        let mut k = 1;
+        if kfam == 1 {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            k = 1 + (seed / 256) % 4;
+        }
+        if kfam == 2 { k = n / 2 + 1; }
+        if kfam == 3 { k = n; }
+        if kfam == 4 { k = n + 2; }
+
+        let a = merge_k(val, left, right, 0, target, k);
+        let b = window_k(sorted, target, k);
+        let d = rank_k(collect(val, left, right, 0), target, k);
+        if same(a, b) == false or same(a, d) == false { mismatches = mismatches + 1; }
+
+        if window_had_tie_step(sorted, target, k) { tie_steps = tie_steps + 1; }
+        if target < sorted[0] as f64 or target > sorted[n - 1] as f64 {
+            open_side = open_side + 1;
+        }
+        if k > n { k_over_n = k_over_n + 1; }
+
+        nodes_total = nodes_total + n;
+        let mut e = 0;
+        while e < a.len() {
+            digest = (digest * 131 + a[e]) % 1000000007;
+            e = e + 1;
+        }
+        digest = (digest * 131 + a.len() + n) % 1000000007;
+        c = c + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"nodes built {nodes_total}");
+    println(f"cases where a DECISION STEP saw a tie {tie_steps}");
+    println(f"targets outside the value range {open_side}");
+    println(f"cases with k > n {k_over_n}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

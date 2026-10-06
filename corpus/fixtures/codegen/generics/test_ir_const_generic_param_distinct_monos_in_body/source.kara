@@ -1,0 +1,6 @@
+
+fn f[const N: i64](x: i64) -> i64 { x + N }
+fn main() {
+    let _ = f[3](10);
+    let _ = f[7](10);
+}

@@ -1,0 +1,16 @@
+
+fn main() {
+    let t: Tensor[i32, [2, 3]] = Tensor.from([[4, 2, 7], [1, 5, 3]]);
+    println(f"{t[0, 0]} {t[1, 2]} {t.sum()} {t.min()} {t.max()}");
+    let m: Tensor[i32, [2, 3]] = t.map(|x| x + 1);
+    let r: Tensor[i32, [6]] = t.reshape([6]);
+    let z: Tensor[i32, [2, 3]] = t.zip_with(t, |a, b| a + b);
+    println(f"{m[0, 0]} {r[5]} {z[1, 2]}");
+    let u: Tensor[u32, [3]] = Tensor.from([30, 10, 20]);
+    let a: Tensor[i32, [3]] = Tensor.full([3], 7);
+    println(f"{u.sum()} {a[0]} {a.sum()}");
+    let f: Tensor[f32, [3]] = Tensor.from([1.5, 2.5, 3.5]);
+    println(f"{f[0]} {f[2]} {f.sum()} {f.mean()}");
+    let d: Tensor[f64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{d[0]} {d.sum()}");
+}

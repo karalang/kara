@@ -1,0 +1,36 @@
+// LeetCode 231 — Power of Two.
+//
+// Return true iff n is a power of two (n == 2^x for some x >= 0).
+//
+// A positive power of two has exactly ONE set bit, so subtracting 1 flips that
+// bit off and turns every lower bit on (e.g. 1000 -> 0111); the two share no
+// bits, so `n & (n - 1)` is 0. Any other positive number has at least two set
+// bits, and clearing the lowest with `n & (n - 1)` leaves something non-zero.
+// Non-positive n is never a power of two. O(1).
+
+fn is_power_of_two(n: i64) -> bool {
+    if n <= 0 { return false; }
+    return (n & (n - 1)) == 0;
+}
+
+fn report(n: i64) {
+    if is_power_of_two(n) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    report(1);            // true  — 2^0
+    report(2);            // true
+    report(16);           // true
+    report(3);            // false
+    report(0);            // false
+    report(-16);          // false
+    report(6);            // false
+    report(1024);         // true
+    report(2147483648);   // true  — 2^31
+    report(1073741824);   // true  — 2^30
+    report(100);          // false
+}

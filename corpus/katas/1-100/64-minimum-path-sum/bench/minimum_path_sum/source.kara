@@ -1,0 +1,87 @@
+// Benchmark workload — Minimum Path Sum (LeetCode #64), the rolling min-path ★.
+//
+// The third data point in the grid-DP family alongside kata
+// [#62](../../62-unique-paths/) (pure-sum RMW scan `dp[c] += dp[c-1]`) and kata
+// [#63](../../63-unique-paths-ii/) (sum + obstacle branch): here the scan body is
+// `dp[c] = cost + min(dp[c], dp[c-1])` — a read-modify-write with a `min` of the
+// two in-neighbours. Isolating that `min` is the point: `min` is now a `std.cmp`
+// generic stdlib free function (not the old hand-rolled `imin` helper), so this
+// also measures whether the generic-stdlib `min` lowers as cleanly as C's
+// `a < b ? a : b` / Rust's `.min()` / Go's branch.
+//
+// Cost source. Rather than materialise a `Vec[Vec[i64]]` cost grid every
+// iteration — which would make per-call allocation, not the DP, dominate the
+// timing (the alloc-domination pitfall BENCHMARKS.md warns against) — the cost at
+// cell (i, c) is a cheap deterministic PREDICATE `((i*7 + c*3 + k) % 13) + 1`,
+// in [1, 13], computed inline. So the only allocation per call is the one
+// `Vec[i64]` dp buffer of length n, exactly as in #62/#63, and the measured body
+// is the `cost + min` RMW scan itself. Every cost is ≥ 1, so the min chooses
+// between genuinely different accumulated costs (real work, nothing degenerate).
+//
+// As in #63 (and unlike #62) there is no axis symmetry to swap on — the dp
+// buffer spans the real column count `n`.
+//
+// Workload. K = 1_000_000 iterations. Each sweeps the grid shape —
+// `m = 2 + k%32`, `n = 2 + (k/32)%32`, both in [2, 33] — and threads `k` through
+// the cost predicate, so both the shape AND the cost field change every
+// iteration (nothing to hoist). The answer is tiny (≤ ~300: costs ≤ 13 over a
+// cheapest path of ≤ 64 cells), far inside i64.
+//
+// Sink. A rolling polynomial hash `acc = (acc*131 + ans) % 1_000_000_007`, the
+// same order-sensitive checksum kata [#55](../../55-jump-game/) and #62/#63 use.
+// It is a loop-carried dependency (each `acc` needs the previous one), so the
+// K-loop is NOT a reduction karac's auto-par pass can split — this stays
+// single-threaded by construction, directly comparable to the native mirrors on
+// a per-core codegen-quality basis. Seq-only kata, same discipline as #55/#62/#63.
+
+fn min_path_sum(m: i64, n: i64, k: i64) -> i64 {
+    let cols = n;
+
+    // Top row: prefix sums of the cost predicate (left-only in-neighbour).
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < cols {
+        let cost = ((j * 3 + k) % 13) + 1;     // i == 0 here
+        if j == 0 {
+            dp.push(cost);
+        } else {
+            let prev = dp[j - 1];
+            dp.push(prev + cost);
+        }
+        j = j + 1;
+    }
+
+    // Fold each subsequent row in place.
+    let mut i = 1;
+    while i < m {
+        // Left column: no left neighbour, so it only accumulates from above.
+        dp[0] = dp[0] + (((i * 7 + k) % 13) + 1);
+        let mut c = 1;
+        while c < cols {
+            let cost = ((i * 7 + c * 3 + k) % 13) + 1;
+            dp[c] = cost + min(dp[c], dp[c - 1]);
+            c = c + 1;
+        }
+        i = i + 1;
+    }
+
+    dp[cols - 1]
+}
+
+fn main() {
+    let total: i64 = 1000000;
+    let modulus: i64 = 1000000007;
+    let span: i64 = 32;
+
+    let mut acc: i64 = 0;
+    let mut k: i64 = 0;
+    while k < total {
+        let m = 2 + (k % span);
+        let n = 2 + ((k / span) % span);
+        let ans = min_path_sum(m, n, k);
+        acc = (acc * 131 + ans) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

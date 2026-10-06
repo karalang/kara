@@ -1,0 +1,14 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    syntax = \"proto3\";
+    package demo.v1;
+    option go_package = \"demo\";
+    import \"other.proto\";
+    message Only { int64 n = 1; }
+";
+
+fn main() {
+    let o = Only { n: 5 };
+    println(Only.decode(o.encode()).n);
+}

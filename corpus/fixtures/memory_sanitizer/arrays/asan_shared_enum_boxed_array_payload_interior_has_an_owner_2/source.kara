@@ -1,0 +1,12 @@
+
+par enum Pr { S(Array[String, 2]), N }
+fn mkp(t: String) -> Array[String, 2] { return [f"p-{t}-aaaaaaaaaaaaaaaaaaaa", f"p-{t}-bbbbbbbbbbbbbbbbbbbb"]; }
+fn main() {
+    { let s = Pr.S(mkp("t")); match s { Pr.S(x) => { println(f"par-temp:{x[0]}"); } Pr.N => { println("e"); } } }
+    let a = mkp("n");
+    { let s = Pr.S(a); match s { Pr.S(x) => { println(f"par-named:{x[1]}"); } Pr.N => { println("e"); } } }
+    let mut keep: Pr = Pr.N;
+    { let b = mkp("d"); keep = Pr.S(b); }
+    match keep { Pr.S(x) => { println(f"par-escape:{x[0]}"); } Pr.N => { println("e"); } }
+    println("done");
+}

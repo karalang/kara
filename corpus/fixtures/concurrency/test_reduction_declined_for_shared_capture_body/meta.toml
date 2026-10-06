@@ -1,0 +1,13 @@
+source = "tests/concurrency.rs::test_reduction_declined_for_shared_capture_body"
+dedup_of = []
+expect = "error:E0285"
+exit = 1
+tags = ["shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

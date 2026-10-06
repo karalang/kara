@@ -1,0 +1,1 @@
+fn main() { let s: Set[String] = Set["alice", "bob"]; }

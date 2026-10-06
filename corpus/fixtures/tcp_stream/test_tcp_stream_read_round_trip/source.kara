@@ -1,0 +1,11 @@
+
+            fn main() {
+                let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let stream = listener.accept().unwrap();
+                let mut buf: Array[u8, 64] = [0u8; 64];
+                match stream.read(mut buf) {
+                    Ok(n) => println(n),
+                    Err(_) => println(-1),
+                }
+            }
+        

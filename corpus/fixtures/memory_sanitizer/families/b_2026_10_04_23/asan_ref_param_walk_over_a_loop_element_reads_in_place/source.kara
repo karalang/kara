@@ -1,0 +1,26 @@
+enum Doc {
+    Word(String),
+    Group(Vec[Doc]),
+}
+
+fn chars(items: ref Vec[Doc]) -> i64 {
+    let mut total = 0;
+    for item in items.iter() {
+        match item {
+            Word(s) => { total += s.len(); }
+            Group(inner) => { total += chars(inner); }
+        }
+    }
+    return total;
+}
+
+fn main() {
+    let mut g: Vec[Doc] = Vec.new();
+    g.push(Word("hello".to_string()));
+    g.push(Word("worlds".to_string()));
+    let mut top: Vec[Doc] = Vec.new();
+    top.push(Group(g));
+    top.push(Word("!".to_string()));
+    println(chars(top));
+    println(chars(top));
+}

@@ -1,0 +1,10 @@
+matrices 1000
+queries 245000
+P1 arm disagreements 0
+P2 single-cell failures 0
+P3 whole-matrix failures 0
+P4 write-invertibility failures 0
+P5 independent-recount failures 0
+P6 idempotent-write failures 0
+P7 history-dependence failures 0
+DIFFERENTIAL OK

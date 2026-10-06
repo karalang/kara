@@ -1,0 +1,24 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn show(r: ref R) { println(f"show{r.id}"); }
+fn eat(r: R) { println(f"eat{r.id}"); }
+fn main() {
+    let a: Option[R] = Some(R { id: 1 });
+    match a {
+        Some(r) => show(r),
+        None => println("none"),
+    }
+    println("after move-mode match");
+    let b: Option[R] = Some(R { id: 2 });
+    match b {
+        Some(ref r) => show(r),
+        None => println("none"),
+    }
+    println("after ref-mode match");
+    let c: Option[R] = Some(R { id: 3 });
+    match c {
+        Some(r) => eat(r),
+        None => println("none"),
+    }
+    println("end");
+}

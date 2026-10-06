@@ -1,0 +1,24 @@
+
+            fn handle_connection(ws: WebSocket) {
+                let mut buf: Array[u8, 4096] = [0u8; 4096];
+                loop {
+                    let r = ws.recv_text(mut buf);
+                    match r {
+                        Result.Ok(n) => {
+                            if n == 0 { break; }
+                            match ws.send_text(buf[0..n]) {
+                                Result.Ok(_) => {}
+                                Result.Err(_) => { break; }
+                            }
+                        }
+                        Result.Err(_) => { break; }
+                    }
+                }
+            }
+            fn main() {
+                let listener: TcpListener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let ws: WebSocket = WebSocket.accept(listener).unwrap();
+                let mut tg: TaskGroup = TaskGroup.new();
+                tg.spawn(|| handle_connection(ws));
+            }
+        

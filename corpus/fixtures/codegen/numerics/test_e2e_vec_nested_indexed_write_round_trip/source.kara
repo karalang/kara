@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let r0: Vec[i64] = Vec.filled(3, 0);
+    let r1: Vec[i64] = Vec.filled(3, 0);
+    rows.push(r0);
+    rows.push(r1);
+    rows[0][1] = 42;
+    rows[1][2] = 99;
+    println(rows[0][0]);
+    println(rows[0][1]);
+    println(rows[1][2]);
+}

@@ -1,0 +1,21 @@
+
+enum E { V(Vec[i64]) }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(100);
+    v.push(200);
+    v.push(300);
+    let e = V(v);
+    match e {
+        V(xs) => {
+            println(xs[0]);
+            println(xs[1]);
+            println(xs[2]);
+            if xs.is_empty() {
+                println(0);
+            } else {
+                println(1);
+            }
+        }
+    }
+}

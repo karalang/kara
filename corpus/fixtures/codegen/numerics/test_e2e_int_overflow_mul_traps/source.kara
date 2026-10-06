@@ -1,0 +1,6 @@
+
+fn main() {
+    let mut x = 4611686018427387904;
+    x = x * 2;
+    println(x);
+}

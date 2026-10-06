@@ -1,0 +1,13 @@
+
+#[derive(Default)]
+struct Inner { x: i64, y: i64 }
+
+#[derive(Default)]
+struct Outer { a: Inner, scale: i64 }
+
+fn main() {
+    let o = Outer.default();
+    println(o.a.x);
+    println(o.a.y);
+    println(o.scale);
+}

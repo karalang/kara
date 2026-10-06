@@ -1,0 +1,117 @@
+// LeetCode #322: Coin Change — breadth-first search over remainders.
+//
+// Read the problem as a graph. The nodes are the amounts 0..=amount, and every
+// coin `c` is an edge from `a` to `a - c`. The fewest coins that make `amount`
+// is then the length of the shortest path from `amount` down to 0, and every
+// edge has the same weight, so breadth-first search finds it level by level:
+// level `d` holds exactly the remainders that `d` coins can reach and fewer
+// cannot.
+//
+// A remainder is enqueued the first time it is seen and never again. The first
+// visit is at the smallest level, so a later one could only be longer. That
+// bounds the work at O(amount * coins), the same as the table, but BFS stops
+// the moment 0 comes off the queue, and it never touches an amount the target
+// cannot reach.
+//
+// The ★ arm asks "what is best for every amount?". This arm never asks that.
+// It only follows edges out of the target, so it cannot share a bug in the
+// table's recurrence.
+
+fn coin_change(coins: ref Vec[i64], amount: i64) -> i64 {
+    if amount == 0 {
+        return 0;
+    }
+    let mut seen: Vec[bool] = Vec.filled(amount + 1, false);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(amount);
+    seen[amount] = true;
+    let mut level = 0;
+    while not queue.is_empty() {
+        level = level + 1;
+        // Everything in the queue right now is at the same distance; drain
+        // exactly that many so the next round is the next level.
+        let width = queue.len();
+        for w in 0..width {
+            let rem = queue.pop_front().unwrap();
+            for i in 0..coins.len() {
+                let next = rem - coins[i];
+                if next == 0 {
+                    return level;
+                }
+                if next > 0 and not seen[next] {
+                    seen[next] = true;
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+    return -1;
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..v.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(v[i].to_string());
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(coins: Vec[i64], amount: i64) {
+    let answer = coin_change(coins, amount);
+    println(f"{show(coins)} amount={amount} -> {answer}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn denominations(count: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    while v.len() < count {
+        let c = next(seed) % top + 1;
+        if not v.contains(c) {
+            v.push(c);
+        }
+    }
+    return v;
+}
+
+fn main() {
+    report([1, 2, 5], 11);
+    report([2], 3);
+    report([1], 0);
+
+    report([1, 3, 4], 6);
+    report([1, 5, 6, 9], 11);
+    report([186, 419, 83, 408], 6249);
+
+    report([4, 6], 9);
+    report([4, 6], 14);
+    report([7, 11], 59);
+    report([7, 11], 60);
+
+    report([13], 13);
+    report([50, 20], 10);
+    report([9, 2, 7, 3], 23);
+    report([5, 7], 0);
+
+    let mut seed = 322;
+    let mut small: Vec[i64] = [2, 3, 4];
+    for t in 0..small.len() {
+        let count = small[t];
+        let coins = denominations(count, 12, mut seed);
+        let amount = next(mut seed) % 40;
+        report(coins, amount);
+    }
+
+    let mut sizes: Vec[i64] = [1000, 20000, 100000];
+    for t in 0..sizes.len() {
+        let amount = sizes[t];
+        let coins = denominations(6 + t, 500 + 300 * t, mut seed);
+        println(f"{show(coins)} amount={amount} -> {coin_change(coins, amount)}");
+    }
+}

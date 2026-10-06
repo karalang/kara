@@ -1,0 +1,12 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    let groups: Vec[Vec[i64]] = v.iter()
+        .map(|x| x * 10)
+        .chunk_by(|x| x > 25)
+        .collect();
+    for g in groups {
+        let first = g[0];
+        println(first);
+    }
+}

@@ -1,0 +1,15 @@
+fn main() {
+         let cmd = Command.new("/bin/sh")
+             .arg("-c")
+             .arg("test \"$MY_VAR\" = \"kara-env-witness\"")
+             .env("MY_VAR", "kara-env-witness");
+         match cmd.spawn() {
+             Ok(child) => {
+                 match child.wait() {
+                     Ok(s) => println(s.success),
+                     Err(_) => println("wait_err"),
+                 }
+             }
+             Err(_) => println("spawn_err"),
+         }
+     }

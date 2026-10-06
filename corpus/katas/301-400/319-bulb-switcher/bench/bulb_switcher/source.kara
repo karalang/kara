@@ -1,0 +1,56 @@
+// Benchmark mirror of LeetCode #319 — the SIMULATION, not the closed form.
+//
+// The ★ arm answers this problem in six Newton iterations, which is not a
+// workload. What is worth measuring is the arm the closed form replaces: the
+// literal round simulation, `n` rounds over `n` bulbs, `n/i` toggles in round
+// `i`. That is a harmonic-sum number of memory writes — about `n * ln(n)` —
+// laid down at every stride from 1 to n, so it is a cache-behaviour benchmark
+// rather than an arithmetic one. Round 1 is a linear sweep; round 700,000
+// touches two bulbs a megabyte apart.
+//
+// PASSES passes, each simulating a different `n` so that the answer actually
+// moves (2449 down to 2278 across the run) instead of being one constant the
+// backend could in principle hoist. The fold takes both the count of lit bulbs
+// and the sum of their indices, so the array has to be materialised and walked
+// rather than merely counted.
+//
+// Bulbs are `u8` rather than `bool` or `i64` so that every language mirror
+// measures the same 6 MB of memory traffic and not its own choice of bit
+// packing.
+
+const BULBS: i64 = 6000000;
+const PASSES: i64 = 10;
+const STRIDE: i64 = 90011;
+const MASK: i64 = 1073741823;
+
+fn main() {
+    let mut on: Vec[u8] = Vec.new();
+    for _ in 0..(BULBS + 1) { on.push(0); }
+
+    let mut sink = 0;
+    for p in 0..PASSES {
+        let n = BULBS - p * STRIDE;
+
+        for b in 0..(n + 1) { on[b] = 0; }
+
+        for step in 1..(n + 1) {
+            let mut b = step;
+            while b <= n {
+                on[b] = on[b] ^ 1;
+                b += step;
+            }
+        }
+
+        let mut count = 0;
+        let mut idx_sum = 0;
+        for b in 1..(n + 1) {
+            if on[b] == 1 {
+                count += 1;
+                idx_sum = (idx_sum + b) % MASK;
+            }
+        }
+        sink = (sink * 31 + count * 7919 + idx_sum) % MASK;
+    }
+
+    print("checksum " + sink.to_string() + "\n");
+}

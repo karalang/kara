@@ -1,0 +1,12 @@
+
+        fn main() {
+            let mut q: VecDeque[String] = VecDeque.new();
+            q.push_back("first");
+            q.push_back("second");
+            q.push_front("zero");
+            let f = q.pop_front();
+            let b = q.pop_back();
+            println(f);
+            println(b);
+        }
+    

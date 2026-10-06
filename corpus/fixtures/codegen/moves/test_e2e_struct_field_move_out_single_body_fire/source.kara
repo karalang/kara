@@ -1,0 +1,30 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Ho { o: Option[Res], t: i64 }
+struct Hv { v: Vec[Res], t: i64 }
+struct Hs { r: Res, t: i64 }
+fn main() {
+    println("option-field:");
+    { let h = Ho { o: Option.Some(Res { id: 1, name: f"a{1}" }), t: 10 }; let x = h.o; println(h.t); }
+    println("vec-field:");
+    {
+        let mut vv: Vec[Res] = Vec.new();
+        vv.push(Res { id: 2, name: f"bb{2}" });
+        let h = Hv { v: vv, t: 20 };
+        let x = h.v;
+        println(h.t);
+    }
+    println("struct-field:");
+    { let h = Hs { r: Res { id: 3, name: f"ccc{3}" }, t: 30 }; let x = h.r; println(h.t); }
+    println("sibling-survives:");
+    {
+        let mut w: Vec[Res] = Vec.new();
+        w.push(Res { id: 4, name: f"dddd{4}" });
+        let h = Hv { v: w, t: 40 };
+        println(h.t);
+    }
+    println("end");
+}

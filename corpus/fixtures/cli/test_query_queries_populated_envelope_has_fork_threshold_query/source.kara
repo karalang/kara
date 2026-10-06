@@ -1,0 +1,9 @@
+
+effect resource R1;
+effect resource R2;
+fn w1() writes(R1) {}
+fn w2() writes(R2) {}
+fn main() {
+    w1();
+    w2();
+}

@@ -1,0 +1,10 @@
+
+fn main() {
+    println(1e30f64 as i32);
+    println(-1e30f64 as i32);
+    println(1e30f64 as u8);
+    println(-1.0f64 as u8);
+    println(f64.NAN as i32);
+    println(f64.INFINITY as i64);
+    println(f64.NEG_INFINITY as i64);
+}

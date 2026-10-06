@@ -1,0 +1,13 @@
+
+fn classify(code: i64) -> i64 {
+    match code {
+        c @ 200..=299 => c + 1000,
+        c @ 400..=499 => c + 2000,
+        other => other,
+    }
+}
+fn main() {
+    println(classify(204));  // in 200..=299 → 204 + 1000 = 1204
+    println(classify(404));  // in 400..=499 → 404 + 2000 = 2404
+    println(classify(500));  // no range → catch-all alias → 500
+}

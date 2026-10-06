@@ -1,0 +1,21 @@
+
+        shared struct P {
+            v: i64,
+        }
+
+        fn main() {
+            let n = 64;
+            let mut ps: Vec[P] = Vec.new();
+            let mut i = 0;
+            while i < n {
+                ps.push(P { v: i });
+                i = i + 1;
+            }
+            let mut out: Vec[i64] = Vec.filled(n, 0);
+            for j in 0..n {
+                let p = ps[j];
+                out[j] = ps[j].v * 2 + p.v;
+            }
+            println(out[0]);
+        }
+        

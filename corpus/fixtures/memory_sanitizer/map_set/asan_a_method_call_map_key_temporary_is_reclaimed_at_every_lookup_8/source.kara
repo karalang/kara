@@ -1,0 +1,13 @@
+
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+} }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.make(0i64), 0i64);
+    if m.contains_key(g.make(0i64)) { println("has"); } else { println("no"); }
+    m.remove(g.make(0i64));
+    println(f"len:{m.len()}");
+}

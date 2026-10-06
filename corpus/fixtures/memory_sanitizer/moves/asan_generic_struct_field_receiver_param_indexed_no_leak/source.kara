@@ -1,0 +1,25 @@
+
+struct Box[T] {
+    v: T,
+}
+fn show(b: ref Box[String]) -> i64 {
+    b.v.len()
+}
+fn sink(b: Box[String]) -> i64 {
+    b.v.len()
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let r = Box { v: i.to_string() };
+        acc = acc + show(r);
+        let s = Box { v: i.to_string() };
+        acc = acc + sink(s);
+        let mut v: Vec[Box[String]] = Vec.new();
+        v.push(Box { v: i.to_string() });
+        acc = acc + v[0].v.len();
+        i = i + 1;
+    }
+    println(acc);
+}

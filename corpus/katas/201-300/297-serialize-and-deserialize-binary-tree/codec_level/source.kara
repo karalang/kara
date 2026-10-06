@@ -1,0 +1,173 @@
+// LeetCode 297 — Serialize and Deserialize, BY LEVEL ORDER.
+//
+// The format LeetCode itself prints trees in: breadth-first, row by row, with
+// `#` for an absent child.
+//
+//         1              "1,2,3,#,#,4,5"
+//        / \
+//       2   3            preorder would say  1,2,#,#,3,4,#,#,5,#,#
+//          / \
+//         4   5
+//
+// SAME INFORMATION, DIFFERENT SHAPE, AND USUALLY SHORTER. Preorder emits a `#`
+// for every absent child of every node, including the two under each leaf.
+// Level order can stop at the end of the last non-empty row, so a bushy tree
+// pays for far fewer sentinels — the example above is 7 tokens against 11.
+// A degenerate spine reverses that: every level holds one real node and one
+// `#`, so level order pays two tokens per node where preorder pays two per
+// node as well but without the trailing row. Neither dominates; they differ.
+//
+// THE MECHANISM IS A QUEUE, NOT A RECURSION. Serialize pushes the root, then
+// repeatedly pops a slot, emits it, and pushes BOTH children — including the
+// empty ones, because their positions are what the reader will count on.
+// Deserialize runs the same queue in the same order: pop a parent, take the
+// next two tokens as its children, push whichever are real.
+//
+// THAT IS WHY IT SHARES NOTHING WITH THE ★ ARM. Preorder deserialization is a
+// recursive descent driven by a cursor whose depth IS the tree; this is a flat
+// loop over a FIFO whose length is the frontier. One is stack-shaped, the other
+// queue-shaped, and a bug in either — a swapped child, an off-by-one in the
+// cursor — has no way to also be present in the other.
+//
+// THE TRAILING-SENTINEL DECISION IS LOAD-BEARING. This arm stops as soon as the
+// queue drains, so it never emits the row of `#` below the last real level.
+// That makes the encoding non-canonical against a version that does emit them:
+// both parse back to the same tree, but the STRINGS differ. The differential
+// therefore compares reconstructed TREES (fingerprinted through the ★ arm's
+// preorder), never the level-order strings — comparing strings across formats
+// would be testing the formats, not the codecs.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: None, right: None });
+}
+
+fn node(v: i64, l: Option[TreeNode], r: Option[TreeNode]) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn serialize_level(t: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut q: VecDeque[Option[TreeNode]] = VecDeque.new();
+    q.push_back(t);
+    while q.len() > 0 {
+        match q.pop_front() {
+            Some(slot) => {
+                match slot {
+                    None => {
+                        parts.push("#");
+                    }
+                    Some(n) => {
+                        parts.push(n.val.to_string());
+                        q.push_back(n.left);
+                        q.push_back(n.right);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    // Trim the trailing sentinel row: everything after the last real value is
+    // recoverable from position alone, so emitting it is pure overhead. This is
+    // what makes the encoding shorter than preorder on a bushy tree, and what
+    // makes it NON-CANONICAL against a version that keeps them — both parse to
+    // the same tree from different strings, which is exactly why the
+    // differential compares trees and never level-order strings.
+    let mut last = parts.len();
+    while last > 0 and parts[last - 1] == "#" {
+        last = last - 1;
+    }
+    let mut trimmed: Vec[String] = Vec.new();
+    let mut k = 0;
+    while k < last {
+        trimmed.push(parts[k]);
+        k = k + 1;
+    }
+    return trimmed.join(",");
+}
+
+fn deserialize_level(s: ref String) -> Option[TreeNode] {
+    if s.len() == 0 {
+        return None;
+    }
+    let tokens = s.split(",");
+    if tokens.len() == 0 or tokens[0] == "#" {
+        return None;
+    }
+    let root_val = match i64.parse(tokens[0]) {
+        Some(x) => x,
+        None => 0,
+    };
+    let root = TreeNode { val: root_val, left: None, right: None };
+    let mut q: VecDeque[TreeNode] = VecDeque.new();
+    q.push_back(root);
+
+    let mut i = 1;
+    while q.len() > 0 and i < tokens.len() {
+        match q.pop_front() {
+            Some(parent) => {
+                // Left child, then right — the same order serialize pushed them.
+                if i < tokens.len() {
+                    let tok = ref tokens[i];
+                    i = i + 1;
+                    if tok != "#" {
+                        let v = match i64.parse(tok) { Some(x) => x, None => 0 };
+                        let child = TreeNode { val: v, left: None, right: None };
+                        parent.left = Some(child);
+                        q.push_back(child);
+                    }
+                }
+                if i < tokens.len() {
+                    let tok = ref tokens[i];
+                    i = i + 1;
+                    if tok != "#" {
+                        let v = match i64.parse(tok) { Some(x) => x, None => 0 };
+                        let child = TreeNode { val: v, left: None, right: None };
+                        parent.right = Some(child);
+                        q.push_back(child);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    return Some(root);
+}
+
+// The ★ arm's preorder form, used here only as a canonical FINGERPRINT so two
+// different encodings can be compared as trees rather than as strings.
+fn fingerprint_into(t: Option[TreeNode], out: mut ref Vec[String]) {
+    match t {
+        None => { out.push("#"); }
+        Some(n) => {
+            out.push(n.val.to_string());
+            fingerprint_into(n.left, out);
+            fingerprint_into(n.right, out);
+        }
+    }
+}
+
+fn fingerprint(t: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    fingerprint_into(t, mut parts);
+    return parts.join(",");
+}
+
+fn report(t: Option[TreeNode]) {
+    let s = serialize_level(t);
+    let round = fingerprint(deserialize_level(s));
+    println(f"{s}  |  tree {round}");
+}
+
+fn main() {
+    report(node(1, leaf(2), node(3, leaf(4), leaf(5))));
+    report(None);
+    report(leaf(7));
+    report(node(-1, leaf(-2), None));
+    report(node(5, node(5, leaf(5), None), leaf(5)));
+}

@@ -1,0 +1,49 @@
+
+#[derive(PartialEq)]
+struct WrapS { a: Array[String, 2] }
+
+fn main() {
+    let x: Array[i64, 2] = Array[1, 2];
+    let y: Array[i64, 2] = Array[1, 9];
+    let z: Array[i64, 2] = Array[1, 2];
+    println(f"{x == y}");
+    println(f"{x == z}");
+    println(f"{x != y}");
+
+    let p: Array[String, 2] = Array["ab", "cd"];
+    let q: Array[String, 2] = Array["ab", "cd"];
+    let r: Array[String, 2] = Array["ab", "zz"];
+    println(f"{p == q}");
+    println(f"{p == r}");
+
+    println(f"{WrapS { a: Array["ab", "cd"] } == WrapS { a: Array["ab", "cd"] }}");
+    println(f"{WrapS { a: Array["ab", "cd"] } == WrapS { a: Array["ab", "zz"] }}");
+
+    let n2: Array[Array[i64, 2], 2] = Array[Array[1, 2], Array[3, 4]];
+    let m2: Array[Array[i64, 2], 2] = Array[Array[1, 2], Array[3, 5]];
+    let k2: Array[Array[i64, 2], 2] = Array[Array[1, 2], Array[3, 4]];
+    println(f"{n2 == m2}");
+    println(f"{n2 == k2}");
+
+    let n3: Array[Array[i64, 3], 2] = Array[Array[1, 2, 3], Array[4, 5, 6]];
+    let m3: Array[Array[i64, 3], 2] = Array[Array[1, 2, 3], Array[4, 5, 7]];
+    println(f"{n3 == m3}");
+
+    let three: Array[i64, 3] = Array[1, 2, 3];
+    let three2: Array[i64, 3] = Array[1, 2, 9];
+    println(f"{three == three2}");
+
+    let e1: Array[i64, 0] = Array[];
+    let e2: Array[i64, 0] = Array[];
+    println(f"{e1 == e2}");
+
+    let mut km: Map[Array[String, 2], i64] = Map.new();
+    km.insert(Array["ab", "cd"], 1);
+    km.insert(Array["ab", "cd"], 2);
+    km.insert(Array["ab", "zz"], 3);
+    println(f"{km.len()}");
+    let mut ki: Map[Array[i64, 2], i64] = Map.new();
+    ki.insert(Array[1, 2], 1);
+    ki.insert(Array[1, 2], 2);
+    println(f"{ki.len()}");
+}

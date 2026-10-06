@@ -1,0 +1,140 @@
+// LeetCode 261 — Graph Valid Tree, by leaf peeling.
+//
+// The third mechanism, and the one that builds no spanning structure at all.
+// Neither a union-find forest nor a BFS tree is constructed; the graph is simply
+// eroded from its leaves inward:
+//
+//     repeatedly delete a vertex of degree 1, along with its one edge
+//
+// A tree erodes completely, down to a single vertex. A cycle does not erode at
+// all — every vertex on it keeps degree ≥ 2 forever, so it survives as residue.
+// A forest of c components erodes to exactly c vertices. So:
+//
+//     valid tree  <=>  exactly one vertex survives the peel
+//
+// which settles (acyclic) and (connected) at once, from the residue alone, with
+// no edge count consulted anywhere. Note the peel must remove ONE leaf at a
+// time, not every current leaf per round: a two-node path has two leaves, and
+// deleting both at once erodes to zero and would report false.
+//
+// The isolated vertex is the subtlety in the other direction. Degree 0 is not
+// degree 1, so a lone vertex never peels — which is exactly why n=1 answers true
+// and why the triangle-plus-stranded-node case answers false with four vertices
+// left standing rather than one.
+
+fn valid_tree(n: i64, edges: ref Vec[Vec[i64]]) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    let mut deg: Vec[i64] = Vec.new();
+    let mut gone: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        adj.push(Vec.new());
+        deg.push(0);
+        gone.push(false);
+        i = i + 1;
+    }
+
+    let m = edges.len();
+    let mut e = 0;
+    while e < m {
+        let edge = ref edges[e];
+        let u = edge[0];
+        let v = edge[1];
+        adj[u].push(v);
+        adj[v].push(u);
+        deg[u] = deg[u] + 1;
+        deg[v] = deg[v] + 1;
+        e = e + 1;
+    }
+
+    // Seed with every current leaf; the queue grows as the peel creates more.
+    let mut queue: Vec[i64] = Vec.new();
+    let mut s = 0;
+    while s < n {
+        if deg[s] == 1 { queue.push(s); }
+        s = s + 1;
+    }
+
+    let mut removed = 0;
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head = head + 1;
+        // A queued node can be stale: its last neighbour may have peeled first,
+        // dropping it to degree 0. Only an actual leaf comes off.
+        if gone[node] or deg[node] != 1 {
+            continue;
+        }
+        gone[node] = true;
+        removed = removed + 1;
+        deg[node] = 0;
+
+        // Its one surviving neighbour loses an edge, and may become a leaf.
+        let nbrs = ref adj[node];
+        let mut k = 0;
+        while k < nbrs.len() {
+            let nb = nbrs[k];
+            if not gone[nb] {
+                deg[nb] = deg[nb] - 1;
+                if deg[nb] == 1 { queue.push(nb); }
+            }
+            k = k + 1;
+        }
+    }
+
+    return n - removed == 1;
+}
+
+fn report(label: ref String, n: i64, edges: ref Vec[Vec[i64]]) {
+    if valid_tree(n, edges) {
+        println(f"{label} -> true");
+    } else {
+        println(f"{label} -> false");
+    }
+}
+
+fn main() {
+    let none: Vec[Vec[i64]] = Vec.new();
+    report("n=1 []", 1, none);
+    report("n=2 []", 2, none);
+
+    let mut a: Vec[Vec[i64]] = Vec.new();
+    a.push([0, 1]);
+    a.push([0, 2]);
+    a.push([0, 3]);
+    a.push([0, 4]);
+    report("n=5 star", 5, a);
+
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([0, 1]);
+    b.push([1, 2]);
+    b.push([2, 3]);
+    b.push([3, 4]);
+    report("n=5 path", 5, b);
+
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    c.push([0, 1]);
+    c.push([1, 2]);
+    c.push([2, 3]);
+    c.push([0, 3]);
+    report("n=4 cycle", 4, c);
+
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    d.push([0, 1]);
+    d.push([1, 2]);
+    d.push([0, 2]);
+    report("n=4 triangle + isolated", 4, d);
+
+    let mut e: Vec[Vec[i64]] = Vec.new();
+    e.push([0, 1]);
+    e.push([2, 3]);
+    e.push([3, 4]);
+    report("n=5 forest", 5, e);
+
+    let mut f: Vec[Vec[i64]] = Vec.new();
+    f.push([3, 4]);
+    f.push([0, 1]);
+    f.push([2, 3]);
+    f.push([1, 2]);
+    report("n=5 path, shuffled edges", 5, f);
+}

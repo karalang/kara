@@ -1,0 +1,463 @@
+// Differential test for #336 Palindrome Pairs: the four arms against an
+// oracle that concatenates each ordered pair and compares the result with
+// its reverse, character by character.
+
+fn is_palindrome_main(b: Slice[u8], lo: i64, hi: i64) -> bool {
+    let mut i = lo;
+    let mut j = hi - 1;
+    while i < j {
+        if b[i] != b[j] {
+            return false;
+        }
+        i += 1;
+        j -= 1;
+    }
+    return true;
+}
+
+fn reversed_main(s: ref String) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let mut r = String.new();
+    let mut i = chars.len();
+    while i > 0 {
+        i -= 1;
+        r.push(chars[i]);
+    }
+    return r;
+}
+
+fn palindrome_pairs_main(words: ref Vec[String]) -> Vec[(i64, i64)] {
+    let mut index: Map[String, i64] = Map.new();
+    for i in 0..words.len() {
+        index.insert(reversed_main(words[i]), i);
+    }
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..words.len() {
+        let w = ref words[i];
+        let b = w.bytes();
+        let len = w.len();
+        for k in 0..len + 1 {
+            if is_palindrome_main(b, k, len) {
+                match index.get(w[0..k]) {
+                    Some(j) if j != i => pairs.push((i, j)),
+                    _ => {}
+                }
+            }
+            if k > 0 and is_palindrome_main(b, 0, k) {
+                match index.get(w[k..len]) {
+                    Some(j) if j != i => pairs.push((j, i)),
+                    _ => {}
+                }
+            }
+        }
+    }
+    pairs.sort();
+    return pairs;
+}
+
+fn at_brute(a: Slice[u8], b: Slice[u8], k: i64) -> u8 {
+    if k < a.len() {
+        return a[k];
+    }
+    return b[k - a.len()];
+}
+
+fn joined_is_palindrome_brute(a: Slice[u8], b: Slice[u8]) -> bool {
+    let mut i = 0;
+    let mut j = a.len() + b.len() - 1;
+    while i < j {
+        if at_brute(a, b, i) != at_brute(a, b, j) {
+            return false;
+        }
+        i += 1;
+        j -= 1;
+    }
+    return true;
+}
+
+fn palindrome_pairs_brute(words: ref Vec[String]) -> Vec[(i64, i64)] {
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..words.len() {
+        for j in 0..words.len() {
+            if i != j and joined_is_palindrome_brute(words[i].bytes(), words[j].bytes()) {
+                pairs.push((i, j));
+            }
+        }
+    }
+    return pairs;
+}
+
+struct NodeT {
+    next: Vec[i64],
+    word: i64,
+    below: Vec[i64],
+}
+
+fn new_node_trie() -> NodeT {
+    let mut next: Vec[i64] = Vec.new();
+    for _ in 0..26 {
+        next.push(-1);
+    }
+    return NodeT { next: next, word: -1, below: Vec.new() };
+}
+
+fn is_palindrome_trie(b: Slice[u8], lo: i64, hi: i64) -> bool {
+    let mut i = lo;
+    let mut j = hi - 1;
+    while i < j {
+        if b[i] != b[j] {
+            return false;
+        }
+        i += 1;
+        j -= 1;
+    }
+    return true;
+}
+
+fn palindrome_pairs_trie(words: ref Vec[String]) -> Vec[(i64, i64)] {
+    let mut nodes: Vec[NodeT] = Vec.new();
+    nodes.push(new_node_trie());
+    for i in 0..words.len() {
+        let b = words[i].bytes();
+        let mut at = 0;
+        let mut k = b.len();
+        // Walk the word from its last byte; the part not inserted yet is
+        // b[0..k].
+        while k > 0 {
+            if is_palindrome_trie(b, 0, k) {
+                nodes[at].below.push(i);
+            }
+            let c = (b[k - 1] - 97) as i64;
+            if nodes[at].next[c] < 0 {
+                nodes.push(new_node_trie());
+                let fresh = nodes.len() - 1;
+                nodes[at].next[c] = fresh;
+            }
+            at = nodes[at].next[c];
+            k -= 1;
+        }
+        nodes[at].word = i;
+        nodes[at].below.push(i);
+    }
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..words.len() {
+        let b = words[i].bytes();
+        let mut at = 0;
+        let mut k = 0;
+        while k < b.len() and at >= 0 {
+            let ends = nodes[at].word;
+            if ends >= 0 and ends != i and is_palindrome_trie(b, k, b.len()) {
+                pairs.push((i, ends));
+            }
+            at = nodes[at].next[(b[k] - 97) as i64];
+            k += 1;
+        }
+        if at >= 0 {
+            for j in nodes[at].below.iter() {
+                if j != i {
+                    pairs.push((i, j));
+                }
+            }
+        }
+    }
+    pairs.sort();
+    return pairs;
+}
+
+fn is_palindrome_lengths(b: Slice[u8], lo: i64, hi: i64) -> bool {
+    let mut i = lo;
+    let mut j = hi - 1;
+    while i < j {
+        if b[i] != b[j] {
+            return false;
+        }
+        i += 1;
+        j -= 1;
+    }
+    return true;
+}
+
+// The reverse of b[lo..hi] as a new String (the words are ASCII).
+fn reverse_piece_lengths(b: Slice[u8], lo: i64, hi: i64) -> String {
+    let mut r = String.new();
+    let mut k = hi;
+    while k > lo {
+        k -= 1;
+        r.push(b[k] as char);
+    }
+    return r;
+}
+
+fn palindrome_pairs_lengths(words: ref Vec[String]) -> Vec[(i64, i64)] {
+    let mut index: SortedMap[String, i64] = SortedMap.new();
+    let mut lengths: Set[i64] = Set.new();
+    for i in 0..words.len() {
+        index.insert(words[i].clone(), i);
+        lengths.insert(words[i].len());
+    }
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..words.len() {
+        let b = words[i].bytes();
+        let len = b.len();
+        for k in 0..len + 1 {
+            // The partner after w is the reverse of the prefix b[0..k].
+            if lengths.contains(k) and is_palindrome_lengths(b, k, len) {
+                match index.get(reverse_piece_lengths(b, 0, k)) {
+                    Some(j) if j != i => pairs.push((i, j)),
+                    _ => {}
+                }
+            }
+            // The partner before w is the reverse of the suffix b[k..len].
+            if k > 0 and lengths.contains(len - k) and is_palindrome_lengths(b, 0, k) {
+                match index.get(reverse_piece_lengths(b, k, len)) {
+                    Some(j) if j != i => pairs.push((j, i)),
+                    _ => {}
+                }
+            }
+        }
+    }
+    pairs.sort();
+    return pairs;
+}
+
+fn rev(s: ref String) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let mut r = String.new();
+    let mut i = chars.len();
+    while i > 0 {
+        i -= 1;
+        r.push(chars[i]);
+    }
+    return r;
+}
+
+fn oracle(words: ref Vec[String]) -> Vec[(i64, i64)] {
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..words.len() {
+        for j in 0..words.len() {
+            if i != j {
+                let joined = words[i] + words[j];
+                if joined == rev(joined) {
+                    pairs.push((i, j));
+                }
+            }
+        }
+    }
+    return pairs;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn shown(words: ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for w in words.iter() {
+        parts.push(f"\"{w}\"");
+    }
+    return parts.join(", ");
+}
+
+fn fail(failures: mut ref i64, what: String, words: ref Vec[String]) {
+    if failures < 10 {
+        println(f"FAIL {what}: [{shown(words)}]");
+    }
+    failures += 1;
+}
+
+fn sorted(pairs: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut p = pairs;
+    p.sort();
+    return p;
+}
+
+fn check(words: ref Vec[String], failures: mut ref i64) -> i64 {
+    let want = oracle(words);
+    let got = palindrome_pairs_main(words);
+    // P1: the arms agree. P2: they equal the oracle.
+    if palindrome_pairs_brute(words) != got or palindrome_pairs_trie(words) != got or palindrome_pairs_lengths(words) != got {
+        fail(failures, "P1 arms disagree", words);
+    }
+    if got != want {
+        fail(failures, "P2 oracle", words);
+    }
+    let n = words.len();
+    // P3: listing the words backwards maps (i, j) to (n-1-i, n-1-j).
+    let mut backwards: Vec[String] = Vec.new();
+    let mut k = n;
+    while k > 0 {
+        k -= 1;
+        backwards.push(words[k].clone());
+    }
+    let mut mapped: Vec[(i64, i64)] = Vec.new();
+    for p in got.iter() {
+        let (i, j) = p;
+        mapped.push((n - 1 - i, n - 1 - j));
+    }
+    if palindrome_pairs_main(backwards) != sorted(mapped) {
+        fail(failures, "P3 list reversed", words);
+    }
+    // P4: reversing every word swaps each pair, since the reverse of a + b
+    // is reverse(b) + reverse(a).
+    let mut flipped: Vec[String] = Vec.new();
+    for w in words.iter() {
+        flipped.push(rev(w));
+    }
+    let mut swapped: Vec[(i64, i64)] = Vec.new();
+    for p in got.iter() {
+        let (i, j) = p;
+        swapped.push((j, i));
+    }
+    if palindrome_pairs_main(flipped) != sorted(swapped) {
+        fail(failures, "P4 words reversed", words);
+    }
+    // P5: the pairs are strictly increasing (so distinct) and never pair a
+    // word with itself.
+    let mut last = (-1, -1);
+    for p in got.iter() {
+        let (i, j) = p;
+        if i == j or (i, j) <= last {
+            fail(failures, "P5 pairs not distinct", words);
+        }
+        last = (i, j);
+    }
+    // P6: swapping the letters a and b keeps the pairs.
+    let mut renamed: Vec[String] = Vec.new();
+    for w in words.iter() {
+        let mut r = String.new();
+        for c in w.chars() {
+            if c == 'a' {
+                r.push('b');
+            } else if c == 'b' {
+                r.push('a');
+            } else {
+                r.push(c);
+            }
+        }
+        renamed.push(r);
+    }
+    if palindrome_pairs_main(renamed) != got {
+        fail(failures, "P6 letters renamed", words);
+    }
+    // P7: the empty word pairs both ways with exactly the non-empty
+    // palindromes.
+    let mut empty = -1;
+    let mut palindromes = 0;
+    for i in 0..n {
+        if words[i].len() == 0 {
+            empty = i;
+        } else if words[i] == rev(words[i]) {
+            palindromes += 1;
+        }
+    }
+    if empty >= 0 {
+        let mut with_empty = 0;
+        for p in got.iter() {
+            let (i, j) = p;
+            if i == empty or j == empty {
+                with_empty += 1;
+            }
+        }
+        if with_empty != 2 * palindromes {
+            fail(failures, "P7 empty word", words);
+        }
+    }
+    // P8: appending the reverse of the first word, when it is new, adds
+    // the pairs (0, n) and (n, 0).
+    if n > 0 {
+        let r = rev(words[0]);
+        let mut present = false;
+        for w in words.iter() {
+            if w == r {
+                present = true;
+            }
+        }
+        if not present {
+            let mut more = words.clone();
+            more.push(r);
+            let extended = palindrome_pairs_main(more);
+            let mut has_after = false;
+            let mut has_before = false;
+            for p in extended.iter() {
+                let (i, j) = p;
+                if i == 0 and j == n {
+                    has_after = true;
+                }
+                if i == n and j == 0 {
+                    has_before = true;
+                }
+            }
+            if not (has_after and has_before) {
+                fail(failures, "P8 reverse appended", words);
+            }
+        }
+    }
+    return got.len();
+}
+
+fn main() {
+    let mut failures: i64 = 0;
+    // Every list of at most three distinct words from the 40 words of length
+    // 0 to 3 over {a, b, c}, in increasing order of this numbering.
+    let mut pool: Vec[String] = Vec.new();
+    pool.push("".to_string());
+    let mut start = 0;
+    for _ in 0..3 {
+        let end = pool.len();
+        for k in start..end {
+            for c in ['a', 'b', 'c'] {
+                let mut w = pool[k].clone();
+                w.push(c);
+                pool.push(w);
+            }
+        }
+        start = end;
+    }
+    let m = pool.len();
+    let mut lists: i64 = 0;
+    let mut pairs: i64 = 0;
+    let empty: Vec[String] = Vec.new();
+    pairs += check(empty, mut failures);
+    lists += 1;
+    for a in 0..m {
+        pairs += check(vec![pool[a].clone()], mut failures);
+        lists += 1;
+        for b in a + 1..m {
+            pairs += check(vec![pool[a].clone(), pool[b].clone()], mut failures);
+            lists += 1;
+            for c in b + 1..m {
+                pairs += check(vec![pool[a].clone(), pool[b].clone(), pool[c].clone()], mut failures);
+                lists += 1;
+            }
+        }
+    }
+    // Random lists of 0 to 30 distinct words over 2 to 4 letters, 0 to 8
+    // letters long.
+    let alphabet = "abcd".bytes();
+    let mut seed = 336;
+    let mut random: i64 = 0;
+    let mut random_pairs: i64 = 0;
+    for round in 0..1000 {
+        let count = next(mut seed) % 31;
+        let letters = 2 + round % 3;
+        let mut seen: Set[String] = Set.new();
+        let mut words: Vec[String] = Vec.new();
+        let mut tries = 0;
+        while words.len() < count and tries < 1000 {
+            tries += 1;
+            let len = next(mut seed) % 9;
+            let mut w = String.new();
+            for _ in 0..len {
+                w.push(alphabet[next(mut seed) % letters] as char);
+            }
+            if not seen.contains(w) {
+                seen.insert(w.clone());
+                words.push(w);
+            }
+        }
+        random_pairs += check(words, mut failures);
+        random += 1;
+    }
+    println(f"{lists} exhaustive lists ({pairs} pairs), {random} random lists ({random_pairs} pairs), {failures} failures");
+}

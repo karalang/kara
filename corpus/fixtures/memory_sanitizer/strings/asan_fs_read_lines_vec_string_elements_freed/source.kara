@@ -1,0 +1,26 @@
+
+fn count_bytes(path: String) -> Result[i64, IoError] with reads(FileSystem) {
+    let lines = fs.read_lines(path)?;
+    let mut total = 0;
+    for line in lines {
+        total = total + line.len();
+    }
+    Ok(total)
+}
+fn main() with reads(FileSystem) writes(FileSystem) {
+    match fs.write("/tmp/karac_asan_b38_read_lines.txt", "alpha-line\nbeta-line\n\ndelta-line\n") {
+        Ok(_) => {
+            let mut i: i64 = 0i64;
+            let mut last: i64 = 0i64;
+            while i < 30i64 {
+                match count_bytes("/tmp/karac_asan_b38_read_lines.txt") {
+                    Ok(n) => { last = n; },
+                    Err(_) => { last = -1i64; },
+                }
+                i = i + 1i64;
+            }
+            println(last.to_string());
+        },
+        Err(_) => println("write-err"),
+    }
+}

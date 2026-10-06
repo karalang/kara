@@ -1,0 +1,11 @@
+fn f(s: Slice[String]) -> i64 {
+    println(f"{s.len()}");
+    s.len()
+}
+
+fn main() {
+    let mut o: Vec[String] = Vec.new();
+    o.push("x");
+    let _ = f(o);
+    let _ = f(o);
+}

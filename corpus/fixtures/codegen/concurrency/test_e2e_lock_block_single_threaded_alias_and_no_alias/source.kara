@@ -1,0 +1,7 @@
+
+fn main() {
+    let m = Mutex.new(10);
+    lock m x { x = x + 5; }
+    lock m y { y = y * 2; }
+    lock m { println(m); }
+}

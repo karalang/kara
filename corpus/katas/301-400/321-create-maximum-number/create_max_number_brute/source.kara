@@ -1,0 +1,144 @@
+// LeetCode #321: Create Maximum Number — brute force, straight from the statement.
+//
+// The statement says: pick some digits from nums1, some from nums2, k in all,
+// keep each array's order, and interleave them. So this arm does exactly that
+// and nothing cleverer. For every split i, it enumerates every length-i
+// subsequence of nums1 and every length-(k - i) subsequence of nums2, and for
+// every such pair it enumerates every interleaving — C(k, i) of them — keeping
+// the largest sequence it has ever seen.
+//
+// There is no monotonic stack, no suffix comparison, no feasibility argument
+// and no dominance argument. None of the reasoning the other arms depend on
+// appears here, which is what makes it the oracle — and why it is only ever
+// run on inputs small enough for the sum over i of C(m, i) C(n, k - i) C(k, i)
+// to be counted in millions.
+
+// Lexicographic `a > b` over equal-length vectors.
+fn greater(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    for x in 0..a.len() {
+        if a[x] != b[x] { return a[x] > b[x]; }
+    }
+    return false;
+}
+
+// Every interleaving of a[i..] and b[j..] appended to `cur`; the largest
+// complete one is kept in `best`.
+fn interleave(a: ref Vec[i64], i: i64, b: ref Vec[i64], j: i64,
+        cur: mut ref Vec[i64], best: mut ref Vec[i64], have: mut ref bool) {
+    if i == a.len() and j == b.len() {
+        if not have or greater(cur, best) {
+            best.clear();
+            for x in 0..cur.len() { best.push(cur[x]); }
+            have = true;
+        }
+        return;
+    }
+    if i < a.len() {
+        cur.push(a[i]);
+        interleave(a, i + 1, b, j, cur, best, have);
+        cur.pop();
+    }
+    if j < b.len() {
+        cur.push(b[j]);
+        interleave(a, i, b, j + 1, cur, best, have);
+        cur.pop();
+    }
+}
+
+// Every length-`want` subsequence of nums[from..], appended to `cur`, pushed
+// onto `out`.
+fn subsequences(nums: ref Vec[i64], from: i64, want: i64, cur: mut ref Vec[i64],
+        out: mut ref Vec[Vec[i64]]) {
+    if want == 0 {
+        out.push(cur.clone());
+        return;
+    }
+    let mut p = from;
+    while p < nums.len() {
+        cur.push(nums[p]);
+        subsequences(nums, p + 1, want - 1, cur, out);
+        cur.pop();
+        p = p + 1;
+    }
+}
+
+fn max_number(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[i64] {
+    let mut best: Vec[i64] = Vec.new();
+    let mut have = false;
+    for i in 0..(k + 1) {
+        if i <= nums1.len() and k - i <= nums2.len() {
+            let mut lefts: Vec[Vec[i64]] = Vec.new();
+            let mut rights: Vec[Vec[i64]] = Vec.new();
+            let mut scratch: Vec[i64] = Vec.new();
+            subsequences(nums1, 0, i, mut scratch, mut lefts);
+            subsequences(nums2, 0, k - i, mut scratch, mut rights);
+            for x in 0..lefts.len() {
+                for y in 0..rights.len() {
+                    let mut cur: Vec[i64] = Vec.new();
+                    interleave(lefts[x], 0, rights[y], 0, mut cur, mut best, mut have);
+                }
+            }
+        }
+    }
+    return best;
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..v.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(v[i].to_string());
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(nums1: Vec[i64], nums2: Vec[i64], k: i64) {
+    let answer = max_number(nums1, nums2, k);
+    println(f"{show(nums1)} {show(nums2)} k={k} -> {show(answer)}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn digits(len: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..len {
+        v.push(next(seed) % 10);
+    }
+    return v;
+}
+
+fn main() {
+    // The three examples from the problem statement.
+    report([3, 4, 6, 5], [9, 1, 2, 5, 8, 3], 5);
+    report([6, 7], [6, 0, 4], 5);
+    report([3, 9], [8, 9], 3);
+
+    // Equal heads whose suffixes agree for several digits before they part —
+    // the case a one-digit lookahead gets wrong.
+    report([2, 5, 6, 4, 4, 0], [7, 3, 8, 0, 6, 5, 7, 6, 2], 15);
+    report([6, 7, 6, 7, 6, 7, 0], [6, 7, 6, 7, 6, 7, 1], 14);
+    report([8, 9, 9], [8, 9, 9, 1], 6);
+
+    // Edges: k = 0, an empty side, every digit taken, all digits equal.
+    report([1, 2, 3], [4, 5], 0);
+    report([], [1, 2, 3], 2);
+    report([5, 4, 3], [], 3);
+    report([1, 2], [3], 3);
+    report([0, 0, 0], [0, 0], 4);
+    report([9, 9], [9, 9, 9], 3);
+
+    // Small random cases — every arm prints these, including the brute force.
+    let mut seed = 321;
+    let mut small: Vec[i64] = [3, 5, 7];
+    for t in 0..small.len() {
+        let len = small[t];
+        let a = digits(len, mut seed);
+        let b = digits(len + 1, mut seed);
+        report(a, b, len + len / 2 + 1);
+    }
+}

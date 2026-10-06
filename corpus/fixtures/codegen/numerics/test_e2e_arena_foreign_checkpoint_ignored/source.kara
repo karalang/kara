@@ -1,0 +1,11 @@
+
+fn main() {
+    let a: Arena[i64] = Arena.new();
+    let b: Arena[i64] = Arena.new();
+    let _ra = a.push(1);
+    let _rb0 = b.push(10);
+    let _rb1 = b.push(20);
+    let foreign = a.high_water_mark();
+    b.rewind_to(foreign);
+    println(b.len());
+}

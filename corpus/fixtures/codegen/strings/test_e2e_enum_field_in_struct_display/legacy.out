@@ -1,0 +1,3 @@
+Tagged { c: Blue, n: 9 }
+Tagged { c: Red, n: 1 }
+t=Tagged { c: Green, n: 2 }

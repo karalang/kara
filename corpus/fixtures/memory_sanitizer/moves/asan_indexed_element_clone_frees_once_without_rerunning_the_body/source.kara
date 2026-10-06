@@ -1,0 +1,21 @@
+struct R { id: i64, v: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+
+fn mk(n: i64) -> E {
+    let mut v: Vec[String] = Vec.new();
+    v.push("abcdefghijklmnopqrstuvwxyz0123456789");
+    v.push(f"tag{n}");
+    return E.A(R { id: n, v: v })
+}
+
+fn main() {
+    let mut xs: Vec[E] = Vec.new();
+    xs.push(mk(7));
+    let mut i = 0;
+    while i < 3 {
+        match xs[0] { E.A(r) => { println(f"n{r.id} {r.v.len()}"); } E.B => { } }
+        i = i + 1;
+    }
+    println("end");
+}

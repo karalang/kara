@@ -1,0 +1,145 @@
+// LeetCode #76: Minimum Window Substring — sliding window with need/have counts (★).
+//
+// Return the shortest substring of `s` that contains every character of `t`
+// INCLUDING multiplicity; "" (reported here as start = -1, length 0) if none
+// exists. The brute force checks every O(n²) window; the linear solution is the
+// two-pointer SLIDING WINDOW that grows the right edge until the window is
+// "complete", then shrinks the left edge as far as it can while staying complete,
+// recording the shortest complete window seen.
+//
+//   need[c]  = how many of char c the window still must contain (from t)
+//   required = number of DISTINCT chars t needs
+//   have[c]  = how many of char c the current window holds
+//   formed   = number of distinct chars whose have[c] has reached need[c]
+//
+//   expand right, adding s[r]:  have[s[r]]++; if have==need for that char, formed++
+//   while formed == required:   record window if shorter; then drop s[l], l++
+//                               (if dropping breaks a char's quota, formed--)
+//
+// Each index enters the window once (r++) and leaves once (l++), so it is O(|s| +
+// |t|) despite the nested loop. Character counts live in fixed length-128 `Vec[i64]`
+// tables — inputs are ASCII English letters, so the byte value IS the index, the
+// same `s.bytes()` zero-copy view katas [#3](../3-longest-substring-without-repeating-characters/)
+// and [#5](../5-longest-palindromic-substring/) use. Like kata [#5](../5-longest-palindromic-substring/)
+// we report the window's (start, length) rather than materialising the substring,
+// and additionally fold a hash of the window's bytes into the sink so the *content*
+// is cross-checked, not just the position.
+//
+// LeetCode bounds: 1 ≤ |s|, |t| ≤ 10⁵, English letters — counts and indices fit i64.
+
+fn min_window(s: ref String, t: ref String) -> Array[i64, 2] {
+    let sb = s.bytes();
+    let tb = t.bytes();
+    let n = s.len();
+    let m = t.len();
+
+    if m > n {
+        return [-1, 0];
+    }
+
+    // need[c] from t; required = distinct chars needed.
+    let mut need: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 128 {
+        need.push(0);
+        i = i + 1;
+    }
+    let mut required = 0;
+    i = 0;
+    while i < m {
+        let c = tb[i];
+        if need[c] == 0 {
+            required = required + 1;
+        }
+        need[c] = need[c] + 1;
+        i = i + 1;
+    }
+
+    let mut have: Vec[i64] = Vec.new();
+    i = 0;
+    while i < 128 {
+        have.push(0);
+        i = i + 1;
+    }
+
+    let mut formed = 0;
+    let mut l = 0;
+    let mut best_start = -1;
+    let mut best_len = 0;
+
+    let mut r = 0;
+    while r < n {
+        let cr = sb[r];
+        have[cr] = have[cr] + 1;
+        if have[cr] == need[cr] {
+            formed = formed + 1;
+        }
+
+        // Window [l, r] is complete — shrink from the left as far as possible.
+        while formed == required {
+            let win = r - l + 1;
+            if best_start == -1 or win < best_len {
+                best_start = l;
+                best_len = win;
+            }
+            let cl = sb[l];
+            have[cl] = have[cl] - 1;
+            if have[cl] < need[cl] {
+                formed = formed - 1;
+            }
+            l = l + 1;
+        }
+        r = r + 1;
+    }
+
+    [best_start, best_len]
+}
+
+// ---- test harness (shared verbatim by the Python mirror) -----------------------
+
+fn window_hash(s: ref String, start: i64, len: i64) -> i64 {
+    if start < 0 {
+        return 0;
+    }
+    let sb = s.bytes();
+    let mut acc = 0;
+    let mut i = 0;
+    while i < len {
+        acc = (acc * 131 + (sb[start + i] as i64)) % 1000000007;
+        i = i + 1;
+    }
+    acc
+}
+
+fn report(s: String, t: String, acc: mut ref String) {
+    let res = min_window(s, t);
+    let start = res[0];
+    let len = res[1];
+    let h = window_hash(s, start, len);
+    println(f"min_window(\"{s}\",\"{t}\") = {start} {len} [{h}]");
+    acc.push(' ');
+    acc.push_str(f"{start}");
+    acc.push(':');
+    acc.push_str(f"{len}");
+    acc.push(':');
+    acc.push_str(f"{h}");
+}
+
+fn main() {
+    let mut acc: String = "sums:";
+
+    report("ADOBECODEBANC", "ABC", mut acc);   // "BANC" -> 9 4
+    report("a", "a", mut acc);                 // "a"    -> 0 1
+    report("a", "aa", mut acc);                // ""     -> -1 0
+    report("a", "b", mut acc);                 // ""     -> -1 0
+    report("ab", "b", mut acc);                // "b"    -> 1 1
+    report("ab", "a", mut acc);                // "a"    -> 0 1
+    report("aa", "aa", mut acc);               // "aa"   -> 0 2
+    report("cabwefgewcwaefgcf", "cae", mut acc);  // "cwae" -> 10 4
+    report("abcabdebac", "cda", mut acc);      // "cabd" -> 2 4
+    report("bba", "ab", mut acc);              // "ba"   -> 1 2
+    report("aaaaaaaaaab", "b", mut acc);       // "b"    -> 10 1
+    report("ADOBECODEBANC", "ABCC", mut acc);  // needs 2 C's -> "CODEBANC" -> 5 8
+
+    println(acc);
+}

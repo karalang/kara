@@ -1,0 +1,22 @@
+
+fn main() {
+    let mut v1: Vec[String] = Vec.new();
+    v1.push("zeta".to_string()); v1.push("alpha".to_string());
+    v1.sort();
+    for x in v1 { println(x); }
+
+    let mut v2: Vec[String] = Vec.new();
+    v2.push("delta".to_string()); v2.push("beta".to_string());
+    v2.sort();
+    for x in v2 { println(x); }
+
+    let mut v3: Vec[i64] = Vec.new();
+    v3.push(1_i64); v3.push(2_i64); v3.push(3_i64);
+    v3.pop();
+    println(v3.len());
+
+    let mut v4: Vec[i64] = Vec.new();
+    v4.push(8_i64); v4.push(9_i64);
+    v4.remove(0_i64);
+    println(v4.len());
+}

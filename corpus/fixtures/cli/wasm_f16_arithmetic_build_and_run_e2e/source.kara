@@ -1,0 +1,30 @@
+
+fn main() {
+    let n = env.args().len() as i64;
+    let one: f32 = n as f32;
+    let big: f16 = (one * 65504.0f32) as f16;
+    let three: f16 = (one * 3.0f32) as f16;
+    let a: f16 = (one * 3.5f32) as f16;
+    let b: f16 = (one * 1.25f32) as f16;
+    let p: f16 = (one * 0.1f32) as f16;
+    let q: f16 = (one * 0.3f32) as f16;
+    let tiny: f16 = (one * 0.00006103515625f32) as f16;
+
+    println(f"ovf {big * three} {big + three}");
+    println(f"div {a / b} {p / q}");
+    println(f"inx {p + q} {p * q} {p - q}");
+    println(f"unf {tiny * tiny}");
+    let mut s: f16 = p;
+    let mut i: i64 = 0;
+    while i < 8 {
+        s = s + p;
+        i = i + 1;
+    }
+    println(f"acc {s}");
+    println(f"mth {big.sqrt()} {a.exp()} {a.ln()} {a.floor()}");
+    let u: Vector[f16, 4] = Vector[f16, 4](big, p, a, tiny);
+    let v: Vector[f16, 4] = Vector[f16, 4](three, q, b, tiny);
+    let w = u * v;
+    let z = u + v;
+    println(f"vec {w[0]} {w[1]} {w[3]} {z[1]}");
+}

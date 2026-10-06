@@ -1,0 +1,52 @@
+
+struct Holder {
+    a: Vec[i64],
+    b: Vec[i64],
+}
+
+trait DbA { fn fetch(ref self) -> Vec[i64]; }
+trait DbB { fn fetch(ref self) -> Vec[i64]; }
+
+pub effect resource R1: DbA;
+pub effect resource R2: DbB;
+
+struct InMemA {}
+struct InMemB {}
+
+impl DbA for InMemA {
+    fn fetch(ref self) -> Vec[i64] {
+        let mut v: Vec[i64] = Vec.new();
+        v.push(1);
+        v
+    }
+}
+
+impl DbB for InMemB {
+    fn fetch(ref self) -> Vec[i64] {
+        let mut v: Vec[i64] = Vec.new();
+        v.push(2);
+        v
+    }
+}
+
+fn fetch_a() -> Vec[i64] with reads(R1) { R1.fetch() }
+fn fetch_b() -> Vec[i64] with reads(R2) { R2.fetch() }
+
+fn assemble() -> Holder with reads(R1) reads(R2) {
+    let a = fetch_a();
+    let b = fetch_b();
+    Holder { a: a, b: b }
+}
+
+fn main() {
+    let mut da = InMemA {};
+    let mut db = InMemB {};
+    with_provider[R1](da, || {
+        with_provider[R2](db, || {
+            let h = assemble();
+            println("before");
+            let _ = h;
+            println("after");
+        });
+    });
+}

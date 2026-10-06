@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let base = "rc-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    m.insert(base.clone(), 7_i64);
+    if m.contains_key(base.clone()) {
+        println("present");
+    }
+    match m.remove("absent-key-bbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()) {
+        Some(x) => println(x),
+        None => println(-1_i64),
+    }
+    println(m.len());
+}

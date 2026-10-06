@@ -1,0 +1,6 @@
+shared struct Sh { n: i64 }
+enum Pair[A, B] { L(A), R(B) }
+fn main() {
+    { let p: Pair[Sh, i64] = Pair.L(Sh { n: 3 }); println("l"); }
+    { let q: Pair[Sh, i64] = Pair.R(7); println("r"); }
+}

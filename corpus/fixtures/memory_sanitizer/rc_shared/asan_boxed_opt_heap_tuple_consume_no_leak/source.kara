@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let mut v: Vec[(String, String)] = Vec.new();
+        v.push((f"key-{n}-padpad", f"val-{n}-padpad"));
+        match v.pop() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
+
+        let mut w: Vec[(String, String)] = Vec.new();
+        w.push((f"k2-{n}-padpad", f"v2-{n}-padpad"));
+        match w.pop() { Some((a, b)) => println(f"{a}={b}"), None => println("n") }
+        n = n + 1;
+    }
+}

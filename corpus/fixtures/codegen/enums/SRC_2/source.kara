@@ -1,0 +1,13 @@
+
+enum MyIoErr {
+    NotFound,
+    PermissionDenied,
+    Other(String),
+}
+fn main() {
+    let e = MyIoErr.Other("disk full");
+    match e {
+        Other(msg) => println(msg),
+        _ => println("wrong variant"),
+    }
+}

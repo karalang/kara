@@ -1,0 +1,110 @@
+// LeetCode #64: Minimum Path Sum — one rolling row of DP, O(m·n) time, O(n) space (★).
+//
+// The per-cell-cost sequel to katas [#62](../62-unique-paths/) (count paths) and
+// [#63](../63-unique-paths-ii/) (count paths around obstacles). Same grid, same
+// right/down moves — but now every cell carries a non-negative COST, and instead
+// of *counting* paths we want the one path whose costs sum to the least. The
+// recurrence swaps `+` (sum over both in-neighbours) for `cost + min` (take the
+// cheaper in-neighbour):
+//
+//     best[i][j] = grid[i][j] + min(best[i-1][j], best[i][j-1])
+//
+// with the borders forced, since a border cell has only ONE in-neighbour:
+//
+//     best[0][0] = grid[0][0]
+//     best[0][j] = best[0][j-1] + grid[0][j]     (top row: only comes from the left)
+//     best[i][0] = best[i-1][0] + grid[i][0]     (left col: only comes from above)
+//
+// This is exactly the generalisation #62's README flagged as forcing the DP:
+// "add per-cell costs (#64) and there is no closed form — the recurrence becomes
+// mandatory." There is no binomial here and no symmetry to exploit; the min is
+// the whole point, and it makes the problem a shortest-path on a DAG that the
+// row-by-row scan solves in one pass.
+//
+// Rolling the 2-D table onto ONE array, exactly as #62/#63 do: the recurrence
+// only ever reads the row directly above, so a single array updated in place,
+// left to right, suffices —
+//
+//     dp[j]  currently holds  best[i-1][j]   (the cell above, this column)
+//     dp[j] = grid[i][j] + min(dp[j], dp[j-1])
+//                          ^^^^^^  ^^^^^^^^
+//                          above    left (already advanced to this row)
+//
+// At the instant `dp[j]` is read it still holds the row-above value (not yet
+// overwritten this pass), while `dp[j-1]` was already advanced to the current
+// row — the two in-neighbours the min chooses between. The left column has no
+// left neighbour, so `dp[0]` just accumulates downward: `dp[0] += grid[i][0]`.
+// Like #63 (and unlike #62) there is no axis symmetry to swap on, so the buffer
+// spans the real column count `n` — O(n) space.
+//
+// Costs are non-negative and ≤ 200 with m, n ≤ 200, so the longest path sums at
+// most 200·(200+200) = 80_000; i64 is used for corpus uniformity and never comes
+// close to overflow. Every `dp[j]` is a partial path cost ≤ the final answer.
+
+fn min_path_sum(grid: ref Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+
+    // Seed the top row: best[0][j] is the running left-to-right prefix sum, since
+    // the only way to reach a top-row cell is a straight run of rights.
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < cols {
+        if j == 0 {
+            dp.push(grid[0][0]);
+        } else {
+            let prev = dp[j - 1];
+            dp.push(prev + grid[0][j]);
+        }
+        j = j + 1;
+    }
+
+    // Fold each subsequent row in place.
+    let mut i = 1;
+    while i < rows {
+        // Left column: no left neighbour, so it only accumulates from above.
+        dp[0] = dp[0] + grid[i][0];
+        let mut c = 1;
+        while c < cols {
+            // cell above (old dp[c]) vs cell to the left (updated dp[c-1])
+            dp[c] = grid[i][c] + min(dp[c], dp[c - 1]);
+            c = c + 1;
+        }
+        i = i + 1;
+    }
+
+    dp[cols - 1]
+}
+
+// ---- test harness (shared verbatim by all three solvers + the Python mirror) --
+
+fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+    let ans = min_path_sum(grid);
+    println(f"{ans}");
+    s.push(' ');
+    s.push_str(f"{ans}");
+}
+
+fn main() {
+    // One answer per case, then a `sums:` fold every solver and the oracle print
+    // identically for a byte-for-byte diff.
+    let mut s: String = "sums:";
+
+    report([[1, 3, 1], [1, 5, 1], [4, 2, 1]], mut s);   // 7   — LeetCode example 1
+    report([[1, 2, 3], [4, 5, 6]], mut s);              // 12  — LeetCode example 2
+    report([[5]], mut s);                               // 5   — single cell
+    report([[1, 2, 3, 4]], mut s);                      // 10  — single row (all rights)
+    report([[1], [2], [3]], mut s);                     // 6   — single column (all downs)
+    report([[1, 2], [1, 1]], mut s);                    // 3   — 2×2, cheaper path down-first
+    report([[0, 0, 0], [0, 0, 0], [0, 0, 0]], mut s);   // 0   — all-zero grid
+    report([[1, 9, 9], [1, 9, 9], [1, 1, 1]], mut s);   // 5   — the cheap L-shaped route
+    report([[1, 3, 1, 2],                               // 9   — 4×4 mixed
+            [2, 1, 3, 1],
+            [3, 2, 1, 4],
+            [1, 1, 1, 1]], mut s);
+    report([[200, 200], [200, 200]], mut s);            // 600 — max cell values
+    report([[7], [3], [9], [1], [5]], mut s);           // 25  — 5×1 column
+    report([[2, 2, 2, 2, 2, 2]], mut s);                // 12  — 1×6 row
+
+    println(s);
+}

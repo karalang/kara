@@ -1,0 +1,13 @@
+
+fn main() {
+    let c: Column[f64] = Column.from_vec([4.0, 1.0, 3.0, 2.0, 5.0]);
+    // Repeated median/quantile — each mallocs + frees its own scratch buffer.
+    println(c.median());
+    println(c.quantile(0.25));
+    println(c.quantile(0.75));
+    // Null-skipping median over an integer column (separate buffer).
+    let o: Column[i64] = Column.from_iter_nullable([Some(9), None, Some(1), Some(5)]);
+    println(o.median());
+    // c still usable afterward (borrowed, not consumed).
+    println(c.len());
+}

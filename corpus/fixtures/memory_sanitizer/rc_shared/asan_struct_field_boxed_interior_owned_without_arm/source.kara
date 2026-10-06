@@ -1,0 +1,27 @@
+
+struct S { o: Option[Option[String]] }
+fn cls(r: Result[S, i64]) -> i64 {
+    match r { Result.Ok(s) => match s.o { Option.Some(Option.Some(t)) => t.len() as i64, _ => -1 }, Result.Err(e) => e }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let nomatch: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"a{n + i}")) });
+        let wild: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"b{n + i}")) });
+        acc = acc + match wild { Result.Ok(_) => 1, Result.Err(e) => e };
+        let sbind: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"c{n + i}")) });
+        acc = acc + match sbind { Result.Ok(s) => 2, Result.Err(e) => e };
+        let deep: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"d{n + i}")) });
+        acc = acc + match deep {
+            Result.Ok(s) => match s.o { Option.Some(Option.Some(t)) => t.len() as i64, _ => -1 },
+            Result.Err(e) => e,
+        };
+        let bound: Result[S, i64] = Result.Ok(S { o: Option.Some(Option.Some(f"e{n + i}")) });
+        acc = acc + cls(bound);
+        acc = acc + cls(Result.Ok(S { o: Option.Some(Option.Some(f"f{n + i}")) }));
+        i = i + 1;
+    }
+    println(acc);
+}

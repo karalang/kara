@@ -1,0 +1,32 @@
+fn show[T: Display](x: Option[T]) { match x { Some(t) => { println(f"{t}") } None => { println("n") } } }
+struct H { }
+impl H {
+    fn m[T: Display](ref self, x: Option[T]) { match x { Some(t) => { println(f"m:{t}") } None => { println("n") } } }
+}
+fn showr[T: Display](x: Result[T, String]) { match x { Ok(t) => { println(f"r:{t}") } Err(e) => { println(e) } } }
+fn main() {
+    let a2: Array[i64, 2] = [1, 2];
+    let a3: Array[i64, 3] = [7, 8, 9];
+    let s2: Slice[i64] = a2[0..2];
+    let mut v: Vec[i64] = Vec.new(); v.push(4); v.push(5);
+    let vs: Vec[String] = ["ab", "cd"];
+    let vs2: Vec[String] = ["ef"];
+    let sv: Slice[String] = vs.as_slice();
+    let t2: (i64, i64) = (5, 6);
+    let v4: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    show(Some(a2));
+    show(Some(a3));
+    show(Some(s2));
+    show(Some(v));
+    show(Some(sv));
+    show(Some(vs2));
+    show(Some(t2));
+    show(Some(v4));
+    show(Some(7));
+    show(Some("hi"));
+    let h = H { };
+    h.m(Some(a3));
+    showr(Ok(a2));
+    let n: Option[i64] = None;
+    show(n);
+}

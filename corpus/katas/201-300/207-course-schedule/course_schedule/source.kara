@@ -1,0 +1,107 @@
+// LeetCode 207 — Course Schedule.
+//
+// `num_courses` courses labelled 0..num_courses, and a list of prerequisite
+// pairs `[a, b]` meaning "course b must be taken before course a". Return true
+// iff every course can be finished — i.e. the prerequisite graph has no cycle.
+//
+// Kahn's topological sort. Model each pair `[a, b]` as a directed edge b -> a,
+// and track each node's in-degree (how many prerequisites still block it). Seed
+// a queue with every in-degree-0 course (nothing blocks it), then repeatedly
+// pop one, "finish" it, and relax its out-edges — decrementing each neighbour's
+// in-degree and enqueuing any that reach zero. If every course gets finished,
+// the graph is acyclic; if a cycle exists, its nodes never reach in-degree 0 and
+// the finished count falls short.
+
+fn can_finish(num_courses: i64, prereqs: ref Vec[Vec[i64]]) -> bool {
+    // adjacency list + in-degree, one slot per course
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    let mut indeg: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < num_courses {
+        adj.push(Vec.new());
+        indeg.push(0);
+        i = i + 1;
+    }
+
+    let m = prereqs.len();
+    let mut e = 0;
+    while e < m {
+        let pair = ref prereqs[e];
+        let a = pair[0];            // course a ...
+        let b = pair[1];            // ... requires b first
+        adj[b].push(a);             // edge b -> a
+        indeg[a] = indeg[a] + 1;
+        e = e + 1;
+    }
+
+    // Queue as a Vec + head cursor (classic index-pool FIFO).
+    let mut queue: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < num_courses {
+        if indeg[c] == 0 { queue.push(c); }
+        c = c + 1;
+    }
+
+    let mut head = 0;
+    let mut finished = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head = head + 1;
+        finished = finished + 1;
+        let neighbors = ref adj[node];
+        let mut k = 0;
+        while k < neighbors.len() {
+            let nb = neighbors[k];
+            indeg[nb] = indeg[nb] - 1;
+            if indeg[nb] == 0 { queue.push(nb); }
+            k = k + 1;
+        }
+    }
+
+    return finished == num_courses;
+}
+
+fn report(num_courses: i64, prereqs: ref Vec[Vec[i64]]) {
+    if can_finish(num_courses, prereqs) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    let single: Vec[Vec[i64]] = Vec.new();
+    report(1, single);                       // true — no prerequisites
+
+    let mut a: Vec[Vec[i64]] = Vec.new();
+    a.push([1, 0]);
+    report(2, a);                            // true — take 0 then 1
+
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([1, 0]);
+    b.push([0, 1]);
+    report(2, b);                            // false — 0<->1 cycle
+
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    c.push([1, 0]);
+    c.push([2, 0]);
+    c.push([3, 1]);
+    c.push([3, 2]);
+    report(4, c);                            // true — diamond, acyclic
+
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    d.push([0, 1]);
+    d.push([1, 2]);
+    d.push([2, 0]);
+    report(3, d);                            // false — 3-cycle
+
+    let mut e: Vec[Vec[i64]] = Vec.new();
+    e.push([1, 0]);
+    e.push([2, 1]);
+    e.push([3, 2]);
+    e.push([4, 3]);
+    report(5, e);                            // true — linear chain
+
+    let empty: Vec[Vec[i64]] = Vec.new();
+    report(3, empty);                        // true — three independent courses
+}

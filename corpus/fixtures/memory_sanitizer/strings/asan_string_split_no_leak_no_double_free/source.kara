@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let line = "a,bb,ccc,dddd";
+        let fields = line.split(',');
+        total = total + fields.len();
+        for f in fields { total = total + f.len(); }
+        i = i + 1;
+    }
+    println(f"{total}");
+}

@@ -1,0 +1,13 @@
+source = "tests/interpreter/map_set.rs::test_for_loop_on_map_iter_destructures_kv"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,14 @@
+
+effect resource Net;
+effect resource Disk;
+effect resource Db;
+
+fn fetch_net() -> i64 reads(Net) { 1 }
+fn fetch_disk() -> i64 reads(Disk) { 2 }
+fn fetch_db() -> i64 reads(Db) { 3 }
+
+fn main() {
+    let _ = fetch_net();
+    let _ = fetch_disk();
+    let _ = fetch_db();
+}

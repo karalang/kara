@@ -1,0 +1,39 @@
+
+struct Hs2 { b: Option[Option[String]] }
+struct Hs3 { b: Option[Option[Option[String]]] }
+struct Hs4 { b: Option[Option[Option[Option[String]]]] }
+struct Hi3 { b: Option[Option[Option[i64]]] }
+fn mkstr(n: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("envelope-");
+    s.push_str(n.to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a2: Hs2 = Hs2 { b: Option.Some(Option.Some(mkstr(n + i))) };
+        match a2.b { Option.Some(Option.Some(t)) => { if t.contains("envelope-") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+
+        let a3: Hs3 = Hs3 { b: Option.Some(Option.Some(Option.Some(mkstr(n + i)))) };
+        match a3.b { Option.Some(Option.Some(Option.Some(t))) => { if t.contains("envelope-") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+
+        let a4: Hs4 = Hs4 { b: Option.Some(Option.Some(Option.Some(Option.Some(mkstr(n + i))))) };
+        match a4.b { Option.Some(Option.Some(Option.Some(Option.Some(t)))) => { if t.contains("envelope-") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+
+        let g: Hs3 = Hs3 { b: Option.Some(Option.Some(Option.Some(mkstr(n + i)))) };
+        match g.b { Option.Some(Option.Some(Option.None)) => { acc = acc - 1; } _ => { acc = acc + 0; } }
+
+        let s3: Hi3 = Hi3 { b: Option.Some(Option.Some(Option.Some(n + i))) };
+        match s3.b { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let u: Hs3 = Hs3 { b: Option.Some(Option.Some(Option.Some(mkstr(n + i)))) };
+        acc = acc + 0;
+
+        i = i + 1;
+    }
+    println(acc);
+}

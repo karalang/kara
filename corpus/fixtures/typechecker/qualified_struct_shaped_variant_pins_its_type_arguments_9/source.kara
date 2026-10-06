@@ -1,0 +1,2 @@
+enum Col { S { v: i64 }, E }
+fn main() { let x: Col = Col.S { v: 3 }; match x { S { v } => { println(f"{v}") } E => { println("e") } } }

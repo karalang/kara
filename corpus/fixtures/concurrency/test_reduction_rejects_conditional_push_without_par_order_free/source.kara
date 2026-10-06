@@ -1,0 +1,10 @@
+
+        fn main() {
+            let mut results: Vec[i64] = Vec.new();
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                if k > 5i64 { results.push(k); }
+                k = k + 1i64;
+            }
+        }
+        

@@ -1,0 +1,62 @@
+// LeetCode #50: Pow(x, n) — iterative square-and-multiply (binary exponentiation).
+//
+// Same O(log |n|) exponentiation by squaring as recursive.kara, written as a
+// bottom-up loop over the bits of n. Read n from its lowest bit upward: keep a
+// running `base` that holds x^(2^k) at bit position k, and fold it into the
+// result exactly when that bit is set:
+//
+//     n = Σ bit_k · 2^k   ⇒   x^n = Π  base_k   over the set bits k
+//
+// So each iteration squares THE BASE (base = base * base, advancing k → k+1)
+// and, when the current low bit is 1, multiplies it into `result`. This differs
+// from recursive.kara — which squares the PARTIAL POWER on the way back up — in
+// the ORDER the factors are multiplied. Real multiplication is associative, but
+// IEEE-754 rounding is not, so on inexact bases the two orders can land one ULP
+// apart (both within LeetCode's 1e-5 tolerance; see the README). On exactly
+// representable results — as in `main` below — they agree bit-for-bit.
+
+fn fast_pow(x: f64, n: i64) -> f64 {
+    let mut result = 1.0;
+    let mut base = x;
+    let mut e = n;
+    while e > 0 {
+        if e & 1 == 1 {
+            result = result * base;   // low bit set: fold in x^(2^k)
+        }
+        base = base * base;           // advance to the next bit: square the base
+        e = e >> 1;
+    }
+    result
+}
+
+// ---- everything below is line-for-line identical to recursive.kara ----------
+
+fn my_pow(x: f64, n: i64) -> f64 {
+    if n < 0 {
+        1.0 / fast_pow(x, -n)        // x^n = 1 / x^(-n); -n in i64 so n=-2^31 is safe
+    } else {
+        fast_pow(x, n)
+    }
+}
+
+fn main() {
+    // Every case below has an EXACTLY representable f64 result (a power of two,
+    // an integer, or ±1), so the recursive and iterative solvers — and the
+    // Python oracle — agree byte-for-byte. See the README for why inexact bases
+    // (e.g. 2.1^3) diverge by one ULP between the two algorithms.
+    println(my_pow(2.0, 10));           // 1024
+    println(my_pow(2.0, -2));           // 0.25
+    println(my_pow(2.0, 0));            // 1
+    println(my_pow(2.0, -3));           // 0.125
+    println(my_pow(-2.0, 3));           // -8
+    println(my_pow(0.5, 4));            // 0.0625
+    println(my_pow(3.0, 5));            // 243
+    println(my_pow(2.0, 30));           // 1073741824
+    println(my_pow(2.0, -10));          // 0.0009765625
+    println(my_pow(10.0, 4));           // 10000
+    println(my_pow(1.0, 2147483647));   // 1            (INT_MAX exponent)
+    println(my_pow(1.0, -2147483648));  // 1            (INT_MIN exponent, |n|=2^31)
+    println(my_pow(2.0, -2147483648));  // 0            (underflows to +0)
+    println(my_pow(-1.0, 2147483647));  // -1           (odd power of -1)
+    println(my_pow(0.5, -3));           // 8            (negative exp of a fraction)
+}

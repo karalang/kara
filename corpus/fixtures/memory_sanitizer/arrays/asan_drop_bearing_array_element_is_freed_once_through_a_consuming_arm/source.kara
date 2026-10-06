@@ -1,0 +1,71 @@
+
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"hd-{self.id}-{self.s}"); } }
+
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"np-{self.id}"); } }
+
+enum Hd { A(Array[D, 2]), B }
+enum Np { A(Array[P, 2]), B }
+enum Sp { A(Array[String, 2]), B }
+
+fn mkhd(n: i64) -> Hd {
+    let a: Array[D, 2] = [D { id: n, s: f"b25-left-aaaaaaaaaaaaaaaa-{n}" }, D { id: n + 100, s: f"b25-right-bbbbbbbbbbbbbbbb-{n}" }];
+    return Hd.A(a);
+}
+fn mknp(n: i64) -> Np {
+    let a: Array[P, 2] = [P { id: n }, P { id: n + 100 }];
+    return Np.A(a);
+}
+fn mksp(n: i64) -> Sp {
+    let a: Array[String, 2] = [f"b25-sp-cccccccccccccccc-{n}", f"b25-sp-dddddddddddddddd-{n}"];
+    return Sp.A(a);
+}
+
+fn takehd(a: Array[D, 2]) -> i64 { return a[0].id; }
+fn takenp(a: Array[P, 2]) -> i64 { return a[0].id; }
+fn takesp(a: Array[String, 2]) -> i64 { return a[0].len(); }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+        match mkhd(i) {
+            Hd.A(a) => { println(f"consume:{takehd(a)}"); }
+            Hd.B => {}
+        }
+
+        let e2: Hd = mkhd(i);
+        match e2 {
+            Hd.A(a) => { println(f"bound:{takehd(a)}"); }
+            Hd.B => {}
+        }
+
+        let e3: Hd = mkhd(i);
+        match e3 {
+            Hd.A(a) => { println(f"readonly:{a[1].id}"); }
+            Hd.B => {}
+        }
+
+        let e4: Np = mknp(i);
+        match e4 {
+            Np.A(a) => { println(f"noheap:{takenp(a)}"); }
+            Np.B => {}
+        }
+
+        let e5: Sp = mksp(i);
+        match e5 {
+            Sp.A(a) => { println(f"strpay:{takesp(a)}"); }
+            Sp.B => {}
+        }
+
+        let bv: Array[D, 2] = [D { id: i + 20, s: f"b25-byval-gggggggggggggggg-{i}" }, D { id: i + 21, s: f"b25-byval-hhhhhhhhhhhhhhhh-{i}" }];
+        println(f"byval:{takehd(bv)}");
+
+        let pv: Array[D, 2] = [D { id: i + 7, s: f"b25-push-eeeeeeeeeeeeeeee-{i}" }, D { id: i + 8, s: f"b25-push-ffffffffffffffff-{i}" }];
+        let mut v: Vec[Array[D, 2]] = Vec.new();
+        v.push(pv);
+        println(f"push:{v.len()}");
+
+        i = i + 1;
+    }
+}

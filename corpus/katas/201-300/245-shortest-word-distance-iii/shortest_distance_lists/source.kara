@@ -1,0 +1,96 @@
+// LeetCode 245 — Shortest Word Distance III, the index-list phrasing.
+//
+// The family's third canonical shape, carried over from #243's
+// `shortest_distance_lists.kara` and #244: collect EVERY position of each word,
+// then answer from the lists.
+//
+// The same-word case is where this phrasing pays off in clarity. With one list
+// of positions, the answer is just the smallest gap between ADJACENT entries —
+// the "only consecutive occurrences can win" argument becomes a one-line loop
+// over `p1[a] - p1[a-1]` with nothing to prove at the call site. The
+// different-word case is #244's two-pointer merge unchanged.
+//
+// Strictly worse than the one-pass variants for a single query — O(n) space and
+// two passes instead of O(1) and one — and that is the honest reason it is
+// third. It earns its place as a distinct compiler surface (`Vec[i64]` growth,
+// `.abs()`, two cursors, and a returned `Vec` rather than a scalar) and because
+// it is the shape that survives into #244, where the lists are built once and
+// only the merge stays in the query path.
+
+fn positions_of(words: ref Slice[String], word: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        if words[i] == word {
+            out.push(i);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn shortest_word_distance(words: ref Slice[String], word1: ref String, word2: ref String) -> i64 {
+    let n = words.len();
+    let mut best = n;
+    let p1 = positions_of(words, word1);
+
+    if word1 == word2 {
+        // One list: only adjacent pairs can win, so a single sweep suffices.
+        let mut a = 1;
+        while a < p1.len() {
+            best = min(best, p1[a] - p1[a - 1]);
+            a = a + 1;
+        }
+        return best;
+    }
+
+    // Two lists: advance whichever cursor is behind.
+    let p2 = positions_of(words, word2);
+    let mut a = 0;
+    let mut b = 0;
+    while a < p1.len() and b < p2.len() {
+        best = min(best, (p1[a] - p2[b]).abs());
+        if p1[a] < p2[b] {
+            a = a + 1;
+        } else {
+            b = b + 1;
+        }
+    }
+    return best;
+}
+
+fn report(words: ref Slice[String], word1: ref String, word2: ref String) {
+    println(f"{word1} <-> {word2} : {shortest_word_distance(words, word1, word2)}");
+}
+
+fn main() {
+    let d1: Array[String, 5] = ["practice", "makes", "perfect", "coding", "makes"];
+    report(d1, "makes", "coding");      // 1
+    report(d1, "makes", "makes");       // 3
+    report(d1, "coding", "practice");   // 3
+
+    let d2: Array[String, 7] = ["a", "b", "x", "x", "x", "a", "b"];
+    report(d2, "a", "b");               // 1
+    report(d2, "a", "a");               // 5
+    report(d2, "x", "x");               // 1
+    report(d2, "b", "b");               // 5
+
+    let d3: Array[String, 2] = ["a", "b"];
+    report(d3, "a", "b");               // 1
+
+    let d4: Array[String, 6] = ["p", "q", "p", "q", "p", "q"];
+    report(d4, "p", "q");               // 1
+    report(d4, "p", "p");               // 2
+
+    let d5: Array[String, 6] = ["m", "z", "z", "z", "n", "m"];
+    report(d5, "m", "m");               // 5
+    report(d5, "z", "z");               // 1
+    report(d5, "m", "n");               // 1
+
+    // A single occurrence leaves the adjacent-gap loop with nothing to do, so
+    // `best` stays at the upper bound — no special case needed.
+    let d6: Array[String, 3] = ["one", "two", "three"];
+    report(d6, "two", "two");           // 3
+    report(d6, "two", "four");          // 3
+}

@@ -1,0 +1,14 @@
+
+fn main() with reads(FileSystem) {{
+    match DataFrame.read_csv("{path}") {{
+        Ok(df) => {{
+            println(df.width());
+            println(df.height());
+            let s: Column[String] = df.column("s");
+            match s[0] {{ Some(v) => println(v.len()), None => println(-1) }}
+            let o: Column[i64] = df.column("opt");
+            println(o.null_count());
+        }}
+        Err(_) => println(-2),
+    }}
+}}

@@ -1,0 +1,27 @@
+
+shared struct N { mut v: i64 }
+
+fn build_map() -> Map[i64, weak N] {
+    let mut m: Map[i64, weak N] = Map.new();
+    let a: N = N { v: 41i64 };
+    m.insert(1i64, a);
+    match m.get(1i64) { Some(x) => { println(x.v); } None => { println(0 - 1); } }
+    return m;
+}
+
+// Overwrite the dead frame so a stale pointer cannot read as live by residue.
+fn churn(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    return n + churn(n - 1);
+}
+
+fn main() {
+    let m: Map[i64, weak N] = build_map();
+    println(churn(60));
+    // The referent died with `build_map`'s frame; the map's weak ref must
+    // upgrade to `None` rather than hand back the freed box.
+    match m.get(1i64) { Some(y) => { println(y.v); } None => { println(0 - 99); } }
+    // A key that was never inserted is the same `None`, and it must not read
+    // the uninitialised value slot the runtime leaves untouched on a miss.
+    match m.get(7i64) { Some(z) => { println(z.v); } None => { println(0 - 7); } }
+}

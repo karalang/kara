@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut out: Vec[String] = Vec.new();
+    out.push("  Hello  ".to_string());
+    match out.first().map(|s| s.to_uppercase()) { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| s.trim()) { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| s.to_lowercase()) { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| s.replace("l", "L")) { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| s.to_string()) { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| f"[{s}]") { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| { let t = s.to_uppercase(); t }) { Some(v) => println(v), None => println("-") }
+    let empty: Vec[String] = Vec.new();
+    match empty.first().map(|s| s.to_uppercase()) { Some(v) => println(v), None => println("-") }
+}

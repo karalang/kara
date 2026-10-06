@@ -1,0 +1,4 @@
+
+fn need_copy[T](a: T, b: T) -> i64 where T: Copy { let x = a; return 1; }
+fn caller[T: Copy](v: T) -> i64 { let w: T = v; return need_copy(w, v); }
+fn main() { println(f"{caller(3)}"); }

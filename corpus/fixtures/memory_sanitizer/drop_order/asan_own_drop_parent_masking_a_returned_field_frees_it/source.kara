@@ -1,0 +1,36 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}") } }
+
+struct W { r: R, n: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"drop W{self.n}") } }
+
+struct Two { a: R, b: R }
+impl Drop for Two { fn drop(mut ref self) { println("drop Two") } }
+
+#[allow(partial_move_of_drop_struct)]
+fn take(w: W) -> R { let W { r, n } = w; r }
+// B-2026-09-03-20 — `return w.r;` is a partial move out of an own-`Drop` `W`
+// exactly as the destructure above is; it went unflagged only while the rule
+// was site-based. B-2026-09-01-43 deliberately left this one WITHOUT an
+// `#[allow]` so it would fail the moment the rule reached `return`, rather
+// than pre-masking the fixture that proves the widening works.
+#[allow(partial_move_of_drop_struct)]
+fn take_field(w: W) -> R { return w.r; }
+#[allow(partial_move_of_drop_struct)]
+fn take_a(t: Two) -> R { let Two { a, b } = t; a }
+fn use_n(w: W) -> i64 { return w.n; }
+fn mk() -> W { return W { r: R { id: 7, name: f"m{7}" }, n: 9 }; }
+
+fn main() {
+    let x = take(W { r: R { id: 41, name: f"a{1}" }, n: 1 });
+    println(x.name);
+    let y = take_field(W { r: R { id: 42, name: f"b{2}" }, n: 2 });
+    println(y.name);
+    let z = take_a(Two { a: R { id: 43, name: f"c{3}" }, b: R { id: 44, name: f"d{4}" } });
+    println(z.name);
+    let k = use_n(W { r: R { id: 45, name: f"e{5}" }, n: 3 });
+    println(f"{k}");
+    let q = take(mk());
+    println(q.name);
+}

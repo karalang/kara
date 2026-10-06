@@ -1,0 +1,9 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let mut p = v.iter().take(0).peekable();
+    match p.peek() {
+        Some(_) => println("yes"),
+        None => println("none"),
+    }
+}

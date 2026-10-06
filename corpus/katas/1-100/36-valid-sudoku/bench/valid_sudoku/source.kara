@@ -1,0 +1,90 @@
+// LeetCode #36 bench harness — Kāra, the single-pass bitmask style (★).
+//
+// The headline ★ style: validate a 9×9 board in one pass with three nine-element
+// bitmask arrays (rows / cols / boxes). For each filled cell (r, c) with digit d,
+// test bit (1 << d) against the row, column, and box masks; a collision means the
+// board is invalid (early return), otherwise set the bit in all three. Pure branchy
+// integer compute over a fixed-size grid, and — crucially for a fair bench — NO
+// heap allocation in the hot path: the board is one stack array, the three masks
+// are stack `Array[i64, 9]` locals reset per call, so this measures validation
+// codegen, not the allocator.
+//
+// Workload: build one fixed, fully-solved (valid) board once as a flat
+// `Array[i64, 81]` (0 would mark empty; the solved board has none). Then TOTAL
+// times, PERTURB one cell — position `k % 81` set to digit `(k % 9) + 1` — validate
+// the perturbed board, fold the boolean verdict into a checksum, and restore the
+// cell. The perturbation varies with the loop index, so no comparator can hoist the
+// validation out of the loop; roughly half the perturbations introduce a duplicate
+// (exercising the early-return path) and half leave a valid board (exercising the
+// full 81-cell scan). The accumulator carries a loop-borne dependency, so this is a
+// single-lane (seq) bench by construction. The board is passed as `Slice[i64]` —
+// the idiomatic borrowed view (an `Array` coerces to it), exactly as the
+// binary-search katas pass `nums`.
+
+fn box_index(r: i64, c: i64) -> i64 {
+    (r / 3) * 3 + c / 3
+}
+
+fn is_valid(board: Slice[i64]) -> bool {
+    let mut rows: Array[i64, 9] = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut cols: Array[i64, 9] = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut boxes: Array[i64, 9] = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut r = 0;
+    while r < 9 {
+        let mut c = 0;
+        while c < 9 {
+            let d = board[r * 9 + c];
+            if d != 0 {
+                let bit = 1 << d;
+                let b = box_index(r, c);
+                if (rows[r] & bit) != 0
+                    or (cols[c] & bit) != 0
+                    or (boxes[b] & bit) != 0 {
+                    return false;
+                }
+                rows[r] = rows[r] | bit;
+                cols[c] = cols[c] | bit;
+                boxes[b] = boxes[b] | bit;
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    true
+}
+
+fn main() {
+    let total = 5000000;
+    let modulus = 1000000007;
+
+    // A fully-solved, valid 9×9 board, flat row-major.
+    let mut board: Array[i64, 81] = [
+        5, 3, 4, 6, 7, 8, 9, 1, 2,
+        6, 7, 2, 1, 9, 5, 3, 4, 8,
+        1, 9, 8, 3, 4, 2, 5, 6, 7,
+        8, 5, 9, 7, 6, 1, 4, 2, 3,
+        4, 2, 6, 8, 5, 3, 7, 9, 1,
+        7, 1, 3, 9, 2, 4, 8, 5, 6,
+        9, 6, 1, 5, 3, 7, 2, 8, 4,
+        2, 8, 7, 4, 1, 9, 6, 3, 5,
+        3, 4, 5, 2, 8, 6, 1, 7, 9,
+    ];
+
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        let pos = k % 81;
+        let digit = (k % 9) + 1;
+        let save = board[pos];
+        board[pos] = digit;                 // perturb one cell
+        let mut v = 0;
+        if is_valid(board) {
+            v = 1;
+        }
+        acc = (acc * 31 + v) % modulus;
+        board[pos] = save;                  // restore for the next iteration
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

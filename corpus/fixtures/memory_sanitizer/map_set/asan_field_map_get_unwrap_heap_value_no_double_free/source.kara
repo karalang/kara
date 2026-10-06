@@ -1,0 +1,27 @@
+
+struct Holder { tag: i64, ms: Map[i64, String], mv: Map[i64, Vec[i64]] }
+fn takes(s: String) -> i64 {
+    s.len()
+}
+fn main() {
+    let mut ms: Map[i64, String] = Map.new();
+    ms.insert(1, "padded aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    ms.insert(2, "padded bbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let mut mv: Map[i64, Vec[i64]] = Map.new();
+    mv.insert(1, [10, 20, 30]);
+    let h = Holder { tag: 7, ms: ms, mv: mv };
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 100 {
+        acc = acc + h.ms.get(1).unwrap().len();
+        acc = acc + takes(h.ms.get(2).unwrap());
+        let v = h.ms.get(1).unwrap();
+        acc = acc + v.len();
+        acc = acc + h.mv.get(1).unwrap()[1];
+        let row = h.mv.get(1).unwrap();
+        acc = acc + row[2];
+        i = i + 1;
+    }
+    println(acc);
+    println(h.ms.get(1).unwrap());
+}

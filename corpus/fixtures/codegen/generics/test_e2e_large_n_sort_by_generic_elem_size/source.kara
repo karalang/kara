@@ -1,0 +1,20 @@
+
+fn main() {
+    let mut v: Vec[(i64, i64, i64)] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 80 {
+        v.push(((i * 29 + 3) % 80, i, i * 2));
+        i = i + 1;
+    }
+    v.sort_by(|x, y| x.0.cmp(y.0));
+    let mut bad: i64 = 0;
+    let mut prev: i64 = -1;
+    let mut j: i64 = 0;
+    while j < 80 {
+        let t = v.get(j).unwrap();
+        if t.0 < prev { bad = bad + 1; }
+        prev = t.0;
+        j = j + 1;
+    }
+    println(bad);
+}

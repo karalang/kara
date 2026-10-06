@@ -1,0 +1,90 @@
+
+shared enum Sh { S(Array[String, 2]), N }
+shared enum Nst { S(Array[Array[String, 2], 2]), N }
+shared enum Two { A(Array[String, 2]), B(Array[i64, 3]), N }
+shared enum Sc { S(Array[i64, 2]), N }
+
+fn mk1(t: String) -> Array[String, 2] { return [f"c1-{t}-a", f"c1-{t}-bb"]; }
+fn mk2(t: String) -> Array[String, 2] { return [f"c2-{t}-aaa", f"c2-{t}-bbbb"]; }
+fn mk3(t: String) -> Array[String, 2] { return [f"c3-{t}-aaaaa", f"c3-{t}-bbbbbb"]; }
+fn mk4(t: String) -> Array[String, 2] { return [f"c4-{t}-aaaaaaa", f"c4-{t}-bbbbbbbb"]; }
+fn mk7(t: String) -> Array[String, 2] { return [f"c7-{t}-aaaaaaaaa", f"c7-{t}-bbbbbbbbbb"]; }
+fn mk8(t: String) -> Array[String, 2] { return [f"c8-{t}-aaaaaaaaaaa", f"c8-{t}-bbbbbbbbbbbb"]; }
+fn mkB(t: String) -> Array[String, 2] { return [f"cB-{t}-aaaaaaaaaaaaa", f"cB-{t}-bbbbbbbbbbbbbb"]; }
+fn mkC(t: String) -> Array[String, 2] { return [f"cC-{t}-aaaaaaaaaaaaaaa", f"cC-{t}-bbbbbbbbbbbbbbbb"]; }
+fn mkD(t: String) -> Array[String, 2] { return [f"cD-{t}-aaaaaaaaaaaaaaaaa", f"cD-{t}-bbbbbbbbbbbbbbbbbb"]; }
+fn mkE(t: String) -> Array[String, 2] { return [f"cE-{t}-aaaaaaaaaaaaaaaaaaa", f"cE-{t}-bbbbbbbbbbbbbbbbbbbb"]; }
+fn mkF(t: String) -> Array[String, 2] { return [f"cF-{t}-aaaaaaaaaaaaaaaaaaaaa", f"cF-{t}-bbbbbbbbbbbbbbbbbbbbbb"]; }
+
+fn look(s: Sh) -> i64 { match s { Sh.S(x) => { return x[0].len(); } Sh.N => { return 0; } } }
+fn takeout(s: Sh) -> Array[String, 2] { match s { Sh.S(x) => { return x; } Sh.N => { return mk1("z"); } } }
+fn fwd(a: Array[String, 2]) -> Array[String, 2] { return a; }
+fn build() -> Sh { let a = mkC("fr"); return Sh.S(a); }
+
+fn main() {
+    // 1 TEMP from a call.
+    { let s = Sh.S(mk1("t")); match s { Sh.S(x) => { println(f"1:{x[0]}"); } Sh.N => { println("e"); } } }
+    // 2 TEMP, two handles to ONE box: exactly one free.
+    { let s1 = Sh.S(mk2("t")); let s2 = s1; match s2 { Sh.S(x) => { println(f"2:{x[1]}"); } Sh.N => { println("e"); } } }
+    // 3 TEMP, three constructions in a loop.
+    let mut i: i64 = 0;
+    while i < 3 {
+        { let s = Sh.S(mk3(f"{i}")); match s { Sh.S(x) => { println(f"3:{x[0]}"); } Sh.N => { println("e"); } } }
+        i = i + 1;
+    }
+    // 4 TEMP, two of them held by a Vec.
+    {
+        let mut v: Vec[Sh] = Vec.new();
+        v.push(Sh.S(mk4("p")));
+        v.push(Sh.S(mk4("q")));
+        match v[0] { Sh.S(x) => { println(f"4:{x[0]}"); } Sh.N => { println("e"); } }
+        match v[1] { Sh.S(x) => { println(f"4:{x[1]}"); } Sh.N => { println("e"); } }
+    }
+    // 5 TEMP, nested aggregate as an inline literal.
+    { let s = Nst.S([[f"c5-aaaaaaaaaaaaaaaaaaaaaaa", f"c5-bbbbbbbbbbbbbbbbbbbbbbbb"], [f"c5-ccccccccccccccccccccccccc", f"c5-dddddddddddddddddddddddddd"]]);
+      match s { Nst.S(x) => { println(f"5:{x[0][0]}/{x[1][1]}"); } Nst.N => { println("e"); } } }
+    // 6 TEMP, inline flat literal -- a literal is a temp too.
+    { let s = Sh.S([f"c6-aaaaaaaaaaaaaaaaaaaaaaaaaaa", f"c6-bbbbbbbbbbbbbbbbbbbbbbbbbbbb"]);
+      match s { Sh.S(x) => { println(f"6:{x[0]}"); } Sh.N => { println("e"); } } }
+    // 7 TEMP routed through a by-value parameter and returned.
+    { let s = Sh.S(fwd(mk7("t"))); match s { Sh.S(x) => { println(f"7:{x[0]}"); } Sh.N => { println("e"); } } }
+
+    // 8 NAMED, handle dies inside the local's scope -- MUST STAY DECLINED.
+    let a8 = mk8("n");
+    { let s = Sh.S(a8); match s { Sh.S(x) => { println(f"8:{x[0]}"); } Sh.N => { println("e"); } } }
+    // 9 NAMED nested -- MUST STAY DECLINED.
+    let a9: Array[Array[String, 2], 2] = [[f"c9-aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", f"c9-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], [f"c9-ccccccccccccccccccccccccccccc", f"c9-dddddddddddddddddddddddddddddd"]];
+    { let s = Nst.S(a9); match s { Nst.S(x) => { println(f"9:{x[1][1]}"); } Nst.N => { println("e"); } } }
+    // A NAMED, two handles -- MUST STAY DECLINED, and still exactly one free.
+    let aA: Array[String, 2] = [f"cA-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", f"cA-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"];
+    { let s1 = Sh.S(aA); let s2 = s1; match s2 { Sh.S(x) => { println(f"A:{x[1]}"); } Sh.N => { println("e"); } } }
+    // B NAMED, READ AFTER the move: the defensive copy gives the box its own
+    // buffers, so the source keeps its drop and this must not double-free.
+    let aB = mkB("n");
+    { let s = Sh.S(aB); match s { Sh.S(x) => { println(f"B:{x[0]}"); } Sh.N => { println("e"); } } }
+    println(f"B:{aB[0]}");
+
+    // C NAMED, handle leaves the FRAME -- leaked before this fix.
+    { let s = build(); match s { Sh.S(x) => { println(f"C:{x[1]}"); } Sh.N => { println("e"); } } }
+    // D NAMED, handle OUTLIVES the local's block -- READ FREED MEMORY before.
+    let mut keep: Sh = Sh.N;
+    { let aD = mkD("n"); keep = Sh.S(aD); }
+    match keep { Sh.S(x) => { println(f"D:{x[0]}"); } Sh.N => { println("e"); } }
+
+    // E an arm RETURNS the payload out of the box: the box must not free what
+    // the arm handed on. Two invalid frees without the alias disarm.
+    { let a = takeout(Sh.S(mkE("t"))); println(f"E:{a[1]}"); }
+    // F the handle is REASSIGNED: the first box is freed exactly once.
+    { let mut s: Sh = Sh.S(mkF("one")); match s { Sh.S(x) => { println(f"F:{x[0]}"); } Sh.N => { println("e"); } }
+      s = Sh.S(mkF("two")); match s { Sh.S(x) => { println(f"F:{x[0]}"); } Sh.N => { println("e"); } } }
+    // G the handle passed BY VALUE to a function.
+    { let s = Sh.S(mk1("g")); println(f"G:{look(s)}"); }
+    // H two boxing variants, one named source each.
+    let aH: Array[String, 2] = [f"cH-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", f"cH-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"];
+    { let s = Two.A(aH); match s { Two.A(v) => { println(f"H:{v[0]}"); } Two.B(w) => { println(f"{w[0]}"); } Two.N => { println("e"); } } }
+    let aI: Array[i64, 3] = [1, 2, 3];
+    { let s = Two.B(aI); match s { Two.A(v) => { println(f"{v[0]}"); } Two.B(w) => { println(f"I:{w[2]}"); } Two.N => { println("e"); } } }
+    // J scalar payload: no interior at all, the cleanest control on the walk.
+    { let s = Sc.S([7, 8]); match s { Sc.S(x) => { println(f"J:{x[0]}/{x[1]}"); } Sc.N => { println("e"); } } }
+    println("done");
+}

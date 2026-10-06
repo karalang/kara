@@ -1,0 +1,38 @@
+
+#[derive(Clone)]
+struct S { tag: String, items: Vec[String] }
+
+#[derive(Clone)]
+enum E { Empty, Payload(String) }
+
+fn dup[T: Clone](x: T) -> T { x.clone() }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        let mut a = S { tag: "src", items: Vec.new() };
+        a.items.push("one");
+        // The copy must own INDEPENDENT buffers: it grows, the source does not.
+        let mut b = a.clone();
+        b.items.push("two");
+        n = n + a.items.len() + b.items.len();
+        // Through a `T: Clone` generic body — the bound that used to be
+        // decorative. `a` is moved in, so only `c` and `b` reach a drop.
+        let c = dup(a);
+        n = n + c.tag.len();
+
+        let e = E.Payload("enum-heap");
+        let f = e.clone();
+        match f {
+            E.Empty => {}
+            E.Payload(t) => { n = n + t.len(); }
+        }
+
+        let o: Option[String] = Option.Some("opt-heap");
+        let p = o.clone();
+        n = n + p.unwrap().len();
+        i = i + 1;
+    }
+    println(n);
+}

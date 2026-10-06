@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("alice");
+    s.insert("bob");
+    s.insert("alice");
+    let mut count: i64 = 0;
+    for _x in s {
+        count = count + 1_i64;
+    }
+    println(count);
+}

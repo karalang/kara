@@ -1,0 +1,112 @@
+// Benchmark workload for LeetCode #263 — Ugly Number.
+//
+// A pure-arithmetic lane: nothing is built once, nothing is allocated in the
+// punch loop, and the working set is a handful of registers. It is the opposite
+// end of the corpus from #261's random dependent load.
+//
+// WHY THE gcd FORM AND NOT THE ★ TRIAL DIVISION. The ★ solver divides by the
+// literals 2, 3 and 5, which every backend here strength-reduces to a
+// multiply-high and a shift — no division instruction is emitted at all. That is
+// already the subject of #258, and re-measuring it would add nothing.
+//
+// Euclid's algorithm cannot be strength-reduced: `x % y` has a VARIABLE divisor,
+// so it lowers to a real hardware divide, and the loop is a serial dependency
+// chain of them. That makes this the corpus's variable-divisor division lane,
+// and a direct complement to #258 — where the natural explanation for Go's 28%
+// gap (that Go emits real division where LLVM strength-reduces) was refuted by
+// disassembly showing zero DIVQ anywhere. Here there is nothing BUT division.
+//
+// The operands are deliberately wide. Values are drawn across the full positive
+// i64 range rather than the i32 range the problem's constraints allow, because
+// 64-bit division cost depends on operand magnitude on several of these
+// microarchitectures, and a lane that only ever divided small numbers would be
+// measuring the easy case.
+//
+// Ugly numbers are vanishingly rare among random draws (~11,000 below 2⁶³), so
+// a purely random sweep would only ever measure the first-rejection path. Every
+// 512th value is therefore replaced by a constructed ugly number, which peels
+// all the way down and exercises the repeat-until-gcd-is-1 loop.
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x = a;
+    let mut y = b;
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    return x;
+}
+
+fn is_ugly(n: i64) -> bool {
+    if n <= 0 {
+        return false;
+    }
+    let mut m = n;
+    let mut g = gcd(m, 30);
+    while g > 1 {
+        m = m / g;
+        g = gcd(m, 30);
+    }
+    return m == 1;
+}
+
+fn main() {
+    let n = 10000000;
+    let limit = i64.MAX;
+
+    // A small ring of genuinely ugly numbers, built once. Each is a product of
+    // 2s, 3s and 5s grown as far as i64 allows, so peeling one is a long loop.
+    let mut ring: Vec[i64] = Vec.new();
+    let mut rs = 7717;
+    let mut k = 0;
+    while k < 64 {
+        let mut v = 1;
+        let mut steps = 0;
+        while steps < 40 {
+            rs = (rs * 1103515245 + 12345) & 2147483647;
+            let pick = (rs / 65536) % 3;
+            let mut f = 2;
+            if pick == 1 { f = 3; }
+            if pick == 2 { f = 5; }
+            if v <= limit / f {
+                v = v * f;
+            } else {
+                steps = 40;
+            }
+            steps = steps + 1;
+        }
+        ring.push(v);
+        k = k + 1;
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let mut state = 263263;
+    let mut uglies = 0;
+    let mut digest = 0;
+    let mut i = 0;
+    while i < n {
+        // Two 31-bit draws combined into a wide positive i64.
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let hi = state;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let mut probe = hi * 2147483648 + state;
+        if i % 512 == 0 {
+            probe = ring[(i / 512) % 64];
+        }
+        // Fold EVERY verdict, not only the trues. Ugly numbers are so rare
+        // among random draws that a trues-only sink would be determined
+        // entirely by the ring, leaving the random path unchecked — a mirror
+        // could get it wrong and still match.
+        let mut bit = 0;
+        if is_ugly(probe) {
+            uglies = uglies + 1;
+            bit = 1;
+        }
+        digest = (digest * 131 + bit * 7 + probe % 1000003) % 1000000007;
+        i = i + 1;
+    }
+
+    println(uglies);
+    println(digest);
+}

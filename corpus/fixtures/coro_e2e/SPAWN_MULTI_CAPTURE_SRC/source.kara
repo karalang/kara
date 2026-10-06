@@ -1,0 +1,13 @@
+
+        fn serve_one(listener: TcpListener, addr: String) {
+            let _stream = listener.accept().unwrap();
+            println(addr.len());
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let addr: String = "127.0.0.1:9000/upstream/backend/path/x";
+            let mut tg = TaskGroup.new();
+            tg.spawn(|| serve_one(listener, addr));
+            println(2);
+        }
+    

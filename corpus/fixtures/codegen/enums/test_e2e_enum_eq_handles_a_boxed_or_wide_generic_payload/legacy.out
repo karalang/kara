@@ -1,0 +1,14 @@
+boxed=true
+boxed-ne=false
+boxed-tag=false
+boxed2=true
+boxed2-ne-s=false
+boxed2-ne-n=false
+boxed2-tag=false
+wide=true
+wide-ne-s=false
+wide-ne-b=false
+wide-tag=false
+opt=true
+opt-tag=false
+opt-scalar=true

@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/moves.rs::asan_deep_chain_field_move_out_keeps_every_sibling_body"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

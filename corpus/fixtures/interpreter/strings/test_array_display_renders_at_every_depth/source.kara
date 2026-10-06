@@ -1,0 +1,48 @@
+#[derive(Display)]
+struct P { x: i64, s: String }
+#[derive(Display)]
+struct WithArr { a: Array[i64, 3], n: i64 }
+#[derive(Display)]
+enum E { A(Array[i64, 3]), S(Array[String, 2]), N }
+
+fn main() {
+    let n: i64 = 1;
+    let a: Array[i64, 3] = [n, n + 1, n + 2];
+    let s: Array[String, 2] = [f"x{n}", f"y{n}"];
+    let f: Array[f64, 2] = [n as f64 + 0.5, n as f64 + 1.5];
+    let one: Array[i64, 1] = [n];
+
+    println(f"fstr   {a}");
+    println(a);
+    println(f"str    {s}");
+    println(f"flt    {f}");
+    println(f"one    {one}");
+
+    let nested: Array[Array[i64, 2], 2] = [[n, n + 1], [n + 2, n + 3]];
+    println(f"nested {nested}");
+    let structs: Array[P, 2] = [P { x: n, s: f"p1" }, P { x: n + 1, s: f"p2" }];
+    println(f"struct {structs}");
+
+    let mut v: Vec[Array[i64, 3]] = Vec.new();
+    v.push(a);
+    println(f"vecarr {v}");
+
+    let w = WithArr { a: a, n: n };
+    println(f"field  {w}");
+
+    let t: (Array[i64, 3], i64) = (a, n);
+    println(f"tuple  {t}");
+
+    let e = E.A(a);
+    println(f"enum   {e}");
+    match e { E.A(b) => { println(f"marm   {b}"); } E.S(b) => {} E.N => {} }
+
+    let oa: Option[Array[i64, 3]] = Some(a);
+    println(f"opt    {oa}");
+    let ra: Result[Array[i64, 3], i64] = Ok(a);
+    println(f"res    {ra}");
+
+    let mut m: Map[String, Array[i64, 3]] = Map.new();
+    m.insert(f"k", a);
+    println(f"mapval {m}");
+}

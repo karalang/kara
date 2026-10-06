@@ -1,0 +1,26 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let src: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];
+        // Heap OUTPUT — Vec[String], long payloads.
+        let strs: Vec[String] = src.iter().map(|n| f"iteration-payload-number-{n}-xyzzy").collect();
+        for s in strs { total = total + s.len(); }
+        // Heap SOURCE, borrowed — must survive the collect.
+        let words: Vec[String] = Vec[
+            "alpha-alpha-alpha-alpha-alpha-alpha".to_string(),
+            "beta-beta-beta-beta-beta-beta-beta-beta".to_string(),
+            "gamma-gamma-gamma-gamma-gamma-gamma-gamma".to_string()
+        ];
+        let lens: Vec[i64] = words.iter().map(|w| w.len()).collect();
+        total = total + lens[0] + lens[1] + lens[2];
+        // Multi-stage over the heap source.
+        let longs: Vec[i64] = words.iter().filter(|w| w.len() > 36i64).map(|w| w.len()).collect();
+        total = total + longs.len();
+        // Source still owned/usable after the collects.
+        total = total + words.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

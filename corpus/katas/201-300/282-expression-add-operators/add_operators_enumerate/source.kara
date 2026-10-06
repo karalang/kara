@@ -1,0 +1,178 @@
+// LeetCode 282 — every operator pattern, evaluated properly.
+//
+// There are `n-1` gaps between the digits and four choices at each — nothing,
+// `+`, `-`, `*` — so `4^(n-1)` patterns. Enumerate them all, build each
+// expression, reject the ones with an illegal leading zero, and EVALUATE THE
+// STRING with an ordinary precedence-aware evaluator: fold the `*` chain first,
+// then the `+`/`-` chain left to right.
+//
+// O(4^n · n), which is worse than the ★ solver only by the cost of re-evaluating
+// from scratch instead of carrying a running total — the search space is the
+// same size. The point is not speed.
+//
+// IT NEVER PERFORMS THE `cur - last + last * n` TRICK. That line is the ★
+// solver's entire claim to correctness, and it is an incremental restatement of
+// precedence rather than precedence itself. This solver applies precedence the
+// way a calculator does, on a finished expression, so the two agree only if the
+// incremental restatement is actually right. A sign error in it — subtracting
+// the wrong term, or forgetting that `last` must go NEGATIVE after a `-` —
+// produces a solver that is correct on `+`-only inputs and wrong as soon as a
+// `*` follows a `-`, which is a shape that is easy to omit from hand-written
+// cases and impossible to omit from an exhaustive enumeration.
+//
+// IT ALSO CHECKS THE LEADING-ZERO RULE INDEPENDENTLY, on the built string rather
+// than during construction, so the two solvers cannot share a misreading of it.
+
+fn eval_expr(expr: ref String) -> i64 {
+    // tokenize: operands and the operators between them
+    let mut vals: Vec[i64] = Vec.new();
+    let mut ops: Vec[i64] = Vec.new();     // 0 = '+', 1 = '-', 2 = '*'
+    let b = expr.bytes();
+    let mut i = 0;
+    let mut cur = 0;
+    let mut started = false;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c >= 48 and c <= 57 {
+            cur = cur * 10 + (c - 48);
+            started = true;
+        } else {
+            vals.push(cur);
+            cur = 0;
+            started = false;
+            if c == 43 { ops.push(0); }
+            if c == 45 { ops.push(1); }
+            if c == 42 { ops.push(2); }
+        }
+        i = i + 1;
+    }
+    vals.push(cur);
+
+    // pass 1 — fold every `*`
+    let mut v2: Vec[i64] = Vec.new();
+    let mut o2: Vec[i64] = Vec.new();
+    v2.push(vals[0]);
+    let mut k = 0;
+    while k < ops.len() {
+        if ops[k] == 2 {
+            let top = v2[v2.len() - 1];
+            v2[v2.len() - 1] = top * vals[k + 1];
+        } else {
+            o2.push(ops[k]);
+            v2.push(vals[k + 1]);
+        }
+        k = k + 1;
+    }
+
+    // pass 2 — fold `+` and `-` left to right
+    let mut acc = v2[0];
+    let mut m = 0;
+    while m < o2.len() {
+        if o2[m] == 0 { acc = acc + v2[m + 1]; } else { acc = acc - v2[m + 1]; }
+        m = m + 1;
+    }
+    return acc;
+}
+
+// A built expression is legal iff no operand of length > 1 starts with '0'.
+fn operands_legal(expr: ref String) -> bool {
+    let b = expr.bytes();
+    let mut i = 0;
+    let mut start = 0;
+    while i <= b.len() {
+        let at_end = i == b.len();
+        let mut is_op = false;
+        if not at_end {
+            let c = b[i] as i64;
+            if c == 43 or c == 45 or c == 42 { is_op = true; }
+        }
+        if at_end or is_op {
+            let len = i - start;
+            if len > 1 and (b[start] as i64) == 48 { return false; }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn pow4(e: i64) -> i64 {
+    let mut p = 1;
+    let mut i = 0;
+    while i < e { p = p * 4; i = i + 1; }
+    return p;
+}
+
+fn add_operators(num: String, target: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let n = num.len();
+    if n == 0 { return out; }
+    let gaps = n - 1;
+    let total = pow4(gaps);
+    let mut mask = 0;
+    while mask < total {
+        // build the expression: digit, then the gap's choice, then the next
+        let mut expr: String = num.substring(0, 1);
+        let mut g = 0;
+        let mut m = mask;
+        while g < gaps {
+            let choice = m % 4;
+            m = m / 4;
+            if choice == 1 { expr = expr + "+"; }
+            if choice == 2 { expr = expr + "-"; }
+            if choice == 3 { expr = expr + "*"; }
+            expr = expr + num.substring(g + 1, g + 2);
+            g = g + 1;
+        }
+        if operands_legal(expr) {
+            if eval_expr(expr) == target { out.push(expr); }
+        }
+        mask = mask + 1;
+    }
+    return out;
+}
+
+fn show(v: ref Vec[String]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + v[i];
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn sort_strings(v: mut ref Vec[String]) {
+    // the answer is a SET, and the two solvers enumerate it in different orders
+    // (DFS versus mask order), so both sort before reporting — that makes the
+    // two mains directly diffable without either pretending order is meaningful
+    let mut a = 1;
+    while a < v.len() {
+        let mut b = a;
+        while b > 0 and v[b - 1] > v[b] {
+            let t = v[b - 1].clone();
+            v[b - 1] = v[b].clone();
+            v[b] = t;
+            b = b - 1;
+        }
+        a = a + 1;
+    }
+}
+
+fn report(num: String, target: i64) {
+    let mut got = add_operators(num.clone(), target);
+    sort_strings(mut got);
+    println(f"{num} t={target} -> {show(got)}");
+}
+
+fn main() {
+    report("123", 6);
+    report("232", 8);
+    report("105", 5);
+    report("00", 0);
+    report("5", 5);
+    report("123", 0 - 1);
+    report("1234567", 100);
+    report("3456", 21);
+}

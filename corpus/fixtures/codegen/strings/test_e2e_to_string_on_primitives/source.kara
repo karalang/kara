@@ -1,0 +1,14 @@
+
+fn main() {
+    let i = -42i64;
+    println(i.to_string());
+    let f = 3.5f64;
+    println(f.to_string());
+    let b = true;
+    println(b.to_string());
+    let c = 'Z';
+    println(c.to_string());
+    let u = 99u64;
+    println(u.to_string());
+    println((-7i64).to_string());
+}

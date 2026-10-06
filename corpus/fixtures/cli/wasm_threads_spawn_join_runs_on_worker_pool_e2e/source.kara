@@ -1,0 +1,24 @@
+
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn worker(id: i64) {
+    println(id)
+}
+
+fn main() {
+    let h: TaskHandle[i64] = spawn(|| add(40, 2));
+    let r: i64 = h.join();
+    println(r);
+
+    par {
+        println("pa");
+        println("pb");
+    }
+
+    let mut tg = TaskGroup.new();
+    tg.spawn(|| worker(1));
+    tg.spawn(|| worker(2));
+    tg.spawn(|| worker(3));
+}

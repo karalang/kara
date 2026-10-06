@@ -1,0 +1,25 @@
+
+fn main() {
+    let mut a: VecDeque[i64] = VecDeque.new();
+    let mut b: VecDeque[i64] = VecDeque.new();
+    let mut i = 0;
+    while i < 200 {
+        a.push_back(i);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < 200 {
+        b.push_back(j * 2);
+        j = j + 1;
+    }
+    let mut sa = 0;
+    while not a.is_empty() {
+        match a.pop_front() { Some(x) => { sa = sa + x; } None => {} }
+    }
+    let mut sb = 0;
+    while not b.is_empty() {
+        match b.pop_front() { Some(x) => { sb = sb + x; } None => {} }
+    }
+    println(sa);
+    println(sb);
+}

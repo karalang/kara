@@ -1,0 +1,22 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct DuoR { pair: (Res, i64), tag: i64 }
+fn main() {
+    println("a");
+    {
+        let mut x = DuoR { pair: (Res { id: 1, name: f"a{1}" }, 5), tag: 7 };
+        println(x.tag);
+        x = DuoR { pair: (Res { id: 2, name: f"b{2}" }, 6), tag: 8 };
+        println(x.tag);
+    }
+    println("mid");
+    {
+        let mut v: Vec[DuoR] = Vec.new();
+        v.push(DuoR { pair: (Res { id: 3, name: f"x{3}" }, 5), tag: 9 });
+        println(v.len());
+    }
+    println("end");
+}

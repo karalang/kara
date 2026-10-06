@@ -1,0 +1,13 @@
+
+shared struct S { val: i64 }
+struct Holder { tag: i64 }
+impl Holder {
+    fn make(self) -> S {
+        let s = S { val: 99 };
+        s
+    }
+}
+fn main() {
+    let h = Holder { tag: 0 };
+    println(h.make().val);
+}

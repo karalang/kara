@@ -1,0 +1,24 @@
+
+struct B { m: Map[String, i64], s: Set[String] }
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("keykeykeykeykey", 1);
+    let mut st: Set[String] = Set.new();
+    st.insert("elemelemelemelem");
+    let b = B { m: m, s: st };
+    let mut tm: Map[String, i64] = Map.new();
+    tm.insert("tuptuptuptuptup", 2);
+    let t = (tm, 0);
+    let mut vm: Map[String, i64] = Map.new();
+    vm.insert("vecvecvecvecvec", 3);
+    let v: Vec[Map[String, i64]] = [vm];
+    let mut k = 0;
+    while k < 20 {
+        println(f"{b.m}");
+        println(b.s);
+        println(f"{t.0}");
+        println(f"{v[0]}");
+        k = k + 1;
+    }
+    println("done");
+}

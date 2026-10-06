@@ -1,0 +1,27 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let s: String = f"prefix-{i}-tail-padding";
+        match s.strip_prefix("prefix-") {
+            Some(rest) => println(rest),
+            None => println("none"),
+        }
+        let t: String = f"head-{i}-suffix-padding";
+        match t.strip_suffix("-suffix-padding") {
+            Some(head) => println(head),
+            None => println("none"),
+        }
+        let u: String = f"zzz-{i}-padding";
+        match u.strip_prefix("nope") {
+            Some(r) => println(r),
+            None => println("none"),
+        }
+        let v: String = f"exact-{i}-padding";
+        match v.strip_prefix(f"exact-{i}-padding") {
+            Some(r) => println(f"empty:{r}"),
+            None => println("none"),
+        }
+        i = i + 1;
+    }
+}

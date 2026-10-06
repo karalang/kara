@@ -1,0 +1,20 @@
+
+struct Node { val: i64, kids: i64 }
+fn build(a: ref Arena[Node], v: i64) -> ArenaRef[Node] {
+    a.push(Node { val: v, kids: 0 })
+}
+fn total(a: ref Arena[i64]) -> i64 {
+    let r0 = a.push(3);
+    let r1 = a.push(4);
+    a.get(r0) + a.get(r1)
+}
+fn main() {
+    let a: Arena[Node] = Arena.new();
+    let r0 = build(a, 10);
+    let r1 = build(a, 20);
+    println(a.get(r0).val);
+    println(a.get(r1).val);
+    println(a.len());
+    let b: Arena[i64] = Arena.new();
+    println(total(b));
+}

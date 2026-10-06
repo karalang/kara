@@ -1,0 +1,101 @@
+// LeetCode 256 — Paint House. (Premium.)
+//
+// n houses in a row, three colours, `costs[i][c]` to paint house i colour c.
+// Adjacent houses must differ. Minimise the total.
+//
+// The recurrence is one line: the cheapest way to reach house i painted colour c
+// is `costs[i][c]` plus the cheaper of the two ways to reach house i-1 in either
+// OTHER colour. Nothing earlier than i-1 matters, because the only constraint
+// reaches back exactly one house — which is why three running scalars suffice
+// and no table is needed. O(n) time, O(1) space.
+//
+// **All three must be computed before any is assigned.** Writing
+// `r = costs[i].0 + min(b, g); b = costs[i].1 + min(r, g);` reads the NEW r when
+// computing b, which silently mixes house i's cost into house i's own
+// predecessor — the answer comes out too large and still looks plausible. The
+// three `let n_*` bindings below exist for that reason, and
+// Which inputs separate the two was MEASURED, not guessed — my first guess,
+// `[[1,2,3],[1,2,3]]`, does not separate them at all (3 either way). The
+// LeetCode example does, dramatically: 10 correct against 26 in place. So does
+// `[[1,100,100] x3]` (102 against 201) and the alternating run. All are in the
+// tests below.
+//
+// Costs are `(i64, i64, i64)` triples rather than a `Vec[Vec[i64]]`: the colour
+// count is fixed at three by the problem, so a triple says so in the type and
+// costs nothing at runtime. #265 (Paint House II) generalises to k colours and
+// is where the nested-Vec form belongs.
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+fn min_cost(costs: Slice[(i64, i64, i64)]) -> i64 {
+    let n = costs.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut r = costs[0].0;
+    let mut b = costs[0].1;
+    let mut g = costs[0].2;
+
+    let mut i = 1;
+    while i < n {
+        // All three read the PREVIOUS row; assigning early would corrupt them.
+        let n_r = costs[i].0 + min2(b, g);
+        let n_b = costs[i].1 + min2(r, g);
+        let n_g = costs[i].2 + min2(r, b);
+        r = n_r;
+        b = n_b;
+        g = n_g;
+        i = i + 1;
+    }
+    return min2(r, min2(b, g));
+}
+
+fn report(costs: Slice[(i64, i64, i64)], label: ref String) {
+    println(f"{label} -> {min_cost(costs)}");
+}
+
+fn main() {
+    // [[17,2,17],[16,16,5],[14,3,19]] -> 10  (2 + 5 + 3)
+    let a: Array[(i64, i64, i64), 3] = [(17, 2, 17), (16, 16, 5), (14, 3, 19)];
+    report(a, "[[17,2,17],[16,16,5],[14,3,19]]");
+
+    // [] -> 0
+    let b: Array[(i64, i64, i64), 0] = [];
+    report(b, "[]");
+
+    // [[7,6,2]] -> 2   (a single house takes its cheapest colour)
+    let c: Array[(i64, i64, i64), 1] = [(7, 6, 2)];
+    report(c, "[[7,6,2]]");
+
+    // [[1,2,3],[1,2,3]] -> 3  — kept as a control: it does NOT separate the
+    // in-place bug, which is why the tests do not rely on it alone
+    let d: Array[(i64, i64, i64), 2] = [(1, 2, 3), (1, 2, 3)];
+    report(d, "[[1,2,3],[1,2,3]]");
+
+    // all colours equal at every house -> n * cost, adjacency never binds
+    let e: Array[(i64, i64, i64), 4] = [(5, 5, 5), (5, 5, 5), (5, 5, 5), (5, 5, 5)];
+    report(e, "[[5,5,5] x4]");
+
+    // the cheapest colour is the same everywhere, so it cannot be taken twice
+    let f: Array[(i64, i64, i64), 3] = [(1, 100, 100), (1, 100, 100), (1, 100, 100)];
+    report(f, "[[1,100,100] x3]");
+
+    // zero costs
+    let g: Array[(i64, i64, i64), 2] = [(0, 0, 0), (0, 0, 0)];
+    report(g, "[[0,0,0] x2]");
+
+    // long alternating run
+    let h: Array[(i64, i64, i64), 6] = [(1, 9, 9), (9, 1, 9), (1, 9, 9), (9, 1, 9), (1, 9, 9), (9, 1, 9)];
+    report(h, "[alternating x6]");
+
+    // large values — the sum must not overflow i64 silently (Kāra traps)
+    let i: Array[(i64, i64, i64), 3] = [(1000000000, 2000000000, 3000000000),
+                                        (3000000000, 1000000000, 2000000000),
+                                        (2000000000, 3000000000, 1000000000)];
+    report(i, "[[1e9-scale] x3]");
+}

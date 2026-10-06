@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_04_71.rs::interp_map_key_and_field_rooted_stores_run_each_subscript_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

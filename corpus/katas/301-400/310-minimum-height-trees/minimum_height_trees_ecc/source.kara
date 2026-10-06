@@ -1,0 +1,148 @@
+// LeetCode 310 — arm D: every eccentricity in O(n), from the diameter endpoints.
+//
+// A theorem about trees that arm C computes the slow way: for ANY node v,
+//
+//     ecc(v) = max( dist(v, u), dist(v, w) )
+//
+// where u and w are the two endpoints of a diameter. The farthest node from
+// anywhere is always a diameter endpoint, so two BFS passes find u and w, and
+// two more give every node its distance to each. Four passes, O(n) total,
+// against arm C's n passes — and unlike arm B it never reconstructs the path or
+// reasons about its parity.
+//
+// WHERE IT DIFFERS FROM ARM B, which also starts with a double BFS: B extracts
+// a single path and reads its midpoint, so its failure mode is the midpoint
+// convention. This arm never builds a path — it scores every node and takes the
+// argmin, so its failure mode is the theorem itself (e.g. using one endpoint
+// instead of both, which is wrong for any node whose farthest point is the
+// other end). The shared double-BFS prefix is exactly the part the differential
+// can see through: if B and D disagree, the fault is downstream of it.
+
+fn bfs_dist(n: i64, adj: ref Vec[Vec[i64]], src: i64) -> Vec[i64] {
+    let mut dist: Vec[i64] = Vec.new();
+    for i in 0..n {
+        dist.push(-1);
+    }
+    let mut order: Vec[i64] = Vec.new();
+    dist[src] = 0;
+    order.push(src);
+    let mut head = 0;
+    while head < order.len() {
+        let v = order[head];
+        head = head + 1;
+        let mut j = 0;
+        while j < adj[v].len() {
+            let w = adj[v][j];
+            if dist[w] == -1 {
+                dist[w] = dist[v] + 1;
+                order.push(w);
+            }
+            j = j + 1;
+        }
+    }
+    return dist;
+}
+
+fn farthest(dist: ref Vec[i64]) -> i64 {
+    let mut best = 0;
+    let mut i = 1;
+    while i < dist.len() {
+        if dist[i] > dist[best] {
+            best = i;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn min_height_roots(n: i64, adj: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut roots: Vec[i64] = Vec.new();
+    if n == 0 {
+        return roots;
+    }
+    let d0 = bfs_dist(n, adj, 0);
+    let u = farthest(d0);
+    let du = bfs_dist(n, adj, u);
+    let w = farthest(du);
+    let dw = bfs_dist(n, adj, w);
+
+    // ecc(v) = max(dist to u, dist to w) — both endpoints, never just one.
+    let mut best = -1;
+    for i in 0..n {
+        let mut e = du[i];
+        if dw[i] > e {
+            e = dw[i];
+        }
+        if best == -1 or e < best {
+            best = e;
+        }
+    }
+    for i in 0..n {
+        let mut e = du[i];
+        if dw[i] > e {
+            e = dw[i];
+        }
+        if e == best {
+            roots.push(i);
+        }
+    }
+    return roots;
+}
+
+fn adjacency(n: i64, edges: Slice[i64]) -> Vec[Vec[i64]] {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let row: Vec[i64] = Vec.new();
+        adj.push(row);
+    }
+    let mut k = 0;
+    while k + 1 < edges.len() {
+        let a = edges[k];
+        let b = edges[k + 1];
+        adj[a].push(b);
+        adj[b].push(a);
+        k = k + 2;
+    }
+    return adj;
+}
+
+fn render(xs: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < xs.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(f"{xs[i]}");
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(n: i64, edges: Slice[i64]) {
+    let adj = adjacency(n, edges);
+    let roots = min_height_roots(n, adj);
+    println(f"n={n} -> {render(roots)}");
+}
+
+fn main() {
+    // The examples from the LeetCode statement.
+    report(4, [1, 0,  1, 2,  1, 3]);
+    report(6, [3, 0,  3, 1,  3, 2,  3, 4,  5, 4]);
+    // A single node: it is its own centre.
+    report(1, []);
+    // Two nodes: both are centres.
+    report(2, [0, 1]);
+    // A path of odd length has ONE centre.
+    report(5, [0, 1,  1, 2,  2, 3,  3, 4]);
+    // A path of even length has TWO.
+    report(4, [0, 1,  1, 2,  2, 3]);
+    // A star: the hub is the only centre.
+    report(7, [0, 1,  0, 2,  0, 3,  0, 4,  0, 5,  0, 6]);
+    // A balanced binary tree of 7 nodes.
+    report(7, [0, 1,  0, 2,  1, 3,  1, 4,  2, 5,  2, 6]);
+    // A caterpillar — a spine with legs, where peeling takes several rounds.
+    report(9, [0, 1,  1, 2,  2, 3,  3, 4,  1, 5,  2, 6,  3, 7,  0, 8]);
+    // Labels deliberately scrambled: the answer is about structure, not names.
+    report(5, [4, 2,  2, 0,  0, 3,  3, 1]);
+}

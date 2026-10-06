@@ -1,0 +1,18 @@
+
+struct Span { a: i64, b: i64, c: i64, d: i64 }
+shared enum E { Lit(i64), Iff(IfNode), Blk(Block) }
+struct Block { stmts: Vec[i64], tail: Option[E], span: Span }
+struct IfNode { cond: E, then_block: Block, span: Span }
+fn mk_block(first: i64, sp: i64) -> Block {
+    let mut s: Vec[i64] = Vec.new();
+    s.push(first); s.push(first + 1);
+    Block { stmts: s, tail: Some(E.Lit(99)), span: Span { a: sp, b: 0, c: 0, d: 0 } }
+}
+fn main() {
+    let ife = E.Iff(IfNode { cond: E.Lit(7), then_block: mk_block(20, 2), span: Span { a: 5, b: 0, c: 0, d: 0 } });
+    match ife {
+        Lit(n) => println(n),
+        Iff(nd) => { println(nd.span.a); let tb = nd.then_block; println(tb.span.a); println(tb.stmts[0]); }
+        Blk(_) => println(-9)
+    }
+}

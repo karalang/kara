@@ -1,0 +1,14 @@
+
+fn maybe(empty: bool) -> Option[i64] {
+    if empty {
+        return Option.None;
+    }
+    return Option.Some(7_i64);
+}
+
+fn main() {
+    let Some(x) = maybe(false) else {
+        return
+    }
+    println(f"bound {x}");
+}

@@ -1,0 +1,23 @@
+
+fn main() {
+    let a: f32 = 4000000000u32 as f32;
+    let one: f32 = 1 as f32;
+    println(f"01 {a + one}");
+    println(f"02 {a - one}");
+    println(f"03 {a / (3 as f32)}");
+    let t: f32 = 0.1 as f32;
+    println(f"04 {t * (3 as f32)}");
+    println(f"05 {t + t + t}");
+    let mut m: f32 = 4000000000 as f32;
+    m += one;
+    println(f"06 {m}");
+    println(f"07 {-t}");
+    println(f"08 {t.sqrt()}");
+    let bh: bf16 = 1.0bf16;
+    println(f"09 {bh + 0.01bf16}");
+    let hh: f16 = 1.0f16;
+    println(f"10 {hh + 0.0005f16}");
+    let d: f64 = 0.1;
+    println(f"11 {d * 3.0}");
+    println(f"12 {d.sqrt()}");
+}

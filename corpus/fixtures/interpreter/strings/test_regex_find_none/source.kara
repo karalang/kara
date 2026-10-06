@@ -1,0 +1,7 @@
+fn main() {
+         let r = Regex.compile("[0-9]+").unwrap();
+         match r.find("abcdef") {
+             Some(m) => println(m.text),
+             None => println("none"),
+         }
+     }

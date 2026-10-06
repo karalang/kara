@@ -1,0 +1,10 @@
+
+fn main() {
+    let lo: i64 = 10i64;
+    let hi: i64 = 1010i64;
+    let mut sum: i64 = 0i64;
+    for k in lo..hi {
+        sum = sum + k;
+    }
+    println(sum);
+}

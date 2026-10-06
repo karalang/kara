@@ -1,0 +1,24 @@
+
+struct Heap[T] { xs: Vec[T] }
+impl[T] Heap[T] { fn into_vec(self) -> Vec[T] { self.xs } }
+struct PlainHeap { xs: Vec[Vec[i64]] }
+impl PlainHeap { fn into_vec(self) -> Vec[Vec[i64]] { self.xs } }
+fn main() {
+    // (a) nested-Vec element: the filed shape.
+    let a = Heap { xs: [[1, 2], [3], [4, 5, 6]] };
+    let av = a.into_vec();
+    println(f"a={av.len()} {av[0].len()} {av[2].len()}");
+    // (b) HEAP-allocated String elements (literals would pass while broken).
+    let mut ss: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 3 { ss.push(f"item{i}"); i = i + 1; }
+    let b = Heap { xs: ss };
+    let bv = b.into_vec();
+    println(f"b={bv.len()} {bv[0]}");
+    // (c) scalar control: correct before the fix.
+    let c = Heap { xs: [7, 8] };
+    println(f"c={c.into_vec().len()}");
+    // (d) NON-generic control at the same nested-Vec element type.
+    let d = PlainHeap { xs: [[1], [2]] };
+    println(f"d={d.into_vec().len()}");
+}

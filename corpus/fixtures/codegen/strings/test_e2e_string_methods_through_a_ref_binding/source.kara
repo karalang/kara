@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut d: Vec[String] = Vec.new();
+    d.push("hello");
+    d.push("world");
+    let s = ref d[0];
+    println(s.len());
+    println(s.starts_with("he"));
+    println(s.substring(0, 2));
+    let c: String = s.clone();
+    println(c);
+    println(s.to_uppercase());
+    println(d[0]);
+}

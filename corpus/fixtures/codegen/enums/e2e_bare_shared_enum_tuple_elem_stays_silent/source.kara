@@ -1,0 +1,9 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+shared enum Sh { S(R), Z }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
+fn shArg(t: (Sh, i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn main() {
+    println("bare"); let _ = shArg((S(mk(1)), 7)); println("bare end")
+    println("done")
+}

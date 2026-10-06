@@ -1,0 +1,7 @@
+fn main() {
+         println(LogEvent.trace("a").level);
+         println(LogEvent.debug("b").level);
+         println(LogEvent.info("c").level);
+         println(LogEvent.warn("d").level);
+         println(LogEvent.error("e").level);
+     }

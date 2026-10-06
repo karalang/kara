@@ -1,0 +1,14 @@
+struct G[T] { v: T, n: i64 }
+enum E[T] { A { x: T, k: i64 }, B }
+fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
+fn a4[T](e: E[G[T]]) -> i64 { match e { E.A { x: G { v, n }, k } => n + k, E.B => 0 } }
+fn a6(e: E[G[G[String]]]) -> i64 { match e { E.A { x: G { v: G { v, n: m }, n }, k } => v.len() + m + n + k, E.B => 0 } }
+fn a9(e: E[G[String]]) -> String { match e { E.A { x: G { v, n }, k } => v, E.B => "none" } }
+fn main() {
+    println(a4(E.A { x: G { v: mk(1), n: 10 }, k: 2 }));
+    println(a6(E.A { x: G { v: G { v: mk(2), n: 10 }, n: 100 }, k: 2 }));
+    println(a9(E.A { x: G { v: mk(3), n: 1 }, k: 2 }));
+    println(a9(E.B));
+    println(a6(E.B));
+    println("end");
+}

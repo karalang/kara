@@ -1,0 +1,68 @@
+// LeetCode #27: Remove Element — two pointers, in-place.
+//
+// Given nums and a value val, remove every occurrence of val in place and
+// return k — the number of kept elements. The first k slots of nums must
+// hold the kept values (order may change, but the slow/fast two-pointer
+// preserves it); what's past k doesn't matter. O(n) time, O(1) extra space.
+//
+// The invariant: nums[0..k] is the compaction of every kept element read so
+// far. Unlike kata #26 (remove duplicates from a sorted array), the keep
+// test is a compare against the scalar `val`, not against the previous kept
+// element — so there is no nums[k - 1] lookback and the input need not be
+// sorted. The read head i runs at or ahead of the write head k, so no
+// element is overwritten before it is read; the compaction is safe in place.
+
+fn remove_element(nums: mut Slice[i64], len: i64, val: i64) -> i64 {
+    let mut k = 0;
+    for i in 0..len {
+        if nums[i] != val {
+            nums[k] = nums[i];
+            k = k + 1;
+        }
+    }
+    k
+}
+
+fn report(nums: mut Slice[i64], len: i64, val: i64) {
+    // nums is already an in-scope mut Slice — forwards without a marker
+    // (design.md Feature 4 Part 1½, Rule 2).
+    let k = remove_element(nums, len, val);
+    println(f"k = {k}");
+    for i in 0..k {
+        println(nums[i]);
+    }
+}
+
+fn main() {
+    // Case 1: LeetCode example 1.
+    let mut a1: Array[i64, 4] = [3, 2, 2, 3];
+    report(mut a1, 4, 3);          // expect: k = 2, then 2 2
+
+    // Case 2: LeetCode example 2.
+    let mut a2: Array[i64, 8] = [0, 1, 2, 2, 3, 0, 4, 2];
+    report(mut a2, 8, 2);          // expect: k = 5, then 0 1 3 0 4
+
+    // Case 3: every element matches — k stays 0.
+    let mut a3: Array[i64, 3] = [4, 4, 4];
+    report(mut a3, 3, 4);          // expect: k = 0
+
+    // Case 4: no element matches — array unchanged.
+    let mut a4: Array[i64, 3] = [1, 2, 3];
+    report(mut a4, 3, 5);          // expect: k = 3, then 1 2 3
+
+    // Case 5: empty — the loop never runs.
+    let mut a5: Array[i64, 0] = [];
+    report(mut a5, 0, 0);          // expect: k = 0
+
+    // Case 6: single element, matches.
+    let mut a6: Array[i64, 1] = [1];
+    report(mut a6, 1, 1);          // expect: k = 0
+
+    // Case 7: single element, no match.
+    let mut a7: Array[i64, 1] = [1];
+    report(mut a7, 1, 2);          // expect: k = 1, then 1
+
+    // Case 8: negatives, val at both boundaries.
+    let mut a8: Array[i64, 5] = [-1, 0, -1, 2, -1];
+    report(mut a8, 5, -1);         // expect: k = 2, then 0 2
+}

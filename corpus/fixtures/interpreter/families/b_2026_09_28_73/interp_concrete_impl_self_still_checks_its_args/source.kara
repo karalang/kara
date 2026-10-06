@@ -1,0 +1,5 @@
+enum G[T] { X(T), Y }
+impl G[i64] {
+    fn bad(self) -> Self { return G.X("s"); }
+}
+fn main() {}

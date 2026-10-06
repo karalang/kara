@@ -1,0 +1,68 @@
+// Benchmark workload for LeetCode #335 — the three-case arm
+// (self_crossing.kara), timed as written.
+//
+// Build once, then punch (BENCHMARKS.md). One path of MOVES moves is built
+// once as an outward spiral, each move one to three longer than the move two
+// before it, which never crosses. Each of PUNCHES punches picks a random move.
+// Half the punches shorten it to 1, which turns the spiral inward so that the
+// next move crosses; the other half leave the path alone, so the solve scans
+// all of it. Then the move is put back.
+//
+// Each answer and its position are folded into a rolling hash, which is the
+// sink.
+
+const MOVES: i64 = 1000000;
+const PUNCHES: i64 = 100;
+const MODULUS: i64 = 1073741789;
+
+fn is_self_crossing(d: ref Vec[i64]) -> bool {
+    let n = d.len();
+    for i in 3..n {
+        if d[i] >= d[i - 2] and d[i - 1] <= d[i - 3] {
+            return true;
+        }
+        if i >= 4 and d[i - 1] == d[i - 3] and d[i] + d[i - 4] >= d[i - 2] {
+            return true;
+        }
+        if i >= 5
+            and d[i - 2] >= d[i - 4]
+            and d[i] + d[i - 4] >= d[i - 2]
+            and d[i - 1] <= d[i - 3]
+            and d[i - 1] + d[i - 5] >= d[i - 3]
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn wide(seed: mut ref i64) -> i64 {
+    let hi = next(seed);
+    return hi * 32768 + next(seed);
+}
+
+fn main() {
+    let mut seed = 335;
+    let mut d: Vec[i64] = Vec.new();
+    for i in 0..MOVES {
+        let two_back = if i >= 2 { d[i - 2] } else { 0 };
+        d.push(two_back + 1 + next(mut seed) % 3);
+    }
+    let mut sink = 0;
+    for p in 0..PUNCHES {
+        let at = 2 + wide(mut seed) % (MOVES - 2);
+        let old = d[at];
+        if p % 2 == 0 {
+            d[at] = 1;
+        }
+        let answer = if is_self_crossing(d) { 1 } else { 0 };
+        d[at] = old;
+        sink = (sink * 1000003 + answer * 2000003 + at) % MODULUS;
+    }
+    println(f"{sink}");
+}

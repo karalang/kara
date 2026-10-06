@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let a: Vec[String] = Vec[
+            "chain-collect-payload-alpha-aaaaaaaaaaaaaaaaaa".to_string(),
+            "chain-collect-payload-bravo-bbbbbbbbbbbbbbbbbb".to_string()
+        ];
+        let b: Vec[String] = Vec[
+            "chain-collect-payload-charlie-cccccccccccccccc".to_string()
+        ];
+        let r: Vec[String] = a.iter().chain(b.iter()).collect();
+        let r2: String = r[2i64].clone();
+        println(f"{r.len()} {a.len()} {b.len()} {r2}");
+        round = round + 1i64;
+    }
+}

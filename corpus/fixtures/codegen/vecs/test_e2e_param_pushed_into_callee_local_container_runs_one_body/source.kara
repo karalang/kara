@@ -1,0 +1,24 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct R2 { id: i64, s: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"e{self.id}") } }
+struct B { n: i64 }
+impl B { fn st(ref self, a: R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v } }
+fn st(a: R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v }
+fn stl(a: R) -> i64 { let mut v: Vec[R] = Vec.new(); v.push(a); 9 }
+fn sto(a: Option[R]) -> Vec[Option[R]] { let mut v: Vec[Option[R]] = Vec.new(); v.push(a); v }
+fn stg[T](a: T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(a); v }
+fn stm(a: R) -> Map[i64, R] { let mut m: Map[i64, R] = Map.new(); m.insert(1, a); m }
+fn st2(a: R2) -> Vec[R2] { let mut v: Vec[R2] = Vec.new(); v.push(a); v }
+fn main() {
+    { let a = R { id: 1 }; let v = st(a); println(f"k{v.len()}"); }
+    { let v = st(R { id: 2 }); println(f"k{v.len()}"); }
+    { let a = R { id: 3 }; println(f"k{stl(a)}"); }
+    { let a = Some(R { id: 4 }); let v = sto(a); println(f"k{v.len()}"); }
+    { let v = sto(Some(R { id: 5 })); println(f"k{v.len()}"); }
+    { let b = B { n: 0 }; let a = R { id: 6 }; let v = b.st(a); println(f"k{v.len()}"); }
+    { let a = R { id: 7 }; let v = stg(a); println(f"k{v.len()}"); }
+    { let a = R { id: 8 }; let m = stm(a); println(f"k{m.len()}"); }
+    { let a = R2 { id: 9, s: f"heap-string-longer-than-sso-9" }; let v = st2(a); println(f"k{v.len()}"); }
+    println("end")
+}

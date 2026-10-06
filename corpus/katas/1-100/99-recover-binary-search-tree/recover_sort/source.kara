@@ -1,0 +1,114 @@
+// LeetCode #99: Recover Binary Search Tree — sort-based recovery.
+//
+// A correct BST's inorder walk is exactly its values in ascending order. So collect
+// the nodes inorder, take a SORTED copy of their values — that is what each position
+// *should* hold — and write the sorted value back into any node whose current value
+// disagrees. Exactly the two swapped nodes differ from the sorted order, so only their
+// two values move; the structure is untouched. A genuinely distinct mechanism from the
+// adjacent-descent scan of the ★ (recover.kara): here the fix comes from a full sort +
+// positional compare rather than from spotting the ≤2 descents directly.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+fn inorder_collect(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    match node {
+        None => {}
+        Some(n) => {
+            inorder_collect(n.left, out);
+            out.push(n);
+            inorder_collect(n.right, out);
+        }
+    }
+}
+
+fn recover(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    inorder_collect(root, mut nodes);
+    let mut sorted: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < nodes.len() {
+        sorted.push(nodes[i].val);
+        i = i + 1;
+    }
+    sorted.sort();
+    let mut j = 0;
+    while j < nodes.len() {
+        if nodes[j].val != sorted[j] {
+            nodes[j].val = sorted[j];
+        }
+        j = j + 1;
+    }
+    root
+}
+
+fn corrupt(root: Option[TreeNode], trial: i64) -> Option[TreeNode] {
+    let mut ns: Vec[TreeNode] = Vec.new();
+    inorder_collect(root, mut ns);
+    let a = trial % ns.len();
+    let b = (trial * 3 + 2) % ns.len();
+    if a != b {
+        let t = ns[a].val;
+        ns[a].val = ns[b].val;
+        ns[b].val = t;
+    }
+    root
+}
+
+fn serialize(node: Option[TreeNode], out: mut ref String) {
+    match node {
+        None => {
+            out.push_str("#,");
+        }
+        Some(n) => {
+            out.push_str(f"{n.val},");
+            serialize(n.left, out);
+            serialize(n.right, out);
+        }
+    }
+}
+
+fn main() {
+    let vals = [5, 3, 8, 2, 4, 7, 9, 1, 6];
+    let mut acc = 0;
+    let mut trial = 0;
+    while trial < 8 {
+        let mut root: Option[TreeNode] = None;
+        let mut k = 0;
+        while k < vals.len() {
+            let idx = (k + trial) % vals.len();
+            root = insert(root, vals[idx]);
+            k = k + 1;
+        }
+        root = corrupt(root, trial);
+        root = recover(root);
+        let mut s: String = "";
+        serialize(root, mut s);
+        let bytes = s.bytes();
+        let mut jb = 0;
+        while jb < bytes.len() {
+            acc = (acc * 131 + (bytes[jb] as i64)) % 1000000007;
+            jb = jb + 1;
+        }
+        println(f"trial {trial}: {s}");
+        trial = trial + 1;
+    }
+    println(f"sink: {acc}");
+}

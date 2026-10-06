@@ -1,0 +1,34 @@
+// The control that rules out "the print family borrows its arguments".
+//
+// This is borrows.kara with the interpolation removed — `consume(t)` is still
+// the argument of a `println`, just not wrapped in an f-string. It is REJECTED:
+//
+//     error[ownership]: rejected.kara:NN:NN: value 't' moved here, used again
+//     here (moved at line NN:NN)
+//
+// So the move IS recorded for a nested consuming call under `println`. The
+// print-borrow rule (ledger B-2026-07-02-21, which made `println(s); println(s)`
+// legal) is about println's OWN argument and does not reach into a nested call's
+// parameter modes — it is not what makes borrows.kara compile.
+//
+// The f-string interpolation is the whole difference.
+
+struct Tracked {
+    s: String,
+}
+
+impl Drop for Tracked {
+    fn drop(mut ref self) {
+        println(f"DROP tearing down: [{self.s}]");
+    }
+}
+
+fn consume(t: Tracked) -> i64 {
+    return t.s.len();
+}
+
+fn main() {
+    let t = Tracked { s: "hello-world-payload" };
+    println(consume(t));
+    println(consume(t));
+}

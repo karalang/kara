@@ -1,0 +1,14 @@
+
+fn main() {
+    let base: i64 = 100;
+    let ok: Fn() -> Result[i64, String] = || Result.Ok(base + 1);
+    let err: Fn() -> Result[i64, String] = || Result.Err(f"bad{base}");
+    match ok() {
+        Result.Ok(v) => { println(f"ok {v}"); }
+        Result.Err(e) => { println(f"err {e}"); }
+    }
+    match err() {
+        Result.Ok(v) => { println(f"ok {v}"); }
+        Result.Err(e) => { println(f"err {e}"); }
+    }
+}

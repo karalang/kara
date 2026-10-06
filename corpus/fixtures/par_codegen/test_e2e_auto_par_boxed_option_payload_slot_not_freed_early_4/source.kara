@@ -1,0 +1,14 @@
+
+struct N { f0: i64, f1: i64, f2: i64 }
+fn get(v: ref Vec[N], k: i64) -> Option[N] {
+    let mut i = 0i64;
+    while i < v.len() { if v[i].f0 == k { return Some(v[i]); } i = i + 1i64; }
+    return None;
+}
+fn main() {
+    let mut ns: Vec[N] = Vec.new();
+    ns.push(N { f0: 5i64, f1: 1111i64, f2: 2222i64 });
+    let hit = get(ns, 5i64);
+    let miss = get(ns, 9i64);
+    println(f"{hit?.f0} {hit?.f2} {miss?.f0}");
+}

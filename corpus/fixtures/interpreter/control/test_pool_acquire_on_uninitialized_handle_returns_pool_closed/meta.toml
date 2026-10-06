@@ -1,0 +1,13 @@
+source = "tests/interpreter/control.rs::test_pool_acquire_on_uninitialized_handle_returns_pool_closed"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

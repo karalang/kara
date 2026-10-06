@@ -1,0 +1,23 @@
+
+struct Inner { data: Vec[i64], tag: i64 }
+enum E { Wrap(Inner), Empty }
+fn mkvec(x: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(x);
+    v.push(x + 1);
+    return v;
+}
+fn main() {
+    let mut sum: i64 = 0;
+    let mut i = 0;
+    while i < 50 {
+        let e = E.Wrap(Inner { data: mkvec(i), tag: i });
+        let k = match e {
+            Wrap(_) => 1,
+            Empty => 0,
+        };
+        sum = sum + k;
+        i = i + 1;
+    }
+    println(sum);
+}

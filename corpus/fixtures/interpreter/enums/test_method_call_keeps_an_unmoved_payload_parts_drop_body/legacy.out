@@ -1,0 +1,51 @@
+free-fn
+  dR6
+  got5
+  dR5
+  out
+method-ref
+  dR6
+  got5
+  dR5
+  out
+method-owned
+  dR6
+  got5
+  dR5
+  out
+method-result
+  dR6
+  got5
+  dR5
+  out
+method-second
+  dR5
+  got6
+  dR6
+  out
+method-struct
+  dR6
+  got5
+  dR5
+  out
+method-destr
+  dR6
+  got5
+  dR5
+  out
+ctl-nomove
+  mid
+  dR5
+  dR6
+  out
+ctl-whole
+  dR5
+  dR6
+  kept
+  out
+ctl-assoc
+  dR6
+  got5
+  dR5
+  out
+end

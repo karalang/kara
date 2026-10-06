@@ -1,0 +1,24 @@
+
+effect resource R1;
+effect resource R2;
+
+fn fetch_a() -> Vec[i64] reads(R1) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(42);
+    v
+}
+
+fn fetch_b() -> Vec[i64] reads(R2) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(99);
+    v
+}
+
+fn use_v(v: Vec[i64]) { println(v.len()); }
+
+fn main() {
+    let a: Vec[i64] = fetch_a();
+    let b: Vec[i64] = fetch_b();
+    use_v(a);
+    use_v(b);
+}

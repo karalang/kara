@@ -1,0 +1,12 @@
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { o: Option[R], r: Result[R, i64], p: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { o: Some(R { s: f"o{t}" }), r: Ok(R { s: f"r{t}" }), p: R { s: f"p{t}" }, n: n } }
+fn main() {
+    { let h1 = mk("1", 1); let x = h1.o.unwrap(); println(x.s); println("k1") }
+    { let h2 = mk("2", 1); let y = h2.r.unwrap(); println(y.s); println("k2") }
+    { let h3 = mk("3", 1); if h3.n > 0 { let x = h3.o.unwrap(); println(x.s) } else { println("no") }; println("k3") }
+    { let h4 = mk("4", 0); if h4.n > 0 { let x = h4.o.unwrap(); println(x.s) } else { println("no") }; println("k4") }
+    { let h5 = H { o: None, r: Err(5), p: R { s: f"p5" }, n: 5 }; let y = h5.r.unwrap_or(R { s: f"d5" }); println(y.s); println("k5") }
+    println("end")
+}

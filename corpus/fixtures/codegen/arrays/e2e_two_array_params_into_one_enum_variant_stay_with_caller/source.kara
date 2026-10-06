@@ -1,0 +1,21 @@
+struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+enum X2 { Gp(Array[S, 2], Array[N, 2]), Gq }
+enum X2s { Hp(Array[S, 2], Array[S, 2]), Hq }
+enum X3 { Ip(Array[S, 2], String, Array[N, 2]), Iq }
+enum X4 { Jp(Array[String, 2], Array[String, 2]), Jq }
+fn t_two(a: Array[S, 2], b: Array[N, 2]) -> i64 { match X2.Gp(a, b) { X2.Gp(v, w) => { println("  r"); return 1 }, X2.Gq => { println("  n"); return 0 } } }
+fn t_twos(a: Array[S, 2], b: Array[S, 2]) -> i64 { match X2s.Hp(a, b) { X2s.Hp(v, w) => { println("  r"); return 1 }, X2s.Hq => { println("  n"); return 0 } } }
+fn t_str(a: Array[S, 2], b: Array[N, 2]) -> i64 { match X3.Ip(a, f"kk", b) { X3.Ip(v, t, w) => { println(f"  r:{t}:{v[1].tag}:{w[0].id}"); return 1 }, X3.Iq => { println("  n"); return 0 } } }
+fn t_let(a: Array[S, 2], b: Array[N, 2]) -> i64 { let o = X2.Gp(a, b); match o { X2.Gp(v, w) => { println("  r"); return 1 }, X2.Gq => { println("  n"); return 0 } } }
+fn t_callee(a: Array[String, 2], b: Array[String, 2]) -> i64 { match X4.Jp(a, b) { X4.Jp(v, w) => { println(f"  r:{v[0]}:{w[1]}"); return 1 }, X4.Jq => { println("  n"); return 0 } } }
+fn main() {
+    println("t/two");    { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let b: Array[N, 2] = [N { id: 1 }, N { id: 2 }]; let z = t_two(a, b); }
+    println("t/twos");   { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let b: Array[S, 2] = [S { tag: f"cccccccc0" }, S { tag: f"cccccccc1" }]; let z = t_twos(a, b); }
+    println("t/str");    { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; let b: Array[N, 2] = [N { id: 3 }, N { id: 4 }]; let z = t_str(a, b); }
+    println("t/let");    { let a: Array[S, 2] = [S { tag: f"eeeeeeee0" }, S { tag: f"eeeeeeee1" }]; let b: Array[N, 2] = [N { id: 5 }, N { id: 6 }]; let z = t_let(a, b); }
+    println("t/callee"); { let a: Array[String, 2] = [f"ffffffff0", f"ffffffff1"]; let b: Array[String, 2] = [f"gggggggg0", f"gggggggg1"]; let z = t_callee(a, b); }
+    println("end")
+}

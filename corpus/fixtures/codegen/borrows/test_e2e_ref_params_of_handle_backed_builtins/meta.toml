@@ -1,0 +1,13 @@
+source = "tests/codegen/borrows.rs::test_e2e_ref_params_of_handle_backed_builtins"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:dataframe", "deferred:tensor"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,127 @@
+// LeetCode 265 — Paint House II, by prefix and suffix minima.
+//
+// The second O(n·k) form, and it reaches the bound by an argument that shares
+// nothing with the ★ file's.
+//
+// "Cheapest entry of the previous row other than index c" is a range-minimum
+// query over everything to the LEFT of c and everything to its RIGHT. Precompute
+// both directions once per row:
+//
+//     pre[j] = min(prev[0..j])      inclusive
+//     suf[j] = min(prev[j..k-1])    inclusive
+//
+// and the answer for colour c is min(pre[c-1], suf[c+1]) — the two halves with
+// c itself excised. One pass each way, then k lookups: O(k) per house, with no
+// appeal to where the minimum sits or how many times it occurs.
+//
+// That last point is why this file earns its place. The ★ form is correct only
+// if its second minimum counts multiplicity; this one never asks the question,
+// because [3, 3, 5] simply has pre[1] = 3 and colour 0 reads it directly. A
+// tie is not a special case here — there are no special cases.
+//
+// The exposed edge is the other one: c = 0 has no left part and c = k-1 has no
+// right part, and an off-by-one that lets index c into its own query silently
+// returns "paint it the same colour as before" without ever noticing.
+
+fn min_cost(costs: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let n = costs.len();
+    if n == 0 {
+        return 0;
+    }
+    let inf = 1000000000000;
+
+    let mut prev: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < k {
+        prev.push(costs[0][c]);
+        c = c + 1;
+    }
+
+    let mut i = 1;
+    while i < n {
+        // pre[j] = min over prev[0..j]; suf[j] = min over prev[j..k-1].
+        let mut pre: Vec[i64] = Vec.new();
+        let mut running = inf;
+        let mut j = 0;
+        while j < k {
+            if prev[j] < running { running = prev[j]; }
+            pre.push(running);
+            j = j + 1;
+        }
+        let mut suf: Vec[i64] = Vec.new();
+        let mut s = 0;
+        while s < k {
+            suf.push(inf);
+            s = s + 1;
+        }
+        running = inf;
+        let mut b = k - 1;
+        while b >= 0 {
+            if prev[b] < running { running = prev[b]; }
+            suf[b] = running;
+            b = b - 1;
+        }
+
+        let mut cur: Vec[i64] = Vec.new();
+        let mut t = 0;
+        while t < k {
+            // Strictly left of t, and strictly right of t.
+            let mut best = inf;
+            if t > 0 and pre[t - 1] < best { best = pre[t - 1]; }
+            if t + 1 < k and suf[t + 1] < best { best = suf[t + 1]; }
+            cur.push(costs[i][t] + best);
+            t = t + 1;
+        }
+        prev = cur;
+        i = i + 1;
+    }
+
+    let mut answer = inf;
+    let mut q = 0;
+    while q < k {
+        if prev[q] < answer { answer = prev[q]; }
+        q = q + 1;
+    }
+    if answer >= inf {
+        return -1;
+    }
+    return answer;
+}
+
+fn report(label: ref String, costs: ref Vec[Vec[i64]], k: i64) {
+    println(f"{label} -> {min_cost(costs, k)}");
+}
+
+fn main() {
+    let empty: Vec[Vec[i64]] = Vec.new();
+    report("[] k=3", empty, 3);
+    let mut a: Vec[Vec[i64]] = Vec.new();
+    a.push([1, 5, 3]);
+    a.push([2, 9, 4]);
+    report("[[1,5,3],[2,9,4]] k=3", a, 3);
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([7, 6, 2]);
+    report("[[7,6,2]] k=3", b, 3);
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    c.push([4]);
+    report("[[4]] k=1", c, 1);
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    d.push([4]);
+    d.push([9]);
+    report("[[4],[9]] k=1", d, 1);
+    let mut e: Vec[Vec[i64]] = Vec.new();
+    e.push([1, 100]);
+    e.push([1, 100]);
+    e.push([1, 100]);
+    report("[[1,100]x3] k=2", e, 2);
+    let mut f: Vec[Vec[i64]] = Vec.new();
+    f.push([3, 3, 5]);
+    f.push([1, 50, 50]);
+    report("[[3,3,5],[1,50,50]] k=3", f, 3);
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    g.push([8, 1, 6, 7, 9]);
+    g.push([2, 9, 3, 4, 1]);
+    g.push([5, 5, 5, 5, 5]);
+    g.push([9, 2, 8, 1, 7]);
+    report("5 colours, 4 houses", g, 5);
+}

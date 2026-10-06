@@ -1,0 +1,8 @@
+fn main() {
+                let tracer = StdoutExporter {};
+                tracer.export_span(Span.root("request", 7));
+                tracer.export_span(
+                    Span.root("outer", 1)
+                        .child("inner", 2)
+                        .with_field("route", "/health"));
+            }

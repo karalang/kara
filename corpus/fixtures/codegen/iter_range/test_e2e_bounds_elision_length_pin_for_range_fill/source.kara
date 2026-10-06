@@ -1,0 +1,13 @@
+
+fn build(rows: i64, cols: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    for i in 0i64..cols { dp.push(1i64); }
+    let mut r = 1i64;
+    while r < rows {
+        let mut c = 1i64;
+        while c < cols { dp[c] = dp[c] + dp[c - 1i64]; c = c + 1i64; }
+        r = r + 1i64;
+    }
+    dp[cols - 1i64]
+}
+fn main() { println(build(7i64, 3i64)); }

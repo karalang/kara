@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_06_36.rs::e2e_moved_nested_tuple_elem_runs_its_bodies"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,12 @@
+
+fn take_s(s: String) -> i64 { return s.len(); }
+fn take_v(v: Vec[i64]) -> i64 { return v.len(); }
+fn main() {
+    let a: String = f"payload_aaaaaaaaaaaaaaaaaaaaaaaa{1}";
+    let mut b: Vec[i64] = Vec.new();
+    b.push(1); b.push(2); b.push(3);
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < 20i64 { t = t + take_s(a.clone()) + take_v(b.clone()); i = i + 1i64; }
+    println(f"{t}");
+}

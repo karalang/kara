@@ -1,0 +1,32 @@
+
+struct P { t: (i64, i64), n: i64 }
+shared struct S { t: (i64, i64) }
+fn take(t: (i64, i64)) -> i64 { return t.0 + t.1; }
+fn take2(a: i64, t: (i64, i64), b: i64) -> i64 { return a + t.0 + t.1 + b; }
+fn takeref(t: ref (i64, i64)) -> i64 { return t.0 + t.1; }
+fn giveret() -> (i64, i64) { let b: u8 = 200u8; let d: u32 = 4000000000u32; return (b, d); }
+fn givetail() -> (i64, i64) { let b: u8 = 200u8; let d: u32 = 4000000000u32; (b, d) }
+fn givenest() -> ((i64, i64), i64) { let b: u8 = 200u8; let d: u32 = 4000000000u32; return ((b, d), 7); }
+fn giveheap() -> (String, i64) { let b: u8 = 200u8; return ("hi", b); }
+fn givesame() -> (i64, i64) { return (1, 2); }
+
+fn main() {
+    let b: u8 = 200u8;
+    let d: u32 = 4000000000u32;
+    let r1 = giveret();    println(f"01 {r1.0} {r1.1}");
+    let r2 = givetail();   println(f"02 {r2.0} {r2.1}");
+    let r3 = givenest();   println(f"03 {r3.0.0} {r3.0.1} {r3.1}");
+    let r4 = giveheap();   println(f"04 {r4.0} {r4.1}");
+    let r5 = givesame();   println(f"05 {r5.0} {r5.1}");
+    println(f"06 {take((b, d))}");
+    println(f"07 {take2(1, (b, d), 2)}");
+    let p = P { t: (b, d), n: 7 };
+    println(f"08 {p.t.0} {p.t.1} {p.n}");
+    let s = S { t: (b, d) };
+    println(f"09 {s.t.0} {s.t.1}");
+    let lt: (i64, i64) = (b, d);
+    println(f"10 {lt.0} {lt.1}");
+    println(f"11 {takeref(lt)}");
+    let un = (b, d);
+    println(f"12 {un.0} {un.1}");
+}

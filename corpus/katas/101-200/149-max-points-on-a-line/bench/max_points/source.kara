@@ -1,0 +1,95 @@
+// Benchmark workload — Max Points on a Line, O(n^2 log n) SORT-based variant.
+//
+// The shipped kata (../max_points.kara) counts slopes in a `Map[String, i64]`.
+// For a map-free, cross-language-honest measurement this bench instead collects
+// each anchor's reduced-integer slope keys into a `Vec[i64]`, sorts them, and
+// counts the longest equal run — the same anchor + normalized-slope algorithm,
+// keyed by an integer (`dx*4096 + dy`) so C can mirror it with `qsort` and no
+// hand-rolled hash map. N=1200 deterministic points (LCG), K=8 outer iterations
+// amortize per-process startup. Tune N / K in step with ../README.md § Benchmarks.
+
+fn abs_i64(v: i64) -> i64 {
+    if v < 0 {
+        return -v;
+    }
+    return v;
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x: i64 = a;
+    let mut y: i64 = b;
+    while y != 0 {
+        let t: i64 = y;
+        y = x % y;
+        x = t;
+    }
+    return x;
+}
+
+fn max_points(xs: Slice[i64], ys: Slice[i64]) -> i64 {
+    let n: i64 = xs.len();
+    if n <= 2 {
+        return n;
+    }
+    let mut best: i64 = 1;
+    for i in 0..n {
+        let mut slopes: Vec[i64] = Vec.new();
+        let mut dup: i64 = 0;
+        for j in (i + 1)..n {
+            let mut dx: i64 = xs[j] - xs[i];
+            let mut dy: i64 = ys[j] - ys[i];
+            if dx == 0 and dy == 0 {
+                dup = dup + 1;
+            } else {
+                let g: i64 = gcd(abs_i64(dx), abs_i64(dy));
+                dx = dx / g;
+                dy = dy / g;
+                if dx < 0 or (dx == 0 and dy < 0) {
+                    dx = -dx;
+                    dy = -dy;
+                }
+                slopes.push(dx * 4096 + dy);
+            }
+        }
+        slopes.sort();
+        let m: i64 = slopes.len();
+        let mut local: i64 = 0;
+        let mut run: i64 = 0;
+        let mut k: i64 = 0;
+        while k < m {
+            if k == 0 or slopes[k] != slopes[k - 1] {
+                run = 1;
+            } else {
+                run = run + 1;
+            }
+            if run > local {
+                local = run;
+            }
+            k = k + 1;
+        }
+        let cand: i64 = local + dup + 1;
+        if cand > best {
+            best = cand;
+        }
+    }
+    return best;
+}
+
+fn main() {
+    let n: i64 = 1200;
+    let mut xs: Vec[i64] = Vec.filled(n, 0);
+    let mut ys: Vec[i64] = Vec.filled(n, 0);
+    let mut state: i64 = 12345;
+    for i in 0..n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        xs[i] = state & 1023;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        ys[i] = state & 1023;
+    }
+
+    let mut sum: i64 = 0;
+    for _ in 0..8 {
+        sum = sum + max_points(xs.as_slice(), ys.as_slice());
+    }
+    println(sum.to_string());
+}

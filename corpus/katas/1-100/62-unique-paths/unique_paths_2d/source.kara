@@ -1,0 +1,79 @@
+// LeetCode #62: Unique Paths — full DP table, O(m·n) time and space.
+//
+// The textbook form of the same recurrence the ★ file
+// ([`unique_paths.kara`](unique_paths.kara)) rolls onto one row. Here the whole
+// grid is materialised: `grid[i][j]` is the number of right/down paths from the
+// start to cell `(i, j)`, filled row by row from the two in-neighbours
+//
+//     grid[i][j] = grid[i-1][j] + grid[i][j-1]
+//
+// with the top row and left column seeded to 1 (a single straight run reaches
+// them). The answer is `grid[m-1][n-1]`.
+//
+// Whereas the rolling version overwrites one array and has to reason about
+// read-before-write ordering, the 2-D table has NO aliasing subtlety at all:
+// every cell is written exactly once, and the two cells it reads —
+// `grid[i-1][j]` in the previous (already-complete) row and `grid[i][j-1]`
+// earlier in the current row — are finalised before it is reached. Its cost is
+// the O(m·n) grid it allocates, which the rolling form trades away for
+// O(min(m, n)); keeping it here shows the space optimisation as a diff against
+// the plain table and provides an independent cross-check of the recurrence.
+// The grid is a `Vec[Vec[i64]]`, the same 2-D shape as kata
+// [#54](../54-spiral-matrix/) and kata [#48](../48-rotate-image/).
+//
+// LeetCode guarantees the answer ≤ 2·10⁹ (fits i32); i64 here for corpus
+// uniformity. Each cell is a partial path count ≤ the final answer, so nothing
+// overflows.
+
+fn unique_paths(m: i64, n: i64) -> i64 {
+    // Build the m×n table. The first row and first column are all 1; each
+    // interior cell sums the cell above and the cell to its left.
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < m {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < n {
+            if i == 0 or j == 0 {
+                row.push(1);
+            } else {
+                // grid[i-1] is the finished previous row; row[j-1] is the cell
+                // just written this pass. Both are final before this read.
+                let up = grid[i - 1][j];
+                let left = row[j - 1];
+                row.push(up + left);
+            }
+            j = j + 1;
+        }
+        grid.push(row);
+        i = i + 1;
+    }
+
+    grid[m - 1][n - 1]
+}
+
+// ---- test harness (shared verbatim with unique_paths.kara) ------------------
+
+fn report(m: i64, n: i64, s: mut ref String) {
+    let ans = unique_paths(m, n);
+    println(f"{ans}");
+    s.push(' ');
+    s.push_str(f"{ans}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report(3, 7, mut s);    // 28
+    report(3, 2, mut s);    // 3
+    report(1, 1, mut s);    // 1
+    report(1, 10, mut s);   // 1
+    report(10, 1, mut s);   // 1
+    report(2, 2, mut s);    // 2
+    report(3, 3, mut s);    // 6
+    report(7, 3, mut s);    // 28
+    report(10, 10, mut s);  // 48620
+    report(51, 9, mut s);   // 1916797311
+
+    println(s);
+}

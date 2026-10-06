@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut count = 0;
+    outer: while true {
+        inner: while true {
+            count = count + 1;
+            break outer ();
+        }
+        // Without the latent-bug fix, the outer-loop body would
+        // re-enter `inner` here every iteration. With the fix, the
+        // `break outer` transfers control past this point straight to
+        // the outer loop's exit BB.
+        count = count + 100;
+    }
+    println(count);
+}

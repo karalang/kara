@@ -1,0 +1,94 @@
+// LeetCode #42: Trapping Rain Water — converging two pointers, O(1) auxiliary space (★).
+//
+// Given non-negative bar heights, each of unit width, return the total water trapped between
+// them after rain. The water standing over column `i` is `min(maxLeft[i], maxRight[i]) -
+// height[i]` (clamped at 0): a column holds water up to the shorter of the tallest wall to
+// its left and the tallest to its right. The O(n)-space way computes both running maxima into
+// arrays; this ★ file removes the arrays entirely.
+//
+// The O(1)-space trick is to walk TWO pointers inward and notice you never need the *exact*
+// far-side maximum — only whether it is at least as tall as the near side. Keep `left_max`
+// and `right_max` (the tallest seen from each end so far) and advance the pointer on the
+// SHORTER outer wall:
+//
+//   if height[left] < height[right]:   the left wall is the binding constraint, AND every
+//       bar from `right` outward is ≥ height[right] > height[left], so the true right-side
+//       maximum is guaranteed ≥ height[left]. Thus min(left_max, right_max_true) == left_max
+//       for column `left` — we can settle it now with `left_max` alone, no lookahead.
+//   else: symmetric on the right.
+//
+// At each step the shorter side is fully determined by its own running max (the other side is
+// provably taller), so we add `left_max - height[left]` (or the right analogue) and step that
+// pointer in. One linear pass, two scalars, no `Vec` — the allocation-free counterpart to the
+// prefix/suffix-array and monotonic-stack solvers, and the same in-place-scan footing as
+// [#41](../41-first-missing-positive/)'s cyclic sort. Heights are non-negative and ≤ 10⁵ with
+// n ≤ 2·10⁴, so the running sum stays far inside i64; i64 throughout for a uniform sink.
+
+fn trap(height: Slice[i64], n: i64) -> i64 {
+    let mut left = 0;
+    let mut right = n - 1;
+    let mut left_max = 0;
+    let mut right_max = 0;
+    let mut water = 0;
+    // Converge inward, always advancing the shorter outer wall — the side whose running
+    // max is the binding constraint for its current column.
+    while left < right {
+        if height[left] < height[right] {
+            if height[left] >= left_max {
+                left_max = height[left];
+            } else {
+                water = water + (left_max - height[left]);
+            }
+            left = left + 1;
+        } else {
+            if height[right] >= right_max {
+                right_max = height[right];
+            } else {
+                water = water + (right_max - height[right]);
+            }
+            right = right - 1;
+        }
+    }
+    water
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn report(height: Slice[i64], n: i64) {
+    let ans = trap(height, n);
+    println(f"{ans}");
+}
+
+fn main() {
+    // LeetCode example 1: the canonical skyline.
+    let a1: Array[i64, 12] = [0, 1, 0, 2, 1, 0, 1, 3, 2, 1, 2, 1];
+    report(a1, 12); // 6
+
+    // LeetCode example 2.
+    let a2: Array[i64, 6] = [4, 2, 0, 3, 2, 5];
+    report(a2, 6); // 9
+
+    // Single bar — nothing to trap.
+    let a3: Array[i64, 1] = [5];
+    report(a3, 1); // 0
+
+    // Minimal basin between two equal walls.
+    let a4: Array[i64, 3] = [2, 0, 2];
+    report(a4, 3); // 2
+
+    // Deep well with an interior bump.
+    let a5: Array[i64, 6] = [3, 0, 0, 2, 0, 4];
+    report(a5, 6); // 10
+
+    // Monotonic increasing — every wall drains right, no trap.
+    let a6: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(a6, 5); // 0
+
+    // Monotonic decreasing — drains left, no trap.
+    let a7: Array[i64, 5] = [5, 4, 3, 2, 1];
+    report(a7, 5); // 0
+
+    // Tall equal walls over a jagged floor.
+    let a8: Array[i64, 6] = [5, 2, 1, 2, 1, 5];
+    report(a8, 6); // 14
+}

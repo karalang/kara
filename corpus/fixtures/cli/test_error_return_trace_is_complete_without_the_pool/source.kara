@@ -1,0 +1,15 @@
+fn inner() -> Result[i64, i64] { Err(7_i64) }
+fn middle() -> Result[i64, i64] {
+    let v = inner()?;
+    Ok(v + 1)
+}
+fn outer() -> Result[i64, i64] {
+    let v = middle()?;
+    Ok(v * 2)
+}
+fn main() {
+    match outer() {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}

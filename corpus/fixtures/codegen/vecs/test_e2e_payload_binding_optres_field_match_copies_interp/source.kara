@@ -1,0 +1,27 @@
+
+struct N { doc: Option[String], k: i64 }
+struct R { doc: Result[String, i64], k: i64 }
+enum It { S(N), T(R), E(i64) }
+fn show(it: It) -> String {
+    match it {
+        It.S(n) => match n.doc { Some(s) => f"s{n.k} {s}", None => f"s{n.k} none" },
+        It.T(r) => match r.doc { Ok(s) => f"t{r.k} {s}", Err(e) => f"t{r.k} {e}" },
+        It.E(x) => f"e{x}",
+    }
+}
+fn show_let(it: It) -> String {
+    match it {
+        It.S(n) => { let d = n.doc; match d { Some(s) => f"l{n.k} {s}", None => f"l{n.k} none" } }
+        _ => "other",
+    }
+}
+fn main() {
+    println(show(It.S(N { doc: Some(f"heap-string-longer-than-sso-1"), k: 1 })));
+    println(show(It.T(R { doc: Ok(f"heap-string-longer-than-sso-2"), k: 2 })));
+    println(show(It.E(3)));
+    println(show_let(It.S(N { doc: Some(f"heap-string-longer-than-sso-4"), k: 4 })));
+    let v: Vec[N] = [N { doc: Some(f"heap-string-longer-than-sso-5"), k: 5 }];
+    let mut t = 0;
+    for n in v { let d = n.doc; match d { Some(s) => { t = t + s.len(); } None => {} } }
+    println(f"loop {t}");
+}

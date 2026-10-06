@@ -1,0 +1,196 @@
+// LeetCode 285 — differential harness.
+//
+// Three solvers: the iterative descent carrying a mutable `best`, the same
+// descent written recursively with `??` as its fallback, and an inorder walk
+// that takes the first key greater than the target.
+//
+// THE TWO DESCENTS ARE THE SAME ALGORITHM. Both rest on the claim that going
+// right can never step over the answer, and a misreading of that claim is shared
+// between them — the recursion just carries in its return value what the loop
+// carries in a variable. The inorder walk makes no claim about the tree's shape
+// at all: it reads every key in ascending order and takes the first that
+// qualifies, which is the problem statement with the BST property removed.
+//
+// THE ANSWER IS `Option`, SO ABSENCE IS PART OF WHAT IS COMPARED. The successor
+// of the maximum does not exist, and every tree has exactly one such key — so
+// roughly one probe in every tree SHOULD return `None`, and a solver that
+// returned a sentinel instead would agree on every other probe. The harness
+// counts the `None` answers separately for exactly that reason: if that count
+// ever goes to zero, the generator has stopped exercising the case the type
+// exists for.
+//
+// TREE SHAPES ARE GENERATED ON PURPOSE, not sampled. Random insertion orders
+// give balanced-ish trees where the descent is short and every solver looks the
+// same; the harness also builds ASCENDING and DESCENDING insertion sequences,
+// which degenerate the BST into a linked list. Those are where an O(h) descent
+// is O(n), where a recursive solver is deepest, and where an off-by-one in the
+// left/right choice stops being masked by a short path.
+//
+// PROBES INCLUDE KEYS NOT IN THE TREE, and both neighbours of every key. The
+// successor of an absent key is well defined and is a different code path from
+// the successor of a present one — `<=` versus `<` in the descent decides it,
+// and a solver that uses the wrong one is correct on absent keys and wrong on
+// present ones.
+
+struct Bst {
+    key: Vec[i64],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+fn bst_insert(t: mut ref Bst, k: i64) {
+    if t.key.len() == 0 {
+        t.key.push(k);
+        t.left.push(0 - 1);
+        t.right.push(0 - 1);
+        return;
+    }
+    let mut cur = 0;
+    let mut more = true;
+    while more {
+        if k < t.key[cur] {
+            if t.left[cur] < 0 {
+                t.key.push(k);
+                t.left.push(0 - 1);
+                t.right.push(0 - 1);
+                t.left[cur] = t.key.len() - 1;
+                more = false;
+            } else {
+                cur = t.left[cur];
+            }
+        } else {
+            if t.right[cur] < 0 {
+                t.key.push(k);
+                t.left.push(0 - 1);
+                t.right.push(0 - 1);
+                t.right[cur] = t.key.len() - 1;
+                more = false;
+            } else {
+                cur = t.right[cur];
+            }
+        }
+    }
+}
+
+fn build(keys: ref Vec[i64]) -> Bst {
+    let mut t = Bst { key: Vec.new(), left: Vec.new(), right: Vec.new() };
+    let mut i = 0;
+    while i < keys.len() {
+        bst_insert(mut t, keys[i]);
+        i = i + 1;
+    }
+    return t;
+}
+
+fn successor_iter(t: ref Bst, target: i64) -> Option[i64] {
+    let mut cur = 0;
+    let mut best: Option[i64] = None;
+    if t.key.len() == 0 { return None; }
+    while cur >= 0 {
+        if t.key[cur] > target {
+            best = Some(t.key[cur]);
+            cur = t.left[cur];
+        } else {
+            cur = t.right[cur];
+        }
+    }
+    return best;
+}
+
+fn successor_rec_from(t: ref Bst, node: i64, target: i64) -> Option[i64] {
+    if node < 0 { return None; }
+    if t.key[node] <= target {
+        return successor_rec_from(t, t.right[node], target);
+    }
+    // this node is a candidate; a smaller one may be on its left
+    return Some(successor_rec_from(t, t.left[node], target) ?? t.key[node]);
+}
+
+fn successor_rec(t: ref Bst, target: i64) -> Option[i64] {
+    if t.key.len() == 0 { return None; }
+    return successor_rec_from(t, 0, target);
+}
+
+fn successor_in(t: ref Bst, target: i64) -> Option[i64] {
+    if t.key.len() == 0 { return None; }
+    let mut stack: Vec[i64] = Vec.new();
+    let mut cur = 0;
+    while cur >= 0 or stack.len() > 0 {
+        while cur >= 0 {
+            stack.push(cur);
+            cur = t.left[cur];
+        }
+        let node = stack.pop().unwrap();
+        if t.key[node] > target {
+            return Some(t.key[node]);
+        }
+        cur = t.right[node];
+    }
+    return None;
+}
+
+
+fn main() {
+    let mut cases = 0;
+    let mut probes_run = 0;
+    let mut none_answers = 0;
+    let mut iter_vs_inorder = 0;
+    let mut rec_vs_inorder = 0;
+    let mut digest = 0;
+    let mut deepest = 0;
+
+    let mut seed = 20260824;
+    let mut shape = 0;
+    while shape < 3 {
+        let mut n = 1;
+        while n <= 12 {
+            let mut rep = 0;
+            while rep < 12 {
+                // shape 0: random inserts. 1: ascending (right spine).
+                // 2: descending (left spine) — both degenerate to a list.
+                let mut keys: Vec[i64] = Vec.new();
+                let mut i = 0;
+                while i < n {
+                    if shape == 0 {
+                        seed = (seed * 1103515245 + 12345) % 2147483648;
+                        keys.push((seed / 7) % 40);
+                    } else {
+                        if shape == 1 { keys.push(i * 3); } else { keys.push((n - i) * 3); }
+                    }
+                    i = i + 1;
+                }
+                let t = build(keys);
+                if t.key.len() > deepest { deepest = t.key.len(); }
+
+                // probe every key, and both neighbours of every key
+                let mut p = 0;
+                while p < keys.len() {
+                    let mut d = 0 - 1;
+                    while d <= 1 {
+                        let target = keys[p] + d;
+                        let a = successor_iter(t, target);
+                        let b = successor_rec(t, target);
+                        let c = successor_in(t, target);
+                        if a != c { iter_vs_inorder = iter_vs_inorder + 1; }
+                        if b != c { rec_vs_inorder = rec_vs_inorder + 1; }
+                        if c == None { none_answers = none_answers + 1; }
+                        digest = (digest * 131 + (c ?? 0 - 7) + 11) % 1000000007;
+                        probes_run = probes_run + 1;
+                        d = d + 1;
+                    }
+                    p = p + 1;
+                }
+                cases = cases + 1;
+                rep = rep + 1;
+            }
+            n = n + 1;
+        }
+        shape = shape + 1;
+    }
+
+    println(f"trees {cases}, probes {probes_run}, deepest tree {deepest} nodes");
+    println(f"probes with NO successor {none_answers}");
+    println(f"digest {digest}");
+    println(f"iterative vs the inorder definition {iter_vs_inorder}");
+    println(f"recursive vs the inorder definition {rec_vs_inorder}");
+}

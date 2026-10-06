@@ -1,0 +1,13 @@
+
+fn main() {
+    let hay: String = "fn let mut while return match";
+    let src: String = "returns_here_padded_xxxxxxxxxx";
+    let mut hits = 0i64;
+    let mut k = 0i64;
+    while k < 4i64 {
+        if hay.contains(src.substring(0i64, 6i64)) { hits = hits + 1i64; }
+        if src.starts_with(src.substring(0i64, 3i64)) { hits = hits + 1i64; }
+        k = k + 1i64;
+    }
+    println(f"{hits}");
+}

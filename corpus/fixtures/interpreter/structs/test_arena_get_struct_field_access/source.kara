@@ -1,0 +1,8 @@
+struct Node { val: i64, next: i64 }
+         fn main() {
+             let a: Arena[Node] = Arena.new();
+             let r = a.push(Node { val: 7, next: 99 });
+             let n = a.get(r);
+             println(n.val);
+             println(n.next);
+         }

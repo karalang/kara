@@ -1,0 +1,13 @@
+source = "tests/interpreter/iter_range.rs::test_iter_filter_keeps_matching_elements"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

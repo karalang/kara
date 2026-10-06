@@ -1,0 +1,8 @@
+
+type P = u16 where self >= 1 and self <= 65535;
+fn main() {
+    let z: u16 = 80;
+    let a = z as P;
+    println("as-ok");
+    match P.try_from(80) { Ok(v) => println("tryfrom-ok"), Err(e) => println("tryfrom-err") }
+}

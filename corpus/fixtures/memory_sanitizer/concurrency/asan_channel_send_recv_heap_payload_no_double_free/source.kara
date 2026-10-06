@@ -1,0 +1,21 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let (vtx, vrx): (Sender[Vec[i64]], Receiver[Vec[i64]]) = Channel.new();
+        let mut v: Vec[i64] = Vec.new();
+        v.push(i);
+        v.push(i + 1);
+        vtx.send(v);
+        let gv = vrx.recv();
+        total = total + gv.len();
+        let (stx, srx): (Sender[String], Receiver[String]) = Channel.new();
+        let s = f"msg-{i}";
+        stx.send(s);
+        let gs = srx.recv();
+        total = total + gs.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

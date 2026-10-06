@@ -1,0 +1,127 @@
+// LeetCode 261 — Graph Valid Tree, by reachability.
+//
+// The independent pair. Where the union-find form establishes (acyclic,
+// connected) and never looks at the edge count, this one establishes
+// (|E| = n-1, connected) and never looks for a cycle:
+//
+//     if edges.len() != n - 1 { return false; }   // (3)
+//     ...then BFS from node 0 and require every node reached.   // (2)
+//
+// (3) and (2) imply (1), so the cycle check is genuinely unnecessary here — but
+// ONLY because the edge count is verified first. Drop that line and the BFS
+// happily reports true for 0-1-2-0 plus a fourth node it never reaches... no,
+// worse: it reports true for any connected graph at all, cycles included. The
+// two lines are load-bearing together and neither is on its own.
+//
+// The edge-count test also disposes of the n-1 arithmetic at the boundary: n=1
+// needs zero edges, and an empty edge list with n=2 fails before the BFS runs.
+
+fn valid_tree(n: i64, edges: ref Vec[Vec[i64]]) -> bool {
+    // (3) — a tree on n nodes has exactly n-1 edges. Checked FIRST, because
+    // everything below is only sound once it holds.
+    if edges.len() != n - 1 {
+        return false;
+    }
+
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        adj.push(Vec.new());
+        i = i + 1;
+    }
+    let m = edges.len();
+    let mut e = 0;
+    while e < m {
+        let edge = ref edges[e];
+        let u = edge[0];
+        let v = edge[1];
+        adj[u].push(v);
+        adj[v].push(u);
+        e = e + 1;
+    }
+
+    // (2) — BFS from 0, counting what we reach. Vec + head cursor as the FIFO.
+    let mut seen: Vec[bool] = Vec.new();
+    let mut s = 0;
+    while s < n {
+        seen.push(false);
+        s = s + 1;
+    }
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    seen[0] = true;
+    let mut reached = 1;
+
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head = head + 1;
+        let nbrs = ref adj[node];
+        let mut k = 0;
+        while k < nbrs.len() {
+            let nb = nbrs[k];
+            if not seen[nb] {
+                seen[nb] = true;
+                reached = reached + 1;
+                queue.push(nb);
+            }
+            k = k + 1;
+        }
+    }
+
+    return reached == n;
+}
+
+fn report(label: ref String, n: i64, edges: ref Vec[Vec[i64]]) {
+    if valid_tree(n, edges) {
+        println(f"{label} -> true");
+    } else {
+        println(f"{label} -> false");
+    }
+}
+
+fn main() {
+    let none: Vec[Vec[i64]] = Vec.new();
+    report("n=1 []", 1, none);
+    report("n=2 []", 2, none);
+
+    let mut a: Vec[Vec[i64]] = Vec.new();
+    a.push([0, 1]);
+    a.push([0, 2]);
+    a.push([0, 3]);
+    a.push([0, 4]);
+    report("n=5 star", 5, a);
+
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([0, 1]);
+    b.push([1, 2]);
+    b.push([2, 3]);
+    b.push([3, 4]);
+    report("n=5 path", 5, b);
+
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    c.push([0, 1]);
+    c.push([1, 2]);
+    c.push([2, 3]);
+    c.push([0, 3]);
+    report("n=4 cycle", 4, c);
+
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    d.push([0, 1]);
+    d.push([1, 2]);
+    d.push([0, 2]);
+    report("n=4 triangle + isolated", 4, d);
+
+    let mut e: Vec[Vec[i64]] = Vec.new();
+    e.push([0, 1]);
+    e.push([2, 3]);
+    e.push([3, 4]);
+    report("n=5 forest", 5, e);
+
+    let mut f: Vec[Vec[i64]] = Vec.new();
+    f.push([3, 4]);
+    f.push([0, 1]);
+    f.push([2, 3]);
+    f.push([1, 2]);
+    report("n=5 path, shuffled edges", 5, f);
+}

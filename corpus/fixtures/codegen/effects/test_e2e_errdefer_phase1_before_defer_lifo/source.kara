@@ -1,0 +1,14 @@
+
+fn body() -> Result[i64, i64] {
+    defer { println("d1"); }
+    errdefer { println("e1"); }
+    defer { println("d2"); }
+    errdefer { println("e2"); }
+    return Err(0_i64);
+}
+fn main() {
+    match body() {
+        Ok(_) => println("ok"),
+        Err(_) => println("caller-err"),
+    }
+}

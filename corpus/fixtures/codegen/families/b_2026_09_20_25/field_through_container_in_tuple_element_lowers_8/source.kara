@@ -1,0 +1,1 @@
+fn main() { let a: (i64, Array[P, 3]) = (7, [P { n: 1 }, P { n: 2 }, P { n: 3 }]); let mut s = 0; let mut i = 0; while i < 3 { s = s + a.1[i].n; i = i + 1; } println(f"r:{s}") }

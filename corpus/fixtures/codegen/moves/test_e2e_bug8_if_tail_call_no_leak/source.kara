@@ -1,0 +1,10 @@
+
+shared struct S { val: i64 }
+fn make_a() -> S { let s = S { val: 10 }; s }
+fn make_b() -> S { let s = S { val: 20 }; s }
+fn main() {
+    let x = if true { make_a() } else { make_b() };
+    println(x.val);
+    let y = if false { make_a() } else { make_b() };
+    println(y.val);
+}

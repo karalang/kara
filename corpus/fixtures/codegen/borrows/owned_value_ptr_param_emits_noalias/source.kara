@@ -1,0 +1,11 @@
+
+fn take_tensor(t: Tensor[f64, [2, 2]]) -> i64 { return t.rank(); }
+fn take_map(m: Map[String, i64]) -> i64 { return m.len(); }
+fn take_sender(s: Sender[i64]) -> i64 { return 0; }
+fn take_scalar(n: i64) -> i64 { return n; }
+struct Point { x: i64, y: i64 }
+fn take_struct(p: Point) -> i64 { return p.x; }
+fn main() {
+    let a: Tensor[f64, [2, 2]] = Tensor.zeros([2, 2]);
+    print(take_tensor(a));
+}

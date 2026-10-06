@@ -1,0 +1,17 @@
+
+struct H { f: Fn(i64) -> i64 }
+struct G { f: Fn(i64) -> i64, n: i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> H { let h = H { f: make(k) }; return h; }
+fn build_tail(k: i64) -> H { let h = H { f: make(k) }; h }
+fn build_data(k: i64) -> G { let g = G { f: make(k), n: 3i64 }; g }
+fn build_binding(k: i64) -> H { let f = make(k); let h = H { f: f }; return h; }
+fn relay(k: i64) -> H { let r = build(k); return r; }
+fn main() {
+    let a = build(10i64);
+    let b = build_tail(20i64);
+    let c = build_data(30i64);
+    let d = build_binding(40i64);
+    let e = relay(5i64);
+    println(f"{(a.f)(1i64) + (b.f)(2i64) + (c.f)(3i64) + c.n + (d.f)(4i64) + (e.f)(6i64)}");
+}

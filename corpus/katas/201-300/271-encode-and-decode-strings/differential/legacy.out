@@ -1,0 +1,10 @@
+cases 4000
+payload bytes 22109
+lists containing ';' 1388
+lists containing '\' 1436
+lists containing '#' 1413
+lists containing multi-byte 1410
+lists with an empty element or no elements 1938
+codecs keeping [] and [""] distinct 3 of 3
+digest 365609880
+round-trip failures: hash 0 fixed 0 escape 0

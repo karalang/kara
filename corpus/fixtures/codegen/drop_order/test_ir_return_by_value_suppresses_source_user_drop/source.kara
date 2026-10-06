@@ -1,0 +1,13 @@
+
+struct Foo { x: i64 }
+impl Drop for Foo {
+    fn drop(mut ref self) {}
+}
+fn make() -> Foo {
+    let f = Foo { x: 7 };
+    f
+}
+fn main() {
+    let r = make();
+    println(r.x);
+}

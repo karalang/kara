@@ -1,0 +1,14 @@
+is_unique(dear) = false
+is_unique(cart) = true
+is_unique(cane) = false
+is_unique(make) = true
+is_unique(cake) = true
+is_unique(deer) = false
+is_unique(dear) = false
+is_unique(deer) = true
+is_unique(dear) = false
+is_unique(it) = true
+is_unique(is) = true
+is_unique(a) = true
+is_unique(hello) = true
+sharing d2r: deer door dear

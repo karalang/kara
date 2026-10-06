@@ -1,0 +1,8 @@
+successor of 5 -> Some(9)
+successor of 9 -> Some(11)
+successor of 11 -> Some(12)
+successor of 14 -> Some(20)
+successor of 20 -> Some(25)
+successor of 25 -> None
+successor of 13 -> Some(14)
+successor in an empty tree -> None

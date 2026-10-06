@@ -1,0 +1,30 @@
+
+struct One { msg: String }
+fn s_of(i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str(f"payload-padded-out-well-past-thirty-six-bytes-{i}");
+    return s;
+}
+fn g(i: i64) -> Result[i64, One] { return Result.Err(One { msg: s_of(i) }); }
+fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut n = 0i64;
+    let mut i = base;
+    while i < base + 50i64 {
+        // 1. READ-ONLY over a named local — a borrow, and it registers `e`.
+        let r: Result[i64, One] = g(i);
+        match r {
+            Result.Ok(_) => { n = n + 1i64; }
+            Result.Err(e) => { if e.msg.contains(digits(i)) { n = n + e.msg.len(); } }
+        }
+        // 2. FRESH TEMP whose arm MOVES the payload out. It must own it; the
+        //    stale registration above made it think otherwise.
+        match g(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { let m: String = e.msg; if m.contains(digits(i)) { n = n + m.len(); } }
+        }
+        i = i + 1;
+    }
+    println("done");
+}

@@ -1,0 +1,5 @@
+
+#[derive(Message)]
+enum Role { Guest, Member, Admin }
+
+fn main() {}

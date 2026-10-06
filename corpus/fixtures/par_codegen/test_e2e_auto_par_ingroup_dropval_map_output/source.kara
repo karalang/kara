@@ -1,0 +1,30 @@
+
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+fn spin(n: i64) -> i64 {
+    let mut s: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n { s = s + i; i = i + 1; }
+    return s;
+}
+fn work(n: i64) -> i64 {
+    let a = n + 1;
+    let mut m: Map[i64, Res] = Map.new();
+    let heavy = spin(8);
+    let _ = m.insert(1, Res { id: 7 });
+    let _ = m.insert(1, Res { id: 8 });
+    a + m.len() + heavy - heavy
+}
+fn main() {
+    let mut k = 0i64;
+    let mut sum = 0i64;
+    while k < 10 {
+        sum = sum + work(k);
+        k = k + 1;
+    }
+    println(f"{sum}");
+}

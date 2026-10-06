@@ -1,0 +1,103 @@
+// LeetCode 296 — Best Meeting Point, by trying every cell.
+//
+// No separability, no median, no pairing. Walk every cell of the grid, add up
+// the Manhattan distance from every home to it, keep the smallest. O(m*n*k),
+// and for the sizes in `differential.kara` that is entirely affordable.
+//
+// It is here because it is the only arm that assumes NOTHING. The other two
+// each rest on a theorem — that the cost separates into independent row and
+// column halves, and that the median (or the nested-pair sum) minimises a sum
+// of absolute deviations. Both theorems are true, and both are the kind of
+// thing one can believe a subtly wrong version of: that the meeting point must
+// be a HOME, say, or that for an even number of homes it must be one specific
+// one of the two middle candidates. This arm cannot make either mistake,
+// because it does not know either fact. It measures the minimum instead of
+// deriving it.
+//
+// The corollary is that it also searches cells the theorems say are pointless,
+// including cells nobody lives in — which is what makes it a real check on the
+// claim that the optimum is attained at a median cell rather than merely a
+// restatement of it.
+
+struct Grid {
+    data: Vec[u8],
+    w: i64,
+    h: i64,
+}
+
+fn at(g: ref Grid, r: i64, c: i64) -> u8 {
+    return g.data[r * g.w + c];
+}
+
+fn iabs(x: i64) -> i64 {
+    if x < 0 { return 0 - x; }
+    return x;
+}
+
+// Total walking if everyone meets at (mr, mc).
+fn total_from(g: ref Grid, mr: i64, mc: i64) -> i64 {
+    let mut total = 0;
+    let mut r = 0;
+    while r < g.h {
+        let mut c = 0;
+        while c < g.w {
+            if at(g, r, c) == 1u8 {
+                total = total + iabs(r - mr) + iabs(c - mc);
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return total;
+}
+
+fn min_total_distance(g: ref Grid) -> i64 {
+    let mut best = -1;
+    let mut r = 0;
+    while r < g.h {
+        let mut c = 0;
+        while c < g.w {
+            let t = total_from(g, r, c);
+            if best == -1 or t < best { best = t; }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    if best == -1 { return 0; }
+    return best;
+}
+
+fn parse(rows: Vec[String]) -> Grid {
+    let h = rows.len();
+    let mut w = 0;
+    if h > 0 { w = rows[0].bytes().len(); }
+    let mut data: Vec[u8] = Vec.new();
+    let mut r = 0;
+    while r < h {
+        let b = rows[r].bytes();
+        let mut c = 0;
+        while c < w {
+            if b[c] == b'1' { data.push(1u8); } else { data.push(0u8); }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return Grid { data: data, w: w, h: h };
+}
+
+fn report(label: String, rows: Vec[String]) {
+    println(f"{label} -> {min_total_distance(parse(rows))}");
+}
+
+fn main() {
+    report("cross      ", ["10001", "00000", "00100"]);
+    report("single     ", ["0100"]);
+    report("pair-row   ", ["1001"]);
+    report("pair-col   ", ["1", "0", "0", "1"]);
+    report("all-ones   ", ["111", "111", "111"]);
+    report("diagonal   ", ["100", "010", "001"]);
+    report("corners    ", ["101", "000", "101"]);
+    report("empty      ", ["000", "000"]);
+    report("column     ", ["1", "1", "1", "1", "1"]);
+    report("sparse-wide", ["1000000001"]);
+}

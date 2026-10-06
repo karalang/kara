@@ -1,0 +1,58 @@
+take/local
+  dE
+  dR1
+  r1
+take/temp
+  dE
+  dR2
+  r2
+take2/local
+  dE
+  dR3
+  r3
+read/local
+  dE
+  dR4
+  r4
+read2/local
+  dE
+  dR5
+  r5
+viacall/local
+  dE
+  dR6
+  r6
+viacall/temp
+  dE
+  dR7
+  r7
+iflet/local
+  dE
+  dR8
+  r8
+iflet/temp
+  dE
+  dR9
+  r9
+letelse/local
+  dE
+  dR10
+  r10
+whilelet/local
+  dE
+  dR11
+  r11
+borrowed/local
+  dR12
+  dE
+  dR12
+  r12
+p_take/local
+  dE
+  dR13
+  r13
+p_iflet/local
+  dE
+  dR14
+  r14
+end

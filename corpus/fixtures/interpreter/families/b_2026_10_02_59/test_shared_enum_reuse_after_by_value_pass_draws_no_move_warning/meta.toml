@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_02_59.rs::test_shared_enum_reuse_after_by_value_pass_draws_no_move_warning"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

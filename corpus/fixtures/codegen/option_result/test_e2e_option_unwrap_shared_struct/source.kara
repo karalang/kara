@@ -1,0 +1,9 @@
+
+shared struct Node { val: i64 }
+fn main() {
+    let n = Node { val: 99 };
+    let mut m: Map[i64, Node] = Map.new();
+    let _ = m.insert(7, n);
+    let got = m.get(7).unwrap();
+    println(got.val);
+}

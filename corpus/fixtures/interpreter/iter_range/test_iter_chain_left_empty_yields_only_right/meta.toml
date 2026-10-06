@@ -1,0 +1,13 @@
+source = "tests/interpreter/iter_range.rs::test_iter_chain_left_empty_yields_only_right"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,4 @@
+fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().step_by("nope");
+         }

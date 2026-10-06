@@ -1,0 +1,47 @@
+struct Lit {
+    value: i128,
+    suffix: String,
+}
+
+struct Outer {
+    lit: Lit,
+    k: i64,
+}
+
+enum E {
+    Int(Lit),
+    Nest(Outer),
+    Other,
+}
+
+shared enum Se {
+    Int(Lit),
+    Leaf,
+}
+
+fn show(e: E) -> String {
+    match e {
+        Int(l) => l.value.to_string() + " " + l.suffix,
+        Nest(o) => {
+            let l = o.lit;
+            l.value.to_string() + " " + l.suffix + " " + o.k.to_string()
+        }
+        Other => "o".to_string(),
+    }
+}
+
+fn shs(e: Se) -> String {
+    match e {
+        Int(l) => l.value.to_string() + " " + l.suffix,
+        Leaf => "leaf".to_string(),
+    }
+}
+
+fn main() {
+    println("start")
+    let big: i128 = 100000000000000000000i128;
+    println(show(E.Int(Lit { value: big, suffix: "i128".to_string() })))
+    println(show(E.Nest(Outer { lit: Lit { value: big + 1, suffix: "n".to_string() }, k: 7 })))
+    println(show(E.Int(Lit { value: -5, suffix: "neg".to_string() })))
+    println(shs(Se.Int(Lit { value: big + 2, suffix: "sh".to_string() })))
+}

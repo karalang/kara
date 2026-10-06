@@ -1,0 +1,35 @@
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
+fn consume(x: R) -> i64 { return x.id }
+struct H1 { pe: (R, i64) }
+struct H2 { pe: ((R, i64), i64) }
+struct H3 { pe: (((R, i64), i64), i64) }
+fn mkpair() -> (R, i64) { return (mk(11), 1) }
+
+fn local3() { let h: H2 = H2 { pe: ((mk(9), 1), 2) }; let (inner, y) = h.pe; let (r, x) = inner; let m: R = r; println(f"  l3 {m.id}") }
+fn norebind() { let h: H2 = H2 { pe: ((mk(7), 1), 2) }; let (inner, y) = h.pe; let (r, x) = inner; println(f"  nr {r.id}") }
+fn viacall() { let h: H2 = H2 { pe: ((mk(4), 1), 2) }; let (inner, y) = h.pe; let (r, x) = inner; let d = consume(r); println(f"  vc {d}") }
+fn three() { let h: H3 = H3 { pe: (((mk(3), 1), 2), 3) }; let (mid, z) = h.pe; let (inner, y) = mid; let (r, x) = inner; let m: R = r; println(f"  t3 {m.id}") }
+fn leftin() { let h: H2 = H2 { pe: ((mk(2), 1), 2) }; let (inner, y) = h.pe; let (r, x) = inner; println(f"  li {x}") }
+fn nestedblock() { let h: H2 = H2 { pe: ((mk(13), 1), 2) }; let (inner, y) = h.pe; { let (r, x) = inner; let m: R = r; println(f"  nb {m.id}") } println("  after") }
+fn flat() { let h: H1 = H1 { pe: (mk(8), 1) }; let (r, k) = h.pe; let m: R = r; println(f"  fl {m.id}") }
+fn plainlocal() { let t: ((R, i64), i64) = ((mk(6), 1), 2); let (inner, y) = t; let (r, x) = inner; let m: R = r; println(f"  pl {m.id}") }
+fn fromcall() { let inner = mkpair(); let (r, x) = inner; let m: R = r; println(f"  fc {m.id}") }
+fn wholecopy() { let h: H2 = H2 { pe: ((mk(12), 1), 2) }; let t = h.pe; let (inner, y) = t; let (r, x) = inner; let m: R = r; println(f"  wc {m.id}") }
+fn param3(h: H2) { let (inner, y) = h.pe; let (r, x) = inner; let m: R = r; println(f"  p3 {m.id}") }
+
+fn main() {
+    println("local3"); local3();
+    println("norebind"); norebind();
+    println("viacall"); viacall();
+    println("three"); three();
+    println("leftin"); leftin();
+    println("nestedblock"); nestedblock();
+    println("flat"); flat();
+    println("plainlocal"); plainlocal();
+    println("fromcall"); fromcall();
+    println("wholecopy"); wholecopy();
+    println("param3"); param3(H2 { pe: ((mk(5), 1), 2) });
+    println("end");
+}

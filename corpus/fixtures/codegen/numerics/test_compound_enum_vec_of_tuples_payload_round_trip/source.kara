@@ -1,0 +1,14 @@
+
+enum E { V(Vec[(String, i64)]) }
+fn count(xs: ref Vec[(String, i64)]) -> i64 {
+    xs.len()
+}
+fn main() {
+    let mut v: Vec[(String, i64)] = Vec.new();
+    v.push(("alpha", 1));
+    v.push(("beta", 2));
+    let e = V(v);
+    match e {
+        V(xs) => println(count(xs)),
+    }
+}

@@ -1,0 +1,38 @@
+
+shared enum Val { Nothing, Ident(String), Num(i64) }
+struct ArgN { name: Option[String], value: Option[Val] }
+struct AttrN { path: Vec[String], args: Vec[ArgN], string_value: Option[String] }
+
+// Entry-copy-THEN-whole-drop: `a` is entry-copied, `a.args.len()` read, then
+// the copy is WHOLE-dropped at return while the caller's for-loop element `a`
+// also drops. A shallow field bit-copy => the same element buffers freed twice.
+fn count(a: AttrN) -> i64 { a.args.len() }
+
+fn build() -> Vec[AttrN] {
+    let mut v: Vec[AttrN] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut args: Vec[ArgN] = Vec.new();
+        args.push(ArgN {
+            name: Some("note_argument_name_key_gamma_ccccccccccc".to_string()),
+            value: Some(Val.Ident("clone_derive_identifier_value_ddddddddd".to_string())),
+        });
+        args.push(ArgN { name: None, value: Some(Val.Num(42)) });
+        let mut path: Vec[String] = Vec.new();
+        path.push("diagnostic_namespace_segment_alpha_aaaaa".to_string());
+        v.push(AttrN {
+            path: path,
+            args: args,
+            string_value: Some("string_value_payload_epsilon_eeeeeeeeee".to_string()),
+        });
+        i = i + 1;
+    }
+    v
+}
+
+fn main() {
+    let items = build();
+    let mut total = 0;
+    for a in items { total = total + count(a); }
+    println(total);
+}

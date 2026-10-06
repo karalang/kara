@@ -1,0 +1,6 @@
+
+par struct Counter { val: i64 }
+fn main() {
+    let c = Counter { val: 42 };
+    println(c.val);
+}

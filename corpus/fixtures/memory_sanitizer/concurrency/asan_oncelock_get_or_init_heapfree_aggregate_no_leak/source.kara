@@ -1,0 +1,13 @@
+
+struct Point { x: i64, y: i64 }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Point] = OnceLock.new();
+        let p = cell.get_or_init(|| Point { x: 3i64, y: 4i64 });
+        total = total + p.x + p.y;
+        i = i + 1;
+    }
+    println(total.to_string());
+}

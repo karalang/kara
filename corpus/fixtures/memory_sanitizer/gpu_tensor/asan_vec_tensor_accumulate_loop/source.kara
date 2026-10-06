@@ -1,0 +1,22 @@
+
+shared struct T { mut grads: Vec[Tensor[f32, [?]]] }
+fn main() {
+    let t = T { grads: Vec.new() };
+    let seed: Tensor[f32, [?]] = Tensor.ones([3]);
+    t.grads.push(seed);
+    let mut k = 1;
+    while k < 4 {
+        let o: Tensor[f32, [?]] = Tensor.ones([3]);
+        t.grads.push(o);
+        k = k + 1;
+    }
+    let mut i = 1;
+    while i < 4 {
+        let g = ref t.grads[i];
+        let acc = ref t.grads[0];
+        t.grads[0] = acc + g;
+        i = i + 1;
+    }
+    let r = ref t.grads[0];
+    println(r[0]);
+}

@@ -1,0 +1,29 @@
+
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(0i64 - 1i64);
+    a.push(0i64 - 2i64);
+    for k in 0i64..100i64 {
+        a.push(k);
+    }
+    let mut b: Vec[i64] = Vec.with_capacity(64i64);
+    for k in 0i64..50i64 {
+        b.push(k * 2i64);
+    }
+    let mut ok: i64 = 1i64;
+    if a[0i64] != 0i64 - 1i64 { ok = 0i64; }
+    if a[1i64] != 0i64 - 2i64 { ok = 0i64; }
+    let mut i: i64 = 0i64;
+    while i < 100i64 {
+        if a[i + 2i64] != i { ok = 0i64; }
+        i = i + 1i64;
+    }
+    i = 0i64;
+    while i < 50i64 {
+        if b[i] != i * 2i64 { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(a.len());
+    println(b.len());
+    println(ok);
+}

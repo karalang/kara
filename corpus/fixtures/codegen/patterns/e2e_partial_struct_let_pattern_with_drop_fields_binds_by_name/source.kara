@@ -1,0 +1,13 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" }; }
+struct S3 { a: R, b: R }
+fn p_fresh(r: R) -> i64 { let s: S3 = S3 { a: mk(2), b: mk(3) }; let S3 { b, .. } = s; return b.id; }
+fn p_swapped(r: R) -> i64 { let s: S3 = S3 { a: mk(7), b: mk(8) }; let S3 { b, a } = s; return b.id * 100 + a.id; }
+fn p_rename(r: R) -> i64 { let s: S3 = S3 { a: mk(12), b: mk(13) }; let S3 { b: q, .. } = s; return q.id; }
+fn main() {
+    { let v: i64 = p_fresh(mk(1)); println(f"v={v}"); println("one") }
+    { let v: i64 = p_swapped(mk(6)); println(f"v={v}"); println("two") }
+    { let v: i64 = p_rename(mk(11)); println(f"v={v}"); println("three") }
+    println("end")
+}

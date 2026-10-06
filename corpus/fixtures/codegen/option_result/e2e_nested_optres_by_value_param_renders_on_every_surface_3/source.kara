@@ -1,0 +1,7 @@
+
+fn show(x: Option[Result[String, String]]) { println(f"{x}"); }
+fn main() {
+    let s = f"payloadpayload0";
+    show(Some(Ok(s)));
+    println("done");
+}

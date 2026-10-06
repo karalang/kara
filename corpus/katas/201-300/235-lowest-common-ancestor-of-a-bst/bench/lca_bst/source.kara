@@ -1,0 +1,109 @@
+// Benchmark harness for LeetCode #235 — Lowest Common Ancestor of a BST.
+//
+// Build-once + punch (BENCHMARKS.md): one 200 000-node BST is built from LCG
+// values, then each punch is a single root-to-split LCA walk. Rebuilding the
+// tree per query would swamp the O(h) walk being measured.
+//
+// The insert loop is ITERATIVE here, not the kata's recursive `insert`. That is
+// a setup-only change: 200 000 recursive inserts at depth ~35 is fine, but the
+// recursion is not what the benchmark measures and an iterative build keeps the
+// setup out of the timing story. The measured `lca` is identical to the kata's.
+//
+// Values are LCG-drawn so the tree is randomly shaped (depth ~2·log2 n ≈ 35).
+// A sorted input would degenerate the BST into a 200 000-deep chain — a
+// different algorithm's cost profile entirely, and a stack hazard for the
+// recursive build.
+//
+// Query pairs are drawn from the inserted values, so both endpoints are always
+// present and the walk always terminates at a real split point.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn lca(nodes: ref Vec[Node], root: i64, p: i64, q: i64) -> i64 {
+    let mut cur = root;
+    while cur != -1 {
+        let v = nodes[cur].val;
+        if p < v and q < v {
+            cur = nodes[cur].left;
+        } else if p > v and q > v {
+            cur = nodes[cur].right;
+        } else {
+            return v;
+        }
+    }
+    return -1;
+}
+
+fn main() {
+    let n = 200000;
+    let iters = 8000000;
+
+    let mut vals: Vec[i64] = Vec.new();
+    let mut x = 7;
+    let mut i = 0;
+    while i < n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        let hi = x / 65536;
+        x = (x * 1103515245 + 12345) % 2147483648;
+        vals.push((hi * 32768 + x / 65536) % 1000000);
+        i = i + 1;
+    }
+
+    // Iterative BST build over an index pool.
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut root = -1;
+    let mut b = 0;
+    while b < n {
+        let v = vals[b];
+        if root == -1 {
+            nodes.push(Node { val: v, left: -1, right: -1 });
+            root = 0;
+        } else {
+            let mut cur = root;
+            while true {
+                if v < nodes[cur].val {
+                    let l = nodes[cur].left;
+                    if l == -1 {
+                        let idx = nodes.len();
+                        nodes.push(Node { val: v, left: -1, right: -1 });
+                        nodes[cur].left = idx;
+                        break;
+                    }
+                    cur = l;
+                } else {
+                    let r = nodes[cur].right;
+                    if r == -1 {
+                        let idx = nodes.len();
+                        nodes.push(Node { val: v, left: -1, right: -1 });
+                        nodes[cur].right = idx;
+                        break;
+                    }
+                    cur = r;
+                }
+            }
+        }
+        b = b + 1;
+    }
+
+    let mut sink = 0;
+    let mut y = 99;
+    let mut it = 0;
+    while it < iters {
+        y = (y * 1103515245 + 12345) % 2147483648;
+        let phi = y / 65536;
+        y = (y * 1103515245 + 12345) % 2147483648;
+        let pi = (phi * 32768 + y / 65536) % n;
+        y = (y * 1103515245 + 12345) % 2147483648;
+        let qhi = y / 65536;
+        y = (y * 1103515245 + 12345) % 2147483648;
+        let qi = (qhi * 32768 + y / 65536) % n;
+        let a = lca(nodes, root, vals[pi], vals[qi]);
+        sink = (sink + a) % 1000000007;
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

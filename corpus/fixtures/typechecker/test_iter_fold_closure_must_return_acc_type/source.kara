@@ -1,0 +1,4 @@
+fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _r = v.iter().fold(0, |_acc, _x| "wrong");
+         }

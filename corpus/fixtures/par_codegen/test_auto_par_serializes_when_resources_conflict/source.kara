@@ -1,0 +1,10 @@
+
+effect resource Disk;
+
+fn write_a() -> i64 writes(Disk) { 1 }
+fn write_b() -> i64 writes(Disk) { 2 }
+
+fn main() {
+    let _ = write_a();
+    let _ = write_b();
+}

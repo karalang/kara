@@ -1,0 +1,1 @@
+ERROR at line 2: parameter `f` is a non-escaping function value and cannot be stored; declare it `f: escaping Fn() -> i64`

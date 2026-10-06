@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = ["alice", "bobby"];
+    for s in v {
+        println(s.len());
+    }
+}

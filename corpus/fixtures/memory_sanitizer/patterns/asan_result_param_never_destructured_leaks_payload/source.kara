@@ -1,0 +1,6 @@
+
+enum E { Missing(String) }
+fn mkv() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push("x"); return v; }
+fn mk() -> Result[Vec[String], E] { return Ok(mkv()); }
+fn take(r: Result[Vec[String], E]) { println("got"); }
+fn main() { let r = mk(); take(r); println("end"); }

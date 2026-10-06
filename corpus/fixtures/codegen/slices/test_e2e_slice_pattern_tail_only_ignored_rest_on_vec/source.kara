@@ -1,0 +1,14 @@
+
+fn last_or(v: Vec[i64], default: i64) -> i64 {
+    match v {
+        [.., last] => last,
+        [] => default,
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    println(last_or(v, -1));
+}

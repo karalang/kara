@@ -1,0 +1,125 @@
+// Benchmark workload — Insert Interval (LeetCode #57), PRE-SIZED variant.
+//
+// Identical to insert_interval.kara in every respect — same M/N/K, LCG,
+// cursor-based disjoint case builder, per-case new interval, linear
+// three-phase sweep, and sink (11,500,000) — EXCEPT one line: the output
+// vector is built with `Vec.with_capacity(intervals.len() + 1)` instead of
+// `Vec.new()`.
+//
+// Why this variant exists. The default insert_interval.kara returns a
+// `Vec.new()` and grows it by push, reallocating 0 -> 1 -> 2 -> 4 -> 8 ->
+// 16 on every call — the same grow-from-empty tax Rust's `Vec::new()` pays
+// (which is why the two tie at ~78/80 ms in the seq lane). But the output
+// length is bounded by `n + 1`, known up front, so a single reservation
+// removes all the reallocs. This is exactly the lever kata 153 documents
+// (`Vec.with_capacity` "closed the gap" + killed a transient 2x RSS).
+//
+// Measured (M5 Pro, 2026-07-03): 78.3 -> 24.4 ms, a 3.2x speedup that
+// lands Kāra at 1.06x of C (22.9 ms) — parity. See ../README.md
+// § Optimization: pre-sizing the output for the full table.
+
+fn insert_interval(intervals: Slice[(i64, i64)], new_interval: (i64, i64)) -> Vec[(i64, i64)] {
+    // The only line that differs from insert_interval.kara: reserve the
+    // known upper bound (n + 1) so the fill never reallocates.
+    let mut result: Vec[(i64, i64)] = Vec.with_capacity(intervals.len() + 1);
+    let n = intervals.len();
+    let mut new_start = new_interval.0;
+    let mut new_end = new_interval.1;
+    let mut i = 0;
+
+    // Phase 1 — intervals entirely left of the new one.
+    while i < n {
+        let cur = intervals[i];
+        if cur.1 >= new_start {
+            break;
+        }
+        result.push(cur);
+        i = i + 1;
+    }
+    // Phase 2 — absorb every overlapping/touching interval.
+    while i < n {
+        let cur = intervals[i];
+        if cur.0 > new_end {
+            break;
+        }
+        if cur.0 < new_start {
+            new_start = cur.0;
+        }
+        if cur.1 > new_end {
+            new_end = cur.1;
+        }
+        i = i + 1;
+    }
+    result.push((new_start, new_end));
+    // Phase 3 — the untouched tail.
+    while i < n {
+        result.push(intervals[i]);
+        i = i + 1;
+    }
+    result
+}
+
+// Overflow-free 31-bit LCG: 1103515245 * state + 12345 (mod 2^31).
+fn lcg_next(state: i64) -> i64 {
+    (1103515245 * state + 12345) % 2147483648
+}
+
+fn build_case(seed: i64, count: i64) -> Vec[(i64, i64)] {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut state = seed;
+    let mut cursor = 0;
+    let mut j = 0;
+    while j < count {
+        state = lcg_next(state);
+        let gap = (state % 4) + 2;
+        state = lcg_next(state);
+        let width = (state % 6) + 1;
+        let start = cursor + gap;
+        let end = start + width;
+        v.push((start, end));
+        cursor = end;
+        j = j + 1;
+    }
+    v
+}
+
+fn pick_new(case: Slice[(i64, i64)], m: i64, count: i64) -> (i64, i64) {
+    let half = count / 2;
+    let mut st = lcg_next(m * 7919 + 101);
+    let lo = st % half;
+    st = lcg_next(st);
+    let span = st % half;
+    let mut hi = lo + 1 + span;
+    if hi > count - 1 {
+        hi = count - 1;
+    }
+    let ns = case[lo].0;
+    let ne = case[hi].1;
+    (ns, ne)
+}
+
+fn main() {
+    let m_cases: i64 = 8;
+    let n_values: i64 = 16;
+    let k_iters: i64 = 1000000;
+
+    let mut sets: Vec[Vec[(i64, i64)]] = Vec.new();
+    let mut news: Vec[(i64, i64)] = Vec.new();
+    let mut m = 0;
+    while m < m_cases {
+        let case = build_case(m * 1000003 + 12345, n_values);
+        news.push(pick_new(case.as_slice(), m, n_values));
+        sets.push(case);
+        m = m + 1;
+    }
+
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % m_cases;
+        let r = insert_interval(sets[idx].as_slice(), news[idx]);
+        sum = sum + r.len();
+        k = k + 1;
+    }
+    println(sum);
+}

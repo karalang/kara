@@ -1,0 +1,22 @@
+
+struct P { k: i64, name: String, xs: Vec[i64] }
+impl Drop for P { fn drop(mut ref self) { println(f"d{self.k}n{self.name.len()}x{self.xs.len()}") } }
+impl P { fn dup(ref self) -> P { return P { k: self.k + 100, name: f"{self.name}-dup", xs: [self.k] } } }
+struct H { n: i64 }
+impl H {
+    fn mk(ref self, k: i64) -> P { return P { k: k, name: "alpha-padded-out-well-past-any-inline-capacity", xs: [k, k] } }
+    fn viaself(ref self, k: i64) -> P { return self.mk(k) }
+}
+fn sink(r: P) { println(f"s{r.k}n{r.name.len()}x{r.xs.len()}") }
+
+fn main() {
+    let h = H { n: 1 };
+    let mut i = 0;
+    while i < 3 {
+        sink(h.mk(i));
+        sink(h.viaself(i + 10));
+        { let p = h.mk(i + 20); sink(p.dup()); }
+        i = i + 1;
+    }
+    println("end");
+}

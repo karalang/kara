@@ -1,0 +1,24 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"s{i}" } }
+enum E { A(S), B(i64) }
+fn a5(c: bool) -> i64 {
+  let t = E.A(mks(5));
+  if c { let y = match t { E.A(s) => s.id, E.B(n) => n }; return y }
+  return 0
+}
+fn a6(c: bool) -> i64 {
+  let t = E.A(mks(6));
+  if c { match t { E.A(s) => { let k = s; println(f"k{k.id}") } E.B(n) => {} } }
+  return 0
+}
+fn a8(c: bool) -> i64 {
+  let t = E.A(mks(8));
+  match t { E.A(s) => { if c { let k = s; println(f"k{k.id}") } } E.B(n) => {} }
+  return 0
+}
+fn main() {
+  println(f"r {a5(false)}"); println(f"r {a5(true)}")
+  println(f"r {a6(false)}"); println(f"r {a6(true)}")
+  println(f"r {a8(false)}"); println(f"r {a8(true)}")
+}

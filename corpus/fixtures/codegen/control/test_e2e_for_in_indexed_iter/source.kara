@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut factors: Vec[Vec[i64]] = Vec.filled(7, Vec.new());
+    factors[6].push(2);
+    factors[6].push(3);
+    let mut sum = 0i64;
+    for p in factors[6].iter() {
+        sum = sum + p;
+    }
+    println(sum);
+}

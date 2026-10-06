@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_04_57.rs::interp_tuple_elem_overwrite_runs_displaced_body"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_04_57.rs::asan_tuple_elem_overwrite_runs_displaced_body"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

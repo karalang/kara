@@ -1,0 +1,17 @@
+
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn pick(flag: bool) -> Vec[E] {
+    let mut a: Vec[E] = Vec.new();
+    a.push(E { x: 1.0, y: 2.0 });
+    if flag {
+        return a;
+    }
+    let mut b: Vec[E] = Vec.new();
+    b.push(E { x: 3.0, y: 4.0 });
+    b
+}
+fn main() with panics {
+    let grid: Vec[E] = pick(true);
+    println(grid[0].x + grid[0].y);
+}

@@ -1,0 +1,16 @@
+
+fn main() {
+    let eth: Array[u8, 2] = b"\x08\x00";
+    println(eth[0]);
+    println(eth[1]);
+    let banner: Array[u8, 13] = b"hello world\n\0";
+    println(banner[0]);
+    println(banner[11]);
+    println(banner[12]);
+    let esc: Array[u8, 7] = b"\n\t\r\0\\\'\"";
+    println(esc[0]);
+    println(esc[4]);
+    println(esc[6]);
+    let inferred = b"hi";
+    println(inferred[1]);
+}

@@ -1,0 +1,7 @@
+
+fn f[T: Copy + Add](zero: T) -> T {
+    let mut a: Vec[T] = Vec.new();
+    a.push(zero);
+    return a[0] + zero;
+}
+fn main() { println(f"{f(5)}"); }

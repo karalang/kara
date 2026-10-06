@@ -1,0 +1,11 @@
+
+struct C { n: i64 }
+impl C {
+    fn inc(mut ref self) { self.n = self.n + 1; }
+}
+fn main() {
+    let mut c = C { n: 0 };
+    c.inc();
+    c.inc();
+    println(c.n);
+}

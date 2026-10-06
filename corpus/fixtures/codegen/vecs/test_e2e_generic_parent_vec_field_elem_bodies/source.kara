@@ -1,0 +1,15 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Pack[T] { items: Vec[T], tag: i64 }
+fn main() {
+    println("a");
+    {
+        let mut p: Pack[Res] = Pack { items: Vec.new(), tag: 1 };
+        p.items.push(Res { id: 7, name: f"qq{7}" });
+        println(f"n {p.items.len()}");
+    }
+    println("end");
+}

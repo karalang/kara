@@ -1,0 +1,13 @@
+source = "tests/interpreter/vecs.rs::vec_resize_grows_with_copies_and_shrinks_like_truncate"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

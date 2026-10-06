@@ -1,0 +1,23 @@
+
+struct AttrNode { string_value: Option[String] }
+fn parse_attrs() -> Vec[AttrNode] {
+    let mut a: Vec[AttrNode] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        a.push(AttrNode { string_value: Some("forloop_destructure_option_string_payload_xx".to_string()) });
+        i = i + 1;
+    }
+    a
+}
+fn main() {
+    let items = parse_attrs();
+    let mut n: i64 = 0;
+    for a in items {
+        let AttrNode { string_value } = a;
+        match string_value {
+            Some(s) => { n = n + s.len(); }
+            None => {}
+        }
+    }
+    println(n);
+}

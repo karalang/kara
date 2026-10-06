@@ -1,0 +1,10 @@
+
+import std.secret.{Secret};
+#[derive(Display)]
+struct Config { name: String, token: Secret[String] }
+fn main() {
+    let c = Config { name: "alice", token: Secret.new("hunter2") };
+    println(c);
+    println(c.to_string());
+    println(f"cfg={c}");
+}

@@ -1,0 +1,170 @@
+// Differential and property check for LeetCode #326.
+//
+// Four implementations of the same predicate, run on the same inputs:
+//
+//   by_divide   divide out every factor of 3              (power_of_three.kara)
+//   by_divisor  3^19 % n == 0                             (power_of_three_divisor.kara)
+//   by_log      round(ln n / ln 3), checked exactly       (power_of_three_log.kara)
+//   by_table    membership in the set of all twenty       (power_of_three_table.kara)
+//
+// Inputs: every n in [-100, 200000], every 3^k + d for k in 0..19 and
+// d in -2..2, both 32-bit extremes, and 20000 pseudo-random 32-bit values.
+//
+// Properties, over every input:
+//   P1  all four agree
+//   P2  accepted only if n > 0
+//   P3  for 0 < n <= 3^18, n is accepted exactly when 3n is
+//   P4  an accepted n other than 1 is divisible by 3
+//   P5  the exhaustive range holds exactly the powers a multiplication loop
+//       finds in it (count and sum)
+//   P6  every 3^k is accepted, and every 3^k + d with d != 0 and 3^k > 3 is not
+
+const MAX_POWER: i64 = 1162261467;
+const I32_MIN: i64 = -2147483648;
+const I32_MAX: i64 = 2147483647;
+
+fn by_divide(n: i64) -> bool {
+    if n <= 0 {
+        return false;
+    }
+    let mut m = n;
+    while m % 3 == 0 {
+        m /= 3;
+    }
+    return m == 1;
+}
+
+fn by_divisor(n: i64) -> bool {
+    return n > 0 and MAX_POWER % n == 0;
+}
+
+fn by_log(n: i64) -> bool {
+    if n <= 0 {
+        return false;
+    }
+    let k = ((n as f64).ln() / 3.0.ln()).round() as i64;
+    let mut p = 1;
+    for _ in 0..k {
+        p *= 3;
+    }
+    return p == n;
+}
+
+fn powers_of_three() -> Set[i64] {
+    let mut s: Set[i64] = Set.new();
+    let mut p = 1;
+    for _ in 0..20 {
+        s.insert(p);
+        p *= 3;
+    }
+    return s;
+}
+
+fn by_table(powers: ref Set[i64], n: i64) -> bool {
+    return powers.contains(n);
+}
+
+struct Tally {
+    checked: i64,
+    accepted: i64,
+    failures: i64,
+}
+
+fn check(powers: ref Set[i64], n: i64, t: mut ref Tally) {
+    let a = by_divide(n);
+    let b = by_divisor(n);
+    let c = by_log(n);
+    let d = by_table(powers, n);
+    t.checked += 1;
+    if a {
+        t.accepted += 1;
+    }
+    if a != b or a != c or a != d {
+        println(f"P1 FAIL n={n}: divide {a} divisor {b} log {c} table {d}");
+        t.failures += 1;
+    }
+    if a and n <= 0 {
+        println(f"P2 FAIL n={n}");
+        t.failures += 1;
+    }
+    if n > 0 and n <= MAX_POWER / 3 {
+        if a != by_divide(3 * n) {
+            println(f"P3 FAIL n={n}");
+            t.failures += 1;
+        }
+    }
+    if a and n != 1 and n % 3 != 0 {
+        println(f"P4 FAIL n={n}");
+        t.failures += 1;
+    }
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// A 32-bit value from two 15-bit draws and a sign-ish third.
+fn random_i32(seed: mut ref i64) -> i64 {
+    let hi = next(seed) % 65536;
+    let lo = next(seed) % 65536;
+    return hi * 65536 + lo + I32_MIN;
+}
+
+fn main() {
+    let powers = powers_of_three();
+    let mut t = Tally { checked: 0, accepted: 0, failures: 0 };
+
+    // Exhaustive range.
+    let mut sum = 0;
+    for n in -100..200001 {
+        check(powers, n, mut t);
+        if by_divide(n) {
+            sum += n;
+        }
+    }
+    let range_accepted = t.accepted;
+    let mut want_count = 0;
+    let mut want_sum = 0;
+    let mut p = 1;
+    while p <= 200000 {
+        want_count += 1;
+        want_sum += p;
+        p *= 3;
+    }
+    if range_accepted != want_count or sum != want_sum {
+        println(f"P5 FAIL: range has {range_accepted} summing {sum}, want {want_count} summing {want_sum}");
+        t.failures += 1;
+    }
+    println(f"[-100, 200000]: {range_accepted} powers, sum {sum}");
+
+    // Every power and its near neighbours.
+    let mut q = 1;
+    for k in 0..20 {
+        for d in -2..3 {
+            let n = q + d;
+            check(powers, n, mut t);
+            let want = d == 0 or (q <= 3 and by_divide(n));
+            if by_divide(n) != want {
+                println(f"P6 FAIL 3^{k} + {d}");
+                t.failures += 1;
+            }
+        }
+        q *= 3;
+    }
+
+    // The extremes.
+    check(powers, I32_MIN, mut t);
+    check(powers, I32_MAX, mut t);
+
+    // Random 32-bit values.
+    let mut seed = 326;
+    for _ in 0..20000 {
+        check(powers, random_i32(mut seed), mut t);
+    }
+
+    println(f"checked {t.checked}, accepted {t.accepted}, failures {t.failures}");
+    if t.failures == 0 {
+        println("all properties hold");
+    }
+}

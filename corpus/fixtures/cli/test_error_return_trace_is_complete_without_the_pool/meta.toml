@@ -1,0 +1,13 @@
+source = "tests/cli.rs::test_error_return_trace_is_complete_without_the_pool"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

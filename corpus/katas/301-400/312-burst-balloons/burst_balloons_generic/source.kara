@@ -1,0 +1,116 @@
+// LeetCode 312 — Burst Balloons, over a generic table.
+//
+// THE ARM: the flat arm's recurrence and schedule, but the table is a generic
+// `Table[T]` behind get/set rather than a bare Vec of i64.
+//
+// This arm exists for COMPILER COVERAGE, not for algorithmic coverage. It
+// computes exactly what the flat arm computes, in exactly the same order — so
+// it adds nothing to the differential's power to catch a wrong recurrence.
+// What it adds is a monomorphisation surface: a generic struct with a bounded
+// impl, an associated constructor that seeds the table through the bound, and
+// accessor methods that must be inlined for the arm to cost what the flat arm
+// costs. Historically that surface is where this corpus finds the most
+// compiler defects, so an interval DP is worth writing once through it.
+//
+// A NOTE ON THE SEED, because it is the one place this arm brushed a real gap.
+// `Table.build` seeds cells with `T.zero()`, reached through the `Zero` bound —
+// and that has always worked, monomorphising correctly to the i64 impl. Writing
+// the same call with the primitive named directly, `i64.zero()`, did NOT: it
+// passed `karac check` with zero diagnostics and then failed on the interpreter,
+// the JIT and the AOT build alike (kara B-2026-09-03-17, fixed in 335261c —
+// the parser treated a lowercase receiver as a VARIABLE named `i64` rather than
+// as a type). Nothing here was phrased around it — the local accumulator below
+// is seeded with a literal `0`, which is what one would write anyway — but the
+// two forms sitting side by side is how the gap was found, so the note stays.
+
+trait Zero {
+    fn zero() -> Self;
+}
+
+impl Zero for i64 {
+    fn zero() -> i64 { return 0; }
+}
+
+struct Table[T] {
+    cells: Vec[T],
+    w: i64,
+}
+
+impl[T: Zero + Copy] Table[T] {
+    fn build(w: i64) -> Table[T] {
+        let mut cells: Vec[T] = Vec.new();
+        // Reached through the bound, which is the form that works.
+        for i in 0..(w * w) { cells.push(T.zero()); }
+        return Table { cells: cells, w: w };
+    }
+
+    fn get(ref self, i: i64, j: i64) -> T {
+        return self.cells[i * self.w + j];
+    }
+
+    fn set(mut ref self, i: i64, j: i64, v: T) {
+        self.cells[i * self.w + j] = v;
+    }
+}
+
+fn max_coins(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    for i in 0..n { a.push(nums[i]); }
+    a.push(1);
+
+    let w = n + 2;
+    let mut dp: Table[i64] = Table.build(w);
+
+    // Shortest interval first, exactly as the nested and flat arms do.
+    for len in 2..w {
+        for i in 0..(w - len) {
+            let j = i + len;
+            let mut best = 0;
+            for k in (i + 1)..j {
+                let coins = dp.get(i, k) + dp.get(k, j) + a[i] * a[k] * a[j];
+                if coins > best { best = coins; }
+            }
+            dp.set(i, j, best);
+        }
+    }
+
+    return dp.get(0, n + 1);
+}
+
+fn render(nums: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { s.push_str(","); }
+        s.push_str(nums[i].to_string());
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(vals: Slice[i64]) {
+    let mut nums: Vec[i64] = Vec.new();
+    for v in vals { nums.push(v); }
+    println(render(nums) + " -> " + max_coins(nums).to_string());
+}
+
+fn main() {
+    report([3, 1, 5, 8]);
+    report([1, 5]);
+    report([]);
+    report([7]);
+    report([3, 0, 5]);
+    report([0, 0, 0]);
+    report([1, 2, 3, 4, 5]);
+    report([5, 4, 3, 2, 1]);
+    report([2, 2, 2, 2]);
+    report([1, 1, 1, 1, 1, 1]);
+    report([1, 100, 1]);
+    report([9, 76, 64, 21, 97, 60]);
+}

@@ -1,0 +1,7 @@
+
+fn main() {
+    let a = Vector[i64, 4](1, 5, 3, 8);
+    let b = Vector[i64, 4](4, 2, 3, 6);
+    let mn = (a < b).select(a, b);
+    println(mn[0]); println(mn[1]); println(mn[2]); println(mn[3]);
+}

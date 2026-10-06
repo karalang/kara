@@ -1,0 +1,157 @@
+// Benchmark harness for LeetCode #117 — O(1)-space next-pointer population on an ARBITRARY tree (★).
+// See ../README.md § Benchmarks. Each rep builds a fresh ~500-node pseudo-random BST (fixed insert
+// sequence, so a fixed SHAPE) whose node values carry a DATA-DEPENDENT base (base = acc%100, seeded
+// by the running hash so nothing hoists — the base shifts every value equally, leaving the BST shape
+// unchanged), wires every node's `next` with the constant-space dummy-head + tail threading, and
+// folds a level-order hash that reads the `next` chain back. K = 16000 reps — the mutate regime:
+// shared-node ALLOCATION (~500 RC nodes built + freed) plus in-place `next` wiring per rep.
+
+shared struct Node {
+    val: i64,
+    mut left: Option[Node],
+    mut right: Option[Node],
+    mut next: Option[Node],
+}
+
+fn connect(root: Option[Node]) {
+    let mut leftmost = root;
+    let mut going = true;
+    while going {
+        match leftmost {
+            None => {
+                going = false;
+            }
+            Some(_) => {
+                let dummy = Node { val: 0, left: None, right: None, next: None };
+                let mut tail = dummy;
+                let mut cur = leftmost;
+                let mut inner = true;
+                while inner {
+                    match cur {
+                        None => {
+                            inner = false;
+                        }
+                        Some(c) => {
+                            match c.left {
+                                None => {}
+                                Some(l) => {
+                                    tail.next = Some(l);
+                                    tail = l;
+                                }
+                            }
+                            match c.right {
+                                None => {}
+                                Some(r) => {
+                                    tail.next = Some(r);
+                                    tail = r;
+                                }
+                            }
+                            cur = c.next;
+                        }
+                    }
+                }
+                leftmost = dummy.next;
+            }
+        }
+    }
+}
+
+fn insert(root: Option[Node], v: i64) -> Option[Node] {
+    match root {
+        None => Some(Node { val: v, left: None, right: None, next: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+fn build_bst(count: i64, base: i64) -> Option[Node] {
+    let mut root: Option[Node] = None;
+    let mut i = 0;
+    let mut s = 88172645;
+    while i < count {
+        s = (s * 1103515245 + 12345) % 2147483648;
+        root = insert(root, (s % 100000) + base);
+        i = i + 1;
+    }
+    root
+}
+
+fn level_hash(root: Option[Node]) -> i64 {
+    let mut h = 1;
+    let mut head = root;
+    let mut going = true;
+    while going {
+        match head {
+            None => {
+                going = false;
+            }
+            Some(_) => {
+                let mut cur = head;
+                let mut inner = true;
+                while inner {
+                    match cur {
+                        None => {
+                            inner = false;
+                        }
+                        Some(c) => {
+                            h = (h * 131 + c.val + 1) % 1000000007;
+                            cur = c.next;
+                        }
+                    }
+                }
+                h = (h * 31 + 7) % 1000000007;
+                let mut nh: Option[Node] = None;
+                let mut scan = head;
+                let mut searching = true;
+                while searching {
+                    match scan {
+                        None => {
+                            searching = false;
+                        }
+                        Some(s) => {
+                            match s.left {
+                                Some(l) => {
+                                    nh = Some(l);
+                                    searching = false;
+                                }
+                                None => {
+                                    match s.right {
+                                        Some(r) => {
+                                            nh = Some(r);
+                                            searching = false;
+                                        }
+                                        None => {
+                                            scan = s.next;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                head = nh;
+            }
+        }
+    }
+    h
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut rep = 0;
+    while rep < 16000 {
+        let base = acc % 100;
+        let root = build_bst(500, base);
+        connect(root);
+        let h = level_hash(root);
+        acc = (acc * 131 + h) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}");
+}

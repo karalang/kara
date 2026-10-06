@@ -1,0 +1,13 @@
+source = "tests/codegen/rc_shared.rs::e2e_fresh_temp_handed_back_in_an_enum_frees_its_field_once"
+dedup_of = ["tests/memory_sanitizer/rc_shared.rs::asan_fresh_temp_handed_back_in_an_enum_frees_its_field_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

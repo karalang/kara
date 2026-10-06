@@ -1,0 +1,27 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn a(c: bool) { let mut v = [R { id: 1 }]; if c { let q = v; println(f"q{q.len()}"); } v = [R { id: 2 }]; println(f"a{v.len()}") }
+fn b(c: bool) { let mut v = [R { id: 3 }]; if c { println("t"); } else { let q = v; println(f"q{q.len()}"); } v = [R { id: 4 }]; println(f"b{v.len()}") }
+fn d(n: i64) { let mut v = [R { id: 5 }]; let mut i = 0; while i < n { if i == 1 { let q = v; println(f"q{q.len()}"); } v = [R { id: 6 + i }]; i = i + 1; } println(f"d{v.len()}") }
+fn e(c: bool) { let mut v: Vec[Vec[R]] = [[R { id: 10 }]]; if c { let q = v; println(f"q{q.len()}"); } v = [[R { id: 11 }]]; println(f"e{v.len()}") }
+fn f(c: bool) { let mut v = [R { id: 12 }]; if c { let q = v; println(f"q{q.len()}"); } v = [R { id: 13 }]; v = [R { id: 14 }]; println(f"f{v.len()}") }
+fn g(c: bool) { let mut v = [R { id: 15 }]; match c { true => { let q = v; println(f"q{q.len()}"); } false => { println("n"); } } v = [R { id: 16 }]; println(f"g{v.len()}") }
+fn h(c: bool) { let mut v = [R { id: 17 }]; if c { let q = v; println(f"q{q.len()}"); } let w = [R { id: 18 }]; v = w; println(f"h{v.len()}") }
+fn k(c: bool) { let mut a = [R { id: 19 }, R { id: 20 }]; if c { let q = a; println(f"q{q.len()}"); } a = [R { id: 21 }, R { id: 22 }]; println(f"k{a.len()}") }
+fn main() {
+    a(true)
+    a(false)
+    b(true)
+    b(false)
+    d(3)
+    e(true)
+    e(false)
+    f(true)
+    g(true)
+    g(false)
+    h(true)
+    h(false)
+    k(true)
+    k(false)
+    println("end")
+}

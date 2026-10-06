@@ -1,0 +1,5 @@
+fn main() {
+         let s = Span.root("req", 7);
+         with_span(s, || { Log.info("inside") });
+         Log.info("outside");
+     }

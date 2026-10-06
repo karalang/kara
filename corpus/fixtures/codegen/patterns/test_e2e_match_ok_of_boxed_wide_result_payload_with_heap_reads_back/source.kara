@@ -1,0 +1,21 @@
+
+struct Err1 { message: String }
+struct Out { v1: Vec[String], v2: Vec[String], v3: Vec[String], tag: i64 }
+
+fn go() -> Result[Out, Err1] {
+    let mut a: Vec[String] = Vec.new();
+    a.push("alpha");
+    let mut b: Vec[String] = Vec.new();
+    b.push("beta");
+    return Ok(Out { v1: a, v2: b, v3: [], tag: 1 });
+}
+
+fn main() {
+    match go() {
+        Ok(a) => {
+            println(a.v1.len());
+            match a.v2.get(0) { Some(s) => { println(s); } None => { } }
+        }
+        Err(e) => { println(e.message); }
+    }
+}

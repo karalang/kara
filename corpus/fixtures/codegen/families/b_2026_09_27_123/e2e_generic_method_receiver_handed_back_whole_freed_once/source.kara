@@ -1,0 +1,20 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum G[T] { X(T), Y }
+impl[T] G[T] {
+    fn id(self) -> Self { return self; }
+    fn tail(self) -> Self { self }
+}
+fn main() {
+    { let d: G[R] = G.X(R { id: 1, tag: f"a" }); let d2 = d.id(); match d2 { G.X(t) => { println(f"m{t.id}") } G.Y => { println("mY") } } }
+    { let d: G[String] = G.X(f"abc"); let d2 = d.id(); match d2 { G.X(t) => { println(f"s{t}") } G.Y => {} } }
+    { let d: G[R] = G.X(R { id: 2, tag: f"b" }); let d2 = d.tail(); match d2 { G.X(t) => { println(f"t{t.id}") } G.Y => {} } }
+    { let d: G[R] = G.X(R { id: 3, tag: f"c" }); let d2 = d.id().id(); match d2 { G.X(t) => { println(f"c{t.id}") } G.Y => {} } }
+    { let d2 = G.X(R { id: 4, tag: f"d" }).id(); match d2 { G.X(t) => { println(f"f{t.id}") } G.Y => {} } }
+    { let d2 = G.X(f"xyz").id().id(); match d2 { G.X(t) => { println(f"g{t}") } G.Y => {} } }
+    { let d: G[Vec[String]] = G.X(["a", "b"]); let d2 = d.id(); match d2 { G.X(v) => { println(f"v{v.len()}") } G.Y => {} } }
+    { let d: G[Array[String, 2]] = G.X([f"a", f"b"]); let d2 = d.id(); match d2 { G.X(v) => { println(f"a{v[1]}") } G.Y => {} } }
+    let mut i = 0;
+    while i < 2 { let d: G[R] = G.X(R { id: 10 + i, tag: f"l" }); let d2 = d.id(); match d2 { G.X(t) => { println(f"l{t.id}") } G.Y => {} } i = i + 1; }
+    println("end")
+}

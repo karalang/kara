@@ -1,0 +1,14 @@
+
+shared struct N { mut v: i64 }
+fn main() {
+    let mut ts: Vec[(i64, String)] = Vec.new();
+    ts.push((7, "payload_long_enough_to_be_heap_allocated".to_string()));
+    let t = ts[0].clone();
+    println(f"{t.0} {t.1.len()} {ts[0].1.len()}");
+
+    let mut os: Vec[Option[N]] = Vec.new();
+    os.push(Some(N { v: 41 }));
+    let o = os[0].clone();
+    match o { Some(n) => { println(n.v); } None => { println("none"); } }
+    match os[0] { Some(n) => { println(n.v + 1); } None => { println("none"); } }
+}

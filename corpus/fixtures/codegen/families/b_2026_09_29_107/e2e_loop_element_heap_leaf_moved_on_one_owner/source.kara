@@ -1,0 +1,18 @@
+struct S { x: String }
+fn main() {
+    let v: Vec[(Vec[i64], i64)] = [([1], 1), ([2, 3], 2)];
+    for pair in v.into_iter() { let (a, j) = pair; let b = a; println(f"a {j} {b.len()}") }
+    let w: Vec[(String, i64)] = [(f"a-heap-string-longer-than-sso-{1}", 1)];
+    for pair in w.into_iter() { let (a, j) = pair; let b = a; println(f"b {j} {b.len()}") }
+    let x: Vec[(String, i64)] = [(f"a-heap-string-longer-than-sso-{2}", 2)];
+    for (a, j) in x { let b = a; println(f"c {j} {b.len()}") }
+    let y: Vec[(String, i64, String)] = [(f"a-heap-string-longer-than-sso-{3}", 3, f"b-heap-string-longer-than-sso-{3}")];
+    for (a, j, c) in y { let b = a; let e = c; println(f"d {j} {b.len()} {e.len()}") }
+    let z: Vec[(Vec[i64], i64)] = [([1], 1), ([2, 3], 2)];
+    let mut out: Vec[Vec[i64]] = [];
+    for pair in z.into_iter() { let (a, j) = pair; out.push(a) }
+    println(f"e {out.len()} {out[1].len()}")
+    let s: Vec[(S, i64)] = [(S { x: f"a-heap-string-longer-than-sso-{4}" }, 4)];
+    for pair in s.into_iter() { let (q, j) = pair; let t = q; println(f"f {t.x.len()} {j}") }
+    println("end")
+}

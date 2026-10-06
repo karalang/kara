@@ -1,0 +1,8 @@
+
+fn main() {
+    let req = Request { };
+    match req.header("content-type") {
+        Some(v) => println(v),
+        None => println("none"),
+    }
+}

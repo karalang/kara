@@ -1,0 +1,97 @@
+// Benchmark workload for LeetCode #328 — the relinking arm
+// (odd_even_list.kara), timed as written.
+//
+// Build once, then punch (BENCHMARKS.md). A list of LEN nodes with values in
+// [0, 999999] is built once. Each of PUNCHES punches regroups the whole list
+// in place, odd positions before even ones, then walks it once: the walk
+// folds every value into a rolling hash, weighted by its position, and
+// replaces the value at one random position. Regrouping a list over and over
+// scatters its nodes, so after the first few punches every step of the walk
+// and the relinking is a cache miss.
+//
+// The rolling hash is the sink.
+
+const LEN: i64 = 1000000;
+const PUNCHES: i64 = 10;
+const MODULUS: i64 = 1073741789;
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+fn odd_even_list(head: Option[ListNode]) -> Option[ListNode] {
+    match head {
+        None => None,
+        Some(first) => {
+            match first.next {
+                None => Some(first),
+                Some(second) => {
+                    let mut odd = first;
+                    let mut even = second;
+                    let mut done = false;
+                    while not done {
+                        match even.next {
+                            None => {
+                                done = true;
+                            }
+                            Some(n) => {
+                                odd.next = Some(n);
+                                odd = n;
+                                even.next = n.next;
+                                match n.next {
+                                    None => {
+                                        done = true;
+                                    }
+                                    Some(m) => {
+                                        even = m;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    odd.next = Some(second);
+                    Some(first)
+                }
+            }
+        }
+    }
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn main() {
+    let mut seed = 328;
+    let mut head: Option[ListNode] = None;
+    for _ in 0..LEN {
+        head = Some(ListNode { val: (next(mut seed) * 32768 + next(mut seed)) % 1000000, next: head });
+    }
+    let mut sink = 0;
+    for _ in 0..PUNCHES {
+        head = odd_even_list(head);
+        let pos = (next(mut seed) * 32768 + next(mut seed)) % LEN;
+        let fresh = (next(mut seed) * 32768 + next(mut seed)) % 1000000;
+        let mut cur = head;
+        let mut k = 0;
+        let mut more = true;
+        while more {
+            match cur {
+                None => {
+                    more = false;
+                }
+                Some(n) => {
+                    if k == pos {
+                        n.val = fresh;
+                    }
+                    sink = (sink * 31 + n.val * (k + 1)) % MODULUS;
+                    cur = n.next;
+                    k += 1;
+                }
+            }
+        }
+    }
+    println(f"sink {sink}");
+}

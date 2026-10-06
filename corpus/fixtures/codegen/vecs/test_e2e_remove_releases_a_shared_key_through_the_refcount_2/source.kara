@@ -1,0 +1,15 @@
+
+#[derive(Hash, Eq, PartialEq)]
+shared struct K { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"dropK {self.id}") } }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let k = K { id: 1 };
+    let keep = k;
+    m.insert(k, 1);
+    println("--before--");
+    m.remove(keep);
+    println("--after-remove--");
+    println(f"keep still {keep.id}");
+    println("--end--");
+}

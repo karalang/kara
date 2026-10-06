@@ -1,0 +1,123 @@
+// LeetCode #63: Unique Paths II — one rolling row of DP, O(m·n) time, O(n) space (★).
+//
+// The obstacle sequel to kata [#62](../62-unique-paths/). A robot sits at the
+// top-left of an `m × n` grid and may step only RIGHT or DOWN, but some cells
+// hold obstacles (`grid[i][j] == 1`) it may not stand on; how many distinct
+// paths reach the bottom-right? The recurrence is #62's, plus one rule — a cell
+// carrying an obstacle has ZERO paths through it:
+//
+//     paths[i][j] = 0                              if grid[i][j] is an obstacle
+//     paths[i][j] = paths[i-1][j] + paths[i][j-1]  otherwise
+//
+// with `paths[0][0] = 1` when the start is clear (and `0` when it is blocked —
+// then there are no paths at all). The top row and left column are no longer a
+// blanket "all 1s": a path along the top row survives only up to the first
+// obstacle, and everything past it is cut off — which the additive recurrence
+// gets for free, because an obstacle zeroes `paths` there and that 0 propagates
+// rightward/downward through the sum.
+//
+// Rolling the 2-D table onto ONE array, exactly as #62 does: the recurrence only
+// ever reads the row directly above, so a single array updated in place, left to
+// right, suffices —
+//
+//     dp[j]  currently holds  paths[i-1][j]   (the row above)
+//     dp[j] += dp[j-1]        ->  paths[i-1][j] + paths[i][j-1] = paths[i][j]
+//
+// At the instant `dp[j]` is read on the right it still holds the row-above value
+// (not yet overwritten this pass), while `dp[j-1]` was already advanced to the
+// current row — the two neighbours the recurrence wants. An obstacle overrides
+// the sum with `dp[j] = 0`; the left-column cell `dp[0]` is only ever touched to
+// zero it at an obstacle, otherwise it carries straight down (the single
+// all-downs path). This is the same read-before-overwrite left-to-right sweep as
+// #62, with an obstacle guard threaded through it.
+//
+// The one structural difference from #62 worth flagging: obstacles BREAK the
+// axis symmetry `paths(m,n) == paths(n,m)`, so there is no swapping to the
+// smaller dimension — the array must span the real column count `n` (O(n)
+// space). And, as #62's closing note promised, there is no closed form here:
+// with arbitrary obstacles the binomial `C(m+n-2, m-1)` is meaningless and the
+// DP recurrence is mandatory. This is why #62's ★ was the DP and not the
+// combinatorial one-liner.
+//
+// LeetCode guarantees the answer ≤ 2·10⁹ (it fits i32); the arithmetic is i64
+// for corpus uniformity. Every `dp[j]` is a partial path count ≤ the final
+// answer, so no intermediate overflows.
+
+fn unique_paths_with_obstacles(grid: ref Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+
+    // dp[j] = obstacle-free right/down paths reaching column j of the current
+    // row. Seed a single virtual path entering the top-left corner; every real
+    // path starts there. (If (0,0) is itself an obstacle, the first-row scan
+    // below zeroes dp[0] straight away, and the answer collapses to 0.)
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < cols {
+        dp.push(0);
+        j = j + 1;
+    }
+    dp[0] = 1;
+
+    let mut i = 0;
+    while i < rows {
+        let mut c = 0;
+        while c < cols {
+            if grid[i][c] == 1 {
+                // Obstacle: no path may stand here, so this cell contributes 0
+                // downward and rightward. Zeroing dp[c] propagates that.
+                dp[c] = 0;
+            } else {
+                if c > 0 {
+                    // cell above (old dp[c]) + cell to the left (updated dp[c-1])
+                    dp[c] = dp[c] + dp[c - 1];
+                }
+                // c == 0: dp[0] carries down the left column untouched.
+            }
+            c = c + 1;
+        }
+        i = i + 1;
+    }
+
+    dp[cols - 1]
+}
+
+// ---- test harness (shared verbatim by both solvers + the Python mirror) ------
+
+fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+    let ans = unique_paths_with_obstacles(grid);
+    println(f"{ans}");
+    s.push(' ');
+    s.push_str(f"{ans}");
+}
+
+fn main() {
+    // One answer per case, then a `sums:` fold every solver and the oracle print
+    // identically for a byte-for-byte diff. `1` marks an obstacle, `0` a free cell.
+    let mut s: String = "sums:";
+
+    report([[0, 0, 0], [0, 1, 0], [0, 0, 0]], mut s);   // 2  — LeetCode example 1
+    report([[0, 1], [0, 0]], mut s);                    // 1  — LeetCode example 2
+    report([[0]], mut s);                               // 1  — single free cell
+    report([[1]], mut s);                               // 0  — start cell blocked
+    report([[1, 0], [0, 0]], mut s);                    // 0  — start blocked (2×2)
+    report([[0, 0], [0, 1]], mut s);                    // 0  — destination blocked
+    report([[0, 0], [1, 1], [0, 0]], mut s);            // 0  — a full row walls it off
+    report([[0, 0, 0], [0, 0, 0], [0, 0, 0]], mut s);   // 6  — no obstacles, #62 C(4,2)
+    report([[0, 0, 0, 0, 0, 0, 0],                      // 28 — clear 3×7, #62 example 1
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0]], mut s);
+    report([[0, 0, 0, 0, 0],                            // 8  — two interior obstacles
+            [0, 1, 0, 1, 0],
+            [0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0]], mut s);
+    report([[0, 0, 0, 0, 0]], mut s);                   // 1  — single clear row (all rights)
+    report([[0, 0, 1, 0, 0]], mut s);                   // 0  — single row, lane blocked
+    report([[0, 0, 0, 0, 0],                            // 15 — scattered obstacles
+            [0, 1, 0, 0, 0],
+            [0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0]], mut s);
+
+    println(s);
+}

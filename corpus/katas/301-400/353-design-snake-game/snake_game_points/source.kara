@@ -1,0 +1,177 @@
+// LeetCode #353: Design Snake Game -- typed cells and directions.
+//
+// The same game written the way a reader would sketch it: a `Point` struct
+// with derived `Hash`/`Eq`, a `Dir` enum parsed from the move letter, the body
+// as a `VecDeque[Point]` with a `Set[Point]` beside it, and the food as a queue
+// that is popped as each piece is eaten. `Point.moved` returns `None` when the
+// step would leave the board, so a wall is just an absent neighbour.
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Point {
+    r: i64,
+    c: i64,
+}
+
+enum Dir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl Dir {
+    fn parse(ch: char) -> Option[Dir] {
+        match ch {
+            'U' => Some(Dir.Up),
+            'D' => Some(Dir.Down),
+            'L' => Some(Dir.Left),
+            'R' => Some(Dir.Right),
+            _ => None,
+        }
+    }
+}
+
+impl Point {
+    fn moved(self, d: Dir, width: i64, height: i64) -> Option[Point] {
+        let p = match d {
+            Dir.Up => Point { r: self.r - 1, c: self.c },
+            Dir.Down => Point { r: self.r + 1, c: self.c },
+            Dir.Left => Point { r: self.r, c: self.c - 1 },
+            Dir.Right => Point { r: self.r, c: self.c + 1 },
+        };
+        if p.r >= 0 and p.r < height and p.c >= 0 and p.c < width { Some(p) } else { None }
+    }
+}
+
+struct SnakeGame {
+    width: i64,
+    height: i64,
+    food: VecDeque[Point],
+    score: i64,
+    body: VecDeque[Point],
+    covered: Set[Point],
+}
+
+impl SnakeGame {
+    fn new(width: i64, height: i64, food: Vec[(i64, i64)]) -> SnakeGame {
+        let mut queue: VecDeque[Point] = VecDeque.new();
+        for (r, c) in food {
+            queue.push_back(Point { r, c });
+        }
+        let start = Point { r: 0, c: 0 };
+        let mut body: VecDeque[Point] = VecDeque.new();
+        body.push_back(start);
+        let mut covered: Set[Point] = Set.new();
+        covered.insert(start);
+        SnakeGame { width, height, food: queue, score: 0, body, covered }
+    }
+
+    fn step(mut ref self, ch: char) -> i64 {
+        let d = Dir.parse(ch).unwrap();
+        let head = self.body[self.body.len() - 1];
+        let next = match head.moved(d, self.width, self.height) {
+            Some(p) => p,
+            None => return -1,
+        };
+        let eats = match self.food.get(0) {
+            Some(f) => f == next,
+            None => false,
+        };
+        if eats {
+            self.food.pop_front();
+            self.score += 1;
+        } else {
+            let tail = self.body.pop_front().unwrap();
+            self.covered.remove(tail);
+        }
+        if not self.covered.insert(next) {
+            return -1;
+        }
+        self.body.push_back(next);
+        self.score
+    }
+
+    fn length(ref self) -> i64 {
+        self.body.len()
+    }
+}
+
+// The moves of a Hamiltonian cycle on a board with an even number of rows:
+// along the top row, snake down through columns 1.., then back up column 0.
+fn cycle_moves(width: i64, height: i64) -> String {
+    let mut m = String.new();
+    for _ in 0..width - 1 {
+        m.push('R');
+    }
+    for row in 1..height {
+        m.push('D');
+        let d = if row % 2 == 1 { 'L' } else { 'R' };
+        for _ in 0..width - 2 {
+            m.push(d);
+        }
+    }
+    m.push('L');
+    for _ in 0..height - 1 {
+        m.push('U');
+    }
+    m
+}
+
+fn play(label: ref String, width: i64, height: i64, food: Vec[(i64, i64)], moves: ref String) {
+    let mut g = SnakeGame.new(width, height, food);
+    let mut out = String.new();
+    for d in moves.chars() {
+        let s = g.step(d);
+        out.push_str(f" {s}");
+        if s < 0 {
+            break;
+        }
+    }
+    println(f"{label}:{out}");
+}
+
+fn main() {
+    // The LeetCode example.
+    play("example", 3, 2, vec![(1, 2), (0, 1)], "RDRULU");
+    // Edge cases.
+    play("wall", 2, 2, Vec.new(), "U");
+    play("tail chase", 2, 2, vec![(0, 1), (1, 1)], "RDLURDLURD");
+    play("self bite", 3, 3, vec![(0, 1), (0, 2), (1, 2), (1, 1)], "RRDLU");
+    play("no food left", 4, 1, vec![(0, 1)], "RRRLL");
+    play("turn back at length 2", 3, 1, vec![(0, 1)], "RL");
+    play("turn back at length 3", 3, 1, vec![(0, 1), (0, 2)], "RRL");
+
+    // A long game: a 60 x 40 board, the snake follows a Hamiltonian cycle, and
+    // food sits three cells ahead of it until 1000 pieces have been eaten.
+    let (w, h) = (60, 40);
+    let cycle = cycle_moves(w, h);
+    let cells: Vec[char] = cycle.chars().collect();
+    let n = cells.len();
+    let mut pos: Vec[(i64, i64)] = Vec.new();
+    let mut (r, c) = (0, 0);
+    for d in cells.iter() {
+        match d {
+            'U' => { r -= 1; }
+            'D' => { r += 1; }
+            'L' => { c -= 1; }
+            _ => { c += 1; }
+        }
+        pos.push((r, c));
+    }
+    let mut food: Vec[(i64, i64)] = Vec.new();
+    for i in 0..1000 {
+        food.push(pos[(3 * i + 2) % n]);
+    }
+    let mut g = SnakeGame.new(w, h, food);
+    let mut checksum: i64 = 0;
+    let total = 3 * n;
+    for t in 0..total {
+        let s = g.step(cells[t % n]);
+        checksum = (checksum * 31 + s + t) % 1000000007;
+        if (t + 1) % 1200 == 0 {
+            println(f"after {t + 1} moves: score {s}, length {g.length()}");
+        }
+    }
+    println(f"bite: {g.step('D')}");
+    println(f"long game: {total} moves, checksum {checksum}");
+}

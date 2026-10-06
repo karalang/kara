@@ -1,0 +1,12 @@
+
+#[derive(Display)]
+enum IoErr { NotFound, Other(String) }
+fn showln[E: Display](e: ref E) { println(e); }
+fn wrap[E: Display](e: ref E) -> String { f"error: {e}" }
+fn main() {
+    let a: IoErr = IoErr.NotFound;
+    let b: IoErr = IoErr.Other(String.from("boom"));
+    showln(a);
+    showln(b);
+    println(wrap(b));
+}

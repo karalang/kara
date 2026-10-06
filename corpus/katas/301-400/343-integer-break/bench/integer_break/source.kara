@@ -1,0 +1,55 @@
+// Benchmark workload for LeetCode #343 — the dynamic-programming arm
+// (integer_break.kara), timed as written.
+//
+// Build once, then punch (BENCHMARKS.md). LEN values of n are drawn once,
+// uniformly from the problem's range [2, 58]. Each of PUNCHES punches
+// replaces one value at a random position and solves every value again, so
+// each punch runs the O(n^2) table about LEN times, allocating its table
+// each time, as the arm does.
+//
+// The sum of the answers is folded into a rolling hash, which is the sink.
+
+const LEN: i64 = 20000;
+const PUNCHES: i64 = 20;
+const MODULUS: i64 = 1073741789;
+
+fn integer_break(n: i64) -> i64 {
+    let mut best: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 2..n + 1 {
+        for j in 1..i {
+            let whole = j * (i - j);
+            let broken = j * best[i - j];
+            if whole > best[i] {
+                best[i] = whole;
+            }
+            if broken > best[i] {
+                best[i] = broken;
+            }
+        }
+    }
+    return best[n];
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn main() {
+    let mut seed = 343;
+    let mut a: Vec[i64] = Vec.new();
+    for _ in 0..LEN {
+        a.push(2 + next(mut seed) % 57);
+    }
+    let mut sink = 0;
+    for _ in 0..PUNCHES {
+        let pos = (next(mut seed) * 32768 + next(mut seed)) % LEN;
+        a[pos] = 2 + next(mut seed) % 57;
+        let mut sum = 0;
+        for n in a {
+            sum = (sum + integer_break(n)) % MODULUS;
+        }
+        sink = (sink * 31 + sum) % MODULUS;
+    }
+    println(f"sink {sink}");
+}

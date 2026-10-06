@@ -1,0 +1,165 @@
+// LeetCode 295 — Find Median from Data Stream.
+//
+// Numbers arrive one at a time. After any of them, `median()` must report the
+// median of everything seen so far: the middle element when the count is odd,
+// the mean of the two middle elements when it is even.
+//
+//     add 1        median 1
+//     add 3        median 2      (1 3)      -> (1+3)/2
+//     add 2        median 2      (1 2 3)
+//     add 4        median 2.5    (1 2 3 4)  -> (2+3)/2
+//
+// SORTING PER QUERY IS THE OBVIOUS ANSWER AND IT IS THE WRONG SHAPE. The median
+// is a position, so the temptation is to keep the stream and sort on demand —
+// O(n log n) per query. Keeping the vec sorted instead (`median_finder_sorted`)
+// drops queries to O(1) but pays O(n) per insert to shift the tail.
+//
+// THE ★ MECHANISM: TWO HEAPS THAT MEET AT THE MIDDLE. Split the multiset in
+// half. `lo` is a MAX-heap over the smaller half, `hi` is a MIN-heap over the
+// larger half. Then the two elements adjacent to the median are exactly the two
+// roots — the largest of the small half and the smallest of the large half —
+// and a root is O(1) to read.
+//
+//     … 1 2 3 │ 4 5 6 …          lo = max-heap{1,2,3}   hi = min-heap{4,5,6}
+//           ↑   ↑                 lo root = 3            hi root = 4
+//
+// Hold `len(lo) == len(hi)` or `len(lo) == len(hi) + 1`. Then an odd count puts
+// the median at `lo`'s root, and an even count averages the two roots. Insert
+// is O(log n), query is O(1).
+//
+// THE INSERT IS A THREE-STEP SHUFFLE, NOT A COMPARISON. It is tempting to
+// compare the new value against a root and choose a side. That works, but it
+// needs a case for the empty heap and another for the tie, and both are easy to
+// get subtly wrong. Pushing through `lo` unconditionally — into `lo`, pop its
+// max into `hi`, then pull back if `hi` grew too big — is correct for every
+// input with no special cases, because each step restores one invariant and
+// disturbs only the next:
+//
+//     lo.push(v)                  lo may now hold a value that belongs in hi
+//     hi.push(lo.pop())           sides are correct; sizes may be off by one
+//     if len(hi) > len(lo):       restore the size invariant
+//         lo.push(hi.pop())
+//
+// ONE HEAP TYPE, TWO DIRECTIONS, NO NEGATION. The usual trick for getting a
+// max-heap out of a min-heap is to store negated values. That is one line, and
+// it silently breaks at `i64`'s most negative value, where negation overflows.
+// A `max: bool` on the heap that flips the comparison costs the same line and
+// has no such edge — see `outranks` below. The differential feeds i64.MIN
+// precisely because the negation version would pass every other test.
+
+struct Heap {
+    mut data: Vec[i64],
+    max: bool,
+}
+
+fn heap_new(max: bool) -> Heap {
+    return Heap { data: Vec.new(), max: max };
+}
+
+fn heap_len(h: ref Heap) -> i64 {
+    return h.data.len();
+}
+
+// Does `a` sit closer to the root than `b`? The single place the two heap
+// directions differ — everything below is shared.
+fn outranks(h: ref Heap, a: i64, b: i64) -> bool {
+    if h.max {
+        return a > b;
+    }
+    return a < b;
+}
+
+fn heap_peek(h: ref Heap) -> i64 {
+    return h.data[0];
+}
+
+fn heap_swap(h: mut ref Heap, i: i64, j: i64) {
+    let t = h.data[i];
+    h.data[i] = h.data[j];
+    h.data[j] = t;
+}
+
+fn heap_push(h: mut ref Heap, v: i64) {
+    h.data.push(v);
+    let mut i = h.data.len() - 1;
+    let mut climbing = true;
+    while climbing and i > 0 {
+        let parent = (i - 1) / 2;
+        if outranks(h, h.data[i], h.data[parent]) {
+            heap_swap(h, i, parent);
+            i = parent;
+        } else {
+            climbing = false;
+        }
+    }
+}
+
+fn heap_pop(h: mut ref Heap) -> i64 {
+    let top = h.data[0];
+    match h.data.pop() {
+        Some(last) => {
+            if h.data.len() > 0 {
+                h.data[0] = last;
+                let n = h.data.len();
+                let mut i = 0;
+                let mut sinking = true;
+                while sinking {
+                    let l = 2 * i + 1;
+                    let r = l + 1;
+                    let mut best = i;
+                    if l < n and outranks(h, h.data[l], h.data[best]) {
+                        best = l;
+                    }
+                    if r < n and outranks(h, h.data[r], h.data[best]) {
+                        best = r;
+                    }
+                    if best == i {
+                        sinking = false;
+                    } else {
+                        heap_swap(h, i, best);
+                        i = best;
+                    }
+                }
+            }
+        }
+        None => {}
+    }
+    return top;
+}
+
+struct MedianFinder {
+    mut lo: Heap,
+    mut hi: Heap,
+}
+
+fn mf_new() -> MedianFinder {
+    return MedianFinder { lo: heap_new(true), hi: heap_new(false) };
+}
+
+fn mf_add(m: mut ref MedianFinder, v: i64) {
+    heap_push(m.lo, v);
+    let moved = heap_pop(m.lo);
+    heap_push(m.hi, moved);
+    if heap_len(m.hi) > heap_len(m.lo) {
+        let back = heap_pop(m.hi);
+        heap_push(m.lo, back);
+    }
+}
+
+fn mf_median(m: ref MedianFinder) -> f64 {
+    if heap_len(m.lo) > heap_len(m.hi) {
+        return heap_peek(m.lo) as f64;
+    }
+    return (heap_peek(m.lo) as f64 + heap_peek(m.hi) as f64) / 2.0;
+}
+
+fn main() {
+    let mut mf = mf_new();
+    let stream = [1, 3, 2, 4, 0, 9, 7];
+    let mut i = 0;
+    while i < stream.len() {
+        mf_add(mut mf, stream[i]);
+        println(f"add {stream[i]} -> median {mf_median(mf)}");
+        i = i + 1;
+    }
+}

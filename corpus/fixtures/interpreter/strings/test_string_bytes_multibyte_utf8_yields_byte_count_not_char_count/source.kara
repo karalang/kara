@@ -1,0 +1,4 @@
+fn main() {
+            let bs = "héllo".bytes();
+            println(bs.len());
+        }

@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0i64..100i64 {
+        if (k % 2i64) == 0i64 {
+            out.push(k);
+        }
+    }
+    println(out.len());
+}

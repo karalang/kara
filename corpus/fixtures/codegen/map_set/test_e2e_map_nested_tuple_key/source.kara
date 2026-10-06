@@ -1,0 +1,23 @@
+
+fn main() {
+    let mut m: Map[(String, (i64, i64)), i64] = Map.new();
+    m.insert(("p", (1_i64, 2_i64)), 12_i64);
+    m.insert(("p", (3_i64, 4_i64)), 34_i64);
+    m.insert(("q", (1_i64, 2_i64)), 99_i64);
+    println(m.len());
+    let v = m.get(("p", (1_i64, 2_i64)));
+    match v {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+    let v2 = m.get(("q", (1_i64, 2_i64)));
+    match v2 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+    let v3 = m.get(("p", (9_i64, 9_i64)));
+    match v3 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+}

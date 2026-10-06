@@ -1,0 +1,8 @@
+shared struct Sh { n: i64 }
+enum Et { A(Sh), C(Sh), S(String), B }
+fn main() {
+    let z = Et.A(Sh { n: 3 });
+    let w = Et.C(Sh { n: 4 });
+    let y = Et.S(f"b1011-aaaaaaaaaa");
+    println("ok");
+}

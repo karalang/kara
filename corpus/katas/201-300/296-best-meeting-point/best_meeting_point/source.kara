@@ -1,0 +1,158 @@
+// LeetCode 296 — Best Meeting Point.
+//
+// A binary grid; each `1` is someone's home. Everyone walks to one meeting
+// cell, distance measured in Manhattan steps. Return the minimum possible
+// TOTAL travel distance.
+//
+//     1 0 0 0 1        the meeting point is (0, 2),
+//     0 0 0 0 0        and the total is 2 + 2 + 2 = 6
+//     0 0 1 0 0
+//
+// TWO IDEAS, and the first one is what makes the problem tractable at all.
+//
+// 1. MANHATTAN DISTANCE SEPARATES. The cost of meeting at (r, c) is
+//
+//        sum over homes |r - ri| + |c - ci|
+//      = ( sum |r - ri| )  +  ( sum |c - ci| )
+//
+//    and the two brackets share no variable. So the best row and the best
+//    column can be chosen INDEPENDENTLY — this is not an approximation or a
+//    heuristic, it is the sum regrouping. A two-dimensional search over m*n
+//    cells collapses into two one-dimensional problems. Nothing about the grid
+//    survives into either half except a list of coordinates.
+//
+// 2. THE MEDIAN MINIMISES SUM OF ABSOLUTE DEVIATIONS. For a sorted list, the
+//    point that minimises `sum |x - p|` is the median. The reason is worth
+//    keeping in mind because it is also arm B's whole algorithm: moving p one
+//    step right changes the total by (#points left of p) − (#points right of
+//    p), so the total falls while more points lie right of p and rises once
+//    more lie left. The turning point is where the counts balance — the
+//    median.
+//
+// THE SORT IS FREE, AND THAT IS THE PART PEOPLE MISS. Both coordinate lists
+// have to be sorted for a median to mean anything. But sortedness is a
+// property of the SCAN ORDER, not something to compute afterwards:
+//
+//     row coordinates, scanned row-major     -> already ascending
+//     column coordinates, scanned COLUMN-major -> already ascending
+//
+// Walking the grid twice, once in each direction, costs O(m*n) and hands back
+// two sorted lists. Collecting both in one row-major pass and then sorting the
+// columns is the same answer for an extra O(k log k), and it is the version
+// almost everyone writes first.
+
+struct Grid {
+    data: Vec[u8],
+    w: i64,
+    h: i64,
+}
+
+fn at(g: ref Grid, r: i64, c: i64) -> u8 {
+    return g.data[r * g.w + c];
+}
+
+fn iabs(x: i64) -> i64 {
+    if x < 0 { return 0 - x; }
+    return x;
+}
+
+// Row indices of every home, ascending — because the outer loop is the row.
+fn row_coords(g: ref Grid) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut r = 0;
+    while r < g.h {
+        let mut c = 0;
+        while c < g.w {
+            if at(g, r, c) == 1u8 { out.push(r); }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return out;
+}
+
+// Column indices of every home, ascending — because the outer loop is the
+// COLUMN. Same grid, same homes, transposed traversal.
+fn col_coords(g: ref Grid) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < g.w {
+        let mut r = 0;
+        while r < g.h {
+            if at(g, r, c) == 1u8 { out.push(c); }
+            r = r + 1;
+        }
+        c = c + 1;
+    }
+    return out;
+}
+
+// Minimum of `sum |x - p|` over p, for an ASCENDING list. The median attains
+// it; for an even count any point between the two middle elements does, and
+// `xs[n / 2]` is one of them.
+fn min_deviation(xs: ref Vec[i64]) -> i64 {
+    let n = xs.len();
+    if n == 0 { return 0; }
+    let m = xs[n / 2];
+    let mut total = 0;
+    let mut i = 0;
+    while i < n {
+        total = total + iabs(xs[i] - m);
+        i = i + 1;
+    }
+    return total;
+}
+
+fn min_total_distance(g: ref Grid) -> i64 {
+    let rows = row_coords(g);
+    let cols = col_coords(g);
+    return min_deviation(rows) + min_deviation(cols);
+}
+
+// The meeting cell itself, so the answer can be checked rather than trusted.
+// Not part of the LeetCode statement — it is what `differential.kara` P6
+// interrogates, on the principle that a single integer can be right for the
+// wrong reason but a witness can be questioned.
+fn meeting_point(g: ref Grid) -> (i64, i64) {
+    let rows = row_coords(g);
+    let cols = col_coords(g);
+    if rows.len() == 0 { return (0, 0); }
+    return (rows[rows.len() / 2], cols[cols.len() / 2]);
+}
+
+fn parse(rows: Vec[String]) -> Grid {
+    let h = rows.len();
+    let mut w = 0;
+    if h > 0 { w = rows[0].bytes().len(); }
+    let mut data: Vec[u8] = Vec.new();
+    let mut r = 0;
+    while r < h {
+        let b = rows[r].bytes();
+        let mut c = 0;
+        while c < w {
+            if b[c] == b'1' { data.push(1u8); } else { data.push(0u8); }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return Grid { data: data, w: w, h: h };
+}
+
+fn report(label: String, rows: Vec[String]) {
+    let g = parse(rows);
+    let (mr, mc) = meeting_point(g);
+    println(f"{label} -> {min_total_distance(g)}  (meet at {mr},{mc})");
+}
+
+fn main() {
+    report("cross      ", ["10001", "00000", "00100"]);          // 6
+    report("single     ", ["0100"]);                              // 0
+    report("pair-row   ", ["1001"]);                              // 3
+    report("pair-col   ", ["1", "0", "0", "1"]);                   // 3
+    report("all-ones   ", ["111", "111", "111"]);                  // 12
+    report("diagonal   ", ["100", "010", "001"]);                  // 4
+    report("corners    ", ["101", "000", "101"]);                  // 8
+    report("empty      ", ["000", "000"]);                         // 0
+    report("column     ", ["1", "1", "1", "1", "1"]);              // 6
+    report("sparse-wide", ["1000000001"]);                         // 9
+}

@@ -1,0 +1,19 @@
+binding:
+10
+drop 1 a1
+param:
+20
+drop 2 bb2
+returned:
+30
+drop 3 c3
+result:
+40
+drop 4 dddd4
+vec-of-tuple:
+1
+drop 5 eeeee5
+nested-tuple:
+600
+drop 6 ffffff6
+end

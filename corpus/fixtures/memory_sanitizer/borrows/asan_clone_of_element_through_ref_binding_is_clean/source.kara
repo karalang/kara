@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut d: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push(f"payload_aaaaaaaaaaaaaaaaaaaa{1}");
+    a.push(f"payload_bbbbbbbbbbbbbbbbbbbb{2}");
+    d.push(a);
+    let row = ref d[0];
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < 20i64 {
+        let c: String = row[0].clone();
+        t = t + c.len();
+        i = i + 1;
+    }
+    println(f"{t}");
+}

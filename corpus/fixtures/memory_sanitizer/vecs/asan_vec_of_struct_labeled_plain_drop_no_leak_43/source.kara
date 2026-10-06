@@ -1,0 +1,28 @@
+
+shared enum Expr { Lit(LitNode), Call(CallNode) }
+struct LitNode { name: String, val: i64 }
+struct Arg { label: Option[String], value: Expr }
+struct CallNode { callee: Expr, args: Vec[Arg], nargs: i64 }
+fn lit(s: String, v: i64) -> Expr { Expr.Lit(LitNode { name: s, val: v }) }
+fn mk() -> Expr {
+    let mut args: Vec[Arg] = Vec.new();
+    args.push(Arg { label: Some("first_argument_label_long_enough_to_force_heap".to_string()), value: lit("first_arg_value_identifier_long_enough_for_heap".to_string(), 1) });
+    args.push(Arg { label: None, value: lit("second_arg_value_identifier_long_enough_for_heap".to_string(), 2) });
+    Expr.Call(CallNode { callee: lit("callee_identifier_name_long_enough_for_heap_buf".to_string(), 100), args: args, nargs: 2 })
+}
+fn root(e: ref Expr) -> i64 {
+    match e {
+        Lit(n) => n.val,
+        Call(c) => c.nargs,
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 50 {
+        let e = mk();
+        total = total + root(e);
+        i = i + 1;
+    }
+    println(total);
+}

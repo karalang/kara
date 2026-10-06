@@ -1,0 +1,7 @@
+fn main() {
+         let sem = Semaphore.new(1);
+         match sem.acquire(1000) { Ok(_) => println("ok"), Err(_) => println("timeout") }
+         match sem.acquire(1000) { Ok(_) => println("ok"), Err(_) => println("timeout") }
+         sem.release();
+         match sem.acquire(1000) { Ok(_) => println("ok"), Err(_) => println("timeout") }
+     }

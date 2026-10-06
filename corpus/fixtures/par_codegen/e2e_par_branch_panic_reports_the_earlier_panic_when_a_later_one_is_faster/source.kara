@@ -1,0 +1,36 @@
+fn busy(v: ref Vec[i64], rounds: i64, d: i64) -> i64 {
+    let mut s = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut i = 0;
+        while i < v.len() {
+            s = (s + v[i] * r) % 1000003;
+            i += 1;
+        }
+        r += 1;
+    }
+    return s / d;
+}
+fn grow(v: ref Vec[i64], n: i64) -> i64 {
+    let mut m = 1;
+    while m <= n {
+        m += m;
+    }
+    return m + v.len();
+}
+fn slow(v: ref Vec[i64], label: String, rounds: i64, d: i64) {
+    println(f"{label} {busy(v, rounds, d)}");
+}
+fn fast(v: ref Vec[i64], label: String, n: i64) {
+    println(f"{label} {grow(v, n)}");
+}
+fn main() {
+    let v: Vec[i64] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9];
+    println("start");
+    slow(v, "a", 200000, 1);
+    fast(v, "b", 10);
+    slow(v, "c", 300000, 0);
+    fast(v, "d", 4611686018427387904);
+    fast(v, "e", 3);
+    println("end");
+}

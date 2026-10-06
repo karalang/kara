@@ -1,0 +1,13 @@
+
+#[derive(Message)]
+struct Bag { nums: Vec[i64] }
+
+fn main() {
+    let b = Bag { nums: [1, -2, 300, 0] };
+    let back = Bag.decode(b.encode());
+    println(back.nums.len());
+    println(back.nums[0]);
+    println(back.nums[1]);
+    println(back.nums[2]);
+    println(back.nums[3]);
+}

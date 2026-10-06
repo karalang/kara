@@ -1,0 +1,22 @@
+
+fn mkS(n: i64) -> String { return f"S{n}-ssssssssssss"; }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let c = n > 0;
+
+    { f"b{n}" };
+    { { f"c{n}" } };
+    { { { f"e{n}" } } };
+    let _ = { f"d{n}" };
+    let _ = { { f"g{n}" } };
+
+    { mkS(n) };
+    { { mkS(n) } };
+    let _ = mkS(n);
+    { if c { mkS(n) } else { mkS(n + 1) } };
+    { { if c { f"h{n}" } else { f"i{n}" } } };
+    { "lit" };
+
+    println(f"done {n}");
+}

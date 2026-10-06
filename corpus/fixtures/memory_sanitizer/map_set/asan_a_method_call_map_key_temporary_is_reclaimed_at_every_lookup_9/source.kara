@@ -1,0 +1,18 @@
+
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+} }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.make(0i64), 0i64);
+    let mut hits: i64 = 0i64;
+    for i in 0i64..5i64 {
+        match m.get(g.make(0i64)) {
+            Some(v) => { hits = hits + 1i64; } None => { }
+        }
+    }
+    println(f"hits:{hits}");
+    println(f"len:{m.len()}");
+}

@@ -1,0 +1,4 @@
+
+struct Holder { s: String }
+fn need_copy[T: Copy](a: T) -> i64 { return 1; }
+fn main() { let h = Holder { s: "x".to_string() }; println(f"{need_copy(h)}"); }

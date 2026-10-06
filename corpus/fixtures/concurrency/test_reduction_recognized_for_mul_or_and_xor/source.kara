@@ -1,0 +1,28 @@
+
+        fn main() {
+            let mut p: i64 = 1i64;
+            let mut a: i64 = 0i64;
+            while a < 5i64 {
+                p = p * a;
+                a = a + 1i64;
+            }
+            let mut o: i64 = 0i64;
+            let mut b: i64 = 0i64;
+            while b < 5i64 {
+                o = o | b;
+                b = b + 1i64;
+            }
+            let mut n: i64 = -1i64;
+            let mut c: i64 = 0i64;
+            while c < 5i64 {
+                n = n & c;
+                c = c + 1i64;
+            }
+            let mut x: i64 = 0i64;
+            let mut d: i64 = 0i64;
+            while d < 5i64 {
+                x = x ^ d;
+                d = d + 1i64;
+            }
+        }
+        

@@ -1,0 +1,18 @@
+
+struct Inner { data: Vec[i64] }
+struct Outer { inner: Inner, n: i64 }
+fn mk(x: i64) -> Outer {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(x);
+    v.push(x);
+    return Outer { inner: Inner { data: v }, n: x };
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let Outer { inner: Inner { data }, n } = mk(i);
+        println(data.len() + n);
+        i = i + 1;
+    }
+    println(99);
+}

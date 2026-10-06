@@ -1,0 +1,18 @@
+
+fn main() {
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    let ts: Vec[i64] = t.sorted();
+    println(f"{ts[0]} {ts[1]} {ts[2]} {ts[3]} {ts[4]} {ts[5]}");
+    let ta: Vec[i64] = t.argsort();
+    println(f"{ta[0]} {ta[1]} {ta[2]} {ta[3]} {ta[4]} {ta[5]}");
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[3, 1, 4], [1, 5, 9]]);
+    let ms: Vec[i64] = m.sorted();
+    println(f"{ms[0]} {ms[1]} {ms[2]} {ms[3]} {ms[4]} {ms[5]}");
+    let ma: Vec[i64] = m.argsort();
+    println(f"{ma[0]} {ma[1]} {ma[2]} {ma[3]} {ma[4]} {ma[5]}");
+    let tf: Tensor[f64, [4]] = Tensor.from([2.5, 8.0, 1.0, 8.0]);
+    let fs: Vec[f64] = tf.sorted();
+    println(f"{fs[0]} {fs[1]} {fs[2]} {fs[3]}");
+    let fa: Vec[i64] = tf.argsort();
+    println(f"{fa[0]} {fa[1]} {fa[2]} {fa[3]}");
+}

@@ -1,0 +1,43 @@
+// examples/word_count.kara
+//
+// Counts words in a file. Demonstrates:
+// - Effect annotations (reads FileSystem, reads Env)
+// - Result<T, E> with ? operator
+// - Structs and impl blocks
+// - Pattern matching
+
+struct WordCount {
+    total: u64,
+    unique: u64,
+}
+
+fn count_words(content: ref String) -> WordCount {
+    let words = content.split(' ');
+    let unique_words = Set.from(words);
+    WordCount {
+        total: words.len(),
+        unique: unique_words.len(),
+    }
+}
+
+fn format_report(filename: ref String, count: ref WordCount) -> String {
+    f"{filename}: {count.total} total words, {count.unique} unique"
+}
+
+fn main() -> Result[(), IoError] {
+    let args = env.args();
+
+    let filename = match args.get(1) {
+        Some(f) => f,
+        None => {
+            println("Usage: word_count <filename>");
+            return Ok(());
+        }
+    };
+
+    let content = read_file(filename)?;
+    let count = count_words(content);
+    let report = format_report(filename, count);
+    println(report);
+    Ok(())
+}

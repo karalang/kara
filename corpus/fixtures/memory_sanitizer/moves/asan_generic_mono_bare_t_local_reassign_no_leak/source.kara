@@ -1,0 +1,22 @@
+
+fn largest[T: Ord + Clone](items: ref Vec[T]) -> T {
+    let mut best: T = items[0].clone();
+    for i in 1..items.len() {
+        if items[i] > best {
+            best = items[i].clone();
+        }
+    }
+    best
+}
+fn main() {
+    let mut words: Vec[String] = Vec.new();
+    words.push("alpha");
+    words.push("middle");
+    words.push("zebra");
+    println(largest(words));
+    let mut nums: Vec[i64] = Vec.new();
+    nums.push(3);
+    nums.push(9);
+    nums.push(1);
+    println(largest(nums));
+}

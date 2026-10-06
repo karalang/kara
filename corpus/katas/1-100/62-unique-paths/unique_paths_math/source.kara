@@ -1,0 +1,82 @@
+// LeetCode #62: Unique Paths — closed-form binomial, O(min(m,n)) time, O(1) space.
+//
+// Drop the DP entirely. Every right/down path from corner to corner is a
+// sequence of exactly `(m-1)` downs and `(n-1)` rights in SOME order — and any
+// such sequence is a valid path. So counting paths is counting orderings of
+// that multiset: choose which of the `(m-1)+(n-1)` steps are the downs. That is
+// a single binomial coefficient
+//
+//     C(m + n - 2,  m - 1)  =  C(m + n - 2,  n - 1)
+//
+// (the two are equal because choosing the downs also fixes the rights). This is
+// the same answer the DP files ([`unique_paths.kara`](unique_paths.kara),
+// [`unique_paths_2d.kara`](unique_paths_2d.kara)) build up cell by cell, reached
+// in one arithmetic pass with no table at all — the Math/Combinatorics view of
+// the problem rather than the Dynamic-Programming one.
+//
+// Computing the binomial without overflow or a factorial is the only subtlety.
+// Build it up multiplicatively with the SMALLER index `k = min(m-1, n-1)`:
+//
+//     result = 1
+//     for i in 1..=k:  result = result * (total - k + i) / i     (total = m+n-2)
+//
+// After step `i`, `result` equals C(total - k + i, i) — always an integer, so
+// every division is exact (the running product of the first `i` terms is itself
+// a binomial coefficient, never a fraction). Ordering matters: multiply THEN
+// divide, so the numerator carries the factor `i` needs before the divide. The
+// partial results climb monotonically to the answer C(total, k), so each stays
+// ≤ the final answer (≤ 2·10⁹ by LeetCode's guarantee); the largest transient,
+// `result * (total - k + i)` before a divide, is bounded by that times
+// `total ≤ 198`, comfortably inside i64. Picking `k = min(m-1, n-1)` both caps
+// the loop at O(min(m, n)) iterations and keeps those transients smallest.
+//
+// The trade against the DP: O(1) space and the fewest operations, but it does
+// NOT generalise — the moment the grid gains obstacles (#63) or per-cell costs
+// (#64) there is no closed form and the recurrence is mandatory. This file is
+// the "you didn't need the table" counterpoint; the ★ is the one that scales to
+// those variants.
+
+fn unique_paths(m: i64, n: i64) -> i64 {
+    let total = m + n - 2;
+
+    // Smaller index → fewer iterations and smaller transients.
+    let mut k = m - 1;
+    if n - 1 < k {
+        k = n - 1;
+    }
+
+    // result == C(total - k + i, i) after each step; every divide is exact.
+    let mut result = 1;
+    let mut i = 1;
+    while i <= k {
+        result = result * (total - k + i) / i;
+        i = i + 1;
+    }
+    result
+}
+
+// ---- test harness (shared verbatim with unique_paths.kara) ------------------
+
+fn report(m: i64, n: i64, s: mut ref String) {
+    let ans = unique_paths(m, n);
+    println(f"{ans}");
+    s.push(' ');
+    s.push_str(f"{ans}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report(3, 7, mut s);    // 28
+    report(3, 2, mut s);    // 3
+    report(1, 1, mut s);    // 1
+    report(1, 10, mut s);   // 1
+    report(10, 1, mut s);   // 1
+    report(2, 2, mut s);    // 2
+    report(3, 3, mut s);    // 6
+    report(7, 3, mut s);    // 28
+    report(10, 10, mut s);  // 48620
+    report(51, 9, mut s);   // 1916797311
+
+    println(s);
+}

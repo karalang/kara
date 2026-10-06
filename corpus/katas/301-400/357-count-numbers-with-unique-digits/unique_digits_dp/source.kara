@@ -1,0 +1,49 @@
+// LeetCode #357: Count Numbers with Unique Digits -- digit DP over a fixed
+// width, memoised on (position, digits used, started).
+//
+// Pad every number below 10^n with leading zeros to exactly n digits; each
+// number then has exactly one padded spelling. Fill the positions left to
+// right. Until the first nonzero digit the number has not started, and a
+// zero there is padding rather than a used digit. After that, a digit may be
+// used once. The state is the position, the set of digits used, and whether
+// the number has started.
+
+fn ways(pos: i64, n: i64, base: i64, used: i64, started: bool, memo: mut ref Map[(i64, i64, bool), i64]) -> i64 {
+    if pos == n {
+        return 1;
+    }
+    let key = (pos, used, started);
+    if let Some(known) = memo.get(key) {
+        return known;
+    }
+    let mut total = 0;
+    for d in 0..base {
+        if not started and d == 0 {
+            total += ways(pos + 1, n, base, used, false, memo);
+        } else if used & (1 << d) == 0 {
+            total += ways(pos + 1, n, base, used | (1 << d), true, memo);
+        }
+    }
+    memo.insert(key, total);
+    total
+}
+
+fn count_unique(n: i64, base: i64) -> i64 {
+    let mut memo: Map[(i64, i64, bool), i64] = Map.new();
+    ways(0, n, base, 0, false, mut memo)
+}
+
+fn main() {
+    for n in 0..=8 {
+        println(f"n = {n}: {count_unique(n, 10)}");
+    }
+    for base in 2..=7 {
+        let mut row: Vec[String] = Vec.new();
+        // One length past the base: no number has more distinct digits than
+        // the base has digits, so the last two entries agree.
+        for n in 0..=(base + 1) {
+            row.push(f"{count_unique(n, base)}");
+        }
+        println(f"base {base}: {row.join(" ")}");
+    }
+}

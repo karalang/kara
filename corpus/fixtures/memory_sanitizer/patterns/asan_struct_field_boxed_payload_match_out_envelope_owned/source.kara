@@ -1,0 +1,35 @@
+
+struct W { o: Option[Option[String]] }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: W = W { o: Option.Some(Option.Some(f"envelope-{n + i}")) };
+        acc = acc + match a.o {
+            Option.Some(Option.Some(s)) => if s.len() > 0 { 1 } else { 0 },
+            Option.Some(Option.None) => 100,
+            Option.None => 200,
+        };
+        let b: W = W { o: Option.Some(Option.Some(f"envelope-{n + i}")) };
+        acc = acc + match b.o {
+            Option.Some(Option.Some(_)) => 2,
+            Option.Some(Option.None) => 100,
+            Option.None => 200,
+        };
+        let c: W = W { o: Option.Some(Option.None) };
+        acc = acc + match c.o {
+            Option.Some(Option.Some(s)) => s.len() as i64,
+            Option.Some(Option.None) => 4,
+            Option.None => 200,
+        };
+        let d: W = W { o: Option.None };
+        acc = acc + match d.o {
+            Option.Some(Option.Some(s)) => s.len() as i64,
+            Option.Some(Option.None) => 100,
+            Option.None => 8,
+        };
+        i = i + 1;
+    }
+    println(acc);
+}

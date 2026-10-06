@@ -1,0 +1,9 @@
+
+fn main() {
+    let s = "abc";
+    let mut sum: i64 = 0_i64;
+    for c in s {
+        sum = sum + (c as i64);
+    }
+    println(sum);
+}

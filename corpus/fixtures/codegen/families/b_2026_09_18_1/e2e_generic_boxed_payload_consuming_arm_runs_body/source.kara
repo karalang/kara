@@ -1,0 +1,36 @@
+struct W { a: String, b: String, c: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.a.len()}") } }
+fn mkw(n: i64) -> W { return W { a: f"a{n}", b: f"bbb{1}", c: f"ccc{1}" }; }
+struct V { id: i64 }
+impl Drop for V { fn drop(mut ref self) { println(f"dV{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+enum HoW { Full(W), Empty }
+enum P2[A, B] { Two(A, B), Nil }
+
+fn c1(x: Ho[W]) { match x { Full(r) => { let z = r; println(f"c1:{z.a.len()}") } Empty => { println("e") } } }
+fn c2(x: Ho[W], f: bool) { match x { Full(r) => { if f { let z = r; println(f"c2t:{z.a.len()}") } else { println(f"c2f:{r.a.len()}") } } Empty => { println("e") } } }
+fn c3(x: Ho[W]) -> W { match x { Full(r) => { let z = r; println("c3"); z } Empty => { mkw(0) } } }
+fn c4(x: Ho[W]) { match x { Full(r) => { let z = r; let y = z; println(f"c4:{y.a.len()}") } Empty => { println("e") } } }
+fn c5(x: P2[W, i64]) { match x { Two(r, n) => { let z = r; println(f"c5:{z.a.len()}/{n}") } Nil => { println("e") } } }
+fn c6(x: Ho[W]) { match x { Full(r) => { println(f"c6:{r.a.len()}") } Empty => { println("e") } } }
+fn c7(x: HoW) { match x { Full(r) => { let z = r; println(f"c7:{z.a.len()}") } Empty => { println("e") } } }
+fn c8(x: Ho[V]) { match x { Full(r) => { let z = r; println(f"c8:{z.id}") } Empty => { println("e") } } }
+fn sink(w: W) { println(f"sink{w.a.len()}") }
+fn c9(x: Ho[W]) { match x { Full(r) => { sink(r); println("c9") } Empty => { println("e") } } }
+fn c10(x: Ho[W]) { match x { Full(r) => { let z = r; println("c10") } Empty => { println("e") } } }
+
+fn main() {
+    c1(Ho.Full(mkw(1))); println("-1");
+    let h2 = Ho.Full(mkw(22)); c1(h2); println("-2");
+    c2(Ho.Full(mkw(333)), true); println("-3");
+    c2(Ho.Full(mkw(4444)), false); println("-4");
+    let w5 = c3(Ho.Full(mkw(55555))); println(f"got{w5.a.len()}"); println("-5");
+    c4(Ho.Full(mkw(6))); println("-6");
+    c5(P2.Two(mkw(77), 7)); println("-7");
+    c6(Ho.Full(mkw(888))); println("-8");
+    c7(HoW.Full(mkw(9999))); println("-9");
+    c8(Ho.Full(V { id: 10 })); println("-10");
+    c9(Ho.Full(mkw(11111))); println("-11");
+    c10(Ho.Full(mkw(121212))); println("-12");
+    println("end");
+}

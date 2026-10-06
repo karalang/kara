@@ -1,0 +1,34 @@
+
+enum Tok { Plus, Ident(String) }
+struct Pt { s: String, x: i64 }
+struct Holder { tok: Tok, inner: Pt, n: i64 }
+fn iflet_enum(h: ref Holder) -> i64 {
+    if let Ident(name) = h.tok {
+        return ("i:".to_string() + name).len();
+    }
+    return 0;
+}
+fn whilelet_enum(h: ref Holder) -> i64 {
+    while let Ident(name) = h.tok {
+        return ("w:".to_string() + name).len();
+    }
+    return 0;
+}
+fn letelse_struct(h: ref Holder) -> i64 {
+    let Pt { s, x } = h.inner else {
+        return 0;
+    }
+    return ("l:".to_string() + s).len() + x;
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = Holder { tok: Tok.Ident("token".to_string()), inner: Pt { s: "pt".to_string(), x: 3 }, n: 1 };
+        acc = acc + iflet_enum(a) + whilelet_enum(a) + letelse_struct(a);
+        let p = Holder { tok: Tok.Plus, inner: Pt { s: "q".to_string(), x: 1 }, n: 2 };
+        acc = acc + iflet_enum(p) + whilelet_enum(p);
+        i = i + 1;
+    }
+    println(acc);
+}

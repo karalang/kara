@@ -1,0 +1,73 @@
+// Benchmark workload for LeetCode #250 — Count Univalue Subtrees.
+//
+// Build-once + punch. A deterministic 32-bit LCG builds ONE large level-order
+// tree (values drawn from a 3-symbol alphabet, so uni-value subtrees are common
+// and the COMBINING path — not just the leaf case — is the hot one), then the
+// post-order counting pass runs over it PASSES times.
+//
+// The reverse index scan is the kernel here rather than the ★ recursion: the
+// pool is filled level-order, so a child's index always exceeds its parent's and
+// a descending walk IS post-order. That keeps the measurement about the counting
+// itself instead of about call-frame overhead, and it is the shape the C/Rust/Go
+// mirrors can all express identically — a recursion would measure four different
+// languages' stack conventions.
+//
+// The verdict of each node depends on its children's, so the loop is
+// loop-carried through the memo and does not vectorize. Sink = accumulated count
+// across all passes.
+
+fn main() {
+    let nodes_n = 2000000;
+    let passes = 40;
+    let alphabet = 3;
+
+    // ---- build once: a complete level-order tree over `nodes_n` nodes -----
+    // Child indices are 2i+1 / 2i+2 when in range, -1 otherwise; this is the
+    // same parent-before-children order `build` produces from a dense array.
+    let mut val: Vec[i64] = Vec.new();
+    let mut state = 250250;
+    let mut i = 0;
+    while i < nodes_n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        val.push((state / 65536) % alphabet);
+        i = i + 1;
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let mut uni: Vec[bool] = Vec.new();
+    let mut k = 0;
+    while k < nodes_n {
+        uni.push(false);
+        k = k + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let mut total = 0;
+        let mut j = nodes_n - 1;
+        while j >= 0 {
+            let left = 2 * j + 1;
+            let right = 2 * j + 2;
+            let mut ok = true;
+            if left < nodes_n {
+                if not uni[left] or val[left] != val[j] {
+                    ok = false;
+                }
+            }
+            if right < nodes_n {
+                if not uni[right] or val[right] != val[j] {
+                    ok = false;
+                }
+            }
+            uni[j] = ok;
+            if ok {
+                total = total + 1;
+            }
+            j = j - 1;
+        }
+        sink = (sink + total) % 1000000007;
+        p = p + 1;
+    }
+    println(sink);
+}

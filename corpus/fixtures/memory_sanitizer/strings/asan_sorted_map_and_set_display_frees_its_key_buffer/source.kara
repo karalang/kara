@@ -1,0 +1,20 @@
+
+struct H { m: SortedMap[String, i64], s: SortedSet[String] }
+fn main() {
+    let mut bm: SortedMap[String, i64] = SortedMap.new();
+    let _ = bm.insert("zebrazebrazebrazebra", 1);
+    let _ = bm.insert("applesapplesapples", 2);
+    let mut hm: SortedMap[String, i64] = SortedMap.new();
+    let _ = hm.insert("mangomangomangomango", 3);
+    let mut hs: SortedSet[String] = SortedSet.new();
+    hs.insert("elemelemelemelemelem");
+    let h = H { m: hm, s: hs };
+    let mut k = 0;
+    while k < 20 {
+        println(f"{bm}");
+        println(f"{h.m}");
+        println(h.s);
+        k = k + 1;
+    }
+    println("done");
+}

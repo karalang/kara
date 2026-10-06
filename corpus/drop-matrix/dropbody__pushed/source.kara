@@ -1,0 +1,10 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+struct W { k: i64, a: R, b: R }
+impl Drop for W { fn drop(mut ref self) { println(f"w{self.k}"); } }
+fn main() {
+    let mut v: Vec[W] = [];
+    v.push(W { k: 1, a: R { id: 11 }, b: R { id: 21 } });
+    v.push(W { k: 2, a: R { id: 12 }, b: R { id: 22 } });
+    println("end");
+}

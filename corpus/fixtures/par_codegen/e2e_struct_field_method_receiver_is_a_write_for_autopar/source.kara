@@ -1,0 +1,9 @@
+
+struct H { items: Vec[i64] }
+fn main() {
+    let mut h = H { items: Vec.new() };
+    h.items.push(30);
+    h.items.push(40);
+    println(f"len {h.items.len()} v0 {h.items[0]} v1 {h.items[1]}");
+    println("end");
+}

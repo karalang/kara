@@ -1,0 +1,26 @@
+struct Pr { a: String, b: i64 }
+enum G[T] { Y(T), N }
+fn glen[T](g: G[T]) -> i64 { return 1 }
+fn gm[T](g: G[T]) -> i64 { match g { G.Y(x) => { return 2 }, G.N => { return 0 } } }
+fn gfwd[T](g: G[T]) -> i64 { return glen(g) }
+fn gtop[T](g: G[T]) -> i64 { return gfwd(g) }
+fn gcond[T](g: G[T], c: bool) -> i64 { if c { return glen(g) } println("keep"); return 0 }
+fn gbr[T](g: G[T], c: bool) -> i64 { if c { return glen(g) } else { return gm(g) } }
+fn main() {
+    let s: G[String] = G.Y(f"ffffffffffff51-heap-string-longer");
+    println(f"s {gfwd(s)}");
+    let v0: Vec[String] = [f"aaaaaaaaaaaaaaaaaaaaaaaaaaaaa1", f"bbbbbbbbbbbbbbbbbbbbbbbbbbbbb2"];
+    let v: G[Vec[String]] = G.Y(v0);
+    println(f"v {gfwd(v)}");
+    let p: G[Pr] = G.Y(Pr { a: f"ppppppppppppppppppppppppppppp3", b: 3 });
+    println(f"p {gtop(p)}");
+    let a: G[Array[String, 2]] = G.Y([f"qqqqqqqqqqqqqqqqqqqqqqqqqqqqq4", f"rrrrrrrrrrrrrrrrrrrrrrrrrrrr5"]);
+    println(f"a {gfwd(a)}");
+    let a3: G[Array[String, 2]] = G.Y([f"qqqqqqqqqqqqqqqqqqqqqqqqqqqqq6", f"rrrrrrrrrrrrrrrrrrrrrrrrrrrr7"]);
+    println(f"a3 {gtop(a3)}");
+    let c1: G[Array[String, 2]] = G.Y([f"qqqqqqqqqqqqqqqqqqqqqqqqqqqqq8", f"rrrrrrrrrrrrrrrrrrrrrrrrrrrr9"]);
+    println(f"c1 {gcond(c1, false)}");
+    let c2: G[String] = G.Y(f"ffffffffffff52-heap-string-longer");
+    println(f"c2 {gbr(c2, false)}");
+    println("end")
+}

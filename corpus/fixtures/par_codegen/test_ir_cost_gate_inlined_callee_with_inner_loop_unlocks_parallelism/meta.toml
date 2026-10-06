@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_ir_cost_gate_inlined_callee_with_inner_loop_unlocks_parallelism"
+dedup_of = ["tests/par_codegen.rs::test_e2e_cost_gate_inlined_callee_correctness"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

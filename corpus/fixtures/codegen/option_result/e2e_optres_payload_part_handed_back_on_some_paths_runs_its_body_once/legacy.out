@@ -1,0 +1,42 @@
+temp-false
+dR5
+  got:1
+dR1
+temp-true
+  got:5
+dR5
+named-false
+dR5
+  got:1
+dR1
+named-true
+  got:5
+dR5
+result-named-true
+  got:5
+dR5
+result-temp-true
+  got:5
+dR5
+method-named-true
+  got:5
+dR5
+method-named-false
+dR5
+  got:1
+dR1
+assoc-named-true
+  got:5
+dR5
+assoc-temp-true
+  got:5
+dR5
+guard-no-escape
+  k
+dR5
+  got:2
+dR2
+guard-scalar-leaf
+dR5
+  got:5
+end

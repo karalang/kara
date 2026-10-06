@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_27_104.rs::e2e_nested_call_with_a_branch_argument_runs_each_body_once"
+dedup_of = ["tests/interpreter/families/b_2026_09_27_104.rs::test_nested_call_with_a_branch_argument_runs_each_body_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

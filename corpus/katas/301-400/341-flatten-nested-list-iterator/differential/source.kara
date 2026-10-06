@@ -1,0 +1,600 @@
+// Differential for LeetCode #341 (Flatten Nested List Iterator).
+//
+// The five arms, copied verbatim apart from their names, against an oracle
+// that never builds the tree: it reads the integers straight out of the
+// text in the order they are written. Run on the hand cases and 300 small
+// pseudo-random nested lists, plus properties.
+//
+//   P1  the five arms agree (also on the four generated lists the arms print)
+//   P2  they equal the oracle
+//   P3  wrapping the whole list in one more list keeps the answer
+//   P4  flattening is idempotent: the answer, read back as a list, flattens
+//       to itself
+//   P5  joining two lists' members into one list joins their answers
+//   P6  reversing every list at every depth reverses the answer
+//   P7  asking has_next three times before each next, and again at the end,
+//       changes nothing (the stack and path arms move in has_next)
+
+enum Nested {
+    Int(i64),
+    List(Vec[Nested]),
+}
+
+// ---- flatten_iterator.kara (the stack of members) ----
+
+struct StackIter {
+    stack: Vec[Nested],
+}
+
+impl StackIter {
+    fn new(items: Vec[Nested]) -> StackIter {
+        let mut it = StackIter { stack: Vec.new() };
+        it.push_reversed(items);
+        return it;
+    }
+
+    fn push_reversed(mut ref self, items: Vec[Nested]) {
+        let mut rest = items;
+        while let Some(x) = rest.pop() {
+            self.stack.push(x);
+        }
+    }
+
+    fn has_next(mut ref self) -> bool {
+        while let Some(top) = self.stack.pop() {
+            match top {
+                Int(v) => {
+                    self.stack.push(Int(v));
+                    return true;
+                }
+                List(inner) => { self.push_reversed(inner); }
+            }
+        }
+        return false;
+    }
+
+    fn next(mut ref self) -> i64 {
+        self.has_next();
+        match self.stack.pop() {
+            Some(Int(v)) => { return v; }
+            _ => { panic("next() past the end"); }
+        }
+    }
+}
+
+fn flatten_stack(items: Vec[Nested]) -> Vec[i64] {
+    let mut it = StackIter.new(items);
+    let mut out: Vec[i64] = Vec.new();
+    while it.has_next() {
+        out.push(it.next());
+    }
+    return out;
+}
+
+// ---- flatten_iterator_eager.kara ----
+
+struct EagerIter {
+    vals: Vec[i64],
+    pos: i64,
+}
+
+fn collect_into(items: ref Vec[Nested], out: mut ref Vec[i64]) {
+    for item in items.iter() {
+        match item {
+            Int(v) => { out.push(v); }
+            List(inner) => { collect_into(inner, out); }
+        }
+    }
+}
+
+impl EagerIter {
+    fn new(items: Vec[Nested]) -> EagerIter {
+        let mut vals: Vec[i64] = Vec.new();
+        collect_into(items, mut vals);
+        return EagerIter { vals: vals, pos: 0 };
+    }
+
+    fn has_next(ref self) -> bool {
+        return self.pos < self.vals.len();
+    }
+
+    fn next(mut ref self) -> i64 {
+        let v = self.vals[self.pos];
+        self.pos += 1;
+        return v;
+    }
+}
+
+fn flatten_eager(items: Vec[Nested]) -> Vec[i64] {
+    let mut it = EagerIter.new(items);
+    let mut out: Vec[i64] = Vec.new();
+    while it.has_next() {
+        out.push(it.next());
+    }
+    return out;
+}
+
+// ---- flatten_iterator_path.kara ----
+
+fn len_at(items: ref Vec[Nested], path: ref Vec[i64], depth: i64, k: i64) -> i64 {
+    if k == depth {
+        return items.len();
+    }
+    match items[path[k]] {
+        List(inner) => { return len_at(inner, path, depth, k + 1); }
+        Int(_) => { return 0; }
+    }
+}
+
+fn member_at(items: ref Vec[Nested], path: ref Vec[i64], k: i64) -> Option[i64] {
+    match items[path[k]] {
+        Int(v) => {
+            if k == path.len() - 1 {
+                return Some(v);
+            }
+            return None;
+        }
+        List(inner) => {
+            if k == path.len() - 1 {
+                return None;
+            }
+            return member_at(inner, path, k + 1);
+        }
+    }
+}
+
+struct PathIter {
+    root: Vec[Nested],
+    path: Vec[i64],
+}
+
+impl PathIter {
+    fn new(items: Vec[Nested]) -> PathIter {
+        return PathIter { root: items, path: [0] };
+    }
+
+    fn has_next(mut ref self) -> bool {
+        while not self.path.is_empty() {
+            let depth = self.path.len() - 1;
+            if self.path[depth] == len_at(self.root, self.path, depth, 0) {
+                self.path.pop();
+                if not self.path.is_empty() {
+                    let up = self.path.len() - 1;
+                    self.path[up] += 1;
+                }
+            } else if member_at(self.root, self.path, 0).is_some() {
+                return true;
+            } else {
+                self.path.push(0);
+            }
+        }
+        return false;
+    }
+
+    fn next(mut ref self) -> i64 {
+        self.has_next();
+        let v = member_at(self.root, self.path, 0).unwrap();
+        let last = self.path.len() - 1;
+        self.path[last] += 1;
+        return v;
+    }
+}
+
+fn flatten_path(items: Vec[Nested]) -> Vec[i64] {
+    let mut it = PathIter.new(items);
+    let mut out: Vec[i64] = Vec.new();
+    while it.has_next() {
+        out.push(it.next());
+    }
+    return out;
+}
+
+// ---- flatten_iterator_peek.kara ----
+
+struct PeekIter {
+    stack: Vec[Nested],
+    ahead: Option[i64],
+}
+
+impl PeekIter {
+    fn new(items: Vec[Nested]) -> PeekIter {
+        let mut stack: Vec[Nested] = Vec.new();
+        let mut rest = items;
+        while let Some(x) = rest.pop() {
+            stack.push(x);
+        }
+        let mut it = PeekIter { stack: stack, ahead: None };
+        it.advance();
+        return it;
+    }
+
+    fn advance(mut ref self) {
+        self.ahead = None;
+        while let Some(top) = self.stack.pop() {
+            match top {
+                Int(v) => {
+                    self.ahead = Some(v);
+                    return;
+                }
+                List(inner) => {
+                    let mut rest = inner;
+                    while let Some(x) = rest.pop() {
+                        self.stack.push(x);
+                    }
+                }
+            }
+        }
+    }
+
+    fn has_next(ref self) -> bool {
+        return self.ahead.is_some();
+    }
+
+    fn next(mut ref self) -> i64 {
+        let v = self.ahead.unwrap();
+        self.advance();
+        return v;
+    }
+}
+
+fn flatten_peek(items: Vec[Nested]) -> Vec[i64] {
+    let mut it = PeekIter.new(items);
+    let mut out: Vec[i64] = Vec.new();
+    while it.has_next() {
+        out.push(it.next());
+    }
+    return out;
+}
+
+// ---- flatten_iterator_trait.kara ----
+
+struct NestedIter {
+    stack: Vec[Nested],
+}
+
+impl NestedIter {
+    fn new(items: Vec[Nested]) -> NestedIter {
+        let mut stack: Vec[Nested] = Vec.new();
+        let mut rest = items;
+        while let Some(x) = rest.pop() {
+            stack.push(x);
+        }
+        return NestedIter { stack: stack };
+    }
+}
+
+impl Iterator for NestedIter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        while let Some(top) = self.stack.pop() {
+            match top {
+                Int(v) => { return Some(v); }
+                List(inner) => {
+                    let mut rest = inner;
+                    while let Some(x) = rest.pop() {
+                        self.stack.push(x);
+                    }
+                }
+            }
+        }
+        return None;
+    }
+}
+
+fn flatten_trait(items: Vec[Nested]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for v in NestedIter.new(items) {
+        out.push(v);
+    }
+    return out;
+}
+
+// ---- the has_next stutter (P7) ----
+
+fn stutter_stack(items: Vec[Nested]) -> Vec[i64] {
+    let mut it = StackIter.new(items);
+    let mut out: Vec[i64] = Vec.new();
+    while it.has_next() and it.has_next() and it.has_next() {
+        out.push(it.next());
+    }
+    if it.has_next() {
+        out.push(999999);
+    }
+    return out;
+}
+
+fn stutter_path(items: Vec[Nested]) -> Vec[i64] {
+    let mut it = PathIter.new(items);
+    let mut out: Vec[i64] = Vec.new();
+    while it.has_next() and it.has_next() and it.has_next() {
+        out.push(it.next());
+    }
+    if it.has_next() {
+        out.push(999999);
+    }
+    return out;
+}
+
+fn stutter_peek(items: Vec[Nested]) -> Vec[i64] {
+    let mut it = PeekIter.new(items);
+    let mut out: Vec[i64] = Vec.new();
+    while it.has_next() and it.has_next() and it.has_next() {
+        out.push(it.next());
+    }
+    if it.has_next() {
+        out.push(999999);
+    }
+    return out;
+}
+
+// ---- the oracle ----
+
+// Every maximal run of digits, with a '-' just before it taken as its sign,
+// in the order it appears in the text.
+fn oracle(text: ref String) -> Vec[i64] {
+    let cs: Vec[char] = text.chars().collect();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i].is_ascii_digit() {
+            let negative = i > 0 and cs[i - 1] == '-';
+            let mut v = 0;
+            while i < cs.len() and cs[i].is_ascii_digit() {
+                v = v * 10 + (cs[i] as i64 - '0' as i64);
+                i += 1;
+            }
+            if negative {
+                out.push(-v);
+            } else {
+                out.push(v);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    return out;
+}
+
+// ---- input (as in the arms) ----
+
+fn parse_list(text: ref Vec[char], pos: mut ref i64) -> Vec[Nested] {
+    let mut items: Vec[Nested] = Vec.new();
+    pos += 1;
+    while text[pos] != ']' {
+        if text[pos] == ',' {
+            pos += 1;
+        } else if text[pos] == '[' {
+            items.push(List(parse_list(text, pos)));
+        } else {
+            let mut sign = 1;
+            if text[pos] == '-' {
+                sign = -1;
+                pos += 1;
+            }
+            let mut v = 0;
+            while text[pos].is_ascii_digit() {
+                v = v * 10 + (text[pos] as i64 - '0' as i64);
+                pos += 1;
+            }
+            items.push(Int(sign * v));
+        }
+    }
+    pos += 1;
+    return items;
+}
+
+fn parse(text: ref String) -> Vec[Nested] {
+    let cs: Vec[char] = text.chars().collect();
+    let mut pos = 0;
+    return parse_list(cs, mut pos);
+}
+
+fn next(state: mut ref i64) -> i64 {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return state >> 8;
+}
+
+fn gen_member(state: mut ref i64, depth: i64, max_depth: i64, out: mut ref String) {
+    if depth < max_depth and next(state) % 3 == 0 {
+        out.push('[');
+        let count = next(state) % 5;
+        for k in 0..count {
+            if k > 0 {
+                out.push(',');
+            }
+            gen_member(state, depth + 1, max_depth, out);
+        }
+        out.push(']');
+    } else {
+        let v = next(state) % 201 - 100;
+        out.push_str(v.to_string());
+    }
+}
+
+fn gen_text(seed: i64, top: i64, max_depth: i64) -> String {
+    let mut state = seed;
+    let mut out = String.new();
+    out.push('[');
+    for k in 0..top {
+        if k > 0 {
+            out.push(',');
+        }
+        gen_member(mut state, 1, max_depth, mut out);
+    }
+    out.push(']');
+    return out;
+}
+
+fn render(vals: ref Vec[i64]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    for k in 0..vals.len() {
+        if k > 0 {
+            out.push(',');
+        }
+        out.push_str(vals[k].to_string());
+    }
+    out.push(']');
+    return out;
+}
+
+// ---- helpers for the properties ----
+
+// The text of a list with every list in it, at every depth, reversed.
+fn render_reversed(items: ref Vec[Nested]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    let mut k = items.len();
+    while k > 0 {
+        k -= 1;
+        match items[k] {
+            Int(v) => { out.push_str(v.to_string()); }
+            List(inner) => { out.push_str(render_reversed(inner)); }
+        }
+        if k > 0 {
+            out.push(',');
+        }
+    }
+    out.push(']');
+    return out;
+}
+
+// One list holding the members of `a` followed by those of `b`.
+fn join_texts(a: ref String, b: ref String) -> String {
+    let ia = a.slice(1, a.len() - 1);
+    let ib = b.slice(1, b.len() - 1);
+    if ia.is_empty() {
+        return f"[{ib}]";
+    }
+    if ib.is_empty() {
+        return f"[{ia}]";
+    }
+    return f"[{ia},{ib}]";
+}
+
+fn reversed(vals: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = vals.len();
+    while k > 0 {
+        k -= 1;
+        out.push(vals[k]);
+    }
+    return out;
+}
+
+fn joined(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for v in a.iter() {
+        out.push(v);
+    }
+    for v in b.iter() {
+        out.push(v);
+    }
+    return out;
+}
+
+// ---- the checks ----
+
+struct Tally {
+    cases: i64,
+    integers: i64,
+    failures: i64,
+}
+
+fn fail(t: mut ref Tally, prop: String, text: ref String, detail: String) {
+    t.failures += 1;
+    if t.failures <= 10 {
+        println(f"FAIL {prop} on {text}: {detail}");
+    }
+}
+
+fn arms_agree(t: mut ref Tally, text: ref String) -> Vec[i64] {
+    let a = flatten_stack(parse(text));
+    let b = flatten_eager(parse(text));
+    let c = flatten_path(parse(text));
+    let d = flatten_peek(parse(text));
+    let e = flatten_trait(parse(text));
+    if b != a or c != a or d != a or e != a {
+        fail(t, "P1", text, f"stack {render(a)} eager {render(b)} path {render(c)} peek {render(d)} trait {render(e)}");
+    }
+    return a;
+}
+
+fn check(t: mut ref Tally, text: ref String) -> Vec[i64] {
+    t.cases += 1;
+    let got = arms_agree(t, text);
+    t.integers += got.len();
+
+    let want = oracle(text);
+    if got != want {
+        fail(t, "P2", text, f"got {render(got)}, oracle {render(want)}");
+    }
+
+    let wrapped = f"[{text}]";
+    if flatten_stack(parse(wrapped)) != got {
+        fail(t, "P3", text, "wrapping changed the answer");
+    }
+
+    let again = render(got);
+    if flatten_stack(parse(again)) != got {
+        fail(t, "P4", text, f"{again} does not flatten to itself");
+    }
+
+    let rev = render_reversed(parse(text));
+    if flatten_stack(parse(rev)) != reversed(got) {
+        fail(t, "P6", text, f"reversed {rev} flattens to {render(flatten_stack(parse(rev)))}");
+    }
+
+    if stutter_stack(parse(text)) != got or stutter_path(parse(text)) != got or stutter_peek(parse(text)) != got {
+        fail(t, "P7", text, "an extra has_next changed the answer");
+    }
+    return got;
+}
+
+fn check_join(t: mut ref Tally, a: ref String, fa: ref Vec[i64], b: ref String, fb: ref Vec[i64]) {
+    let text = join_texts(a, b);
+    let got = arms_agree(t, text);
+    if got != joined(fa, fb) {
+        fail(t, "P5", text, f"{render(got)} is not {render(fa)} then {render(fb)}");
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, integers: 0, failures: 0 };
+    let hand = [
+        "[[1,1],2,[1,1]]",
+        "[1,[4,[6]]]",
+        "[]",
+        "[[]]",
+        "[[],[[]],7]",
+        "[-3,[-4,[5,[-6]]]]",
+        "[[[[[[[[[[9]]]]]]]]]]",
+        "[0,[0,[0]],1000000]",
+    ];
+    let mut texts: Vec[String] = Vec.new();
+    for h in hand.iter() {
+        texts.push(h.to_string());
+    }
+    for seed in 0..300 {
+        texts.push(gen_text(seed * 7 + 1, seed % 7, 1 + seed % 6));
+    }
+
+    let mut answers: Vec[Vec[i64]] = Vec.new();
+    for text in texts.iter() {
+        answers.push(check(mut t, text));
+    }
+    for k in 0..texts.len() - 1 {
+        check_join(mut t, texts[k], answers[k], texts[k + 1], answers[k + 1]);
+    }
+
+    // P1 on the four lists the arms print, which are too large for the
+    // other checks' many re-parses.
+    let big = [(1, 10, 4), (7, 1000, 8), (42, 20000, 12), (2026, 50000, 30)];
+    for (seed, top, depth) in big.iter() {
+        let text = gen_text(seed, top, depth);
+        let got = arms_agree(mut t, text);
+        t.integers += got.len();
+    }
+
+    println(f"{t.cases} cases checked ({t.integers} integers flattened), {t.failures} failures");
+}

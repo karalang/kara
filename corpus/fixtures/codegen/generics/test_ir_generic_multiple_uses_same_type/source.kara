@@ -1,0 +1,7 @@
+
+fn negate[T](x: T) -> T { 0 - x }
+fn main() {
+    let a = negate(5);
+    let b = negate(3);
+    println(a + b);
+}

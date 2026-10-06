@@ -1,0 +1,25 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+struct H { a: Array[R, 2] }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
+fn mka(k: i64) -> Array[R, 2] { return [mkr(k), mkr(k + 1)] }
+fn mks() -> Array[String, 2] { return [f"aa{1}", f"bb{2}"] }
+fn rebind() { let a: Array[R, 2] = mka(10); match Option.Some(a) { Option.Some(v) => { let u = v; println(f"rebind {u[0].id}") }, Option.None => {} } }
+fn untyped() { let a = mka(20); match Option.Some(a) { Option.Some(v) => { let u = v; println(f"untyped {u[1].id}") }, Option.None => {} } }
+fn store() { let a: Array[R, 2] = mka(30); match Option.Some(a) { Option.Some(v) => { let h = H { a: v }; println(f"store {h.a[0].id}") }, Option.None => {} } }
+fn iflet() { let a: Array[R, 2] = mka(40); if let Option.Some(v) = Option.Some(a) { let u = v; println(f"iflet {u[0].id}") } }
+fn bare() { let a: Array[R, 2] = mka(50); match Some(a) { Some(v) => { let u = v; println(f"bare {u[0].id}") }, None => {} } }
+fn okseed() { let a: Array[R, 2] = mka(60); match Ok(a) { Ok(v) => { let u = v; println(f"ok {u[0].id}") }, Err(e) => { println(f"e{e}") } } }
+fn strs() { let a: Array[String, 2] = mks(); match Option.Some(a) { Option.Some(v) => { let u = v; println(f"strs {u[1]}") }, Option.None => {} } }
+fn main() {
+    rebind()
+    untyped()
+    store()
+    iflet()
+    bare()
+    okseed()
+    strs()
+    let mut i = 0;
+    while i < 2 { let a: Array[R, 2] = mka(70 + i * 2); match Option.Some(a) { Option.Some(v) => { let u = v; println(f"loop {u[0].id}") }, Option.None => {} }; i = i + 1; }
+    println("end")
+}

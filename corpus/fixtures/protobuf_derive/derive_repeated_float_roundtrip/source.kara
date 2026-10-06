@@ -1,0 +1,13 @@
+
+#[derive(Message)]
+struct Bag { ds: Vec[f64], fs: Vec[f32] }
+
+fn main() {
+    let b = Bag { ds: [1.5, -2.25, 0.0], fs: [0.5, -0.25] };
+    let back = Bag.decode(b.encode());
+    println(back.ds.len());
+    println(back.ds[0] == 1.5);
+    println(back.ds[1] == -2.25);
+    println(back.fs.len());
+    println(back.fs[1] == -0.25);
+}

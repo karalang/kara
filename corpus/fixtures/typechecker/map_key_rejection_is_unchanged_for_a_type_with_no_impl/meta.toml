@@ -1,0 +1,13 @@
+source = "tests/typechecker.rs::map_key_rejection_is_unchanged_for_a_type_with_no_impl"
+dedup_of = []
+expect = "error:E0232"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

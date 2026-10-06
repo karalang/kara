@@ -1,0 +1,78 @@
+// Benchmark workload for LeetCode #342 — the mask arm (power_of_four.kara),
+// timed as written.
+//
+// Build once, then punch (BENCHMARKS.md). LEN 32-bit values are built once,
+// a third each of: a power of four 4^0..4^15, a near miss (a power of two
+// with an odd exponent, or a power of four plus or minus one), and a random
+// 32-bit value. Each of PUNCHES punches replaces one value at a random
+// position and classifies the whole array again. The test is a few bit
+// operations with no loop, so the classification pass is the work, and a
+// compiler is free to vectorise it.
+//
+// The count and sum of accepted values are folded into a rolling hash, which
+// is the sink.
+
+const LEN: i64 = 500000;
+const PUNCHES: i64 = 100;
+const MODULUS: i64 = 1073741789;
+const I32_MIN: i64 = -2147483648;
+
+fn is_power_of_four(n: i32) -> bool {
+    return n > 0 and (n & (n - 1)) == 0 and (n & 0x55555555) != 0;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn two_to(k: i64) -> i32 {
+    let mut p: i32 = 1;
+    for _ in 0..k {
+        p *= 2;
+    }
+    return p;
+}
+
+fn value(seed: mut ref i64) -> i32 {
+    let kind = next(seed) % 3;
+    if kind == 0 {
+        return two_to(2 * (next(seed) % 16));
+    }
+    if kind == 1 {
+        let r = next(seed) % 3;
+        if r == 0 {
+            return two_to(2 * (next(seed) % 15) + 1);
+        }
+        let p = two_to(2 * (next(seed) % 16));
+        if r == 1 {
+            return p + 1;
+        }
+        return p - 1;
+    }
+    let hi = next(seed) * 32768 + next(seed);
+    return (hi * 4 + next(seed) % 4 + I32_MIN) as i32;
+}
+
+fn main() {
+    let mut seed = 342;
+    let mut a: Vec[i32] = Vec.new();
+    for _ in 0..LEN {
+        a.push(value(mut seed));
+    }
+    let mut sink = 0;
+    for _ in 0..PUNCHES {
+        let pos = (next(mut seed) * 32768 + next(mut seed)) % LEN;
+        a[pos] = value(mut seed);
+        let mut count = 0;
+        let mut sum: i64 = 0;
+        for x in a {
+            if is_power_of_four(x) {
+                count += 1;
+                sum += x as i64;
+            }
+        }
+        sink = (sink * 31 + count + sum % MODULUS) % MODULUS;
+    }
+    println(f"sink {sink}");
+}

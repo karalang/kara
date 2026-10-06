@@ -1,0 +1,24 @@
+
+fn opt_v(i: i64) -> Option[Vec[String]] {
+    if i % 2 == 0 { Some(["x", "y"]) } else { None }
+}
+fn opt_i(i: i64) -> Option[Vec[i64]] {
+    if i % 2 == 0 { Some([i, i]) } else { None }
+}
+fn opt_s(i: i64) -> Option[String] {
+    if i % 2 == 0 { Some("hi") } else { None }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let v: Vec[String] = opt_v(i).unwrap_or(["a", "b", "c"]);
+        total = total + (v.len() as i64);
+        let w: Vec[i64] = opt_i(i).unwrap_or(Vec[9, 9, 9]);
+        total = total + (w.len() as i64);
+        let s: String = opt_s(i).unwrap_or(f"def-{i}");
+        total = total + (s.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}

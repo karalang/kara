@@ -1,0 +1,30 @@
+// LeetCode 191 — Number of 1 Bits (Hamming weight).
+//
+// Count the set bits of an integer. Brian Kernighan's trick: `x & (x - 1)` clears
+// the LOWEST set bit (borrowing turns that 1 and all the 0s below it, then the
+// AND wipes them). Each iteration removes exactly one 1, so the loop runs once per
+// set bit — O(popcount), not O(bit-width).
+
+fn hamming_weight(n: i64) -> i64 {
+    let mut count = 0;
+    let mut x = n;
+    while x != 0 {
+        x = x & (x - 1);
+        count = count + 1;
+    }
+    return count;
+}
+
+fn report(n: i64) {
+    println(hamming_weight(n));
+}
+
+fn main() {
+    report(11);          // 3   (1011)
+    report(128);         // 1   (10000000)
+    report(4294967293);  // 31  (…11111101)
+    report(0);           // 0
+    report(1);           // 1
+    report(4294967295);  // 32  (all ones)
+    report(2147483648);  // 1   (bit 31)
+}

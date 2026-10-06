@@ -1,0 +1,13 @@
+
+        effect resource Db;
+        struct Handle { fd: i64 }
+        impl Handle {
+            fn write_at(ref self, id: i64) with writes(Db[id]) { }
+        }
+        fn main() {
+            let a = Handle { fd: 0 };
+            let b = Handle { fd: 1 };
+            a.write_at(1);
+            b.write_at(1);
+        }
+        

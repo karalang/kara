@@ -1,0 +1,18 @@
+
+fn get_opt(present: bool) -> Option[i64] {
+    if present { 42.into() } else { None }
+}
+fn get_res(ok: bool) -> Result[i64, String] {
+    if ok { 7.into() } else { Err("nope") }
+}
+struct Holder { slot: Option[String] }
+fn main() {
+    let o: Option[i64] = 5.into();
+    match o { Some(v) => println(v), None => println(-1) };
+    match get_opt(true) { Some(v) => println(v), None => println(-1) };
+    match get_opt(false) { Some(v) => println(v), None => println(-1) };
+    match get_res(true) { Ok(v) => println(v), Err(e) => println(e) };
+    match get_res(false) { Ok(v) => println(v), Err(e) => println(e) };
+    let h: Holder = Holder { slot: "hi".into() };
+    match h.slot { Some(s) => println(s), None => println("none") };
+}

@@ -1,0 +1,11 @@
+
+shared enum E { Leaf(i64), Node(E) }
+fn chk(e: E) -> i64 {
+    match e {
+        Leaf(n) => n,
+        Node(x) => chk(x)
+    }
+}
+fn main() {
+    println(chk(Node(Node(Node(Leaf(42))))));
+}

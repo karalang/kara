@@ -1,0 +1,7 @@
+ord  true true
+i64  true true true false
+u64  false true
+f64  true true
+str  true false
+user true true
+nan  false false false false

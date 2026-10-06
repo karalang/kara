@@ -1,0 +1,37 @@
+// LeetCode #122: Best Time to Buy and Sell Stock II — greedy O(n).
+//
+// Unlike #121 (a single buy/sell), here you may trade as many times as you like
+// — buy and sell on consecutive days if it helps. The optimum is simply the sum
+// of every POSITIVE day-to-day gain: whenever `prices[i] > prices[i-1]`, pocket
+// the difference. That captures every upward run without ever needing to look
+// ahead. O(n) time, O(1) space.
+
+fn max_profit(prices: Slice[i64]) -> i64 {
+    let n = prices.len();
+    let mut profit = 0;
+    for i in 1..n {
+        let d = prices[i] - prices[i - 1];
+        if d > 0 {
+            profit = profit + d;
+        }
+    }
+    profit
+}
+
+fn report(prices: Slice[i64]) {
+    println(max_profit(prices));
+}
+
+fn main() {
+    let case1: Array[i64, 6] = [7, 1, 5, 3, 6, 4];
+    report(case1);   // expect: 7  (1->5 = 4, 3->6 = 3)
+
+    let case2: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case2);   // expect: 4  (one long upward run, 1->5)
+
+    let case3: Array[i64, 5] = [7, 6, 4, 3, 1];
+    report(case3);   // expect: 0  (prices only fall)
+
+    let case4: Array[i64, 1] = [5];
+    report(case4);   // expect: 0  (single day, no trade possible)
+}

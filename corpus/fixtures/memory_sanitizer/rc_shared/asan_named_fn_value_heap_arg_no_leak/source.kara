@@ -1,0 +1,7 @@
+
+fn shout(s: String) -> String { f"{s}!" }
+fn apply(f: Fn(String) -> String, x: String) -> String { f(x) }
+fn main() {
+    let r = apply(shout, "hello-this-is-a-fairly-long-payload-string");
+    println(r);
+}

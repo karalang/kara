@@ -1,0 +1,7 @@
+abab / redblueredblue -> true
+aaaa / asdasdasdasd -> true
+aabb / xyzabcxzyabc -> false
+ab / aa -> false
+a / a -> true
+abc / xy -> false
+aba / xyzxyzxyz -> false

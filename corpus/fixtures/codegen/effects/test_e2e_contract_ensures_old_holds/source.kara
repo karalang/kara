@@ -1,0 +1,8 @@
+
+struct Account { balance: i64 }
+impl Account {
+    pub fn withdraw(mut ref self, amount: i64) -> i64
+        ensures(result) self.balance == old(self.balance) - amount
+    { self.balance = self.balance - amount; amount }
+}
+fn main() { let mut a = Account { balance: 100 }; println(a.withdraw(30)); }

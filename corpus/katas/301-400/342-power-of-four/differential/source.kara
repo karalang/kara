@@ -1,0 +1,191 @@
+// Differential and property check for LeetCode #342.
+//
+// Five implementations of the same predicate, run on the same inputs:
+//
+//   by_mask      one bit set, and it is in 0x55555555     (power_of_four.kara)
+//   by_divide    divide out every factor of 4             (power_of_four_divide.kara)
+//   by_mod3      a power of two that leaves 1 mod 3       (power_of_four_mod3.kara)
+//   by_bits      count_ones == 1, trailing_zeros even     (power_of_four_bits.kara)
+//   by_unsigned  as u32: power of two, leading_zeros odd  (power_of_four_unsigned.kara)
+//
+// Inputs: every n in [-100, 200000], every 2^k + d for k in 0..30 and
+// d in -2..2, every -2^31 + 2^k, both 32-bit extremes, and 20000
+// pseudo-random 32-bit values.
+//
+// Properties, over every input:
+//   P1  all five agree
+//   P2  accepted only if n > 0
+//   P3  for 0 < n < 2^29, n is accepted exactly when 4n is
+//   P4  an accepted n leaves 1 mod 3, and is 1 or divisible by 4
+//   P5  the exhaustive range holds exactly the powers a multiplication loop
+//       finds in it (count and sum)
+//   P6  2^k is accepted exactly when k is even, and 2^k + d with d != 0 and
+//       2^k > 4 never is
+//   P7  for n > 0, n is accepted exactly when it is the square of a power
+//       of two
+
+const I32_MIN: i32 = -2147483648;
+const I32_MAX: i32 = 2147483647;
+
+fn by_mask(n: i32) -> bool {
+    return n > 0 and (n & (n - 1)) == 0 and (n & 0x55555555) != 0;
+}
+
+fn by_divide(n: i32) -> bool {
+    if n <= 0 {
+        return false;
+    }
+    let mut m = n;
+    while m % 4 == 0 {
+        m /= 4;
+    }
+    return m == 1;
+}
+
+fn by_mod3(n: i32) -> bool {
+    return n > 0 and (n & (n - 1)) == 0 and n % 3 == 1;
+}
+
+fn by_bits(n: i32) -> bool {
+    return n > 0 and n.count_ones() == 1 and n.trailing_zeros() % 2 == 0;
+}
+
+fn by_unsigned(n: i32) -> bool {
+    let u = n as u32;
+    return u.is_power_of_two() and u.leading_zeros() % 2 == 1;
+}
+
+// The square root of a positive n, if n is a perfect square. The float root
+// is only a guess; the neighbours of the guess are checked exactly.
+fn exact_sqrt(n: i64) -> Option[i64] {
+    let r = (n as f64).sqrt() as i64;
+    for c in [r - 1, r, r + 1] {
+        if c >= 0 and c * c == n {
+            return Some(c);
+        }
+    }
+    return None;
+}
+
+struct Tally {
+    checked: i64,
+    accepted: i64,
+    failures: i64,
+}
+
+fn check(n: i32, t: mut ref Tally) {
+    let a = by_mask(n);
+    let b = by_divide(n);
+    let c = by_mod3(n);
+    let d = by_bits(n);
+    let e = by_unsigned(n);
+    t.checked += 1;
+    if a {
+        t.accepted += 1;
+    }
+    if a != b or a != c or a != d or a != e {
+        println(f"P1 FAIL n={n}: mask {a} divide {b} mod3 {c} bits {d} unsigned {e}");
+        t.failures += 1;
+    }
+    if a and n <= 0 {
+        println(f"P2 FAIL n={n}");
+        t.failures += 1;
+    }
+    if n > 0 and n < 536870912 {
+        if a != by_divide(4 * n) {
+            println(f"P3 FAIL n={n}");
+            t.failures += 1;
+        }
+    }
+    if a and (n % 3 != 1 or (n != 1 and n % 4 != 0)) {
+        println(f"P4 FAIL n={n}");
+        t.failures += 1;
+    }
+    if n > 0 {
+        let square_of_two = match exact_sqrt(n as i64) {
+            Some(r) => (r & (r - 1)) == 0,
+            None => false,
+        };
+        if a != square_of_two {
+            println(f"P7 FAIL n={n}: accepted {a}, square of a power of two {square_of_two}");
+            t.failures += 1;
+        }
+    }
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// A 32-bit value from two 16-bit draws, shifted to cover the signed range.
+fn random_i32(seed: mut ref i64) -> i32 {
+    let hi = next(seed) % 65536;
+    let lo = next(seed) % 65536;
+    return (hi * 65536 + lo - 2147483648) as i32;
+}
+
+fn main() {
+    let mut t = Tally { checked: 0, accepted: 0, failures: 0 };
+
+    // Exhaustive range.
+    let mut sum: i64 = 0;
+    for n in -100i32..200001 {
+        check(n, mut t);
+        if by_mask(n) {
+            sum += n as i64;
+        }
+    }
+    let range_accepted = t.accepted;
+    let mut want_count = 0;
+    let mut want_sum: i64 = 0;
+    let mut p: i64 = 1;
+    while p <= 200000 {
+        want_count += 1;
+        want_sum += p;
+        p *= 4;
+    }
+    if range_accepted != want_count or sum != want_sum {
+        println(f"P5 FAIL: range has {range_accepted} summing {sum}, want {want_count} summing {want_sum}");
+        t.failures += 1;
+    }
+    println(f"[-100, 200000]: {range_accepted} powers, sum {sum}");
+
+    // Every power of two and its near neighbours, staying inside 32 bits,
+    // and each power of two with the sign bit added.
+    let mut q: i64 = 1;
+    for k in 0..31 {
+        for dd in -2..3 {
+            let v = q + dd;
+            if v > I32_MAX as i64 {
+                continue;
+            }
+            let n = v as i32;
+            check(n, mut t);
+            let want = if dd == 0 { k % 2 == 0 } else { q <= 4 and by_divide(n) };
+            if by_mask(n) != want {
+                println(f"P6 FAIL 2^{k} + {dd}");
+                t.failures += 1;
+            }
+        }
+        // The same bit with the sign bit also set. Read as a `u32`, only
+        // the high bit tells these apart from the powers themselves.
+        check((I32_MIN as i64 + q) as i32, mut t);
+        q *= 2;
+    }
+
+    // The extremes.
+    check(I32_MIN, mut t);
+    check(I32_MAX, mut t);
+
+    // Random 32-bit values.
+    let mut seed = 342;
+    for _ in 0..20000 {
+        check(random_i32(mut seed), mut t);
+    }
+
+    println(f"checked {t.checked}, accepted {t.accepted}, failures {t.failures}");
+    if t.failures == 0 {
+        println("all properties hold");
+    }
+}

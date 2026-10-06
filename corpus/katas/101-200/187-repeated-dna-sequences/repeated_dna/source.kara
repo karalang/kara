@@ -1,0 +1,50 @@
+// LeetCode 187 — Repeated DNA Sequences.
+//
+// Return every length-10 substring that appears MORE THAN ONCE in a DNA string
+// (alphabet A/C/G/T). A single sliding window of width 10 over the string, with a
+// `Map[String, i64]` counting how many times each 10-mer has been seen. The first
+// time a 10-mer's count crosses from 1 to 2 we record it (once), so the result is
+// each repeated sequence in first-repeat order — deterministic across backends.
+
+fn find_repeated(s: String) -> Vec[String] {
+    let n = s.len();
+    let mut counts: Map[String, i64] = Map.new();
+    let mut result: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i + 10 <= n {
+        let sub: String = s[i..i + 10].to_string();
+        match counts.get(sub) {
+            Some(c) => {
+                if c == 1 {
+                    result.push(sub.clone()); // record on the 1 -> 2 transition
+                }
+                let _ = counts.insert(sub, c + 1);
+            }
+            None => {
+                let _ = counts.insert(sub, 1);
+            }
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn report(s: String) {
+    let reps = find_repeated(s);
+    let k = reps.len();
+    println(f"{k}");
+    let mut i = 0;
+    while i < k {
+        println(reps[i]);
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    report("AAAAACCCCCAAAAACCCCCCAAAAAGGGTTT"); // 2: AAAAACCCCC, CCCCCAAAAA
+    report("AAAAAAAAAAAAA");                    // 1: AAAAAAAAAA
+    report("AAAAAAAAAA");                       // 0 (appears once)
+    report("ACGTACGTAC");                       // 0 (length 10, one window)
+    report("GGGGGGGGGGGGGGGGGGGGGGGGG");        // 1: GGGGGGGGGG
+}

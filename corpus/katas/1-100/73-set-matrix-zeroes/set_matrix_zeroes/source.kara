@@ -1,0 +1,182 @@
+// LeetCode #73: Set Matrix Zeroes — O(1) extra space, first row/col as markers (★).
+//
+// Given an m×n matrix, if any cell is 0, set that cell's ENTIRE row and column
+// to 0 — IN PLACE. The follow-up forbids the obvious O(m·n) scratch copy and even
+// the O(m+n) row/col flag arrays ([`set_matrix_zeroes_markers.kara`](set_matrix_zeroes_markers.kara)
+// is that cleaner-but-heavier form). The O(1) trick: reuse the matrix's own FIRST
+// ROW and FIRST COLUMN as the marker storage.
+//
+//   1. Record separately whether row 0 and column 0 each already contain a zero
+//      (two bools) — because step 2 is about to overwrite them as scratch.
+//   2. For every INTERIOR zero m[i][j]==0 (i≥1, j≥1), stamp its row marker
+//      m[i][0]=0 and its column marker m[0][j]=0.
+//   3. Second interior pass: zero m[i][j] whenever its row marker m[i][0] or
+//      column marker m[0][j] is 0.
+//   4. Finally zero row 0 / column 0 themselves iff the step-1 bools said so.
+//
+// Steps 2→3 must be two separate passes: a marker written in step 2 must not be
+// read as "this cell was originally zero" by a later cell in the same pass, and
+// row/col 0 are handled dead last so their marker role can't corrupt their data
+// role. This is the in-place-matrix-mutation cousin of kata
+// [#48](../48-rotate-image/)'s ring rotation — same `mut ref Vec[Vec[i64]]`
+// nested index-write, here driven by a marker sweep rather than a cyclic swap.
+//
+// LeetCode bounds: 1 ≤ m, n ≤ 200, -2³¹ ≤ v < 2³¹ — every value fits in i64.
+
+fn set_zeroes(m: mut ref Vec[Vec[i64]]) {
+    let rows = m.len();
+    if rows == 0 {
+        return;
+    }
+    let cols = m[0].len();
+
+    // Step 1: does row 0 / column 0 already hold a zero? Decide BEFORE overloading
+    // them as marker scratch in step 2.
+    let mut first_row_zero = false;
+    let mut first_col_zero = false;
+    let mut j = 0;
+    while j < cols {
+        if m[0][j] == 0 {
+            first_row_zero = true;
+        }
+        j = j + 1;
+    }
+    let mut i = 0;
+    while i < rows {
+        if m[i][0] == 0 {
+            first_col_zero = true;
+        }
+        i = i + 1;
+    }
+
+    // Step 2: stamp each interior zero onto its row/column markers.
+    i = 1;
+    while i < rows {
+        j = 1;
+        while j < cols {
+            if m[i][j] == 0 {
+                m[i][0] = 0;
+                m[0][j] = 0;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    // Step 3: zero any interior cell whose row or column marker fired.
+    i = 1;
+    while i < rows {
+        j = 1;
+        while j < cols {
+            if m[i][0] == 0 or m[0][j] == 0 {
+                m[i][j] = 0;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    // Step 4: the markers' own row/column, handled last.
+    if first_row_zero {
+        j = 0;
+        while j < cols {
+            m[0][j] = 0;
+            j = j + 1;
+        }
+    }
+    if first_col_zero {
+        i = 0;
+        while i < rows {
+            m[i][0] = 0;
+            i = i + 1;
+        }
+    }
+}
+
+// ---- test harness (shared verbatim with the markers variant + Python mirror) ---
+
+fn print_grid(m: ref Vec[Vec[i64]]) {
+    let rows = m.len();
+    let mut i = 0;
+    while i < rows {
+        let row = ref m[i];
+        let w = row.len();
+        let mut s: String = "[";
+        let mut j = 0;
+        while j < w {
+            if j > 0 {
+                s.push_str(", ");
+            }
+            s.push_str(f"{row[j]}");
+            j = j + 1;
+        }
+        s.push(']');
+        println(s);
+        i = i + 1;
+    }
+}
+
+// Rolling polynomial hash of the whole grid — a single scalar oracle per case.
+// All test values are non-negative, so the fold stays non-negative and agrees
+// byte-for-byte across every language mirror.
+fn hash_grid(m: ref Vec[Vec[i64]]) -> i64 {
+    let mut acc = 0;
+    let rows = m.len();
+    let mut i = 0;
+    while i < rows {
+        let row = ref m[i];
+        let w = row.len();
+        let mut j = 0;
+        while j < w {
+            acc = (acc * 131 + row[j]) % 1000000007;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    acc
+}
+
+fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+    let mut m = grid;
+    set_zeroes(mut m);
+    print_grid(m);
+    println("---");
+    s.push(' ');
+    s.push_str(f"{hash_grid(m)}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    // LeetCode example 1 — one interior zero.
+    report([[1, 1, 1], [1, 0, 1], [1, 1, 1]], mut s);
+
+    // LeetCode example 2 — zeros in row 0 and column 0.
+    report([[0, 1, 2, 0], [3, 4, 5, 2], [1, 3, 1, 5]], mut s);
+
+    // 1×1, the lone cell zero -> stays zero.
+    report([[0]], mut s);
+
+    // 1×1, non-zero -> unchanged.
+    report([[7]], mut s);
+
+    // No zero anywhere -> matrix unchanged.
+    report([[1, 2], [3, 4]], mut s);
+
+    // All zeros -> stays all zeros.
+    report([[0, 0], [0, 0]], mut s);
+
+    // Single row with a zero -> whole row zeroed.
+    report([[5, 0, 9, 3]], mut s);
+
+    // Single column with a zero -> whole column zeroed.
+    report([[5], [0], [9], [3]], mut s);
+
+    // A zero only in the first column (marker-role stress).
+    report([[1, 2, 3], [0, 4, 5], [6, 7, 8]], mut s);
+
+    // A zero only in the first row (marker-role stress).
+    report([[1, 0, 3], [4, 5, 6], [7, 8, 9]], mut s);
+
+    println(s);
+}

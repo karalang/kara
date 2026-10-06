@@ -1,0 +1,13 @@
+
+shared struct N { v: i64 }
+
+fn main() {
+    let a: N = N { v: 7 };
+    let mut inner: Vec[weak N] = Vec.new();
+    inner.push(a);
+    let mut outer: Vec[Vec[weak N]] = Vec.new();
+    outer.push(inner);
+    let row: Vec[weak N] = outer[0].clone();
+    match row[0] { Some(x) => { println(x.v) } None => { println(0 - 1) } }
+    println(a.v);
+}

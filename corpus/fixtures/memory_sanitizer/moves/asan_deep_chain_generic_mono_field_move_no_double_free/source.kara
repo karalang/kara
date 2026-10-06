@@ -1,0 +1,18 @@
+
+struct Boxy[T] { v: T }
+struct Hg { b: Boxy[String] }
+struct Og { h: Hg }
+struct Hgv { b: Boxy[Vec[i64]] }
+struct Ogv { h: Hgv }
+fn main() {
+    let o = Og { h: Hg { b: Boxy { v: f"s{7}" } } };
+    let g = o.h.b;
+    println(f"g {g.v}");
+    let mut bx = Boxy { v: Vec.new() };
+    bx.v.push(5);
+    bx.v.push(6);
+    let o2 = Ogv { h: Hgv { b: bx } };
+    let g2 = o2.h.b;
+    println(f"g0 {g2.v[0]} g1 {g2.v[1]}");
+    println("end");
+}

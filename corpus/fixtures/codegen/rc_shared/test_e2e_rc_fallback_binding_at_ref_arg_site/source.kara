@@ -1,0 +1,18 @@
+
+struct Src { x: i64, y: i64 }
+struct Acc { total: i64 }
+fn consume_src(s: Src) { }
+fn read_ref(s: ref Src) -> i64 { s.x + s.y }
+impl Acc {
+    fn add(mut ref self, s: ref Src) { self.total = self.total + s.x + s.y; }
+}
+fn main() {
+    let cond: bool = false;
+    let mut a = Acc { total: 0 };
+    let s = Src { x: 3, y: 7 };
+    if cond { consume_src(s); }
+    a.add(s);
+    let r: i64 = read_ref(s);
+    println(a.total);
+    println(r);
+}

@@ -1,0 +1,86 @@
+// Benchmark workload — Remove Duplicates from Sorted List (LeetCode #83).
+// The dedup pass mutates/re-links the list, so — like kata #21/#82 — each iteration
+// builds a FRESH list, runs the in-place keep-one dedup, and folds the survivors
+// through a rolling polynomial hash. Per-iteration node allocation is part of the
+// measured work (fair: every mirror allocates its nodes), alongside the RC-node
+// pointer chase and the splice-out logic. The list is a sorted M=300 run with every
+// value duplicated ([0,0,1,1,2,2,…]) so dedup halves it uniformly; K=70000 iterations
+// seeded by the loop index so nothing hoists. The loop-carried hash is not an
+// auto-par-splittable reduction, so the default build stays single-threaded (verified
+// equal to KARAC_AUTO_PAR=0). See ../README.md § Benchmarks.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn delete_duplicates(head: Option[ListNode]) -> Option[ListNode] {
+    let mut cur = head;
+    loop {
+        match cur {
+            Some(node) => {
+                match node.next {
+                    Some(nxt) => {
+                        if node.val == nxt.val {
+                            node.next = nxt.next;
+                        } else {
+                            cur = node.next;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            None => break,
+        }
+    }
+    head
+}
+
+fn build(m: i64, dup: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: -1, next: None };
+    let mut tail = dummy;
+    let mut v = 0;
+    while v < m {
+        let mut d = 0;
+        while d < dup {
+            let node = ListNode { val: v, next: None };
+            tail.next = Some(node);
+            tail = node;
+            d = d + 1;
+        }
+        v = v + 1;
+    }
+    dummy.next
+}
+
+fn fold(list: Option[ListNode], seed: i64) -> i64 {
+    let mut a = seed;
+    let mut c = list;
+    loop {
+        match c {
+            Some(n) => {
+                a = (a * 131 + (n.val + 1000)) % 1000000007;
+                c = n.next;
+            }
+            None => break,
+        }
+    }
+    a
+}
+
+fn main() {
+    let m = 300;
+    let dup = 2;
+    let total = 70000;
+    let modulus = 1000000007;
+
+    let mut sum = 0;
+    let mut k = 0;
+    while k < total {
+        let list = build(m, dup);
+        let dd = delete_duplicates(list);
+        sum = (sum * 131 + fold(dd, k)) % modulus;
+        k = k + 1;
+    }
+    println(f"{sum}");
+}

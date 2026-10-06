@@ -1,0 +1,22 @@
+
+fn main() {
+    let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);
+    println(f"lane {u[0]}");
+    println(f"whole {u}");
+    println(f"bare");
+    println(u);
+    let w: Vector[u128, 2] = Vector[u128, 2](340282366920938463463374607431768211455u128, 1u128);
+    println(f"u128 {w[0]} {w}");
+    let b: Vector[u64, 2] = Vector[u64, 2](9223372036854775808u64, 1u64);
+    println(f"bound {b}");
+    let s: Vector[i64, 2] = Vector[i64, 2](-1, 1);
+    println(f"signed {s}");
+    let n: Vector[u8, 4] = Vector[u8, 4](200u8, 1u8, 2u8, 3u8);
+    println(f"narrow {n}");
+    let vs: Vec[Vector[u64, 2]] = [u];
+    println(f"invec {vs}");
+    let t = (u, 7i64);
+    println(f"intup {t}");
+    let o: Option[Vector[u64, 2]] = Some(u);
+    println(f"inopt {o}");
+}

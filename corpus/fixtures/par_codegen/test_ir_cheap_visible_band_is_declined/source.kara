@@ -1,0 +1,15 @@
+
+fn add_digits(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let mut rev: Vec[i64] = Vec.new();
+    let mut i = a.len() - 1;
+    let mut j = b.len() - 1;
+    let mut carry = 0;
+    rev.push(carry);
+    return i + j + rev.len();
+}
+
+fn main() {
+    let x: Vec[i64] = Vec.new();
+    let y: Vec[i64] = Vec.new();
+    println(add_digits(x, y).to_string());
+}

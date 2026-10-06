@@ -1,0 +1,1 @@
+fn main() { let b = Bag { t: ([P { n: 5 }, P { n: 6 }], 7) }; println(f"r:{b.t.0[1].n}") }

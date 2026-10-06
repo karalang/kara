@@ -1,0 +1,14 @@
+fn mk(n: i64) -> Option[Vector[i64, 8]] {
+    return Some(Vector[i64, 8](n, n+1, n+2, n+3, n+4, n+5, n+6, n+7))
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut i = 0;
+    while i < 20 {
+        let o = mk(i + n);
+        match o { Some(w) => { println(f"w {w}"); } None => {} }
+        i = i + 1;
+    }
+    println("end");
+}

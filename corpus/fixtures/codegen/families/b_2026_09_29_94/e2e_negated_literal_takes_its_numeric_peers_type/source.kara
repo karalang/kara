@@ -1,0 +1,20 @@
+fn main() {
+    let a: i32 = 5;
+    println(f"{a + -1} {a - -1} {a * -2} {-3 + a} {a / -2} {a % -3}");
+    println(f"{a.min(-1)} {a.max(-7)} {a.wrapping_add(-1)} {a.abs_diff(-4)} {a.clamp(-2, 3)}");
+    let b: i128 = 5;
+    println(f"{b * -1} {b - -1} {b.wrapping_add(-1)}");
+    let c: i8 = 100;
+    println(f"{c + -100} {c.wrapping_sub(-100)} {c < -1} {-1 < c} {c == -100}");
+    let h: i16 = -32767;
+    println(f"{h + -1}");
+    let f: f32 = 1.5;
+    println(f"{f + -1.0} {f * -2} {f.min(-1.25)} {f > -1} {f.min(1.25)} {f.max(2)} {f.max(-2)}");
+    println(f"{f.clamp(0, 1)} {f.clamp(-1.0, 1.25)} {f.clamp(-3, -2)}");
+    let g: f64 = 2.5;
+    println(f"{g + -1} {g - -1.5} {g.min(-1)} {-1 < g}");
+    let bb: bf16 = 1.5;
+    println(f"{bb.min(-1)} {bb + -1} {bb.min(0.1)} {bb.clamp(-0.3, 0.1)}");
+    let z: f32 = 0.0;
+    println(f"{z.max(0.1)} {z.min(-0.1)}");
+}

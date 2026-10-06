@@ -1,0 +1,14 @@
+
+fn label(v: Vec[i64]) -> String {
+    match v {
+        [] => "empty",
+        _ => "non-empty",
+    }
+}
+fn main() {
+    let a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    b.push(7);
+    println(label(a));
+    println(label(b));
+}

@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/rc_shared.rs::asan_std_mem_swap_replace_heap_no_leak_no_double_free"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

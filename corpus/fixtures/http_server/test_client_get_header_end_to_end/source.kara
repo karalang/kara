@@ -1,0 +1,21 @@
+
+fn main() with sends(Network) receives(Network) {{
+    let url: String = "{url}";
+    let c = Client.new();
+    match c.get(url) {{
+        Ok(resp) => {{
+            match resp.header("x-custom") {{
+                Some(v) => println(v),
+                None => println("MISSING"),
+            }}
+            match resp.header("x-absent") {{
+                Some(v2) => println(v2),
+                None => println("ABSENT-OK"),
+            }}
+        }}
+        Err(e) => {{
+            println("ERR");
+            println(e.message());
+        }}
+    }}
+}}

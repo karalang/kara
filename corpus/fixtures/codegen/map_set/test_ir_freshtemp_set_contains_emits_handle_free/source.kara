@@ -1,0 +1,10 @@
+
+fn make_set() -> Set[i64] {
+    let mut s: Set[i64] = Set.new();
+    s.insert(7_i64);
+    return s;
+}
+
+fn main() {
+    println(make_set().contains(7_i64));
+}

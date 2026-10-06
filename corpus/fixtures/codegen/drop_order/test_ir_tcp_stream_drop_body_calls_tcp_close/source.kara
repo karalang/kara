@@ -1,0 +1,6 @@
+
+fn main() {
+    let l = TcpListener.bind("127.0.0.1:0").unwrap();
+    let s = l.accept().unwrap();
+    println(s.fd);
+}

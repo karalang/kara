@@ -1,0 +1,8 @@
+fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().flat_map(|n: i64| {
+                 let inner: Vec[String] = Vec.new();
+                 inner.iter()
+             });
+             let _s: String = it.next().unwrap();
+         }

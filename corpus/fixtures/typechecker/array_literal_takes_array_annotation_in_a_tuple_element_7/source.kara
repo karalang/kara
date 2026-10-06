@@ -1,0 +1,2 @@
+struct S { a: Array[String, 2], n: i64 }
+fn main() { let s = S { a: [f"a", f"b"], n: 7 }; println(f"{s.n}"); }

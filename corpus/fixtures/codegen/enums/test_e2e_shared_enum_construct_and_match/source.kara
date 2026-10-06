@@ -1,0 +1,12 @@
+
+shared enum Action { Add(i64), Mul(i64) }
+fn apply(a: Action, base: i64) -> i64 {
+    match a {
+        Add(n) => base + n,
+        Mul(n) => base * n,
+    }
+}
+fn main() {
+    let a = Add(5);
+    println(apply(a, 10));
+}

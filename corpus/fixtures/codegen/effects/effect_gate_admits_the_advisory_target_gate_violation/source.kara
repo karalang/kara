@@ -1,0 +1,10 @@
+
+effect resource Console;
+
+unsafe extern "C" {
+    fn puts(s: *const u8) -> i32 with writes(Console);
+}
+
+fn main() with writes(Console) blocks {
+    puts(c"advisory".as_ptr());
+}

@@ -1,0 +1,108 @@
+// LeetCode #8: String to Integer (atoi) — one-pass scan with i32 overflow
+// rails. O(n) time, O(1) extra space (zero-copy `s.bytes()` view; no
+// `Vec[char]` snapshot).
+//
+// The algorithm is three short phases over the bytes:
+//
+//   1. skip ASCII space (' ') prefix
+//   2. consume at most one sign character ('+' or '-')
+//   3. consume the digit run '0'..'9', stopping at the first non-digit
+//
+// LeetCode #8's input alphabet is digits, letters, `' '`, `'+'`, `'-'`,
+// `'.'` — all ASCII, all single-byte under UTF-8. `s.bytes()` returns a
+// `Slice[u8]` over the String's storage with O(1) byte-positional
+// access; that's the right primitive for the algorithm and avoids the
+// O(n) `Vec[char]` snapshot the early version used.
+//
+// The accumulator stays in `i32` end-to-end to honor the LeetCode
+// "environment can only store 32-bit signed integers" constraint — the
+// overflow rails fire *before* the offending `result * 10 + digit`
+// multiply, against `INT_MAX / 10 = 214748364` and the boundary digit 7
+// (the last digit of `INT_MAX = 2_147_483_647`). When the rail fires
+// the function returns the clamped sentinel directly: `INT_MAX` for a
+// positive overflow, `INT_MIN` for a negative one.
+//
+// On the boundary case `result == max_div and digit == 8` (positive
+// overflow by 1, negative underflow exactly to `INT_MIN`), both signs
+// route through the same clamp arm — for `-`, `INT_MIN` is the exact
+// representable value, so clamping is still the correct answer.
+// Returning `sign * result` only after the loop also keeps the
+// multiply in the safe range: `result <= INT_MAX / 10 * 10 + 7 =
+// INT_MAX`, so `-result` lands at `INT_MIN + 1` worst-case and fits
+// in i32 without a separate negative rail.
+
+fn my_atoi(s: ref String) -> i32 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    let space: u8 = b' ';
+    let plus:  u8 = b'+';
+    let minus: u8 = b'-';
+    let zero:  u8 = b'0';
+    let nine:  u8 = b'9';
+
+    let mut i = 0;
+    while i < n and bytes[i] == space {
+        i = i + 1;
+    }
+
+    let mut sign: i32 = 1i32;
+    if i < n and bytes[i] == plus {
+        i = i + 1;
+    } else if i < n and bytes[i] == minus {
+        sign = -1i32;
+        i = i + 1;
+    }
+
+    let int_max: i32 = 2147483647i32;
+    let int_min: i32 = -2147483648i32;
+    let max_div: i32 = int_max / 10i32;
+
+    let mut result: i32 = 0i32;
+    while i < n {
+        let b = bytes[i];
+        if b < zero or b > nine {
+            break;
+        }
+        let digit: i32 = (b as i32) - (zero as i32);
+        if result > max_div or (result == max_div and digit > 7i32) {
+            if sign == 1i32 {
+                return int_max;
+            }
+            return int_min;
+        }
+        result = result * 10i32 + digit;
+        i = i + 1;
+    }
+
+    sign * result
+}
+
+fn report(s: ref String) {
+    println(my_atoi(s));
+}
+
+fn main() {
+    // The LeetCode reference cases, plus the boundary inputs that
+    // exercise both rails. Expected outputs are in trailing comments.
+    report("42");                         // expect: 42
+    report("   -42");                     // expect: -42  (leading spaces)
+    report("4193 with words");            // expect: 4193 (stop at first non-digit)
+    report("words and 987");              // expect: 0    (non-digit prefix → no number)
+    report("-91283472332");               // expect: -2147483648 (underflow clamp)
+    report("91283472332");                // expect: 2147483647  (overflow clamp)
+    report("+1");                         // expect: 1
+    report("");                           // expect: 0    (empty input)
+    report("   ");                        // expect: 0    (only whitespace)
+    report("+-12");                       // expect: 0    (sign then non-digit)
+    report("-+12");                       // expect: 0    (sign then non-digit)
+    report("  0000000000012345678");      // expect: 12345678  (leading zeros)
+    report("2147483647");                 // expect: 2147483647 (INT_MAX exactly)
+    report("-2147483648");                // expect: -2147483648 (INT_MIN exactly)
+    report("2147483648");                 // expect: 2147483647 (one past INT_MAX → clamp)
+    report("-2147483649");                // expect: -2147483648 (one past INT_MIN → clamp)
+    report("  +0 123");                   // expect: 0   (trailing space + digits ignored)
+    report("00000-42a1234");              // expect: 0   (digits then non-digit; stops cleanly)
+    report("  -0012a42");                 // expect: -12 (leading zeros after sign)
+    report("+");                          // expect: 0   (sign with no digits)
+}

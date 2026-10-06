@@ -1,0 +1,7 @@
+
+fn show(x: Result[Option[String], String]) { println(f"{x}"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 { let s = f"payloadpayload{i}"; show(Ok(Some(s))); i = i + 1; }
+    println("done");
+}

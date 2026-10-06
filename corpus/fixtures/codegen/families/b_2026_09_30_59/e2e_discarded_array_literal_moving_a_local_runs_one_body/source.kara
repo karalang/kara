@@ -1,0 +1,37 @@
+struct W1 { v: i64, s: String }
+impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
+struct H1 { v: i64, s: String }
+fn mk(n: i64) -> W1 { return W1 { v: n, s: f"ssssssssssssssssssssssssssssss{n}" } }
+fn mh(n: i64) -> H1 { return H1 { v: n, s: f"hhhhhhhhhhhhhhhhhhhhhhhhhhhhhh{n}" } }
+fn run() {
+    let a = mk(1);
+    let _ = [a];
+    println("s1");
+    let b = mk(2);
+    let _ = Array[b];
+    println("s2");
+    let c = mk(3);
+    [c];
+    println("s3");
+    let d = mk(4);
+    let _ = Array[d, mk(5)];
+    println("s4");
+    let e = mk(6);
+    let f = mk(7);
+    [e, f];
+    println("s5");
+    let g = mk(8);
+    let _ = Vec[g];
+    println("s6");
+    let h = mh(9);
+    let _ = [h];
+    let k = mh(10);
+    Array[k];
+    println("s7");
+}
+fn main() {
+    run();
+    let mut i = 0;
+    while i < 2 { let w = mk(20 + i); let _ = [w]; let x = mk(30 + i); Array[x, mk(40 + i)]; i = i + 1; }
+    println("end")
+}

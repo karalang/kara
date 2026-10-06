@@ -1,0 +1,29 @@
+m/first
+  r
+  dSaaaaaaaa0
+  dSaaaaaaaa1
+m/second
+  r
+  dSbbbbbbbb0
+  dSbbbbbbbb1
+m/read
+  r:kk:cccccccc0
+  dScccccccc0
+  dScccccccc1
+m/three
+  r
+  dSdddddddd0
+  dSdddddddd1
+m/noheap
+  r
+  dN2
+  dN3
+b/str
+  r:gggggggg0
+b/single
+  r
+  dShhhhhhhh0
+  dShhhhhhhh1
+b/local
+  r
+end

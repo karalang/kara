@@ -1,0 +1,18 @@
+
+#[derive(Display)]
+struct Point { x: i64, y: i64 }
+#[derive(Display)]
+struct Inner { v: i64 }
+#[derive(Display)]
+struct Outer { a: Inner, b: i64 }
+fn by_ref(p: ref Point) -> String { p.to_string() }
+fn by_val(p: Point) -> String { p.to_string() }
+fn nested(o: ref Outer) -> String { o.to_string() }
+fn main() {
+    let p: Point = Point { x: 3, y: 4 };
+    println(by_ref(p));
+    let q: Point = Point { x: 5, y: 6 };
+    println(by_val(q));
+    let o: Outer = Outer { a: Inner { v: 7 }, b: 9 };
+    println(nested(o));
+}

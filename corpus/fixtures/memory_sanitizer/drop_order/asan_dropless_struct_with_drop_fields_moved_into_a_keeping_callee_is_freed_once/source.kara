@@ -1,0 +1,30 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, tag: String }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), tag: f"tag-string-longer-than-sso-{n}" }; }
+fn stw(v: mut ref Vec[W], x: W) { v.push(x); }
+fn keepw(x: W) -> W { x }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+struct Bw { ws: Vec[W] }
+impl Bw { fn add(mut ref self, x: W) { self.ws.push(x); } }
+fn main() {
+    let mut v: Vec[W] = Vec.new();
+    let a = mkw(1);
+    stw(mut v, a);
+    let b = mkw(2);
+    gst(mut v, b);
+    println(f"v{v.len()}");
+    let c = mkw(3);
+    let k = keepw(c);
+    println(f"k{k.tag}");
+    let mut bw = Bw { ws: Vec.new() };
+    let d = mkw(4);
+    bw.add(d);
+    let e = mkw(5);
+    if e.r.id > 3 { stw(mut v, e); }
+    let f = mkw(0);
+    if f.r.id > 3 { stw(mut v, f); }
+    println(f"v{v.len()} b{bw.ws.len()}");
+    println("end")
+}

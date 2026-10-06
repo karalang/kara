@@ -1,0 +1,18 @@
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Pos { x: i64, y: i64 }
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Tagged { p: Pos, tag: String }
+
+fn main() {
+    let mut v: Vec[Tagged] = Vec.new();
+    v.push(Tagged { p: Pos { x: 1, y: 0 }, tag: "z" });
+    v.push(Tagged { p: Pos { x: 1, y: 0 }, tag: "a" });
+    v.push(Tagged { p: Pos { x: 0, y: 9 }, tag: "m" });
+    v.sort_by_key(|t| t);
+    for t in v.iter() {
+        println(t.p.x);
+        println(t.p.y);
+        println(t.tag);
+    }
+}

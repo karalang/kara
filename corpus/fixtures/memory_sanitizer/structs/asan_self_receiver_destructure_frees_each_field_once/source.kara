@@ -1,0 +1,31 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct WrapR { inner: HoRes }
+fn eat(x: R) { println(f"  eat{x.id}") }
+impl HoRes {
+    fn s_match(self)  { let HoRes { a, b } = self; println(f"  rd{a.id}")
+                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+    fn s_unused(self) { let HoRes { a, b } = self; println(f"  rd{a.id}") }
+    fn s_call(self)   { let HoRes { a, b } = self;
+                        match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
+}
+impl WrapR {
+    fn p_match(self)  { let HoRes { a, b } = self.inner; println(f"  rd{a.id}")
+                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+    fn p_unused(self) { let HoRes { a, b } = self.inner; println(f"  rd{a.id}") }
+}
+fn main() {
+    println("start")
+    let mut i = 0;
+    while i < 3 {
+        let k = i * 10;
+        HoRes { a: mk(k + 1), b: Result.Ok(mk(k + 101)) }.s_match()
+        HoRes { a: mk(k + 2), b: Result.Ok(mk(k + 102)) }.s_unused()
+        HoRes { a: mk(k + 3), b: Result.Ok(mk(k + 103)) }.s_call()
+        WrapR { inner: HoRes { a: mk(k + 4), b: Result.Ok(mk(k + 104)) } }.p_match()
+        WrapR { inner: HoRes { a: mk(k + 5), b: Result.Ok(mk(k + 105)) } }.p_unused()
+        i = i + 1;
+    }
+}

@@ -1,0 +1,52 @@
+
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+
+fn mkr(i: i64) -> R { return R { id: i, tag: f"b1521-pay-{i}-aaaaaaaaaaaaaaaa" }; }
+
+fn asg(b: E) -> i64 {
+    let mut out: R = R { id: 0, tag: f"b1521-out-aaaaaaaaaaaaaaaa" };
+    match b { E.A(r) => { out = r; } E.B => { } }
+    return out.id;
+}
+fn iflet(b: E) -> i64 {
+    let mut out: R = R { id: 0, tag: f"b1521-out-aaaaaaaaaaaaaaaa" };
+    if let E.A(r) = b { out = r; }
+    return out.id;
+}
+fn rebind(b: E) -> i64 {
+    let mut out: R = R { id: 0, tag: f"b1521-out-aaaaaaaaaaaaaaaa" };
+    match b { E.A(r) => { let m = r; out = m; } E.B => { } }
+    return out.id;
+}
+fn readonly(b: E) -> i64 {
+    match b { E.A(r) => { return r.id; } E.B => { return 0; } }
+}
+fn borrowed(b: ref E) -> i64 {
+    match b { E.A(r) => { return r.id; } E.B => { return 0; } }
+}
+
+fn main() {
+    let a1: i64 = asg(E.A(mkr(8)));
+    println(f"asg:{a1}");
+    let a2: i64 = asg(E.B);
+    println(f"none:{a2}");
+    let a3: i64 = iflet(E.A(mkr(7)));
+    println(f"iflet:{a3}");
+    let a4: i64 = rebind(E.A(mkr(6)));
+    println(f"rebind:{a4}");
+    let a5: i64 = readonly(E.A(mkr(5)));
+    println(f"read:{a5}");
+    let k: E = E.A(mkr(4));
+    let a6: i64 = borrowed(k);
+    println(f"borrow:{a6}");
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 3 {
+        let one: i64 = asg(E.A(mkr(1)));
+        acc = acc + one;
+        i = i + 1;
+    }
+    println(f"loop:{acc}");
+}

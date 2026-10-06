@@ -1,0 +1,61 @@
+loc-t
+  y1
+  d1
+  d2
+loc-f
+  d1
+  d2
+  dies
+  y8
+  d8
+  d9
+tailif-t
+  y4
+  d3
+  d4
+tailif-f
+  d3
+  d4
+  y9
+  d8
+  d9
+inloop-t
+  y5
+  d5
+  d6
+inloop-f
+  d5
+  d6
+  dies
+  y8
+  d8
+  d9
+passed-t
+  y11
+  d11
+  d12
+passed-f
+  c11
+  d11
+  d12
+  dies
+  y8
+  d8
+  d9
+ppass-t
+  y20
+  d20
+  d21
+ppass-f
+  c20
+  dies
+  d20
+  d21
+  y8
+  d8
+  d9
+str-t
+  y30
+str-f
+  y32
+end

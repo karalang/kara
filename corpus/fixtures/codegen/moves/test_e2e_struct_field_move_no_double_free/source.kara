@@ -1,0 +1,15 @@
+
+struct Holder {
+    tag: i64,
+    body: String,
+}
+fn build() -> Holder {
+    let mut s: String = String.new();
+    s.push_str("hello, world");
+    Holder { tag: 7, body: s }
+}
+fn main() {
+    let h: Holder = build();
+    println(h.tag);
+    println(h.body);
+}

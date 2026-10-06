@@ -1,0 +1,20 @@
+
+shared struct T { mut s: String }
+fn app(x: mut ref String, tag: String) { x = x + tag; }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let mut seed: String = String.new();
+        seed.push_str("payload-");
+        seed.push_str((n + i).to_string());
+        seed.push_str("-padding-to-force-heap");
+        let t = T { s: seed };
+        app(mut t.s, "-suffix-also-heap-sized".to_string());
+        if t.s.contains("payload") { acc = acc + 1; }
+        if t.s.ends_with("heap-sized") { acc = acc + 1; }
+        i = i + 1;
+    }
+    println(acc);
+}

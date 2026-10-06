@@ -1,0 +1,17 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct W { p: (Option[Res], i64) }
+fn main() {
+    println("struct-field-tuple:");
+    { let w = W { p: (Option.Some(Res { id: 1, name: f"a{1}" }), 10) }; println(w.p.1); }
+    println("map-value-tuple:");
+    {
+        let mut m: Map[i64, (Option[Res], i64)] = Map.new();
+        m.insert(5, (Option.Some(Res { id: 2, name: f"bb{2}" }), 20));
+        println(m.len());
+    }
+    println("end");
+}

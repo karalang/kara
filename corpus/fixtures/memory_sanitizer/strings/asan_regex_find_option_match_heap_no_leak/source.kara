@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    while i < 40i64 {
+        let mut p = String.from("[0-9]");
+        p.push_str("+");
+        let re = Regex.compile(p).unwrap();
+        match re.find("abc123def456") {
+            Some(m) => { total = total + m.text.len(); }
+            None => {}
+        }
+        i = i + 1;
+    }
+    println(f"{total}");
+}

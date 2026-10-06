@@ -1,0 +1,6 @@
+
+fn sum4(p: i64, q: i64, r: i64, s: i64) -> i64 {
+    let v: Vector[i64, 4] = Vector[i64, 4](p, q, r, s);
+    v.reduce_sum()
+}
+fn main() { println(sum4(1, 2, 3, 4)); }

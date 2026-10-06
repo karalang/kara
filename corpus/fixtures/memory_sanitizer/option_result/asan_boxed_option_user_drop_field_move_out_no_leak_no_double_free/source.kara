@@ -1,0 +1,55 @@
+
+struct C { name: String, zip: i64 }
+struct A { c: Option[C], other: String }
+
+impl Drop for A {
+    fn drop(mut ref self) {
+        let _ = self.other.len();
+    }
+}
+
+// B-2026-09-03-20 — the match arm's tail `{ x.c }` moves a field out of an
+// own-`Drop` `A`; the opt-out keeps the memory behaviour this pins reachable.
+#[allow(partial_move_of_drop_struct)]
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let a = Option.Some(A {
+            c: Option.Some(C { name: "payload-string-" + i.to_string(), zip: i }),
+            other: "sibling-string-" + i.to_string(),
+        });
+        let f = match a {
+            Option.Some(x) => { x.c }
+            Option.None => { Option.None }
+        };
+        match f {
+            Option.Some(cc) => { acc = acc + cc.name.len() + cc.zip; }
+            Option.None => { acc = acc + 1; }
+        }
+        i = i + 1;
+    }
+    let mut j: i64 = 0;
+    while j < 20 {
+        let b = Option.Some(A {
+            c: Option.Some(C { name: "kept-string-" + j.to_string(), zip: j }),
+            other: "kept-sibling-" + j.to_string(),
+        });
+        let n = match b {
+            Option.Some(y) => { y.other.len() }
+            Option.None => { 0 }
+        };
+        acc = acc + n;
+        j = j + 1;
+    }
+    let e: Option[A] = Option.None;
+    let g = match e {
+        Option.Some(z) => { z.c }
+        Option.None => { Option.None }
+    };
+    match g {
+        Option.Some(cc) => { acc = acc + cc.name.len(); }
+        Option.None => { acc = acc + 7; }
+    }
+    println(acc);
+}

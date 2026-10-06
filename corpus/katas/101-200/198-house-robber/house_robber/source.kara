@@ -1,0 +1,48 @@
+// LeetCode 198 — House Robber.
+//
+// Maximum sum of a subset of houses with NO two adjacent chosen (robbing two
+// neighbours trips the alarm). The classic O(1)-space DP: at each house you
+// either skip it (keep the best-so-far `prev`) or rob it (add its value to the
+// best from two houses back, `prev2`). Carry just those two running maxima:
+//   cur = max(prev, prev2 + nums[i])
+// and slide the window forward. The answer is the final `prev`.
+
+fn max_i64(a: i64, b: i64) -> i64 { if a > b { return a; } return b; }
+
+fn rob(nums: Slice[i64]) -> i64 {
+    let mut prev2 = 0; // best up to i-2
+    let mut prev = 0;  // best up to i-1
+    let n = nums.len();
+    let mut i = 0;
+    while i < n {
+        let cur = max_i64(prev, prev2 + nums[i]);
+        prev2 = prev;
+        prev = cur;
+        i = i + 1;
+    }
+    return prev;
+}
+
+fn report(nums: Slice[i64]) {
+    println(rob(nums));
+}
+
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 3, 1];
+    report(a);                          // 4  (1 + 3)
+
+    let b: Array[i64, 5] = [2, 7, 9, 3, 1];
+    report(b);                          // 12 (2 + 9 + 1)
+
+    let c: Array[i64, 1] = [5];
+    report(c);                          // 5
+
+    let d: Array[i64, 0] = [];
+    report(d);                          // 0
+
+    let e: Array[i64, 6] = [2, 1, 1, 2, 1, 1];
+    report(e);                          // 5
+
+    let f: Array[i64, 3] = [100, 1, 100];
+    report(f);                          // 200
+}

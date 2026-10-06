@@ -1,0 +1,20 @@
+
+trait Greeter {
+    fn name(self) -> String;
+    fn greeting(self) -> String { "hi " + self.name() }
+}
+struct Person { id: i64 }
+impl Greeter for Person {
+    fn name(self) -> String { "a sufficiently long greeter name payload" }
+}
+fn describe[G: Greeter](g: G) -> String { g.greeting() }
+fn main() {
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 50i64 {
+        let g = describe(Person { id: i });
+        acc = acc + g.len();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}

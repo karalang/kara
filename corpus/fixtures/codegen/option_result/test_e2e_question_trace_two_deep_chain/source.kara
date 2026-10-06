@@ -1,0 +1,16 @@
+
+fn level_a() -> Result[i64, i64] { Err(3_i64) }
+fn level_b() -> Result[i64, i64] {
+    let _ = level_a()?;
+    Ok(0_i64)
+}
+fn level_c() -> Result[i64, i64] {
+    let _ = level_b()?;
+    Ok(0_i64)
+}
+fn main() {
+    match level_c() {
+        Ok(_) => println(0_i64),
+        Err(e) => println(e),
+    }
+}

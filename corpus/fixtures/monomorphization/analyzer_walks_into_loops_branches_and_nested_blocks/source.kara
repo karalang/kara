@@ -1,0 +1,9 @@
+
+fn identity[T](x: T) -> T { x }
+fn main() {
+    for i in 0..3 {
+        if i > 0 {
+            let _ = identity(i);
+        }
+    }
+}

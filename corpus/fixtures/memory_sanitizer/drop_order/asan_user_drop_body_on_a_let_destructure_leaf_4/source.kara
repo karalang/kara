@@ -1,0 +1,9 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct W { r: R }
+fn main() {
+    let p = (W { r: R { id: 1, name: "payload-dd" } }, 2);
+    let (w, n) = p;
+    println(f"n={w.r.id + n}");
+}

@@ -1,0 +1,5 @@
+cases 1800
+mismatches 0
+  in-place vs copy 0
+  set vs grid      0
+invariant failures 0

@@ -1,0 +1,23 @@
+
+trait Default {
+    fn default() -> Self;
+}
+
+struct Box { value: i64 }
+
+impl Default for Box {
+    fn default() -> Box { Box { value: 100 } }
+}
+
+fn make[T: Default]() -> T {
+    T.default()
+}
+
+fn outer[T: Default]() -> T {
+    make()
+}
+
+fn main() {
+    let b: Box = outer();
+    println(b.value);
+}

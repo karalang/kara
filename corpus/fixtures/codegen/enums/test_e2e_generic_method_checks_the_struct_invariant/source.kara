@@ -1,0 +1,17 @@
+
+struct Holder {
+    items: Vec[i64],
+
+    invariant self.items.len() < 4
+}
+impl Holder {
+    pub fn add[T](mut ref self, x: T) -> i64 where T: Ord {
+        self.items.push(1);
+        self.items.len()
+    }
+}
+fn main() {
+    let mut h = Holder { items: [1, 2] };
+    println(h.add(3));
+    println(h.add(4));
+}

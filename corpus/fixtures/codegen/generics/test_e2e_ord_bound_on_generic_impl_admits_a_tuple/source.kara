@@ -1,0 +1,22 @@
+
+struct W[=T] { v: Vec[T] }
+
+impl[T: Ord] W[T] {
+    fn add(mut ref self, x: T) { self.v.push(x); }
+    fn n(ref self) -> i64 { return self.v.len(); }
+}
+
+fn main() {
+    let mut w: W[(i64, i64)] = W { v: Vec.new() };
+    w.add((1, 2));
+    w.add((3, 4));
+    println(f"{w.n()}");
+
+    let mut x: W[(String, i64)] = W { v: Vec.new() };
+    x.add(("a", 1));
+    println(f"{x.n()}");
+
+    let mut u: W[i64] = W { v: Vec.new() };
+    u.add(7);
+    println(f"{u.n()}");
+}

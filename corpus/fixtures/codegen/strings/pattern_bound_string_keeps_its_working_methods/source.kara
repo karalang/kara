@@ -1,0 +1,12 @@
+
+fn mks(k: i64) -> String { let mut s: String = String.new(); s.push_str(f"pay-{k}"); return s; }
+fn main() {
+    let r: Result[String, i64] = Result.Ok(mks(7));
+    match r {
+        Result.Ok(s) => {
+            println(s.len());
+            println(s.starts_with("pay"));
+        }
+        Result.Err(e) => { println(0); }
+    }
+}

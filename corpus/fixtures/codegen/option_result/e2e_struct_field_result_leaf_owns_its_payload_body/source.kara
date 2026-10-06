@@ -1,0 +1,66 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct W { id: i64, x: String, y: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.x}{self.y}") } }
+fn mkw(n: i64) -> W { return W { id: n, x: f"x{n}", y: f"y{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoErr { a: R, b: Result[String, R] }
+struct SoloRes { b: Result[R, String] }
+struct HoStr { a: R, b: Result[String, String] }
+struct HoW { a: R, b: Result[W, String] }
+fn mkho(n: i64) -> HoRes { return HoRes { a: mk(n), b: Result.Ok(mk(n + 100)) }; }
+fn mkhs(n: i64) -> HoStr { return HoStr { a: mk(n), b: Result.Ok(f"s{n + 100}") }; }
+fn mkhw(n: i64) -> HoW { return HoW { a: mk(n), b: Result.Ok(mkw(n + 100)) }; }
+
+fn loc()    { let h = HoRes { a: mk(1), b: Result.Ok(mk(101)) }; let HoRes { a, b } = h; println(f"  rd{a.id}")
+              match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn iflet()  { let h = HoRes { a: mk(2), b: Result.Ok(mk(102)) }; let HoRes { a, b } = h; println(f"  rd{a.id}")
+              if let Result.Ok(r) = b { println(f"  ok{r.id}") } }
+fn errs()   { let h = HoErr { a: mk(3), b: Result.Err(mk(103)) }; let HoErr { a, b } = h; println(f"  rd{a.id}")
+              match b { Result.Ok(s) => println(f"  ok{s}"), Result.Err(r) => println(f"  er{r.id}") } }
+fn noread() { let h = HoRes { a: mk(4), b: Result.Ok(mk(104)) }; let HoRes { a, b } = h; println(f"  rd{a.id}")
+              match b { Result.Ok(r) => println("  ok"), Result.Err(e) => println(f"  er{e}") } }
+fn solo()   { let h = SoloRes { b: Result.Ok(mk(105)) }; let SoloRes { b } = h;
+              match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn rename() { let h = HoRes { a: mk(6), b: Result.Ok(mk(106)) }; let HoRes { a: aa, b: bb } = h; println(f"  rd{aa.id}")
+              match bb { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn unused() { let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; let HoRes { a, b } = h; println(f"  rd{a.id}") }
+fn fcall()  { let HoRes { a, b } = mkho(8); println(f"  rd{a.id}")
+              match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn flit()   { let HoRes { a, b } = HoRes { a: mk(9), b: Result.Ok(mk(109)) }; println(f"  rd{a.id}")
+              match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn fcallu() { let HoRes { a, b } = mkho(10); println(f"  rd{a.id}") }
+fn fstru()  { let HoStr { a, b } = mkhs(11); println(f"  rd{a.id}") }
+fn fstr()   { let HoStr { a, b } = mkhs(12); println(f"  rd{a.id}")
+              match b { Result.Ok(s) => println(f"  ok{s}"), Result.Err(e) => println(f"  er{e}") } }
+fn wloc()   { let h = HoW { a: mk(13), b: Result.Ok(mkw(113)) }; let HoW { a, b } = h; println(f"  rd{a.id}")
+              match b { Result.Ok(w) => println(f"  ok{w.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn wunused(){ let h = HoW { a: mk(14), b: Result.Ok(mkw(114)) }; let HoW { a, b } = h; println(f"  rd{a.id}") }
+fn wfcall() { let HoW { a, b } = mkhw(15); println(f"  rd{a.id}")
+              match b { Result.Ok(w) => println(f"  ok{w.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn wfcallu(){ let HoW { a, b } = mkhw(16); println(f"  rd{a.id}") }
+fn param()  { take(HoRes { a: mk(17), b: Result.Ok(mk(117)) }) }
+fn take(h: HoRes) { let HoRes { a, b } = h; println(f"  rd{a.id}")
+              match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+
+fn main() {
+  println("loc");     loc()
+  println("iflet");   iflet()
+  println("errs");    errs()
+  println("noread");  noread()
+  println("solo");    solo()
+  println("rename");  rename()
+  println("unused");  unused()
+  println("fcall");   fcall()
+  println("flit");    flit()
+  println("fcallu");  fcallu()
+  println("fstru");   fstru()
+  println("fstr");    fstr()
+  println("wloc");    wloc()
+  println("wunused"); wunused()
+  println("wfcall");  wfcall()
+  println("wfcallu"); wfcallu()
+  println("param");   param()
+  println("done")
+}

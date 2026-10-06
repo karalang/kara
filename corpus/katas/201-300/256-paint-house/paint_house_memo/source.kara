@@ -1,0 +1,108 @@
+// LeetCode 256 — Paint House, top-down with memoisation.
+//
+// The recurrence read the other way: `best(i, c)` is the cheapest way to paint
+// houses i..n-1 given that house i takes colour c. It is `costs[i][c]` plus the
+// cheaper of `best(i+1, c')` over the two other colours, and the base case is
+// one past the end costing nothing.
+//
+// Three independent things make this worth carrying alongside the two bottom-up
+// files. It recurses FORWARD where they iterate backward in the dependency
+// sense, so an off-by-one in either direction shows as a disagreement. Its memo
+// is a flat `Vec[i64]` of `3n` entries with a `seen` companion, which is a
+// different ownership and indexing surface from a `Vec` of triples. And it
+// answers a subtly different question at each step — "given this choice, what
+// does the REST cost" rather than "what is the best way to have ARRIVED here" —
+// so agreeing on the total is a real cross-check of the recurrence, not just of
+// the arithmetic.
+//
+// Memoised, so still O(n) time and O(n) space; the recursion depth is n, which
+// is why the benchmark lane uses the rolling form instead.
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+fn cost_of(costs: Slice[(i64, i64, i64)], i: i64, c: i64) -> i64 {
+    if c == 0 {
+        return costs[i].0;
+    }
+    if c == 1 {
+        return costs[i].1;
+    }
+    return costs[i].2;
+}
+
+fn best(
+    costs: Slice[(i64, i64, i64)],
+    i: i64,
+    c: i64,
+    memo: mut ref Vec[i64],
+    seen: mut ref Vec[bool],
+) -> i64 {
+    let n = costs.len();
+    if i == n {
+        return 0;
+    }
+    let key = i * 3 + c;
+    if seen[key] {
+        return memo[key];
+    }
+    // The two colours that are not `c`, without branching on which they are.
+    let a = (c + 1) % 3;
+    let b = (c + 2) % 3;
+    let sub_a = best(costs, i + 1, a, memo, seen);
+    let sub_b = best(costs, i + 1, b, memo, seen);
+    let total = cost_of(costs, i, c) + min2(sub_a, sub_b);
+    memo[key] = total;
+    seen[key] = true;
+    return total;
+}
+
+fn min_cost(costs: Slice[(i64, i64, i64)]) -> i64 {
+    let n = costs.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut memo: Vec[i64] = Vec.new();
+    let mut seen: Vec[bool] = Vec.new();
+    let mut k = 0;
+    while k < n * 3 {
+        memo.push(0);
+        seen.push(false);
+        k = k + 1;
+    }
+    let r = best(costs, 0, 0, mut memo, mut seen);
+    let b = best(costs, 0, 1, mut memo, mut seen);
+    let g = best(costs, 0, 2, mut memo, mut seen);
+    return min2(r, min2(b, g));
+}
+
+fn report(costs: Slice[(i64, i64, i64)], label: ref String) {
+    println(f"{label} -> {min_cost(costs)}");
+}
+
+fn main() {
+    let a: Array[(i64, i64, i64), 3] = [(17, 2, 17), (16, 16, 5), (14, 3, 19)];
+    report(a, "[[17,2,17],[16,16,5],[14,3,19]]");
+    let b: Array[(i64, i64, i64), 0] = [];
+    report(b, "[]");
+    let c: Array[(i64, i64, i64), 1] = [(7, 6, 2)];
+    report(c, "[[7,6,2]]");
+    let d: Array[(i64, i64, i64), 2] = [(1, 2, 3), (1, 2, 3)];
+    report(d, "[[1,2,3],[1,2,3]]");
+    let e: Array[(i64, i64, i64), 4] = [(5, 5, 5), (5, 5, 5), (5, 5, 5), (5, 5, 5)];
+    report(e, "[[5,5,5] x4]");
+    let f: Array[(i64, i64, i64), 3] = [(1, 100, 100), (1, 100, 100), (1, 100, 100)];
+    report(f, "[[1,100,100] x3]");
+    let g: Array[(i64, i64, i64), 2] = [(0, 0, 0), (0, 0, 0)];
+    report(g, "[[0,0,0] x2]");
+    let h: Array[(i64, i64, i64), 6] = [(1, 9, 9), (9, 1, 9), (1, 9, 9), (9, 1, 9), (1, 9, 9), (9, 1, 9)];
+    report(h, "[alternating x6]");
+    let i: Array[(i64, i64, i64), 3] = [(1000000000, 2000000000, 3000000000),
+                                        (3000000000, 1000000000, 2000000000),
+                                        (2000000000, 3000000000, 1000000000)];
+    report(i, "[[1e9-scale] x3]");
+}

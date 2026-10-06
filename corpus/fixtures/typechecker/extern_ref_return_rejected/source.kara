@@ -1,0 +1,1 @@
+unsafe extern "C" { fn getenv(n: *const u8) -> ref CStr; } fn main() {}

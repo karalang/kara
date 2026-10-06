@@ -1,0 +1,34 @@
+
+enum E { Missing(String) }
+struct Sm { a: Map[String, i64] }
+struct Ss { a: Set[String] }
+struct Sv { a: Vec[String] }
+fn mk_map() -> Result[Sm, E] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("k", 1);
+    Ok(Sm { a: m })
+}
+fn mk_set() -> Result[Ss, E] {
+    let mut s: Set[String] = Set.new();
+    s.insert("k");
+    Ok(Ss { a: s })
+}
+fn mk_vec() -> Result[Sv, E] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("k");
+    Ok(Sv { a: v })
+}
+fn take_map(s: Sm) -> i64 { return s.a.len(); }
+fn take_set(s: Ss) -> i64 { return s.a.len(); }
+fn take_vec(s: Sv) -> i64 { return s.a.len(); }
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 30 {
+        match mk_map() { Ok(s) => { total = total + take_map(s); }, Err(_e) => { total = total + 100; } }
+        match mk_set() { Ok(s) => { total = total + take_set(s); }, Err(_e) => { total = total + 100; } }
+        match mk_vec() { Ok(s) => { total = total + take_vec(s); }, Err(_e) => { total = total + 100; } }
+        i = i + 1;
+    }
+    println(f"{total}");
+}

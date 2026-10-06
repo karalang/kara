@@ -1,0 +1,4 @@
+shared struct Sh { n: i64 }
+enum Et { A(Sh), B }
+impl Et { fn peek(ref self) -> i64 { match self { Et.A(s) => { return s.n; } Et.B => { return 0; } } } }
+fn main() { let a = Et.A(Sh { n: 3 }); println(f"p:{a.peek()}"); }

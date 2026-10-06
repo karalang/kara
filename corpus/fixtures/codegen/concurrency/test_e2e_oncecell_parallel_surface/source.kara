@@ -1,0 +1,8 @@
+
+fn main() {
+    let c: OnceCell[i64] = OnceCell.new();
+    println(c.is_set());
+    match c.set(7) { Ok(_) => println(1), Err(_) => println(0), }
+    match c.get() { Some(v) => println(v), None => println(-1), }
+    println(c.is_set());
+}

@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = [1, 2];
+    for x in v.iter().cycle().take(4).map(|x| x * 10) {
+        println(x);
+    }
+}

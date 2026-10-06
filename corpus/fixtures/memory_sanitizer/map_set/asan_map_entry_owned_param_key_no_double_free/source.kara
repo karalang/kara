@@ -1,0 +1,23 @@
+
+fn bump(m: mut ref Map[String, i64], k: String) {
+    *m.entry(k).or_insert(0_i64) += 1_i64;
+}
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut a1 = String.new();
+    a1.push_str("param-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    bump(mut m, a1);
+    let mut a2 = String.new();
+    a2.push_str("param-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    bump(mut m, a2);
+    let mut churn: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < 16i64 {
+        let mut t = String.new();
+        t.push_str("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+        churn.push(t);
+        i = i + 1;
+    }
+    println(m.get_or("param-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 0_i64));
+}

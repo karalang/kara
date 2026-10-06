@@ -1,0 +1,11 @@
+
+struct Item { v: i64, tag: i64 }
+fn key(s: Item) -> i64 { s.v }
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    v.push(Item { v: 30, tag: 1 });
+    v.push(Item { v: 10, tag: 2 });
+    v.push(Item { v: 20, tag: 3 });
+    v.sort_by_key(key);
+    for s in v.iter() { println(s.v); }
+}

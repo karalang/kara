@@ -1,0 +1,471 @@
+// Differential for LeetCode #339 (Nested List Weight Sum).
+//
+// The five arms, copied verbatim apart from their names, against an oracle
+// that recounts the brackets before each integer from the start of the text,
+// on 300 small pseudo-random lists and the hand cases, plus properties.
+//
+//   P1  the five arms agree (also on the four large lists the arms print)
+//   P2  they equal the oracle
+//   P3  wrapping the list in one more list adds the plain sum of its integers
+//   P4  joining two lists into one adds their weight sums
+//   P5  negating every integer negates the weight sum
+//   P6  tripling every integer triples it
+//   P7  n integers at depth 1 weigh their plain sum, and an integer v nested
+//       k lists deep weighs v * k
+//   P8  inserting an empty list as the first member of every list changes
+//       nothing
+
+enum Nested {
+    Int(i64),
+    List(Vec[Nested]),
+}
+
+// ---- nested_weight_sum.kara ----
+
+fn depth_sum(items: ref Vec[Nested], depth: i64) -> i64 {
+    let mut total = 0;
+    for item in items.iter() {
+        match item {
+            Int(v) => { total += v * depth; }
+            List(inner) => { total += depth_sum(inner, depth + 1); }
+        }
+    }
+    return total;
+}
+
+fn weight_sum_star(items: ref Vec[Nested]) -> i64 {
+    return depth_sum(items, 1);
+}
+
+// ---- nested_weight_sum_bfs.kara ----
+
+fn weight_sum_bfs(items: Vec[Nested]) -> i64 {
+    let mut total = 0;
+    let mut depth = 1;
+    let mut level = items;
+    while not level.is_empty() {
+        let mut next_level: Vec[Nested] = Vec.new();
+        for item in level {
+            match item {
+                Int(v) => { total += v * depth; }
+                List(inner) => {
+                    for x in inner {
+                        next_level.push(x);
+                    }
+                }
+            }
+        }
+        level = next_level;
+        depth += 1;
+    }
+    return total;
+}
+
+// ---- nested_weight_sum_stack.kara ----
+
+fn weight_sum_stack(items: Vec[Nested]) -> i64 {
+    let mut stack: Vec[(Nested, i64)] = Vec.new();
+    for item in items {
+        stack.push((item, 1));
+    }
+    let mut total = 0;
+    while let Some((item, depth)) = stack.pop() {
+        match item {
+            Int(v) => { total += v * depth; }
+            List(inner) => {
+                for x in inner {
+                    stack.push((x, depth + 1));
+                }
+            }
+        }
+    }
+    return total;
+}
+
+// ---- nested_weight_sum_fold.kara ----
+
+impl Nested {
+    fn weight(ref self, depth: i64) -> i64 {
+        match self {
+            Int(v) => v * depth,
+            List(inner) => inner.iter().map(|x| x.weight(depth + 1)).sum(),
+        }
+    }
+}
+
+fn weight_sum_fold(items: ref Vec[Nested]) -> i64 {
+    return items.iter().map(|x| x.weight(1)).sum();
+}
+
+// ---- nested_weight_sum_scan.kara ----
+
+fn weight_sum_scan(text: ref String) -> i64 {
+    let cs: Vec[char] = text.chars().collect();
+    let mut total = 0;
+    let mut depth = 0;
+    let mut pos = 0;
+    while pos < cs.len() {
+        let c = cs[pos];
+        if c == '[' {
+            depth += 1;
+            pos += 1;
+        } else if c == ']' {
+            depth -= 1;
+            pos += 1;
+        } else if c == ',' {
+            pos += 1;
+        } else {
+            let mut sign = 1;
+            if c == '-' {
+                sign = -1;
+                pos += 1;
+            }
+            let mut v = 0;
+            while cs[pos].is_ascii_digit() {
+                v = v * 10 + (cs[pos] as i64 - '0' as i64);
+                pos += 1;
+            }
+            total += sign * v * depth;
+        }
+    }
+    return total;
+}
+
+// ---- input (as in every arm) ----
+
+// Parses the list that starts at text[pos], which must be '['. Leaves pos
+// just past the matching ']'.
+fn parse_list(text: ref Vec[char], pos: mut ref i64) -> Vec[Nested] {
+    let mut items: Vec[Nested] = Vec.new();
+    pos += 1;
+    while text[pos] != ']' {
+        if text[pos] == ',' {
+            pos += 1;
+        } else if text[pos] == '[' {
+            items.push(List(parse_list(text, pos)));
+        } else {
+            let mut sign = 1;
+            if text[pos] == '-' {
+                sign = -1;
+                pos += 1;
+            }
+            let mut v = 0;
+            while text[pos].is_ascii_digit() {
+                v = v * 10 + (text[pos] as i64 - '0' as i64);
+                pos += 1;
+            }
+            items.push(Int(sign * v));
+        }
+    }
+    pos += 1;
+    return items;
+}
+
+fn parse(text: ref String) -> Vec[Nested] {
+    let cs: Vec[char] = text.chars().collect();
+    let mut pos = 0;
+    return parse_list(cs, mut pos);
+}
+
+// A pseudo-random nested list: each list holds 0 to 4 members, and a member
+// is a further list one time in three while the depth is below max_depth,
+// otherwise an integer from -100 to 100. The outer list holds `top` members.
+fn next(state: mut ref i64) -> i64 {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return state >> 8;
+}
+
+fn gen_member(state: mut ref i64, depth: i64, max_depth: i64, out: mut ref String) {
+    if depth < max_depth and next(state) % 3 == 0 {
+        out.push('[');
+        let count = next(state) % 5;
+        for k in 0..count {
+            if k > 0 {
+                out.push(',');
+            }
+            gen_member(state, depth + 1, max_depth, out);
+        }
+        out.push(']');
+    } else {
+        let v = next(state) % 201 - 100;
+        out.push_str(v.to_string());
+    }
+}
+
+fn gen_text(seed: i64, top: i64, max_depth: i64) -> String {
+    let mut state = seed;
+    let mut out = String.new();
+    out.push('[');
+    for k in 0..top {
+        if k > 0 {
+            out.push(',');
+        }
+        gen_member(mut state, 1, max_depth, mut out);
+    }
+    out.push(']');
+    return out;
+}
+
+// ---- oracle and transforms ----
+
+fn is_digit_char(c: char) -> bool {
+    return c >= '0' and c <= '9';
+}
+
+// The depth of the integer starting at text[p] is the number of '[' before
+// it minus the number of ']', recounted from the start every time.
+fn oracle(text: ref String) -> i64 {
+    let cs: Vec[char] = text.chars().collect();
+    let mut total = 0;
+    let mut p = 0;
+    while p < cs.len() {
+        let starts = (cs[p] == '-' or is_digit_char(cs[p])) and (p == 0 or not is_digit_char(cs[p - 1]));
+        if starts {
+            let mut depth = 0;
+            for q in 0..p {
+                if cs[q] == '[' {
+                    depth += 1;
+                } else if cs[q] == ']' {
+                    depth -= 1;
+                }
+            }
+            let mut end = p;
+            if cs[end] == '-' {
+                end += 1;
+            }
+            while end < cs.len() and is_digit_char(cs[end]) {
+                end += 1;
+            }
+            let token: String = cs[p..end].iter().collect();
+            total += i64.parse(token).unwrap() * depth;
+            p = end;
+        } else {
+            p += 1;
+        }
+    }
+    return total;
+}
+
+fn plain_sum(text: ref String) -> i64 {
+    let cs: Vec[char] = text.chars().collect();
+    let mut total = 0;
+    let mut p = 0;
+    while p < cs.len() {
+        if cs[p] == '-' or is_digit_char(cs[p]) {
+            let mut sign = 1;
+            if cs[p] == '-' {
+                sign = -1;
+                p += 1;
+            }
+            let mut v = 0;
+            while is_digit_char(cs[p]) {
+                v = v * 10 + (cs[p] as i64 - '0' as i64);
+                p += 1;
+            }
+            total += sign * v;
+        } else {
+            p += 1;
+        }
+    }
+    return total;
+}
+
+// The text with every integer multiplied by k.
+fn scale_ints(text: ref String, k: i64) -> String {
+    let cs: Vec[char] = text.chars().collect();
+    let mut out = String.new();
+    let mut p = 0;
+    while p < cs.len() {
+        if cs[p] == '-' or is_digit_char(cs[p]) {
+            let mut sign = 1;
+            if cs[p] == '-' {
+                sign = -1;
+                p += 1;
+            }
+            let mut v = 0;
+            while is_digit_char(cs[p]) {
+                v = v * 10 + (cs[p] as i64 - '0' as i64);
+                p += 1;
+            }
+            out.push_str((sign * v * k).to_string());
+        } else {
+            out.push(cs[p]);
+            p += 1;
+        }
+    }
+    return out;
+}
+
+// The text with an empty list inserted as the first member of every list.
+fn pad_empty(text: ref String) -> String {
+    let cs: Vec[char] = text.chars().collect();
+    let mut out = String.new();
+    for i in 0..cs.len() {
+        out.push(cs[i]);
+        if cs[i] == '[' {
+            if cs[i + 1] == ']' {
+                out.push_str("[]");
+            } else {
+                out.push_str("[],");
+            }
+        }
+    }
+    return out;
+}
+
+// The members of a list's text, without its outer brackets.
+fn inner(text: ref String) -> String {
+    let cs: Vec[char] = text.chars().collect();
+    return cs[1..cs.len() - 1].iter().collect();
+}
+
+fn join(a: ref String, b: ref String) -> String {
+    let ia = inner(a);
+    let ib = inner(b);
+    if ia.is_empty() {
+        return b.clone();
+    }
+    if ib.is_empty() {
+        return a.clone();
+    }
+    return f"[{ia},{ib}]";
+}
+
+// All five arms on one text; -1 failures are counted by the caller.
+fn arms(text: ref String) -> Vec[i64] {
+    let mut got: Vec[i64] = Vec.new();
+    let a = parse(text);
+    got.push(weight_sum_star(a));
+    got.push(weight_sum_bfs(parse(text)));
+    got.push(weight_sum_stack(parse(text)));
+    let d = parse(text);
+    got.push(weight_sum_fold(d));
+    got.push(weight_sum_scan(text));
+    return got;
+}
+
+fn agree(got: ref Vec[i64]) -> bool {
+    for g in got.iter() {
+        if g != got[0] {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct Tally {
+    failures: i64,
+    shown: i64,
+}
+
+fn fail(t: mut ref Tally, what: String) {
+    t.failures += 1;
+    if t.shown < 10 {
+        println(f"FAIL {what}");
+        t.shown += 1;
+    }
+}
+
+fn check_text(t: mut ref Tally, text: ref String) -> i64 {
+    let got = arms(text);
+    if not agree(got) {
+        fail(t, f"P1 arms disagree on {text}: {got}");
+    }
+    let want = oracle(text);
+    if got[0] != want {
+        fail(t, f"P2 {text}: arms {got[0]}, oracle {want}");
+    }
+    return got[0];
+}
+
+fn main() {
+    let mut t = Tally { failures: 0, shown: 0 };
+    let hand: Vec[String] = vec![
+        "[[1,1],2,[1,1]]".to_string(),
+        "[1,[4,[6]]]".to_string(),
+        "[]".to_string(),
+        "[[]]".to_string(),
+        "[[],[[]],7]".to_string(),
+        "[-3,[-4,[5,[-6]]]]".to_string(),
+        "[[[[[[[[[[9]]]]]]]]]]".to_string(),
+        "[0,[0,[0]],1000000]".to_string(),
+    ];
+    let mut texts: Vec[String] = Vec.new();
+    for h in hand.iter() {
+        texts.push(h.clone());
+    }
+    for seed in 1..=300 {
+        texts.push(gen_text(seed, seed % 30 + 1, seed % 6 + 1));
+    }
+    let mut checked = 0;
+    let mut total = 0;
+    for text in texts.iter() {
+        let w = check_text(mut t, text);
+        total += w;
+        checked += 1;
+
+        let wrapped = f"[{text}]";
+        let ww = check_text(mut t, wrapped);
+        if ww != w + plain_sum(text) {
+            fail(mut t, f"P3 {text}: wrapped {ww}, expected {w} + {plain_sum(text)}");
+        }
+        let neg = scale_ints(text, -1);
+        if check_text(mut t, neg) != -w {
+            fail(mut t, f"P5 {text}");
+        }
+        let tri = scale_ints(text, 3);
+        if check_text(mut t, tri) != 3 * w {
+            fail(mut t, f"P6 {text}");
+        }
+        let padded = pad_empty(text);
+        if check_text(mut t, padded) != w {
+            fail(mut t, f"P8 {text}");
+        }
+    }
+    for i in 0..texts.len() - 1 {
+        let a = texts[i].clone();
+        let b = texts[i + 1].clone();
+        let joined = join(a, b);
+        let wj = check_text(mut t, joined);
+        if wj != weight_sum_scan(a) + weight_sum_scan(b) {
+            fail(mut t, f"P4 {a} + {b}");
+        }
+    }
+    for n in 0..20 {
+        let mut flat = String.new();
+        flat.push('[');
+        let mut plain = 0;
+        for k in 0..n {
+            if k > 0 {
+                flat.push(',');
+            }
+            let v = k * 7 - 50;
+            flat.push_str(v.to_string());
+            plain += v;
+        }
+        flat.push(']');
+        if check_text(mut t, flat) != plain {
+            fail(mut t, f"P7 flat {flat}");
+        }
+        let mut deep = String.new();
+        for _ in 0..n + 1 {
+            deep.push('[');
+        }
+        deep.push_str("-13");
+        for _ in 0..n + 1 {
+            deep.push(']');
+        }
+        if check_text(mut t, deep) != -13 * (n + 1) {
+            fail(mut t, f"P7 deep {deep}");
+        }
+    }
+    let big: Vec[(i64, i64, i64)] = vec![(1, 10, 4), (7, 1000, 8), (42, 20000, 12), (2026, 50000, 30)];
+    for (seed, top, depth) in big.iter() {
+        let text = gen_text(seed, top, depth);
+        let got = arms(text);
+        if not agree(got) {
+            fail(mut t, f"P1 seed {seed}: {got}");
+        }
+    }
+    println(f"{checked} lists checked (weight sums add up to {total}), {t.failures} failures");
+}

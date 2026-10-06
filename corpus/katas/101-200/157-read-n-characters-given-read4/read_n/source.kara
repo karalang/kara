@@ -1,0 +1,56 @@
+// LeetCode 157 — Read N Characters Given Read4. (LeetCode Premium.)
+//
+// A `read4` primitive returns up to 4 characters at a time from a source
+// (fewer than 4 only at EOF). Implement `read(n)`: pull chunks of ≤4 until n
+// characters are collected or EOF is reached, copying only as many as still
+// needed from the final chunk. The source + cursor live in a `Reader` struct
+// (corpus method-free style); `read4` slices the next ≤4 bytes out of the source.
+
+struct Reader {
+    src: String,
+    mut pos: i64,
+}
+
+fn read4(rd: mut ref Reader) -> String {
+    let n = rd.src.len();
+    let mut chunk: String = "";
+    let mut count = 0;
+    while count < 4 and rd.pos < n {
+        chunk.push_str(rd.src[rd.pos..rd.pos + 1]);
+        rd.pos = rd.pos + 1;
+        count = count + 1;
+    }
+    return chunk;
+}
+
+fn read(rd: mut ref Reader, n: i64) -> String {
+    let mut result: String = "";
+    let mut total = 0;
+    let mut done = false;
+    while total < n and not done {
+        let chunk = read4(rd);
+        let clen = chunk.len();
+        if clen == 0 {
+            done = true;
+        } else {
+            let take = if total + clen <= n { clen } else { n - total };
+            result.push_str(chunk[0..take]);
+            total = total + take;
+        }
+    }
+    return result;
+}
+
+fn run(src: String, n: i64) {
+    let mut rd = Reader { src: src, pos: 0 };
+    let r = read(mut rd, n);
+    println(f"{r.len()} {r}");
+}
+
+fn main() {
+    run("abc", 4);          // 3 abc
+    run("HelloWorld", 5);   // 5 Hello
+    run("HelloWorld", 12);  // 10 HelloWorld
+    run("", 3);             // 0
+    run("read4test", 7);    // 7 read4te
+}

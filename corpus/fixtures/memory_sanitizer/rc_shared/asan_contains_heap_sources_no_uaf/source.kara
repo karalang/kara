@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut names: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < 4 { names.push(f"name:{i}"); i = i + 1; }
+    println(names.contains(f"name:2"));
+    println(names.contains(f"name:9"));
+
+    let mut s: String = "";
+    s.push_str("hello ");
+    s.push_str("world");
+    println(s.contains(f"o w"));
+    println(s.contains(f"zzz"));
+}

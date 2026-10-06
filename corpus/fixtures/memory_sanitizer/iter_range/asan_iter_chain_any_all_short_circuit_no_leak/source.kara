@@ -1,0 +1,8 @@
+
+fn main() {
+    let words: Vec[String] = ["alpha", "beta", "gamma", "delta", "epsilon"];
+    let hit = words.iter().map(|w| f"[{w}]").any(|s| s.len() > 6);
+    let allshort = words.iter().map(|w| f"[{w}]").all(|s| s.len() < 5);
+    if hit { println("hit"); } else { println("miss"); }
+    if allshort { println("all-short"); } else { println("not-all"); }
+}

@@ -1,0 +1,12 @@
+
+struct Box[T] { v: T }
+fn get[T](b: Box[T]) -> T { b.v }
+impl[T] Box[T] { fn take(self) -> T { self.v } }
+fn main() {
+    let a = Box { v: [1, 2, 3] };
+    println(get(a).len());
+    let m = Box { v: [4, 5] };
+    println(m.take().len());
+    let s = Box { v: ["x".to_string(), "y".to_string()] };
+    println(get(s).len());
+}

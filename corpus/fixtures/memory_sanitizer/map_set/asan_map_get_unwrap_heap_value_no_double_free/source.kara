@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut mv: Map[String, Vec[i64]] = Map.new();
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    mv.insert("a", v);
+    let rv = mv.get("a").unwrap();
+    println(rv.len());
+
+    let mut ms: Map[String, String] = Map.new();
+    ms.insert("k", "hello world");
+    let rs = ms.get("k").unwrap();
+    println(rs.len());
+}

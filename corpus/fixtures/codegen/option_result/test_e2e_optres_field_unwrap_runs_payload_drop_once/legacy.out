@@ -1,0 +1,25 @@
+drop p1
+drop r1
+o1
+drop o1
+k1
+drop p2
+drop o2
+r2
+drop r2
+k2
+o3
+drop o3
+drop p3
+drop r3
+k3
+no
+drop p4
+drop r4
+drop o4
+k4
+drop p5
+d5
+drop d5
+k5
+end

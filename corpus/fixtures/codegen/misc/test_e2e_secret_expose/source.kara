@@ -1,0 +1,10 @@
+
+import std.secret.{Secret};
+fn main() {
+    let s = Secret.new(42);
+    let v = s.expose();
+    println(v);
+    let t = Secret.new("hunter2");
+    let w = t.expose();
+    println(w);
+}

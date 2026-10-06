@@ -1,0 +1,13 @@
+
+let mut REGISTRY: Map[String, i64] = Map.new();
+fn put(k: String, v: i64) { REGISTRY.insert(k, v); }
+fn main() {
+    let mut k1 = String.new();
+    k1.push_str("alpha-key-with-long-padding-to-exceed-sso-buffer");
+    put(k1, 1i64);
+    let mut k2 = String.new();
+    k2.push_str("beta-key-with-long-padding-to-exceed-sso-buffer");
+    put(k2, 2i64);
+    println(REGISTRY.get("alpha-key-with-long-padding-to-exceed-sso-buffer").unwrap_or(0i64));
+    println(REGISTRY.len());
+}

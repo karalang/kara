@@ -1,0 +1,16 @@
+
+enum E { V((Vec[i64], i64)) }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v.push(4);
+    let e = V((v, 100));
+    match e {
+        V((xs, n)) => {
+            println(xs.len());
+            println(n);
+        }
+    }
+}

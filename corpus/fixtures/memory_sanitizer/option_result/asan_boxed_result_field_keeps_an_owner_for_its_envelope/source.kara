@@ -1,0 +1,48 @@
+
+struct R2 { s: String, t: String, u: String }
+enum K { A(R2), B }
+struct HolderR { k: Result[K, i64], n: i64 }
+struct HolderE { k: Result[i64, K], n: i64 }
+struct HolderS { k: Result[String, i64], n: i64 }
+struct HolderO { k: Option[K], n: i64 }
+
+fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
+fn eat(x: Result[K, i64]) -> i64 {
+    match x { Result.Ok(K.A(r)) => { return r.s.len(); } Result.Ok(K.B) => { return 0; } Result.Err(e) => { return e; } }
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let a = HolderR { k: Result.Ok(K.A(mkr(i))), n: i };
+        match a.k { Result.Ok(K.A(r)) => { println(f"d:{r.s}"); } Result.Ok(K.B) => {} Result.Err(e) => {} }
+
+        let b = HolderR { k: Result.Ok(K.A(mkr(i))), n: i };
+        match b.k { Result.Ok(kk) => { println("wb"); } Result.Err(e) => {} }
+
+        let c = HolderR { k: Result.Ok(K.A(mkr(i))), n: i };
+        match c.k { Result.Ok(K.A(_)) => { println("vw"); } Result.Ok(K.B) => {} Result.Err(e) => {} }
+
+        let d = HolderR { k: Result.Ok(K.A(mkr(i))), n: i };
+        match d.k { Result.Ok(_) => { println("wc"); } Result.Err(e) => {} }
+
+        let e2 = HolderR { k: Result.Ok(K.A(mkr(i))), n: i };
+        let lm = e2.k;
+        match lm { Result.Ok(K.A(r)) => { println(f"lm:{r.s}"); } Result.Ok(K.B) => {} Result.Err(e) => {} }
+
+        let f2 = HolderR { k: Result.Ok(K.A(mkr(i))), n: i };
+        println(f"am:{eat(f2.k)}");
+
+        let g = HolderE { k: Result.Err(K.A(mkr(i))), n: i };
+        match g.k { Result.Ok(v) => {} Result.Err(K.A(r)) => { println(f"be:{r.s}"); } Result.Err(K.B) => {} }
+
+        let h = HolderS { k: Result.Ok(f"pppppppp{i}"), n: i };
+        match h.k { Result.Ok(s) => { println(f"ub:{s}"); } Result.Err(e) => {} }
+
+        let o = HolderO { k: Option.Some(K.A(mkr(i))), n: i };
+        match o.k { Option.Some(kk) => { println("ow"); } Option.None => {} }
+
+        i = i + 1;
+    }
+    println("end");
+}

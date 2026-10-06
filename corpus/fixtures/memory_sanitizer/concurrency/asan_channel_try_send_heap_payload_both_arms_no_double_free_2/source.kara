@@ -1,0 +1,21 @@
+
+struct Quad { a: i64, b: i64, c: i64, d: i64 }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let (tx, rx) = Channel.bounded(1);
+        let x = Quad { a: i, b: i, c: i, d: i };
+        let r1 = tx.try_send(x);
+        let y = Quad { a: i, b: i, c: i, d: 7 };
+        match tx.try_send(y) {
+            Ok(u) => { total = total + 1; }
+            Err(SendError.Full(v)) => { total = total + v.d; }
+            Err(SendError.Closed(v)) => { total = total + v.a; }
+        }
+        let g = rx.recv();
+        total = total + g.a;
+        i = i + 1;
+    }
+    println(total.to_string());
+}

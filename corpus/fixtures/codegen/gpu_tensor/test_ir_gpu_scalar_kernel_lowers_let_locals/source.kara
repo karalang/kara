@@ -1,0 +1,14 @@
+
+#[gpu]
+fn k(x: f32) -> f32 {
+    let doubled: f32 = x * 2.0;
+    let shifted: f32 = doubled + 1.0;
+    shifted * shifted
+}
+
+fn main() {
+    let mut v: Vec[f32] = Vec.new();
+    v.push(1.0);
+    let out = gpu.dispatch(k, v);
+    println(out[0] as i64);
+}

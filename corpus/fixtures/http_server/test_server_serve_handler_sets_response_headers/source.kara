@@ -1,0 +1,16 @@
+
+            struct Response { status: i64, body: String, headers: Vec[(String, String)] }
+
+            fn handle(req: Request) -> Response {
+                let mut headers: Vec[(String, String)] = Vec.new();
+                headers.push(("X-Custom-Header", "custom-value"));
+                headers.push(("X-Trace-Id", "abc-123"));
+                headers.push(("Content-Type", "text/plain"));
+                Response { status: 200, body: "ok", headers: headers }
+            }
+
+            fn main() {
+                let _r = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        

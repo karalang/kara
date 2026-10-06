@@ -1,0 +1,96 @@
+// Bench workload for LeetCode #895 — Maximum Frequency Stack.
+//
+// Build-once + punch: an LCG drives PUSHES over a small value domain so
+// frequencies climb and several buckets stay live at once, and every third
+// step pops. The small modulus is the point — a wide domain would keep every
+// frequency at 1 and the per-frequency buckets would never be exercised.
+//
+// The sink weights each popped value by its step so a permutation of the same
+// pops cannot collide: this kata's tie-break is "most recent among the most
+// frequent", and an unweighted sum would not notice if it broke.
+
+struct FreqStack {
+    freq: Map[i64, i64],
+    buckets: Map[i64, Vec[i64]],
+    maxfreq: i64,
+}
+
+fn new_freq_stack() -> FreqStack {
+    return FreqStack { freq: Map.new(), buckets: Map.new(), maxfreq: 0 };
+}
+
+impl FreqStack {
+    fn push(mut ref self, x: i64) {
+        let f = self.freq.get_or(x, 0) + 1;
+        self.freq.insert(x, f);
+        if f > self.maxfreq {
+            self.maxfreq = f;
+        }
+        let mut b = self.buckets.get_or(f, Vec.new());
+        b.push(x);
+        self.buckets.insert(f, b);
+    }
+
+    fn pop(mut ref self) -> i64 {
+        let top = self.maxfreq;
+        let mut b = self.buckets.get_or(top, Vec.new());
+        let x = b[b.len() - 1];
+        b.pop();
+        let drained = b.is_empty();
+        self.buckets.insert(top, b);
+        self.freq.insert(x, self.freq.get_or(x, 0) - 1);
+        if drained {
+            self.maxfreq = top - 1;
+        }
+        return x;
+    }
+}
+
+// ONE ROUND, self-contained. Factored out so the accumulation at the call site
+// is a top-level reduction over independent rounds — which is what makes the
+// outer loop an auto-par candidate. Written as an inner loop inside `run`, the
+// `checksum +=` sits inside an `if`/`else` and an inner `while`, so
+// `classify_loop_body` correctly declines it and the loop is not a candidate at
+// all (`karac query concurrency` reports neither a reduction nor a decline).
+//
+// This is better code either way — a round is a unit — but it is the reason
+// this kata HAS a par lane, so it is not incidental.
+fn round(r: i64, steps: i64) -> i64 {
+    let mut st = new_freq_stack();
+    let mut seed = 12345 + r;
+    let mut live = 0;
+    let mut acc = 0;
+    let mut i = 0;
+    while i < steps {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        if i % 3 == 2 and live > 0 {
+            acc = acc + st.pop() * (i % 7 + 1);
+            live = live - 1;
+        } else {
+            st.push(seed % 12);
+            live = live + 1;
+        }
+        i = i + 1;
+    }
+    while live > 0 {
+        acc = acc + st.pop();
+        live = live - 1;
+    }
+    return acc;
+}
+
+// The reduction. NO parallel source: `karac build` recognizes
+// `checksum = checksum + round(...)` over independent iterations and emits a
+// karac_par_reduce dispatch on its own. `KARAC_AUTO_PAR=0` compiles the same
+// text sequentially, which is the seq-lane binary.
+fn run(rounds: i64, steps: i64) -> i64 {
+    let mut checksum = 0;
+    for r in 0..rounds {
+        checksum = checksum + round(r, steps);
+    }
+    return checksum;
+}
+
+fn main() {
+    println(run(120, 3000).to_string());
+}

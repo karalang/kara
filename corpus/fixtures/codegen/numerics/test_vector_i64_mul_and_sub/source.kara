@@ -1,0 +1,9 @@
+
+fn main() {
+    let a: Vector[i64, 4] = Vector[i64, 4](2, 3, 4, 5);
+    let b: Vector[i64, 4] = Vector[i64, 4](10, 10, 10, 10);
+    let prod = a * b;
+    let diff = b - a;
+    println(prod[1]);
+    println(diff[2]);
+}

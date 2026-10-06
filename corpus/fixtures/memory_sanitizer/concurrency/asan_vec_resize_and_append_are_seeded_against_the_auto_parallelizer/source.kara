@@ -1,0 +1,20 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(3);
+    v.resize(5, 9);
+    println(f"grow: len {v.len()} [{v[0]},{v[1]},{v[2]},{v[3]},{v[4]}]");
+    let mut a: Vec[i64] = Vec.new();
+    a.push(10);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(30);
+    a.append(b);
+    println(f"append: {a.len()} {a[0]} {a[1]}");
+    let mut p: Vec[String] = Vec.new();
+    p.push("one");
+    let mut q: Vec[String] = Vec.new();
+    q.push("two");
+    p.append(q);
+    p.resize(4, "pad");
+    println(f"heap: {p.len()} {p[0]} {p[1]} {p[2]} {p[3]}");
+}

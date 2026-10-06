@@ -1,0 +1,152 @@
+// Benchmark workload for LeetCode #324 — the select arm (quickselect the
+// median, then a three-way partition through a virtual index).
+//
+// The sorting arm is not the one timed here: its cost is the standard
+// library's sort, which is a different algorithm in each of the five
+// languages, so timing it would compare five sorts rather than five
+// compilers. The select arm is plain loops and swaps, line for line the same
+// in every mirror.
+//
+// One buffer of LEN values is allocated once. Each of PASSES passes refills
+// it with a fresh input that is known to have an answer (even slots drawn
+// from 0..k, odd slots from k..2k, then a Fisher-Yates shuffle), with k
+// cycling through 2, 3, 50 and 2500: from almost every value repeated, which
+// is the hard case, to almost every value distinct. The refill is two LCG
+// steps per element, a serial dependency chain that cannot vectorize.
+//
+// After each pass the number of wiggle violations (always 0) and a
+// stride-9973 sample of the arrangement are folded into a rolling hash, so
+// the whole arrangement stays observable.
+
+const LEN: i64 = 1000000;
+const PASSES: i64 = 16;
+const STRIDE: i64 = 9973;
+const MODULUS: i64 = 1073741789;
+
+fn median3(x: i64, y: i64, z: i64) -> i64 {
+    if (x <= y and y <= z) or (z <= y and y <= x) {
+        return y;
+    }
+    if (y <= x and x <= z) or (z <= x and x <= y) {
+        return x;
+    }
+    return z;
+}
+
+fn select(a: mut ref Vec[i64], k: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = a.len() - 1;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let pivot = median3(a[lo], a[mid], a[hi]);
+        let mut lt = lo;
+        let mut i = lo;
+        let mut gt = hi;
+        while i <= gt {
+            if a[i] < pivot {
+                a.swap(lt, i);
+                lt += 1;
+                i += 1;
+            } else if a[i] > pivot {
+                a.swap(i, gt);
+                gt -= 1;
+            } else {
+                i += 1;
+            }
+        }
+        if k < lt {
+            hi = lt - 1;
+        } else if k > gt {
+            lo = gt + 1;
+        } else {
+            return pivot;
+        }
+    }
+    return a[k];
+}
+
+fn wiggle_sort(nums: mut ref Vec[i64]) {
+    let n = nums.len();
+    let median = select(nums, n / 2);
+    let m = n | 1;
+    let mut left = 0;
+    let mut i = 0;
+    let mut right = n - 1;
+    while i <= right {
+        let vi = (1 + 2 * i) % m;
+        if nums[vi] > median {
+            nums.swap((1 + 2 * left) % m, vi);
+            left += 1;
+            i += 1;
+        } else if nums[vi] < median {
+            nums.swap(vi, (1 + 2 * right) % m);
+            right -= 1;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// A draw in 0..bound from two LCG steps (one step only reaches 32767).
+fn draw(seed: mut ref i64, bound: i64) -> i64 {
+    let hi = next(seed);
+    let lo = next(seed);
+    return (hi * 32768 + lo) % bound;
+}
+
+fn refill(nums: mut ref Vec[i64], k: i64, seed: mut ref i64) {
+    let n = nums.len();
+    for i in 0..n {
+        if i % 2 == 0 {
+            nums[i] = draw(seed, k);
+        } else {
+            nums[i] = k + draw(seed, k);
+        }
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = draw(seed, i + 1);
+        nums.swap(i, j);
+        i -= 1;
+    }
+}
+
+fn violations(a: ref Vec[i64]) -> i64 {
+    let mut bad = 0;
+    for i in 1..a.len() {
+        if i % 2 == 1 {
+            if a[i] <= a[i - 1] { bad += 1; }
+        } else {
+            if a[i] >= a[i - 1] { bad += 1; }
+        }
+    }
+    return bad;
+}
+
+fn main() {
+    let mut seed = 324;
+    let mut sink = 0;
+    let mut nums: Vec[i64] = Vec.filled(LEN, 0);
+    let mut ks: Vec[i64] = [2, 3, 50, 2500];
+    let mut bad = 0;
+
+    for p in 0..PASSES {
+        refill(mut nums, ks[p % 4], mut seed);
+        wiggle_sort(mut nums);
+        bad = violations(nums);
+        let mut probe = 0;
+        let mut i = 0;
+        while i < LEN {
+            probe = (probe * 31 + nums[i]) % MODULUS;
+            i = i + STRIDE;
+        }
+        sink = (sink * 131 + bad * 7 + probe) % MODULUS;
+    }
+
+    println(f"sink {sink} violations {bad}");
+}

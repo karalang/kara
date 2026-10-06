@@ -1,0 +1,47 @@
+
+#[derive(Hash, Eq, PartialEq)]
+enum Box1[T] { One(T), Nil }
+#[derive(Hash, Eq, PartialEq)]
+enum Pair2[T] { P(T, i64), Nil }
+#[derive(Hash, Eq, PartialEq)]
+struct Big { a: i64, b: i64, s: String }
+#[derive(Hash, Eq, PartialEq)]
+enum H { W(Big), N }
+
+fn mk(n: i64) -> String { return f"v{n}"; }
+
+fn main() {
+    let a: Box1[String] = Box1.One(mk(1));
+    let b: Box1[String] = Box1.One(mk(1));
+    let c: Box1[String] = Box1.One(mk(2));
+    println(f"boxed={a == b}");
+    println(f"boxed-ne={a == c}");
+    println(f"boxed-tag={a == Box1.Nil}");
+
+    let d: Pair2[String] = Pair2.P(mk(3), 7);
+    let e: Pair2[String] = Pair2.P(mk(3), 7);
+    let g: Pair2[String] = Pair2.P(mk(4), 7);
+    let h: Pair2[String] = Pair2.P(mk(3), 8);
+    println(f"boxed2={d == e}");
+    println(f"boxed2-ne-s={d == g}");
+    println(f"boxed2-ne-n={d == h}");
+    println(f"boxed2-tag={d == Pair2.Nil}");
+
+    let i: H = H.W(Big { a: 1, b: 2, s: mk(5) });
+    let j: H = H.W(Big { a: 1, b: 2, s: mk(5) });
+    let k: H = H.W(Big { a: 1, b: 2, s: mk(6) });
+    let l: H = H.W(Big { a: 1, b: 9, s: mk(5) });
+    println(f"wide={i == j}");
+    println(f"wide-ne-s={i == k}");
+    println(f"wide-ne-b={i == l}");
+    println(f"wide-tag={i == H.N}");
+
+    let m: Option[String] = Some(mk(7));
+    let n: Option[String] = Some(mk(7));
+    println(f"opt={m == n}");
+    let q: Option[String] = None;
+    println(f"opt-tag={m == q}");
+    let o: Option[i64] = Some(5);
+    let p: Option[i64] = Some(5);
+    println(f"opt-scalar={o == p}");
+}

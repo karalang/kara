@@ -1,0 +1,108 @@
+// Bench workload for LeetCode 289 — Game of Life.
+//
+// A 256x256 board seeded at 35% density, stepped 60 generations with the ★
+// file's two-bit in-place encoding. The sink is the final population plus a
+// position-weighted hash, so a solver that gets the right COUNT with the wrong
+// LAYOUT still fails.
+//
+// WHY THIS WORKLOAD. Life is a stencil: every cell reads its 8 neighbours, so
+// the inner loop is memory-bound and the arithmetic is trivial. That makes it a
+// fair cross-language comparison — there is no library to hide behind and no
+// allocator to dominate, just bounds-checked 2D indexing in a tight loop, which
+// is exactly the shape Kara's bounds-check elision has to earn its keep on.
+//
+// Density 35% is chosen so the population neither explodes nor dies out over 60
+// generations: a board that goes empty would measure nothing after step ~20.
+
+fn next_rand(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 2147483647;
+}
+
+fn live_neighbours(board: ref Vec[Vec[i64]], r: i64, c: i64, rows: i64, cols: i64) -> i64 {
+    let mut n = 0;
+    let mut dr = -1;
+    while dr <= 1 {
+        let mut dc = -1;
+        while dc <= 1 {
+            if not (dr == 0 and dc == 0) {
+                let rr = r + dr;
+                let cc = c + dc;
+                if rr >= 0 and rr < rows and cc >= 0 and cc < cols {
+                    n = n + (board[rr][cc] & 1);
+                }
+            }
+            dc = dc + 1;
+        }
+        dr = dr + 1;
+    }
+    return n;
+}
+
+fn step(board: mut ref Vec[Vec[i64]], rows: i64, cols: i64) {
+    let mut r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            let n = live_neighbours(board, r, c, rows, cols);
+            let alive = (board[r][c] & 1) == 1;
+            let lives = if alive { n == 2 or n == 3 } else { n == 3 };
+            if lives { board[r][c] = board[r][c] | 2; }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            board[r][c] = board[r][c] >> 1;
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+}
+
+fn main() {
+    let rows = 256;
+    let cols = 256;
+    let gens = 60;
+    let mut seed = 20260820;
+
+    let mut board: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r < rows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < cols {
+            seed = next_rand(seed);
+            if ((seed / 65536) % 100) < 35 { row.push(1); } else { row.push(0); }
+            c = c + 1;
+        }
+        board.push(row);
+        r = r + 1;
+    }
+
+    let mut g = 0;
+    while g < gens {
+        step(mut board, rows, cols);
+        g = g + 1;
+    }
+
+    // Population plus a position-weighted hash: the count alone would not
+    // notice a board that is right in total and wrong in arrangement.
+    let mut pop = 0;
+    let mut hash = 0;
+    r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            if board[r][c] == 1 {
+                pop = pop + 1;
+                hash = (hash * 31 + (r * cols + c)) % 1000000007;
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    println(f"pop {pop} hash {hash}");
+}

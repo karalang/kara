@@ -1,0 +1,21 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let s = "cs-" + "buf";
+        match s.to_cstring() {
+            Ok(cs) => {
+                println(cs.len());
+                let b = cs.as_bytes();
+                println(b[0]);
+            }
+            Err(_) => println("ERR"),
+        }
+        let bad = "x\u{0}y";
+        match bad.to_cstring() {
+            Ok(_) => println("OK?"),
+            Err(_) => println("interior-nul"),
+        }
+        i = i + 1;
+    }
+}

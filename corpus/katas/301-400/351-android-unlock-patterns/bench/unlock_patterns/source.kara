@@ -1,0 +1,63 @@
+// Benchmark workload for LeetCode #351 — the star arm of unlock_patterns.kara.
+//
+// ROUNDS rounds, each counting the patterns for every (m, n) the constraints
+// allow, 1 <= m, n <= 9, m > n included. Every count is folded into the sink
+// together with its round, so no call can be skipped or hoisted.
+
+const ROUNDS: i64 = 48;
+
+fn skip_table() -> Vec[i64] {
+    let mut skip: Vec[i64] = Vec.filled(100, 0);
+    let pairs = [(1, 3, 2), (4, 6, 5), (7, 9, 8), (1, 7, 4), (2, 8, 5), (3, 9, 6), (1, 9, 5), (3, 7, 5)];
+    for (a, b, mid) in pairs {
+        skip[a * 10 + b] = mid;
+        skip[b * 10 + a] = mid;
+    }
+    return skip;
+}
+
+// The patterns that continue from `key`, which is the `len`-th key, counted
+// when their length is in m..=n. The pattern ending at `key` is one of them.
+fn count_from(key: i64, len: i64, m: i64, n: i64, visited: mut ref Vec[bool], skip: ref Vec[i64]) -> i64 {
+    let mut total = 0;
+    if len >= m {
+        total += 1;
+    }
+    if len == n {
+        return total;
+    }
+    visited[key] = true;
+    for next in 1..10 {
+        let mid = skip[key * 10 + next];
+        if not visited[next] and (mid == 0 or visited[mid]) {
+            total += count_from(next, len + 1, m, n, visited, skip);
+        }
+    }
+    visited[key] = false;
+    return total;
+}
+
+fn number_of_patterns(m: i64, n: i64) -> i64 {
+    if m > n {
+        return 0;
+    }
+    let skip = skip_table();
+    let mut visited: Vec[bool] = Vec.filled(10, false);
+    let corner = count_from(1, 1, m, n, mut visited, skip);
+    let edge = count_from(2, 1, m, n, mut visited, skip);
+    let center = count_from(5, 1, m, n, mut visited, skip);
+    return 4 * corner + 4 * edge + center;
+}
+
+fn main() {
+    let mut sink = 0;
+    for round in 0..ROUNDS {
+        for m in 1..10 {
+            for n in 1..10 {
+                let c = number_of_patterns(m, n);
+                sink = (sink * 31 + c + round) % 1000000007;
+            }
+        }
+    }
+    println(f"sink {sink}");
+}

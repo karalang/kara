@@ -1,0 +1,19 @@
+
+struct Box { items: Vec[i64] }
+impl Box {
+    fn push_len(mut ref self, x: i64) -> i64 { self.items.push(x); self.items.len() }
+    fn take(mut ref self) -> Option[i64] { self.items.pop() }
+    fn size(ref self) -> i64 { self.items.len() }
+}
+fn main() {
+    let mut b = Box { items: Vec.new() };
+    // Mutating method calls nested in f-string interpolations — must persist.
+    println(f"{b.push_len(10)}");
+    println(f"{b.push_len(20)}");
+    println(f"size {b.size()}");
+    // Mutating method call as a match scrutinee — pop must persist.
+    match b.take() {
+        Some(v) => println(f"{v} {b.size()}"),
+        None => println("none"),
+    }
+}

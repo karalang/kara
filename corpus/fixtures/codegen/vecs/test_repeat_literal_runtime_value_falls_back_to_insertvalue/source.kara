@@ -1,0 +1,7 @@
+
+fn compute() -> i64 { 7 }
+fn main() {
+    let n = compute();
+    let buf: Array[i64, 4] = [n; 4];
+    let _ = buf[0];
+}

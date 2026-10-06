@@ -1,0 +1,16 @@
+
+fn find_min_strided(nums: Slice[i64]) -> i64 {
+    let n = 65536i64;
+    let mut m = nums[0];
+    for i in 1i64..n {
+        let x = nums[i * 16];
+        if x < m {
+            m = x;
+        }
+    }
+    m
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.filled(1048576i64, 5i64);
+    println(find_min_strided(v.as_slice()));
+}

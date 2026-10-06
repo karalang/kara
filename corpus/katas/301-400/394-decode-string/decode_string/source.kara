@@ -1,0 +1,97 @@
+// LeetCode #394: Decode String — one stack-based byte scan.
+//
+// `k[encoded]` runs, nested: `3[a2[c]]` -> "accaccacc". A single left-to-right
+// pass over the source bytes drives two parallel stacks:
+//
+//   digit  (b'0'..b'9')  -> k = k*10 + (b - b'0')     multi-digit repeat count
+//   '['                  -> push (cur, k), reset cur/k   open a nesting level
+//   ']'                  -> count=num.pop, prev=str.pop; cur = prev + cur*count
+//   letter run           -> cur.push_str(s[i..j])      append the whole run
+//
+// The closest corpus analog to the self-hosted lexer's escape / repeat
+// machinery: a digit-run folded into an integer, a bracket-nesting stack, and
+// a push/concat output storm. Per the lexer string-scan shape, letters are
+// appended as one **zero-copy slice** `s[i..j]` over the maximal letter run —
+// not char-by-char `push` — and the repeat reuses `cur` by borrow.
+
+fn is_letter(b: u8) -> bool {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+    b != b'[' and b != b']' and not (b >= d0 and b <= d9)
+}
+
+fn decode_string(s: ref String) -> String {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    let mut str_stack: Vec[String] = Vec.new();
+    let mut num_stack: Vec[i64] = Vec.new();
+    let mut cur: String = "";
+    let mut k = 0;
+
+    let mut i = 0;
+    while i < n {
+        let b = bytes[i];
+        if b >= d0 and b <= d9 {
+            k = k * 10 + ((b - d0) as i64);
+            i = i + 1;
+        } else if b == b'[' {
+            str_stack.push(cur);
+            num_stack.push(k);
+            cur = "";
+            k = 0;
+            i = i + 1;
+        } else if b == b']' {
+            let count = num_stack.pop().unwrap();
+            let prev = str_stack.pop().unwrap();
+            // cur = prev + cur*count, via String.repeat (single malloc + n×
+            // memcpy). The repeat result is a fresh temp push_str frees.
+            let mut newcur = prev;
+            newcur.push_str(cur.repeat(count));
+            cur = newcur;
+            i = i + 1;
+        } else {
+            // Maximal letter run [i, j) -> one zero-copy slice append.
+            let mut j = i;
+            while j < n and is_letter(bytes[j]) {
+                j = j + 1;
+            }
+            cur.push_str(s[i..j]);
+            i = j;
+        }
+    }
+    cur
+}
+
+fn report(s: ref String) {
+    println(f"\"{s}\" -> \"{decode_string(s)}\"");
+}
+
+fn main() {
+    // LeetCode canonical examples.
+    report("3[a]2[bc]");        // aaabcbc
+    report("3[a2[c]]");         // accaccacc
+    report("2[abc]3[cd]ef");    // abcabccdcdcdef
+    report("abc3[cd]xyz");      // abccdcdcdxyz
+
+    // Single repeat / multi-digit counts.
+    report("1[a]");             // a
+    report("10[a]");            // aaaaaaaaaa
+    report("12[ab]");           // ababababababababababababab
+
+    // Deep nesting.
+    report("2[2[2[a]]]");       // aaaaaaaa
+    report("3[z3[y]]");         // zyyyzyyyzyyy
+    report("2[a3[b]c]");        // abbbcabbbc
+
+    // No brackets / mixed prefix+suffix literals.
+    report("abcdef");           // abcdef
+    report("2[a]bc3[d]");       // aabcddd
+    report("x2[y]z");           // xyyz
+
+    // Adjacent groups and letters between nests.
+    report("2[ab3[cd]]ef");     // abcdcdcdabcdcdcdef
+}

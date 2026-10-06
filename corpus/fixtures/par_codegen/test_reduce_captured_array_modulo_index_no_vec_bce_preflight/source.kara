@@ -1,0 +1,15 @@
+
+fn f(a: i64, b: i64) -> i64 { a * 100i64 + b }
+fn main() {
+    let m: i64 = 4i64;
+    let atab: Array[i64, 4] = [10i64, 20i64, 30i64, 40i64];
+    let btab: Array[i64, 4] = [1i64, 2i64, 3i64, 4i64];
+    let mut total: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        let idx = k % m;
+        total = total + f(atab[idx], btab[idx]);
+        k = k + 1i64;
+    }
+    println(total);
+}

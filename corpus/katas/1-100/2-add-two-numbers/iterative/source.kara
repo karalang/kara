@@ -1,0 +1,127 @@
+// LeetCode #2: Add Two Numbers — iterative O(max(m, n)).
+//
+// Two non-empty linked lists, digits stored in reverse order (least-
+// significant first). Each node holds one digit 0..9. Walk both lists in
+// lockstep, summing digits + carry, and emit a result list in the same
+// reverse-digit form. The final carry can produce one extra leading digit.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    let mut carry: i64 = 0;
+
+    loop {
+        let mut s: i64 = carry;
+        let mut done = true;
+
+        if let Some(n) = a {
+            s = s + n.val;
+            a = n.next;
+            done = false;
+        }
+        if let Some(n) = b {
+            s = s + n.val;
+            b = n.next;
+            done = false;
+        }
+        if done and s == 0 {
+            break;
+        }
+
+        let node = ListNode { val: s % 10, next: None };
+        tail.next = Some(node);
+        tail = node;
+        carry = s / 10;
+    }
+
+    dummy.next
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    // `push_str` mutates in place (amortized O(1) per call); the prior
+    // f-string self-append `s = f"{s}{...}"` re-copied the whole buffer
+    // per node — O(n²) total, the exact shape kata #71 measured and
+    // killed (karac push_str landed 7ef42b9).
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                } else {
+                    s.push_str(", ");
+                }
+                s.push_str(f"{node.val}");
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(a: Slice[i64], b: Slice[i64]) {
+    let l1 = from_array(a);
+    let l2 = from_array(b);
+    let out = add_two_numbers(l1, l2);
+    println(to_string(out));
+}
+
+fn main() {
+    // 342 + 465 = 807
+    let a1: Array[i64, 3] = [2, 4, 3];
+    let b1: Array[i64, 3] = [5, 6, 4];
+    report(a1, b1);
+
+    // 0 + 0 = 0
+    let a2: Array[i64, 1] = [0];
+    let b2: Array[i64, 1] = [0];
+    report(a2, b2);
+
+    // 9999999 + 9999 = 10009998
+    let a3: Array[i64, 7] = [9, 9, 9, 9, 9, 9, 9];
+    let b3: Array[i64, 4] = [9, 9, 9, 9];
+    report(a3, b3);
+
+    // 1 + 99 = 100 — pure carry-propagation case
+    let a4: Array[i64, 1] = [1];
+    let b4: Array[i64, 2] = [9, 9];
+    report(a4, b4);
+
+    // 5 + 5 = 10 — carry produces an extra leading digit
+    let a5: Array[i64, 1] = [5];
+    let b5: Array[i64, 1] = [5];
+    report(a5, b5);
+
+    // 7 + 0 = 7 — single-digit, no carry
+    let a6: Array[i64, 1] = [7];
+    let b6: Array[i64, 1] = [0];
+    report(a6, b6);
+}

@@ -1,0 +1,27 @@
+
+enum E { Tag(String), Num(i64) }
+fn build() -> Vec[E] {
+    let mut v: Vec[E] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        if i % 2 == 0 {
+            v.push(E.Tag("bare_enum_variant_heap_payload_omicron_field".to_string()));
+        } else {
+            v.push(E.Num(i));
+        }
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let items = build();
+    let mut n: i64 = 0;
+    for a in items {
+        let x = a;
+        match x {
+            E.Tag(s) => { n = n + s.len(); }
+            E.Num(k) => { n = n + k; }
+        }
+    }
+    println(n);
+}

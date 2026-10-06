@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_30_67.rs::e2e_params_handed_back_inside_a_container_run_one_body_each"
+dedup_of = ["tests/interpreter/families/b_2026_09_30_67.rs::interp_params_handed_back_inside_a_container_run_one_body_each", "tests/memory_sanitizer/families/b_2026_09_30_67.rs::asan_params_handed_back_inside_a_container_run_one_body_each"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

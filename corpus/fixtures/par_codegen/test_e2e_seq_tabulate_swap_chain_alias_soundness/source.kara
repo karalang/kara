@@ -1,0 +1,24 @@
+
+fn main() {
+    let n: i64 = 64i64;
+    let mut grid: Vec[i64] = Vec.new();
+    let mut i: i64 = 0i64;
+    while i < n {
+        grid.push(i);
+        i = i + 1i64;
+    }
+    let mut s: i64 = 0i64;
+    while s < 10i64 {
+        let mut next: Vec[i64] = Vec.new();
+        let mut c: i64 = 0i64;
+        while c < n {
+            let left = if c == 0i64 { 0i64 } else { grid[c - 1i64] };
+            next.push(grid[c] + left);
+            c = c + 1i64;
+        }
+        grid = next;
+        s = s + 1i64;
+    }
+    println(grid[10i64]);
+    println(grid[63i64]);
+}

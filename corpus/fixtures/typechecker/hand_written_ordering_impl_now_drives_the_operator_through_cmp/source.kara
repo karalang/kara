@@ -1,0 +1,17 @@
+
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(self.cmp(other)) } }
+impl Ord for Item {
+    fn cmp(ref self, other: ref Item) -> Ordering {
+        if self.id < other.id { return Ordering.Less; }
+        if self.id > other.id { return Ordering.Greater; }
+        Ordering.Equal
+    }
+}
+fn main() {
+    let a = Item { id: 1 };
+    let b = Item { id: 2 };
+    println(f"{a < b}");
+}

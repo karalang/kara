@@ -1,0 +1,17 @@
+
+#[derive(Message)]
+struct M { d: f64, f: f32 }
+
+fn main() {
+    let m = M { d: 1.25, f: 0.5 };
+    let mut r = ProtoReader.new(m.encode());
+    let (f1, w1) = r.read_tag();
+    let _ = r.read_fixed64();
+    let (f2, w2) = r.read_tag();
+    let _ = r.read_fixed32();
+    println(f1);
+    println(w1);
+    println(f2);
+    println(w2);
+    println(r.at_end());
+}

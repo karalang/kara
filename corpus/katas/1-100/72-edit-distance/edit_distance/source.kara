@@ -1,0 +1,104 @@
+// LeetCode #72: Edit Distance — full 2-D DP table (★), O(m·n) time and space.
+//
+// The minimum number of single-character edits (insert, delete, replace) that
+// turn `a` into `b` — the Levenshtein distance. Let `dp[i][j]` be the edit
+// distance between the first `i` characters of `a` and the first `j` of `b`. The
+// recurrence looks at the last character of each prefix:
+//
+//   a[i-1] == b[j-1]  ->  dp[i][j] = dp[i-1][j-1]           (free match, no edit)
+//   a[i-1] != b[j-1]  ->  dp[i][j] = 1 + min(
+//                             dp[i-1][j-1],   // replace a[i-1] with b[j-1]
+//                             dp[i-1][j],     // delete a[i-1]
+//                             dp[i][j-1])     // insert b[j-1]
+//
+// with the borders forced: `dp[i][0] = i` (delete all of a's prefix) and
+// `dp[0][j] = j` (insert all of b's prefix). The answer is `dp[m][n]`.
+//
+// This is the two-string cousin of the grid DP in katas
+// [#62](../62-unique-paths/)–[#64](../64-minimum-path-sum/): a 2-D table filled
+// in a fixed scan order, each cell a `min` (here over THREE in-neighbours, not
+// two) of already-computed cells. The min-of-three is where an actual choice is
+// made — replace vs delete vs insert — so, like kata [#64](../64-minimum-path-sum/)
+// and unlike the pure-count katas, the recurrence is genuinely an optimisation.
+//
+// The rolling-row form ([`edit_distance_rolling.kara`](edit_distance_rolling.kara))
+// collapses this to O(n) space; the full table is kept here as the textbook form
+// and an independent cross-check. Inputs are ASCII, so `String.bytes()` indices
+// are character positions; distances are ≤ max(m, n) ≤ 500, tiny in i64.
+
+fn edit_distance(a: ref String, b: ref String) -> i64 {
+    let ab = a.bytes();
+    let bb = b.bytes();
+    let m = a.len();
+    let n = b.len();
+
+    // Build the (m+1)×(n+1) table with the borders seeded: row 0 is 0..n,
+    // column 0 is 0..m, interior zeroed for now.
+    let mut dp: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i <= m {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j <= n {
+            if i == 0 {
+                row.push(j);
+            } else if j == 0 {
+                row.push(i);
+            } else {
+                row.push(0);
+            }
+            j = j + 1;
+        }
+        dp.push(row);
+        i = i + 1;
+    }
+
+    // Fill the interior in row-major order; every cell it reads is already final.
+    let mut r = 1;
+    while r <= m {
+        let mut c = 1;
+        while c <= n {
+            if ab[r - 1] == bb[c - 1] {
+                dp[r][c] = dp[r - 1][c - 1];        // characters match: free
+            } else {
+                let diag = dp[r - 1][c - 1];        // replace
+                let up = dp[r - 1][c];                 // delete from a
+                let left = dp[r][c - 1];               // insert into a
+                dp[r][c] = 1 + min(diag, min(up, left));
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+
+    dp[m][n]
+}
+
+// ---- test harness (shared verbatim by both solvers + the Python mirror) --------
+
+fn report(a: String, b: String, s: mut ref String) {
+    let d = edit_distance(a, b);
+    println(f"edit(\"{a}\",\"{b}\") = {d}");
+    s.push(' ');
+    s.push_str(f"{d}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report("horse", "ros", mut s);              // 3  — LeetCode example 1
+    report("intention", "execution", mut s);    // 5  — LeetCode example 2
+    report("", "", mut s);                      // 0  — both empty
+    report("", "abc", mut s);                   // 3  — all inserts
+    report("abc", "", mut s);                   // 3  — all deletes
+    report("abc", "abc", mut s);                // 0  — identical
+    report("a", "b", mut s);                    // 1  — single replace
+    report("kitten", "sitting", mut s);         // 3  — the classic
+    report("sunday", "saturday", mut s);        // 3
+    report("plasma", "altruism", mut s);        // 6
+    report("abcdef", "azced", mut s);           // 3
+    report("distance", "instance", mut s);      // 2
+    report("x", "", mut s);                     // 1  — single delete
+
+    println(s);
+}

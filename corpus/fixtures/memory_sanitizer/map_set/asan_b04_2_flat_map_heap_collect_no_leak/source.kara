@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let xs: Vec[Vec[String]] = Vec[
+            Vec["flat-map-payload-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
+                "flat-map-payload-bravo-bbbbbbbbbbbbbbbbbbbb".to_string()],
+            Vec["flat-map-payload-charlie-cccccccccccccccccc".to_string()]
+        ];
+        let r: Vec[String] = xs.iter().flat_map(|v| v.iter()).collect();
+        let r2: String = r[2i64].clone();
+        println(f"{r.len()} {xs.len()} {r2}");
+        round = round + 1i64;
+    }
+}

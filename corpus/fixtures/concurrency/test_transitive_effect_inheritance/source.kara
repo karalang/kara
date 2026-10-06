@@ -1,0 +1,10 @@
+
+        effect resource Db;
+        fn helper() writes(Db) { }
+        fn wrapper() { helper(); }
+        fn reader() reads(Db) { }
+        fn main() {
+            wrapper();
+            reader();
+        }
+        

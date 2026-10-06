@@ -1,0 +1,119 @@
+// Benchmark workload for LeetCode #138 — Copy List with Random Pointer.
+//
+// Build-once + punch: one big list of N nodes (a linear `next` chain plus a
+// `random` edge per node targeting any node or null) is generated once with a
+// deterministic 32-bit LCG (overflow-safe in i64; values from the HIGH bits to
+// dodge the LCG's short-period low bits). The list is deep-copied K times;
+// before each copy one node's `random` target is repointed (the punch) so the
+// structure — and its checksum — changes every pass and the optimizer cannot
+// hoist. `random` is a `weak Node` (reads as `Option[Node]`, stored by assigning
+// a strong handle), so the cyclic-through-random graph is reclaimed cleanly.
+// Sink = running total of a checksum over each copy's (val, next-id, random-id).
+//
+// Natural form: deep_copy allocates a fresh Vec[Node] per call (exactly as the
+// kata does) — no loop-invariant shared scratch is threaded through helpers.
+
+shared struct Node {
+    val: i64,
+    id: i64,
+    mut next: Option[Node],
+    mut random: weak Node,
+}
+
+fn build(vals: ref Vec[i64], rnd: ref Vec[i64]) -> Vec[Node] {
+    let n = vals.len();
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        nodes.push(Node { val: vals[i], id: i, next: None, random: None });
+        i = i + 1;
+    }
+    i = 0;
+    while i < n {
+        if i + 1 < n {
+            nodes[i].next = Some(nodes[i + 1]);
+        }
+        if rnd[i] >= 0 {
+            nodes[i].random = nodes[rnd[i]];
+        }
+        i = i + 1;
+    }
+    return nodes;
+}
+
+fn deep_copy(orig: ref Vec[Node]) -> Vec[Node] {
+    let n = orig.len();
+    let mut copies: Vec[Node] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        copies.push(Node { val: orig[i].val, id: orig[i].id, next: None, random: None });
+        i = i + 1;
+    }
+    i = 0;
+    while i < n {
+        if i + 1 < n {
+            copies[i].next = Some(copies[i + 1]);
+        }
+        match orig[i].random {
+            Some(r) => { copies[i].random = copies[r.id]; }
+            None => {}
+        }
+        i = i + 1;
+    }
+    return copies;
+}
+
+fn checksum(copies: ref Vec[Node]) -> i64 {
+    let n = copies.len();
+    let mut s = 0;
+    let mut i = 0;
+    while i < n {
+        let next_id = match copies[i].next {
+            Some(m) => m.id,
+            None => 0 - 1,
+        };
+        let rand_id = match copies[i].random {
+            Some(r) => r.id,
+            None => 0 - 1,
+        };
+        s = s + copies[i].val + next_id * 7 + rand_id * 13;
+        i = i + 1;
+    }
+    return s;
+}
+
+fn main() {
+    let n = 3000;
+    let k = 4000;
+
+    let mut vals: Vec[i64] = Vec.new();
+    let mut rnd: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        vals.push((state >> 16) % 1000);
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let r = state >> 16;
+        if r % 4 == 0 {
+            rnd.push(0 - 1);
+        } else {
+            rnd.push(r % n);
+        }
+        i = i + 1;
+    }
+
+    let orig: Vec[Node] = build(vals, rnd);
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < k {
+        let ii = p % n;
+        let target = (p * 37 + 11) % n;
+        orig[ii].random = orig[target];
+        let copies: Vec[Node] = deep_copy(orig);
+        sink = sink + checksum(copies);
+        p = p + 1;
+    }
+    println(sink);
+}

@@ -1,0 +1,74 @@
+// LeetCode 276 — enumerate every painting and count the legal ones.
+//
+// O(k^n) — hopeless past a dozen posts, and that is fine. It exists because it
+// is the DEFINITION rather than a consequence of it: no recurrence, no states,
+// no base cases to seed. It walks all `k^n` assignments and rejects the ones
+// with three equal in a row, which is exactly what the problem says.
+//
+// WHY THAT MATTERS MORE THAN ITS COST. Both other solvers are the same
+// derivation at different stages — the two-state form and the same recurrence
+// with a variable eliminated. They share the `total[2] = k * k` fact and the
+// "start at 3" convention, so a misunderstanding of the RULE (rather than an
+// off-by-one in the loop) would be invisible to a comparison between them: they
+// would agree, confidently, on the wrong count. 272 measured that exact failure
+// and 275 showed a definitional check catching what three agreeing solvers
+// could not.
+//
+// This is that check, and it is a solver rather than a validator because the
+// answer here is a single number: there is nothing to validate the SHAPE of,
+// only a count to recompute a different way.
+//
+// THE ODOMETER carries the colours as digits base `k` and increments with carry
+// — the same shape as 275's combinations-with-repetition enumerator, minus the
+// non-decreasing constraint, since here every assignment is a distinct painting.
+
+fn num_ways(n: i64, k: i64) -> i64 {
+    if n == 0 { return 0; }
+    let mut colours: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < n {
+        colours.push(0);
+        z = z + 1;
+    }
+    let mut count = 0;
+    let mut more = true;
+    while more {
+        let mut ok = true;
+        let mut i = 2;
+        while i < n {
+            if colours[i] == colours[i - 1] and colours[i - 1] == colours[i - 2] {
+                ok = false;
+            }
+            i = i + 1;
+        }
+        if ok { count = count + 1; }
+
+        // odometer: rightmost digit below k-1 gets bumped, everything right of
+        // it rolls to zero
+        let mut p = n - 1;
+        while p >= 0 and colours[p] == k - 1 {
+            colours[p] = 0;
+            p = p - 1;
+        }
+        if p < 0 {
+            more = false;
+        } else {
+            colours[p] = colours[p] + 1;
+        }
+    }
+    return count;
+}
+
+fn main() {
+    let cases: Vec[Vec[i64]] = [
+        [1, 1], [1, 5], [2, 2], [3, 2], [7, 2],
+        [2, 4], [3, 4], [4, 3], [10, 3], [20, 2],
+    ];
+    let mut i = 0;
+    while i < cases.len() {
+        let n = cases[i][0];
+        let k = cases[i][1];
+        println(f"n={n} k={k} -> {num_ways(n, k)}");
+        i = i + 1;
+    }
+}

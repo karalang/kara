@@ -1,0 +1,103 @@
+// LeetCode #35: Search Insert Position — binary lifting (exponential strides).
+//
+// A third factoring of the same answer (first index i with nums[i] >= target),
+// built BOTTOM-UP from power-of-two strides instead of halving a window. This is
+// the "partition point by binary lifting" trick: maintain `pos`, the largest index
+// known to satisfy nums[pos] < target (start at -1, before the array), then try to
+// extend it by ever-smaller powers of two.
+//
+//   - step = the largest power of two <= len. Halve it each iteration down to 1.
+//   - At each step, if pos + step is in range AND nums[pos + step] < target, the
+//     whole prefix up to pos + step is still too small, so jump: pos += step.
+//     Otherwise the stride overshoots; keep pos and try the smaller stride.
+//   - After all strides, pos is the last index with nums[pos] < target, so pos + 1
+//     is the first index >= target — the found-or-insert position.
+//
+// Why bother, when the two window-halving styles are simpler: the loop here runs a
+// FIXED number of iterations (ceil(log2(len+1))) regardless of the data, and the
+// per-step test is a single comparison feeding a predicated add. There is no
+// `lo`/`hi` convergence whose trip count depends on where the target sits — every
+// query of a given array length executes the identical instruction trace, only the
+// taken/not-taken bit of each `pos += step` varies. That regularity is what makes
+// the form interesting to a branch predictor and to a vectorizing/loop-unrolling
+// backend, and it is the standard way competitive-programming `partition_point` is
+// written. Same O(log n); a different shape of the same logarithm.
+//
+// Like the ★ file this never tests equality — distinct values mean the first index
+// >= target IS the answer whether or not the target is present.
+
+// Largest power of two that is <= n (and >= 1 for n >= 1); returns 1 for n == 0
+// so the single trial below is harmlessly range-checked away.
+fn highest_pow2_leq(n: i64) -> i64 {
+    let mut p = 1;
+    while p * 2 <= n {
+        p = p * 2;
+    }
+    p
+}
+
+fn search_insert(nums: Slice[i64], len: i64, target: i64) -> i64 {
+    let mut pos = -1;                     // largest index with nums[pos] < target
+    let mut step = highest_pow2_leq(len);
+    while step >= 1 {
+        let next = pos + step;
+        if next < len and nums[next] < target {
+            pos = next;                      // prefix through `next` is still too small
+        }
+        step = step / 2;
+    }
+    pos + 1                               // first index >= target = insert position
+}
+
+fn fmt(nums: Slice[i64], len: i64) -> String {
+    let mut s: String = "[";
+    for i in 0..len {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(nums: Slice[i64], len: i64, target: i64) {
+    let idx = search_insert(nums, len, target);
+    println(f"{fmt(nums, len)} target={target} -> {idx}");
+}
+
+fn main() {
+    let a1: Array[i64, 4] = [1, 3, 5, 6];
+    report(a1, 4, 5);                // 2
+    report(a1, 4, 2);                // 1
+    report(a1, 4, 7);                // 4
+    report(a1, 4, 0);                // 0
+
+    let a2: Array[i64, 0] = [];
+    report(a2, 0, 5);                // 0
+
+    let a3: Array[i64, 1] = [2];
+    report(a3, 1, 1);                // 0
+    report(a3, 1, 2);                // 0
+    report(a3, 1, 3);                // 1
+
+    let a4: Array[i64, 5] = [1, 3, 5, 7, 9];
+    report(a4, 5, 1);                // 0
+    report(a4, 5, 3);                // 1
+    report(a4, 5, 5);                // 2
+    report(a4, 5, 7);                // 3
+    report(a4, 5, 9);                // 4
+    report(a4, 5, 0);                // 0
+    report(a4, 5, 2);                // 1
+    report(a4, 5, 4);                // 2
+    report(a4, 5, 6);                // 3
+    report(a4, 5, 8);                // 4
+    report(a4, 5, 10);               // 5
+
+    let a5: Array[i64, 6] = [-9, -4, -1, 0, 3, 8];
+    report(a5, 6, -9);               // 0
+    report(a5, 6, -5);               // 1
+    report(a5, 6, 0);                // 3
+    report(a5, 6, 8);                // 5
+    report(a5, 6, 100);              // 6
+}

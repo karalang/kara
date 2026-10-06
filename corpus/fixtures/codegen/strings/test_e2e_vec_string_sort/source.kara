@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("banana");
+    v.push("apple");
+    v.push("cherry");
+    v.sort();
+    for s in v {
+        println(s);
+    }
+}

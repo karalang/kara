@@ -1,0 +1,100 @@
+// LeetCode #95: Unique Binary Search Trees II — recursive divide & conquer (★).
+//
+// Given n, return every structurally unique BST that stores exactly the values 1..n.
+// The count is the nth Catalan number (1, 2, 5, 14, 42, 132, 429, 1430 for n = 1..8).
+//
+// The recursion is the classic divide & conquer: to build every BST over the value
+// range [lo, hi], pick each value `i` in that range as the root. Everything smaller
+// (`lo..i-1`) must form its left subtree and everything larger (`i+1..hi`) its right —
+// so recursively generate ALL left subtrees and ALL right subtrees, then take the full
+// cross product, one root per (left, right) pair. The base case `lo > hi` is the empty
+// range, which contributes exactly one subtree: `None`.
+//
+//   build_all(lo, hi):
+//       if lo > hi: return [None]
+//       for i in lo..hi:
+//           for l in build_all(lo, i-1):
+//               for r in build_all(i+1, hi):
+//                   emit TreeNode(i, l, r)
+//
+// Subtrees are `shared struct TreeNode` (RC) handles, so the SAME left/right subtree
+// instance is shared across every root that pairs with it — the standard structural
+// sharing this problem is famous for, expressed naturally because RC makes the aliasing
+// safe. Node type mirrors kata [#94](../94-binary-tree-inorder-traversal/) /
+// [#98](../98-validate-binary-search-tree/).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn build_all(lo: i64, hi: i64) -> Vec[Option[TreeNode]] {
+    let mut result: Vec[Option[TreeNode]] = Vec.new();
+    if lo > hi {
+        result.push(None);
+        return result;
+    }
+    let mut i = lo;
+    while i <= hi {
+        let lefts = build_all(lo, i - 1);
+        let rights = build_all(i + 1, hi);
+        let mut li = 0;
+        while li < lefts.len() {
+            let mut ri = 0;
+            while ri < rights.len() {
+                result.push(Some(TreeNode { val: i, left: lefts[li], right: rights[ri] }));
+                ri = ri + 1;
+            }
+            li = li + 1;
+        }
+        i = i + 1;
+    }
+    result
+}
+
+// Canonical preorder serialization with '#' null markers — makes each tree a string.
+fn serialize(node: Option[TreeNode], out: mut ref String) {
+    match node {
+        None => {
+            out.push_str("#,");
+        }
+        Some(n) => {
+            out.push_str(f"{n.val},");
+            serialize(n.left, out);
+            serialize(n.right, out);
+        }
+    }
+}
+
+fn report(n: i64, acc: mut ref i64) {
+    let trees = build_all(1, n);
+    let count = trees.len();
+    println(f"n={n}: {count}");
+    // Fold the count and every tree's serialization (in build_all order) into a running hash.
+    let mut a = (acc * 131 + (count + 1)) % 1000000007;
+    let mut t = 0;
+    while t < count {
+        let mut s: String = "";
+        serialize(trees[t].clone(), mut s);
+        let bytes = s.bytes();
+        let mut j = 0;
+        while j < bytes.len() {
+            a = (a * 131 + (bytes[j] as i64)) % 1000000007;
+            j = j + 1;
+        }
+        a = (a * 131 + 7) % 1000000007;      // tree separator
+        t = t + 1;
+    }
+    acc = a;
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut n = 1;
+    while n <= 7 {
+        report(n, mut acc);
+        n = n + 1;
+    }
+    println(f"sink: {acc}");
+}

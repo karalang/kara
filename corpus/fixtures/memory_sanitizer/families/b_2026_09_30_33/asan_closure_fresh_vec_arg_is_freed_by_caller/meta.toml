@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_09_30_33.rs::asan_closure_fresh_vec_arg_is_freed_by_caller"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

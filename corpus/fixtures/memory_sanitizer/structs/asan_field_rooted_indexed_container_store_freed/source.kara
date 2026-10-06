@@ -1,0 +1,15 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Hi { r: Res }
+struct Oi { hs: Vec[Hi] }
+fn main() {
+    println("a");
+    let mut o = Oi { hs: Vec.new() };
+    o.hs.push(Hi { r: Res { id: 9, name: f"z{9}" } });
+    o.hs[0].r = Res { id: 5, name: f"y{5}" };
+    println(f"held {o.hs[0].r.id}");
+    println("end");
+}

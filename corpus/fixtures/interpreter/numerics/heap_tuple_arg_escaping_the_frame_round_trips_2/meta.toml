@@ -1,0 +1,13 @@
+source = "tests/interpreter/numerics.rs::heap_tuple_arg_escaping_the_frame_round_trips"
+dedup_of = ["tests/memory_sanitizer/generics.rs::asan_generic_struct_destructured_from_a_tuple_param_frees_once"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

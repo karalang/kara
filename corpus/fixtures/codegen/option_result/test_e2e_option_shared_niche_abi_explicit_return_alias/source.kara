@@ -1,0 +1,44 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn ret_ident(head: Option[ListNode], flag: i64) -> Option[ListNode] {
+    if flag == 1 {
+        return head;
+    }
+    None
+}
+fn ret_field(head: Option[ListNode]) -> Option[ListNode] {
+    if head.is_some() {
+        let node = head.unwrap();
+        return node.next;
+    }
+    return None;
+}
+fn tail_field(head: Option[ListNode]) -> Option[ListNode] {
+    let node = head.unwrap();
+    node.next
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut total = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        total = total + node.val;
+        cur = node.next;
+    }
+    total
+}
+fn main() {
+    println(sum(ret_ident(make(3), 1)));
+    println(sum(ret_field(make(3))));
+    println(sum(tail_field(make(3))));
+}

@@ -1,0 +1,7 @@
+
+fn f(a: f32) -> f32 {
+    let v: Vector[f32, 4] = Vector[f32, 4](a, a, a, a);
+    let e = v.exp();
+    e[0]
+}
+fn main() { println(f(1.0f32)); }

@@ -1,0 +1,59 @@
+// Benchmark workload — Plus One (LeetCode #66), the reverse-scan carry ★.
+//
+// A single `plus_one` is O(1) amortised (the ★ returns at the first digit below
+// 9), so one call is far too cheap to time. The honest heavy workload is the
+// operation the kata IS: increment a decimal number represented as a digit
+// array, over and over. So this drives a fixed-width digit buffer as a base-10
+// COUNTER, applying the ★'s reverse-scan carry in place K times — a build-once +
+// punch workload (BENCHMARKS.md's preferred shape over a vectorisable refill).
+//
+// In-place, not per-call alloc. The committed kata ★ returns a fresh `Vec[i64]`
+// each call; here the carry is applied to one reused buffer so the benchmark
+// measures the CARRY-SCAN codegen (the heart of Plus One) rather than allocator
+// throughput — the same "punch a fixed buffer" discipline as the array katas.
+// The buffer is W = 9 wide and K < 10⁹, so the counter never overflows 9 digits:
+// the array-widening path (`[9,9,9] -> [1,0,0,0]`) — a once-per-power-of-ten
+// rarity, amortised-negligible for steady-state timing — does not fire here, and
+// the loop stays allocation-free after the one-time buffer build.
+//
+// Sink. A rolling polynomial hash `acc = (acc*131 + digits[k % W]) % 1e9+7`. It
+// folds a ROTATING digit position (`k % W` sweeps all nine cells), so every
+// digit the carry writes is read back over the cycle — the carry propagation
+// cannot be dead-code-eliminated down to "units = k % 10". The hash is a
+// loop-carried dependency (each `acc` needs the previous), so the K-loop is NOT
+// a reduction karac's auto-par pass can split — single-threaded by construction,
+// directly comparable to the native mirrors on a per-core basis. Seq-only kata,
+// same discipline as #55/#62/#63/#64.
+
+fn main() {
+    let total: i64 = 80000000;
+    let modulus: i64 = 1000000007;
+    let width: i64 = 9;
+
+    // The digit buffer, most-significant first, seeded to 0.
+    let mut digits: Vec[i64] = Vec.new();
+    let mut w = 0;
+    while w < width {
+        digits.push(0);
+        w = w + 1;
+    }
+
+    let mut acc: i64 = 0;
+    let mut k: i64 = 0;
+    while k < total {
+        // plus_one, in place: bump the first digit below 9, else 0 and carry left.
+        let mut i = width - 1;
+        while i >= 0 {
+            if digits[i] < 9 {
+                digits[i] = digits[i] + 1;
+                break;                           // carry absorbed — stop the scan
+            }
+            digits[i] = 0;
+            i = i - 1;
+        }
+        acc = (acc * 131 + digits[k % width]) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

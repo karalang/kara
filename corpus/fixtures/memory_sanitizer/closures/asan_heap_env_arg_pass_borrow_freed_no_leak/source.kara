@@ -1,0 +1,21 @@
+
+struct H { f: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn apply(g: Fn(i64) -> i64, x: i64) -> i64 { g(x) }
+fn sumcalls(g: Fn(i64) -> i64, n: i64) -> i64 {
+    let mut s = 0i64;
+    let mut i = 0i64;
+    while i < n { s = s + g(i); i = i + 1i64; }
+    s
+}
+fn build2(g: Fn(i64) -> i64) -> H { let local = make(7i64); let h = H { f: local }; let _u = g(0i64); h }
+fn main() {
+    let f = make(10i64);
+    let g = f;
+    let a = apply(f, 5i64);
+    let b = sumcalls(g, 4i64);
+    let r = build2(f);
+    let c = (r.f)(3i64);
+    let d = f(100i64);
+    println(f"{a + b + c + d}");
+}

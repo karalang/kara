@@ -1,0 +1,13 @@
+
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn make() -> Vec[E] {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 1.0, y: 2.0 });
+    grid.push(E { x: 3.0, y: 4.0 });
+    grid
+}
+fn main() with panics {
+    let g: Vec[E] = make();
+    println(g[0].x + g[1].y);
+}

@@ -1,0 +1,66 @@
+
+struct Wrap[T] { val: T }
+struct Plain { s: String }
+enum Slot[T] { Filled(T), Blank }
+
+fn opeek(s: ref Slot[Option[String]]) -> bool {
+    match s { Filled(x) => match x { Some(y) => y.contains("row"), None => false, }, Blank => false, }
+}
+fn otake(s: Slot[Option[String]]) -> bool {
+    match s { Filled(x) => match x { Some(y) => y.contains("row"), None => false, }, Blank => false, }
+}
+fn wpeek(s: ref Slot[Wrap[String]]) -> bool {
+    match s { Filled(x) => x.val.contains("row"), Blank => false, }
+}
+fn ttake(s: Slot[(String, i64)]) -> bool {
+    match s { Filled(x) => x.0.contains("row"), Blank => false, }
+}
+fn wtake(s: Slot[Wrap[String]]) -> bool {
+    match s { Filled(x) => x.val.contains("row"), Blank => false, }
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0i64;
+    while i < 8i64 {
+        let c1: Slot[(String, i64)] = Filled((f"row-aaaaaaaaaaaa-{i}-{n}", 1i64));
+        println("c1");
+        let c2: Slot[Array[String, 2]] = Filled([f"row-bbbbbbbbbbbb-{i}-{n}", f"row-cccccccccccc-{i}-{n}"]);
+        println("c2");
+        let c3: Slot[Option[String]] = Filled(Some(f"row-dddddddddddd-{i}-{n}"));
+        println("c3");
+        let c4: Slot[Wrap[String]] = Filled(Wrap { val: f"row-eeeeeeeeeeee-{i}-{n}" });
+        println("c4");
+        let c5: Slot[Option[String]] = Filled(Some(f"row-ffffffffffff-{i}-{n}"));
+        println(f"c5:{opeek(c5)}");
+        let c6: Slot[Wrap[String]] = Filled(Wrap { val: f"row-gggggggggggg-{i}-{n}" });
+        println(f"c6:{wpeek(c6)}");
+        let c7: Slot[Plain] = Filled(Plain { s: f"row-hhhhhhhhhhhh-{i}-{n}" });
+        println("c7");
+        let c8: Slot[Option[String]] = Filled(Some(f"row-iiiiiiiiiiii-{i}-{n}"));
+        println(f"c8:{match c8 { Filled(x) => match x { Some(y) => y.contains("row"), None => false, }, Blank => false, }}");
+        let c9: Slot[Option[String]] = Filled(Some(f"row-jjjjjjjjjjjj-{i}-{n}"));
+        println(f"c9:{otake(c9)}");
+        let c10: Slot[(String, i64)] = Filled((f"row-kkkkkkkkkkkk-{i}-{n}", 2i64));
+        println(f"c10:{match c10 { Filled(x) => x.0.contains("row"), Blank => false, }}");
+        let c11: Slot[Wrap[String]] = Filled(Wrap { val: f"row-llllllllllll-{i}-{n}" });
+        println(f"c11:{match c11 { Filled(x) => x.val.contains("row"), Blank => false, }}");
+        let c12: Slot[Array[String, 2]] = Filled([f"row-mmmmmmmmmmmm-{i}-{n}", f"row-nnnnnnnnnnnn-{i}-{n}"]);
+        println(f"c12:{match c12 { Filled(x) => x[0].contains("row"), Blank => false, }}");
+        let c13: Slot[(String, i64)] = Filled((f"row-oooooooooooo-{i}-{n}", 3i64));
+        println(f"c13:{ttake(c13)}");
+        let c14: Slot[Wrap[String]] = Filled(Wrap { val: f"row-pppppppppppp-{i}-{n}" });
+        println(f"c14:{wtake(c14)}");
+        let c15: Slot[(String, i64)] = Filled((f"row-qqqqqqqqqqqq-{i}-{n}", 4i64));
+        let m15: (String, i64) = match c15 { Filled(x) => x, Blank => (f"zzzzzzzzzzzz-{i}", 0i64), };
+        println(f"c15:{m15.0.contains("row")}");
+        let c16: Slot[Wrap[String]] = Filled(Wrap { val: f"row-rrrrrrrrrrrr-{i}-{n}" });
+        let m16: Wrap[String] = match c16 { Filled(x) => x, Blank => Wrap { val: f"zzzzzzzzzzzz-{i}" }, };
+        println(f"c16:{m16.val.contains("row")}");
+        let c17: Slot[Array[String, 2]] = Filled([f"row-ssssssssssss-{i}-{n}", f"row-tttttttttttt-{i}-{n}"]);
+        let m17: Array[String, 2] = match c17 { Filled(x) => x, Blank => [f"zzzzzzzzzzzz-{i}", f"yyyyyyyyyyyy-{i}"], };
+        println(f"c17:{m17[0].contains("row")}");
+        i = i + 1i64;
+    }
+    println("end");
+}

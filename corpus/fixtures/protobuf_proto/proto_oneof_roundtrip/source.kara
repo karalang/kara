@@ -1,0 +1,24 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    message Event {
+        int64 id = 1;
+        oneof body {
+            int64 num = 2;
+            string text = 3;
+            bool flag = 4;
+        }
+    }
+";
+
+fn main() {
+    let e = Event { id: 7, body: EventBody.Text("hi") };
+    let back = Event.decode(e.encode());
+    println(back.id);
+    println(match back.body {
+        EventBody.Num(x) => f"num {x}",
+        EventBody.Text(s) => f"text {s}",
+        EventBody.Flag(b) => f"flag {b}",
+        EventBody.NotSet => "notset",
+    });
+}

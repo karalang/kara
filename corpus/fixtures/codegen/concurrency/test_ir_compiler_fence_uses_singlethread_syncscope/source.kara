@@ -1,0 +1,5 @@
+
+fn barrier() {
+    compiler_fence(MemoryOrdering.SeqCst);
+}
+fn main() { barrier(); }

@@ -1,0 +1,9 @@
+
+struct Doc { lines: Vec[String] }
+struct Editor { doc: Doc }
+fn main() {
+    let mut l: Vec[String] = Vec.new();
+    l.push("a");
+    let e = Editor { doc: Doc { lines: l } };
+    println(e.doc.lines.len());
+}

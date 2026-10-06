@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut k1 = String.new();
+    k1.push_str("ins-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    m.insert(k1, 1_i64);
+    let mut k2 = String.new();
+    k2.push_str("ins-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    m.insert(k2, 2_i64);
+    println(m.len());
+    println(m.get_or("ins-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 0_i64));
+}

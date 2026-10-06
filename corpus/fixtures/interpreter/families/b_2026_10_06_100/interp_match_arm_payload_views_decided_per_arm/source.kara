@@ -1,0 +1,39 @@
+struct D { n: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"d{self.n}") } }
+fn d(n: i64) -> D { D { n: n, s: f"heap-string-longer-than-sso-{n}" } }
+fn eat(x: D) { println(f"eat{x.n}") }
+fn eatv(x: Vec[D]) { println(f"eatv{x.len()}") }
+enum E { One(D), Many(Vec[D]), No }
+enum F { One(D), Many(Vec[D]) }
+impl Drop for F { fn drop(mut ref self) { println("dF") } }
+enum T { Two(D, D), One(D) }
+fn main() {
+    let a = E.Many(vec![d(1), d(2)]);
+    match a { E.One(x) => eat(x), E.Many(xs) => println(f"m{xs.len()}"), E.No => println("no") }
+    println("A");
+    let b = E.One(d(3));
+    match b { E.One(x) => println(f"o{x.n}"), E.Many(xs) => eatv(xs), E.No => println("no") }
+    println("B");
+    let c = F.Many(vec![d(4), d(5)]);
+    match c { F.One(x) => eat(x), F.Many(xs) => println(f"m{xs.len()}") }
+    println("C");
+    let e = F.One(d(6));
+    match e { F.One(x) => eat(x), F.Many(xs) => println(f"m{xs.len()}") }
+    println("D");
+    let t = T.Two(d(7), d(8));
+    match t { T.One(x) => eat(x), T.Two(p, q) => println(f"t{p.n}{q.n}") }
+    println("E");
+    let u = T.Two(d(9), d(10));
+    match u { T.One(x) => println(f"o{x.n}"), T.Two(p, _) => eat(p) }
+    println("F");
+    let g = E.Many(vec![d(11)]);
+    let k = match g { E.One(x) => { eat(x); 0 } E.Many(xs) => xs.len(), E.No => 0 };
+    println(f"k{k}");
+    let mut v: Vec[D] = Vec.new();
+    for i in 0..2 {
+        let h = if i == 0 { E.One(d(12)) } else { E.Many(vec![d(13)]) };
+        match h { E.One(x) => v.push(x), E.Many(xs) => println(f"m{xs.len()}"), E.No => println("no") }
+    }
+    println(f"v{v.len()}");
+    println("end")
+}

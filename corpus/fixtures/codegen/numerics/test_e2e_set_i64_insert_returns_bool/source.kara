@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    let a = s.insert(1_i64);
+    let b = s.insert(1_i64);
+    println(a);
+    println(b);
+}

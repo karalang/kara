@@ -1,0 +1,6 @@
+
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    let msg: String = "bin";
+    let _ = ws.send_binary(msg.bytes());
+}

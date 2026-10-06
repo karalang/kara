@@ -1,0 +1,15 @@
+
+shared struct ShIn { s: String }
+struct ShP { i: ShIn, n: i64 }
+fn mkp(n: i64) -> ShP { return ShP { i: ShIn { s: f"aaaaaaaaaaaaaaaaaaa{n}" }, n: n }; }
+fn f1(a: Option[ShP]) -> i64 { match a { Some(ShP { i, n }) => n, None => 0 } }
+fn f2(a: Option[ShP]) -> i64 { match a { Some(ShP { i: _, n }) => n, None => 0 } }
+fn f3(a: Option[ShP]) -> i64 { if let Some(ShP { i, n }) = a { n } else { 0 } }
+fn f4(a: Option[ShP]) -> i64 { match a { Some(ShP { i, n }) => { let m = n; m } None => 0 } }
+fn main() {
+    println(f"a{f1(Some(mkp(1)))}"); let x1 = Some(mkp(2)); println(f"b{f1(x1)}");
+    println(f"a{f2(Some(mkp(3)))}"); let x2 = Some(mkp(4)); println(f"b{f2(x2)}");
+    println(f"a{f3(Some(mkp(5)))}"); let x3 = Some(mkp(6)); println(f"b{f3(x3)}");
+    println(f"a{f4(Some(mkp(7)))}"); let x4 = Some(mkp(8)); println(f"b{f4(x4)}");
+    println("end")
+}

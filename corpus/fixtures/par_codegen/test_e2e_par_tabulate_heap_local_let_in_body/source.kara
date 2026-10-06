@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    #[par_order_free]
+    for k in 0i64..200i64 {
+        let s = f"x{k}";
+        out.push((s.len() as i64) + k * 10i64);
+    }
+    let mut ok: i64 = 1i64;
+    let mut i: i64 = 0i64;
+    while i < 200i64 {
+        let digits: i64 = if i < 10i64 { 1i64 } else { if i < 100i64 { 2i64 } else { 3i64 } };
+        if out[i] != digits + 1i64 + i * 10i64 { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+}

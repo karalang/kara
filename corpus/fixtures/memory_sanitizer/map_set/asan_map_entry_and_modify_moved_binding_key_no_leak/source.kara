@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("am-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 10_i64);
+    let mut k = String.new();
+    k.push_str("am-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    m.entry(k).and_modify(|v| { *v += 5_i64; });
+    println(m.get_or("am-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 0_i64));
+}

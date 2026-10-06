@@ -1,0 +1,15 @@
+
+#[derive(Eq)]
+enum Color { Red, Green, Blue }
+
+#[derive(Eq)]
+enum Tagged { N(i64), Z }
+
+fn main() {
+    println(f"{Color.Red == Color.Red}");
+    println(f"{Color.Red == Color.Blue}");
+    println(f"{Color.Red != Color.Blue}");
+    println(f"{Tagged.N(7) == Tagged.N(7)}");
+    println(f"{Tagged.N(7) == Tagged.N(9)}");
+    println(f"{Tagged.N(7) == Tagged.Z}");
+}

@@ -1,0 +1,10 @@
+
+shared struct Node { label: String }
+fn agg(ns: ref Vec[Node]) -> i64 { return ns.len(); }
+fn main() {
+    let mut ns: Vec[Node] = Vec.new();
+    ns.push(Node { label: "aaaaaaaaaaaaaaaa" });
+    ns.push(Node { label: "bbbbbbbbbbbbbbbb" });
+    ns.push(Node { label: "cccccccccccccccc" });
+    println(agg(ns.clone()));
+}

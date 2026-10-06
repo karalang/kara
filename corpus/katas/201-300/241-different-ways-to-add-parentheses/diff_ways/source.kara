@@ -1,0 +1,101 @@
+// LeetCode 241 — Different Ways to Add Parentheses.
+//
+// Given an arithmetic expression of non-negative integers and the operators
+// `+`, `-`, `*`, return every value obtainable by parenthesizing it differently.
+//
+// Divide and conquer on each operator: treating operator `k` as the LAST one
+// evaluated splits the expression into an independent left and right part. Recurse
+// to get ALL values each part can take, then combine every left value with every
+// right value under operator `k`. A run of digits with no operator is a single
+// leaf value.
+//
+// The expression is first tokenized (byte scan) into an interleaved
+// `Vec[i64]` — numbers at even positions, operator codes at odd — so the
+// recursion works over token indices. Results are sorted for a deterministic,
+// oracle-comparable line (uses `Vec[i64].sort()`).
+
+// Operator codes (ASCII).
+// '+' = 43, '-' = 45, '*' = 42
+
+fn tokenize(expr: Slice[u8]) -> Vec[i64] {
+    let mut tok: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let n = expr.len();
+    while i < n {
+        let b = expr[i] as i64;
+        if b == 43 or b == 45 or b == 42 {
+            tok.push(b);
+            i = i + 1;
+        } else {
+            // Digit run → one number.
+            let mut v = 0;
+            while i < n {
+                let d = expr[i] as i64;
+                if d >= 48 and d <= 57 {
+                    v = v * 10 + (d - 48);
+                    i = i + 1;
+                } else {
+                    break;
+                }
+            }
+            tok.push(v);
+        }
+    }
+    return tok;
+}
+
+// All achievable values for token span [lo, hi] (both are number positions).
+fn ways(tok: ref Vec[i64], lo: i64, hi: i64) -> Vec[i64] {
+    let mut res: Vec[i64] = Vec.new();
+    if lo == hi {
+        res.push(tok[lo]);
+        return res;
+    }
+    let mut k = lo + 1;                      // operator positions are odd offsets
+    while k < hi {
+        let op = tok[k];
+        let left = ways(tok, lo, k - 1);
+        let right = ways(tok, k + 1, hi);
+        let mut a = 0;
+        while a < left.len() {
+            let mut b = 0;
+            while b < right.len() {
+                let l = left[a];
+                let r = right[b];
+                if op == 43 {
+                    res.push(l + r);
+                } else if op == 45 {
+                    res.push(l - r);
+                } else {
+                    res.push(l * r);
+                }
+                b = b + 1;
+            }
+            a = a + 1;
+        }
+        k = k + 2;
+    }
+    return res;
+}
+
+fn report(expr: ref String) {
+    let tok = tokenize(expr.bytes());
+    let mut vals = ways(tok, 0, tok.len() - 1);
+    vals.sort();
+    let mut line: String = String.new();
+    let mut i = 0;
+    while i < vals.len() {
+        if i > 0 { line.push_str(" "); }
+        line.push_str(f"{vals[i]}");
+        i = i + 1;
+    }
+    println(line);
+}
+
+fn main() {
+    report("2-1-1");                                // 0 2
+    report("2*3-4*5");                              // -34 -14 -10 -10 10
+    report("11");                                   // 11
+    report("1+2*3");                                // 7 9
+    report("2*3*4");                                // 24 24
+}

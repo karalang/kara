@@ -1,0 +1,54 @@
+
+enum G1[T] { Y(T), N }
+enum G2[T] { Y(T) }
+struct S1[T] { v: T }
+
+fn gplain[T](g: G1[T]) -> i64 { return 7; }
+fn g2len[T](g: G2[T]) -> i64 { return 7; }
+fn gints[T](g: G1[T]) -> i64 {
+    match g { G1.Y(v) => { return 1; } G1.N => { return 0; } }
+}
+fn gref[T](g: ref G1[T]) -> i64 { return 7; }
+fn slen[T](s: S1[T]) -> i64 { return 7; }
+fn bare[T](x: T) -> i64 { return 7; }
+fn optlen[T](o: Option[T]) -> i64 { return 7; }
+fn monolen(g: G1[String]) -> i64 { return 7; }
+fn mkg(n: i64) -> G1[String] { return G1.Y(f"b1610-fresh-aaaaaaaaaaaa-{n}"); }
+
+fn main() {
+    let mut t = 0;
+    let mut i = 0;
+    while i < 2 {
+        let a: G2[String] = G2.Y(f"b1610-unit-bbbbbbbbbbbb-{i}");
+        t = t + g2len(a);
+
+        let b: G1[Vec[String]] = G1.Y([f"b1610-vec-cccccccccccc-{i}"]);
+        t = t + gplain(b);
+
+        let c: G1[Array[i64, 2]] = G1.Y([i, i + 1]);
+        t = t + gints(c);
+
+        t = t + gplain(mkg(i));
+
+        let d: G1[String] = G1.Y(f"b1610-loop-dddddddddddd-{i}");
+        t = t + gplain(d);
+
+        let e: G1[String] = G1.Y(f"b1610-ref-eeeeeeeeeeee-{i}");
+        t = t + gref(e);
+
+        let f2: S1[String] = S1 { v: f"b1610-struct-ffffffffffff-{i}" };
+        t = t + slen(f2);
+
+        let g2: String = f"b1610-baret-gggggggggggg-{i}";
+        t = t + bare(g2);
+
+        let h: Option[Array[String, 2]] = Option.Some([f"b1610-opt-hhhhhhhhhhhh-{i}", f"b1610-opt-iiiiiiiiiiii-{i}"]);
+        t = t + optlen(h);
+
+        let j: G1[String] = G1.Y(f"b1610-mono-jjjjjjjjjjjj-{i}");
+        t = t + monolen(j);
+
+        i = i + 1;
+    }
+    println(f"total {t}");
+}

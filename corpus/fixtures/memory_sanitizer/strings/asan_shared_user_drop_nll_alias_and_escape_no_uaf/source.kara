@@ -1,0 +1,14 @@
+
+shared struct Res { tag: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(self.tag); }
+}
+fn main() {
+    let p = Res { tag: 1, name: "a heap string payload well over thirty-six bytes long".to_string() };
+    let q = p;
+    println(p.name.len());
+    let mut keep: Vec[Res] = Vec.new();
+    keep.push(q);
+    println(keep[0].name.len());
+    println(0);
+}

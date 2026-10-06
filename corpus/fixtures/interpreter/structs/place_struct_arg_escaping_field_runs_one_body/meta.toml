@@ -1,0 +1,13 @@
+source = "tests/interpreter/structs.rs::place_struct_arg_escaping_field_runs_one_body"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

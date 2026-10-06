@@ -1,0 +1,18 @@
+
+fn boom(flag: bool) -> Result[i64, i64] {
+    if flag { Ok(1_i64) } else { Err(7_i64) }
+}
+fn use_vec(flag: bool) -> Result[i64, i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    v.push(30_i64);
+    let _ = boom(flag)?;
+    Ok(v.len() as i64)
+}
+fn main() {
+    match use_vec(false) {
+        Ok(n) => println(n),
+        Err(e) => println(e),
+    }
+}

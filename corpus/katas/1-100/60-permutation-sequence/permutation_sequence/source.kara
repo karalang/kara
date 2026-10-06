@@ -1,0 +1,69 @@
+// LeetCode #60: Permutation Sequence — factorial number system, O(n²).
+//
+// The set {1, 2, …, n} has n! permutations; list them in lexicographic order
+// and return the k-th (1-indexed). The trick is to build the answer digit by
+// digit instead of enumerating: the permutations split into n blocks by their
+// FIRST element, each block holding (n-1)! permutations in order. So the first
+// digit is fixed by which block k falls into — `idx = (k-1) / (n-1)!` — and the
+// remainder `(k-1) % (n-1)!` re-poses the exact same problem on the n-1 digits
+// left over. Repeat, shrinking the factorial each step.
+//
+// Work 0-indexed: let kk = k - 1. At position `pos` (0..n) the block size is
+// `(n-1-pos)!`, so `idx = kk / block` selects the digit to emit from the still-
+// available list, and `kk = kk % block` descends into the chosen block. The
+// available digits live in a `Vec[i64]` initialised to 1..n; `digits.remove(idx)`
+// pulls the chosen one out and shifts the tail down, keeping the remaining
+// digits sorted for the next pick — the O(n) shift per step is what makes this
+// O(n²), trivial for the LeetCode bound n ≤ 9 (9! = 362880 < i64).
+//
+// This is the closed-form dual of kata #31's next_permutation: #31 steps ONE
+// permutation forward in place; here we jump straight to the k-th without
+// walking the k-1 in between (that walk is the alternate solver,
+// permutation_sequence_nextperm.kara).
+
+fn get_permutation(n: i64, k: i64) -> String {
+    // factorials: fact[i] = i!  for i in 0..=n. fact[n-1-pos] is the block size.
+    let mut fact: Vec[i64] = Vec.new();
+    fact.push(1);                       // 0! = 1
+    let mut i = 1;
+    while i <= n {
+        fact.push(fact[i - 1] * i);
+        i = i + 1;
+    }
+
+    // Available digits, sorted ascending: 1, 2, …, n.
+    let mut digits: Vec[i64] = Vec.new();
+    let mut d = 1;
+    while d <= n {
+        digits.push(d);
+        d = d + 1;
+    }
+
+    let mut kk = k - 1;                  // 0-indexed rank
+    let mut result: String = "";
+    let mut pos = 0;
+    while pos < n {
+        let block = fact[n - 1 - pos];  // (n-1-pos)! permutations per first-digit block
+        let idx = kk / block;              // which remaining digit leads this block
+        kk = kk % block;                   // descend into that block
+        let digit = digits.remove(idx);    // emit it and drop it from the pool
+        result = f"{result}{digit}";
+        pos = pos + 1;
+    }
+    result
+}
+
+fn report(n: i64, k: i64) {
+    let s = get_permutation(n, k);
+    println(f"n={n} k={k} -> {s}");
+}
+
+fn main() {
+    report(3, 3);         // "213"  (LeetCode example 1)
+    report(4, 9);         // "2314" (LeetCode example 2)
+    report(3, 1);         // "123"  (LeetCode example 3 — first perm)
+    report(1, 1);         // "1"    (degenerate single element)
+    report(3, 6);         // "321"  (last perm of n=3)
+    report(9, 1);         // "123456789" (first perm of n=9)
+    report(9, 362880);    // "987654321" (last perm, k = 9!)
+}

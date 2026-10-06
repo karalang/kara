@@ -1,0 +1,13 @@
+
+import std.autograd.{Tape, Var};
+fn main() {
+    let vg = Tape.value_and_grad(|x| x.mul(x).add(x.add(x).add(x)), 2.0);
+    println(vg.0);
+    println(vg.1);
+    println(Tape.grad(|x| x.mul(x).add(x), 2.0));
+    println(Tape.grad(|x| x.mul(x).mul(x), 2.0));
+    println(Tape.grad(|x| x.sigmoid(), 0.0));
+    println(Tape.grad(|x| x.tanh(), 0.0));
+    println(Tape.grad(|x| x.relu(), 3.0));
+    println(Tape.grad(|x| x.relu(), 0.0 - 1.0));
+}

@@ -1,0 +1,37 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    let mut carry: i64 = 0;
+    loop {
+        let mut s: i64 = carry;
+        let mut done = true;
+        if let Some(n) = a {
+            s = s + n.val;
+            a = n.next;
+            done = false;
+        }
+        if let Some(n) = b {
+            s = s + n.val;
+            b = n.next;
+            done = false;
+        }
+        if done and s == 0 {
+            break;
+        }
+        let node = ListNode { val: s % 10, next: None };
+        tail.next = Some(node);
+        tail = node;
+        carry = s / 10;
+    }
+    dummy.next
+}
+fn main() {
+    let x = ListNode { val: 7, next: None };
+    let y = ListNode { val: 5, next: None };
+    let r = add_two_numbers(Some(x), Some(y));
+    if r.is_some() { println(r.unwrap().val); }
+}

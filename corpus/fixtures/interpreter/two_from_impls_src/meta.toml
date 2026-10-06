@@ -1,0 +1,13 @@
+source = "tests/interpreter.rs::two_from_impls_src"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["format-template"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"

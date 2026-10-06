@@ -1,0 +1,101 @@
+// LeetCode #101: Symmetric Tree — recursive mirror check (★).
+//
+// A tree is symmetric iff its left and right subtrees are mirror images of each other.
+// Two trees mirror when their roots share a value and the left's LEFT child mirrors the
+// right's RIGHT child, while the left's RIGHT child mirrors the right's LEFT child — the
+// cross-comparison is what "mirror" means. Walk both subtrees in that crossed lockstep,
+// short-circuiting on the first mismatch. Node type mirrors kata
+// [#100](../100-same-tree/) — a `shared struct TreeNode` (RC).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+// Deep clone of `node` with left/right swapped at every level — its mirror image.
+fn mirror(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirror(n.right), right: mirror(n.left) }),
+    }
+}
+
+fn is_mirror(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
+    match a {
+        None => {
+            match b {
+                None => true,
+                Some(_) => false,
+            }
+        }
+        Some(an) => {
+            match b {
+                None => false,
+                Some(bn) => {
+                    an.val == bn.val and is_mirror(an.left, bn.right) and is_mirror(an.right, bn.left)
+                }
+            }
+        }
+    }
+}
+
+fn is_symmetric(root: Option[TreeNode]) -> bool {
+    match root {
+        None => true,
+        Some(n) => is_mirror(n.left, n.right),
+    }
+}
+
+fn build(nums: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    let mut i = 0;
+    while i < nums.len() {
+        root = insert(root, nums[i]);
+        i = i + 1;
+    }
+    root
+}
+
+fn main() {
+    let base = [4, 2, 6, 1, 3, 5, 7];
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 12 {
+        // Build subtree L from `base` rotated by t.
+        let mut lv: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < base.len() {
+            lv.push(base[(k + t) % base.len()]);
+            k = k + 1;
+        }
+        let sub = build(lv);
+        // Even t: root has L on the left and mirror(L) on the right -> symmetric.
+        // Odd  t: root has L on both sides -> asymmetric (L itself is not symmetric).
+        let root = if (t % 2) == 0 {
+            Some(TreeNode { val: 0, left: sub, right: mirror(sub) })
+        } else {
+            Some(TreeNode { val: 0, left: sub, right: sub })
+        };
+        let sym = is_symmetric(root);
+        let bit = if sym { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        println(f"tree {t}: {sym}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

@@ -1,0 +1,112 @@
+// LeetCode #14: Longest Common Prefix — vertical scanning.
+//
+// Walk the columns of the input strings left to right. At column `col`
+// every string must agree on the same character; the first column where
+// any string either ends early or disagrees is where the common prefix
+// stops. O(S) time where S is the total characters scanned (bounded by
+// min-length × count), O(1) extra space beyond the returned prefix.
+//
+// `strs[0].bytes()` is the reference column source — a zero-copy
+// Slice[u8] view with O(1) positional access (the same primitive kata 13
+// uses). Each other string's bytes() view is compared column-for-column.
+// LeetCode #14 restricts inputs to lowercase English letters, so every
+// character is a single ASCII byte and the byte column index equals the
+// char index — the byte view is exact and no Vec[char] snapshot is
+// needed for the scan. The output prefix is rebuilt from the first
+// string's chars() (one pass, O(prefix)) so the returned String is
+// well-formed regardless of the runtime's String storage encoding.
+//
+// `or` short-circuits, so the `col >= other.len()` bound check guards
+// the `other[col]` indexed read on the same line — a string shorter than
+// the current column never triggers an out-of-bounds access.
+
+fn prefix_string(s: ref String, k: i64) -> String {
+    let mut out: String = "";
+    let mut i = 0;
+    for c in s.chars() {
+        if i >= k {
+            break;
+        }
+        out.push(c);
+        i = i + 1;
+    }
+    out
+}
+
+fn longest_common_prefix(strs: ref Vec[String]) -> String {
+    let n = strs.len();
+    if n == 0 {
+        return "";
+    }
+
+    let first = strs[0].bytes();
+    let first_len = first.len();
+
+    let mut col = 0;
+    while col < first_len {
+        let c = first[col];
+        let mut s = 1;
+        while s < n {
+            let other = strs[s].bytes();
+            if col >= other.len() or other[col] != c {
+                return prefix_string(strs[0], col);
+            }
+            s = s + 1;
+        }
+        col = col + 1;
+    }
+    // Every string matched the whole first string — it is the prefix.
+    prefix_string(strs[0], first_len)
+}
+
+fn report(strs: ref Vec[String]) {
+    let r = longest_common_prefix(strs);
+    println(f"\"{r}\"");
+}
+
+fn main() {
+    // LeetCode spec examples.
+    let mut a: Vec[String] = Vec.new();
+    a.push("flower");
+    a.push("flow");
+    a.push("flight");
+    report(a);                       // "fl"
+
+    let mut b: Vec[String] = Vec.new();
+    b.push("dog");
+    b.push("racecar");
+    b.push("car");
+    report(b);                       // ""
+
+    // Single string — the prefix is the string itself.
+    let mut c: Vec[String] = Vec.new();
+    c.push("alone");
+    report(c);                       // "alone"
+
+    // One empty string forces an empty prefix.
+    let mut d: Vec[String] = Vec.new();
+    d.push("");
+    d.push("anything");
+    report(d);                       // ""
+
+    // Identical strings — full string is the prefix.
+    let mut e: Vec[String] = Vec.new();
+    e.push("same");
+    e.push("same");
+    e.push("same");
+    report(e);                       // "same"
+
+    // Prefix is a whole shorter string ("ab" is a prefix of all).
+    let mut f: Vec[String] = Vec.new();
+    f.push("abab");
+    f.push("ab");
+    f.push("abc");
+    report(f);                       // "ab"
+
+    // Common single character then divergence.
+    let mut g: Vec[String] = Vec.new();
+    g.push("a");
+    g.push("a");
+    g.push("ab");
+    report(g);                       // "a"
+}

@@ -1,0 +1,9 @@
+
+fn get_a(u: String) -> i64 with sends(Network) receives(Network) { return 11; }
+fn get_b(u: String) -> i64 with sends(Network) receives(Network) { return 22; }
+fn main() {
+    let x = get_a("http://a");
+    let y = get_b("http://b");
+    println(x);
+    println(y);
+}

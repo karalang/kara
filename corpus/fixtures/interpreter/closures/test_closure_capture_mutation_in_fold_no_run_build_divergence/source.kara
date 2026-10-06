@@ -1,0 +1,8 @@
+
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let mut count = 0i64;
+    let s = v.iter().fold(0i64, |a: i64, x: i64| { count = count + 1i64; a + x });
+    println(f"{s}");
+    println(f"{count}");
+}

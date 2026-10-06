@@ -1,0 +1,4 @@
+fn main() {
+    let t: (Array[Array[i64, 2], 2], i64) = ([[1, 2], [3, 4]], 5);
+    println(f"s:{t.1}");
+}

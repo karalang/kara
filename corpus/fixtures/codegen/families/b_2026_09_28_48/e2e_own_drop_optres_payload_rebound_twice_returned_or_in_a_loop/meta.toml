@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_28_48.rs::e2e_own_drop_optres_payload_rebound_twice_returned_or_in_a_loop"
+dedup_of = ["tests/interpreter/families/b_2026_09_28_48.rs::interp_own_drop_optres_payload_rebound_twice_returned_or_in_a_loop", "tests/memory_sanitizer/families/b_2026_09_28_48.rs::asan_own_drop_optres_payload_rebound_twice_returned_or_in_a_loop"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,109 @@
+// LeetCode #323: Number of Connected Components in an Undirected Graph —
+// label propagation until nothing changes.
+//
+// Give every node its own index as a label. Then sweep the edge list again and
+// again, and at every edge set both ends to the smaller of their two labels.
+// A label can only go down, and only to a label some neighbour already holds,
+// so it never crosses between components. And inside a component the smallest
+// index keeps spreading one edge further on every sweep, so once a sweep
+// changes nothing, every node holds the smallest index of its component. The
+// components are then counted as the nodes that still hold their own index.
+//
+// There is no forest, no adjacency list and no traversal order here. The only
+// operation is "take the minimum across an edge", repeated to a fixed point,
+// which is as close to the definition of connectivity as an algorithm gets.
+// It costs up to O(edges) per sweep and one sweep per step of the longest
+// path a label has to travel, so it is only run on the small cases.
+
+fn count_components(n: i64, edges: ref Vec[(i64, i64)]) -> i64 {
+    let mut label: Vec[i64] = Vec.new();
+    for v in 0..n {
+        label.push(v);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (a, b) in edges {
+            let low = min(label[a], label[b]);
+            if label[a] != low or label[b] != low {
+                label[a] = low;
+                label[b] = low;
+                changed = true;
+            }
+        }
+    }
+    let mut count = 0;
+    for v in 0..n {
+        if label[v] == v {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn show(edges: ref Vec[(i64, i64)]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..edges.len() {
+        if i > 0 { s.push_str(", "); }
+        let (a, b) = edges[i];
+        s.push_str(f"({a}, {b})");
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(n: i64, edges: Vec[(i64, i64)]) {
+    println(f"n={n} edges={show(edges)} -> {count_components(n, edges)}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// `m` random edges over nodes 0..n-1. Self-loops and repeats are allowed: the
+// statement does not promise a simple graph, and both must change nothing.
+fn random_edges(n: i64, m: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for i in 0..m {
+        let a = next(seed) % n;
+        let b = next(seed) % n;
+        edges.push((a, b));
+    }
+    return edges;
+}
+
+fn main() {
+    // The two examples from the problem statement.
+    report(5, [(0, 1), (1, 2), (3, 4)]);
+    report(5, [(0, 1), (1, 2), (2, 3), (3, 4)]);
+
+    // No edges: every node is alone.
+    report(1, []);
+    report(4, []);
+
+    // Edges that change nothing: a self-loop, a repeat, a reversed repeat,
+    // and a cycle's closing edge.
+    report(3, [(2, 2)]);
+    report(3, [(0, 1), (0, 1), (1, 0)]);
+    report(4, [(0, 1), (1, 2), (2, 0)]);
+
+    // Two components that only meet through the last edge, listed so that
+    // union by size has to hang the bigger tree correctly.
+    report(6, [(0, 1), (1, 2), (3, 4), (4, 5), (5, 3), (2, 3)]);
+
+    // A star, a path listed backwards, and isolated nodes at both ends.
+    report(7, [(3, 0), (3, 1), (3, 2), (3, 4), (3, 5)]);
+    report(6, [(4, 5), (3, 4), (2, 3), (1, 2)]);
+    report(8, [(2, 3), (4, 5)]);
+
+    // Small random graphs: every arm prints these.
+    let mut seed = 323;
+    let mut sizes: Vec[i64] = [6, 9, 12];
+    for t in 0..sizes.len() {
+        let n = sizes[t];
+        let edges = random_edges(n, n / 2 + t, mut seed);
+        report(n, edges);
+    }
+}

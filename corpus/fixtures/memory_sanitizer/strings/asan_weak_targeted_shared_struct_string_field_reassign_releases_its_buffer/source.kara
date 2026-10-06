@@ -1,0 +1,12 @@
+
+shared struct P { mut label: String, mut back: Option[weak P] }
+fn main() {
+    let p = P { label: "start", back: None };
+    let mut i = 0i64;
+    while i < 20i64 {
+        let f: String = f"epsilonepsilonepsilon-{i}-zetazetazeta";
+        p.label = f;
+        i = i + 1;
+    }
+    println("end");
+}

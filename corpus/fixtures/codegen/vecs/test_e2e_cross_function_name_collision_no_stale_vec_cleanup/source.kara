@@ -1,0 +1,38 @@
+
+fn prefix_string(s: ref String, k: i64) -> String {
+    let mut out: String = "";
+    let mut i = 0i64;
+    for c in s.chars() {
+        if i >= k { break; }
+        out.push(c);
+        i = i + 1i64;
+    }
+    out
+}
+fn lcp(strs: ref Vec[String]) -> String {
+    let n = strs.len();
+    let first = strs[0i64].bytes();
+    let first_len = first.len();
+    let mut col = 0i64;
+    while col < first_len {
+        let c = first[col];
+        let mut s = 1i64;
+        while s < n {
+            let other = strs[s].bytes();
+            if col >= other.len() or other[col] != c {
+                return prefix_string(strs[0i64], col);
+            }
+            s = s + 1i64;
+        }
+        col = col + 1i64;
+    }
+    prefix_string(strs[0i64], first_len)
+}
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("flower");
+    a.push("flow");
+    a.push("flight");
+    let r = lcp(a);
+    println(r.len());
+}

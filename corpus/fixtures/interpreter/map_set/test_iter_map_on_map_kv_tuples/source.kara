@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    for s in m.iter().map(|(k, v)| f"{k}={v}") {
+        println(s);
+    }
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/vecs.rs::test_e2e_owned_vec_param_let_move_then_index"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

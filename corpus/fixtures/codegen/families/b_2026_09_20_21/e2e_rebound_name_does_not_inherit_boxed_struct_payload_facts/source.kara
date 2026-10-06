@@ -1,0 +1,17 @@
+struct R { id: i64, v: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}v{self.v}") } }
+struct Q { r: R, s: R }
+fn mkr(k: i64) -> R { return R { id: k, v: k * 10 } }
+fn peek(o: Option[Q]) { match o { Option.Some(t) => { println(f"p{t.r.v}.{t.s.v}") } Option.None => { println("n") } } }
+fn ttake(o: Option[(R, R)]) { match o { Option.Some(t) => { let x = t.0; println(f"t{x.v}.{t.1.v}") } Option.None => { println("n") } } }
+fn main() {
+    { let a = Option.Some(Q { r: mkr(1), s: mkr(2) }); peek(a) }
+    println("out1");
+    { let a = Option.Some((mkr(3), mkr(4))); ttake(a) }
+    println("out2");
+    let b = Option.Some(Q { r: mkr(5), s: mkr(6) });
+    peek(b);
+    let b = Option.Some((mkr(7), mkr(8)));
+    ttake(b);
+    println("end")
+}

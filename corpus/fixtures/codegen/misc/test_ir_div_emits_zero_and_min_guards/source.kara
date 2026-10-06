@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut z = 3;
+    z = z + 0;
+    let q = 7 / z;
+    println(q);
+}

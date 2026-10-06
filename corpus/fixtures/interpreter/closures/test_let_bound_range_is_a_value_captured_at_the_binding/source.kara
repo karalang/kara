@@ -1,0 +1,21 @@
+
+fn main() {
+    let mut a = 2;
+    let r = a..6;
+    a = 10;
+    let mut n = 0;
+    for i in r { n = n + i; }
+    println(n);
+    let inc = 0..=4;
+    let mut b = 0;
+    for i in inc { b = b + i; }
+    println(b);
+    let e = 5..5;
+    let mut z = 0;
+    for i in e { z = z + 1; }
+    println(z);
+    let q = 0..3;
+    let mut k = 0;
+    for i in q { for j in q { k = k + 1; } }
+    println(k);
+}

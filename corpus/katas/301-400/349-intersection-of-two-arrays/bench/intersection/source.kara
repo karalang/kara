@@ -1,0 +1,53 @@
+// Benchmark workload for LeetCode #349 -- the star arm (intersection.kara),
+// timed as written: a Set of the first array, walked by the second.
+//
+// A pool of POOL pseudo-random values in the problem's range, 0..=1000, is
+// built once. Each of PAIRS punches takes two windows of LEN values from it
+// at pseudo-random offsets, the problem's largest arrays, and intersects
+// them. The size and sum of every answer are folded into the sink, so no
+// punch can be skipped.
+
+const POOL: i64 = 1000000;
+const LEN: i64 = 1000;
+const PAIRS: i64 = 20000;
+
+fn intersection(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut seen: Set[i64] = Set.new();
+    for x in a {
+        seen.insert(x);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for y in b {
+        if seen.remove(y) {
+            out.push(y);
+        }
+    }
+    out.sort();
+    return out;
+}
+
+fn main() {
+    let mut pool: Vec[i64] = Vec.new();
+    let mut x = 349;
+    for _ in 0..POOL {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        pool.push(x / 16 % 1001);
+    }
+
+    let mut sink = 0;
+    for _ in 0..PAIRS {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        let i = x / 16 % (POOL - LEN);
+        x = (x * 1103515245 + 12345) % 2147483648;
+        let j = x / 16 % (POOL - LEN);
+        let a = pool[i..i + LEN].to_vec();
+        let b = pool[j..j + LEN].to_vec();
+        let r = intersection(a, b);
+        let mut s = 0;
+        for v in r {
+            s += v;
+        }
+        sink = (sink * 31 + r.len() * 1000003 + s) % 1000000007;
+    }
+    println(f"sink {sink}");
+}

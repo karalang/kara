@@ -1,0 +1,26 @@
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut a: Array[String, 2] = [f"aaaaaaaa-{n}", f"bbbbbbbb-{n}"];
+    a[0] = f"MUTATED-{n}";
+    println(f"c1:{a[0]}");
+    let mut b: Array[String, 3] = [f"pppppppp-{n}", f"qqqqqqqq-{n}", f"rrrrrrrr-{n}"];
+    b[0] = f"M1-{n}";
+    b[1] = f"M2-{n}";
+    b[2] = f"M3-{n}";
+    println(f"c2:{b[0]}{b[1]}{b[2]}");
+    let mut c: Array[String, 2] = [f"cccccccc-{n}", f"dddddddd-{n}"];
+    c[0] = c[0] + f"X{n}";
+    println(f"c3:{c[0]}");
+    let mut d: Array[String, 2] = ["lit-a", "lit-b"];
+    d[0] = "lit-c";
+    println(f"c4:{d[0]}");
+    let mut e: Array[i64, 3] = [n, n + 1, n + 2];
+    e[0] = n + 9;
+    println(f"c5:{e[0]}");
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"vvvvvvvv-{n}");
+    v[0] = f"VM-{n}";
+    println(f"c6:{v[0]}");
+    println("end");
+}

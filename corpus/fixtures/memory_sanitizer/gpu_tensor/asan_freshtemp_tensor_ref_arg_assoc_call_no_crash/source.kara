@@ -1,0 +1,18 @@
+
+shared struct S { mut vals: Vec[Tensor[f32, [?]]] }
+impl S {
+    fn new() -> S { S { vals: Vec.new() } }
+    fn ins(t: S, value: ref Tensor[f32, [?]]) {
+        let v: Tensor[f32, [?]] = value + 0.0;
+        t.vals.push(v);
+    }
+}
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let s = S.new();
+        S.ins(s, Tensor.from([-1.0, 2.0, 3.0]));
+        println(f"{s.vals.len()}");
+        n = n + 1;
+    }
+}

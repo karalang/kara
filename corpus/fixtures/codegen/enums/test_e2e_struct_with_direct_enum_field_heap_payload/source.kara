@@ -1,0 +1,22 @@
+
+enum Tok { Id(String), Int(i64) }
+struct Span { tok: Tok, off: i64 }
+fn wrap(s: Span) -> Span { s }
+fn sink(x: String) { if x.len() > 9000 { println(x) } }
+fn main() {
+    let a = Span { tok: Tok.Id("hello".to_string()), off: 1 };
+    let b = wrap(a);
+    println(b.off.to_string());
+    let c = Span { tok: Tok.Int(42_i64), off: 2 };
+    match c.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
+    let d = Span { tok: Tok.Id("world".to_string()), off: 3 };
+    match d.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
+    // #19: transfer-out then destructure-and-USE the bound payload.
+    let e1 = Span { tok: Tok.Id("xfer".to_string()), off: 4 };
+    let f1 = wrap(e1);
+    match f1.tok { Id(s) => println(s), Int(n) => println(n.to_string()) }
+    let e2 = Span { tok: Tok.Id("cons".to_string()), off: 5 };
+    let f2 = wrap(e2);
+    match f2.tok { Id(s) => sink(s), Int(n) => println(n.to_string()) }
+    println("ok");
+}

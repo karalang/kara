@@ -1,0 +1,14 @@
+
+fn mk() -> VecDeque[i64] {
+    let mut q: VecDeque[i64] = VecDeque.new();
+    q.push_back(5);
+    q.push_back(6);
+    q
+}
+fn main() {
+    let o: Option[VecDeque[i64]] = Some(mk());
+    match o {
+        Some(v) => { println(v.len()); println(v[0]); }
+        None => { println("n"); }
+    }
+}

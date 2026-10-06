@@ -1,0 +1,7 @@
+
+fn main() {
+    let addr: String = "127.0.0.1:0";
+    let cert: String = "fake-cert";
+    let key: String = "fake-key";
+    let listener: TlsListener = TlsListener.bind_tls(addr, cert, key).unwrap();
+}

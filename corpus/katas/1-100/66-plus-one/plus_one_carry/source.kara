@@ -1,0 +1,91 @@
+// LeetCode #66: Plus One — explicit carry propagation, O(n) time, O(n) space.
+//
+// The general-adder form of the ★ ([`plus_one.kara`](plus_one.kara)). Instead of
+// stopping at the first digit below 9, seed a carry of 1 (the "+1") and ripple it
+// through every column, least-significant first — exactly the column-add shape of
+// kata [#67](../67-add-binary/), here in base 10 rather than base 2:
+//
+//   sum   = digits[i] + carry
+//   out   = sum % 10        (emitted digit, least-significant first)
+//   carry = sum / 10        (0 or 1, ripples one place left)
+//
+// After the scan a leftover `carry == 1` is the all-nines widening — pushed as
+// the new leading digit. Because the digits come out least-significant first,
+// they land in a reversed buffer that is flipped back to most-significant-first
+// at the end (the same LSB-first-then-reverse discipline as #67 and kata
+// [#2](../2-add-two-numbers/)).
+//
+// This always walks the whole array and allocates a fresh result, so it is
+// strictly more work than the ★'s early return on the common path — but it is the
+// phrasing that generalises: swap the seed 1 for any addend, or `% 10` for
+// another base, and the same loop adds arbitrary values. Kept here as the
+// independent cross-check and the "what if the increment weren't exactly 1"
+// generalisation. Digits stay in `[0, 9]`; i64 for corpus uniformity.
+
+fn plus_one(digits: ref Vec[i64]) -> Vec[i64] {
+    let n = digits.len();
+
+    // Least-significant-first accumulation of the incremented digits.
+    let mut rev: Vec[i64] = Vec.new();
+    let mut carry = 1;                 // the "+1"
+    let mut i = n - 1;
+    while i >= 0 {
+        let sum = digits[i] + carry;
+        rev.push(sum % 10);
+        carry = sum / 10;
+        i = i - 1;
+    }
+    if carry > 0 {
+        rev.push(carry);                  // all-nines: new leading 1
+    }
+
+    // Flip LSB-first back to MSB-first for the answer.
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = rev.len() - 1;
+    while k >= 0 {
+        out.push(rev[k]);
+        k = k - 1;
+    }
+    out
+}
+
+// ---- test harness (shared verbatim with plus_one.kara) -----------------------
+
+fn report(digits: Vec[i64], s: mut ref String) {
+    let out = plus_one(digits);
+    let mut line: String = "[";
+    let mut k = 0;
+    let len = out.len();
+    let mut chk = 0;
+    while k < len {
+        if k > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{out[k]}");
+        chk = chk + (k + 1) * out[k];
+        k = k + 1;
+    }
+    line.push(']');
+    println(line);
+    s.push(' ');
+    s.push_str(f"{chk}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report([1, 2, 3], mut s);              // [1, 2, 4]
+    report([4, 3, 2, 1], mut s);           // [4, 3, 2, 2]
+    report([9], mut s);                    // [1, 0]
+    report([9, 9], mut s);                 // [1, 0, 0]
+    report([9, 9, 9], mut s);              // [1, 0, 0, 0]
+    report([1, 9, 9], mut s);              // [2, 0, 0]
+    report([0], mut s);                    // [1]
+    report([8, 9, 9, 9], mut s);           // [9, 0, 0, 0]
+    report([1, 0, 0, 0], mut s);           // [1, 0, 0, 1]
+    report([2, 9], mut s);                 // [3, 0]
+    report([5, 4, 3, 2, 1], mut s);        // [5, 4, 3, 2, 2]
+    report([9, 8, 7, 6, 5, 4, 3, 2, 1, 0], mut s); // [9, 8, 7, 6, 5, 4, 3, 2, 1, 1]
+
+    println(s);
+}

@@ -1,0 +1,9 @@
+
+        fn take_a(rx: Receiver[i64]) -> i64 with receives(rx) { return 1; }
+        fn take_b(rx: Receiver[i64]) -> i64 with receives(rx) { return 2; }
+        fn main() {
+            let c = 0;
+            let x = take_a(c);
+            let y = take_b(c);
+        }
+        

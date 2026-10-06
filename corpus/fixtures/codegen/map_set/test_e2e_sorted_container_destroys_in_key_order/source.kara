@@ -1,0 +1,16 @@
+
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd)]
+struct K { id: i64 }
+struct V { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"K{self.id}") } }
+impl Drop for V { fn drop(mut ref self) { println(f"V{self.id}") } }
+fn main() {
+    { let mut m: SortedMap[K, V] = SortedMap.new();
+      let mut i = 1;
+      while i <= 4 { m.insert(K { id: 5 - i }, V { id: i }); i = i + 1; }
+      println("--map--"); }
+    { let mut s: SortedSet[K] = SortedSet.new();
+      let mut j = 1;
+      while j <= 4 { s.insert(K { id: 50 - j }); j = j + 1; }
+      println("--set--"); }
+}

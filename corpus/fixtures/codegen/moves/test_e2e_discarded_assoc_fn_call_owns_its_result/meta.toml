@@ -1,0 +1,13 @@
+source = "tests/codegen/moves.rs::test_e2e_discarded_assoc_fn_call_owns_its_result"
+dedup_of = ["tests/par_codegen.rs::test_e2e_auto_par_discarded_assoc_fn_call_owns_its_result"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

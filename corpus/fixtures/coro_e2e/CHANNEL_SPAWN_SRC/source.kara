@@ -1,0 +1,13 @@
+
+        fn serve_one(listener: TcpListener, tx: Sender[i64]) {
+            let _stream = listener.accept().unwrap();
+            tx.send(7);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+            spawn(|| serve_one(listener, tx));
+            let v: i64 = rx.recv();
+            println(v);
+        }
+    

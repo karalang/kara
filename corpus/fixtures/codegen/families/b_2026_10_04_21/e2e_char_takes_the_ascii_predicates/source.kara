@@ -1,0 +1,19 @@
+fn main() {
+    let cs: Vec[char] = "a7F_g٣é Z0".chars().collect();
+    let mut line = String.new();
+    for c in cs.iter() {
+        let d = if c.is_ascii_digit() { "d" } else { "-" };
+        let a = if c.is_ascii_alphabetic() { "a" } else { "-" };
+        let h = if c.is_ascii_hexdigit() { "h" } else { "-" };
+        line.push_str(f"{d}{a}{h} ");
+    }
+    println(line);
+    let mut pos = 0;
+    let text: Vec[char] = "123,45".chars().collect();
+    let mut v = 0;
+    while text[pos].is_ascii_digit() {
+        v = v * 10 + (text[pos] as i64 - 48);
+        pos += 1;
+    }
+    println(f"{v} {pos} {'9'.is_ascii_digit()} {'x'.is_ascii_hexdigit()}");
+}

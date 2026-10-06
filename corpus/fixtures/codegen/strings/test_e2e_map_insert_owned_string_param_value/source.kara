@@ -1,0 +1,13 @@
+
+fn store(m: mut ref Map[i64, String], v: String) {
+    m.insert(7i64, v);
+}
+
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    let mut s = String.new();
+    s.push_str("payload");
+    store(mut m, s);
+    println(m.len());
+    match m.get(7i64) { Some(g) => println(g), None => println("missing") }
+}

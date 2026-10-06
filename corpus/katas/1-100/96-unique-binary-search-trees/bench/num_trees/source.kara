@@ -1,0 +1,27 @@
+// Bench workload for #96: K reps of the O(n^2) Catalan DP-table at a DATA-DEPENDENT
+// size (m = 2 + acc%18, so the trip count can't be hoisted/precomputed), folding each
+// count into a rolling hash. Mirrors do the identical DP-table fill.
+fn num_trees(n: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    dp.push(1);
+    let mut k = 1;
+    while k <= n {
+        let mut total = 0;
+        let mut r = 1;
+        while r <= k { total = total + dp[r - 1] * dp[k - r]; r = r + 1; }
+        dp.push(total);
+        k = k + 1;
+    }
+    dp[n]
+}
+fn main() {
+    let mut acc = 1;
+    let mut rep = 0;
+    while rep < 5000000 {
+        let m = 2 + (acc % 18);
+        let c = num_trees(m);
+        acc = (acc * 1000003 + c) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

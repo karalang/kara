@@ -1,0 +1,32 @@
+
+fn main() {
+    let lo: u8 = 1;
+    let m: u8 = 4;
+    let mut t: u8 = 0;
+    for b in lo..m { t = t + b; }
+    for c in lo..=m { t = t + c; }
+    for b in 1..m { t = t + b; }
+    let big: u8 = 250;
+    let top: u8 = 255;
+    let mut cnt: u32 = 0;
+    for x in big..=top { cnt = cnt + (x as u32); }
+    let hi: u32 = 10;
+    let mut u: u32 = 0;
+    for d in (0..hi).rev() { u = u * 2 + d; }
+    let mut a: u32 = 0;
+    for i in (0..hi).step_by(3) { a = a + i; }
+    let r = lo..m;
+    let mut rb: u8 = 0;
+    for i in r { rb = rb + i; }
+    let neg: i8 = -100;
+    let pos: i8 = 100;
+    let mut n: i32 = 0;
+    for q in neg..pos { n = n + (q as i32); }
+    let s16: i16 = -5;
+    let mut c16: i16 = 0;
+    for i in (s16..=0).rev() { c16 = c16 * 2 + i; }
+    let w: u16 = 65535;
+    let mut d16: u16 = 0;
+    for i in 65530..=w { d16 = d16 + (i - 65530); }
+    println(f"{t} {cnt} {u} {a} {rb} {n} {c16} {d16}");
+}

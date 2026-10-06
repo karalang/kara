@@ -1,0 +1,9 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    let w = [10, 20];
+    let xs: Vec[i64] = v.iter().filter(|x| x > 2).chain(w.iter().map(|y| y + 100)).collect();
+    for x in xs {
+        println(x);
+    }
+}

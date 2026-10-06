@@ -1,0 +1,117 @@
+// LeetCode 147 — Insertion Sort List.
+//
+// Sort a singly linked list using insertion sort: for each node, scan the
+// already-sorted prefix from the head to find its insertion point, then splice
+// it in. Nodes are `Vec`-owned (strong) with a `weak Node` next overlay — the
+// same RC modeling as #141/#142/#143 — so every splice (front-insert or
+// mid-chain) only rewrites weak links and stays leak-free. We track the sorted
+// list's head by index (`-1` = empty), rewire the weak `next` chain as we
+// insert, then walk from the head to emit the sorted values.
+
+shared struct Node {
+    val: i64,
+    id: i64,
+    mut next: weak Node,
+}
+
+fn sort_list(vals: Vec[i64]) -> Vec[i64] {
+    let n: i64 = vals.len();
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        nodes.push(Node { val: vals[i], id: i, next: None });
+        i = i + 1;
+    }
+
+    // `head` indexes the sorted list's first node; -1 while it is empty.
+    let mut head: i64 = -1;
+    i = 0;
+    while i < n {
+        let v: i64 = nodes[i].val;
+        if head == -1 {
+            head = i;
+        } else if nodes[head].val >= v {
+            // Node i belongs before the current head: front-insert.
+            nodes[i].next = nodes[head];
+            head = i;
+        } else {
+            // Walk the sorted prefix to the last node whose `next` value is
+            // still < v (or whose `next` is empty), then splice i in after it.
+            let mut prev: i64 = head;
+            let mut scan: bool = true;
+            while scan {
+                match nodes[prev].next {
+                    None => { scan = false; }
+                    Some(nxt) => {
+                        if nxt.val < v {
+                            prev = nxt.id;
+                        } else {
+                            scan = false;
+                        }
+                    }
+                }
+            }
+            // Splice i between prev and prev's current successor. The weak-to-weak
+            // `next` copy is the memory-safe form (see README: materializing the
+            // successor into a strong `Option[Node]` temp first leaks/double-frees).
+            nodes[i].next = nodes[prev].next;
+            nodes[prev].next = nodes[i];
+        }
+        i = i + 1;
+    }
+
+    // Traverse the sorted chain from the head via `next`, collecting values.
+    let mut out: Vec[i64] = Vec.new();
+    if head == -1 {
+        return out;
+    }
+    let mut cur: Option[Node] = Some(nodes[head]);
+    let mut go: bool = true;
+    while go {
+        match cur {
+            None => { go = false; }
+            Some(c) => {
+                out.push(c.val);
+                cur = c.next;
+            }
+        }
+    }
+    return out;
+}
+
+fn run(vals: Vec[i64]) {
+    let r: Vec[i64] = sort_list(vals);
+    let n: i64 = r.len();
+    let mut s: String = "";
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 {
+            s = s + " ";
+        }
+        s = s + r[i].to_string();
+        i = i + 1;
+    }
+    println(s);
+}
+
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(4); a.push(2); a.push(1); a.push(3);
+    run(a);
+
+    let mut b: Vec[i64] = Vec.new();
+    b.push(-1); b.push(5); b.push(3); b.push(4); b.push(0);
+    run(b);
+
+    let mut c: Vec[i64] = Vec.new();
+    c.push(1);
+    run(c);
+
+    let mut d: Vec[i64] = Vec.new();
+    d.push(3); d.push(1); d.push(2); d.push(2); d.push(1);
+    run(d);
+
+    let mut e: Vec[i64] = Vec.new();
+    e.push(5); e.push(4); e.push(3); e.push(2); e.push(1);
+    run(e);
+}

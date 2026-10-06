@@ -1,0 +1,34 @@
+
+fn show(o: Option[i64]) {
+    match o {
+        Some(i) => println(f"{i}"),
+        None => println("none"),
+    }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    show(c.argmin());
+    show(c.argmax());
+
+    let mut n: Column[i64] = Column.new();
+    n.push(10);
+    n.push_null();
+    n.push(5);
+    n.push_null();
+    n.push(20);
+    show(n.argmin());
+    show(n.argmax());
+
+    let mut allnull: Column[i64] = Column.with_capacity(2);
+    allnull.push_null();
+    allnull.push_null();
+    show(allnull.argmin());
+
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    show(t.argmin());
+    show(t.argmax());
+
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[3, 1, 4], [1, 5, 9]]);
+    show(m.argmin());
+    show(m.argmax());
+}

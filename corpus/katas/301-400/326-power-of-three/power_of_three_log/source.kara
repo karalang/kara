@@ -1,0 +1,86 @@
+// LeetCode #326: Power of Three — a base-3 logarithm, rounded and checked.
+//
+// The textbook shortcut is "log3(n) is a whole number", computed as
+// log10(n) / log10(3). It happens to be exact for every power of three up to
+// 3^19 with log10, while ln(n) / ln(3) is not: ln(243) / ln(3) is
+// 4.999999999999999. Relying on either is relying on rounding luck, so this
+// arm uses the logarithm only to GUESS the exponent, rounds it to the nearest
+// integer, and then checks the guess with exact integer arithmetic. A float
+// error smaller than one half cannot change the answer.
+//
+// O(log n) for the check, O(1) space.
+
+fn is_power_of_three(n: i64) -> bool {
+    if n <= 0 {
+        return false;
+    }
+    let k = ((n as f64).ln() / 3.0.ln()).round() as i64;
+    let mut p = 1;
+    for _ in 0..k {
+        p *= 3;
+    }
+    return p == n;
+}
+
+fn report(n: i64) {
+    println(f"{n} -> {is_power_of_three(n)}");
+}
+
+const I32_MIN: i64 = -2147483648;
+const I32_MAX: i64 = 2147483647;
+
+fn main() {
+    // The examples from the problem statement.
+    report(27);
+    report(0);
+    report(-1);
+
+    // More single values: the smallest powers, and near misses.
+    report(1);
+    report(3);
+    report(9);
+    report(45);
+    report(-3);
+    report(-27);
+    report(2);
+
+    // 243 = 3^5: the value that sinks the natural-log shortcut, which
+    // computes ln(243) / ln(3) = 4.999999999999999.
+    report(243);
+
+    // The largest power of three that fits in 32 bits, its neighbours, and
+    // both ends of the range.
+    report(1162261467);
+    report(1162261466);
+    report(1162261468);
+    report(I32_MAX);
+    report(I32_MIN);
+
+    // Every power of three up to 3^19, and the values one either side.
+    let mut p = 1;
+    let mut hits = 0;
+    let mut misses = 0;
+    for _ in 0..20 {
+        if is_power_of_three(p) {
+            hits += 1;
+        }
+        if is_power_of_three(p - 1) or is_power_of_three(p + 1) {
+            if p > 3 {
+                misses += 1;
+            }
+        }
+        p *= 3;
+    }
+    println(f"powers 3^0..3^19: {hits} of 20 accepted, {misses} neighbours above 3 accepted");
+
+    // A sweep: every n in [-1000, 1000000].
+    let mut count = 0;
+    let mut sum = 0;
+    for n in -1000..1000001 {
+        if is_power_of_three(n) {
+            count += 1;
+            sum += n;
+        }
+    }
+    println(f"[-1000, 1000000]: {count} powers, sum {sum}");
+}

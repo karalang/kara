@@ -1,0 +1,239 @@
+// LeetCode #37: Sudoku Solver — MRV (minimum remaining values) ordering.
+//
+// The bitmask style (★, sudoku_solver.kara) branches on the next LINEAR empty cell.
+// This style keeps the same three mask arrays and the same O(1) candidate test, but
+// branches on the empty cell with the FEWEST legal digits — minimum remaining values.
+// A cell with a single candidate is forced; taking forced and near-forced cells first
+// collapses the search tree, so on a backtracking-heavy puzzle (escargot / inkala) MRV
+// visits orders of magnitude fewer nodes than linear order for the same answer.
+//
+//   - Among all empty cells, pick (r, c) minimising the count of digits whose bit is
+//     clear in rows[r] | cols[c] | boxes[b]. (A cell with zero candidates is a dead
+//     end — its branch tries nothing and the parent backtracks.)
+//   - For each legal digit there: place it, set the three bits, recurse with one fewer
+//     empty cell; on failure clear the cell, XOR the bits off, and try the next.
+//   - remaining == 0 means every cell is filled — a complete, valid solution.
+//
+// On a unique-solution board the completion is the same as the linear styles'; only the
+// cell-visit order (and so the node count) differs. The mask bookkeeping is identical
+// to ★ — MRV changes only WHICH empty cell is expanded next, not how legality is tested.
+
+fn box_index(r: i64, c: i64) -> i64 {
+    (r / 3) * 3 + c / 3
+}
+
+// Number of digits 1..9 whose bit is clear in `used` — i.e. legal at a cell whose three
+// masks OR to `used`. Counted by probing each digit's bit (no complement needed).
+fn candidate_count(used: i64) -> i64 {
+    let mut n = 0;
+    let mut d = 1;
+    while d <= 9 {
+        if (used & (1 << d)) == 0 {
+            n = n + 1;
+        }
+        d = d + 1;
+    }
+    n
+}
+
+fn go(
+    board: mut ref Vec[Vec[i64]],
+    rows: mut ref Vec[i64],
+    cols: mut ref Vec[i64],
+    boxes: mut ref Vec[i64],
+    remaining: i64,
+) -> bool {
+    if remaining == 0 {
+        return true;
+    }
+    // Find the empty cell with the fewest candidates.
+    let mut best_r = -1;
+    let mut best_c = -1;
+    let mut best_n = 10;
+    let mut r = 0;
+    while r < 9 {
+        let mut c = 0;
+        while c < 9 {
+            if board[r][c] == 0 {
+                let used = rows[r] | cols[c] | boxes[box_index(r, c)];
+                let n = candidate_count(used);
+                if n < best_n {
+                    best_n = n;
+                    best_r = r;
+                    best_c = c;
+                }
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+
+    let br = best_r;
+    let bc = best_c;
+    let b = box_index(br, bc);
+    let used = rows[br] | cols[bc] | boxes[b];
+    let mut d = 1;
+    while d <= 9 {
+        let bit = 1 << d;
+        if (used & bit) == 0 {
+            board[br][bc] = d;
+            rows[br] = rows[br] | bit;
+            cols[bc] = cols[bc] | bit;
+            boxes[b] = boxes[b] | bit;
+            if go(board, rows, cols, boxes, remaining - 1) {
+                return true;
+            }
+            board[br][bc] = 0;          // undo
+            rows[br] = rows[br] ^ bit;      // clear the bit (XOR toggles it off)
+            cols[bc] = cols[bc] ^ bit;
+            boxes[b] = boxes[b] ^ bit;
+        }
+        d = d + 1;
+    }
+    false
+}
+
+fn solve(board: mut ref Vec[Vec[i64]]) -> bool {
+    let mut rows: Vec[i64] = Vec.new();
+    let mut cols: Vec[i64] = Vec.new();
+    let mut boxes: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 9 {
+        rows.push(0);
+        cols.push(0);
+        boxes.push(0);
+        i = i + 1;
+    }
+    let mut empties = 0;
+    let mut r = 0;
+    while r < 9 {
+        let mut c = 0;
+        while c < 9 {
+            let d = board[r][c];
+            if d != 0 {
+                let bit = 1 << d;
+                let b = box_index(r, c);
+                rows[r] = rows[r] | bit;
+                cols[c] = cols[c] | bit;
+                boxes[b] = boxes[b] | bit;
+            } else {
+                empties = empties + 1;
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    go(board, mut rows, mut cols, mut boxes, empties)
+}
+
+// Render a board as nine slash-separated rows of nine digits — the oracle's format.
+fn render(board: ref Vec[Vec[i64]]) -> String {
+    let mut out = "";
+    let mut r = 0;
+    while r < 9 {
+        if r != 0 {
+            out = f"{out}/";
+        }
+        let mut c = 0;
+        while c < 9 {
+            out = f"{out}{board[r][c]}";
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    out
+}
+
+fn report(name: String, board: Vec[Vec[i64]]) {
+    let mut b = board;
+    if solve(mut b) {
+        let rendered = render(b);
+        println(f"{name} -> {rendered}");
+    } else {
+        println(f"{name} -> no solution");
+    }
+}
+
+// LeetCode #37 example 1 — solves to the exact board #36's example 1 validates.
+fn board_example() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([5, 3, 0, 0, 7, 0, 0, 0, 0]);
+    b.push([6, 0, 0, 1, 9, 5, 0, 0, 0]);
+    b.push([0, 9, 8, 0, 0, 0, 0, 6, 0]);
+    b.push([8, 0, 0, 0, 6, 0, 0, 0, 3]);
+    b.push([4, 0, 0, 8, 0, 3, 0, 0, 1]);
+    b.push([7, 0, 0, 0, 2, 0, 0, 0, 6]);
+    b.push([0, 6, 0, 0, 0, 0, 2, 8, 0]);
+    b.push([0, 0, 0, 4, 1, 9, 0, 0, 5]);
+    b.push([0, 0, 0, 0, 8, 0, 0, 7, 9]);
+    b
+}
+
+// "AI Escargot" (Arto Inkala, 2006) — a classic backtracking-heavy unique puzzle.
+fn board_escargot() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([1, 0, 0, 0, 0, 7, 0, 9, 0]);
+    b.push([0, 3, 0, 0, 2, 0, 0, 0, 8]);
+    b.push([0, 0, 9, 6, 0, 0, 5, 0, 0]);
+    b.push([0, 0, 5, 3, 0, 0, 9, 0, 0]);
+    b.push([0, 1, 0, 0, 8, 0, 0, 0, 2]);
+    b.push([6, 0, 0, 0, 0, 4, 0, 0, 0]);
+    b.push([3, 0, 0, 0, 0, 0, 0, 1, 0]);
+    b.push([0, 4, 0, 0, 0, 0, 0, 0, 7]);
+    b.push([0, 0, 7, 0, 0, 0, 3, 0, 0]);
+    b
+}
+
+// Arto Inkala's 2012 "world's hardest sudoku" — unique, maximal backtracking.
+fn board_inkala() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([8, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 3, 6, 0, 0, 0, 0, 0]);
+    b.push([0, 7, 0, 0, 9, 0, 2, 0, 0]);
+    b.push([0, 5, 0, 0, 0, 7, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 4, 5, 7, 0, 0]);
+    b.push([0, 0, 0, 1, 0, 0, 0, 3, 0]);
+    b.push([0, 0, 1, 0, 0, 0, 0, 6, 8]);
+    b.push([0, 0, 8, 5, 0, 0, 0, 1, 0]);
+    b.push([0, 9, 0, 0, 0, 0, 4, 0, 0]);
+    b
+}
+
+// Already complete (0 empties) — solve returns it unchanged.
+fn board_solved() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([5, 3, 4, 6, 7, 8, 9, 1, 2]);
+    b.push([6, 7, 2, 1, 9, 5, 3, 4, 8]);
+    b.push([1, 9, 8, 3, 4, 2, 5, 6, 7]);
+    b.push([8, 5, 9, 7, 6, 1, 4, 2, 3]);
+    b.push([4, 2, 6, 8, 5, 3, 7, 9, 1]);
+    b.push([7, 1, 3, 9, 2, 4, 8, 5, 6]);
+    b.push([9, 6, 1, 5, 3, 7, 2, 8, 4]);
+    b.push([2, 8, 7, 4, 1, 9, 6, 3, 5]);
+    b.push([3, 4, 5, 2, 8, 6, 1, 7, 9]);
+    b
+}
+
+// Valid SO FAR but with no completion: cell (0,0)'s row already holds {1..6} and its
+// box already holds {7,8,9}, so no digit fits there — the search must fail.
+fn board_unsolvable() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([0, 0, 0, 1, 2, 3, 4, 5, 6]);
+    b.push([0, 7, 8, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 9, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b
+}
+
+fn main() {
+    report("example  (LeetCode 37)", board_example());     // -> #36's solved board
+    report("escargot (AI Escargot) ", board_escargot());   // backtracking-heavy
+    report("inkala   (hardest 2012)", board_inkala());     // world's hardest
+    report("solved   (0 empties)   ", board_solved());     // identity
+    report("unsolvable (no fill)   ", board_unsolvable()); // no solution
+}

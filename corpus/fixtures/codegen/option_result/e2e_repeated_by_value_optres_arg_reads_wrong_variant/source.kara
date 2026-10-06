@@ -1,0 +1,14 @@
+
+enum E { Missing(String) }
+fn mkv() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push("x"); v.push("y"); return v; }
+fn mkr() -> Result[Vec[String], E] { return Ok(mkv()); }
+fn takr(r: Result[Vec[String], E]) -> i64 { match r { Ok(v) => v.len(), Err(_e) => -1 } }
+fn tako(o: Option[Vec[String]]) -> i64 { match o { Some(v) => v.len(), None => -1 } }
+fn main() {
+    let r = mkr();
+    println(takr(r));
+    println(takr(r));
+    let o = Some(mkv());
+    println(tako(o));
+    println(tako(o));
+}

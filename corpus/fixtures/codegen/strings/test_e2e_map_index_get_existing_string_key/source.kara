@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("hello", 100_i64);
+    m.insert("world", 200_i64);
+    println(m["world"]);
+}

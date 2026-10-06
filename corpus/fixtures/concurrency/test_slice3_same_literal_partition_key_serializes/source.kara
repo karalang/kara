@@ -1,0 +1,8 @@
+
+        effect resource Db;
+        fn update(id: i64) with writes(Db[id]) { }
+        fn main() {
+            update(1);
+            update(1);
+        }
+        

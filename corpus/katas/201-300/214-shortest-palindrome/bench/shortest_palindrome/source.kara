@@ -1,0 +1,68 @@
+// Benchmark workload for LeetCode #214 — Shortest Palindrome.
+//
+// The kata's core is the KMP prefix-function over comb = s + '#' + reverse(s);
+// fail[last] is the longest-palindromic-prefix (lps) length. One call is O(n).
+// The bench turns it into a throughput kernel: build ONE big symbol string over
+// a tiny alphabet (so palindromic prefixes actually occur and lps varies), then
+// slide a fixed-width window across it and, for every window, build comb and run
+// the prefix-function, summing lps. The prefix-function's `len = fail[len-1]`
+// fallback is a loop-carried, data-dependent recurrence — it does NOT vectorize.
+// Sink = sum of lps over all windows. Symbols are i64 codes (alphabet 0..A-1),
+// with -1 as the '#' separator, so all five languages run the identical kernel.
+
+fn prefix_lps(base: ref Vec[i64], w: i64, width: i64, comb: mut ref Vec[i64], fail: mut ref Vec[i64]) -> i64 {
+    let m = 2 * width + 1;
+    // comb = base[w..w+width] + '#' + reverse(base[w..w+width])
+    let mut i = 0;
+    while i < width { comb[i] = base[w + i]; i = i + 1; }
+    comb[width] = -1;
+    i = 0;
+    while i < width { comb[width + 1 + i] = base[w + width - 1 - i]; i = i + 1; }
+
+    fail[0] = 0;
+    let mut len = 0;
+    let mut idx = 1;
+    while idx < m {
+        if comb[idx] == comb[len] {
+            len = len + 1;
+            fail[idx] = len;
+            idx = idx + 1;
+        } else if len > 0 {
+            len = fail[len - 1];
+        } else {
+            fail[idx] = 0;
+            idx = idx + 1;
+        }
+    }
+    return fail[m - 1];
+}
+
+fn main() {
+    let big = 260000;
+    let width = 512;
+    let alpha = 2;
+
+    let mut base: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut c = 0;
+    while c < big {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        base.push(state % alpha);
+        c = c + 1;
+    }
+
+    let m = 2 * width + 1;
+    let mut comb: Vec[i64] = Vec.new();
+    let mut fail: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < m { comb.push(0); fail.push(0); z = z + 1; }
+
+    let windows = big - width;
+    let mut sink = 0;
+    let mut w = 0;
+    while w < windows {
+        sink = sink + prefix_lps(base, w, width, mut comb, mut fail);
+        w = w + 1;
+    }
+    println(sink);
+}

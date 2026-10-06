@@ -1,0 +1,20 @@
+
+enum Opt[T] { Yes(T), No }
+fn get(o: Opt[String], d: i64) -> i64 {
+    match o {
+        Opt.Yes(s) => s.len(),
+        Opt.No => d,
+    }
+}
+fn fwd(o: Opt[String]) -> i64 { get(o, -1) }
+fn ident(o: Opt[String]) -> Opt[String] { o }
+fn main() {
+    println(get(Opt.Yes("consumed in place by the callee"), -1));
+    println(fwd(Opt.Yes("forwarded to a second by-value param")));
+    let back: Opt[String] = ident(Opt.Yes("returned straight back out of the callee"));
+    match back {
+        Opt.Yes(s) => println(s.len()),
+        Opt.No => println(-1),
+    }
+    println(get(Opt.No, 7));
+}

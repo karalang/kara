@@ -1,0 +1,3 @@
+shared enum Inner { X(i64), Y }
+enum Et { A(Inner), B }
+fn main() { let z = Et.A(Inner.X(3)); println("ok"); }

@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut k = 1;
+    let f = |x| x + k;
+    k = 10;
+    println(f(1));
+}

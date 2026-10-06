@@ -1,0 +1,21 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.name.contains("row")}") } }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    while i < 8 {
+        // A — BRACED arm yielding the binding, result bound: the reported shape.
+        let oa: Option[R] = Option.Some(R { id: n + i, name: "row-" + (n + i).to_string() });
+        let ka = match oa { Option.Some(r) => { r } Option.None => { R { id: 0, name: "z".to_string() } } };
+        // B — the BARE spelling of the same thing, which was already correct.
+        let ob: Option[R] = Option.Some(R { id: n + i, name: "row-" + (n + i).to_string() });
+        let kb = match ob { Option.Some(r) => r, Option.None => R { id: 0, name: "z".to_string() } };
+        // C — braced arm, result DISCARDED: nothing downstream owns it, so the
+        // neutralizer must NOT fire.
+        let oc: Option[R] = Option.Some(R { id: n + i, name: "row-" + (n + i).to_string() });
+        match oc { Option.Some(r) => { r } Option.None => { R { id: 0, name: "z".to_string() } } };
+        i = i + 1;
+    }
+}

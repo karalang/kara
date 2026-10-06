@@ -1,0 +1,18 @@
+
+shared enum Expr { Num(i64), Bin(Expr, Expr) }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Bin(l, r) => eval(l) + eval(r),
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 40 {
+        let t: Expr = Bin(Num(i), Bin(Num(i), Num(2)));
+        total = total + eval(t);
+        i = i + 1;
+    }
+    println(total);
+}

@@ -1,0 +1,5 @@
+
+fn main() {
+    let a: f16 = 7.80078125f16;
+    println(f"{a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+}

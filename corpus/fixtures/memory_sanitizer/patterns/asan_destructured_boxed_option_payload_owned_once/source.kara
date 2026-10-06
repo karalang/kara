@@ -1,0 +1,26 @@
+
+struct Wide { tag: i64, payload: String }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut acc = 0i64;
+    let mut i = 0;
+    while i < base + 49 {
+        let a: Option[Wide] = Some(Wide { tag: 7, payload: f"pay-{i}-long-enough-aaaa" });
+        acc = acc + match a {
+            Some(w) => { let Wide { tag, payload } = w; if payload.starts_with("pay") { tag } else { 0i64 } }
+            None => 0i64,
+        };
+        let b: Option[Wide] = Some(Wide { tag: 3, payload: f"unb-{i}-long-enough-aaaa" });
+        acc = acc + match b {
+            Some(w) => { let Wide { tag, payload: _ } = w; tag }
+            None => 0i64,
+        };
+        let c: Option[Wide] = Some(Wide { tag: 2, payload: f"arm-{i}-long-enough-aaaa" });
+        acc = acc + match c {
+            Some(Wide { tag, payload }) => { if payload.starts_with("arm") { tag } else { 0i64 } }
+            None => 0i64,
+        };
+        i = i + 1;
+    }
+    println(acc);
+}

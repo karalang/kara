@@ -1,0 +1,18 @@
+
+struct Pair { a: Set[i64], b: Set[i64], n: i64 }
+fn mk(x: i64) -> Pair {
+    let mut sa: Set[i64] = Set.new();
+    sa.insert(x);
+    let mut sb: Set[i64] = Set.new();
+    sb.insert(x * 2);
+    return Pair { a: sa, b: sb, n: x };
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let Pair { a, b: _, n } = mk(i);
+        println(a.len() + n);
+        i = i + 1;
+    }
+    println(99);
+}

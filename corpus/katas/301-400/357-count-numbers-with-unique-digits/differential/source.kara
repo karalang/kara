@@ -1,0 +1,186 @@
+// Differential for #357: the four arms against an oracle that walks every
+// number below base^n and checks its digits directly, for bases 2 to 7 and
+// every n from 0 to base + 1 small enough to walk (base^n <= 300,000).
+//
+//   P1  every arm returns the oracle's answer
+//   P2  the count never falls as n grows, and stops rising exactly at n = base
+//   P3  the step from n - 1 to n is the count of n-digit numbers,
+//       (base - 1) * (base - 1) * (base - 2) * ... over n factors
+//   P4  one digit allows exactly base numbers
+//   P5  base 10 matches the known answers for n = 0 to 8
+//
+// The arms are copied from the kata's four files, renamed.
+
+fn by_position(n: i64, base: i64) -> i64 {
+    let mut total = 1;
+    let mut run = base - 1;
+    let mut next = base - 1;
+    let mut k = 1;
+    while k <= n and k <= base {
+        total += run;
+        run *= next;
+        next -= 1;
+        k += 1;
+    }
+    total
+}
+
+fn extend(len: i64, n: i64, base: i64, used: i64) -> i64 {
+    if len == n {
+        return 1;
+    }
+    let mut count = 1;
+    for d in 0..base {
+        if len == 0 and d == 0 {
+            continue;
+        }
+        if used & (1 << d) == 0 {
+            count += extend(len + 1, n, base, used | (1 << d));
+        }
+    }
+    count
+}
+
+fn by_search(n: i64, base: i64) -> i64 {
+    extend(0, n, base, 0)
+}
+
+fn ways(pos: i64, n: i64, base: i64, used: i64, started: bool, memo: mut ref Map[(i64, i64, bool), i64]) -> i64 {
+    if pos == n {
+        return 1;
+    }
+    let key = (pos, used, started);
+    if let Some(known) = memo.get(key) {
+        return known;
+    }
+    let mut total = 0;
+    for d in 0..base {
+        if not started and d == 0 {
+            total += ways(pos + 1, n, base, used, false, memo);
+        } else if used & (1 << d) == 0 {
+            total += ways(pos + 1, n, base, used | (1 << d), true, memo);
+        }
+    }
+    memo.insert(key, total);
+    total
+}
+
+fn by_digit_dp(n: i64, base: i64) -> i64 {
+    let mut memo: Map[(i64, i64, bool), i64] = Map.new();
+    ways(0, n, base, 0, false, mut memo)
+}
+
+fn factorial(k: i64) -> i64 {
+    let mut f = 1;
+    for i in 2..=k {
+        f *= i;
+    }
+    f
+}
+
+fn by_subsets(n: i64, base: i64) -> i64 {
+    let mut total = 1;
+    for mask in 1..(1 << base) {
+        let k = mask.count_ones() as i64;
+        if k > n {
+            continue;
+        }
+        total += factorial(k);
+        if mask & 1 == 1 {
+            total -= factorial(k - 1);
+        }
+    }
+    total
+}
+
+fn distinct_digits(value: i64, base: i64) -> bool {
+    let mut seen = 0;
+    let mut v = value;
+    while v > 0 {
+        let d = v % base;
+        if seen & (1 << d) != 0 {
+            return false;
+        }
+        seen = seen | (1 << d);
+        v = v / base;
+    }
+    true
+}
+
+fn oracle(n: i64, base: i64) -> i64 {
+    let mut limit = 1;
+    for _ in 0..n {
+        limit *= base;
+    }
+    let mut count = 0;
+    for value in 0..limit {
+        if distinct_digits(value, base) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn check(what: String, ok: bool, failures: mut ref i64) {
+    if not ok {
+        failures += 1;
+        if failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn exactly(n: i64, base: i64) -> i64 {
+    // n-digit numbers with distinct digits, n >= 1.
+    let mut product = base - 1;
+    for i in 1..n {
+        product *= base - i;
+    }
+    if n > base { 0 } else { product }
+}
+
+fn main() {
+    let mut failures = 0;
+    let mut checks = 0;
+    for base in 2..=7 {
+        let mut previous = 0;
+        for n in 0..=(base + 1) {
+            let arms = vec![by_position(n, base), by_search(n, base), by_digit_dp(n, base), by_subsets(n, base)];
+            let mut limit = 1;
+            for _ in 0..n {
+                limit *= base;
+            }
+            if limit <= 300000 {
+                let want = oracle(n, base);
+                for got in arms.iter() {
+                    check(f"P1 base {base} n {n}: arm {got} != oracle {want}", got == want, mut failures);
+                    checks += 1;
+                }
+            }
+            let here = arms[0];
+            for got in arms.iter() {
+                check(f"P1 base {base} n {n}: arms disagree {got} != {here}", got == here, mut failures);
+                checks += 1;
+            }
+            if n > 0 {
+                check(f"P2 base {base} n {n}", here >= previous and (here == previous) == (n > base), mut failures);
+                check(f"P3 base {base} n {n}", here - previous == exactly(n, base), mut failures);
+                checks += 2;
+            }
+            if n == 1 {
+                check(f"P4 base {base}", here == base, mut failures);
+                checks += 1;
+            }
+            previous = here;
+        }
+    }
+    let known = vec![1, 10, 91, 739, 5275, 32491, 168571, 712891, 2345851];
+    for n in 0..=8 {
+        let answers = vec![by_position(n, 10), by_digit_dp(n, 10), by_subsets(n, 10)];
+        for got in answers.iter() {
+            check(f"P5 n {n}: {got} != {known[n]}", got == known[n], mut failures);
+            checks += 1;
+        }
+    }
+    println(f"{checks} checks, {failures} failures");
+}

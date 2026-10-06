@@ -1,0 +1,74 @@
+// LeetCode #41 bench harness — Kāra, the in-place cyclic-sort solver (★).
+//
+// The headline ★ style: send each in-range value to its home index v-1 by swapping
+// (`nums[v-1] != v` guard caps total swaps at n), then scan for the first slot not holding
+// its home value. This is ALLOCATION-FREE integer compute on a reused buffer — no Vec
+// growth, no clone — the same in-place-array footing as #36/#37, the contrast with the
+// heap-allocating #38/#39/#40.
+//
+// Workload: a reused length-N buffer is refilled each iteration with a k-rotated permutation
+// of 1..N, then one slot is punched out of range to create a k-dependent gap, and the
+// cyclic sort finds the missing positive. TOTAL times, fold the answer into a rolling
+// checksum. The buffer is allocated ONCE and overwritten in place every iteration (the hot
+// loop allocates nothing), the gap location varies with the loop index (no hoisting), and
+// the checksum carries a loop-borne dependency — a single-lane (seq) bench by construction.
+// All five language mirrors fold the identical answer sequence and print the identical
+// checksum before timing.
+
+fn first_missing_positive(nums: mut ref Vec[i64], n: i64) -> i64 {
+    // Placement pass: swap each in-range value to its home index v-1.
+    let mut i = 0;
+    while i < n {
+        let v = nums[i];
+        if v >= 1 and v <= n and nums[v - 1] != v {
+            let t = nums[v - 1];
+            nums[v - 1] = v;
+            nums[i] = t;
+        } else {
+            i = i + 1;
+        }
+    }
+    // First slot not holding its home value is the missing positive.
+    let mut j = 0;
+    while j < n {
+        if nums[j] != j + 1 {
+            return j + 1;
+        }
+        j = j + 1;
+    }
+    n + 1
+}
+
+fn main() {
+    let total = 200000;
+    let n = 100;
+    let modulus = 1000000007;
+
+    // Allocate the working buffer ONCE; the hot loop only overwrites it.
+    let mut nums: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < n {
+        nums.push(0);
+        z = z + 1;
+    }
+
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        // Refill with a k-rotated permutation of 1..N (all present), then punch
+        // one slot out of range to create a per-iteration gap.
+        let rot = k % n;
+        let mut i = 0;
+        while i < n {
+            nums[i] = ((i + rot) % n) + 1;
+            i = i + 1;
+        }
+        nums[k % n] = n + 7;
+
+        let ans = first_missing_positive(mut nums, n);
+        acc = (acc * 131 + ans) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

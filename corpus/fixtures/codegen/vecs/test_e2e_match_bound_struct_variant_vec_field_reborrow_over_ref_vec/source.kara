@@ -1,0 +1,25 @@
+
+struct P { n: i64 }
+enum It { Fu { params: Vec[P] }, Other }
+fn collect(items: ref Vec[It]) -> i64 {
+    let mut total = 0;
+    for it in items {
+        match it {
+            It.Fu { params } => {
+                let ps = params;
+                for p in ps { total = total + p.n; }
+            }
+            It.Other => {}
+        }
+    }
+    total
+}
+fn main() {
+    let mut items: Vec[It] = Vec.new();
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { n: 4 });
+    ps.push(P { n: 5 });
+    items.push(It.Fu { params: ps });
+    items.push(It.Other);
+    println(collect(items).to_string());
+}

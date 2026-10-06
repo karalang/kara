@@ -1,0 +1,93 @@
+// Benchmark workload — Permutation Sequence (LeetCode #60), FACTORIAL solver.
+//
+// M = 9 distinct (n, k) cases (rotated by `idx = k % M`). K = 500,000 outer
+// iters. Per iter: build the k-th permutation of 1..n by the factorial number
+// system (permutation_sequence.kara's O(n²) closed form) into a fresh
+// Vec[i64], then fold a POSITION-WEIGHTED checksum `Σ perm[i]·(i+1)` over its
+// digits into the running total.
+//
+// Two design choices matter for a meaningful measurement:
+//
+//   * Rotating (n, k) (not a fixed pair) defeats loop-invariant code motion —
+//     a fixed (n, k) makes get_permutation a loop-invariant the compiler could
+//     hoist out of the K loop entirely, measuring nothing. Same role as kata
+//     56/57/59's rotated cases.
+//   * The sink reads EVERY output digit (`perm[i]·(i+1)`), so no mirror can
+//     dead-code the digit picks. All n digits are materialized and read.
+//
+// This solver's cost is O(n²) and INDEPENDENT of k (it jumps straight to the
+// k-th), so K is large (4M) to reach a measurable time. Its sibling mirror
+// permutation_sequence_nextperm.kara does O(k·n) work — thousands of times
+// more per iter — so it runs a much smaller K; the two are NOT directly
+// wall-time comparable at equal K (see README § Benchmarks for the per-second
+// throughput normalization). The sink is a fixed integer all same-K mirrors
+// (kara/rust/c/go/py) must print before timing; bench.sh fails on mismatch.
+//
+// The `total = total + <checksum>` accumulator is the slice-1 allow-list
+// reduction shape, so karac's default build may emit a karac_par_reduce
+// dispatch — this is a two-lane kata (seq vs auto-par), same as kata 56/57/59.
+
+fn get_permutation(n: i64, k: i64) -> Vec[i64] {
+    let mut fact: Vec[i64] = Vec.new();
+    fact.push(1);
+    let mut i = 1;
+    while i <= n {
+        fact.push(fact[i - 1] * i);
+        i = i + 1;
+    }
+
+    let mut digits: Vec[i64] = Vec.new();
+    let mut d = 1;
+    while d <= n {
+        digits.push(d);
+        d = d + 1;
+    }
+
+    let mut kk = k - 1;
+    let mut result: Vec[i64] = Vec.new();
+    let mut pos = 0;
+    while pos < n {
+        let block = fact[n - 1 - pos];
+        let idx = kk / block;
+        kk = kk % block;
+        result.push(digits.remove(idx));
+        pos = pos + 1;
+    }
+    result
+}
+
+// Position-weighted fold over every digit — forces the whole permutation to be
+// materialized and read (no dead-digit elision).
+fn checksum(perm: ref Vec[i64], n: i64) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < n {
+        s = s + perm[i] * (i + 1);
+        i = i + 1;
+    }
+    s
+}
+
+fn main() {
+    // Rotated (n, k) cases as Vec tables (idiomatic; a captured fixed-size
+    // Array here miscompiles under auto-par — see README § Benchmarks).
+    let m: i64 = 9;
+    let mut ntab: Vec[i64] = Vec.new();
+    ntab.push(9); ntab.push(8); ntab.push(9); ntab.push(7); ntab.push(8);
+    ntab.push(9); ntab.push(6); ntab.push(7); ntab.push(9);
+    let mut ktab: Vec[i64] = Vec.new();
+    ktab.push(362880); ktab.push(40320); ktab.push(181440); ktab.push(5040);
+    ktab.push(20160); ktab.push(300000); ktab.push(720); ktab.push(2520);
+    ktab.push(250000);
+
+    let k_iters: i64 = 500000;
+    let mut total: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx = k % m;
+        let perm = get_permutation(ntab[idx], ktab[idx]);
+        total = total + checksum(perm, ntab[idx]);
+        k = k + 1;
+    }
+    println(total);
+}

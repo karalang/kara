@@ -1,0 +1,13 @@
+source = "tests/codegen/structs.rs::e2e_projection_source_struct_destructure_hands_each_leaf_its_body"
+dedup_of = ["tests/interpreter/structs.rs::test_projection_source_struct_destructure_hands_each_leaf_its_body"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

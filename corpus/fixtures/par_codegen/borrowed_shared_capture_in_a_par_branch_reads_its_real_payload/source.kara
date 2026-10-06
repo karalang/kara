@@ -1,0 +1,15 @@
+
+shared struct N {{ val: i64 }}
+fn worker(n: {mode}N, k: i64) -> i64 {{ n.val + k }}
+fn driver(n: {mode}N) -> i64 {{
+    let (a, b) = par {{
+        let a = worker(n, 1);
+        let b = 100;
+        (a, b)
+    }};
+    a + b
+}}
+fn main() {{
+    let g = N {{ val: 7 }};
+    println(driver(g));
+}}

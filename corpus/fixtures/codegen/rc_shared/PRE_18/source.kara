@@ -1,0 +1,3 @@
+fn go() -> i64 { let t = mkp(9); let p = P { a: t.a, b: 1 };
+  return p.a.len() + p.b; }
+fn main() { println(go()); }

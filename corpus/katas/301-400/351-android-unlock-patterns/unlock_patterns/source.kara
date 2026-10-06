@@ -1,0 +1,88 @@
+// LeetCode #351: Android Unlock Patterns — depth-first search with a skip
+// table and the grid's symmetry.
+//
+// The keys of a 3x3 lock screen are numbered
+//
+//   1 2 3
+//   4 5 6
+//   7 8 9
+//
+// A pattern joins at least m and at most n distinct keys, 1 <= m, n <= 9.
+// The line from one key to the next may pass over a third key only if that
+// key is already in the pattern: 1 -> 3 needs 2 first, 1 -> 9 needs 5 first,
+// and 1 -> 6 passes over no key, so it is always allowed. Count the patterns.
+//
+//   m = 1, n = 1  ->  9
+//   m = 1, n = 2  ->  65
+//
+// skip[a * 10 + b] is the key the line from a to b passes over, or 0 when it
+// passes over none. One search counts every pattern whose length is in
+// m..=n. The four corners start the same number of patterns, and so do the
+// four edges, so the search runs from 1, 2 and 5 only.
+//
+// O(9!) time in the worst case, O(9) space.
+
+fn skip_table() -> Vec[i64] {
+    let mut skip: Vec[i64] = Vec.filled(100, 0);
+    let pairs = [(1, 3, 2), (4, 6, 5), (7, 9, 8), (1, 7, 4), (2, 8, 5), (3, 9, 6), (1, 9, 5), (3, 7, 5)];
+    for (a, b, mid) in pairs {
+        skip[a * 10 + b] = mid;
+        skip[b * 10 + a] = mid;
+    }
+    return skip;
+}
+
+// The patterns that continue from `key`, which is the `len`-th key, counted
+// when their length is in m..=n. The pattern ending at `key` is one of them.
+fn count_from(key: i64, len: i64, m: i64, n: i64, visited: mut ref Vec[bool], skip: ref Vec[i64]) -> i64 {
+    let mut total = 0;
+    if len >= m {
+        total += 1;
+    }
+    if len == n {
+        return total;
+    }
+    visited[key] = true;
+    for next in 1..10 {
+        let mid = skip[key * 10 + next];
+        if not visited[next] and (mid == 0 or visited[mid]) {
+            total += count_from(next, len + 1, m, n, visited, skip);
+        }
+    }
+    visited[key] = false;
+    return total;
+}
+
+fn number_of_patterns(m: i64, n: i64) -> i64 {
+    if m > n {
+        return 0;
+    }
+    let skip = skip_table();
+    let mut visited: Vec[bool] = Vec.filled(10, false);
+    let corner = count_from(1, 1, m, n, mut visited, skip);
+    let edge = count_from(2, 1, m, n, mut visited, skip);
+    let center = count_from(5, 1, m, n, mut visited, skip);
+    return 4 * corner + 4 * edge + center;
+}
+
+fn main() {
+    // The examples from the problem statement.
+    println(f"m=1 n=1 -> {number_of_patterns(1, 1)}");
+    println(f"m=1 n=2 -> {number_of_patterns(1, 2)}");
+
+    // The patterns of each length on its own, and their sum.
+    let mut all = 0;
+    for k in 1..10 {
+        let c = number_of_patterns(k, k);
+        println(f"length {k}: {c}");
+        all += c;
+    }
+    println(f"lengths 1..9 one at a time: {all}");
+
+    // Ranges: every pattern, the classic lock screen's at least four keys, a
+    // range in the middle, and m > n, which has no patterns.
+    println(f"m=1 n=9 -> {number_of_patterns(1, 9)}");
+    println(f"m=4 n=9 -> {number_of_patterns(4, 9)}");
+    println(f"m=3 n=5 -> {number_of_patterns(3, 5)}");
+    println(f"m=9 n=1 -> {number_of_patterns(9, 1)}");
+}

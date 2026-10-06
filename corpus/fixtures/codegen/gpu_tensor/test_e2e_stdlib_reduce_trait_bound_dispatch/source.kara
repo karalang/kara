@@ -1,0 +1,14 @@
+
+fn spread[C: Reduce[i64]](c: ref C) -> i64 {
+    c.max() - c.min()
+}
+fn avg[C: Reduce[i64]](c: ref C) -> f64 {
+    c.mean()
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([10, 20, 30]);
+    let t: Tensor[i64, [4]] = Tensor.from([2, 4, 6, 8]);
+    println(f"{spread(c)} {spread(t)}");
+    println(f"{avg(c)} {avg(t)}");
+    println(f"{c.sum()} {t.sum()}");
+}

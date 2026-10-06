@@ -1,0 +1,121 @@
+// LeetCode 286 — Walls and Gates by DFS RELAXATION.
+//
+// Run a depth-first flood from each gate, carrying the distance walked so far,
+// and write it into a room only when it BEATS what the room already holds.
+//
+//     dfs(cell, d):
+//         if cell is a wall or grid[cell] < d:  return
+//         grid[cell] = d
+//         dfs(each neighbour, d + 1)
+//
+// This looks like the BFS with the queue swapped for the call stack, and it is
+// not. THE FIRST ARRIVAL NO LONGER WINS. Depth-first order means a room can be
+// reached the long way round before the short way, so the search has to be
+// allowed to come back and lower the value — that is what `grid[cell] < d`
+// expresses. The BFS's trick of using INF as the visited mark would break this
+// algorithm outright, because a room that has been written once still has to be
+// reachable again.
+//
+// THE GUARD IS THE ALGORITHM. Without `grid[cell] < d` it does not terminate:
+// the flood walks back into where it came from, one step longer each time. With
+// it, every step either lowers a room's value or stops, and a value can only be
+// lowered finitely often, so it halts. The guard is doing termination duty AND
+// correctness duty at once, which is why it reads like an optimization and is not
+// one.
+//
+// WHAT IT COSTS, AND WHY THE DIFFERENTIAL COUNTS IT. The answer is identical to
+// the BFS's — the differential proves that on every input — but the WORK is not.
+// BFS writes each reachable room exactly once. This writes a room every time it
+// finds a shorter route, which on a grid with gates at both ends can be several
+// times per room, and the counts diverge by a wide margin (3.9x on the
+// harness's inputs). Both are correct; only one has a bound you can state without
+// looking at the input.
+//
+// That is the whole reason the harness measures relaxations as a SECOND property
+// rather than only comparing grids. Two correct algorithms that write wildly
+// different numbers of times are exactly the situation where an answer-only
+// oracle tells you nothing about whether the visited-marking is right.
+
+fn inf() -> i64 {
+    return 2147483647;
+}
+
+fn flood(g: mut ref Vec[i64], r: i64, c: i64, cell: i64, d: i64, relaxations: mut ref i64) {
+    // A wall stops the flood; so does a cell already at or below this distance.
+    // Note the second test also covers the gate we started from (0 < d for any
+    // d >= 1), which is why no separate "don't overwrite a gate" case is needed.
+    if g[cell] == -1 { return; }
+    if g[cell] < d { return; }
+
+    g[cell] = d;
+    relaxations = relaxations + 1;
+
+    let row = cell / c;
+    let col = cell % c;
+    if row > 0 { flood(g, r, c, cell - c, d + 1, relaxations); }
+    if row < r - 1 { flood(g, r, c, cell + c, d + 1, relaxations); }
+    if col > 0 { flood(g, r, c, cell - 1, d + 1, relaxations); }
+    if col < c - 1 { flood(g, r, c, cell + 1, d + 1, relaxations); }
+}
+
+fn walls_and_gates(g: mut ref Vec[i64], r: i64, c: i64, relaxations: mut ref i64) {
+    let mut i = 0;
+    while i < r * c {
+        if g[i] == 0 {
+            // Start each gate's flood at its four neighbours rather than at the
+            // gate itself: entering at the gate would write it (a relaxation
+            // that is not one) and the guard would then stop the flood dead,
+            // since 0 < 1.
+            let row = i / c;
+            let col = i % c;
+            if row > 0 { flood(g, r, c, i - c, 1, relaxations); }
+            if row < r - 1 { flood(g, r, c, i + c, 1, relaxations); }
+            if col > 0 { flood(g, r, c, i - 1, 1, relaxations); }
+            if col < c - 1 { flood(g, r, c, i + 1, 1, relaxations); }
+        }
+        i = i + 1;
+    }
+}
+
+fn show(g: ref Vec[i64], r: i64, c: i64) -> String {
+    let mut s: String = "";
+    let mut row = 0;
+    while row < r {
+        let mut col = 0;
+        while col < c {
+            if col > 0 { s = s + " "; }
+            let v = g[row * c + col];
+            if v == inf() { s = s + "INF"; }
+            else { s = s + f"{v}"; }
+            col = col + 1;
+        }
+        if row < r - 1 { s = s + " / "; }
+        row = row + 1;
+    }
+    return s;
+}
+
+fn report(grid: Vec[i64], r: i64, c: i64) {
+    let mut g = grid;
+    let mut n = 0;
+    walls_and_gates(mut g, r, c, mut n);
+    println(f"{show(g, r, c)}  ({n} relaxations)");
+}
+
+fn main() {
+    let w = -1;
+    let f = 2147483647;
+
+    report([f, w, 0, f,
+            f, f, f, w,
+            f, w, f, w,
+            0, w, f, f], 4, 4);
+
+    report([w], 1, 1);
+    report([0], 1, 1);
+    report([f], 1, 1);
+    report([0, f, f, f], 1, 4);
+    report([f, f, 0, f, f], 1, 5);
+    report([0, f, w, f], 2, 2);
+    report([f, f, f, f], 2, 2);
+}

@@ -1,0 +1,67 @@
+
+struct Q { id: i64, s: String }
+
+impl Drop for Q {
+    fn drop(mut ref self) { println(f"dQ{self.id}"); }
+}
+
+struct W { s: String, k: i64 }
+
+enum Ey { S(String), V(Vec[String]), M(Map[i64, String]), A(Array[String, 2]), N }
+enum Ev { A(Q), B }
+enum Ew { A(W), B }
+enum Ed { A(String), B }
+
+impl Drop for Ed {
+    fn drop(mut ref self) { println("dEd"); }
+}
+
+struct Host { k: i64 }
+
+impl Host {
+    fn mkstr(n: i64) -> Ey { return Ey.S(f"xt-str-aaaaaaaaaaaaaaaa-{n}"); }
+    fn mkvec(n: i64) -> Ey {
+        let mut p: Vec[String] = Vec.new();
+        p.push(f"xt-vec-bbbbbbbbbbbbbbbb-{n}");
+        return Ey.V(p);
+    }
+    fn mkmap(n: i64) -> Ey {
+        let mut p: Map[i64, String] = Map.new();
+        p.insert(n, f"xt-map-cccccccccccccccc-{n}");
+        return Ey.M(p);
+    }
+    fn mkarr(n: i64) -> Ey {
+        let p: Array[String, 2] = [f"xt-arr-dddddddddddddddd-{n}", f"xt-arr-eeeeeeeeeeeeeeee-{n}"];
+        return Ey.A(p);
+    }
+}
+
+impl Ev {
+    fn mke(n: i64) -> Ev { return Ev.A(Q { id: n, s: f"st-q-ffffffffffffffff-{n}" }); }
+}
+
+impl Ew {
+    fn mkw(n: i64) -> Ew { return Ew.A(W { s: f"st-w-gggggggggggggggg-{n}", k: n }); }
+}
+
+impl Ed {
+    fn mkd(n: i64) -> Ed { return Ed.A(f"st-d-hhhhhhhhhhhhhhhh-{n}"); }
+}
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 2 {
+        Host.mkstr(j);
+        Host.mkvec(j);
+        Host.mkmap(j);
+        Host.mkarr(j);
+
+        Ev.mke(j);
+        Ew.mkw(j);
+        Ed.mkd(j);
+
+        println(f"round:{j}");
+        j = j + 1;
+    }
+    println("end");
+}

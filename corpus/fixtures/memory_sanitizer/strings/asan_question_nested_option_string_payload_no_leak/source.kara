@@ -1,0 +1,13 @@
+
+enum E { X }
+fn inner(n: i64) -> Result[Option[String], E] {
+    if n < 0 { return Err(E.X); }
+    Ok(Some(f"got-{n}"))
+}
+fn outer(n: i64) -> Result[String, E] {
+    let opt = inner(n)?;
+    match opt { Some(s) => Ok(s), None => Ok(f"empty") }
+}
+fn main() {
+    match outer(7) { Ok(v) => println(v), Err(_) => println("e") }
+}

@@ -1,0 +1,245 @@
+// LeetCode 263 — differential harness.
+//
+// Runs all THREE deciders — trial division, gcd peeling, constructive
+// enumeration — over four families of input.
+//
+// The first family is EXHAUSTIVE. Ugliness is a property of a single integer,
+// not of a structure, so the small band can simply be checked in full rather
+// than sampled: every n from -100 to 20,000 inclusive, which settles the answer
+// for that range outright instead of "probably". Sampling would be strictly
+// weaker for no saving.
+//
+// The other three families reach where exhaustion cannot:
+//
+//     B  constructed ugly numbers   2^a * 3^b * 5^c near the i64 ceiling
+//     C  ugly * one other prime     the near-misses that share every low factor
+//     D  uniform random i64         almost all false, for varied reasons
+//
+// Family C is the one that separates. A decider that strips 2s, 3s and 5s and
+// then forgets to ask what is left will accept every one of them; so will one
+// that checks only "divisible by 2, 3 or 5". Family B alone would not catch
+// either, because everything in it is genuinely ugly.
+//
+// Family B also exercises the overflow guard in the enumerator. Its candidates
+// are u[i] * 5, and with u[i] a legitimate ugly number close to i64.MAX that
+// product does not fit. Kāra traps on signed overflow rather than wrapping, so
+// an unguarded enumerator does not return a wrong answer here — it aborts.
+//
+// The n <= 0 hang is NOT reachable through this harness, and deliberately so.
+// Every decider guards it, and a decider that did not would not produce a
+// mismatch to count — it would never return. That failure mode is demonstrated
+// in the README by the only means that fits it: running it under a timeout.
+
+fn is_ugly_div(n: i64) -> bool {
+    if n <= 0 { return false; }
+    let mut m = n;
+    while m % 2 == 0 { m = m / 2; }
+    while m % 3 == 0 { m = m / 3; }
+    while m % 5 == 0 { m = m / 5; }
+    return m == 1;
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x = a;
+    let mut y = b;
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    return x;
+}
+
+fn is_ugly_gcd(n: i64) -> bool {
+    if n <= 0 { return false; }
+    let mut m = n;
+    let mut g = gcd(m, 30);
+    while g > 1 {
+        m = m / g;
+        g = gcd(m, 30);
+    }
+    return m == 1;
+}
+
+fn is_ugly_enum(n: i64) -> bool {
+    if n <= 0 { return false; }
+    if n == 1 { return true; }
+    let mut u: Vec[i64] = Vec.new();
+    u.push(1);
+    let mut i2 = 0;
+    let mut i3 = 0;
+    let mut i5 = 0;
+    while true {
+        let mut has2 = false;
+        let mut c2 = 0;
+        if u[i2] <= n / 2 { has2 = true; c2 = u[i2] * 2; }
+        let mut has3 = false;
+        let mut c3 = 0;
+        if u[i3] <= n / 3 { has3 = true; c3 = u[i3] * 3; }
+        let mut has5 = false;
+        let mut c5 = 0;
+        if u[i5] <= n / 5 { has5 = true; c5 = u[i5] * 5; }
+        if not has2 and not has3 and not has5 { return false; }
+        let mut next = 0;
+        let mut have = false;
+        if has2 { next = c2; have = true; }
+        if has3 and (not have or c3 < next) { next = c3; have = true; }
+        if has5 and (not have or c5 < next) { next = c5; have = true; }
+        if next == n { return true; }
+        u.push(next);
+        if has2 and c2 == next { i2 = i2 + 1; }
+        if has3 and c3 == next { i3 = i3 + 1; }
+        if has5 and c5 == next { i5 = i5 + 1; }
+    }
+    return false;
+}
+
+// The constructive generator in its NATURAL mode: over a contiguous range, run
+// the merge once and mark everything it produces, instead of re-running it per
+// value. Same algorithm, same output, applied the way a constructive oracle is
+// meant to be applied to a band. (Families B/C/D cannot use this — their values
+// are scattered across the whole i64 range — so the per-value form above is
+// what checks those.)
+fn ugly_table(limit: i64) -> Vec[bool] {
+    let mut mark: Vec[bool] = Vec.new();
+    let mut z = 0;
+    while z <= limit {
+        mark.push(false);
+        z = z + 1;
+    }
+    let mut u: Vec[i64] = Vec.new();
+    u.push(1);
+    mark[1] = true;
+    let mut i2 = 0;
+    let mut i3 = 0;
+    let mut i5 = 0;
+    while true {
+        let mut has2 = false;
+        let mut c2 = 0;
+        if u[i2] <= limit / 2 { has2 = true; c2 = u[i2] * 2; }
+        let mut has3 = false;
+        let mut c3 = 0;
+        if u[i3] <= limit / 3 { has3 = true; c3 = u[i3] * 3; }
+        let mut has5 = false;
+        let mut c5 = 0;
+        if u[i5] <= limit / 5 { has5 = true; c5 = u[i5] * 5; }
+        if not has2 and not has3 and not has5 { z = 0; break; }
+        let mut next = 0;
+        let mut have = false;
+        if has2 { next = c2; have = true; }
+        if has3 and (not have or c3 < next) { next = c3; have = true; }
+        if has5 and (not have or c5 < next) { next = c5; have = true; }
+        u.push(next);
+        mark[next] = true;
+        if has2 and c2 == next { i2 = i2 + 1; }
+        if has3 and c3 == next { i3 = i3 + 1; }
+        if has5 and c5 == next { i5 = i5 + 1; }
+    }
+    return mark;
+}
+
+fn main() {
+    let mut mismatches = 0;
+    let mut uglies = 0;
+    let mut checked = 0;
+    let mut digest = 0;
+
+    // ---- family A: exhaustive over [-100, 20000] -------------------------
+    let band = 20000;
+    let mark = ugly_table(band);
+    let mut n = -100;
+    while n <= band {
+        let a = is_ugly_div(n);
+        let b = is_ugly_gcd(n);
+        let mut c = false;
+        if n > 0 { c = mark[n]; }
+        if a != b or a != c { mismatches = mismatches + 1; }
+        if a { uglies = uglies + 1; }
+        let mut bit = 0;
+        if a { bit = 1; }
+        digest = (digest * 131 + bit) % 1000000007;
+        checked = checked + 1;
+        n = n + 1;
+    }
+    let exhaustive_uglies = uglies;
+
+    // ---- families B/C/D --------------------------------------------------
+    let limit = i64.MAX;
+    let mut seed = 263263;
+    let mut big_ugly = 0;
+    let mut near_miss = 0;
+
+    let mut c = 0;
+    while c < 600 {
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let family = (seed / 65536) % 3;
+
+        // Build an ugly number by repeatedly multiplying by 2, 3 or 5, as far
+        // as i64 allows. `v <= limit / f` is what keeps the product in range.
+        let mut v = 1;
+        let mut steps = 0;
+        // Most cases stay moderate so the enumerator's cost stays bounded (its
+        // work is the count of ugly numbers below the value); one in eight is
+        // pushed to the i64 ceiling, which is what exercises the overflow
+        // guard.
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let mut want = (seed / 65536) % 13;
+        if (seed / 65536) % 8 == 0 { want = (seed / 65536) % 90; }
+        while steps < want {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let pick = (seed / 65536) % 3;
+            let mut f = 2;
+            if pick == 1 { f = 3; }
+            if pick == 2 { f = 5; }
+            if v <= limit / f {
+                v = v * f;
+            } else {
+                steps = want;   // ceiling reached; stop growing
+            }
+            steps = steps + 1;
+        }
+
+        let mut probe = v;
+        if family == 1 {
+            // ★ near-miss: one factor outside {2,3,5}, everything else shared.
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let pick = (seed / 65536) % 5;
+            let mut q = 7;
+            if pick == 1 { q = 11; }
+            if pick == 2 { q = 13; }
+            if pick == 3 { q = 17; }
+            if pick == 4 { q = 9973; }
+            if v <= limit / q {
+                probe = v * q;
+            } else {
+                probe = q;      // the ugly part did not fit; the prime alone
+            }
+        }
+        if family == 2 {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            probe = seed;       // uniform, small-ish, essentially never ugly
+        }
+
+        let a = is_ugly_div(probe);
+        let b = is_ugly_gcd(probe);
+        let d = is_ugly_enum(probe);
+        if a != b or a != d { mismatches = mismatches + 1; }
+        if a { uglies = uglies + 1; }
+        if family == 0 and a { big_ugly = big_ugly + 1; }
+        if family == 1 and not a { near_miss = near_miss + 1; }
+        let mut bit = 0;
+        if a { bit = 1; }
+        digest = (digest * 131 + bit * 7 + probe % 97) % 1000000007;
+        checked = checked + 1;
+        c = c + 1;
+    }
+
+    println(f"checked {checked}");
+    println(f"ugly {uglies}");
+    println(f"ugly in [-100,20000] {exhaustive_uglies}");
+    println(f"constructed ugly confirmed {big_ugly}");
+    println(f"near-misses rejected {near_miss}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

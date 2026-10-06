@@ -1,0 +1,2 @@
+enum Col { A(i64, String), B }
+fn main() { let g = Col.A; println("end") }

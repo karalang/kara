@@ -1,0 +1,14 @@
+
+fn main() {
+    let v = [1, 2, 3, 4, 5, 6];
+    let xs: Vec[i64] = v.iter()
+        .filter(|x| x % 2 == 0)
+        .scan(0, |state, item| {
+            let new = state + item;
+            Some((new, new))
+        })
+        .collect();
+    for x in xs {
+        println(x);
+    }
+}

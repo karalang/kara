@@ -1,0 +1,13 @@
+source = "tests/spawn_e2e.rs::test_spawn_single_task_runs_and_joins_via_taskgroup_drop"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "par"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

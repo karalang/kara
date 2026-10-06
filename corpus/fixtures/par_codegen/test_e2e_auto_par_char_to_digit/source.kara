@@ -1,0 +1,13 @@
+
+fn show(c: char, r: u32) {
+    match c.to_digit(r) {
+        Some(v) => println(f"{v}"),
+        None => println("none"),
+    }
+}
+fn main() {
+    show('7', 10);
+    show('a', 16);
+    show('z', 36);
+    show('9', 2);
+}

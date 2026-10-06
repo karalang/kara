@@ -1,0 +1,92 @@
+// LeetCode #112: Path Sum — recursive DFS with a running remainder (★).
+//
+// Is there a root-to-LEAF path whose node values sum to `target`? Walk down, subtracting each
+// node's value from the remaining target; the answer is yes exactly when some LEAF is reached
+// with a remainder of zero. The leaf check is essential (as in #111's minimum depth): only a
+// node with no children can complete a path, so an internal node that happens to hit remainder
+// zero does NOT count — you must reach a leaf. Recurse into the children with the reduced
+// remainder and OR the results (a missing child contributes `false`). O(n), short-circuiting on
+// the first satisfying path. Node type mirrors kata [#104](../104-maximum-depth-of-binary-tree/)
+// — a `shared struct TreeNode` (RC).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+fn has_path_sum(node: Option[TreeNode], target: i64) -> bool {
+    match node {
+        None => false,
+        Some(n) => {
+            let rem = target - n.val;
+            let left_none = match n.left { None => true, Some(_) => false };
+            let right_none = match n.right { None => true, Some(_) => false };
+            if left_none and right_none {
+                rem == 0   // leaf: the path completes iff the remainder is exhausted
+            } else {
+                has_path_sum(n.left, rem) or has_path_sum(n.right, rem)
+            }
+        }
+    }
+}
+
+fn build_balanced(lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: mid, left: None, right: None };
+    node.left = build_balanced(lo, mid - 1);
+    node.right = build_balanced(mid + 1, hi);
+    Some(node)
+}
+
+// The sum of one genuine root-to-leaf path (follow left where present, else right) — used to
+// build an ACHIEVABLE target so the verdict has guaranteed true cases.
+fn leftmost_path_sum(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            match n.left {
+                Some(_) => n.val + leftmost_path_sum(n.left),
+                None => n.val + leftmost_path_sum(n.right),
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        let n = 7 + t;
+        let root = build_balanced(t * 20, t * 20 + n - 1);
+        // Even t: an achievable target (a real path sum) -> true. Odd t: far out of range -> false.
+        let target = if (t % 2) == 0 {
+            leftmost_path_sum(root)
+        } else {
+            1000000000
+        };
+        let hit = has_path_sum(root, target);
+        let bit = if hit { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        println(f"tree {t}: target {target} has_path={hit}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

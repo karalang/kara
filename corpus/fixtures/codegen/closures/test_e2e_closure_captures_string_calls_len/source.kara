@@ -1,0 +1,6 @@
+
+fn main() {
+    let s = String.from("hello");
+    let len_plus = |extra: i64| s.len() + extra;
+    println(len_plus(5));
+}

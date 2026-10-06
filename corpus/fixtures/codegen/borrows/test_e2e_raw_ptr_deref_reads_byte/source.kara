@@ -1,0 +1,13 @@
+
+fn main() {
+    let a: Array[u8, 3] = [65u8, 66u8, 67u8];
+    let pa = a.as_ptr();
+    // Safety: `pa` addresses element 0 of the live owned array.
+    let ba: u8 = unsafe { *pa };
+    println(ba);
+    let s = c"hi";
+    let ps = s.as_ptr();
+    // Safety: `ps` addresses the first byte of the live c-string literal.
+    let bs: u8 = unsafe { *ps };
+    println(bs);
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::e2e_fresh_temp_owned_enum_receiver_runs_the_shell_body"
+dedup_of = ["tests/memory_sanitizer/enums.rs::asan_fresh_temp_owned_enum_receiver_runs_the_shell_body_balanced"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

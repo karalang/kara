@@ -1,0 +1,4 @@
+fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _s: String = v.iter().fold(String.new(), |acc, _x| acc);
+         }

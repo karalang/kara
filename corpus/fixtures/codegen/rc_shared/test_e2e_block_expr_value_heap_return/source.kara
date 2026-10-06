@@ -1,0 +1,25 @@
+
+enum E { A(String), B }
+fn mk() -> String { { f"ret{1}" } }
+struct S { name: String }
+fn main() {
+    let a = { f"a{1}" };
+    println(a);
+    let b = { let p = "x" + "y"; p };
+    println(b);
+    let c = if true { f"yes{2}" } else { f"no{0}" };
+    println(c);
+    let mut i = 0i64;
+    while i < 2i64 { let v = { f"v{i}" }; println(v); i = i + 1i64; }
+    let e1 = E.A("m");
+    let d = match e1 { E.A(n) => { f"<{n}>" }, E.B => "z" };
+    println(d);
+    let e2 = E.A("k");
+    let g = match e2 { E.A(n) => { let p = f"[{n}]"; p }, E.B => "z" };
+    println(g);
+    let h = { { f"nest{3}" } };
+    println(h);
+    println(mk());
+    let s = S { name: { f"fld{4}" } };
+    println(s.name);
+}

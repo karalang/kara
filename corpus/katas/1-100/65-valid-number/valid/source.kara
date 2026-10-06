@@ -1,0 +1,139 @@
+// LeetCode #65: Valid Number — 8-state DFA over `s.bytes()`. O(n)
+// time, O(1) extra space.
+//
+// Each byte is categorized into one of {digit, sign, dot, exp, other}
+// and dispatched against the current state. Any unhandled
+// (state, category) pair rejects; at end-of-input the string is valid
+// iff the final state is an accepting state ({2, 4, 5, 8}). All input
+// bytes are ASCII per the LeetCode constraints (letters, digits,
+// `' '` is NOT in the alphabet so leading/trailing spaces are rejected
+// — the kata's `" 1"` / `"1 "` edge cases exercise that), so `s.bytes()`
+// gives the right primitive and avoids a `Vec[char]` snapshot.
+
+// Input categories — match the order in valid.py for cross-impl
+// readability. `OTHER` (= 4) covers every byte not explicitly
+// recognized (letters other than e/E, space, anything else).
+//
+//   0 = digit  1 = sign  2 = dot  3 = exp  4 = other
+fn categorize(b: u8) -> i32 {
+    if b >= b'0' and b <= b'9' {
+        return 0i32;
+    }
+    if b == b'+' or b == b'-' {
+        return 1i32;
+    }
+    if b == b'.' {
+        return 2i32;
+    }
+    if b == b'e' or b == b'E' {
+        return 3i32;
+    }
+    4i32
+}
+
+// State legend (accepting states marked *):
+//   0: start
+//   1: sign seen, awaiting integer-or-dot
+//   2: integer digits accumulated                          (*)
+//   3: dot with no preceding digit, awaiting fractional
+//   4: dot with preceding digit                            (*)
+//   5: fractional digits                                   (*)
+//   6: 'e'/'E' seen, awaiting optional sign + exponent integer
+//   7: sign after 'e', awaiting exponent integer
+//   8: exponent digits                                     (*)
+fn is_number(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    // Category codes (must agree with categorize):
+    //   0 = digit  1 = sign  2 = dot  3 = exp  4 = other
+    let mut state: i32 = 0i32;
+    let mut i = 0;
+    while i < n {
+        let cat: i32 = categorize(bytes[i]);
+
+        if state == 0i32 {
+            if      cat == 0i32 { state = 2i32; }
+            else if cat == 1i32 { state = 1i32; }
+            else if cat == 2i32 { state = 3i32; }
+            else { return false; }
+        } else if state == 1i32 {
+            if      cat == 0i32 { state = 2i32; }
+            else if cat == 2i32 { state = 3i32; }
+            else { return false; }
+        } else if state == 2i32 {
+            if      cat == 0i32 { state = 2i32; }
+            else if cat == 2i32 { state = 4i32; }
+            else if cat == 3i32 { state = 6i32; }
+            else { return false; }
+        } else if state == 3i32 {
+            if      cat == 0i32 { state = 5i32; }
+            else { return false; }
+        } else if state == 4i32 {
+            if      cat == 0i32 { state = 5i32; }
+            else if cat == 3i32 { state = 6i32; }
+            else { return false; }
+        } else if state == 5i32 {
+            if      cat == 0i32 { state = 5i32; }
+            else if cat == 3i32 { state = 6i32; }
+            else { return false; }
+        } else if state == 6i32 {
+            if      cat == 0i32 { state = 8i32; }
+            else if cat == 1i32 { state = 7i32; }
+            else { return false; }
+        } else if state == 7i32 {
+            if      cat == 0i32 { state = 8i32; }
+            else { return false; }
+        } else if state == 8i32 {
+            if      cat == 0i32 { state = 8i32; }
+            else { return false; }
+        } else {
+            return false;
+        }
+
+        i = i + 1;
+    }
+
+    state == 2i32 or state == 4i32 or state == 5i32 or state == 8i32
+}
+
+fn report(s: ref String) {
+    println(f"is_number \"{s}\": {is_number(s)}");
+}
+
+fn main() {
+    // Valid cases from the LeetCode spec.
+    report("0");                 // true
+    report("2");                 // true
+    report("0089");              // true
+    report("-0.1");              // true
+    report("+3.14");             // true
+    report("4.");                // true
+    report("-.9");               // true
+    report("2e10");              // true
+    report("-90E3");             // true
+    report("3e+7");              // true
+    report("+6e-1");             // true
+    report("53.5e93");           // true
+    report("-123.456e789");      // true
+
+    // Invalid cases from the LeetCode spec.
+    report("abc");               // false
+    report("1a");                // false
+    report("1e");                // false  (e with no exponent digits)
+    report("e3");                // false  (e at start)
+    report("99e2.5");            // false  (dot in exponent)
+    report("--6");               // false  (double sign)
+    report("-+3");               // false  (mixed sign)
+    report("95a54e53");          // false  (letter inside int)
+
+    // Edge cases — bare dot/sign, empty exponent, sign mid-stream.
+    report(".");                 // false  (dot with no digits either side)
+    report(".e1");               // false  (dot with no preceding-or-trailing digit)
+    report("+.");                // false  (sign + dot with no digits)
+    report("+");                 // false  (sign alone)
+    report("4e+");               // false  (exponent with no digits)
+    report("6+1");               // false  (sign mid-stream, not after e)
+    report(" 1");                // false  (leading space — not in alphabet)
+    report("1 ");                // false  (trailing space — not in alphabet)
+}

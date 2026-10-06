@@ -1,0 +1,9 @@
+
+fn main() {
+    let names: Vec[String] = Vec.from_fn(3, |i| f"n{i}");
+    println(names[0]);
+    println(names[2]);
+    println(names.len());
+    let built: Vec[String] = Vec.from_fn(2, |i| i.to_string());
+    println(built[1]);
+}

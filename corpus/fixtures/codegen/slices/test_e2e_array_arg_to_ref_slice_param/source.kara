@@ -1,0 +1,34 @@
+
+fn sum_ref(nums: ref Slice[i64], n: i64) -> i64 {
+    let mut s = 0i64;
+    let mut i = 0i64;
+    while i < n { s = s + nums[i]; i = i + 1i64; }
+    s
+}
+fn forward(nums: ref Slice[i64], n: i64) -> i64 {
+    sum_ref(nums, n)
+}
+fn first_missing(nums: ref Slice[i64], n: i64) -> i64 {
+    let mut seen: Vec[bool] = Vec.new();
+    let mut k = 0i64;
+    while k <= n { seen.push(false); k = k + 1i64; }
+    let mut i = 0i64;
+    while i < n {
+        let v = nums[i];
+        if v >= 1i64 and v <= n { seen[v] = true; }
+        i = i + 1i64;
+    }
+    let mut v = 1i64;
+    while v <= n {
+        if not seen[v] { return v; }
+        v = v + 1i64;
+    }
+    n + 1i64
+}
+fn main() {
+    let a: Array[i64, 4] = [10, 20, 30, 40];
+    println(sum_ref(a, 4));      // 100 — direct Array -> ref Slice
+    println(forward(a, 4));      // 100 — forwarded ref-slice binding
+    let b: Array[i64, 5] = [3, 4, -1, 1, 9];
+    println(first_missing(b, 5)); // 2 — ref-slice forward + Vec[bool] index
+}

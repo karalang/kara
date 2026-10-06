@@ -1,0 +1,18 @@
+
+#[derive(Default)]
+struct Config {
+    timeout_ms: i64,
+    ratio: f64,
+    verbose: bool,
+    name: String,
+    tag: char,
+}
+
+fn main() {
+    let c = Config.default();
+    println(c.timeout_ms);
+    println(c.ratio);
+    println(c.verbose);
+    println(c.name);
+    println(c.tag as i64);
+}

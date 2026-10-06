@@ -1,0 +1,9 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let mut it = v.iter().skip_while(|x| x < 100);
+    match it.next() {
+        Some(_) => println("had value"),
+        None => println("empty"),
+    }
+}

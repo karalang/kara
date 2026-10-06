@@ -1,0 +1,39 @@
+
+struct Mix[T] { v: T, s: String }
+struct MixC[T] { v: T, s: String }
+struct Scal[T] { v: T, n: i64 }
+struct Lone[T] { v: T }
+struct Pr[T] { a: T, b: T }
+struct PrC[T] { a: T, b: T }
+
+fn diverge[U](x: Mix[U]) -> i64 { 1 }
+fn same[T](x: MixC[T]) -> i64 { 1 }
+fn scal[U](x: Scal[U]) -> i64 { 1 }
+fn lone[U](x: Lone[U]) -> i64 { 1 }
+fn pair[U](x: Pr[U]) -> i64 { 1 }
+fn pair_same[T](x: PrC[T]) -> i64 { 1 }
+
+fn main() {
+    // Runtime-derived payload: a constant-folded one is a dead allocation the
+    // optimizer deletes, and the fixture then passes vacuously against the
+    // unfixed compiler (B-2026-08-04-17).
+    let n: i64 = env.args().len();
+    let mut i: i64 = 0;
+    while i < 3 {
+        // Fresh temps — the callee is the sole owner.
+        println(diverge(Mix { v: "diverging-payload-past-inline".repeat(n), s: "sibling-payload-past-inline".repeat(n) }));
+        println(same(MixC { v: "control-payload-past-inline".repeat(n), s: "sibling-payload-past-inline".repeat(n) }));
+        println(pair(Pr { a: "bare-a-payload-past-inline".repeat(n), b: "bare-b-payload-past-inline".repeat(n) }));
+        println(pair_same(PrC { a: "bare-a-payload-past-inline".repeat(n), b: "bare-b-payload-past-inline".repeat(n) }));
+        // Named bindings — the caller owns until it retracts.
+        let m = Mix { v: "named-payload-past-inline".repeat(n), s: "named-sibling-past-inline".repeat(n) };
+        println(diverge(m));
+        let sc = Scal { v: "scalar-sibling-payload-past-inline".repeat(n), n: i };
+        println(scal(sc));
+        let lo = Lone { v: "lone-bare-payload-past-inline".repeat(n) };
+        println(lone(lo));
+        let pr = Pr { a: "named-a-payload-past-inline".repeat(n), b: "named-b-payload-past-inline".repeat(n) };
+        println(pair(pr));
+        i = i + 1;
+    }
+}

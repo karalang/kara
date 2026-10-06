@@ -1,0 +1,59 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct Inner { id: i64, tag: String }
+#[derive(Hash, Eq, PartialEq)]
+enum Shape {
+    Unit,
+    Scalar(i64),
+    Alt(i64),
+    Text { s: String },
+    Pair(i64, String),
+    Items(Vec[i64]),
+    Nested(Inner),
+    Narrow(u8, i64),
+}
+#[derive(Hash, Eq, PartialEq)]
+shared enum Node { Named { s: String }, Anon }
+fn main() {
+    let mut m: Map[Shape, i64] = Map.new();
+    m.insert(Shape.Unit, 1);
+    m.insert(Shape.Scalar(5), 2);
+    m.insert(Shape.Alt(5), 3);
+    m.insert(Shape.Text { s: f"hello" }, 4);
+    m.insert(Shape.Pair(9, f"pp"), 5);
+    m.insert(Shape.Items(vec![1, 2, 3]), 6);
+    m.insert(Shape.Nested(Inner { id: 7, tag: f"nn" }), 7);
+    m.insert(Shape.Narrow(200, 11), 8);
+    println(f"len={m.len()}");
+    println(f"unit={m.contains_key(Shape.Unit)}");
+    println(f"text={m.contains_key(Shape.Text { s: f"hello" })}");
+    println(f"text-ne={m.contains_key(Shape.Text { s: f"hellp" })}");
+    println(f"pair={m.contains_key(Shape.Pair(9, f"pp"))}");
+    println(f"pair-ne={m.contains_key(Shape.Pair(9, f"pq"))}");
+    println(f"items={m.contains_key(Shape.Items(vec![1, 2, 3]))}");
+    println(f"items-ne={m.contains_key(Shape.Items(vec![1, 2, 4]))}");
+    println(f"nested={m.contains_key(Shape.Nested(Inner { id: 7, tag: f"nn" }))}");
+    println(f"nested-ne={m.contains_key(Shape.Nested(Inner { id: 7, tag: f"nm" }))}");
+    println(f"narrow={m.contains_key(Shape.Narrow(200, 11))}");
+    println(f"narrow-ne={m.contains_key(Shape.Narrow(201, 11))}");
+    match m.get(Shape.Scalar(5)) { Some(v) => { println(f"tag-a={v}") } None => { println(f"tag-a=miss") } }
+    match m.get(Shape.Alt(5)) { Some(v) => { println(f"tag-b={v}") } None => { println(f"tag-b=miss") } }
+
+    let mut s: Set[Shape] = Set.new();
+    s.insert(Shape.Text { s: f"dup" });
+    s.insert(Shape.Text { s: f"dup" });
+    println(f"dedup={s.len()}");
+    m.remove(Shape.Text { s: f"hello" });
+    println(f"removed={m.len()}");
+
+    let mut n: Map[Node, i64] = Map.new();
+    n.insert(Node.Named { s: f"aa" }, 1);
+    println(f"shared={n.contains_key(Node.Named { s: f"aa" })}");
+    println(f"shared-ne={n.contains_key(Node.Named { s: f"ab" })}");
+
+    let p = Shape.Text { s: f"eq" };
+    let q = Shape.Text { s: f"eq" };
+    let r = Shape.Text { s: f"ne" };
+    println(f"eq={p == q}");
+    println(f"eq-ne={p == r}");
+}

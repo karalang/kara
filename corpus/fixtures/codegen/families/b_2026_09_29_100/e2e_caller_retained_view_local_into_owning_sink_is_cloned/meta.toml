@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_100.rs::e2e_caller_retained_view_local_into_owning_sink_is_cloned"
+dedup_of = ["tests/interpreter/families/b_2026_09_29_100.rs::interp_caller_retained_view_local_into_owning_sink_is_cloned", "tests/memory_sanitizer/families/b_2026_09_29_100.rs::asan_caller_retained_view_local_into_owning_sink_is_cloned"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared", "uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

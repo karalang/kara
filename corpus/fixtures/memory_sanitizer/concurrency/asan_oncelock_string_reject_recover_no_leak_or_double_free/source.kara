@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[String] = OnceLock.new();
+        match cell.set("first".to_string()) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set("second".to_string()) {
+            Ok(_) => {}
+            Err(e) => { n = n + e.rejected.len(); }
+        }
+        i = i + 1;
+    }
+    println(n.to_string());
+}

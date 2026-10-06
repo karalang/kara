@@ -1,0 +1,18 @@
+
+        fn first_word(s: String) -> Option[String] {
+            let words = s.split(" ");
+            if words.len() > 0 { Some(words[0]) } else { None }
+        }
+        fn work(n: i64) -> i64 {
+            let mut t = 0;
+            let mut i = 0;
+            while i < n { t = t + i; i = i + 1; }
+            t
+        }
+        fn main() {
+            let r = first_word("hello world");
+            let a = r.unwrap_or("x").len();
+            let b = work(50000);
+            println(a + b);
+        }
+        

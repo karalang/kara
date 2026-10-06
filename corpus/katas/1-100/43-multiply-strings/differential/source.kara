@@ -1,0 +1,113 @@
+// Differential: schoolbook vs add-shift multiplication on random digit strings.
+// Schoolbook multiplication over digit vectors, least significant digit first.
+fn digits(s: ref String) -> Vec[i64] {
+    let mut d: Vec[i64] = s.bytes().iter().map(|b| (b as i64) - 48).collect();
+    d.reverse();
+    d
+}
+
+fn multiply(a: ref String, b: ref String) -> String {
+    let x = digits(a);
+    let y = digits(b);
+    let mut acc: Vec[i64] = vec![0; x.len() + y.len()];
+    for i in 0..x.len() {
+        for j in 0..y.len() {
+            acc[i + j] += x[i] * y[j];
+        }
+    }
+    let mut carry = 0;
+    for k in 0..acc.len() {
+        let t = acc[k] + carry;
+        acc[k] = t % 10;
+        carry = t / 10;
+    }
+    while acc.len() > 1 and acc[acc.len() - 1] == 0 {
+        acc.pop();
+    }
+    let mut out = String.new();
+    for k in (0..acc.len()).rev() {
+        out.push((acc[k] as u8 + 48) as char);
+    }
+    out
+}
+
+// Sum of shifted partial products, each built by one-digit multiplication.
+fn add(a: String, b: String) -> String {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let mut i = x.len() as i64 - 1;
+    let mut j = y.len() as i64 - 1;
+    let mut carry = 0;
+    let mut rev: Vec[char] = Vec.new();
+    while i >= 0 or j >= 0 or carry > 0 {
+        let dx = if i >= 0 { x[i].to_digit(10).unwrap() as i64 } else { 0 };
+        let dy = if j >= 0 { y[j].to_digit(10).unwrap() as i64 } else { 0 };
+        let t = dx + dy + carry;
+        rev.push(((t % 10) as u8 + 48) as char);
+        carry = t / 10;
+        i -= 1;
+        j -= 1;
+    }
+    rev.iter().rev().collect()
+}
+
+fn times_digit(a: ref String, d: i64, shift: i64) -> String {
+    if d == 0 {
+        return "0";
+    }
+    let mut acc = "0".to_string();
+    for _ in 0..d {
+        acc = add(acc, a.clone());
+    }
+    acc + "0".repeat(shift)
+}
+
+fn multiply2(a: String, b: String) -> String {
+    let mut total = "0".to_string();
+    let bs: Vec[char] = b.chars().collect();
+    for (k, c) in bs.iter().enumerate() {
+        let d = c.to_digit(10).unwrap() as i64;
+        let part = times_digit(a, d, bs.len() - 1 - k);
+        total = add(total, part);
+    }
+    let cs: Vec[char] = total.chars().collect();
+    let mut k = 0;
+    while k + 1 < cs.len() and cs[k] == '0' {
+        k += 1;
+    }
+    cs[k..].iter().collect()
+}
+
+fn main() {
+    let mut seed: i64 = 4242;
+    let mut fails = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..400 {
+        let mut a = String.new();
+        let mut b = String.new();
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let la = 1 + seed % 18;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let lb = 1 + seed % 18;
+        for i in 0..la {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let d = if i == 0 and la > 1 { 1 + (seed / 16) % 9 } else { (seed / 16) % 10 };
+            a.push((d as u8 + 48) as char);
+        }
+        for i in 0..lb {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let d = if i == 0 and lb > 1 { 1 + (seed / 16) % 9 } else { (seed / 16) % 10 };
+            b.push((d as u8 + 48) as char);
+        }
+        let p = multiply(a, b);
+        let q = multiply2(a.clone(), b.clone());
+        if p != q {
+            fails += 1;
+            println(f"mismatch {t}: {a} * {b}: {p} vs {q}");
+        }
+        for c in p.chars() {
+            checksum = (checksum * 17 + (c as i64) + t) % 1000000007;
+        }
+    }
+    println(f"400 products, failures {fails}, checksum {checksum}");
+}

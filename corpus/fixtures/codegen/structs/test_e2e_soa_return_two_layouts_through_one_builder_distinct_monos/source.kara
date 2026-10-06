@@ -1,0 +1,25 @@
+
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+layout coll: Vec[E] { group c1 { x } group c2 { y } }
+fn make() -> Vec[E] {
+    let mut buf: Vec[E] = Vec.new();
+    buf.push(E { x: 1.0, y: 2.0 });
+    buf.push(E { x: 3.0, y: 4.0 });
+    buf
+}
+fn sum_grid(g: Vec[E]) -> f64 {
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < g.len() {
+        s = s + g[i].x + g[i].y;
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let grid: Vec[E] = make();
+    let coll: Vec[E] = make();
+    println(sum_grid(grid));
+    println(sum_grid(coll));
+}

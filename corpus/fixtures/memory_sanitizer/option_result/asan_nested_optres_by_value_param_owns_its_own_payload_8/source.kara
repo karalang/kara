@@ -1,0 +1,7 @@
+
+fn show(x: Result[Option[String], String]) { println(f"{x}"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 { show(Ok(None)); i = i + 1; }
+    println("done");
+}

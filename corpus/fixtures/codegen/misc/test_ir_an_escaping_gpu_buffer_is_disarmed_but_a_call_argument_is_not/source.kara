@@ -1,0 +1,12 @@
+
+struct Body { mass: f32, speed: f32 }
+
+fn make() -> GpuBuffer[Body] {
+    let bodies: Vec[Body] = [Body { mass: 1.0, speed: 2.0 }];
+    let buf = gpu.upload(bodies);
+    buf
+}
+
+fn main() {
+    println(f"{gpu.sum(make().mass)}");
+}

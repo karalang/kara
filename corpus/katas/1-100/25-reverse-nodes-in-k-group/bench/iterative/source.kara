@@ -1,0 +1,109 @@
+// Benchmark workload — Reverse Nodes in k-Group (LeetCode #25), iterative.
+// Builds a fresh N-node list every iteration (the reversal consumes and
+// re-links it, so each iter needs fresh input), reverses it in groups of
+// k = 5 in place, and sums the result. K iterations. See ../README.md
+// § Benchmarks.
+//
+// The list is [1, 2, …, N]; the reversal re-links every node (N/k group
+// reversals, one probe walk + k pointer stores each) but moves no values,
+// so the sum is invariant: N·(N+1)/2 per iteration. The sink is the running
+// total of that per-iter sum, so all four compiled mirrors must agree before
+// timing — a reversal that drops or duplicates a node breaks the sink.
+//
+// Seq lane (BENCH.md two-lane discipline): the kara binary is built with
+// KARAC_AUTO_PAR=0 so the K-loop's `total = total + …` reduction stays
+// single-threaded and directly comparable to rustc -O / clang -O3 / go build.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn reverse_k_group(head: Option[ListNode], k: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut group_prev = dummy;
+    loop {
+        // Probe k nodes ahead; a partial trailing group stays in place.
+        let mut probe = group_prev.next;
+        let mut count = 0;
+        let mut full = true;
+        while count < k {
+            match probe {
+                Some(node) => {
+                    probe = node.next;
+                    count = count + 1;
+                }
+                None => {
+                    full = false;
+                    break;
+                }
+            }
+        }
+        if not full {
+            break;
+        }
+        if let Some(group_head) = group_prev.next {
+            // Reverse exactly k nodes, prev seeded with the suffix.
+            let mut prev = probe;
+            let mut cur = group_prev.next;
+            let mut j = 0;
+            while j < k {
+                if let Some(node) = cur {
+                    cur = node.next;
+                    node.next = prev;
+                    prev = Some(node);
+                }
+                j = j + 1;
+            }
+            group_prev.next = prev;
+            group_prev = group_head;
+        } else {
+            break;
+        }
+    }
+    dummy.next
+}
+
+fn build_list(count: i64) -> Option[ListNode] {
+    if count <= 0 {
+        return None;
+    }
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    for i in 2..count + 1 {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn sum_list(list: Option[ListNode]) -> i64 {
+    let mut s = 0;
+    let mut c = list;
+    loop {
+        match c {
+            Some(node) => {
+                s = s + node.val;
+                c = node.next;
+            }
+            None => break,
+        }
+    }
+    s
+}
+
+fn main() {
+    let n_values = 100;
+    let k_iters = 500000;
+
+    let mut total = 0;
+    let mut k = 0;
+    while k < k_iters {
+        let list = build_list(n_values);
+        let reversed = reverse_k_group(list, 5);
+        total = total + sum_list(reversed);
+        k = k + 1;
+    }
+    println(f"{total}");
+}

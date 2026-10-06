@@ -1,0 +1,64 @@
+
+struct R { s: String }
+struct H { r: R, n: i64 }
+struct Q { h: H }
+struct W { a: R, b: R }
+fn s_of(i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+    s.push_str(f"{i}");
+    return s;
+}
+fn if_let_spelling(k: i64) -> bool {
+    let h: H = H { r: R { s: s_of(k + 1) }, n: 4 };
+    let mut hit: bool = false;
+    if let H { r, .. } = h { hit = r.s.contains("padded"); }
+    return hit;
+}
+fn let_else_spelling(k: i64) -> bool {
+    let h: H = H { r: R { s: s_of(k + 2) }, n: 4 };
+    let H { r, .. } = h else { return false };
+    return r.s.contains("padded");
+}
+fn nested_match_spelling(k: i64) -> bool {
+    let q: Q = Q { h: H { r: R { s: s_of(k + 3) }, n: 4 } };
+    let mut hit: bool = false;
+    match q { Q { h: H { r, .. } } => { hit = r.s.contains("padded"); } }
+    return hit;
+}
+fn nested_if_let_spelling(k: i64) -> bool {
+    let q: Q = Q { h: H { r: R { s: s_of(k + 4) }, n: 4 } };
+    let mut hit: bool = false;
+    if let Q { h: H { r, .. } } = q { hit = r.s.contains("padded"); }
+    return hit;
+}
+fn two_fields_one_taken(k: i64) -> bool {
+    let w: W = W { a: R { s: s_of(k + 5) }, b: R { s: s_of(k + 6) } };
+    let mut hit: bool = false;
+    if let W { a, .. } = w { hit = a.s.contains("padded"); }
+    return hit;
+}
+fn flat_match_control(k: i64) -> bool {
+    let h: H = H { r: R { s: s_of(k + 7) }, n: 4 };
+    let mut hit: bool = false;
+    match h { H { r, .. } => { hit = r.s.contains("padded"); } }
+    return hit;
+}
+fn main() {
+    // B-2026-09-03-40 — `k` is RUNTIME-OPAQUE (argv length), and every payload
+    // is derived from it. With the literal seeds this fixture used to carry,
+    // `s_of(1)` builds a compile-time-known string and `contains("padded")` is
+    // provably true, so once the spurious auto-par band around these bodies
+    // stopped forming and LLVM could see through them, it folded the payloads
+    // away entirely: allocations fell 99 -> 31 and the min-allocs floor caught
+    // it. The floor was RIGHT and the fixture was leaning on the band to block
+    // constant-folding. Seeding from argv restores real allocation.
+    let k: i64 = env.args().len();
+    println(if_let_spelling(k));
+    println(let_else_spelling(k));
+    println(nested_match_spelling(k));
+    println(nested_if_let_spelling(k));
+    println(two_fields_one_taken(k));
+    println(flat_match_control(k));
+    println("done");
+}

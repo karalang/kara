@@ -1,0 +1,105 @@
+// Benchmark lane for LeetCode #299 — Bulls and Cows.
+//
+// WHAT IS AND ISN'T MEASURED. The kata's function takes two `String`s and
+// begins `s.chars().collect()`, which allocates. Benching that would put a
+// UTF-8 decode and two Vec allocations in front of about twenty integer
+// operations, and the lane would report allocator throughput under a
+// bulls-and-cows-shaped name. So the boards are decoded ONCE into a flat digit
+// array at startup and the punch loop scores them in place. What is timed is
+// the reconciliation — the part the kata is about.
+//
+// BOARD SHAPE. Length 4 over an alphabet of 4 digits, which is the game as
+// actually played and, more to the point, a regime where collisions are the
+// rule rather than the exception: with four slots drawn from four digits, a
+// repeat appears in about 96% of boards. That keeps the multiset path — the
+// `min(count, count)` reconciliation — under constant load. Drawing from all
+// ten digits instead would make most boards repeat-free, and the lane would
+// spend its time on the easy branch.
+//
+// The build is a `build-once + punch` shape on purpose (BENCHMARKS.md): boards
+// are generated once, then scored 12 times. A generator inside the timed loop
+// would be vectorizable in C and Rust and not in Kara, and the lane would
+// measure that difference instead of this one.
+
+let N_PAIRS = 400000;
+let PASSES = 12;
+let WIDTH = 4;
+let ALPHABET = 4;
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn main() {
+    // ---- build once -----------------------------------------------------
+    let total = N_PAIRS * WIDTH;
+    let mut secrets: Vec[i64] = Vec.filled(total, 0);
+    let mut guesses: Vec[i64] = Vec.filled(total, 0);
+
+    let mut state = 20299;
+    let mut i = 0;
+    while i < total {
+        state = lcg(state);
+        secrets[i] = (state / 65536) % ALPHABET;
+        state = lcg(state);
+        guesses[i] = (state / 65536) % ALPHABET;
+        i = i + 1;
+    }
+
+    // ---- punch ----------------------------------------------------------
+    let mut checksum = 0;
+    let mut pass = 0;
+    while pass < PASSES {
+        let mut p = 0;
+        while p < N_PAIRS {
+            let base = p * WIDTH;
+
+            // `Array[i64, 4]`, not `Vec.filled(4, 0)`. The Vec spelling
+            // heap-allocates twice per pair — 9.6M allocations over the lane —
+            // where C's `long s_left[4] = {0}` and Rust's `[0i64; 4]` are a
+            // stack slot and a couple of stores. Benching the Vec against
+            // those would be a mirror asymmetry, not a language result.
+            let mut s_left: Array[i64, 4] = Array[0, 0, 0, 0];
+            let mut g_left: Array[i64, 4] = Array[0, 0, 0, 0];
+            let mut bulls = 0;
+            let mut cows = 0;
+
+            let mut k = 0;
+            while k < WIDTH {
+                let sd = secrets[base + k];
+                let gd = guesses[base + k];
+                if sd == gd {
+                    bulls = bulls + 1;
+                } else {
+                    s_left[sd] = s_left[sd] + 1;
+                    g_left[gd] = g_left[gd] + 1;
+                }
+                k = k + 1;
+            }
+
+            let mut d = 0;
+            while d < ALPHABET {
+                // A VALUE-`if` feeding ONE add, not an add duplicated into two
+                // arms. The mirrors all select a value and accumulate once
+                // (`cows += s < g ? s : g` in C, the same `if` expression in
+                // Rust, the conditional expression in Python), and in a
+                // checked-arithmetic language the difference is not cosmetic:
+                // an add in each arm is two checked adds with two trap edges,
+                // which nothing can if-convert, and it costs 2.6x. Measured
+                // 2026-09-21 — and `rustc -C overflow-checks=on` pays the same
+                // 2.6x for the duplicated spelling, so this is the shape of
+                // checked arithmetic rather than anything kara-specific.
+                cows = cows + (if s_left[d] < g_left[d] { s_left[d] } else { g_left[d] });
+                d = d + 1;
+            }
+
+            // Sink: both numbers, every pair, every pass. Folding only the
+            // bulls would let an optimizer drop the whole cow reconciliation.
+            checksum = (checksum * 31 + bulls * 7 + cows) % 1000000007;
+            p = p + 1;
+        }
+        pass = pass + 1;
+    }
+
+    println(f"pairs {N_PAIRS} passes {PASSES} checksum {checksum}");
+}

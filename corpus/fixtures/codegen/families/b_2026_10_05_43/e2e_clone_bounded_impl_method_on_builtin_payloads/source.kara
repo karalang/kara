@@ -1,0 +1,20 @@
+struct G[T] { v: T }
+impl[T: Clone] G[T] {
+    fn get(ref self) -> T { return self.v.clone(); }
+}
+fn main() {
+    let mut a = G { v: "abc".to_string() };
+    let s = a.get();
+    a.v.push('d');
+    println(f"{s} {a.v}");
+    let mut b = G { v: vec![1, 2] };
+    let v = b.get();
+    b.v.push(3);
+    println(f"{v.len()} {b.v.len()}");
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 10);
+    let mut d = G { v: m };
+    let m2 = d.get();
+    d.v.insert(2, 20);
+    println(f"{m2.len()} {d.v.len()}");
+}

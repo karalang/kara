@@ -1,0 +1,5 @@
+
+        trait Channel[T] { fn send(ref self, v: T); }
+        effect resource RequestCh: Channel;
+        fn main() { }
+        

@@ -1,0 +1,40 @@
+
+struct Heap[T] { xs: Vec[T] }
+impl[T] Heap[T] {
+    fn pop_one(mut ref self) -> Option[T] { self.xs.pop() }
+    fn take_one(self) -> Option[T] {
+        let mut h = self;
+        h.pop_one()
+    }
+    fn into_sorted(self) -> Vec[T] {
+        let mut h = self;
+        let mut out: Vec[T] = Vec.new();
+        while h.xs.len() > 0 {
+            match h.pop_one() { Some(v) => { out.push(v); } None => {} }
+        }
+        out
+    }
+}
+struct PlainHeap { xs: Vec[String] }
+impl PlainHeap {
+    fn pop_one(mut ref self) -> Option[String] { self.xs.pop() }
+    fn take_one(self) -> Option[String] { let mut h = self; h.pop_one() }
+}
+fn main() {
+    // (a) minimal: ONE sibling call through the rebound owned receiver.
+    let a = Heap { xs: ["a", "bb", "ccc"] };
+    match a.take_one() { Some(v) => { println(v); } None => {} }
+    // (b) the filed shape — assert CONTENTS, not just the count: the count was
+    // right even while every element was empty.
+    let b = Heap { xs: ["a", "bb", "ccc"] };
+    let o = b.into_sorted();
+    println(o.len());
+    let mut i = 0;
+    while i < o.len() { println(o[i]); i = i + 1; }
+    // (c) scalar control: correct pre-fix, because the base layout is i64.
+    let c = Heap { xs: [1, 2, 3] };
+    match c.take_one() { Some(v) => { println(v); } None => {} }
+    // (d) NON-generic control at the same heap element type.
+    let d = PlainHeap { xs: ["p", "qq"] };
+    match d.take_one() { Some(v) => { println(v); } None => {} }
+}

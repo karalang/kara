@@ -1,0 +1,93 @@
+// LeetCode #100: Same Tree — recursive structural comparison (★).
+//
+// Two binary trees are "the same" iff they are structurally identical AND every
+// corresponding pair of nodes holds the same value. The recursion walks both trees
+// in lockstep: two empty subtrees match; an empty and a non-empty do not; otherwise
+// the roots must share a value and their left subtrees and right subtrees must both
+// match. A single traversal of the (identical) shape, short-circuiting on the first
+// mismatch. Node type mirrors kata [#98](../98-validate-binary-search-tree/) /
+// [#99](../99-recover-binary-search-tree/) — a `shared struct TreeNode` (RC).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+fn is_same(p: Option[TreeNode], q: Option[TreeNode]) -> bool {
+    match p {
+        None => {
+            match q {
+                None => true,
+                Some(_) => false,
+            }
+        }
+        Some(pn) => {
+            match q {
+                None => false,
+                Some(qn) => {
+                    pn.val == qn.val and is_same(pn.left, qn.left) and is_same(pn.right, qn.right)
+                }
+            }
+        }
+    }
+}
+
+fn build(nums: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    let mut i = 0;
+    while i < nums.len() {
+        root = insert(root, nums[i]);
+        i = i + 1;
+    }
+    root
+}
+
+fn main() {
+    // A battery of (p, q) tree pairs: some identical, some differing by one value
+    // or one extra node. Fold each verdict into a running hash.
+    let bases = [
+        [5, 3, 8, 1, 4, 7, 9],
+        [2, 1, 3, 0, 0, 0, 0],
+        [10, 5, 15, 3, 7, 12, 20],
+        [1, 2, 3, 4, 5, 6, 7],
+    ];
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 12 {
+        let bi = t % bases.len();
+        let base = ref bases[bi];
+        // p is `base`; q is base with element (t%7) bumped by (t%3) — 0 bump => identical.
+        let mut pseq: Vec[i64] = Vec.new();
+        let mut qseq: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < base.len() {
+            pseq.push(base[k]);
+            let bump = if k == (t % 7) { t % 3 } else { 0 };
+            qseq.push(base[k] + bump);
+            k = k + 1;
+        }
+        let p = build(pseq);
+        let q = build(qseq);
+        let same = is_same(p, q);
+        let bit = if same { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        println(f"pair {t}: {same}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

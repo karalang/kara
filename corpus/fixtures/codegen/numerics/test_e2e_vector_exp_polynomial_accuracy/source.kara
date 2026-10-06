@@ -1,0 +1,8 @@
+
+fn main() {
+    let x = Vector[f32, 4].from_array([1.0f32, 2.0f32, -3.0f32, 5.0f32]);
+    let e = x.exp();
+    println(e[0]); println(e[1]); println(e[2]); println(e[3]);
+    let s = x.sigmoid(); println(s[0]);
+    let t = x.tanh(); println(t[0]);
+}

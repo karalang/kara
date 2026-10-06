@@ -1,0 +1,187 @@
+// Differential and property check for LeetCode #344.
+//
+// Five in-place reversals, plus an oracle that copies from the back:
+//
+//   by_two      two indices and a temporary          (reverse_string.kara)
+//   by_swap     s.swap(k, n - 1 - k) for k < n / 2   (reverse_string_swap.kara)
+//   by_builtin  s.reverse()                           (reverse_string_builtin.kara)
+//   by_rec      recursion on the outer pair           (reverse_string_recursive.kara)
+//   by_tuple    s[i], s[j] = s[j], s[i]               (reverse_string_tuple.kara)
+//   by_copy     a fresh Vec filled from the last element down
+//
+// Inputs: every length 0..300, each with a pseudo-random fill over an alphabet
+// that mixes ASCII, two-byte, three-byte and four-byte code points.
+//
+// Properties:
+//   P1  all five equal the copy, for every input
+//   P2  reversing twice gives the input back
+//   P3  element k of the result is element n - 1 - k of the input
+//   P4  rev(a ++ b) == rev(b) ++ rev(a), splitting each input in the middle
+//   P5  s ++ rev(s) is a palindrome, so reversing it changes nothing
+
+const MAX_LEN: i64 = 300;
+
+fn by_two(s: mut Slice[char]) {
+    if s.len() < 2 {
+        return;
+    }
+    let mut i = 0;
+    let mut j = s.len() - 1;
+    while i < j {
+        let t = s[i];
+        s[i] = s[j];
+        s[j] = t;
+        i += 1;
+        j -= 1;
+    }
+}
+
+fn by_swap(s: mut Slice[char]) {
+    let n = s.len();
+    for k in 0..n / 2 {
+        s.swap(k, n - 1 - k);
+    }
+}
+
+fn by_builtin(s: mut Slice[char]) {
+    s.reverse();
+}
+
+fn rec_range(s: mut Slice[char], lo: i64, hi: i64) {
+    if lo >= hi {
+        return;
+    }
+    let t = s[lo];
+    s[lo] = s[hi];
+    s[hi] = t;
+    rec_range(s, lo + 1, hi - 1);
+}
+
+fn by_rec(s: mut Slice[char]) {
+    let n = s.len();
+    rec_range(s, 0, n - 1);
+}
+
+fn by_tuple(s: mut Slice[char]) {
+    let mut i = 0;
+    let mut j = s.len() - 1;
+    while i < j {
+        s[i], s[j] = s[j], s[i];
+        i += 1;
+        j -= 1;
+    }
+}
+
+fn by_copy(s: ref Vec[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut k = s.len() - 1;
+    while k >= 0 {
+        out.push(s[k]);
+        k -= 1;
+    }
+    return out;
+}
+
+fn same(a: ref Vec[char], b: ref Vec[char]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for k in 0..a.len() {
+        if a[k] != b[k] {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn fill(n: i64, seed: i64) -> Vec[char] {
+    let alphabet: Vec[char] = "abcxyzABC019 _ñāé€ह日🦀😀".chars().collect();
+    let mut out: Vec[char] = Vec.new();
+    let mut x = seed * 2654435761 % 4294967296 + 1;
+    for _ in 0..n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        out.push(alphabet[(x / 65536) % alphabet.len()]);
+    }
+    return out;
+}
+
+fn concat(a: ref Vec[char], b: ref Vec[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for c in a {
+        out.push(c);
+    }
+    for c in b {
+        out.push(c);
+    }
+    return out;
+}
+
+fn main() {
+    let mut failures = 0;
+    let mut checksum = 0;
+    for n in 0..MAX_LEN + 1 {
+        let s = fill(n, n);
+        let want = by_copy(s);
+
+        let mut a = s.clone();
+        by_two(mut a);
+        let mut b = s.clone();
+        by_swap(mut b);
+        let mut c = s.clone();
+        by_builtin(mut c);
+        let mut d = s.clone();
+        by_rec(mut d);
+        let mut e = s.clone();
+        by_tuple(mut e);
+        if not same(a, want) or not same(b, want) or not same(c, want) or not same(d, want) or not same(e, want) {
+            println(f"P1 FAIL n={n}");
+            failures += 1;
+        }
+
+        by_two(mut a);
+        if not same(a, s) {
+            println(f"P2 FAIL n={n}");
+            failures += 1;
+        }
+
+        for k in 0..n {
+            if want[k] != s[n - 1 - k] {
+                println(f"P3 FAIL n={n} k={k}");
+                failures += 1;
+            }
+            checksum = (checksum * 31 + (want[k] as u32) as i64 * (k + 1)) % 1000000007;
+        }
+
+        let mut left: Vec[char] = Vec.new();
+        let mut right: Vec[char] = Vec.new();
+        for k in 0..n {
+            if k < n / 2 {
+                left.push(s[k]);
+            } else {
+                right.push(s[k]);
+            }
+        }
+        let mut whole = concat(left, right);
+        by_swap(mut whole);
+        by_builtin(mut left);
+        by_builtin(mut right);
+        if not same(whole, concat(right, left)) {
+            println(f"P4 FAIL n={n}");
+            failures += 1;
+        }
+
+        let mut pal = concat(s, want);
+        let before = pal.clone();
+        by_tuple(mut pal);
+        if not same(pal, before) {
+            println(f"P5 FAIL n={n}");
+            failures += 1;
+        }
+    }
+
+    println(f"lengths 0..{MAX_LEN}: checksum {checksum}");
+    println(f"failures {failures}");
+    if failures == 0 {
+        println("all properties hold");
+    }
+}

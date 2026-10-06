@@ -1,0 +1,10 @@
+
+shared enum G[T] { Y(T), N }
+shared enum M { Y(Vec[String]), N }
+fn mkv(s: String) -> Vec[String] { let mut v = Vec.new(); v.push(s); v.push("second-heap-string-long-enough".to_string()); v }
+fn main() {
+    let h: G[M] = G.Y(M.Y(mkv("heap-string-long-enough-5".to_string())));
+    let n = match h { G.Y(M.Y(x)) => x.len(), _ => 0 };
+    println(f"g{n}");
+    println("end")
+}

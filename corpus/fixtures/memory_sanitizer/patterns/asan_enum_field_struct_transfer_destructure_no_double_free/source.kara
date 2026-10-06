@@ -1,0 +1,28 @@
+
+enum Tok { Id(String), Int(i64) }
+struct Span { tok: Tok, off: i64 }
+struct Wrap { sp: Span, hi: i64 }
+fn wrap(s: Span) -> Span { s }
+fn fwd(w: Wrap) -> Wrap { w }
+fn sink(s: String) -> i64 { s.len() }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 4 {
+        // One-level transfer + BORROW arm.
+        let a = Span { tok: Tok.Id(f"a-{i}"), off: i };
+        let b = wrap(a);
+        match b.tok { Id(s) => println(s), Int(n) => { if n > 99999 { println("never"); } } }
+        // One-level transfer + CONSUME arm.
+        let c = Span { tok: Tok.Id(f"c-{i}"), off: i };
+        let d = wrap(c);
+        match d.tok { Id(s) => { acc = acc + sink(s); } Int(n) => { if n > 99999 { println("never"); } } }
+        // Nested two-level transfer + BORROW arm.
+        let e = Wrap { sp: Span { tok: Tok.Id(f"e-{i}"), off: i }, hi: i };
+        let g = fwd(e);
+        match g.sp.tok { Id(s) => println(s), Int(n) => { if n > 99999 { println("never"); } } }
+        i = i + 1;
+    }
+    if acc > 99999 { println("never"); }
+    println("done");
+}

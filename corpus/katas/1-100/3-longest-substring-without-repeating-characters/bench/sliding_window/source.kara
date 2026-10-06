@@ -1,0 +1,51 @@
+// Benchmark workload — sliding-window O(n) Longest Substring Without
+// Repeating Characters.
+//
+// Input is the 26-character lowercase alphabet repeated 4000 times for a
+// 104_000-char String — each 26-char window is "abcdefghijklmnopqrstuvwxyz"
+// and the answer is exactly 26 every call. The deterministic, repeat-heavy
+// shape stresses the inner branch in a way the predictor never gets a free
+// ride on: every 27th character collides with the leftmost char of the
+// current window, forcing a `left = prev + 1` jump.
+//
+// K = 20 outer iterations so per-process startup amortizes against
+// algorithm time. Sink = K × 26 = 520.
+
+fn length_of_longest_substring(s: ref String) -> i64 {
+    let mut last_idx: Map[char, i64] = Map.new();
+    let mut left = 0;
+    let mut best = 0;
+    let mut right = 0;
+    for c in s.chars() {
+        match last_idx.get(c) {
+            Some(prev) => {
+                if prev >= left {
+                    left = prev + 1;
+                }
+            },
+            None => {},
+        }
+        last_idx.insert(c, right);
+        let window = right - left + 1;
+        if window > best {
+            best = window;
+        }
+        right = right + 1;
+    }
+    best
+}
+
+fn main() {
+    let mut data: String = String.new();
+    let mut i = 0;
+    while i < 4000 {
+        data.push_str("abcdefghijklmnopqrstuvwxyz");
+        i = i + 1;
+    }
+
+    let mut sum = 0;
+    for _ in 0..20 {
+        sum = sum + length_of_longest_substring(data);
+    }
+    println(sum);
+}

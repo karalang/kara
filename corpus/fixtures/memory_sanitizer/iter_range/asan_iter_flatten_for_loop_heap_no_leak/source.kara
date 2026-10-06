@@ -1,0 +1,26 @@
+
+fn main() {
+    let mut iter: i64 = 0i64;
+    while iter < 3i64 {
+        let nested: Vec[Vec[String]] = [[f"a{iter}", f"b{iter}"], [], [f"c{iter}"]];
+        let mut d: Vec[String] = Vec.new();
+        for w in nested.iter().flatten() {
+            d.push(w.clone());
+        }
+        println(d.get(0));
+        println(d.get(2));
+        // Source still owns its buffers (outer Vec length + a re-flatten).
+        println(nested.len());
+        let mut n2: i64 = 0i64;
+        for w2 in nested.iter().flatten() {
+            n2 = n2 + 1i64;
+        }
+        println(n2);
+        // Slice 3 — `.flatten().collect()` over heap elements ALLOCATES a fresh
+        // Vec whose String buffers (cloned from the borrowed source) must each
+        // free exactly once; the source survives.
+        let c: Vec[String] = nested.iter().flatten().collect();
+        println(c.get(0));
+        iter = iter + 1i64;
+    }
+}

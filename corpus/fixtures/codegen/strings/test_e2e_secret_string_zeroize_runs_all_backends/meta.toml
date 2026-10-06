@@ -1,0 +1,13 @@
+source = "tests/codegen/strings.rs::test_e2e_secret_string_zeroize_runs_all_backends"
+dedup_of = ["tests/interpreter/strings.rs::test_secret_string_zeroize_on_drop_runs", "tests/memory_sanitizer/strings.rs::asan_secret_string_zeroize_no_leak"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

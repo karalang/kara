@@ -1,0 +1,32 @@
+named
+dR101/t101
+  rd1
+dR1/t1
+named end
+one
+dR102/t102
+  rd2
+dR2/t2
+one end
+two
+dR103/t103
+  rd3
+dR3/t3
+two end
+three
+dR104/t104
+  rd4
+dR4/t4
+three end
+nodest
+  rd5
+dR5/t5
+dR105/t105
+nodest end
+live
+dR106/t106
+  rd6
+dR6/t6
+  g6
+live end
+done

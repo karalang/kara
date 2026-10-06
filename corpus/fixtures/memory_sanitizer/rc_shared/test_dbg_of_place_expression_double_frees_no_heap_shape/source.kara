@@ -1,0 +1,32 @@
+
+struct Pair { a: i64, b: String }
+fn main() {
+    let mut vs: Vec[i64] = Vec.new();
+    vs.push(1_i64);
+    dbg(vs);
+    let vs2 = dbg(vs);
+    println(f"{vs2.len()}");
+
+    let hs = "x".to_uppercase();
+    dbg(hs);
+    let hs2 = dbg(hs);
+    println(hs2);
+
+    let mut mp: Map[String, i64] = Map.new();
+    mp.insert("k", 7_i64);
+    dbg(mp);
+    let mp2 = dbg(mp);
+    println(f"{mp2.len()}");
+
+    let op: Option[String] = Some("s".to_uppercase());
+    dbg(op);
+    let op2 = dbg(op);
+    match op2 {
+        Some(v) => println(v),
+        None => println("none"),
+    }
+
+    let pr = Pair { a: 1_i64, b: "t".to_uppercase() };
+    dbg(pr);
+    println(f"{pr.a}");
+}

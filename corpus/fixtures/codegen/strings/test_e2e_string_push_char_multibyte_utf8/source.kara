@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut s: String = "";
+    s.push('é');
+    s.push('日');
+    s.push('🦀');
+    println(s);
+    println(s.len());
+}

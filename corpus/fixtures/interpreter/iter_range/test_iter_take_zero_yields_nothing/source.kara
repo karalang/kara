@@ -1,0 +1,9 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let mut it = v.iter().take(0);
+    match it.next() {
+        Some(_) => println("had value"),
+        None => println("empty"),
+    }
+}

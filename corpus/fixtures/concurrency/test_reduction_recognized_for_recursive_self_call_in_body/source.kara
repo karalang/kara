@@ -1,0 +1,13 @@
+
+        fn count(n: i64, row: i64) -> i64 {
+            if row == n { return 1i64; }
+            let mut total: i64 = 0i64;
+            let mut c: i64 = 0i64;
+            while c < n {
+                if c >= 0i64 { total = total + count(n, row + 1i64); }
+                c = c + 1i64;
+            }
+            total
+        }
+        fn main() { let x: i64 = count(4i64, 0i64); }
+        

@@ -1,0 +1,99 @@
+// LeetCode 303 — Range Sum Query, Immutable.
+//
+// Build a structure over a fixed integer array, then answer many
+// `sum_range(left, right)` queries — inclusive on both ends, and the array
+// never changes.
+//
+//     nums = [-2, 0, 3, -5, 2, -1]
+//     sum_range(0, 2) ->  1
+//     sum_range(2, 5) -> -1
+//     sum_range(0, 5) -> -3
+//
+// PREFIX SUMS. `prefix[i]` is the total of the first i elements, so
+// `prefix[0] = 0` and `prefix[i + 1] = prefix[i] + nums[i]`. Then
+//
+//     sum_range(l, r) = prefix[r + 1] - prefix[l]
+//
+// because the second term is exactly the part of the first that lies before l.
+// One O(n) pass at construction, and every query after that is a subtraction.
+//
+// THE OFF-BY-ONE IS WHY THE ARRAY HAS n + 1 ENTRIES. A prefix array of length n
+// forces a special case at `l == 0`, since there is no "sum of everything
+// before index 0" slot to subtract. Carrying an explicit leading zero removes
+// the branch entirely — the empty prefix becomes a representable value rather
+// than a case to handle. That is the whole trick, and it is the thing to get
+// right: `r + 1` and `l` index the same array, one past and one at.
+//
+// WHY THIS PROBLEM IS WORTH A KATA AT ALL. The algorithm is four lines. The
+// interesting part is the SHAPE: a structure built once and then read many
+// times through `ref self`, which is a different compiler surface from a free
+// function that takes its data as an argument. Every query here borrows the
+// same `Vec[i64]` field immutably and returns a scalar — the read-only,
+// non-escaping borrow that karac's RC-elision hint exists to make free
+// (`OwnershipCheckResult::elidable_ref_params`). A kata that never builds a
+// struct never exercises it.
+
+struct NumArray {
+    prefix: Vec[i64],
+}
+
+// `prefix` carries a leading 0, so it has one more entry than `nums`.
+fn new_num_array(nums: ref Vec[i64]) -> NumArray {
+    let mut prefix: Vec[i64] = Vec.new();
+    prefix.push(0);
+    let mut i = 0;
+    while i < nums.len() {
+        prefix.push(prefix[i] + nums[i]);
+        i = i + 1;
+    }
+    return NumArray { prefix: prefix };
+}
+
+impl NumArray {
+    // Inclusive on both ends. Reads only — hence `ref self`.
+    fn sum_range(ref self, left: i64, right: i64) -> i64 {
+        return self.prefix[right + 1] - self.prefix[left];
+    }
+
+    fn len(ref self) -> i64 {
+        return self.prefix.len() - 1;
+    }
+}
+
+fn render(nums: ref Vec[i64]) -> String {
+    let mut line = String.new();
+    line.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { line.push_str(", "); }
+        line.push_str(f"{nums[i]}");
+        i = i + 1;
+    }
+    line.push_str("]");
+    return line;
+}
+
+fn report(nums: Vec[i64], queries: Vec[i64]) {
+    let na = new_num_array(nums);
+    let mut line = String.new();
+    line.push_str(render(nums));
+    line.push_str(" ->");
+    // `queries` is a flat list of (left, right) pairs.
+    let mut q = 0;
+    while q + 1 < queries.len() {
+        let l = queries[q];
+        let r = queries[q + 1];
+        line.push_str(f" [{l},{r}]={na.sum_range(l, r)}");
+        q = q + 2;
+    }
+    println(line);
+}
+
+fn main() {
+    report([-2, 0, 3, -5, 2, -1], [0, 2, 2, 5, 0, 5, 1, 1]);
+    report([1, 2, 3, 4, 5], [0, 4, 0, 0, 4, 4, 1, 3]);
+    report([7], [0, 0]);
+    report([0, 0, 0, 0], [0, 3, 1, 2]);
+    report([-1, -2, -3], [0, 2, 1, 2, 2, 2]);
+    report([100000, -100000, 100000], [0, 2, 0, 1, 1, 2]);
+}

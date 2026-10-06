@@ -1,0 +1,20 @@
+
+struct P { name: String, age: i64 }
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    let mut v: Vec[i64] = v;
+    v.push(3); v.push(1); v.push(2);
+    let s = v.sorted_by_key(|x| x);
+    for x in v.iter() { println(x); }
+    for x in s.iter() { println(x); }
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { name: "c padded beyond the small-string threshold", age: 30 });
+    ps.push(P { name: "a padded beyond the small-string threshold", age: 10 });
+    ps.push(P { name: "b padded beyond the small-string threshold", age: 20 });
+    let byage = ps.sorted_by_key(|p| p.age);
+    for p in byage.iter() { println(p.age); }
+    let mut fs: Vec[f64] = Vec.new();
+    fs.push(2.5); fs.push(0.0 / 0.0); fs.push(1.5);
+    let fsorted = fs.sorted_by_key(|x| x);
+    for x in fsorted.iter() { println(x); }
+}

@@ -1,0 +1,15 @@
+struct R2 { s: String, t: String, u: String }
+    impl Drop for R2 { fn drop(mut ref self) { println(f"d2:{self.s.len()}") } }
+    fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" } }
+    shared enum SMono { P(R2), Q }
+
+    fn main() {
+        println("named");
+        let r = mkr(1);
+        { let s = SMono.P(r); println("  B") }
+        println("  C");
+        println("temp");
+        { let s2 = SMono.P(mkr(2)); println("  B2") }
+        println("  C2");
+        println("end")
+    }

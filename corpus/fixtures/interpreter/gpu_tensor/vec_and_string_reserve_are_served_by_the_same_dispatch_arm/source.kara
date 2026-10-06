@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.reserve(32);
+    v.push(1);
+    let mut s: String = String.new();
+    s.reserve(32);
+    s.push_str("x");
+    println(f"{v.len()} {v.capacity() >= 32} [{s}]");
+}

@@ -1,0 +1,78 @@
+// LeetCode 275 — H-Index II.
+//
+// `citations` is sorted ASCENDING. Return the h-index: the largest `h` such
+// that at least `h` papers have at least `h` citations each. Must be O(log n).
+//
+// [`#274`](../274-h-index/) is the same definition on UNSORTED input, where the
+// answer costs a sort or a counting pass. Handing the array over sorted changes
+// the problem entirely: the qualifying condition becomes monotone in the index,
+// and monotone means binary search.
+//
+// THE ★ MECHANISM: BINARY SEARCH ON THE INDEX. At index `i` the papers at
+// `[i, n)` are the `n - i` most-cited ones. If `citations[i] >= n - i`, then
+// each of those `n - i` papers has at least `n - i` citations, so `n - i` is an
+// achievable h. Larger `i` means fewer papers, so a smaller and easier target —
+// the predicate `citations[i] >= n - i` is therefore FALSE for a prefix and TRUE
+// for a suffix, and the answer is `n - i` at the first TRUE.
+//
+// That monotonicity is the whole content of the problem, and it is worth being
+// precise about WHY it holds, because it is not simply "the array is sorted".
+// Moving from `i` to `i + 1` raises the left side (`citations` is
+// non-decreasing) and lowers the right side (`n - i` shrinks by one). Both
+// movements favour the predicate, so once it is true it stays true. A predicate
+// where only one side moved would not be searchable this way.
+//
+// NO QUALIFYING INDEX MEANS h = 0 — the all-uncited case — which falls out of
+// the search naturally if the low bound is allowed to run to `n`.
+//
+// THE OFF-BY-ONE LIVES IN THE HALF-OPEN INVARIANT, not in the comparison.
+// `lo` is a candidate; `hi` is one past the last candidate. `citations[mid] >=
+// n - mid` means `mid` qualifies, so the answer is at `mid` or LEFT of it and
+// `hi = mid`; otherwise it is strictly right and `lo = mid + 1`. Writing
+// `hi = mid - 1` here is the classic way to skip the answer, and it is wrong on
+// exactly the inputs where the first qualifying index is the one being tested.
+
+fn h_index(citations: ref Vec[i64]) -> i64 {
+    let n = citations.len();
+    let mut lo = 0;
+    let mut hi = n;                      // one PAST the last candidate
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2; // no overflow even at i64's ceiling
+        if citations[mid] >= n - mid {
+            hi = mid;                    // `mid` qualifies — it or something left of it
+        } else {
+            lo = mid + 1;             // strictly right
+        }
+    }
+    return n - lo;                       // lo == n when nothing qualifies -> 0
+}
+
+fn show(xs: ref Vec[i64]) -> String {
+    let mut s = "[";
+    let mut i = 0;
+    while i < xs.len() {
+        if i > 0 { s = s + ","; }
+        s = s + f"{xs[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    let cases: Vec[Vec[i64]] = [
+        [0, 1, 3, 5, 6],   // 3
+        [1, 2, 100],             // 2
+        [0],                           // 0
+        [100],                         // 1
+        [0, 0, 0],               // 0  — nothing is cited
+        [5, 5, 5],               // 3  — everything clears the bar
+        [0, 0, 4, 4],         // 2
+        [1, 1, 1, 1, 1],   // 1  — a wide flat plateau
+        [0, 1, 2, 3, 4],   // 2  — the diagonal crossing
+    ];
+    let mut i = 0;
+    while i < cases.len() {
+        println(f"{show(cases[i])} -> {h_index(cases[i])}");
+        i = i + 1;
+    }
+}

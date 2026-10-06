@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_09_27_88.rs::asan_optres_param_shared_field_payload_not_taken_has_one_owner"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

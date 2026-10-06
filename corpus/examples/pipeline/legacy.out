@@ -1,0 +1,11 @@
+requests: 10
+ok: 7
+server_err: 2
+client_err: 1
+bytes_served: 18432
+max_latency_ms: 210
+avg_ok_latency_ms: 50
+slow_paths: 3
+  /api/orders
+  /api/users
+  /assets/app

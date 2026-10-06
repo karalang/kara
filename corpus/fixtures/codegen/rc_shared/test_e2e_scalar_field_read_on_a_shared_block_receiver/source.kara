@@ -1,0 +1,19 @@
+
+shared struct Node { v: i64, w: i64 }
+shared struct Wrap { inner: i64 }
+
+fn make(k: i64) -> Node { return Node { v: k, w: k * 100 }; }
+fn mkw() -> Wrap { return Wrap { inner: 9 }; }
+
+fn main() {
+    println({ let n = make(1); n }.v);
+    println({ let n = make(2); n }.w);
+    println({ let n = make(3); n }.v + 10);
+    let k = { let n = make(4); n }.v;
+    println(k);
+    let c = true;
+    println(if c { make(5) } else { make(6) }.v);
+    println({ let w = mkw(); w }.inner);
+    let b = make(8);
+    println(b.v);
+}

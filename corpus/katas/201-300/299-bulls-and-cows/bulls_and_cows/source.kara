@@ -1,0 +1,109 @@
+// LeetCode 299 — Bulls and Cows.
+//
+// `secret` and `guess` are equal-length digit strings. A BULL is a digit that
+// is right in the right place; a COW is a digit that occurs in the secret but
+// at some other position. Report them as "xAyB".
+//
+//     secret "1807", guess "7810"  ->  "1A3B"     8 and 0 and 1 are misplaced
+//     secret "1123", guess "0111"  ->  "1A1B"     NOT "1A2B" — see below
+//
+// THE WHOLE PROBLEM IS THE SECOND EXAMPLE. Bulls are trivial: one pass, compare
+// position by position. Cows are where every naive reading goes wrong, because
+// "occurs elsewhere" is a MULTISET question, not a membership question. Guess
+// "0111" holds three 1s and secret "1123" holds two. One of the guess's 1s is
+// already a bull, so it is spent. Of the two remaining, only ONE can be paired
+// against the secret's one leftover 1 — the third has nothing left to match.
+//
+// So the cow count for a digit `d` is
+//
+//     min(count of d among non-bull secret positions,
+//         count of d among non-bull guess  positions)
+//
+// summed over d. Asking instead "does this guess digit appear anywhere in the
+// secret?" double-counts (it would say 2 here); asking "how many of d does the
+// secret hold?" without excluding bulls double-counts the bull itself. Both
+// mistakes produce "1A2B", and both are invisible until a digit repeats — which
+// is why the differential in this directory generates repeats deliberately
+// rather than trusting the LeetCode samples, none of which catch the second.
+//
+// The digits are '0'..'9', so the tally is a fixed 10-slot Vec rather than a
+// Map: ten `i64`s on the stack-shaped heap beat hashing ten known-dense keys,
+// and — the reason it matters here — a Vec walk is ORDERED, so this kata's
+// output is identical on every backend and every run. A Map walk would not be
+// (kara CLAUDE.md § `Map`/`Set` iteration order), and this program prints its
+// per-digit breakdown.
+
+fn digit_index(c: char) -> i64 {
+    return (c as i64) - ('0' as i64);
+}
+
+// Two passes. The first settles bulls and tallies everything that ISN'T one;
+// the second reads the two tallies against each other.
+fn bulls_and_cows(secret: ref String, guess: ref String) -> String {
+    let s: Vec[char] = secret.chars().collect();
+    let g: Vec[char] = guess.chars().collect();
+    let n = s.len();
+
+    let mut bulls = 0;
+    let mut cows = 0;
+
+    // Non-bull digit tallies. Index d holds the count of digit d.
+    //
+    // `Array[i64, 10]`, not `Vec` — the length is 10 because there are ten
+    // digits, it is known at compile time, and it never changes. `Array[0; 10]`
+    // is the repeat literal. The bench lane in this directory measures what the
+    // looser spelling costs when it lands in a hot loop: swapping two
+    // `Vec.filled` tallies for two `Array`s there took the scoring pass from
+    // 453 ms to 166 ms — 2.7x — because a Vec is a heap allocation and this is
+    // a stack slot. Nothing about the algorithm changed.
+    let mut s_left: Array[i64, 10] = Array[0; 10];
+    let mut g_left: Array[i64, 10] = Array[0; 10];
+    let mut d = 0;
+
+    let mut i = 0;
+    while i < n {
+        if s[i] == g[i] {
+            // A bull is spent: it contributes to neither tally, which is what
+            // stops it from being counted a second time as a cow.
+            bulls = bulls + 1;
+        } else {
+            let si = digit_index(s[i]);
+            let gi = digit_index(g[i]);
+            s_left[si] = s_left[si] + 1;
+            g_left[gi] = g_left[gi] + 1;
+        }
+        i = i + 1;
+    }
+
+    // Pair up what's left, digit by digit. The smaller side is the binding one.
+    d = 0;
+    while d < 10 {
+        if s_left[d] < g_left[d] {
+            cows = cows + s_left[d];
+        } else {
+            cows = cows + g_left[d];
+        }
+        d = d + 1;
+    }
+
+    return f"{bulls}A{cows}B";
+}
+
+fn report(secret: String, guess: String) {
+    println(f"secret {secret}  guess {guess}  ->  {bulls_and_cows(secret, guess)}");
+}
+
+fn main() {
+    report("1807", "7810");      // expect 1A3B — the statement's first example
+    report("1123", "0111");      // expect 1A1B — the multiset case
+    report("1", "0");            // expect 0A0B
+    report("1", "1");            // expect 1A0B
+    report("11", "10");          // expect 1A0B — the second 1 has nothing left
+    report("11", "01");          // expect 1A0B — mirror of the above
+    report("1122", "2211");      // expect 0A4B — a total derangement
+    report("1122", "1222");      // expect 3A0B — surplus 2s find nothing
+    report("0000", "0000");      // expect 4A0B
+    report("0000", "1111");      // expect 0A0B — disjoint
+    report("", "");              // expect 0A0B — the empty game
+    report("1234567890", "0987654321");  // expect 0A10B — every digit once, all moved
+}

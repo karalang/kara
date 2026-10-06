@@ -1,0 +1,24 @@
+struct R { id: i64, name: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"n{i}", xs: [i] }; }
+struct S3 { a: R, b: R }
+
+fn full_ret(s: S3) -> i64 { let S3 { a, b } = s; println("  mid"); return b.id; }
+fn full_let(s: S3) -> i64 { let S3 { a, b } = s; println("  mid"); let x = a.id + b.id; return x; }
+fn rest_ret(s: S3) -> i64 { let S3 { a, .. } = s; println("  mid"); return a.id; }
+fn wild_ret(s: S3) -> i64 { let S3 { a, b: _ } = s; println("  mid"); return a.id; }
+fn rest_len(s: S3) -> i64 { let S3 { a, .. } = s; println("  mid"); let n = a.name.len(); return n; }
+fn rest_none(s: S3) -> i64 { let S3 { a, .. } = s; println("  mid"); return 1; }
+fn whole_b(s: S3) -> R { let S3 { a, b } = s; println("  mid"); return b; }
+
+fn main() {
+    println("full_ret"); let v1 = full_ret(S3 { a: mk(1), b: mk(2) }); println(f"  v={v1}");
+    println("full_let"); let v2 = full_let(S3 { a: mk(3), b: mk(4) }); println(f"  v={v2}");
+    println("rest_ret"); let v3 = rest_ret(S3 { a: mk(5), b: mk(6) }); println(f"  v={v3}");
+    println("wild_ret"); let v4 = wild_ret(S3 { a: mk(7), b: mk(8) }); println(f"  v={v4}");
+    println("rest_len"); let v5 = rest_len(S3 { a: mk(9), b: mk(10) }); println(f"  v={v5}");
+    println("rest_none"); let v6 = rest_none(S3 { a: mk(11), b: mk(12) }); println(f"  v={v6}");
+    println("whole_b"); let r7 = whole_b(S3 { a: mk(13), b: mk(14) }); println(f"  v={r7.id}");
+    println("named"); let s8 = S3 { a: mk(15), b: mk(16) }; let v8 = full_ret(s8); println(f"  v={v8}");
+    println("end");
+}

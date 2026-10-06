@@ -1,0 +1,51 @@
+// LeetCode #38: Count and Say — recursive unfolding.
+//
+// The sequence's definition written out literally: countAndSay(1) = "1", and
+// countAndSay(n) = say(countAndSay(n-1)). Where the ★ file unfolds the n-1 encodes with a
+// loop, this one RECURSES down to the "1" base case and lets the call stack apply the
+// encodes on the way back up — the most direct transcription of "each term says the one
+// before it". The encode itself is the same single-pass streaming run-length pass; only
+// the unfolding differs (recursion vs iteration).
+//
+//   - `say` is the identical streaming state machine: carry (run_digit, run_len), extend
+//     on a match, else flush "<len><digit>" and open a new run, with a final flush.
+//   - `count_and_say` bottoms out at n == 1 returning "1", else says the (n-1)th term.
+
+fn say(s: ref String) -> String {
+    let mut out: String = "";
+    let mut run_digit: char = '0';
+    let mut run_len = 0;
+    for c in s.chars() {
+        if run_len != 0 and c == run_digit {
+            run_len = run_len + 1;
+        } else {
+            if run_len != 0 {
+                out.push_str(f"{run_len}");
+                out.push(run_digit);
+            }
+            run_digit = c;
+            run_len = 1;
+        }
+    }
+    if run_len != 0 {
+        out.push_str(f"{run_len}");
+        out.push(run_digit);
+    }
+    out
+}
+
+fn count_and_say(n: i64) -> String {
+    if n == 1 {
+        return "1";
+    }
+    let prev = count_and_say(n - 1);
+    say(prev)
+}
+
+fn main() {
+    let mut n = 1;
+    while n <= 12 {
+        println(f"{n}: {count_and_say(n)}");
+        n = n + 1;
+    }
+}

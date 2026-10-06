@@ -1,0 +1,13 @@
+source = "tests/interpreter/generics.rs::test_integration_assoc_fn_in_arg_position"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

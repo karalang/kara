@@ -1,0 +1,35 @@
+
+fn main() {
+    let sleeper = Command.new("sleep").arg("30");
+    match sleeper.spawn() {
+        Ok(child) => {
+            match child.try_wait() {
+                Ok(maybe) => {
+                    match maybe {
+                        Some(st) => println("exited early?!"),
+                        None => println("running"),
+                    }
+                }
+                Err(e) => println("try_wait failed"),
+            }
+            match child.kill() {
+                Ok(u) => println("killed"),
+                Err(e) => println("kill failed"),
+            }
+            match child.wait() {
+                Ok(st) => println(f"success={st.success} code={st.code}"),
+                Err(e) => println("wait failed"),
+            }
+            match child.wait() {
+                Ok(st) => println("double reap?!"),
+                Err(e) => {
+                    match e {
+                        IoError.NotFound => println("reaped"),
+                        _ => println("unexpected err"),
+                    }
+                }
+            }
+        }
+        Err(e) => println("spawn failed"),
+    }
+}

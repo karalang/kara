@@ -1,0 +1,146 @@
+// LeetCode 273 — the digit-position walk.
+//
+// No division by 1000, no recursion, and no arithmetic on the number at all
+// after the first step: render `n` as decimal text, then walk the digits LEFT TO
+// RIGHT deciding each one from its POSITION. Position `p` counted from the right
+// gives the place inside its group as `p % 3` and the scale as `p / 3`, so the
+// hundreds / tens / units rules and the Thousand / Million / Billion labels both
+// fall out of one index.
+//
+// WHY IT IS WORTH KEEPING alongside the ★ chunker: it is the only solver here
+// that never splits the number, so it cannot inherit a grouping bug — and it is
+// forced to confront the one rule that a positional scheme genuinely cannot
+// express, which is the teens.
+//
+// TEN THROUGH NINETEEN BREAK THE POSITION RULE. Every other digit is decided by
+// its own value and its own place, but a `1` in the tens place is not "Ten"
+// followed by whatever the units digit says — it BINDS to the next digit and the
+// pair is spelled once. So this loop is not a pure per-digit map: it has one
+// lookahead, and consuming the units digit early is also what ends the group, so
+// the scale word has to be emitted from two different places in the loop rather
+// than from the `place == 0` arm alone. That coupling is the entire difficulty
+// of writing it this way.
+//
+// THE JOIN IS DELIBERATELY DIFFERENT from the other two solvers: words are
+// collected into a `Vec[String]` and joined once at the end, rather than
+// concatenated as they are produced. A separator bug in one join cannot appear
+// in the others.
+
+fn small_name(n: i64) -> String {
+    if n == 1 { return "One"; }
+    if n == 2 { return "Two"; }
+    if n == 3 { return "Three"; }
+    if n == 4 { return "Four"; }
+    if n == 5 { return "Five"; }
+    if n == 6 { return "Six"; }
+    if n == 7 { return "Seven"; }
+    if n == 8 { return "Eight"; }
+    if n == 9 { return "Nine"; }
+    if n == 10 { return "Ten"; }
+    if n == 11 { return "Eleven"; }
+    if n == 12 { return "Twelve"; }
+    if n == 13 { return "Thirteen"; }
+    if n == 14 { return "Fourteen"; }
+    if n == 15 { return "Fifteen"; }
+    if n == 16 { return "Sixteen"; }
+    if n == 17 { return "Seventeen"; }
+    if n == 18 { return "Eighteen"; }
+    if n == 19 { return "Nineteen"; }
+    return "";
+}
+
+fn tens_name(t: i64) -> String {
+    if t == 2 { return "Twenty"; }
+    if t == 3 { return "Thirty"; }
+    if t == 4 { return "Forty"; }
+    if t == 5 { return "Fifty"; }
+    if t == 6 { return "Sixty"; }
+    if t == 7 { return "Seventy"; }
+    if t == 8 { return "Eighty"; }
+    if t == 9 { return "Ninety"; }
+    return "";
+}
+
+fn scale_name(s: i64) -> String {
+    if s == 1 { return "Thousand"; }
+    if s == 2 { return "Million"; }
+    if s == 3 { return "Billion"; }
+    return "";
+}
+
+fn number_to_words(n: i64) -> String {
+    if n == 0 { return "Zero"; }
+    let text = f"{n}";
+    let digits = text.bytes();
+    let len = digits.len();
+
+    let mut words: Vec[String] = Vec.new();
+    let mut group_nonempty = false;
+    let mut i = 0;
+    while i < len {
+        let p = len - 1 - i;
+        let place = p % 3;
+        let scale = p / 3;
+        let d = digits[i] as i64 - 48;
+        // A group normally ends at its units digit — unless a teen consumed
+        // that digit one step early, which is the second exit below.
+        let mut group_done = place == 0;
+
+        if place == 2 {
+            if d > 0 {
+                words.push(small_name(d));
+                words.push("Hundred");
+                group_nonempty = true;
+            }
+        }
+        if place == 1 {
+            if d == 1 {
+                // The lookahead: `1` in the tens place binds the units digit.
+                let u = digits[i + 1] as i64 - 48;
+                words.push(small_name(10 + u));
+                group_nonempty = true;
+                i = i + 1;
+                group_done = true;
+            } else {
+                if d >= 2 {
+                    words.push(tens_name(d));
+                    group_nonempty = true;
+                }
+            }
+        }
+        if place == 0 {
+            if d > 0 {
+                words.push(small_name(d));
+                group_nonempty = true;
+            }
+        }
+
+        if group_done {
+            if group_nonempty and scale > 0 { words.push(scale_name(scale)); }
+            group_nonempty = false;
+        }
+        i = i + 1;
+    }
+
+    let mut out = "";
+    let mut w = 0;
+    while w < words.len() {
+        if out != "" { out = out + " "; }
+        out = out + words[w];
+        w = w + 1;
+    }
+    return out;
+}
+
+fn main() {
+    let cases: Vec[i64] = [
+        0, 5, 13, 20, 21, 100, 101, 110, 123,
+        1000, 1000000, 1000010, 12345, 1234567,
+        1000000000, 2147483647
+    ];
+    let mut i = 0;
+    while i < cases.len() {
+        println(f"{cases[i]} -> {number_to_words(cases[i])}");
+        i = i + 1;
+    }
+}

@@ -1,0 +1,13 @@
+
+struct A { tag: i64 }
+struct B { tag: i64 }
+impl Drop for A {
+    fn drop(mut ref self) {}
+}
+impl Drop for B {
+    fn drop(mut ref self) {}
+}
+fn main() {
+    let a = A { tag: 1 };
+    let b = B { tag: 2 };
+}

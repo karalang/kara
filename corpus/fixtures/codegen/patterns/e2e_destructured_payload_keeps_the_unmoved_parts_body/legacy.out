@@ -1,0 +1,44 @@
+scalarout
+  dR5
+  got:9
+dropout
+  dR7
+  got:6
+  dR6
+resultout
+  dR8
+  got:9
+wildkept
+  dR10
+  got:9
+middleout
+  dR11
+  dR13
+  got:12
+  dR12
+bothout
+  got:14
+  dR14
+  dR15
+readonly
+  dR16
+  dR17
+  got:33
+wholeout
+  got:9
+  dR18
+condfalse
+  dR19
+  got:20
+  dR20
+genout
+  dR21
+  got:9
+method
+  dR22
+  got:9
+unused
+  dR24
+  dR23
+  x
+end

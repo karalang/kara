@@ -1,0 +1,24 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let (tx, rx) = Channel.bounded(1);
+        let first = f"first-{i}";
+        match tx.try_send(first) {
+            Ok(u) => { total = total + 1; }
+            Err(SendError.Full(v)) => { total = total + v.len(); }
+            Err(SendError.Closed(v)) => { total = total + v.len(); }
+        }
+        let second = f"second-{i}";
+        match tx.try_send(second) {
+            Ok(u) => { total = total + 1; }
+            Err(SendError.Full(v)) => { total = total + v.len(); }
+            Err(SendError.Closed(v)) => { total = total + v.len(); }
+        }
+        let got = rx.recv();
+        total = total + got.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

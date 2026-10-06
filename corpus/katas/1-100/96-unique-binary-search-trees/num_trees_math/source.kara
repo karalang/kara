@@ -1,0 +1,33 @@
+// LeetCode #96: Unique Binary Search Trees — closed-form Catalan (O(n), no table).
+//
+// The count is the nth Catalan number, and successive Catalan numbers satisfy the
+// multiplicative recurrence
+//
+//     C(0) = 1,   C(k) = C(k-1) * 2*(2k-1) / (k+1)
+//
+// which needs no O(n^2) table — just carry one running value up to n. The product
+// C(k-1) * 2 * (2k-1) is always divisible by k+1 (Catalan numbers are integers), so the
+// integer division is exact. A genuinely distinct mechanism from the DP-table sibling
+// num_trees.kara; both must agree on every n.
+
+fn num_trees(n: i64) -> i64 {
+    let mut c = 1;                    // C(0)
+    let mut k = 1;
+    while k <= n {
+        c = c * 2 * (2 * k - 1) / (k + 1);
+        k = k + 1;
+    }
+    c
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut n = 1;
+    while n <= 19 {
+        let c = num_trees(n);
+        println(f"n={n}: {c}");
+        acc = (acc * 1000003 + c) % 1000000007;
+        n = n + 1;
+    }
+    println(f"sink: {acc}");
+}

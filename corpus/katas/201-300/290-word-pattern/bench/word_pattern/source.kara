@@ -1,0 +1,132 @@
+// Benchmark harness for LeetCode #290 — Word Pattern.
+//
+// Build-once + punch (BENCHMARKS.md): the pattern/subject table is built once,
+// then each punch runs the full check — split the subject into words, then walk
+// pattern and words in lockstep maintaining both directions of the bijection.
+// Rebuilding the subjects per iteration would be a refill loop.
+//
+// Even-indexed pairs are a valid bijection, so the whole 1000-position loop
+// runs and returns true. Odd-indexed pairs repeat the FIRST word in the LAST
+// position, which collides with a letter already bound to it — so those also
+// scan the whole input before failing. Both paths therefore do full work; the
+// benchmark is not measuring an early-exit.
+
+fn split_words(s: Slice[u8]) -> Vec[String] {
+    let mut words: Vec[String] = Vec.new();
+    let mut cur: String = String.new();
+    let mut have = false;
+    let mut i = 0;
+    while i < s.len() {
+        let b = s[i];
+        if b == 32u8 {
+            if have {
+                words.push(cur);
+                cur = String.new();
+                have = false;
+            }
+        } else {
+            cur.push(b as char);
+            have = true;
+        }
+        i = i + 1;
+    }
+    if have {
+        words.push(cur);
+    }
+    return words;
+}
+
+fn word_pattern(pattern: ref String, s: ref String) -> bool {
+    let words = split_words(s.bytes());
+    let pb = pattern.bytes();
+    if pb.len() != words.len() {
+        return false;
+    }
+
+    let mut p2w: Map[i64, String] = Map.new();
+    let mut w2p: Map[String, i64] = Map.new();
+
+    let mut i = 0;
+    while i < pb.len() {
+        let c = pb[i] as i64;
+        let w = words[i].clone();
+
+        match p2w.get(c) {
+            Some(prev) => {
+                if prev != w {
+                    return false;
+                }
+            }
+            None => {
+                let _ = p2w.insert(c, w);
+            }
+        }
+        match w2p.get(w) {
+            Some(pc) => {
+                if pc != c {
+                    return false;
+                }
+            }
+            None => {
+                let _ = w2p.insert(w, c);
+            }
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn main() {
+    let np = 8;
+    let pl = 1000;
+    let alpha_n = 26;
+    let iters = 2500;
+
+    let mut alpha: Vec[String] = Vec.new();
+    let mut a = 0;
+    while a < alpha_n {
+        let mut t = String.new();
+        t.push((97 + a) as u8 as char);
+        alpha.push(t);
+        a = a + 1;
+    }
+
+    let mut patterns: Vec[String] = Vec.new();
+    let mut subjects: Vec[String] = Vec.new();
+    let mut j = 0;
+    while j < np {
+        let mut pat = String.new();
+        let mut sub = String.new();
+        let mut i = 0;
+        while i < pl {
+            let slot = (i + j) % alpha_n;
+            pat = pat + alpha[slot];
+            if i > 0 { sub = sub + " "; }
+            // Odd j: the last word repeats the first, which is already bound
+            // to a different letter — a bijection violation found only at the
+            // very end, after a full scan.
+            let mut wslot = slot;
+            if j % 2 == 1 {
+                if i == pl - 1 { wslot = j % alpha_n; }
+            }
+            sub = sub + f"w{wslot}";
+            i = i + 1;
+        }
+        patterns.push(pat);
+        subjects.push(sub);
+        j = j + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 3) % np;
+        if word_pattern(patterns[idx], subjects[idx]) {
+            sink = sink + (it + 1);
+        } else {
+            sink = sink + 1;
+        }
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

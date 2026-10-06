@@ -1,0 +1,44 @@
+
+fn total(edges: ref Vec[(i64, i64)]) -> i64 {
+    let mut s = 0;
+    for (a, b) in edges { s += a * 10 + b; }
+    return s;
+}
+fn nested(v: ref Vec[(i64, (i64, i64))]) -> i64 {
+    let mut s = 0;
+    for (a, (b, c)) in v { s += a + b * c; }
+    return s;
+}
+fn muts(v: mut ref Vec[(String, i64)]) -> i64 {
+    let mut s = 0;
+    for (name, k) in v { s += name.len() + k; }
+    v.push(("q".to_string(), 1));
+    return s;
+}
+fn map_total(m: ref Map[String, i64]) -> i64 {
+    let mut s = 0;
+    for (k, v) in m { s += k.len() + v; }
+    return s;
+}
+fn pair(p: ref (String, i64)) -> i64 {
+    let (name, k) = p;
+    return name.len() + k;
+}
+fn by_index(ps: ref Vec[(String, i64)]) -> i64 {
+    let mut n = 0;
+    for i in 0..ps.len() {
+        let (name, k) = ref ps[i];
+        n += name.len() * 100 + k;
+    }
+    return n;
+}
+fn main() {
+    println(f"{total(vec![(1, 2), (3, 4)])} {nested(vec![(1, (2, 3)), (4, (5, 6))])}");
+    let mut ps = vec![("ab".to_string(), 5)];
+    println(f"{muts(mut ps)} {ps.len()}");
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("ab".to_string(), 3);
+    m.insert("c".to_string(), 4);
+    let u = ("abc".to_string(), 2);
+    println(f"{map_total(m)} {pair(u)} {by_index(ps)}");
+}

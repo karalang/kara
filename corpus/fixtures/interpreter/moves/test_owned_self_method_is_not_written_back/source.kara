@@ -1,0 +1,11 @@
+
+struct Counter { n: i64 }
+impl Counter {
+    fn into_n(self) -> i64 { self.n }
+    fn peek(ref self) -> i64 { self.n }
+}
+fn main() {
+    let c = Counter { n: 7 };
+    println(c.peek());
+    println(c.into_n());
+}

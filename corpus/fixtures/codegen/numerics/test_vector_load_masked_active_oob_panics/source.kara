@@ -1,0 +1,10 @@
+
+fn main() {
+    let a: Array[i64, 4] = [10, 20, 30, 40];
+    let one = a[0..1];
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    let v = Vector[i64, 4].load_masked(one, m);
+    println(v[0]);
+}

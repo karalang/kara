@@ -1,0 +1,10 @@
+fn main() {
+         let cmd = Command.new("printenv").env("FOO", "bar");
+         match cmd.cmd_env.get(0) {
+             Some(e) => {
+                 println(e.key);
+                 println(e.value);
+             }
+             None => println("?"),
+         }
+     }

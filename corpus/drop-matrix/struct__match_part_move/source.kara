@@ -1,0 +1,15 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+struct P { a: R, b: R, c: R }
+fn main() {
+    let x = P { a: R { id: 1 }, b: R { id: 11 }, c: R { id: 21 } };
+    match x {
+        P { b: p, .. } => {
+            println("arm");
+        },
+        _ => {
+            println("other");
+        },
+    }
+    println("end");
+}

@@ -1,0 +1,8 @@
+
+        fn get_a() -> i64 with sends(Network) receives(Network) { return 1; }
+        fn get_b() -> i64 with sends(Network) receives(Network) { return 2; }
+        fn main() {
+            let x = get_a();
+            let y = get_b();
+        }
+        

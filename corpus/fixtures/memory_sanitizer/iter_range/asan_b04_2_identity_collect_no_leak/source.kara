@@ -1,0 +1,23 @@
+
+fn mk() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("identity-collect-freshtemp-alpha-aaaaaaaaaaaa".to_string());
+    v.push("identity-collect-freshtemp-bravo-bbbbbbbbbbbb".to_string());
+    v
+}
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "identity-collect-local-alpha-aaaaaaaaaaaaaaaa".to_string(),
+            "identity-collect-local-bravo-bbbbbbbbbbbbbbbb".to_string(),
+            "identity-collect-local-charlie-cccccccccccccc".to_string()
+        ];
+        let a: Vec[String] = w.iter().collect();
+        let ft: Vec[String] = mk().iter().collect();
+        let a1: String = a[1i64].clone();
+        let ft0: String = ft[0i64].clone();
+        println(f"{a.len()} {w.len()} {a1} {ft.len()} {ft0}");
+        round = round + 1i64;
+    }
+}

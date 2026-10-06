@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_30_59.rs::e2e_discarded_array_literal_moving_a_local_runs_one_body"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_09_30_59.rs::asan_discarded_array_literal_moving_a_local_frees_it"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

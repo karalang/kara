@@ -1,0 +1,1 @@
+ERROR at line 5: cannot move a field out of `W`, which has a `Drop` body

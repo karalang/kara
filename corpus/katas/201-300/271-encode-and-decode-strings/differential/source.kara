@@ -1,0 +1,260 @@
+// LeetCode 271 — differential harness.
+//
+// Three codecs, and a property rather than a common answer. Each produces a
+// DIFFERENT encoding of the same list — "3#abc", "00000003abc", ";abc" — so
+// there is nothing to compare between them directly. What must hold for all
+// three is:
+//
+//     decode(encode(x)) == x          for every x
+//     encode([]) != encode([""])      the two empty cases stay apart
+//
+// A round-trip property is the right check here for the same reason #269 used
+// one: the answer is not unique, so equality against one implementation would
+// assert an implementation detail rather than the problem.
+//
+// GENERATOR DESIGN. A random alphabet of ordinary letters exercises none of
+// this: the whole problem is what happens when the payload contains the thing
+// the codec uses to structure the output. So the draws are weighted toward the
+// hazards — `;` and `\` for the escaping form, `#` and digits for the
+// length-prefixed one, multi-byte UTF-8 for all three, and empty strings
+// everywhere, which is the case that separates [] from [""].
+//
+// The harness counts how many lists actually contained each hazard, so
+// "the dangerous inputs were generated" is a number rather than an intention.
+
+fn show(items: ref Vec[String]) -> String {
+    let mut s = "[";
+    let mut i = 0;
+    while i < items.len() {
+        if i > 0 { s = s + ","; }
+        s = s + "\"" + items[i] + "\"";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+// --- codec 1: length + '#' ------------------------------------------------
+fn enc_hash(items: ref Vec[String]) -> String {
+    let mut out = "";
+    let mut i = 0;
+    while i < items.len() {
+        let mut n = 0;
+        for b in items[i].bytes() { n = n + 1; }
+        out = out + f"{n}" + "#" + items[i];
+        i = i + 1;
+    }
+    return out;
+}
+
+fn dec_hash(data: ref String) -> Vec[String] {
+    let mut bytes: Vec[u8] = Vec.new();
+    for b in data.bytes() { bytes.push(b); }
+    let mut out: Vec[String] = Vec.new();
+    let mut p = 0;
+    while p < bytes.len() {
+        let mut n = 0;
+        while bytes[p] != 35u8 {
+            n = n * 10 + (bytes[p] as i64 - 48);
+            p = p + 1;
+        }
+        p = p + 1;
+        let mut raw: Vec[u8] = Vec.new();
+        let mut k = 0;
+        while k < n { raw.push(bytes[p + k]); k = k + 1; }
+        p = p + n;
+        match String.from_utf8(raw) {
+            Ok(s) => { out.push(s); }
+            Err(e) => { out.push(""); }
+        }
+    }
+    return out;
+}
+
+// --- codec 2: fixed 8-digit header ---------------------------------------
+fn enc_fixed(items: ref Vec[String]) -> String {
+    let mut out = "";
+    let mut i = 0;
+    while i < items.len() {
+        let mut n = 0;
+        for b in items[i].bytes() { n = n + 1; }
+        let digits = f"{n}";
+        let mut dl = 0;
+        for b in digits.bytes() { dl = dl + 1; }
+        let mut pad = "";
+        let mut k = dl;
+        while k < 8 { pad = pad + "0"; k = k + 1; }
+        out = out + pad + digits + items[i];
+        i = i + 1;
+    }
+    return out;
+}
+
+fn dec_fixed(data: ref String) -> Vec[String] {
+    let mut bytes: Vec[u8] = Vec.new();
+    for b in data.bytes() { bytes.push(b); }
+    let mut out: Vec[String] = Vec.new();
+    let mut p = 0;
+    while p < bytes.len() {
+        let mut n = 0;
+        let mut k = 0;
+        while k < 8 { n = n * 10 + (bytes[p + k] as i64 - 48); k = k + 1; }
+        p = p + 8;
+        let mut raw: Vec[u8] = Vec.new();
+        let mut j = 0;
+        while j < n { raw.push(bytes[p + j]); j = j + 1; }
+        p = p + n;
+        match String.from_utf8(raw) {
+            Ok(s) => { out.push(s); }
+            Err(e) => { out.push(""); }
+        }
+    }
+    return out;
+}
+
+// --- codec 3: escaping, separator-prefixed --------------------------------
+fn enc_esc(items: ref Vec[String]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < items.len() {
+        out.push(59u8);
+        for b in items[i].bytes() {
+            if b == 59u8 { out.push(92u8); out.push(59u8); }
+            else {
+                if b == 92u8 { out.push(92u8); out.push(92u8); }
+                else { out.push(b); }
+            }
+        }
+        i = i + 1;
+    }
+    match String.from_utf8(out) {
+        Ok(s) => { return s; }
+        Err(e) => { return ""; }
+    }
+}
+
+fn dec_esc(data: ref String) -> Vec[String] {
+    let mut bytes: Vec[u8] = Vec.new();
+    for b in data.bytes() { bytes.push(b); }
+    let mut out: Vec[String] = Vec.new();
+    let mut raw: Vec[u8] = Vec.new();
+    let mut started = false;
+    let mut p = 0;
+    while p < bytes.len() {
+        let b = bytes[p];
+        if b == 59u8 {
+            if started {
+                match String.from_utf8(raw) {
+                    Ok(s) => { out.push(s); }
+                    Err(e) => { out.push(""); }
+                }
+                raw = Vec.new();
+            }
+            started = true;
+            p = p + 1;
+        } else {
+            if b == 92u8 { raw.push(bytes[p + 1]); p = p + 2; }
+            else { raw.push(b); p = p + 1; }
+        }
+    }
+    if started {
+        match String.from_utf8(raw) {
+            Ok(s) => { out.push(s); }
+            Err(e) => { out.push(""); }
+        }
+    }
+    return out;
+}
+
+fn main() {
+    let cases = 4000;
+    let mut seed = 271271;
+
+    let mut fail_hash = 0;
+    let mut fail_fixed = 0;
+    let mut fail_esc = 0;
+    let mut had_sep = 0;
+    let mut had_backslash = 0;
+    let mut had_hash = 0;
+    let mut had_empty = 0;
+    let mut had_multibyte = 0;
+    let mut total_bytes = 0;
+    let mut digest = 0;
+
+    let mut c = 0;
+    while c < cases {
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let m = (seed / 65536) % 5;              // 0..4 strings
+
+        let mut items: Vec[String] = Vec.new();
+        let mut saw_sep = false;
+        let mut saw_bs = false;
+        let mut saw_hash = false;
+        let mut saw_empty = false;
+        let mut saw_mb = false;
+
+        let mut w = 0;
+        while w < m {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let len = (seed / 65536) % 6;        // 0..5 — empties are common
+            let mut raw: Vec[u8] = Vec.new();
+            let mut p = 0;
+            while p < len {
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                let pick = (seed / 65536) % 10;
+                // weighted toward the structural characters
+                if pick == 0 { raw.push(59u8); saw_sep = true; }
+                if pick == 1 { raw.push(92u8); saw_bs = true; }
+                if pick == 2 { raw.push(35u8); saw_hash = true; }
+                if pick == 3 { raw.push(48u8 + ((seed / 4096) % 10) as u8); }
+                if pick == 4 {
+                    // a two-byte UTF-8 codepoint (U+00E9 é)
+                    raw.push(195u8); raw.push(169u8); saw_mb = true;
+                }
+                if pick >= 5 { raw.push(97u8 + ((seed / 4096) % 26) as u8); }
+                p = p + 1;
+            }
+            if raw.len() == 0 { saw_empty = true; }
+            total_bytes = total_bytes + raw.len();
+            match String.from_utf8(raw) {
+                Ok(s) => { items.push(s); }
+                Err(e) => { items.push(""); }
+            }
+            w = w + 1;
+        }
+        if m == 0 { saw_empty = true; }
+
+        let want = show(items);
+        if show(dec_hash(enc_hash(items))) != want { fail_hash = fail_hash + 1; }
+        if show(dec_fixed(enc_fixed(items))) != want { fail_fixed = fail_fixed + 1; }
+        if show(dec_esc(enc_esc(items))) != want { fail_esc = fail_esc + 1; }
+
+        if saw_sep { had_sep = had_sep + 1; }
+        if saw_bs { had_backslash = had_backslash + 1; }
+        if saw_hash { had_hash = had_hash + 1; }
+        if saw_empty { had_empty = had_empty + 1; }
+        if saw_mb { had_multibyte = had_multibyte + 1; }
+
+        for ch in want.bytes() { digest = (digest * 31 + ch as i64) % 1000000007; }
+        c = c + 1;
+    }
+
+    // The collision the two empty cases create for a joining separator.
+    let none: Vec[String] = Vec.new();
+    let mut one: Vec[String] = Vec.new();
+    one.push("");
+    let mut apart = 0;
+    if enc_hash(none) != enc_hash(one) { apart = apart + 1; }
+    if enc_fixed(none) != enc_fixed(one) { apart = apart + 1; }
+    if enc_esc(none) != enc_esc(one) { apart = apart + 1; }
+
+    println(f"cases {cases}");
+    println(f"payload bytes {total_bytes}");
+    println(f"lists containing ';' {had_sep}");
+    println(f"lists containing '\\' {had_backslash}");
+    println(f"lists containing '#' {had_hash}");
+    println(f"lists containing multi-byte {had_multibyte}");
+    println(f"lists with an empty element or no elements {had_empty}");
+    println(f"codecs keeping [] and [\"\"] distinct {apart} of 3");
+    println(f"digest {digest}");
+    println(f"round-trip failures: hash {fail_hash} fixed {fail_fixed} escape {fail_esc}");
+}

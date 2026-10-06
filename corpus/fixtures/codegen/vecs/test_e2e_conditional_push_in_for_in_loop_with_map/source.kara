@@ -1,0 +1,27 @@
+
+shared struct Node { val: i64 }
+fn main() {
+    let mut m: Map[i64, Node] = Map.new();
+    let mut q: VecDeque[Node] = VecDeque.new();
+    let n1 = Node { val: 1 };
+    let mut xs: Vec[Node] = Vec.new();
+    xs.push(Node { val: 10 });
+    xs.push(Node { val: 20 });
+    let _ = m.insert(99, n1);
+    q.push_back(n1);
+    let mut count: i64 = 0;
+    loop {
+        if let Some(_curr) = q.pop_front() {
+            count = count + 1;
+            if count > 5 { break; }
+            for x in xs.iter() {
+                if x.val > 0 {
+                    q.push_back(x);
+                }
+            }
+        } else {
+            break;
+        }
+    }
+    println(count);
+}

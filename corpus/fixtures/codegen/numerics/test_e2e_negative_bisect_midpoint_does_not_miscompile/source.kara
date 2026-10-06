@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut lo = 0i64 - 3i64;
+    let mut hi = 0i64 - 2i64;
+    let mut steps = 0i64;
+    while lo < hi {
+        let mid = (lo + hi) / 2i64;
+        steps = steps + 1i64;
+        println(f"mid {mid}");
+        if steps > 3i64 { break; }
+        lo = mid + 1i64;
+    }
+    println(f"steps {steps}");
+}

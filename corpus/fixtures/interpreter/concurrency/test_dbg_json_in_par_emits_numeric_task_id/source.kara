@@ -1,0 +1,6 @@
+fn main() {
+    par {
+        let _ = dbg(10);
+        let _ = dbg(20);
+    }
+}

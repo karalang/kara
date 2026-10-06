@@ -1,0 +1,13 @@
+source = "tests/interpreter/numerics.rs::test_vector_array_enum_payload_round_trip"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,123 @@
+// Benchmark workload for LeetCode #321 — the ★ arm's split-shrink-merge.
+//
+// PASSES passes. Each draws two fresh digit arrays of lengths LEN1 and LEN2
+// from an LCG, then answers the problem for three k — short, middle, and
+// nearly the whole input — and folds every digit of every answer into a rolling hash.
+//
+// What this measures is the ★ arm's three loops and nothing else: for each k,
+// every feasible split runs two monotonic-stack shrinks and one suffix-compare
+// merge. The stacks, the merge output and the running best all live in
+// buffers allocated once, with explicit lengths, so the five mirrors measure
+// the same stack and merge work rather than five allocator policies.
+
+const LEN1: i64 = 1500;
+const LEN2: i64 = 1700;
+const PASSES: i64 = 24;
+const MODULUS: i64 = 1073741789;
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// Largest length-`keep` subsequence of nums, written to out[0..keep].
+fn shrink(nums: ref Vec[i64], keep: i64, out: mut ref Vec[i64]) {
+    let mut top = 0;
+    let mut drop = nums.len() - keep;
+    for i in 0..nums.len() {
+        let d = nums[i];
+        while drop > 0 and top > 0 and out[top - 1] < d {
+            top = top - 1;
+            drop = drop - 1;
+        }
+        if top < keep {
+            out[top] = d;
+            top = top + 1;
+        } else {
+            drop = drop - 1;
+        }
+    }
+}
+
+// Is a[i..alen] lexicographically greater than b[j..blen]?
+fn suffix_greater(a: ref Vec[i64], alen: i64, i: i64, b: ref Vec[i64], blen: i64, j: i64) -> bool {
+    let mut x = i;
+    let mut y = j;
+    while x < alen and y < blen and a[x] == b[y] {
+        x = x + 1;
+        y = y + 1;
+    }
+    if y == blen { return x < alen; }
+    if x == alen { return false; }
+    return a[x] > b[y];
+}
+
+fn merge(a: ref Vec[i64], alen: i64, b: ref Vec[i64], blen: i64, out: mut ref Vec[i64]) {
+    let mut i = 0;
+    let mut j = 0;
+    let mut t = 0;
+    while i < alen or j < blen {
+        if suffix_greater(a, alen, i, b, blen, j) {
+            out[t] = a[i];
+            i = i + 1;
+        } else {
+            out[t] = b[j];
+            j = j + 1;
+        }
+        t = t + 1;
+    }
+}
+
+fn main() {
+    let mut seed = 321;
+    let mut sink = 0;
+    let mut digits_out = 0;
+
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    let mut cand: Vec[i64] = Vec.new();
+    let mut best: Vec[i64] = Vec.new();
+    for x in 0..(LEN1 + LEN2) {
+        left.push(0);
+        right.push(0);
+        cand.push(0);
+        best.push(0);
+    }
+
+    for p in 0..PASSES {
+        let mut nums1: Vec[i64] = Vec.new();
+        let mut nums2: Vec[i64] = Vec.new();
+        for x in 0..LEN1 { nums1.push(next(mut seed) % 10); }
+        for x in 0..LEN2 { nums2.push(next(mut seed) % 10); }
+
+        let mut ks: Vec[i64] = [LEN1 / 3, (LEN1 + LEN2) / 2, LEN1 + LEN2 - 7 * (p + 1)];
+        for t in 0..ks.len() {
+            let k = ks[t];
+            let mut lo = k - LEN2;
+            if lo < 0 { lo = 0; }
+            let mut hi = k;
+            if hi > LEN1 { hi = LEN1; }
+            let mut have = false;
+            let mut i = lo;
+            while i <= hi {
+                shrink(nums1, i, mut left);
+                shrink(nums2, k - i, mut right);
+                merge(left, i, right, k - i, mut cand);
+                if not have or suffix_greater(cand, k, 0, best, k, 0) {
+                    for x in 0..k { best[x] = cand[x]; }
+                    have = true;
+                }
+                i = i + 1;
+            }
+
+            let mut acc = 0;
+            for x in 0..k {
+                acc = (acc * 131 + best[x] + 1) % MODULUS;
+            }
+            sink = (sink * 1000003 + acc) % MODULUS;
+            digits_out = digits_out + k;
+        }
+    }
+
+    println(f"sink {sink} digits {digits_out}");
+}

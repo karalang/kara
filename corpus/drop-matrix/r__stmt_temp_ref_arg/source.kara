@@ -1,0 +1,9 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn peek(x: ref R) {
+    println("peek");
+}
+fn main() {
+    peek(R { id: 1 });
+    println("next");
+}

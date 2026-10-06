@@ -1,0 +1,42 @@
+
+struct Pair { word: String, n: i64 }
+struct Deep { inner: Pair, tag: i64 }
+fn take(xs: Slice[Pair]) -> String { let w = xs[0].word; w }
+fn nested(xs: Slice[Deep]) -> String { let w = xs[0].inner.word; w }
+fn tally(xs: Slice[Pair]) -> i64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < 200 {
+        let w = xs[0].word;
+        let peek = xs[0].word;
+        acc = acc + w.len() + peek.len();
+        i = i + 1;
+    }
+    acc
+}
+fn main() {
+    let k = env.args().len() as i64;
+    let mut ps: Vec[Pair] = Vec.new();
+    ps.push(Pair { word: f"a{k}", n: 1 });
+    let borrowed = take(ps[0..1]);
+    let kept = ps[0].word;
+    let mut acc = borrowed.len() + kept.len();
+    acc = acc + tally(ps[0..1]);
+    let mut ds: Vec[Deep] = Vec.new();
+    ds.push(Deep { inner: Pair { word: f"b{k}", n: 2 }, tag: 3 });
+    let deep = nested(ds[0..1]);
+    let kept_deep = ds[0].inner.word;
+    acc = acc + deep.len() + kept_deep.len();
+    let mut m: Map[String, Pair] = Map.new();
+    m.insert(f"k{k}", Pair { word: f"c{k}", n: 4 });
+    let mapped = m[f"k{k}"].word;
+    let kept_map = m[f"k{k}"].word;
+    acc = acc + mapped.len() + kept_map.len();
+    let mut i = 0i64;
+    while i < 200 {
+        let w = m[f"k{k}"].word;
+        acc = acc + w.len();
+        i = i + 1;
+    }
+    println(acc > 0);
+}

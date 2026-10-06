@@ -1,0 +1,8 @@
+
+fn main() {
+    let v = ["a", "b", "c"];
+    let w = [10, 20, 30];
+    for (s, (i, n)) in v.iter().zip(w.iter().enumerate()) {
+        println(f"{s}:{i}={n}");
+    }
+}

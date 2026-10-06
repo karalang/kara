@@ -1,0 +1,45 @@
+
+fn viol(v: Vec[(i64, i64)]) -> i64 {
+    let mut bad: i64 = 0i64;
+    let mut i: i64 = 1i64;
+    while i < v.len() {
+        let p: (i64, i64) = v[i - 1i64];
+        let c: (i64, i64) = v[i];
+        if p.0 > c.0 { bad = bad + 1i64; }
+        if p.0 == c.0 and p.1 > c.1 { bad = bad + 1i64; }
+        i = i + 1i64;
+    }
+    return bad;
+}
+fn main() {
+    let mut bad: i64 = 0i64;
+    let mut si: i64 = 0i64;
+    while si < 6i64 {
+        let mut n: i64 = 0i64;
+        if si == 0i64 { n = 31i64; }
+        if si == 1i64 { n = 32i64; }
+        if si == 2i64 { n = 33i64; }
+        if si == 3i64 { n = 63i64; }
+        if si == 4i64 { n = 64i64; }
+        if si == 5i64 { n = 65i64; }
+        let mut k: i64 = 0i64;
+        while k < 4i64 {
+            let mut v: Vec[(i64, i64)] = Vec.new();
+            let mut i: i64 = 0i64;
+            while i < n {
+                let mut key: i64 = 0i64;
+                if k == 0i64 { key = i; }
+                if k == 1i64 { key = n - i; }
+                if k == 2i64 { key = 7i64; }
+                if k == 3i64 { key = (i * 37i64) % 11i64; }
+                v.push((key, i));
+                i = i + 1i64;
+            }
+            v.sort_by(|x, y| x.0.cmp(y.0));
+            bad = bad + viol(v);
+            k = k + 1i64;
+        }
+        si = si + 1i64;
+    }
+    println(bad);
+}

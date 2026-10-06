@@ -1,0 +1,410 @@
+// LeetCode 306 — five arms against each other and against seven properties
+// that follow from the STATEMENT rather than from any implementation.
+//
+//   A  search the two prefix lengths, verify by digit-list addition  (star)
+//   B  the same search, verification by recursion
+//   C  the same search, generate the concatenation and compare
+//   D  the same search over i64, declining where it would overflow
+//   E  enumerate EVERY cut of the string — the definition, nothing added
+//
+// WHAT THE ARMS CANNOT SHARE. A, B, C and D are four spellings of ONE idea:
+// once the first two numbers are fixed the rest of the sequence follows, so
+// the search runs over two prefix lengths instead of over cuts. If that idea
+// were wrong all four would be wrong together and agree perfectly. E does the
+// thing the idea makes unnecessary — it reaches every cut, including the ones
+// the idea says cannot work — so every agreement between E and the others is a
+// check of the premise itself, not of its implementation.
+//
+// THE HARD PART OF TESTING THIS PROBLEM IS THAT THE ANSWER IS A BOOLEAN, and
+// almost every digit string is NOT additive. A case set drawn from random
+// strings is ~99% false, so an arm that ignored its input and returned `false`
+// would pass it. Agreement between arms does not help either: five arms that
+// all return false agree.
+//
+// So the case space is built in three parts, and the shape matters more than
+// the count:
+//
+//   EXHAUSTIVE  every string of length 3..6 over the alphabet {0,1,2,9} —
+//               5,440 cases. Small enough for arm E to reach all of them, and
+//               the alphabet keeps 9s in play so carries are exercised.
+//   CONSTRUCTED sequences built forward from (a, b) and concatenated, so they
+//               are additive BY CONSTRUCTION. These are the only guaranteed
+//               positives in the set, and P2 is what makes them bite.
+//   PERTURBED   a constructed positive with one digit changed — negatives that
+//               sit one edit away from a positive, which is where an
+//               off-by-one in the offset advance actually shows up.
+//
+// The true-rate is reported. A property set for a boolean predicate is worth
+// nothing if the cases are all one answer, and that number is the only way to
+// see it.
+//
+// P2, P5 AND P6 ARE THE ONES NO ARM COMPUTES. Each starts from a sequence the
+// harness built and asks the arms about the STRING, so each is a check that
+// runs in the opposite direction to every arm: the arms search for a cut, the
+// harness already knows one.
+//
+//   P2, recognition: a string built by concatenating a genuine additive
+//   sequence must be accepted. This is the entire defence against an arm that
+//   is biased toward `false` — the failure mode that agreement is blind to.
+//
+//   P5, truncation: drop the last term of a constructed positive with at least
+//   four terms. The remaining terms still satisfy "each is the sum of the two
+//   before", so the shorter string is still additive. Sound, and a different
+//   string from the one P2 asked about.
+//
+//   P6, extension: append the next term of a constructed positive. Same
+//   argument in the other direction.
+//
+// P7 IS THE PROBLEM'S OWN FOLLOW-UP made testable: wherever arm D answers, it
+// must agree with the exact arms. `None` is not a pass — the count of cases it
+// actually answered is reported, so declining everything would be visible.
+// Decimal digits of the input's [lo, hi) span, most significant first.
+fn digits_of(bytes: Slice[u8], lo: i64, hi: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in lo..hi { out.push((bytes[i] - b'0') as i64); }
+    return out;
+}
+// Schoolbook addition, most-significant-first, exact at any length.
+fn add_digits(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut rev: Vec[i64] = Vec.new();
+    let mut i = a.len() - 1;
+    let mut j = b.len() - 1;
+    let mut carry = 0;
+    // i and j are signed, so the "walked off the front" test is >= 0 rather
+    // than a wrapping comparison.
+    while i >= 0 or j >= 0 or carry > 0 {
+        let mut sum = carry;
+        if i >= 0 { sum = sum + a[i]; i = i - 1; }
+        if j >= 0 { sum = sum + b[j]; j = j - 1; }
+        rev.push(sum % 10);
+        carry = sum / 10;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = rev.len() - 1;
+    while k >= 0 { out.push(rev[k]); k = k - 1; }
+    return out;
+}
+// Does `num` spell exactly the input's digits starting at `pos`?
+fn matches_at(bytes: Slice[u8], pos: i64, num: ref Vec[i64]) -> bool {
+    if pos + num.len() > bytes.len() { return false; }
+    for k in 0..num.len() {
+        if (bytes[pos + k] - b'0') as i64 != num[k] { return false; }
+    }
+    return true;
+}
+// A number may not carry a leading zero unless it IS zero.
+fn no_leading_zero(bytes: Slice[u8], lo: i64, hi: i64) -> bool {
+    return hi - lo == 1 or bytes[lo] != b'0';
+}
+
+const I64_SAFE_DIGITS: i64 = 18;
+const E_REACH: i64 = 12;      // arm E is 2^(n-1); this is where it stops being cheap
+
+fn digits_eq(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() { return false; }
+    for i in 0..a.len() { if a[i] != b[i] { return false; } }
+    return true;
+}
+
+// ---------------------------------------------------------------- arm A ---
+fn solve_a(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    if n < 3 { return false; }
+    for len1 in 1..(n - 1) {
+        if not no_leading_zero(bytes, 0, len1) { break; }
+        for len2 in 1..(n - len1) {
+            if not no_leading_zero(bytes, len1, len1 + len2) { break; }
+            let mut a = digits_of(bytes, 0, len1);
+            let mut b = digits_of(bytes, len1, len1 + len2);
+            let mut pos = len1 + len2;
+            let mut ok = true;
+            let mut steps = 0;
+            while pos < n and ok {
+                let c = add_digits(a, b);
+                if matches_at(bytes, pos, c) {
+                    pos = pos + c.len(); a = b; b = c; steps = steps + 1;
+                } else { ok = false; }
+            }
+            if ok and pos == n and steps > 0 { return true; }
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------- arm B ---
+fn extend(bytes: Slice[u8], pos: i64, a: ref Vec[i64], b: ref Vec[i64], steps: i64) -> bool {
+    if pos == bytes.len() { return steps > 0; }
+    let c = add_digits(a, b);
+    if not matches_at(bytes, pos, c) { return false; }
+    return extend(bytes, pos + c.len(), b, c, steps + 1);
+}
+
+fn solve_b(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    if n < 3 { return false; }
+    for len1 in 1..(n - 1) {
+        if not no_leading_zero(bytes, 0, len1) { break; }
+        for len2 in 1..(n - len1) {
+            if not no_leading_zero(bytes, len1, len1 + len2) { break; }
+            let a = digits_of(bytes, 0, len1);
+            let b = digits_of(bytes, len1, len1 + len2);
+            if extend(bytes, len1 + len2, a, b, 0) { return true; }
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------- arm C ---
+fn solve_c(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    if n < 3 { return false; }
+    let whole = digits_of(bytes, 0, n);
+    for len1 in 1..(n - 1) {
+        if not no_leading_zero(bytes, 0, len1) { break; }
+        for len2 in 1..(n - len1) {
+            if not no_leading_zero(bytes, len1, len1 + len2) { break; }
+            let mut a = digits_of(bytes, 0, len1);
+            let mut b = digits_of(bytes, len1, len1 + len2);
+            let mut built: Vec[i64] = Vec.new();
+            for d in a { built.push(d); }
+            for d in b { built.push(d); }
+            let mut count = 2;
+            while built.len() < n {
+                let c = add_digits(a, b);
+                for d in c { built.push(d); }
+                a = b; b = c; count = count + 1;
+            }
+            if count > 2 and digits_eq(built, whole) { return true; }
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------- arm D ---
+fn parse_span(bytes: Slice[u8], lo: i64, hi: i64) -> i64 {
+    let mut v = 0;
+    for i in lo..hi { v = v * 10 + (bytes[i] - b'0') as i64; }
+    return v;
+}
+
+fn width_of(v: i64) -> i64 {
+    if v == 0 { return 1; }
+    let mut w = 0; let mut t = v;
+    while t > 0 { w = w + 1; t = t / 10; }
+    return w;
+}
+
+fn solve_d(s: ref String) -> Option[bool] {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    if n > I64_SAFE_DIGITS { return None; }
+    if n < 3 { return Some(false); }
+    for len1 in 1..(n - 1) {
+        if not no_leading_zero(bytes, 0, len1) { break; }
+        for len2 in 1..(n - len1) {
+            if not no_leading_zero(bytes, len1, len1 + len2) { break; }
+            let mut a = parse_span(bytes, 0, len1);
+            let mut b = parse_span(bytes, len1, len1 + len2);
+            let mut pos = len1 + len2;
+            let mut ok = true;
+            let mut steps = 0;
+            while pos < n and ok {
+                let c = a + b;
+                let w = width_of(c);
+                if pos + w <= n and parse_span(bytes, pos, pos + w) == c {
+                    pos = pos + w; a = b; b = c; steps = steps + 1;
+                } else { ok = false; }
+            }
+            if ok and pos == n and steps > 0 { return Some(true); }
+        }
+    }
+    return Some(false);
+}
+
+// ---------------------------------------------------------------- arm E ---
+fn is_additive_list(nums: ref Vec[Vec[i64]]) -> bool {
+    if nums.len() < 3 { return false; }
+    for k in 2..nums.len() {
+        let want = add_digits(nums[k - 2], nums[k - 1]);
+        if not digits_eq(want, nums[k]) { return false; }
+    }
+    return true;
+}
+
+fn explore(bytes: Slice[u8], pos: i64, nums: mut ref Vec[Vec[i64]]) -> bool {
+    let n = bytes.len();
+    if pos == n { return is_additive_list(nums); }
+    for len in 1..(n - pos + 1) {
+        if not no_leading_zero(bytes, pos, pos + len) { break; }
+        nums.push(digits_of(bytes, pos, pos + len));
+        if explore(bytes, pos + len, nums) { return true; }
+        nums.pop();
+    }
+    return false;
+}
+
+fn solve_e(s: ref String) -> bool {
+    let bytes = s.bytes();
+    if bytes.len() < 3 { return false; }
+    let mut nums: Vec[Vec[i64]] = Vec.new();
+    return explore(bytes, 0, mut nums);
+}
+
+// ----------------------------------------------------------- generators ---
+// The concatenation of the additive sequence seeded by (a, b), stopped at
+// `terms` terms. Additive BY CONSTRUCTION, which is what P2/P5/P6 rest on.
+fn build_positive(a0: i64, b0: i64, terms: i64) -> String {
+    let mut a = a0;
+    let mut b = b0;
+    let mut s = a.to_string() + b.to_string();
+    for t in 2..terms {
+        let c = a + b;
+        s = s + c.to_string();
+        a = b;
+        b = c;
+    }
+    return s;
+}
+
+fn nth_digit_string(idx: i64, len: i64, alpha: ref Vec[i64]) -> String {
+    let base = alpha.len();
+    let mut s = String.new();
+    let mut v = idx;
+    for i in 0..len {
+        s = s + alpha[v % base].to_string();
+        v = v / base;
+    }
+    return s;
+}
+
+fn pow_i(b: i64, e: i64) -> i64 {
+    let mut v = 1;
+    for i in 0..e { v = v * b; }
+    return v;
+}
+
+fn main() {
+    let mut alpha: Vec[i64] = Vec.new();
+    for d in [0, 1, 2, 9] { alpha.push(d); }
+
+    let mut cases = 0;
+    let mut trues = 0;
+    let mut e_run = 0;
+    let mut d_run = 0;
+    let mut p1 = 0; let mut p2 = 0; let mut p3 = 0; let mut p4 = 0;
+    let mut p5 = 0; let mut p6 = 0; let mut p7 = 0;
+
+    // ---- part 1: exhaustive over {0,1,2,9}, lengths 3..6 ----
+    for len in 3..7 {
+        let total = pow_i(alpha.len(), len);
+        for idx in 0..total {
+            let s = nth_digit_string(idx, len, alpha);
+            let ra = solve_a(s);
+            if ra { trues += 1; }
+            if solve_b(s) != ra or solve_c(s) != ra { p1 += 1; }
+            if len <= E_REACH {
+                e_run += 1;
+                if solve_e(s) != ra { p1 += 1; }
+            }
+            match solve_d(s) {
+                Some(v) => { d_run += 1; if v != ra { p7 += 1; } },
+                None => { },
+            }
+            cases += 1;
+        }
+    }
+
+    // ---- part 2: constructed positives, plus truncation and extension ----
+    for a0 in 0..24 {
+        for b0 in 0..24 {
+            for terms in 3..6 {
+                let s = build_positive(a0, b0, terms);
+                let ra = solve_a(s);
+                if ra { trues += 1; }
+                // P2 — built additive, so it must be recognised.
+                if not ra { p2 += 1; }
+                if solve_b(s) != ra or solve_c(s) != ra { p1 += 1; }
+                if s.len() <= E_REACH {
+                    e_run += 1;
+                    if solve_e(s) != ra { p1 += 1; }
+                }
+                match solve_d(s) {
+                    Some(v) => { d_run += 1; if v != ra { p7 += 1; } },
+                    None => { },
+                }
+                cases += 1;
+
+                // P5 — truncation to terms-1 >= 3 stays additive.
+                if terms > 3 {
+                    let shorter = build_positive(a0, b0, terms - 1);
+                    if not solve_a(shorter) { p5 += 1; }
+                }
+                // P6 — extension by one more term stays additive.
+                let longer = build_positive(a0, b0, terms + 1);
+                if not solve_a(longer) { p6 += 1; }
+
+                // ---- part 3: one-digit perturbations of a positive ----
+                let bytes = s.bytes();
+                let n = bytes.len();
+                let site = (a0 * 7 + b0 * 3 + terms) % n;
+                let mut t = String.new();
+                for i in 0..n {
+                    if i == site {
+                        t = t + (((bytes[i] - b'0') as i64 + 1) % 10).to_string();
+                    } else {
+                        t = t + ((bytes[i] - b'0') as i64).to_string();
+                    }
+                }
+                let rt = solve_a(t);
+                if rt { trues += 1; }
+                if solve_b(t) != rt or solve_c(t) != rt { p1 += 1; }
+                if t.len() <= E_REACH {
+                    e_run += 1;
+                    if solve_e(t) != rt { p1 += 1; }
+                }
+                match solve_d(t) {
+                    Some(v) => { d_run += 1; if v != rt { p7 += 1; } },
+                    None => { },
+                }
+                cases += 1;
+            }
+        }
+    }
+
+    // ---- closed forms ----
+    // P3 — nothing shorter than three digits can hold three numbers.
+    for len in 0..3 {
+        let total = pow_i(alpha.len(), len);
+        for idx in 0..total {
+            let s = nth_digit_string(idx, len, alpha);
+            if solve_a(s) { p3 += 1; }
+        }
+    }
+    // P4 — all zeros, any length >= 3, is 0 + 0 = 0 forever.
+    for len in 3..20 {
+        let mut z = String.new();
+        for i in 0..len { z = z + "0"; }
+        if not solve_a(z) { p4 += 1; }
+    }
+
+    println(f"cases {cases}");
+    println(f"  of which additive {trues}");
+    println(f"  arm E (all cuts) run on {e_run}");
+    println(f"  arm D (i64) answered {d_run}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 constructed-positive rejections {p2}");
+    println(f"P3 short-string acceptances {p3}");
+    println(f"P4 all-zero rejections {p4}");
+    println(f"P5 truncation failures {p5}");
+    println(f"P6 extension failures {p6}");
+    println(f"P7 i64 disagreements {p7}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

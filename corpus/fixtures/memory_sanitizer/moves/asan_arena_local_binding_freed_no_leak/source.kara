@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let a: Arena[i64] = Arena.new();
+        let r0 = a.push(7i64);
+        let cp = a.high_water_mark();
+        let _r1 = a.push(9i64);
+        a.rewind_to(cp);
+        total = total + a.get(r0) + a.len();
+        let s: Arena[String] = Arena.new();
+        let sr = s.push("alpha");
+        total = total + s.get(sr).len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

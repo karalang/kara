@@ -1,0 +1,7 @@
+
+shared struct Vec2 { x: i64, y: i64 }
+fn sum(v: Vec2) -> i64 { v.x + v.y }
+fn main() {
+    let v = Vec2 { x: 3, y: 7 };
+    println(sum(v));
+}

@@ -1,0 +1,33 @@
+fn helper() -> i64 {
+    return 1;
+}
+const LIMIT: i64 = 10;
+fn apply(f: Fn() -> i64) -> i64 {
+    let helper = 50;
+    return f() + helper;
+}
+fn make(k: i64) -> Fn(i64) -> i64 {
+    return |x| x + k + LIMIT;
+}
+fn main() {
+    let mut x = 1;
+    let c = || x + helper();
+    x = 100;
+    println(f"{c()} {x}");
+    let helper = || 7;
+    let d = || helper() + LIMIT;
+    println(f"{d()} {apply(d)}");
+    let add = make(5);
+    println(f"{add(1)}");
+    let mut total = 0;
+    let mut bump = mut ref || {
+        total += 1;
+    };
+    bump();
+    bump();
+    println(f"{total}");
+    let v = [3, 1, 2];
+    let mut w = v.clone();
+    w.sort_by(|a, b| b.cmp(a));
+    println(f"{w} {v.iter().map(|e| e * LIMIT).collect()}");
+}

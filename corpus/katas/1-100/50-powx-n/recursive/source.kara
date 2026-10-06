@@ -1,0 +1,65 @@
+// LeetCode #50: Pow(x, n) — recursive divide-and-conquer (exponentiation by squaring).
+//
+// Compute x raised to the integer power n. The exponent n is a 32-bit signed
+// integer in [-2^31, 2^31 - 1]; the base x and the result are f64. A naive
+// x * x * … loop is O(n) and — for |n| up to 2^31 — hopeless. Exponentiation by
+// squaring makes it O(log |n|) by halving the exponent each step:
+//
+//     x^n = (x^(n/2))^2               when n is even
+//     x^n = (x^(n/2))^2 * x           when n is odd
+//
+// so each recursion strips one bit off n. This ★ variant recurses on the HALVED
+// exponent and SQUARES THE PARTIAL POWER on the way back up (`half * half`).
+// Its sibling `iterative.kara` walks the bits of n low-to-high and squares THE
+// BASE instead — same O(log n) cost, but the two multiply their factors in a
+// different order, so on inexact bases they can disagree in the last bit (both
+// stay within LeetCode's 1e-5 tolerance; see the README).
+//
+// Negative exponents: x^n = 1 / x^(-n). The magnitude `-n` is taken in i64 so
+// that n = -2^31 — whose magnitude 2^31 does NOT fit back into i32 — never traps
+// under Kāra's default arithmetic overflow checking. `fast_pow` therefore only
+// ever sees a non-negative exponent, and `n / 2` / `n % 2` stay in easy range.
+
+fn fast_pow(x: f64, n: i64) -> f64 {
+    if n == 0 {
+        return 1.0;
+    }
+    let half = fast_pow(x, n / 2);   // recurse on the halved exponent
+    if n % 2 == 0 {
+        half * half                  // even: square the partial power
+    } else {
+        half * half * x              // odd: square, then fold in one more x
+    }
+}
+
+// ---- everything below is line-for-line identical to iterative.kara ----------
+
+fn my_pow(x: f64, n: i64) -> f64 {
+    if n < 0 {
+        1.0 / fast_pow(x, -n)        // x^n = 1 / x^(-n); -n in i64 so n=-2^31 is safe
+    } else {
+        fast_pow(x, n)
+    }
+}
+
+fn main() {
+    // Every case below has an EXACTLY representable f64 result (a power of two,
+    // an integer, or ±1), so the recursive and iterative solvers — and the
+    // Python oracle — agree byte-for-byte. See the README for why inexact bases
+    // (e.g. 2.1^3) diverge by one ULP between the two algorithms.
+    println(my_pow(2.0, 10));           // 1024
+    println(my_pow(2.0, -2));           // 0.25
+    println(my_pow(2.0, 0));            // 1
+    println(my_pow(2.0, -3));           // 0.125
+    println(my_pow(-2.0, 3));           // -8
+    println(my_pow(0.5, 4));            // 0.0625
+    println(my_pow(3.0, 5));            // 243
+    println(my_pow(2.0, 30));           // 1073741824
+    println(my_pow(2.0, -10));          // 0.0009765625
+    println(my_pow(10.0, 4));           // 10000
+    println(my_pow(1.0, 2147483647));   // 1            (INT_MAX exponent)
+    println(my_pow(1.0, -2147483648));  // 1            (INT_MIN exponent, |n|=2^31)
+    println(my_pow(2.0, -2147483648));  // 0            (underflows to +0)
+    println(my_pow(-1.0, 2147483647));  // -1           (odd power of -1)
+    println(my_pow(0.5, -3));           // 8            (negative exp of a fraction)
+}

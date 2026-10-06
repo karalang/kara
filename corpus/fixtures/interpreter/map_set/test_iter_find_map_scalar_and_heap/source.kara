@@ -1,0 +1,11 @@
+
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let a: Option[i64] = v.iter().find_map(|x| if x > 2 { Some(x * 2) } else { None });
+    match a { Some(n) => println(n), None => println(-1) }
+    let b: Option[i64] = v.iter().find_map(|x| if x > 100 { Some(x) } else { None });
+    match b { Some(n) => println(n), None => println(-1) }
+    let w = ["hi".to_string(), "there".to_string(), "yo".to_string()];
+    let c: Option[String] = w.iter().find_map(|s| if s.len() > 2 { Some(s.to_uppercase()) } else { None });
+    match c { Some(s) => println(s), None => println("none") }
+}

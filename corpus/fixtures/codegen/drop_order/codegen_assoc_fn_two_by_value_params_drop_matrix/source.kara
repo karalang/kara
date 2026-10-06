@@ -1,0 +1,13 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct H { n: i64 }
+fn mk(i: i64) -> String { return f"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
+
+impl H {
+    fn two(a: R, b: R, k: bool) -> R { if k { return b; } return a; }
+}
+
+fn t_t() { let x = H.two(R { id: 41, s: mk(41) }, R { id: 42, s: mk(42) }, true); println(f"T{x.id}"); }
+fn t_f() { let x = H.two(R { id: 43, s: mk(43) }, R { id: 44, s: mk(44) }, false); println(f"T{x.id}"); }
+
+fn main() { t_t(); t_f(); println("end"); }

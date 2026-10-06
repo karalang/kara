@@ -1,0 +1,81 @@
+// Benchmark workload for LeetCode #252 — Meeting Rooms.
+//
+// Build-once + punch. One packed, ATTENDABLE set of 120,000 intervals is built
+// and shuffled once; each round copies it, sorts by start, and runs the adjacent
+// overlap scan to completion.
+//
+// Two choices make this measure the algorithm rather than an early exit:
+//
+//   * The set is ATTENDABLE. A clashing set returns at the first conflict, so a
+//     benchmark over one would measure how quickly a clash appears — i.e. the
+//     generator — not the scan. Only the attendable case walks all n.
+//   * The set is SHUFFLED once, and each round sorts a fresh copy of the
+//     shuffled order. Sorting an already-sorted array takes a different path in
+//     every implementation here, and re-sorting the output of the previous round
+//     would measure that path from round 2 onward.
+//
+// The sort is the load-bearing step (O(n log n) against the scan's O(n)), so
+// this lane is largely a cross-language comparison of sorting 120k pairs by a
+// key — with a data-dependent scan on top that cannot be vectorized away.
+
+fn main() {
+    let n = 120000;
+    let rounds = 40;
+
+    // ---- build once: packed, attendable, then shuffled -------------------
+    let mut base: Vec[(i64, i64)] = Vec.new();
+    let mut state = 252252;
+    let mut cursor = 0;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let dur = (state / 65536) % 7 + 1;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let gap = (state / 65536) % 3;
+        base.push((cursor, cursor + dur));
+        cursor = cursor + dur + gap;
+        i = i + 1;
+    }
+    let mut k = base.len() - 1;
+    while k > 0 {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let wd0 = state / 65536;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let swap = (wd0 * 32768 + state / 65536) % (k + 1);
+        let tmp = base[k];
+        base[k] = base[swap];
+        base[swap] = tmp;
+        k = k - 1;
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut s: Vec[(i64, i64)] = Vec.new();
+        let mut c = 0;
+        while c < n {
+            s.push(base[c]);
+            c = c + 1;
+        }
+        s.sort_by(|a, b| a.0.cmp(b.0));
+
+        let mut ok = true;
+        let mut j = 1;
+        while j < n {
+            if s[j].0 < s[j - 1].1 {
+                ok = false;
+            }
+            j = j + 1;
+        }
+        // Fold the verdict AND the sorted span, so a wrong sort is caught.
+        if ok {
+            sink = (sink * 31 + 1) % 1000000007;
+        } else {
+            sink = (sink * 31) % 1000000007;
+        }
+        sink = (sink * 131 + s[n - 1].1 - s[0].0) % 1000000007;
+        r = r + 1;
+    }
+    println(sink);
+}

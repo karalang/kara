@@ -1,0 +1,14 @@
+== logical plan ==
+LIMIT 3
+  SELECT [name, opt]
+    FILTER (((age > 10) and (age < 40)) or (score >= 7))
+      SCAN [age, name, score, opt]
+== optimized ==
+SELECT [name, opt]
+  LIMIT 3
+    FILTER (((age > 10) and (age < 40)) or (score >= 7))
+      SCAN cols=[age, name, score, opt]
+3
+ada_padding_aaaaaaaaaaaaaaaaa
+null
+1

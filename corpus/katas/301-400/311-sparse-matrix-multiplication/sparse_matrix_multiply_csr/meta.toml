@@ -1,0 +1,13 @@
+source = "kara-katas/leetcode/301-400/311-sparse-matrix-multiplication/sparse_matrix_multiply_csr.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

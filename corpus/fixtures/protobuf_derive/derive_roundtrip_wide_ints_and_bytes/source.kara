@@ -1,0 +1,22 @@
+
+#[derive(Message)]
+struct Wide {
+    a: i32,
+    b: u64,
+    c: i64,
+    d: Vec[u8],
+}
+
+fn main() {
+    let mut bytes = Vec.new();
+    bytes.push(7u8);
+    bytes.push(8u8);
+    bytes.push(255u8);
+    let w = Wide { a: 0 - 5, b: 18000000000u64, c: 0 - 123456789, d: bytes };
+    let r = Wide.decode(w.encode());
+    println(r.a);
+    println(r.b);
+    println(r.c);
+    println(r.d.len());
+    println(r.d[2]);
+}

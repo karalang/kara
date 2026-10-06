@@ -1,0 +1,6 @@
+cases 5461
+total writes: cursor 30948, swap 20280
+cases where swap wrote less 3768, where the cursor wrote less 664
+digest 170171595
+multiset broken 0, non-zero order broken 0, zeros misplaced 0
+cursor vs definition 0, swap vs definition 0

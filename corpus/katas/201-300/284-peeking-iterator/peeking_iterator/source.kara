@@ -1,0 +1,125 @@
+// LeetCode 284 — Peeking Iterator.
+//
+// You are given an iterator that supports `has_next()` and `next()`. Wrap it so
+// it also supports `peek()` — return the next element WITHOUT advancing.
+//
+// THE CONSTRAINT IS THAT YOU CANNOT SEE INSIDE. The underlying iterator offers
+// exactly two operations, and `next()` is destructive: once called, the element
+// is gone and there is no way to put it back. So `peek()` cannot be implemented
+// by asking — it can only be implemented by having ALREADY asked and kept the
+// answer.
+//
+// THE ★ MECHANISM: A ONE-SLOT BUFFER, FILLED EAGERLY. At construction, pull one
+// element and hold it. `peek()` returns the held element. `next()` returns it
+// and immediately pulls the replacement. `has_next()` asks whether the slot is
+// full, not whether the underlying iterator has more — which is the part that
+// gets written wrong.
+//
+//     peek()      -> slot
+//     next()      -> slot, then refill from the underlying iterator
+//     has_next()  -> the SLOT is full  (not: the underlying has more)
+//
+// WHY `has_next` MUST ASK ABOUT THE SLOT. After the last element has been pulled
+// into the slot, the underlying iterator reports empty while the wrapper still
+// has one element to hand out. A `has_next` that forwards to the underlying
+// iterator drops the final element — and every test that drains a list gets the
+// right answer for the first n-1 elements and loses the last, which is the
+// easiest possible bug to miss on a short example.
+//
+// THE COST OF EAGER IS ONE PULL YOU MIGHT NOT NEED. Construction consumes an
+// element before the caller has asked for anything, which is observable if the
+// underlying iterator is expensive or effectful. `peeking_iterator_lazy.kara`
+// pulls only when asked, and the differential counts the pulls rather than
+// arguing about which is better.
+//
+// KĀRA HAS NO ITERATOR PROTOCOL TO WRAP (see kata 281), so the underlying
+// iterator is a plain struct over a `Vec` with a cursor and a call counter. That
+// counter is the point: it makes "how many times did you pull" a measurable
+// property rather than a claim.
+
+struct Source {
+    data: Vec[i64],
+    mut pos: i64,
+    mut pulls: i64,
+}
+
+fn src_has_next(s: ref Source) -> bool {
+    return s.pos < s.data.len();
+}
+
+fn src_next(s: mut ref Source) -> i64 {
+    let v = s.data[s.pos];
+    s.pos = s.pos + 1;
+    s.pulls = s.pulls + 1;
+    return v;
+}
+
+struct Peeking {
+    mut src: Source,
+    mut slot: i64,
+    mut full: bool,
+}
+
+fn make_peeking(data: Vec[i64]) -> Peeking {
+    let mut s = Source { data: data, pos: 0, pulls: 0 };
+    let mut full = false;
+    let mut slot = 0;
+    if src_has_next(s) {
+        slot = src_next(mut s);
+        full = true;
+    }
+    return Peeking { src: s, slot: slot, full: full };
+}
+
+fn peek(p: ref Peeking) -> i64 {
+    return p.slot;
+}
+
+fn has_next(p: ref Peeking) -> bool {
+    return p.full;
+}
+
+fn next(p: mut ref Peeking) -> i64 {
+    let v = p.slot;
+    if src_has_next(p.src) {
+        p.slot = src_next(p.src);
+    } else {
+        p.full = false;
+    }
+    return v;
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + f"{v[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    // drain, peeking before every next
+    let mut p = make_peeking([1, 2, 3]);
+    let mut out: Vec[i64] = Vec.new();
+    while has_next(p) {
+        out.push(peek(p));
+        out.push(next(mut p));
+    }
+    println(f"peek+next drain of [1,2,3] -> {show(out)} ({p.src.pulls} pulls)");
+
+    // peek must not advance: three peeks then a next
+    let mut q = make_peeking([7, 8]);
+    println(f"peek thrice: {peek(q)} {peek(q)} {peek(q)} then next: {next(mut q)}");
+
+    // the empty case
+    let e = make_peeking([]);
+    println(f"empty: has_next={has_next(e)}");
+
+    // a single element — the case a forwarding has_next drops
+    let mut one = make_peeking([42]);
+    let first = next(mut one);
+    println(f"single: got {first}, has_next now {has_next(one)}");
+}

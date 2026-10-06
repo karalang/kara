@@ -1,0 +1,15 @@
+
+fn check_par_blocks() {
+    let pbs = Runtime.list_par_blocks();
+    let n = pbs.len();
+    println(n);
+}
+fn other_branch() {
+    println(99);
+}
+fn main() {
+    par {
+        check_par_blocks();
+        other_branch();
+    }
+}

@@ -1,0 +1,67 @@
+rebind
+  ok1
+dR1/t1
+rebindu
+dR2/t2
+  m
+esc
+  got3
+dR3/t3
+escerr
+  got4
+dR4/t4
+esciflet
+  got5
+dR5/t5
+call
+  eat6
+dR6/t6
+inner
+  got7
+dR7/t7
+strreb
+  oks8
+stresc
+  gots9
+optesc
+  got10
+dR10/t10
+treb
+dR11/t11
+  ok111
+dR111/t111
+trebu
+dR12/t12
+dR112/t112
+  m
+tesc
+dR13/t13
+  got113
+dR113/t113
+freb
+dR14/t14
+  ok114
+dR114/t114
+fesc
+dR15/t15
+  got115
+dR115/t115
+wreb
+  ok16
+dW16/x16y16
+wesc
+  got17
+dW17/x17y17
+wtreb
+dR18/t18
+  ok118
+dW118/x118y118
+wfreb
+dR19/t19
+  ok119
+dW119/x119y119
+wfesc
+dR20/t20
+  got120
+dW120/x120y120
+done

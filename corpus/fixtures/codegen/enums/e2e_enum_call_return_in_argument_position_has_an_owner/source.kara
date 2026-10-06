@@ -1,0 +1,48 @@
+
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum Ts { A(String), B }
+enum Tr { A(R), B }
+enum Tv { A(Vec[String]), B }
+enum Td { A(String), B }
+impl Drop for Td { fn drop(mut ref self) { println("dTd") } }
+struct W { a: String }
+
+fn mks(n: i64) -> Ts { return Ts.A(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); }
+fn mkr(n: i64) -> Tr { return Tr.A(R { id: n, s: f"b1613-payload-aaaaaaaaaaaaaaaa-{n}" }); }
+fn mkv(n: i64) -> Tv { let mut v: Vec[String] = Vec.new(); v.push(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); return Tv.A(v); }
+fn mkd(n: i64) -> Td { return Td.A(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); }
+fn mkw(n: i64) -> W { return W { a: f"b1613-payload-aaaaaaaaaaaaaaaa-{n}" }; }
+fn mko(n: i64) -> Option[String] { return Option.Some(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); }
+
+fn eats(e: Ts) -> i64 { return 7; }
+fn eatr(e: Tr) -> i64 { return 7; }
+fn eatv(e: Tv) -> i64 { return 7; }
+fn eatd(e: Td) -> i64 { return 7; }
+fn eatw(e: W) -> i64 { return 7; }
+fn eato(e: Option[String]) -> i64 { return 7; }
+fn takes(e: Ts) -> i64 { match e { Ts.A(s) => { return 1 }, Ts.B => { return 0 } } }
+struct H { n: i64 }
+impl H {
+    fn meth(ref self, e: Ts) -> i64 { return 7; }
+    fn methr(ref self, e: Tr) -> i64 { return 7; }
+    fn assoc(e: Ts) -> i64 { return 7; }
+}
+
+fn main() {
+    println(f"s={eats(mks(1))}");
+    println(f"r={eatr(mkr(2))}");
+    println(f"v={eatv(mkv(3))}");
+    println(f"m={takes(mks(4))}");
+    println(f"d={eatd(mkd(5))}");
+    let e6: Ts = mks(6);
+    println(f"local={eats(e6)}");
+    println(f"inline={eats(Ts.A(f"b1613-payload-aaaaaaaaaaaaaaaa-7"))}");
+    println(f"struct={eatw(mkw(8))}");
+    println(f"option={eato(mko(9))}");
+    let h = H { n: 1 };
+    println(f"meth={h.meth(mks(10))}");
+    println(f"methr={h.methr(mkr(11))}");
+    println(f"assoc={H.assoc(mks(12))}");
+    println("end");
+}

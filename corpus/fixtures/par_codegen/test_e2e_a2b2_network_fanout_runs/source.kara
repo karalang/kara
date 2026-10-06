@@ -1,0 +1,9 @@
+
+fn fetch_a() -> i64 with reads(Network) suspends { return 11; }
+fn fetch_b() -> i64 with reads(Network) suspends { return 22; }
+fn main() {
+    let x = fetch_a();
+    let y = fetch_b();
+    println(x);
+    println(y);
+}

@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut groups: Vec[String] = Vec.new();
+    groups.push("abc");
+    groups.push("def");
+    let idx: i64 = 1_i64;
+    let mut sum: i64 = 0_i64;
+    for c in groups[idx].chars() {
+        sum = sum + (c as i64);
+    }
+    println(sum);
+}

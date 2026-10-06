@@ -1,0 +1,5 @@
+
+fn main() {
+    let mut a: Array[i64, 3] = [1, 2, 3];
+    a[0] = 42;
+}

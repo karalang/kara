@@ -1,0 +1,4 @@
+
+#[proto_schema]
+const SCHEMA: String = "message M { decimal x = 1; }";
+fn main() {}

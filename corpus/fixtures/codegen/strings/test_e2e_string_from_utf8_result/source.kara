@@ -1,0 +1,29 @@
+
+fn main() {
+    let mut a: Vec[u8] = Vec.new();
+    a.push(104u8); a.push(105u8);
+    match String.from_utf8(a) {
+        Ok(s) => println(s),
+        Err(_) => println("ERR"),
+    }
+    let mut b: Vec[u8] = Vec.new();
+    b.push(255u8);
+    match String.from_utf8(b) {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            Utf8Error.InvalidByte => println("INVALID"),
+            Utf8Error.IncompleteSequence => println("INCOMPLETE"),
+            Utf8Error.Other(m) => println(m),
+        },
+    }
+    let mut c: Vec[u8] = Vec.new();
+    c.push(226u8); c.push(130u8);
+    match String.from_utf8(c) {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            Utf8Error.InvalidByte => println("INVALID"),
+            Utf8Error.IncompleteSequence => println("INCOMPLETE"),
+            Utf8Error.Other(m) => println(m),
+        },
+    }
+}

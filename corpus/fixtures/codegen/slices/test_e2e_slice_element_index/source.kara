@@ -1,0 +1,6 @@
+
+fn second(xs: Slice[i64]) -> i64 { xs[1] }
+fn main() {
+    let a: Array[i64, 3] = [7, 8, 9];
+    println(second(a));
+}

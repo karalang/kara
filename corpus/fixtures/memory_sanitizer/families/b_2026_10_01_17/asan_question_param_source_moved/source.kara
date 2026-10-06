@@ -1,0 +1,18 @@
+struct S4 { id: i64, v: String }
+impl Drop for S4 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn hs(k: i64) -> String { f"heap-string-long-enough-{k}" }
+fn mk(k: i64) -> Result[S4, S4] { if k > 5 { Result.Ok(S4 { id: k, v: hs(k) }) } else { Result.Err(S4 { id: k + 100, v: hs(k) }) } }
+fn h(r: Result[S4, S4]) -> Result[i64, S4] { let x = r?; println(x.v); Result.Ok(x.id) }
+fn hc(r: Result[S4, S4], c: bool) -> Result[i64, S4] { if c { let x = r?; println(x.v); return Result.Ok(x.id) } println("skip"); Result.Ok(0) }
+fn pr(r: Result[i64, S4]) { match r { Result.Ok(v) => println(f"ok{v}"), Result.Err(e) => println(f"err{e.id}") } }
+fn main() {
+    pr(h(mk(8)))
+    pr(h(mk(2)))
+    let a = mk(9);
+    pr(h(a))
+    pr(hc(mk(7), true))
+    pr(hc(mk(3), true))
+    let b = mk(6);
+    pr(hc(b, false))
+    println("end")
+}

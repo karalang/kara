@@ -1,0 +1,5 @@
+
+fn main() {
+    let msg: ref CStr = c"hi";
+    println(msg.len());
+}

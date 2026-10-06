@@ -1,0 +1,9 @@
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { o: Option[R], r: Result[R, i64], p: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { o: Some(R { s: f"o{t}" }), r: Ok(R { s: f"r{t}" }), p: R { s: f"p{t}" }, n: n } }
+fn main() {
+    let h = mk("3", 1); if h.n > 0 { let x = h.p; println(x.s) } else { println("no") }; println("k3")
+    let h = mk("4", 0); if h.n > 0 { let x = h.p; println(x.s) } else { println("no") }; println("k4")
+    println("end")
+}

@@ -1,0 +1,57 @@
+
+struct One { msg: String }
+struct Two { code: i64, msg: String }
+fn s_of(tag: String, i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str(tag);
+    s.push_str(f"-payload-{i}");
+    return s;
+}
+fn digits(i: i64) -> String {
+    let mut d: String = String.new();
+    d.push_str(f"{i}");
+    return d;
+}
+fn g1(i: i64) -> Result[i64, One] { return Result.Err(One { msg: s_of("one", i) }); }
+fn g2(i: i64) -> Result[i64, Two] { return Result.Err(Two { code: i, msg: s_of("two", i) }); }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut n = 0i64;
+    let mut i = base;
+    while i < base + 200i64 {
+        // Bound and never read.
+        match g1(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { n = n + 1i64; }
+        }
+        // Bound and READ — borrow-only, which is what the skip keyed on.
+        match g1(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { if e.msg.contains(digits(i)) { n = n + e.msg.len(); } }
+        }
+        // Two-field payload, still inside Result's 5-word inline area.
+        match g2(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { if e.msg.contains(digits(i)) { n = n + e.msg.len() + e.code; } }
+        }
+        // IMMUNITY: a wildcard binds nothing, so nothing ever competed.
+        match g1(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(_) => { n = n + 2i64; }
+        }
+        // IMMUNITY: a named scrutinee takes the ordinary binding path.
+        let r: Result[i64, One] = g1(i);
+        match r {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { if e.msg.contains(digits(i)) { n = n + e.msg.len(); } }
+        }
+        // IMMUNITY / blast radius: gap 2's recover-CONSUME — the arm moves the
+        // field out, and the source must still suppress.
+        match g1(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { let m: String = e.msg; if m.contains(digits(i)) { n = n + m.len(); } }
+        }
+        i = i + 1;
+    }
+    println(n);
+}

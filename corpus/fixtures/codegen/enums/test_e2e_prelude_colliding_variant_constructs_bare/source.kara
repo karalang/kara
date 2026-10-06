@@ -1,0 +1,20 @@
+
+enum Ev { Request(String), Response(i64), Idle }
+enum Mode { Fast(i64), File }
+fn describe(e: Ev) -> String {
+    match e {
+        Request(p) => f"req {p}",
+        Response(c) => f"resp {c}",
+        Idle => "idle",
+    }
+}
+fn main() {
+    let a = Request("/users");
+    let b = Response(200);
+    let c = Idle;
+    println(describe(a));
+    println(describe(b));
+    println(describe(c));
+    let m = File;
+    match m { Mode.File => println("file"), _ => println("fast") }
+}

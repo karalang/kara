@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let mut q: VecDeque[i64] = VecDeque.new();
+    q.push_back(42);
+    let _ = m.insert(1, 100);
+    println(q.len());
+}

@@ -1,0 +1,25 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn take(t: (Option[Res], i64)) -> i64 { t.1 }
+fn mk() -> (Option[Res], i64) { (Option.Some(Res { id: 3, name: f"c{3}" }), 30) }
+fn main() {
+    { let t = (Option.Some(Res { id: 1, name: f"a{1}" }), 10); println(t.1); }
+    { let t = (Option.Some(Res { id: 2, name: f"bb{2}" }), 20); println(take(t)); }
+    { let t = mk(); println(t.1); }
+    { let t: (Result[Res, i64], i64) = (Result.Ok(Res { id: 4, name: f"dddd{4}" }), 40); println(t.1); }
+    {
+        let mut v: Vec[(Option[Res], i64)] = Vec.new();
+        v.push((Option.Some(Res { id: 5, name: f"eeeee{5}" }), 50));
+        println(v.len());
+    }
+    { let t = ((Option.Some(Res { id: 6, name: f"ffffff{6}" }), 60), 600); println(t.1); }
+    {
+        let t = (Option.Some(Res { id: 7, name: f"ggggggg{7}" }), 70);
+        let x = t.0;
+        println(t.1);
+    }
+    println("end");
+}

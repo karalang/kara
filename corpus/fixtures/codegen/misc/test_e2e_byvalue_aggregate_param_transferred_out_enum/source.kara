@@ -1,0 +1,11 @@
+
+enum E { A(String), N(i64) }
+fn wrap(e: E) -> E { e }
+fn main() {
+    let f = E.A("hi".to_string());
+    let g = wrap(f);
+    match g {
+        A(s) => println(s),
+        N(n) => println(n.to_string()),
+    }
+}

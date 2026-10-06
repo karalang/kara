@@ -1,0 +1,269 @@
+// LeetCode 300 — three arms against each other and against six properties that
+// follow from the STATEMENT rather than from any implementation.
+//
+//   A  patience sorting, O(n log n) — binary search over a tails array
+//   B  the O(n^2) DP recurrence, a direct transcript of the definition
+//   C  patience sorting WITH reconstruction, returning an actual witness
+//
+// A and C share their core loop, so their agreement is nearly free and proves
+// little on its own. B is the independent one: a different recurrence, a
+// different data structure, and — the part that matters — STRICTNESS EXPRESSED
+// IN A DIFFERENT PLACE. B says `nums[j] < nums[i]` in a guard; A and C say
+// `tails[mid] < x` inside a binary search whose `>=` half decides whether an
+// equal value appends or overwrites. A differential between them therefore
+// actually tests strictness, which it would not if both spelled it the same way.
+//
+// C earns its place by producing something CHECKABLE. A length is a single
+// integer: an implementation can return the right one for the wrong reason on
+// every input a generator is likely to produce, and no amount of arm-vs-arm
+// agreement notices. A witness can be interrogated directly — is it increasing,
+// is it genuinely a subsequence of the input, is it as long as the number
+// claimed — and none of those questions cares how it was computed. That is P5,
+// and it is the closest thing here to an independent oracle.
+//
+// P4 is the other non-obvious one. Reversing an array and negating every element
+// maps its increasing subsequences bijectively onto the increasing subsequences
+// of the result, so the LIS length must be invariant under that transform. It is
+// a property no arm computes, and it catches an off-by-one or a boundary error
+// that happens to be symmetric in the input — which several plausible bugs are.
+
+fn lis_a(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+    let mut tails: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let x = nums[i];
+        let mut lo = 0;
+        let mut hi = tails.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if tails[mid] < x { lo = mid + 1; } else { hi = mid; }
+        }
+        if lo == tails.len() { tails.push(x); } else { tails[lo] = x; }
+        i = i + 1;
+    }
+    return tails.len();
+}
+
+fn lis_b(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+    let mut best: Vec[i64] = Vec.filled(n, 1);
+    let mut answer = 1;
+    let mut i = 1;
+    while i < n {
+        let mut j = 0;
+        while j < i {
+            if nums[j] < nums[i] and best[j] + 1 > best[i] { best[i] = best[j] + 1; }
+            j = j + 1;
+        }
+        if best[i] > answer { answer = best[i]; }
+        i = i + 1;
+    }
+    return answer;
+}
+
+fn lis_c_witness(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = Vec.new();
+    if n == 0 { return out; }
+    let mut tails: Vec[i64] = Vec.new();
+    let mut tails_at: Vec[i64] = Vec.new();
+    let mut parent: Vec[i64] = Vec.filled(n, -1);
+    let mut i = 0;
+    while i < n {
+        let x = nums[i];
+        let mut lo = 0;
+        let mut hi = tails.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if tails[mid] < x { lo = mid + 1; } else { hi = mid; }
+        }
+        if lo > 0 { parent[i] = tails_at[lo - 1]; }
+        if lo == tails.len() {
+            tails.push(x);
+            tails_at.push(i);
+        } else {
+            tails[lo] = x;
+            tails_at[lo] = i;
+        }
+        i = i + 1;
+    }
+    let mut cur = tails_at[tails_at.len() - 1];
+    while cur != -1 {
+        out.push(nums[cur]);
+        cur = parent[cur];
+    }
+    let mut a = 0;
+    let mut b = out.len() - 1;
+    while a < b {
+        let t = out[a];
+        out[a] = out[b];
+        out[b] = t;
+        a = a + 1;
+        b = b - 1;
+    }
+    return out;
+}
+
+// --------------------------------------------------------------- checkers
+
+// Is `w` strictly increasing?
+fn is_increasing(w: ref Vec[i64]) -> bool {
+    let mut i = 1;
+    while i < w.len() {
+        if w[i - 1] >= w[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Is `w` a subsequence of `nums`? Greedy left-to-right matching is correct
+// here: taking the earliest possible match never forecloses a later one.
+fn is_subsequence(w: ref Vec[i64], nums: ref Vec[i64]) -> bool {
+    let mut wi = 0;
+    let mut ni = 0;
+    while wi < w.len() and ni < nums.len() {
+        if w[wi] == nums[ni] { wi = wi + 1; }
+        ni = ni + 1;
+    }
+    return wi == w.len();
+}
+
+fn reverse_negate(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = nums.len();
+    let mut i = 0;
+    while i < n {
+        out.push(0 - nums[n - 1 - i]);
+        i = i + 1;
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------- harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn gen_arr(state: mut ref i64, len: i64, spread: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < len {
+        state = lcg(state);
+        out.push((state / 65536) % spread);
+        i = i + 1;
+    }
+    return out;
+}
+
+fn max_of(nums: ref Vec[i64]) -> i64 {
+    let mut m = nums[0];
+    let mut i = 1;
+    while i < nums.len() {
+        if nums[i] > m { m = nums[i]; }
+        i = i + 1;
+    }
+    return m;
+}
+
+fn main() {
+    let mut state = 20300;
+
+    let mut cases = 0;
+    let mut p1 = 0;   // arms disagree on length
+    let mut p2 = 0;   // length outside [0, n]
+    let mut p3 = 0;   // degenerate shapes wrong
+    let mut p4 = 0;   // not invariant under reverse+negate
+    let mut p5 = 0;   // witness invalid
+    let mut p6 = 0;   // appending a new maximum does not add exactly 1
+
+    // SPREAD is the knob. A spread of 3 over length 12 forces heavy ties, which
+    // is where STRICTNESS is actually tested; a spread of 10000 gives an almost
+    // certainly distinct array, where a non-strict implementation passes.
+    let spreads: Vec[i64] = [2, 3, 5, 20, 10000];
+    let lengths: Vec[i64] = [0, 1, 2, 3, 5, 8, 12, 20, 40];
+
+    let mut round = 0;
+    while round < 150 {
+        let mut si = 0;
+        while si < spreads.len() {
+            let mut li = 0;
+            while li < lengths.len() {
+                let len = lengths[li];
+                let nums = gen_arr(mut state, len, spreads[si]);
+                cases = cases + 1;
+
+                let a = lis_a(nums);
+                let b = lis_b(nums);
+                let w = lis_c_witness(nums);
+                let c = w.len();
+
+                // P1 — three arms, one answer.
+                if a != b or b != c { p1 = p1 + 1; }
+
+                // P2 — a subsequence of an n-element array has length <= n.
+                if a < 0 or a > len { p2 = p2 + 1; }
+                if len > 0 and a < 1 { p2 = p2 + 1; }
+
+                // P5 — the witness is real: increasing, actually a
+                // subsequence, and as long as the number claimed.
+                if not is_increasing(w) { p5 = p5 + 1; }
+                if not is_subsequence(w, nums) { p5 = p5 + 1; }
+                if c != a { p5 = p5 + 1; }
+
+                // P4 — reverse-and-negate preserves the LIS length.
+                let rn = reverse_negate(nums);
+                if lis_a(rn) != a { p4 = p4 + 1; }
+
+                // P6 — appending a strictly new maximum extends by exactly 1.
+                if len > 0 {
+                    let mut extended: Vec[i64] = Vec.new();
+                    let mut k = 0;
+                    while k < len { extended.push(nums[k]); k = k + 1; }
+                    extended.push(max_of(nums) + 1);
+                    if lis_a(extended) != a + 1 { p6 = p6 + 1; }
+                }
+
+                li = li + 1;
+            }
+            si = si + 1;
+        }
+        round = round + 1;
+    }
+
+    // P3 — the three shapes whose answer is fixed by the statement alone.
+    let mut shape = 1;
+    while shape <= 60 {
+        let mut asc: Vec[i64] = Vec.new();
+        let mut desc: Vec[i64] = Vec.new();
+        let mut flat: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < shape {
+            asc.push(i);
+            desc.push(shape - i);
+            flat.push(9);
+            i = i + 1;
+        }
+        if lis_a(asc) != shape or lis_b(asc) != shape { p3 = p3 + 1; }
+        if lis_a(desc) != 1 or lis_b(desc) != 1 { p3 = p3 + 1; }
+        if lis_a(flat) != 1 or lis_b(flat) != 1 { p3 = p3 + 1; }
+        shape = shape + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"P1 three-arm disagreements {p1}");
+    println(f"P2 range violations {p2}");
+    println(f"P3 degenerate-shape failures {p3}");
+    println(f"P4 reverse-negate asymmetries {p4}");
+    println(f"P5 invalid witnesses {p5}");
+    println(f"P6 append-maximum failures {p6}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

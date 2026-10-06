@@ -1,0 +1,29 @@
+is_number "0": true
+is_number "2": true
+is_number "0089": true
+is_number "-0.1": true
+is_number "+3.14": true
+is_number "4.": true
+is_number "-.9": true
+is_number "2e10": true
+is_number "-90E3": true
+is_number "3e+7": true
+is_number "+6e-1": true
+is_number "53.5e93": true
+is_number "-123.456e789": true
+is_number "abc": false
+is_number "1a": false
+is_number "1e": false
+is_number "e3": false
+is_number "99e2.5": false
+is_number "--6": false
+is_number "-+3": false
+is_number "95a54e53": false
+is_number ".": false
+is_number ".e1": false
+is_number "+.": false
+is_number "+": false
+is_number "4e+": false
+is_number "6+1": false
+is_number " 1": false
+is_number "1 ": false

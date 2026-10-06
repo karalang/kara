@@ -1,0 +1,6 @@
+
+fn helper(n: i64) -> i64 { n + 1 }
+fn main() {
+    let _ = helper(1_i64);
+    let _ = helper(2_i64);
+}

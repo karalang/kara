@@ -1,0 +1,10 @@
+
+fn main() {
+    let step = 5;
+    let advance = |x: i64| x + step;
+    let mut n = 0;
+    for _ in 0..4 {
+        n = advance(n);
+    }
+    println(n);
+}

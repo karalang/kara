@@ -1,0 +1,26 @@
+
+struct Holder {
+    name: String,
+    id: i64,
+}
+fn build(n: i64) -> Map[i64, Holder] {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: f"holder payload padded out beyond thirty-six bytes {n}", id: n };
+    m.insert(n, h);
+    m
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let m = build(i);
+        match m.get(i) {
+            Some(h) => { println(h.name.len() + h.id); },
+            None => { println("missing"); },
+        }
+        match m.get(i) {
+            Some(h) => { println(h.id); },
+            None => { println("missing"); },
+        }
+        i = i + 1;
+    };
+}

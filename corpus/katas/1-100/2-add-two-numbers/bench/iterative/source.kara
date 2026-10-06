@@ -1,0 +1,91 @@
+// LeetCode #2 bench — iterative add_two_numbers on N=100 digit lists,
+// K=500_000 iterations. Sink is sum of the first digit of each result
+// so the loop body's output participates in I/O and can't be elided.
+//
+// Lists are built once outside the K-loop so the bench measures the
+// addition kernel (linear walk + per-digit Node alloc + recursive
+// chain drop), not list construction. Expected output is 8 * K =
+// 4_000_000 (999..9 + 999..9 = 1999..98 in reverse-digit storage, so
+// the result's first digit is 8).
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    let mut carry: i64 = 0;
+
+    loop {
+        let mut s: i64 = carry;
+        let mut done = true;
+
+        if let Some(n) = a {
+            s = s + n.val;
+            a = n.next;
+            done = false;
+        }
+        if let Some(n) = b {
+            s = s + n.val;
+            b = n.next;
+            done = false;
+        }
+        if done and s == 0 {
+            break;
+        }
+
+        let node = ListNode { val: s % 10, next: None };
+        tail.next = Some(node);
+        tail = node;
+        carry = s / 10;
+    }
+
+    dummy.next
+}
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn make_nines(n: u64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(9);
+    }
+    v
+}
+
+fn main() {
+    let n: u64 = 100;
+    let k: i64 = 500000;
+
+    let a = make_nines(n);
+    let b = make_nines(n);
+    let l1 = from_array(a.as_slice());
+    let l2 = from_array(b.as_slice());
+
+    let mut sum: i64 = 0;
+    for i in 0..k {
+        let out = add_two_numbers(l1, l2);
+        match out {
+            Some(node) => { sum = sum + node.val; }
+            None => {}
+        }
+    }
+    println(sum);
+}

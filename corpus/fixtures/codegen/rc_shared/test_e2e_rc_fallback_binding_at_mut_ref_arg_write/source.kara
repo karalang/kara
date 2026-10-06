@@ -1,0 +1,12 @@
+
+struct Src { x: i64, y: i64 }
+fn consume_src(s: Src) { }
+fn bump(s: mut ref Src) { s.x = s.x + 100; }
+fn main() {
+    let cond: bool = false;
+    let mut s = Src { x: 3, y: 7 };
+    if cond { consume_src(s); }
+    bump(mut s);
+    println(s.x);
+    println(s.y);
+}

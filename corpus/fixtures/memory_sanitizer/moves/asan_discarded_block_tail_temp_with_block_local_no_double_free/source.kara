@@ -1,0 +1,20 @@
+
+fn make_vv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("x");
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        {
+            let mut local: Vec[String] = Vec.new();
+            local.push("y");
+            println(local.len());
+            make_vv()
+        }
+        i = i + 1;
+    }
+    println(i);
+}

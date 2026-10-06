@@ -1,0 +1,21 @@
+
+enum Tk { A, Id(String), Num(i64) }
+struct Sp { tok: Tk, off: i64 }
+struct P { toks: Vec[Sp], pos: i64 }
+fn mk() -> Vec[Sp] {
+    let mut w: Vec[Sp] = Vec.new();
+    w.push(Sp { tok: Tk.Id("ident_long_enough_to_force_a_heap_buffer".to_string()), off: 5 });
+    w.push(Sp { tok: Tk.Id("another_heap_allocated_identifier_string".to_string()), off: 9 });
+    w.push(Sp { tok: Tk.Num(7), off: 3 });
+    w
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 50 {
+        let p = P { toks: mk(), pos: 0 };
+        total = total + p.toks[0].off + p.toks[1].off + p.toks[2].off;
+        i = i + 1;
+    }
+    println(total);
+}

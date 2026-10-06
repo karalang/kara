@@ -1,0 +1,18 @@
+27 -> true
+0 -> false
+-1 -> false
+1 -> true
+3 -> true
+9 -> true
+45 -> false
+-3 -> false
+-27 -> false
+2 -> false
+243 -> true
+1162261467 -> true
+1162261466 -> false
+1162261468 -> false
+2147483647 -> false
+-2147483648 -> false
+powers 3^0..3^19: 20 of 20 accepted, 0 neighbours above 3 accepted
+[-1000, 1000000]: 13 powers, sum 797161

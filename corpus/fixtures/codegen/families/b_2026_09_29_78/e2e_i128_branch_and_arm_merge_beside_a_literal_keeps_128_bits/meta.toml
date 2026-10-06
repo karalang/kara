@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_78.rs::e2e_i128_branch_and_arm_merge_beside_a_literal_keeps_128_bits"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

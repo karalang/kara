@@ -1,0 +1,18 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn f(fail: bool) -> Result[i64, i64] {
+    let x = (R { id: 1 }, R { id: 11 }, R { id: 21 });
+    errdefer {
+        println("rollback");
+    }
+    let y = (R { id: 2 }, R { id: 12 }, R { id: 22 });
+    if fail {
+        return Err(1);
+    }
+    Ok(0)
+}
+fn main() {
+    let _ = f(false);
+    println("--");
+    let _ = f(true);
+}

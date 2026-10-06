@@ -1,0 +1,34 @@
+
+shared struct H { tag: i64, mut v: Vec[String], mut w: Vec[i64] }
+
+fn zap(s: mut Slice[i64]) { s[0] = 99; }
+
+fn total(s: Slice[i64]) -> i64 {
+    let mut t = 0;
+    let mut i = 0;
+    while i < s.len() { t = t + s[i]; i = i + 1; }
+    t
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        let mut sv: Vec[String] = Vec.new();
+        let mut s: String = String.new();
+        s.push_str("payload-");
+        s.push_str(n.to_string());
+        s.push_str("-padded-out-to-force-heap");
+        sv.push(s);
+        let mut wv: Vec[i64] = Vec.new();
+        wv.push(i);
+        wv.push(i + 1);
+        wv.push(i + 2);
+        let h = H { tag: i, v: sv, w: wv };
+        zap(mut h.w);
+        acc = acc + total(h.w) + h.v[0].len();
+        i = i + 1;
+    }
+    println(acc);
+}

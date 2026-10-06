@@ -1,0 +1,29 @@
+
+struct H3 { b: Option[Option[Option[i64]]] }
+struct H4 { b: Option[Option[Option[Option[i64]]]] }
+struct H2 { b: Option[Option[i64]] }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        let h3: H3 = H3 { b: a };
+        match h3.b { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let q: Option[Option[Option[Option[i64]]]] = Option.Some(Option.Some(Option.Some(Option.Some(n + i))));
+        let h4: H4 = H4 { b: q };
+        match h4.b { Option.Some(Option.Some(Option.Some(Option.Some(x)))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let d: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        let h2: H2 = H2 { b: d };
+        match h2.b { Option.Some(Option.Some(x)) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let u: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        let hu: H3 = H3 { b: u };
+        acc = acc + 0;
+
+        i = i + 1;
+    }
+    println(acc);
+}

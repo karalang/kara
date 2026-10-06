@@ -1,0 +1,2 @@
+enum Col { Red(i64), Blue }
+fn main() { match Col.Red(3) { Red(n) => { println(f"r:{n}") } Blue => { println("b") } } }

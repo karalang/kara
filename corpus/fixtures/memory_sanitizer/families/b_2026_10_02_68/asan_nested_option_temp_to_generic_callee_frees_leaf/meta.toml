@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_10_02_68.rs::asan_nested_option_temp_to_generic_callee_frees_leaf"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,45 @@
+
+struct Res { tag: i64, buf: Vec[i64] }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
+        self.buf.clear();
+    }
+}
+struct Wrap { r: Res }
+enum Slot { Empty, Full(Res) }
+enum Nest { Nil, Held(Wrap) }
+
+fn mk(i: i64) -> Res {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Res { tag: 1, buf: b };
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Held to the binding's end — the payload body fires here.
+        let s = Slot.Full(mk(i));
+        n = n + 1i64;
+
+        // Drop-bearing payload FIELD, one struct deeper.
+        let w = Nest.Held(Wrap { r: mk(i) });
+        n = n + 1i64;
+
+        // Payload MOVED OUT by a match arm — the source must run no body
+        // against the wiped payload words.
+        let t = Slot.Full(mk(i));
+        match t {
+            Slot.Full(r) => { n = n + r.tag; }
+            Slot.Empty => { n = n + 100i64; }
+        }
+
+        // Same, through `if let`.
+        let u = Slot.Full(mk(i));
+        if let Slot.Full(q) = u { n = n + q.tag; }
+        i = i + 1;
+    }
+    println(n);
+}

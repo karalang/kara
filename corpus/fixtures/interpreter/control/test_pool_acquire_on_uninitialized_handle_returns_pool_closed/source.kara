@@ -1,0 +1,9 @@
+fn main() {
+         let pool: Pool[i64] = Pool { handle_id: 0 };
+         match pool.acquire(0) {
+             Ok(_) => println("ok??"),
+             Err(PoolError.Timeout) => println("timeout"),
+             Err(PoolError.PoolClosed) => println("closed"),
+             Err(PoolError.CreateFailed) => println("create_failed"),
+         }
+     }

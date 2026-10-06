@@ -1,0 +1,14 @@
+
+#[derive(Message)]
+struct Doc { counts: Map[String, i64] }
+
+fn main() {
+    let mut counts: Map[String, i64] = Map.new();
+    counts.insert("a", 1);
+    counts.insert("b", -2);
+    let d = Doc { counts: counts };
+    let back = Doc.decode(d.encode());
+    println(back.counts.len());
+    println(match back.counts.get("a") { Option.Some(x) => x, Option.None => -100 });
+    println(match back.counts.get("b") { Option.Some(x) => x, Option.None => -100 });
+}

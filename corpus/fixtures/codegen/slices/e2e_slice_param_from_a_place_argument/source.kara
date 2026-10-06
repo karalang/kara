@@ -1,0 +1,57 @@
+struct P { a: Vec[i64], tag: String }
+struct Inner { a: Vec[i64] }
+struct Outer { q: Inner }
+
+fn mkv(k: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(k);
+    v.push(k + 1i64);
+    v.push(k + 2i64);
+    return v;
+}
+
+fn total(s: Slice[i64]) -> i64 {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < s.len() { t = t + s[i]; i = i + 1i64; }
+    return t;
+}
+
+fn rtotal(s: ref Slice[i64]) -> i64 {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < s.len() { t = t + s[i]; i = i + 1i64; }
+    return t;
+}
+
+fn bumpall(s: mut Slice[i64]) {
+    let mut i: i64 = 0;
+    while i < s.len() { s[i] = s[i] + 1i64; i = i + 1i64; }
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n + 199i64 {
+        let mut g: P = P { a: mkv(i), tag: f"tag-{i}-payload" };
+        bumpall(mut g.a);
+        acc = acc + total(g.a);
+        if g.tag.contains("payload") { acc = acc + 1i64; }
+        let mut g2: P = P { a: mkv(i), tag: f"tag2-{i}-payload" };
+        bumpall(mut g2.a);
+        acc = acc + rtotal(g2.a);
+        let mut t: (Vec[i64], i64) = (mkv(i), 0i64);
+        bumpall(mut t.0);
+        acc = acc + total(t.0);
+        let mut vv: Vec[Vec[i64]] = Vec.new();
+        vv.push(mkv(i));
+        bumpall(mut vv[0i64]);
+        acc = acc + total(vv[0i64]);
+        let mut o: Outer = Outer { q: Inner { a: mkv(i) } };
+        bumpall(mut o.q.a);
+        acc = acc + total(o.q.a);
+        i = i + 1i64;
+    }
+    println(acc);
+}

@@ -1,0 +1,34 @@
+fn id(a: Option[String]) -> Option[String] { a }
+struct H { k: i64 }
+impl H {
+    fn peek(ref self, a: Option[String]) -> i64 { match id(a) { Some(s) => s.len() + self.k, None => 0 } }
+    fn pick(ref self, a: Option[String]) -> String { match id(a) { Some(s) => s, None => f"none" } }
+    fn reb(ref self, a: Option[String]) -> i64 { let c = a; match c { Some(s) => s.len(), None => 0 } }
+    fn st(ref self, a: Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
+    fn sto(self, a: Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
+    fn mk(a: Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
+}
+fn main() {
+    let h = H { k: 1 };
+    let a = Some(f"heap-string-longer-than-sso-1");
+    println(f"k{h.peek(a)}");
+    println(f"k{h.peek(Some(f"heap-string-longer-than-sso-2"))}");
+    let b = Some(f"heap-string-longer-than-sso-3");
+    println(h.pick(b));
+    println(h.pick(Some(f"heap-string-longer-than-sso-4")));
+    println(h.pick(None));
+    let c = Some(f"heap-string-longer-than-sso-005");
+    println(f"k{h.reb(c)}");
+    let d = Some(f"heap-string-longer-than-sso-6");
+    let v1 = h.st(d);
+    let v2 = h.st(Some(f"heap-string-longer-than-sso-7"));
+    let e = Some(f"heap-string-longer-than-sso-8");
+    let v3 = H.mk(e);
+    let v4 = H.mk(Some(f"heap-string-longer-than-sso-9"));
+    println(f"v{v1.len() + v2.len() + v3.len() + v4.len()}");
+    let g = H { k: 2 };
+    let f = Some(f"heap-string-longer-than-sso-10");
+    let v5 = g.sto(f);
+    println(f"v{v5.len()}");
+    println("end")
+}

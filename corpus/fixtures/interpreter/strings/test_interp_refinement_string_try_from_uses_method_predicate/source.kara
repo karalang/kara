@@ -1,0 +1,12 @@
+
+type NonEmpty = String where self.len() > 0;
+fn main() {
+    match NonEmpty.try_from("") {
+        Ok(s) => println(s),
+        Err(_) => println("rejected-empty"),
+    }
+    match NonEmpty.try_from("hi") {
+        Ok(s) => println(s),
+        Err(_) => println("rejected"),
+    }
+}

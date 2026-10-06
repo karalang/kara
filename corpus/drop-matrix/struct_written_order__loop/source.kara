@@ -1,0 +1,10 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+struct P { a: R, b: R, c: R }
+fn main() {
+    for i in 0..2 {
+        let x = P { c: R { id: i + 20 }, a: R { id: i + 0 }, b: R { id: i + 10 } };
+        println("it");
+    }
+    println("done");
+}

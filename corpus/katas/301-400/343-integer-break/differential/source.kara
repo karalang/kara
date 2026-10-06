@@ -1,0 +1,208 @@
+// Differential and property check for LeetCode #343.
+//
+// Five implementations of the same function, plus a brute-force oracle:
+//
+//   by_dp      best[i] over every first part j        (integer_break.kara)
+//   by_greedy  take threes while more than four is left  (integer_break_greedy.kara)
+//   by_pow     3^q, 3^(q-1) * 4 or 3^q * 2 by n mod 3  (integer_break_pow.kara)
+//   by_memo    top-down recursion with a memo        (integer_break_memo.kara)
+//   by_23      a table over parts of size 2 and 3     (integer_break_23.kara)
+//   by_brute   every partition into at least two parts, n <= 40
+//
+// Inputs: every n in 2..119, the whole range in which the answer fits an i64.
+//
+// Properties:
+//   P1  all five agree, for every n
+//   P2  they equal the brute force, for n <= 40
+//   P3  the answer grows strictly with n
+//   P4  f(n + 3) == 3 * f(n) for n >= 4
+//   P5  f(n) >= n - 1, and f(n) >= n for n >= 4
+//   P6  f(a + b) >= f(a) * f(b) for a, b >= 2 (two breaks side by side are a
+//       break of the sum), checked while the product fits
+//   P7  for n >= 4, f(n) is 2^e * 3^k with e <= 2
+
+fn by_dp(n: i64) -> i64 {
+    let mut best: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 2..n + 1 {
+        for j in 1..i {
+            let whole = j * (i - j);
+            let broken = j * best[i - j];
+            if whole > best[i] {
+                best[i] = whole;
+            }
+            if broken > best[i] {
+                best[i] = broken;
+            }
+        }
+    }
+    return best[n];
+}
+
+fn by_greedy(n: i64) -> i64 {
+    if n <= 3 {
+        return n - 1;
+    }
+    let mut rest = n;
+    let mut product = 1;
+    while rest > 4 {
+        product *= 3;
+        rest -= 3;
+    }
+    return product * rest;
+}
+
+fn by_pow(n: i64) -> i64 {
+    if n <= 3 {
+        return n - 1;
+    }
+    let q = n / 3;
+    return match n % 3 {
+        0 => 3.pow(q as u32),
+        1 => 3.pow((q - 1) as u32) * 4,
+        _ => 3.pow(q as u32) * 2,
+    };
+}
+
+fn value(i: i64, memo: mut ref Vec[Option[i64]]) -> i64 {
+    if let Some(v) = memo[i] {
+        return v;
+    }
+    let mut v = i;
+    for j in 1..i {
+        let p = j * value(i - j, memo);
+        if p > v {
+            v = p;
+        }
+    }
+    memo[i] = Some(v);
+    return v;
+}
+
+fn by_memo(n: i64) -> i64 {
+    let mut memo: Vec[Option[i64]] = Vec.filled(n + 1, None);
+    let mut best = 0;
+    for j in 1..n {
+        let p = j * value(n - j, mut memo);
+        if p > best {
+            best = p;
+        }
+    }
+    return best;
+}
+
+fn by_23(n: i64) -> i64 {
+    if n <= 3 {
+        return n - 1;
+    }
+    let mut f: Vec[i64] = Vec.filled(n + 1, 0);
+    f[0] = 1;
+    for i in 2..n + 1 {
+        let two = 2 * f[i - 2];
+        let three = if i >= 3 { 3 * f[i - 3] } else { 0 };
+        f[i] = if two > three { two } else { three };
+    }
+    return f[n];
+}
+
+// The largest product of a partition of `rest` into parts of at least `low`,
+// in non-decreasing order, times `product` so far. `parts` counts the parts
+// already taken; a partition with fewer than two parts in all does not count.
+fn brute(rest: i64, low: i64, parts: i64, product: i64) -> i64 {
+    if rest == 0 {
+        return if parts >= 2 { product } else { 0 };
+    }
+    let mut best = 0;
+    let mut part = low;
+    while part <= rest {
+        let p = brute(rest - part, part, parts + 1, product * part);
+        if p > best {
+            best = p;
+        }
+        part += 1;
+    }
+    return best;
+}
+
+fn by_brute(n: i64) -> i64 {
+    return brute(n, 1, 0, 1);
+}
+
+const MAX_N: i64 = 119;
+const BRUTE_N: i64 = 40;
+const I64_MAX: i64 = 9223372036854775807;
+
+fn main() {
+    let mut failures = 0;
+    let mut f: Vec[i64] = Vec.filled(MAX_N + 1, 0);
+    let mut sum = 0;
+    for n in 2..MAX_N + 1 {
+        let a = by_dp(n);
+        let b = by_greedy(n);
+        let c = by_pow(n);
+        let d = by_memo(n);
+        let e = by_23(n);
+        if a != b or a != c or a != d or a != e {
+            println(f"P1 FAIL n={n}: dp {a} greedy {b} pow {c} memo {d} 23 {e}");
+            failures += 1;
+        }
+        if n <= BRUTE_N {
+            let g = by_brute(n);
+            if a != g {
+                println(f"P2 FAIL n={n}: dp {a} brute {g}");
+                failures += 1;
+            }
+        }
+        f[n] = a;
+        sum += a % 1000000007;
+    }
+
+    for n in 2..MAX_N + 1 {
+        if n < MAX_N and f[n + 1] <= f[n] {
+            println(f"P3 FAIL n={n}");
+            failures += 1;
+        }
+        if n >= 4 and n + 3 <= MAX_N and f[n + 3] != 3 * f[n] {
+            println(f"P4 FAIL n={n}");
+            failures += 1;
+        }
+        if f[n] < n - 1 or (n >= 4 and f[n] < n) {
+            println(f"P5 FAIL n={n}");
+            failures += 1;
+        }
+        if n >= 4 and f[n] > 0 {
+            let mut m = f[n];
+            let mut twos = 0;
+            while m % 2 == 0 {
+                m /= 2;
+                twos += 1;
+            }
+            while m % 3 == 0 {
+                m /= 3;
+            }
+            if m != 1 or twos > 2 {
+                println(f"P7 FAIL n={n}: {f[n]}");
+                failures += 1;
+            }
+        }
+    }
+
+    let mut pairs = 0;
+    for a in 2..MAX_N + 1 {
+        for b in a..MAX_N - a + 1 {
+            if f[b] <= 0 or f[a] > I64_MAX / f[b] {
+                continue;
+            }
+            pairs += 1;
+            if f[a + b] < f[a] * f[b] {
+                println(f"P6 FAIL a={a} b={b}");
+                failures += 1;
+            }
+        }
+    }
+
+    println(f"n in 2..{MAX_N}: brute force to {BRUTE_N}, {pairs} sums checked, answers mod 1e9+7 add up to {sum}");
+    println(f"failures {failures}");
+    if failures == 0 {
+        println("all properties hold");
+    }
+}

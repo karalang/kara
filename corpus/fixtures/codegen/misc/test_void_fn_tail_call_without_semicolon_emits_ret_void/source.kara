@@ -1,0 +1,8 @@
+
+fn helper() {
+    println(7)
+}
+
+fn main() {
+    helper();
+}

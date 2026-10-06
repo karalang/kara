@@ -1,0 +1,55 @@
+// LeetCode 258 — Add Digits, digit sum over the rendered text.
+//
+// The third file deliberately shares NO arithmetic with the other two. Instead
+// of peeling digits with `% 10` and `/ 10`, it renders the number to a `String`
+// and sums the decimal bytes, subtracting `'0'` (48).
+//
+// That independence is the point. `add_digits.kara` and a recursive twin would
+// both rest on the same `% 10` loop, so agreeing tells you little about the
+// closed form in `add_digits_formula.kara` — it is really one computation
+// checked against itself. Going through the text representation exercises a
+// different mechanism end to end, so when all three agree across an exhaustive
+// sweep the congruence argument has been checked by something that does not
+// share its machinery.
+//
+// It is also the slowest by a wide margin — a `String` allocation per pass
+// against two integer ops per digit — which `bench/` measures.
+
+fn digit_sum_via_text(n: i64) -> i64 {
+    let s: String = f"{n}";
+    let b = s.bytes();
+    let mut sum = 0;
+    let mut i = 0;
+    while i < b.len() {
+        sum = sum + ((b[i] as i64) - 48); // '0' is 48
+        i = i + 1;
+    }
+    return sum;
+}
+
+fn add_digits(num: i64) -> i64 {
+    let mut n = num;
+    while n >= 10 {
+        n = digit_sum_via_text(n);
+    }
+    return n;
+}
+
+fn report(n: i64) {
+    println(f"{n} -> {add_digits(n)}");
+}
+
+fn main() {
+    report(38);
+    report(0);
+    report(9);
+    report(10);
+    report(18);
+    report(19);
+    report(99);
+    report(100);
+    report(12345);
+    report(999999999);
+    report(2147483647);
+    report(9223372036854775807);
+}

@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut s = 0;
+    for x in 0..5 {
+        s = s + x;
+    }
+    println(s);
+}

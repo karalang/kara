@@ -1,0 +1,14 @@
+
+#[derive(Message)]
+struct Person { name: String, age: i64, active: bool }
+
+fn main() {
+    let mut p = Person { name: "Ada", age: 36, active: true };
+    let mut delta = Vec.new();
+    delta.extend_from_slice(ProtoBuf.encode_tag(2, 0));
+    delta.extend_from_slice(ProtoBuf.encode_varint(99u64));
+    p.merge(delta);
+    println(p.name);
+    println(p.age);
+    println(p.active);
+}

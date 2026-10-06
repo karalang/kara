@@ -1,0 +1,12 @@
+
+trait Default {
+    fn default() -> Self;
+}
+struct Foo { value: i64 }
+impl Default for Foo {
+    fn default() -> Foo { Foo { value: 7 } }
+}
+fn main() {
+    let f = Foo.default();
+    println(f.value);
+}

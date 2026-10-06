@@ -1,0 +1,35 @@
+struct P { n: i64, s: String }
+struct H { rows: Vec[Vec[P]] }
+impl H {
+    fn put(mut ref self, i: i64, j: i64) { self.rows[i][j].n = 10 * i + j + 100; self.rows[i][j].s = f"x{i}{j}"; }
+    fn at(ref self, i: i64, j: i64) -> String { return f"{self.rows[i][j].n}{self.rows[i][j].s}" }
+}
+fn set(v: mut ref Vec[Vec[P]], i: i64) { v[i][0].s = f"set{i}"; v[i][0].n = i * 10; }
+fn rd(v: ref Vec[Vec[P]], i: i64, j: i64) -> String { return f"{v[i][j].n}{v[i][j].s}" }
+fn tset(a: mut ref (Vec[Vec[P]], i64)) { a.0[0][0].n = 9; a.0[0][0].s = f"tp{9}"; }
+fn idx(k: i64) -> i64 { return k }
+fn main() {
+    let mut h = H { rows: [[P { n: 1, s: f"a{0}" }, P { n: 2, s: f"b{0}" }], [P { n: 3, s: f"c{0}" }]] };
+    h.put(0, 1);
+    h.rows[1][0].s = f"direct{1}";
+    println(f"a:{h.at(0, 0)} {h.at(0, 1)} {h.rows[1][0].n}{h.rows[1][0].s}");
+    let mut v: Vec[Vec[P]] = [[P { n: 1, s: f"a{1}" }], [P { n: 2, s: f"b{2}" }, P { n: 3, s: f"c{3}" }]];
+    set(mut v, 1);
+    v[idx(1)][idx(1)].s = f"imp{3}";
+    v[0][0].n = 77;
+    println(f"b:{rd(v, 0, 0)} {rd(v, 1, 0)} {v[1][1].n}{v[1][1].s}");
+    let mut g: Vec[Vec[Vec[P]]] = [[[P { n: 7, s: f"q{7}" }, P { n: 8, s: f"w{8}" }]]];
+    g[0][0][1].s = f"deep{1}";
+    g[0][0][0].n = 70;
+    println(f"c:{g[0][0][0].n}{g[0][0][0].s} {g[0][0][1].n}{g[0][0][1].s}");
+    let mut arr: Array[Array[P, 2], 1] = [[P { n: 1, s: f"m{1}" }, P { n: 2, s: f"k{2}" }]];
+    arr[0][1].s = f"arr{2}";
+    arr[0][0].n = 11;
+    println(f"d:{arr[0][0].n}{arr[0][0].s} {arr[0][1].n}{arr[0][1].s}");
+    let mut t: (Array[Array[P, 1], 1], i64) = ([[P { n: 5, s: f"t{5}" }]], 1);
+    t.0[0][0].n = 9;
+    t.0[0][0].s = f"tt{9}";
+    let mut u: (Vec[Vec[P]], i64) = ([[P { n: 5, s: f"u{5}" }]], 1);
+    tset(mut u);
+    println(f"e:{t.0[0][0].n}{t.0[0][0].s} {t.1} {u.0[0][0].n}{u.0[0][0].s}");
+}

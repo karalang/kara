@@ -1,0 +1,14 @@
+
+fn sid(s: ref String) -> ref String { s }
+fn vid(v: ref Vec[i64]) -> ref Vec[i64] { v }
+fn main() {
+    let s: String = "hello " + "world";
+    let n = sid(s);
+    println(n.starts_with("hello"));
+    let xs: Vec[i64] = [10, 20, 30];
+    let m = vid(xs);
+    match m.get(1) { Some(x) => println(x), None => println(0 - 1) }
+    match m.last() { Some(x) => println(x), None => println(0 - 1) }
+    println(s.len());
+    println(xs.len());
+}

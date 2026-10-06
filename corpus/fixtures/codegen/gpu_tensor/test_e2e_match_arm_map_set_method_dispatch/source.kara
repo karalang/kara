@@ -1,0 +1,26 @@
+
+fn build_map() -> Option[Map[i64, i64]] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 10);
+    m.insert(2, 20);
+    m.insert(3, 30);
+    return Some(m);
+}
+fn build_set() -> Option[Set[i64]] {
+    let mut s: Set[i64] = Set.new();
+    s.insert(7);
+    s.insert(8);
+    return Some(s);
+}
+fn main() {
+    match build_map() {
+        Some(m) => println(m.len()),
+        None => println(-1),
+    }
+    match build_set() {
+        Some(s) => {
+            if s.contains(7) { println(s.len()); } else { println(-1); }
+        }
+        None => println(-1),
+    }
+}

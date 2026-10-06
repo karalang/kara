@@ -1,0 +1,12 @@
+
+fn classify(n: i64) -> String {
+    match n { 0 => f"zero", x if x < 0i64 => f"neg", x if x < 10i64 => f"small", _ => f"big" }
+}
+fn g(o: Option[i64]) -> i64 { match o { Some(x) if x > 5i64 => 1i64, Some(_) => 2i64, None => 3i64 } }
+fn main() {
+    println(classify(0i64));
+    println(classify(0i64 - 3i64));
+    println(classify(5i64));
+    println(classify(100i64));
+    println(f"{g(Some(10i64))} {g(Some(2i64))} {g(None)}");
+}

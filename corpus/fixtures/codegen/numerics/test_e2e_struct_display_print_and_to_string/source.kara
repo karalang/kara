@@ -1,0 +1,9 @@
+
+#[derive(Display)]
+struct Cell { tag: char, n: u32, f: f64 }
+fn main() {
+    let c = Cell { tag: 'Z', n: 42, f: 1.5 };
+    println(c);
+    println(c.to_string());
+    println(f"c={c}");
+}

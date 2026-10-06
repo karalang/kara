@@ -1,0 +1,24 @@
+
+fn make(empty: bool) -> Option[String] {
+    if empty {
+        return Option.None;
+    }
+    let s = "hello";
+    return Option.Some(s + "!");
+}
+
+fn run(empty: bool) {
+    let Some(s) = make(empty) else {
+        let msg = "was ";
+        let full = msg + "empty";
+        println(full);
+        return
+    }
+    println(s);
+}
+
+fn main() {
+    run(false);
+    run(true);
+    println("done");
+}

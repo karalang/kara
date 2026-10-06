@@ -1,0 +1,14 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn f(c: bool) {
+    let x = [R { id: 1 }, R { id: 11 }, R { id: 21 }];
+    if c {
+        let y = [R { id: 2 }, R { id: 12 }, R { id: 22 }];
+        return;
+    }
+    println("not taken");
+}
+fn main() {
+    f(true);
+    println("after");
+}

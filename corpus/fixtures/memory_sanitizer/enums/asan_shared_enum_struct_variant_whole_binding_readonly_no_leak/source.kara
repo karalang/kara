@@ -1,0 +1,20 @@
+
+struct Id { name: String, off: i64 }
+shared enum E { Ident(Id) }
+fn render(e: E) -> i64 {
+    match e {
+        Ident(n) => { n.name.len() }
+    }
+}
+fn make() -> E {
+    E.Ident(Id { name: "an_identifier_long_enough_to_force_heap".to_string(), off: 0 })
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        total = total + render(make());
+        i = i + 1;
+    }
+    println(total);
+}

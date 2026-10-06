@@ -1,0 +1,12 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn take(r: R) { println(f"took{r.id}"); }
+fn f(c: bool) {
+    let a = R { id: 1 };
+    if c { take(a); }
+    println("end");
+}
+fn main() {
+    f(true);
+    f(false);
+}

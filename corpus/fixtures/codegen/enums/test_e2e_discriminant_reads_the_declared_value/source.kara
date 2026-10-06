@@ -1,0 +1,54 @@
+
+const BASE: i64 = 16;
+
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
+
+enum Plain { A, B, C }
+
+#[repr(i8)]
+enum Neg { Down = -128, Up = 127 }
+
+#[repr(u16)]
+enum Wide { A = 1000, B = 65535 }
+
+#[repr(u8)]
+enum Op { Add = BASE + 1, Sub = BASE + 2 }
+
+struct Holder { kind: UsbClass }
+
+impl Op {
+    fn code(ref self) -> u8 { self.discriminant() }
+}
+
+fn as_u8(k: UsbClass) -> u8 { k.discriminant() }
+
+fn main() {
+    // The spec's example.
+    let c = UsbClass.Hid;
+    let byte: u8 = c.discriminant();
+    println(byte);
+    println(UsbClass.Audio.discriminant());
+    println(UsbClass.MassStorage.discriminant());
+
+    // No declared values: declaration position, as in C.
+    println(Plain.A.discriminant());
+    println(Plain.C.discriminant());
+
+    // Signed and wide reprs at their boundaries.
+    println(Neg.Down.discriminant());
+    println(Neg.Up.discriminant());
+    println(Wide.A.discriminant());
+    println(Wide.B.discriminant());
+
+    // A folded constant expression — the fold happens once, in the
+    // typechecker, so both backends read the same number.
+    println(Op.Add.discriminant());
+
+    // Every receiver shape: struct field, by-value parameter, `self`.
+    let h = Holder { kind: UsbClass.MassStorage };
+    println(h.kind.discriminant());
+    println(as_u8(UsbClass.Audio));
+    let o = Op.Sub;
+    println(o.code());
+}

@@ -1,0 +1,7 @@
+
+fn main() {
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](2, 2, 2, 2);
+    let m = idx < lim;
+    let _ = Vector[i64, 4].load_masked(7, m);
+}

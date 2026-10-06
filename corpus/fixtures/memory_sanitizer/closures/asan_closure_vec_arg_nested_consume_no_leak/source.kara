@@ -1,0 +1,17 @@
+
+fn dup(v: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    out.push(v.len());
+    out
+}
+fn main() {
+    let f = |v: Vec[i64]| dup(dup(v));
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 30i64 {
+        let r = f(Vec.filled(5, 9));
+        total = total + r[0];
+        i = i + 1;
+    }
+    println(total.to_string());
+}

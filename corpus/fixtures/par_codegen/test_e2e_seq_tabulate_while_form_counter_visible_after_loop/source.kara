@@ -1,0 +1,13 @@
+
+fn main() {
+    let n: i64 = 500i64;
+    let mut out: Vec[i64] = Vec.new();
+    let mut c: i64 = 0i64;
+    while c < n {
+        out.push(c + 7i64);
+        c = c + 1i64;
+    }
+    println(out.len());
+    println(c);
+    println(out[499i64]);
+}

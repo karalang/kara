@@ -1,0 +1,17 @@
+
+#[derive(Message)]
+struct A { v: i64 }
+
+#[derive(Message)]
+struct B { a: A, name: String }
+
+#[derive(Message)]
+struct C { b: B, k: i64 }
+
+fn main() {
+    let c = C { b: B { a: A { v: 42 }, name: "deep" }, k: 9 };
+    let back = C.decode(c.encode());
+    println(back.k);
+    println(back.b.name);
+    println(back.b.a.v);
+}

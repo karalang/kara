@@ -1,0 +1,12 @@
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct W { r: R, n: i64 }
+fn mk(s: String) -> R { R { s: s } }
+fn main() {
+    { let o = Some(R { s: f"r1" }); let q = o.unwrap_or(R { s: f"d1" }); println(q.s); println("k1") }
+    { let o: Option[R] = None; let q = o.unwrap_or(R { s: f"d2" }); println(q.s); println("k2") }
+    { let o = Some(R { s: f"r3" }); let q = o.unwrap_or(mk(f"d3")); println(q.s); println("k3") }
+    { let d = R { s: f"d4" }; let o = Some(R { s: f"r4" }); let q = o.unwrap_or(d); println(q.s); println("k4") }
+    { let o = Some(W { r: R { s: f"r5" }, n: 5 }); let q = o.unwrap_or(W { r: R { s: f"d5" }, n: 0 }); println(q.n); println("k5") }
+    println("end")
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/structs.rs::e2e_struct_destructure_rest_fields_run_their_bodies_once"
+dedup_of = ["tests/interpreter/structs.rs::test_struct_destructure_rest_fields_run_their_bodies_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

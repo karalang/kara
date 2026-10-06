@@ -1,0 +1,19 @@
+
+fn main() {
+    let n: i64 = 12345;
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 40 {
+        total = total + n.to_string().len();
+        total = total + n.to_string().to_string().len();
+        i = i + 1;
+    }
+    let s: String = "  hello  ".to_string();
+    let mut j: i64 = 0;
+    while j < 40 {
+        total = total + s.trim().to_string().len();
+        total = total + s.clone().to_string().len();
+        j = j + 1;
+    }
+    println(f"{total}");
+}

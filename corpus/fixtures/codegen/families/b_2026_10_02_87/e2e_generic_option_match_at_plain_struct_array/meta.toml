@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_02_87.rs::e2e_generic_option_match_at_plain_struct_array"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_02_87.rs::asan_generic_option_match_at_plain_struct_array"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,6 @@
+
+fn main() {
+    let v: Vec[i64] = Vec[];
+    let s: i64 = v.iter().fold(42, |acc, x| acc + x);
+    println(s);
+}

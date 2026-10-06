@@ -1,0 +1,24 @@
+
+pub trait Recorder { fn record(ref self, value: i64) -> i64; }
+
+pub struct ProvA { x: i64 }
+impl ProvA { pub fn new() -> ProvA { ProvA { x: 1 } } }
+impl Recorder for ProvA { fn record(ref self, value: i64) -> i64 { 100 } }
+
+pub struct ProvB { x: i64 }
+impl ProvB { pub fn new() -> ProvB { ProvB { x: 2 } } }
+impl Recorder for ProvB { fn record(ref self, value: i64) -> i64 { 200 } }
+
+pub effect resource Ra: Recorder;
+pub effect resource Rb: Recorder;
+
+fn main() {
+    let a = ProvA.new();
+    let b = ProvB.new();
+    with_provider[Ra](a, || {
+        with_provider[Rb](b, || {
+            println(Ra.record(0));
+            println(Rb.record(0));
+        });
+    });
+}

@@ -1,0 +1,12 @@
+fn mk(i: i64) -> String { return f"s{i}"; }
+fn main() {
+    let mut i = 0i64; let mut n = 0i64;
+    while i < 50i64 {
+        let x = mk(i);
+        let y = mk(i);
+        let a: Array[String, 2] = [x, y];
+        n = n + a[0].len() + a[1].len();
+        i = i + 1;
+    }
+    println(n);
+}

@@ -1,0 +1,379 @@
+// LeetCode 296 — three arms against each other and against seven properties
+// that follow from the STATEMENT rather than from any implementation.
+//
+//   A  separate into row/column halves, take the median of each
+//   B  separate, then sum the spans of the nested outermost pairs
+//   C  try every cell in the grid and keep the smallest total
+//
+// WHAT THE ARMS DISAGREE ABOUT. A and B share the separability step and split
+// immediately after it: A picks a minimiser and measures deviations from it,
+// B never picks anything and adds up spans.
+//
+// The obvious thing to expect that split to catch is a MEDIAN CONVENTION bug —
+// `n / 2` versus `(n - 1) / 2` on an even-length list, the classic. It does
+// not, and that is worth stating because the expectation is so natural: for a
+// sum of absolute deviations EVERY point between the two middle elements is a
+// minimiser, both conventions included, so they return the identical total.
+// Mutating arm A from one to the other leaves all seven properties at zero, and
+// the mutation table in README.md records that as the result it is rather than
+// quietly dropping the row. The convention is not load-bearing here; an index
+// that lands OUTSIDE the middle pair is, and that is the mutation that fires.
+//
+// C shares nothing with either: it does not separate,
+// does not sort, does not know that the optimum is attained at a median cell,
+// and searches cells nobody lives in. That last part matters, because "the
+// answer is attained at a home" is a plausible-sounding false belief that A and
+// B both silently avoid and neither of them tests.
+//
+// WHERE THE INVARIANCES EARN THEIR KEEP. P3–P5 are the properties no arm
+// computes. Translating every home by a constant offset, transposing the grid,
+// and mirroring it left-right or top-bottom are all isometries of the Manhattan
+// metric, so the minimum total cannot change under any of them. Those catch a
+// whole family of bugs the arms cannot catch by agreeing: an off-by-one that is
+// symmetric in the input, a row/column mix-up that happens to be invisible on
+// square grids, an index that is correct only when the first home sits at zero.
+// A three-way agreement is blind to any error all three arms share through the
+// coordinate-collection code they have in common — and they do have it in
+// common, which is exactly the situation #301's mutation table warned about.
+
+struct Grid {
+    data: Vec[u8],
+    w: i64,
+    h: i64,
+}
+
+fn at(g: ref Grid, r: i64, c: i64) -> u8 {
+    return g.data[r * g.w + c];
+}
+
+fn iabs(x: i64) -> i64 {
+    if x < 0 { return 0 - x; }
+    return x;
+}
+
+fn row_coords(g: ref Grid) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut r = 0;
+    while r < g.h {
+        let mut c = 0;
+        while c < g.w {
+            if at(g, r, c) == 1u8 { out.push(r); }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return out;
+}
+
+fn col_coords(g: ref Grid) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < g.w {
+        let mut r = 0;
+        while r < g.h {
+            if at(g, r, c) == 1u8 { out.push(c); }
+            r = r + 1;
+        }
+        c = c + 1;
+    }
+    return out;
+}
+
+// -------------------------------------------------------------------- arm A
+
+fn min_deviation(xs: ref Vec[i64]) -> i64 {
+    let n = xs.len();
+    if n == 0 { return 0; }
+    let m = xs[n / 2];
+    let mut total = 0;
+    let mut i = 0;
+    while i < n {
+        total = total + iabs(xs[i] - m);
+        i = i + 1;
+    }
+    return total;
+}
+
+fn solve_a(g: ref Grid) -> i64 {
+    return min_deviation(row_coords(g)) + min_deviation(col_coords(g));
+}
+
+fn witness(g: ref Grid) -> (i64, i64) {
+    let rows = row_coords(g);
+    let cols = col_coords(g);
+    if rows.len() == 0 { return (0, 0); }
+    return (rows[rows.len() / 2], cols[cols.len() / 2]);
+}
+
+// -------------------------------------------------------------------- arm B
+
+fn span_sum(xs: ref Vec[i64]) -> i64 {
+    let mut total = 0;
+    let mut lo = 0;
+    let mut hi = xs.len() - 1;
+    while lo < hi {
+        total = total + (xs[hi] - xs[lo]);
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    return total;
+}
+
+fn solve_b(g: ref Grid) -> i64 {
+    let rows = row_coords(g);
+    if rows.len() == 0 { return 0; }
+    return span_sum(rows) + span_sum(col_coords(g));
+}
+
+// -------------------------------------------------------------------- arm C
+
+fn total_from(g: ref Grid, mr: i64, mc: i64) -> i64 {
+    let mut total = 0;
+    let mut r = 0;
+    while r < g.h {
+        let mut c = 0;
+        while c < g.w {
+            if at(g, r, c) == 1u8 {
+                total = total + iabs(r - mr) + iabs(c - mc);
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return total;
+}
+
+fn solve_c(g: ref Grid) -> i64 {
+    let mut best = -1;
+    let mut r = 0;
+    while r < g.h {
+        let mut c = 0;
+        while c < g.w {
+            let t = total_from(g, r, c);
+            if best == -1 or t < best { best = t; }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    if best == -1 { return 0; }
+    return best;
+}
+
+// ------------------------------------------------------- isometries (P3-P5)
+
+fn transpose(g: ref Grid) -> Grid {
+    let mut data: Vec[u8] = Vec.new();
+    let mut c = 0;
+    while c < g.w {
+        let mut r = 0;
+        while r < g.h {
+            data.push(at(g, r, c));
+            r = r + 1;
+        }
+        c = c + 1;
+    }
+    return Grid { data: data, w: g.h, h: g.w };
+}
+
+fn flip_h(g: ref Grid) -> Grid {
+    let mut data: Vec[u8] = Vec.new();
+    let mut r = 0;
+    while r < g.h {
+        let mut c = 0;
+        while c < g.w {
+            data.push(at(g, r, g.w - 1 - c));
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return Grid { data: data, w: g.w, h: g.h };
+}
+
+fn flip_v(g: ref Grid) -> Grid {
+    let mut data: Vec[u8] = Vec.new();
+    let mut r = 0;
+    while r < g.h {
+        let mut c = 0;
+        while c < g.w {
+            data.push(at(g, g.h - 1 - r, c));
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return Grid { data: data, w: g.w, h: g.h };
+}
+
+// Embed the grid into a larger one at offset (dr, dc) — a pure translation of
+// every home, which the Manhattan metric cannot notice.
+fn translate(g: ref Grid, dr: i64, dc: i64) -> Grid {
+    let nh = g.h + dr + 1;
+    let nw = g.w + dc + 2;
+    let mut data: Vec[u8] = Vec.filled(nh * nw, 0u8);
+    let mut r = 0;
+    while r < g.h {
+        let mut c = 0;
+        while c < g.w {
+            data[(r + dr) * nw + (c + dc)] = at(g, r, c);
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return Grid { data: data, w: nw, h: nh };
+}
+
+// ---------------------------------------------------------------- harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn gen_grid(state: mut ref i64, h: i64, w: i64, pct: i64) -> Grid {
+    let mut data: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < h * w {
+        state = lcg(state);
+        if (state / 65536) % 100 < pct { data.push(1u8); } else { data.push(0u8); }
+        i = i + 1;
+    }
+    return Grid { data: data, w: w, h: h };
+}
+
+fn count_homes(g: ref Grid) -> i64 {
+    let mut n = 0;
+    let mut i = 0;
+    while i < g.data.len() {
+        if g.data[i] == 1u8 { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+fn main() {
+    let mut state = 29600;
+
+    let mut cases = 0;
+    let mut p1 = 0;   // the three arms disagree
+    let mut p2 = 0;   // the witness does not achieve the reported total
+    let mut p3 = 0;   // translation changes the answer
+    let mut p4 = 0;   // transpose changes the answer
+    let mut p5 = 0;   // reflection changes the answer
+    let mut p6 = 0;   // adding a home lowers the total
+    let mut p7 = 0;   // a statement-fixed shape is wrong
+
+    // Density is the knob that matters. A 5% grid is a handful of scattered
+    // homes where an even/odd median convention rarely shows; a 100% grid puts
+    // a home in every cell, which is where the two middle candidates of an
+    // even-length list are both legal and a wrong pick is still optimal. The
+    // interesting failures live at both ends, so both are swept.
+    let densities: Vec[i64] = [0, 4, 15, 40, 75, 100];
+    let sizes: Vec[i64] = [1, 2, 3, 4, 6, 8];
+
+    let mut round = 0;
+    while round < 15 {
+        let mut di = 0;
+        while di < densities.len() {
+            let mut hi = 0;
+            while hi < sizes.len() {
+                let mut wi = 0;
+                while wi < sizes.len() {
+                    let h = sizes[hi];
+                    let w = sizes[wi];
+                    let g = gen_grid(mut state, h, w, densities[di]);
+                    cases = cases + 1;
+
+                    let a = solve_a(g);
+                    let b = solve_b(g);
+                    let c = solve_c(g);
+
+                    // P1 — three unrelated derivations, one number.
+                    if a != b or b != c { p1 = p1 + 1; }
+
+                    // P2 — the meeting cell arm A names really does cost what
+                    // arm A says. A total is one integer and can be right for
+                    // the wrong reason; a witness can be interrogated.
+                    let (mr, mc) = witness(g);
+                    if count_homes(g) > 0 and total_from(g, mr, mc) != a { p2 = p2 + 1; }
+
+                    // P3-P5 — isometries of the Manhattan metric.
+                    if solve_a(translate(g, 1, 1)) != a { p3 = p3 + 1; }
+                    if solve_a(translate(g, 0, 2)) != a { p3 = p3 + 1; }
+                    if solve_a(transpose(g)) != a { p4 = p4 + 1; }
+                    if solve_a(flip_h(g)) != a { p5 = p5 + 1; }
+                    if solve_a(flip_v(g)) != a { p5 = p5 + 1; }
+
+                    // P6 — one more home can never make the meeting cheaper.
+                    //
+                    // The empty cell is located BEFORE the augmented grid is
+                    // built, and that ordering is load-bearing rather than
+                    // stylistic: `Grid { data: g.data, .. }` MOVES `g.data`, so
+                    // reading `g` afterwards is a use-after-move. It happens to
+                    // observe the old contents on both backends, which is
+                    // exactly why it is worth avoiding — that is unspecified
+                    // behaviour agreeing with itself, not a guarantee, and
+                    // `karac check` flags it.
+                    let cells = g.data.len();
+                    let mut target = -1;
+                    let mut k = 0;
+                    while k < cells {
+                        if g.data[k] == 0u8 {
+                            target = k;
+                            k = cells;
+                        } else {
+                            k = k + 1;
+                        }
+                    }
+                    if target >= 0 {
+                        let mut g2 = Grid { data: g.data, w: g.w, h: g.h };
+                        g2.data[target] = 1u8;
+                        if solve_a(g2) < a { p6 = p6 + 1; }
+                    }
+
+                    wi = wi + 1;
+                }
+                hi = hi + 1;
+            }
+            di = di + 1;
+        }
+        round = round + 1;
+    }
+
+    // P7 — shapes whose answer the statement fixes outright.
+    let mut n = 1;
+    while n <= 12 {
+        // A single home: nobody walks.
+        let mut one: Vec[u8] = Vec.filled(n * n, 0u8);
+        one[(n * n) / 2] = 1u8;
+        let g1 = Grid { data: one, w: n, h: n };
+        if solve_a(g1) != 0 or solve_c(g1) != 0 { p7 = p7 + 1; }
+
+        // Exactly two homes: the total is their Manhattan distance, since one
+        // of them can simply walk to the other.
+        let mut two: Vec[u8] = Vec.filled(n * n, 0u8);
+        two[0] = 1u8;
+        two[n * n - 1] = 1u8;
+        let g2 = Grid { data: two, w: n, h: n };
+        let want = (n - 1) + (n - 1);
+        if solve_a(g2) != want or solve_b(g2) != want or solve_c(g2) != want { p7 = p7 + 1; }
+
+        // No homes at all: nothing to do.
+        let g0 = Grid { data: Vec.filled(n * n, 0u8), w: n, h: n };
+        if solve_a(g0) != 0 or solve_b(g0) != 0 or solve_c(g0) != 0 { p7 = p7 + 1; }
+
+        n = n + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 witness mismatches {p2}");
+    println(f"P3 translation asymmetries {p3}");
+    println(f"P4 transpose asymmetries {p4}");
+    println(f"P5 reflection asymmetries {p5}");
+    println(f"P6 monotonicity violations {p6}");
+    println(f"P7 fixed-shape failures {p7}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

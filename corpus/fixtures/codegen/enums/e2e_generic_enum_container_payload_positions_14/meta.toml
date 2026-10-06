@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::e2e_generic_enum_container_payload_positions"
+dedup_of = ["tests/interpreter/enums.rs::generic_enum_container_payload_positions"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

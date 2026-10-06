@@ -1,0 +1,101 @@
+// Benchmark workload for LeetCode #247 — Strobogrammatic Number II.
+//
+// A STRING-building workload, which is what distinguishes this lane from the
+// integer/pointer kernels elsewhere in the corpus: every answer is assembled by
+// wrapping a digit pair around a shorter string, so the middle-outward recursion
+// allocates and concatenates roughly 5^(m-1) strings per round and nothing about
+// it is vectorizable.
+//
+// Length 16 yields 4 * 5^7 = 312,500 numbers. Each round regenerates the whole
+// set from scratch and re-verifies every member with the two-pointer rotation
+// check, so the round does allocation-heavy work AND a read-back pass over what
+// it just built. Sink = rolling checksum over every generated string's bytes, so
+// the CONTENT is load-bearing, not just the count.
+
+fn build(k: i64, n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if k == 0 {
+        out.push("");
+        return out;
+    }
+    if k == 1 {
+        out.push("0");
+        out.push("1");
+        out.push("8");
+        return out;
+    }
+
+    let mut pair_a: Vec[String] = Vec.new();
+    let mut pair_b: Vec[String] = Vec.new();
+    pair_a.push("0"); pair_b.push("0");
+    pair_a.push("1"); pair_b.push("1");
+    pair_a.push("6"); pair_b.push("9");
+    pair_a.push("8"); pair_b.push("8");
+    pair_a.push("9"); pair_b.push("6");
+
+    let inner = build(k - 2, n);
+    let mut i = 0;
+    while i < inner.len() {
+        let mut p = 0;
+        while p < pair_a.len() {
+            // The outermost layer refuses the 0/0 pair: "0" wrapped in 0/0 is
+            // "000", not a number of length 3.
+            if not (k == n and pair_a[p] == "0") {
+                let mut s: String = "";
+                s.push_str(pair_a[p]);
+                s.push_str(inner[i]);
+                s.push_str(pair_b[p]);
+                out.push(s);
+            }
+            p = p + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn is_strobogrammatic(s: ref String) -> bool {
+    let b = s.bytes();
+    let mut lo = 0;
+    let mut hi = b.len() - 1;
+    while lo <= hi {
+        let x = b[lo];
+        let y = b[hi];
+        let ok = (x == 48 and y == 48)
+            or (x == 49 and y == 49)
+            or (x == 56 and y == 56)
+            or (x == 54 and y == 57)
+            or (x == 57 and y == 54);
+        if not ok {
+            return false;
+        }
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    return true;
+}
+
+fn main() {
+    let n = 16;
+    let rounds = 12;
+
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let got = build(n, n);
+        let mut i = 0;
+        while i < got.len() {
+            if is_strobogrammatic(got[i]) {
+                let b = got[i].bytes();
+                let mut j = 0;
+                while j < b.len() {
+                    sink = (sink * 31 + (b[j] as i64)) % 1000000007;
+                    j = j + 1;
+                }
+            }
+            i = i + 1;
+        }
+        r = r + 1;
+    }
+    println(sink);
+}

@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_e2e_auto_par_column_producer_slot_not_freed_early"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:dataframe"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

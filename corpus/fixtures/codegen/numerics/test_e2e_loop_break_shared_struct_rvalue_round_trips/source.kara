@@ -1,0 +1,12 @@
+
+shared struct Node { v: i64 }
+
+fn pick() -> Node {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break Node { v: i * 11 } }
+    }
+}
+
+fn main() { println(pick().v); }

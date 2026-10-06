@@ -1,0 +1,17 @@
+
+fn main() {
+    let v = [10, 20, 30];
+    match v.get(1) {
+        Some(x) => println(x),
+        None => println("none"),
+    };
+    let words = ["alpha", "beta", "gamma"];
+    match words.first() {
+        Some(w) => { println(w); println(w.len()); }
+        None => println("empty"),
+    };
+    match v.get(99) {
+        Some(x) => println(x),
+        None => println("oob"),
+    };
+}

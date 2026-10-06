@@ -1,0 +1,4 @@
+
+#[derive(Display)]
+struct H { u: Option[i64] }
+fn main() { let h = H { u: Some(3) }; println(f"{h}") }

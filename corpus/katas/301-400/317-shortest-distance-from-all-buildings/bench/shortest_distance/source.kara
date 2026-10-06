@@ -1,0 +1,127 @@
+// Benchmark lane for LeetCode 317 — Shortest Distance from All Buildings.
+//
+// build-once + punch (see ../../../../BENCHMARKS.md): generate the ROWS x COLS
+// grid ONCE — 20% obstacles, then BUILDINGS buildings dropped on empty cells
+// reachable from the top-left corner so that no building starts walled off —
+// then punch PASSES complete answers through it. Each pass first RELOCATES one
+// building — the pass's turn in the site list — to the first empty cell at or
+// after an index drawn from the running checksum, runs the ★ arm, folds the
+// answer into the checksum, and moves the building back so the grid does not
+// drift. Relocating a building shifts every pass's answer; walling one empty
+// cell, the first design, never moved the minimum at all (30 identical
+// answers), which is a punch the optimiser could not hoist but the workload
+// could not feel.
+//
+// The arm mirrored is one BFS per building (★): a per-pass `seen` stamp array
+// replaces the per-building distance reset, `total` and `reach` accumulate,
+// and the answer is the smallest `total` among empty cells every building
+// reached. All five mirrors use the same flat i64 grid, the same array queue
+// and the same stamp trick, so they are on one footing.
+
+const ROWS: i64 = 360;
+const COLS: i64 = 360;
+const BUILDINGS: i64 = 20;
+const OBSTACLE_PCT: i64 = 20;
+const PASSES: i64 = 30;
+const MASK: i64 = 1073741823;
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn shortest_distance(grid: ref Vec[i64], rows: i64, cols: i64) -> i64 {
+    let n = rows * cols;
+    let mut total: Vec[i64] = Vec.new();
+    let mut reach: Vec[i64] = Vec.new();
+    let mut seen: Vec[i64] = Vec.new();
+    let mut dist: Vec[i64] = Vec.new();
+    for i in 0..n { total.push(0); reach.push(0); seen.push(0); dist.push(0); }
+    let mut b = 0;
+    for src in 0..n {
+        if grid[src] != 1 { continue; }
+        b += 1;
+        seen[src] = b;
+        dist[src] = 0;
+        let mut q: Vec[i64] = Vec.new();
+        q.push(src);
+        let mut head = 0;
+        while head < q.len() {
+            let cell = q[head];
+            head += 1;
+            let r = cell / cols;
+            let c = cell % cols;
+            let d = dist[cell] + 1;
+            if r > 0 {
+                let nb = cell - cols;
+                if grid[nb] == 0 and seen[nb] != b { seen[nb] = b; dist[nb] = d; total[nb] += d; reach[nb] += 1; q.push(nb); }
+            }
+            if r < rows - 1 {
+                let nb = cell + cols;
+                if grid[nb] == 0 and seen[nb] != b { seen[nb] = b; dist[nb] = d; total[nb] += d; reach[nb] += 1; q.push(nb); }
+            }
+            if c > 0 {
+                let nb = cell - 1;
+                if grid[nb] == 0 and seen[nb] != b { seen[nb] = b; dist[nb] = d; total[nb] += d; reach[nb] += 1; q.push(nb); }
+            }
+            if c < cols - 1 {
+                let nb = cell + 1;
+                if grid[nb] == 0 and seen[nb] != b { seen[nb] = b; dist[nb] = d; total[nb] += d; reach[nb] += 1; q.push(nb); }
+            }
+        }
+    }
+    let mut best = -1;
+    for i in 0..n {
+        if grid[i] == 0 and reach[i] == b and (best < 0 or total[i] < best) { best = total[i]; }
+    }
+    return best;
+}
+
+fn main() {
+    let n = ROWS * COLS;
+    let mut seed = 317;
+    let mut grid: Vec[i64] = Vec.new();
+    for i in 0..n {
+        seed = lcg(seed);
+        if (seed / 65536) % 100 < OBSTACLE_PCT { grid.push(2); } else { grid.push(0); }
+    }
+    grid[0] = 0;
+
+    // Cells reachable from the corner across non-obstacle land.
+    let mut reach: Vec[bool] = Vec.new();
+    for i in 0..n { reach.push(false); }
+    let mut q: Vec[i64] = Vec.new();
+    reach[0] = true;
+    q.push(0);
+    let mut head = 0;
+    while head < q.len() {
+        let cell = q[head];
+        head += 1;
+        let r = cell / COLS;
+        let c = cell % COLS;
+        if r > 0 and grid[cell - COLS] != 2 and not reach[cell - COLS] { reach[cell - COLS] = true; q.push(cell - COLS); }
+        if r < ROWS - 1 and grid[cell + COLS] != 2 and not reach[cell + COLS] { reach[cell + COLS] = true; q.push(cell + COLS); }
+        if c > 0 and grid[cell - 1] != 2 and not reach[cell - 1] { reach[cell - 1] = true; q.push(cell - 1); }
+        if c < COLS - 1 and grid[cell + 1] != 2 and not reach[cell + 1] { reach[cell + 1] = true; q.push(cell + 1); }
+    }
+
+    let mut sites: Vec[i64] = Vec.new();
+    while sites.len() < BUILDINGS {
+        seed = lcg(seed);
+        let p = (seed / 256) % n;
+        if grid[p] == 0 and reach[p] { grid[p] = 1; sites.push(p); }
+    }
+
+    let mut checksum = 0;
+    for pass in 0..PASSES {
+        let old = sites[pass % BUILDINGS];
+        let mut i = checksum % n;
+        while grid[i] != 0 { i = (i + 1) % n; }
+        grid[old] = 0;
+        grid[i] = 1;
+        let ans = shortest_distance(grid, ROWS, COLS);
+        checksum = (checksum * 31 + ans + 7) & MASK;
+        grid[i] = 0;
+        grid[old] = 1;
+    }
+    println("checksum " + checksum.to_string());
+}

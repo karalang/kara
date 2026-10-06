@@ -1,0 +1,15 @@
+fn main() {
+         let cmd = Command.new("/usr/bin/true");
+         match cmd.spawn() {
+             Ok(child) => {
+                 match child.wait() {
+                     Ok(status) => {
+                         println(status.code);
+                         println(status.success);
+                     }
+                     Err(_) => println("wait_err"),
+                 }
+             }
+             Err(_) => println("spawn_err"),
+         }
+     }

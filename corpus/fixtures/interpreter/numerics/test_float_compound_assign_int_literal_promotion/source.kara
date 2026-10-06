@@ -1,0 +1,10 @@
+
+        fn main() {
+            let mut a: f64 = 2.0;
+            a += 1;
+            a *= 2;
+            a -= 3;
+            a /= 2;
+            println(f"{a}");
+        }
+    

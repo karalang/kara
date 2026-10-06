@@ -1,0 +1,85 @@
+// LeetCode #415: Add Strings — two-pointer column add with a digit table.
+//
+// Add two non-negative decimal strings, return the sum as a string. No
+// int-conversion / no bignum — pure digit arithmetic, the same column add as
+// #67 add-binary but at base 10:
+//
+//   sum   = carry + (a[i] - b'0') + (b[j] - b'0')     missing operand -> 0
+//   digit = sum % 10                                    emitted decimal digit
+//   carry = sum / 10                                    ripples left
+//
+// Two surfaces from the self-hosted lexer at once: the base-10 `from_str_radix`
+// arm (the decimal int-literal path), and a **digit-table render** — the
+// emitted digit indexes a const `"0123456789"` and a one-byte zero-copy slice
+// `DIGITS[d..d+1]` is appended. That table is the inverse nibble map of digit
+// *parsing*: the exact shape #405 convert-to-hex and #168 excel-column use to
+// turn a value back into a glyph. (Base 2 in #67 needs only two symbols, so a
+// char literal sufficed; base 10 is where the table earns its place.)
+
+fn add_strings(a: ref String, b: ref String) -> String {
+    let digits: String = "0123456789";
+
+    let ab = a.bytes();
+    let bb = b.bytes();
+
+    let mut i = ab.len() - 1;
+    let mut j = bb.len() - 1;
+    let mut carry = 0;
+
+    // Decimal digit values, least-significant first.
+    let mut buf: Vec[i64] = Vec.new();
+    while i >= 0 or j >= 0 or carry > 0 {
+        let mut sum = carry;
+        if i >= 0 {
+            sum = sum + ((ab[i] - b'0') as i64);
+            i = i - 1;
+        }
+        if j >= 0 {
+            sum = sum + ((bb[j] - b'0') as i64);
+            j = j - 1;
+        }
+        buf.push(sum % 10);
+        carry = sum / 10;
+    }
+
+    // Reverse into the MSB-first answer, rendering each value through the digit
+    // table: a one-byte zero-copy slice `DIGITS[d..d+1]` appended via push_str.
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        let d = buf[k];
+        out.push_str(digits[d..d + 1]);
+        k = k - 1;
+    }
+    out
+}
+
+fn report(a: ref String, b: ref String) {
+    println(f"\"{a}\" + \"{b}\" -> \"{add_strings(a, b)}\"");
+}
+
+fn main() {
+    // LeetCode canonical examples.
+    report("11", "123");            // 134
+    report("456", "77");            // 533
+    report("0", "0");               // 0
+
+    // Carry ripples / new most-significant digit.
+    report("9", "1");               // 10
+    report("99", "1");              // 100
+    report("999", "999");           // 1998
+    report("1", "999999999");       // 1000000000
+
+    // Unequal lengths.
+    report("1", "9999");            // 10000
+    report("12345", "54321");       // 66666
+    report("100", "23");            // 123
+
+    // Zeros and leading-digit edges.
+    report("0", "12345");           // 12345
+    report("500", "500");           // 1000
+
+    // Long operands (beyond any native int width — the no-bignum point).
+    report("9999999999999999999999999999999999999999", "1");
+    report("12345678901234567890", "98765432109876543210");
+}

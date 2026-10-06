@@ -1,0 +1,108 @@
+// LeetCode 277 — the STACK formulation of the same elimination.
+//
+// The ★ solver folds the eliminations into a running `cand`, which is a linear
+// scan. This one makes the elimination explicit: put everyone on a stack, pop
+// two, ask one question, push back the survivor. Repeat until one remains.
+//
+// IT IS THE SAME `n - 1` QUESTIONS, and deliberately so. Each round consumes two
+// candidates and returns one, so `n` people take `n - 1` rounds, one question
+// each — identical to the scan, because the bound is a property of the PROBLEM
+// (one question kills one person) and not of how you organize the bookkeeping.
+// Two shapes reaching the same count is evidence the count is real.
+//
+// WHY KEEP BOTH. The scan carries its state in one variable and is easy to get
+// subtly wrong at the update (`cand = i` versus leaving it); the stack carries
+// its state in a container and is easy to get wrong at the push-back (which of
+// the two survives). Different places to slip, same answer — which is what makes
+// them worth cross-checking. The verification phase is shared verbatim: the
+// elimination is what differs, and the proof obligation afterwards does not.
+
+fn knows(m: ref Vec[Vec[bool]], a: i64, b: i64, calls: mut ref i64) -> bool {
+    calls = calls + 1;
+    return m[a][b];
+}
+
+fn find_celebrity(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
+    let mut st: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        st.push(i);
+        i = i + 1;
+    }
+
+    // Each round: two candidates in, one out. `pop` returns `Option[i64]` and
+    // the `len() > 1` guard makes None unreachable, so `unwrap` states that
+    // invariant rather than hiding it behind a `match` arm that cannot run.
+    while st.len() > 1 {
+        let a = st.pop().unwrap();
+        let b = st.pop().unwrap();
+        if knows(m, a, b, calls) {
+            st.push(b);        // a knows someone, so a is out
+        } else {
+            st.push(a);        // b is not known by a, so b is out
+        }
+    }
+
+    let cand = st[0];
+    let mut j = 0;
+    while j < n {
+        if j != cand {
+            if knows(m, cand, j, calls) {
+                return -1;
+            }
+            if not knows(m, j, cand, calls) {
+                return -1;
+            }
+        }
+        j = j + 1;
+    }
+    return cand;
+}
+
+fn row(bits: Vec[i64]) -> Vec[bool] {
+    let mut r: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < bits.len() {
+        r.push(bits[i] == 1);
+        i = i + 1;
+    }
+    return r;
+}
+
+fn main() {
+    // knows[a][b] — the diagonal is unused (nobody is asked about themselves).
+    // Case 1: person 1 is the celebrity — 0 and 2 know 1, 1 knows nobody.
+    let m1: Vec[Vec[bool]] = [
+        row([0, 1, 0]),
+        row([0, 0, 0]),
+        row([0, 1, 0]),
+    ];
+    // Case 2: nobody — 1 is known by all but knows 2.
+    let m2: Vec[Vec[bool]] = [
+        row([0, 1, 0]),
+        row([0, 0, 1]),
+        row([0, 1, 0]),
+    ];
+    // Case 3: single person, trivially a celebrity.
+    let m3: Vec[Vec[bool]] = [row([0])];
+    // Case 4: person 0 is the celebrity.
+    let m4: Vec[Vec[bool]] = [
+        row([0, 0, 0, 0]),
+        row([1, 0, 1, 0]),
+        row([1, 0, 0, 1]),
+        row([1, 1, 0, 0]),
+    ];
+    // Case 5: two people who know each other — neither qualifies.
+    let m5: Vec[Vec[bool]] = [row([0, 1]), row([1, 0])];
+
+    let cases: Vec[Vec[Vec[bool]]] = [m1, m2, m3, m4, m5];
+    let mut c = 0;
+    while c < cases.len() {
+        let n = cases[c].len();
+        let mut calls = 0;
+        let who = find_celebrity(cases[c], n, mut calls);
+        let bound = 3 * (n - 1);
+        println(f"n={n} celebrity={who} calls={calls} (bound {bound})");
+        c = c + 1;
+    }
+}

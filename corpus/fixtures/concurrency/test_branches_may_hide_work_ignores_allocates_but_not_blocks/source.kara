@@ -1,0 +1,9 @@
+
+        fn main() {
+            let mut a: Vec[i64] = Vec.new();
+            let mut b: Vec[i64] = Vec.new();
+            a.push(1);
+            b.push(2);
+            println((a.len() + b.len()).to_string());
+        }
+        

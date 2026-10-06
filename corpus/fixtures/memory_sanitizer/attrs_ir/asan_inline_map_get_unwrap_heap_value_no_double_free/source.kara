@@ -1,0 +1,23 @@
+
+fn takes(s: String) -> i64 {
+    s.len()
+}
+fn main() {
+    let mut ms: Map[i64, String] = Map.new();
+    ms.insert(1, "alpha".to_string());
+    ms.insert(2, "bb".to_string());
+    let mut mv: Map[i64, Vec[i64]] = Map.new();
+    mv.insert(1, [1, 2, 3, 4]);
+    mv.insert(2, [9]);
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 60 {
+        acc = acc + ms.get(1).unwrap().len();
+        acc = acc + takes(ms.get(2).unwrap());
+        acc = acc + mv.get(1).unwrap().len();
+        acc = acc + mv.get(2).unwrap().len();
+        i = i + 1;
+    }
+    println(acc);
+    println(ms.get(1).unwrap());
+}

@@ -1,0 +1,13 @@
+source = "tests/interpreter/patterns.rs::test_agg_leaf_boxed_payload_moving_arm_frees_envelope"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

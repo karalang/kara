@@ -1,0 +1,9 @@
+
+fn main() {
+    let v = [10, 20, 30, 40];
+    match v.iter().find(|x| x > 25) { Some(e) => println(e), None => println(-1) }
+    match v.iter().find(|x| x > 99) { Some(e) => println(e), None => println(-1) }
+    match v.iter().filter(|x| x % 20 == 0).find(|x| x > 25) { Some(e) => println(e), None => println(-1) }
+    let s: Vec[String] = ["a", "bb", "ccc"];
+    match s.iter().find(|w| w.len() == 2) { Some(e) => println(e), None => println("none") }
+}

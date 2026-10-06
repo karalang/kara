@@ -1,0 +1,22 @@
+
+struct Rec { name: String }
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let a = "Hello-World".to_string();
+        let b = a.to_uppercase().to_lowercase();
+        total = total + (b.len() as i64);
+        let c = "  Trim Me  ".to_string();
+        let d = c.trim().to_string().to_uppercase();
+        total = total + (d.len() as i64);
+        let e = "x,y,z".to_string();
+        let parts = e.to_uppercase().split(",");
+        for p in parts { total = total + (p.len() as i64); }
+        let r = Rec { name: "field-string-value".to_string() };
+        let u = r.name.to_uppercase();
+        total = total + (u.len() as i64) + (r.name.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}

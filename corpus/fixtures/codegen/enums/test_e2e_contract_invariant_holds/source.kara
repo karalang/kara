@@ -1,0 +1,4 @@
+
+struct Counter { n: i64, invariant self.n >= 0 }
+impl Counter { pub fn inc(mut ref self) -> i64 { self.n = self.n + 1; self.n } }
+fn main() { let mut c = Counter { n: 0 }; println(c.inc()); }

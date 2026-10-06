@@ -1,0 +1,6 @@
+
+        trait A { fn run(ref self) -> i64; }
+        trait B { fn stop(ref self) -> i64; }
+        effect resource R: A + B;
+        fn main() { }
+        

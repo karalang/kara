@@ -1,0 +1,14 @@
+
+#[derive(Eq)]
+struct P { name: String }
+fn mk(s: ref String) -> P { P { name: s.substring(0, 4) } }
+fn f(hay: ref String, other: ref P) -> i64 {
+    let differs = mk(hay) != other;
+    let n = other.name.len();
+    if differs { n } else { n + 100 }
+}
+fn main() {
+    let h = "zzzzefgh";
+    let p = P { name: "abcd" };
+    println(f"{f(h, p)}");
+}

@@ -1,0 +1,20 @@
+
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn build_grid() -> Vec[E] {
+    let mut out: Vec[E] = Vec.new();
+    out.push(E { x: 1.0, y: 2.0 });
+    out.push(E { x: 3.0, y: 4.0 });
+    out.push(E { x: 5.0, y: 6.0 });
+    out
+}
+fn main() {
+    let grid: Vec[E] = build_grid();
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < grid.len() {
+        s = s + grid[i].x + grid[i].y;
+        i = i + 1;
+    }
+    println(s);
+}

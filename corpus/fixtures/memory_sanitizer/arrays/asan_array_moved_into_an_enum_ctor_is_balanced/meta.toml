@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/arrays.rs::asan_array_moved_into_an_enum_ctor_is_balanced"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

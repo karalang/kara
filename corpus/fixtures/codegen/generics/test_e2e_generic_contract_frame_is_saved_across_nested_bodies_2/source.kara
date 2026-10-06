@@ -1,0 +1,19 @@
+
+fn inner[T](v: ref Vec[T]) -> i64
+    requires v.len() > 0
+    ensures(result) result > 0
+where T: Ord
+{ v.len() }
+
+fn outer[T](v: ref Vec[T]) -> i64
+    requires v.len() > 1
+    ensures(result) result > 100
+where T: Ord
+{
+    inner(v) + inner(v)
+}
+
+fn main() {
+    let a: Vec[i64] = [1, 2, 3];
+    println(outer(a));
+}

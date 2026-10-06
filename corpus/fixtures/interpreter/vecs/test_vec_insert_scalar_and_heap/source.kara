@@ -1,0 +1,17 @@
+
+        fn main() {
+            let mut v: Vec[i64] = [1, 2, 4, 5];
+            v.insert(2, 3);
+            v.insert(0, 0);
+            v.insert(6, 6);
+            let mut i = 0;
+            while i < v.len() { print(f"{v[i]}"); i = i + 1; }
+            println("");
+            let mut s: Vec[String] = Vec.new();
+            s.push(f"a");
+            s.push(f"c");
+            let mid = f"b-{1}";
+            s.insert(1, mid);
+            println(s[1]);
+        }
+    

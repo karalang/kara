@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut total: i64 = 0;
+    let mut it: i64 = 0;
+    while it < 6 {
+        let mut v: Vec[i64] = Vec.new();
+        let mut i: i64 = 0;
+        while i < 262144 {
+            v.push(i + it);
+            i = i + 1;
+        }
+        total = total + v[0] + v[262143] + v.len();
+        it = it + 1;
+    }
+    println(f"{total}");
+}

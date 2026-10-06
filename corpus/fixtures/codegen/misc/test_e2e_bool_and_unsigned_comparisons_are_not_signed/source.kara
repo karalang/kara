@@ -1,0 +1,51 @@
+
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    // 01 — the operators, on literals and on bindings.
+    let f = false;
+    let t = true;
+    println(f"01 {false < true} {false <= true} {true > false} {true >= false}");
+    println(f"02 {f < t} {f <= t} {t > f} {t >= f}");
+
+    // 03 — `.cmp` on bool, literal and bound receiver.
+    println(f"03 {tag(false.cmp(true))} {tag(true.cmp(false))} {tag(t.cmp(t))}");
+
+    // 04 — `Vec[bool].sort()`. Starts descending, so an unsorted or
+    // reverse-sorted result is visible.
+    let mut v: Vec[bool] = [true, false, true, false];
+    v.sort();
+    let mut s = "";
+    for e in v { s = s + f"{e} "; }
+    println(f"04 {s}");
+
+    // 05-07 — unsigned integers whose value sets the top bit of the width.
+    let a: u8 = 200;
+    let b: u8 = 100;
+    let c: u64 = 18446744073709551615u64;
+    let d: u64 = 1;
+    let g: u32 = 4000000000;
+    let h: u32 = 1;
+    println(f"05 {tag(a.cmp(b))}");
+    println(f"06 {tag(c.cmp(d))}");
+    println(f"07 {tag(g.cmp(h))}");
+
+    // 08 — widening a bool. `sext` of `i1` gives -1 / 255; `zext` gives 1.
+    let w1 = t as i64;
+    let w2 = t as u8;
+    let w3 = t as i32;
+    println(f"08 {w1} {w2} {w3}");
+
+    // 09 — equality and branching must be untouched by the signedness change.
+    if t { println("09 true true"); } else { println("09 BAD"); }
+
+    // 10 — the over-correction guard. Making EVERY integer unsigned would
+    // satisfy every row above; a signed receiver must stay signed.
+    let s1: i64 = 0 - 5;
+    let s2: i64 = 1;
+    println(f"10 {tag(s1.cmp(s2))} {s1 < s2}");
+}

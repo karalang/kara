@@ -1,0 +1,7 @@
+fn mkerr() -> Result[i64, i64] { return Err(9); }
+fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn showr[T: Display, E: Display](x: Result[T, E]) { println(f"{x}"); }
+fn main() {
+    show(Some(3));
+    showr(mkerr());
+}

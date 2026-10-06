@@ -1,0 +1,9 @@
+tf payload-1-long-enough-to-heap 3 1
+st 1 payload-2-long-enough-to-heap 7
+il payload-3-long-enough-to-heap
+so payload-4-long-enough-to-heap
+rt payload-5-long-enough-to-heap
+lm 3 payload-6-long-enough-to-heap
+vp 2 payload-8-long-enough-to-heap
+ro 116
+done

@@ -1,0 +1,23 @@
+struct Disconnected;
+struct Connected;
+
+struct Connection[State] { fd: i64 }
+
+fn connect(c: Connection[Disconnected]) -> Connection[Connected] {
+    Connection[Connected] { fd: c.fd }
+}
+
+fn send(c: ref Connection[Connected], n: i64) -> i64 { c.fd + n }
+
+// A unit struct is still a struct: constructible with the braced literal
+// and usable as an ordinary value, not only as a phantom argument.
+struct Marker;
+
+fn main() {
+    let c = Connection[Disconnected] { fd: 4 };
+    let open = connect(c);
+    println(f"sent {send(open, 2)}");
+    let m = Marker {};
+    let _ = m;
+    println("marker ok");
+}

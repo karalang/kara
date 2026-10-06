@@ -1,0 +1,15 @@
+
+        fn main() {
+            let x = 7;
+            match x {
+                0 => println("zero"),
+                _ => {
+                    let a = 1;
+                    let b = 2;
+                    let c = 3;
+                    let d = a + b + c;
+                    println(f"{d}");
+                }
+            }
+        }
+    

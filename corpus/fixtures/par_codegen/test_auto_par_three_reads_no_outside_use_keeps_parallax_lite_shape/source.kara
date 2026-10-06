@@ -1,0 +1,14 @@
+
+effect resource R0;
+effect resource R1;
+effect resource R2;
+
+fn write_r0() writes(R0) {}
+fn write_r1() writes(R1) {}
+fn write_r2() writes(R2) {}
+
+fn main() {
+    write_r0();
+    write_r1();
+    write_r2();
+}

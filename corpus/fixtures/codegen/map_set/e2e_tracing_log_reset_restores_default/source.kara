@@ -1,0 +1,6 @@
+fn main() {
+                Log.set_min_level("error");
+                Log.info("dropped");
+                Log.reset();
+                Log.info("kept");
+            }

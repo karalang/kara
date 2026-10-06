@@ -1,0 +1,37 @@
+
+fn head(s: ref String) -> Option[StringSlice] { return Some(s.slice(0, 3)); }
+
+struct SplitIter { rest: StringSlice, done: bool }
+impl SplitIter {
+    fn next(mut ref self) -> Option[StringSlice] {
+        if self.done { return None; }
+        match self.rest.find(",") {
+            Some(k) => {
+                let head = self.rest.slice(0, k);
+                self.rest = self.rest.slice(k + 1, self.rest.len());
+                return Some(head);
+            }
+            None => { self.done = true; return Some(self.rest); }
+        }
+    }
+}
+
+fn main() {
+    let s = "hello";
+    match head(s) {
+        Some(v) => println(f"len={v.len()}"),
+        None => println("none")
+    }
+    match head(s) {
+        Some(v) => println(f"sub={v.slice(0, 2).to_string()}"),
+        None => println("none")
+    }
+    let text = "aa,bb,cc";
+    let mut it = SplitIter { rest: text.slice(0, text.len()), done: false };
+    let mut n = 0;
+    let mut c = 0;
+    while true {
+        match it.next() { None => break, Some(f) => { n = n + f.len(); c = c + 1; } }
+    }
+    println(f"{c} fields, {n} bytes")
+}

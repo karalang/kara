@@ -1,0 +1,97 @@
+// LeetCode #137: Single Number II — every element appears three times but one.
+//
+// Two canonical bit tricks, both computed and cross-checked at runtime:
+//   A) ones/twos FSM — a 2-bit per-column counter mod 3 held in two masks:
+//      ones ^= x & ~twos; twos ^= x & ~ones. `ones` ends holding the loner.
+//   B) per-bit count mod 3 — for each of 32 bit positions, count set bits across
+//      all numbers; a residue != 0 mod 3 marks a bit of the answer.
+// Both operate on the 32-bit two's-complement pattern, then sign-extend.
+
+fn mask32() -> i64 {
+    4294967295 // 0xFFFFFFFF
+}
+
+fn sign_extend32(v: i64) -> i64 {
+    if v >= 2147483648 {
+        v - 4294967296
+    } else {
+        v
+    }
+}
+
+fn single_ones_twos(nums: ref Vec[i64]) -> i64 {
+    let mask = mask32();
+    let mut ones = 0;
+    let mut twos = 0;
+    let mut i = 0;
+    while i < nums.len() {
+        let x = nums[i] & mask;
+        ones = (ones ^ x) & (~twos) & mask;
+        twos = (twos ^ x) & (~ones) & mask;
+        i = i + 1;
+    }
+    sign_extend32(ones)
+}
+
+fn single_bitcount(nums: ref Vec[i64]) -> i64 {
+    let mut res = 0;
+    let mut b = 0;
+    while b < 32 {
+        let mut cnt = 0;
+        let mut i = 0;
+        while i < nums.len() {
+            if ((nums[i] >> b) & 1) == 1 {
+                cnt = cnt + 1;
+            }
+            i = i + 1;
+        }
+        if (cnt % 3) != 0 {
+            res = res | (1 << b);
+        }
+        b = b + 1;
+    }
+    sign_extend32(res)
+}
+
+fn report(nums: Vec[i64], sink_a: mut ref i64, sink_b: mut ref i64) {
+    let m = 1000000007;
+    let n = nums.len();
+    let a = single_ones_twos(nums);
+    let b = single_bitcount(nums);
+    println(f"n={n}: {a}");
+    sink_a = (sink_a * 1000003 + (a + 1000)) % m;
+    sink_b = (sink_b * 1000003 + (b + 1000)) % m;
+}
+
+fn main() {
+    let mut sink_a = 0;
+    let mut sink_b = 0;
+
+    let mut c1: Vec[i64] = Vec.new();
+    c1.push(2); c1.push(2); c1.push(3); c1.push(2);
+    report(c1, mut sink_a, mut sink_b);
+
+    let mut c2: Vec[i64] = Vec.new();
+    c2.push(0); c2.push(1); c2.push(0); c2.push(1); c2.push(0); c2.push(1); c2.push(99);
+    report(c2, mut sink_a, mut sink_b);
+
+    let mut c3: Vec[i64] = Vec.new();
+    c3.push(-2); c3.push(-2); c3.push(1); c3.push(1); c3.push(-3);
+    c3.push(1); c3.push(-3); c3.push(-3); c3.push(-2); c3.push(30);
+    report(c3, mut sink_a, mut sink_b);
+
+    let mut c4: Vec[i64] = Vec.new();
+    c4.push(5);
+    report(c4, mut sink_a, mut sink_b);
+
+    let mut c5: Vec[i64] = Vec.new();
+    c5.push(7); c5.push(7); c5.push(7); c5.push(13);
+    report(c5, mut sink_a, mut sink_b);
+
+    // The two approaches must agree bit-for-bit.
+    if sink_a == sink_b {
+        println(f"sink: {sink_a}");
+    } else {
+        println(f"MISMATCH a={sink_a} b={sink_b}");
+    }
+}

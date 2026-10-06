@@ -1,0 +1,179 @@
+// LeetCode 286 — Walls and Gates, with the grid as a SUM TYPE.
+//
+// Same multi-source BFS as `walls_and_gates.kara`. The difference is the grid's
+// representation, and the difference is the point of the file.
+//
+// THE PROBLEM AS POSED IS A SENTINEL ZOO. LeetCode packs three unrelated meanings
+// into one `i64`: `-1` means "this is a wall", `0` means "this is a gate", and
+// `2147483647` means "this room has no answer yet". None of those is a distance,
+// yet all three live in the distance array, and every read has to know which of
+// the four readings applies. The `inf()` helper in the ★ file exists only to name
+// one of them.
+//
+// A grid cell is really a three-way choice, so this file says so:
+//
+//     enum Cell { Wall, Reached(i64), Room }
+//
+// A gate is `Reached(0)` — not a special case, just the distance-0 member of the
+// same variant a filled room lands in. `Room` is the un-reached state, and it is
+// UNINHABITED BY ANY NUMBER, so it cannot collide with a real distance. The
+// 2147483647 disappears from the algorithm entirely; it survives only in the I/O
+// boundary, because the problem statement asks for it back.
+//
+// WHAT THIS COSTS. One pointer-free payload word per cell, and a `match` where
+// the ★ file has a comparison. What it buys is that "is this a wall" and "does
+// this room have an answer" stop being the same question asked of the same
+// integer. The seeding loop reads `Reached(0)` instead of `== 0`, and the relax
+// step's `Room =>` arm cannot fire on a wall — the type rules it out rather than
+// a convention doing so.
+//
+// WHY IT IS ALSO A COMPILER PROBE. Before this kata, no kata in the corpus
+// declared an enum with a PAYLOAD at all — 285 files, zero. That is a large gap
+// in the dogfood surface, and it sits directly under two fixes that landed the
+// same week: B-2026-08-18-48 (freeing a POD-struct boxed enum payload moved into
+// a call) and B-2026-08-18-39 (transferring a boxed enum payload out of a par
+// branch). This file makes payload-carrying enums a routine part of the corpus:
+// they are built in a Vec, matched with bindings, passed to functions, returned
+// by value, and converted back to the sentinel encoding.
+
+enum Cell {
+    Wall,
+    Reached(i64),
+    Room,
+}
+
+// The sentinel encoding in, the sum type out.
+fn decode(g: ref Vec[i64]) -> Vec[Cell] {
+    let mut cells: Vec[Cell] = [];
+    let mut i = 0;
+    while i < g.len() {
+        if g[i] == -1 { cells.push(Cell.Wall); }
+        else if g[i] == 2147483647 { cells.push(Cell.Room); }
+        else { cells.push(Cell.Reached(g[i])); }
+        i = i + 1;
+    }
+    return cells;
+}
+
+// The sum type in, the sentinel encoding out. Unreached rooms go back to INF,
+// which is where the sentinel belongs: at the boundary, not in the algorithm.
+fn encode(cells: ref Vec[Cell]) -> Vec[i64] {
+    let mut g: Vec[i64] = [];
+    let mut i = 0;
+    while i < cells.len() {
+        match cells[i] {
+            Wall => { g.push(-1); }
+            Reached(d) => { g.push(d); }
+            Room => { g.push(2147483647); }
+        }
+        i = i + 1;
+    }
+    return g;
+}
+
+// The distance already recorded at `i`, or -1 for a cell that has none. Kept
+// separate so the BFS body reads as one `match` rather than nested ones.
+fn distance_at(cells: ref Vec[Cell], i: i64) -> i64 {
+    match cells[i] {
+        Reached(d) => { return d; }
+        Wall => { return -1; }
+        Room => { return -1; }
+    }
+}
+
+fn is_unreached_room(cells: ref Vec[Cell], i: i64) -> bool {
+    match cells[i] {
+        Room => { return true; }
+        Wall => { return false; }
+        Reached(_) => { return false; }
+    }
+}
+
+fn walls_and_gates(g: mut ref Vec[i64], r: i64, c: i64, relaxations: mut ref i64) {
+    let mut cells = decode(g);
+    let mut q = VecDeque.new();
+
+    let mut i = 0;
+    while i < r * c {
+        if distance_at(cells, i) == 0 { q.push_back(i); }
+        i = i + 1;
+    }
+
+    loop {
+        match q.pop_front() {
+            None => { break; },
+            Some(cell) => {
+                let row = cell / c;
+                let col = cell % c;
+                let d = distance_at(cells, cell) + 1;
+
+                if row > 0 { relax(mut cells, cell - c, d, mut q, relaxations); }
+                if row < r - 1 { relax(mut cells, cell + c, d, mut q, relaxations); }
+                if col > 0 { relax(mut cells, cell - 1, d, mut q, relaxations); }
+                if col < c - 1 { relax(mut cells, cell + 1, d, mut q, relaxations); }
+            }
+        }
+    }
+
+    let out = encode(cells);
+    let mut j = 0;
+    while j < out.len() {
+        g[j] = out[j];
+        j = j + 1;
+    }
+}
+
+// `Room` is the only variant that can be claimed. In the ★ file the equivalent
+// test is `g[n] == inf()`, which is true of a room and — by accident of the
+// encoding — could never be true of a wall only because -1 happens not to equal
+// 2147483647. Here the exclusion is the type's, not arithmetic's.
+fn relax(cells: mut ref Vec[Cell], n: i64, d: i64, q: mut ref VecDeque[i64], relaxations: mut ref i64) {
+    if is_unreached_room(cells, n) {
+        cells[n] = Cell.Reached(d);
+        relaxations = relaxations + 1;
+        q.push_back(n);
+    }
+}
+
+fn show(g: ref Vec[i64], r: i64, c: i64) -> String {
+    let mut s: String = "";
+    let mut row = 0;
+    while row < r {
+        let mut col = 0;
+        while col < c {
+            if col > 0 { s = s + " "; }
+            let v = g[row * c + col];
+            if v == 2147483647 { s = s + "INF"; }
+            else { s = s + f"{v}"; }
+            col = col + 1;
+        }
+        if row < r - 1 { s = s + " / "; }
+        row = row + 1;
+    }
+    return s;
+}
+
+fn report(grid: Vec[i64], r: i64, c: i64) {
+    let mut g = grid;
+    let mut n = 0;
+    walls_and_gates(mut g, r, c, mut n);
+    println(f"{show(g, r, c)}  ({n} relaxations)");
+}
+
+fn main() {
+    let w = -1;
+    let f = 2147483647;
+
+    report([f, w, 0, f,
+            f, f, f, w,
+            f, w, f, w,
+            0, w, f, f], 4, 4);
+
+    report([w], 1, 1);
+    report([0], 1, 1);
+    report([f], 1, 1);
+    report([0, f, f, f], 1, 4);
+    report([f, f, 0, f, f], 1, 5);
+    report([0, f, w, f], 2, 2);
+    report([f, f, f, f], 2, 2);
+}

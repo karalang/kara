@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/drop_order.rs::asan_soa_drop_with_cold_group_primitive"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:layout"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

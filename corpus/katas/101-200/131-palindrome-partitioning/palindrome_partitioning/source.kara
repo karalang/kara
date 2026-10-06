@@ -1,0 +1,121 @@
+// LeetCode #131: Palindrome Partitioning — backtracking over palindromic cuts.
+//
+// Every way to cut `s` so each piece is a palindrome. Backtrack from `start`:
+// for each `end`, if `s[start..=end]` is a palindrome, push that piece, recurse
+// on the remainder, then pop (undo). Deterministic report per case: `count`
+// (number of partitionings) and an order-independent digest (sum of per-partition
+// hashes), folded into a global sink — the #126/#113 discipline.
+
+fn modulus() -> i64 {
+    1000000007
+}
+
+// Palindrome test on the inclusive byte range [lo, hi] (lowercase ASCII).
+fn is_pal(s: ref String, lo: i64, hi: i64) -> bool {
+    let bytes = s.bytes();
+    let mut l = lo;
+    let mut h = hi;
+    while l < h {
+        if bytes[l] != bytes[h] {
+            return false;
+        }
+        l = l + 1;
+        h = h - 1;
+    }
+    true
+}
+
+// The substring s[lo..=hi] as a fresh String.
+fn substring(s: ref String, lo: i64, hi: i64) -> String {
+    let mut out: String = "";
+    let mut i = 0;
+    for ch in s.chars() {
+        if i >= lo and i <= hi {
+            out.push(ch);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Order-independent hash of one partition (the current `path`).
+fn part_hash(path: ref Vec[String]) -> i64 {
+    let m = modulus();
+    let mut h = 0;
+    let mut idx = 0;
+    while idx < path.len() {
+        let piece = ref path[idx];
+        for b in piece.bytes() {
+            h = (h * 131 + ((b as i64) - 96)) % m;
+        }
+        h = (h * 131 + 27) % m;
+        idx = idx + 1;
+    }
+    h
+}
+
+fn backtrack(
+    s: ref String,
+    start: i64,
+    n: i64,
+    path: mut ref Vec[String],
+    count: mut ref i64,
+    digest: mut ref i64,
+) {
+    if start == n {
+        let m = modulus();
+        digest = (digest + part_hash(path)) % m;
+        count = count + 1;
+        return;
+    }
+    let mut end = start;
+    while end < n {
+        if is_pal(s, start, end) {
+            path.push(substring(s, start, end));
+            backtrack(s, end + 1, n, path, count, digest);
+            path.pop();
+        }
+        end = end + 1;
+    }
+}
+
+struct PartResult {
+    count: i64,
+    digest: i64,
+}
+
+fn summarize(s: String) -> PartResult {
+    let n = s.bytes().len();
+    let mut path: Vec[String] = Vec.new();
+    let mut count = 0;
+    let mut digest = 0;
+    backtrack(s, 0, n, mut path, mut count, mut digest);
+    PartResult { count: count, digest: digest }
+}
+
+fn main() {
+    let m = modulus();
+    let mut sink = 0;
+
+    let mut cases: Vec[String] = Vec.new();
+    cases.push("aab");
+    cases.push("a");
+    cases.push("aba");
+    cases.push("aabaa");
+    cases.push("abccba");
+    cases.push("racecar");
+    cases.push("bananas");
+    cases.push("aaaa");
+    cases.push("abcde");
+
+    let mut i = 0;
+    while i < cases.len() {
+        let s = cases[i].clone();
+        let r = summarize(s);
+        println(f"{cases[i]}: count={r.count} hash={r.digest}");
+        sink = (sink * 1000003 + r.count * 13 + r.digest) % m;
+        i = i + 1;
+    }
+
+    println(f"sink: {sink}");
+}

@@ -1,0 +1,14 @@
+
+struct Wide { a: i64, b: i64, c: i64, d: i64 }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Wide] = OnceLock.new();
+        match cell.set(Wide { a: 1i64, b: 2i64, c: 3i64, d: 4i64 }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set(Wide { a: 9i64, b: 9i64, c: 9i64, d: 9i64 }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.get() { Some(w) => { total = total + w.a + w.b + w.c + w.d; }, None => {}, }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

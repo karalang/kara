@@ -1,0 +1,153 @@
+// LeetCode 311 — arm C: compress BOTH operands.
+//
+// Arms ★ and B skip A's zeros but still walk every column of B. This arm
+// compresses B into CSR as well, so the innermost loop visits only B's
+// nonzeros:
+//
+//     for each nonzero (i, k, av) of A:
+//       for each nonzero (k, j, bv) of row k of B:
+//         C[i][j] += av * bv
+//
+// Every multiplication it performs contributes a nonzero product. Nothing is
+// multiplied by zero anywhere.
+//
+// THE TRADE IT MAKES, and why it is not automatically the ★. Skipping B's
+// zeros costs an index over B, and that index has to be built whether or not
+// the zeros are there. On a DENSE B this arm does strictly more work than the
+// ★ arm — same multiplications, plus an indirection per term and a build pass
+// — and it loses the contiguous walk along B[k] that makes ★ fast even when it
+// skips nothing. Sparsity is an assumption, and this arm is the one that bets
+// hardest on it.
+//
+// IT ALSO CANNOT COMMIT EITHER SIBLING'S BUG. There is no zero test to hoist
+// and no dense inner loop to stride the wrong way. Its own failure mode is
+// unique to it: the accumulation target `C[i][j]` is now reached through TWO
+// levels of indirection (A's column index picks B's row, B's column index picks
+// the output column), so transposing either lookup produces a well-formed
+// matrix of the wrong shape's worth of sums.
+
+fn compress(m: ref Vec[Vec[i64]], rows: i64, cols_n: i64) -> Vec[Vec[i64]] {
+    // Returns [offsets, cols, vals] as three rows of one Vec.
+    let mut offsets: Vec[i64] = Vec.new();
+    let mut cols: Vec[i64] = Vec.new();
+    let mut vals: Vec[i64] = Vec.new();
+    offsets.push(0);
+    for r in 0..rows {
+        for c in 0..cols_n {
+            if m[r][c] != 0 {
+                cols.push(c);
+                vals.push(m[r][c]);
+            }
+        }
+        offsets.push(cols.len());
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    out.push(offsets);
+    out.push(cols);
+    out.push(vals);
+    return out;
+}
+
+fn multiply(a: ref Vec[Vec[i64]], b: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = a.len();
+    let mut k_dim = 0;
+    if m > 0 { k_dim = a[0].len(); }
+    let mut n = 0;
+    if b.len() > 0 { n = b[0].len(); }
+
+    let ca = compress(a, m, k_dim);
+    let cb = compress(b, b.len(), n);
+
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    for i in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(0);
+        }
+        c.push(row);
+    }
+
+    for i in 0..m {
+        let mut p = ca[0][i];
+        while p < ca[0][i + 1] {
+            let k = ca[1][p];
+            let av = ca[2][p];
+            // Only the nonzeros of B's row k.
+            let mut q = cb[0][k];
+            while q < cb[0][k + 1] {
+                c[i][cb[1][q]] += av * cb[2][q];
+                q = q + 1;
+            }
+            p = p + 1;
+        }
+    }
+    return c;
+}
+
+fn matrix_of(flat: Slice[i64], w: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < flat.len() {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < w {
+            row.push(flat[i + c]);
+            c = c + 1;
+        }
+        m.push(row);
+        i = i + w;
+    }
+    return m;
+}
+
+fn render(m: ref Vec[Vec[i64]]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut r = 0;
+    while r < m.len() {
+        if r > 0 { s.push_str(" "); }
+        s.push_str("[");
+        let mut c = 0;
+        while c < m[r].len() {
+            if c > 0 { s.push_str(","); }
+            s.push_str(f"{m[r][c]}");
+            c = c + 1;
+        }
+        s.push_str("]");
+        r = r + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(a_flat: Slice[i64], ak: i64, b_flat: Slice[i64], bn: i64) {
+    let a = matrix_of(a_flat, ak);
+    let b = matrix_of(b_flat, bn);
+    let c = multiply(a, b);
+    println(render(c));
+}
+
+fn main() {
+    // The example from the LeetCode statement.
+    report([1, 0, 0,  -1, 0, 3], 3,
+           [7, 0, 0,  0, 0, 0,  0, 0, 1], 3);
+    // 1x1 identities and zeros.
+    report([5], 1, [3], 1);
+    report([0], 1, [9], 1);
+    // A row vector times a column vector — a 1x1 dot product.
+    report([1, 2, 3], 3, [4,  5,  6], 1);
+    // A column vector times a row vector — a full 3x3 outer product.
+    report([1,  2,  3], 1, [4, 5, 6], 3);
+    // Multiplying by the identity returns the original.
+    report([2, 0, 7,  0, 3, 0], 3,
+           [1, 0, 0,  0, 1, 0,  0, 0, 1], 3);
+    // An all-zero left operand annihilates whatever is on the right.
+    report([0, 0,  0, 0], 2, [9, 8,  7, 6], 2);
+    // Entirely dense, so every arm's zero-skipping is inert.
+    report([1, 2,  3, 4], 2, [5, 6,  7, 8], 2);
+    // Negative entries, and a column of B that is entirely zero.
+    report([-1, 2,  3, -4], 2, [5, 0,  -7, 0], 2);
+    // Rectangular: 3x2 times 2x4.
+    report([1, 0,  0, 2,  3, 4], 2,
+           [1, 0, 0, 5,  0, 6, 0, 0], 4);
+}

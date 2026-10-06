@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_116.rs::e2e_let_moved_local_in_an_untaken_branch_keeps_its_payload_body"
+dedup_of = ["tests/interpreter/families/b_2026_09_29_116.rs::interp_let_moved_local_in_an_untaken_branch_keeps_its_payload_body", "tests/memory_sanitizer/families/b_2026_09_29_116.rs::asan_let_moved_local_in_an_untaken_branch_keeps_its_payload_body"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

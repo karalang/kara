@@ -1,0 +1,6 @@
+
+fn main() {
+    let mut x = -9223372036854775807;
+    x = x - 1;
+    println(x.abs());
+}

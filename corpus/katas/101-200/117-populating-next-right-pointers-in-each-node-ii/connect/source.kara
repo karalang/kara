@@ -1,0 +1,171 @@
+// LeetCode #117: Populating Next Right Pointers in Each Node II — O(1) extra space (★).
+//
+// The #116 generalisation: the tree is now ANY binary tree (not perfect), so a node may have zero,
+// one, or two children and the "both children exist" shortcut is gone. The constant-space trick uses
+// a DUMMY HEAD + a running TAIL for each level: thread the current level via its already-wired `next`
+// chain, and as each node's children (left then right, whichever exist) are seen, append them to the
+// next level's chain through `tail`. `dummy.next` is that level's head, so `leftmost = dummy.next`
+// descends one level with no queue and no recursion.
+//
+// Node type is #116's `shared struct Node` — `val` + mutable `left`/`right`/`next` handles.
+
+shared struct Node {
+    val: i64,
+    mut left: Option[Node],
+    mut right: Option[Node],
+    mut next: Option[Node],
+}
+
+fn connect(root: Option[Node]) {
+    let mut leftmost = root;
+    let mut going = true;
+    while going {
+        match leftmost {
+            None => {
+                going = false;
+            }
+            Some(_) => {
+                // Dummy head anchors the next level's chain; `tail` is its growing end.
+                let dummy = Node { val: 0, left: None, right: None, next: None };
+                let mut tail = dummy;
+                // Walk the current level via its `next` chain.
+                let mut cur = leftmost;
+                let mut inner = true;
+                while inner {
+                    match cur {
+                        None => {
+                            inner = false;
+                        }
+                        Some(c) => {
+                            match c.left {
+                                None => {}
+                                Some(l) => {
+                                    tail.next = Some(l);
+                                    tail = l;
+                                }
+                            }
+                            match c.right {
+                                None => {}
+                                Some(r) => {
+                                    tail.next = Some(r);
+                                    tail = r;
+                                }
+                            }
+                            cur = c.next;
+                        }
+                    }
+                }
+                // Head of the next level (or None if this was the last level).
+                leftmost = dummy.next;
+            }
+        }
+    }
+}
+
+// A pseudo-random binary-search-tree insert — produces arbitrary (skewed, sparse) shapes, exactly
+// what #117 must handle where #116's perfect tree could not occur.
+fn insert(root: Option[Node], v: i64) -> Option[Node] {
+    match root {
+        None => Some(Node { val: v, left: None, right: None, next: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+fn build_bst(seed: i64, count: i64) -> Option[Node] {
+    let mut root: Option[Node] = None;
+    let mut i = 0;
+    let mut s = seed;
+    while i < count {
+        s = (s * 1103515245 + 12345) % 2147483648;
+        root = insert(root, s % 500);
+        i = i + 1;
+    }
+    root
+}
+
+// Fold LEVEL BY LEVEL following the `next` chain `connect` set. For each level, fold every value
+// left-to-right via `next`; then find the next level's head — the first child (left or right) of any
+// node on this level, reached by scanning the current level via `next`. This reads back exactly the
+// pointers `connect` wrote, so a wrong wiring shows in the sink.
+fn level_hash(root: Option[Node]) -> i64 {
+    let mut h = 1;
+    let mut head = root;
+    let mut going = true;
+    while going {
+        match head {
+            None => {
+                going = false;
+            }
+            Some(_) => {
+                // Fold this level via `next`.
+                let mut cur = head;
+                let mut inner = true;
+                while inner {
+                    match cur {
+                        None => {
+                            inner = false;
+                        }
+                        Some(c) => {
+                            h = (h * 131 + c.val + 1) % 1000000007;
+                            cur = c.next;
+                        }
+                    }
+                }
+                h = (h * 31 + 7) % 1000000007;
+                // Find the next level's head: first child of any node on this level.
+                let mut nh: Option[Node] = None;
+                let mut scan = head;
+                let mut searching = true;
+                while searching {
+                    match scan {
+                        None => {
+                            searching = false;
+                        }
+                        Some(s) => {
+                            match s.left {
+                                Some(l) => {
+                                    nh = Some(l);
+                                    searching = false;
+                                }
+                                None => {
+                                    match s.right {
+                                        Some(r) => {
+                                            nh = Some(r);
+                                            searching = false;
+                                        }
+                                        None => {
+                                            scan = s.next;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                head = nh;
+            }
+        }
+    }
+    h
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        let root = build_bst(t * 7919 + 1, 12 + t * 3);
+        connect(root);
+        let h = level_hash(root);
+        acc = (acc * 131 + h) % 1000000007;
+        println(f"tree {t}: level_hash={h}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

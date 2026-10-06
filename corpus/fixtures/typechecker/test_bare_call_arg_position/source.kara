@@ -1,0 +1,15 @@
+
+trait Default {
+    fn default() -> Self;
+}
+
+struct Wrapper { value: i64 }
+impl Default for Wrapper {
+    fn default() -> Wrapper { Wrapper { value: 0 } }
+}
+
+fn take(w: Wrapper) {}
+
+fn main() {
+    take(default());
+}

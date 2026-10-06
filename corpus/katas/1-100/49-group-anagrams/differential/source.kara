@@ -1,0 +1,41 @@
+// Differential: 4000 LCG words over a 4-letter alphabet, grouped by sorted-bytes key with
+// entry().or_insert, first-appearance order kept in a side Vec; checksum over groups.
+fn next(s: mut ref u64) -> u64 {
+    *s = (*s).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) % 18446744073709551557u64;
+    *s >> 33
+}
+
+fn main() {
+    let mut seed: u64 = 12345;
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..4000 {
+        let len = (next(mut seed) % 5 + 1) as i64;
+        let mut w = String.new();
+        for _ in 0..len {
+            let c = (b'a' + (next(mut seed) % 4) as u8) as char;
+            w.push(c);
+        }
+        words.push(w);
+    }
+    let mut groups: Map[String, Vec[i64]] = Map.new();
+    let mut order: Vec[String] = Vec.new();
+    for (i, w) in words.iter().enumerate() {
+        let mut b: Vec[u8] = w.bytes().to_vec();
+        b.sort();
+        let k = String.from_utf8(b).unwrap();
+        if not groups.contains_key(k) {
+            order.push(k.clone());
+        }
+        groups.entry(k).or_insert(Vec.new()).push(i);
+    }
+    let mut check: i64 = 0;
+    let mut biggest = 0;
+    for (gi, k) in order.iter().enumerate() {
+        let g = groups.get(k).unwrap();
+        if g.len() > biggest { biggest = g.len(); }
+        for idx in g.iter() {
+            check = (check * 31 + idx * (gi + 1)) % 1000000007;
+        }
+    }
+    println(f"{words.len()} words, {order.len()} groups, biggest {biggest}, checksum {check}");
+}

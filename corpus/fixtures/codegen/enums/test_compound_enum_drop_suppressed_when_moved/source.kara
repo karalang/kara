@@ -1,0 +1,10 @@
+
+enum E { V(String) }
+fn consume(_e: E) -> i64 { 7 }
+fn main() {
+    let mut s = String.new();
+    s.push_str("hello");
+    let e = V(s);
+    let n = consume(e);
+    println(n);
+}

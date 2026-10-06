@@ -1,0 +1,25 @@
+
+struct Inner { s: String }
+struct Outer { inner: Inner, tag: Option[String] }
+fn build() -> Vec[Outer] {
+    let mut v: Vec[Outer] = Vec.new();
+    let mut i = 0;
+    while i < 5 {
+        v.push(Outer {
+            inner: Inner { s: "nested_inner_heap_payload_kappa_field_xx".to_string() },
+            tag: Some("outer_option_string_payload_lambda_field_yy".to_string()),
+        });
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let items = build();
+    let mut n: i64 = 0;
+    for a in items {
+        let x = a;
+        n = n + x.inner.s.len();
+        match x.tag { Some(t) => { n = n + t.len(); } None => {} }
+    }
+    println(n);
+}

@@ -1,0 +1,18 @@
+count 10
+dR0
+dR10
+count 12
+dR1
+dR11
+count 14
+dR2
+dR12
+h 1
+dR7
+dR4
+dR6
+dR5
+take 4 56
+one 1
+two 2 3
+end

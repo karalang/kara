@@ -1,0 +1,17 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn consume(x: (R, R, R)) {
+    let l = R { id: 9 };
+    println("in");
+}
+fn f(c: bool) {
+    let x = (R { id: 1 }, R { id: 11 }, R { id: 21 });
+    if c {
+        consume(x);
+    }
+    println("end");
+}
+fn main() {
+    f(false);
+    println("after");
+}

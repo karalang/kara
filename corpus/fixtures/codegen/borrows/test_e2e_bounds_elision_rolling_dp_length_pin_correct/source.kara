@@ -1,0 +1,17 @@
+
+fn unique_paths(m: i64, n: i64) -> i64 {
+    let mut rows = m;
+    let mut cols = n;
+    if cols > rows { let t = rows; rows = cols; cols = t; }
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j < cols { dp.push(1i64); j = j + 1i64; }
+    let mut i = 1i64;
+    while i < rows {
+        let mut c = 1i64;
+        while c < cols { dp[c] = dp[c] + dp[c - 1i64]; c = c + 1i64; }
+        i = i + 1i64;
+    }
+    dp[cols - 1i64]
+}
+fn main() { println(unique_paths(3i64, 7i64)); }

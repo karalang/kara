@@ -1,0 +1,13 @@
+source = "tests/codegen/attrs_ir.rs::test_ir_map_i64_i64_insert_uses_mono_symbol"
+dedup_of = ["tests/codegen/attrs_ir.rs::test_ir_map_i64_i64_insert_body_has_inline_probe"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

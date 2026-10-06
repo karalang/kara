@@ -1,0 +1,19 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct K { id: i64 }
+struct V { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"dropK {self.id}") } }
+impl Drop for V { fn drop(mut ref self) { println(f"dropV {self.id}") } }
+struct Holder { m: Map[K, V] }
+fn main() {
+    let mut a: Map[K, V] = Map.new();
+    a.insert(K { id: 1 }, V { id: 1 });
+    println("--before-clear--")
+    a.clear();
+    println("--after-clear--")
+    { let mut b: Map[K, V] = Map.new();
+      b.insert(K { id: 2 }, V { id: 2 });
+      let h = Holder { m: b };
+      println("--field-in-scope--"); }
+    println("--field-gone--")
+}

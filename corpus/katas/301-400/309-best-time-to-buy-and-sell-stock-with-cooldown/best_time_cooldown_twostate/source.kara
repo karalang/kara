@@ -1,0 +1,101 @@
+// LeetCode 309 — arm B: two states and a two-day lookback.
+//
+// The same problem decomposed differently. Instead of a third `rest` state to
+// absorb the cooldown, this arm keeps only `buy` and `sell` and expresses the
+// delay by reaching TWO days back:
+//
+//     buy[i]  = max(buy[i-1],  sell[i-2] - price[i])
+//     sell[i] = max(sell[i-1], buy[i-1]  + price[i])
+//
+// `sell[i-2]` is the cooldown: a purchase on day i may only build on a sale
+// completed on day i-2 or earlier, so day i-1's sale is invisible to it. The
+// two formulations are equivalent — arm ★'s `rest[i] = max(rest[i-1],
+// sold[i-1])` is exactly a one-day-delayed running maximum of `sell`, which is
+// what indexing `sell[i-2]` achieves directly.
+//
+// WHAT IT CANNOT GET WRONG. Arm ★'s characteristic bug is an update-order slip
+// among three simultaneously-live scalars; this arm reads `sell[i-2]` out of a
+// materialised array, so there is no snapshot to forget. Its own signature bug
+// is the boundary instead — `sell[i-2]` for i = 1 has no predecessor and must
+// read as 0, and an arm that starts its loop at the wrong index or clamps the
+// lookback wrongly gets exactly the first transaction wrong. Neither arm can
+// commit the other's mistake.
+
+fn max_profit(prices: ref Vec[i64]) -> i64 {
+    let n = prices.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut buy: Vec[i64] = Vec.new();
+    let mut sell: Vec[i64] = Vec.new();
+    for i in 0..n {
+        buy.push(0);
+        sell.push(0);
+    }
+    buy[0] = -prices[0];
+    sell[0] = 0;
+    for i in 1..n {
+        // sell[i - 2] is 0 when it would fall before the series.
+        let mut two_back = 0;
+        if i >= 2 {
+            two_back = sell[i - 2];
+        }
+        buy[i] = buy[i - 1];
+        if two_back - prices[i] > buy[i] {
+            buy[i] = two_back - prices[i];
+        }
+        sell[i] = sell[i - 1];
+        if buy[i - 1] + prices[i] > sell[i] {
+            sell[i] = buy[i - 1] + prices[i];
+        }
+    }
+    return sell[n - 1];
+}
+
+fn render(prices: Slice[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < prices.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(f"{prices[i]}");
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(prices: Slice[i64]) {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..prices.len() {
+        v.push(prices[i]);
+    }
+    let mut line = String.new();
+    line.push_str(render(prices));
+    line.push_str(f" -> {max_profit(v)}");
+    println(line);
+}
+
+fn main() {
+    // The example from the LeetCode statement: buy, sell, cooldown, buy, sell.
+    report([1, 2, 3, 0, 2]);
+    // The second statement example.
+    report([1]);
+    // Empty.
+    report([]);
+    // Strictly decreasing — never profitable, answer 0.
+    report([5, 4, 3, 2, 1]);
+    // Strictly increasing — one buy and one sell beats churning under cooldown.
+    report([1, 2, 3, 4, 5]);
+    // A saw-tooth, where the cooldown actually costs something.
+    report([1, 4, 1, 4, 1, 4]);
+    // Two clean humps separated by a trough.
+    report([2, 8, 1, 9]);
+    // Flat prices — no profit anywhere.
+    report([7, 7, 7, 7]);
+    // A single spike late.
+    report([3, 3, 3, 100]);
+    // Negative prices are not in the statement's domain, but the recurrence is
+    // defined over any integers, and every arm must still agree.
+    report([-5, -1, -8, -2]);
+}

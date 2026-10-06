@@ -1,0 +1,7 @@
+fn main() {
+    let mut e: VecDeque[i64] = VecDeque.new();
+    println(e.len());
+    let mut q: VecDeque[i64] = VecDeque.new();
+    q.push_back(1);
+    match q.pop_front() { Some(x) => { println(x); } None => {} }
+}

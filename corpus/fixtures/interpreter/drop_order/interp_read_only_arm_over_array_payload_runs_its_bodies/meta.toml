@@ -1,0 +1,13 @@
+source = "tests/interpreter/drop_order.rs::interp_read_only_arm_over_array_payload_runs_its_bodies"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

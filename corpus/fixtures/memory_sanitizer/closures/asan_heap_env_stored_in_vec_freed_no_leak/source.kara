@@ -1,0 +1,15 @@
+
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    let mut i = 0i64;
+    while i < 3i64 { v.push(make(i)); i = i + 1i64; }
+    let f = make(20i64);
+    let mut w: Vec[Fn(i64) -> i64] = Vec.new();
+    w.push(f);
+    let mut acc = 0i64;
+    let mut j = 0i64;
+    while j < v.len() { acc = acc + (v[j])(10i64); j = j + 1i64; }
+    acc = acc + f(0i64) + (w[0])(1i64);
+    println(f"{acc}");
+}

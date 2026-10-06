@@ -1,0 +1,27 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, name: String, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
+fn keep(d: D) -> D { d }
+fn stash(v: mut ref Vec[D], d: D) { v.push(d); }
+fn maybe(d: D, c: bool) -> Option[D] { if c { return Some(d); } None }
+struct H { k: i64 }
+impl H { fn kp(self, d: D) -> D { d } }
+fn gp[T](x: ref T) -> i64 { 2 }
+fn gn[T](x: T) -> i64 { 1 }
+fn main() {
+    let k = keep(mkw(1).r);
+    println(f"a{k.id}");
+    let h = H { k: 1 };
+    let j = h.kp(mkw(2).s);
+    println(f"b{j.id}");
+    let mut v: Vec[D] = Vec.new();
+    stash(mut v, mkw(3).r);
+    println(f"c{v.len()}");
+    let o = maybe(mkw(4).r, false);
+    println(f"d{o.is_some()}");
+    println(f"e{gp(mkw(5).r)}");
+    println(f"f{gn(mkw(6).s)}");
+    println("end")
+}

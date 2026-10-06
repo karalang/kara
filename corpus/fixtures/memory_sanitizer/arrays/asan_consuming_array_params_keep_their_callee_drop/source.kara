@@ -1,0 +1,19 @@
+
+fn eat(a: Array[String, 2]) -> i64 { return a[0].len(); }
+fn sink(a: Array[String, 2]) { println(f"s:{a[1]}"); }
+fn passthru_arr(a: Array[String, 2]) -> Array[String, 2] { return a; }
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 3 {
+        let e2: Array[String, 2] = [f"eat-aaaaaaaaaaaaaaaa-{j}", f"eat-bbbbbbbbbbbbbbbb-{j}"];
+        println(f"e:{eat(e2)}");
+        let e3: Array[String, 2] = [f"snk-aaaaaaaaaaaaaaaa-{j}", f"snk-bbbbbbbbbbbbbbbb-{j}"];
+        sink(e3);
+        let e4: Array[String, 2] = [f"pt-aaaaaaaaaaaaaaaa-{j}", f"pt-bbbbbbbbbbbbbbbb-{j}"];
+        let r = passthru_arr(e4);
+        println(f"p:{r[0]}");
+        j = j + 1;
+    }
+    println("end");
+}

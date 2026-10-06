@@ -1,0 +1,52 @@
+shared struct Sh { k: i64 }
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct W2 { o: Option[P] }
+struct H { n: i64 }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn keep(o: Option[S2]) -> Option[S2] { return o }
+fn outq(s: S2) -> Option[S2] { let o = Some(s); return o }
+fn outp(s: S2) -> Option[S2] { let o = Some(s); let p = keep(o); return p }
+fn outk(s: S2) -> Option[S2] { let o = Some(s); return keep(o) }
+fn c3(s: P) -> Option[P] { let o = Some(s); let q = o; return q }
+impl H { fn m(ref self, s: P) -> Option[P] { let o = Some(s); return o } fn a(s: P) -> Option[P] { let o = Some(s); return o } }
+fn g1[T](s: T) -> Option[T] { let o = Some(s); return o }
+fn e1(s: P) -> Result[i64, P] { let o: Result[i64, P] = Err(s); return o }
+fn vv(s: Vec[P]) -> Option[Vec[P]] { let o = Some(s); return o }
+fn w1(s: P) -> W2 { let o = Some(s); let w = W2 { o: o }; return w }
+fn t1(s: P) -> (Option[P], i64) { let o = Some(s); return (o, 1) }
+fn a() { let s = mk2(1); let p = outq(s); let v = p.unwrap(); println(f"a{v.id}") }
+fn b() { let s = mk2(2); let p = outp(s); let v = p.unwrap(); println(f"b{v.id}") }
+fn c() { let s = mk2(3); let p = outk(s); let v = p.unwrap(); println(f"c{v.id}") }
+fn d() { let p = outp(mk2(4)); let v = p.unwrap(); println(f"d{v.id}") }
+fn e() { let p = outq(mk2(5)); let v = p.unwrap(); println(f"e{v.id}") }
+fn f() { let s = mk2(6); let p = outq(s); println(f"f{p.is_some()}") }
+fn g() { let p = c3(P { id: 7 }); println(f"g{p.is_some()}") }
+fn h() { let x = H { n: 1 }; let s = P { id: 8 }; let p = x.m(s); println(f"h{p.is_some()}") }
+fn i() { let p = H.a(P { id: 9 }); println(f"i{p.is_some()}") }
+fn j() { let p = g1(P { id: 10 }); println(f"j{p.is_some()}") }
+fn k() { let s = P { id: 11 }; let p = g1(s); let v = p.unwrap(); println(f"k{v.id}") }
+fn l() { let p = e1(P { id: 12 }); println(f"l{p.is_err()}") }
+fn m() { let mut v: Vec[P] = Vec.new(); v.push(P { id: 13 }); let p = vv(v); println(f"m{p.is_some()}") }
+fn n() { let w = w1(P { id: 14 }); println(f"n{w.o.is_some()}") }
+fn o() { let p = t1(P { id: 15 }); println(f"o{p.1}") }
+fn main() {
+    a(); println("a.")
+    b(); println("b.")
+    c(); println("c.")
+    d(); println("d.")
+    e(); println("e.")
+    f(); println("f.")
+    g(); println("g.")
+    h(); println("h.")
+    i(); println("i.")
+    j(); println("j.")
+    k(); println("k.")
+    l(); println("l.")
+    m(); println("m.")
+    n(); println("n.")
+    o(); println("o.")
+    println("end")
+}

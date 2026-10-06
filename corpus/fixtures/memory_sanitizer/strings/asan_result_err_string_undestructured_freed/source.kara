@@ -1,0 +1,8 @@
+
+fn mk(bad: bool) -> Result[i64, String] {
+    if bad { Err(f"err-value-runtime-heap") } else { Ok(7i64) }
+}
+fn main() {
+    let x = mk(true);
+    println("done");
+}

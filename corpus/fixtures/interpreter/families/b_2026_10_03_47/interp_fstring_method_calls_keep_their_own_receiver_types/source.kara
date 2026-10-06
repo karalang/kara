@@ -1,0 +1,16 @@
+fn main() {
+    let a: i64 = 1;
+    println(f"{a.leading_zeros()} {a.count_ones()} {a.trailing_zeros()}");
+    let vals: Vec[i64] = vec![-1, 256];
+    for v in vals.iter() {
+        println(f"i64 {v}: {v.count_ones()} {v.leading_zeros()}");
+    }
+    let b: i32 = 1;
+    println(f"{b.leading_zeros()} {b.count_ones()} {b.trailing_zeros()}");
+    let n32: Vec[i32] = vec![-1, 256];
+    for w in n32.iter() {
+        println(f"i32 {w}: {w.count_ones()} {w.leading_zeros()}");
+    }
+    let c: u8 = 1;
+    println(f"{c.leading_zeros()}");
+}

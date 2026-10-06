@@ -1,0 +1,88 @@
+// LeetCode #134: Gas Station — greedy single pass.
+//
+// If the total gas covers the total cost, a unique start exists. Track a running
+// tank across one loop; whenever it dips below zero, no station up to here can be
+// the start, so restart the candidate at the next station and reset the tank.
+// `total >= 0` decides feasibility; the last surviving candidate is the answer.
+
+fn can_complete(gas: Vec[i64], cost: Vec[i64]) -> i64 {
+    let n = gas.len();
+    let mut total = 0;
+    let mut tank = 0;
+    let mut start = 0;
+    let mut i = 0;
+    while i < n {
+        let d = gas[i] - cost[i];
+        total = total + d;
+        tank = tank + d;
+        if tank < 0 {
+            start = i + 1;
+            tank = 0;
+        }
+        i = i + 1;
+    }
+    if total >= 0 {
+        start
+    } else {
+        -1
+    }
+}
+
+fn lcg(seed: i64, n: i64, cap: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = seed;
+    let mut k = 0;
+    while k < n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        out.push(x % cap);
+        k = k + 1;
+    }
+    out
+}
+
+fn report(gas: Vec[i64], cost: Vec[i64], sink: mut ref i64) {
+    let m = 1000000007;
+    let n = gas.len();
+    let r = can_complete(gas, cost);
+    println(f"n={n}: {r}");
+    sink = (sink * 1000003 + (r + 2)) % m;
+}
+
+fn main() {
+    let mut sink = 0;
+
+    let mut g1: Vec[i64] = Vec.new();
+    g1.push(1); g1.push(2); g1.push(3); g1.push(4); g1.push(5);
+    let mut c1: Vec[i64] = Vec.new();
+    c1.push(3); c1.push(4); c1.push(5); c1.push(1); c1.push(2);
+    report(g1, c1, mut sink);
+
+    let mut g2: Vec[i64] = Vec.new();
+    g2.push(2); g2.push(3); g2.push(4);
+    let mut c2: Vec[i64] = Vec.new();
+    c2.push(3); c2.push(4); c2.push(3);
+    report(g2, c2, mut sink);
+
+    let mut g3: Vec[i64] = Vec.new();
+    g3.push(5);
+    let mut c3: Vec[i64] = Vec.new();
+    c3.push(4);
+    report(g3, c3, mut sink);
+
+    let mut g4: Vec[i64] = Vec.new();
+    g4.push(3); g4.push(3); g4.push(4);
+    let mut c4: Vec[i64] = Vec.new();
+    c4.push(3); c4.push(4); c4.push(4);
+    report(g4, c4, mut sink);
+
+    let mut t = 0;
+    while t < 6 {
+        let n = 8 + t * 3;
+        let gas = lcg(t + 1, n, 20);
+        let cost = lcg(t + 100, n, 20);
+        report(gas, cost, mut sink);
+        t = t + 1;
+    }
+
+    println(f"sink: {sink}");
+}

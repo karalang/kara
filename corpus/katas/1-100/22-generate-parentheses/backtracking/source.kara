@@ -1,0 +1,98 @@
+// LeetCode #22: Generate Parentheses — recursive backtracking,
+// O(Catalan(n) · n) time / output.
+//
+// Given n pairs of parentheses, produce every well-formed combination.
+// The result count is the n-th Catalan number (1, 2, 5, 14, 42, … for
+// n = 1, 2, 3, 4, 5), and each output string has length 2n.
+//
+// The backtracking invariant is two counters, no stack and no validity
+// re-check: a partial string with `open` openers and `close` closers
+// placed can be extended by
+//
+//   - '(' whenever open  < n      (openers still in budget), and
+//   - ')' whenever close < open   (an unmatched opener exists to close).
+//
+// Every string reachable under these two rules is a prefix of some
+// well-formed combination, and every well-formed combination is reached
+// exactly once — so the recursion tree *is* the answer set, with zero
+// pruning waste. `close == n` is the single completion test: close can
+// never pass open, and open never passes n, so close == n forces
+// open == n and the string is complete at length 2n.
+//
+// This is the generator dual of kata [#20](../20-valid-parentheses/):
+// #20 consumes a candidate string and validates LIFO bracket discipline
+// with an explicit stack; #22 produces exactly the valid strings by
+// construction, with the `close < open` rule playing the role #20's
+// stack-emptiness check plays — the unmatched-opener count is the
+// stack *depth*, tracked as an integer because (with one bracket type)
+// the stack's contents carry no information beyond its height.
+//
+// Each recursive call takes the partial string `cur` as an OWNED String
+// and extends it via f-string concat (`f"{cur}("`) into a fresh String
+// for the child call — the immutable-snapshot backtracking shape, where
+// undo is "the parent's copy was never touched" rather than a pop. The
+// per-node O(len) copy is the cost; the payoff is that a completed
+// string is push'd into the accumulator by *move*, no final copy. The
+// accumulator threads through the recursion as `mut ref Vec[String]`,
+// and the root call writes the call-site marker (`mut out`) because
+// `out` is a fresh owned binding there — interior calls forward the
+// already-mut-ref `out` unmarked, per the call-site-marker rule.
+//
+// LeetCode bounds n to [1, 8] (Catalan(8) = 1430 strings of length 16).
+// Counters are i64 for corpus uniformity, as in kata [#20](../20-valid-parentheses/).
+
+fn backtrack(cur: String, open: i64, close: i64, n: i64, out: mut ref Vec[String]) {
+    if close == n {
+        // close ≤ open ≤ n throughout, so close == n forces open == n:
+        // all n pairs are placed and `cur` is complete. Move it in.
+        out.push(cur);
+        return;
+    }
+    if open < n {
+        // Opener budget remains — extend with '('.
+        backtrack(f"{cur}(", open + 1, close, n, out);
+    }
+    if close < open {
+        // An unmatched opener exists — extend with ')'.
+        backtrack(f"{cur})", open, close + 1, n, out);
+    }
+}
+
+fn generate_parenthesis(n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    backtrack("", 0, 0, n, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn report(n: i64) {
+    let combos = generate_parenthesis(n);
+    let count = combos.len();
+    println(f"n={n} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(combos[i]);
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    // LeetCode example 2 — the smallest case.
+    report(1); // 1: ()
+
+    // First case with a branch: nest or concatenate.
+    report(2); // 2: (()), ()()
+
+    // LeetCode example 1 — the canonical n=3 list, Catalan(3) = 5.
+    report(3); // 5: ((())), (()()), (())(), ()(()), ()()()
+
+    // Catalan(4) = 14 — first n where both extension rules interleave
+    // deeply enough that no output is a prefix of another's "shape".
+    report(4); // 14
+
+    // LeetCode upper bound — Catalan(8) = 1430 strings of length 16.
+    // Printed in full: the diff against the Python mirror is the test.
+    report(8); // 1430
+}

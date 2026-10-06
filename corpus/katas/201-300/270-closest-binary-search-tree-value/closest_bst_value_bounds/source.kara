@@ -1,0 +1,98 @@
+// LeetCode 270 — Closest BST Value, by floor and ceiling.
+//
+// The third mechanism, and the only one that never compares distances during
+// the search. Descend twice — once for the largest value ≤ target (the floor)
+// and once for the smallest value ≥ target (the ceiling) — then decide between
+// exactly two candidates at the end.
+//
+// This reframes the problem as a boundary question rather than a minimisation,
+// and the reframing is what makes it a useful third opinion: it cannot get the
+// running-best wrong because it keeps no running best, and it cannot mis-order a
+// tie because it compares the two finalists directly.
+//
+// Its own exposed edge is the OPEN SIDE. A target below every value has no
+// floor, and one above every value has no ceiling; the missing side must be
+// recognised rather than defaulted, since a sentinel that participates in the
+// comparison silently wins. This file tracks each side's presence explicitly
+// and answers from whichever exists when only one does.
+//
+// The tie rule falls out for free here: floor ≤ target ≤ ceiling, so when the
+// distances are equal the floor is the smaller value, and `<=` on the floor's
+// distance selects it without a value comparison at all.
+
+fn abs_f(x: f64) -> f64 {
+    if x < 0.0 { return 0.0 - x; }
+    return x;
+}
+
+fn closest(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+           root: i64, target: f64) -> i64 {
+    let mut has_floor = false;
+    let mut floor_v = 0;
+    let mut has_ceil = false;
+    let mut ceil_v = 0;
+
+    let mut cur = root;
+    while cur >= 0 {
+        let v = val[cur];
+        if (v as f64) <= target {
+            // a candidate floor; anything larger still ≤ target is better
+            if not has_floor or v > floor_v { has_floor = true; floor_v = v; }
+            cur = right[cur];
+        } else {
+            if not has_ceil or v < ceil_v { has_ceil = true; ceil_v = v; }
+            cur = left[cur];
+        }
+    }
+
+    if not has_floor { return ceil_v; }
+    if not has_ceil { return floor_v; }
+    // floor ≤ target ≤ ceil, so on a tie the floor is the smaller value and
+    // `<=` picks it — no value comparison needed.
+    if abs_f(floor_v as f64 - target) <= abs_f(ceil_v as f64 - target) {
+        return floor_v;
+    }
+    return ceil_v;
+}
+
+fn report(label: ref String, val: ref Vec[i64], left: ref Vec[i64],
+          right: ref Vec[i64], root: i64, target: f64) {
+    println(f"{label} target={target} -> {closest(val, left, right, root, target)}");
+}
+
+fn main() {
+    let mut val: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    val.push(4); left.push(1); right.push(2);
+    val.push(2); left.push(3); right.push(4);
+    val.push(5); left.push(-1); right.push(-1);
+    val.push(1); left.push(-1); right.push(-1);
+    val.push(3); left.push(-1); right.push(-1);
+
+    report("[4,2,5,1,3]", val, left, right, 0, 3.714286);
+    report("[4,2,5,1,3]", val, left, right, 0, 0.5);
+    report("[4,2,5,1,3]", val, left, right, 0, 100.0);
+    report("[4,2,5,1,3]", val, left, right, 0, 2.5);
+    report("[4,2,5,1,3]", val, left, right, 0, 4.5);
+    report("[4,2,5,1,3]", val, left, right, 0, 1.5);
+    report("[4,2,5,1,3]", val, left, right, 0, 3.4);
+    report("[4,2,5,1,3]", val, left, right, 0, 3.6);
+    report("[4,2,5,1,3]", val, left, right, 0, 2.0);
+    report("[4,2,5,1,3]", val, left, right, 0, 5.0);
+
+    let mut v2: Vec[i64] = Vec.new();
+    let mut l2: Vec[i64] = Vec.new();
+    let mut r2: Vec[i64] = Vec.new();
+    v2.push(7); l2.push(-1); r2.push(-1);
+    report("[7]", v2, l2, r2, 0, -3.25);
+
+    let mut v3: Vec[i64] = Vec.new();
+    let mut l3: Vec[i64] = Vec.new();
+    let mut r3: Vec[i64] = Vec.new();
+    v3.push(1); l3.push(-1); r3.push(1);
+    v3.push(10); l3.push(-1); r3.push(2);
+    v3.push(100); l3.push(-1); r3.push(-1);
+    report("[1,10,100] spine", v3, l3, r3, 0, 6.0);
+    report("[1,10,100] spine", v3, l3, r3, 0, 5.5);
+}

@@ -1,0 +1,189 @@
+// LeetCode #61: Rotate List — close-the-ring then cut, O(L) time, O(1) extra.
+//
+// Given the head of a singly linked list, rotate it to the RIGHT by `k`
+// places: the last `k` nodes move to the front, in order. Rotating
+// `[1, 2, 3, 4, 5]` right by 2 gives `[4, 5, 1, 2, 3]` — the tail pair
+// `4, 5` wraps around to the head.
+//
+// Two facts collapse the whole problem:
+//
+//   1. A rotation by `k` and a rotation by `k % L` (L = list length) land on
+//      the same list, because L rotations return the list to itself. LeetCode
+//      lets `k` reach 2·10⁹ while the list has at most 500 nodes, so reducing
+//      `k` modulo `L` is what makes the walk cheap — never actually step 2·10⁹
+//      times. This is the whole reason the naive "shift one node k times" loop
+//      is the wrong shape here.
+//   2. After reduction, rotating right by `s = k % L` means the new head is
+//      the node at index `L - s`, and the new tail is the node just before it,
+//      at index `L - s - 1`.
+//
+// The tidy way to realize that cut is to first join the tail back to the head,
+// forming a ring, then walk `L - s - 1` steps from the old head to the new
+// tail and sever the ring right after it:
+//
+//   measure L, find the tail  →  tail.next = head (ring)
+//   walk (L - s - 1) steps    →  new_tail
+//   result = new_tail.next     ;  new_tail.next = None   (cut)
+//
+// Closing the ring is what removes the special cases: whether the new head is
+// deep in the list or is the old head itself (s == 0), the cut is always the
+// same two lines. The transient cycle is broken again before returning, and
+// every node stays reachable from the result — no node is leaked or freed
+// early. This mirrors the dummy-node trick in kata
+// [#19](../19-remove-nth-node-from-end-of-list/): spend one cheap structural
+// move up front so the splice below has no branches.
+//
+// `shared struct ListNode` gives the nodes reference (Rc-like) semantics, the
+// same model kata [#2](../2-add-two-numbers/) introduced: `tail.next = head`
+// stores an *alias* (a retain), and `new_tail.next = None` drops the ring edge
+// without touching the nodes it linked, since they remain held by the result
+// chain. `result = new_tail.next` retains the back segment into a local before
+// the cut nulls the field, so the node it names is never the one freed.
+//
+// LeetCode bounds the value at 100 and `k` at 2·10⁹ (which even fits i32); the
+// arithmetic is i64 for uniformity with the rest of the corpus, not because
+// the width is forced — the modulo, not the range, is the load-bearing part
+// (contrast kata [#18](../18-4sum/), where the 10⁹ *sum* bound makes i64
+// mandatory).
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn rotate_right(head: Option[ListNode], k: i64) -> Option[ListNode] {
+    // One pass: count the nodes (L) and hold onto the tail.
+    let mut len = 0;
+    let mut cur = head;
+    let mut tail = head;
+    loop {
+        match cur {
+            Some(node) => {
+                len = len + 1;
+                tail = Some(node);
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+
+    // Empty list, or a rotation that is a whole multiple of the length: no-op.
+    if len == 0 {
+        return None;
+    }
+    let shift = k % len;
+    if shift == 0 {
+        return head;
+    }
+
+    // Close the ring: the old tail points back at the old head.
+    if let Some(t) = tail {
+        t.next = head;
+    }
+
+    // The new tail sits (L - shift - 1) steps from the old head.
+    let steps = len - shift - 1;
+    let mut new_tail = head;
+    let mut i = 0;
+    while i < steps {
+        if let Some(node) = new_tail {
+            new_tail = node.next;
+        }
+        i = i + 1;
+    }
+
+    // The new head is right after the new tail; sever the ring there.
+    let mut result = head;
+    if let Some(nt) = new_tail {
+        result = nt.next;
+        nt.next = None;
+    }
+    result
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn report(arr: Slice[i64], k: i64) {
+    let head = from_array(arr);
+    let out = rotate_right(head, k);
+    println(to_string(out));
+}
+
+fn main() {
+    // LeetCode example 1 — [1,2,3,4,5] right by 2 → [4, 5, 1, 2, 3].
+    let case1: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case1, 2);
+
+    // LeetCode example 2 — [0,1,2] right by 4 (4 % 3 == 1) → [2, 0, 1].
+    let case2: Array[i64, 3] = [0, 1, 2];
+    report(case2, 4);
+
+    // Empty list, k == 0 → [].
+    let case3: Array[i64, 0] = [];
+    report(case3, 0);
+
+    // Empty list, nonzero k → still [] (the len == 0 guard, before any modulo).
+    let case4: Array[i64, 0] = [];
+    report(case4, 3);
+
+    // Single node, large k → unchanged: 99 % 1 == 0, so shift is 0 → [1].
+    let case5: Array[i64, 1] = [1];
+    report(case5, 99);
+
+    // Two nodes, right by 1 → [2, 1].
+    let case6: Array[i64, 2] = [1, 2];
+    report(case6, 1);
+
+    // Two nodes, right by 2 (== L) → no-op → [1, 2].
+    let case7: Array[i64, 2] = [1, 2];
+    report(case7, 2);
+
+    // Huge k on a 3-node list: 2·10⁹ % 3 == 2 → [2, 3, 1]. This is the case the
+    // modulo carries — a literal 2-billion-step walk would never finish.
+    let case8: Array[i64, 3] = [1, 2, 3];
+    report(case8, 2000000000);
+
+    // k == L on a longer list → unchanged → [1, 2, 3, 4, 5].
+    let case9: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case9, 5);
+
+    // k > L (7 % 5 == 2) reduces to example 1 → [4, 5, 1, 2, 3].
+    let case10: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case10, 7);
+}

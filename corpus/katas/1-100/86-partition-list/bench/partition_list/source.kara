@@ -1,0 +1,92 @@
+// Benchmark workload — Partition List (LeetCode #86).
+// Two lanes over ONE workload: a batch of K=170000 INDEPENDENT partitions (the ★).
+// Each iteration builds a fresh M=200-node linked list whose values depend on the
+// iteration index (val = (j*7 + iter) % 100, so no call hoists), stably partitions it
+// around x=50, and the per-iteration fold of the result is combined through a plain
+// associative SUM (order-independent, so parallel == sequential).
+//
+//   - SEQ lane: the batch run single-threaded — kara (KARAC_AUTO_PAR=0) vs
+//     rustc -O (Rc<RefCell>) / clang -O3 (malloc list) / go build (*Node) per-core.
+//   - PAR lane: the SAME batch, parallel — the default `karac build` AUTO-PARALLELIZES
+//     the `for k in 0..K` sum reduction with NO hand-written parallel code, raced
+//     against hand-tuned C-pthreads / rayon / goroutines (kata #75/#84 framing).
+//
+// This is an ALLOCATION-BOUND workload (a fresh M-node list built and torn down every
+// iteration), so no implementation scales linearly; the point is auto-par vs hand-
+// tuned parallelism on equal, malloc-heavy footing. The nodes are `shared struct`
+// (Rc-like) handles — the same model as katas #82/#83. See ../README.md § Benchmarks.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn partition(head: Option[ListNode], x: i64) -> Option[ListNode] {
+    let less_dummy = ListNode { val: 0, next: None };
+    let greater_dummy = ListNode { val: 0, next: None };
+    let mut less_tail = less_dummy;
+    let mut greater_tail = greater_dummy;
+    let mut cur = head;
+    loop {
+        match cur {
+            Some(node) => {
+                let nxt = node.next;
+                node.next = None;
+                if node.val < x {
+                    less_tail.next = Some(node);
+                    less_tail = node;
+                } else {
+                    greater_tail.next = Some(node);
+                    greater_tail = node;
+                }
+                cur = nxt;
+            }
+            None => break,
+        }
+    }
+    less_tail.next = greater_dummy.next;
+    less_dummy.next
+}
+
+fn build(m: i64, seed: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: -1, next: None };
+    let mut tail = dummy;
+    let mut j = 0;
+    while j < m {
+        let node = ListNode { val: (j * 7 + seed) % 100, next: None };
+        tail.next = Some(node);
+        tail = node;
+        j = j + 1;
+    }
+    dummy.next
+}
+
+fn fold(list: Option[ListNode], seed: i64) -> i64 {
+    let mut a = seed;
+    let mut c = list;
+    loop {
+        match c {
+            Some(n) => {
+                a = (a * 131 + (n.val + 1000)) % 1000000007;
+                c = n.next;
+            }
+            None => break,
+        }
+    }
+    a
+}
+
+fn main() {
+    let m = 200;
+    let total = 170000;
+
+    // Associative sum over K independent partitions; the default build auto-
+    // parallelizes this `for` reduction, KARAC_AUTO_PAR=0 keeps it single-threaded.
+    let mut sum = 0;
+    for k in 0..total {
+        let list = build(m, k);
+        let p = partition(list, 50);
+        sum = sum + fold(p, k);
+    }
+    println(f"{sum}");
+}

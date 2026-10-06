@@ -1,0 +1,13 @@
+source = "tests/codegen/rc_shared.rs::test_e2e_bug8_method_call_chain_field_shared_return"
+dedup_of = ["tests/codegen/structs.rs::test_ir_bug8_method_call_chain_field_emits_load_and_dec"]
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

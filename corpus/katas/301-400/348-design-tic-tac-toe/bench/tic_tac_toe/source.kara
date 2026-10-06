@@ -1,0 +1,86 @@
+// Benchmark workload for LeetCode #348 -- the star arm (tic_tac_toe.kara),
+// timed as written: one signed counter per row, column and diagonal.
+//
+// The order of all SIDE * SIDE cells is shuffled once. Each of GAMES games
+// starts a fresh board and plays that order from its own starting point,
+// wrapping around, alternating players, until somebody wins or the board is
+// full. Every game's move count and winner are folded into the sink, so no
+// move can be skipped.
+
+const SIDE: i64 = 1000;
+const GAMES: i64 = 100;
+
+struct TicTacToe {
+    n: i64,
+    rows: Vec[i64],
+    cols: Vec[i64],
+    diag: i64,
+    anti: i64,
+}
+
+impl TicTacToe {
+    fn new(n: i64) -> TicTacToe {
+        let mut rows: Vec[i64] = Vec.new();
+        let mut cols: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            rows.push(0);
+            cols.push(0);
+        }
+        return TicTacToe { n: n, rows: rows, cols: cols, diag: 0, anti: 0 };
+    }
+
+    fn make_move(mut ref self, row: i64, col: i64, player: i64) -> i64 {
+        let d = if player == 1 { 1 } else { -1 };
+        self.rows[row] += d;
+        self.cols[col] += d;
+        if row == col {
+            self.diag += d;
+        }
+        if row + col == self.n - 1 {
+            self.anti += d;
+        }
+        let goal = d * self.n;
+        if self.rows[row] == goal or self.cols[col] == goal or self.diag == goal or self.anti == goal {
+            return player;
+        }
+        return 0;
+    }
+}
+
+fn main() {
+    // Every cell once, in a shuffled order, built once.
+    let cells = SIDE * SIDE;
+    let mut order: Vec[i64] = Vec.new();
+    for c in 0..cells {
+        order.push(c);
+    }
+    let mut x = 348;
+    let mut k = cells - 1;
+    while k > 0 {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        let j = x / 16 % (k + 1);
+        let t = order[k];
+        order[k] = order[j];
+        order[j] = t;
+        k -= 1;
+    }
+
+    // Each game plays that order from its own starting point, wrapping
+    // around, until somebody wins or the board is full.
+    let mut sink = 0;
+    for g in 0..GAMES {
+        let start = g * cells / GAMES;
+        let mut game = TicTacToe.new(SIDE);
+        let mut player = 1;
+        let mut moves = 0;
+        let mut winner = 0;
+        while moves < cells and winner == 0 {
+            let cell = order[(start + moves) % cells];
+            winner = game.make_move(cell / SIDE, cell % SIDE, player);
+            moves += 1;
+            player = 3 - player;
+        }
+        sink = (sink * 31 + moves * (winner + 1)) % 1000000007;
+    }
+    println(f"sink {sink}");
+}

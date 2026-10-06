@@ -1,0 +1,5 @@
+
+#[derive(Message)]
+struct Person { name: String, age: i64, active: bool, score: u32 }
+
+fn main() {}

@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_04_20.rs::interp_ascii_predicates_do_not_mask_a_wide_integer_to_a_byte"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

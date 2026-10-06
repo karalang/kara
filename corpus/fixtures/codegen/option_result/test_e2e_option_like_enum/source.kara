@@ -1,0 +1,15 @@
+
+enum MyOption {
+    None,
+    Some(i64),
+}
+fn get_value(opt: MyOption) -> i64 {
+    match opt {
+        None => 0,
+        Some(x) => x,
+    }
+}
+fn main() {
+    println(get_value(MyOption.Some(42)));
+    println(get_value(MyOption.None));
+}

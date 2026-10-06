@@ -1,0 +1,49 @@
+
+struct Inner { data: Vec[i64], n: i64 }
+enum E { Wrap(Inner), Empty }
+fn mk(x: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(x);
+    v.push(x + 1);
+    return v;
+}
+fn sink(e: E) -> i64 {
+    match e {
+        Wrap(inner) => inner.n,
+        Empty => 0,
+    }
+}
+fn unwrap_or(e: E) -> Inner {
+    match e {
+        Wrap(inner) => inner,
+        Empty => Inner { data: mk(0), n: 0 },
+    }
+}
+fn main() {
+    let mut t: i64 = 0;
+    let mut i = 0;
+    while i < 20 {
+        // match-bind move-out into a local, then consume
+        let e1 = E.Wrap(Inner { data: mk(i), n: 1 });
+        let r1 = match e1 {
+            Wrap(inner) => inner.data.len() + inner.n,
+            Empty => 0,
+        };
+        // by-value pass into a fn that binds the payload out
+        let e2 = E.Wrap(Inner { data: mk(i), n: 2 });
+        let r2 = sink(e2);
+        // tail-return the moved-out struct binding
+        let e3 = E.Wrap(Inner { data: mk(i), n: 3 });
+        let got = unwrap_or(e3);
+        // consuming call, then re-use the (copy-supported, callee-owned) original
+        let e4 = E.Wrap(Inner { data: mk(i), n: 4 });
+        let a = sink(e4);
+        let b = match e4 {
+            Wrap(inner) => inner.n,
+            Empty => 0,
+        };
+        t = t + r1 + r2 + got.n + a + b;
+        i = i + 1;
+    }
+    println(t);
+}

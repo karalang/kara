@@ -1,0 +1,13 @@
+
+fn main() {
+    let k = env.args().len() as i64;
+    let mut vms: Vec[Map[String, i64]] = Vec.new();
+    let mut inner: Map[String, i64] = Map.new();
+    let _ = inner.insert("n", k);
+    vms.push(inner);
+    let cur = vms[0].clone();
+    let mut tot = 0i64;
+    match cur.get("n") { Some(x) => { tot = tot + x; }, None => {} }
+    if cur.contains_key("n") { tot = tot + 10; }
+    println(tot);
+}

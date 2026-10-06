@@ -1,0 +1,4 @@
+fn id2[T](d: T) -> T { d }
+fn inner[T](d: T) -> T { d }
+fn outer[U](y: U) -> U { inner(y) }
+fn main() { let a = id2([f"heap-string-longer-than-sso-1", f"x"]); let n = [f"heap-string-longer-than-sso-2", f"y"]; let b = id2(n); println(f"{a[0]} {b[0]}"); let c = outer([f"heap-string-longer-than-sso-3"]); let m = [f"heap-string-longer-than-sso-4"]; let d = outer(m); println(f"{c[0]} {d[0]}"); println("end") }

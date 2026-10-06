@@ -1,0 +1,8 @@
+
+fn main() {
+    let v = [1, 2];
+    let w = [10, 20, 30];
+    for x in v.iter().chain(w.iter()) {
+        println(x);
+    }
+}

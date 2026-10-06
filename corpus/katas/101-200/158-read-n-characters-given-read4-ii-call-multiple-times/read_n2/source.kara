@@ -1,0 +1,62 @@
+// LeetCode 158 — Read N Characters Given Read4 II - Call multiple times. (Premium.)
+//
+// Like #157, but `read(n)` is called MULTIPLE times on the same source, so any
+// characters pulled by `read4` beyond what a call needed must PERSIST for the
+// next call. The `Reader` carries a leftover buffer (`buf` + `buf_pos`): each
+// read consumes from the buffer first, refilling via `read4` only when it drains,
+// and leaves any surplus for the following call.
+
+struct Reader {
+    src: String,
+    mut pos: i64,
+    mut buf: String,
+    mut buf_pos: i64,
+}
+
+fn new_reader(src: String) -> Reader {
+    return Reader { src: src, pos: 0, buf: "", buf_pos: 0 };
+}
+
+fn read4(rd: mut ref Reader) -> String {
+    let n = rd.src.len();
+    let mut chunk: String = "";
+    let mut count = 0;
+    while count < 4 and rd.pos < n {
+        chunk.push_str(rd.src[rd.pos..rd.pos + 1]);
+        rd.pos = rd.pos + 1;
+        count = count + 1;
+    }
+    return chunk;
+}
+
+fn read(rd: mut ref Reader, n: i64) -> String {
+    let mut result: String = "";
+    let mut total = 0;
+    while total < n {
+        if rd.buf_pos >= rd.buf.len() {
+            rd.buf = read4(rd);
+            rd.buf_pos = 0;
+            if rd.buf.len() == 0 {
+                return result;
+            }
+        }
+        result.push_str(rd.buf[rd.buf_pos..rd.buf_pos + 1]);
+        rd.buf_pos = rd.buf_pos + 1;
+        total = total + 1;
+    }
+    return result;
+}
+
+fn main() {
+    let mut rd = new_reader("HelloWorld");
+    println(read(mut rd, 2)); // He
+    println(read(mut rd, 3)); // llo
+    println(read(mut rd, 10)); // World
+    println(read(mut rd, 1)); // (empty, EOF)
+
+    // A second reader where reads straddle read4 boundaries.
+    let mut r2 = new_reader("abcdefghij");
+    println(read(mut r2, 1)); // a
+    println(read(mut r2, 5)); // bcdef
+    println(read(mut r2, 100)); // ghij
+}

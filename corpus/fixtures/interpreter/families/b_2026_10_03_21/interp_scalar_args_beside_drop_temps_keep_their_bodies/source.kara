@@ -1,0 +1,16 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct H { r: R, n: i64 }
+fn mk(i: i64) -> R { return R { id: i } }
+fn mkh(i: i64) -> H { return H { r: R { id: i }, n: i } }
+fn f(a: i64) -> i64 { println(f"f{a}"); return a }
+fn g(a: i64, r: R) -> i64 { return a + r.id }
+fn main() {
+    let x = f(mk(1).id);
+    let y = f(mkh(2).n);
+    let z = f(mkh(3).r.id);
+    let w = g(f(4), mk(5));
+    let k = 6;
+    let q = g(k, mk(7));
+    println(f"{x} {y} {z} {w} {q}");
+}

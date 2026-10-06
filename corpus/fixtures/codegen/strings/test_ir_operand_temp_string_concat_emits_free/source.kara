@@ -1,0 +1,10 @@
+
+fn make_s() -> String {
+    let s: String = "a fresh heap operand string padded beyond thirty-six bytes";
+    return s;
+}
+
+fn main() {
+    let r = make_s() + " [suffix]";
+    println(r);
+}

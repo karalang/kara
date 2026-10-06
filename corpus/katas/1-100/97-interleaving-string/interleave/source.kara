@@ -1,0 +1,71 @@
+// LeetCode #97: Interleaving String — 2D dynamic programming (★).
+//
+// Is s3 an interleaving of s1 and s2? An interleaving weaves the two strings together
+// keeping each one's characters in their original order (s3 has length |s1|+|s2| and,
+// reading left to right, its characters split into the subsequence of s1 followed-in-order
+// and the subsequence of s2 followed-in-order).
+//
+// dp[i][j] = "can the first i chars of s1 and the first j chars of s2 interleave to form
+// the first i+j chars of s3?". The last char of that prefix (s3[i+j-1]) came from either
+// s1 (so s1[i-1] must match it and dp[i-1][j] must hold) or s2 (s2[j-1] matches and
+// dp[i][j-1] holds):
+//
+//     dp[i][j] = (dp[i-1][j] and s1[i-1] == s3[i+j-1])
+//             or (dp[i][j-1] and s2[j-1] == s3[i+j-1])
+//
+// with dp[0][0] = true. A flat Vec[bool] of (|s1|+1)*(|s2|+1) cells, filled row by row —
+// O(|s1|*|s2|). Returns false immediately when the lengths can't add up.
+
+fn is_interleave(s1: String, s2: String, s3: String) -> bool {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let c = s3.bytes();
+    let n = a.len();
+    let m = b.len();
+    if n + m != c.len() {
+        return false;
+    }
+    let stride = m + 1;
+    // Sized zero-init of the table (one allocation), then fill in place — the
+    // idiomatic DP-table allocation, matching the mirrors' calloc / vec![false; N].
+    let mut dp: Vec[bool] = Vec.filled((n + 1) * stride, false);
+    dp[0] = true;
+    // Row 0: only s2 contributes.
+    let mut j = 1;
+    while j <= m {
+        dp[j] = dp[j - 1] and (b[j - 1] == c[j - 1]);
+        j = j + 1;
+    }
+    let mut i = 1;
+    while i <= n {
+        // Column 0: only s1 contributes.
+        dp[i * stride] = dp[(i - 1) * stride] and (a[i - 1] == c[i - 1]);
+        let mut jj = 1;
+        while jj <= m {
+            let from_up = dp[(i - 1) * stride + jj] and (a[i - 1] == c[i + jj - 1]);
+            let from_left = dp[i * stride + jj - 1] and (b[jj - 1] == c[i + jj - 1]);
+            dp[i * stride + jj] = from_up or from_left;
+            jj = jj + 1;
+        }
+        i = i + 1;
+    }
+    dp[n * stride + m]
+}
+
+fn main() {
+    // A battery of cases; fold each verdict into a running hash (order-sensitive).
+    let mut acc = 0;
+    // (s1, s2, s3) triples with known answers.
+    let s1s = ["aabcc", "aabcc", "", "a", "", "abc", "aa", "ab", "abababab", "aaaa"];
+    let s2s = ["dbbca", "dbbca", "", "", "b", "def", "ab", "cd", "babababa", "bbbb"];
+    let s3s = ["aadbbcbcac", "aadbbbaccc", "", "a", "b", "adbcef", "aaba", "acbd", "aabbababbaba", "aabbaabb"];
+    let mut k = 0;
+    while k < s1s.len() {
+        let ok = is_interleave(s1s[k].clone(), s2s[k].clone(), s3s[k].clone());
+        let bit = if ok { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        println(f"case {k}: {ok}");
+        k = k + 1;
+    }
+    println(f"sink: {acc}");
+}

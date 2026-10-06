@@ -1,0 +1,17 @@
+
+effect resource DbA;
+effect resource DbB;
+effect resource DbC;
+fn fetch_a() -> i64 reads(DbA) { println("A: start"); println("A: done"); 100_i64 }
+fn fetch_b() -> i64 reads(DbB) { println("B: start"); println(2_i64); 200_i64 }
+fn fetch_c() -> i64 reads(DbC) { println("C: start"); println("C: done"); 300_i64 }
+fn dashboard() -> i64 reads(DbA) reads(DbB) reads(DbC) {
+    let a = fetch_a();
+    let b = fetch_b();
+    let c = fetch_c();
+    a + b + c
+}
+fn main() {
+    let total = dashboard();
+    println(total);
+}

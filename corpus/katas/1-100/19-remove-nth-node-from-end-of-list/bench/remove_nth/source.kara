@@ -1,0 +1,104 @@
+// Benchmark workload — Remove Nth Node From End (LeetCode #19).
+//
+// Seq-only kata (BENCH.md two-lane discipline): the loop body builds a
+// fresh N-node list, removes one node, reads a sink, and drops the rest.
+// Per-call work is a linear build + a single linear two-pointer pass — the
+// same small-per-call alloc/drop shape as kata [#2](../../2-add-two-numbers/).
+// A par lane over the K reduction would mostly measure worker-pool dispatch
+// against that tiny body, so this kata stays single-threaded and measures
+// pure codegen quality, exactly as kata 2 does.
+//
+// Workload. N = 100-node list, values 1..N, rebuilt every iteration (the
+// removal mutates the chain in place, so each iter needs a fresh list).
+// K = 500_000 iters. Per iter we rotate the removal position
+// `n = (k % N) + 1` over the full range [1, N], so across any N consecutive
+// iters every position is removed once — tail (n=1), head (n=N), and every
+// interior node — which keeps the branch predictor from learning a single
+// splice trajectory and exercises the dummy's head-removal path on 1/N of
+// the iters.
+//
+// Sink. The head value of the result list: 1 on the iters that remove an
+// interior/tail node (the head survives), 2 on the 1/N iters that remove
+// the head (the new head is the old second node, value 2). Summed across
+// K iters. This mirrors kata 2's "read the result head" sink — the build +
+// splice + drop are the measured work; the sink just forces the result to
+// be observed so nothing is dead-code-eliminated.
+//
+// `remove_nth_from_end` and the result are bound to `let`s before use
+// (`let list = ...; let out = remove_nth_from_end(list, n);`) — see
+// ../README.md § Codegen for why a call-result `Option[shared T]` is bound
+// before being consumed.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn remove_nth_from_end(head: Option[ListNode], n: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut fast = head;
+    let mut i = 0;
+    while i < n {
+        if let Some(node) = fast {
+            fast = node.next;
+        }
+        i = i + 1;
+    }
+    let mut slow = dummy;
+    loop {
+        match fast {
+            Some(node) => {
+                fast = node.next;
+                if let Some(snode) = slow.next {
+                    slow = snode;
+                }
+            }
+            None => break,
+        }
+    }
+    if let Some(target) = slow.next {
+        slow.next = target.next;
+    }
+    dummy.next
+}
+
+// Build a fresh `count`-node list valued 1..count. Append via a tail cursor
+// (same shape as the kata's `from_array`): head is value 1, tail is `count`.
+// Returns None for count <= 0.
+fn build_list(count: i64) -> Option[ListNode] {
+    if count <= 0 {
+        return None;
+    }
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    for v in 2..(count + 1) {
+        let node = ListNode { val: v, next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn main() {
+    let n_values: i64 = 100;
+    let k_iters: i64 = 500000;
+
+    // Seq-only sink, same shape as kata 2's: read the result head's value
+    // under an `if let` guard. The guard keeps this off the auto-par-on-
+    // reduction allow-list (a bare `sum = sum + f(out)` would be eligible),
+    // so the default build stays single-threaded — the within-lane
+    // comparator against rust / c / go. Head value is 1 on the iters that
+    // remove an interior/tail node, 2 on the 1/N iters that remove the head.
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let list = build_list(n_values);
+        let n: i64 = (k % n_values) + 1;
+        let out = remove_nth_from_end(list, n);
+        if let Some(node) = out {
+            sum = sum + node.val;
+        }
+        k = k + 1;
+    }
+    println(sum);
+}

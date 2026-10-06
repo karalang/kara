@@ -1,0 +1,28 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+struct Ho { pe: (R, Option[R]) }
+
+fn mk(id: i64) -> R { return R { id: id, tag: f"t{id}" } }
+
+fn loc1() { let t = (mk(1), Option.Some(mk(11))); let (r, o) = t; println(f"  rd{r.id}") }
+fn loc0() { let t = (Option.Some(mk(20)), 0);     let (o, k) = t; println("  rd0") }
+fn ctl()  { let t = (mk(3), Option.Some(mk(33))); println(f"  rd{t.0.id}") }
+fn proj() { let h = Ho { pe: (mk(4), Option.Some(mk(44))) }; let (r, o) = h.pe; println(f"  rd{r.id}") }
+fn used() { let t = (mk(5), Option.Some(mk(55)));
+            let (r, o) = t;
+            match o { Option.Some(x) => println(f"  got{x.id}"), Option.None => println("  none") }
+            println(f"  rd{r.id}") }
+fn none() { let n: Option[R] = Option.None; let t = (mk(6), n); let (r, o) = t; println(f"  rd{r.id}") }
+fn annres() { let t: (R, Result[R, String]) = (mk(7), Result[R, String].Ok(mk(77)));
+              let (r, o) = t; println(f"  rd{r.id}") }
+
+fn main() {
+    println("loc1");   loc1()
+    println("loc0");   loc0()
+    println("ctl");    ctl()
+    println("proj");   proj()
+    println("used");   used()
+    println("none");   none()
+    println("annres"); annres()
+    println("done")
+}

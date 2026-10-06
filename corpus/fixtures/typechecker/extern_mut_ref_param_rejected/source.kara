@@ -1,0 +1,1 @@
+unsafe extern "C" { fn fill(buf: mut ref String) -> i64; } fn main() {}

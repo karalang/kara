@@ -1,0 +1,6 @@
+fn main() {
+         let cmd = Command.new("ls").stdout(Stdio.Null).stderr(Stdio.Null);
+         match cmd.cmd_stdin { Stdio.Inherit => println("in:inherit"), Stdio.Null => println("in:null") }
+         match cmd.cmd_stdout { Stdio.Inherit => println("out:inherit"), Stdio.Null => println("out:null") }
+         match cmd.cmd_stderr { Stdio.Inherit => println("err:inherit"), Stdio.Null => println("err:null") }
+     }

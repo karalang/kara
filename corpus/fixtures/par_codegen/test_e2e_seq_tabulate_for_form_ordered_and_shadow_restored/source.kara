@@ -1,0 +1,17 @@
+
+fn main() {
+    let k: i64 = 99i64;
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0i64..1000i64 {
+        out.push(k * 3i64);
+    }
+    let mut ok: i64 = 1i64;
+    let mut i: i64 = 0i64;
+    while i < out.len() {
+        if out[i] != i * 3i64 { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+    println(k);
+}

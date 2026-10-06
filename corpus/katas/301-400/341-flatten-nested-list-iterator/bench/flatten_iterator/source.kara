@@ -1,0 +1,93 @@
+// Benchmark kernel for LeetCode #341 (Flatten Nested List Iterator), the ★
+// arm as written: a stack of members, with has_next() expanding lists until
+// an integer is on top.
+//
+// Each of 80 rounds builds a pseudo-random nested list of 20,000 top-level
+// members (a member is a list of 0 to 4 members one time in three while the
+// depth is below 12, otherwise an integer from -100 to 100) and drains it
+// through the iterator. The sink is a rolling hash of every integer in the
+// order the iterator hands them out.
+
+enum Nested {
+    Int(i64),
+    List(Vec[Nested]),
+}
+
+struct NestedIterator {
+    stack: Vec[Nested],
+}
+
+impl NestedIterator {
+    fn new(items: Vec[Nested]) -> NestedIterator {
+        let mut it = NestedIterator { stack: Vec.new() };
+        it.push_reversed(items);
+        return it;
+    }
+
+    fn push_reversed(mut ref self, items: Vec[Nested]) {
+        let mut rest = items;
+        while let Some(x) = rest.pop() {
+            self.stack.push(x);
+        }
+    }
+
+    fn has_next(mut ref self) -> bool {
+        while let Some(top) = self.stack.pop() {
+            match top {
+                Int(v) => {
+                    self.stack.push(Int(v));
+                    return true;
+                }
+                List(inner) => { self.push_reversed(inner); }
+            }
+        }
+        return false;
+    }
+
+    fn next(mut ref self) -> i64 {
+        self.has_next();
+        match self.stack.pop() {
+            Some(Int(v)) => { return v; }
+            _ => { panic("next() past the end"); }
+        }
+    }
+}
+
+// ---- input --------------------------------------------------------------
+
+fn next(state: mut ref i64) -> i64 {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return state >> 8;
+}
+
+fn gen_member(state: mut ref i64, depth: i64, max_depth: i64) -> Nested {
+    if depth < max_depth and next(state) % 3 == 0 {
+        let count = next(state) % 5;
+        let mut items: Vec[Nested] = Vec.new();
+        for _ in 0..count {
+            items.push(gen_member(state, depth + 1, max_depth));
+        }
+        return List(items);
+    }
+    return Int(next(state) % 201 - 100);
+}
+
+fn gen_list(seed: i64, top: i64, max_depth: i64) -> Vec[Nested] {
+    let mut state = seed;
+    let mut items: Vec[Nested] = Vec.new();
+    for _ in 0..top {
+        items.push(gen_member(mut state, 1, max_depth));
+    }
+    return items;
+}
+
+fn main() {
+    let mut h = 7;
+    for r in 0..80 {
+        let mut it = NestedIterator.new(gen_list(r * 7 + 1, 20000, 12));
+        while it.has_next() {
+            h = (h * 31 + it.next() + 101) % 1000000007;
+        }
+    }
+    println(h);
+}

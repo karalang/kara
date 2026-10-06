@@ -1,0 +1,11 @@
+
+shared struct N { val: i64, mut next: Option[N] }
+fn main() {
+    let n1 = N { val: 1, next: None };
+    let mut v: Vec[N] = Vec.new();
+    v.push(n1);
+    let a = N { val: 2, next: None };
+    let mut w: Vec[Option[N]] = Vec.new();
+    w.push(Some(a));
+    println(99);
+}

@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut words: Vec[String] = Vec.new();
+    words.push("loopelem-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    let mut sink: Vec[String] = Vec.new();
+    for w in words {
+        sink.push(w);
+    }
+    let mut w = String.new();
+    w.push_str("rebound-owned-bbbbbbbbbbbbbbbbbbbbbbbb");
+    sink.push(w);
+    println(sink.len());
+}

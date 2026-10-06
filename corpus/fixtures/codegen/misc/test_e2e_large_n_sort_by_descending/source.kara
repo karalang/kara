@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 80 {
+        v.push((i * 53 + 7) % 80);
+        i = i + 1;
+    }
+    v.sort_by(|a, b| b.cmp(a));
+    let mut bad: i64 = 0;
+    let mut prev: i64 = 1000000;
+    for x in v.iter() {
+        if x > prev { bad = bad + 1; }
+        prev = x;
+    }
+    println(bad);
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/arrays.rs::e2e_shadowed_array_local_returned_is_dropped_once"
+dedup_of = ["tests/memory_sanitizer/arrays.rs::asan_shadowed_array_local_returned_is_dropped_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

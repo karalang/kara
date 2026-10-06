@@ -1,0 +1,1 @@
+unsafe extern "C" { fn memset(p: *mut u8, c: i32, n: usize); } fn main() {}

@@ -1,0 +1,6 @@
+
+fn main() {
+    Stdout.print("x");
+    Stdout.flush();
+    Stdout.println("y");
+}

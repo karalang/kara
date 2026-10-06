@@ -1,0 +1,21 @@
+
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+layout entities: Vec[Entity] {
+    group pos { x, y }
+    group vel { vx }
+    cold { vy }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5 {
+        entities.push(Entity { x: i, y: i + 1, vx: i + 2, vy: i + 3 });
+        i = i + 1;
+    }
+    let e = entities[4];
+    println(e.x);
+    println(e.y);
+    println(e.vx);
+    println(e.vy);
+    println(entities[2].vy);
+}

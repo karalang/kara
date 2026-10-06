@@ -1,0 +1,15 @@
+
+#[derive(Message)]
+struct Bag { flags: Vec[bool], tags: Vec[String], blobs: Vec[Vec[u8]] }
+
+fn main() {
+    let b = Bag { flags: [true, false, true], tags: ["a", "bb"], blobs: [[1u8, 2u8], [9u8]] };
+    let back = Bag.decode(b.encode());
+    println(back.flags[0]);
+    println(back.flags[2]);
+    println(back.tags[0]);
+    println(back.tags[1]);
+    println(back.blobs.len());
+    println(back.blobs[0].len());
+    println(back.blobs[1][0]);
+}

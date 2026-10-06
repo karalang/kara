@@ -1,0 +1,13 @@
+
+shared struct Node { v: i64, tag: String }
+
+fn make(k: i64) -> Node { return Node { v: k, tag: "held".to_string() }; }
+
+fn main() {
+    println({ let n = make(1); n }.v);
+    let c = true;
+    println(if c { make(2) } else { make(3) }.v);
+    let b = make(4);
+    println(b.v);
+    println(b.tag);
+}

@@ -1,0 +1,11 @@
+fn other(x: Option[Vec[String]]) -> i64 { return 1 }
+fn otherR(y: Result[Vec[String], String]) -> i64 { return 2 }
+fn main() {
+    let x: i64 = 7;
+    println(f"{x}");
+    let y: i64 = 8;
+    println(f"{y}");
+    let n: Option[Vec[String]] = None;
+    let e: Result[Vec[String], String] = Err("e");
+    println(f"{other(n)}{otherR(e)}");
+}

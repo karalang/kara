@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.reserve_exact(7);
+    println(f"{v.capacity() >= 8} {v.len()}");
+    v.reserve(-5);
+    v.reserve(0);
+    println(f"{v.len()} {v[0]}");
+}

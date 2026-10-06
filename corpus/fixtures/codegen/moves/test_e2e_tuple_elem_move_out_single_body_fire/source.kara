@@ -1,0 +1,20 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("struct-elem:");
+    {
+        let t = (Res { id: 1, name: f"a{1}" }, Res { id: 2, name: f"bb{2}" });
+        let x = t.0;
+        println(t.1.id);
+    }
+    println("option-elem:");
+    {
+        let t = (Option.Some(Res { id: 3, name: f"ccc{3}" }), 30);
+        let x = t.0;
+        println(t.1);
+    }
+    println("end");
+}

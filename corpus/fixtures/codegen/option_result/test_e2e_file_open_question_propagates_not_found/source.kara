@@ -1,0 +1,14 @@
+
+fn try_open(path: String) -> Result[i64, IoError] with reads(FileSystem) {
+    let _f = File.open(path)?;
+    Ok(0_i64)
+}
+fn main() with reads(FileSystem) {
+    match try_open("/nonexistent_karac_f5_test.txt") {
+        Ok(_) => println("unexpected-ok"),
+        Err(e) => match e {
+            IoError.NotFound => println("propagated-NotFound"),
+            _ => println("propagated-other"),
+        },
+    }
+}

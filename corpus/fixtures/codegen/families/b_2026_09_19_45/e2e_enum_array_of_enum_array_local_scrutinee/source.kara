@@ -1,0 +1,10 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  drop {self.id}") } }
+enum Mono { P(R), Q }
+fn mk(i: i64) -> R { R { id: i, s: f"ssssssss{i}" } }
+fn main() {
+    { let a: Array[Mono, 1] = [Mono.P(mk(4))]; match a[0] { Mono.P(r) => println(f"  in {r.id}"), Mono.Q => println("  q") }; println("  after"); }
+    { let a: Array[Mono, 2] = [Mono.Q, Mono.P(mk(5))]; match a[0] { Mono.P(r) => println(f"  in {r.id}"), Mono.Q => println("  q") }; println("  after"); }
+    { let a: Array[Mono, 2] = [Mono.P(mk(6)), Mono.P(mk(7))]; match a[1] { Mono.P(_) => println("  in"), Mono.Q => println("  q") }; println("  after"); }
+    println("end")
+}

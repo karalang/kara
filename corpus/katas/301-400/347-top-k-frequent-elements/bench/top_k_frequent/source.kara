@@ -1,0 +1,87 @@
+// Benchmark harness for LeetCode #347 — scalar-keyed Map approach.
+//
+// Build-once + punch (BENCHMARKS.md): the array is built once, then each punch
+// mutates a single element and re-runs the whole tally + keys() walk +
+// (count desc, key asc) insertion sort. Rebuilding the array per iteration
+// would be a vectorizable refill loop that swamps the measurement.
+//
+// The distribution is skewed (every 5th slot draws from a 13-key pool) so the
+// top-k answer is well defined rather than an arbitrary tie.
+
+fn top_k_frequent(nums: ref Vec[i64], k: i64) -> Vec[i64] {
+    let mut counts: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < nums.len() {
+        let v = nums[i];
+        let n = match counts.get(v) { Some(c) => c, None => 0 };
+        let _ = counts.insert(v, n + 1);
+        i = i + 1;
+    }
+
+    let mut vals: Vec[i64] = Vec.new();
+    for v in counts.keys() {
+        vals.push(v);
+    }
+
+    let mut a = 1;
+    while a < vals.len() {
+        let cur = vals[a];
+        let cur_c = match counts.get(cur) { Some(c) => c, None => 0 };
+        let mut b = a - 1;
+        while b >= 0 {
+            let prev = vals[b];
+            let prev_c = match counts.get(prev) { Some(c) => c, None => 0 };
+            let mut shift = false;
+            if prev_c < cur_c { shift = true; }
+            if prev_c == cur_c {
+                if prev > cur { shift = true; }
+            }
+            if not shift { break; }
+            vals[b + 1] = prev;
+            b = b - 1;
+        }
+        vals[b + 1] = cur;
+        a = a + 1;
+    }
+
+    let mut limit = k;
+    if vals.len() < limit { limit = vals.len(); }
+    let mut out: Vec[i64] = Vec.new();
+    let mut t = 0;
+    while t < limit {
+        out.push(vals[t]);
+        t = t + 1;
+    }
+    out
+}
+
+fn main() {
+    let n = 8000;
+    let d = 200;
+    let iters = 300;
+    let k = 10;
+
+    let mut bs: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut v = i % d;
+        if i % 5 == 0 { v = i % 13; }
+        bs.push(v);
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let p = (it * 7919) % n;
+        bs[p] = (it * 37) % d;
+        let got = top_k_frequent(bs, k);
+        let mut j = 0;
+        while j < got.len() {
+            sink = sink + got[j];
+            j = j + 1;
+        }
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

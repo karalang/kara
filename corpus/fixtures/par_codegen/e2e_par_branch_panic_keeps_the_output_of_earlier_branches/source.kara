@@ -1,0 +1,41 @@
+fn patches(nums: ref Vec[i64], n: i64) -> i64 {
+    let mut miss = 1;
+    let mut i = 0;
+    let mut count = 0;
+    while miss <= n {
+        if i < nums.len() and nums[i] <= miss {
+            miss += nums[i];
+            i += 1;
+        } else {
+            miss += miss;
+            count += 1;
+        }
+    }
+    return count;
+}
+fn spread(nums: ref Vec[i64], d: i64) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < nums.len() {
+        s += nums[i] / d;
+        i += 1;
+    }
+    return s;
+}
+fn show(nums: ref Vec[i64], n: i64) {
+    println(f"{nums} n={n} -> {patches(nums, n)}");
+}
+fn cut(nums: ref Vec[i64], d: i64) {
+    println(f"{nums} d={d} -> {spread(nums, d)}");
+}
+fn main() {
+    let v: Vec[i64] = [1, 5, 10];
+    println("start");
+    show(v, 20);
+    cut(v, 3);
+    show(v, 7);
+    cut(v, 0);
+    show(v, 4611686018427387904);
+    show(v, 9);
+    println("end");
+}

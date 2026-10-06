@@ -1,0 +1,13 @@
+source = "tests/codegen/attrs_ir.rs::test_e2e_user_drop_fires_once_for_inline_temp_call_arg"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

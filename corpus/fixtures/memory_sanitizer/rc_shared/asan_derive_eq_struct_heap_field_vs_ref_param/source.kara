@@ -1,0 +1,10 @@
+
+#[derive(Eq)]
+struct P { name: String }
+fn mk(s: ref String) -> P { P { name: s.substring(0, 4) } }
+fn f(hay: ref String, other: ref P) -> bool { mk(hay) == other }
+fn main() {
+    let h = "abcdefgh";
+    let p = P { name: "abcd" };
+    println(f"{f(h, p)}");
+}

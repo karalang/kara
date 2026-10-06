@@ -1,0 +1,35 @@
+
+fn mkA(n: i64) -> String { return f"AAAAAAAAAAAAAA{n}"; }
+fn mkB(n: i64) -> String { return f"BBBBBBBBBBBBBB{n}"; }
+
+fn main() {
+    let t1 = mkB(1);
+    let mut s1 = mkA(2);
+    s1 = { t1 };
+    println(f"s1={s1}");
+
+    let t2: Vec[i64] = vec![10, 20, 30];
+    let mut s2: Vec[i64] = vec![1, 2, 3, 4, 5];
+    s2 = { t2 };
+    println(f"s2len={s2.len()} s2head={s2[0]}");
+
+    let mut s3 = mkA(3);
+    s3 = { s3 };
+    println(f"s3={s3}");
+
+    let mut s4 = mkA(4);
+    s4 = mkB(4);
+    let t5 = mkB(5);
+    let mut s5 = mkA(5);
+    s5 = t5;
+    println(f"s4={s4} s5={s5}");
+
+    let mut acc = mkA(0);
+    let mut i = 1;
+    while i < 6 {
+        let ti = mkA(i * 100);
+        acc = { ti };
+        i = i + 1;
+    }
+    println(f"acc={acc}");
+}

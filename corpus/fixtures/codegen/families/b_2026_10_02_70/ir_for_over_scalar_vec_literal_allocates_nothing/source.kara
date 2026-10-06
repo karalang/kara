@@ -1,0 +1,10 @@
+fn walk(r: i64, c: i64) -> i64 {
+    let mut s = 0;
+    for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        s = s * 10 + (r + dr) * 3 + (c + dc);
+    }
+    return s;
+}
+fn main() {
+    println(f"{walk(2, 3)}");
+}

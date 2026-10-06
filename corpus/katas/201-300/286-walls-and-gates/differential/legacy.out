@@ -1,0 +1,11 @@
+grids                1296
+cells                15876
+bfs disagreements    0
+enum disagreements   0
+dfs disagreements    0
+relaxation violations 0
+grids w/ unreachable 659
+unreachable cells    2731
+bfs relaxations      6373
+dfs relaxations      25075
+digest               514667302

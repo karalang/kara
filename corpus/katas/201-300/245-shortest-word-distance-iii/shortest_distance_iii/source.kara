@@ -1,0 +1,80 @@
+// LeetCode 245 — Shortest Word Distance III. (Premium.)
+//
+// #243 with one constraint dropped: `word1` and `word2` may be the SAME word,
+// and then they mean two DIFFERENT occurrences of it. That single change breaks
+// #243's two-last-seen-indices scan, because its two branches are `else if` —
+// mutually exclusive on the assumption that a slot can match at most one of the
+// requested words. When both words are "makes", every hit matches both, and the
+// second branch never runs.
+//
+// The unified fix is to stop tracking two variables and track ONE: the last
+// index that matched EITHER word. A new match pairs with that predecessor
+// whenever the two are genuinely a valid pair, which is exactly:
+//
+//   * the same-word case — every consecutive pair of occurrences is valid; or
+//   * the different-word case — valid only when the predecessor held the OTHER
+//     word, i.e. `words[prev] != words[i]`.
+//
+// One pass, O(1) space, no special-casing of the two problems into separate
+// loops, and it degenerates to #243's answer when the words differ. The price
+// is one extra `String` comparison per matched slot (`words[prev] != words[i]`)
+// — paid only on hits, not on every slot.
+//
+// `best` starts at the list length rather than a sentinel: the list has that
+// many slots, so no two distinct positions can be that far apart. It is a
+// genuine upper bound that doubles as the "no such pair" answer with no
+// separate found flag — the same convention as #243 and #244, which is why
+// `["one","two","three"]` queried for "two" against itself is in the test set
+// (one occurrence, so no pair exists).
+
+fn shortest_word_distance(words: ref Slice[String], word1: ref String, word2: ref String) -> i64 {
+    let n = words.len();
+    let same = word1 == word2;
+    let mut best = n;
+    let mut prev = -1;
+    let mut i = 0;
+    while i < n {
+        if words[i] == word1 or words[i] == word2 {
+            if prev >= 0 and (same or words[prev] != words[i]) {
+                best = min(best, i - prev);
+            }
+            prev = i;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn report(words: ref Slice[String], word1: ref String, word2: ref String) {
+    println(f"{word1} <-> {word2} : {shortest_word_distance(words, word1, word2)}");
+}
+
+fn main() {
+    let d1: Array[String, 5] = ["practice", "makes", "perfect", "coding", "makes"];
+    report(d1, "makes", "coding");      // 1
+    report(d1, "makes", "makes");       // 3  — indices 1 and 4
+    report(d1, "coding", "practice");   // 3
+
+    let d2: Array[String, 7] = ["a", "b", "x", "x", "x", "a", "b"];
+    report(d2, "a", "b");               // 1
+    report(d2, "a", "a");               // 5
+    report(d2, "x", "x");               // 1  — adjacent occurrences
+    report(d2, "b", "b");               // 5
+
+    let d3: Array[String, 2] = ["a", "b"];
+    report(d3, "a", "b");               // 1
+
+    let d4: Array[String, 6] = ["p", "q", "p", "q", "p", "q"];
+    report(d4, "p", "q");               // 1
+    report(d4, "p", "p");               // 2
+
+    let d5: Array[String, 6] = ["m", "z", "z", "z", "n", "m"];
+    report(d5, "m", "m");               // 5
+    report(d5, "z", "z");               // 1
+    report(d5, "m", "n");               // 1
+
+    // One occurrence, so no pair exists and `best` stays at the upper bound.
+    let d6: Array[String, 3] = ["one", "two", "three"];
+    report(d6, "two", "two");           // 3
+    report(d6, "two", "four");          // 3
+}

@@ -1,0 +1,19 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let mut v: Vec[String] = Vec[
+            "nested-idx-bind-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "nested-idx-bind-bravo-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "nested-idx-bind-charlie-cccccccccccccccccc".to_string(),
+            "nested-idx-bind-delta-dddddddddddddddddddd".to_string()
+        ];
+        let m: Vec[Vec[String]] = v.iter().chunks(2i64).collect();
+        let r0: Vec[String] = m[0i64].clone();
+        let r1: Vec[String] = m[1i64].clone();
+        let a: String = r0[0i64].clone();
+        let b: String = r1[1i64].clone();
+        println(f"{a} {b} {m.len()} {v.len()}");
+        round = round + 1i64;
+    }
+}

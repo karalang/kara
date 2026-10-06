@@ -1,0 +1,10 @@
+fn main() {
+         let p = Parser.new("greet")
+             .about("Greets a name")
+             .arg("--name", Arg.string().required())
+             .flag("--verbose", short: 'v', help: "verbose");
+         println(p.program_name);
+         println(p.about_text);
+         println(p.args.len());
+         println(p.flags.len());
+     }

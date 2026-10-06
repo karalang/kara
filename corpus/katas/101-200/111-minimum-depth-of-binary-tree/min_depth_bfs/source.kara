@@ -1,0 +1,105 @@
+// LeetCode #111: Minimum Depth of Binary Tree — BFS, stop at the first leaf.
+//
+// Because breadth-first search reaches nodes in nondecreasing depth order, the FIRST leaf it
+// encounters is at the minimum depth — so the natural BFS reads the answer off directly and
+// returns the moment it dequeues a node with no children, never exploring deeper. Hold each
+// level as a `Vec[TreeNode]` frontier, bump the depth per level, and short-circuit on the first
+// leaf. A distinct mechanism from the recursive min recurrence (an early-terminating level
+// queue vs a full post-order), landing on the identical number — and it exercises returning
+// early while the `Vec[shared]` frontiers still hold residual nodes (the residual-worklist drop
+// surface of kata [#100](../../1-100/100-same-tree/), now clean). Node type mirrors kata
+// [#104](../104-maximum-depth-of-binary-tree/) — a `shared struct TreeNode` (RC).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+fn min_depth(root: Option[TreeNode]) -> i64 {
+    let mut depth = 0;
+    let mut current: Vec[TreeNode] = Vec.new();
+    match root {
+        None => {}
+        Some(n) => { current.push(n); }
+    }
+    while current.len() > 0 {
+        depth = depth + 1;
+        let mut next: Vec[TreeNode] = Vec.new();
+        let mut i = 0;
+        while i < current.len() {
+            let node = current[i];
+            match node.left {
+                None => {
+                    match node.right {
+                        None => { return depth; }   // leaf reached at the minimum depth
+                        Some(r) => { next.push(r); }
+                    }
+                }
+                Some(l) => {
+                    next.push(l);
+                    match node.right {
+                        None => {}
+                        Some(r) => { next.push(r); }
+                    }
+                }
+            }
+            i = i + 1;
+        }
+        current = next;
+    }
+    depth
+}
+
+fn build_balanced(lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: mid, left: None, right: None };
+    node.left = build_balanced(lo, mid - 1);
+    node.right = build_balanced(mid + 1, hi);
+    Some(node)
+}
+
+fn build_chain(len: i64) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    let mut i = 0;
+    while i < len {
+        root = insert(root, i);
+        i = i + 1;
+    }
+    root
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        let n = 7 + t;
+        let root = if (t % 2) == 0 {
+            build_balanced(0, n - 1)
+        } else {
+            build_chain(n)
+        };
+        let d = min_depth(root);
+        acc = (acc * 131 + d + 1) % 1000000007;
+        println(f"tree {t}: min_depth {d}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

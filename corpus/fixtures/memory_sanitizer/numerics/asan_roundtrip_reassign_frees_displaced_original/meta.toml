@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/numerics.rs::asan_roundtrip_reassign_frees_displaced_original"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,50 @@
+// LeetCode 233 — Number of Digit One.
+//
+// Count the total number of times the digit '1' appears across ALL non-negative
+// integers from 0 to n (e.g. n=13 -> 1,10,11,12,13 contribute 6 ones).
+//
+// Counting per digit position beats enumerating every number (O(log n) vs O(n)).
+// For each place value `pos` (1, 10, 100, …), split n around that digit:
+//   high = n / (pos*10)   cur = (n / pos) % 10   low = n % pos
+// The count of 1s contributed at this position is:
+//   cur == 0 -> high * pos                 (full high cycles only)
+//   cur == 1 -> high * pos + low + 1       (a partial cycle: 0..low at this 1)
+//   cur >= 2 -> (high + 1) * pos           (this digit's 1-block is fully covered)
+// Summed over every position, that's the answer.
+
+fn count_digit_one(n: i64) -> i64 {
+    if n < 0 { return 0; }
+    let mut count = 0;
+    let mut pos = 1;
+    while pos <= n {
+        let high = n / (pos * 10);
+        let cur = (n / pos) % 10;
+        let low = n % pos;
+        if cur == 0 {
+            count = count + high * pos;
+        } else if cur == 1 {
+            count = count + high * pos + low + 1;
+        } else {
+            count = count + (high + 1) * pos;
+        }
+        pos = pos * 10;
+    }
+    return count;
+}
+
+fn report(n: i64) {
+    println(count_digit_one(n));
+}
+
+fn main() {
+    report(13);           // 6
+    report(0);            // 0
+    report(1);            // 1
+    report(10);           // 2
+    report(20);           // 12
+    report(99);           // 20
+    report(100);          // 21
+    report(1024);         // 338
+    report(999999999);    // 900000000
+    report(1000000000);   // 900000001
+}

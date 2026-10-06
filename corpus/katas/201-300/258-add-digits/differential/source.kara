@@ -1,0 +1,113 @@
+// LeetCode 258 — differential harness.
+//
+// Runs all THREE forms over an EXHAUSTIVE sweep: the `% 10` simulation, the
+// O(1) closed form, and the digit sum taken over the rendered text.
+//
+// Exhaustive, not sampled, and that is the whole design. The closed form's risk
+// is not a random wrong answer — it is being wrong on a REGULAR SUBSET, and the
+// most likely such subset is the multiples of nine, where the tempting `num % 9`
+// spelling returns 0 instead of 9. A uniform random draw hits multiples of nine
+// about a ninth of the time and would find that, but a subtler off-by-one (say a
+// wrong residue only at 9k+1) could easily be missed. Sweeping every value in a
+// contiguous range cannot miss any residue class.
+//
+// The three forms are chosen so agreement means something. The simulation and a
+// recursive twin would both rest on the same `% 10` loop — one computation
+// checked against itself. The text form shares no arithmetic with either, so
+// three-way agreement across the sweep is a real check of the congruence, not a
+// restatement of it.
+//
+// The sweep also covers the boundary values the closed form treats specially:
+// 0 itself, and every multiple of nine in range.
+
+fn add_digits_loop(num: i64) -> i64 {
+    let mut n = num;
+    while n >= 10 {
+        let mut sum = 0;
+        while n > 0 {
+            sum = sum + n % 10;
+            n = n / 10;
+        }
+        n = sum;
+    }
+    return n;
+}
+
+fn add_digits_formula(num: i64) -> i64 {
+    if num == 0 {
+        return 0;
+    }
+    return 1 + (num - 1) % 9;
+}
+
+fn digit_sum_via_text(n: i64) -> i64 {
+    let s: String = f"{n}";
+    let b = s.bytes();
+    let mut sum = 0;
+    let mut i = 0;
+    while i < b.len() {
+        sum = sum + ((b[i] as i64) - 48);
+        i = i + 1;
+    }
+    return sum;
+}
+
+fn add_digits_bytes(num: i64) -> i64 {
+    let mut n = num;
+    while n >= 10 {
+        n = digit_sum_via_text(n);
+    }
+    return n;
+}
+
+fn main() {
+    let hi = 300000;
+
+    let mut mismatches = 0;
+    let mut nines = 0;      // inputs whose answer is 9 — the risky class
+    let mut zeros = 0;
+    let mut digest = 0;
+
+    let mut n = 0;
+    while n <= hi {
+        let a = add_digits_loop(n);
+        let b = add_digits_formula(n);
+        let c = add_digits_bytes(n);
+
+        if a != b or a != c {
+            mismatches = mismatches + 1;
+        }
+        if a == 9 {
+            nines = nines + 1;
+        }
+        if a == 0 {
+            zeros = zeros + 1;
+        }
+        digest = (digest * 131 + a) % 1000000007;
+        n = n + 1;
+    }
+
+    // Spot-check the far end of the range too, where the simulation needs three
+    // passes and the closed form still needs one.
+    let mut big = 9223372036854775807;
+    let mut k = 0;
+    let mut big_mismatch = 0;
+    while k < 500 {
+        let a = add_digits_loop(big);
+        let b = add_digits_formula(big);
+        let c = add_digits_bytes(big);
+        if a != b or a != c {
+            big_mismatch = big_mismatch + 1;
+        }
+        digest = (digest * 131 + a) % 1000000007;
+        big = big - 7919; // a prime stride, so residues mod 9 all get hit
+        k = k + 1;
+    }
+
+    println(f"swept 0..{hi}");
+    println(f"answer==9 {nines}");
+    println(f"answer==0 {zeros}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+    println(f"high-range mismatches {big_mismatch}");
+}

@@ -1,0 +1,124 @@
+// LeetCode 347 — Top K Frequent Elements, bounded-heap form.
+//
+// The sibling `top_k_frequent.kara` tallies into a Map, then insertion-sorts
+// every distinct value by (count desc, value asc) and slices the first k — O(d²)
+// in the number of distinct values. This one keeps a `PriorityQueue` holding at
+// most k candidates and evicts the weakest each time it overflows: O(d log k)
+// time in O(k) space, the form that scales when d is large and k is small.
+//
+// THE ORDER IS THE INTERESTING PART, and it is why this kata needs a
+// user-defined `Ord` rather than the scalar queues the corpus has used so far.
+// The answer wants (count DESC, value ASC). The eviction candidate is therefore
+// the entry with the SMALLEST count, and among equal counts the LARGEST value —
+// two fields disagreeing on direction, which no derived ordering can express
+// (a derive compares fields in declaration order, all ascending).
+//
+// `PriorityQueue[(i64, i64)]` would be the obvious spelling and DOES NOT
+// COMPILE: tuples answer `<` but do not implement `Ord`, so the bound is
+// unsatisfied. Filed as a compiler gap; see the kara repo's ledger. The other
+// way around it — storing `-value` so a derived ascending order comes out right
+// — is the negation trick [#295](../../201-300/295-find-median-from-data-stream/)
+// rejects, because `-i64.MIN` overflows and Kāra traps overflow by default.
+// So `Weakest` spells the comparison out instead, and the full
+// PartialEq/Eq/PartialOrd/Ord chain is written by hand.
+//
+// Draining a smallest-first queue yields weakest-to-strongest, which is the
+// answer reversed — so `into_sorted_vec()` then a reverse walk is the whole
+// output step.
+
+struct Weakest { count: i64, value: i64 }
+
+impl PartialEq for Weakest {
+    fn eq(ref self, other: ref Weakest) -> bool {
+        self.count == other.count and self.value == other.value
+    }
+}
+
+impl Eq for Weakest {}
+
+impl PartialOrd for Weakest {
+    fn partial_cmp(ref self, other: ref Weakest) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Weakest {
+    // Weakest-first: lower count is weaker; on a tie the LARGER value is
+    // weaker, because the answer breaks count ties by value ascending.
+    fn cmp(ref self, other: ref Weakest) -> Ordering {
+        let by_count = self.count.cmp(other.count);
+        match by_count {
+            Ordering.Equal => other.value.cmp(self.value),
+            _ => by_count,
+        }
+    }
+}
+
+fn top_k_frequent(nums: ref Vec[i64], k: i64) -> Vec[i64] {
+    let mut counts: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < nums.len() {
+        let v = nums[i];
+        let n = match counts.get(v) { Some(c) => c, None => 0 };
+        let _ = counts.insert(v, n + 1);
+        i = i + 1;
+    }
+
+    // Keep at most k candidates; the root is always the one to drop next.
+    let mut best: PriorityQueue[Weakest] = PriorityQueue.new();
+    for v in counts.keys() {
+        let c = match counts.get(v) { Some(c) => c, None => 0 };
+        best.push(Weakest { count: c, value: v });
+        if best.len() > k {
+            let _evicted = best.pop();
+        }
+    }
+
+    // Ascending is weakest-first, so the answer is this reversed.
+    let ranked = best.into_sorted_vec();
+    let mut out: Vec[i64] = Vec.new();
+    let mut j = ranked.len() - 1;
+    while j >= 0 {
+        out.push(ranked[j].value);
+        j = j - 1;
+    }
+    out
+}
+
+fn show(nums: ref Vec[i64], k: i64) {
+    let got = top_k_frequent(nums, k);
+    let mut s = "";
+    let mut i = 0;
+    while i < got.len() {
+        if i > 0 { s = s + ","; }
+        s = s + f"{got[i]}";
+        i = i + 1;
+    }
+    println(f"k={k} -> [{s}]");
+}
+
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1); a.push(1); a.push(1); a.push(2); a.push(2); a.push(3);
+    show(a, 2);
+
+    let mut b: Vec[i64] = Vec.new();
+    b.push(1);
+    show(b, 1);
+
+    // Negative values, and a count tie broken by value ascending.
+    let mut c: Vec[i64] = Vec.new();
+    c.push(4); c.push(1); c.push(-1); c.push(2);
+    c.push(-1); c.push(2); c.push(3);
+    show(c, 2);
+
+    // All counts equal — pure value-ascending tie-break.
+    let mut d: Vec[i64] = Vec.new();
+    d.push(5); d.push(5); d.push(4); d.push(4); d.push(3); d.push(3);
+    show(d, 3);
+
+    // k larger than the number of distinct values.
+    let mut e: Vec[i64] = Vec.new();
+    e.push(7); e.push(7); e.push(8);
+    show(e, 5);
+}

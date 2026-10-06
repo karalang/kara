@@ -1,0 +1,9 @@
+struct S { n: i64, s: String }
+struct G[T] { k: T }
+impl[T] G[T] {
+    fn mk() -> Array[S, 2] { return [S { n: 1, s: f"aaaaaaaaaaaaaaaaaaaaaaaaaaa{1}" }, S { n: 2, s: f"bbbbbbbbbbbbbbbbbbbbbbbbbbbb{2}" }] }
+}
+fn main() {
+    let b = G[i64].mk();
+    println(f"y{b[0].n}{b[0].s}{b[1].s}");
+}

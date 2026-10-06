@@ -1,0 +1,9 @@
+
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn use_t(t: (Fn(i64) -> i64, String)) -> i64 { (t.0)(1i64) }
+fn main() {
+    let a = (make(10i64), "an independently long heap string payload here");
+    let r = use_t(a);
+    println(f"{r + (a.0)(2i64)}");
+    println(a.1);
+}

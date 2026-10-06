@@ -1,0 +1,10 @@
+
+fn main() {
+    let base = 2.5;
+    let total = par {
+        let x = base + 1.0;
+        let y = base * 2.0;
+        x + y
+    };
+    println(total);
+}

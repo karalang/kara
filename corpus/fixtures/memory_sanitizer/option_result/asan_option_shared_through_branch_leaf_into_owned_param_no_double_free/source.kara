@@ -1,0 +1,22 @@
+
+shared struct Node { val: i64 }
+fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }
+fn take(t: Option[Node]) -> i64 {
+    match t { None => { return 0; } Some(n) => { return n.val; } }
+}
+fn main() {
+    let mut s = 0i64;
+    let mut total = 0i64;
+    while s < 8i64 {
+        let a = make(s);
+        total = total + take(if s == 0i64 { a } else { a });
+        let b = make(s);
+        total = total + take(match s { 0 => b, _ => b });
+        let c = make(s);
+        total = total + take({ c });
+        let d = make(s);
+        total = total + take(if s < 4i64 { d } else { make(100i64) });
+        s = s + 1i64;
+    }
+    println(total);
+}

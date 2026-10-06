@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_09_20_22.rs::asan_shared_field_payload_view_moved_on_runs_its_body_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

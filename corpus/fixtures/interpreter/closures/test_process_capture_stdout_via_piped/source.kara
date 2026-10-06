@@ -1,0 +1,21 @@
+fn main() {
+         let cmd = Command.new("/bin/echo").arg("hello-pipe").stdout(Stdio.Piped);
+         match cmd.spawn() {
+             Ok(child) => {
+                 match child.stdout() {
+                     Some(out) => {
+                         match out.read_to_string() {
+                             Ok(s) => print(s),
+                             Err(_) => println("read_err"),
+                         }
+                     }
+                     None => println("no_stdout"),
+                 }
+                 match child.wait() {
+                     Ok(_) => {}
+                     Err(_) => println("wait_err"),
+                 }
+             }
+             Err(_) => println("spawn_err"),
+         }
+     }

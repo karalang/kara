@@ -1,0 +1,286 @@
+// LeetCode 250 — differential harness.
+//
+// Builds randomized trees and runs all FOUR solvers over each one: the post-order
+// recursion (★), the explicit-stack iteration, the reverse index scan, and the
+// pure struct-returning twin. Any disagreement is a bug in one of them — or in
+// the compiler.
+//
+// Two deliberate choices in the generator, both load-bearing:
+//
+//   * The value alphabet is TINY (2-3 distinct values). Draw values uniformly
+//     from a wide range and almost every internal node is broken by one of its
+//     children, so the count collapses to "number of leaves" and the combining
+//     path — the actual subject of this problem — barely runs. A small alphabet
+//     makes uni-value subtrees COMMON, so the interesting branch is the hot one.
+//
+//   * The null density is tuned so trees are ragged, not full. Full trees never
+//     exercise the `left == -1` / `right == -1` half-present cases, which is
+//     precisely where the "an absent child never breaks its parent" rule lives.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn build(vals: ref Vec[i64], null_val: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let len = vals.len();
+    if len == 0 or vals[0] == null_val {
+        return nodes;
+    }
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < len {
+        let cur = queue[head];
+        head = head + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let li = nodes.len() - 1;
+            nodes[cur].left = li;
+            queue.push(li);
+        }
+        i = i + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let ri = nodes.len() - 1;
+            nodes[cur].right = ri;
+            queue.push(ri);
+        }
+        i = i + 1;
+    }
+    return nodes;
+}
+
+// ---- solver 1: post-order recursion --------------------------------------
+
+fn is_uni(nodes: ref Vec[Node], node: i64, total: mut ref i64) -> bool {
+    if node == -1 {
+        return true;
+    }
+    let left = nodes[node].left;
+    let right = nodes[node].right;
+    let left_uni = is_uni(nodes, left, total);
+    let right_uni = is_uni(nodes, right, total);
+    let mut ok = left_uni and right_uni;
+    if left != -1 and nodes[left].val != nodes[node].val {
+        ok = false;
+    }
+    if right != -1 and nodes[right].val != nodes[node].val {
+        ok = false;
+    }
+    if ok {
+        total = total + 1;
+    }
+    return ok;
+}
+
+fn count_rec(nodes: ref Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    let mut total: i64 = 0;
+    let root_uni = is_uni(nodes, 0, mut total);
+    let _ = root_uni;
+    return total;
+}
+
+// ---- solver 2: explicit-stack post-order ---------------------------------
+
+fn count_iter(nodes: ref Vec[Node]) -> i64 {
+    let n = nodes.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut uni: Vec[bool] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        uni.push(false);
+        k = k + 1;
+    }
+    let mut stack: Vec[i64] = Vec.new();
+    let mut expanded: Vec[bool] = Vec.new();
+    stack.push(0);
+    expanded.push(false);
+    let mut total = 0;
+    while stack.len() > 0 {
+        let node = match stack.pop() {
+            Some(v) => v,
+            None => -1,
+        };
+        let seen = match expanded.pop() {
+            Some(v) => v,
+            None => false,
+        };
+        if node == -1 {
+            continue;
+        }
+        if not seen {
+            stack.push(node);
+            expanded.push(true);
+            stack.push(nodes[node].right);
+            expanded.push(false);
+            stack.push(nodes[node].left);
+            expanded.push(false);
+            continue;
+        }
+        let left = nodes[node].left;
+        let right = nodes[node].right;
+        let mut ok = true;
+        if left != -1 {
+            if not uni[left] or nodes[left].val != nodes[node].val {
+                ok = false;
+            }
+        }
+        if right != -1 {
+            if not uni[right] or nodes[right].val != nodes[node].val {
+                ok = false;
+            }
+        }
+        uni[node] = ok;
+        if ok {
+            total = total + 1;
+        }
+    }
+    return total;
+}
+
+// ---- solver 3: reverse index scan ----------------------------------------
+
+fn count_scan(nodes: ref Vec[Node]) -> i64 {
+    let n = nodes.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut uni: Vec[bool] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        uni.push(false);
+        k = k + 1;
+    }
+    let mut total = 0;
+    let mut i = n - 1;
+    while i >= 0 {
+        let left = nodes[i].left;
+        let right = nodes[i].right;
+        let mut ok = true;
+        if left != -1 {
+            if not uni[left] or nodes[left].val != nodes[i].val {
+                ok = false;
+            }
+        }
+        if right != -1 {
+            if not uni[right] or nodes[right].val != nodes[i].val {
+                ok = false;
+            }
+        }
+        uni[i] = ok;
+        if ok {
+            total = total + 1;
+        }
+        i = i - 1;
+    }
+    return total;
+}
+
+// ---- solver 4: pure post-order, struct returned by value -----------------
+
+struct Verdict {
+    uni: bool,
+    count: i64,
+}
+
+fn tally(nodes: ref Vec[Node], node: i64) -> Verdict {
+    if node == -1 {
+        return Verdict { uni: true, count: 0 };
+    }
+    let left = nodes[node].left;
+    let right = nodes[node].right;
+    let l = tally(nodes, left);
+    let r = tally(nodes, right);
+    let mut ok = l.uni and r.uni;
+    if left != -1 and nodes[left].val != nodes[node].val {
+        ok = false;
+    }
+    if right != -1 and nodes[right].val != nodes[node].val {
+        ok = false;
+    }
+    let mut n = l.count + r.count;
+    if ok {
+        n = n + 1;
+    }
+    return Verdict { uni: ok, count: n };
+}
+
+fn count_pair(nodes: ref Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    return tally(nodes, 0).count;
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn main() {
+    let null = -1000;
+    let cases = 4000;
+
+    let mut state = 20250250;
+    let mut total_nodes = 0;
+    let mut total_uni = 0;
+    let mut all_uni_trees = 0;
+    let mut mismatches = 0;
+
+    let mut c = 0;
+    while c < cases {
+        // Tree shape: 1..48 slots in the level-order array.
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let slots = (state / 65536) % 48 + 1;
+
+        // Alphabet of 2 or 3 values, so uni-value subtrees are the common case.
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let alphabet = (state / 65536) % 2 + 2;
+
+        let mut vals: Vec[i64] = Vec.new();
+        let mut s = 0;
+        while s < slots {
+            state = (state * 1103515245 + 12345) % 2147483648;
+            let roll = (state / 65536) % 100;
+            // Root is never null (an empty tree is covered by the unit files);
+            // elsewhere ~28% nulls keeps the trees ragged.
+            if s > 0 and roll < 28 {
+                vals.push(null);
+            } else {
+                state = (state * 1103515245 + 12345) % 2147483648;
+                let v = (state / 65536) % alphabet;
+                vals.push(v);
+            }
+            s = s + 1;
+        }
+
+        let nodes = build(vals, null);
+        let a = count_rec(nodes);
+        let b = count_iter(nodes);
+        let d = count_scan(nodes);
+        let e = count_pair(nodes);
+
+        if a != b or a != d or a != e {
+            mismatches = mismatches + 1;
+        }
+        total_nodes = total_nodes + nodes.len();
+        total_uni = total_uni + a;
+        if nodes.len() > 0 and a == nodes.len() {
+            all_uni_trees = all_uni_trees + 1;
+        }
+        c = c + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"nodes {total_nodes}");
+    println(f"univalue {total_uni}");
+    println(f"all-univalue trees {all_uni_trees}");
+    println(f"mismatches {mismatches}");
+}

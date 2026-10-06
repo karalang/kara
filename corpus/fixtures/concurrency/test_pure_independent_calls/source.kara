@@ -1,0 +1,8 @@
+
+        fn a() -> i32 { 1 }
+        fn b() -> i32 { 2 }
+        fn main() {
+            let x = a();
+            let y = b();
+        }
+        

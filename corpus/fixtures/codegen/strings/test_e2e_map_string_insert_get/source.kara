@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("hello", 42_i64);
+    let v = m.get("hello");
+    match v {
+        Some(x) => println(x),
+        None => println(0_i64),
+    }
+    let v2 = m.get("world");
+    match v2 {
+        Some(x) => println(x),
+        None => println(0_i64),
+    }
+}

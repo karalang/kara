@@ -1,0 +1,18 @@
+
+struct P { word: String, n: i64 }
+struct Box2 { w: String, k: i64 }
+
+fn mkp() -> Vec[P] { return [P { word: f"a{1}", n: 1 }, P { word: f"b{2}", n: 2 }]; }
+
+fn main() {
+    let p = mkp();
+    // the unbound literal: it owns what it moved in
+    println(Box2 { w: p[0].word, k: 1 }.w);
+    println(Box2 { w: p[1].word, k: 2 }.k);
+    // the bound control
+    let b = Box2 { w: p[0].word, k: 3 };
+    println(b.w);
+    // the container is untouched
+    println(p[0].word);
+    println(p[1].word);
+}

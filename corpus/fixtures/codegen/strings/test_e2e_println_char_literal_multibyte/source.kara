@@ -1,0 +1,6 @@
+
+fn main() {
+    let c: char = '日';
+    println(c);
+    println(f"a={c}b");
+}

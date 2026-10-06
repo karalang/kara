@@ -1,0 +1,13 @@
+source = "tests/interpreter/attrs_ir.rs::test_interner_symbol_as_map_key"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

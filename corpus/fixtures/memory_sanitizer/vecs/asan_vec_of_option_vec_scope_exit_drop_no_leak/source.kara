@@ -1,0 +1,18 @@
+
+fn build(n: i64) -> Vec[Option[Vec[i64]]] {
+    let mut v: Vec[Option[Vec[i64]]] = Vec.new();
+    let mut inner: Vec[i64] = Vec.new();
+    inner.push(n);
+    inner.push(n + 1);
+    v.push(Some(inner));
+    v.push(None);
+    return v;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}

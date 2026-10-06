@@ -1,0 +1,1 @@
+fn main() { let a: (Array[Q, 1], i64) = ([Q { n: 5, s: f"hi{1}" }], 7); let k = a.0[0].s.len(); println(f"r:{k}") }

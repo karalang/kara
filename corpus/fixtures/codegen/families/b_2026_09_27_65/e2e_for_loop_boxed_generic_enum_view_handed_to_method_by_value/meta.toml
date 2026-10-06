@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_27_65.rs::e2e_for_loop_boxed_generic_enum_view_handed_to_method_by_value"
+dedup_of = ["tests/interpreter/families/b_2026_09_27_65.rs::interp_for_loop_boxed_generic_enum_view_handed_to_method_by_value", "tests/memory_sanitizer/families/b_2026_09_27_65.rs::asan_for_loop_boxed_generic_enum_view_handed_to_method_by_value"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

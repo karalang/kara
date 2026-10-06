@@ -1,0 +1,21 @@
+
+fn fst(c: Column[i64], i: i64) -> i64 { match c[i] { Some(v) => v, None => -1 } }
+fn main() {
+    let mut a: Column[i64] = Column.new();
+    a.push(10); a.push_null(); a.push(30);
+    let mut b: Column[i64] = Column.new();
+    b.push(1); b.push(2); b.push(3);
+    // chained col-col: a + b + b — the (a + b) intermediate is a fresh
+    // temp freed after the second op.
+    let s = a + b + b;
+    println(fst(s, 2));
+    // col-scalar + unary neg chain.
+    let m = -(a * 2);
+    println(fst(m, 0));
+    // comparison -> fresh Column[bool].
+    let eq = a == b;
+    println(eq.null_count());
+    // operands still usable (borrowed, not consumed).
+    println(a.null_count());
+    println(b.len());
+}

@@ -1,0 +1,5 @@
+
+fn main() {
+    let is_pos = |x: i64| x > 0;
+    println(is_pos(5));
+}

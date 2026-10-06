@@ -1,0 +1,27 @@
+
+struct S { m: Map[i64, i64] }
+struct Hz { z: Set[i64] }
+struct Ht { t: (Map[i64, i64], i64) }
+fn mkm() -> Map[i64, i64] { let mut m: Map[i64, i64] = Map.new(); m.insert(1, 10); m.insert(2, 20); return m; }
+fn mks() -> Set[i64] { let mut s: Set[i64] = Set.new(); s.insert(3); s.insert(4); return s; }
+fn main() {
+    // Map field bound to a local, no annotation.
+    let s = S { m: mkm() };
+    let mm = s.m;
+    println(mm.len().to_string());                  // 2
+    println(mm.get(1).unwrap_or(0).to_string());    // 10
+    // Mutation through the bound local (mutates the shared handle).
+    let s2 = S { m: mkm() };
+    let mut mm2 = s2.m;
+    mm2.insert(9, 90);
+    println(mm2.len().to_string());                 // 3
+    // Set field bound to a local.
+    let z = Hz { z: mks() };
+    let ss = z.z;
+    println(ss.len().to_string());                  // 2
+    println(ss.contains(3).to_string());            // true
+    // Map TUPLE element bound to a local.
+    let h = Ht { t: (mkm(), 7) };
+    let tm = h.t.0;
+    println(tm.len().to_string());                  // 2
+}

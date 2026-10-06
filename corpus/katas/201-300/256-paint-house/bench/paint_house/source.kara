@@ -1,0 +1,98 @@
+// Benchmark workload for LeetCode #256 — Paint House.
+//
+// Build-once + punch. One cost table of 150,000 houses is generated once, then
+// the rolling three-scalar DP sweeps it 800 times.
+//
+// The table is sized to stay CACHE-RESIDENT (150k x 24 B = 3.6 MB). An earlier
+// version used 4M houses, whose 93 MiB working set made the lane
+// memory-bandwidth-bound rather than a measure of the recurrence — the wrong
+// thing for a kata whose subject is dependent arithmetic. Rounds were raised to
+// keep total work comparable.
+//
+// Honest note on why that resize happened: it was made because 93 MiB measures
+// the memory system, not because it fixed measurement variance. It did not —
+// this host's run-to-run sigma for the same binary swings between 10% and 26%
+// regardless of working-set size, which is why the numbers below are
+// corroboration only.
+//
+// The costs are drawn so the adjacency constraint actually BINDS. A uniform draw
+// makes the cheapest colour differ between neighbours most of the time, so the
+// optimum degenerates towards "take each house's minimum" and the two `min2`
+// calls become predictable. Here one colour is cheap at long RUNS of consecutive
+// houses (the run length itself varies), so the optimum must repeatedly leave
+// the locally-cheapest colour — the comparisons stay data-dependent and neither
+// min branch predicts away.
+//
+// The recurrence is loop-carried through three scalars: each house reads the
+// previous house's three totals, so nothing vectorises and nothing reorders.
+// That makes this a pure dependent-arithmetic lane — no allocation in the punch
+// loop at all, which distinguishes it from the allocation-heavy (#254) and
+// push/pop (#255) lanes next door.
+//
+// i64 throughout: 4M houses at ~10^2 per house stays far inside range, and Kara
+// traps on overflow rather than wrapping, so a mis-sized workload would abort
+// rather than silently wrap.
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+fn main() {
+    let n = 150000;
+    let rounds = 800;
+
+    // ---- build once ------------------------------------------------------
+    let mut cost: Vec[(i64, i64, i64)] = Vec.new();
+    let mut state = 256256;
+    let mut cheap = 0;   // which colour is cheap in the current run
+    let mut run_left = 0;
+    let mut i = 0;
+    while i < n {
+        if run_left == 0 {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            run_left = (state / 65536) % 9 + 2;
+            state = (state * 1103515245 + 12345) & 2147483647;
+            cheap = (state / 65536) % 3;
+        }
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let lo = (state / 65536) % 10 + 1;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let m1 = (state / 65536) % 40 + 40;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let m2 = (state / 65536) % 40 + 40;
+        if cheap == 0 {
+            cost.push((lo, m1, m2));
+        } else if cheap == 1 {
+            cost.push((m1, lo, m2));
+        } else {
+            cost.push((m1, m2, lo));
+        }
+        run_left = run_left - 1;
+        i = i + 1;
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut a = cost[0].0;
+        let mut b = cost[0].1;
+        let mut c = cost[0].2;
+        let mut k = 1;
+        while k < n {
+            let n_a = cost[k].0 + min2(b, c);
+            let n_b = cost[k].1 + min2(a, c);
+            let n_c = cost[k].2 + min2(a, b);
+            a = n_a;
+            b = n_b;
+            c = n_c;
+            k = k + 1;
+        }
+        sink = (sink * 31 + min2(a, min2(b, c))) % 1000000007;
+        r = r + 1;
+    }
+    println(sink);
+}

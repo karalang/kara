@@ -1,0 +1,7 @@
+
+fn main() {
+    let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let b: Vector[i64, 4] = Vector[i64, 4](5, 6, 7, 8);
+    let c = a + b;
+    let _ = c[0];
+}

@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut src: Vec[(i64, String)] = Vec.new();
+    let s = f"p{1}";
+    src.push((1i64, s));
+    println(src[0].1);
+    println(src.len());
+}

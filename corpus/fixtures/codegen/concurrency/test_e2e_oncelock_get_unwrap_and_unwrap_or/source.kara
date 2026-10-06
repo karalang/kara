@@ -1,0 +1,9 @@
+
+fn main() {
+    let c: OnceLock[i64] = OnceLock.new();
+    let _s = c.set(7);
+    println(c.get().unwrap());
+    println(c.get().unwrap_or(0));
+    let d: OnceLock[i64] = OnceLock.new();
+    println(d.get().unwrap_or(42));
+}

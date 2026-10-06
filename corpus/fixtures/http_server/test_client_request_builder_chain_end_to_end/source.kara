@@ -1,0 +1,14 @@
+
+fn main() with sends(Network) receives(Network) {{
+    let url: String = "{url}";
+    let c = Client.new();
+    match c.request("GET", url).header("X-Trace-Id", "trace-zzz").send() {{
+        Ok(resp) => {{
+            println(resp.body());
+        }}
+        Err(e) => {{
+            println("ERR");
+            println(e.message());
+        }}
+    }}
+}}

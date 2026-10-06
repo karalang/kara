@@ -1,0 +1,90 @@
+// LeetCode 216 — Combination Sum III.
+//
+// Find all combinations of exactly `k` distinct digits from 1..9 that sum to
+// `n`. Each digit is used at most once, and each combination is listed in
+// ascending order; the set of combinations is emitted in lexicographic order.
+//
+// Backtracking over ascending digits. Carry the next digit to consider
+// (`start`), how many digits remain to place (`k`), and the remaining sum. At
+// each step try each digit `d` from `start` to 9: because digits only increase,
+// once `d` exceeds the remaining sum no later digit can fit, so the branch is
+// pruned. Placing `d` recurses with `start = d+1`, `k-1`, `remaining - d`; a leaf
+// with `k == 0` and `remaining == 0` is a valid combination and is snapshotted
+// into the result set.
+
+// A fresh owned copy of the current path (so the shared, still-mutating `path`
+// buffer isn't moved into the results).
+fn snapshot(path: ref Vec[i64]) -> Vec[i64] {
+    let mut copy: Vec[i64] = Vec.new();
+    let m = path.len();
+    let mut i = 0;
+    while i < m {
+        copy.push(path[i]);
+        i = i + 1;
+    }
+    return copy;
+}
+
+fn backtrack(
+    start: i64,
+    k: i64,
+    remaining: i64,
+    path: mut ref Vec[i64],
+    results: mut ref Vec[Vec[i64]],
+) {
+    if k == 0 {
+        if remaining == 0 {
+            results.push(snapshot(path));
+        }
+        return;
+    }
+    let mut d = start;
+    while d <= 9 {
+        if d > remaining { return; }        // ascending digits: no later d fits
+        path.push(d);
+        backtrack(d + 1, k - 1, remaining - d, path, results);
+        let _ = path.pop();
+        d = d + 1;
+    }
+}
+
+fn solve(k: i64, n: i64) -> Vec[Vec[i64]] {
+    let mut results: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    backtrack(1, k, n, mut path, mut results);
+    return results;
+}
+
+fn report(k: i64, n: i64) {
+    println(f"k={k} n={n}:");
+    let results = solve(k, n);
+    if results.len() == 0 {
+        println("  (none)");
+        return;
+    }
+    let mut r = 0;
+    while r < results.len() {
+        let combo = ref results[r];
+        let mut line: String = "  ";
+        let mut j = 0;
+        let mut first = true;
+        while j < combo.len() {
+            if first { first = false; } else { line.push_str(" "); }
+            line.push_str(f"{combo[j]}");
+            j = j + 1;
+        }
+        println(line);
+        r = r + 1;
+    }
+}
+
+fn main() {
+    report(3, 7);      // 1 2 4
+    report(3, 9);      // 1 2 6 / 1 3 5 / 2 3 4
+    report(4, 1);      // (none)
+    report(2, 18);     // (none) — max 8+9=17
+    report(1, 5);      // 5
+    report(3, 15);     // eight combinations
+    report(9, 45);     // 1 2 3 4 5 6 7 8 9
+    report(2, 6);      // 1 5 / 2 4
+}

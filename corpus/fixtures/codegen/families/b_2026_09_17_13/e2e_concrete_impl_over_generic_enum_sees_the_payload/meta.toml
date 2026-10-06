@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_17_13.rs::e2e_concrete_impl_over_generic_enum_sees_the_payload"
+dedup_of = ["tests/interpreter/families/b_2026_09_17_13.rs::test_concrete_impl_over_generic_enum_sees_the_payload", "tests/memory_sanitizer/families/b_2026_09_17_13.rs::asan_concrete_impl_over_generic_enum_sees_the_payload"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,18 @@
+
+            effect resource Network;
+
+            unsafe extern "C" {
+                fn karac_runtime_test_bind_and_print_port() -> i32;
+            }
+
+            pub fn karac_park_on_fd(fd: i32, direction: u8) with sends(Network) receives(Network) {}
+
+            fn main() {
+                let fd = karac_runtime_test_bind_and_print_port();
+                let dir: u8 = 0;
+                karac_park_on_fd(fd, dir);
+                println("WOKEN1");
+                karac_park_on_fd(fd, dir);
+                println("WOKEN2");
+            }
+        

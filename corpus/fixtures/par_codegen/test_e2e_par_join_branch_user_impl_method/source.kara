@@ -1,0 +1,14 @@
+
+struct Point { x: i64, y: i64 }
+impl Point {
+    fn magsq(self) -> i64 { self.x * self.x + self.y * self.y }
+}
+fn main() {
+    let p = Point { x: 3, y: 4 };
+    let total = par {
+        let a = p.magsq();
+        let b = 100;
+        a + b
+    };
+    println(total);
+}

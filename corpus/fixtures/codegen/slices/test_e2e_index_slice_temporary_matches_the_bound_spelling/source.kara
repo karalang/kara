@@ -1,0 +1,24 @@
+
+struct W { s: String }
+
+fn main() {
+    let s: String = "hello";
+    println(s.bytes()[1]);
+    println(f"b={s.bytes()[4]}");
+    let mut i = 0i64;
+    let mut sum = 0i64;
+    while i < 5i64 {
+        sum = sum + s.bytes()[i] as i64;
+        i = i + 1i64;
+    }
+    println(sum);
+    let v: Vec[i64] = [10, 20, 30];
+    println(v.as_slice()[2]);
+    println(c"abc".as_bytes()[2]);
+    let w = W { s: "hello" };
+    println(w.s.bytes()[3]);
+    let hs: Vec[String] = ["ab", "cd"];
+    println(hs.as_slice()[1]);
+    let b = s.bytes();
+    println(b[1]);
+}

@@ -1,0 +1,6 @@
+
+fn handle(s: TlsStream) {
+    let msg: String = "hello";
+    let _ = s.write(msg.bytes());
+}
+fn main() {}

@@ -1,0 +1,70 @@
+// LeetCode 252 — Meeting Rooms, pairwise.
+//
+// No sort at all: test every unordered pair directly. Two intervals overlap iff
+// `max(s1, s2) < min(e1, e2)` — the later start comes strictly before the
+// earlier end. O(n²), which is worse than the other two files and is the point:
+// it is the DEFINITION of the problem transcribed, so it depends on no ordering
+// argument and no sweep invariant.
+//
+// That makes it the differential's reference. When three implementations
+// disagree, the one whose correctness rests on the fewest assumptions is the one
+// to believe, and this is it.
+//
+// The `max(...) < min(...)` form also states the touching rule without a special
+// case: for `[1,5]` and `[5,10]`, `max(1,5) = 5` and `min(5,10) = 5`, and
+// `5 < 5` is false — not overlapping, no `<=`-versus-`<` decision to get wrong
+// in a second place.
+
+fn overlaps(a: (i64, i64), b: (i64, i64)) -> bool {
+    let later_start = if a.0 > b.0 { a.0 } else { b.0 };
+    let earlier_end = if a.1 < b.1 { a.1 } else { b.1 };
+    return later_start < earlier_end;
+}
+
+fn can_attend_all(intervals: Slice[(i64, i64)]) -> bool {
+    let n = intervals.len();
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n {
+            if overlaps(intervals[i], intervals[j]) {
+                return false;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn report(intervals: Slice[(i64, i64)], label: ref String) {
+    if can_attend_all(intervals) {
+        println(f"{label} -> true");
+    } else {
+        println(f"{label} -> false");
+    }
+}
+
+fn main() {
+    let a: Array[(i64, i64), 3] = [(0, 30), (5, 10), (15, 20)];
+    report(a, "[[0,30],[5,10],[15,20]]");
+    let b: Array[(i64, i64), 2] = [(7, 10), (2, 4)];
+    report(b, "[[7,10],[2,4]]");
+    let c: Array[(i64, i64), 0] = [];
+    report(c, "[]");
+    let d: Array[(i64, i64), 1] = [(1, 5)];
+    report(d, "[[1,5]]");
+    let e: Array[(i64, i64), 2] = [(1, 5), (5, 10)];
+    report(e, "[[1,5],[5,10]]");
+    let f: Array[(i64, i64), 2] = [(1, 10), (2, 3)];
+    report(f, "[[1,10],[2,3]]");
+    let g: Array[(i64, i64), 2] = [(5, 10), (1, 5)];
+    report(g, "[[5,10],[1,5]]");
+    let h: Array[(i64, i64), 4] = [(1, 3), (3, 5), (5, 7), (7, 9)];
+    report(h, "[[1,3],[3,5],[5,7],[7,9]]");
+    // [[1,2],[1,2]] -> false — identical meetings clash with each other
+    let i: Array[(i64, i64), 2] = [(1, 2), (1, 2)];
+    report(i, "[[1,2],[1,2]]");
+    let j: Array[(i64, i64), 3] = [(1, 4), (2, 5), (3, 6)];
+    report(j, "[[1,4],[2,5],[3,6]]");
+}

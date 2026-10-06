@@ -1,0 +1,56 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
+
+struct P { id: i64, name: String }
+
+enum E { A(String), B }
+impl Drop for E { fn drop(mut ref self) { println("dropE") } }
+
+fn pass(r: R) -> R { return r; }
+fn passp(p: P) -> P { return p; }
+fn passe(x: E) -> E { return x; }
+fn mk(n: i64) -> R { return R { id: n, name: f"mk-aaaaaaaaaaaaaaaaaaaaaaaa" }; }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let c = n > 0;
+    let d = n > 5;
+
+    let mut bif = R { id: 1, name: f"bif-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    bif = if c { pass(bif) } else { pass(bif) };
+    println(f"bif {bif.id}");
+
+    let mut bmatch = R { id: 2, name: f"bmatch-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    bmatch = match c { true => pass(bmatch), false => pass(bmatch) };
+    println(f"bmatch {bmatch.id}");
+
+    let mut bmix = R { id: 3, name: f"bmix-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    bmix = if c { pass(bmix) } else { mk(30) };
+    println(f"bmix {bmix.id}");
+
+    let mut bmix2 = R { id: 4, name: f"bmix2-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    bmix2 = if d { pass(bmix2) } else { mk(40) };
+    println(f"bmix2 {bmix2.id}");
+
+    let mut bnest = R { id: 5, name: f"bnest-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    bnest = { let z: i64 = n; if c { pass(bnest) } else { pass(bnest) } };
+    println(f"bnest {bnest.id}");
+
+    let mut bil = R { id: 6, name: f"bil-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    let o: Option[i64] = Option.Some(n);
+    bil = if let Option.Some(k) = o { pass(bil) } else { pass(bil) };
+    println(f"bil {bil.id}");
+
+    let mut belif = R { id: 7, name: f"belif-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    belif = if d { pass(belif) } else if c { mk(70) } else { pass(belif) };
+    println(f"belif {belif.id}");
+
+    let mut ben: E = E.A(f"ben-aaaaaaaaaaaaaaaaaaaaaaaa");
+    ben = if c { passe(ben) } else { passe(ben) };
+    println("ben done");
+
+    let mut bnod = P { id: 9, name: f"bnod-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    bnod = if c { passp(bnod) } else { passp(bnod) };
+    println(f"bnod {bnod.id}");
+}

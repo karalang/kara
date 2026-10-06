@@ -1,0 +1,86 @@
+// Benchmark workload for LeetCode #329 — the memoized DFS arm
+// (longest_increasing_path.kara), timed as written.
+//
+// Build once, then punch (BENCHMARKS.md). A SIDE x SIDE grid of values in
+// [0, 999] is built once. Each of PUNCHES punches replaces the value at one
+// random cell and finds the longest increasing path of the whole grid again,
+// with a fresh memo.
+//
+// Each answer is folded into a rolling hash with the punched cell, which is
+// the sink.
+
+const SIDE: i64 = 500;
+const PUNCHES: i64 = 20;
+const MODULUS: i64 = 1073741789;
+
+fn longest_from(matrix: ref Vec[Vec[i64]], memo: mut ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
+    if memo[r][c] > 0 {
+        return memo[r][c];
+    }
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let here = matrix[r][c];
+    let mut best = 1;
+    for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let nr = r + dr;
+        let nc = c + dc;
+        if nr >= 0 and nr < rows and nc >= 0 and nc < cols and matrix[nr][nc] > here {
+            let len = 1 + longest_from(matrix, memo, nr, nc);
+            if len > best {
+                best = len;
+            }
+        }
+    }
+    memo[r][c] = best;
+    return best;
+}
+
+fn longest_increasing_path(matrix: ref Vec[Vec[i64]]) -> i64 {
+    if matrix.len() == 0 or matrix[0].len() == 0 {
+        return 0;
+    }
+    let mut memo: Vec[Vec[i64]] = Vec.new();
+    for row in matrix {
+        let mut zeros: Vec[i64] = Vec.new();
+        for _ in 0..row.len() {
+            zeros.push(0);
+        }
+        memo.push(zeros);
+    }
+    let mut best = 0;
+    for r in 0..matrix.len() {
+        for c in 0..matrix[0].len() {
+            let len = longest_from(matrix, mut memo, r, c);
+            if len > best {
+                best = len;
+            }
+        }
+    }
+    return best;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn main() {
+    let mut seed = 329;
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..SIDE {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..SIDE {
+            row.push(next(mut seed) % 1000);
+        }
+        grid.push(row);
+    }
+    let mut sink = 0;
+    for _ in 0..PUNCHES {
+        let r = next(mut seed) % SIDE;
+        let c = next(mut seed) % SIDE;
+        grid[r][c] = next(mut seed) % 1000;
+        let len = longest_increasing_path(grid);
+        sink = (sink * 31 + len * 1000003 + r * SIDE + c) % MODULUS;
+    }
+    println(f"sink {sink}");
+}

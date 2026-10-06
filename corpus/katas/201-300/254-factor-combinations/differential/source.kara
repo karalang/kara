@@ -1,0 +1,193 @@
+// LeetCode 254 — differential harness.
+//
+// Sweeps every n in a range and runs all THREE generators over each: the ★
+// sqrt-bounded backtracking, the close-the-tail recursion, and the iterative
+// worklist. Any disagreement is a bug in one of them — or in the compiler.
+//
+// The three emit in genuinely different orders (★ splits at each divisor, the
+// close-the-tail form bottoms out first, the worklist is LIFO), so the
+// comparison is deliberately ORDER-INDEPENDENT: each combination is folded to a
+// hash, and the hashes are SUMMED. Addition is commutative, so the digest
+// depends on the multiset of combinations and not on the order they were
+// produced — no sorting, and no risk of a sort accidentally hiding a
+// disagreement about content.
+//
+// An exhaustive sweep is the right shape here rather than random sampling: the
+// interesting inputs are highly composite numbers, which are rare under a
+// uniform draw and dense in a contiguous range. The census reports the worst
+// case actually reached.
+
+fn helper_a(remaining: i64, start: i64, path: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    let mut i = start;
+    while i * i <= remaining {
+        if remaining % i == 0 {
+            let mut combo: Vec[i64] = Vec.new();
+            let mut k = 0;
+            while k < path.len() {
+                combo.push(path[k]);
+                k = k + 1;
+            }
+            combo.push(i);
+            combo.push(remaining / i);
+            out.push(combo);
+            path.push(i);
+            helper_a(remaining / i, i, path, out);
+            let _ = path.pop();
+        }
+        i = i + 1;
+    }
+}
+
+fn gen_split(n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if n < 4 {
+        return out;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    helper_a(n, 2, mut path, mut out);
+    return out;
+}
+
+fn helper_b(remaining: i64, start: i64, path: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    let mut i = start;
+    while i * i <= remaining {
+        if remaining % i == 0 {
+            path.push(i);
+            helper_b(remaining / i, i, path, out);
+            let _ = path.pop();
+        }
+        i = i + 1;
+    }
+    if path.len() > 0 and remaining >= start {
+        let mut combo: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < path.len() {
+            combo.push(path[k]);
+            k = k + 1;
+        }
+        combo.push(remaining);
+        out.push(combo);
+    }
+}
+
+fn gen_close(n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if n < 4 {
+        return out;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    helper_b(n, 2, mut path, mut out);
+    return out;
+}
+
+struct Frame {
+    remaining: i64,
+    start: i64,
+    path: Vec[i64],
+}
+
+fn gen_iter(n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if n < 4 {
+        return out;
+    }
+    let mut stack: Vec[Frame] = Vec.new();
+    stack.push(Frame { remaining: n, start: 2, path: Vec.new() });
+    while stack.len() > 0 {
+        let f = match stack.pop() {
+            Some(v) => v,
+            None => Frame { remaining: 0, start: 2, path: Vec.new() },
+        };
+        let mut i = f.start;
+        while i * i <= f.remaining {
+            if f.remaining % i == 0 {
+                let mut combo: Vec[i64] = Vec.new();
+                let mut k = 0;
+                while k < f.path.len() {
+                    combo.push(f.path[k]);
+                    k = k + 1;
+                }
+                combo.push(i);
+                combo.push(f.remaining / i);
+                out.push(combo);
+                let mut child: Vec[i64] = Vec.new();
+                let mut m = 0;
+                while m < f.path.len() {
+                    child.push(f.path[m]);
+                    m = m + 1;
+                }
+                child.push(i);
+                stack.push(Frame { remaining: f.remaining / i, start: i, path: child });
+            }
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+// Order-independent: hash each combination, SUM the hashes.
+fn digest_of(combos: ref Vec[Vec[i64]]) -> i64 {
+    let mut total = 0;
+    let mut c = 0;
+    while c < combos.len() {
+        let mut h = 1;
+        let mut k = 0;
+        while k < combos[c].len() {
+            h = (h * 1000003 + combos[c][k]) % 1000000007;
+            k = k + 1;
+        }
+        total = (total + h) % 1000000007;
+        c = c + 1;
+    }
+    return total;
+}
+
+fn main() {
+    let hi = 10000;
+
+    let mut mismatches = 0;
+    let mut total_combos = 0;
+    let mut factorable = 0;
+    let mut max_combos = 0;
+    let mut max_at = 0;
+    let mut deepest = 0;
+    let mut digest = 0;
+
+    let mut n = 2;
+    while n <= hi {
+        let a = gen_split(n);
+        let b = gen_close(n);
+        let c = gen_iter(n);
+
+        let da = digest_of(a);
+        if a.len() != b.len() or a.len() != c.len() or da != digest_of(b) or da != digest_of(c) {
+            mismatches = mismatches + 1;
+        }
+
+        total_combos = total_combos + a.len();
+        if a.len() > 0 {
+            factorable = factorable + 1;
+        }
+        if a.len() > max_combos {
+            max_combos = a.len();
+            max_at = n;
+        }
+        let mut c2 = 0;
+        while c2 < a.len() {
+            if a[c2].len() > deepest {
+                deepest = a[c2].len();
+            }
+            c2 = c2 + 1;
+        }
+        digest = (digest * 131 + da) % 1000000007;
+        n = n + 1;
+    }
+
+    println(f"range 2..{hi}");
+    println(f"factorable {factorable}");
+    println(f"total combinations {total_combos}");
+    println(f"max combinations {max_combos} at n={max_at}");
+    println(f"deepest combination {deepest}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

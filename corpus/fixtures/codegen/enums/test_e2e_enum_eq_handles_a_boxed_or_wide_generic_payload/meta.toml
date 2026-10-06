@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::test_e2e_enum_eq_handles_a_boxed_or_wide_generic_payload"
+dedup_of = ["tests/interpreter/enums.rs::enum_eq_handles_a_boxed_or_wide_generic_payload"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

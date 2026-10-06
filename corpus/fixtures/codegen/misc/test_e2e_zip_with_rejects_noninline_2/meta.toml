@@ -1,0 +1,13 @@
+source = "tests/codegen/misc.rs::test_e2e_zip_with_rejects_noninline"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["closure", "deferred:tensor"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

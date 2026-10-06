@@ -1,0 +1,17 @@
+
+fn main() {
+    let v = Vector[f32, 4].from_array([4.0f32, 9.0f32, 16.0f32, 25.0f32]);
+    let s = v.sqrt();
+    println(s[0]);
+    println(s[3]);
+    let z = Vector[f32, 4].splat(0.0f32);
+    let ex = z.exp();
+    println(ex[0]);
+    let sg = z.sigmoid();
+    println(sg[0]);
+    let th = z.tanh();
+    println(th[0]);
+    let o = Vector[f32, 4].splat(1.0f32);
+    let l = o.ln();
+    println(l[0]);
+}

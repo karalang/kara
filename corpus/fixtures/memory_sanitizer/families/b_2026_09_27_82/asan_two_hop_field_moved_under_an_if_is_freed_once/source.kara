@@ -1,0 +1,24 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { D { id: n, name: f"n{n}" } }
+struct W { r: D, s: D }
+struct X { w: W, t: D }
+struct Y { x: X, u: D }
+fn mkx(n: i64) -> X { X { w: W { r: mkd(n), s: mkd(n + 1) }, t: mkd(n + 2) } }
+fn keep(d: D) -> D { d }
+fn push_if(c: bool) { let x = mkx(10); let mut xs: Vec[D] = Vec.new(); if c { xs.push(x.w.r); } println(f"l{xs.len()}"); }
+fn keep_if(c: bool) { let x = mkx(20); if c { let k = keep(x.w.r); println(f"k{k.id}"); } println("r"); }
+fn push_else(c: bool) { let x = mkx(30); let mut xs: Vec[D] = Vec.new(); if c { println("a"); } else { xs.push(x.w.s); } println(f"l{xs.len()}"); }
+fn three_hops(c: bool) { let y = Y { x: mkx(40), u: mkd(43) }; let mut xs: Vec[D] = Vec.new(); if c { xs.push(y.x.w.r); } println(f"l{xs.len()}"); }
+fn let_if(c: bool) { let x = mkx(50); if c { let k = x.w.r; println(f"k{k.id}"); } println("r"); }
+fn ret_if(c: bool) -> Option[D] { let x = mkx(60); if c { return Some(x.w.r); } println("n"); None }
+fn main() {
+    push_if(false); push_if(true);
+    keep_if(false); keep_if(true);
+    push_else(false); push_else(true);
+    three_hops(false); three_hops(true);
+    let_if(false); let_if(true);
+    match ret_if(false) { Some(d) => println(f"s{d.id}"), None => println("none") }
+    match ret_if(true) { Some(d) => println(f"s{d.id}"), None => println("none") }
+    println("end")
+}

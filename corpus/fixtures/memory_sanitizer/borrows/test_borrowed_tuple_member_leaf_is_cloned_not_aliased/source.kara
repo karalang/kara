@@ -1,0 +1,35 @@
+
+struct R { id: i64, name: String }
+struct Wt { pair: (String, i64), k: i64 }
+struct Wr { pr: (R, i64), k: i64 }
+
+fn sink(s: String) -> i64 { return s.len(); }
+
+fn ret(t: ref Wt) -> String { return t.pair.0; }
+fn tail(t: ref Wt) -> String { t.pair.0 }
+fn bound(t: ref Wt) -> String { let s = t.pair.0; return s; }
+fn arg(t: ref Wt) -> i64 { return sink(t.pair.0); }
+fn scalar(t: ref Wt) -> i64 { return t.pair.1; }
+fn structleaf(t: ref Wr) -> R { return t.pr.0; }
+fn owned(t: Wt) -> String { return t.pair.0; }
+
+impl Wt { fn peek(ref self) -> String { return self.pair.0; } }
+
+fn main() {
+    let v = Wt { pair: (f"n{41}", 7), k: 2 };
+    println(ret(v));
+    println(tail(v));
+    println(bound(v));
+    println(arg(v));
+    println(scalar(v));
+    println(v.peek());
+    // the borrowed struct's member survives every one of those
+    println(v.pair.0);
+
+    let w = Wr { pr: (R { id: 1, name: f"n{41}" }, 7), k: 2 };
+    println(structleaf(w).name);
+    println(w.pr.0.name);
+
+    let o = Wt { pair: (f"n{41}", 7), k: 2 };
+    println(owned(o));
+}

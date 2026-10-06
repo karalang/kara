@@ -1,0 +1,9 @@
+
+struct Holder { name: String, id: i64 }
+fn main() {
+    let o: Option[Holder] = Some(Holder { name: "a heap string padded out beyond thirty-six bytes!", id: 1 });
+    match o {
+        Some(Holder { name, id }) => { let owned: String = name; println(owned.len() + id); },
+        None => { println("missing"); },
+    }
+}

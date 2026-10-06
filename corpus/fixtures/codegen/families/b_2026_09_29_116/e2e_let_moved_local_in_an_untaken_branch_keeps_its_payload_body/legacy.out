@@ -1,0 +1,51 @@
+c false
+dS1
+r 0
+dS2
+r 0
+n
+dS3
+r 0
+dS4
+r 0
+dS5
+r 0
+dS6
+r 0
+dS7
+arm 8
+dS8
+r 0
+dS9
+dS10
+z
+r 0
+c true
+dS1
+k
+r 0
+dS2
+y
+r 0
+dS3
+y
+r 0
+dS4
+y
+r 1
+dS5
+y
+r 0
+dS6
+y
+r 0
+dS7
+y
+arm 8
+dS8
+r 0
+dS9
+y
+dS10
+r 0
+end

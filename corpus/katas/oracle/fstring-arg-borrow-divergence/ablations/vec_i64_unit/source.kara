@@ -1,0 +1,10 @@
+fn f(s: Slice[i64]) {
+    println(f"{s.len()}");
+}
+
+fn main() {
+    let mut o: Vec[i64] = Vec.new();
+    o.push(1);
+    f(o);
+    f(o);
+}

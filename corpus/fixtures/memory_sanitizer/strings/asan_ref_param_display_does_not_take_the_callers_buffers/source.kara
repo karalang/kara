@@ -1,0 +1,33 @@
+
+fn pv(x: ref Vec[String]) { println(x); println(f"{x}"); }
+fn pa(a: ref Array[String, 2]) { println(f"{a}"); }
+fn po(x: ref Option[String]) { println(x); println(f"{x}"); }
+fn pr(x: ref Result[String, String]) { println(f"{x}"); }
+fn pm(x: mut ref Map[String, String]) { println(x); }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        let v: Vec[String] = [f"a{i}", f"b{i}"];
+        pv(v);
+        println(f"own-v={v[0]}");
+
+        let arr: Array[String, 2] = [f"p{i}", f"q{i}"];
+        pa(arr);
+        println(f"own-a={arr[1]}");
+
+        let o: Option[String] = Some(f"o{i}");
+        po(o);
+        println(f"own-o={o.is_some()}");
+
+        let r: Result[String, String] = Ok(f"r{i}");
+        pr(r);
+
+        let mut m: Map[String, String] = Map.new();
+        m.insert(f"k{i}", f"w{i}");
+        pm(mut m);
+        println(f"own-m={m.len()}");
+
+        i = i + 1;
+    }
+}

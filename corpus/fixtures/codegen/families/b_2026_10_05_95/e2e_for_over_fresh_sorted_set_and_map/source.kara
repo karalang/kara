@@ -1,0 +1,34 @@
+fn ss(xs: ref Vec[i64]) -> SortedSet[i64] {
+    let mut s: SortedSet[i64] = SortedSet.new();
+    for x in xs { s.insert(x); }
+    return s;
+}
+fn sm(xs: ref Vec[i64]) -> SortedMap[i64, i64] {
+    let mut m: SortedMap[i64, i64] = SortedMap.new();
+    for x in xs { m.insert(x, x * 10); }
+    return m;
+}
+fn main() {
+    let a = [3, 1, 4, 1, 5, 9, 2, 6];
+    let b = [9, 2, 6, 5, 3, 5, 8];
+    let sa = ss(a);
+    let sb = ss(b);
+    let mut t = 0;
+    for v in sa.intersection(sb) { t = t * 10 + v; }
+    println(t);
+    t = 0;
+    for v in sa.union(sb) { t = t * 10 + v; }
+    println(t);
+    t = 0;
+    for v in ss(b) { t = t * 10 + v; }
+    println(t);
+    t = 0;
+    for (k, v) in sm(a) { t = t * 100 + k + v; }
+    println(t);
+    t = 0;
+    for v in sa.union(sb).iter() { t = t * 10 + v; }
+    println(t);
+    t = 0;
+    for v in ss(b).iter() { t = t * 10 + v; }
+    println(t);
+}

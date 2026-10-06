@@ -1,0 +1,18 @@
+
+#[derive(Message)]
+struct Pair { x: i64, y: i64 }
+
+fn main() {
+    let p = Pair { x: 10, y: 20 };
+    let mut reader = ProtoReader.new(p.encode());
+    let (f1, w1) = reader.read_tag();
+    let v1 = reader.read_varint();
+    let (f2, w2) = reader.read_tag();
+    let v2 = reader.read_varint();
+    println(f1);
+    println(w1);
+    println(v1);
+    println(f2);
+    println(v2);
+    println(reader.at_end());
+}

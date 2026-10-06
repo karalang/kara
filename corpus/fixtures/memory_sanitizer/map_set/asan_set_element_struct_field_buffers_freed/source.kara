@@ -1,0 +1,24 @@
+
+#[derive(Hash, Eq, Ord)]
+struct P { a: i64, s: String }
+#[derive(Hash, Eq, Ord)]
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("a");
+    let mut set: Set[P] = Set.new();
+    set.insert(P { a: 2, s: f"zz{2}" });
+    set.insert(P { a: 1, s: f"bb{1}" });
+    let mut ss: SortedSet[P] = SortedSet.new();
+    ss.insert(P { a: 4, s: f"dd{4}" });
+    ss.insert(P { a: 3, s: f"cc{3}" });
+    let mut m: Map[P, i64] = Map.new();
+    let _ = m.insert(P { a: 5, s: f"k{5}" }, 50);
+    println("b");
+    let mut ds: SortedSet[Res] = SortedSet.new();
+    ds.insert(Res { id: 7, name: f"q{7}" });
+    ds.insert(Res { id: 6, name: f"p{6}" });
+    println("end");
+}

@@ -1,0 +1,3 @@
+enum Col { A(i64), B }
+fn apply(f: Fn(i64) -> Col, n: i64) -> Col { return f(n); }
+fn main() { let x = apply(Col.A, 5)(3); println("end") }

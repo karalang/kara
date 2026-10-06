@@ -1,0 +1,15 @@
+cases 1364 closure-cases 1340 edge-removal-cases 1343
+P1  dfs-vs-star disagreements 0
+P2  bfs-vs-star disagreements 0
+P3  labels-vs-star disagreements 0
+P4  closure-vs-star disagreements 0
+P5  bound failures 0
+P6  edge-order failures 0
+P7  edge-direction failures 0
+P8  relabelling failures 0
+P9  repeat-and-loop failures 0
+P10 one-edge-change failures 0
+P11 disjoint-union failures 0
+P12 hub failures 0
+P13 spanning-forest failures 0
+DIFFERENTIAL OK

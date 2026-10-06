@@ -1,0 +1,39 @@
+
+par struct Gate { v: Atomic[i64] }
+impl Gate {
+    fn open(ref self) { self.v.store(1, MemoryOrdering.SeqCst) }
+    fn is_open(ref self) -> bool { self.v.load(MemoryOrdering.SeqCst) == 1 }
+}
+
+fn slow_err(v: i64, g: Gate) -> Result[i64, i64] {
+    g.open();
+    let mut acc: i64 = 0_i64;
+    let mut i: i64 = 0_i64;
+    while i < 1000000_i64 {
+        acc = acc + i;
+        i = i + 1_i64;
+    }
+    if acc < 0_i64 {
+        Ok(acc)
+    } else {
+        Err(v)
+    }
+}
+
+fn gated_err(v: i64, g: Gate) -> Result[i64, i64] {
+    while not g.is_open() { }
+    Err(v)
+}
+
+fn main() {
+    let g = Gate { v: Atomic.new(0) };
+    let r: Result[i64, i64] = par {
+        let r1: Result[i64, i64] = slow_err(11_i64, g);
+        let r2: Result[i64, i64] = gated_err(33_i64, g);
+        Ok(7_i64)
+    };
+    match r {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}

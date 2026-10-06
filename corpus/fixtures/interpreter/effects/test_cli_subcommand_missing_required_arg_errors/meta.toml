@@ -1,0 +1,13 @@
+source = "tests/interpreter/effects.rs::test_cli_subcommand_missing_required_arg_errors"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

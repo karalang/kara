@@ -1,0 +1,19 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn older(c: bool, b: i64) -> Array[R, 2] { let x: Array[R, 2] = [mkr(b+1), mkr(b+2)]; if c { return x }; let x: Array[R, 2] = [mkr(b+8), mkr(b+9)]; println("dies"); return x }
+fn some_exits(c: bool, b: i64) -> Array[R, 2] { let x: Array[R, 2] = [mkr(b+1), mkr(b+2)]; let x: Array[R, 2] = [mkr(b+8), mkr(b+9)]; if c { let w: Array[R, 2] = [mkr(b+5), mkr(b+6)]; return w }; println("dies"); x }
+fn inner(b: i64) -> Array[R, 2] { let x: Array[R, 2] = [mkr(b+1), mkr(b+2)]; { let x: Array[R, 2] = [mkr(b+8), mkr(b+9)]; println(f"i{x[0].id}") }; println("dies"); return x }
+fn two_some(c: i64, b: i64) -> Array[R, 2] { let x: Array[R, 2] = [mkr(b+1), mkr(b+2)]; if c == 1 { return x }; let x: Array[R, 2] = [mkr(b+3), mkr(b+4)]; if c == 2 { return x }; println("dies"); let w: Array[R, 2] = [mkr(b+5), mkr(b+6)]; return w }
+fn wrapped(c: bool, b: i64) -> Option[Array[R, 2]] { let x: Array[R, 2] = [mkr(b+1), mkr(b+2)]; if c { return Some(x) }; let x: Array[R, 2] = [mkr(b+8), mkr(b+9)]; println("dies"); Some(x) }
+fn main() {
+    let a = older(true, 10); println(f"a{a[0].id}");
+    let b = older(false, 20); println(f"b{b[0].id}");
+    let c = some_exits(true, 30); println(f"c{c[0].id}");
+    let d = some_exits(false, 40); println(f"q{d[0].id}");
+    let e = inner(50); println(f"e{e[0].id}");
+    for k in 1..4 { let t = two_some(k, 100 * k); println(f"t{t[0].id}") };
+    match wrapped(true, 60) { Some(v) => println(f"w{v[0].id}"), None => println("n") };
+    match wrapped(false, 70) { Some(v) => println(f"w{v[0].id}"), None => println("n") };
+    println("end")
+}

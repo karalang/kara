@@ -1,0 +1,6 @@
+
+struct Plain { x: i64 }
+fn main() {
+    let p = Plain { x: 1 };
+    let _ = p.encode();
+}

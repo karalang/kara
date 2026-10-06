@@ -1,0 +1,12 @@
+
+struct Bag { n: i64 }
+fn read_n(b: ref Bag) -> i64 { b.n }
+fn peek(b: ref Bag) -> i64 {
+    match b {
+        whole @ Bag { n } => read_n(whole) + n,
+    }
+}
+fn main() {
+    let b = Bag { n: 5 };
+    println(peek(b));
+}

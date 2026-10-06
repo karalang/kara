@@ -1,0 +1,10 @@
+
+fn main() {
+    println((100i8).saturating_mul(2i8));
+    println((-100i8).saturating_mul(2i8));
+    println((-100i8).saturating_mul(-2i8));
+    println((100i8).saturating_mul(-2i8));
+    println((-100i8).saturating_sub(100i8));
+    println((100i8).saturating_sub(-100i8));
+    println((-100i8).saturating_add(-100i8));
+}

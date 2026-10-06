@@ -1,0 +1,25 @@
+
+enum E { A(String), B(i64) }
+fn mks(k: i64) -> String { let mut s: String = String.new(); s.push_str(f"pay-{k}"); return s; }
+fn dig(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+fn main() {
+    let n: i64 = 1;
+    let mut hits: i64 = 0;
+
+    let r: Result[String, i64] = Result.Ok(mks(n));
+    match r { Result.Ok(s) => { if s.contains(dig(n)) { hits = hits + 1; } } Result.Err(e) => {} }
+
+    let r2: Result[i64, String] = Result.Err(mks(n));
+    match r2 { Result.Ok(v) => {} Result.Err(e) => { if e.contains(dig(n)) { hits = hits + 10; } } }
+
+    let o: Option[String] = Option.Some(mks(n));
+    match o { Option.Some(s) => { if s.contains(dig(n)) { hits = hits + 100; } } Option.None => {} }
+
+    let u: E = E.A(mks(n));
+    match u { E.A(s) => { if s.contains(dig(n)) { hits = hits + 1000; } } E.B(v) => {} }
+
+    let o2: Option[String] = Option.Some(mks(n));
+    if let Option.Some(s) = o2 { if s.contains(dig(n)) { hits = hits + 10000; } }
+
+    println(hits);
+}

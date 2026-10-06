@@ -1,0 +1,362 @@
+// LeetCode 273 — differential harness.
+//
+// Three solvers over every integer 0..10,000, every power of ten and its
+// neighbours, 20,000 uniform draws across 0 .. 2^31 - 1, and 20,000 numbers
+// built to CONTAIN ZERO GROUPS: the ★ three-digit chunker
+// (recursive, peels groups off the right, prepends), the positional walk (no
+// grouping arithmetic at all, one lookahead for the teens, collects words and
+// joins once) and the precomputed table (all 1,000 groups built bottom-up, then
+// assembled by descending magnitude, appending).
+//
+// TWO LEXICON TRANSCRIPTIONS, ON PURPOSE. The chunker and the positional walk
+// spell the twenty-eight words as an `if`-chain and SHARE it here, so they
+// cannot cross-check a typo in it. The table solver holds the same words as
+// array literals — a second, independent transcription — and that is what makes
+// a lexicon typo a reported disagreement rather than three solvers politely
+// agreeing on "Fourty". 269 is the reason this is spelled out: factoring one
+// derivation into a single shared function took two injected bugs from detected
+// to invisible.
+//
+// AND A FOURTH CHECK THAT COMPUTES NOTHING. Agreement between solvers cannot
+// catch a mistake all three make — and all three are joining words with spaces,
+// which is the same job done three ways. So every produced string is also run
+// through a SHAPE oracle: split it on a single space and require that no token
+// is empty and every token is in the vocabulary. An empty token is exactly a
+// leading space, a trailing space or a doubled space, so one condition covers
+// all three, and it holds no opinion about which number was being spelled.
+
+fn small_name(n: i64) -> String {
+    if n == 1 { return "One"; }
+    if n == 2 { return "Two"; }
+    if n == 3 { return "Three"; }
+    if n == 4 { return "Four"; }
+    if n == 5 { return "Five"; }
+    if n == 6 { return "Six"; }
+    if n == 7 { return "Seven"; }
+    if n == 8 { return "Eight"; }
+    if n == 9 { return "Nine"; }
+    if n == 10 { return "Ten"; }
+    if n == 11 { return "Eleven"; }
+    if n == 12 { return "Twelve"; }
+    if n == 13 { return "Thirteen"; }
+    if n == 14 { return "Fourteen"; }
+    if n == 15 { return "Fifteen"; }
+    if n == 16 { return "Sixteen"; }
+    if n == 17 { return "Seventeen"; }
+    if n == 18 { return "Eighteen"; }
+    if n == 19 { return "Nineteen"; }
+    return "";
+}
+
+fn tens_name(t: i64) -> String {
+    if t == 2 { return "Twenty"; }
+    if t == 3 { return "Thirty"; }
+    if t == 4 { return "Forty"; }
+    if t == 5 { return "Fifty"; }
+    if t == 6 { return "Sixty"; }
+    if t == 7 { return "Seventy"; }
+    if t == 8 { return "Eighty"; }
+    if t == 9 { return "Ninety"; }
+    return "";
+}
+
+fn scale_name(s: i64) -> String {
+    if s == 1 { return "Thousand"; }
+    if s == 2 { return "Million"; }
+    if s == 3 { return "Billion"; }
+    return "";
+}
+
+// ---- solver A: the ★ three-digit chunker -------------------------------------
+
+fn group_name(n: i64) -> String {
+    if n == 0 { return ""; }
+    if n < 20 { return small_name(n); }
+    if n < 100 {
+        let t = tens_name(n / 10);
+        let r = n % 10;
+        if r == 0 { return t; }
+        return t + " " + small_name(r);
+    }
+    let h = small_name(n / 100) + " Hundred";
+    let r = group_name(n % 100);
+    if r == "" { return h; }
+    return h + " " + r;
+}
+
+fn chunker(n: i64) -> String {
+    if n == 0 { return "Zero"; }
+    let mut out = "";
+    let mut rem = n;
+    let mut scale = 0;
+    while rem > 0 {
+        let part = rem % 1000;
+        if part > 0 {
+            let mut piece = group_name(part);
+            if scale > 0 { piece = piece + " " + scale_name(scale); }
+            if out == "" { out = piece; } else { out = piece + " " + out; }
+        }
+        rem = rem / 1000;
+        scale = scale + 1;
+    }
+    return out;
+}
+
+// ---- solver B: the positional walk -------------------------------------------
+
+fn positional(n: i64) -> String {
+    if n == 0 { return "Zero"; }
+    let text = f"{n}";
+    let digits = text.bytes();
+    let len = digits.len();
+    let mut words: Vec[String] = Vec.new();
+    let mut group_nonempty = false;
+    let mut i = 0;
+    while i < len {
+        let p = len - 1 - i;
+        let place = p % 3;
+        let scale = p / 3;
+        let d = digits[i] as i64 - 48;
+        let mut group_done = place == 0;
+        if place == 2 {
+            if d > 0 {
+                words.push(small_name(d));
+                words.push("Hundred");
+                group_nonempty = true;
+            }
+        }
+        if place == 1 {
+            if d == 1 {
+                let u = digits[i + 1] as i64 - 48;
+                words.push(small_name(10 + u));
+                group_nonempty = true;
+                i = i + 1;
+                group_done = true;
+            } else {
+                if d >= 2 {
+                    words.push(tens_name(d));
+                    group_nonempty = true;
+                }
+            }
+        }
+        if place == 0 {
+            if d > 0 {
+                words.push(small_name(d));
+                group_nonempty = true;
+            }
+        }
+        if group_done {
+            if group_nonempty and scale > 0 { words.push(scale_name(scale)); }
+            group_nonempty = false;
+        }
+        i = i + 1;
+    }
+    let mut out = "";
+    let mut w = 0;
+    while w < words.len() {
+        if out != "" { out = out + " "; }
+        out = out + words[w];
+        w = w + 1;
+    }
+    return out;
+}
+
+// ---- solver C: the precomputed table (its own lexicon transcription) ---------
+
+fn units_table() -> Vec[String] {
+    return ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight",
+            "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen",
+            "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+}
+
+fn tens_table() -> Vec[String] {
+    return ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy",
+            "Eighty", "Ninety"];
+}
+
+fn scale_table() -> Vec[String] {
+    return ["", "Thousand", "Million", "Billion"];
+}
+
+fn build_groups() -> Vec[String] {
+    let u = units_table();
+    let t = tens_table();
+    let mut g: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 20 { g.push(u[i]); i = i + 1; }
+    let mut d = 2;
+    while d < 10 {
+        let mut r = 0;
+        while r < 10 {
+            if r == 0 { g.push(t[d]); } else { g.push(t[d] + " " + u[r]); }
+            r = r + 1;
+        }
+        d = d + 1;
+    }
+    let mut h = 1;
+    while h < 10 {
+        let mut r = 0;
+        while r < 100 {
+            if r == 0 { g.push(u[h] + " Hundred"); }
+            else { g.push(u[h] + " Hundred " + g[r]); }
+            r = r + 1;
+        }
+        h = h + 1;
+    }
+    return g;
+}
+
+fn tabled(n: i64, g: ref Vec[String], s: ref Vec[String]) -> String {
+    if n == 0 { return "Zero"; }
+    let mut out = "";
+    let mut rem = n;
+    let mut div = 1000000000;
+    let mut scale = 3;
+    while div >= 1 {
+        let part = rem / div;
+        if part > 0 {
+            if out != "" { out = out + " "; }
+            out = out + g[part];
+            if scale > 0 { out = out + " " + s[scale]; }
+        }
+        rem = rem % div;
+        div = div / 1000;
+        scale = scale - 1;
+    }
+    return out;
+}
+
+// ---- the shape oracle --------------------------------------------------------
+
+fn vocabulary() -> Set[String] {
+    let mut v: Set[String] = Set.new();
+    let u = units_table();
+    let mut i = 1;
+    while i < u.len() { v.insert(u[i]); i = i + 1; }
+    let t = tens_table();
+    i = 2;
+    while i < t.len() { v.insert(t[i]); i = i + 1; }
+    v.insert("Hundred");
+    v.insert("Thousand");
+    v.insert("Million");
+    v.insert("Billion");
+    v.insert("Zero");
+    return v;
+}
+
+// 0 = well-formed. An EMPTY token is a leading space, a trailing space or a
+// doubled space, so the one condition covers all three shapes of join bug.
+fn shape_ok(s: String, v: ref Set[String]) -> bool {
+    if s == "" { return false; }
+    let toks = s.split(" ");
+    let mut i = 0;
+    while i < toks.len() {
+        if toks[i] == "" { return false; }
+        if v.contains(toks[i]) == false { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn has_zero_group(n: i64) -> bool {
+    // A zero group BELOW a nonzero one — the case that must emit nothing.
+    let mut rem = n;
+    let mut seen_nonzero_above = false;
+    let mut groups: Vec[i64] = Vec.new();
+    while rem > 0 { groups.push(rem % 1000); rem = rem / 1000; }
+    let mut i = groups.len() - 1;
+    while i >= 0 {
+        if groups[i] == 0 and seen_nonzero_above { return true; }
+        if groups[i] > 0 { seen_nonzero_above = true; }
+        i = i - 1;
+    }
+    return false;
+}
+
+fn main() {
+    let g = build_groups();
+    let s = scale_table();
+    let v = vocabulary();
+
+    let mut probes: Vec[i64] = Vec.new();
+    // exhaustive over the small range — every teen, every tens/units pair, and
+    // every hundreds carry appears here many times over
+    let mut n = 0;
+    while n <= 10000 { probes.push(n); n = n + 1; }
+    // every power of ten and its immediate neighbours: the zero-group cases
+    let mut pw = 1;
+    while pw <= 1000000000 {
+        probes.push(pw - 1);
+        probes.push(pw);
+        probes.push(pw + 1);
+        pw = pw * 10;
+    }
+    // and the whole range, sampled
+    let mut seed = 273273;
+    let mut r = 0;
+    while r < 20000 {
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        probes.push(seed);
+        r = r + 1;
+    }
+    // CONSTRUCTED ZERO GROUPS. A uniform draw over 0 .. 2^31 - 1 almost never
+    // produces one — each group is zero with probability 1/1000, so 20,000 draws
+    // yielded 91 — and the zero group is the whole reason `group_name` returns
+    // the empty string. So build them: four groups, each independently zeroed a
+    // third of the time. Same discipline as 270's constructed midpoints.
+    r = 0;
+    while r < 20000 {
+        let mut x = 0;
+        let mut mag = 1;
+        let mut gi = 0;
+        while gi < 4 {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let mut part = (seed / 256) % 1000;
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            if (seed / 256) % 3 == 0 { part = 0; }
+            if gi == 3 { part = part % 3; }
+            x = x + part * mag;
+            mag = mag * 1000;
+            gi = gi + 1;
+        }
+        probes.push(x);
+        r = r + 1;
+    }
+    probes.push(2147483647);
+
+    let mut mismatches = 0;
+    let mut shape_bad = 0;
+    let mut zero_group = 0;
+    let mut teens = 0;
+    let mut longest = 0;
+    let mut digest = 0;
+
+    let mut i = 0;
+    while i < probes.len() {
+        let x = probes[i];
+        let a = chunker(x);
+        let b = positional(x);
+        let c = tabled(x, g, s);
+        if a != b or a != c { mismatches = mismatches + 1; }
+        if shape_ok(a.clone(), v) == false { shape_bad = shape_bad + 1; }
+        if has_zero_group(x) { zero_group = zero_group + 1; }
+        let m = x % 100;
+        if m >= 10 and m <= 19 { teens = teens + 1; }
+        if a.len() > longest { longest = a.len(); }
+        let bytes = a.bytes();
+        let mut q = 0;
+        while q < bytes.len() {
+            digest = (digest * 131 + bytes[q] as i64) % 1000000007;
+            q = q + 1;
+        }
+        i = i + 1;
+    }
+
+    println(f"cases {probes.len()}");
+    println(f"numbers with a ZERO GROUP below a nonzero one {zero_group}");
+    println(f"numbers ending in a teen {teens}");
+    println(f"longest spelling, bytes {longest}");
+    println(f"shape violations {shape_bad}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

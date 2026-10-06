@@ -1,0 +1,6 @@
+leetcode -> 0 (uniq=5)
+loveleetcode -> 2 (uniq=4)
+aabb -> -1 (uniq=0)
+z -> 0 (uniq=1)
+ -> -1 (uniq=0)
+abcabcd -> 6 (uniq=1)

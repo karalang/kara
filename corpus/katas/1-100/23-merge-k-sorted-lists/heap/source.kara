@@ -1,0 +1,251 @@
+// LeetCode #23: Merge k Sorted Lists — k-way merge with a binary
+// min-heap of cursors, O(N log k) (N = total nodes, heap never exceeds
+// k entries).
+//
+// One cursor per non-exhausted list lives in a min-heap keyed on the
+// cursor node's value. Each step pops the global minimum, splices it
+// onto the output tail, and pushes its successor (if any) — the heap
+// IS the k-way frontier, holding at most one node per list.
+//
+// Kāra has no standard-library heap yet, so the heap is built by hand
+// over a `Vec[ListNode]`: `heap_push` appends and sifts up, `heap_pop`
+// swaps the last element into the root and sifts down. This is the
+// corpus's first Vec of shared-struct handles — every sift compares
+// `heap[i].val` through two RC handles and swaps slots by element
+// read + element write, pure refcount traffic on the heap array.
+//
+// The spliced node's `next` still points at its source-list suffix when
+// it lands on the output tail; the next pop overwrites it, and the loop
+// ends only when the final node's `next` is None (a Some successor
+// would have been pushed, keeping the heap non-empty). So the output
+// list is fully re-linked by the time the dummy's head is returned.
+//
+// Unlike divide_and_conquer.kara this merge is NOT stable: equal keys
+// pop in heap-shape order, not input-list order. Outputs still diff
+// identical because only values are printed.
+//
+// Same complexity as divide-and-conquer, different constant profile:
+// d&c does log k linear passes with branchy two-way compares; the heap
+// does one pass with a log k sift per node — and per-node heap
+// maintenance on a shared-struct Vec is refcount-heavy, which is
+// exactly what this style is here to exercise.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+// Append `node` and sift it up until its parent is no larger.
+fn heap_push(heap: mut ref Vec[ListNode], node: ListNode) {
+    heap.push(node);
+    let mut i = heap.len() - 1;
+    while i > 0 {
+        let parent = (i - 1) / 2;
+        if heap[i].val < heap[parent].val {
+            let tmp = heap[i];
+            heap[i] = heap[parent];
+            heap[parent] = tmp;
+            i = parent;
+        } else {
+            break;
+        }
+    }
+}
+
+// Pop the minimum: swap the last element into the root, sift it down.
+// Callers only pop while `heap.len() > 0`.
+fn heap_pop(heap: mut ref Vec[ListNode]) -> ListNode {
+    let top = heap[0];
+    if let Some(last) = heap.pop() {
+        if heap.len() > 0 {
+            // `last` was not the root itself — re-seat it and sift down.
+            heap[0] = last;
+            let m = heap.len();
+            let mut i = 0;
+            loop {
+                let l = 2 * i + 1;
+                let r = l + 1;
+                let mut smallest = i;
+                if l < m {
+                    if heap[l].val < heap[smallest].val {
+                        smallest = l;
+                    }
+                }
+                if r < m {
+                    if heap[r].val < heap[smallest].val {
+                        smallest = r;
+                    }
+                }
+                if smallest == i {
+                    break;
+                }
+                let tmp = heap[i];
+                heap[i] = heap[smallest];
+                heap[smallest] = tmp;
+                i = smallest;
+            }
+        }
+    }
+    top
+}
+
+fn merge_k_lists(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+    // Seed the frontier: one cursor per non-empty list.
+    let k = lists.len();
+    let mut heap: Vec[ListNode] = Vec.new();
+    let mut idx = 0;
+    while idx < k {
+        if let Some(head) = lists[idx] {
+            heap_push(mut heap, head);
+        }
+        idx = idx + 1;
+    }
+
+    // Pop the global minimum, splice it, advance its list's cursor.
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    while heap.len() > 0 {
+        let node = heap_pop(mut heap);
+        tail.next = Some(node);
+        tail = node;
+        if let Some(nxt) = node.next {
+            heap_push(mut heap, nxt);
+        }
+    }
+
+    dummy.next
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn main() {
+    // Same ten cases as `divide_and_conquer.kara` — the two must diff
+    // line-for-line (only values are printed, so the heap's different
+    // tie order is invisible).
+
+    // LeetCode example 1 — three lists, interleaved, with a cross-list tie.
+    let a1: Array[i64, 3] = [1, 4, 5];
+    let b1: Array[i64, 3] = [1, 3, 4];
+    let c1: Array[i64, 2] = [2, 6];
+    let mut lists1: Vec[Option[ListNode]] = Vec.new();
+    lists1.push(from_array(a1));
+    lists1.push(from_array(b1));
+    lists1.push(from_array(c1));
+    println(to_string(merge_k_lists(lists1))); // [1, 1, 2, 3, 4, 4, 5, 6]
+
+    // LeetCode example 2 — no lists at all (k = 0).
+    let lists2: Vec[Option[ListNode]] = Vec.new();
+    println(to_string(merge_k_lists(lists2))); // []
+
+    // LeetCode example 3 — one list, itself empty.
+    let mut lists3: Vec[Option[ListNode]] = Vec.new();
+    lists3.push(None);
+    println(to_string(merge_k_lists(lists3))); // []
+
+    // k = 1 — identity: every node passes through a 1-element heap.
+    let a4: Array[i64, 3] = [1, 2, 3];
+    let mut lists4: Vec[Option[ListNode]] = Vec.new();
+    lists4.push(from_array(a4));
+    println(to_string(merge_k_lists(lists4))); // [1, 2, 3]
+
+    // Empty lists surrounding one singleton.
+    let a5: Array[i64, 1] = [1];
+    let mut lists5: Vec[Option[ListNode]] = Vec.new();
+    lists5.push(None);
+    lists5.push(from_array(a5));
+    lists5.push(None);
+    println(to_string(merge_k_lists(lists5))); // [1]
+
+    // Disjoint ranges, deliberately out of order — the heap drains one
+    // whole list at a time.
+    let a6: Array[i64, 3] = [7, 8, 9];
+    let b6: Array[i64, 3] = [1, 2, 3];
+    let c6: Array[i64, 3] = [4, 5, 6];
+    let mut lists6: Vec[Option[ListNode]] = Vec.new();
+    lists6.push(from_array(a6));
+    lists6.push(from_array(b6));
+    lists6.push(from_array(c6));
+    println(to_string(merge_k_lists(lists6))); // [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    // All keys equal — output is value-identical regardless of tie order.
+    let a7: Array[i64, 2] = [2, 2];
+    let b7: Array[i64, 1] = [2];
+    let c7: Array[i64, 3] = [2, 2, 2];
+    let mut lists7: Vec[Option[ListNode]] = Vec.new();
+    lists7.push(from_array(a7));
+    lists7.push(from_array(b7));
+    lists7.push(from_array(c7));
+    println(to_string(merge_k_lists(lists7))); // [2, 2, 2, 2, 2, 2]
+
+    // Negatives, including a duplicate inside one list.
+    let a8: Array[i64, 3] = [-10, -5, 0];
+    let b8: Array[i64, 2] = [-7, 3];
+    let c8: Array[i64, 2] = [-6, -6];
+    let mut lists8: Vec[Option[ListNode]] = Vec.new();
+    lists8.push(from_array(a8));
+    lists8.push(from_array(b8));
+    lists8.push(from_array(c8));
+    println(to_string(merge_k_lists(lists8))); // [-10, -7, -6, -6, -5, 0, 3]
+
+    // k = 6 (even, > 4) — a two-level heap stays full for a while.
+    let a9: Array[i64, 1] = [5];
+    let b9: Array[i64, 2] = [1, 6];
+    let c9: Array[i64, 1] = [3];
+    let d9: Array[i64, 2] = [2, 7];
+    let e9: Array[i64, 1] = [4];
+    let f9: Array[i64, 1] = [0];
+    let mut lists9: Vec[Option[ListNode]] = Vec.new();
+    lists9.push(from_array(a9));
+    lists9.push(from_array(b9));
+    lists9.push(from_array(c9));
+    lists9.push(from_array(d9));
+    lists9.push(from_array(e9));
+    lists9.push(from_array(f9));
+    println(to_string(merge_k_lists(lists9))); // [0, 1, 2, 3, 4, 5, 6, 7]
+
+    // Sharply uneven lengths — one cursor outlives the other two by far.
+    let a10: Array[i64, 3] = [1, 10, 20];
+    let b10: Array[i64, 1] = [2];
+    let c10: Array[i64, 5] = [3, 4, 5, 6, 7];
+    let mut lists10: Vec[Option[ListNode]] = Vec.new();
+    lists10.push(from_array(a10));
+    lists10.push(from_array(b10));
+    lists10.push(from_array(c10));
+    println(to_string(merge_k_lists(lists10))); // [1, 2, 3, 4, 5, 6, 7, 10, 20]
+}

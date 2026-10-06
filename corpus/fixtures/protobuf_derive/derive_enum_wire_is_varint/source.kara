@@ -1,0 +1,14 @@
+
+enum Status { Pending, Active, Closed }
+
+#[derive(Message)]
+struct Task { status: Status }
+
+fn main() {
+    let t = Task { status: Status.Closed };
+    let mut r = ProtoReader.new(t.encode());
+    let (fld, wire) = r.read_tag();
+    println(fld);
+    println(wire);
+    println(r.read_varint());
+}

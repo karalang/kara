@@ -1,0 +1,13 @@
+
+struct FakeEnv {}
+impl FakeEnv { fn var(self, name: String) -> Result[String, VarError] { Ok("mocked") } }
+fn rv() -> String reads(Env) {
+    match env.var("ANYTHING") { Ok(s) => s, Err(e) => "missing" }
+}
+fn main() reads(Env) {
+    with_provider[Env](FakeEnv {}, || { println(rv()); });
+    match env.var("KARA_DEFINITELY_UNSET_XYZ") {
+        Ok(s) => println(s),
+        Err(e) => println("unset-default"),
+    }
+}

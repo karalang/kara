@@ -1,0 +1,62 @@
+shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+struct W { p: Option[S2] }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn wrapS(v: S2) -> Option[S2] { return Some(v) }
+fn keep(o: Option[S2]) -> Option[S2] { return o }
+fn keepg[T](o: Option[T]) -> Option[T] { return o }
+fn keep3(o: Option[S3]) -> Option[S3] { return o }
+fn maybe(o: Option[S2], c: bool) -> Option[S2] { if c { return o } return None }
+fn rk(i: i64) -> Option[S2] { let o = Some(mk2(i)); return keep(o) }
+fn a_unwrap() { let o = Some(mk2(1)); let p = keep(o); let v = p.unwrap(); println(f"a{v.id}") }
+fn b_match_move() { let o = Some(mk2(2)); let p = keep(o); match p { Some(x) => { let y = x; println(f"b{y.id}") }, None => println("bn") } }
+fn c_match_read() { let o = Some(mk2(3)); let p = keep(o); match p { Some(x) => println(f"c{x.id}"), None => println("cn") } }
+fn d_iflet() { let o = Some(mk2(4)); let p = keep(o); if let Some(x) = p { let y = x; println(f"d{y.id}") } }
+fn e_plain() { let o = Some(mk2(5)); let p = keep(o); println(f"e{p.is_some()}") }
+fn f_chain() { let o = Some(mk2(6)); let p = keep(o); let q = keep(p); let v = q.unwrap(); println(f"f{v.id}") }
+fn g_generic() { let o = Some(mk2(7)); let p = keepg(o); let v = p.unwrap(); println(f"g{v.id}") }
+fn h_maybe() { let o = Some(mk2(8)); let p = maybe(o, true); let v = p.unwrap(); println(f"h{v.id}") }
+fn i_maybe_none() { let o = Some(mk2(9)); let p = maybe(o, false); println(f"i{p.is_none()}") }
+fn j_wrap_chain() { let s = mk2(10); let o = wrapS(s); let p = keep(o); let v = p.unwrap(); println(f"j{v.id}") }
+fn k_s3() { let o = Some(mk3(11)); let p = keep3(o); let v = p.unwrap(); println(f"k{v.id}") }
+fn l_rebind() { let o = Some(mk2(12)); let p = keep(o); let q = p; let v = q.unwrap(); println(f"l{v.id}") }
+fn m_unwrap_or() { let o = Some(mk2(13)); let p = keep(o); let v = p.unwrap_or(mk2(93)); println(f"m{v.id}") }
+fn n_call_unwrap() { let o = Some(mk2(14)); let v = keep(o).unwrap(); println(f"n{v.id}") }
+fn o_ret() { let p = rk(15); let v = p.unwrap(); println(f"o{v.id}") }
+fn p_ret_plain() { let p = rk(16); println(f"p{p.is_some()}") }
+fn q_field() { let o = Some(mk2(17)); let w = W { p: keep(o) }; println(f"q{w.p.is_some()}") }
+fn r_wrap_call_unwrap() { let s = mk2(18); let o = wrapS(s); let v = keep(o).unwrap(); println(f"r{v.id}") }
+fn s_loop() {
+    let mut i = 0;
+    while i < 2 {
+        let o = Some(mk2(19 + i)); let p = keep(o); let v = p.unwrap(); println(f"s{v.id}");
+        i = i + 1;
+    }
+}
+fn t_reassign() { let o = Some(mk2(21)); let p = keep(o); let mut q = p; q = Some(mk2(22)); println(f"t{q.is_some()}") }
+fn main() {
+    a_unwrap(); println("a.")
+    b_match_move(); println("b.")
+    c_match_read(); println("c.")
+    d_iflet(); println("d.")
+    e_plain(); println("e.")
+    f_chain(); println("f.")
+    g_generic(); println("g.")
+    h_maybe(); println("h.")
+    i_maybe_none(); println("i.")
+    j_wrap_chain(); println("j.")
+    k_s3(); println("k.")
+    l_rebind(); println("l.")
+    m_unwrap_or(); println("m.")
+    n_call_unwrap(); println("n.")
+    o_ret(); println("o.")
+    p_ret_plain(); println("p.")
+    q_field(); println("q.")
+    r_wrap_call_unwrap(); println("r.")
+    s_loop(); println("s.")
+    t_reassign(); println("t.")
+    println("end")
+}

@@ -1,0 +1,18 @@
+
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
+struct P { id: i64, name: String }
+fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
+struct Box2 { mut xs: Vec[R] }
+
+impl Box2 {
+    fn after(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } println(f"s{r.inner.v}"); }
+    fn before(mut ref self, r: R, k: bool) { println(f"s{r.inner.v}"); if k { self.xs.push(r); } }
+    fn bare(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } }
+}
+fn ff(v: mut ref Vec[R], r: R, k: bool) { if k { v.push(r); } println(f"s{r.inner.v}"); }
+fn pf(v: mut ref Vec[P], p: P, k: bool) { if k { v.push(p); } println(f"s{p.id}"); }
+
+fn main() { }

@@ -1,0 +1,19 @@
+
+struct Inner { s: String }
+struct A { value: Option[Inner] }
+fn use_a(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn mk() -> A { A { value: Some(Inner { s: "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm".to_string() }) } }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { value: Some(Inner { s: "ssssssssssssssssssssssssssssssssssssssss".to_string() }) }); i = i + 1; }
+    v
+}
+fn main() {
+    let xs = build();
+    let mut t = 0;
+    for a in xs { t = t + use_a(a); }            // Vec-sourced: always was clean
+    let mut i = 0;                               // fresh-temp source: the broken path
+    while i < 6 { t = t + use_a(mk()); i = i + 1; }
+    println(t);
+}

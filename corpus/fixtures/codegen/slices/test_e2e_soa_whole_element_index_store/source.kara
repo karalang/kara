@@ -1,0 +1,18 @@
+
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn main() with panics {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 0.0, y: 0.0 });
+    grid.push(E { x: 0.0, y: 0.0 });
+    grid.push(E { x: 0.0, y: 0.0 });
+    let mut i = 0;
+    while i < grid.len() {
+        grid[i] = E { x: (i + 1) as f64, y: (i * 10) as f64 };
+        i = i + 1;
+    }
+    let mut s = 0.0;
+    let mut j = 0;
+    while j < grid.len() { s = s + grid[j].x + grid[j].y; j = j + 1; }
+    println(s);
+}

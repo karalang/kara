@@ -1,0 +1,16 @@
+
+fn main() with sends(Network) receives(Network) {{
+    let c = Client.new();
+    match c.request("PUT", "http://127.0.0.1:{port}/p")
+           .header("X-A", "one")
+           .header("X-B", "two")
+           .body("payload42")
+           .timeout(5000)
+           .send() {{
+        Ok(r) => {{
+            println(r.status());
+            println(r.body());
+        }}
+        Err(e) => println("err " + e.message()),
+    }}
+}}

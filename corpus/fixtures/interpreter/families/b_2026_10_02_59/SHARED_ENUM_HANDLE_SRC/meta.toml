@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_02_59.rs::SHARED_ENUM_HANDLE_SRC"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

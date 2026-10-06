@@ -1,0 +1,27 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+enum SBox { Full(Res), Empty }
+enum Loud { Hold(Res), Quiet }
+impl Drop for Loud {
+    fn drop(mut ref self) {
+        println("loud drop")
+    }
+}
+fn mk(n: i64) -> SBox {
+    return SBox.Full(Res { id: n, name: f"s{n}" });
+}
+fn mk_loud(n: i64) -> Loud {
+    return Loud.Hold(Res { id: n, name: f"l{n}" });
+}
+fn main() {
+    let mut a = mk(1);
+    a = mk(2);
+    let mut b = mk_loud(3);
+    b = mk_loud(4);
+    println("end");
+}

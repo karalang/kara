@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/patterns.rs::asan_arm_bound_payload_assigned_over_a_mut_local_has_an_owner"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    v.push((3, 1));
+    v.push((1, 2));
+    v.push((3, 0));
+    v.sort();
+    for t in v {
+        println(t.0 * 10 + t.1);
+    }
+}

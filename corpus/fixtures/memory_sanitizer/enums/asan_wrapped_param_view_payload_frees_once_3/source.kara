@@ -1,0 +1,10 @@
+
+struct R {{ id: i64, name: String }}
+impl Drop for R {{ fn drop(mut ref self) {{ println(f"dR{{self.id}} {{self.name}}") }} }}
+struct S {{ r: R }}
+struct S3 {{ a: R, b: R }}
+fn take(r: R) -> i64 {{ {body} 7 }}
+fn main() {{
+    let v = take(R {{ id: 1, name: f"heap-one" }});
+    println(f"v={{v}}");
+}}

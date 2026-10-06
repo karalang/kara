@@ -1,0 +1,36 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+
+struct HoRes { a: R, b: Result[R, String] }
+struct HoOpt { a: R, b: Option[R] }
+struct HoPln { a: R, b: R }
+struct HoStr { a: R, b: String }
+struct WrapR { inner: HoRes }
+struct WrapO { inner: HoOpt }
+struct WrapP { inner: HoPln }
+struct WrapS { inner: HoStr }
+struct Outer { h: WrapR }
+
+fn cell_res()   { let w = WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
+fn cell_local() { let h = HoRes { a: mk(2), b: Result.Ok(mk(102)) };                  let HoRes { a, b } = h;       println(f"  rd{a.id}") }
+fn cell_opt()   { let w = WrapO { inner: HoOpt { a: mk(3), b: Option.Some(mk(103)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}") }
+fn cell_pln()   { let w = WrapP { inner: HoPln { a: mk(4), b: mk(104) } };            let HoPln { a, b } = w.inner; println(f"  rd{a.id}") }
+fn cell_str()   { let w = WrapS { inner: HoStr { a: mk(5), b: "plain" } };            let HoStr { a, b } = w.inner; println(f"  rd{a.id}") }
+fn cell_two()   { let g = Outer { h: WrapR { inner: HoRes { a: mk(6), b: Result.Ok(mk(106)) } } }; let HoRes { a, b } = g.h.inner; println(f"  rd{a.id}") }
+fn cell_live()  { let w = WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}"); println(f"  w{w.inner.a.id}") }
+fn cell_nodest(){ let w = WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108)) } }; println(f"  rd{w.inner.a.id}") }
+fn cell_move()  { let w = WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } }; let h = w.inner; println(f"  rd{h.a.id}") }
+
+fn main() {
+    println("res");    cell_res()
+    println("local");  cell_local()
+    println("opt");    cell_opt()
+    println("pln");    cell_pln()
+    println("str");    cell_str()
+    println("two");    cell_two()
+    println("live");   cell_live()
+    println("nodest"); cell_nodest()
+    println("move");   cell_move()
+    println("done")
+}

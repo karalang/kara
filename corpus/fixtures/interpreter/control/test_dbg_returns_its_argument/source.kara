@@ -1,0 +1,4 @@
+fn main() {
+    let x = dbg(3) + dbg(4);
+    println(x);
+}

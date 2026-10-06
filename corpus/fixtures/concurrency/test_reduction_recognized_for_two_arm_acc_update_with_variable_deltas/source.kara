@@ -1,0 +1,11 @@
+
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let even: bool = (k % 2i64) == 0i64;
+                if even { sum = sum + (k * 2i64); } else { sum = sum + k; }
+                k = k + 1i64;
+            }
+        }
+        

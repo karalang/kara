@@ -1,0 +1,52 @@
+// #100 micro-bench: ref-borrow variant of is_same (matches Rust's &-borrow — no
+// per-node rc-inc/dec). Isolates how much of kara's gap is RC-by-value vs the
+// Option[shared] traversal codegen itself. Same K, same sink 718339783.
+shared struct TreeNode { val: i64, mut left: Option[TreeNode], mut right: Option[TreeNode] }
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => { if v < n.val { n.left = insert(n.left, v); } else { n.right = insert(n.right, v); } Some(n) }
+    }
+}
+fn is_same(p: ref Option[TreeNode], q: ref Option[TreeNode]) -> bool {
+    match p {
+        None => { match q { None => true, Some(_) => false } }
+        Some(pn) => { match q { None => false, Some(qn) => pn.val == qn.val and is_same(pn.left, qn.left) and is_same(pn.right, qn.right) } }
+    }
+}
+fn build(nums: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None; let mut i = 0;
+    while i < nums.len() { root = insert(root, nums[i]); i = i + 1; }
+    root
+}
+fn main() {
+    // Build 8 tree pairs once: pair i has p == q iff i is even (identical), else differs by one value.
+    let base = [16,8,24,4,12,20,28,2,6,10,14,18,22,26,30];
+    let mut pool_p: Vec[Option[TreeNode]] = Vec.new();
+    let mut pool_q: Vec[Option[TreeNode]] = Vec.new();
+    let mut i = 0;
+    while i < 8 {
+        let mut pv: Vec[i64] = Vec.new();
+        let mut qv: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < base.len() {
+            pv.push(base[k]);
+            let bump = if (i % 2) == 1 and k == (i % base.len()) { 1 } else { 0 };
+            qv.push(base[k] + bump);
+            k = k + 1;
+        }
+        pool_p.push(build(pv));
+        pool_q.push(build(qv));
+        i = i + 1;
+    }
+    let mut acc = 1;
+    let mut rep = 0;
+    while rep < 6000000 {
+        let idx = acc % 8;
+        let same = is_same(pool_p[idx], pool_q[idx]);
+        let bit = if same { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

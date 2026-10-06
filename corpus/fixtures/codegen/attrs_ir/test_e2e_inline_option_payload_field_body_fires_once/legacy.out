@@ -1,0 +1,16 @@
+inline-field:
+10
+drop 1
+inline-field-byvalue:
+20
+drop 2
+boxed-field:
+30
+drop 3 c3
+result-sibling:
+40
+drop 4
+direct-binding:
+drop 5
+50
+end

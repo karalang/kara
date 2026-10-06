@@ -1,0 +1,13 @@
+source = "tests/codegen/concurrency.rs::test_ir_par_block_arc_promoted_binding_uses_atomic_rc"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "uses-moved"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,13 @@
+source = "tests/codegen/patterns.rs::e2e_partial_struct_let_pattern_with_drop_fields_binds_by_name"
+dedup_of = ["tests/memory_sanitizer/patterns.rs::asan_partial_struct_let_pattern_with_drop_fields_clean"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

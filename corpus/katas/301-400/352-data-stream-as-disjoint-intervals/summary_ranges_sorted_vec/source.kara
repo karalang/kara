@@ -1,0 +1,126 @@
+// LeetCode #352: Data Stream as Disjoint Intervals — two sorted vectors
+// and a binary search.
+//
+// starts[i] and ends[i] are the i-th interval in ascending order. A new
+// value v finds, by binary search, the first interval starting after v. The
+// one before it may already cover v or end at v - 1; the one at that index may
+// start at v + 1. Joining the two removes an entry, extending one changes it
+// in place, and a lone value is inserted at the index.
+//
+// add_num is O(log k) to find the place plus O(k) to shift the vectors, and
+// get_intervals is O(k), for k disjoint intervals. The shifts are memory
+// moves, so for the k <= 5001 this problem allows the vectors stay close to
+// the sorted map.
+
+struct SummaryRanges {
+    starts: Vec[i64],
+    ends: Vec[i64],
+}
+
+impl SummaryRanges {
+    fn new() -> SummaryRanges {
+        return SummaryRanges { starts: Vec.new(), ends: Vec.new() };
+    }
+
+    // The index of the first interval that starts after `value`.
+    fn first_after(ref self, value: i64) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.starts.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.starts[mid] <= value {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    fn add_num(mut ref self, value: i64) {
+        let i = self.first_after(value);
+        let joins_left = i > 0 and self.ends[i - 1] >= value - 1;
+        if i > 0 and self.ends[i - 1] >= value {
+            return;
+        }
+        let joins_right = i < self.starts.len() and self.starts[i] == value + 1;
+        if joins_left and joins_right {
+            self.ends[i - 1] = self.ends[i];
+            self.starts.remove(i);
+            self.ends.remove(i);
+        } else if joins_left {
+            self.ends[i - 1] = value;
+        } else if joins_right {
+            self.starts[i] = value;
+        } else {
+            self.starts.insert(i, value);
+            self.ends.insert(i, value);
+        }
+    }
+
+    fn get_intervals(ref self) -> Vec[(i64, i64)] {
+        let mut out: Vec[(i64, i64)] = Vec.new();
+        for i in 0..self.starts.len() {
+            out.push((self.starts[i], self.ends[i]));
+        }
+        return out;
+    }
+}
+
+fn show(intervals: ref Vec[(i64, i64)]) -> String {
+    let mut text = "";
+    for (s, e) in intervals {
+        if text.len() > 0 {
+            text = text + " ";
+        }
+        text = text + f"[{s}, {e}]";
+    }
+    if text.len() == 0 {
+        return "(empty)";
+    }
+    return text;
+}
+
+// A pseudo-random stream: a linear congruential generator modulo 2^31,
+// reduced to 0..=limit.
+fn next_value(state: mut ref i64, limit: i64) -> i64 {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return (state >> 8) % (limit + 1);
+}
+
+fn main() {
+    // The example from the problem statement.
+    let mut ranges = SummaryRanges.new();
+    for v in [1, 3, 7, 2, 6] {
+        ranges.add_num(v);
+        println(f"add {v}: {show(ranges.get_intervals())}");
+    }
+
+    // Edge cases: a repeat, a value inside an interval, the ends of the range,
+    // a value that bridges two intervals, and values arriving in descending
+    // order.
+    let mut edge = SummaryRanges.new();
+    println(f"nothing added: {show(edge.get_intervals())}");
+    for v in [5, 5, 0, 10000, 3, 4, 9999, 9998, 2, 1, 6] {
+        edge.add_num(v);
+    }
+    println(f"edges: {show(edge.get_intervals())}");
+
+    // A long stream over 0..=10000 with a report every 3000 values.
+    let mut stream = SummaryRanges.new();
+    let mut state: i64 = 352;
+    let mut checksum = 0;
+    for i in 1..30001 {
+        stream.add_num(next_value(mut state, 10000));
+        if i % 3000 == 0 {
+            let intervals = stream.get_intervals();
+            let mut covered = 0;
+            for (s, e) in intervals {
+                covered += e - s + 1;
+                checksum = (checksum * 31 + s * 7 + e) % 1000000007;
+            }
+            println(f"after {i}: {intervals.len()} intervals covering {covered}");
+        }
+    }
+    println(f"checksum {checksum}");
+}

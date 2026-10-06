@@ -1,0 +1,30 @@
+m/arr
+  r:aaaaaaaa0
+  dSaaaaaaaa0
+  dSaaaaaaaa1
+m/wild
+  w
+m/str
+  r:cccccccc0
+m/res
+  r
+  dSdddddddd0
+  dSdddddddd1
+m/one
+  r
+  dR1
+b/noheap
+  r
+  dN2
+  dN3
+b/fresh
+  r:gggggggg0
+  dSgggggggg0
+  dSgggggggg1
+b/let
+  r
+  dShhhhhhhh0
+  dShhhhhhhh1
+b/mono
+  r
+end

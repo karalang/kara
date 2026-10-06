@@ -1,0 +1,13 @@
+source = "tests/cli.rs::wasm_browser_build_and_run_e2e"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

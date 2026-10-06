@@ -1,0 +1,103 @@
+// Benchmark workload for LeetCode #211 — Add and Search Words Data Structure.
+//
+// Build-once + punch: an index-pool trie is built ONCE from NWORDS deterministic
+// PRNG words (fixed length WLEN over a small alphabet), then NQUERY PRNG patterns
+// — each carrying a sprinkling of '.' wildcards — are matched by the recursive
+// backtracking DFS that is this problem's whole point (a literal follows one
+// edge; a '.' fans out to every child). The trie is deliberately sized so only a
+// fraction of patterns match, keeping the sink discriminating. The recursion's
+// data-dependent branching does NOT vectorize. Sink = count of matching patterns.
+
+fn dfs(
+    children: ref Vec[i64],
+    is_end: ref Vec[i64],
+    wild: ref Vec[i64],
+    letter: ref Vec[i64],
+    alpha: i64,
+    wlen: i64,
+    cur: i64,
+    pos: i64,
+) -> bool {
+    if pos == wlen { return is_end[cur] == 1; }
+    if wild[pos] == 1 {
+        let mut a = 0;
+        while a < alpha {
+            let nc = children[cur * alpha + a];
+            if nc != 0 {
+                if dfs(children, is_end, wild, letter, alpha, wlen, nc, pos + 1) {
+                    return true;
+                }
+            }
+            a = a + 1;
+        }
+        return false;
+    }
+    let nc = children[cur * alpha + letter[pos]];
+    if nc == 0 { return false; }
+    return dfs(children, is_end, wild, letter, alpha, wlen, nc, pos + 1);
+}
+
+fn main() {
+    let alpha = 6;
+    let wlen = 6;
+    let nwords = 20000;
+    let nquery = 8000000;
+
+    let mut children: Vec[i64] = Vec.new();
+    let mut is_end: Vec[i64] = Vec.new();
+    let mut a = 0;
+    while a < alpha { children.push(0); a = a + 1; }
+    is_end.push(0);              // root at index 0
+
+    let mut state = 12345;
+
+    // Build phase.
+    let mut w = 0;
+    while w < nwords {
+        let mut cur = 0;
+        let mut k = 0;
+        while k < wlen {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let c = state % alpha;
+            let nxt = children[cur * alpha + c];
+            if nxt == 0 {
+                let idx = is_end.len();
+                let mut aa = 0;
+                while aa < alpha { children.push(0); aa = aa + 1; }
+                is_end.push(0);
+                children[cur * alpha + c] = idx;
+                cur = idx;
+            } else {
+                cur = nxt;
+            }
+            k = k + 1;
+        }
+        is_end[cur] = 1;
+        w = w + 1;
+    }
+
+    // Query phase.
+    let mut wild: Vec[i64] = Vec.new();
+    let mut letter: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < wlen { wild.push(0); letter.push(0); z = z + 1; }
+
+    let mut sink = 0;
+    let mut q = 0;
+    while q < nquery {
+        let mut k = 0;
+        while k < wlen {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let v = state;
+            if v % 6 == 0 { wild[k] = 1; } else { wild[k] = 0; }
+            letter[k] = (v / 6) % alpha;
+            k = k + 1;
+        }
+        if dfs(children, is_end, wild, letter, alpha, wlen, 0, 0) {
+            sink = sink + 1;
+        }
+        q = q + 1;
+    }
+
+    println(sink);
+}

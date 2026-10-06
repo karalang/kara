@@ -1,0 +1,8 @@
+
+fn max_val[T](a: T, b: T) -> T {
+    if a > b { a } else { b }
+}
+fn main() {
+    println(max_val(3, 7));
+    println(max_val(10, 2));
+}

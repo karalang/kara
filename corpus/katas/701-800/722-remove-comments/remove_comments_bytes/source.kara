@@ -1,0 +1,148 @@
+// LeetCode #722: Remove Comments — byte-indexed segment-slicing variant.
+//
+// The most lexer-faithful of the three styles, and the fastest. Where the
+// index-heavy version snapshots each line into a `Vec[char]` and the
+// streaming version pushes survivors char-by-char, this one scans the line's
+// zero-copy `bytes()` view with `b'/'` / `b'*'` byte classification and emits
+// each surviving run as a single **zero-copy slice** `source[li][a..b]`
+// appended via `push_str` (WIP §1 byte scan + §3 token-text slicing), O(segments)
+// calls instead of O(chars) `push`.
+//
+// Append uses slice syntax, NOT `.substring(a, b)`, on purpose: `s[a..b]` is a
+// borrowed view (no allocation), so `push_str` copies the bytes once — exactly
+// Rust's `&line[a..b]`. `.substring(a, b)` instead returns an *owned* `String`
+// (malloc + copy + free per segment); it is the right tool only when the run
+// must OUTLIVE the source (a stored token), and benches ~1.6× slower here. With
+// the zero-copy slice this kata beats Rust on the seq lane (see README
+// § Benchmarks).
+//
+// `seg_start` marks where the current surviving run began (a byte offset into
+// the line). A `//` or `/*` flushes `[seg_start, i)`; a closing `*/` resumes
+// the run at `seg_start = i`; end-of-line (outside a block) flushes the tail
+// `[seg_start, n)`. The `in_block` flag is the only state crossing lines, so a
+// multi-line block fuses the pre-`/*` and post-`*/` slices into one output
+// line. Input is ASCII C++ source, so byte offsets are char boundaries.
+
+fn remove_comments(source: ref Vec[String]) -> Vec[String] {
+    let slash: u8 = b'/';
+    let star:  u8 = b'*';
+
+    let mut result: Vec[String] = Vec.new();
+    let mut buffer: String = "";
+    let mut in_block = false;
+
+    let nlines = source.len();
+    let mut li = 0;
+    while li < nlines {
+        let bytes = source[li].bytes();        // zero-copy Slice[u8]
+        let n = bytes.len();
+
+        let mut seg_start = 0;              // byte offset of the live run
+        let mut i = 0;
+        while i < n {
+            if not in_block {
+                if i + 1 < n and bytes[i] == slash and bytes[i + 1] == slash {
+                    buffer.push_str(source[li][seg_start..i]);
+                    seg_start = n;             // rest of line is a comment
+                    break;
+                } else if i + 1 < n and bytes[i] == slash and bytes[i + 1] == star {
+                    buffer.push_str(source[li][seg_start..i]);
+                    in_block = true;
+                    i = i + 2;
+                } else {
+                    i = i + 1;
+                }
+            } else {
+                if i + 1 < n and bytes[i] == star and bytes[i + 1] == slash {
+                    in_block = false;
+                    i = i + 2;
+                    seg_start = i;             // live run resumes after `*/`
+                } else {
+                    i = i + 1;
+                }
+            }
+        }
+
+        if not in_block {
+            buffer.push_str(source[li][seg_start..n]);
+            if not buffer.is_empty() {
+                result.push(buffer);
+                buffer = "";
+            }
+        }
+        li = li + 1;
+    }
+    result
+}
+
+fn report(name: ref String, source: ref Vec[String]) {
+    let out = remove_comments(source);
+    let mut line: String = "";
+    line.push_str(name);
+    line.push_str(" -> [");
+    let mut k = 0;
+    let m = out.len();
+    while k < m {
+        if k > 0 {
+            line.push_str(", ");
+        }
+        line.push_str("\"");
+        line.push_str(out[k]);
+        line.push_str("\"");
+        k = k + 1;
+    }
+    line.push_str("]");
+    println(line);
+}
+
+fn main() {
+    let ex1: Vec[String] = [
+        "/*Test program */", "int main()", "{ ",
+        "  // variable declaration ", "int a, b, c;",
+        "/* This is a test", "   multiline  ", "   comment for ",
+        "   testing */", "a = b + c;", "}",
+    ];
+    report("ex1", ex1);
+
+    let ex2: Vec[String] = ["a/*comment", "line", "more_comment*/b"];
+    report("ex2", ex2);
+
+    let inline: Vec[String] = ["a/*c*/b"];
+    report("inline", inline);
+
+    let empty_block: Vec[String] = ["/**/"];
+    report("empty-block", empty_block);
+
+    let line_only: Vec[String] = ["// nothing here"];
+    report("line-only", line_only);
+
+    let trailing_line: Vec[String] = ["int x = 1; // set x"];
+    report("trailing-line", trailing_line);
+
+    let stray_close: Vec[String] = ["a*/b"];
+    report("stray-close", stray_close);
+
+    let slashes_in_block: Vec[String] = ["/* // not a line comment */code"];
+    report("slashes-in-block", slashes_in_block);
+
+    let open_in_line: Vec[String] = ["x // /* still a line comment"];
+    report("open-in-line", open_in_line);
+
+    let two_blocks: Vec[String] = ["a/*1*/b/*2*/c"];
+    report("two-blocks", two_blocks);
+
+    let span_empty: Vec[String] = ["start/*", "", "*/end"];
+    report("span-empty", span_empty);
+
+    let lone_symbols: Vec[String] = ["a / b * c"];
+    report("lone-symbols", lone_symbols);
+
+    let block_then_code: Vec[String] = ["pre/*x", "y*/post//tail"];
+    report("block-then-code", block_then_code);
+
+    let adjacent: Vec[String] = ["a/*x*//*y*/b"];
+    report("adjacent", adjacent);
+
+    let blanks: Vec[String] = ["", "   ", ""];
+    report("blanks", blanks);
+}

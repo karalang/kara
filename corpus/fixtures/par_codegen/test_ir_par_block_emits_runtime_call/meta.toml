@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_ir_par_block_emits_runtime_call"
+dedup_of = ["tests/par_codegen.rs::test_ir_par_branch_result_typed_let_emits_slot_and_cancel_store", "tests/par_codegen.rs::test_e2e_par_both_branches_run", "tests/wasm_codegen.rs::wasm_target_keeps_explicit_par_block_lowering"]
+expect = "stdout"
+exit = 0
+tags = ["par"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,7 @@
+
+#[target(native)]
+pub fn native_only(s: String) {}
+
+pub fn untagged(s: String) {}
+
+fn main() {}

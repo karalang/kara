@@ -1,0 +1,13 @@
+source = "tests/tls_codegen.rs::test_ir_ws_recv_text_routes_through_runtime_ffi_for_tls_accept_result"
+dedup_of = []
+expect = "skip"
+exit = 101
+tags = ["nondeterministic", "panic"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 101
+rules = []
+backends = []
+env = {}
+note = "output differs between two legacy runs (a bound port, scheduling or timing)"

@@ -1,0 +1,23 @@
+
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4, 5]);
+    println(f"{c.fold(0, |a, x| a + x)}");
+    println(f"{c.fold(1, |a, x| a * x)}");
+    println(f"{c.fold(0, |a, x| if x > 2 { a + 1 } else { a })}");
+
+    // String accumulator — the interpreter is not restricted to POD `A`.
+    let words: Column[i64] = Column.from_vec([1, 2, 3]);
+    let joined = words.fold("", |acc, x| acc + "!");
+    println(f"{joined}");
+
+    // Nulls are skipped (SQL/pandas posture).
+    let mut n: Column[i64] = Column.new();
+    n.push(10);
+    n.push_null();
+    n.push(20);
+    println(f"{n.fold(0, |a, x| a + x)}");
+
+    // Empty column returns `init` unchanged (the fold identity — no trap).
+    let e: Column[i64] = Column.from_vec([]);
+    println(f"{e.fold(99, |a, x| a + x)}");
+}

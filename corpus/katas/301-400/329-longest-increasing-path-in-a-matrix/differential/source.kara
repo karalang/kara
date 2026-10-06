@@ -1,0 +1,364 @@
+// Differential and property check for LeetCode #329.
+//
+// Four implementations of the same function, run on the same random grids:
+//
+//   by_dfs     depth-first search with a memo      (longest_increasing_path.kara)
+//   by_topo    peel layers of local maxima         (longest_increasing_path_topo.kara)
+//   by_sorted  DP over the cells in value order    (longest_increasing_path_sorted.kara)
+//   brute      depth-first search with no memo     (here only)
+//
+// Properties, over every round:
+//   P1  all four answers agree
+//   P2  1 <= answer <= rows * cols, for a non-empty grid
+//   P3  transposing the grid keeps the answer
+//   P4  mirroring every row keeps the answer
+//   P5  negating every value keeps the answer (each path runs backwards)
+//   P6  adding a constant to every value keeps the answer
+//   P7  the memo yields a witness: a path of exactly that many cells, each
+//       adjacent to the last and strictly larger
+
+// ---- by_dfs ----------------------------------------------------------------
+
+fn longest_from(matrix: ref Vec[Vec[i64]], memo: mut ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
+    if memo[r][c] > 0 {
+        return memo[r][c];
+    }
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let here = matrix[r][c];
+    let mut best = 1;
+    for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let nr = r + dr;
+        let nc = c + dc;
+        if nr >= 0 and nr < rows and nc >= 0 and nc < cols and matrix[nr][nc] > here {
+            let len = 1 + longest_from(matrix, memo, nr, nc);
+            if len > best {
+                best = len;
+            }
+        }
+    }
+    memo[r][c] = best;
+    return best;
+}
+
+fn by_dfs(matrix: ref Vec[Vec[i64]]) -> i64 {
+    if matrix.len() == 0 or matrix[0].len() == 0 {
+        return 0;
+    }
+    let mut memo: Vec[Vec[i64]] = Vec.new();
+    for row in matrix {
+        let mut zeros: Vec[i64] = Vec.new();
+        for _ in 0..row.len() {
+            zeros.push(0);
+        }
+        memo.push(zeros);
+    }
+    let mut best = 0;
+    for r in 0..matrix.len() {
+        for c in 0..matrix[0].len() {
+            let len = longest_from(matrix, mut memo, r, c);
+            if len > best {
+                best = len;
+            }
+        }
+    }
+    return best;
+}
+
+// ---- by_topo ---------------------------------------------------------------
+
+fn by_topo(matrix: ref Vec[Vec[i64]]) -> i64 {
+    if matrix.len() == 0 or matrix[0].len() == 0 {
+        return 0;
+    }
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let steps = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+
+    // out[r * cols + c] = how many neighbours of (r, c) are larger.
+    let mut out: Vec[i64] = Vec.new();
+    let mut layer: Vec[i64] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            let mut larger = 0;
+            for (dr, dc) in steps {
+                let nr = r + dr;
+                let nc = c + dc;
+                if nr >= 0 and nr < rows and nc >= 0 and nc < cols and matrix[nr][nc] > matrix[r][c] {
+                    larger += 1;
+                }
+            }
+            out.push(larger);
+            if larger == 0 {
+                layer.push(r * cols + c);
+            }
+        }
+    }
+
+    let mut layers = 0;
+    while layer.len() > 0 {
+        layers += 1;
+        let mut next_layer: Vec[i64] = Vec.new();
+        for cell in layer {
+            let r = cell / cols;
+            let c = cell % cols;
+            for (dr, dc) in steps {
+                let nr = r + dr;
+                let nc = c + dc;
+                if nr >= 0 and nr < rows and nc >= 0 and nc < cols and matrix[nr][nc] < matrix[r][c] {
+                    let k = nr * cols + nc;
+                    out[k] -= 1;
+                    if out[k] == 0 {
+                        next_layer.push(k);
+                    }
+                }
+            }
+        }
+        layer = next_layer;
+    }
+    return layers;
+}
+
+// ---- by_sorted -------------------------------------------------------------
+
+fn by_sorted(matrix: ref Vec[Vec[i64]]) -> i64 {
+    if matrix.len() == 0 or matrix[0].len() == 0 {
+        return 0;
+    }
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            cells.push((matrix[r][c], r * cols + c));
+        }
+    }
+    cells.sort_by(|a, b| b.0.cmp(a.0));
+
+    let mut best: Vec[i64] = Vec.new();
+    for _ in 0..rows * cols {
+        best.push(1);
+    }
+    let mut answer = 0;
+    for (value, cell) in cells {
+        let r = cell / cols;
+        let c = cell % cols;
+        for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and matrix[nr][nc] > value {
+                let len = best[nr * cols + nc] + 1;
+                if len > best[cell] {
+                    best[cell] = len;
+                }
+            }
+        }
+        if best[cell] > answer {
+            answer = best[cell];
+        }
+    }
+    return answer;
+}
+
+// ---- brute -----------------------------------------------------------------
+
+fn walk(matrix: ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
+    let mut best = 1;
+    for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let nr = r + dr;
+        let nc = c + dc;
+        if nr >= 0 and nr < matrix.len() and nc >= 0 and nc < matrix[0].len() and matrix[nr][nc] > matrix[r][c] {
+            let len = 1 + walk(matrix, nr, nc);
+            if len > best {
+                best = len;
+            }
+        }
+    }
+    return best;
+}
+
+fn brute(matrix: ref Vec[Vec[i64]]) -> i64 {
+    let mut best = 0;
+    for r in 0..matrix.len() {
+        for c in 0..matrix[r].len() {
+            let len = walk(matrix, r, c);
+            if len > best {
+                best = len;
+            }
+        }
+    }
+    return best;
+}
+
+// ---- checks ----------------------------------------------------------------
+
+struct Tally {
+    rounds: i64,
+    cells: i64,
+    failures: i64,
+}
+
+fn fail(t: mut ref Tally, property: String, matrix: ref Vec[Vec[i64]]) {
+    t.failures += 1;
+    if t.failures <= 10 {
+        println(f"{property} fails on {matrix}");
+    }
+}
+
+fn transpose(m: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for c in 0..m[0].len() {
+        let mut row: Vec[i64] = Vec.new();
+        for r in 0..m.len() {
+            row.push(m[r][c]);
+        }
+        out.push(row);
+    }
+    return out;
+}
+
+fn mirror(m: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in m {
+        let mut flipped: Vec[i64] = Vec.new();
+        let mut c = row.len() - 1;
+        while c >= 0 {
+            flipped.push(row[c]);
+            c -= 1;
+        }
+        out.push(flipped);
+    }
+    return out;
+}
+
+fn mapped(m: ref Vec[Vec[i64]], scale: i64, shift: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in m {
+        let mut changed: Vec[i64] = Vec.new();
+        for v in row {
+            changed.push(v * scale + shift);
+        }
+        out.push(changed);
+    }
+    return out;
+}
+
+// Rebuild one longest path from the DFS memo, and check it.
+fn witness_holds(m: ref Vec[Vec[i64]], answer: i64) -> bool {
+    let rows = m.len();
+    let cols = m[0].len();
+    let mut memo: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        let mut zeros: Vec[i64] = Vec.new();
+        for _ in 0..cols {
+            zeros.push(0);
+        }
+        memo.push(zeros);
+    }
+    let mut r = -1;
+    let mut c = -1;
+    for i in 0..rows {
+        for j in 0..cols {
+            if longest_from(m, mut memo, i, j) == answer and r < 0 {
+                r = i;
+                c = j;
+            }
+        }
+    }
+    if r < 0 {
+        return false;
+    }
+    let mut cells = 1;
+    while memo[r][c] > 1 {
+        let mut moved = false;
+        for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if not moved and nr >= 0 and nr < rows and nc >= 0 and nc < cols and m[nr][nc] > m[r][c] and memo[nr][nc] == memo[r][c] - 1 {
+                r = nr;
+                c = nc;
+                moved = true;
+            }
+        }
+        if not moved {
+            return false;
+        }
+        cells += 1;
+    }
+    return cells == answer;
+}
+
+fn check(m: Vec[Vec[i64]], t: mut ref Tally) {
+    t.rounds += 1;
+    let rows = m.len();
+    let cols = m[0].len();
+    t.cells += rows * cols;
+
+    let a = by_dfs(m);
+    let b = by_topo(m);
+    let c = by_sorted(m);
+    let d = brute(m);
+    if a != b or a != c or a != d {
+        fail(t, "P1", m);
+    }
+    if a < 1 or a > rows * cols {
+        fail(t, "P2", m);
+    }
+    if by_dfs(transpose(m)) != a {
+        fail(t, "P3", m);
+    }
+    if by_topo(mirror(m)) != a {
+        fail(t, "P4", m);
+    }
+    if by_sorted(mapped(m, -1, 0)) != a {
+        fail(t, "P5", m);
+    }
+    if by_dfs(mapped(m, 1, 1000)) != a {
+        fail(t, "P6", m);
+    }
+    if not witness_holds(m, a) {
+        fail(t, "P7", m);
+    }
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn main() {
+    let mut t = Tally { rounds: 0, cells: 0, failures: 0 };
+
+    // Edge cases.
+    check([[0]], mut t);
+    check([[5, 5, 5]], mut t);
+    check([[1], [2], [3]], mut t);
+    check([[9, 9, 4], [6, 6, 8], [2, 1, 1]], mut t);
+    check([[3, 4, 5], [3, 2, 6], [2, 2, 1]], mut t);
+    check([[1, 2, 3], [6, 5, 4], [7, 8, 9]], mut t);
+    check([[-4611686018427387904, 4611686018427387904]], mut t);
+
+    // Random rounds: 1 to 6 rows and columns, values in [0, k) for k from 1
+    // to 9, so most grids have ties and several local maxima.
+    let mut seed = 329;
+    for round in 0..600 {
+        let rows = next(mut seed) % 6 + 1;
+        let cols = next(mut seed) % 6 + 1;
+        let range = round % 9 + 1;
+        let mut m: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                row.push(next(mut seed) % range);
+            }
+            m.push(row);
+        }
+        check(m, mut t);
+    }
+
+    println(f"rounds {t.rounds}, cells {t.cells}, failures {t.failures}");
+    if t.failures == 0 {
+        println("all properties hold");
+    }
+}

@@ -1,0 +1,108 @@
+// Benchmark workload for LeetCode #142 — Linked List Cycle II.
+//
+// Build-once + punch, same index-pool substrate as #141: `K` lists laid out in
+// a shared `nxt` pool (`nxt[i]` = next global index, or -1 for the end), each
+// tail either a back-edge (cycle) or null per a deterministic LCG. Here Floyd's
+// TWO-PHASE algorithm returns the cycle ENTRY: phase 1 finds a meeting point,
+// phase 2 resets one pointer to the head and steps both until they meet at the
+// entry. `PASSES` times, with one tail toggled before each pass so the repeated
+// scans cannot be hoisted.
+//
+// Pointer-chasing, data-dependent, non-vectorizable. `detect` returns the entry's
+// LOCAL index (0..len-1), or -1 when acyclic. Sink = Σ over passes and lists of
+// (entry + 1) — the +1 offset keeps the acyclic (-1) contribution non-negative.
+
+fn detect(nxt: ref Vec[i64], head: i64) -> i64 {
+    let mut slow = head;
+    let mut fast = head;
+    let mut met = false;
+
+    let mut go = true;
+    while go {
+        fast = nxt[fast];
+        if fast < 0 { return 0 - 1; }
+        fast = nxt[fast];
+        if fast < 0 { return 0 - 1; }
+        slow = nxt[slow];
+        if slow == fast {
+            met = true;
+            go = false;
+        }
+    }
+
+    if not met {
+        return 0 - 1;
+    }
+
+    slow = head;
+    while slow != fast {
+        slow = nxt[slow];
+        fast = nxt[fast];
+    }
+    return slow - head;
+}
+
+fn main() {
+    let k_lists = 1000;
+    let len = 60;
+    let passes = 3000;
+    let cycpct = 50;
+    let pool = k_lists * len;
+
+    let mut nxt: Vec[i64] = Vec.new();
+    let mut p = 0;
+    while p < pool {
+        nxt.push(0);
+        p = p + 1;
+    }
+    let mut target: Vec[i64] = Vec.new();
+    let mut tail: Vec[i64] = Vec.new();
+
+    let mut state = 12345;
+
+    let mut k = 0;
+    while k < k_lists {
+        let base = k * len;
+        let mut j = 0;
+        while j < len - 1 {
+            nxt[base + j] = base + j + 1;
+            j = j + 1;
+        }
+        let t = base + len - 1;
+        tail.push(t);
+
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let coin = (state >> 16) % 100;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let tl = (state >> 16) % len;
+        target.push(base + tl);
+
+        if coin < cycpct {
+            nxt[t] = base + tl;
+        } else {
+            nxt[t] = 0 - 1;
+        }
+        k = k + 1;
+    }
+
+    let mut sink = 0;
+    let mut pass = 0;
+    while pass < passes {
+        let idx = pass % k_lists;
+        let ti = tail[idx];
+        if nxt[ti] < 0 {
+            nxt[ti] = target[idx];
+        } else {
+            nxt[ti] = 0 - 1;
+        }
+        let mut kk = 0;
+        while kk < k_lists {
+            let e = detect(nxt, kk * len);
+            sink = sink + e + 1;
+            kk = kk + 1;
+        }
+        pass = pass + 1;
+    }
+
+    println(sink);
+}

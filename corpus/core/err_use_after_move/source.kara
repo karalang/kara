@@ -1,0 +1,6 @@
+fn take(s: String) { println(s); }
+fn main() {
+    let s = "hi".to_string();
+    take(s);
+    println(s);
+}

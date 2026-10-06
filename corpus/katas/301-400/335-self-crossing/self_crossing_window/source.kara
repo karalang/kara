@@ -1,0 +1,104 @@
+// LeetCode #335: Self Crossing — real segments, checked against a window.
+//
+// Walk the path as axis-aligned segments with their end points. Two
+// axis-aligned segments meet exactly when their x ranges overlap and their
+// y ranges overlap, ends included, so touching counts. A new segment can
+// only meet one of the three segments three, four or five moves back
+// before it would have met a later one, so only those are checked: the
+// geometry, rather than the inequalities, decides each case.
+//
+// O(n) time, O(n) space for the segments.
+
+struct Seg {
+    x_lo: i64,
+    x_hi: i64,
+    y_lo: i64,
+    y_hi: i64,
+}
+
+fn seg(x1: i64, y1: i64, x2: i64, y2: i64) -> Seg {
+    return Seg { x_lo: x1.min(x2), x_hi: x1.max(x2), y_lo: y1.min(y2), y_hi: y1.max(y2) };
+}
+
+fn meets(a: ref Seg, b: ref Seg) -> bool {
+    return a.x_lo <= b.x_hi and b.x_lo <= a.x_hi and a.y_lo <= b.y_hi and b.y_lo <= a.y_hi;
+}
+
+fn is_self_crossing(d: ref Vec[i64]) -> bool {
+    // north, west, south, east
+    let dx = [0, -1, 0, 1];
+    let dy = [1, 0, -1, 0];
+    let mut segs: Vec[Seg] = Vec.new();
+    let mut x: i64 = 0;
+    let mut y: i64 = 0;
+    for i in 0..d.len() {
+        let nx = x + dx[i % 4] * d[i];
+        let ny = y + dy[i % 4] * d[i];
+        let s = seg(x, y, nx, ny);
+        let mut back = 3;
+        while back <= 5 and back <= i {
+            if meets(s, segs[i - back]) {
+                return true;
+            }
+            back += 1;
+        }
+        segs.push(s);
+        x = nx;
+        y = ny;
+    }
+    return false;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn show(d: Vec[i64]) {
+    let mut parts: Vec[String] = Vec.new();
+    for x in d.iter() {
+        parts.push(x.to_string());
+    }
+    let shown = parts.join(", ");
+    println(f"[{shown}] -> {is_self_crossing(d)}");
+}
+
+fn main() {
+    show(vec![2, 1, 1, 2]);
+    show(vec![1, 2, 3, 4]);
+    show(vec![1, 1, 1, 2]);
+    show(vec![]);
+    show(vec![1]);
+    show(vec![1, 1, 1]);
+    show(vec![1, 1, 2, 1, 1]);
+    show(vec![3, 3, 4, 2, 2]);
+    show(vec![1, 1, 2, 2, 1, 1]);
+    show(vec![3, 3, 3, 2, 1, 1]);
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    show(vec![9, 8, 7, 6, 5, 4, 3, 2, 1]);
+    show(vec![1, 2, 3, 4, 3, 3, 1]);
+    show(vec![2, 2, 4, 3, 3, 1, 4]);
+    show(vec![1000000000, 1000000000, 1000000000, 999999999]);
+    let mut seed = 335;
+    for round in 0..8 {
+        let n = 4 + round * 2;
+        let mut d: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            d.push(1 + next(mut seed) % (3 + round));
+        }
+        show(d);
+    }
+    // An outward spiral never crosses; turning it inward early enough
+    // makes the next segment come back across an old one.
+    let mut spiral: Vec[i64] = Vec.new();
+    for k in 1..100001 {
+        spiral.push(k);
+    }
+    let count = spiral.len();
+    let out = is_self_crossing(spiral);
+    spiral.push(1);
+    let still = is_self_crossing(spiral);
+    spiral.push(100002);
+    let crossed = is_self_crossing(spiral);
+    println(f"spiral: {count} moves -> {out}, turn in -> {still}, then out -> {crossed}");
+}

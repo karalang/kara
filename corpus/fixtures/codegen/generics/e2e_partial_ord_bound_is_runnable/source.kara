@@ -1,0 +1,23 @@
+#[derive(PartialEq, PartialOrd)]
+struct Po { v: i64 }
+
+fn lt_ord[T: Ord](a: T, b: T) -> bool { return a < b }
+fn lt_po[T: PartialOrd](a: T, b: T) -> bool { return a < b }
+fn le_po[T: PartialOrd](a: T, b: T) -> bool { return a <= b }
+fn gt_po[T: PartialOrd](a: T, b: T) -> bool { return a > b }
+fn ge_po[T: PartialOrd](a: T, b: T) -> bool { return a >= b }
+
+fn main() {
+    let n = env.args().len() as i64;
+    println(f"ord  {lt_ord(n, n + 1)} {lt_ord(f"a", f"b")}");
+    println(f"i64  {lt_po(n, n + 1)} {le_po(n, n)} {gt_po(n + 1, n)} {ge_po(n, n + 1)}");
+    let u: u64 = 18446744073709551615u64;
+    println(f"u64  {lt_po(u, 1u64)} {gt_po(u, 1u64)}");
+    let f: f64 = (n as f64) + 1.0;
+    println(f"f64  {lt_po(f, f + 1.0)} {ge_po(f, f)}");
+    println(f"str  {lt_po(f"a", f"b")} {gt_po(f"a", f"b")}");
+    println(f"user {lt_po(Po { v: n }, Po { v: n + 1 })} {ge_po(Po { v: n }, Po { v: n })}");
+    let z: f64 = (n as f64) - 1.0;
+    let nan: f64 = z / z;
+    println(f"nan  {lt_po(nan, f)} {le_po(nan, nan)} {gt_po(f, nan)} {ge_po(nan, nan)}");
+}

@@ -1,0 +1,18 @@
+
+#[gpu]
+fn poly(x: f32) -> f32 {
+    let mut acc: f32 = 0.0;
+    for i in 0..4 {
+        for k in 1..=2 {
+            acc = acc + x;
+        }
+    }
+    acc
+}
+
+fn main() {
+    let mut v: Vec[f32] = Vec.new();
+    v.push(2.0);
+    let out = gpu.dispatch(poly, v);
+    println(out[0] as i64);
+}

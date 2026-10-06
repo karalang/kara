@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("pear".to_string(), 3_i64);
+    m.insert("fig".to_string(), 1_i64);
+    m.insert("kiwi".to_string(), 2_i64);
+    let mut keys: Vec[String] = m.keys();
+    keys.sort();
+    for k in keys {
+        println(f"{k} {m.get_or(k.clone(), 0_i64)}");
+    }
+}

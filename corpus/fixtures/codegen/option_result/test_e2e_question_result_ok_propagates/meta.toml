@@ -1,0 +1,13 @@
+source = "tests/codegen/option_result.rs::test_e2e_question_result_ok_propagates"
+dedup_of = ["tests/lljit_e2e.rs::jit_e2e_question_mark_happy_path"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

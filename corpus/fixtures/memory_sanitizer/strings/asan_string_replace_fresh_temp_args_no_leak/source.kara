@@ -1,0 +1,17 @@
+
+fn main() {
+    let s = "a-b-c-d".to_string();
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let r1 = s.replace("-".to_string(), "_".to_string());
+        total = total + (r1.len() as i64);
+        let r2 = s.replace("-".to_string().to_uppercase().to_lowercase(), "SEP".to_string());
+        total = total + (r2.len() as i64);
+        let from = "-".to_string();
+        let r3 = s.replace(from, "+".to_string());
+        total = total + (r3.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}

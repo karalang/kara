@@ -1,0 +1,74 @@
+// LeetCode 292 — Nim Game, by SEARCHING THE GAME TREE.
+//
+// The most literal reading of "both play optimally": from a heap of `n`, try
+// each legal move, recurse on what the opponent then faces, and win if any move
+// leaves them unable to win.
+//
+//     can_win(n) = can_win(n-1) == false
+//               or can_win(n-2) == false
+//               or can_win(n-3) == false
+//
+// which is the same recurrence as `nim_game_dp.kara` read top-down instead of
+// bottom-up. Memoized it is O(n); unmemoized it is the tribonacci tree and
+// takes exponential time, which is why the memo is not an optimization here but
+// the difference between finishing and not.
+//
+// WHY KEEP AN ARM THAT DUPLICATES THE DP. It fails DIFFERENTLY. The DP is a
+// loop over an array and its risks are indexing ones; this is recursion, and
+// its risks are stack depth and memo-key handling. A differential that runs
+// both is checking two implementations, not one written twice — and the
+// recursion is what a reader reaches for first when the phrase is "plays
+// optimally", so it is the version most likely to be written by hand.
+//
+// The recursion depth is `n`, so this arm has its own ceiling well below the
+// DP's memory one. `differential.kara` bounds it accordingly rather than
+// discovering the limit by crashing.
+
+fn solve(n: i64, memo: mut ref Vec[i64]) -> bool {
+    if n <= 0 {
+        return false;
+    }
+    // 0 = unknown, 1 = winning, 2 = losing. A plain Vec[i64] rather than an
+    // Option[bool] so the "not computed yet" state is one comparison.
+    if memo[n] != 0 {
+        return memo[n] == 1;
+    }
+    let mut w = false;
+    let mut take = 1;
+    while take <= 3 {
+        if n - take >= 0 {
+            if not solve(n - take, memo) {
+                w = true;
+            }
+        }
+        take = take + 1;
+    }
+    if w { memo[n] = 1; } else { memo[n] = 2; }
+    return w;
+}
+
+fn can_win_nim(n: i64) -> bool {
+    if n <= 0 {
+        return false;
+    }
+    let mut memo: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i <= n {
+        memo.push(0);
+        i = i + 1;
+    }
+    return solve(n, mut memo);
+}
+
+fn report(n: i64) {
+    println(f"n={n} -> {can_win_nim(n)}");
+}
+
+fn main() {
+    let mut n = 1;
+    while n <= 12 {
+        report(n);
+        n = n + 1;
+    }
+    report(0);
+}

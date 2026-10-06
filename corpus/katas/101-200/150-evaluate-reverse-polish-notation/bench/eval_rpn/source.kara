@@ -1,0 +1,96 @@
+// Benchmark workload for LeetCode #150 — Evaluate Reverse Polish Notation.
+//
+// Build-once + punch: one large VALID postfix token stream is generated once with
+// a deterministic 32-bit LCG (overflow-safe in i64). It is the left-fold shape
+// `a b op c op d op ...` — every operator's right operand (its divisor, when the
+// op is `/`) is a freshly-pushed literal >= 1, so evaluation never divides by
+// zero. Tokens are integer-coded: a value >= 0 is an operand, a negative value
+// -(k+1) is operator k (0:+ 1:- 2:* 3:/). Each punch PERTURBS one operand (so the
+// evaluation cannot be hoisted) and re-runs the stack machine, reducing the
+// accumulator into [0, MODP) after every operator (canonicalized so C/Rust/Go/
+// Kāra truncated `%` and Python floored `%` agree). The per-op branch on operator
+// kind is data-dependent — no vectorization. Sink = sum of the K results mod MODP.
+
+fn eval_rpn(tok: ref Vec[i64], stk: mut ref Vec[i64], modp: i64) -> i64 {
+    let t = tok.len();
+    let mut sp = 0;
+    let mut i = 0;
+    while i < t {
+        let x = tok[i];
+        if x >= 0 {
+            stk[sp] = x;
+            sp = sp + 1;
+        } else {
+            let op = -x - 1;
+            sp = sp - 1;
+            let b = stk[sp];
+            sp = sp - 1;
+            let a = stk[sp];
+            let mut r = 0;
+            if op == 0 {
+                r = a + b;
+            } else if op == 1 {
+                r = a - b;
+            } else if op == 2 {
+                r = a * b;
+            } else {
+                r = a / b;
+            }
+            r = ((r % modp) + modp) % modp;
+            stk[sp] = r;
+            sp = sp + 1;
+        }
+        i = i + 1;
+    }
+    return stk[0];
+}
+
+fn main() {
+    let m = 100000;        // number of operators
+    let punches = 700;
+    let modp = 1000000007;
+    let opr = 1000;        // operand range: values in [1, opr]
+
+    let mut tok: Vec[i64] = Vec.new();
+    let mut state = 12345;
+
+    // operand0, operand1, op1
+    state = (state * 1103515245 + 12345) & 2147483647;
+    tok.push(state % opr + 1);
+    state = (state * 1103515245 + 12345) & 2147483647;
+    tok.push(state % opr + 1);
+    state = (state * 1103515245 + 12345) & 2147483647;
+    tok.push(-(state % 4) - 1);
+
+    // then (operand_k, op_k) for k = 2..=m
+    let mut k = 2;
+    while k <= m {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        tok.push(state % opr + 1);
+        state = (state * 1103515245 + 12345) & 2147483647;
+        tok.push(-(state % 4) - 1);
+        k = k + 1;
+    }
+
+    // Reusable operand stack (left-fold depth is 2; size 4 is ample).
+    let mut stk: Vec[i64] = Vec.new();
+    let mut si = 0;
+    while si < 4 {
+        stk.push(0);
+        si = si + 1;
+    }
+
+    let mut sink = 0;
+    let mut pn = 0;
+    while pn < punches {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let r = state % (m + 1);
+        let tokpos = if r == 0 { 0 } else { 2 * r - 1 };
+        state = (state * 1103515245 + 12345) & 2147483647;
+        tok[tokpos] = state % opr + 1;
+        let res = eval_rpn(tok, mut stk, modp);
+        sink = (sink + res) % modp;
+        pn = pn + 1;
+    }
+    println(sink);
+}

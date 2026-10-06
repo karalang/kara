@@ -1,0 +1,13 @@
+
+#[derive(Display)]
+enum IoErr { NotFound, Other(String) }
+trait Error { fn message(ref self) -> String; }
+impl Error for IoErr { fn message(ref self) -> String { self.to_string() } }
+fn report[E: Error](e: ref E) -> String { e.message() }
+fn main() {
+    let a: IoErr = IoErr.NotFound;
+    let b: IoErr = IoErr.Other(String.from("disk full"));
+    println(a.message());
+    println(b.message());
+    println(report(a));
+}

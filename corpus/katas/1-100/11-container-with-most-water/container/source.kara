@@ -1,0 +1,111 @@
+// LeetCode #11: Container With Most Water — two-pointer O(n) area maximization.
+// O(n) time, O(1) space.
+//
+// Given a vertical-line height series, pick two lines (l, r) with l < r so
+// that the rectangle between them holds the most water — area is bounded by
+// the *shorter* of the two heights times the horizontal distance:
+//
+//     area(l, r) = min(h[l], h[r]) * (r - l)
+//
+// Brute force is O(n²) (every pair). The two-pointer trick collapses it to
+// O(n) by observing that when we have lo < hi with h[lo] ≤ h[hi]:
+//
+//   - The pair (lo, hi) gives area = h[lo] * (hi - lo).
+//   - Any pair (lo, hi') with hi' < hi has *strictly smaller width*, and its
+//     height is still capped by min(h[lo], h[hi']) ≤ h[lo]. So no such pair
+//     can beat (lo, hi). The whole column starting at lo is dominated by
+//     the pair we just examined.
+//   - Therefore lo can never participate in the optimal pair as the lower
+//     line — advance lo and look for a taller candidate.
+//
+// (Symmetric argument when h[hi] < h[lo]: retreat hi.) Either way, each step
+// burns one pointer-advance and learns one column's worth of pairs, so n
+// steps suffice. The proof depends on the *strict-less width* fact; ties go
+// either direction (advancing lo on h[lo] == h[hi] is fine — the pair is
+// already examined and any hi' < hi has both shorter width and height ≤ the
+// tie value).
+//
+// `min` is inlined as an if-expression rather than a helper call; same
+// pattern as kata #88's two-pointer and kata #121's running-min. Heights
+// are i64 throughout (LeetCode allows 0..=10^4 per cell, area up to ~10^9
+// — fits i32 but i64 keeps the math monoidic with the bench's K * area
+// accumulator without needing a widening cast at the call site).
+
+fn max_area(heights: Slice[i64]) -> i64 {
+    let n = heights.len();
+    if n < 2 {
+        return 0;
+    }
+    let mut lo: i64 = 0;
+    let mut hi: i64 = n - 1;
+    let mut best: i64 = 0;
+    while lo < hi {
+        let h_lo: i64 = heights[lo];
+        let h_hi: i64 = heights[hi];
+        let h: i64 = if h_lo < h_hi { h_lo } else { h_hi };
+        let area: i64 = h * (hi - lo);
+        if area > best {
+            best = area;
+        }
+        // Advance the shorter side — see header for the dominance argument.
+        // Ties go either direction; advancing lo is consistent.
+        if h_lo < h_hi {
+            lo = lo + 1;
+        } else {
+            hi = hi - 1;
+        }
+    }
+    best
+}
+
+fn report(heights: Slice[i64]) {
+    println(max_area(heights));
+}
+
+fn main() {
+    // LeetCode reference examples first.
+    let case1: Array[i64, 9] = [1, 8, 6, 2, 5, 4, 8, 3, 7];
+    report(case1);                                                  // expect: 49 (between idx 1 and idx 8, h=7)
+    let case2: Array[i64, 2] = [1, 1];
+    report(case2);                                                  // expect: 1  (smallest non-trivial case)
+
+    // Symmetric tall ends — best pair spans the whole array.
+    let case3: Array[i64, 5] = [4, 3, 2, 1, 4];
+    report(case3);                                                  // expect: 16 (h=4, w=4)
+
+    // Strict monotone shapes — the two-pointer crawls n-1 steps in one
+    // direction without ever flipping.
+    let case4: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case4);                                                  // expect: 6  (min(2,5)*3 or min(3,5)*2 — both 6)
+    let case5: Array[i64, 5] = [5, 4, 3, 2, 1];
+    report(case5);                                                  // expect: 6  (mirror of case4)
+
+    // All-equal heights — area is dominated by maximum width.
+    let case6: Array[i64, 4] = [3, 3, 3, 3];
+    report(case6);                                                  // expect: 9  (h=3, w=3)
+
+    // Tall interior pair — global best is two adjacent tall cells, not the
+    // wide-span pair. Exercises a `best` update that fires mid-traversal.
+    let case7: Array[i64, 7] = [2, 3, 4, 5, 18, 17, 6];
+    report(case7);                                                  // expect: 17 (idx 4-5, h=17, w=1)
+
+    // Single-zero edge — any pair touching idx 1 has area 0; best is the
+    // off-zero pair (idx 0 and idx 2 → h=2, w=2 → 4).
+    let case8: Array[i64, 3] = [2, 0, 3];
+    report(case8);                                                  // expect: 4  (skips the zero column)
+
+    // Two-element edge — smallest input that produces a non-zero area.
+    let case9: Array[i64, 2] = [2, 3];
+    report(case9);                                                  // expect: 2  (min(2,3)*1)
+
+    // Single-element edge — must return 0 (no pair exists).
+    let case10: Array[i64, 1] = [5];
+    report(case10);                                                 // expect: 0  (degenerate)
+
+    // Long tail — exercises ~20 pointer-moves with a non-trivial best.
+    let case11: Array[i64, 14] = [
+        1, 2, 4, 3, 5, 9, 1, 2,
+        7, 6, 8, 4, 3, 2,
+    ];
+    report(case11);                                                 // expect: 40 (idx 5-10: min(9,8)*5)
+}

@@ -1,0 +1,20 @@
+
+#[derive(Eq, PartialEq)]
+shared struct P { x: i64, y: i64 }
+#[derive(Eq, PartialEq)]
+shared struct Line { a: P, b: P, label: String }
+fn main() {
+    let a = P { x: 1, y: 2 };
+    let b = P { x: 1, y: 2 };
+    let c = P { x: 9, y: 2 };
+    if a == b { println("eq"); }
+    if a != c { println("ne"); }
+    if a == a { println("self"); }
+    let l1 = Line { a: P { x: 1, y: 2 }, b: P { x: 3, y: 4 }, label: "seg" };
+    let l2 = Line { a: P { x: 1, y: 2 }, b: P { x: 3, y: 4 }, label: "seg" };
+    let l3 = Line { a: P { x: 1, y: 2 }, b: P { x: 3, y: 9 }, label: "seg" };
+    let l4 = Line { a: P { x: 1, y: 2 }, b: P { x: 3, y: 4 }, label: "DIFF" };
+    if l1 == l2 { println("line-eq"); }
+    if l1 != l3 { println("line-ne-field"); }
+    if l1 != l4 { println("line-ne-string"); }
+}

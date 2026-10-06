@@ -1,0 +1,6 @@
+
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    let msg: String = "client-msg";
+    let _ = ws.send_text_masked(msg.bytes());
+}

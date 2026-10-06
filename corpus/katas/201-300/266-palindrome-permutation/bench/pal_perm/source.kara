@@ -1,0 +1,90 @@
+// Benchmark workload for LeetCode #266 — Palindrome Permutation.
+//
+// Build-once + punch. One 200,000-element array of lowercase letter values is
+// generated once, and the ★ histogram parity test is punched through it 4,000
+// times over a window whose start rotates each round.
+//
+// WHAT THIS LANE MEASURES. The inner loop is `counts[b] = counts[b] + 1` — a
+// SCATTERED READ-MODIFY-WRITE into a small table at a data-dependent index.
+// That is a different hazard from anything else in the corpus: the addresses are
+// unpredictable but the table is 2 KB and stays in L1, so nothing misses; what
+// costs is store-to-load forwarding when consecutive bytes hit the SAME counter,
+// and the loop cannot vectorise because two lanes may target one slot.
+//
+// It is deliberately not #261's hazard. That lane chases pointers — a serial
+// dependency through an 800 KB array. Here the increments are independent and
+// the table is tiny; only same-index collisions serialise.
+//
+// THE ALPHABET IS 26, NOT 256. Drawing over the problem's actual alphabet is
+// what makes collisions frequent — roughly one byte in 26 hits the counter its
+// predecessor just wrote — so the forwarding path is exercised rather than
+// designed away. A 256-wide draw would make collisions ten times rarer and
+// measure a different loop.
+//
+// The window start rotates so no round repeats the last: each round sees a
+// different multiset, so the odd-count and the verdict both vary and nothing is
+// loop-invariant. Work per round is identical.
+//
+// Byte values are held in a Vec[i64] rather than a String so that all five
+// mirrors do identical work without routing through five different string APIs;
+// the kata files themselves use `String.bytes()`.
+
+fn main() {
+    let n = 200000;
+    let rounds = 4000;
+    let span = 1000;          // how far the window start may travel
+    let width = n - span;        // fixed window length
+
+    // ---- build once ------------------------------------------------------
+    let mut data: Vec[i64] = Vec.new();
+    let mut state = 266266;
+    let mut z = 0;
+    while z < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        data.push(97 + (state / 65536) % 26);
+        z = z + 1;
+    }
+
+    // One counter table, allocated once and re-zeroed per round — which is part
+    // of the algorithm's cost, not an artifact: the histogram form pays 256
+    // slots of setup and 256 of teardown whatever the input length.
+    let mut counts: Vec[i64] = Vec.new();
+    let mut q = 0;
+    while q < 256 {
+        counts.push(0);
+        q = q + 1;
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut c = 0;
+        while c < 256 {
+            counts[c] = 0;
+            c = c + 1;
+        }
+
+        let start = (r * 7919) % span;
+        let mut i = start;
+        let stop = start + width;
+        while i < stop {
+            let b = data[i];
+            counts[b] = counts[b] + 1;
+            i = i + 1;
+        }
+
+        let mut odd = 0;
+        let mut k = 0;
+        while k < 256 {
+            if counts[k] % 2 == 1 { odd = odd + 1; }
+            k = k + 1;
+        }
+        let mut verdict = 0;
+        if odd <= 1 { verdict = 1; }
+        sink = (sink * 131 + odd * 7 + verdict) % 1000000007;
+        r = r + 1;
+    }
+
+    println(sink);
+}

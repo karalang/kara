@@ -1,0 +1,6 @@
+
+fn main() {
+    let v = Vector[i64, 3](-5, 2, -3);
+    println(v.reduce_min());
+    println(v.reduce_max());
+}

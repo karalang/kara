@@ -1,0 +1,13 @@
+
+fn boom() -> Result[i64, i64] { Err(99_i64) }
+fn caller() -> Result[i64, i64] {
+    errdefer(e) { println(e); }
+    let _ = boom()?;
+    Ok(0_i64)
+}
+fn main() {
+    match caller() {
+        Ok(_) => println(0_i64),
+        Err(_) => println(2_i64),
+    }
+}

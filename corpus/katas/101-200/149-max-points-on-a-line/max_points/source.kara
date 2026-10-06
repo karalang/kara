@@ -1,0 +1,123 @@
+// LeetCode 149 — Max Points on a Line.
+//
+// Given points on a plane, return the maximum number that lie on the same
+// straight line. O(n^2): anchor each point i, and for every other point j count
+// how many share the same slope through i. Slopes are kept EXACT (no floating
+// point) as a reduced integer pair `(dx/g, dy/g)` with a normalized sign, keyed
+// into a `Map[String, i64]`. Coincident points (duplicates of the anchor) are
+// counted separately and added to every line through the anchor.
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn abs_i64(v: i64) -> i64 {
+    if v < 0 {
+        return -v;
+    }
+    return v;
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x: i64 = a;
+    let mut y: i64 = b;
+    while y != 0 {
+        let t: i64 = y;
+        y = x % y;
+        x = t;
+    }
+    return x;
+}
+
+fn max_points(pts: Vec[Point]) -> i64 {
+    let n: i64 = pts.len();
+    if n <= 2 {
+        return n;
+    }
+    let mut best: i64 = 1;
+    let mut i: i64 = 0;
+    while i < n {
+        let mut slopes: Map[String, i64] = Map.new();
+        let mut dup: i64 = 0;
+        let mut local: i64 = 0;
+        let mut j: i64 = i + 1;
+        while j < n {
+            let mut dx: i64 = pts[j].x - pts[i].x;
+            let mut dy: i64 = pts[j].y - pts[i].y;
+            if dx == 0 and dy == 0 {
+                dup = dup + 1;
+            } else {
+                let g: i64 = gcd(abs_i64(dx), abs_i64(dy));
+                dx = dx / g;
+                dy = dy / g;
+                // Normalize sign so `(dx, dy)` and `(-dx, -dy)` share a key:
+                // force dx > 0, or dy > 0 on a vertical line (dx == 0).
+                if dx < 0 or (dx == 0 and dy < 0) {
+                    dx = -dx;
+                    dy = -dy;
+                }
+                let key: String = dx.to_string() + "/" + dy.to_string();
+                let c: i64 = match slopes.get(key) {
+                    None => 0,
+                    Some(v) => v,
+                };
+                slopes.insert(key, c + 1);
+                if c + 1 > local {
+                    local = c + 1;
+                }
+            }
+            j = j + 1;
+        }
+        if local + dup + 1 > best {
+            best = local + dup + 1;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn run(pts: Vec[Point]) {
+    println(max_points(pts).to_string());
+}
+
+fn main() {
+    let mut a: Vec[Point] = Vec.new();
+    a.push(Point { x: 1, y: 1 });
+    a.push(Point { x: 2, y: 2 });
+    a.push(Point { x: 3, y: 3 });
+    run(a);
+
+    let mut b: Vec[Point] = Vec.new();
+    b.push(Point { x: 1, y: 1 });
+    b.push(Point { x: 3, y: 2 });
+    b.push(Point { x: 5, y: 3 });
+    b.push(Point { x: 4, y: 1 });
+    b.push(Point { x: 2, y: 3 });
+    b.push(Point { x: 1, y: 4 });
+    run(b);
+
+    let mut c: Vec[Point] = Vec.new();
+    c.push(Point { x: 0, y: 0 });
+    run(c);
+
+    let mut d: Vec[Point] = Vec.new();
+    d.push(Point { x: 0, y: 0 });
+    d.push(Point { x: 1, y: 1 });
+    run(d);
+
+    // Duplicate points collapse onto every line through the anchor.
+    let mut e: Vec[Point] = Vec.new();
+    e.push(Point { x: 1, y: 1 });
+    e.push(Point { x: 1, y: 1 });
+    e.push(Point { x: 2, y: 2 });
+    run(e);
+
+    // Vertical line plus one off-line point.
+    let mut f: Vec[Point] = Vec.new();
+    f.push(Point { x: 1, y: 1 });
+    f.push(Point { x: 1, y: 2 });
+    f.push(Point { x: 1, y: 3 });
+    f.push(Point { x: 2, y: 1 });
+    run(f);
+}

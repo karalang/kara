@@ -1,0 +1,59 @@
+// Benchmark workload — Subsets II (LeetCode #90).
+// The ★'s emit-at-every-node dedup backtracking, run as an enumerate-and-fold (kata
+// #78's shape): the recursion visits every UNIQUE subset node of a sorted multiset and
+// folds the current path into a threaded accumulator instead of storing it — same tree,
+// no per-node Vec-of-Vec allocation, so the measured work is the DFS recursion + the
+// skip-duplicates-at-level test. The multiset is 8 distinct values each repeated twice
+// (`[0,0,1,1,…,7,7]`), so the skip rule `i == start or nums[i] != nums[i-1]` fires
+// throughout and the tree has 3^8 = 6561 unique subsets (not 2^16). Enumerated K=2700
+// times, the acc seeded with the iteration index so nothing hoists. See ../README.md.
+
+fn enumerate(nums: ref Vec[i64], start: i64, path: mut ref Vec[i64], acc: i64) -> i64 {
+    let plen = path.len();
+    let mut a = (acc * 131 + (plen + 1)) % 1000000007;
+    let mut p = 0;
+    while p < plen {
+        a = (a * 131 + (path[p] + 1)) % 1000000007;
+        p = p + 1;
+    }
+    let n = nums.len();
+    let mut i = start;
+    while i < n {
+        if i == start or nums[i] != nums[i - 1] {
+            path.push(nums[i]);
+            a = enumerate(nums, i + 1, path, a);
+            path.pop();
+        }
+        i = i + 1;
+    }
+    a
+}
+
+fn main() {
+    let d = 8;
+    let r = 2;
+    let total = 2700;
+    let modulus = 1000000007;
+
+    // Sorted multiset: values 0..d, each repeated r times.
+    let mut nums: Vec[i64] = Vec.new();
+    let mut v = 0;
+    while v < d {
+        let mut c = 0;
+        while c < r {
+            nums.push(v);
+            c = c + 1;
+        }
+        v = v + 1;
+    }
+
+    let mut sum = 0;
+    let mut iter = 0;
+    while iter < total {
+        let mut path: Vec[i64] = Vec.new();
+        let rr = enumerate(nums, 0, mut path, iter);
+        sum = (sum * 131 + rr) % modulus;
+        iter = iter + 1;
+    }
+    println(f"{sum}");
+}

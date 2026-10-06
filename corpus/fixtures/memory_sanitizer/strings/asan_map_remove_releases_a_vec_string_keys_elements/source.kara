@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut m: Map[Vec[String], i64] = Map.new();
+    let mut i = 0i64;
+    while i < 20i64 {
+        let mut k: Vec[String] = Vec.new();
+        k.push(f"key-{i}-padding-padding-padding");
+        let mut probe: Vec[String] = Vec.new();
+        probe.push(f"key-{i}-padding-padding-padding");
+        m.insert(k, i);
+        m.remove(probe);
+        i = i + 1;
+    }
+    println(f"{m.len()}");
+}

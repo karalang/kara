@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    match v.last() {
+        Some(x) => println(x),
+        None => println(0),
+    }
+}

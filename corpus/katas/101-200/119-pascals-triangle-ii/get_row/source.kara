@@ -1,0 +1,63 @@
+// LeetCode #119: Pascal's Triangle II — the rowIndex-th row, O(rowIndex) extra space (★).
+//
+// Return row `rowIndex` (0-indexed) of Pascal's triangle using only a single row of storage. Start
+// with all 1s, then for each row number `i` from 2 up, update the row IN PLACE from right to left:
+// `row[j] = row[j] + row[j-1]`. Descending `j` is what makes it correct in place — when `row[j]` is
+// updated, `row[j-1]` still holds the PREVIOUS row's value. Distinct surface from #118: no nested
+// `Vec[Vec]`, just repeated in-place index-assignment on one `Vec[i64]`.
+
+fn get_row(row_index: i64) -> Vec[i64] {
+    // Start with all 1s — the bulk-fill primitive, matching the Rust mirror's
+    // `vec![1i64; n]` for an apples-to-apples fill (a push loop would compare a
+    // scalar fill against Rust's tuned bulk-fill; see README § Benchmarks).
+    let mut row: Vec[i64] = Vec.filled(row_index + 1, 1);
+    let mut i = 2;
+    while i <= row_index {
+        let mut k = i - 1;
+        while k >= 1 {
+            row[k] = row[k] + row[k - 1];
+            k = k - 1;
+        }
+        i = i + 1;
+    }
+    row
+}
+
+fn row_hash(row: ref Vec[i64]) -> i64 {
+    let mut h = 1;
+    let mut j = 0;
+    while j < row.len() {
+        h = (h * 131 + row[j]) % 1000000007;
+        j = j + 1;
+    }
+    (h * 31 + row.len() + 7) % 1000000007
+}
+
+fn main() {
+    // Show a few rows.
+    let mut r = 0;
+    while r <= 6 {
+        let row = get_row(r);
+        let mut line = "";
+        let mut c = 0;
+        while c < row.len() {
+            if c > 0 {
+                line = line + " ";
+            }
+            line = line + f"{row[c]}";
+            c = c + 1;
+        }
+        println(f"row {r}: {line}");
+        r = r + 1;
+    }
+
+    let mut acc = 0;
+    let mut n = 0;
+    while n <= 33 {
+        let row = get_row(n);
+        let h = row_hash(row);
+        acc = (acc * 131 + h) % 1000000007;
+        n = n + 1;
+    }
+    println(f"sink: {acc}");
+}

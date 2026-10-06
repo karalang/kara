@@ -1,0 +1,82 @@
+// LeetCode #315: Count of Smaller Numbers After Self — merge sort, counting as it merges.
+//
+// Sort a permutation of the INDICES by value, and watch the merge: when the
+// merge takes an element from the LEFT half, every element already taken from
+// the right half is both smaller and originally to its right — so the count of
+// right-half elements taken so far is added to that index's answer. Each merge
+// is a linear pass and each index is merged O(log n) times: O(n log n), no
+// value compression, no extra data structure.
+//
+// TIES DECIDE CORRECTNESS. The merge must take from the RIGHT only when the
+// right element is STRICTLY smaller; on equal values it takes from the left,
+// so an equal element to the right is not counted. Flip that comparison and
+// every duplicate is over-counted — the `_brute` arm and the duplicate-heavy
+// bands of the differential are what would notice.
+
+fn sort_count(idx: mut ref Vec[i64], lo: i64, hi: i64, nums: ref Vec[i64], counts: mut ref Vec[i64]) {
+    if hi - lo <= 1 { return; }
+    let mid = (lo + hi) / 2;
+    sort_count(idx, lo, mid, nums, counts);
+    sort_count(idx, mid, hi, nums, counts);
+    let mut merged: Vec[i64] = Vec.new();
+    let mut a = lo;
+    let mut b = mid;
+    let mut taken_right = 0;
+    while a < mid or b < hi {
+        if b >= hi or (a < mid and nums[idx[a]] <= nums[idx[b]]) {
+            counts[idx[a]] = counts[idx[a]] + taken_right;
+            merged.push(idx[a]);
+            a = a + 1;
+        } else {
+            taken_right = taken_right + 1;
+            merged.push(idx[b]);
+            b = b + 1;
+        }
+    }
+    for k in 0..merged.len() {
+        idx[lo + k] = merged[k];
+    }
+}
+
+fn count_smaller(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut idx: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..n { idx.push(i); counts.push(0); }
+    sort_count(mut idx, 0, n, nums, mut counts);
+    return counts;
+}
+
+// ------------------------------------------------------------- demo ---
+
+fn fmt(v: ref Vec[i64]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..v.len() {
+        if i > 0 { s = s + ","; }
+        s = s + v[i].to_string();
+    }
+    return s + "]";
+}
+
+fn main() {
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    cases.push([5, 2, 6, 1]);            // LeetCode: [2,1,1,0]
+    cases.push([-1]);                    // [0]
+    cases.push([-1, -1]);                // [0,0] — equal is not smaller
+    cases.push([]);
+    cases.push([3, 3, 3, 3]);
+    cases.push([1, 2, 3, 4, 5]);         // ascending: all zero
+    cases.push([5, 4, 3, 2, 1]);         // descending: n-1-i
+    cases.push([-10000, 10000, 0, -10000, 7, 7, -3]);
+    cases.push([2, 0, 1]);
+
+    let mut acc = 0;
+    for c in 0..cases.len() {
+        let counts = count_smaller(cases[c]);
+        for j in 0..counts.len() {
+            acc = (acc * 131 + counts[j] + 1) % 1000000007;
+        }
+        println(f"case {c}: {fmt(counts)}");
+    }
+    println(f"sink: {acc}");
+}

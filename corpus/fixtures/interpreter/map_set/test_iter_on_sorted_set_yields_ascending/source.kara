@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut s: SortedSet[i64] = SortedSet.new();
+    s.insert(11);
+    s.insert(3);
+    s.insert(7);
+    let mut it = s.iter();
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+}

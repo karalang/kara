@@ -1,0 +1,9 @@
+
+struct Response { status: i64, body: String }
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    match c.get("http://127.0.0.1:1/") {
+        Ok(r) => { println("got"); }
+        Err(e) => { println("err"); }
+    }
+}

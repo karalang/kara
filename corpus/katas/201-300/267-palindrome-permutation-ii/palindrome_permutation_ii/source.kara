@@ -1,0 +1,122 @@
+// LeetCode 267 — Palindrome Permutation II. (Premium.)
+//
+// Given a string, return ALL its distinct palindromic permutations. Empty list
+// if none exist.
+//
+// [#266](../266-palindrome-permutation/) answered whether any exists — at most
+// one character may occur an odd number of times. This asks for the set of
+// them, and the whole design follows from one observation:
+//
+//     a palindrome is determined by its FIRST HALF.
+//
+// So do not permute the string. Halve every count, permute the multiset of
+// halves, and mirror each arrangement around the optional lone middle
+// character. That collapses an n! search over the full string into (n/2)! over
+// half of it — for a 10-character input, 3,628,800 arrangements become 120.
+//
+// It also DISPOSES OF DEDUPLICATION for free, which is the part that bites.
+// Permuting "aabb" directly yields "abba" twice, once for each way of ordering
+// the two 'a's, and a solution that permutes-then-filters has to carry a seen
+// set or sort-and-unique afterwards. Permuting the half "ab" instead yields
+// each arrangement once, because the backtracking loop iterates over DISTINCT
+// characters and consumes from their counts — two identical characters are
+// never two choices.
+//
+// The count of results is therefore the multinomial (n/2)! / prod(c_i/2)!, which
+// the differential checks against a closed form rather than against another
+// enumeration.
+
+fn build(counts: mut ref Vec[i64], half: mut ref Vec[i64], half_len: i64,
+         middle: i64, out: mut ref Vec[String]) {
+    if half.len() == half_len {
+        // Mirror: half + optional middle + reversed half.
+        let mut s = "";
+        let mut i = 0;
+        while i < half.len() {
+            s = s + f"{half[i] as u8 as char}";
+            i = i + 1;
+        }
+        if middle >= 0 {
+            s = s + f"{middle as u8 as char}";
+        }
+        let mut j = half.len() - 1;
+        while j >= 0 {
+            s = s + f"{half[j] as u8 as char}";
+            j = j - 1;
+        }
+        out.push(s);
+        return;
+    }
+    // Iterate over DISTINCT characters — this is where dedup happens.
+    let mut c = 0;
+    while c < 128 {
+        if counts[c] > 0 {
+            counts[c] = counts[c] - 1;
+            half.push(c);
+            build(counts, half, half_len, middle, out);
+            half.pop();
+            counts[c] = counts[c] + 1;
+        }
+        c = c + 1;
+    }
+}
+
+fn generate(s: ref String) -> Vec[String] {
+    let mut counts: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 128 {
+        counts.push(0);
+        i = i + 1;
+    }
+    for b in s.bytes() {
+        counts[b] = counts[b] + 1;
+    }
+
+    // At most one odd count, and that character is the middle.
+    let mut odd = 0;
+    let mut middle = -1;
+    let mut half_len = 0;
+    let mut c = 0;
+    while c < 128 {
+        if counts[c] % 2 == 1 {
+            odd = odd + 1;
+            middle = c;
+        }
+        counts[c] = counts[c] / 2;      // halve in place
+        half_len = half_len + counts[c];
+        c = c + 1;
+    }
+
+    let mut out: Vec[String] = Vec.new();
+    if odd > 1 {
+        return out;                         // no palindrome exists
+    }
+    let mut half: Vec[i64] = Vec.new();
+    build(mut counts, mut half, half_len, middle, mut out);
+    return out;
+}
+
+fn report(s: ref String) {
+    let res = generate(s);
+    let mut line = "";
+    let mut i = 0;
+    while i < res.len() {
+        if i > 0 { line = line + ","; }
+        line = line + res[i];
+        i = i + 1;
+    }
+    println(f"\"{s}\" ({res.len()}) [{line}]");
+}
+
+fn main() {
+    report("aabb");        // abba, baab
+    report("abc");         // none
+    report("aabbc");       // abcba, bacab
+    report("");            // the empty palindrome
+    report("a");           // a
+    report("aa");          // aa
+    report("aaa");         // aaa
+    report("aabbcc");      // 6 arrangements of the half "abc"
+    report("aaaabb");      // half "aab" -> 3
+    report("carerac");     // racecar and its rearrangements
+}

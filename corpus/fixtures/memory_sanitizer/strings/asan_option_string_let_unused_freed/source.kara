@@ -1,0 +1,6 @@
+
+fn mk(n: i64) -> Option[String] { Some(f"value-{n}-runtime-heap") }
+fn main() {
+    let x = mk(42);
+    println("done");
+}

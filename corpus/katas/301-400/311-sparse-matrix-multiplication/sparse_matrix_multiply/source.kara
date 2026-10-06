@@ -1,0 +1,133 @@
+// LeetCode 311 — Sparse Matrix Multiplication
+//
+// Multiply two matrices that are mostly zeros. The product is defined exactly
+// as always —
+//
+//     C[i][j] = SUM over k of A[i][k] * B[k][j]
+//
+// — so the problem is not what to compute but how much of it to skip.
+//
+// THE ARM: hoist the zero test out of the inner loop.
+//
+// The naive triple loop asks "is this term zero?" once per (i, j, k), which is
+// m*n*k questions. But A[i][k] does not depend on j, so a single zero in A
+// kills an ENTIRE inner loop over j. Reordering the loops from (i, j, k) to
+// (i, k, j) lets the test move up one level:
+//
+//     for i:
+//       for k:
+//         if A[i][k] != 0:          <-- tested m*k times, not m*n*k
+//           for j:
+//             C[i][j] += A[i][k] * B[k][j]
+//
+// The arithmetic is identical and the answer is identical; only the order of
+// accumulation into C[i][j] changes, and addition does not care.
+//
+// THE REORDERING PAYS TWICE, and the second time is easy to miss. The obvious
+// win is skipping work proportional to A's zeros. The subtler one is that the
+// inner loop now walks B[k] along a ROW — consecutive memory — where the naive
+// order strides down a column. On a dense input, where nothing is skipped at
+// all, this arm is still the faster of the two for that reason alone.
+//
+// WHAT IT DOES NOT DO is exploit B's zeros: the inner loop over j visits every
+// column whether B[k][j] is zero or not. The `..._both.kara` arm compresses
+// both operands and skips those too, which is a different trade — it pays for
+// an index structure over B to avoid work that may not be there.
+
+fn multiply(a: ref Vec[Vec[i64]], b: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = a.len();
+    let mut k_dim = 0;
+    if m > 0 { k_dim = a[0].len(); }
+    let mut n = 0;
+    if b.len() > 0 { n = b[0].len(); }
+
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    for i in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(0);
+        }
+        c.push(row);
+    }
+
+    for i in 0..m {
+        for k in 0..k_dim {
+            let av = a[i][k];
+            // One zero in A skips an entire row of B.
+            if av != 0 {
+                for j in 0..n {
+                    c[i][j] += av * b[k][j];
+                }
+            }
+        }
+    }
+    return c;
+}
+
+fn matrix_of(flat: Slice[i64], w: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < flat.len() {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < w {
+            row.push(flat[i + c]);
+            c = c + 1;
+        }
+        m.push(row);
+        i = i + w;
+    }
+    return m;
+}
+
+fn render(m: ref Vec[Vec[i64]]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut r = 0;
+    while r < m.len() {
+        if r > 0 { s.push_str(" "); }
+        s.push_str("[");
+        let mut c = 0;
+        while c < m[r].len() {
+            if c > 0 { s.push_str(","); }
+            s.push_str(f"{m[r][c]}");
+            c = c + 1;
+        }
+        s.push_str("]");
+        r = r + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(a_flat: Slice[i64], ak: i64, b_flat: Slice[i64], bn: i64) {
+    let a = matrix_of(a_flat, ak);
+    let b = matrix_of(b_flat, bn);
+    let c = multiply(a, b);
+    println(render(c));
+}
+
+fn main() {
+    // The example from the LeetCode statement.
+    report([1, 0, 0,  -1, 0, 3], 3,
+           [7, 0, 0,  0, 0, 0,  0, 0, 1], 3);
+    // 1x1 identities and zeros.
+    report([5], 1, [3], 1);
+    report([0], 1, [9], 1);
+    // A row vector times a column vector — a 1x1 dot product.
+    report([1, 2, 3], 3, [4,  5,  6], 1);
+    // A column vector times a row vector — a full 3x3 outer product.
+    report([1,  2,  3], 1, [4, 5, 6], 3);
+    // Multiplying by the identity returns the original.
+    report([2, 0, 7,  0, 3, 0], 3,
+           [1, 0, 0,  0, 1, 0,  0, 0, 1], 3);
+    // An all-zero left operand annihilates whatever is on the right.
+    report([0, 0,  0, 0], 2, [9, 8,  7, 6], 2);
+    // Entirely dense, so every arm's zero-skipping is inert.
+    report([1, 2,  3, 4], 2, [5, 6,  7, 8], 2);
+    // Negative entries, and a column of B that is entirely zero.
+    report([-1, 2,  3, -4], 2, [5, 0,  -7, 0], 2);
+    // Rectangular: 3x2 times 2x4.
+    report([1, 0,  0, 2,  3, 4], 2,
+           [1, 0, 0, 5,  0, 6, 0, 0], 4);
+}

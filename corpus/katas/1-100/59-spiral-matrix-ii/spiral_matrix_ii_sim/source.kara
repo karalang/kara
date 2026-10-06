@@ -1,0 +1,74 @@
+// LeetCode #59: Spiral Matrix II — direction-vector simulation, O(n²) time.
+//
+// Instead of tracking four boundaries, walk a single "turtle" through the
+// grid: hold a position `(r, c)` and a direction index into the clockwise
+// cycle right → down → left → up. Write the next value, then peek one step
+// ahead; if that step would leave the grid OR land on an already-filled cell
+// (nonzero), turn right (`dir = (dir + 1) % 4`) before stepping. The
+// already-filled test is what makes the spiral close in on itself without any
+// boundary bookkeeping.
+//
+// The out-of-bounds checks are ordered BEFORE the `grid[nr][nc] != 0` read
+// and joined with `or`, so the short-circuit guarantees the grid is never
+// indexed out of range (same short-circuit discipline as kata #28's
+// `j < nn and h[i + j] == nee[j]`). Same `Vec[Vec[i64]]` grid and nested
+// index-store as the boundary solver; the extra move here is the nested
+// index-READ `grid[nr][nc]` used as the turn test.
+
+fn generate_matrix(n: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    let mut rr = 0;
+    while rr < n {
+        grid.push(Vec.filled(n, 0));
+        rr = rr + 1;
+    }
+
+    // Clockwise direction deltas: right, down, left, up.
+    let dr: Array[i64, 4] = [0, 1, 0, -1];
+    let dc: Array[i64, 4] = [1, 0, -1, 0];
+
+    let mut r = 0;
+    let mut c = 0;
+    let mut dir = 0;
+    let total = n * n;
+    let mut v = 1;
+    while v <= total {
+        grid[r][c] = v;
+
+        // Peek one step ahead in the current direction.
+        let nr = r + dr[dir];
+        let nc = c + dc[dir];
+        // Turn right if that step leaves the grid or hits a filled cell.
+        // The bounds checks precede the grid read, and `or` short-circuits,
+        // so `grid[nr][nc]` is only evaluated for an in-bounds (nr, nc).
+        if nr < 0 or nr >= n or nc < 0 or nc >= n or grid[nr][nc] != 0 {
+            dir = (dir + 1) % 4;
+        }
+
+        // Step in the (possibly new) direction.
+        r = r + dr[dir];
+        c = c + dc[dir];
+        v = v + 1;
+    }
+    grid
+}
+
+fn report(n: i64) {
+    let g = generate_matrix(n);
+    println(n);
+    for row in g.iter() {
+        let mut line: String = "";
+        for x in row.iter() {
+            line = f"{line}{x} ";
+        }
+        println(line);
+    }
+}
+
+fn main() {
+    report(1);
+    report(2);
+    report(3);
+    report(4);
+    report(5);
+}

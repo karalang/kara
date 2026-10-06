@@ -1,0 +1,164 @@
+// LeetCode #51: N-Queens — row-by-row backtracking with O(1) marker arrays (★).
+//
+// Place `n` queens on an n×n board so that no two attack each other — no shared row,
+// column, or diagonal — and return EVERY distinct placement, each rendered as a list
+// of board rows (`'Q'` for a queen, `'.'` for empty). The count of solutions is the
+// (in)famous sequence 1, 0, 0, 2, 10, 4, 40, 92, 352, … for n = 1, 2, 3, 4, …
+//
+// The move that makes this tractable: place EXACTLY ONE queen per row and descend row
+// by row. That instantly discharges the "no two on a row" rule (one per row by
+// construction) and turns the search into "for each row, which column?" — an n-way
+// branch at each of n levels, pruned hard by the attack tests. Two queens at
+// (r1, c1) and (r2, c2) attack iff they share a column (`c1 == c2`) or a diagonal.
+// The diagonal test is the elegant part: cells on the SAME ↘ diagonal share `row + col`,
+// and cells on the same ↙ diagonal share `row - col`. So a queen at (row, col) is
+// legal iff its column and BOTH diagonal keys are still free.
+//
+// This ★ variant makes each of those three tests O(1) with a parallel boolean marker
+// per axis — the array-of-bools idiom the permutation katas ([#46](../46-permutations/),
+// [#47](../47-permutations-ii/)) lean on, here scaled to THREE marker arrays flipped in
+// lockstep:
+//
+//   - `cols[c]`      — column c occupied.                      index 0 .. n-1
+//   - `diag1[row+col]` — the ↘ diagonal through (row,col).     index 0 .. 2n-2
+//   - `diag2[row-col+(n-1)]` — the ↙ diagonal; the `+(n-1)`    index 0 .. 2n-2
+//     bias shifts `row-col ∈ [-(n-1), n-1]` into `[0, 2n-2]`.
+//
+// Each choice is bracketed set-marks / recurse / clear-marks — the textbook backtracking
+// undo, here with THREE flags to restore (plus the `queens` path entry) rather than one.
+// The loop scans columns 0..n low-to-high, so solutions come out in LeetCode's canonical
+// order; the sibling files ([`conflict_scan`](conflict_scan.kara),
+// [`bitmask`](bitmask.kara)) emit the identical listing by construction.
+//
+// LeetCode bounds: 1 ≤ n ≤ 9. i64 throughout for corpus uniformity (every index and the
+// solution count fit trivially).
+
+fn place(
+    n: i64,
+    row: i64,
+    cols: mut ref Vec[bool],
+    diag1: mut ref Vec[bool],
+    diag2: mut ref Vec[bool],
+    queens: mut ref Vec[i64],
+    out: mut ref Vec[Vec[String]],
+) {
+    if row == n {
+        // Every row filled — this placement is a solution; render and snapshot it.
+        out.push(build_board(queens, n));
+        return;
+    }
+    let mut c = 0;
+    while c < n {
+        let d1 = row + c;              // ↘ diagonal key
+        let d2 = row - c + (n - 1);    // ↙ diagonal key, biased non-negative
+        if not cols[c] and not diag1[d1] and not diag2[d2] {
+            cols[c] = true;
+            diag1[d1] = true;
+            diag2[d2] = true;
+            queens.push(c);
+            place(n, row + 1, cols, diag1, diag2, queens, out);
+            queens.pop();             // undo the choice: path entry + all three markers
+            cols[c] = false;
+            diag1[d1] = false;
+            diag2[d2] = false;
+        }
+        c = c + 1;
+    }
+}
+
+// Render one solved placement (queens[r] = column of the queen in row r) as n board rows.
+fn build_board(queens: ref Vec[i64], n: i64) -> Vec[String] {
+    let mut board: Vec[String] = Vec.new();
+    let mut r = 0;
+    while r < n {
+        let qc = queens[r];
+        let mut row: String = "";
+        let mut c = 0;
+        while c < n {
+            if c == qc {
+                row.push('Q');
+            } else {
+                row.push('.');
+            }
+            c = c + 1;
+        }
+        board.push(row);
+        r = r + 1;
+    }
+    board
+}
+
+fn solve(n: i64) -> Vec[Vec[String]] {
+    let mut cols: Vec[bool] = Vec.new();
+    let mut diag1: Vec[bool] = Vec.new();
+    let mut diag2: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        cols.push(false);
+        i = i + 1;
+    }
+    let span = 2 * n - 1;       // both diagonal axes hold 2n-1 keys
+    let mut j = 0;
+    while j < span {
+        diag1.push(false);
+        diag2.push(false);
+        j = j + 1;
+    }
+    let mut queens: Vec[i64] = Vec.new();
+    let mut out: Vec[Vec[String]] = Vec.new();
+    place(n, 0, mut cols, mut diag1, mut diag2, mut queens, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Print every solution for one board size, then the solution count.
+fn report(n: i64) {
+    let sols = solve(n);
+    let count = sols.len();
+    println(f"n={n} -> {count}");
+    let mut s = 0;
+    while s < count {
+        let board = ref sols[s];
+        let rows = board.len();
+        let mut r = 0;
+        while r < rows {
+            println(board[r]);
+            r = r + 1;
+        }
+        println("--");
+        s = s + 1;
+    }
+    println("====");
+}
+
+// Print just the solution count for one board size (for the n-sweep summary).
+fn count_only(n: i64) -> i64 {
+    solve(n).len()
+}
+
+fn main() {
+    // n = 1: the trivial single-queen board.
+    report(1);
+
+    // n = 2 and n = 3: no legal placement exists — the empty-solution case.
+    report(2);
+    report(3);
+
+    // n = 4: the smallest interesting board — exactly 2 solutions (LeetCode example 1).
+    report(4);
+
+    // n = 5 and n = 6: 10 and 4 solutions — full board listings.
+    report(5);
+    report(6);
+
+    // Count sweep n = 1..9 — the known sequence 1,0,0,2,10,4,40,92,352.
+    let mut s: String = "counts:";
+    let mut n = 1;
+    while n <= 9 {
+        s.push(' ');
+        s.push_str(f"{count_only(n)}");
+        n = n + 1;
+    }
+    println(s);
+}

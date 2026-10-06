@@ -1,0 +1,69 @@
+read/local
+  dE
+  dR1
+  x1
+read/temp
+  dE
+  dR2
+  x2
+r/local
+  dE
+  y3
+  dR3
+r/temp
+  dE
+  y4
+  dR4
+print/temp
+  p5
+  dE
+  dR5
+  after
+ref/temp
+  dE
+  dR6
+  x6
+iflet/temp
+  dE
+  dR7
+  x7
+unit/temp
+  dE
+  x0
+noshell/temp
+  dR8
+  x8
+me/temp
+  dE
+  dR9
+  held
+wrap/temp
+  dE
+  dR10
+  held
+chain/temp
+  dR11
+  x11
+ref/local
+  dE
+  dR12
+  x12
+refnoshell/temp
+  dR13
+  x13
+refnoshell/local
+  dR14
+  x14
+opt/temp
+  dE
+  dR16
+  held
+optself/temp
+  dE
+  dR17
+  held
+mut/temp
+  dE
+  dR18
+  x18
+end

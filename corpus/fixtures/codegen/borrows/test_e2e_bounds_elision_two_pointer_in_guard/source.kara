@@ -1,0 +1,20 @@
+
+fn expand(chars: ref Vec[i64], lo0: i64, hi0: i64) -> i64 {
+    let mut lo = lo0;
+    let mut hi = hi0;
+    let n = chars.len();
+    while lo >= 0 and hi < n and chars[lo] == chars[hi] {
+        lo = lo - 1;
+        hi = hi + 1;
+    }
+    hi - lo - 1
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v.push(2);
+    v.push(1);
+    println(expand(v, 2, 2));
+}

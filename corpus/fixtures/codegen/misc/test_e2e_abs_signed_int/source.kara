@@ -1,0 +1,6 @@
+
+fn main() {
+    println((-5i64).abs());
+    println((7i64).abs());
+    println((0i64).abs());
+}

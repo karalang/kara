@@ -1,0 +1,15 @@
+
+fn store(m: mut ref Map[String, i64], k: String) {
+    m.insert(k, 1i64);
+}
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut a = String.new();
+    a.push_str("alpha-key-string");
+    store(mut m, a);
+    let mut b = String.new();
+    b.push_str("beta-key-string");
+    store(mut m, b);
+    println(m.len());
+}

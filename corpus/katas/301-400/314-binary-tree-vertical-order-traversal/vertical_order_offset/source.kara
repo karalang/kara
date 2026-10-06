@@ -1,0 +1,126 @@
+// LeetCode #314: Binary Tree Vertical Order Traversal — no map, two passes.
+//
+// The columns a tree occupies are a contiguous range: every child is exactly
+// one column from its parent, so the set of columns has no holes. One
+// depth-first pass finds the leftmost and rightmost column; then the columns
+// are a plain `Vec[Vec[i64]]` indexed by `column - leftmost`, and the
+// breadth-first walk appends into it directly. No hashing, no sorting, no
+// ordered map — which is also why this is the arm the benchmark lane mirrors:
+// it is the same algorithm in every language, with nothing standing in for a
+// B-tree.
+//
+// The breadth-first walk here is a level frontier (`current = next`) rather
+// than a queue: each outer iteration is one row, which keeps the "top to
+// bottom, then left to right" requirement visibly true — a row's nodes are
+// appended in left-to-right order before the next row starts. The frontier
+// is consumed by the `for (n, c) in current` walk and then reassigned — the
+// idiom that surfaced B-2026-07-12-30 on kata #102, here over tuples.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn node(v: i64, l: Option[TreeNode], r: Option[TreeNode]) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    return node(v, None, None);
+}
+
+fn extent(t: Option[TreeNode], col: i64, lo: mut ref i64, hi: mut ref i64) {
+    match t {
+        None => {}
+        Some(n) => {
+            if col < lo { lo = col; }
+            if col > hi { hi = col; }
+            extent(n.left, col - 1, lo, hi);
+            extent(n.right, col + 1, lo, hi);
+        }
+    }
+}
+
+fn vertical_order(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut current: Vec[(TreeNode, i64)] = Vec.new();
+    match root {
+        None => { return out; }
+        Some(n) => { current.push((n, 0)); }
+    }
+    let mut lo = 0;
+    let mut hi = 0;
+    extent(root, 0, mut lo, mut hi);
+    for i in lo..(hi + 1) { out.push(Vec.new()); }
+
+    while current.len() > 0 {
+        let mut next: Vec[(TreeNode, i64)] = Vec.new();
+        for (n, c) in current {
+            out[c - lo].push(n.val);
+            match n.left {
+                None => {}
+                Some(l) => { next.push((l, c - 1)); }
+            }
+            match n.right {
+                None => {}
+                Some(r) => { next.push((r, c + 1)); }
+            }
+        }
+        current = next;
+    }
+    return out;
+}
+
+// ------------------------------------------------------------- demo ---
+
+fn fmt(cols: ref Vec[Vec[i64]]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..cols.len() {
+        if i > 0 { s = s + ","; }
+        s = s + "[";
+        for j in 0..cols[i].len() {
+            if j > 0 { s = s + ","; }
+            let v = cols[i][j];
+            s = s + v.to_string();
+        }
+        s = s + "]";
+    }
+    return s + "]";
+}
+
+fn left_spine(n: i64) -> Option[TreeNode] {
+    if n <= 0 { return None; }
+    return node(-n, left_spine(n - 1), None);
+}
+
+fn main() {
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    // LeetCode's three examples.
+    trees.push(node(3, leaf(9), node(20, leaf(15), leaf(7))));
+    trees.push(node(3, node(9, leaf(4), leaf(0)), node(8, leaf(1), leaf(7))));
+    trees.push(node(3, node(9, leaf(4), node(0, None, leaf(2))),
+                       node(8, node(1, leaf(5), None), leaf(7))));
+    // The DFS trap: 6 is three deep in the LEFT subtree and 3 is one deep in
+    // the right, both in column 1. Preorder reaches 6 first; the answer is
+    // [3, 6].
+    trees.push(node(1, node(2, None, node(4, None, leaf(6))), node(3, leaf(5), None)));
+    trees.push(None);
+    trees.push(leaf(7));
+    trees.push(left_spine(5));
+    // Duplicate values: structure, not value, decides placement.
+    trees.push(node(1, node(1, leaf(1), leaf(1)), node(1, leaf(1), leaf(1))));
+
+    let mut acc = 0;
+    for t in 0..trees.len() {
+        let cols = vertical_order(trees[t].clone());
+        for i in 0..cols.len() {
+            acc = (acc * 131 + cols[i].len()) % 1000000007;
+            for j in 0..cols[i].len() {
+                acc = (acc * 131 + cols[i][j] + 1000) % 1000000007;
+            }
+        }
+        println(f"tree {t}: {fmt(cols)}");
+    }
+    println(f"sink: {acc}");
+}

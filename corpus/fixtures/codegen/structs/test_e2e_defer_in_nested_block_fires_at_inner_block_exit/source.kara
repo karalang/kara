@@ -1,0 +1,9 @@
+
+fn main() {
+    println("before");
+    {
+        defer { println("inner-defer"); }
+        println("in-block");
+    };
+    println("after");
+}

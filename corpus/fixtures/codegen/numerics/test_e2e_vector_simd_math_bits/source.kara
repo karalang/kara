@@ -1,0 +1,13 @@
+
+fn main() {
+    let v = Vector[f32, 4].from_array([1.0f32, 2.0f32, 0.0f32, -1.0f32]);
+    let b = v.to_bits();
+    println(b[0]);
+    let r = b.bits_as_f32();
+    println(r[3]);
+    let w = Vector[f64, 2].from_array([1.0, 2.0]);
+    let wb = w.to_bits();
+    println(wb[0]);
+    let wr = wb.bits_as_f64();
+    println(wr[1]);
+}

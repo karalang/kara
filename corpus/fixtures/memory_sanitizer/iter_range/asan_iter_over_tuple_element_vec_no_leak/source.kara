@@ -1,0 +1,20 @@
+
+fn make() -> (Vec[String], i64) {
+    let mut a: Vec[String] = Vec.new();
+    a.push("alpha");
+    a.push("beta");
+    a.push("gamma");
+    (a, 0)
+}
+fn main() {
+    let mut total: i64 = 0;
+    for _ in 0..50 {
+        let t = make();
+        for w in t.0.iter() {
+            total = total + w.len();
+        }
+        let n = t.0.iter().fold(0, |acc, w| acc + 1);
+        total = total + n;
+    }
+    println(total);
+}

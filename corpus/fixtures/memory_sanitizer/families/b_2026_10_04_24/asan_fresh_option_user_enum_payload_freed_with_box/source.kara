@@ -1,0 +1,21 @@
+enum Nested { Int(i64), List(Vec[Nested]) }
+fn mk() -> Option[Nested] { let mut l2: Vec[Nested] = Vec.new(); l2.push(Nested.Int(1)); return Some(Nested.List(l2)) }
+fn main() {
+    let mut stack: Vec[Nested] = Vec.new();
+    stack.push(Nested.List(Vec.new()));
+    let mut l2: Vec[Nested] = Vec.new();
+    l2.push(Nested.Int(1));
+    stack.push(Nested.List(l2));
+    let mut total = 0;
+    while let Some(item) = stack.pop() { total += 1; }
+    if let Some(item) = mk() { total += 1; }
+    if let Some(_) = mk() { total += 1; }
+    match mk() { Some(item) => { total += 1; } None => {} }
+    match mk() { Some(_) => { total += 1; } None => {} }
+    let mut keep: Vec[Nested] = Vec.new();
+    if let Some(item) = mk() { keep.push(item); }
+    if let Some(item) = mk() { let k = item; total += 1; }
+    match mk() { Some(item) => match item { Nested.List(xs) => { total += 1; } _ => {} }, None => {} }
+    println(total);
+    println(keep.len());
+}

@@ -1,0 +1,158 @@
+// LeetCode 286 — Walls and Gates, read literally.
+//
+// The problem says "the distance to the nearest gate", so this file computes,
+// for each room independently, the distance to the nearest gate — one BFS per
+// room, stopping at the first gate it meets.
+//
+// THIS IS THE DEFINITIONAL ORACLE. It has no cleverness to be wrong about: no
+// shared queue, no relaxation guard, no reuse of one room's work for another's.
+// Every room's answer is derived from that room's own search, so a bug in one
+// room's answer cannot propagate to the next. That independence is exactly what
+// makes it worth keeping at O((mn)^2) — the differential runs it beside the two
+// linear solvers and compares grids, and when they disagree, this file is the
+// one to believe.
+//
+// It is also the file that makes the ★ solver's argument concrete. The BFS
+// inverts this: instead of mn searches each finding its nearest gate, one search
+// from all gates at once lets every room be found by its nearest. Reading the
+// two side by side is the clearest statement of what multi-source BFS actually
+// buys, which is why the slow version is documentation and not just a check.
+//
+// RELAXATIONS HERE ARE NOT COMPARABLE to the other solvers'. This one writes
+// each room exactly once — its own final answer — so the count equals the number
+// of reachable rooms, the same as the BFS. That agreement is a coincidence of
+// two different mechanisms (never-revisit vs. one-search-per-room) and the
+// harness treats it as a checkable fact rather than a shared implementation
+// detail: it asserts BOTH equal the reachable-room count, and separately that
+// the DFS exceeds it.
+
+fn inf() -> i64 {
+    return 2147483647;
+}
+
+// The distance from `start` to the nearest gate, or INF if no gate is reachable.
+// A plain single-source BFS outward from the room.
+fn nearest_gate(g: ref Vec[i64], r: i64, c: i64, start: i64) -> i64 {
+    let mut seen: Vec[bool] = [];
+    let mut i = 0;
+    while i < r * c {
+        seen.push(false);
+        i = i + 1;
+    }
+
+    let mut q = VecDeque.new();
+    q.push_back(start);
+    q.push_back(0);
+    seen[start] = true;
+
+    loop {
+        match q.pop_front() {
+            None => { break; },
+            Some(cell) => {
+                match q.pop_front() {
+                    None => { break; },
+                    Some(d) => {
+                        if g[cell] == 0 { return d; }
+
+                        let row = cell / c;
+                        let col = cell % c;
+                        if row > 0 { step(g, mut seen, mut q, cell - c, d + 1); }
+                        if row < r - 1 { step(g, mut seen, mut q, cell + c, d + 1); }
+                        if col > 0 { step(g, mut seen, mut q, cell - 1, d + 1); }
+                        if col < c - 1 { step(g, mut seen, mut q, cell + 1, d + 1); }
+                    }
+                }
+            }
+        }
+    }
+
+    return inf();
+}
+
+fn step(g: ref Vec[i64], seen: mut ref Vec[bool], q: mut ref VecDeque[i64], n: i64, d: i64) {
+    if g[n] == -1 { return; }
+    if seen[n] { return; }
+    seen[n] = true;
+    q.push_back(n);
+    q.push_back(d);
+}
+
+fn walls_and_gates(g: mut ref Vec[i64], r: i64, c: i64, relaxations: mut ref i64) {
+    // Answers are computed against a snapshot and written afterwards.
+    //
+    // THE SNAPSHOT IS NOT LOAD-BEARING, and it is worth saying so rather than
+    // implying otherwise. The obvious justification would be "a room filled with
+    // a fresh distance could be mistaken for a gate by a later room\'s search" —
+    // and that is FALSE here, because every distance this writes is at least 1
+    // and a gate is 0, so no filled room can ever be read as a gate. The
+    // differential proves it: rewriting this loop to search `g` while filling `g`
+    // changes not one of the 1296 grids.
+    //
+    // It stays anyway, because the reason to keep it is structural, not
+    // numeric. This file\'s job is to be the solver whose rooms cannot influence
+    // each other, and reading from a snapshot makes that true BY CONSTRUCTION
+    // rather than true by an accident of which sentinel values the problem
+    // happens to use. An oracle that is correct for a reason you have to
+    // re-derive is a worse oracle.
+    let source = g.clone();
+
+    let mut answers: Vec[i64] = [];
+    let mut i = 0;
+    while i < r * c {
+        if source[i] == inf() { answers.push(nearest_gate(source, r, c, i)); }
+        else { answers.push(source[i]); }
+        i = i + 1;
+    }
+
+    let mut j = 0;
+    while j < r * c {
+        if source[j] == inf() {
+            if answers[j] != inf() { relaxations = relaxations + 1; }
+        }
+        g[j] = answers[j];
+        j = j + 1;
+    }
+}
+
+fn show(g: ref Vec[i64], r: i64, c: i64) -> String {
+    let mut s: String = "";
+    let mut row = 0;
+    while row < r {
+        let mut col = 0;
+        while col < c {
+            if col > 0 { s = s + " "; }
+            let v = g[row * c + col];
+            if v == inf() { s = s + "INF"; }
+            else { s = s + f"{v}"; }
+            col = col + 1;
+        }
+        if row < r - 1 { s = s + " / "; }
+        row = row + 1;
+    }
+    return s;
+}
+
+fn report(grid: Vec[i64], r: i64, c: i64) {
+    let mut g = grid;
+    let mut n = 0;
+    walls_and_gates(mut g, r, c, mut n);
+    println(f"{show(g, r, c)}  ({n} relaxations)");
+}
+
+fn main() {
+    let w = -1;
+    let f = 2147483647;
+
+    report([f, w, 0, f,
+            f, f, f, w,
+            f, w, f, w,
+            0, w, f, f], 4, 4);
+
+    report([w], 1, 1);
+    report([0], 1, 1);
+    report([f], 1, 1);
+    report([0, f, f, f], 1, 4);
+    report([f, f, 0, f, f], 1, 5);
+    report([0, f, w, f], 2, 2);
+    report([f, f, f, f], 2, 2);
+}

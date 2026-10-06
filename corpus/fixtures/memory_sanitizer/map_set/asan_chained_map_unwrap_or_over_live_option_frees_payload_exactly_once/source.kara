@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let mut v: Vec[i64] = Vec.new();
+        v.push(1i64); v.push(2i64); v.push(3i64);
+        let opt: Option[Vec[i64]] = Some(v);
+        // The shape that leaked: the mapper only reads, so the arm borrows —
+        // and `unwrap_or` must then NOT disarm `opt`, which still owns it.
+        total = total + opt.map(|xs| xs.len()).unwrap_or(0i64);
+        i = i + 1;
+    }
+    println(total.to_string());
+}

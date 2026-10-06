@@ -1,0 +1,17 @@
+
+shared struct N { mut v: i64 }
+fn fill(w: mut ref Vec[weak N]) {
+    let a: N = N { v: 7i64 };
+    w.push(a);
+    match w[0] { Some(x) => { println(x.v); } None => { println(0 - 1); } }
+}
+fn main() {
+    let keep: N = N { v: 41i64 };
+    let mut c: Vec[weak N] = Vec.new();
+    c.push(keep);
+    println(keep.v);
+
+    let mut w: Vec[weak N] = Vec.new();
+    fill(mut w);
+    match w[0] { Some(x) => { println(x.v); } None => { println(0 - 2); } }
+}

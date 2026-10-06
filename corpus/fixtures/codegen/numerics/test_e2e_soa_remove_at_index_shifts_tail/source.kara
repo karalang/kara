@@ -1,0 +1,26 @@
+
+struct Entity { x: i64, y: i64, label: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    cold { label }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    entities.push(Entity { x: 1, y: 10, label: 100 });
+    entities.push(Entity { x: 2, y: 20, label: 200 });
+    entities.push(Entity { x: 3, y: 30, label: 300 });
+    entities.push(Entity { x: 4, y: 40, label: 400 });
+    let removed = entities.remove(1);
+    println(removed.x);
+    println(removed.y);
+    println(removed.label);
+    let now0 = entities[0];
+    let now1 = entities[1];
+    let now2 = entities[2];
+    println(now0.x);
+    println(now1.x);
+    println(now1.label);
+    println(now2.x);
+    println(now2.label);
+    println(entities.len());
+}

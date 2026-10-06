@@ -1,0 +1,18 @@
+
+#[derive(Eq)]
+struct P { name: String }
+fn mk(s: ref String, i: i64) -> P { P { name: s.substring(i, i + 4) } }
+fn f(hay: ref String, other: ref P) -> i64 {
+    let mut hits = 0;
+    let mut i = 0;
+    while i + 4 <= hay.len() {
+        if mk(hay, i) == other { hits = hits + 1; }
+        i = i + 1;
+    }
+    hits
+}
+fn main() {
+    let h = "abcdabcdabcd";
+    let p = P { name: "abcd" };
+    println(f"{f(h, p)}");
+}

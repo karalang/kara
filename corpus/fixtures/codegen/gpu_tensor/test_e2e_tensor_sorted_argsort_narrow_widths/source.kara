@@ -1,0 +1,18 @@
+
+fn main() {
+    let ti: Tensor[i32, [5]] = Tensor.from([40, 10, 30, 20, 10]);
+    let si: Vec[i32] = ti.sorted();
+    println(f"{si[0]} {si[1]} {si[2]} {si[3]} {si[4]}");
+    let ai: Vec[i64] = ti.argsort();
+    println(f"{ai[0]} {ai[1]} {ai[2]} {ai[3]} {ai[4]}");
+    let tu: Tensor[u32, [4]] = Tensor.from([40, 10, 30, 20]);
+    let su: Vec[u32] = tu.sorted();
+    println(f"{su[0]} {su[1]} {su[2]} {su[3]}");
+    let au: Vec[i64] = tu.argsort();
+    println(f"{au[0]} {au[1]} {au[2]} {au[3]}");
+    let tf: Tensor[f32, [4]] = Tensor.from([2.5, 0.5, 3.5, 1.5]);
+    let sf: Vec[f32] = tf.sorted();
+    println(f"{sf[0]} {sf[1]} {sf[2]} {sf[3]}");
+    let af: Vec[i64] = tf.argsort();
+    println(f"{af[0]} {af[1]} {af[2]} {af[3]}");
+}

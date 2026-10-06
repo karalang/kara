@@ -1,0 +1,19 @@
+m1 bare-die
+  end
+  dR1
+m2 rebind-die
+  end
+  dR2
+m3 into-call
+  end
+  dR3
+m4 wrap-moveout
+  dR4
+  v=7
+m5 destr-intocall
+  end
+  dR5
+m6 destr-die
+  end
+  dR6
+done

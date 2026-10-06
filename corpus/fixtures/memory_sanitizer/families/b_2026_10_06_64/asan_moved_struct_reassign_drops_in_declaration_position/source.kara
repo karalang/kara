@@ -1,0 +1,20 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct S { name: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.name}") } }
+fn a() { let mut r = R { id: 1 }; let q = r; r = R { id: 2 }; println(f"a{r.id}{q.id}") }
+fn c() { let mut r = R { id: 3 }; let q = r; r = R { id: 4 }; let w = r; r = R { id: 5 }; println(f"c{r.id}{q.id}{w.id}") }
+fn d() { let mut r = R { id: 6 }; let z = R { id: 7 }; let q = r; r = R { id: 8 }; println(f"d{r.id}{z.id}{q.id}") }
+fn e() { let z = R { id: 9 }; let mut r = R { id: 10 }; let q = r; let y = R { id: 11 }; r = R { id: 12 }; println(f"e{z.id}{r.id}{q.id}{y.id}") }
+fn h() { let mut r = R { id: 13 }; let q = r; let mut r = R { id: 14 }; let w = r; r = R { id: 15 }; println(f"h{q.id}{w.id}{r.id}") }
+fn k() { let mut s = S { name: "a".to_string() }; let t = s; let u = S { name: "u".to_string() }; s = S { name: "b".to_string() }; println(f"k{t.name}{u.name}{s.name}") }
+fn n() { let mut r = R { id: 20 }; let q = r; r = R { id: 21 }; r = R { id: 22 }; println(f"n{q.id}{r.id}") }
+fn main() {
+    a()
+    c()
+    d()
+    e()
+    h()
+    k()
+    n()
+}

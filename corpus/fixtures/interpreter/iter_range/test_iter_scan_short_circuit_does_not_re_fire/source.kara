@@ -1,0 +1,15 @@
+
+fn main() {
+    let v = [1, 2, 100, 3, 4];
+    for x in v.iter().scan(0, |state, item| {
+        println(f"c:{item}");
+        if item > 50 {
+            None
+        } else {
+            let new = state + item;
+            Some((new, new))
+        }
+    }) {
+        println(f"y:{x}");
+    }
+}

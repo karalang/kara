@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut s: String = "";
+    s.push_str("kara");
+    s.push('-');
+    s.push_str("rust");
+    s.push('!');
+    println(s);
+    println(s.len());
+}

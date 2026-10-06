@@ -1,0 +1,10 @@
+
+fn clamp_port(p: u16) -> u16
+    requires p <= 65535
+{
+    p
+}
+fn main() {
+    let r = clamp_port(80);
+    println("contract-ok");
+}

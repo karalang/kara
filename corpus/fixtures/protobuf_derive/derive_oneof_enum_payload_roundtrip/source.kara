@@ -1,0 +1,14 @@
+
+shared enum Color { Red, Green, Blue }
+
+enum Body { NotSet, Tint(Color), Note(String) }
+
+#[derive(Message)]
+struct Evt { body: Body }
+
+fn main() {
+    let back = Evt.decode(Evt { body: Body.Tint(Color.Blue) }.encode());
+    println(match back.body { Body.Tint(c) => match c { Color.Blue => "blue", Color.Green => "green", Color.Red => "red" }, _ => "?" });
+    let n = Evt.decode(Evt { body: Body.Note("x") }.encode());
+    println(match n.body { Body.Note(s) => s, _ => "?" });
+}

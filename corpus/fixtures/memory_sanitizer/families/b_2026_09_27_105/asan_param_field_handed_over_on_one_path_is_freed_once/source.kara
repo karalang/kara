@@ -1,0 +1,29 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { X { w: mkw(n), t: mkd(n + 300) } }
+fn keep(d: D) -> D { d }
+fn ret(w: W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 }
+fn push(w: W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r); } xs.len() }
+fn tailpush(w: W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r) } xs.len() }
+fn viaalias(w: W, c: bool) -> i64 { let r = w.r; if c { let k = keep(r); return k.id; } 0 }
+fn viaaliaspush(w: W, c: bool) -> i64 { let r = w.r; let mut xs: Vec[D] = Vec.new(); if c { xs.push(r); } xs.len() }
+fn arm(w: W, c: bool) -> i64 { match c { true => { let k = keep(w.r); k.id } false => 0 } }
+fn twohop(x: X, c: bool) -> i64 { if c { let k = keep(x.w.r); return k.id; } 0 }
+fn fwd(w: W, c: bool) -> i64 { ret(w, c) }
+impl W { fn assoc(w: W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 } }
+fn main() {
+    println(f"a{ret(mkw(1), false)}"); println(f"a{ret(mkw(2), true)}")
+    println(f"b{push(mkw(3), false)}"); println(f"b{push(mkw(4), true)}")
+    println(f"c{tailpush(mkw(5), false)}"); println(f"c{tailpush(mkw(6), true)}")
+    println(f"e{viaalias(mkw(7), false)}"); println(f"e{viaalias(mkw(8), true)}")
+    println(f"f{viaaliaspush(mkw(9), false)}"); println(f"f{viaaliaspush(mkw(10), true)}")
+    println(f"g{arm(mkw(11), false)}"); println(f"g{arm(mkw(12), true)}")
+    println(f"h{twohop(mkx(13), false)}"); println(f"h{twohop(mkx(14), true)}")
+    println(f"i{fwd(mkw(15), false)}"); println(f"i{fwd(mkw(16), true)}")
+    println(f"j{W.assoc(mkw(17), false)}"); println(f"j{W.assoc(mkw(18), true)}")
+    println("end")
+}

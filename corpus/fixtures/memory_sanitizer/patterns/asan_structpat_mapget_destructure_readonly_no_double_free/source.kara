@@ -1,0 +1,14 @@
+
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, Holder] = Map.new();
+        m.insert(i, Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i });
+        match m.get(i) {
+            Some(Holder { name, id }) => { println(name.len() + id); },
+            None => { println("missing"); },
+        }
+        i = i + 1;
+    };
+}

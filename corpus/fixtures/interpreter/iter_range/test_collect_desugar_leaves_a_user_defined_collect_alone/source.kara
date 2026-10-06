@@ -1,0 +1,16 @@
+
+struct Bag { n: i64 }
+
+impl Bag {
+    fn collect(self) -> Set[i64] {
+        let mut s: Set[i64] = Set.new();
+        s.insert(self.n);
+        return s;
+    }
+}
+
+fn main() {
+    let b = Bag { n: 7 };
+    let s: Set[i64] = b.collect();
+    println(s.len());
+}

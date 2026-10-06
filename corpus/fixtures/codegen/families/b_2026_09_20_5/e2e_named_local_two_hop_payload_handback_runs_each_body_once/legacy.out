@@ -1,0 +1,42 @@
+one
+  dR2
+  got:1
+  dR1
+t01
+  dR5
+  got:6
+  dR6
+t00
+  dR8
+  got:7
+  dR7
+tmp
+  dR9
+  got:10
+  dR10
+three
+  dR11
+  dR13
+  got:12
+  dR12
+viaW
+  dR22
+  dR23
+  got:21
+  dR21
+peek
+  dR31
+  dR32
+  got:32
+method
+  dR41
+  got:42
+  dR42
+assoc
+  dR52
+  got:51
+  dR51
+none
+  got:0
+  dR0
+end

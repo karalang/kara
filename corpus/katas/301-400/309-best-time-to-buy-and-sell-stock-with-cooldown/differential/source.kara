@@ -1,0 +1,378 @@
+// LeetCode 309 — four arms against each other, an EXHAUSTIVE ORACLE, and seven
+// properties that follow from the STATEMENT rather than from any implementation.
+//
+//   A  three-state rolling DP   — O(1) space, three scalars carried forward
+//   B  two-state, i-2 lookback  — the cooldown as an index, not a state
+//   C  three-state tabulated    — arm A's recurrence, fully materialised
+//   D  memoised recursion       — the machine enumerated BACKWARD over (day, state)
+//
+// WHAT THE ARMS CANNOT SHARE. A's characteristic bug is an update-order slip on
+// its `rest` line — reading today's `sold` rather than yesterday's, which
+// deletes the cooldown; C spells "yesterday" as `[i - 1]` and cannot commit it.
+// (The same slip on A's `sold` line is measurably harmless — see the ★ arm.) B has no third state at all, so a fault in the `rest`
+// transition has no counterpart there; its own signature bug is the `sell[i-2]`
+// boundary, which none of the others index. D runs the other direction
+// entirely.
+//
+// AND WHAT ALL FOUR SHARE — which is why P7 exists. Every arm assumes the
+// optimum at a day depends only on a bounded summary of the days before it.
+// That is TRUE here, but it is exactly the assumption four-way agreement cannot
+// audit: if the state set were insufficient, all four would be wrong together.
+// P7 answers by brute force — enumerating transaction PAIRS directly, with no
+// state machine anywhere — so it shares no structure with any arm.
+//
+//     brute(start) = max over b in [start, n), s in (b, n) of
+//                    price[s] - price[b] + brute(s + 2)
+//
+// The `s + 2` is the cooldown stated as arithmetic on days rather than as a
+// transition. Exponential, so it runs only for n <= 9.
+//
+// P3 IS THE PROPERTY NO ARM COMPUTES. Adding a constant to every price leaves
+// the answer unchanged: profit is a sum of differences, and a shift cancels in
+// each one. No arm has any notion of that invariance — each recomputes from
+// scratch — so it catches a whole-series fault that is symmetric across all
+// four, which is the failure mode arm agreement is blind to.
+//
+// P5 AND P6 BRACKET THE ANSWER USING OTHER KATAS' PROBLEMS. Cooldown can only
+// ever cost you, so the answer is at most #122's greedy sum of positive one-day
+// gains; and one transaction is always schedulable whatever the cooldown, so it
+// is at least #121's best single buy-sell. Two independent bounds, neither
+// computed by any arm, both from problems the corpus already carries.
+
+// ------------------------------------------------------------------- arm A
+
+fn solve_a(prices: ref Vec[i64]) -> i64 {
+    let n = prices.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut hold = -prices[0];
+    let mut sold = 0;
+    let mut rest = 0;
+    for i in 1..n {
+        // Snapshot yesterday BEFORE any of the three is overwritten.
+        let prev_hold = hold;
+        let prev_sold = sold;
+        let prev_rest = rest;
+        hold = prev_hold;
+        if prev_rest - prices[i] > hold {
+            hold = prev_rest - prices[i];
+        }
+        sold = prev_hold + prices[i];
+        rest = prev_rest;
+        if prev_sold > rest {
+            rest = prev_sold;
+        }
+    }
+    if sold > rest {
+        return sold;
+    }
+    return rest;
+}
+
+// ------------------------------------------------------------------- arm B
+
+fn solve_b(prices: ref Vec[i64]) -> i64 {
+    let n = prices.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut buy: Vec[i64] = Vec.new();
+    let mut sell: Vec[i64] = Vec.new();
+    for i in 0..n {
+        buy.push(0);
+        sell.push(0);
+    }
+    buy[0] = -prices[0];
+    sell[0] = 0;
+    for i in 1..n {
+        // sell[i - 2] is 0 when it would fall before the series.
+        let mut two_back = 0;
+        if i >= 2 {
+            two_back = sell[i - 2];
+        }
+        buy[i] = buy[i - 1];
+        if two_back - prices[i] > buy[i] {
+            buy[i] = two_back - prices[i];
+        }
+        sell[i] = sell[i - 1];
+        if buy[i - 1] + prices[i] > sell[i] {
+            sell[i] = buy[i - 1] + prices[i];
+        }
+    }
+    return sell[n - 1];
+}
+
+// ------------------------------------------------------------------- arm C
+
+fn solve_c(prices: ref Vec[i64]) -> i64 {
+    let n = prices.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut hold: Vec[i64] = Vec.new();
+    let mut sold: Vec[i64] = Vec.new();
+    let mut rest: Vec[i64] = Vec.new();
+    for i in 0..n {
+        hold.push(0);
+        sold.push(0);
+        rest.push(0);
+    }
+    hold[0] = -prices[0];
+    sold[0] = 0;
+    rest[0] = 0;
+    for i in 1..n {
+        hold[i] = hold[i - 1];
+        if rest[i - 1] - prices[i] > hold[i] {
+            hold[i] = rest[i - 1] - prices[i];
+        }
+        sold[i] = hold[i - 1] + prices[i];
+        rest[i] = rest[i - 1];
+        if sold[i - 1] > rest[i] {
+            rest[i] = sold[i - 1];
+        }
+    }
+    if sold[n - 1] > rest[n - 1] {
+        return sold[n - 1];
+    }
+    return rest[n - 1];
+}
+
+// ------------------------------------------------------------------- arm D
+
+struct Memo {
+    val: Vec[Option[i64]],
+    seen: Vec[i64],
+    prices: Vec[i64],
+    n: i64,
+}
+
+impl Memo {
+    fn new(prices: ref Vec[i64]) -> Memo {
+        let n = prices.len();
+        let mut val: Vec[Option[i64]] = Vec.new();
+        let mut seen: Vec[i64] = Vec.new();
+        for i in 0..((n + 1) * 3) {
+            val.push(None);
+            seen.push(0);
+        }
+        let mut p: Vec[i64] = Vec.new();
+        for i in 0..n {
+            p.push(prices[i]);
+        }
+        return Memo { val: val, seen: seen, prices: p, n: n };
+    }
+
+    // state: 0 = free to buy, 1 = holding, 2 = cooling down
+    fn best(mut ref self, i: i64, state: i64) -> Option[i64] {
+        if i == self.n {
+            // Free and cooling are valid places to stop; HOLDING is not.
+            if state == 1 {
+                return None;
+            }
+            return Some(0);
+        }
+        let key = i * 3 + state;
+        if self.seen[key] == 1 {
+            return self.val[key];
+        }
+        let mut answer: Option[i64] = None;
+        if state == 0 {
+            answer = self.best(i + 1, 0);
+            match self.best(i + 1, 1) {
+                Some(v) => { answer = better_d(answer, v - self.prices[i]); }
+                None => {}
+            }
+        } else if state == 1 {
+            answer = self.best(i + 1, 1);
+            match self.best(i + 1, 2) {
+                Some(v) => { answer = better_d(answer, v + self.prices[i]); }
+                None => {}
+            }
+        } else {
+            answer = self.best(i + 1, 0);
+        }
+        self.val[key] = answer;
+        self.seen[key] = 1;
+        return answer;
+    }
+}
+
+// Keep the larger of an Option and a candidate.
+fn better_d(current: Option[i64], candidate: i64) -> Option[i64] {
+    match current {
+        Some(v) => {
+            if candidate > v {
+                return Some(candidate);
+            }
+            return Some(v);
+        }
+        None => { return Some(candidate); }
+    }
+}
+
+fn solve_d(prices: ref Vec[i64]) -> i64 {
+    if prices.len() == 0 {
+        return 0;
+    }
+    let mut m = Memo.new(prices);
+    match m.best(0, 0) {
+        Some(v) => { return v; }
+        None => { return 0; }
+    }
+}
+
+// ------------------------------------------------------------------ harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) % 2147483648;
+}
+
+fn make_prices(n: i64, seed: i64, lo: i64, span: i64) -> Vec[i64] {
+    let mut state = seed;
+    let mut xs: Vec[i64] = Vec.new();
+    for i in 0..n {
+        state = lcg(state);
+        xs.push(lo + state % span);
+    }
+    return xs;
+}
+
+// P7's oracle: enumerate transaction pairs directly. No state machine.
+fn brute(prices: ref Vec[i64], start: i64) -> i64 {
+    let n = prices.len();
+    let mut best = 0;
+    let mut b = start;
+    while b < n {
+        let mut s = b + 1;
+        while s < n {
+            let gain = prices[s] - prices[b] + brute(prices, s + 2);
+            if gain > best {
+                best = gain;
+            }
+            s = s + 1;
+        }
+        b = b + 1;
+    }
+    return best;
+}
+
+// #122's answer: unlimited transactions, NO cooldown — an upper bound.
+fn no_cooldown(prices: ref Vec[i64]) -> i64 {
+    let mut total = 0;
+    let mut i = 1;
+    while i < prices.len() {
+        if prices[i] > prices[i - 1] {
+            total += prices[i] - prices[i - 1];
+        }
+        i = i + 1;
+    }
+    return total;
+}
+
+// #121's answer: one transaction only — a lower bound.
+fn single_transaction(prices: ref Vec[i64]) -> i64 {
+    let mut best = 0;
+    let mut i = 0;
+    while i < prices.len() {
+        let mut j = i + 1;
+        while j < prices.len() {
+            if prices[j] - prices[i] > best {
+                best = prices[j] - prices[i];
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn shifted(prices: ref Vec[i64], k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..prices.len() {
+        out.push(prices[i] + k);
+    }
+    return out;
+}
+
+fn scaled(prices: ref Vec[i64], c: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..prices.len() {
+        out.push(prices[i] * c);
+    }
+    return out;
+}
+
+fn main() {
+    let mut series = 0;
+    let mut oracle_series = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6 = 0;
+    let mut p7 = 0;
+
+    let mut n = 0;
+    while n <= 18 {
+        let mut round = 0;
+        while round < 200 {
+            let seed = 7919 * (n + 3) + round * 104729 + 1;
+            // Values straddle zero: a buy at a negative price is a GAIN, which
+            // is what caught arm D ending a schedule while still holding.
+            let prices = make_prices(n, seed, 0 - 12, 25);
+
+            let va = solve_a(prices);
+
+            // P1 — four arms, one answer.
+            if solve_b(prices) != va { p1 += 1; }
+            if solve_c(prices) != va { p1 += 1; }
+            if solve_d(prices) != va { p1 += 1; }
+
+            // P2 — doing nothing is always allowed, so profit is never negative.
+            if va < 0 { p2 += 1; }
+
+            // P3 — a constant shift of every price cancels in every difference.
+            let k = 1 + round % 17;
+            if solve_a(shifted(prices, k)) != va { p3 += 1; }
+            if solve_a(shifted(prices, 0 - k)) != va { p3 += 1; }
+
+            // P4 — scaling every price by c > 0 scales the answer by c.
+            let c = 2 + round % 3;
+            if solve_a(scaled(prices, c)) != va * c { p4 += 1; }
+
+            // P5 — cooldown can only cost: bounded above by the no-cooldown answer.
+            if va > no_cooldown(prices) { p5 += 1; }
+
+            // P6 — one transaction is always schedulable: bounded below by it.
+            if va < single_transaction(prices) { p6 += 1; }
+
+            // P7 — against an exhaustive enumeration of transaction pairs.
+            if n <= 9 {
+                oracle_series += 1;
+                if brute(prices, 0) != va { p7 += 1; }
+            }
+
+            series += 1;
+            round = round + 1;
+        }
+        n = n + 1;
+    }
+
+    println(f"series {series}");
+    println(f"oracle-checked {oracle_series}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 negative-profit failures {p2}");
+    println(f"P3 shift-invariance failures {p3}");
+    println(f"P4 scale-response failures {p4}");
+    println(f"P5 upper-bound violations {p5}");
+    println(f"P6 lower-bound violations {p6}");
+    println(f"P7 brute-force disagreements {p7}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

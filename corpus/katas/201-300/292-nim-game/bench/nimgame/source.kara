@@ -1,0 +1,44 @@
+// Bench workload for LeetCode 292 — Nim Game.
+//
+// THE CLOSED FORM IS ONE MODULO, so there is nothing to time: any benchmark of
+// `n % 4 != 0` measures the loop around it. What IS worth timing is the
+// derivation — building the win/lose table the induction describes — because
+// that is a real O(n) workload with a branchy inner loop over a Vec[bool], and
+// it is the shape a reader writes before spotting the pattern.
+//
+// So: build the table to 20,000,000 and sink the number of losing positions
+// plus a positional checksum. The count alone would be N/4 + 1 by construction
+// and so could not distinguish a correct table from one that merely has the
+// right density, which is exactly the mistake a wrong `take` bound makes.
+
+fn main() {
+    let n = 20000000;
+
+    let mut win: Vec[bool] = Vec.new();
+    win.push(false);
+    let mut i = 1;
+    while i <= n {
+        let mut w = false;
+        let mut take = 1;
+        while take <= 3 {
+            if i - take >= 0 {
+                if not win[i - take] { w = true; }
+            }
+            take = take + 1;
+        }
+        win.push(w);
+        i = i + 1;
+    }
+
+    let mut losing = 0;
+    let mut checksum = 0;
+    i = 0;
+    while i <= n {
+        if not win[i] {
+            losing = losing + 1;
+            checksum = (checksum * 31 + i) % 1000000007;
+        }
+        i = i + 1;
+    }
+    println(f"losing {losing} checksum {checksum}");
+}

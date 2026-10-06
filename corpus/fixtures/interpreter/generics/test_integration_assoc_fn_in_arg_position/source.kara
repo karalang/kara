@@ -1,0 +1,16 @@
+
+trait Default {
+    fn default() -> Self;
+}
+
+struct Foo { v: i64 }
+
+impl Default for Foo {
+    fn default() -> Foo { Foo { v: 21 } }
+}
+
+fn take(f: Foo) -> i64 { f.v * 2 }
+
+fn main() {
+    println(take(default()));
+}

@@ -1,0 +1,96 @@
+// LeetCode 277 — the definition, asked directly.
+//
+// For each person, ask about every other person: do they know anyone (then they
+// are out), and is everyone known by them (or they are out). O(n^2) questions,
+// which is exactly what the problem asks you not to do — and exactly why it
+// belongs here.
+//
+// IT IS THE ONLY SOLVER THAT DOES NOT USE THE ELIMINATION INSIGHT. The scan and
+// the stack are the same idea in two arrangements: both rest on "one question
+// kills one person", and both then verify a survivor. A misreading of the
+// CELEBRITY CONDITION itself — the direction of `knows`, or whether a celebrity
+// may know one person — would be shared by both and invisible between them.
+// This one reads the condition off the definition for every candidate
+// independently, so it cannot inherit that mistake.
+//
+// It is also the reason the differential can enumerate EVERY knows-matrix for
+// small `n`: at n=4 that is 2^12 = 4096 relations, most of which have no
+// celebrity at all. The no-celebrity cases are the ones a survivor-based solver
+// gets wrong, and they are the overwhelming majority of the space.
+
+fn knows(m: ref Vec[Vec[bool]], a: i64, b: i64, calls: mut ref i64) -> bool {
+    calls = calls + 1;
+    return m[a][b];
+}
+
+fn find_celebrity(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
+    let mut i = 0;
+    while i < n {
+        let mut ok = true;
+        let mut j = 0;
+        while j < n {
+            if i != j {
+                if knows(m, i, j, calls) {
+                    ok = false;
+                }
+                if not knows(m, j, i, calls) {
+                    ok = false;
+                }
+            }
+            j = j + 1;
+        }
+        if ok {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn row(bits: Vec[i64]) -> Vec[bool] {
+    let mut r: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < bits.len() {
+        r.push(bits[i] == 1);
+        i = i + 1;
+    }
+    return r;
+}
+
+fn main() {
+    // knows[a][b] — the diagonal is unused (nobody is asked about themselves).
+    // Case 1: person 1 is the celebrity — 0 and 2 know 1, 1 knows nobody.
+    let m1: Vec[Vec[bool]] = [
+        row([0, 1, 0]),
+        row([0, 0, 0]),
+        row([0, 1, 0]),
+    ];
+    // Case 2: nobody — 1 is known by all but knows 2.
+    let m2: Vec[Vec[bool]] = [
+        row([0, 1, 0]),
+        row([0, 0, 1]),
+        row([0, 1, 0]),
+    ];
+    // Case 3: single person, trivially a celebrity.
+    let m3: Vec[Vec[bool]] = [row([0])];
+    // Case 4: person 0 is the celebrity.
+    let m4: Vec[Vec[bool]] = [
+        row([0, 0, 0, 0]),
+        row([1, 0, 1, 0]),
+        row([1, 0, 0, 1]),
+        row([1, 1, 0, 0]),
+    ];
+    // Case 5: two people who know each other — neither qualifies.
+    let m5: Vec[Vec[bool]] = [row([0, 1]), row([1, 0])];
+
+    let cases: Vec[Vec[Vec[bool]]] = [m1, m2, m3, m4, m5];
+    let mut c = 0;
+    while c < cases.len() {
+        let n = cases[c].len();
+        let mut calls = 0;
+        let who = find_celebrity(cases[c], n, mut calls);
+        let bound = 3 * (n - 1);
+        println(f"n={n} celebrity={who} calls={calls} (bound {bound})");
+        c = c + 1;
+    }
+}

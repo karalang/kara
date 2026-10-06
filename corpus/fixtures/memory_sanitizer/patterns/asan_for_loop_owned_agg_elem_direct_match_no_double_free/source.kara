@@ -1,0 +1,25 @@
+
+struct Named { name: String, nums: Vec[i64] }
+enum Item { A(Named), B }
+fn total(items: ref Vec[Item]) -> i64 {
+    let mut n = 0;
+    for it in items {
+        match it {
+            A(x) => { n = n + x.name.len(); for t in x.nums { n = n + t; } }
+            B => {}
+        }
+    }
+    n
+}
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut tg: Vec[i64] = Vec.new();
+        tg.push(1); tg.push(2);
+        v.push(Item.A(Named { name: "owned-agg-elem-direct-match-payload-xx".to_string(), nums: tg }));
+        v.push(Item.B);
+        i = i + 1;
+    }
+    println(total(v));
+}

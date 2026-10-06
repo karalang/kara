@@ -1,0 +1,5 @@
+
+fn main() {
+    let r = "left part padded beyond thirty-six bytes ok " + "right part too";
+    println(r);
+}

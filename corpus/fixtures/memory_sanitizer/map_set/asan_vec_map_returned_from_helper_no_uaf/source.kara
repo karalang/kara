@@ -1,0 +1,21 @@
+
+fn make() -> Vec[Map[i64, i64]] {
+    let mut v: Vec[Map[i64, i64]] = Vec.new();
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1i64, 777i64);
+    v.push(m);
+    v
+}
+
+fn main() {
+    let v = make();
+    let mut churn: Vec[Map[i64, i64]] = Vec.new();
+    let mut i = 0i64;
+    while i < 16i64 {
+        let mut c: Map[i64, i64] = Map.new();
+        c.insert(99i64, 1i64);
+        churn.push(c);
+        i = i + 1;
+    }
+    match v[0].get(1i64) { Some(x) => println(x), None => println(-1i64) }
+}

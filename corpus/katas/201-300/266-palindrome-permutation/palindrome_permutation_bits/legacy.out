@@ -1,0 +1,14 @@
+"code" -> false
+"aab" -> true
+"carerac" -> true
+"" -> true
+"a" -> true
+"aa" -> true
+"ab" -> false
+"aabb" -> true
+"aabbcc" -> true
+"aaabbb" -> false
+"aaabbbb" -> true
+"zzzzzzzz" -> true
+"abcabcabc" -> false
+"abcabcabcd" -> false

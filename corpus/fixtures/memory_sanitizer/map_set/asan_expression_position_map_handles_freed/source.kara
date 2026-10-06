@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut v: Vec[Map[String, i64]] = Vec.new();
+    v.push(Map.new());
+    let _ = v[0].insert(f"k{1}", 5);
+    match v[0].get(f"k{1}") { Some(x) => println(f"got {x}"), None => println("miss") }
+    let mut g: Vec[Map[String, i64]] = Vec.filled(2, Map.new());
+    let _ = g[0].insert(f"a{2}", 7);
+    println(f"g0 {g[0].len()} g1 {g[1].len()}");
+    println("end");
+}

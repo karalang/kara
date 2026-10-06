@@ -1,0 +1,628 @@
+// LeetCode #320: Generalized Abbreviation — differential + property harness.
+//
+// Four arms, each reaching the same 2^n strings by a different route:
+//
+//   mask     walk 0..2^n and run-length encode each mask          (★)
+//   back     recurse per letter carrying a pending run
+//   grow     hold level k, build level k+1 by editing strings
+//   runs     enumerate the maximal-run decompositions directly
+//
+// There is no external oracle here — the answer IS the enumeration — so the
+// harness leans on properties that do not know how any arm works. Two of them
+// are complete on their own: P4 pins the size of the answer and P9 pins its
+// content, because "the recovered masks are a permutation of 0..2^n" says the
+// set is exactly right with no reference to how it was produced.
+//
+//   P1   back agrees with mask (as sorted multisets)
+//   P2   grow agrees with mask
+//   P3   runs agrees with mask
+//   P4   the answer has exactly 2^n entries
+//   P5   every entry expands back to `word`
+//   P6   the entries are pairwise sorted_entries
+//   P7   every number is well formed: >= 1, no leading zero, and it fits in
+//        the letters that remain
+//   P8   length identity: |entry| == kept letters + sum of digits per run
+//   P9   the masks recovered from the entries are a permutation of 0..2^n
+//   P10  prefix induction: dropping each entry's last unit maps the answer for
+//        word[0..k] onto the answer for word[0..k-1] exactly two-to-one
+//   P11  reversal symmetry: reversing the token order of every entry of
+//        reverse(word) gives the answer for word
+//   P12  relabelling letters commutes with abbreviating
+//   P13  run census: the number of entries with exactly r numbers matches
+//        sum over s of C(s-1, r-1) * C(n-s+1, r)
+//
+// P9 and P13 are the two that watch the machine rather than the answer. P9
+// inverts every entry back to the choice that produced it, so a mutant that
+// emits 2^n strings which are not the right 2^n is caught even when the count
+// is right. P13 counts the answer a second way — by run structure rather than
+// by letter choice — so an arm that loses (or duplicates) a particular SHAPE
+// of abbreviation is caught even when the total still comes out at 2^n.
+
+// Sizing. Every bound here is set by the TREE-WALK interpreter, not by the
+// JIT: the repo's A/B rule wants this harness byte-identical under `karac run`,
+// `karac run --interp` and both `karac build` modes, and the interpreter is
+// roughly three orders of magnitude slower. The first cut of this file swept
+// to NMAX 13 with the relabel check on every case and took over ten minutes of
+// interpreter CPU without finishing; these bounds bring it to seconds while
+// still enumerating thousands of entries per case.
+const NMAX: i64 = 11;         // full enumeration sweep, every word length 0..NMAX
+const WORDS_PER_N: i64 = 3;   // random words per length, plus the patterned ones
+const RELABEL_NMAX: i64 = 8;  // P12 re-runs all four arms twice more per case
+const CENSUS_NMAX: i64 = 14;  // P13 runs further: counting is cheaper than checking
+
+// -------------------------------------------------------------- arms ---
+
+fn abbrev_mask(word: ref String) -> Vec[String] {
+    let bs = word.bytes();
+    let n = bs.len();
+    let mut out: Vec[String] = Vec.new();
+    let limit = 1 << n;
+    let mut mask = 0;
+    while mask < limit {
+        let mut abbr = String.new();
+        let mut run = 0;
+        for i in 0..n {
+            if (mask & (1 << i)) != 0 {
+                run = run + 1;
+            } else {
+                if run > 0 { abbr.push_str(run.to_string()); run = 0; }
+                abbr.push(bs[i] as char);
+            }
+        }
+        if run > 0 { abbr.push_str(run.to_string()); }
+        out.push(abbr);
+        mask = mask + 1;
+    }
+    return out;
+}
+
+fn back_walk(bs: ref Vec[u8], n: i64, i: i64, run: i64, path: String,
+        out: mut ref Vec[String]) {
+    if i == n {
+        let mut leaf = path;
+        if run > 0 { leaf.push_str(run.to_string()); }
+        out.push(leaf);
+        return;
+    }
+    back_walk(bs, n, i + 1, run + 1, path.clone(), out);
+    let mut kept = path;
+    if run > 0 { kept.push_str(run.to_string()); }
+    kept.push(bs[i] as char);
+    back_walk(bs, n, i + 1, 0, kept, out);
+}
+
+fn abbrev_back(word: ref String) -> Vec[String] {
+    let bs = to_bytes(word);
+    let mut out: Vec[String] = Vec.new();
+    back_walk(bs, bs.len(), 0, 0, String.new(), mut out);
+    return out;
+}
+
+fn bump_tail(abbr: ref String) -> String {
+    let b = abbr.bytes();
+    let n = b.len();
+    let mut cut = n;
+    while cut > 0 and b[cut - 1] >= b'0' and b[cut - 1] <= b'9' { cut = cut - 1; }
+    if cut == n {
+        let mut grown = abbr.clone();
+        grown.push_str("1");
+        return grown;
+    }
+    let mut value = 0;
+    for i in cut..n { value = value * 10 + ((b[i] - b'0') as i64); }
+    let mut grown = String.new();
+    for i in 0..cut { grown.push(b[i] as char); }
+    grown.push_str((value + 1).to_string());
+    return grown;
+}
+
+fn abbrev_grow(word: ref String) -> Vec[String] {
+    let bs = word.bytes();
+    let mut level: Vec[String] = Vec.new();
+    level.push(String.new());
+    for i in 0..bs.len() {
+        let mut grown: Vec[String] = Vec.new();
+        for t in 0..level.len() {
+            let entry = level[t].clone();
+            let mut kept = entry.clone();
+            kept.push(bs[i] as char);
+            grown.push(kept);
+            grown.push(bump_tail(entry));
+        }
+        level = grown;
+    }
+    return level;
+}
+
+fn runs_walk(bs: ref Vec[u8], n: i64, p: i64, path: String, out: mut ref Vec[String]) {
+    let mut tail = path.clone();
+    for i in p..n { tail.push(bs[i] as char); }
+    out.push(tail);
+    for a in p..n {
+        let mut head = path.clone();
+        for i in p..a { head.push(bs[i] as char); }
+        let mut len = 1;
+        while a + len <= n {
+            let mut with_run = head.clone();
+            with_run.push_str(len.to_string());
+            if a + len == n {
+                out.push(with_run);
+            } else {
+                with_run.push(bs[a + len] as char);
+                runs_walk(bs, n, a + len + 1, with_run, out);
+            }
+            len = len + 1;
+        }
+    }
+}
+
+fn abbrev_runs(word: ref String) -> Vec[String] {
+    let bs = to_bytes(word);
+    let mut out: Vec[String] = Vec.new();
+    runs_walk(bs, bs.len(), 0, String.new(), mut out);
+    return out;
+}
+
+fn abbrev_arm(arm: i64, word: ref String) -> Vec[String] {
+    if arm == 0 { return abbrev_mask(word); }
+    if arm == 1 { return abbrev_back(word); }
+    if arm == 2 { return abbrev_grow(word); }
+    return abbrev_runs(word);
+}
+
+// ----------------------------------------------------------- helpers ---
+
+fn to_bytes(word: ref String) -> Vec[u8] {
+    let b = word.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    for i in 0..b.len() { v.push(b[i]); }
+    return v;
+}
+
+fn is_digit(c: u8) -> bool {
+    return c >= b'0' and c <= b'9';
+}
+
+// Canonical view of a Vec[String]: sorted, then joined with a separator that
+// cannot occur inside an abbreviation.
+fn canon(v: ref Vec[String]) -> String {
+    let mut copy: Vec[String] = Vec.new();
+    for i in 0..v.len() { copy.push(v[i].clone()); }
+    copy.sort();
+    let mut out = String.new();
+    for i in 0..copy.len() {
+        out.push_str(copy[i]);
+        out.push('|');
+    }
+    return out;
+}
+
+// Expand an abbreviation against `word`: letters are copied, each number
+// consumes that many of `word`'s letters. Returns "!" when the abbreviation is
+// malformed or does not line up with `word`'s length.
+fn expand(abbr: ref String, word: ref String) -> String {
+    let a = abbr.bytes();
+    let w = word.bytes();
+    let mut out = String.new();
+    let mut wi = 0;
+    let mut i = 0;
+    while i < a.len() {
+        if is_digit(a[i]) {
+            let mut value = 0;
+            while i < a.len() and is_digit(a[i]) {
+                value = value * 10 + ((a[i] - b'0') as i64);
+                i = i + 1;
+            }
+            if value == 0 { return "!"; }
+            for _ in 0..value {
+                if wi >= w.len() { return "!"; }
+                out.push(w[wi] as char);
+                wi = wi + 1;
+            }
+        } else {
+            out.push(a[i] as char);
+            wi = wi + 1;
+            i = i + 1;
+        }
+    }
+    if wi != w.len() { return "!"; }
+    return out;
+}
+
+// Recover the keep/count choice the abbreviation encodes: bit `i` set means
+// letter `i` was counted. Returns -1 when the abbreviation does not decode
+// against `word` at all.
+fn to_mask(abbr: ref String, word: ref String) -> i64 {
+    let a = abbr.bytes();
+    let w = word.bytes();
+    let mut mask = 0;
+    let mut wi = 0;
+    let mut i = 0;
+    while i < a.len() {
+        if is_digit(a[i]) {
+            let mut value = 0;
+            while i < a.len() and is_digit(a[i]) {
+                value = value * 10 + ((a[i] - b'0') as i64);
+                i = i + 1;
+            }
+            if value == 0 { return -1; }
+            for _ in 0..value {
+                if wi >= w.len() { return -1; }
+                mask = mask | (1 << wi);
+                wi = wi + 1;
+            }
+        } else {
+            if wi >= w.len() or a[i] != w[wi] { return -1; }
+            wi = wi + 1;
+            i = i + 1;
+        }
+    }
+    if wi != w.len() { return -1; }
+    return mask;
+}
+
+// Every number is >= 1, carries no leading zero, and fits the letters left.
+fn numbers_well_formed(abbr: ref String, n: i64) -> bool {
+    let a = abbr.bytes();
+    let mut consumed = 0;
+    let mut i = 0;
+    while i < a.len() {
+        if is_digit(a[i]) {
+            if a[i] == b'0' { return false; }         // leading zero (and "0")
+            let mut value = 0;
+            while i < a.len() and is_digit(a[i]) {
+                value = value * 10 + ((a[i] - b'0') as i64);
+                i = i + 1;
+            }
+            if value < 1 { return false; }
+            consumed = consumed + value;
+        } else {
+            consumed = consumed + 1;
+            i = i + 1;
+        }
+    }
+    return consumed <= n;
+}
+
+fn digits_of(value: i64) -> i64 {
+    let mut d = 0;
+    let mut v = value;
+    while v > 0 { d = d + 1; v = v / 10; }
+    if d == 0 { d = 1; }
+    return d;
+}
+
+// |abbr| == (kept letters) + sum over runs of digits(run length).
+fn length_identity(abbr: ref String) -> bool {
+    let a = abbr.bytes();
+    let mut want = 0;
+    let mut i = 0;
+    while i < a.len() {
+        if is_digit(a[i]) {
+            let mut value = 0;
+            while i < a.len() and is_digit(a[i]) {
+                value = value * 10 + ((a[i] - b'0') as i64);
+                i = i + 1;
+            }
+            want = want + digits_of(value);
+        } else {
+            want = want + 1;
+            i = i + 1;
+        }
+    }
+    return want == a.len();
+}
+
+fn count_numbers(abbr: ref String) -> i64 {
+    let a = abbr.bytes();
+    let mut runs = 0;
+    let mut i = 0;
+    while i < a.len() {
+        if is_digit(a[i]) {
+            runs = runs + 1;
+            while i < a.len() and is_digit(a[i]) { i = i + 1; }
+        } else {
+            i = i + 1;
+        }
+    }
+    return runs;
+}
+
+// Remove the last unit: a trailing number goes down by one (and vanishes at
+// zero), otherwise the trailing letter is dropped.
+fn drop_last_unit(abbr: ref String) -> String {
+    let b = abbr.bytes();
+    let n = b.len();
+    if n == 0 { return String.new(); }
+    if not is_digit(b[n - 1]) {
+        let mut out = String.new();
+        for i in 0..(n - 1) { out.push(b[i] as char); }
+        return out;
+    }
+    let mut cut = n;
+    while cut > 0 and is_digit(b[cut - 1]) { cut = cut - 1; }
+    let mut value = 0;
+    for i in cut..n { value = value * 10 + ((b[i] - b'0') as i64); }
+    let mut out = String.new();
+    for i in 0..cut { out.push(b[i] as char); }
+    if value > 1 { out.push_str((value - 1).to_string()); }
+    return out;
+}
+
+// Reverse the sequence of units, leaving each number's digits in place.
+fn reverse_tokens(abbr: ref String) -> String {
+    let a = abbr.bytes();
+    let mut units: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < a.len() {
+        let mut unit = String.new();
+        if is_digit(a[i]) {
+            while i < a.len() and is_digit(a[i]) { unit.push(a[i] as char); i = i + 1; }
+        } else {
+            unit.push(a[i] as char);
+            i = i + 1;
+        }
+        units.push(unit);
+    }
+    let mut out = String.new();
+    let mut k = units.len() - 1;
+    while k >= 0 { out.push_str(units[k]); k = k - 1; }
+    return out;
+}
+
+fn reverse_word(word: ref String) -> String {
+    let b = word.bytes();
+    let mut out = String.new();
+    let mut i = b.len() - 1;
+    while i >= 0 { out.push(b[i] as char); i = i - 1; }
+    return out;
+}
+
+// Rotate letters by `shift` within a..z; digits are left alone.
+fn relabel(s: ref String, shift: i64) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    for i in 0..b.len() {
+        if is_digit(b[i]) {
+            out.push(b[i] as char);
+        } else {
+            let c = ((b[i] - b'a') as i64 + shift) % 26;
+            out.push((((c as u8)) + b'a') as char);
+        }
+    }
+    return out;
+}
+
+fn relabel_all(v: ref Vec[String], shift: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..v.len() { out.push(relabel(v[i], shift)); }
+    return out;
+}
+
+fn prefix(word: ref String, k: i64) -> String {
+    let b = word.bytes();
+    let mut out = String.new();
+    for i in 0..k { out.push(b[i] as char); }
+    return out;
+}
+
+// C(n, k) for the small n this harness needs.
+fn binom(n: i64, k: i64) -> i64 {
+    if k < 0 or k > n or n < 0 { return 0; }
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    for i in 0..(n + 1) {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..(n + 1) { row.push(0); }
+        row[0] = 1;
+        rows.push(row);
+    }
+    for i in 1..(n + 1) {
+        for j in 1..(i + 1) {
+            rows[i][j] = rows[i - 1][j - 1] + rows[i - 1][j];
+        }
+    }
+    return rows[n][k];
+}
+
+// Abbreviations of an n-letter word that use exactly r numbers: choose the
+// total counted length s, split it into r runs (C(s-1, r-1) compositions), and
+// place those runs among the n-s kept letters so that no two touch
+// (C(n-s+1, r) slots).
+fn census_closed_form(n: i64, r: i64) -> i64 {
+    if r == 0 { return 1; }
+    let mut total = 0;
+    for s in r..(n + 1) {
+        total = total + binom(s - 1, r - 1) * binom(n - s + 1, r);
+    }
+    return total;
+}
+
+// --------------------------------------------------------- generator ---
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn grow_word(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut out = String.new();
+    for i in 0..n {
+        let r = next(seed);
+        out.push((((r % k) as u8) + b'a') as char);
+    }
+    return out;
+}
+
+// All one letter, strictly ascending, and a two-letter alternation — the
+// shapes where "the letters do not matter" is easiest to get wrong.
+fn patterned(kind: i64, n: i64) -> String {
+    let mut out = String.new();
+    for i in 0..n {
+        if kind == 0 { out.push('a'); }
+        else if kind == 1 { out.push((((i % 26) as u8) + b'a') as char); }
+        else { out.push((((i % 2) as u8) + b'a') as char); }
+    }
+    return out;
+}
+
+// -------------------------------------------------------------- main ---
+
+fn main() {
+    let mut inputs: Vec[String] = Vec.new();
+    for n in 0..(NMAX + 1) {
+        for kind in 0..3 { inputs.push(patterned(kind, n)); }
+        for sd in 0..WORDS_PER_N {
+            let mut seed = n * 7919 + sd * 104729 + 17;
+            inputs.push(grow_word(n, 4 + sd, mut seed));
+        }
+    }
+
+    let mut cases = 0;
+    let mut relabel_cases = 0;
+    let mut entries = 0;
+    let mut census_cells = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6 = 0;
+    let mut p7 = 0;
+    let mut p8 = 0;
+    let mut p9 = 0;
+    let mut p10 = 0;
+    let mut p11 = 0;
+    let mut p12: Vec[i64] = [0, 0, 0, 0];
+    let mut p13 = 0;
+
+    for t in 0..inputs.len() {
+        let word = inputs[t].clone();
+        let n = word.bytes().len();
+        cases = cases + 1;
+
+        let all = abbrev_mask(word);
+        let key = canon(all);
+        entries = entries + all.len();
+
+        // P1-P3: the other three arms produce the same multiset.
+        if canon(abbrev_back(word)) != key { p1 = p1 + 1; }
+        if canon(abbrev_grow(word)) != key { p2 = p2 + 1; }
+        if canon(abbrev_runs(word)) != key { p3 = p3 + 1; }
+
+        // P4: exactly 2^n entries.
+        let mut expect = 1;
+        for i in 0..n { expect = expect * 2; }
+        if all.len() != expect { p4 = p4 + 1; }
+
+        // P5-P9: per-entry properties, plus the mask bijection.
+        let mut seen: Vec[bool] = Vec.new();
+        for m in 0..expect { seen.push(false); }
+        let mut sorted_entries: Vec[String] = Vec.new();
+        for i in 0..all.len() {
+            let abbr = all[i].clone();
+            if expand(abbr, word) != word { p5 = p5 + 1; }
+            if not numbers_well_formed(abbr, n) { p7 = p7 + 1; }
+            if not length_identity(abbr) { p8 = p8 + 1; }
+            let m = to_mask(abbr, word);
+            if m < 0 or m >= expect {
+                p9 = p9 + 1;
+            } else if seen[m] {
+                p9 = p9 + 1;
+            } else {
+                seen[m] = true;
+            }
+            sorted_entries.push(abbr);
+        }
+        for m in 0..expect { if not seen[m] { p9 = p9 + 1; } }
+
+        // P6: pairwise sorted_entries — sort and look for an equal neighbour.
+        sorted_entries.sort();
+        for i in 1..sorted_entries.len() {
+            if sorted_entries[i] == sorted_entries[i - 1] { p6 = p6 + 1; }
+        }
+
+        // P10: dropping each entry's last unit hits every abbreviation of the
+        // one-letter-shorter prefix exactly twice.
+        if n >= 1 {
+            let shorter = abbrev_mask(prefix(word, n - 1));
+            let mut dropped: Vec[String] = Vec.new();
+            for i in 0..all.len() { dropped.push(drop_last_unit(all[i])); }
+            let mut doubled: Vec[String] = Vec.new();
+            for i in 0..shorter.len() {
+                doubled.push(shorter[i].clone());
+                doubled.push(shorter[i].clone());
+            }
+            if canon(dropped) != canon(doubled) { p10 = p10 + 1; }
+        }
+
+        // P11: reversing the word reverses each entry's token order.
+        let mirrored = abbrev_mask(reverse_word(word));
+        let mut unmirrored: Vec[String] = Vec.new();
+        for i in 0..mirrored.len() { unmirrored.push(reverse_tokens(mirrored[i])); }
+        if canon(unmirrored) != key { p11 = p11 + 1; }
+
+        // P12: relabelling the letters commutes with abbreviating — per arm.
+        // Capped at RELABEL_NMAX: this re-runs every arm twice more, and the
+        // property is about a per-letter map, so short words exercise it fully.
+        if n <= RELABEL_NMAX {
+            for arm in 0..4 {
+                let plain = abbrev_arm(arm, word);
+                for shift in 1..3 {
+                    let moved = abbrev_arm(arm, relabel(word, shift));
+                    if canon(moved) != canon(relabel_all(plain, shift)) {
+                        p12[arm] += 1;
+                    }
+                }
+            }
+            relabel_cases = relabel_cases + 1;
+        }
+
+        // P13: the run census matches the closed form.
+        let mut census: Vec[i64] = Vec.new();
+        for r in 0..(n + 1) { census.push(0); }
+        for i in 0..all.len() { census[count_numbers(all[i])] += 1; }
+        for r in 0..(n + 1) {
+            census_cells = census_cells + 1;
+            if census[r] != census_closed_form(n, r) { p13 = p13 + 1; }
+        }
+    }
+
+    // P13 again, further out: counting run structures is cheap, so push the
+    // closed form past the length the full enumeration can reach.
+    for n in (NMAX + 1)..(CENSUS_NMAX + 1) {
+        let word = patterned(1, n);
+        let all = abbrev_mask(word);
+        let mut census: Vec[i64] = Vec.new();
+        for r in 0..(n + 1) { census.push(0); }
+        for i in 0..all.len() { census[count_numbers(all[i])] += 1; }
+        let mut total = 0;
+        for r in 0..(n + 1) {
+            census_cells = census_cells + 1;
+            let want = census_closed_form(n, r);
+            total = total + want;
+            if census[r] != want { p13 = p13 + 1; }
+        }
+        if total != all.len() { p13 = p13 + 1; }
+    }
+
+    println(f"cases {cases} relabel-cases {relabel_cases} entries {entries} census-cells {census_cells}");
+    println(f"P1  back-vs-mask disagreements {p1}");
+    println(f"P2  grow-vs-mask disagreements {p2}");
+    println(f"P3  runs-vs-mask disagreements {p3}");
+    println(f"P4  count != 2^n {p4}");
+    println(f"P5  expansion failures {p5}");
+    println(f"P6  duplicate entries {p6}");
+    println(f"P7  malformed numbers {p7}");
+    println(f"P8  length-identity failures {p8}");
+    println(f"P9  mask-bijection failures {p9}");
+    println(f"P10 prefix-induction failures {p10}");
+    println(f"P11 reversal-symmetry failures {p11}");
+    println(f"P12 relabel-commutes mask failures {p12[0]}");
+    println(f"P12 relabel-commutes back failures {p12[1]}");
+    println(f"P12 relabel-commutes grow failures {p12[2]}");
+    println(f"P12 relabel-commutes runs failures {p12[3]}");
+    println(f"P13 run-census failures {p13}");
+    let total = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11
+        + p12[0] + p12[1] + p12[2] + p12[3] + p13;
+    if total == 0 { println("DIFFERENTIAL OK"); } else { println("DIFFERENTIAL FAILED"); }
+}

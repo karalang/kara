@@ -1,0 +1,13 @@
+source = "tests/codegen/mod.rs::IFLET_INDEX_ELEM_CLONE_SRC"
+dedup_of = ["tests/interpreter/patterns.rs::test_if_let_over_an_indexed_element_runs_one_payload_body"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,36 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" }; }
+struct S3 { a: R, b: R }
+struct S4 { a: R, b: R, c: R }
+struct Mix { a: R, k: i64, c: R }
+struct Inner { p: R }
+struct Outer { i: Inner, z: R }
+fn eat(r: R) -> i64 { return r.id; }
+
+fn bind_first() -> i64 { let s: S3 = S3 { a: mk(1), b: mk(2) }; match s { S3 { a, .. } => { return a.id; } } }
+fn bind_last() -> i64 { let s: S3 = S3 { a: mk(3), b: mk(4) }; match s { S3 { b, .. } => { return b.id; } } }
+fn bind_middle() -> i64 { let s: S4 = S4 { a: mk(5), b: mk(6), c: mk(7) }; match s { S4 { b, .. } => { return b.id; } } }
+fn bind_all() -> i64 { let s: S3 = S3 { a: mk(8), b: mk(9) }; match s { S3 { a, b } => { return a.id + b.id; } } }
+fn bind_none() -> i64 { let s: S3 = S3 { a: mk(10), b: mk(11) }; match s { S3 { .. } => { return 1; } } }
+fn renamed() -> i64 { let s: S3 = S3 { a: mk(12), b: mk(13) }; match s { S3 { a: x, .. } => { return x.id; } } }
+fn wild_field() -> i64 { let s: S3 = S3 { a: mk(14), b: mk(15) }; match s { S3 { a: _, .. } => { return 1; } } }
+fn nested_leaf() -> i64 { let o: Outer = Outer { i: Inner { p: mk(16) }, z: mk(17) }; match o { Outer { i: Inner { p }, .. } => { return p.id; } } }
+fn scalar_beside() -> i64 { let s: Mix = Mix { a: mk(18), k: 5, c: mk(19) }; match s { Mix { a, .. } => { return a.id; } } }
+fn iflet_named() -> i64 { let s: S3 = S3 { a: mk(20), b: mk(21) }; if let S3 { a, .. } = s { return a.id; } return 0; }
+fn moved_on() -> i64 { let s: S4 = S4 { a: mk(22), b: mk(23), c: mk(24) }; match s { S4 { b, .. } => { return eat(b); } } }
+
+fn main() {
+    println("bind_first"); let a: i64 = bind_first(); println(f"  v={a}");
+    println("bind_last"); let b: i64 = bind_last(); println(f"  v={b}");
+    println("bind_middle"); let c: i64 = bind_middle(); println(f"  v={c}");
+    println("bind_all"); let d: i64 = bind_all(); println(f"  v={d}");
+    println("bind_none"); let e: i64 = bind_none(); println(f"  v={e}");
+    println("renamed"); let f: i64 = renamed(); println(f"  v={f}");
+    println("wild_field"); let g: i64 = wild_field(); println(f"  v={g}");
+    println("nested_leaf"); let h: i64 = nested_leaf(); println(f"  v={h}");
+    println("scalar_beside"); let i: i64 = scalar_beside(); println(f"  v={i}");
+    println("iflet_named"); let j: i64 = iflet_named(); println(f"  v={j}");
+    println("moved_on"); let k: i64 = moved_on(); println(f"  v={k}");
+    println("end");
+}

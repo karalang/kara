@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut s: String = String.new();
+    s.push_str("hello");
+    s.reserve(1000);
+    println(f"[{s}] {s.len()}");
+    s.push_str(" world");
+    s.reserve(-5);
+    s.reserve(0);
+    println(f"[{s}] {s.len()}");
+}

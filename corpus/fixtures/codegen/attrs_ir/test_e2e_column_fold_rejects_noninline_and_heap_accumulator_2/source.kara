@@ -1,0 +1,6 @@
+
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3]);
+    let s = c.fold("", |acc, x| acc + "!");
+    println(f"{s}");
+}

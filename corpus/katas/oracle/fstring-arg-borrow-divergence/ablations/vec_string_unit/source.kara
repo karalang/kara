@@ -1,0 +1,10 @@
+fn f(s: Slice[String]) {
+    println(f"{s.len()}");
+}
+
+fn main() {
+    let mut o: Vec[String] = Vec.new();
+    o.push("x");
+    f(o);
+    f(o);
+}

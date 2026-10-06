@@ -1,0 +1,20 @@
+
+struct Body { x: f64, vx: f64, health: f64 }
+layout bodies: Vec[Body] { group pos { x } group vel { vx } group hp { health } }
+fn main() {
+    let mut bodies: Vec[Body] = Vec.new();
+    bodies.push(Body { x: 0.0, vx: 1.5, health: 100.0 });
+    bodies.push(Body { x: 10.0, vx: 2.5, health: 50.0 });
+    let mut i = 0;
+    while i < bodies.len() {
+        bodies[i].x = bodies[i].x + bodies[i].vx;
+        i = i + 1;
+    }
+    let mut total = 0.0;
+    let mut j = 0;
+    while j < bodies.len() {
+        total = total + bodies[j].x + bodies[j].health;
+        j = j + 1;
+    }
+    println(total);
+}

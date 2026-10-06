@@ -1,0 +1,17 @@
+
+type NonEmptyV = Vec[String] where self.len() > 0;
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        let mut v: Vec[String] = Vec.new();
+        v.push(f"a-{i}");
+        v.push(f"b-{i}");
+        match NonEmptyV.try_from(v) {
+            Ok(rows) => { total = total + rows.len(); }
+            Err(_)   => { total = total + 0; }
+        }
+        i = i + 1;
+    }
+    println(total);
+}

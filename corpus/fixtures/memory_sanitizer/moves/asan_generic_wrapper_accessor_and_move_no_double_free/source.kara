@@ -1,0 +1,33 @@
+
+struct Box[T] {
+    v: T,
+}
+impl[T] Box[T] {
+    fn get(ref self) -> T {
+        self.v
+    }
+}
+fn sink(b: Box[String]) -> i64 {
+    let s = b.v;
+    s.len()
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = Box { v: i.to_string() };
+        let sa = a.get();
+        acc = acc + sa.len();
+        let b = Box { v: [i, i + 1, i + 2, i + 3] };
+        let sb = b.get();
+        acc = acc + sb.len();
+        let c = Box { v: i.to_string() };
+        let d = c;
+        let sd = d.v;
+        acc = acc + sd.len();
+        let e = Box { v: i.to_string() };
+        acc = acc + sink(e);
+        i = i + 1;
+    }
+    println(acc);
+}

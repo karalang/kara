@@ -1,0 +1,13 @@
+
+struct P { name: String, age: i64 }
+fn main() {
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { name: f"carol padded beyond thirty-six bytes junk {1}", age: 30 });
+    ps.push(P { name: f"alice padded beyond thirty-six bytes junk {1}", age: 10 });
+    ps.push(P { name: f"bob padded beyond thirty-six bytes junk {1}", age: 20 });
+    let byage = ps.sorted_by_key(|p| p.age);
+    for p in byage.iter() { println(p.age); }
+    for p in ps.iter() { println(p.age); }
+    let byname = ps.sorted_by_key(|p| p.name);
+    println(byname.len());
+}

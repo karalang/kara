@@ -1,0 +1,2 @@
+enum Box2[T] { V(T), N }
+fn main() { let z: Box2[i64] = Box2.V(7); println("ok"); }

@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_ir_reduction_modulo_bce_literal_divisor"
+dedup_of = ["tests/par_codegen.rs::test_e2e_reduction_modulo_bce_sink_matches"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

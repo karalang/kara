@@ -1,0 +1,10 @@
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Task { pri: i64, id: i64 }
+fn main() {
+    let mut q: PriorityQueue[Task] = PriorityQueue.new();
+    q.push(Task { pri: 1, id: 10 });
+    match q.peek() { Some(t) => { println(t.id); } None => {} }
+    match q.pop() { Some(t) => { println(t.id); } None => {} }
+    println(q.len());
+}

@@ -1,0 +1,13 @@
+source = "tests/interpreter/patterns.rs::test_tuple_destructure_option_payload_survives_every_depth"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,18 @@
+
+import std.embeddings.{top_k};
+fn main() {
+    let mut s: Vec[f32] = Vec.new();
+    s.push(0.125f32); s.push(0.5f32); s.push(0.25f32); s.push(0.75f32);
+    let a = top_k(s, 3);
+    for pair in a.iter() {
+        let (idx, score) = pair;
+        println(idx);
+        println(score);
+    }
+    println(-1);
+    let b = top_k(s, 10);
+    for pair in b.iter() {
+        let (idx, _) = pair;
+        println(idx);
+    }
+}

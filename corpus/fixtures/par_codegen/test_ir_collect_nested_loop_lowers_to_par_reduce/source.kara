@@ -1,0 +1,23 @@
+
+struct C2 { v: i64, w: f64 }
+fn main() {
+    let mut g: Vec[C2] = Vec.new();
+    let mut i: i64 = 0i64;
+    while i < 100i64 {
+        g.push(C2 { v: i, w: 0.0 });
+        i = i + 1i64;
+    }
+    let mut round: i64 = 0i64;
+    while round < 3i64 {
+        let mut next: Vec[C2] = Vec.new();
+        let mut k: i64 = 0i64;
+        #[par_order_free]
+        while k < 100i64 {
+            next.push(C2 { v: g[k].v + 1i64, w: g[k].w });
+            k = k + 1i64;
+        }
+        g = next;
+        round = round + 1i64;
+    }
+    println(g.len());
+}

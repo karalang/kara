@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.with_capacity(5);
+    println(v.len());
+    let mut i = 0i64;
+    while i < 5 {
+        v.push(i * 10);
+        i = i + 1;
+    }
+    println(v.len());
+    println(v[0]);
+    println(v[4]);
+}

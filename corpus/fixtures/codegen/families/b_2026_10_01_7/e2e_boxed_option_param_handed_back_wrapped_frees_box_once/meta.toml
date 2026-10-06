@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_01_7.rs::e2e_boxed_option_param_handed_back_wrapped_frees_box_once"
+dedup_of = ["tests/interpreter/families/b_2026_10_01_7.rs::interp_boxed_option_param_handed_back_wrapped_frees_box_once", "tests/memory_sanitizer/families/b_2026_10_01_7.rs::asan_boxed_option_param_handed_back_wrapped_frees_box_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,16 @@
+
+struct Pair { s: String }
+fn build(n: i64) -> Vec[Option[Pair]] {
+    let mut v: Vec[Option[Pair]] = Vec.new();
+    v.push(Some(Pair { s: f"pair payload padded beyond thirty-six bytes {n}" }));
+    v.push(None);
+    v
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}

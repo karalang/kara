@@ -1,0 +1,9 @@
+
+fn boom(a: i64) -> i64 {
+    let c = -a;
+    return c;
+}
+
+fn main() {
+    println(boom(-9223372036854775807 - 1));
+}

@@ -1,0 +1,65 @@
+#[derive(Display)]
+enum E {
+    V4(Vector[i64, 4]),
+    V8(Vector[i64, 8]),
+    V32(Vector[i32, 4]),
+    Vf(Vector[f64, 2]),
+    Vh(Vector[f16, 2]),
+    Vu(Vector[u8, 4]),
+    N,
+}
+
+struct Holder { v: Vector[i64, 4], a: Array[i64, 3], n: i64 }
+enum H { W(Holder), N }
+
+// Array payloads live on a NON-derived enum: `Array[T, N]` has no Display
+// arm in codegen at any depth (B-2026-08-31-19), so a derived-Display enum
+// carrying one panics the compiler before this row's reconstruction runs.
+enum A { A3(Array[i64, 3]), N }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let v4: Vector[i64, 4] = Vector[i64, 4](n, n + 1, n + 2, n + 3);
+    let v8: Vector[i64, 8] = Vector[i64, 8](n, n+1, n+2, n+3, n+4, n+5, n+6, n+7);
+    let v32: Vector[i32, 4] = Vector[i32, 4](n as i32, (n+1) as i32, (n+2) as i32, (n+3) as i32);
+    let vf: Vector[f64, 2] = Vector[f64, 2](n as f64 + 0.5, n as f64 + 1.5);
+    let vh: Vector[f16, 2] = Vector[f16, 2]((n as f32 + 1.5f32) as f16, (n as f32 + 2.5f32) as f16);
+    let vu: Vector[u8, 4] = Vector[u8, 4](n as u8, (n + 1) as u8, (n + 2) as u8, (n + 3) as u8);
+    let a3: Array[i64, 3] = [n, n + 1, n + 2];
+
+    let d4 = E.V4(v4);
+    println(f"d4  {d4}");
+    let d8 = E.V8(v8);
+    println(f"d8  {d8}");
+    let d32 = E.V32(v32);
+    println(f"d32 {d32}");
+    let df = E.Vf(vf);
+    println(f"df  {df}");
+
+    let dh = E.Vh(vh);
+    println(f"dh  {dh}");
+    let du = E.Vu(vu);
+    println(f"du  {du}");
+
+    match d4 { E.V4(w) => { println(f"m4  {w}"); } E.V8(w) => {} E.V32(w) => {} E.Vf(w) => {} E.Vh(w) => {} E.Vu(w) => {} E.N => {} }
+    match d8 { E.V8(w) => { println(f"m8  {w}"); } E.V4(w) => {} E.V32(w) => {} E.Vf(w) => {} E.Vh(w) => {} E.Vu(w) => {} E.N => {} }
+    match d32 { E.V32(w) => { println(f"m32 {w}"); } E.V4(w) => {} E.V8(w) => {} E.Vf(w) => {} E.Vh(w) => {} E.Vu(w) => {} E.N => {} }
+    match df { E.Vf(w) => { println(f"mf  {w}"); } E.V4(w) => {} E.V8(w) => {} E.V32(w) => {} E.Vh(w) => {} E.Vu(w) => {} E.N => {} }
+    match dh { E.Vh(w) => { println(f"mh  {w}"); } E.V4(w) => {} E.V8(w) => {} E.V32(w) => {} E.Vf(w) => {} E.Vu(w) => {} E.N => {} }
+    match du { E.Vu(w) => { println(f"mu  {w}"); } E.V4(w) => {} E.V8(w) => {} E.V32(w) => {} E.Vf(w) => {} E.Vh(w) => {} E.N => {} }
+
+    let da = A.A3(a3);
+    match da { A.A3(b) => { println(f"ma  {b[0]} {b[1]} {b[2]}"); } A.N => {} }
+
+    let o4: Option[Vector[i64, 4]] = Some(v4);
+    match o4 { Some(w) => { println(f"o4  {w}"); } None => {} }
+    let o8: Option[Vector[i64, 8]] = Some(v8);
+    match o8 { Some(w) => { println(f"o8  {w}"); } None => {} }
+    let oa: Option[Array[i64, 3]] = Some(a3);
+    match oa { Some(b) => { println(f"oa  {b[0]} {b[2]}"); } None => {} }
+    let r4: Result[Vector[i64, 4], i64] = Ok(v4);
+    match r4 { Ok(w) => { println(f"r4  {w}"); } Err(x) => { println(f"re  {x}"); } }
+
+    let h = H.W(Holder { v: v4, a: a3, n: n });
+    match h { H.W(x) => { println(f"hw  {x.v} {x.a[0]} {x.a[2]} {x.n}"); } H.N => {} }
+}

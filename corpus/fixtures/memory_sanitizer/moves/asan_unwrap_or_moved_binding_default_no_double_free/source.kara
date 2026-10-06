@@ -1,0 +1,21 @@
+
+fn opt_s(i: i64) -> Option[String] {
+    if i % 2 == 0 { Some("even-payload".to_string()) } else { None }
+}
+fn opt_v(i: i64) -> Option[Vec[i64]] {
+    if i % 3 == 0 { Some([i, i + 1]) } else { None }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let ds = "string-fallback".to_string();
+        let s = opt_s(i).unwrap_or(ds);
+        total = total + (s.len() as i64);
+        let dv: Vec[i64] = [7, 7, 7];
+        let v = opt_v(i).unwrap_or(dv);
+        total = total + (v.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}

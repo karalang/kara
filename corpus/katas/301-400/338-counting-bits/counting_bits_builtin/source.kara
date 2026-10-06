@@ -1,0 +1,51 @@
+// LeetCode #338: Counting Bits — the built-in bit count.
+//
+// Same spec as `counting_bits.kara`, counting each number's 1 bits on its own
+// with `count_ones`, which lowers to the processor's population count.
+//
+// O(n) time with a hardware population count.
+
+fn count_bits(n: i64) -> Vec[i64] {
+    let mut ans: Vec[i64] = Vec.with_capacity(n + 1);
+    for i in 0..=n {
+        ans.push(i.count_ones() as i64);
+    }
+    return ans;
+}
+
+fn show(n: i64) {
+    let ans = count_bits(n);
+    let parts: Vec[String] = ans.iter().map(|c| c.to_string()).collect();
+    let shown = parts.join(", ");
+    println(f"{n} -> [{shown}]");
+}
+
+// Summary of a long answer: its length, its total, its largest entry, and a
+// rolling hash of every entry.
+fn summary(n: i64) {
+    let ans = count_bits(n);
+    let mut total = 0;
+    let mut most = 0;
+    let mut hash = 0;
+    for c in ans.iter() {
+        total += c;
+        most = most.max(c);
+        hash = (hash * 31 + c) % 1000000007;
+    }
+    println(f"{n} -> {ans.len()} counts, total {total}, largest {most}, hash {hash}");
+}
+
+fn main() {
+    show(2);
+    show(5);
+    show(0);
+    show(1);
+    show(16);
+    show(31);
+    show(33);
+    summary(1000);
+    summary(65535);
+    summary(65536);
+    summary(100000);
+    summary(1048575);
+}

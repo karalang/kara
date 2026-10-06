@@ -1,0 +1,9 @@
+
+fn main() {
+    let msg = c"hello, world";
+    println(msg.len());
+    let e = c"";
+    println(e.len());
+    if e.is_empty() { println("empty"); }
+    if msg.is_empty() { println("BAD"); } else { println("non-empty"); }
+}

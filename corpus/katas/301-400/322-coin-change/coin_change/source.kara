@@ -1,0 +1,118 @@
+// LeetCode #322: Coin Change — bottom-up DP over amounts.
+//
+// Given coin denominations `coins` (distinct, positive, each usable any number
+// of times) and a target `amount`, return the fewest coins that add up to
+// `amount`, or -1 if no combination does.
+//
+//   coins = [1, 2, 5]   amount = 11  ->  3      (5 + 5 + 1)
+//   coins = [2]         amount = 3   ->  -1
+//   coins = [1]         amount = 0   ->  0
+//
+// The obvious method is greedy: take the largest coin that fits, repeat. It is
+// right for real currencies and wrong in general. With coins [1, 3, 4] and
+// amount 6, greedy takes 4 + 1 + 1 (three coins), but 3 + 3 is two.
+//
+// What is always true is that the LAST coin of an optimal answer is some coin
+// `c`, and what comes before it is an optimal answer for `amount - c`. So
+//
+//   best(0) = 0
+//   best(a) = 1 + min over coins c <= a of best(a - c)
+//
+// and `best(a)` is unreachable if every `a - c` is. Filling `best` for every
+// amount from 0 up to the target costs O(amount * coins) time and O(amount)
+// space. Unreachable amounts hold a sentinel one larger than any real answer
+// (`amount + 1`: the most coins any answer can use is `amount`, all 1s).
+
+fn coin_change(coins: ref Vec[i64], amount: i64) -> i64 {
+    let unreachable = amount + 1;
+    let mut best: Vec[i64] = Vec.filled(amount + 1, unreachable);
+    best[0] = 0;
+    for a in 1..amount + 1 {
+        for i in 0..coins.len() {
+            let c = coins[i];
+            if c <= a and best[a - c] + 1 < best[a] {
+                best[a] = best[a - c] + 1;
+            }
+        }
+    }
+    if best[amount] == unreachable {
+        return -1;
+    }
+    return best[amount];
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..v.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(v[i].to_string());
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(coins: Vec[i64], amount: i64) {
+    let answer = coin_change(coins, amount);
+    println(f"{show(coins)} amount={amount} -> {answer}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// `count` distinct denominations drawn from 1..=top, in draw order.
+fn denominations(count: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    while v.len() < count {
+        let c = next(seed) % top + 1;
+        if not v.contains(c) {
+            v.push(c);
+        }
+    }
+    return v;
+}
+
+fn main() {
+    // The three examples from the problem statement.
+    report([1, 2, 5], 11);
+    report([2], 3);
+    report([1], 0);
+
+    // Greedy traps: the largest coin that fits is not part of any optimum.
+    report([1, 3, 4], 6);
+    report([1, 5, 6, 9], 11);
+    report([186, 419, 83, 408], 6249);
+
+    // No 1-coin: reachability depends on the whole set, not just a gcd.
+    report([4, 6], 9);
+    report([4, 6], 14);
+    report([7, 11], 59);
+    report([7, 11], 60);
+
+    // Edges: a single coin equal to the amount, coins larger than the amount,
+    // unsorted input, and amount 0 with coins that cannot make anything.
+    report([13], 13);
+    report([50, 20], 10);
+    report([9, 2, 7, 3], 23);
+    report([5, 7], 0);
+
+    // Small random cases: every arm prints these, including the brute force.
+    let mut seed = 322;
+    let mut small: Vec[i64] = [2, 3, 4];
+    for t in 0..small.len() {
+        let count = small[t];
+        let coins = denominations(count, 12, mut seed);
+        let amount = next(mut seed) % 40;
+        report(coins, amount);
+    }
+
+    // Larger random cases, for the fast arms only.
+    let mut sizes: Vec[i64] = [1000, 20000, 100000];
+    for t in 0..sizes.len() {
+        let amount = sizes[t];
+        let coins = denominations(6 + t, 500 + 300 * t, mut seed);
+        println(f"{show(coins)} amount={amount} -> {coin_change(coins, amount)}");
+    }
+}

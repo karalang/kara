@@ -1,0 +1,18 @@
+
+fn main() {
+    let v = [1];
+    let mut p = v.iter().peekable();
+    println(p.next().unwrap());
+    match p.peek() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+    match p.peek() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+    match p.next() {
+        Some(_) => println("more"),
+        None => println("done-next"),
+    }
+}

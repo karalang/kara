@@ -1,0 +1,70 @@
+// LeetCode #7: Reverse Integer — pop-and-push with pre-multiply overflow check.
+// O(log10 |x|) time, O(1) space.
+//
+// Walk the digits of x least-significant first via `digit = x % 10` and
+// `x = x / 10`. Build the reversed value into `result` with
+// `result = result * 10 + digit`. The LeetCode constraint is that the
+// reversed value must fit in signed 32-bit; if a step would overflow, the
+// problem asks for 0.
+//
+// The check has to fire *before* the multiply, because the multiply itself
+// would already overflow. Two rails to test against INT_MAX / INT_MIN:
+//
+//   result > INT_MAX / 10                — next * 10 definitely overflows
+//   result == INT_MAX / 10 and digit > 7 — last-digit overflow at the boundary
+//                                          (INT_MAX = 2_147_483_647, last digit 7)
+//   result < INT_MIN / 10                — symmetric for negatives
+//   result == INT_MIN / 10 and digit < -8 — INT_MIN = -2_147_483_648, last digit -8
+//
+// Kāra's `%` matches Rust/C semantics — sign of result follows the dividend
+// — so `(-123) % 10 == -3`, which is exactly what the algorithm wants: one
+// sign-tracking loop covers both positive and negative inputs.
+//
+// All arithmetic stays in i32 to honor the LeetCode "no 64-bit storage"
+// constraint, and `println(r)` on an `i32` renders the signed decimal
+// directly — codegen sign-extends narrow ints to i64 before passing to
+// printf's `%lld`, matching the interpreter (karac fix landed
+// 2026-05-19, post kata authoring).
+
+fn reverse(x: i32) -> i32 {
+    let mut x = x;
+    let mut result: i32 = 0i32;
+    let int_max: i32 = 2147483647i32;
+    let int_min: i32 = -2147483648i32;
+    let max_div: i32 = int_max / 10i32;
+    let min_div: i32 = int_min / 10i32;
+    while x != 0i32 {
+        let digit: i32 = x % 10i32;
+        if result > max_div or (result == max_div and digit > 7i32) {
+            return 0i32;
+        }
+        if result < min_div or (result == min_div and digit < -8i32) {
+            return 0i32;
+        }
+        result = result * 10i32 + digit;
+        x = x / 10i32;
+    }
+    result
+}
+
+fn report(x: i32) {
+    let r = reverse(x);
+    println(r);
+}
+
+fn main() {
+    report(123i32);            // expect: 321
+    report(-123i32);           // expect: -321
+    report(120i32);            // expect: 21    (trailing zeros drop)
+    report(0i32);              // expect: 0
+    report(1i32);              // expect: 1
+    report(-1i32);             // expect: -1
+    report(10i32);             // expect: 1
+    report(-10i32);            // expect: -1
+    report(1534236469i32);     // expect: 0     (reverse = 9646324351, > INT_MAX)
+    report(-2147483648i32);    // expect: 0     (reverse = -8463847412, < INT_MIN)
+    report(2147483647i32);     // expect: 0     (reverse = 7463847412,  > INT_MAX)
+    report(1463847412i32);     // expect: 2147483641   (just under INT_MAX)
+    report(-1463847412i32);    // expect: -2147483641  (just over INT_MIN)
+    report(1463847413i32);     // expect: 0     (reverse = 3147483641,  > INT_MAX)
+}

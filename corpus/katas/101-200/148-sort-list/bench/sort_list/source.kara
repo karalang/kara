@@ -1,0 +1,104 @@
+// Benchmark workload for LeetCode #148 — Sort List.
+//
+// Build-once + punch: N node values are generated once with a deterministic
+// 32-bit LCG (overflow-safe in i64 — no wrapping needed), held in an index-pool
+// linked list (parallel `val` / `nxt` i64 arrays, -1 = null). Each pass PERTURBS
+// one node value (so the sort cannot be hoisted), relinks the initial chain
+// 0->1->...->n-1, then top-down merge-sorts it: recursively split by a slow/fast
+// walk and merge the sorted halves by re-pointing `nxt`. Split and merge are
+// data-dependent pointer chasing — no vectorization. After each pass we traverse
+// the sorted chain accumulating a position-weighted checksum. Sink = that
+// checksum summed over all passes.
+
+fn split_mid(nxt: mut ref Vec[i64], head: i64) -> i64 {
+    let mut slow = head;
+    let mut fast = nxt[head];
+    while fast != -1 {
+        fast = nxt[fast];
+        if fast != -1 {
+            slow = nxt[slow];
+            fast = nxt[fast];
+        }
+    }
+    let mid = nxt[slow];
+    nxt[slow] = -1;
+    return mid;
+}
+
+fn merge(val: ref Vec[i64], nxt: mut ref Vec[i64], a: i64, b: i64) -> i64 {
+    let mut ai = a;
+    let mut bi = b;
+    let mut head = -1;
+    let mut tail = -1;
+    while ai != -1 and bi != -1 {
+        if val[ai] <= val[bi] {
+            if head == -1 { head = ai; } else { nxt[tail] = ai; }
+            tail = ai;
+            ai = nxt[ai];
+        } else {
+            if head == -1 { head = bi; } else { nxt[tail] = bi; }
+            tail = bi;
+            bi = nxt[bi];
+        }
+    }
+    let rest = if ai != -1 { ai } else { bi };
+    if tail != -1 {
+        if rest == -1 { nxt[tail] = -1; } else { nxt[tail] = rest; }
+    }
+    return head;
+}
+
+fn sort_chain(val: ref Vec[i64], nxt: mut ref Vec[i64], head: i64) -> i64 {
+    if head == -1 { return -1; }
+    if nxt[head] == -1 { return head; }
+    let mid = split_mid(nxt, head);
+    let left = sort_chain(val, nxt, head);
+    let right = sort_chain(val, nxt, mid);
+    return merge(val, nxt, left, right);
+}
+
+fn main() {
+    let n = 20000;
+    let passes = 180;
+    let vr = 100000;
+
+    let mut val: Vec[i64] = Vec.new();
+    let mut nxt: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        val.push(state % vr);
+        nxt.push(-1);
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let idx = state % n;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        val[idx] = state % vr;
+
+        // Relink the initial chain 0 -> 1 -> ... -> n-1.
+        i = 0;
+        while i < n - 1 {
+            nxt[i] = i + 1;
+            i = i + 1;
+        }
+        nxt[n - 1] = -1;
+
+        let head = sort_chain(val, mut nxt, 0);
+
+        let mut cur = head;
+        let mut pos = 1;
+        while cur != -1 {
+            sink = sink + pos * val[cur];
+            pos = pos + 1;
+            cur = nxt[cur];
+        }
+        p = p + 1;
+    }
+    println(sink);
+}

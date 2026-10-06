@@ -1,0 +1,9 @@
+
+struct Inner { v: i64 }
+
+#[derive(Message)]
+struct E { body: Choice }
+
+enum Choice { NotSet, Msg(Inner) }
+
+fn main() {}

@@ -1,0 +1,10 @@
+
+#[target(wasm_browser)]
+pub fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+#[target(wasm_browser)]
+pub fn tick(n: i64) {}
+
+fn main() {}

@@ -1,0 +1,100 @@
+// LeetCode #66: Plus One — reverse scan with early return (★), O(n) time, O(1) extra.
+//
+// A non-negative integer is given as its decimal digits, most-significant first
+// (`[1, 2, 3]` is 123), with no leading zeros except the single `[0]`. Add one
+// and return the digit array of the result.
+//
+// The only subtlety is the carry, and it dies the moment it hits a digit that
+// is not 9. So walk from the LEAST-significant digit and stop early:
+//
+//   digit < 9  ->  increment it, done — nothing to the left changes
+//   digit == 9 ->  it becomes 0 and the carry ripples one place left
+//
+// If every digit is a 9 (`[9, 9, 9]`), the carry falls off the left end and the
+// result grows by one place to `[1, 0, 0, 0]` — the ONLY case where the length
+// changes, and the reason a plain in-place bump is not enough. That single
+// grow-by-one is this kata's whole point (cf. kata [#67](../67-add-binary/),
+// where the same carry can widen a binary sum, and kata
+// [#43](../43-multiply-strings/)'s digit-array arithmetic).
+//
+// This ★ mutates a private copy and returns as soon as the carry stops, so on
+// the common path (a trailing digit below 9) it touches exactly one cell. Only
+// the all-nines path scans the whole array and then allocates the widened
+// result. Digits stay in `[0, 9]` throughout; i64 is used for corpus uniformity.
+
+fn plus_one(digits: ref Vec[i64]) -> Vec[i64] {
+    let n = digits.len();
+
+    // Work on a private copy so the caller's array is untouched.
+    let mut out: Vec[i64] = Vec.new();
+    let mut t = 0;
+    while t < n {
+        out.push(digits[t]);
+        t = t + 1;
+    }
+
+    // Reverse scan; the first digit below 9 absorbs the carry and we are done.
+    let mut i = n - 1;
+    while i >= 0 {
+        if out[i] < 9 {
+            out[i] = out[i] + 1;
+            return out;
+        }
+        out[i] = 0;          // 9 + 1 = 10: write 0, carry left
+        i = i - 1;
+    }
+
+    // Fell off the left edge: every digit was a 9, so the answer is one place
+    // wider — a leading 1 followed by n zeros.
+    let mut grown: Vec[i64] = Vec.new();
+    grown.push(1);
+    let mut z = 0;
+    while z < n {
+        grown.push(0);
+        z = z + 1;
+    }
+    grown
+}
+
+// ---- test harness (shared verbatim by both solvers + the Python mirror) -------
+
+fn report(digits: Vec[i64], s: mut ref String) {
+    let out = plus_one(digits);
+    // Bracketed digit list, then a positional checksum Σ (k+1)·out[k] folded into
+    // `sums:` — the byte-for-byte diff anchor shared with katas #54 and #62–64.
+    let mut line: String = "[";
+    let mut k = 0;
+    let len = out.len();
+    let mut chk = 0;
+    while k < len {
+        if k > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{out[k]}");
+        chk = chk + (k + 1) * out[k];
+        k = k + 1;
+    }
+    line.push(']');
+    println(line);
+    s.push(' ');
+    s.push_str(f"{chk}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report([1, 2, 3], mut s);              // [1, 2, 4]        — LeetCode example 1
+    report([4, 3, 2, 1], mut s);           // [4, 3, 2, 2]     — LeetCode example 2
+    report([9], mut s);                    // [1, 0]           — single 9 grows
+    report([9, 9], mut s);                 // [1, 0, 0]
+    report([9, 9, 9], mut s);              // [1, 0, 0, 0]     — all nines, widen by one
+    report([1, 9, 9], mut s);              // [2, 0, 0]        — carry stops at the front
+    report([0], mut s);                    // [1]              — single zero
+    report([8, 9, 9, 9], mut s);           // [9, 0, 0, 0]     — carry stops one short of widening
+    report([1, 0, 0, 0], mut s);           // [1, 0, 0, 1]     — no carry at all
+    report([2, 9], mut s);                 // [3, 0]
+    report([5, 4, 3, 2, 1], mut s);        // [5, 4, 3, 2, 2]
+    report([9, 8, 7, 6, 5, 4, 3, 2, 1, 0], mut s); // [9, 8, 7, 6, 5, 4, 3, 2, 1, 1]
+
+    println(s);
+}

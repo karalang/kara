@@ -1,0 +1,17 @@
+
+shared struct Node { mut val: i64, mut next: Option[Node] }
+struct H { mut head: Option[Node] }
+impl H {
+    fn advance(mut ref self) {
+        match self.head { None => {} Some(n) => { self.head = n.next; } }
+    }
+}
+fn main() {
+    let mut h = H { head: None };
+    let a = Node { val: 1, next: None };
+    let b = Node { val: 2, next: None };
+    a.next = Some(b);
+    h.head = Some(a);
+    h.advance();
+    match h.head { None => { println("none") } Some(m) => { println(m.val) } }
+}

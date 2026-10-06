@@ -1,0 +1,12 @@
+
+struct H { f: Fn(i64) -> i64, g: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut h = H { f: make(0i64), g: make(20i64) };
+    let mut i = 1i64;
+    while i <= 50i64 {
+        h.f = make(i * 10i64);
+        i = i + 1;
+    }
+    println(f"{(h.f)(5i64) + (h.g)(0i64)}");
+}

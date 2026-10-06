@@ -1,0 +1,21 @@
+
+fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+struct Named { name: String }
+fn build(k: i64) -> i64 {
+    let mut s = String.new();
+    s.push_str("hello-");
+    s.push_str(f"{k}");
+    let n: Named = Named { name: s };
+    if n.name.contains(digits(k)) { return n.name.len(); }
+    return 0i64;
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut sum = 0i64;
+    let mut i = base;
+    while i < base + 5i64 {
+        sum = sum + build(i);
+        i = i + 1;
+    }
+    println(f"{sum}");
+}

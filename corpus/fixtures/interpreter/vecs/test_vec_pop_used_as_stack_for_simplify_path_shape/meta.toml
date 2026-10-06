@@ -1,0 +1,13 @@
+source = "tests/interpreter/vecs.rs::test_vec_pop_used_as_stack_for_simplify_path_shape"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

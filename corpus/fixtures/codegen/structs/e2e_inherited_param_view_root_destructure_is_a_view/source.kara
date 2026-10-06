@@ -1,0 +1,23 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct H    { pe: (R, i64) }
+struct Hold { n: i64 }
+
+fn g1(h: H)         { let h2 = h; let (r, k) = h2.pe; println(f"  b{r.id}") }
+fn g2(h: H)         { let h2 = h; let (r, k) = h2.pe; let m = r; println(f"  b{m.id}") }
+fn g3(h: H)         { let h2 = h; let h3 = h2; let (r, k) = h3.pe; let m = r; println(f"  b{m.id}") }
+fn g4(t: (R, i64))  { let t2 = t; let (r, k) = t2; let m = r; println(f"  b{m.id}") }
+impl Hold { fn take(ref self, h: H) { let h2 = h; let (r, k) = h2.pe; let m = r; println(f"  b{m.id}") } }
+fn g6()             { let t = (R { id: 26 }, 0); let t2 = t; let (r, k) = t2; let m = r; println(f"  b{m.id}") }
+fn g7(h: H)         { let h2 = h; println("  np") }
+
+fn main() {
+    println("norebind"); g1(H { pe: (R { id: 21 }, 0) });                     println("norebind end")
+    println("rebind");   g2(H { pe: (R { id: 22 }, 0) });                     println("rebind end")
+    println("twohop");   g3(H { pe: (R { id: 23 }, 0) });                     println("twohop end")
+    println("tupreb");   g4((R { id: 24 }, 0));                               println("tupreb end")
+    println("method");   let o = Hold { n: 0 }; o.take(H { pe: (R { id: 25 }, 0) }); println("method end")
+    println("local");    g6();                                                println("local end")
+    println("noproj");   g7(H { pe: (R { id: 27 }, 0) });                     println("noproj end")
+    println("done")
+}

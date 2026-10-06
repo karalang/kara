@@ -1,0 +1,151 @@
+// LeetCode #321: Create Maximum Number — one digit at a time, over a frontier.
+//
+// Build the answer left to right. At every step the only question is "what is
+// the largest digit that can go here?", and a digit can go here if it can be
+// taken from either array AND enough digits remain after it to finish the
+// number. That much is an ordinary greedy.
+//
+// What makes it hard is that the largest digit may be available in more than
+// one way. With [6, 7] and [6, 0, 4] the first digit is 6 either way — but
+// which 6 was taken decides whether the 7 is reachable next. The ★ arm settles
+// that question in advance with a suffix comparison. This arm refuses to
+// settle it at all: it keeps EVERY way of reaching the best prefix so far.
+//
+// A way is a state (i, j): the next unread index in nums1 and in nums2. The
+// frontier is the set of states that produce the best prefix. For the next
+// position, each state offers the first feasible occurrence of each digit in
+// either array; the step's digit is the largest offered, and the next frontier
+// is every state that offered it. Nothing is ever chosen between two ties —
+// they both survive until the arrays themselves tell them apart.
+//
+// Taking the FIRST occurrence of a digit is the one pruning here, and it is
+// safe: from (i, j), taking nums1[p] and taking a later nums1[p'] with the
+// same value give the same prefix, and (p + 1, j) can still do anything
+// (p' + 1, j) can. States are deduplicated through an (m + 1) x (n + 1) grid.
+//
+// Cost: k steps, at most (m + 1)(n + 1) states each, O(m + n) scan per state
+// — O(k m n (m + n)) at worst, though on random digits the frontier stays
+// small.
+
+// The first index p >= from with a[p] == d and at least `need` digits left
+// after it across both arrays (`other` = digits remaining on the other side);
+// -1 if there is none.
+fn first_feasible(a: ref Vec[i64], from: i64, d: i64, other: i64, need: i64) -> i64 {
+    let mut p = from;
+    while p < a.len() {
+        if (a.len() - p - 1) + other < need { return -1; }
+        if a[p] == d { return p; }
+        p = p + 1;
+    }
+    return -1;
+}
+
+fn max_number(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[i64] {
+    let m = nums1.len();
+    let n = nums2.len();
+    let w = n + 1;
+    let mut out: Vec[i64] = Vec.new();
+    let mut fi: Vec[i64] = [0];
+    let mut fj: Vec[i64] = [0];
+    let mut seen: Vec[bool] = Vec.new();
+    for c in 0..((m + 1) * w) { seen.push(false); }
+
+    for step in 0..k {
+        let need = k - step - 1;
+        // The largest digit any state can place here.
+        let mut digit = -1;
+        let mut d = 9;
+        while d >= 0 and digit < 0 {
+            for s in 0..fi.len() {
+                if first_feasible(nums1, fi[s], d, n - fj[s], need) >= 0
+                    or first_feasible(nums2, fj[s], d, m - fi[s], need) >= 0 {
+                    digit = d;
+                }
+            }
+            d = d - 1;
+        }
+        out.push(digit);
+
+        // Every state that can place it moves on; the rest are dropped.
+        let mut ni: Vec[i64] = Vec.new();
+        let mut nj: Vec[i64] = Vec.new();
+        for s in 0..fi.len() {
+            let p = first_feasible(nums1, fi[s], digit, n - fj[s], need);
+            if p >= 0 and not seen[(p + 1) * w + fj[s]] {
+                seen[(p + 1) * w + fj[s]] = true;
+                ni.push(p + 1);
+                nj.push(fj[s]);
+            }
+            let q = first_feasible(nums2, fj[s], digit, m - fi[s], need);
+            if q >= 0 and not seen[fi[s] * w + q + 1] {
+                seen[fi[s] * w + q + 1] = true;
+                ni.push(fi[s]);
+                nj.push(q + 1);
+            }
+        }
+        for s in 0..ni.len() { seen[ni[s] * w + nj[s]] = false; }
+        fi = ni;
+        fj = nj;
+    }
+    return out;
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..v.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(v[i].to_string());
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(nums1: Vec[i64], nums2: Vec[i64], k: i64) {
+    let answer = max_number(nums1, nums2, k);
+    println(f"{show(nums1)} {show(nums2)} k={k} -> {show(answer)}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn digits(len: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..len {
+        v.push(next(seed) % 10);
+    }
+    return v;
+}
+
+fn main() {
+    // The three examples from the problem statement.
+    report([3, 4, 6, 5], [9, 1, 2, 5, 8, 3], 5);
+    report([6, 7], [6, 0, 4], 5);
+    report([3, 9], [8, 9], 3);
+
+    // Equal heads whose suffixes agree for several digits before they part —
+    // the case a one-digit lookahead gets wrong.
+    report([2, 5, 6, 4, 4, 0], [7, 3, 8, 0, 6, 5, 7, 6, 2], 15);
+    report([6, 7, 6, 7, 6, 7, 0], [6, 7, 6, 7, 6, 7, 1], 14);
+    report([8, 9, 9], [8, 9, 9, 1], 6);
+
+    // Edges: k = 0, an empty side, every digit taken, all digits equal.
+    report([1, 2, 3], [4, 5], 0);
+    report([], [1, 2, 3], 2);
+    report([5, 4, 3], [], 3);
+    report([1, 2], [3], 3);
+    report([0, 0, 0], [0, 0], 4);
+    report([9, 9], [9, 9, 9], 3);
+
+    // Small random cases — every arm prints these, including the brute force.
+    let mut seed = 321;
+    let mut small: Vec[i64] = [3, 5, 7];
+    for t in 0..small.len() {
+        let len = small[t];
+        let a = digits(len, mut seed);
+        let b = digits(len + 1, mut seed);
+        report(a, b, len + len / 2 + 1);
+    }
+}

@@ -1,0 +1,84 @@
+// Benchmark harness for LeetCode #238 — Product of Array Except Self.
+//
+// Build-once + punch (BENCHMARKS.md): 8 arrays generated once, then each punch
+// runs both sweeps. Regenerating per iteration would be a refill loop.
+//
+// VALUE RANGE IS DELIBERATE. The algorithm multiplies a running product across
+// the whole array, so arbitrary values overflow i64 within ~20 elements — and
+// kāra traps integer overflow by default, so the benchmark would abort rather
+// than measure. Drawing from {-1, 0, 1} keeps every partial product bounded at
+// any length while still exercising the real control flow: sign flips, and the
+// zero case the kata highlights (one zero zeroes every position but its own,
+// two zeros zero everything). LeetCode's own constraint guarantees the product
+// fits in 32 bits, so a bounded-product input is representative, not a dodge.
+//
+// What this measures is therefore the two-pass memory traffic over a flat
+// array, which is what the algorithm actually costs.
+
+fn product_except_self(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = Vec.new();
+
+    let mut prefix = 1;
+    let mut i = 0;
+    while i < n {
+        out.push(prefix);
+        prefix = prefix * nums[i];
+        i = i + 1;
+    }
+
+    let mut suffix = 1;
+    let mut j = n - 1;
+    while j >= 0 {
+        out[j] = out[j] * suffix;
+        suffix = suffix * nums[j];
+        j = j - 1;
+    }
+
+    return out;
+}
+
+fn lcg_vals(seed: i64, n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = seed;
+    let mut t = 0;
+    while t < n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        // Bit 16, not bit 0: a power-of-two-modulus LCG has period 2 in its
+        // LOW bit, so `x % 2` yields a perfectly alternating 1,-1,1,-1 ...
+        // With 8 arrays whose starting parity splits evenly, the
+        // position-weighted sums then cancel to exactly 0 — a sink a broken
+        // implementation would also produce. High-order bits have the full
+        // period.
+        out.push(1 - 2 * ((x / 65536) % 2));
+        t = t + 1;
+    }
+    out
+}
+
+fn main() {
+    let np = 8;
+    let n = 100000;
+    let iters = 400;
+
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut j = 0;
+    while j < np {
+        arrays.push(lcg_vals(j + 1, n));
+        j = j + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 3) % np;
+        let res = product_except_self(arrays[idx]);
+        let mut v = 0;
+        while v < res.len() {
+            sink = (sink + (v + 1) * res[v]) % 1000000007;
+            v = v + 1;
+        }
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

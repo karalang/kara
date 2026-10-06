@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/slices.rs::asan_nested_index_weak_read_takes_a_balancing_acquire"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

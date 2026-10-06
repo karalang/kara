@@ -1,0 +1,94 @@
+// Benchmark workload — Reverse Linked List II (LeetCode #92).
+// The reverse mutates/re-links the list, so — like kata #82/#83/#86 — each iteration
+// builds a FRESH M=200-node list, reverses a ~100-node window whose start shifts per
+// iteration (left = 1 + iter%50, right = left+100, so no call hoists), and folds the
+// result through a rolling polynomial hash. Per-iteration node allocation is part of
+// the measured work (fair: every mirror allocates its nodes), alongside the RC-node
+// pointer-chase reversal (head insertion). The nodes are `shared struct` (Rc-like)
+// handles. The loop-carried hash is not an auto-par-splittable reduction, so the
+// default build stays single-threaded (verified equal to KARAC_AUTO_PAR=0). See
+// ../README.md § Benchmarks.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn reverse_between(head: Option[ListNode], left: i64, right: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut prev = dummy;
+    let mut i = 1;
+    while i < left {
+        match prev.next {
+            Some(n) => {
+                prev = n;
+            }
+            None => {}
+        }
+        i = i + 1;
+    }
+    match prev.next {
+        Some(cur) => {
+            let mut j = left;
+            while j < right {
+                match cur.next {
+                    Some(nxt) => {
+                        cur.next = nxt.next;
+                        nxt.next = prev.next;
+                        prev.next = Some(nxt);
+                    }
+                    None => {}
+                }
+                j = j + 1;
+            }
+        }
+        None => {}
+    }
+    dummy.next
+}
+
+fn build(m: i64, seed: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: -1, next: None };
+    let mut tail = dummy;
+    let mut j = 0;
+    while j < m {
+        let node = ListNode { val: (j + seed) % 1000, next: None };
+        tail.next = Some(node);
+        tail = node;
+        j = j + 1;
+    }
+    dummy.next
+}
+
+fn fold(list: Option[ListNode], seed: i64) -> i64 {
+    let mut a = seed;
+    let mut c = list;
+    loop {
+        match c {
+            Some(n) => {
+                a = (a * 131 + (n.val + 1000)) % 1000000007;
+                c = n.next;
+            }
+            None => break,
+        }
+    }
+    a
+}
+
+fn main() {
+    let m = 200;
+    let total = 178000;
+    let modulus = 1000000007;
+
+    let mut sum = 0;
+    let mut k = 0;
+    while k < total {
+        let list = build(m, k);
+        let left = 1 + (k % 50);
+        let right = left + 100;
+        let r = reverse_between(list, left, right);
+        sum = (sum * 131 + fold(r, k)) % modulus;
+        k = k + 1;
+    }
+    println(f"{sum}");
+}

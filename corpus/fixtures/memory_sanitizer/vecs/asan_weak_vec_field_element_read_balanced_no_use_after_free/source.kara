@@ -1,0 +1,18 @@
+
+shared struct N { v: i64, mut ns: Vec[weak N] }
+fn build(seed: i64) -> i64 {
+    let a = N { v: seed, ns: Vec.new() };
+    let b = N { v: seed + 1i64, ns: Vec.new() };
+    a.ns.push(b);
+    b.ns.push(a);
+    let mut acc: i64 = 0i64;
+    match a.ns[0] { Some(x) => { acc = acc + x.v; } None => { acc = acc - 1i64; } }
+    match b.ns[0] { Some(y) => { acc = acc + y.v; } None => { acc = acc - 1i64; } }
+    match a.ns[0] { Some(z) => { acc = acc + z.v; } None => { acc = acc - 1i64; } }
+    return acc;
+}
+fn churn(d: i64) -> i64 { if d <= 0i64 { 0i64 } else { d + churn(d - 1i64) } }
+fn main() {
+    println(build(1i64));
+    println(churn(64i64));
+}

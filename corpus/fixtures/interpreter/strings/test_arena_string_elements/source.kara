@@ -1,0 +1,7 @@
+fn main() {
+             let a: Arena[String] = Arena.new();
+             let r0 = a.push("hello");
+             let r1 = a.push("world");
+             println(a.get(r0));
+             println(a.get(r1));
+         }

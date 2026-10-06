@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_28_47.rs::e2e_boxed_option_named_local_handed_to_a_generic_keeper_moves_its_box_into_the_vec"
+dedup_of = ["tests/interpreter/families/b_2026_09_28_47.rs::interp_boxed_option_named_local_handed_to_a_generic_keeper_moves_its_box_into_the_vec", "tests/memory_sanitizer/families/b_2026_09_28_47.rs::asan_boxed_option_named_local_handed_to_a_generic_keeper_moves_its_box_into_the_vec"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

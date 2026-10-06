@@ -1,0 +1,340 @@
+// Differential and property check for LeetCode #328.
+//
+// Four implementations of the same function, run on the same random inputs:
+//
+//   by_relink   shared-struct nodes relinked in place  (odd_even_list.kara)
+//   by_persist  persistent shared-enum list, rebuilt   (odd_even_list_enum.kara)
+//   by_arena    index arena, `next` indices relinked   (odd_even_list_arena.kara)
+//   by_vec      odd indices, then even, off a Vec      (odd_even_list_vec.kara)
+//
+// Properties, over every round:
+//   P1  all four results agree
+//   P2  the result has as many values as the input
+//   P3  the result is a permutation of the input
+//   P4  position k of the result holds input position 2k, for k below
+//       ceil(n/2), and position ceil(n/2) + k holds input position 2k + 1
+//   P5  the persistent arm leaves its input list as it was
+//   P6  splitting the input after an even number m of values splits the
+//       result: f(a ++ b) = odd(a) ++ odd(b) ++ even(a) ++ even(b), where
+//       odd(x) and even(x) are the halves of f(x)
+
+// ---- by_relink -------------------------------------------------------------
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn relink(head: Option[ListNode]) -> Option[ListNode] {
+    match head {
+        None => None,
+        Some(first) => {
+            match first.next {
+                None => Some(first),
+                Some(second) => {
+                    let mut odd = first;
+                    let mut even = second;
+                    let mut done = false;
+                    while not done {
+                        match even.next {
+                            None => {
+                                done = true;
+                            }
+                            Some(n) => {
+                                odd.next = Some(n);
+                                odd = n;
+                                even.next = n.next;
+                                match n.next {
+                                    None => {
+                                        done = true;
+                                    }
+                                    Some(m) => {
+                                        even = m;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    odd.next = Some(second);
+                    Some(first)
+                }
+            }
+        }
+    }
+}
+
+fn by_relink(values: ref Vec[i64]) -> Vec[i64] {
+    let mut head: Option[ListNode] = None;
+    let mut i = values.len() - 1;
+    while i >= 0 {
+        head = Some(ListNode { val: values[i], next: head });
+        i -= 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut cur = relink(head);
+    let mut more = true;
+    while more {
+        match cur {
+            None => {
+                more = false;
+            }
+            Some(n) => {
+                out.push(n.val);
+                cur = n.next;
+            }
+        }
+    }
+    return out;
+}
+
+// ---- by_persist ------------------------------------------------------------
+
+shared enum List {
+    Nil,
+    Cons(i64, List),
+}
+
+fn alternate(l: List, keep: bool) -> List {
+    match l {
+        List.Nil => List.Nil,
+        List.Cons(v, rest) => {
+            if keep {
+                List.Cons(v, alternate(rest, false))
+            } else {
+                alternate(rest, true)
+            }
+        }
+    }
+}
+
+fn append(a: List, b: List) -> List {
+    match a {
+        List.Nil => b,
+        List.Cons(v, rest) => List.Cons(v, append(rest, b)),
+    }
+}
+
+fn persist(head: List) -> List {
+    return append(alternate(head, true), alternate(head, false));
+}
+
+fn list_of(values: ref Vec[i64]) -> List {
+    let mut head = List.Nil;
+    let mut i = values.len() - 1;
+    while i >= 0 {
+        head = List.Cons(values[i], head);
+        i -= 1;
+    }
+    return head;
+}
+
+fn values_of(head: List) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut cur = head;
+    let mut more = true;
+    while more {
+        match cur {
+            List.Nil => {
+                more = false;
+            }
+            List.Cons(v, rest) => {
+                out.push(v);
+                cur = rest;
+            }
+        }
+    }
+    return out;
+}
+
+// ---- by_arena --------------------------------------------------------------
+
+struct Nodes {
+    vals: Vec[i64],
+    next: Vec[i64],
+}
+
+fn arena(nodes: mut ref Nodes, head: i64) -> i64 {
+    if head < 0 or nodes.next[head] < 0 {
+        return head;
+    }
+    let even_head = nodes.next[head];
+    let mut odd = head;
+    let mut even = even_head;
+    while even >= 0 and nodes.next[even] >= 0 {
+        let n = nodes.next[even];
+        nodes.next[odd] = n;
+        odd = n;
+        nodes.next[even] = nodes.next[n];
+        even = nodes.next[n];
+    }
+    nodes.next[odd] = even_head;
+    return head;
+}
+
+fn by_arena(values: ref Vec[i64]) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut next: Vec[i64] = Vec.new();
+    for i in 0..values.len() {
+        vals.push(values[i]);
+        if i + 1 < values.len() {
+            next.push(i + 1);
+        } else {
+            next.push(-1);
+        }
+    }
+    let mut nodes = Nodes { vals: vals, next: next };
+    let head = if values.len() == 0 { -1 } else { 0 };
+    let mut cur = arena(mut nodes, head);
+    let mut out: Vec[i64] = Vec.new();
+    while cur >= 0 {
+        out.push(nodes.vals[cur]);
+        cur = nodes.next[cur];
+    }
+    return out;
+}
+
+// ---- by_vec ----------------------------------------------------------------
+
+fn by_vec(values: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < values.len() {
+        out.push(values[i]);
+        i += 2;
+    }
+    i = 1;
+    while i < values.len() {
+        out.push(values[i]);
+        i += 2;
+    }
+    return out;
+}
+
+// ---- checks ----------------------------------------------------------------
+
+struct Tally {
+    rounds: i64,
+    values: i64,
+    failures: i64,
+}
+
+fn fail(t: mut ref Tally, property: String, values: ref Vec[i64]) {
+    t.failures += 1;
+    if t.failures <= 10 {
+        println(f"{property} fails on {values}");
+    }
+}
+
+fn sorted(values: ref Vec[i64]) -> Vec[i64] {
+    let mut out = values.clone();
+    out.sort();
+    return out;
+}
+
+fn check(values: Vec[i64], t: mut ref Tally) {
+    t.rounds += 1;
+    t.values += values.len();
+    let n = values.len();
+    let half = (n + 1) / 2;
+
+    let a = by_relink(values);
+    let list = list_of(values);
+    let b = values_of(persist(list));
+    let c = by_arena(values);
+    let d = by_vec(values);
+
+    if a != b or a != c or a != d {
+        fail(t, "P1", values);
+    }
+    if a.len() != n {
+        fail(t, "P2", values);
+    }
+    if sorted(a) != sorted(values) {
+        fail(t, "P3", values);
+    }
+    let mut placed = a.len() == n;
+    if placed {
+        for k in 0..n {
+            let from = if k < half { 2 * k } else { 2 * (k - half) + 1 };
+            if a[k] != values[from] {
+                placed = false;
+            }
+        }
+    }
+    if not placed {
+        fail(t, "P4", values);
+    }
+    if values_of(list) != values {
+        fail(t, "P5", values);
+    }
+
+    // P6, at every even split point.
+    let mut m = 0;
+    while m <= n {
+        let mut left: Vec[i64] = Vec.new();
+        let mut right: Vec[i64] = Vec.new();
+        for i in 0..n {
+            if i < m {
+                left.push(values[i]);
+            } else {
+                right.push(values[i]);
+            }
+        }
+        let fl = by_relink(left);
+        let fr = by_relink(right);
+        let hl = m / 2;
+        let hr = (n - m + 1) / 2;
+        let mut want: Vec[i64] = Vec.new();
+        for i in 0..hl {
+            want.push(fl[i]);
+        }
+        for i in 0..hr {
+            want.push(fr[i]);
+        }
+        for i in hl..fl.len() {
+            want.push(fl[i]);
+        }
+        for i in hr..fr.len() {
+            want.push(fr[i]);
+        }
+        if want != a {
+            fail(t, f"P6 at {m}", values);
+        }
+        m += 2;
+    }
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn main() {
+    let mut t = Tally { rounds: 0, values: 0, failures: 0 };
+
+    // Edge cases.
+    check([], mut t);
+    check([0], mut t);
+    check([1, 2], mut t);
+    check([1, 2, 3], mut t);
+    check([5, 5, 5, 5, 5], mut t);
+    check([1, 2, 3, 4, 5], mut t);
+    check([2, 1, 3, 5, 6, 4, 7], mut t);
+    check([-9223372036854775808, 9223372036854775807, 0], mut t);
+
+    // Random rounds: 0 to 39 values in [0, 9], so most lists repeat values.
+    let mut seed = 328;
+    for _ in 0..600 {
+        let n = next(mut seed) % 40;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next(mut seed) % 10);
+        }
+        check(values, mut t);
+    }
+
+    println(f"rounds {t.rounds}, values {t.values}, failures {t.failures}");
+    if t.failures == 0 {
+        println("all properties hold");
+    }
+}

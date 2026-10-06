@@ -1,0 +1,12 @@
+
+fn main() {
+    let n = env.args().len() as i64;
+    let a: bf16 = ((n + 1) as f32) as bf16;
+    let b: bf16 = ((n + 2) as f32) as bf16;
+    println(f"m1={a.sqrt()} {a.exp()} {a.ln()} {a.log2()} {a.log10()} {a.exp2()}");
+    println(f"m2={a.sin()} {a.cos()} {a.tan()} {a.atan()} {a.asin()} {a.acos()}");
+    println(f"m3={a.sinh()} {a.cosh()} {a.tanh()} {a.ln_1p()} {a.exp_m1()}");
+    println(f"m4={a.floor()} {a.ceil()} {a.round()} {a.trunc()} {a.fract()}");
+    println(f"m5={a.signum()} {a.recip()} {a.to_degrees()} {a.to_radians()}");
+    println(f"m6={a.atan2(b)} {a.hypot(b)} {a.pow(b)}");
+}

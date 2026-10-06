@@ -1,0 +1,15 @@
+
+fn lo[C: ElementwiseOrd[i64]](c: ref C) -> i64 { c.argmin().unwrap() }
+fn hi[C: ElementwiseOrd[i64]](c: ref C) -> i64 { c.argmax().unwrap() }
+fn top[C: ElementwiseOrd[i64]](c: ref C) -> i64 { let s: Vec[i64] = c.sorted(); s[2] }
+trait Ranked { fn span(ref self) -> i64; }
+impl Ranked for Column[i64] {
+    fn span(ref self) -> i64 { self.argmin().unwrap() + self.argmax().unwrap() }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([3, 1, 2]);
+    let t: Tensor[i64, [3]] = Tensor.from([30, 10, 20]);
+    println(f"{lo(c)} {hi(c)} {top(c)}");
+    println(f"{lo(t)} {hi(t)} {top(t)}");
+    println(f"{c.span()}");
+}

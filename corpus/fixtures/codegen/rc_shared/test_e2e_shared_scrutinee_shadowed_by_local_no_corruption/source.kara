@@ -1,0 +1,20 @@
+
+shared enum E { A(i64), B(i64) }
+fn chk(e: E) -> i64 {
+    match e {
+        A(n) => n,
+        B(m) => {
+            let mut e = 0;
+            let mut i = 0;
+            loop {
+                if i >= 3 { break; }
+                e = e + i;
+                i = i + 1;
+            }
+            m + e
+        }
+    }
+}
+fn main() {
+    println(chk(B(10)));
+}

@@ -1,0 +1,192 @@
+// LeetCode 301 — Remove Invalid Parentheses.
+//
+// Remove the MINIMUM number of '(' and ')' so the string becomes valid, and
+// return EVERY distinct string achievable with that minimum. Non-paren
+// characters are never removed.
+//
+//     "()())()"   ->  ["(())()", "()()()"]
+//     "(a)())()"  ->  ["(a())()", "(a)()()"]
+//     ")("        ->  [""]
+//
+// BOUNDED DFS. The key observation is that the minimum removal count is not
+// something the search has to discover — it is computable in one pass, before
+// any branching:
+//
+//     scan left to right, carrying `open`
+//       '('  ->  open + 1
+//       ')'  ->  open > 0 ? open - 1 : "this ')' can never be matched, drop it"
+//     at the end, whatever `open` remains is unmatchable '(' — drop those too.
+//
+// Those two counters — `lrem` and `rrem` below — are exactly the number of '('
+// and ')' that must go. That is a lower bound because each of those characters
+// is individually unmatchable, and an achievable one because deleting them
+// leaves a valid string. So the DFS is not searching for the minimum; it is
+// enumerating the ways to SPEND a budget it already knows.
+//
+// That turns an exponential search into a bounded one. Each position offers at
+// most two branches — keep, or spend one unit of budget — and the `open > 0`
+// guard on keeping a ')' prunes every prefix that has already gone invalid, so
+// no leaf is ever reached by a doomed path. What remains at a leaf is checked
+// by construction rather than by re-validating: budget exhausted and `open`
+// back to zero IS validity.
+//
+// DUPLICATES ARE THE REAL DIFFICULTY. "(( ))" with one '(' to remove can drop
+// either one and produce the same string, so a bare DFS emits the same answer
+// several times, and the count is not small — a run of k identical parens with
+// j to remove yields C(k, j) identical leaves. This arm dedups with a Set,
+// which is the honest, obvious fix. `..._unique.kara` in this directory removes
+// the Set entirely by making the enumeration canonical, which is a much better
+// answer and considerably harder to be sure of; that is why both are here.
+//
+// OUTPUT ORDER. The problem statement permits any order, and this arm's Set
+// walk would give a different one on every run (`Map`/`Set` iteration is
+// per-process random — see the repo CLAUDE.md). Every arm therefore sorts its
+// results bytewise before returning, so the three agree as SEQUENCES and the
+// program is byte-stable across `run`, `build`, and auto-par.
+
+// A NOTE ON BYTES. Every arm here works on `s.bytes()` and rebuilds results
+// with `push(b as char)`. That spelling is correct for ASCII and WRONG for
+// anything else — it re-encodes each byte >= 0x80 as its own two-byte sequence,
+// so "(é)日" round-trips to "(Ã©)æ¥", 7 bytes in and 12 out. It is used here
+// deliberately: #301's alphabet is parentheses and lowercase English letters,
+// all single-byte, and staying on bytes is what keeps the Kara arm the same
+// algorithm as its C/Rust/Go/Python mirrors. For a byte rebuild that must
+// survive non-ASCII, accumulate a `Vec[u8]` and finish with
+// `String.from_utf8(buf).unwrap()`, which validates and round-trips exactly.
+
+// --- byte-lexicographic order, so the mirrors in C/Rust/Go/Python sort the
+// --- same way Kāra does without depending on any locale or collation.
+fn str_less(a: ref String, b: ref String) -> bool {
+    let ab = a.bytes();
+    let bb = b.bytes();
+    let n = if ab.len() < bb.len() { ab.len() } else { bb.len() };
+    let mut i = 0;
+    while i < n {
+        if ab[i] != bb[i] { return ab[i] < bb[i]; }
+        i = i + 1;
+    }
+    return ab.len() < bb.len();
+}
+
+fn sort_strings(items: mut ref Vec[String]) {
+    // Insertion sort: the result sets here are tiny (a handful of strings),
+    // and it is the one sort every mirror language can spell identically.
+    let mut i = 1;
+    while i < items.len() {
+        let mut j = i;
+        while j > 0 and str_less(items[j], items[j - 1]) {
+            items.swap(j, j - 1);
+            j = j - 1;
+        }
+        i = i + 1;
+    }
+}
+
+// The one-pass budget. Returns (unmatchable '(' , unmatchable ')').
+fn removal_budget(bytes: Slice[u8]) -> (i64, i64) {
+    let mut lrem = 0;
+    let mut rrem = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'(' {
+            lrem = lrem + 1;
+        } else if c == b')' {
+            if lrem > 0 { lrem = lrem - 1; } else { rrem = rrem + 1; }
+        }
+        i = i + 1;
+    }
+    return (lrem, rrem);
+}
+
+fn walk(
+    bytes: Slice[u8],
+    i: i64,
+    open: i64,
+    lrem: i64,
+    rrem: i64,
+    cur: ref String,
+    seen: mut ref Set[String],
+    out: mut ref Vec[String],
+) {
+    if i == bytes.len() {
+        // Budget spent and nothing left open: valid, by construction.
+        if lrem == 0 and rrem == 0 and open == 0 {
+            if not seen.contains(cur) {
+                seen.insert(cur.to_string());
+                out.push(cur.to_string());
+            }
+        }
+        return;
+    }
+
+    let c = bytes[i];
+
+    // Branch 1 — spend a unit of budget on this character.
+    if c == b'(' and lrem > 0 {
+        walk(bytes, i + 1, open, lrem - 1, rrem, cur, seen, out);
+    } else if c == b')' and rrem > 0 {
+        walk(bytes, i + 1, open, lrem, rrem - 1, cur, seen, out);
+    }
+
+    // Branch 2 — keep it. A ')' may only be kept against an open '(' ; that
+    // guard is what prunes doomed prefixes instead of validating at the leaf.
+    let mut next = cur.to_string();
+    next.push(c as char);
+    if c == b'(' {
+        walk(bytes, i + 1, open + 1, lrem, rrem, next, seen, out);
+    } else if c == b')' {
+        if open > 0 {
+            walk(bytes, i + 1, open - 1, lrem, rrem, next, seen, out);
+        }
+    } else {
+        walk(bytes, i + 1, open, lrem, rrem, next, seen, out);
+    }
+}
+
+fn remove_invalid_parentheses(s: ref String) -> Vec[String] {
+    let bytes = s.bytes();
+    let (lrem, rrem) = removal_budget(bytes);
+
+    let mut seen: Set[String] = Set.new();
+    let mut out: Vec[String] = Vec.new();
+    let empty: String = "";
+    walk(bytes, 0, 0, lrem, rrem, empty, mut seen, mut out);
+
+    sort_strings(mut out);
+    return out;
+}
+
+fn render(items: ref Vec[String]) -> String {
+    let mut line = String.new();
+    line.push_str("[");
+    let mut i = 0;
+    while i < items.len() {
+        if i > 0 { line.push_str(", "); }
+        line.push_str("\"");
+        line.push_str(items[i]);
+        line.push_str("\"");
+        i = i + 1;
+    }
+    line.push_str("]");
+    return line;
+}
+
+fn report(s: String) {
+    let got = remove_invalid_parentheses(s);
+    println(f"\"{s}\" -> {render(got)}");
+}
+
+fn main() {
+    report("()())()");     // ["(())()", "()()()"]
+    report("(a)())()");    // ["(a())()", "(a)()()"]
+    report(")(");          // [""]
+    report("");            // [""]
+    report("(((");         // [""]
+    report("n");           // ["n"]
+    report("()");          // ["()"]     already valid — itself, alone
+    report("()())()(");    // one extra unmatchable '('
+    report("()(()");       // ["()()"] — only ONE, though two
+                           //   different '(' can be the one removed
+    report("(a(b(c)d)");   // one '(' too many, three places to take it from
+}

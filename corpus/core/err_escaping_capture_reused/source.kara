@@ -1,0 +1,7 @@
+struct Holder { f: Fn() -> i64 }
+fn main() {
+    let s = "abc".to_string();
+    let h = Holder { f: || s.len() };
+    println(s);
+    println(f"{(h.f)()}");
+}

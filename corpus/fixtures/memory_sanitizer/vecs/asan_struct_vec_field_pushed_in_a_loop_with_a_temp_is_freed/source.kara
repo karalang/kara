@@ -1,0 +1,11 @@
+struct Bag { xs: Vec[Option[String]] }
+
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    let mut i = 0;
+    while i < 3 {
+        b.xs.push(Some(f"payloadpayload{i}"));
+        println(f"{i}");
+        i = i + 1;
+    }
+}

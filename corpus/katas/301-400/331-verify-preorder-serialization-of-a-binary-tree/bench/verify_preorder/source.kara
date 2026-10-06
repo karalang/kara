@@ -1,0 +1,84 @@
+// Benchmark workload for LeetCode #331 — the slot-counting arm
+// (verify_preorder.kara), timed as written.
+//
+// Build once, then punch (BENCHMARKS.md). One random tree of NODES values is
+// serialized once into tokens, and VARIANTS strings are built from it, by
+// kind: the tree itself, one token dropped (invalid), one `#` grown into
+// `7,#,#` (valid), and one `#` inserted (invalid). Each of PUNCHES punches
+// picks a variant and checks it, so the work is the split and the count over
+// about 2 * NODES tokens, ending early only where an inserted `#` closes the
+// tree before the string ends.
+//
+// Each answer and the variant it came from are folded into a rolling hash,
+// which is the sink.
+
+const NODES: i64 = 100000;
+const VARIANTS: i64 = 16;
+const PUNCHES: i64 = 160;
+const MODULUS: i64 = 1073741789;
+
+fn is_valid_serialization(preorder: ref String) -> bool {
+    let mut slots = 1;
+    for tok in preorder.split(",") {
+        if slots == 0 {
+            return false;
+        }
+        if tok == "#" {
+            slots -= 1;
+        } else {
+            slots += 1;
+        }
+    }
+    return slots == 0;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// A random tree of exactly `n` values, as preorder tokens: the left subtree
+// takes a uniform share of the rest, which keeps the depth logarithmic.
+fn tree(seed: mut ref i64, n: i64, out: mut ref Vec[String]) {
+    if n == 0 {
+        out.push("#");
+        return;
+    }
+    out.push((next(seed) % 100).to_string());
+    let left = next(seed) % n;
+    tree(seed, left, out);
+    tree(seed, n - 1 - left, out);
+}
+
+fn main() {
+    let mut seed = 331;
+    let mut tokens: Vec[String] = Vec.new();
+    tree(mut seed, NODES, mut tokens);
+    let mut variants: Vec[String] = Vec.new();
+    for v in 0..VARIANTS {
+        let kind = v % 4;
+        let at = (next(mut seed) * 32768 + next(mut seed)) % tokens.len();
+        let mut edited: Vec[String] = Vec.new();
+        for i in 0..tokens.len() {
+            if i == at and kind == 1 {
+                continue;
+            }
+            if i == at and kind == 3 {
+                edited.push("#");
+            }
+            if i == at and kind == 2 and tokens[i] == "#" {
+                edited.push("7");
+                edited.push("#");
+            }
+            edited.push(tokens[i].clone());
+        }
+        variants.push(edited.join(","));
+    }
+    let mut sink = 0;
+    for _ in 0..PUNCHES {
+        let v = next(mut seed) % VARIANTS;
+        let answer = if is_valid_serialization(variants[v]) { 1 } else { 0 };
+        sink = (sink * 1000003 + answer * 64 + v) % MODULUS;
+    }
+    println(f"{sink}");
+}

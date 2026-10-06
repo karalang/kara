@@ -1,0 +1,14 @@
+
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 2_i64);
+    return m;
+}
+
+fn show(m: ref Map[i64, i64]) {
+    println(m.len());
+}
+
+fn main() {
+    show(make_map());
+}

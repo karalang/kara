@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_15.rs::e2e_branch_take_of_a_by_value_param_payload_runs_its_body_on_every_path"
+dedup_of = ["tests/interpreter/families/b_2026_09_29_15.rs::interp_branch_take_of_a_by_value_param_payload_runs_its_body_on_every_path", "tests/memory_sanitizer/families/b_2026_09_29_15.rs::asan_branch_take_of_a_by_value_param_payload_runs_its_body_on_every_path"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

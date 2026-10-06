@@ -1,0 +1,67 @@
+// LeetCode 292 — Nim Game, by BUILDING THE TABLE the induction describes.
+//
+// `win[i]` is true when the player about to move on a heap of `i` can force a
+// win. The recurrence is the definition of a winning position, written out:
+//
+//     win[0] = false                                  no stone to take
+//     win[i] = win[i-1] == false                      leave a loser behind
+//           or win[i-2] == false
+//           or win[i-3] == false
+//
+// A position is winning exactly when SOME move reaches a losing one, because
+// the mover chooses. Read the table it produces and the answer to the whole
+// problem is sitting in plain sight:
+//
+//     i    0  1  2  3  4  5  6  7  8  9 10 11 12
+//     win  F  T  T  T  F  T  T  T  F  T  T  T  F
+//
+// False exactly at the multiples of 4 — which is `nim_game.kara`'s one-liner,
+// discovered rather than asserted. This file is the honest route to that
+// answer: nobody sees `n % 4 != 0` first.
+//
+// WHAT IT COSTS. O(n) time and O(n) space, against LeetCode's `n` up to
+// 2^31 - 1. At the top of that range this wants roughly 17 GB for the table
+// alone, so it is a DERIVATION and a differential arm, not a submission. The
+// kata keeps it because a table you can read is worth more than a constant you
+// cannot check, and because it is what the closed form has to agree with.
+
+fn can_win_nim(n: i64) -> bool {
+    if n <= 0 {
+        return false;
+    }
+    let mut win: Vec[bool] = Vec.new();
+    win.push(false);                 // win[0] — no stone to take, already lost
+    let mut i = 1;
+    while i <= n {
+        // Some move must hand the opponent a losing heap.
+        let mut w = false;
+        let mut take = 1;
+        while take <= 3 {
+            if i - take >= 0 {
+                if not win[i - take] {
+                    w = true;
+                }
+            }
+            take = take + 1;
+        }
+        win.push(w);
+        i = i + 1;
+    }
+    return win[n];
+}
+
+fn report(n: i64) {
+    println(f"n={n} -> {can_win_nim(n)}");
+}
+
+fn main() {
+    let mut n = 1;
+    while n <= 12 {
+        report(n);
+        n = n + 1;
+    }
+    // The big cases the closed form answers are deliberately ABSENT here: this
+    // arm cannot reach them, and pretending otherwise is the dishonesty the
+    // README calls out.
+    report(0);
+}

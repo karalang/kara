@@ -1,0 +1,41 @@
+
+enum Tok { Id(String), Num(i64) }
+fn ret_tuple(i: i64) -> (Tok, i64) { return (Tok.Id(f"id{i}"), i); }
+fn ret_imap(i: i64) -> (Map[i64, i64], i64) {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(i, i);
+    return (m, i);
+}
+fn ret_smap(i: i64) -> (Map[String, i64], i64) {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"k{i}", i); m.insert(f"j{i}", i);
+    return (m, i);
+}
+fn use_tok(t: Tok) -> i64 {
+    match t { Id(s) => s.len(), Num(n) => n }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 8 {
+        // Call-sourced enum-leaf tuple var, UNUSED (the #24 leak).
+        let p = ret_tuple(i);
+
+        // Call-sourced enum-leaf tuple var, destructured + consumed (no double-free).
+        let q = ret_tuple(i + 50);
+        let (t, n) = q;
+        acc = acc + use_tok(t) + n;
+
+        // Call-sourced scalar-map tuple var, UNUSED (memo key (0,0) flags).
+        let im = ret_imap(i);
+
+        // Call-sourced String-key-map tuple var, UNUSED (memo key (1,0) flags) —
+        // in the SAME loop body as the scalar map so the old shared memo key would
+        // drop this with (0,0) and leak the f-string keys.
+        let sm = ret_smap(i);
+
+        i = i + 1;
+    }
+    if acc > 999999 { println("never"); }
+    println("done");
+}

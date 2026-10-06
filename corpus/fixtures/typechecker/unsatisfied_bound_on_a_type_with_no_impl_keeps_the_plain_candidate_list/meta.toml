@@ -1,0 +1,13 @@
+source = "tests/typechecker.rs::unsatisfied_bound_on_a_type_with_no_impl_keeps_the_plain_candidate_list"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

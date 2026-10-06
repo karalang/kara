@@ -1,0 +1,13 @@
+
+fn mka(t: String) -> Array[String, 2] {
+    return [f"{t}-aaaaaaaaaaaaaaaaaaaa", f"{t}-bbbbbbbbbbbbbbbbbbbb"];
+}
+
+fn main() {
+    let a = mka("arr");
+    let n: Array[Array[String, 2], 1] = [a];
+    println(n[0][1]);
+    let b = mka("vec");
+    let v: Vec[Array[String, 2]] = [b];
+    println(v.len());
+}

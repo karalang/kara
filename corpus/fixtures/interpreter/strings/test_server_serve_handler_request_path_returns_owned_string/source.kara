@@ -1,0 +1,10 @@
+
+fn main() {
+    let req = Request { };
+    let p1 = req.path();
+    let p2 = req.path();
+    let m1 = req.method();
+    println(p1.len());
+    println(p2.len());
+    println(m1.len());
+}

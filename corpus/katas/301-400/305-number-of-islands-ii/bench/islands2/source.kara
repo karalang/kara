@@ -1,0 +1,106 @@
+// Benchmark — LeetCode 305, Number of Islands II.
+//
+// Build-once + punch, per BENCHMARKS.md: a random permutation of all 65,536
+// cells of a 256x256 grid is generated ONCE, outside the timed loop. The timed
+// work is PASSES sweeps, each one building a fresh disjoint-set forest and
+// replaying the whole operation list through it.
+//
+// WHY THE FOREST IS REBUILT EACH PASS RATHER THAN HOISTED. Union-find is
+// destructive: once the grid is full every cell is land and a replay would do
+// nothing. The per-pass allocation is therefore part of the workload by
+// necessity, not by oversight — but it is bounded and identical in all five
+// languages (two i64 arrays of 65,536), and it is dwarfed by the 65,536
+// operations that follow, each of which does a real find-with-compression and
+// up to four merges. Filling the grid completely also means every operation
+// does work: no early-out on an already-land cell, which a duplicate-heavy
+// operation list would have turned the benchmark into.
+//
+// THE SINK IS A MASK, NOT A MODULO — the lesson from #303, whose first draft
+// spent ~75% of its runtime in two 64-bit divisions and reported every language
+// as tied. `& 0x3FFFFFFF` is one instruction.
+//
+// The permutation is a Fisher-Yates shuffle over the same LCG in all five
+// mirrors, so every language processes the identical operation sequence.
+
+fn main() {
+    let n = 256;
+    let cells = n * n;
+    let passes = 160;
+
+    // ---- the operation list, generated once
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..cells {
+        order.push(i);
+    }
+    let mut state = 20305;
+    let mut i = cells - 1;
+    while i > 0 {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let j = state % (i + 1);
+        let t = order[i];
+        order[i] = order[j];
+        order[j] = t;
+        i = i - 1;
+    }
+
+    // ---- the timed work
+    let mut checksum = 0;
+    let mut p = 0;
+    while p < passes {
+        let mut parent: Vec[i64] = Vec.new();
+        let mut rank: Vec[i64] = Vec.new();
+        for k in 0..cells {
+            parent.push(-1);
+            rank.push(0);
+        }
+        let mut count = 0;
+
+        let mut q = 0;
+        while q < cells {
+            let idx = order[q];
+            let r = idx / n;
+            let c = idx % n;
+            parent[idx] = idx;
+            count = count + 1;
+
+            // Merge with each already-land neighbour.
+            let mut d = 0;
+            while d < 4 {
+                let mut nb = -1;
+                if d == 0 and r > 0 { nb = idx - n; }
+                if d == 1 and r < n - 1 { nb = idx + n; }
+                if d == 2 and c > 0 { nb = idx - 1; }
+                if d == 3 and c < n - 1 { nb = idx + 1; }
+                if nb >= 0 and parent[nb] >= 0 {
+                    // find(idx) with path compression
+                    let mut ra = idx;
+                    while parent[ra] != ra { ra = parent[ra]; }
+                    let mut cur = idx;
+                    while parent[cur] != ra { let nx = parent[cur]; parent[cur] = ra; cur = nx; }
+                    // find(nb) with path compression
+                    let mut rb = nb;
+                    while parent[rb] != rb { rb = parent[rb]; }
+                    cur = nb;
+                    while parent[cur] != rb { let nx = parent[cur]; parent[cur] = rb; cur = nx; }
+                    if ra != rb {
+                        if rank[ra] < rank[rb] {
+                            parent[ra] = rb;
+                        } else if rank[ra] > rank[rb] {
+                            parent[rb] = ra;
+                        } else {
+                            parent[rb] = ra;
+                            rank[ra] = rank[ra] + 1;
+                        }
+                        count = count - 1;
+                    }
+                }
+                d = d + 1;
+            }
+            checksum = (checksum + count) & 0x3FFFFFFF;
+            q = q + 1;
+        }
+        p = p + 1;
+    }
+
+    println(f"checksum {checksum}");
+}

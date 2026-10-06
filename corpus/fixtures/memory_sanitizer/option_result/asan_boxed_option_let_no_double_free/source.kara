@@ -1,0 +1,14 @@
+
+struct Wide { a: i64, b: i64, c: i64, d: i64 }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let o: Option[Wide] = Some(Wide { a: i, b: 2, c: 3, d: 4 });
+        match o {
+            Some(e) => println(e.a + e.d),
+            None => println(-1),
+        }
+        i = i + 1;
+    }
+    println(99);
+}

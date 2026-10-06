@@ -1,0 +1,22 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("remove:");
+    {
+        let mut v: Vec[Res] = Vec.new();
+        v.push(Res { id: 1, name: f"rr{1}" });
+        v.remove(0);
+        println(v.len());
+    }
+    println("swapremove:");
+    {
+        let mut w: Vec[Res] = Vec.new();
+        w.push(Res { id: 2, name: f"ss{2}" });
+        w.swap_remove(0);
+        println(w.len());
+    }
+    println("end");
+}

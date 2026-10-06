@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_09_19_32.rs::asan_non_drop_enum_payload_moved_out_as_return_frees_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

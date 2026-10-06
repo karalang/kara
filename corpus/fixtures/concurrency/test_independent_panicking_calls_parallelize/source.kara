@@ -1,0 +1,7 @@
+
+        fn divmod(n: i64, d: i64) -> i64 { return n / d; }
+        fn main() {
+            let a = divmod(100, 5);
+            let b = divmod(200, 4);
+        }
+        

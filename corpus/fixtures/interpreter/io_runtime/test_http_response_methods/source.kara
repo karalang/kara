@@ -1,0 +1,9 @@
+
+fn make_client() -> Client { Client.new() }
+fn main() {
+    let c = make_client();
+    match c.get("not-a-url") {
+        Ok(resp) => println(resp.status()),
+        Err(e) => println("error"),
+    }
+}

@@ -1,0 +1,15 @@
+
+trait Doubler[T: Add] { fn doubled_sum(ref self) -> T; }
+impl[T: Add] Doubler[T] for Tensor[T, [3]] {
+    fn doubled_sum(ref self) -> T { self.sum() + self.sum() }
+}
+impl[T: Add] Doubler[T] for Column[T] {
+    fn doubled_sum(ref self) -> T { self.sum() + self.sum() }
+}
+fn main() {
+    let tf: Tensor[f64, [3]] = Tensor.from([1.5, 2.5, 3.0]);
+    let ts: Tensor[f32, [3]] = Tensor.from([1.0, 2.0, 3.0]);
+    let tu: Tensor[u32, [3]] = Tensor.from([10u32, 20u32, 30u32]);
+    let cf: Column[f32] = Column.from_vec([1.0, 2.0, 3.0]);
+    println(f"{tf.doubled_sum()} {ts.doubled_sum()} {tu.doubled_sum()} {cf.doubled_sum()}");
+}

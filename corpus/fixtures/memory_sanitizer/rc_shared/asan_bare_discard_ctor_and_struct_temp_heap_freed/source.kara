@@ -1,0 +1,19 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { r: Res }
+enum Box2 { Full(Res), Empty }
+fn mk_h(n: i64) -> Holder {
+    return Holder { r: Res { id: n, name: f"f{n}" } };
+}
+fn main() {
+    println("a");
+    Box2.Full(Res { id: 24, name: f"h{24}" });
+    println("b");
+    mk_h(64);
+    println("c");
+    let _ = mk_h(63);
+    println("end");
+}

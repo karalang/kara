@@ -1,0 +1,43 @@
+
+struct D { s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD"); } }
+
+enum G1[T] { Y(T), N }
+enum M1 { Y(String), N }
+
+fn idG[T](g: G1[T]) -> G1[T] { return g; }
+fn idM(g: M1) -> M1 { return g; }
+fn mk[T](x: T) -> G1[T] { return G1.Y(x); }
+fn eat[T](g: G1[T]) -> i64 { return 1; }
+
+fn main() {
+    let a: G1[String] = G1.Y(f"b1616-esc-aaaaaaaaaa");
+    let back = idG(a);
+    match back { G1.Y(v) => { println(f"esc {v.len()}"); } G1.N => { println(f"esc 0"); } }
+
+    let b: G1[String] = G1.Y(f"b1616-noarm-bbbbbbbb");
+    let back2 = idG(b);
+    println(f"noarm ok");
+
+    let c: G1[D] = G1.Y(D { s: f"b1616-drop-cccccccccc" });
+    let back3 = idG(c);
+    match back3 { G1.Y(v) => { println(f"drop {v.s.len()}"); } G1.N => { println(f"drop 0"); } }
+
+    let d: G1[String] = G1.Y(f"b1616-disc-dddddddddd");
+    idG(d);
+    println(f"disc ok");
+
+    let e: M1 = M1.Y(f"b1616-mono-eeeeeeeeee");
+    let back4 = idM(e);
+    match back4 { M1.Y(v) => { println(f"mono {v.len()}"); } M1.N => { println(f"mono 0"); } }
+
+    let f: G1[i64] = G1.Y(42);
+    let back5 = idG(f);
+    match back5 { G1.Y(v) => { println(f"pod {v}"); } G1.N => { println(f"pod 0"); } }
+
+    let back6 = mk(f"b1616-mk-ffffffffffff");
+    match back6 { G1.Y(v) => { println(f"mk {v.len()}"); } G1.N => { println(f"mk 0"); } }
+
+    let g: G1[String] = G1.Y(f"b1616-eat-gggggggggg");
+    println(f"eat {eat(g)}");
+}

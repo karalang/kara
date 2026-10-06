@@ -1,0 +1,45 @@
+// LeetCode #319 — count each bulb's divisors and keep the odd ones.
+//
+// This arm takes the divisor half of the argument and stops there. Bulb `b` is
+// toggled once per divisor of `b`, so it ends on exactly when `b` has an odd
+// number of divisors — so count divisors, test the parity, and total it up. It
+// never notices that "odd divisor count" and "perfect square" are the same
+// predicate, which is precisely what makes it a second, independent oracle:
+// the ★ arm's answer is a square root, and this arm's answer is a parity
+// tally, and they have no shared step to be wrong in together.
+//
+// Divisors are counted by trial division up to `sqrt(b)`, adding two per hit
+// (`d` and `b/d`) except when `d * d == b`, where the pair collapses to one.
+// That collapse is the entire perfect-square story showing up again from the
+// other side — and it is the one line here worth staring at, because dropping
+// its guard makes every square's count even and the answer identically zero.
+
+fn divisor_count(b: i64) -> i64 {
+    let mut c = 0;
+    let mut d = 1;
+    while d * d <= b {
+        if b % d == 0 {
+            c += 1;
+            if d * d != b { c += 1; }
+        }
+        d += 1;
+    }
+    return c;
+}
+
+fn bulb_switch(n: i64) -> i64 {
+    let mut count = 0;
+    for b in 1..(n + 1) {
+        if divisor_count(b) % 2 == 1 { count += 1; }
+    }
+    return count;
+}
+
+fn main() {
+    let cases: Vec[i64] = [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 15, 16, 99, 100, 101,
+                           4095, 4096, 10000];
+    for i in 0..cases.len() {
+        let n = cases[i];
+        print("n = " + n.to_string() + " -> " + bulb_switch(n).to_string() + "\n");
+    }
+}

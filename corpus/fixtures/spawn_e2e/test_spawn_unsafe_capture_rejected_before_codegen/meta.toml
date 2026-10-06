@@ -1,0 +1,13 @@
+source = "tests/spawn_e2e.rs::test_spawn_unsafe_capture_rejected_before_codegen"
+dedup_of = []
+expect = "error:E0254"
+exit = 1
+tags = ["closure", "par", "shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

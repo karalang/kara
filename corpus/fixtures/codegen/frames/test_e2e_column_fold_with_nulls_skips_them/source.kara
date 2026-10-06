@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut c: Column[i64] = Column.new();
+    c.push(10);
+    c.push_null();
+    c.push(20);
+    c.push_null();
+    c.push(30);
+    println(f"{c.fold(0, |a, x| a + x)}");
+    println(f"{c.fold(0, |a, x| a + 1)}");
+}

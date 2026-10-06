@@ -1,0 +1,24 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+
+struct WrapR { inner: (R, Result[R, String]) }
+struct OuterR { h: WrapR }
+struct DeepR { g: OuterR }
+
+fn c_named()  { let t: (R, Result[R, String]) = (mk(1), Result.Ok(mk(101))); let (a1, b1) = t; println(f"  rd{a1.id}") }
+fn c_one()    { let w = WrapR { inner: (mk(2), Result.Ok(mk(102))) }; let (a2, b2) = w.inner; println(f"  rd{a2.id}") }
+fn c_two()    { let g = OuterR { h: WrapR { inner: (mk(3), Result.Ok(mk(103))) } }; let (a3, b3) = g.h.inner; println(f"  rd{a3.id}") }
+fn c_three()  { let d = DeepR { g: OuterR { h: WrapR { inner: (mk(4), Result.Ok(mk(104))) } } }; let (a4, b4) = d.g.h.inner; println(f"  rd{a4.id}") }
+fn c_nodest() { let w = WrapR { inner: (mk(5), Result.Ok(mk(105))) }; println(f"  rd{w.inner.0.id}") }
+fn c_live()   { let g = OuterR { h: WrapR { inner: (mk(6), Result.Ok(mk(106))) } }; let (a6, b6) = g.h.inner; println(f"  rd{a6.id}"); println(f"  g{g.h.inner.0.id}") }
+
+fn main() {
+    println("named"); c_named(); println("named end")
+    println("one");   c_one();   println("one end")
+    println("two");   c_two();   println("two end")
+    println("three"); c_three(); println("three end")
+    println("nodest");c_nodest();println("nodest end")
+    println("live");  c_live();  println("live end")
+    println("done")
+}

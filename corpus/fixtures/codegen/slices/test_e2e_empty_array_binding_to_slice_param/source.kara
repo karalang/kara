@@ -1,0 +1,12 @@
+
+fn take(s: Slice[i64], len: i64) -> i64 {
+    let mut sum = 0i64;
+    for i in 0..len { sum = sum + s[i]; }
+    sum
+}
+fn main() {
+    let a: Array[i64, 0] = [];
+    println(take(a, 0));
+    let b: Array[i64, 3] = [1, 2, 3];
+    println(take(b, 3));
+}

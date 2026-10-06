@@ -1,0 +1,4 @@
+struct R { id: i64 }
+enum Ho[T] { Full(T), Empty }
+fn takeit(x: Ho[R]) -> i64 { match x { Full(r) => { r.id } Empty => { 0 } } }
+fn main() { println(f"{takeit(Ho[R].Full(R { id: 5 }))}"); }

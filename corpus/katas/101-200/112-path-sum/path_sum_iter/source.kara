@@ -1,0 +1,114 @@
+// LeetCode #112: Path Sum — iterative DFS with an explicit (node, remaining) worklist.
+//
+// The same descent, driven by two parallel stacks instead of the call stack: a `Vec[TreeNode]`
+// of nodes still to visit and a `Vec[i64]` of the target remaining when each was pushed. Pop a
+// pair, subtract the node's value; if it is a LEAF and the remainder is now zero, a satisfying
+// path exists — return immediately. Otherwise push each child with the reduced remainder. A
+// distinct mechanism from the recursive OR (an explicit stack vs the call stack) that must
+// return the identical verdict — and it exercises returning early while the `Vec[shared]` node
+// stack still holds residual entries (the residual-worklist drop surface of kata
+// [#111](../111-minimum-depth-of-binary-tree/), now clean). Node type mirrors
+// [#104](../104-maximum-depth-of-binary-tree/) — a `shared struct TreeNode` (RC); the node
+// worklist is advanced by `stack.pop()` (the surface hardened by kara `a384971`).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+fn has_path_sum(root: Option[TreeNode], target: i64) -> bool {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    let mut rems: Vec[i64] = Vec.new();
+    match root {
+        None => {}
+        Some(n) => {
+            nodes.push(n);
+            rems.push(target);
+        }
+    }
+    while nodes.len() > 0 {
+        let rem = rems[rems.len() - 1];
+        match rems.pop() { None => {} Some(_) => {} }
+        match nodes.pop() {
+            None => {}
+            Some(node) => {
+                let r = rem - node.val;
+                let left_none = match node.left { None => true, Some(_) => false };
+                let right_none = match node.right { None => true, Some(_) => false };
+                if left_none and right_none {
+                    if r == 0 {
+                        return true;
+                    }
+                } else {
+                    match node.left {
+                        None => {}
+                        Some(l) => { nodes.push(l); rems.push(r); }
+                    }
+                    match node.right {
+                        None => {}
+                        Some(rr) => { nodes.push(rr); rems.push(r); }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn build_balanced(lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: mid, left: None, right: None };
+    node.left = build_balanced(lo, mid - 1);
+    node.right = build_balanced(mid + 1, hi);
+    Some(node)
+}
+
+fn leftmost_path_sum(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            match n.left {
+                Some(_) => n.val + leftmost_path_sum(n.left),
+                None => n.val + leftmost_path_sum(n.right),
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        let n = 7 + t;
+        let root = build_balanced(t * 20, t * 20 + n - 1);
+        let target = if (t % 2) == 0 {
+            leftmost_path_sum(root)
+        } else {
+            1000000000
+        };
+        let hit = has_path_sum(root, target);
+        let bit = if hit { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        println(f"tree {t}: target {target} has_path={hit}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

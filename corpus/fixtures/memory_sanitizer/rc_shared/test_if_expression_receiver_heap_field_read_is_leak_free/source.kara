@@ -1,0 +1,12 @@
+
+struct Person { name: String, note: String, age: i64 }
+
+fn make(k: i64) -> Person {
+    return Person { name: "ada".to_string(), note: "unread".to_string(), age: k };
+}
+
+fn main() {
+    let c = true;
+    println(if c { make(1) } else { make(2) }.name);
+    println(if not c { make(3) } else { make(4) }.age);
+}

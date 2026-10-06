@@ -1,0 +1,67 @@
+// Benchmark workload for LeetCode #254 — Factor Combinations.
+//
+// An exhaustive sweep rather than build-once + punch: `n` from 2 to 40,000, each
+// fully factorised by the ★ sqrt-bounded backtracking. There is nothing to build
+// once here — the input IS the range, and the work is the recursion.
+//
+// This is a recursion-and-allocation workload, which is what distinguishes it
+// from the sort-dominated lanes next door (#252, #253): every combination found
+// allocates a fresh `Vec[i64]`, and highly composite n produce hundreds of them
+// (n=8,640 alone yields 661). The divisor loop is data-dependent on
+// divisibility, so nothing vectorises.
+//
+// The sink is the ORDER-INDEPENDENT digest the kata's differential uses — hash
+// each combination, sum the hashes. Summing is commutative, so a mirror that
+// enumerates in a different order still has to agree on the multiset, which is
+// the honest cross-language check for a generator whose output order is an
+// implementation detail.
+
+fn helper(remaining: i64, start: i64, path: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    let mut i = start;
+    while i * i <= remaining {
+        if remaining % i == 0 {
+            let mut combo: Vec[i64] = Vec.new();
+            let mut k = 0;
+            while k < path.len() {
+                combo.push(path[k]);
+                k = k + 1;
+            }
+            combo.push(i);
+            combo.push(remaining / i);
+            out.push(combo);
+            path.push(i);
+            helper(remaining / i, i, path, out);
+            let _ = path.pop();
+        }
+        i = i + 1;
+    }
+}
+
+fn main() {
+    let hi = 150000;
+    let mut digest = 0;
+    let mut total = 0;
+
+    let mut n = 2;
+    while n <= hi {
+        let mut out: Vec[Vec[i64]] = Vec.new();
+        if n >= 4 {
+            let mut path: Vec[i64] = Vec.new();
+            helper(n, 2, mut path, mut out);
+        }
+        let mut c = 0;
+        while c < out.len() {
+            let mut h = 1;
+            let mut k = 0;
+            while k < out[c].len() {
+                h = (h * 1000003 + out[c][k]) % 1000000007;
+                k = k + 1;
+            }
+            digest = (digest + h) % 1000000007;
+            c = c + 1;
+        }
+        total = total + out.len();
+        n = n + 1;
+    }
+    println(f"{total} {digest}");
+}

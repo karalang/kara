@@ -1,0 +1,60 @@
+// LeetCode 209 — Minimum Size Subarray Sum.
+//
+// Given a positive `target` and an array of positive integers, return the
+// minimal length of a contiguous subarray whose sum is >= target, or 0 if no
+// such subarray exists.
+//
+// Sliding window. Because every element is positive, growing the window can only
+// increase its sum and shrinking can only decrease it — so a two-pointer scan
+// finds the answer in one pass. Extend `right`, adding each value to the running
+// sum; whenever the window sum reaches `target`, record its length and shrink
+// from `left` (subtracting the departing value) as far as it stays >= target.
+// The smallest length ever recorded is the answer. O(n) — each index is added
+// once and removed once.
+
+fn min_subarray_len(target: i64, nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut left = 0;
+    let mut sum = 0;
+    let mut best = -1;          // -1 = no qualifying window seen yet
+    let mut right = 0;
+    while right < n {
+        sum = sum + nums[right];
+        while sum >= target {
+            let len = right - left + 1;
+            if best == -1 or len < best { best = len; }
+            sum = sum - nums[left];
+            left = left + 1;
+        }
+        right = right + 1;
+    }
+    if best == -1 { return 0; }
+    return best;
+}
+
+fn report(target: i64, nums: Slice[i64]) {
+    println(min_subarray_len(target, nums));
+}
+
+fn main() {
+    let a: Array[i64, 6] = [2, 3, 1, 2, 4, 3];
+    report(7, a);                        // 2  — [4,3]
+
+    let b: Array[i64, 3] = [1, 4, 4];
+    report(4, b);                        // 1  — [4]
+
+    let c: Array[i64, 8] = [1, 1, 1, 1, 1, 1, 1, 1];
+    report(11, c);                       // 0  — total is only 8
+
+    let d: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(15, d);                       // 5  — the whole array
+
+    let e: Array[i64, 1] = [10];
+    report(6, e);                        // 1
+
+    let f: Array[i64, 3] = [1, 2, 3];
+    report(100, f);                      // 0
+
+    let g: Array[i64, 5] = [1, 1, 1, 1, 1];
+    report(3, g);                        // 3
+}

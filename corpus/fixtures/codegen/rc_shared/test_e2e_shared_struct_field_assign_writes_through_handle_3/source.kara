@@ -1,0 +1,10 @@
+
+shared struct Cell { mut value: i64 }
+struct Inner { cell: Cell }
+struct Outer { inner: Inner }
+fn main() {
+    let c = Cell { value: 1 };
+    let mut o = Outer { inner: Inner { cell: c } };
+    o.inner.cell.value = 42;
+    println(f"{c.value}");
+}

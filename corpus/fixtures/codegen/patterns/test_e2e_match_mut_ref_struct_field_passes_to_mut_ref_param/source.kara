@@ -1,0 +1,12 @@
+
+struct Bag { n: i64 }
+fn bump(n: mut ref i64) -> i64 { n + 1 }
+fn show(b: mut ref Bag) -> i64 {
+    match b {
+        Bag { n } => bump(n),
+    }
+}
+fn main() {
+    let mut b = Bag { n: 10 };
+    println(show(mut b));
+}

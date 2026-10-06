@@ -1,0 +1,17 @@
+
+fn mk() -> Vec[i64] { [1, 2, 3] }
+fn take(v: Vec[i64]) -> i64 { v.len() }
+fn main() {
+    println(mk().len());
+    println(take([4, 5]));
+    let mut v: Vec[i64] = [7, 8, 9];
+    v.push(10);
+    println(v.len());
+    let mut b = [100, 200];
+    b.push(300);
+    println(b.len());
+    let r = mk();
+    let mut s = 0;
+    for x in r { s = s + x; }
+    println(s);
+}

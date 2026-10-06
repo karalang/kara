@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/gpu_tensor.rs::asan_column_tensor_argmin_freed_no_leak"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["deferred:dataframe", "deferred:tensor"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

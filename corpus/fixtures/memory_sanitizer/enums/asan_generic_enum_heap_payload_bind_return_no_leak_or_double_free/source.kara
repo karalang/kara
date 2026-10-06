@@ -1,0 +1,22 @@
+
+enum Opt[T] { Yes(T), No }
+fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 200i64 {
+        let a: String = get(Opt.Yes(f"yes{i}"), f"fb");
+        total = total + a.len();
+        let b: String = get(Opt.No, f"no{i}");
+        total = total + b.len();
+        let mut vv: Vec[i64] = Vec.new();
+        vv.push(i);
+        vv.push(i);
+        vv.push(i);
+        let empty: Vec[i64] = Vec.new();
+        let w: Vec[i64] = get(Opt.Yes(vv), empty);
+        total = total + w.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

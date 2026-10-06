@@ -1,0 +1,25 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { D { id: n, name: f"n{n}" } }
+struct W { r: D, s: D }
+struct X { w: W, t: D }
+struct Y { x: X, u: D }
+fn mkx(n: i64) -> X { X { w: W { r: mkd(n), s: mkd(n + 1) }, t: mkd(n + 2) } }
+fn show(d: D) { println(f"s{d.id}"); }
+fn let_if(c: bool) { let x = mkx(10); let y = if c { x.w.r } else { mkd(9) }; println(f"y{y.id}"); }
+fn let_match(c: bool) { let x = mkx(20); let y = match c { true => x.w.r, false => mkd(9) }; println(f"y{y.id}"); }
+fn both_legs(c: bool) { let x = mkx(30); let y = if c { x.w.r } else { x.w.s }; println(f"y{y.id}"); }
+fn else_leg(c: bool) { let x = mkx(40); let y = if c { mkd(9) } else { x.w.r }; println(f"y{y.id}"); }
+fn three_hops(c: bool) { let y0 = Y { x: mkx(50), u: mkd(53) }; let y = if c { y0.x.w.r } else { mkd(9) }; println(f"y{y.id}"); }
+fn push_arg(c: bool) { let x = mkx(60); let mut xs: Vec[D] = Vec.new(); xs.push(if c { x.w.r } else { mkd(9) }); println(f"l{xs.len()}"); }
+fn call_arg(c: bool) { let x = mkx(70); show(if c { x.w.r } else { mkd(9) }); println("r"); }
+fn main() {
+    let_if(false); let_if(true);
+    let_match(false); let_match(true);
+    both_legs(false); both_legs(true);
+    else_leg(false); else_leg(true);
+    three_hops(false); three_hops(true);
+    push_arg(false); push_arg(true);
+    call_arg(false); call_arg(true);
+    println("end")
+}

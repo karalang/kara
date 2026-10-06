@@ -1,0 +1,1 @@
+ERROR at line 4: `r` borrows a temporary that is dropped at the end of this statement; bind it to a variable first

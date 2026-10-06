@@ -1,0 +1,26 @@
+
+shared struct Node { v: i64 }
+struct Sa { n: Option[Node], m: Option[Map[String, i64]] }
+fn mk(i: i64) -> Map[String, i64] {
+    let mut mm: Map[String, i64] = Map.new();
+    mm.insert("map_key_long_enough_to_force_a_heap_allocation".to_string(), i);
+    mm
+}
+fn take_match(a: Sa) -> i64 { match a.m { Some(x) => { x.len() } None => { 0 } } }
+fn take_let(a: Sa) -> i64 { let mm = a.m; match mm { Some(x) => { x.len() } None => { 0 } } }
+fn take_escape(a: Sa) -> Option[Map[String, i64]] { a.m }
+fn main() {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let a: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        t = t + take_match(a);
+        let b: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        t = t + take_let(b);
+        let c: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        let esc = take_escape(c);
+        match esc { Some(x) => { t = t + x.len(); } None => {} }
+        i = i + 1;
+    }
+    println(t);
+}

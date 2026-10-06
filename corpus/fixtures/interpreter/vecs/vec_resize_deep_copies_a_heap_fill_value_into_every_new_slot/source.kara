@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a"); v.push("b");
+    v.resize(5, "z");
+    println(f"{v.len()} {v[2]} {v[3]} {v[4]}");
+    v.resize(1, "q");
+    println(f"{v.len()} {v[0]}");
+}

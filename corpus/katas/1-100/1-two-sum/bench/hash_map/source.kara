@@ -1,0 +1,39 @@
+// Benchmark workload — hash-map O(n) Two Sum.
+//
+// Same N / K / target as bench/brute_force.kara. Single-pass dict-style
+// lookup: ~N inserts/lookups per call (full N because the sentinel
+// target=-1 is never matched), K=10 outer iterations.
+// See ../README.md § Benchmarks for what the numbers mean.
+
+fn two_sum(nums: Slice[i64], target: i64) -> Array[i64, 2] {
+    let mut seen: Map[i64, i64] = Map.new();
+    let n = nums.len();
+    for i in 0..n {
+        let complement = target - nums[i];
+        match seen.get(complement) {
+            Some(j) => return [j, i],
+            None => seen.insert(nums[i], i),
+        }
+    }
+    [-1, -1]
+}
+
+fn main() {
+    let mut data: Array[i64, 5000] = [0; 5000];
+    for i in 0..5000 {
+        data[i] = (i * 7) % 1000;
+    }
+
+    // Sentinel target — no pair sums to a negative number, so every
+    // call walks the full O(n) loop and returns [-1, -1].
+    let target = -1;
+
+    // Sum-of-results sink so the optimizer (if any) cannot elide
+    // the calls. Expected: K * (-1 + -1) = -20.
+    let mut sum = 0;
+    for _ in 0..10 {
+        let r = two_sum(data, target);
+        sum = sum + r[0] + r[1];
+    }
+    println(sum);
+}

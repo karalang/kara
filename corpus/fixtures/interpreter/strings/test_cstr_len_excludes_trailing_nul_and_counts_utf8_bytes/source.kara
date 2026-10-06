@@ -1,0 +1,5 @@
+
+fn main() {
+    println(c"hello".len());
+    println(c"caf\u{e9}".len());
+}

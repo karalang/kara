@@ -1,0 +1,7 @@
+
+fn main() {
+    defer { println("1"); }
+    defer { println("2"); }
+    defer { println("3"); }
+    println("0");
+}

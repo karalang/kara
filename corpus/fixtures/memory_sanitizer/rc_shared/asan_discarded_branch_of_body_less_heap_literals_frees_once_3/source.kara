@@ -1,0 +1,13 @@
+
+struct V { v: Vec[i64], b: i64 }
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkv(n: i64) -> V { let mut q: Vec[i64] = Vec.new(); q.push(n); return V { v: q, b: n }; }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn go() -> i64 {
+    if seed() > 0 { V { v: mkv(1).v, b: 1 } } else { V { v: mkv(2).v, b: 2 } };
+    let _ = if seed() > 0 { P { a: mkp(1).a, b: 1 } } else { P { a: mkp(2).a, b: 2 } };
+    return 1;
+}
+fn main() { println(go()); }

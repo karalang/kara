@@ -1,0 +1,13 @@
+source = "tests/codegen/io_runtime.rs::test_e2e_process_exit_sets_status_code"
+dedup_of = []
+expect = "panic:42"
+exit = 42
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 42
+rules = []
+backends = []
+env = {}
+note = ""

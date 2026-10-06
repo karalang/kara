@@ -1,0 +1,16 @@
+
+fn outer_lens(xs: mut Slice[Vec[i64]]) {
+    println(xs[0].len());
+    println(xs[1].len());
+}
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    a.push(2);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(10);
+    b.push(20);
+    b.push(30);
+    let mut arr: Array[Vec[i64], 2] = [a, b];
+    outer_lens(mut arr);
+}

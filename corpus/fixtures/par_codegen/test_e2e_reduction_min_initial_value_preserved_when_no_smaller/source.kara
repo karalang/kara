@@ -1,0 +1,14 @@
+
+fn main() {
+    let k_iters: i64 = 1000i64;
+    let mut m: i64 = -999999i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let x: i64 = i + 1i64;
+        if x < m {
+            m = x;
+        }
+        i = i + 1i64;
+    }
+    println(m);
+}

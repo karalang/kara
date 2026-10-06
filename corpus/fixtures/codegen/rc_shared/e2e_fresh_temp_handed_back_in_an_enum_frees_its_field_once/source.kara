@@ -1,0 +1,56 @@
+shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn wrapS(v: S2) -> Option[S2] { return Some(v) }
+fn midS(v: S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
+fn mkhS(v: S2) -> Ho[S2] { return Ho.Full(v) }
+fn wrap3(v: S3) -> Option[S3] { return Some(v) }
+fn mid3(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
+fn ho3(v: S3) -> Ho[S3] { return Ho.Full(v) }
+fn wrapP(v: P) -> Option[P] { return Some(v) }
+fn outq(s: S2) -> Option[S2] { let o = Some(s); return o }
+fn dup(a: S2, b: S2) -> Option[S2] { return Some(a) }
+fn noret(v: S2) -> Option[S2] { println(f"n{v.id}"); return None }
+fn ca() { let o = wrapS(mk2(1)); println(f"s{o.is_some()}"); }
+fn cb() { let o = wrapS(S2 { h: Sh { k: 2 }, id: 2 }); println(f"s{o.is_some()}"); }
+fn cc() { let o = midS(mk2(3), true); println(f"s{o.is_some()}"); }
+fn cd() { let o = midS(mk2(4), false); println(f"s{o.is_some()}"); }
+fn ce() { let o = midS(mk2(5), true); let v = o.unwrap(); println(f"v{v.id}"); }
+fn cf() { let h = mkhS(mk2(6)); match h { Ho.Full(x) => println(f"x{x.id}"), Ho.Empty => println("e"), }; }
+fn cg() { let o = wrap3(mk3(7)); println(f"s{o.is_some()}"); }
+fn ch() { let o = wrap3(mk3(8)); let v = o.unwrap(); println(f"v{v.id}"); }
+fn ci() { let o = mid3(mk3(9), true); println(f"s{o.is_some()}"); }
+fn ck() { let o = mid3(mk3(11), true); let v = o.unwrap(); println(f"v{v.id}"); }
+fn cl() { let h = ho3(mk3(12)); println("h"); }
+fn cm() { let o = wrapP(P { id: 13 }); println(f"s{o.is_some()}"); }
+fn cn() { let o = outq(mk2(14)); match o { Some(x) => { let y = x; println(f"y{y.id}"); }, None => println("n"), }; }
+fn co() { let o = dup(mk2(15), mk2(16)); println(f"s{o.is_some()}"); }
+fn cp() { let o = noret(mk2(17)); println(f"s{o.is_some()}"); }
+fn cq() { let mut i = 0; while i < 2 { let o = midS(mk2(20 + i), i == 0); println(f"s{o.is_some()}"); i = i + 1; } }
+fn cr() { let o = wrapS(mk2(18)); let q = o; println(f"s{q.is_some()}"); }
+fn main() {
+    ca(); println("a.")
+    cb(); println("b.")
+    cc(); println("c.")
+    cd(); println("d.")
+    ce(); println("e.")
+    cf(); println("f.")
+    cg(); println("g.")
+    ch(); println("h.")
+    ci(); println("i.")
+    ck(); println("k.")
+    cl(); println("l.")
+    cm(); println("m.")
+    cn(); println("n.")
+    co(); println("o.")
+    cp(); println("p.")
+    cq(); println("q.")
+    cr(); println("r.")
+    println("end")
+}

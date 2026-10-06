@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut a: Set[i64] = Set.new();
+    a.insert(1_i64);
+    a.insert(2_i64);
+    a.insert(3_i64);
+    let mut b: Set[i64] = Set.new();
+    b.insert(2_i64);
+    b.insert(3_i64);
+    b.insert(4_i64);
+    let i: Set[i64] = a.intersection(b);
+    println(i.len());
+    println(i.contains(1_i64));
+    println(i.contains(2_i64));
+    println(i.contains(3_i64));
+    println(i.contains(4_i64));
+}

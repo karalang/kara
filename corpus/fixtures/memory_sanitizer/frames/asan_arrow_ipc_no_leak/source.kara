@@ -1,0 +1,55 @@
+
+fn main() {
+    let mut total: i64 = 0;
+    let mut c: Column[i64] = Column.new();
+    c.push(10); c.push(20); c.push_null(); c.push(40);
+    let b1 = c.to_arrow_ipc();
+    total = total + b1.len();
+    let cs: Column[String] = Column.from_vec(["alpha", "beta"]);
+    let b2 = cs.to_arrow_ipc();
+    total = total + b2.len();
+    let ce: Column[i64] = Column.new();
+    let b3 = ce.to_arrow_ipc();
+    total = total + b3.len();
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("age", Column.from_vec([30i64, 25i64]));
+    df.insert("name", Column.from_vec(["ada", "bob"]));
+    let b4 = df.to_arrow_ipc();
+    total = total + b4.len();
+    let empty: DataFrame = DataFrame.new();
+    let b5 = empty.to_arrow_ipc();
+    total = total + b5.len();
+    let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    let b6 = t.to_arrow_ipc();
+    total = total + b6.len();
+
+    // Read direction: the runtime BUILDS these graphs (data buffer, validity
+    // bitmap, control block, per-cell String heaps, and for a frame the entry
+    // array + copied names), and only the caller's ordinary Column/DataFrame
+    // cleanup frees them. A layout that doesn't match what codegen builds
+    // itself leaks or double-frees here.
+    let r1: Column[i64] = Column.from_arrow_ipc(b1);
+    total = total + r1.len();
+    let r2: Column[String] = Column.from_arrow_ipc(b2);
+    total = total + r2.len();
+    let r3: Column[i64] = Column.from_arrow_ipc(b3);
+    total = total + r3.len();
+    let r4: DataFrame = DataFrame.from_arrow_ipc(b4);
+    total = total + r4.width();
+    let r5: DataFrame = DataFrame.from_arrow_ipc(b5);
+    total = total + r5.width();
+    // TEMPORARY argument — the round-trip shape. Nothing else owns the
+    // intermediate buffer, so the call site must free it, and only AFTER the
+    // runtime has read it.
+    let r6: Column[String] = Column.from_arrow_ipc(r2.to_arrow_ipc());
+    total = total + r6.len();
+    let r7: DataFrame = DataFrame.from_arrow_ipc(r4.to_arrow_ipc());
+    total = total + r7.width();
+    // Tensor: one allocation for [rank][dims][data], freed as a whole. The
+    // `?`-axis case takes the same path with the extent supplied by the stream.
+    let r8: Tensor[i64, [2, 3]] = Tensor.from_arrow_ipc(b6);
+    total = total + r8.sum();
+    let r9: Tensor[i64, [?, 3]] = Tensor.from_arrow_ipc(r8.to_arrow_ipc());
+    total = total + r9.sum();
+    println(total > 0);
+}

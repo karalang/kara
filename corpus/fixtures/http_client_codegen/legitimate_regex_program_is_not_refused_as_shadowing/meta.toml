@@ -1,0 +1,13 @@
+source = "tests/http_client_codegen.rs::legitimate_regex_program_is_not_refused_as_shadowing"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["deferred:regex"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,10 @@
+
+fn main() {
+    let base = -7;
+    let total = par {
+        let x = base.abs();
+        let y = base + 100;
+        x + y
+    };
+    println(total);
+}

@@ -1,0 +1,97 @@
+// LeetCode #46: Permutations — immutable-snapshot DFS (functional shape).
+//
+// Same any-unused-element DFS and the same membership test as [`_scan`](permutations_scan.kara)
+// — an element is available iff it is not already in the path — and the same canonical order.
+// The ONE axis that changes from the mutable-path solvers is how the current branch's choices
+// are carried.
+//
+// Where the ★ file ([`permutations.kara`](permutations.kara)) threads a single mutable `path`
+// and brackets each choice with push/pop (and a `used` flip), this style carries the path as an
+// OWNED `Vec[i64]` SNAPSHOT and never undoes anything: descending into element `x` builds a
+// FRESH child path (`path.clone()` then `push(x)`) and hands it to the recursive call by move;
+// at the leaf (`path.len() == n`) the snapshot already IS the answer, so it is moved straight
+// into the output. "Undo" is implicit — the parent still holds its own untouched copy — exactly
+// the immutable-snapshot shape kata [#40](../40-combination-sum-ii/)'s snapshot solver uses. The
+// per-node clone is the cost, traded for zero pop/unmark bookkeeping and no shared mutable state.
+//
+// Distinctness of `nums` again makes the in-path membership scan a correct availability test.
+// All three #46 solvers emit the identical permutation listing for every case.
+//
+// LeetCode bounds: 1 ≤ n ≤ 6, -10 ≤ nums[i] ≤ 10, all distinct.
+
+fn contains(path: ref Vec[i64], x: i64) -> bool {
+    let n = path.len();
+    let mut i = 0;
+    while i < n {
+        if path[i] == x {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn backtrack(nums: ref Vec[i64], path: Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    let n = nums.len();
+    if path.len() == n {
+        out.push(path);
+        return;
+    }
+    let mut i = 0;
+    while i < n {
+        let x = nums[i];
+        if not contains(path, x) {
+            // Fresh child path = parent's snapshot + this choice; recurse by move.
+            let mut next = path.clone();
+            next.push(x);
+            backtrack(nums, next, out);
+        }
+        i = i + 1;
+    }
+}
+
+fn permute(nums: Slice[i64]) -> Vec[Vec[i64]] {
+    let xs: Vec[i64] = Vec.from_slice(nums);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let seed: Vec[i64] = Vec.new();
+    backtrack(xs, seed, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(perm: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = perm.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{perm[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn report(nums: Slice[i64]) {
+    let perms = permute(nums);
+    let count = perms.len();
+    let input: Vec[i64] = Vec.from_slice(nums);
+    println(f"{show(input)} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(show(perms[i]));
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    report([1, 2, 3]);
+    report([0, 1]);
+    report([1]);
+    report([5, 3, 4]);
+    report([1, 2, 3, 4]);
+}

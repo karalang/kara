@@ -1,0 +1,37 @@
+-c1
+11 11
+dS1
+dS1
+-c2
+dS2
+dS2
+s202
+-c3
+dS3
+33 00
+dS0
+dS3
+-c4
+dS4
+dS4
+dS0
+dS4
+s404
+-c5
+55 06
+-c6
+66
+dS6
+dS6
+-c7
+7 7
+dS7
+-c8
+308 308
+dT8
+dT8
+-c9
+dS9
+dS9
+s99
+end

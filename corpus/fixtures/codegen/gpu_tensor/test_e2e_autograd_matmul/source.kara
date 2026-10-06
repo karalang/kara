@@ -1,0 +1,15 @@
+
+import std.autograd.{MatTape, MatVar};
+fn main() {
+    let t = MatTape.new();
+    let a0: Tensor[f32, [?, ?]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    let b0: Tensor[f32, [?, ?]] = Tensor.from([[1.0, 0.0], [0.0, 1.0]]);
+    let a = MatVar.leaf(t, a0);
+    let b = MatVar.leaf(t, b0);
+    let y = a.matmul(b);
+    y.backward();
+    println(a.grad_at(0, 0));
+    println(a.grad_at(1, 1));
+    println(b.grad_at(0, 0));
+    println(b.grad_at(1, 0));
+}

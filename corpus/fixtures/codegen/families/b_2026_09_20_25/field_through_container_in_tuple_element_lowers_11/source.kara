@@ -1,0 +1,1 @@
+fn main() { let mut a: (Array[P, 2], i64) = ([P { n: 5 }, P { n: 6 }], 3); a.0[1].n = 9; println(f"r:{a.0[0].n} {a.0[1].n} {a.1}") }

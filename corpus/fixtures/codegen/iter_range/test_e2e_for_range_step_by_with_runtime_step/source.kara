@@ -1,0 +1,11 @@
+
+fn main() {
+    let cap = 12i64;
+    for i in 2..=cap {
+        let mut count = 0i64;
+        for _j in (i..=cap).step_by(i) {
+            count = count + 1;
+        }
+        println(count);
+    }
+}

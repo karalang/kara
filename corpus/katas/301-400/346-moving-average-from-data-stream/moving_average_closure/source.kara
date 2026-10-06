@@ -1,0 +1,64 @@
+// LeetCode #346: Moving Average from Data Stream — a closure over its window.
+//
+// No struct: the window and the running sum are locals, and `next` is a
+// closure that captures them mutably. Each call pushes, trims, and divides
+// exactly as the ★ arm does, so it is O(1) per call and O(size) space.
+
+fn run(size: i64, vals: Vec[i64]) {
+    let mut window: VecDeque[i64] = VecDeque.new();
+    let mut sum = 0;
+    let mut next = |val: i64| {
+        window.push_back(val);
+        sum += val;
+        if window.len() > size {
+            sum -= window.pop_front().unwrap();
+        }
+        return sum as f64 / window.len() as f64;
+    };
+    let mut out = String.new();
+    for v in vals {
+        if out.len() > 0 {
+            out.push_str(", ");
+        }
+        let a = next(v);
+        out.push_str(f"{a:.5}");
+    }
+    println(f"size {size}: [{out}]");
+}
+
+fn long_run() {
+    let mut window: VecDeque[i64] = VecDeque.new();
+    let mut sum = 0;
+    let mut next = |val: i64| {
+        window.push_back(val);
+        sum += val;
+        if window.len() > 1000 {
+            sum -= window.pop_front().unwrap();
+        }
+        return sum as f64 / window.len() as f64;
+    };
+    let mut last = 0.0;
+    let mut total = 0.0;
+    for k in 0..100000 {
+        last = next((k * 7919) % 200001 - 100000);
+        total += last;
+    }
+    println(f"100000 values, window 1000: last {last:.5}, sum of averages {total:.3}");
+}
+
+fn main() {
+    // The example from the problem statement.
+    run(3, [1, 10, 3, 5]);
+
+    // A window of one is the stream itself; a window wider than the stream
+    // never drops anything.
+    run(1, [4, -2, 7]);
+    run(10, [1, 2, 3, 4]);
+
+    // Negative values, and a mean that is not a terminating decimal.
+    run(2, [-5, 5, -5, 5, 0]);
+    run(3, [1, 1, 2]);
+
+    // Large values near the problem's bound (|val| <= 100000) over a long run.
+    long_run();
+}

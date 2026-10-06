@@ -1,0 +1,26 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct T { n: i64 }
+impl T {
+    fn pick[U](ref self, ra: R, k: bool, u: U) -> R { if k { ra } else { R { id: 99, name: f"n99" } } }
+}
+fn gcond[U](rb: R, k: bool, u: U) -> R { if k { rb } else { R { id: 98, name: f"n98" } } }
+fn gmatch[U](rc: R, k: i64, u: U) -> R { match k { 1 => { rc } _ => { R { id: 97, name: f"n97" } } } }
+fn main() {
+    let base: i64 = env.args().len();
+    let a = gcond(R { id: base, name: f"a{base}" }, false, 7);
+    println(f"{a.id}");
+    let b = gcond(R { id: base, name: f"b{base}" }, true, 7);
+    println(f"{b.id}");
+    let c = gmatch(R { id: base, name: f"c{base}" }, 2, f"s");
+    println(f"{c.id}");
+    let d = gmatch(R { id: base, name: f"d{base}" }, 1, f"s");
+    println(f"{d.id}");
+    let t = T { n: 1 };
+    let e = t.pick(R { id: base, name: f"e{base}" }, false, 7);
+    println(f"{e.id}");
+    let g = t.pick(R { id: base, name: f"g{base}" }, true, 7);
+    println(f"{g.id}");
+    println("end");
+}

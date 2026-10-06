@@ -1,0 +1,16 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    syntax = \"proto3\";
+    message Address { string city = 1; string zip = 2; }
+    message Person { string name = 1; Address addr = 2; int64 age = 3; }
+";
+
+fn main() {
+    let p = Person { name: "Ada", addr: Address { city: "London", zip: "NW1" }, age: 36 };
+    let q = Person.decode(p.encode());
+    println(q.name);
+    println(q.addr.city);
+    println(q.addr.zip);
+    println(q.age);
+}

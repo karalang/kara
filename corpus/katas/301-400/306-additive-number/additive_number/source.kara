@@ -1,0 +1,158 @@
+// LeetCode 306 — Additive Number
+//
+// A string of digits is ADDITIVE if its digits can be cut into a sequence of
+// at least three numbers where every number after the first two is the sum of
+// the two before it. No number may carry a leading zero, so "1", "02", "3" is
+// not a valid cut even though 1 + 2 == 3.
+//
+//     "112358"     -> true    1, 1, 2, 3, 5, 8
+//     "199100199"  -> true    1, 99, 100, 199
+//     "1023"       -> false
+//
+// THE ARM: the first two numbers determine everything, so search over those
+// two and verify the rest.
+//
+// The naive reading of the statement is "find a cut of the string into three
+// or more parts", which is a search over subsets of the 34 possible cut
+// positions — 2^34. But the additive rule leaves nothing to choose after the
+// second number: once a and b are fixed, the third number MUST be a + b, which
+// fixes its digits, which fixes where it ends, which fixes the fourth, and so
+// on to the end of the string. The whole sequence is a function of its first
+// two elements.
+//
+// So the search space is not the cuts, it is the two prefix lengths — O(n^2)
+// pairs, each verified in O(n) — and the exponential collapses to O(n^3). The
+// `_allsplits` arm enumerates the cuts instead, which is what makes this
+// argument a checked claim rather than a plausible one.
+//
+// ARITHMETIC IS THE OTHER HALF, and it is the reason this kata exists at all.
+// The input is up to 35 digits. Split it as evenly as the rule allows and the
+// two leading numbers run to ~17 digits each, so their sum needs 18 — and the
+// sums compound from there. i64 tops out at 19 digits, so a straightforward
+// integer implementation does not merely lose precision on the extremes, it
+// OVERFLOWS on inputs the problem explicitly admits. Kāra checks arithmetic by
+// default, so that overflow is a panic rather than a wrong answer.
+//
+// This arm therefore never converts a number to an integer. It holds each
+// number as its DECIMAL DIGITS and adds them by hand, most-significant first,
+// which is exact at any length. The `_i64` arm is the same search over machine
+// integers and returns `None` where it would overflow — the two together are
+// the answer to the problem's own follow-up question.
+//
+// MATCHING IS IN PLACE. Having computed a + b as digits, the arm does not
+// build a string and compare; it checks the digits against the input at the
+// current offset. That keeps the verification allocation-free per step and
+// makes "the sum's digits ARE the next stretch of the input" the literal
+// statement of the check. The `_concat` arm does build the string, and is
+// slower for exactly this reason.
+
+// Decimal digits of the input's [lo, hi) span, most significant first.
+fn digits_of(bytes: Slice[u8], lo: i64, hi: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in lo..hi { out.push((bytes[i] - b'0') as i64); }
+    return out;
+}
+
+// Schoolbook addition, most-significant-first, exact at any length.
+fn add_digits(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut rev: Vec[i64] = Vec.new();
+    let mut i = a.len() - 1;
+    let mut j = b.len() - 1;
+    let mut carry = 0;
+    // i and j are signed, so the "walked off the front" test is >= 0 rather
+    // than a wrapping comparison.
+    while i >= 0 or j >= 0 or carry > 0 {
+        let mut sum = carry;
+        if i >= 0 { sum = sum + a[i]; i = i - 1; }
+        if j >= 0 { sum = sum + b[j]; j = j - 1; }
+        rev.push(sum % 10);
+        carry = sum / 10;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = rev.len() - 1;
+    while k >= 0 { out.push(rev[k]); k = k - 1; }
+    return out;
+}
+
+// Does `num` spell exactly the input's digits starting at `pos`?
+fn matches_at(bytes: Slice[u8], pos: i64, num: ref Vec[i64]) -> bool {
+    if pos + num.len() > bytes.len() { return false; }
+    for k in 0..num.len() {
+        if (bytes[pos + k] - b'0') as i64 != num[k] { return false; }
+    }
+    return true;
+}
+
+// A number may not carry a leading zero unless it IS zero.
+fn no_leading_zero(bytes: Slice[u8], lo: i64, hi: i64) -> bool {
+    return hi - lo == 1 or bytes[lo] != b'0';
+}
+
+fn is_additive(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    // Three numbers of at least one digit each.
+    if n < 3 { return false; }
+
+    for len1 in 1..(n - 1) {
+        if not no_leading_zero(bytes, 0, len1) { break; }
+        for len2 in 1..(n - len1) {
+            if not no_leading_zero(bytes, len1, len1 + len2) { break; }
+            let mut a = digits_of(bytes, 0, len1);
+            let mut b = digits_of(bytes, len1, len1 + len2);
+            let mut pos = len1 + len2;
+            let mut ok = true;
+            // At least one sum must be consumed, so a two-number cut that
+            // exhausts the string is not additive.
+            let mut steps = 0;
+            while pos < n and ok {
+                let c = add_digits(a, b);
+                if matches_at(bytes, pos, c) {
+                    pos = pos + c.len();
+                    a = b;
+                    b = c;
+                    steps = steps + 1;
+                } else {
+                    ok = false;
+                }
+            }
+            if ok and pos == n and steps > 0 { return true; }
+        }
+    }
+    return false;
+}
+
+fn report(s: ref String) {
+    println("\"" + s + "\" -> " + is_additive(s).to_string());
+}
+
+fn main() {
+    // The three examples from the LeetCode statement.
+    report("112358".to_string());
+    report("199100199".to_string());
+    report("1023".to_string());
+    // Shortest possible: three single digits.
+    report("000".to_string());
+    report("011".to_string());
+    report("123".to_string());
+    report("122".to_string());
+    // Too short to hold three numbers.
+    report("".to_string());
+    report("1".to_string());
+    report("12".to_string());
+    // Leading zeros are the whole trap: 1,02,3 must not count.
+    report("1023456".to_string());
+    report("0235".to_string());
+    // All zeros of every length — 0+0=0 forever.
+    report("0000".to_string());
+    report("00000".to_string());
+    // A carry that lengthens the sum, which is where in-place matching earns
+    // its keep: 99 + 1 = 100 is three digits where its inputs were two.
+    report("199100".to_string());
+    // 35 digits, the stated maximum, and far past what i64 can hold.
+    report("11235813213455891442333776109871597258441816765109461771128657".to_string());
+    // Three numbers that each exceed i64: (10^20 - 1) + 1 = 10^20. The
+    // `_i64` arm returns None here; this arm answers it exactly.
+    report("999999999999999999991100000000000000000000".to_string());
+    report("12345678910111213141516171819202122".to_string());
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/arrays.rs::e2e_boxed_array_payload_handed_to_callee_owned_param"
+dedup_of = ["tests/memory_sanitizer/arrays.rs::asan_boxed_array_payload_handed_to_callee_owned_param_no_double_free"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

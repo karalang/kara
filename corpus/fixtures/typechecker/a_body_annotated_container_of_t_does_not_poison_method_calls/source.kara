@@ -1,0 +1,12 @@
+
+struct Bag[T] { xs: Vec[T] }
+impl[T: Copy] Bag[T] {
+    fn add(mut ref self, v: T) { self.xs.push(v); }
+    fn make(v: T) -> Bag[T] {
+        let mut xs: Vec[T] = Vec.new();
+        let mut b = Bag { xs: xs };
+        b.add(v);
+        return b;
+    }
+}
+fn main() { let b = Bag.make(7); println(f"{b.xs.len()}"); }

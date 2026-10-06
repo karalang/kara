@@ -1,0 +1,27 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct Wrap { r: R }
+fn cond(r: R, k: bool) -> R { if k { r } else { R { id: 99, name: f"n99" } } }
+fn cond_match(r: R, k: i64) -> R { match k { 1 => { r } _ => { R { id: 98, name: f"n98" } } } }
+fn two(a: R, b: R, k: bool) -> R { if k { a } else { b } }
+fn agg(r: R, k: bool) -> Wrap { if k { Wrap { r: r } } else { Wrap { r: R { id: 95, name: f"n95" } } } }
+fn main() {
+    let base: i64 = env.args().len();
+    let a = cond(R { id: base, name: f"a{base}" }, false);
+    println(f"{a.id}");
+    let b = cond(R { id: base, name: f"b{base}" }, true);
+    println(f"{b.id}");
+    let c = cond_match(R { id: base, name: f"c{base}" }, 2);
+    println(f"{c.id}");
+    let d = cond_match(R { id: base, name: f"d{base}" }, 1);
+    println(f"{d.id}");
+    let g = two(R { id: base, name: f"g{base}" }, R { id: base, name: f"h{base}" }, true);
+    println(f"{g.id}");
+    let i = agg(R { id: base, name: f"j{base}" }, true);
+    println(f"{i.r.id}");
+    let j = agg(R { id: base, name: f"k{base}" }, false);
+    println(f"{j.r.id}");
+    cond(R { id: base, name: f"l{base}" }, false);
+    println("end");
+}

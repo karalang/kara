@@ -1,0 +1,28 @@
+// Benchmark workload for LeetCode #172 — Factorial Trailing Zeroes.
+//
+// One trailing_zeroes call is O(log_5 n); the bench turns it into a scalar
+// division kernel by summing trailing_zeroes(n) over n in 0..LIMIT. The inner
+// `while m > 0 { count += m; m /= 5 }` has a data-dependent trip count and a
+// loop-carried `m`, so the outer loop does NOT vectorize — a clean scalar
+// divide + accumulate bench. Sink = the accumulated sum.
+
+fn trailing_zeroes(n: i64) -> i64 {
+    let mut count = 0;
+    let mut m = n / 5;
+    while m > 0 {
+        count = count + m;
+        m = m / 5;
+    }
+    return count;
+}
+
+fn main() {
+    let limit = 35000000;
+    let mut sink = 0;
+    let mut i = 0;
+    while i < limit {
+        sink = sink + trailing_zeroes(i);
+        i = i + 1;
+    }
+    println(sink);
+}

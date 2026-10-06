@@ -1,0 +1,14 @@
+
+fn m_len(c: ref CStr) -> i64 { return c.len(); }
+fn m_empty(c: ref CStr) -> bool { return c.is_empty(); }
+fn m_byte(c: ref CStr, i: i64) -> u8 { return c.as_bytes()[i]; }
+
+fn main() {
+    let s = c"abc";
+    let e = c"";
+    println(m_len(s));
+    println(m_empty(s));
+    println(m_empty(e));
+    println(m_byte(s, 0));
+    println(m_byte(s, 2));
+}

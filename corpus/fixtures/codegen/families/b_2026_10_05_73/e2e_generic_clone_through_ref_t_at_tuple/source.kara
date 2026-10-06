@@ -1,0 +1,10 @@
+fn dup[T: Clone](x: ref T) -> T { return x.clone(); }
+fn main() {
+    let o: (i64, String) = (1, "a".to_string());
+    let t: (String, String) = ("p".to_string(), "q".to_string());
+    let u: (i64, i64) = (3, 4);
+    let o2 = dup(o);
+    let t2 = dup(t);
+    let u2 = dup(u);
+    println(f"b:{o2.0} {o2.1} {t2.0} {t2.1} {u2.0} {u2.1} {o.1}");
+}

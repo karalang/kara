@@ -1,0 +1,9 @@
+
+fn main() {
+    let t: Interner = Interner.new();
+    let u: Interner = Interner.new();
+    let _a = t.intern("x");
+    let _b = u.intern("y");
+    println(t.len());
+    println(u.len());
+}

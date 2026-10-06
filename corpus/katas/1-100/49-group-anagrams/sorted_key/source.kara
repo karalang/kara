@@ -1,0 +1,103 @@
+// LeetCode #49: Group Anagrams — sorted-string key (canonical ★).
+//
+// Two strings are anagrams iff their characters, sorted, are equal. So the
+// sorted form of a word is a perfect group key: every anagram of "eat" —
+// "tea", "ate", … — shares the key "aet". `String.sorted()` returns exactly
+// that: the characters sorted ascending (by Unicode scalar value) as a fresh
+// String. O(K log K) per word of length K.
+//
+// Grouping uses the **index-map** shape rather than iterating a
+// `Map[key -> Vec[word]]`: a `Map[key -> group index]` names where each
+// anagram class lives in a growing `Vec[Vec[String]]`. That keeps the output
+// order deterministic and backend-independent — groups appear in
+// *first-appearance* order (the order each class is first seen) with the words
+// inside each group in input order — without depending on the hash map's
+// (unspecified) value-iteration order. A hash-order `for g in map.values()`
+// would risk diverging between `karac run` and `karac build`; this doesn't.
+// That is also why no post-hoc sort of the groups is needed: the structure is
+// already canonical. The count-signature sibling
+// [`count_signature.kara`](count_signature.kara) reuses this exact grouping
+// and differs *only* in `anagram_key`, so both emit byte-identical output.
+//
+// `count_signature.kara` is the O(N·K) contrast: it swaps the per-word
+// `O(K log K)` sort for an `O(K)` 26-bucket count. Same groups, same order.
+//
+// What this kata surfaced — a real codegen gap, now fixed in `karac`.
+// `word.sorted()` ran under `karac run` (the interpreter's
+// `chars().sort_unstable()`) but failed `karac build` with
+// "Vec/String method 'sorted' is not yet supported in codegen" — a run/build
+// divergence. Fixed (bug-ledger B-2026-06-30-12) by lowering `String.sorted()`
+// through a `karac_string_sorted` runtime helper that mirrors the interpreter
+// char-sort byte-for-byte, so both backends agree. See README § What this kata
+// surfaced.
+
+fn anagram_key(word: ref String) -> String {
+    word.sorted()
+}
+
+fn group_anagrams(words: Vec[String]) -> Vec[Vec[String]] {
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    let mut index_of: Map[String, i64] = Map.new();
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        let word = words[i].clone();
+        let key = anagram_key(word);
+        match index_of.get(key) {
+            // Seen this anagram class — append to its existing group.
+            Some(gi) => groups[gi].push(word),
+            // First of its class — open a new group at the end and record
+            // its index so later anagrams find it.
+            None => {
+                index_of.insert(anagram_key(word), groups.len());
+                let mut g: Vec[String] = Vec.new();
+                g.push(word);
+                groups.push(g);
+            }
+        }
+        i = i + 1;
+    }
+    groups
+}
+
+fn join_words(words: ref Vec[String]) -> String {
+    let mut out: String = "";
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(words[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn report(words: Vec[String]) {
+    let groups = group_anagrams(words);
+    let g = groups.len();
+    println(f"{g} groups");
+    let mut j = 0;
+    while j < g {
+        println(join_words(groups[j]));
+        j = j + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    // LeetCode reference example — three classes: {eat,tea,ate}, {tan,nat},
+    // {bat}. First-appearance order, input order within each class.
+    report(["eat", "tea", "tan", "ate", "nat", "bat"]);   // expect: 3 groups
+
+    // Single empty string — the problem's degenerate case: one class, the
+    // empty key "".
+    report([""]);                                         // expect: 1 group
+
+    // Single one-letter word.
+    report(["a"]);                                        // expect: 1 group
+
+    // Three anagrams of "abc" then two distinct singletons.
+    report(["abc", "bca", "cab", "xyz", "zzz"]);          // expect: 3 groups
+}

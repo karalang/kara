@@ -1,0 +1,80 @@
+// LeetCode #13: Roman to Integer — single-pass forward scan with lookahead.
+// O(n) time over the input bytes, O(1) extra space (zero-copy `s.bytes()`
+// view; no allocation per call).
+//
+// At each position `i` we look up `val[s[i]]` and compare against the
+// next byte's value: if the current symbol is *smaller* than the next
+// one, we're at the start of a subtractive pair (IV, IX, XL, XC, CD, CM)
+// and the current value is negated; otherwise it adds. The lookahead is
+// the cleanest way to express the LeetCode subtractive rule — it makes
+// "I before V means -1, I anywhere else means +1" a one-line predicate
+// instead of branching on every possible two-char prefix.
+//
+// The value lookup is unrolled into seven byte-equality checks (the
+// alphabet is fixed: I V X L C D M). On a real Roman numeral the longest
+// chain that goes through `value()` is one comparison per char of the
+// input, so worst-case bound is 15 chars × 7 compares = 105 byte ops —
+// constant-bounded by the LeetCode constraint `1 <= s.length <= 15`.
+//
+// `s.bytes()` returns a Slice[u8] over the String's storage with O(1)
+// positional access — the same primitive kata 8 (atoi) uses. Single-byte
+// ASCII for all seven Roman symbols, so the byte view is exact and we
+// never need a Vec[char] snapshot.
+
+fn value(b: u8) -> i64 {
+    if b == b'I' { return 1; }
+    if b == b'V' { return 5; }
+    if b == b'X' { return 10; }
+    if b == b'L' { return 50; }
+    if b == b'C' { return 100; }
+    if b == b'D' { return 500; }
+    if b == b'M' { return 1000; }
+    0
+}
+
+fn roman_to_int(s: ref String) -> i64 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    let mut total = 0;
+    let mut i = 0;
+    while i < n {
+        let cur = value(bytes[i]);
+        if i + 1 < n {
+            let nxt = value(bytes[i + 1]);
+            if cur < nxt {
+                total = total - cur;
+            } else {
+                total = total + cur;
+            }
+        } else {
+            total = total + cur;
+        }
+        i = i + 1;
+    }
+    total
+}
+
+fn report(s: ref String) {
+    println(roman_to_int(s));
+}
+
+fn main() {
+    // LeetCode samples — mirror kata 12's case list, inverted.
+    report("III");      // expect: 3
+    report("IV");       // expect: 4
+    report("IX");       // expect: 9
+    report("LVIII");    // expect: 58
+    report("MCMXCIV");  // expect: 1994
+    // Subtractive corner cases — one per place (units/tens/hundreds)
+    report("I");                  // expect: 1
+    report("XL");                 // expect: 40
+    report("CM");                 // expect: 900
+    report("CDXLIV");             // expect: 444     (4-4-4 across all three places)
+    // Year-shaped
+    report("MMXXIV");             // expect: 2024
+    // Maximum input length: 15 chars
+    report("MMMDCCCLXXXVIII");    // expect: 3888
+    // Upper bound per LeetCode constraints
+    report("MMMCMXCIX");          // expect: 3999
+}

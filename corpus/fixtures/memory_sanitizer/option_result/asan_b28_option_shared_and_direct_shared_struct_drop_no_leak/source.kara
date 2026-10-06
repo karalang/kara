@@ -1,0 +1,51 @@
+
+shared enum Val { Nothing, Ident(String), Num(i64) }
+struct OptH { value: Option[Val] }
+struct DirH { value: Val }
+
+fn borrow_opt(h: OptH) -> i64 {
+    let mut r = 0;
+    match h.value { Some(_) => { r = 1; } None => {} }
+    r
+}
+fn destr_opt(h: OptH) -> i64 {
+    let OptH { value } = h;
+    let mut r = 0;
+    match value { Some(_) => { r = 1; } None => {} }
+    r
+}
+fn borrow_dir(h: DirH) -> i64 {
+    let mut r = 0;
+    match h.value { Val.Ident(_) => { r = 1; } _ => {} }
+    r
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 4 {
+        // (1) plain local scope-drop, both field shapes.
+        let a = OptH { value: Some(Val.Ident("option_shared_local_payload_alpha_aaaaaaaa".to_string())) };
+        match a.value { Some(_) => { total = total + 1; } None => {} }
+        let b = DirH { value: Val.Ident("direct_shared_local_payload_beta_bbbbbbbbbb".to_string()) };
+        match b.value { Val.Ident(_) => { total = total + 1; } _ => {} }
+        // (2) by-value param borrowed — fresh-temp for the copy-supported
+        // Option[shared] struct; a LOCAL for the caller-retains direct-shared one
+        // (a direct-shared fresh-temp arg is a separate pre-existing residual).
+        total = total + borrow_opt(OptH { value: Some(Val.Ident("byvalue_borrow_opt_payload_gamma_cccccccc".to_string())) });
+        let d = DirH { value: Val.Ident("byvalue_borrow_dir_payload_delta_dddddddd".to_string()) };
+        total = total + borrow_dir(d);
+        // (3) by-value param destructured.
+        total = total + destr_opt(OptH { value: Some(Val.Ident("byvalue_destr_opt_payload_epsilon_eeeeeee".to_string())) });
+        i = i + 1;
+    }
+    // (4) Vec[OptH] element scope-drop (built, len-read, dropped unconsumed).
+    let mut v: Vec[OptH] = Vec.new();
+    let mut j = 0;
+    while j < 4 {
+        v.push(OptH { value: Some(Val.Ident("vec_element_option_shared_payload_zeta_fff".to_string())) });
+        j = j + 1;
+    }
+    total = total + v.len();
+    println(total);
+}

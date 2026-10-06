@@ -1,0 +1,17 @@
+
+fn main() with reads(Env) writes(FileSystem) reads(FileSystem) {
+    let _t = clock.now();
+    let _r = rand.next_u64();
+    let _a = env.args();
+    stdout.print("a");
+    stdout.println("b");
+    stdout.flush();
+    stderr.print("c");
+    stderr.println("d");
+    stderr.flush();
+    let _w = fs.write("/tmp/karac_lc_alias_tc.txt", "x");
+    match fs.read_to_string("/tmp/karac_lc_alias_tc.txt") {
+        Ok(s) => { let _n = s.len(); }
+        Err(_) => {}
+    }
+}

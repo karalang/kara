@@ -1,0 +1,11 @@
+boards 8191 wins 4836
+A vs C mismatches 0
+A vs B mismatches 0 (over lengths 0..10)
+P1 reversal failures 0
+P2 terminal failures 0
+P3 recursion failures 0
+P4 run-multiset failures 0
+P5 single-run failures 0
+losing single runs 0..18: 0 1 5 9 15
+run of 16 — memo calls 1492, unmemoized calls 7426
+DIFFERENTIAL OK

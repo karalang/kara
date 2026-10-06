@@ -1,0 +1,13 @@
+
+        #[inline]
+        pub fn step(x: i64) -> i64 { x + 1 }
+        fn main() {
+            let mut acc: i64 = 0;
+            for i in 0..100 {
+                acc = step(acc);
+                acc = step(acc);
+                acc = step(acc);
+            }
+            println(f"{acc}");
+        }
+    

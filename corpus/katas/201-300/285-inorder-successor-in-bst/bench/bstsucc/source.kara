@@ -1,0 +1,120 @@
+// LeetCode 285 bench kernel — the O(h) descent, punched many times.
+//
+// BUILD ONCE, PUNCH MANY TIMES, and here the build genuinely is once: the tree is
+// immutable during the timed phase and every query only reads it. That is the
+// cleanest form of this pattern in the corpus — katas 280 and 283 had to refresh
+// their input every round because the work mutated it, and this one does not.
+//
+// THE TREE SHAPE IS THE KNOB. A descent is O(h), so a balanced tree makes every
+// query ~log n and a degenerate one makes it n. The tree here is built by RANDOM
+// insertion, which gives h ~ 1.4 log n — the realistic case, and the one where
+// the per-query cost is small enough that the surrounding loop and the Option
+// return actually show up in the measurement.
+//
+// THE QUERIES ARE DRAWN FROM OUTSIDE THE KEY SET as well as inside. A probe that
+// always hits an existing key takes the same branch at every level; mixing in
+// absent keys exercises the other side of `<=` and keeps both paths warm.
+//
+// THE SINK FOLDS THE OPTION, not just the value. `?? -1` collapses absent to a
+// sentinel INSIDE the hash, so a solver that returned the wrong answer for the
+// maximum — the one query whose answer is None — changes the sink. Folding only
+// the present answers would make that case invisible, and it is exactly the case
+// this problem exists to get right.
+//
+// NO PARALLEL LANE. The queries are genuinely independent and would fan out, but
+// each is ~20 ns of pointer-chasing over a shared read-only tree, so the fan-out
+// would measure dispatch rather than the descent. Kata 282 is the one where the
+// per-branch work was large enough for the lane to mean something — the
+// distinction is the work per branch, not whether independence exists.
+
+struct Bst {
+    key: Vec[i64],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+fn bst_insert(t: mut ref Bst, k: i64) {
+    if t.key.len() == 0 {
+        t.key.push(k);
+        t.left.push(0 - 1);
+        t.right.push(0 - 1);
+        return;
+    }
+    let mut cur = 0;
+    let mut more = true;
+    while more {
+        if k < t.key[cur] {
+            if t.left[cur] < 0 {
+                t.key.push(k);
+                t.left.push(0 - 1);
+                t.right.push(0 - 1);
+                t.left[cur] = t.key.len() - 1;
+                more = false;
+            } else {
+                cur = t.left[cur];
+            }
+        } else {
+            if t.right[cur] < 0 {
+                t.key.push(k);
+                t.left.push(0 - 1);
+                t.right.push(0 - 1);
+                t.right[cur] = t.key.len() - 1;
+                more = false;
+            } else {
+                cur = t.right[cur];
+            }
+        }
+    }
+}
+
+fn build(keys: ref Vec[i64]) -> Bst {
+    let mut t = Bst { key: Vec.new(), left: Vec.new(), right: Vec.new() };
+    let mut i = 0;
+    while i < keys.len() {
+        bst_insert(mut t, keys[i]);
+        i = i + 1;
+    }
+    return t;
+}
+
+fn successor(t: ref Bst, target: i64) -> Option[i64] {
+    let mut cur = 0;
+    let mut best: Option[i64] = None;
+    if t.key.len() == 0 { return None; }
+    while cur >= 0 {
+        if t.key[cur] > target {
+            best = Some(t.key[cur]);
+            cur = t.left[cur];
+        } else {
+            cur = t.right[cur];
+        }
+    }
+    return best;
+}
+
+fn main() {
+    let n = 300000;
+    let queries = 2000000;
+
+    let mut t = Bst { key: Vec.new(), left: Vec.new(), right: Vec.new() };
+    let mut seed = 20260825;
+    let mut i = 0;
+    while i < n {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        bst_insert(mut t, seed % 1000000);
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut found = 0;
+    let mut q = 0;
+    while q < queries {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let target = seed % 1000000;
+        let s = successor(t, target);
+        if s != None { found = found + 1; }
+        sink = (sink * 31 + (s ?? 0 - 1)) % 1000000007;
+        q = q + 1;
+    }
+    println(f"{sink} {found}");
+}

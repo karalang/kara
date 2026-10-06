@@ -1,0 +1,9 @@
+
+fn main() {
+    Stdout.print("a");
+    Stdout.println("b");
+    Stdout.flush();
+    Stderr.print("c");
+    Stderr.println("d");
+    Stderr.flush();
+}

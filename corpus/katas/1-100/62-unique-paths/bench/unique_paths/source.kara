@@ -1,0 +1,72 @@
+// Benchmark workload — Unique Paths (LeetCode #62), the rolling-DP ★.
+//
+// `unique_paths` is byte-identical to the kata's ★ ([`../unique_paths.kara`]):
+// one array rolled down the grid, `dp[c] += dp[c-1]`, sized to the smaller
+// axis. Per call it allocates one `Vec[i64]` of length min(m,n) and does m·n
+// additions — a small arithmetic + one-allocation body, the DP analogue of the
+// per-iter list build in kata [#19](../../19-remove-nth-node-from-end-of-list/).
+//
+// Workload. K = 1_000_000 iterations. Each iteration sweeps the grid shape —
+// `m = 2 + k%32`, `n = 2 + (k/32)%32`, both in [2, 33] — so the DP genuinely
+// re-runs on a different table every iteration (no hoisting a constant answer
+// out of the loop) while every count stays inside i64: the largest case, 33×33,
+// is C(64,32) ≈ 1.8·10¹⁸, well under i64's 9.2·10¹⁸. The shape sweep also keeps
+// the branch predictor off a single trip count.
+//
+// Sink. A rolling polynomial hash `acc = (acc*131 + ans) % 1_000_000_007`, the
+// same order-sensitive checksum kata [#55](../../55-jump-game/) uses. It folds
+// the whole sequence of answers (not just their sum), so nothing is dead-code-
+// eliminated and the order of iterations matters; the `% modulus` keeps it
+// bounded regardless of how large the individual path counts get. Crucially the
+// hash is a loop-carried dependency (each `acc` needs the previous one), so the
+// loop is NOT a reduction karac's auto-par pass can split — this stays single-
+// threaded by construction, directly comparable to rustc -O / clang -O3 /
+// go build on a per-core codegen-quality basis. Seq-only kata, same discipline
+// as kata 55.
+
+fn unique_paths(m: i64, n: i64) -> i64 {
+    let mut rows = m;
+    let mut cols = n;
+    if cols > rows {
+        let t = rows;
+        rows = cols;
+        cols = t;
+    }
+
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < cols {
+        dp.push(1);
+        j = j + 1;
+    }
+
+    let mut i = 1;
+    while i < rows {
+        let mut c = 1;
+        while c < cols {
+            dp[c] = dp[c] + dp[c - 1];
+            c = c + 1;
+        }
+        i = i + 1;
+    }
+
+    dp[cols - 1]
+}
+
+fn main() {
+    let total: i64 = 1000000;
+    let modulus: i64 = 1000000007;
+    let span: i64 = 32;
+
+    let mut acc: i64 = 0;
+    let mut k: i64 = 0;
+    while k < total {
+        let m = 2 + (k % span);
+        let n = 2 + ((k / span) % span);
+        let ans = unique_paths(m, n);
+        acc = (acc * 131 + ans) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

@@ -1,0 +1,4 @@
+fn main() {
+         let fake = RateLimiter { handle_id: 0 };
+         println(fake.try_acquire("k"));
+     }

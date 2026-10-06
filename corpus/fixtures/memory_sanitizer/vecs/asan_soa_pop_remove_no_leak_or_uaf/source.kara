@@ -1,0 +1,25 @@
+
+struct Entity { x: i64, y: i64, hp: i64, label: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+    group meta { label }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 6 {
+        entities.push(Entity { x: i, y: i * 10, hp: i * 100, label: i * 1000 + 7 });
+        i = i + 1;
+    }
+    let _front = entities.pop_front();
+    let _middle = entities.remove(2);
+    match entities.pop() {
+        Some(e) => {
+            println(e.x);
+            println(e.label);
+        }
+        None => println(-1),
+    }
+    println(entities.len());
+}

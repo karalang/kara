@@ -1,0 +1,151 @@
+// LeetCode #30: Substring with Concatenation of All Words — sliding window.
+//
+// Same problem as brute_force.kara — find every start index where a length-(L·K)
+// slice of `s` is the concatenation of all K words (each of length L) exactly
+// once, in any order. This variant is O(n): instead of re-tallying a fresh
+// window at every byte offset, it slides one window per *phase*.
+//
+// The key observation: a valid window starts at some offset whose value mod L
+// is fixed, and within one residue class `r` (0 ≤ r < L) all the word
+// boundaries line up — every candidate window is a run of whole L-byte words
+// starting at `r, r+L, r+2L, …`. So run L independent passes, one per residue
+// `r`, each a classic variable-width sliding window over *words* (step L):
+//
+//   * Extend `right` by one word. If that word isn't in `need`, the window is
+//     dead — clear it and restart just past the offending word.
+//   * Otherwise add it to `seen`; while it now appears more often than `need`
+//     wants, drop words off the `left` end (each drop slides `left` by L).
+//   * When the window holds exactly K words it is a match: record `left`, then
+//     drop one word off the left so the search continues for the next window.
+//
+// Each byte of `s` enters and leaves a window at most once per phase, so the
+// total work is O(n) map operations across all L phases — independent of K.
+//
+// Because the L phases discover hits in residue-then-scan order rather than
+// globally ascending order, the result is sorted before return so this file's
+// output matches brute_force.kara's left-to-right scan order byte-for-byte.
+//
+// Kāra notes (shared with brute_force.kara):
+//   * `words: Slice[String]`; `need`/`seen` are `Map[String, i64]` keyed on
+//     words and on `s[a .. b]` String slices — no manual byte handling.
+//   * Every window slice is written *inline* in the map-key slot (`need.get(s[j
+//     ..j+wl])`, never `let piece = s[j..j+wl]`). A slice expression in a map
+//     key position lowers to a borrowed `{ptr,len,cap=0}` view into `s` — the
+//     `get`s never allocate, and `insert` deep-copies the bytes only on a
+//     fresh key — so the hot loop allocates once per *distinct* word, not once
+//     per window. Binding the slice to a `let` first would force an owned copy
+//     each time. See README § "Why the slice is written inline".
+
+fn find_substring(s: ref String, words: Slice[String]) -> Vec[i64] {
+    let mut result: Vec[i64] = Vec.new();
+    let k = words.len();
+    if k == 0 {
+        return result;
+    }
+    let wl = words[0].len();
+    let total = wl * k;
+    let n = s.len();
+    if wl == 0 or total > n {
+        return result;
+    }
+
+    let mut need: Map[String, i64] = Map.new();
+    for idx in 0..k {
+        let cur = match need.get(words[idx]) {
+            Some(c) => c,
+            None => 0,
+        };
+        need.insert(words[idx].clone(), cur + 1);
+    }
+
+    for r in 0..wl {
+        let mut seen: Map[String, i64] = Map.new();
+        let mut count = 0; // whole words currently in [left, right)
+        let mut left = r;
+        let mut j = r;
+        while j + wl <= n {
+            // Each `s[a..b]` is written inline in the map-key slot so it
+            // lowers to a borrowed (allocation-free) view for the `get`s and a
+            // deep-copy-on-fresh-key for `insert`. See README § "Why the slice
+            // is written inline".
+            let req = match need.get(s[j..j + wl]) {
+                Some(c) => c,
+                None => -1,
+            };
+            if req < 0 {
+                // Dead window — restart just past the foreign word.
+                seen.clear();
+                count = 0;
+                left = j + wl;
+            } else {
+                let cur = match seen.get(s[j..j + wl]) {
+                    Some(c) => c,
+                    None => 0,
+                };
+                seen.insert(s[j..j + wl], cur + 1);
+                count = count + 1;
+                // Too many of this word: drop words off the left until balanced.
+                while (match seen.get(s[j..j + wl]) {
+                    Some(c) => c,
+                    None => 0,
+                }) > req
+                {
+                    let lc = match seen.get(s[left..left + wl]) {
+                        Some(c) => c,
+                        None => 0,
+                    };
+                    seen.insert(s[left..left + wl], lc - 1);
+                    left = left + wl;
+                    count = count - 1;
+                }
+                if count == k {
+                    result.push(left);
+                    // Slide past the leftmost word to look for the next window.
+                    let lc = match seen.get(s[left..left + wl]) {
+                        Some(c) => c,
+                        None => 0,
+                    };
+                    seen.insert(s[left..left + wl], lc - 1);
+                    left = left + wl;
+                    count = count - 1;
+                }
+            }
+            j = j + wl;
+        }
+    }
+    result.sort_by(|a, b| a.cmp(b));
+    result
+}
+
+fn report(s: ref String, words: Slice[String]) {
+    let r = find_substring(s, words);
+    println(r.len());
+    for idx in r {
+        println(idx);
+    }
+}
+
+fn main() {
+    // Identical cases and output to brute_force.kara — the two files diff only
+    // in the algorithm, never in what they print.
+    let w1: Vec[String] = ["foo", "bar"];
+    report("barfoothefoobarman", w1); // 2: 0 9
+
+    let w2: Vec[String] = ["word", "good", "best", "word"];
+    report("wordgoodgoodgoodbestword", w2); // 0
+
+    let w3: Vec[String] = ["bar", "foo", "the"];
+    report("barfoofoobarthefoobarman", w3); // 3: 6 9 12
+
+    let w4: Vec[String] = ["aa", "aa"];
+    report("aaaaaa", w4); // 3: 0 1 2
+
+    let w5: Vec[String] = ["a", "b", "a"];
+    report("abababab", w5); // 3: 0 2 4
+
+    let w6: Vec[String] = ["a"];
+    report("a", w6); // 1: 0
+
+    let w7: Vec[String] = ["ab", "ba"];
+    report("abbaab", w7); // 2: 0 2
+}

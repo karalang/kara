@@ -1,0 +1,20 @@
+fn main() {
+            let a = "one\ntwo\nthree";
+            let v = a.lines();
+            println(f"{v.len()}");
+            println(v[0]);
+            println(v[2]);
+            // Trailing newline → no final empty line.
+            println(f"{"trailing\n".lines().len()}");
+            // CRLF endings → `\r` stripped, no trailing empty.
+            let c = "crlf\r\nhandling\r\n";
+            let w = c.lines();
+            println(f"{w.len()}");
+            println(w[1]);
+            // Empty middle line is preserved.
+            let d = "a\n\nb";
+            let x = d.lines();
+            println(f"{x.len()} {x[1].len()}");
+            // Empty string → zero lines.
+            println(f"{"".lines().len()}");
+        }

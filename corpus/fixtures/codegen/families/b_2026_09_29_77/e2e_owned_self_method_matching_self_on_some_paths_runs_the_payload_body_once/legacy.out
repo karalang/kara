@@ -1,0 +1,38 @@
+dS1
+t1 0
+dS2
+t1 2
+dS3
+t2 0
+dS4
+t2 4
+dS5
+t3 0
+dS6
+t3 6
+dS7
+e1 0
+dS8
+e1 8
+dS9
+e2 0
+dS10
+e2 10
+dS11
+e3 7
+dS12
+e3 12
+dS13
+h2 13
+dS14
+h2 14
+dS15
+f1 0
+dF
+dS16
+f1 16
+dF
+dS17
+tmp 0
+t1 0
+end

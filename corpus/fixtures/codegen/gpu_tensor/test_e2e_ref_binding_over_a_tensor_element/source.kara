@@ -1,0 +1,9 @@
+
+shared struct Tape { mut grads: Vec[Tensor[f32, [?]]] }
+fn main() {
+    let tp: Tape = Tape { grads: Vec.new() };
+    let z: Tensor[f32, [?]] = Tensor.from([2.0, 4.0, 8.0]);
+    tp.grads.push(z);
+    let g = ref tp.grads[0];
+    println(f"{g[0]} {g[1]} {g[2]}");
+}

@@ -1,0 +1,11 @@
+
+fn main() {
+    let v = [1, 2];
+    let mut it = v.iter().map(|x| x + 100);
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}

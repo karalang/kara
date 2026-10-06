@@ -1,0 +1,14 @@
+
+struct Wide { a: i64, b: i64, c: i64 }
+enum G1[T] { Y(T), N }
+fn main() {
+    { let g: G1[String] = G1.Y(f"payload-alpha"); let t = (g, 7);
+      match t.0 { G1.Y(s) => { println(f"mv {s}") } G1.N => { println("mv none") } } }
+    { let g: G1[String] = G1.Y(f"payload-beta"); let t = (g, 8);
+      match t.0 { G1.Y(s) => { println(f"ml {s.len()}") } G1.N => { println("ml none") } } }
+    { let g: G1[i64] = G1.Y(41); let t = (g, 9);
+      match t.0 { G1.Y(n) => { println(f"mn {n}") } G1.N => { println("mn none") } } }
+    { let g: G1[Wide] = G1.Y(Wide { a: 1, b: 2, c: 3 }); let t = (g, 10);
+      match t.0 { G1.Y(w) => { println(f"mw {w.a}{w.b}{w.c}") } G1.N => { println("mw none") } } }
+    println("end")
+}

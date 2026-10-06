@@ -1,0 +1,125 @@
+// LeetCode #79: Word Search — DFS backtracking with a separate visited grid.
+//
+// Same start-from-every-matching-cell DFS as word_search.kara (the ★), but instead
+// of mutating the board in place it carries a parallel `Vec[Vec[bool]]` of visited
+// flags: a cell is set true before recursing and reset on the way out. This keeps
+// the board immutable (`ref`, not `mut ref`) and moves the backtracking state into a
+// bool grid — a distinct surface (a `Vec[Vec[bool]]` threaded `mut ref` with nested
+// bool index-assignment) that must agree with the in-place variant byte-for-byte.
+
+fn dfs(board: ref Vec[Vec[u8]], visited: mut ref Vec[Vec[bool]], word: ref Vec[u8],
+        r: i64, c: i64, k: i64, rows: i64, cols: i64) -> bool {
+    if k == word.len() {
+        return true;
+    }
+    if r < 0 or r >= rows or c < 0 or c >= cols {
+        return false;
+    }
+    if visited[r][c] or board[r][c] != word[k] {
+        return false;
+    }
+    visited[r][c] = true;
+    let found = dfs(board, visited, word, r + 1, c, k + 1, rows, cols)
+        or dfs(board, visited, word, r - 1, c, k + 1, rows, cols)
+        or dfs(board, visited, word, r, c + 1, k + 1, rows, cols)
+        or dfs(board, visited, word, r, c - 1, k + 1, rows, cols);
+    visited[r][c] = false;
+    found
+}
+
+fn exists(board: ref Vec[Vec[u8]], word: ref Vec[u8]) -> bool {
+    let rows = board.len();
+    if rows == 0 {
+        return word.len() == 0;
+    }
+    let cols = board[0].len();
+    if word.len() == 0 {
+        return true;
+    }
+    let mut r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            // Fresh visited grid per start cell (all false).
+            let mut visited: Vec[Vec[bool]] = Vec.new();
+            let mut vr = 0;
+            while vr < rows {
+                let mut vrow: Vec[bool] = Vec.new();
+                let mut vc = 0;
+                while vc < cols {
+                    vrow.push(false);
+                    vc = vc + 1;
+                }
+                visited.push(vrow);
+                vr = vr + 1;
+            }
+            if dfs(board, mut visited, word, r, c, 0, rows, cols) {
+                return true;
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    false
+}
+
+fn make_board(rows: ref Vec[String]) -> Vec[Vec[u8]] {
+    let mut board: Vec[Vec[u8]] = Vec.new();
+    let n = rows.len();
+    let mut i = 0;
+    while i < n {
+        let bytes = rows[i].bytes();
+        let mut row: Vec[u8] = Vec.new();
+        let mut j = 0;
+        while j < bytes.len() {
+            row.push(bytes[j]);
+            j = j + 1;
+        }
+        board.push(row);
+        i = i + 1;
+    }
+    board
+}
+
+fn report(rows: ref Vec[String], word: String, acc: mut ref i64) {
+    let board = make_board(rows);
+    let wbytes = word.bytes();
+    let mut wvec: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < wbytes.len() {
+        wvec.push(wbytes[i]);
+        i = i + 1;
+    }
+    let found = exists(board, wvec);
+    if found {
+        println(f"{word}: true");
+    } else {
+        println(f"{word}: false");
+    }
+    let bit = if found { 1 } else { 0 };
+    let a = acc;
+    acc = (a * 131 + bit + 1) % 1000000007;
+}
+
+fn main() {
+    let mut board_rows: Vec[String] = Vec.new();
+    board_rows.push("ABCE");
+    board_rows.push("SFCS");
+    board_rows.push("ADEE");
+
+    let mut acc = 0;
+    report(board_rows, "ABCCED", mut acc);
+    report(board_rows, "SEE", mut acc);
+    report(board_rows, "ABCB", mut acc);
+    report(board_rows, "SFDA", mut acc);
+    report(board_rows, "ABCESEEEFS", mut acc);
+    report(board_rows, "A", mut acc);
+    report(board_rows, "Z", mut acc);
+
+    let mut single: Vec[String] = Vec.new();
+    single.push("A");
+    report(single, "A", mut acc);
+    report(single, "AB", mut acc);
+
+    println(f"sink: {acc}");
+}

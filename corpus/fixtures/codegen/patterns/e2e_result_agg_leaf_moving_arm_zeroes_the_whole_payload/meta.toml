@@ -1,0 +1,13 @@
+source = "tests/codegen/patterns.rs::e2e_result_agg_leaf_moving_arm_zeroes_the_whole_payload"
+dedup_of = ["tests/interpreter/patterns.rs::test_result_agg_leaf_moving_arm_zeroes_the_whole_payload", "tests/memory_sanitizer/patterns.rs::asan_result_agg_leaf_moving_arm_is_balanced"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

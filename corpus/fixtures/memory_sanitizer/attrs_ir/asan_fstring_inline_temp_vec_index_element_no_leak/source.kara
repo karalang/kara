@@ -1,0 +1,28 @@
+
+struct B { xs: Vec[i64] }
+fn names() -> Vec[String] {
+    let v: Vec[String] = ["alphaalphaalphaalpha", "betabetabetabetabeta"];
+    return v;
+}
+fn mkrows() -> Vec[Vec[i64]] {
+    let v: Vec[Vec[i64]] = [[1, 2, 3, 4], [5, 6, 7, 8]];
+    return v;
+}
+fn main() {
+    let b = B { xs: [7, 8, 9] };
+    let grid: Vec[Vec[i64]] = [[1, 2], [3, 4]];
+    let held: Vec[String] = ["gammagammagamma", "deltadeltadelta"];
+    let mut k = 0;
+    while k < 20 {
+        println(f"{names()[1]}");
+        println(names()[1]);
+        println(f"{mkrows()[1]}");
+        println(mkrows()[1]);
+        println(f"{b.xs}");
+        println(f"{grid[1]}");
+        println(f"{held[1]}");
+        println(held[1]);
+        k = k + 1;
+    }
+    println("done");
+}

@@ -1,0 +1,6 @@
+
+fn checked(x: i64) -> i64 requires x > 0 { x * 2 }
+fn main() {
+    println(checked(-3));
+    println(42);
+}

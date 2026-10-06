@@ -1,0 +1,81 @@
+// Benchmark workload — Unique Paths II (LeetCode #63), the rolling obstacle-DP ★.
+//
+// The honest #63 analog of kata [#62](../../62-unique-paths/)'s bench: the SAME
+// rolling-DP read-modify-write scan `dp[c] += dp[c-1]`, now with the one thing
+// #63 adds over #62 — a per-cell OBSTACLE branch. Isolating exactly that branch
+// is the point: does the extra `if obstacle { dp[c] = 0 }` guard cost kāra
+// anything against rustc -O / clang -O3 / go build on the identical scan?
+//
+// Obstacle source. Rather than materialise a `Vec[Vec[i64]]` grid every
+// iteration — which would make per-call allocation, not the DP, dominate the
+// timing (the alloc-domination pitfall BENCHMARKS.md warns against) — the
+// obstacle at cell (i, c) is a cheap deterministic PREDICATE
+// `((i*7 + c*3 + k) % 13) == 0`, computed inline. So the only allocation per
+// call is the one `Vec[i64]` dp buffer of length n, exactly as in #62, and the
+// measured body is the obstacle-guarded RMW scan itself. (~31% of cells are
+// obstacles; counts stay meaningfully non-zero so the additions are real work.)
+//
+// Note the structural difference from #62 the kata's README explains: obstacles
+// break the axis symmetry `paths(m,n) == paths(n,m)`, so there is NO swap to the
+// smaller dimension — the dp buffer spans the real column count `n`.
+//
+// Workload. K = 1_000_000 iterations. Each sweeps the grid shape —
+// `m = 2 + k%32`, `n = 2 + (k/32)%32`, both in [2, 33] — and threads `k` through
+// the obstacle predicate, so both the shape AND the obstacle pattern change
+// every iteration (nothing to hoist). Every count stays inside i64: the largest
+// case is bounded by the unobstructed 33×33 count C(64,32) ≈ 1.8·10¹⁸ < i64 max.
+//
+// Sink. A rolling polynomial hash `acc = (acc*131 + ans) % 1_000_000_007`, the
+// same order-sensitive checksum kata [#55](../../55-jump-game/) and #62 use. It
+// is a loop-carried dependency (each `acc` needs the previous one), so the
+// K-loop is NOT a reduction karac's auto-par pass can split — this stays
+// single-threaded by construction, directly comparable to the native mirrors on
+// a per-core codegen-quality basis. Seq-only kata, same discipline as #55/#62.
+
+fn unique_paths_with_obstacles(m: i64, n: i64, k: i64) -> i64 {
+    let cols = n;
+
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < cols {
+        dp.push(0);
+        j = j + 1;
+    }
+    dp[0] = 1;
+
+    let mut i = 0;
+    while i < m {
+        let mut c = 0;
+        while c < cols {
+            if (i * 7 + c * 3 + k) % 13 == 0 {
+                dp[c] = 0;
+            } else {
+                if c > 0 {
+                    dp[c] = dp[c] + dp[c - 1];
+                }
+            }
+            c = c + 1;
+        }
+        i = i + 1;
+    }
+
+    dp[cols - 1]
+}
+
+fn main() {
+    let total: i64 = 1000000;
+    let modulus: i64 = 1000000007;
+    let span: i64 = 32;
+
+    let mut acc: i64 = 0;
+    let mut k: i64 = 0;
+    while k < total {
+        let m = 2 + (k % span);
+        let n = 2 + ((k / span) % span);
+        let ans = unique_paths_with_obstacles(m, n, k);
+        acc = (acc * 131 + ans) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

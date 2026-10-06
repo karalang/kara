@@ -1,0 +1,29 @@
+
+fn inner() -> i64 {
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    let mut i = 0i64;
+    while i < 50 {
+        bucket.entry(i).or_insert(Vec.new()).push(i);
+        i = i + 1;
+    }
+    let mut k = 0i64;
+    while k < 50 {
+        match bucket.remove(k) {
+            Some(indices) => {
+                let _len = indices.len();
+            },
+            None => {},
+        }
+        k = k + 1;
+    }
+    0i64
+}
+fn main() {
+    let mut s = 0i64;
+    let mut iter = 0i64;
+    while iter < 10 {
+        s = s + inner();
+        iter = iter + 1;
+    }
+    println(s);
+}

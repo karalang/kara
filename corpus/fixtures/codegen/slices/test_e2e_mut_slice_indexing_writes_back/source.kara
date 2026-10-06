@@ -1,0 +1,9 @@
+
+fn set_first(xs: mut Slice[i64]) {
+    xs[0] = 99;
+}
+fn main() {
+    let mut a: Array[i64, 3] = [1, 2, 3];
+    set_first(mut a);
+    println(a[0]);
+}

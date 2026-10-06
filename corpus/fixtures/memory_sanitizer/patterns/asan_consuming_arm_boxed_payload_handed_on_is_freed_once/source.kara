@@ -1,0 +1,15 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}"); } }
+fn main() {
+    let base: i64 = env.args().len();
+    // The row's repro: the arm's value IS the bound payload, and `k` takes it.
+    let o: Option[R] = Some(R { id: base, name: f"a{base}" });
+    let k = match o { Some(r) => { r } None => { R { id: 9, name: f"n9" } } };
+    println(f"kept {k.id}");
+    // CONTROL — binds the payload but yields something else, so the box must
+    // keep owning its fields.
+    let q: Option[R] = Some(R { id: 5, name: f"c{base}" });
+    let n = match q { Some(r) => { R { id: 7, name: f"n7" } } None => { R { id: 8, name: f"n8" } } };
+    println(f"other {n.id}");
+}

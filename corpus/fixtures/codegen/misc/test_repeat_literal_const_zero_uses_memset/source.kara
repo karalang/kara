@@ -1,0 +1,5 @@
+
+fn main() {
+    let buf: Array[i64, 100] = [0; 100];
+    let _ = buf[0];
+}

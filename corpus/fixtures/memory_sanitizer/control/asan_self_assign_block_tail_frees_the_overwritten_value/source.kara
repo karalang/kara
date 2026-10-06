@@ -1,0 +1,45 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
+
+struct W { id: i64, a: String, b: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dropW {self.id}") } }
+
+struct P { id: i64, name: String }
+
+enum E { A(String), B }
+impl Drop for E { fn drop(mut ref self) { println("dropE") } }
+
+fn pass(r: R) -> R { return r; }
+fn passw(w: W) -> W { return w; }
+fn passp(p: P) -> P { return p; }
+fn passe(x: E) -> E { return x; }
+
+fn main() {
+    let n: i64 = env.args().len();
+
+    let mut one = R { id: 1, name: f"one-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    one = { let z: i64 = n; pass(one) };
+    println(f"one {one.id}");
+
+    let mut two = W { id: 2, a: f"a-aaaaaaaaaaaaaaaaaaaaaaaa", b: f"b-bbbbbbbbbbbbbbbbbbbbbbbb" };
+    two = { let z: i64 = n; passw(two) };
+    println(f"two {two.id}");
+
+    let mut en: E = E.A(f"en-aaaaaaaaaaaaaaaaaaaaaaaa");
+    en = { let z: i64 = n; passe(en) };
+    println("en done");
+
+    let mut nod = P { id: 4, name: f"nod-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    nod = { let z: i64 = n; passp(nod) };
+    println(f"nod {nod.id}");
+
+    let mut nest = R { id: 5, name: f"nest-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    nest = { let z: i64 = n; { pass(nest) } };
+    println(f"nest {nest.id}");
+
+    let mut uns = R { id: 6, name: f"uns-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    // Safety: no unsafe operation here — the block spelling is the point.
+    uns = unsafe { pass(uns) };
+    println(f"uns {uns.id}");
+}

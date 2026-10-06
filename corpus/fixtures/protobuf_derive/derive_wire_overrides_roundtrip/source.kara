@@ -1,0 +1,19 @@
+
+#[derive(Message)]
+struct M {
+    #[karac::proto(sint64)] a: i64,
+    #[karac::proto(sint32)] b: i32,
+    #[karac::proto(fixed64)] c: u64,
+    #[karac::proto(sfixed32)] d: i32,
+    plain: i64,
+}
+
+fn main() {
+    let m = M { a: -5, b: -100000, c: 18000000000u64, d: -7, plain: -5 };
+    let back = M.decode(m.encode());
+    println(back.a);
+    println(back.b);
+    println(back.c);
+    println(back.d);
+    println(back.plain);
+}

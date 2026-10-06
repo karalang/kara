@@ -1,0 +1,16 @@
+
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alice"); v.push("bob"); v.push("carol");
+    v
+}
+fn sink(s: String) { println(s); }
+fn main() {
+    let mut i = 0i64;
+    while i < 3 {
+        let ns = names();
+        sink(ns[0].clone());
+        sink(ns[2].clone());
+        i = i + 1;
+    }
+}

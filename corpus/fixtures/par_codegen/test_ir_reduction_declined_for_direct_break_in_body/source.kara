@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..100000i64 {
+        if k > 90000i64 { break }
+        sum = sum + k;
+    }
+    println(sum);
+}

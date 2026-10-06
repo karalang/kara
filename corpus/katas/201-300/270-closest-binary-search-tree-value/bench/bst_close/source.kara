@@ -1,0 +1,146 @@
+// Benchmark workload for LeetCode #270 — Closest BST Value.
+//
+// Build-once + punch. One 30,000-node BST and 100,000 f64 targets are generated
+// once, and the ★ O(h) descent is punched over every target 22 times — 2.2M
+// descents, each averaging 10 nodes — a search stops at the first null child on its side, which is shallower than a random leaf.
+//
+// WHAT THIS LANE MEASURES: FLOAT WORK IN A POINTER CHASE. Every node visited
+// costs an i64→f64 conversion, a subtract, an absolute value, two f64 compares,
+// and a data-dependent branch choosing the next child. The corpus has an
+// integer-division lane (#258), a variable-divisor division lane (#263) and a
+// pointer-chase lane (#261), but nothing whose inner step is floating point —
+// this is that lane.
+//
+// SIZED TO STAY CACHE-RESIDENT, on the #261 lesson. Three 30,000-element index
+// arrays plus 100,000 targets is about 1.5 MB, so the chase misses L1 and lives
+// in L2. At 400,000 nodes #261 became unrankable — its sigma went to 22.8% —
+// because a randomly-accessed working set that large is at the mercy of whatever
+// else the container is doing. This lane deliberately stays an order of
+// magnitude below that.
+//
+// The tree is built by random insertion, so its depth is ~2·log₂(n) ≈ 30 rather
+// than the ~15 of a perfectly balanced tree; that is the honest shape for a BST
+// nobody rebalanced, and it makes the descent long enough to measure.
+//
+// EVERY MIRROR USES ITS OWN NATIVE ABSOLUTE VALUE — kāra's `.abs()`, C's
+// `fabs`, Rust's `.abs()`, Go's `math.Abs`. The first version of this lane
+// hand-wrote `if x < 0.0 { 0.0 - x }` in all five on the theory that a shared
+// spelling was the parity-safe choice. It was the opposite: every one of these
+// languages HAS an absolute value, so hand-writing it is the unnatural spelling
+// everywhere, and clang in particular compiled the hand-written form into a
+// five-instruction branchless select (cmpltsd/andpd/andnpd/orpd) sitting inside
+// the pointer-chase dependency chain, where `fabs` is a single `andpd`. That
+// cost C 23% by itself. Parity means the same ALGORITHM, not the same
+// keystrokes — and the idiomatic call is what every mirror would really write.
+//
+// Targets are drawn across the value range and beyond both ends, so descents
+// terminate at varying depths rather than all running to a leaf.//
+// PARALLEL LANE. The punch loop carries `#[par_order_free]`, which opts it into
+// the auto-par collect lowering. `bst_close_seq.kara` is the same program
+// without the attribute; both print the same sink, and the seq/par pair is the
+// only Kara-to-Kara comparison drawn — cross-lane rows conflate compiler quality
+// with whether the comparator opted into parallelism.
+//
+// THE SINK IS POSITION-WEIGHTED AND ORDER-INVARIANT, which it had to become for
+// this lane to exist. The old running `sink = sink * 31 + best` depends on the
+// order results arrive in. Each query now contributes `(t * 1000003 + best)` and
+// those are SUMMED: the sum does not care which worker finished first, and the
+// `t` factor means swapping two queries' answers still changes it — a plain sum
+// of `best` would not, and `best` repeats often across 2.2M queries.
+//
+// EVERY QUERY IS INDEPENDENT: the tree and the target array are read-only, and
+// the descent's only state is three scalars. Nothing is shared to race on.
+
+fn main() {
+    let n = 30000;
+    let queries = 100000;
+    let rounds = 22;
+
+    // ---- build once: a BST by random insertion --------------------------
+    let mut val: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    let mut state = 270270;
+
+    let mut i = 0;
+    while i < n {
+        // Two draws combined: `state / 65536` is the LCG's top 15 bits and
+        // maxes at 32,767, so a single draw cannot span a million. The first
+        // version of this lane used one, which silently confined every value —
+        // and every target — to a 32K window, made the tree mostly duplicates
+        // and sent every descent down the left spine.
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let hi = state / 65536;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let v = (hi * 32768 + state / 65536) % 1000000;
+        if val.len() == 0 {
+            val.push(v); left.push(-1); right.push(-1);
+        } else {
+            let mut cur = 0;
+            while true {
+                if v < val[cur] {
+                    if left[cur] < 0 {
+                        val.push(v); left.push(-1); right.push(-1);
+                        left[cur] = val.len() - 1;
+                        break;
+                    }
+                    cur = left[cur];
+                } else {
+                    if right[cur] < 0 {
+                        val.push(v); left.push(-1); right.push(-1);
+                        right[cur] = val.len() - 1;
+                        break;
+                    }
+                    cur = right[cur];
+                }
+            }
+        }
+        i = i + 1;
+    }
+
+    // ---- build once: the targets ----------------------------------------
+    let mut targets: Vec[f64] = Vec.new();
+    let mut q = 0;
+    while q < queries {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let th = state / 65536;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        // spread over the value range and a little past both ends
+        let whole = (th * 32768 + state / 65536) % 1100000 - 50000;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let frac = ((state / 65536) % 1000) as f64 / 1000.0;
+        targets.push(whole as f64 + frac);
+        q = q + 1;
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let total = queries * rounds;
+    let mut parts: Vec[i64] = Vec.new();
+    #[par_order_free]
+    for t in 0..total {
+        let target = targets[t % queries];
+        let mut best = val[0];
+        let mut best_diff = (val[0] as f64 - target).abs();
+        let mut cur = 0;
+        while cur >= 0 {
+            let v = val[cur];
+            let d = (v as f64 - target).abs();
+            if d < best_diff or (d == best_diff and v < best) {
+                best = v;
+                best_diff = d;
+            }
+            if (v as f64) < target { cur = right[cur]; } else { cur = left[cur]; }
+        }
+        parts.push((t * 1000003 + best) % 1000000007);
+    }
+
+    let mut sink = 0;
+    let mut k = 0;
+    while k < parts.len() {
+        sink = (sink + parts[k]) % 1000000007;
+        k = k + 1;
+    }
+
+    println(sink);
+    println(f"queries {total} nodes {val.len()}");
+}

@@ -1,0 +1,17 @@
+fn main() {
+         let cmd = Command.new("/bin/sleep").arg("0.5");
+         match cmd.spawn() {
+             Ok(child) => {
+                 match child.try_wait() {
+                     Ok(None) => println("still_running"),
+                     Ok(Some(_)) => println("already_exited"),
+                     Err(_) => println("err"),
+                 }
+                 match child.wait() {
+                     Ok(_) => println("waited"),
+                     Err(_) => println("wait_err"),
+                 }
+             }
+             Err(_) => println("spawn_err"),
+         }
+     }

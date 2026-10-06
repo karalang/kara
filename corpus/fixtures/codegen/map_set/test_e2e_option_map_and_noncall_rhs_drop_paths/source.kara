@@ -1,0 +1,18 @@
+
+fn mk_map() -> Option[Map[i64, i64]] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1i64, 42i64);
+    Some(m)
+}
+fn main() {
+    let om = mk_map();
+    match om {
+        Some(m) => { match m.get(1i64) { Some(x) => println(x), None => println(-1i64) } }
+        None => { println(-2i64); }
+    };
+    let c = true;
+    let mut a = String.new();
+    a.push_str("fresh-if");
+    let x = if c { Some(a) } else { None };
+    match x { Some(s) => println(s), None => println("none") }
+}

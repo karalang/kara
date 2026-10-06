@@ -1,0 +1,15 @@
+fn dupm[T: Clone](x: mut ref T) -> T { return x.clone(); }
+struct G[T] { v: T }
+impl[T: Clone] G[T] { fn get(ref self) -> T { return self.v.clone(); } }
+fn main() {
+    let mut a: Option[String] = Some("m".to_string());
+    let mut t: (i64, String) = (2, "mt".to_string());
+    let a2 = dupm(mut a);
+    let t2 = dupm(mut t);
+    println(f"g:{a2.unwrap()} {t2.0} {t2.1}");
+    let g = G { v: Some(5) };
+    let x = g.get();
+    let k = G { v: (1, "tk".to_string()) };
+    let z = k.get();
+    println(f"h:{x.unwrap()} {z.0} {z.1}");
+}

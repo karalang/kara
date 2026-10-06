@@ -1,0 +1,6 @@
+
+fn make_arr[T, const N: i64]() -> i64 { 42 }
+fn main() {
+    let _ = make_arr[i64, 4]();
+    let _ = make_arr[i64, 8]();
+}

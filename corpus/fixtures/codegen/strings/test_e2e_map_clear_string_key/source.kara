@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1_i64);
+    m.insert("b", 2_i64);
+    m.clear();
+    println(m.len());
+    m.insert("c", 3_i64);
+    println(m["c"]);
+}

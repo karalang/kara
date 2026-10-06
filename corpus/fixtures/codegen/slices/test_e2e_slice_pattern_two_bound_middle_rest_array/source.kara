@@ -1,0 +1,8 @@
+
+fn main() {
+    let arr: Array[i64, 5] = [1, 2, 3, 4, 5];
+    let [first, ..mid, last] = arr;
+    println(first);
+    println(mid.len());
+    println(last);
+}

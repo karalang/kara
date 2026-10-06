@@ -1,0 +1,26 @@
+
+fn main() {
+    let n = 7i64;
+    let len = 5i64;
+    let mut v: Vec[i64] = Vec.filled(n * len, 0i64);
+    let mut i = 0i64;
+    while i < n {
+        let base = i * len;
+        let mut lo = 0i64;
+        let mut hi = len - 1i64;
+        while lo <= hi {
+            v[base + lo] = v[base + lo] + 1i64;
+            v[base + hi] = v[base + hi] + 1i64;
+            lo = lo + 1i64;
+            hi = hi - 1i64;
+        }
+        i = i + 1;
+    }
+    let mut total = 0i64;
+    let mut k = 0i64;
+    while k < n * len {
+        total = total + v[k];
+        k = k + 1i64;
+    }
+    println(f"{total}");
+}

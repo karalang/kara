@@ -1,0 +1,13 @@
+
+fn main() {
+    let ubig: u64 = 18446744073709551615u64;
+    let umid: u64 = 9223372036854775808u64;
+    let usmall: u64 = 42u64;
+    let u32v: u32 = 4294967295;
+    let u8v: u8 = 255;
+    let sneg: i64 = -7;
+    println(f"[{ubig:22}][{umid:22}][{usmall:22}]");
+    println(f"[{ubig:<24}][{umid:>24}][{ubig:026}]");
+    println(f"[{u32v:14}][{u8v:6}][{sneg:6}][{sneg:06}]");
+    println(f"[{ubig:x}][{umid:x}]");
+}

@@ -1,0 +1,20 @@
+
+enum G { A(String), B }
+impl Drop for G {
+    fn drop(mut ref self) {
+        match self {
+            G.A(s) => { println(f"dG{s.contains("row")}") }
+            G.B => { println("dGB") }
+        }
+    }
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    while i < 8 {
+        let o: Option[G] = Option.Some(G.A("row-" + (n + i).to_string()));
+        let k = match o { Option.Some(g) => { g } Option.None => { G.B } };
+        i = i + 1;
+    }
+}

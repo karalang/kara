@@ -1,0 +1,10 @@
+
+fn main() {
+    let base = 5;
+    let r = par {
+        let x = base + 1;
+        let y = base > 3;
+        if y { x } else { 0 }
+    };
+    println(r);
+}

@@ -1,0 +1,2 @@
+fn takeit(x: Option[i64]) { match x { Some(r) => { println(f"f:{r}") } None => { println("e") } } }
+fn main() { takeit(Option[i64].None); println("end") }

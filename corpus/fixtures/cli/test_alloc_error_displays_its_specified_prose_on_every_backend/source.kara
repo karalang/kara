@@ -1,0 +1,10 @@
+fn main() {
+    let e = AllocError.OutOfMemory { requested_bytes: 4096 };
+    let c = AllocError.CapacityOverflow;
+    println(e);
+    println(c);
+    println(e.to_string());
+    println(c.to_string());
+    println(f"[{e}] and [{c}]");
+    dbg(e);
+}

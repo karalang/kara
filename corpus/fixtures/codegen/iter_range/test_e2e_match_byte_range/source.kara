@@ -1,0 +1,13 @@
+
+fn kind(b: u8) -> i64 {
+    match b {
+        b'0'..=b'9' => 1,
+        b'a'..=b'z' => 2,
+        _ => 0,
+    }
+}
+fn main() {
+    println(kind(b'5'));   // digit → 1
+    println(kind(b'q'));   // lower → 2
+    println(kind(b'M'));   // neither → 0
+}

@@ -1,0 +1,19 @@
+
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct G2[T] { v: T, r: R }
+fn mk(k: i64) -> R { R { id: k, s: f"a-heap-string-longer-than-sso-{k}" } }
+fn mkres(k: i64) -> Result[G2[R], i64] { Result.Ok(G2 { v: mk(k), r: mk(k * 10) }) }
+fn a1() -> i64 { let o = Option.Some(G2 { v: mk(1), r: mk(11) }); 1 }
+fn a2() -> i64 { let o = Option.Some(G2 { v: mk(2), r: mk(22) }); match o { Option.Some(g) => g.v.id, Option.None => 0 } }
+fn a5() -> i64 { let o = Option.Some(G2 { v: mk(5), r: mk(55) }); match o { Option.Some(_) => 5, Option.None => 0 } }
+fn a9() -> i64 { let o = Option.Some(G2 { v: mk(9), r: mk(99) }); match o { Option.Some(g) => { let h = g; h.r.id }, Option.None => 0 } }
+fn a11() -> i64 { match Option.Some(G2 { v: mk(11), r: mk(111) }) { Option.Some(g) => g.v.id, Option.None => 0 } }
+fn b1() -> i64 { let o: Result[G2[R], i64] = Result.Ok(G2 { v: mk(13), r: mk(133) }); 13 }
+fn b2() -> i64 { let o: Result[G2[R], i64] = Result.Ok(G2 { v: mk(14), r: mk(144) }); match o { Result.Ok(g) => g.v.id, Result.Err(e) => e } }
+fn b9() -> i64 { match mkres(9) { Result.Ok(g) => g.r.id, Result.Err(e) => e } }
+fn main() {
+    println(a1()); println(a2()); println(a5()); println(a9()); println(a11());
+    println(b1()); println(b2()); println(b9())
+    println("end")
+}

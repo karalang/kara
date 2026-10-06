@@ -1,0 +1,11 @@
+
+fn main() {
+    let v: Vec[String] = ["alpha", "beta", "gamma", "delta"];
+    for s in v.iter().rev() {
+        println(s);
+    }
+    let r: Vec[String] = v.iter().rev().collect();
+    println(r.get(0));
+    println(v.get(0));
+    println(v.iter().rev().count());
+}

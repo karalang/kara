@@ -1,0 +1,13 @@
+source = "tests/codegen/misc.rs::test_e2e_one_binding_passed_twice_by_value_in_one_call"
+dedup_of = ["tests/interpreter/misc.rs::one_binding_passed_twice_by_value_in_one_call", "tests/memory_sanitizer/misc.rs::asan_one_binding_passed_twice_by_value_in_one_call"]
+expect = "stdout"
+exit = 0
+tags = ["uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

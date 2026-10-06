@@ -1,0 +1,13 @@
+source = "tests/interpreter/patterns.rs::enum_struct_variant_construction_match_and_equality"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

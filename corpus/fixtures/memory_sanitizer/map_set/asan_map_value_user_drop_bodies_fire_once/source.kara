@@ -1,0 +1,54 @@
+
+struct Full { name: String, buf: Vec[i64] }
+impl Drop for Full {
+    fn drop(mut ref self) {
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
+        self.buf.clear();
+    }
+}
+
+fn mk(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Full { name: "map-value-payload-string", buf: b };
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Held to the binding's end — the value body fires via the walk.
+        let mut m: Map[i64, Full] = Map.new();
+        m.insert(i, mk(i));
+        n = n + 1i64;
+
+        // Removed value leaves through the Option; the walk must skip the
+        // tombstone and the moved-out binding runs the body instead.
+        let mut m2: Map[i64, Full] = Map.new();
+        m2.insert(i, mk(i));
+        let out = m2.remove(i);
+        n = n + 1i64;
+
+        // Insert of a BINDING: the source's own action is fully disarmed;
+        // only the map walk runs the body.
+        let mut m3: Map[i64, Full] = Map.new();
+        let r = mk(i);
+        m3.insert(i, r);
+        n = n + 1i64;
+
+        // Whole-map REBIND (B-2026-07-31-27): the move nulls m4's slot and
+        // `transfer_map_handle_on_rebind` copies the handle free onto m5 —
+        // exactly one free of the handle + arrays + values. Before the fix
+        // the ENTIRE map leaked here; the loop makes that LSan-visible (each
+        // iteration's dead map is unreachable once the allocas are
+        // overwritten by the next one — unlike the straight-line shape,
+        // whose stale slot pointer LSan's conservative stack scan finds).
+        let mut m4: Map[i64, Full] = Map.new();
+        m4.insert(i, mk(i));
+        let m5 = m4;
+        n = n + 1i64;
+
+        i = i + 1;
+    }
+    println(n);
+}

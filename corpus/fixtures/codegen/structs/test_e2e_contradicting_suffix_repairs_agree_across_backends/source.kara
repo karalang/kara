@@ -1,0 +1,12 @@
+fn main() {
+    let a: Option[f32] = Option.Some(0.1);
+    println(f"{a}");
+    let b: Option[f32] = Option.Some(0.1f64 as f32);
+    println(f"{b}");
+    let c: f32 = 16777217.0;
+    println(f"{c}");
+    let d: f32 = 16777217.0f64 as f32;
+    println(f"{d}");
+    let w: f64 = 0.1f32;
+    println(f"{w}");
+}

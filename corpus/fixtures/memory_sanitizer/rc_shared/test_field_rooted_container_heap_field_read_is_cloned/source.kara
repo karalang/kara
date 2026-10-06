@@ -1,0 +1,42 @@
+
+struct R { id: i64, name: String }
+struct H { xs: Vec[R], k: i64 }
+struct H2 { ps: Vec[(R, i64)], k: i64 }
+struct Box2 { w: String }
+
+fn sink(s: String) -> i64 { return s.len(); }
+
+impl H { fn peek(ref self) -> String { return self.xs[0].name; } }
+impl H2 { fn peek(ref self) -> String { return self.ps[0].0.name; } }
+
+fn main() {
+    // the identifier-rooted control, always clean
+    let v: Vec[R] = [R { id: 8, name: f"m{8}" }];
+    let c = v[0].name;
+    println(c);
+    println(v[0].name);
+
+    let h = H { xs: [R { id: 8, name: f"m{8}" }], k: 1 };
+    // consuming positions
+    let s = h.xs[0].name;
+    println(s);
+    let b = Box2 { w: h.xs[0].name };
+    println(b.w);
+    let mut o: Vec[String] = Vec.new();
+    o.push(h.xs[0].name);
+    println(o[0]);
+    println(h.peek());
+    // non-consuming reads: the clone must free itself
+    println(sink(h.xs[0].name));
+    println(h.xs[0].name + "!");
+    println(h.xs[0].id);
+    // the container's element survives all of it
+    println(h.xs[0].name);
+
+    // the tuple spelling shares the gate
+    let h2 = H2 { ps: [(R { id: 9, name: f"p{9}" }, 1)], k: 1 };
+    let t = h2.ps[0].0.name;
+    println(t);
+    println(h2.peek());
+    println(h2.ps[0].0.name);
+}

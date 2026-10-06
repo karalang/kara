@@ -1,0 +1,18 @@
+
+fn main() {
+    let t: Tensor[i32, [4]] = Tensor.from([40, 10, 30, 20]);
+    println(f"{t[0]} {t[1]} {t[2]} {t[3]} {t.sum()}");
+    let n: Tensor[i16, [3]] = Tensor.from([-100, -200, 300]);
+    println(f"{n[0]} {n[1]} {n[2]} {n.sum()}");
+    let u: Tensor[u8, [4]] = Tensor.from([1, 2, 50, 3]);
+    println(f"{u[0]} {u[2]} {u[3]} {u.sum()}");
+    let w: Tensor[u32, [3]] = Tensor.from([10, 20, 30]);
+    println(f"{w[0]} {w[2]} {w.sum()}");
+    let f: Tensor[f32, [3]] = Tensor.from([1.5, 2.5, 3.0]);
+    println(f"{f[0]} {f[2]} {f.sum()}");
+    let m: Tensor[i32, [2, 2]] = Tensor.from([[1, 2], [3, 4]]);
+    println(f"{m[0, 0]} {m[0, 1]} {m[1, 0]} {m[1, 1]} {m.sum()}");
+    let bi: Tensor[i64, [3]] = Tensor.from([5, 6, 7]);
+    let bf: Tensor[f64, [2]] = Tensor.from([1.5, 2.5]);
+    println(f"{bi[1]} {bi.sum()} {bf[0]} {bf.sum()}");
+}

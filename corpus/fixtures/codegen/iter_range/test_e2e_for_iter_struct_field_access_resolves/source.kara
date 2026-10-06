@@ -1,0 +1,12 @@
+
+struct N { val: i64 }
+fn main() {
+    let mut xs: Vec[N] = Vec.new();
+    xs.push(N { val: 10 });
+    xs.push(N { val: 20 });
+    let mut sum: i64 = 0;
+    for x in xs.iter() {
+        sum = sum + x.val;
+    }
+    println(sum);
+}

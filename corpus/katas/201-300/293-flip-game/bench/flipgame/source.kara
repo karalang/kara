@@ -1,0 +1,69 @@
+// Bench workload for LeetCode 293 — Flip Game.
+//
+// One call is trivial, so the workload is the one that matters in practice:
+// #294's search calls `next_states` on every node of a game tree, where most
+// nodes have FEW legal moves and many have none. So the bench is 40,000
+// generated boards of length 64 at three '+' densities, and the sink is the
+// total number of states produced plus a checksum over their contents.
+//
+// The density sweep is the point. At 15% '+' most boards have no legal move at
+// all, which is where the ★ file's test-before-allocate ordering pays and the
+// rebuild variant does n copies for nothing. At 85% nearly every position is a
+// move and both arms allocate on almost every step, so the ordering stops
+// mattering and what is left is raw string-building throughput.
+
+fn next_rand(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 2147483647;
+}
+
+fn next_states(cs: ref Vec[char], n: i64, out: mut ref Vec[String]) {
+    let mut i = 0;
+    while i + 1 < n {
+        if cs[i] == '+' and cs[i + 1] == '+' {
+            let mut t = String.new();
+            let mut j = 0;
+            while j < n {
+                if j == i or j == i + 1 { t.push('-'); } else { t.push(cs[j]); }
+                j = j + 1;
+            }
+            out.push(t);
+        }
+        i = i + 1;
+    }
+}
+
+fn main() {
+    let len = 64;
+    let boards = 40000;
+    let mut seed = 20260820;
+
+    let densities: Vec[i64] = [15, 50, 85];
+    let mut total_states = 0;
+    let mut checksum = 0;
+
+    let mut di = 0;
+    while di < densities.len() {
+        let density = densities[di];
+        let mut b = 0;
+        while b < boards {
+            let mut cs: Vec[char] = Vec.new();
+            let mut i = 0;
+            while i < len {
+                seed = next_rand(seed);
+                if ((seed / 65536) % 100) < density { cs.push('+'); } else { cs.push('-'); }
+                i = i + 1;
+            }
+            let mut out: Vec[String] = Vec.new();
+            next_states(cs, len, mut out);
+            total_states = total_states + out.len();
+            let mut k = 0;
+            while k < out.len() {
+                checksum = (checksum * 31 + out[k].len()) % 1000000007;
+                k = k + 1;
+            }
+            b = b + 1;
+        }
+        di = di + 1;
+    }
+    println(f"states {total_states} checksum {checksum}");
+}

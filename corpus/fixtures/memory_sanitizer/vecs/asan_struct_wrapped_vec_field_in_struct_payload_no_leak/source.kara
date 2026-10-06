@@ -1,0 +1,30 @@
+
+shared enum Expr { Num(i64), Call(CallExpr), Wrapped(Wrap) }
+struct CallExpr { callee: Expr, args: Vec[Expr] }
+struct Wrap { items: Vec[Expr] }
+fn sum_args(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Call(c) => c.args.len() as i64,
+        Wrapped(w) => w.items.len() as i64,
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut k: i64 = 0;
+    while k < 25 {
+        let mut args: Vec[Expr] = Vec.new();
+        let mut i: i64 = 0;
+        while i < 10 { args.push(Num(i)); i = i + 1; }
+        let call: Expr = Call(CallExpr { callee: Num(100), args: args });
+        total = total + sum_args(call);
+        // a struct whose ONLY shared content is a Vec[shared] field
+        let mut items: Vec[Expr] = Vec.new();
+        let mut j: i64 = 0;
+        while j < 5 { items.push(Num(j)); j = j + 1; }
+        let wrapped: Expr = Wrapped(Wrap { items: items });
+        total = total + sum_args(wrapped);
+        k = k + 1;
+    }
+    println(total);
+}

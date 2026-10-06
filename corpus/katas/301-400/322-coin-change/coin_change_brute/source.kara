@@ -1,0 +1,94 @@
+// LeetCode #322: Coin Change — every combination of coin counts.
+//
+// An answer is a count for each denomination: `k_0` copies of `coins[0]`,
+// `k_1` of `coins[1]`, and so on, with `sum k_i * coins[i] == amount`. This arm
+// enumerates every such count vector and keeps the smallest `sum k_i`. It has
+// no recurrence over amounts, no queue, no memo and no ordering argument. It
+// reads straight off the statement, which is what makes it the oracle.
+//
+// Coin `i` can be used between 0 and `rem / coins[i]` times, where `rem` is
+// what the earlier coins left over, and the last coin must finish the job
+// exactly. The number of vectors grows like the product of those ranges, so
+// this arm only runs where that stays in the millions.
+
+fn search(coins: ref Vec[i64], i: i64, rem: i64, used: i64, best: mut ref i64) {
+    if i == coins.len() {
+        if rem == 0 and (best < 0 or used < best) {
+            best = used;
+        }
+        return;
+    }
+    let c = coins[i];
+    let mut k = 0;
+    while k * c <= rem {
+        search(coins, i + 1, rem - k * c, used + k, best);
+        k = k + 1;
+    }
+}
+
+fn coin_change(coins: ref Vec[i64], amount: i64) -> i64 {
+    let mut best = -1;
+    search(coins, 0, amount, 0, mut best);
+    return best;
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..v.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(v[i].to_string());
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(coins: Vec[i64], amount: i64) {
+    let answer = coin_change(coins, amount);
+    println(f"{show(coins)} amount={amount} -> {answer}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn denominations(count: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    while v.len() < count {
+        let c = next(seed) % top + 1;
+        if not v.contains(c) {
+            v.push(c);
+        }
+    }
+    return v;
+}
+
+fn main() {
+    report([1, 2, 5], 11);
+    report([2], 3);
+    report([1], 0);
+
+    report([1, 3, 4], 6);
+    report([1, 5, 6, 9], 11);
+    report([186, 419, 83, 408], 6249);
+
+    report([4, 6], 9);
+    report([4, 6], 14);
+    report([7, 11], 59);
+    report([7, 11], 60);
+
+    report([13], 13);
+    report([50, 20], 10);
+    report([9, 2, 7, 3], 23);
+    report([5, 7], 0);
+
+    let mut seed = 322;
+    let mut small: Vec[i64] = [2, 3, 4];
+    for t in 0..small.len() {
+        let count = small[t];
+        let coins = denominations(count, 12, mut seed);
+        let amount = next(mut seed) % 40;
+        report(coins, amount);
+    }
+}

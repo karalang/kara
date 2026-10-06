@@ -1,0 +1,28 @@
+
+#[target(wasm_wasi)]
+fn where_am_i() -> String {
+    return "wasm";
+}
+
+#[target(native)]
+fn where_am_i() -> String {
+    return "native";
+}
+
+fn fib(n: i64) -> i64 {
+    if n < 2 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(40);
+    v.push(2);
+    let mut total = 0;
+    for x in v {
+        total += x;
+    }
+    println(total);
+    println(fib(15));
+    println(where_am_i());
+}

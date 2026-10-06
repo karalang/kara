@@ -1,0 +1,5 @@
+
+fn main() {
+    Stderr.println("to-stderr");
+    println("to-stdout");
+}

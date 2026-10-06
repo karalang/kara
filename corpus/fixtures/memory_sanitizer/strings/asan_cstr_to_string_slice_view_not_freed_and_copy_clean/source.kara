@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        match c"hello-view".to_string_slice() {
+            Ok(s) => {
+                println(s);
+                println(s.to_string());
+            }
+            Err(_) => println("ERR"),
+        }
+        i = i + 1;
+    }
+}

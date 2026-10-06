@@ -1,0 +1,10 @@
+
+        fn main() {
+            let x = 'a';
+            match x {
+                'a' => { let y = 1; },
+                'b' => { let y = 2; },
+                _ => { let y = 0; },
+            };
+        }
+    

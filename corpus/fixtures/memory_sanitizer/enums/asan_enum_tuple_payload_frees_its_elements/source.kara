@@ -1,0 +1,43 @@
+
+struct Pr { s: String, k: i64 }
+enum T2 { P((String, i64)), Q }
+enum Tvec { Pvec((Vec[String], i64)), Qvec }
+enum Tnest { Pnest(((String, i64), i64)), Qnest }
+enum S2 { R(Pr), Z }
+enum V2 { W(String), Y }
+
+fn take2(s: T2) -> bool { match s { P(x) => x.0.contains("row"), Q => false, } }
+fn peek2(s: ref T2) -> bool { match s { P(x) => x.0.contains("row"), Q => false, } }
+fn mk2(i: i64, n: i64) -> T2 { return P((f"row-cccccccccccc-{i}-{n}", 1i64)); }
+fn takev(s: Tvec) -> i64 {
+    match s { Pvec(x) => { let mut k: i64 = 0i64; for e in x.0 { if e.contains("row") { k = k + 1i64; } } return k; }, Qvec => { return 0i64; } }
+}
+fn takes(s: S2) -> bool { match s { R(x) => x.s.contains("row"), Z => false, } }
+fn takew(s: V2) -> bool { match s { W(x) => x.contains("row"), Y => false, } }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0i64;
+    while i < 8i64 {
+        let c1: T2 = P((f"row-aaaaaaaaaaaa-{i}-{n}", 1i64));
+        println("c1");
+        let c2: T2 = P((f"row-bbbbbbbbbbbb-{i}-{n}", 1i64));
+        println(f"c2:{take2(c2)}");
+        let c3: T2 = mk2(i, n);
+        println("c3");
+        let c4: T2 = P((f"row-dddddddddddd-{i}-{n}", 1i64));
+        println(f"c4:{peek2(c4)}");
+        let c5: T2 = P((f"row-eeeeeeeeeeee-{i}-{n}", 1i64));
+        println(f"c5:{match c5 { P(x) => x.0.contains("row"), Q => false, }}");
+        let c6: Tvec = Pvec((Vec[f"row-ffffffffffff-{i}-{n}", f"row-gggggggggggg-{i}-{n}"], 1i64));
+        println(f"c6:{takev(c6)}");
+        let c7: Tnest = Pnest(((f"row-hhhhhhhhhhhh-{i}-{n}", 1i64), 2i64));
+        println("c7");
+        let c8: S2 = R(Pr { s: f"row-iiiiiiiiiiii-{i}-{n}", k: 1i64 });
+        println(f"c8:{takes(c8)}");
+        let c9: V2 = W(f"row-jjjjjjjjjjjj-{i}-{n}");
+        println(f"c9:{takew(c9)}");
+        i = i + 1i64;
+    }
+    println("end");
+}

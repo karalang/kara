@@ -1,0 +1,20 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"name-{i}-padding" }; }
+struct S3 { a: R, b: R }
+
+fn g_two() -> i64 { match S3 { a: mk(80), b: mk(81) } { S3 { a, .. } if a.id > 900 => { return a.id; } S3 { b, .. } => { return b.id; } } }
+fn g_first() -> i64 { match S3 { a: mk(82), b: mk(83) } { S3 { a, .. } if a.id > 0 => { return a.id; } S3 { b, .. } => { return b.id; } } }
+fn g_thru() -> i64 { let v = match S3 { a: mk(89), b: mk(90) } { S3 { a, .. } if a.id > 900 => { a.id } S3 { b, .. } => { b.id } }; return v; }
+fn g_three() -> i64 { match S3 { a: mk(86), b: mk(87) } { S3 { a, .. } if a.id > 900 => { return a.id; } S3 { b, .. } if b.id > 900 => { return b.id; } S3 { .. } => { return 3; } } }
+fn g_all() -> i64 { match S3 { a: mk(99), b: mk(100) } { S3 { a, .. } if a.id > 900 => { return a.id; } S3 { a, b } => { return a.id + b.id; } } }
+
+fn main() {
+    println(f"T:{g_two()}");
+    println(f"F:{g_first()}");
+    println(f"H:{g_thru()}");
+    println(f"R:{g_three()}");
+    println(f"A:{g_all()}");
+    println("done");
+}

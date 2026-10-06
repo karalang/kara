@@ -1,0 +1,14 @@
+
+fn main() {
+    let v: Vec[f64] = vec![40.0, 10.0, 30.0, 20.0, 50.0];
+    println(Stats.percentile(v, 50.0));
+    let s: Vec[f64] = Stats.sort(v);
+    println(s[0]);
+    println(s[4]);
+    let a: Vec[i64] = Stats.argsort(v);
+    println(a[0]);
+    println(a[4]);
+    // fresh vec![…] temp argument: read then freed (no leak).
+    let s2: Vec[f64] = Stats.sort(vec![3.0, 1.0, 2.0]);
+    println(s2[0]);
+}

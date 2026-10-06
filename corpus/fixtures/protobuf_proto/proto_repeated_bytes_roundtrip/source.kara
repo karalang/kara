@@ -1,0 +1,11 @@
+
+#[proto_schema]
+const SCHEMA: String = "message Blobs { repeated bytes chunks = 1; }";
+
+fn main() {
+    let b = Blobs { chunks: [[1u8, 2u8], [9u8]] };
+    let back = Blobs.decode(b.encode());
+    println(back.chunks.len());
+    println(back.chunks[0].len());
+    println(back.chunks[1][0]);
+}

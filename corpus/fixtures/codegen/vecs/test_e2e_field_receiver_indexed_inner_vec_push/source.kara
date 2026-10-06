@@ -1,0 +1,13 @@
+
+shared struct Node { val: i64, mut neighbors: Vec[i64] }
+fn main() {
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: 1, neighbors: Vec.new() });
+    nodes.push(Node { val: 2, neighbors: Vec.new() });
+    nodes[0_u64].neighbors.push(99);
+    nodes[0_u64].neighbors.push(88);
+    nodes[1_u64].neighbors.push(77);
+    println(nodes[0_u64].neighbors.len());
+    println(nodes[1_u64].neighbors.len());
+    println(nodes[0_u64].val);
+}

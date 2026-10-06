@@ -1,0 +1,51 @@
+
+enum Tok {
+    KwFn,
+    KwOnceFn,
+    Ident(String),
+    Punct(String),
+    Eof,
+}
+struct Span { line: i64, col: i64 }
+struct SpannedTok { tok: Tok, span: Span }
+struct Lexer { toks: Vec[SpannedTok], pos: i64 }
+
+fn dup_str(s: ref String) -> String {
+    let mut out = "".to_string();
+    out.push_str(s);
+    out
+}
+
+impl Lexer {
+    // Borrow-match the payload out of an indexed place, then compare it (by an
+    // owned dup) against a SHORTER literal. The dup's length exceeds the
+    // literal's, so the pre-fix `memcmp(.., l_len)` overran the literal buffer.
+    fn ident_matches(ref self, target: String) -> bool {
+        match self.toks[self.pos].tok {
+            Ident(n) => {
+                let got = dup_str(n);
+                got == target
+            }
+            _ => false,
+        }
+    }
+}
+
+fn mk(name: String) -> SpannedTok {
+    SpannedTok { tok: Tok.Ident(name), span: Span { line: 1, col: 1 } }
+}
+
+fn main() {
+    let mut toks = Vec.new();
+    toks.push(mk("OnceFnHandler".to_string()));
+    toks.push(mk("FnPtrFactory".to_string()));
+    let lx = Lexer { toks: toks, pos: 0 };
+    // Long payload (shares a prefix with the short literal) vs short keyword:
+    // the comparison span must clamp to the keyword length, not the payload's.
+    let m_fn = lx.ident_matches("Fn".to_string());
+    let m_once = lx.ident_matches("OnceFn".to_string());
+    let m_exact = lx.ident_matches("OnceFnHandler".to_string());
+    println(m_fn);
+    println(m_once);
+    println(m_exact);
+}

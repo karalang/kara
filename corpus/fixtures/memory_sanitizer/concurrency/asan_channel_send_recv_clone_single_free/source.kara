@@ -1,0 +1,13 @@
+
+fn main() {
+    let (tx, rx): (Sender[String], Receiver[String]) = Channel.new();
+    tx.send("first");
+    let tx2 = tx.clone();
+    tx2.send("second");
+    println(rx.recv());
+    println(rx.recv());
+    match rx.try_recv() {
+        Some(v) => println(v),
+        None => println("drained"),
+    }
+}

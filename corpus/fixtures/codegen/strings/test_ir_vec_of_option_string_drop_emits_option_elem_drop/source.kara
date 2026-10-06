@@ -1,0 +1,12 @@
+
+fn build(n: i64) -> Vec[Option[String]] {
+    let mut v: Vec[Option[String]] = Vec.new();
+    v.push(Some(f"a payload string padded beyond thirty-six bytes {n}"));
+    v.push(None);
+    return v;
+}
+
+fn main() {
+    let v = build(1_i64);
+    println(v.len());
+}

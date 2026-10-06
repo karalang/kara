@@ -1,0 +1,15 @@
+
+fn main() {
+    let t: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let d = t.map(|x| x * 2);
+    println(f"{d.sum()}");
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    let e = m.map(|x| x + 10);
+    println(f"{e.sum()}");
+    let tf: Tensor[f64, [3]] = Tensor.from([1.5, 2.5, 4.0]);
+    let df = tf.map(|x| x + 0.5);
+    println(f"{df.sum()}");
+    let k: i64 = 100;
+    let g = t.map(|x| x + k);
+    println(f"{g.sum()}");
+}

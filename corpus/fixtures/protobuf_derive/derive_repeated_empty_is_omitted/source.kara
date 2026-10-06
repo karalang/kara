@@ -1,0 +1,11 @@
+
+#[derive(Message)]
+struct Bag { nums: Vec[i64], tags: Vec[String] }
+
+fn main() {
+    let b = Bag { nums: [], tags: [] };
+    println(b.encode().len());
+    let back = Bag.decode(b.encode());
+    println(back.nums.len());
+    println(back.tags.len());
+}

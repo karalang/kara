@@ -1,0 +1,15 @@
+
+shared enum Wrap {
+    Leaf(i64),
+    Box(Wrap),
+}
+fn depth(w: Wrap) -> i64 {
+    match w {
+        Leaf(n) => 0,
+        Box(inner) => 1 + depth(inner),
+    }
+}
+fn main() {
+    let w = Box(Box(Box(Leaf(7))));
+    println(depth(w));
+}

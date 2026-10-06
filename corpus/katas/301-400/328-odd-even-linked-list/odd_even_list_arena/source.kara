@@ -1,0 +1,119 @@
+// LeetCode #328: Odd Even Linked List — relink an index arena.
+//
+// The list lives in two parallel vectors: `vals[i]` is node `i`'s value and
+// `next[i]` the index of the node after it, `-1` at the end. The relinking is
+// the same as the pointer version: two tails, `odd` and `even`, each step
+// moving the node after `even` onto `odd` and the node after that onto
+// `even`, then the even group hung after the last odd node. Only `next`
+// changes.
+//
+// O(n) time, O(1) extra space beyond the arena.
+
+struct Nodes {
+    vals: Vec[i64],
+    next: Vec[i64],
+}
+
+fn odd_even_list(nodes: mut ref Nodes, head: i64) -> i64 {
+    if head < 0 or nodes.next[head] < 0 {
+        return head;
+    }
+    let even_head = nodes.next[head];
+    let mut odd = head;
+    let mut even = even_head;
+    while even >= 0 and nodes.next[even] >= 0 {
+        let n = nodes.next[even];
+        nodes.next[odd] = n;
+        odd = n;
+        nodes.next[even] = nodes.next[n];
+        even = nodes.next[n];
+    }
+    nodes.next[odd] = even_head;
+    return head;
+}
+
+// ---- test harness ----------------------------------------------------------
+
+// Node i holds values[i] and points at node i + 1.
+fn from_vec(values: ref Vec[i64]) -> Nodes {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut next: Vec[i64] = Vec.new();
+    for i in 0..values.len() {
+        vals.push(values[i]);
+        if i + 1 < values.len() {
+            next.push(i + 1);
+        } else {
+            next.push(-1);
+        }
+    }
+    return Nodes { vals: vals, next: next };
+}
+
+fn to_vec(nodes: ref Nodes, head: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while cur >= 0 {
+        out.push(nodes.vals[cur]);
+        cur = nodes.next[cur];
+    }
+    return out;
+}
+
+fn run(values: ref Vec[i64]) -> Vec[i64] {
+    let mut nodes = from_vec(values);
+    let head = if values.len() == 0 { -1 } else { 0 };
+    let h = odd_even_list(mut nodes, head);
+    return to_vec(nodes, h);
+}
+
+fn report(values: Vec[i64]) {
+    let got = run(values);
+    println(f"{values} -> {got}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn main() {
+    // The examples from the problem statement.
+    report([1, 2, 3, 4, 5]);
+    report([2, 1, 3, 5, 6, 4, 7]);
+
+    // Edge cases: empty, one, two and three nodes, repeated values.
+    report([]);
+    report([1]);
+    report([1, 2]);
+    report([1, 2, 3]);
+    report([7, 7, 7, 7]);
+    report([-1, 0, -1, 0, -1, 0]);
+
+    // Larger lists, reported by a checksum of the positions: each value is
+    // its 1-based position, so the result must read 1, 3, 5, ..., 2, 4, ...
+    for n in [10, 11, 1000, 1001, 10000] {
+        let mut values: Vec[i64] = Vec.new();
+        for i in 1..n + 1 {
+            values.push(i);
+        }
+        let got = run(values);
+        let mut sum = 0;
+        let mut k = 1;
+        for v in got {
+            sum = (sum * 31 + v * k) % 1000000007;
+            k += 1;
+        }
+        println(f"n={n}: first {got[0]}, first even {got[(n + 1) / 2]}, last {got[n - 1]}, hash {sum}");
+    }
+
+    // Random values.
+    let mut seed = 328;
+    for _ in 0..3 {
+        let n = next(mut seed) % 9 + 1;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next(mut seed) % 100);
+        }
+        report(values);
+    }
+}

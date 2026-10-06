@@ -1,0 +1,54 @@
+// LeetCode #343: Integer Break — take threes while more than four is left.
+//
+// Given an integer n (2 <= n <= 58), break it into the sum of at least two
+// positive integers and return the largest product of those integers.
+//
+//   n = 2   ->  1     (1 + 1)
+//   n = 10  ->  36    (3 + 3 + 4)
+//
+// A best break uses only 2s and 3s. A part p >= 5 is worth less than the two
+// parts 2 and p - 2, since 2(p - 2) > p; a 4 is worth exactly 2 + 2; and a 1
+// adds to the sum without adding to the product. Three 2s (product 8) lose to
+// two 3s (product 9), so there are at most two 2s, and that leaves one shape
+// per remainder mod 3: all threes, threes and one 4, or threes and one 2.
+// Taking threes until at most four is left reaches exactly that shape.
+//
+// 2 and 3 are the exceptions, because the break must have two parts: 1 + 1
+// and 1 + 2.
+//
+// O(n) time, O(1) space.
+
+fn integer_break(n: i64) -> i64 {
+    if n <= 3 {
+        return n - 1;
+    }
+    let mut rest = n;
+    let mut product = 1;
+    while rest > 4 {
+        product *= 3;
+        rest -= 3;
+    }
+    return product * rest;
+}
+
+fn main() {
+    // The examples from the problem statement.
+    println(f"2 -> {integer_break(2)}");
+    println(f"10 -> {integer_break(10)}");
+
+    // Every n the problem allows, one line each, and their sum.
+    let mut sum = 0;
+    for n in 2..59 {
+        let p = integer_break(n);
+        println(f"{n} -> {p}");
+        sum += p;
+    }
+    println(f"sum over 2..58: {sum}");
+
+    // Past the problem's bound. Every candidate a step compares is the
+    // product of a real break, so none exceeds the answer, and nothing
+    // overflows before the answer itself does: 119 is the largest n whose
+    // answer, 2 * 3^39, fits in an i64.
+    println(f"100 -> {integer_break(100)}");
+    println(f"119 -> {integer_break(119)}");
+}

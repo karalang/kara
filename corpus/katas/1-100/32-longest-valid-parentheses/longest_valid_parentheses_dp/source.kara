@@ -1,0 +1,90 @@
+// LeetCode #32: Longest Valid Parentheses — dynamic programming.
+//
+// dp[i] = the length of the longest valid substring ENDING exactly at index i.
+// O(n) time, O(n) space for the dp array. Only ')' positions can end a valid
+// substring (a '(' leaves an unmatched opener), so dp[i] is 0 at every '(' and
+// is filled only on ')':
+//
+//   - bytes[i] == ')' and bytes[i-1] == '('  →  a fresh "()" closes here:
+//       dp[i] = dp[i-2] + 2        (extend whatever valid run ended at i-2)
+//
+//   - bytes[i] == ')' and bytes[i-1] == ')'  →  this ')' might close a '('
+//     sitting just before the valid run that ends at i-1. That opener is at
+//     j = i - dp[i-1] - 1. If bytes[j] == '(' it matches:
+//       dp[i] = dp[i-1] + 2 + dp[j-1]
+//     i.e. the inner run dp[i-1], the new pair (2), and any valid run that
+//     ended just before the opener (dp[j-1]) — stitched into one.
+//
+// The dp[j-1] term is the part that makes this catch concatenated runs like
+// "()(())": the outer match reaches back across its inner run AND glues on the
+// "()" that preceded it. The recurrence is the index-arithmetic counterpart to
+// the stack form — where the stack reads the boundary off the top, dp computes
+// the matching opener's index directly from the run length already stored.
+//
+// Same zero-copy `s.bytes()` scan; the dp array is a `Vec[i64]` of n slots.
+
+fn longest_valid(s: ref String) -> i64 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    // dp[i] = longest valid substring ending at i; all zero to start.
+    let mut dp: Vec[i64] = Vec.new();
+    let mut t = 0;
+    while t < n {
+        dp.push(0);
+        t = t + 1;
+    }
+
+    let mut best = 0;
+    let mut i = 1;
+    while i < n {
+        if bytes[i] == b')' {
+            if bytes[i - 1] == b'(' {
+                // "...()" — close a fresh pair, extend the run before it.
+                let prev = if i >= 2 { dp[i - 2] } else { 0 };
+                dp[i] = prev + 2;
+            } else {
+                // "...))" — match the opener just before the inner run.
+                let j = i - dp[i - 1] - 1;
+                if j >= 0 and bytes[j] == b'(' {
+                    let prev = if j >= 1 { dp[j - 1] } else { 0 };
+                    dp[i] = dp[i - 1] + 2 + prev;
+                }
+            }
+            if dp[i] > best {
+                best = dp[i];
+            }
+        }
+        i = i + 1;
+    }
+
+    best
+}
+
+fn report(s: ref String) {
+    println(f"\"{s}\" -> {longest_valid(s)}");
+}
+
+fn main() {
+    // Same case battery as longest_valid_parentheses.kara — identical output.
+    report("(()");          // 2
+    report(")()())");       // 4
+    report("");             // 0
+    report("(");            // 0
+    report(")");            // 0
+    report("(((");          // 0
+    report(")))");          // 0
+    report(")(");           // 0
+    report("()");           // 2
+    report("()()");         // 4
+    report("(())");         // 4
+    report("((()))");       // 6
+    report("()(()");        // 2
+    report("()(())");       // 6
+    report("(()())");       // 6
+    report("())(())");      // 4
+    report(")()())()()(");  // 4
+    report("()(()))(()()");  // 6
+    report("((((((");        // 0
+    report("))))))");        // 0
+}

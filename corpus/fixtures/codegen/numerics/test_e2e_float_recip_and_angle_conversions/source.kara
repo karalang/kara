@@ -1,0 +1,9 @@
+
+fn main() {
+    println((4.0f64).recip());
+    println((0.5f64).recip());
+    println((0.0f64).to_degrees());
+    println((0.0f64).to_radians());
+    println((1.0f64).to_radians());
+    println((1.0f64).to_degrees());
+}

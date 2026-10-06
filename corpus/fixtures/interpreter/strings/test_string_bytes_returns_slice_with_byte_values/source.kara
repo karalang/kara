@@ -1,0 +1,9 @@
+fn main() {
+            let s = "hello";
+            let bs = s.bytes();
+            println(bs.len());
+            println(bs[0]);
+            println(bs[4]);
+            let h: u8 = 'h' as u32 as u8;
+            println(bs[0] == h);
+        }

@@ -1,0 +1,13 @@
+source = "tests/codegen/vecs.rs::test_e2e_optres_param_bodiless_escape_keeps_caller_body"
+dedup_of = ["tests/memory_sanitizer/vecs.rs::asan_optres_param_bodiless_escape_frees_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

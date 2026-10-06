@@ -1,0 +1,161 @@
+// LeetCode #321: Create Maximum Number — dynamic programming over (i, j, l).
+//
+// This arm does not know that the problem splits. It never asks "how many
+// digits come from nums1", never shrinks a side with a stack, never merges.
+// It asks one question, for every suffix pair and every length:
+//
+//   best(i, j, l) = the largest length-l sequence that can be drawn from
+//                   nums1[i..] and nums2[j..] with both orders kept
+//
+// and answers it from four smaller questions. The first digit of that sequence
+// is either nums1[i] (taken), nums2[j] (taken), or neither of them — in which
+// case one of the two heads is simply never used:
+//
+//   best(i, j, l) = max of   nums1[i] :: best(i + 1, j, l - 1)
+//                            nums2[j] :: best(i, j + 1, l - 1)
+//                            best(i + 1, j, l)          (skip nums1[i])
+//                            best(i, j + 1, l)          (skip nums2[j])
+//
+// over the options that exist and are FEASIBLE — `(m - i) + (n - j) >= l`,
+// enough digits left to fill the length. Skipping both heads at once is
+// covered by skipping one and then the other, so four cases are enough.
+//
+// Nothing here is greedy, which is exactly why it is here: the ★ arm's three
+// claims (every split is tried, the largest subsequence is always the right
+// one to merge, the tie rule picks the right side) are all things this arm is
+// in a position to contradict. The cost is O(m * n * k) cells, each holding a
+// vector of up to k digits and compared in O(k) — O(m n k^2) time. The table
+// is filled one length at a time, keeping only layers l - 1 and l.
+//
+// Cells are flattened to `i * (n + 1) + j`. An infeasible cell is never read:
+// every read is guarded by the same feasibility test that decides whether the
+// cell was ever filled.
+
+fn feasible(m: i64, n: i64, i: i64, j: i64, l: i64) -> bool {
+    return (m - i) + (n - j) >= l;
+}
+
+// Lexicographic `a > b`; a proper prefix is smaller.
+fn greater(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    let mut x = 0;
+    while x < a.len() and x < b.len() {
+        if a[x] != b[x] { return a[x] > b[x]; }
+        x = x + 1;
+    }
+    return a.len() > b.len();
+}
+
+fn cons(d: i64, rest: ref Vec[i64]) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(d);
+    for x in 0..rest.len() { v.push(rest[x]); }
+    return v;
+}
+
+fn max_number(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[i64] {
+    let m = nums1.len();
+    let n = nums2.len();
+    let w = n + 1;
+    let cells = (m + 1) * w;
+
+    // Layer 0: the empty sequence, everywhere.
+    let mut prev: Vec[Vec[i64]] = Vec.new();
+    for c in 0..cells { prev.push(Vec.new()); }
+
+    for l in 1..(k + 1) {
+        let mut cur: Vec[Vec[i64]] = Vec.new();
+        for c in 0..cells { cur.push(Vec.new()); }
+        // Descending i and j, so the same-layer "skip" cells are filled first.
+        let mut i = m;
+        while i >= 0 {
+            let mut j = n;
+            while j >= 0 {
+                if feasible(m, n, i, j, l) {
+                    let mut best: Vec[i64] = Vec.new();
+                    let mut have = false;
+                    if i < m {
+                        let take = cons(nums1[i], prev[(i + 1) * w + j]);
+                        if not have or greater(take, best) { best = take; have = true; }
+                        if feasible(m, n, i + 1, j, l) {
+                            let skip = cur[(i + 1) * w + j].clone();
+                            if greater(skip, best) { best = skip; }
+                        }
+                    }
+                    if j < n {
+                        let take = cons(nums2[j], prev[i * w + j + 1]);
+                        if not have or greater(take, best) { best = take; have = true; }
+                        if feasible(m, n, i, j + 1, l) {
+                            let skip = cur[i * w + j + 1].clone();
+                            if greater(skip, best) { best = skip; }
+                        }
+                    }
+                    cur[i * w + j] = best;
+                }
+                j = j - 1;
+            }
+            i = i - 1;
+        }
+        prev = cur;
+    }
+    return prev[0].clone();
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..v.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(v[i].to_string());
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(nums1: Vec[i64], nums2: Vec[i64], k: i64) {
+    let answer = max_number(nums1, nums2, k);
+    println(f"{show(nums1)} {show(nums2)} k={k} -> {show(answer)}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn digits(len: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..len {
+        v.push(next(seed) % 10);
+    }
+    return v;
+}
+
+fn main() {
+    // The three examples from the problem statement.
+    report([3, 4, 6, 5], [9, 1, 2, 5, 8, 3], 5);
+    report([6, 7], [6, 0, 4], 5);
+    report([3, 9], [8, 9], 3);
+
+    // Equal heads whose suffixes agree for several digits before they part —
+    // the case a one-digit lookahead gets wrong.
+    report([2, 5, 6, 4, 4, 0], [7, 3, 8, 0, 6, 5, 7, 6, 2], 15);
+    report([6, 7, 6, 7, 6, 7, 0], [6, 7, 6, 7, 6, 7, 1], 14);
+    report([8, 9, 9], [8, 9, 9, 1], 6);
+
+    // Edges: k = 0, an empty side, every digit taken, all digits equal.
+    report([1, 2, 3], [4, 5], 0);
+    report([], [1, 2, 3], 2);
+    report([5, 4, 3], [], 3);
+    report([1, 2], [3], 3);
+    report([0, 0, 0], [0, 0], 4);
+    report([9, 9], [9, 9, 9], 3);
+
+    // Small random cases — every arm prints these, including the brute force.
+    let mut seed = 321;
+    let mut small: Vec[i64] = [3, 5, 7];
+    for t in 0..small.len() {
+        let len = small[t];
+        let a = digits(len, mut seed);
+        let b = digits(len + 1, mut seed);
+        report(a, b, len + len / 2 + 1);
+    }
+}

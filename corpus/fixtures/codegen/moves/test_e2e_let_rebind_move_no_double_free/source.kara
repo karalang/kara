@@ -1,0 +1,11 @@
+
+fn build() -> String {
+    let mut inner: String = String.new();
+    inner.push_str("relayed");
+    let outer: String = inner;
+    outer
+}
+fn main() {
+    let s: String = build();
+    println(s);
+}

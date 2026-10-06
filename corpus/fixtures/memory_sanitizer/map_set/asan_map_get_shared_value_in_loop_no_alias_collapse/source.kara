@@ -1,0 +1,36 @@
+
+shared struct Node {
+    val: i64,
+    mut neighbors: Vec[Node],
+}
+
+fn main() {
+    let mut visited: Map[i64, Node] = Map.new();
+    let k: i64 = 5;
+    for i in 0..k {
+        let fresh = Node { val: i, neighbors: Vec.new() };
+        let _ = visited.insert(i, fresh);
+    }
+    // The push-into-Vec[Node] step is what triggers the per-iter
+    // cleanup of `a` and `b` to free the Map's only ref; without
+    // this second loop the bug doesn't surface because the inserts'
+    // per-iter cleanup is already balanced by the existing
+    // `suppress_source_vec_cleanup_for_arg` rc_inc.
+    for i in 0..k {
+        let a = visited.get(i).unwrap();
+        if i + 1 < k {
+            let b = visited.get(i + 1).unwrap();
+            a.neighbors.push(b);
+        }
+    }
+    // Read with let-bindings (not inline chains). The inline
+    // `Map.get(k).unwrap().val` shape is covered separately in
+    // `asan_map_get_unwrap_field_inline_chain` — together the
+    // two tests pin both common reader shapes.
+    let n0 = visited.get(0_i64).unwrap();
+    let n1 = visited.get(1_i64).unwrap();
+    let n4 = visited.get(4_i64).unwrap();
+    println(n0.val);
+    println(n1.val);
+    println(n4.val);
+}

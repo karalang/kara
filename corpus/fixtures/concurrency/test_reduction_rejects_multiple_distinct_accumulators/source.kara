@@ -1,0 +1,12 @@
+
+        fn main() {
+            let mut a: i64 = 0i64;
+            let mut b: i64 = 1i64;
+            let mut k: i64 = 0i64;
+            while k < 10i64 {
+                a = a + k;
+                b = b * k;
+                k = k + 1i64;
+            }
+        }
+        

@@ -1,0 +1,14 @@
+fn main() {
+    let n = env.args().len() as i64;
+    let vv: Vector[i64, 4] = Vector[i64, 4](n, n + 1, n + 2, n + 3);
+    let ovv: Option[Vector[i64, 4]] = Some(vv);
+    println(f"{ovv}");
+    let a: Array[i64, 3] = [n, n + 1, n + 2];
+    let oa: Option[Array[i64, 3]] = Some(a);
+    println(f"{oa}");
+    let mut v: Vec[i64] = Vec.new();
+    v.push(n);
+    v.push(n + 1);
+    let os: Option[Slice[i64]] = Some(v.as_slice());
+    println(f"{os}");
+}

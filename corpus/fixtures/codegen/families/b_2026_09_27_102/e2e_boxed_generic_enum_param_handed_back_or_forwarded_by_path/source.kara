@@ -1,0 +1,34 @@
+enum Ho[T] { Full(T), Empty }
+struct K { k: i64 }
+fn showt(h: Ho[String]) { match h { Ho.Full(r) => println(f"t{r}"), Ho.Empty => println("e") } }
+fn keep(h: Ho[String]) -> Ho[String] { h }
+fn fwd(h: Ho[String]) { showt(h) }
+fn mk(s: String) -> Ho[String] { return Ho.Full(s + "!") }
+fn pk(h: Ho[String], k: bool) -> Ho[String] { if k { return h } showt(h); return Ho.Empty }
+fn pkc(h: Ho[String], k: bool) -> Ho[String] { if k { return keep(h) } fwd(h); return Ho.Empty }
+impl K {
+    fn pks(h: Ho[String], k: bool) -> Ho[String] { if k { return h } showt(h); return Ho.Empty }
+    fn pkm(self, h: Ho[String], k: bool) -> Ho[String] { if k { return h } showt(h); return Ho.Empty }
+}
+fn main() {
+    println("free");
+    let a = mk("a"); let ra = pk(a, false); showt(ra);
+    let b = mk("b"); let rb = pk(b, true); showt(rb);
+    println("chain");
+    let c = mk("c"); let rc = pkc(c, false); showt(rc);
+    let d = mk("d"); let rd = pkc(d, true); showt(rd);
+    println("static");
+    let e = mk("e"); let re = K.pks(e, false); showt(re);
+    let f = mk("f"); let rf = K.pks(f, true); showt(rf);
+    println("method");
+    let g = mk("g"); let kg = K { k: 1 }; let rg = kg.pkm(g, false); showt(rg);
+    let h = mk("h"); let kh = K { k: 2 }; let rh = kh.pkm(h, true); showt(rh);
+    println("loop");
+    let mut v: Vec[Ho[String]] = Vec.new();
+    v.push(mk("x"));
+    v.push(Ho.Empty);
+    for x in v { let r = pk(x, false); showt(r) }
+    for x in v { let r = pkc(x, true); showt(r) }
+    println(f"n{v.len()}");
+    println("end")
+}

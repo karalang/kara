@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut a: Column[i64] = Column.new();
+    a.push(1);
+    a.push_null();
+    a.push(3);
+    let mut b: Column[i64] = Column.new();
+    b.push(10);
+    b.push(20);
+    b.push_null();
+    let z = a.zip_with(b, |x, y| x + y);
+    println(f"{z.sum()}");
+    println(f"{z.valid_count()}");
+}

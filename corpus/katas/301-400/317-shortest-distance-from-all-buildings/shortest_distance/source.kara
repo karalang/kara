@@ -1,0 +1,120 @@
+// LeetCode #317: Shortest Distance from All Buildings — one BFS per building.
+//
+// A grid of `0` (empty land), `1` (building) and `2` (obstacle). Find the empty
+// cell that minimises the SUM of walking distances to every building, moving
+// only up/down/left/right and only across empty land — buildings and obstacles
+// both block the way. Return that sum, or -1 if no empty cell reaches every
+// building.
+//
+// The trick is the direction of the search. Searching FROM each empty cell
+// costs O(E · R·C) and E is most of the grid. Searching FROM each building
+// costs O(B · R·C), and B is usually a handful. Every building's BFS deposits
+// its distance into `total[cell]` and bumps `reach[cell]`; at the end the answer
+// is the smallest `total` among empty cells whose `reach` equals the building
+// count. The `reach` test is the whole -1 story: a cell some building cannot
+// reach has a total that is missing a term, and it must be excluded rather than
+// compared.
+//
+// The BFS itself walks empty cells only. A building is a SOURCE (distance 0),
+// never a waypoint — a wave from building A does not pass through building B,
+// and an obstacle is never entered at all.
+
+fn shortest_distance(grid: ref Vec[i64], rows: i64, cols: i64) -> i64 {
+    let n = rows * cols;
+    let mut buildings = 0;
+    for i in 0..n { if grid[i] == 1 { buildings += 1; } }
+
+    let mut total: Vec[i64] = Vec.new();
+    let mut reach: Vec[i64] = Vec.new();
+    let mut dist: Vec[i64] = Vec.new();
+    for i in 0..n { total.push(0); reach.push(0); dist.push(-1); }
+
+    for src in 0..n {
+        if grid[src] != 1 { continue; }
+        for i in 0..n { dist[i] = -1; }
+        dist[src] = 0;
+        let mut q: VecDeque[i64] = VecDeque.new();
+        q.push_back(src);
+        loop {
+            match q.pop_front() {
+                None => { break; },
+                Some(cell) => {
+                    let r = cell / cols;
+                    let c = cell % cols;
+                    let d = dist[cell] + 1;
+                    if r > 0 { step(grid, cell - cols, d, mut dist, mut total, mut reach, mut q); }
+                    if r < rows - 1 { step(grid, cell + cols, d, mut dist, mut total, mut reach, mut q); }
+                    if c > 0 { step(grid, cell - 1, d, mut dist, mut total, mut reach, mut q); }
+                    if c < cols - 1 { step(grid, cell + 1, d, mut dist, mut total, mut reach, mut q); }
+                }
+            }
+        }
+    }
+
+    let mut best = -1;
+    for i in 0..n {
+        if grid[i] == 0 and reach[i] == buildings {
+            if best < 0 or total[i] < best { best = total[i]; }
+        }
+    }
+    return best;
+}
+
+// Claim `next` for this building's wave if it is empty land not yet reached.
+fn step(grid: ref Vec[i64], next: i64, d: i64, dist: mut ref Vec[i64],
+        total: mut ref Vec[i64], reach: mut ref Vec[i64], q: mut ref VecDeque[i64]) {
+    if grid[next] != 0 or dist[next] >= 0 { return; }
+    dist[next] = d;
+    total[next] += d;
+    reach[next] += 1;
+    q.push_back(next);
+}
+
+// ------------------------------------------------------------- demo ---
+
+fn show(grid: ref Vec[i64], rows: i64, cols: i64) -> String {
+    let mut s = String.new();
+    for r in 0..rows {
+        if r > 0 { s.push_str(" / "); }
+        for c in 0..cols {
+            if c > 0 { s.push(' '); }
+            s.push_str(grid[r * cols + c].to_string());
+        }
+    }
+    return s;
+}
+
+fn report(tag: i64, grid: Vec[i64], rows: i64, cols: i64, acc: mut ref i64) {
+    let ans = shortest_distance(grid, rows, cols);
+    acc = (acc * 131 + ans + 2) % 1000000007;
+    println(f"case {tag}: {show(grid, rows, cols)} -> {ans}");
+}
+
+fn main() {
+    let mut acc = 0;
+    // LeetCode's example: meet at (1, 2) for 3 + 3 + 1 = 7.
+    report(0, [1, 0, 2, 0, 1,
+               0, 0, 0, 0, 0,
+               0, 0, 1, 0, 0], 3, 5, mut acc);
+    report(1, [1, 0], 1, 2, mut acc);                 // 1
+    report(2, [1], 1, 1, mut acc);                    // -1: no empty land
+    report(3, [1, 2, 0], 1, 3, mut acc);              // -1: the obstacle seals it
+    report(4, [1, 0, 0, 0, 1], 1, 5, mut acc);        // 4, attained at three cells
+    report(5, [1, 0, 1,
+               0, 0, 0,
+               1, 0, 1], 3, 3, mut acc);              // 8 at the centre
+    report(6, [1, 0, 2,
+               0, 2, 0,
+               2, 0, 1], 3, 3, mut acc);              // -1: two pockets
+    report(7, [0, 0, 0,
+               0, 1, 0,
+               0, 0, 0], 3, 3, mut acc);              // 1
+    report(8, [1, 0, 0, 2, 1,
+               0, 2, 0, 2, 0,
+               0, 0, 0, 0, 0], 3, 5, mut acc);        // detour around the wall
+    report(9, [2, 2, 2], 1, 3, mut acc);              // -1: nothing to reach, nowhere to stand
+    report(10, [0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 2, 0, 1], 3, 4, mut acc);          // 5: the middle building is a wall too
+    println(f"sink: {acc}");
+}

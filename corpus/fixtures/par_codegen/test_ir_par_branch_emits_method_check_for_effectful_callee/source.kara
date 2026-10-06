@@ -1,0 +1,13 @@
+
+effect resource Log;
+struct Counter { n: i64 }
+impl Counter {
+    fn effectful(ref self) -> i64 writes(Log) { self.n + 1 }
+}
+fn main() {
+    let c = Counter { n: 1 };
+    par {
+        let _ = c.effectful();
+        let _ = c.effectful();
+    }
+}

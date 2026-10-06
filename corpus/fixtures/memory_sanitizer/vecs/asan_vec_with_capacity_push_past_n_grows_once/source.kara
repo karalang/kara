@@ -1,0 +1,11 @@
+
+fn main() {
+    let base: i64 = env.args().len();
+    let mut v: Vec[i64] = Vec.with_capacity(4);
+    let mut i = 0;
+    while i < base + 15 {
+        v.push(i);
+        i = i + 1;
+    }
+    println(f"{v.len()}:{v[0i64]}:{v[15i64]}");
+}

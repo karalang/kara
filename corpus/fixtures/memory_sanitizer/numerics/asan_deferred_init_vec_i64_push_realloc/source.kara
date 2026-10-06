@@ -1,0 +1,13 @@
+
+fn main() {
+    let c = false;
+    let mut v: Vec[i64];
+    if c { v = [1, 2]; } else { v = Vec.new(); }
+    let mut i = 0;
+    while i < 100 {
+        v.push(i);
+        i = i + 1;
+    }
+    println(v.len());
+    println(v[99]);
+}

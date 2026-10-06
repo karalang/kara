@@ -1,0 +1,27 @@
+
+fn pad(t: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+    s.push_str(f"{t}");
+    return s;
+}
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.s.len()}"); } }
+struct H { r: R, n: i64 }
+fn viaelse(t: i64) -> i64 {
+    let e: Option[H] = Some(H { r: R { s: pad(t) }, n: 4 });
+    let Some(H { n, .. }) = e else { return 0 };
+    return n;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let a: Option[H] = Some(H { r: R { s: pad(i) }, n: 4 });
+        if let Some(H { n, .. }) = a { println(f"A{n}") }
+        let b: Option[H] = Some(H { r: R { s: pad(i) }, n: 5 });
+        match b { Some(H { n, .. }) => println(f"B{n}"), None => {} }
+        println(f"E{viaelse(i)}");
+        i = i + 1;
+    }
+    println("done");
+}

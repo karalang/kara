@@ -1,0 +1,17 @@
+
+fn main() {
+    let v: Vec[i64] = vec![7, 9];
+    // Defect 1: result type == payload type, the shapes that failed to verify.
+    match v.first().map(|a| a + 1) { Some(b) => println(b), None => println("-") }
+    match v.first().map(|a| a) { Some(b) => println(b), None => println("-") }
+    match v.first().map(|a: ref i64| a + 1) { Some(b) => println(b), None => println("-") }
+    match v.get(1i64).map(|a| a + 1) { Some(b) => println(b), None => println("-") }
+    println(v.first().map_or(0i64, |a| a + 1));
+    println(v.first().map(|a| a + 1).unwrap_or(0i64));
+    // Controls: these compiled before the fix and must keep their answers.
+    match v.first().map(|a| a > 5i64) { Some(b) => println(b), None => println("-") }
+    let f: Vec[f64] = vec![1.5];
+    match f.first().map(|a| a + 1.0) { Some(b) => println(b), None => println("-") }
+    let empty: Vec[i64] = Vec.new();
+    match empty.first().map(|a| a + 1) { Some(b) => println(b), None => println("-") }
+}

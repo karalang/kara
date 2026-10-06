@@ -1,0 +1,29 @@
+struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+enum W2 { Af(Array[S, 2], String), Aq }
+enum W2s { Bs(String, Array[S, 2]), Bq }
+enum W3 { Ct(String, Array[S, 2], i64), Cq }
+enum Wn { Dn(Array[N, 2], String), Dq }
+enum Wv { Ev(Array[String, 2], String), Eq }
+enum W1 { Fo(Array[S, 2]), Fq }
+fn m_first(a: Array[S, 2]) -> i64 { match W2.Af(a, f"zz") { W2.Af(v, t) => { println("  r"); return 1 }, W2.Aq => { println("  n"); return 0 } } }
+fn m_second(a: Array[S, 2]) -> i64 { match W2s.Bs(f"zz", a) { W2s.Bs(t, v) => { println("  r"); return 1 }, W2s.Bq => { println("  n"); return 0 } } }
+fn m_read(a: Array[S, 2]) -> i64 { match W2.Af(a, f"kk") { W2.Af(v, t) => { println(f"  r:{t}:{v[0].tag}"); return 1 }, W2.Aq => { println("  n"); return 0 } } }
+fn m_three(a: Array[S, 2]) -> i64 { match W3.Ct(f"zz", a, 9) { W3.Ct(t, v, k) => { println("  r"); return 1 }, W3.Cq => { println("  n"); return 0 } } }
+fn m_noheap(a: Array[N, 2]) -> i64 { match Wn.Dn(a, f"zz") { Wn.Dn(v, t) => { println("  r"); return 1 }, Wn.Dq => { println("  n"); return 0 } } }
+fn b_str(a: Array[String, 2]) -> i64 { match Wv.Ev(a, f"zz") { Wv.Ev(v, t) => { println(f"  r:{v[0]}"); return 1 }, Wv.Eq => { println("  n"); return 0 } } }
+fn b_single(a: Array[S, 2]) -> i64 { match W1.Fo(a) { W1.Fo(v) => { println("  r"); return 1 }, W1.Fq => { println("  n"); return 0 } } }
+fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; match W2.Af(a, f"zz") { W2.Af(v, t) => { println("  r"); return 1 }, W2.Aq => { println("  n"); return 0 } } }
+fn main() {
+    println("m/first");  { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = m_first(a); }
+    println("m/second"); { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let z = m_second(a); }
+    println("m/read");   { let a: Array[S, 2] = [S { tag: f"cccccccc0" }, S { tag: f"cccccccc1" }]; let z = m_read(a); }
+    println("m/three");  { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; let z = m_three(a); }
+    println("m/noheap"); { let a: Array[N, 2] = [N { id: 2 }, N { id: 3 }]; let z = m_noheap(a); }
+    println("b/str");    { let a: Array[String, 2] = [f"gggggggg0", f"gggggggg1"]; let z = b_str(a); }
+    println("b/single"); { let a: Array[S, 2] = [S { tag: f"hhhhhhhh0" }, S { tag: f"hhhhhhhh1" }]; let z = b_single(a); }
+    println("b/local");  { let z = b_local(); }
+    println("end")
+}

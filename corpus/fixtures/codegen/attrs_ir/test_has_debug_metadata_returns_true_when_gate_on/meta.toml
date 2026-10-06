@@ -1,0 +1,13 @@
+source = "tests/codegen/attrs_ir.rs::test_has_debug_metadata_returns_true_when_gate_on"
+dedup_of = ["tests/codegen/attrs_ir.rs::test_has_debug_metadata_returns_false_when_gate_off"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

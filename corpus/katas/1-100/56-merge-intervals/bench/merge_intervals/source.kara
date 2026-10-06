@@ -1,0 +1,106 @@
+// Benchmark workload — Merge Intervals (LeetCode #56).
+//
+// M = 8 distinct test cases, each a Vec[(i64, i64)] of N = 16 intervals
+// drawn from a deterministic 31-bit LCG. Each interval is generated as
+// `(start, start + width)` where `start` is in [0, 50] and `width` is in
+// [1, 10] — guarantees valid `start <= end` and produces a mix of
+// overlapping / disjoint cases so the sweep does real merging work.
+// Built once into a Vec[Vec[(i64, i64)]] before the timed loop.
+//
+// K = 1,000,000 outer iters. Per-iter work: a Vec.from_slice copy of N
+// pairs, an O(N log N) sort BY FIRST TUPLE COMPONENT, an O(N) sweep, and
+// one Vec[(i64, i64)] output of however many merged intervals the case
+// holds. Sort-by-tuple is the key difference from kata 15/16 — same
+// M/N/K shape, same allocator stress, but the comparator's
+// `a.0.cmp(b.0)` projection routes through `karac_vec_sort_by` with a
+// thunk that loads the tuple, extracts `.0`, and compares: NOT covered
+// by karac's Slice 6.1 mono fast path (gated on i64 elem type), so this
+// kata is the natural-pull trigger for Slice 6.4 (tuple/struct elem mono
+// sort). See README § Benchmarks for the within-kata measurement.
+//
+// Sink: total count of merged intervals across all K iters. The sum is
+// the slice-1 allow-list reduction shape, so karac's default build emits
+// a karac_par_reduce dispatch.
+//
+// The LCG stays inside i64 with no wraparound (1103515245 * state never
+// exceeds ~2.37e18 < i64::MAX). Every mirror (kara/rust/c/go/py)
+// reproduces the same stream and the same merged-interval counts; all
+// five must print the same sink before timing starts.
+
+fn merge_intervals(intervals: Slice[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut s: Vec[(i64, i64)] = Vec.from_slice(intervals);
+    s.sort_by(|a, b| a.0.cmp(b.0));
+    let mut result: Vec[(i64, i64)] = Vec.new();
+    let n = s.len();
+    if n == 0 {
+        return result;
+    }
+    let mut cur_start = s[0].0;
+    let mut cur_end = s[0].1;
+    let mut i = 1;
+    while i < n {
+        let interval = s[i];
+        if interval.0 <= cur_end {
+            if interval.1 > cur_end {
+                cur_end = interval.1;
+            }
+        } else {
+            result.push((cur_start, cur_end));
+            cur_start = interval.0;
+            cur_end = interval.1;
+        }
+        i = i + 1;
+    }
+    result.push((cur_start, cur_end));
+    result
+}
+
+// Overflow-free 31-bit LCG: 1103515245 * state + 12345 (mod 2^31).
+fn lcg_next(state: i64) -> i64 {
+    (1103515245 * state + 12345) % 2147483648
+}
+
+// One case = `count` intervals. Per interval: start in [0, 50], width in
+// [1, 10] (so end = start + width is always > start). The LCG stream
+// produces (start_seed, width_seed) pairs across the count.
+fn build_case(seed: i64, count: i64) -> Vec[(i64, i64)] {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut state = seed;
+    let mut j = 0;
+    while j < count {
+        state = lcg_next(state);
+        let start = state % 51;
+        state = lcg_next(state);
+        let width = (state % 10) + 1;
+        v.push((start, start + width));
+        j = j + 1;
+    }
+    v
+}
+
+fn main() {
+    let m_cases: i64 = 8;
+    let n_values: i64 = 16;
+    let k_iters: i64 = 1000000;
+
+    let mut sets: Vec[Vec[(i64, i64)]] = Vec.new();
+    let mut m = 0;
+    while m < m_cases {
+        sets.push(build_case(m * 1000003 + 12345, n_values));
+        m = m + 1;
+    }
+
+    // Reduction shape: sum = sum + r.len() per iter. karac's default
+    // build recognizes the allow-listed `+` accumulator and emits a
+    // karac_par_reduce dispatch. `r` is a Vec[(i64, i64)] allocated
+    // fresh inside merge_intervals and dropped at end-of-iter scope.
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % m_cases;
+        let r = merge_intervals(sets[idx].as_slice());
+        sum = sum + r.len();
+        k = k + 1;
+    }
+    println(sum);
+}

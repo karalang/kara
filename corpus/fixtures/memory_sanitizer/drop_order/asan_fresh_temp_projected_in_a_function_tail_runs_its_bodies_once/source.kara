@@ -1,0 +1,20 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+struct G[T] { v: T, k: i64 }
+fn mkg(d: D) -> G[D] { return G { v: d, k: 5 }; }
+fn tail() -> i64 { mkw(1).b }
+fn tailg() -> i64 { mkg(mkd(2)).k }
+fn taild() -> D { mkw(3).r }
+fn lastst() { let a = 1; mkw(4).b; }
+fn main() {
+    println(f"t{tail()}");
+    println(f"g{tailg()}");
+    let d = taild(); println(d.name);
+    lastst();
+    let f = |n: i64| { mkw(n).b }; println(f"f{f(5)}");
+    let x = mkg(mkd(6)).k; println(f"x{x}");
+    println("end")
+}

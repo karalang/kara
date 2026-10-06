@@ -1,0 +1,16 @@
+
+fn boom() -> Result[i64, i64] { Err(7_i64) }
+fn use_vec() -> Result[i64, i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    v.push(2_i64);
+    v.push(3_i64);
+    let _ = boom()?;
+    Ok(v.len() as i64)
+}
+fn main() {
+    match use_vec() {
+        Ok(n) => println(n),
+        Err(e) => println(e),
+    }
+}

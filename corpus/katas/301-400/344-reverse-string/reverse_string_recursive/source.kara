@@ -1,0 +1,70 @@
+// LeetCode #344: Reverse String — recursion on the outer pair.
+//
+// Write a function that reverses a string given as an array of characters,
+// in place, with O(1) extra memory.
+//
+//   ['h','e','l','l','o']        ->  ['o','l','l','e','h']
+//   ['H','a','n','n','a','h']    ->  ['h','a','n','n','a','H']
+//
+// Swap the outermost pair, then reverse what lies between it. The recursion
+// is a tail call on a range that shrinks by two, so it ends when the range
+// has fewer than two characters.
+//
+// O(n) time, O(n) stack unless the tail call is eliminated; the problem's
+// O(1) bound is the loop arms'.
+
+fn reverse_range(s: mut Slice[char], lo: i64, hi: i64) {
+    if lo >= hi {
+        return;
+    }
+    let t = s[lo];
+    s[lo] = s[hi];
+    s[hi] = t;
+    reverse_range(s, lo + 1, hi - 1);
+}
+
+fn reverse_string(s: mut Slice[char]) {
+    let n = s.len();
+    reverse_range(s, 0, n - 1);
+}
+
+fn show(s: ref Vec[char]) -> String {
+    let mut out = String.new();
+    for c in s {
+        out.push(c);
+    }
+    return out;
+}
+
+fn report(text: String) {
+    let mut s: Vec[char] = text.chars().collect();
+    reverse_string(mut s);
+    println(f"\"{text}\" -> \"{show(s)}\"");
+}
+
+fn main() {
+    // The examples from the problem statement.
+    report("hello");
+    report("Hannah");
+
+    // Edge lengths, and characters outside ASCII: each `char` is one code
+    // point, so these reverse code point by code point.
+    report("");
+    report("a");
+    report("ab");
+    report("racecar");
+    report("Kāra");
+    report("añb€c🦀d");
+    report("tab\there");
+
+    // Reversing twice is the identity, on a long string.
+    let mut long: Vec[char] = Vec.new();
+    for k in 0..100000 {
+        long.push(((k * 7919) % 26 + 97) as u8 as char);
+    }
+    let original = show(long);
+    reverse_string(mut long);
+    let first = long[0];
+    reverse_string(mut long);
+    println(f"100000 letters: first after one reverse '{first}', twice restores: {show(long) == original}");
+}

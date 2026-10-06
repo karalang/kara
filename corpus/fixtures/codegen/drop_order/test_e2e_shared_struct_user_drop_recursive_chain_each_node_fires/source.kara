@@ -1,0 +1,13 @@
+
+shared struct Node { val: i64, mut next: Option[Node] }
+impl Drop for Node {
+    fn drop(mut ref self) {
+        println(self.val);
+    }
+}
+fn main() {
+    let c = Node { val: 3, next: None };
+    let b = Node { val: 2, next: Some(c) };
+    let a = Node { val: 1, next: Some(b) };
+    println(0);
+}

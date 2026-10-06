@@ -1,0 +1,11 @@
+fn main() {
+         let cmd = Command.new("echo").arg("hello").arg("world");
+         match cmd.cmd_args.get(0) {
+             Some(a) => println(a),
+             None => println("?"),
+         }
+         match cmd.cmd_args.get(1) {
+             Some(a) => println(a),
+             None => println("?"),
+         }
+     }

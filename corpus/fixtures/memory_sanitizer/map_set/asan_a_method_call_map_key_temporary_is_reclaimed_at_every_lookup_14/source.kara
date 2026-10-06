@@ -1,0 +1,12 @@
+
+fn mkk(n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+}
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    m.insert(mkk(0i64), 0i64);
+    match m.get(mkk(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}

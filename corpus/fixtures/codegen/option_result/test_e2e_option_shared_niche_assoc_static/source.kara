@@ -1,0 +1,39 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+impl ListNode {
+    fn build(n: i64) -> Option[ListNode] {
+        let mut head: Option[ListNode] = None;
+        let mut i = n;
+        while i > 0 {
+            let node = ListNode { val: i, next: head };
+            head = Some(node);
+            i = i - 1;
+        }
+        head
+    }
+    fn total(head: Option[ListNode]) -> i64 {
+        let mut t = 0;
+        let mut cur = head;
+        while cur.is_some() {
+            let n = cur.unwrap();
+            t = t + n.val;
+            cur = n.next;
+        }
+        t
+    }
+    fn tail_of(head: Option[ListNode]) -> Option[ListNode] {
+        if head.is_some() {
+            let n = head.unwrap();
+            return n.next;
+        }
+        None
+    }
+}
+fn main() {
+    let chain = ListNode.build(4);
+    println(ListNode.total(chain));
+    println(ListNode.total(chain));
+    let rest = ListNode.tail_of(chain);
+    println(ListNode.total(rest));
+    println(ListNode.total(ListNode.tail_of(ListNode.build(3))));
+}

@@ -1,0 +1,25 @@
+
+fn main() {
+    let a: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let b: Column[i64] = Column.from_vec([10, 20, 30, 40]);
+    println(f"{a.zip_with(b, |x, y| x + y).sum()}");
+
+    let mut p: Column[i64] = Column.new();
+    p.push(1);
+    p.push_null();
+    p.push(3);
+    let mut q: Column[i64] = Column.new();
+    q.push(10);
+    q.push(20);
+    q.push_null();
+    let z = p.zip_with(q, |x, y| x + y);
+    println(f"{z.sum()} {z.valid_count()}");
+
+    let t1: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let t2: Tensor[i64, [4]] = Tensor.from([2, 2, 2, 2]);
+    println(f"{t1.zip_with(t2, |x, y| x * y).sum()}");
+
+    let m1: Tensor[i64, [2, 2]] = Tensor.from([[1, 2], [3, 4]]);
+    let m2: Tensor[i64, [2, 2]] = Tensor.from([[10, 20], [30, 40]]);
+    println(f"{m1.zip_with(m2, |x, y| x + y).sum()}");
+}

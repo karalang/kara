@@ -1,0 +1,15 @@
+
+fn maybe_ok(v: i64) -> Result[i64, i64] { Ok(v) }
+fn maybe_err(v: i64) -> Result[i64, i64] { Err(v) }
+fn main() {
+    let r: Result[i64, i64] = par {
+        let r1: Result[i64, i64] = maybe_ok(10_i64);
+        let r2: Result[i64, i64] = maybe_ok(20_i64);
+        let r3: Result[i64, i64] = maybe_err(42_i64);
+        Ok(7_i64)
+    };
+    match r {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}

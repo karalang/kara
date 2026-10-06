@@ -1,0 +1,30 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct T { id: i64 }
+impl Drop for T { fn drop(mut ref self) { println(f"t{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+struct V { s: String }
+impl Drop for V { fn drop(mut ref self) { println(f"v{self.s.len()}") } }
+fn qv(a: Option[V], c: bool) -> i64 { let r = if c { a } else { Some(V { s: f"fresh-heap-string-longer-than-sso" }) }; match r { Some(x) => println(f"r{x.s.len()}"), None => println("rn") }; 0 }
+fn keep(x: R) -> i64 { println(f"k{x.id}"); 0 }
+fn qf(a: Option[R], c: bool) -> i64 { let r = if c { a } else { Some(mkr(7)) }; match r { Some(x) => println(f"r{x.id}"), None => println("rn") }; 0 }
+fn qm(a: Option[R], k: i64) -> i64 { let r = match k { 0 => a, 1 => None, _ => Some(mkr(8)) }; match r { Some(x) => println(f"r{x.id}"), None => println("rn") }; 0 }
+fn qr(a: Option[R], c: bool) -> Option[R] { let r = if c { a } else { None }; r }
+fn qt(a: Option[R], c: bool) -> i64 { let r = if c { a } else { None }; match r { Some(x) => keep(x), None => 0 } }
+fn qx(a: Result[R, i64], c: bool) -> i64 { let r = if c { a } else { Err(5) }; match r { Ok(x) => println(f"r{x.id}"), Err(e) => println(f"e{e}") }; 0 }
+fn qs(a: Option[T], c: bool) -> i64 { let r = if c { a } else { None }; match r { Some(x) => println(f"r{x.id}"), None => println("rn") }; 0 }
+fn qb(a: Option[R], c: bool) -> i64 { let r = { if c { a } else { None } }; println(f"m{r.is_some()}"); 0 }
+fn ql(a: Option[R], c: bool) -> i64 { let r = if c { a } else { None }; if let Some(x) = r { println(f"l{x.id}") }; 0 }
+fn qn(a: Option[R], c: bool) -> i64 { let r = if c { a } else { None }; let q = r; println(f"m{q.is_some()}"); 0 }
+fn main() {
+  println("-a"); qf(Some(mkr(1)), true); qf(Some(mkr(2)), false);
+  println("-b"); qm(Some(mkr(1)), 0); qm(Some(mkr(2)), 1); qm(Some(mkr(3)), 2);
+  println("-c"); let o = qr(Some(mkr(1)), true); println(f"o{o.is_some()}"); let p = qr(Some(mkr(2)), false); println(f"p{p.is_some()}");
+  println("-d"); qt(Some(mkr(1)), true); qt(Some(mkr(2)), false);
+  println("-e"); qx(Ok(mkr(1)), true); qx(Ok(mkr(2)), false);
+  println("-f"); qs(Some(T { id: 1 }), true); qs(Some(T { id: 2 }), false);
+  println("-g"); qb(Some(mkr(1)), true); qb(Some(mkr(2)), false);
+  println("-i"); ql(Some(mkr(1)), true); ql(Some(mkr(2)), false);
+  println("-j"); qn(Some(mkr(1)), true); qn(Some(mkr(2)), false);
+  println("-k"); qv(Some(V { s: f"caller-heap-string-longer-than-sso-1" }), true); qv(Some(V { s: f"caller-heap-string-longer-than-sso-22" }), false);
+  println("end") }

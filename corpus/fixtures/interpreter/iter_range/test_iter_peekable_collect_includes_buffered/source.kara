@@ -1,0 +1,10 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let mut p = v.iter().peekable();
+    let _ = p.peek();
+    let xs: Vec[i64] = p.collect();
+    for x in xs {
+        println(x);
+    }
+}

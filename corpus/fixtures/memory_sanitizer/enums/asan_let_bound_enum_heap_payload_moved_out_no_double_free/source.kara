@@ -1,0 +1,35 @@
+
+enum E { A(String), B(i64, String), N(i64) }
+fn make(tag: i64) -> E {
+    if tag == 0 {
+        let e = E.A("alpha".to_string());
+        e
+    } else if tag == 1 {
+        let e = E.B(7, "beta".to_string());
+        e
+    } else {
+        let e = E.N(99);
+        e
+    }
+}
+fn main() {
+    // return-of-let-bound-enum, consumed by an INLINE match (not re-transferred
+    // through another call — that transfer path is #14, not covered here).
+    let r = make(0);
+    match r { A(s) => println(s), B(n, s) => { println(n.to_string()); println(s); } N(x) => println(x.to_string()) }
+    let r1 = make(1);
+    match r1 { A(s) => println(s), B(n, s) => { println(n.to_string()); println(s); } N(x) => println(x.to_string()) }
+    let r2 = make(2);
+    match r2 { A(s) => println(s), B(n, s) => { println(n.to_string()); println(s); } N(x) => println(x.to_string()) }
+    // `let g = f` enum move — g is the sole owner, f's drop suppressed.
+    let f = make(0);
+    let g = f;
+    match g { A(s) => println(s), B(n, s) => { println(n.to_string()); println(s); } N(x) => println(x.to_string()) }
+    // loop: each iteration's return-bound enum frees exactly once.
+    let mut i = 0;
+    while i < 3 {
+        let x = make(0);
+        match x { A(s) => println(s), B(n, s) => { println(n.to_string()); println(s); } N(y) => println(y.to_string()) }
+        i = i + 1;
+    }
+}

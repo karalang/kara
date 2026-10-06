@@ -1,0 +1,19 @@
+
+shared struct N { v: i64 }
+
+fn probe(xs: Vec[weak N]) -> i64 {
+    let work = xs;
+    match work[0] { Some(x) => { x.v } None => { 0 - 1 } }
+}
+
+fn build() -> Vec[weak N] {
+    let a: N = N { v: 7 };
+    let mut w: Vec[weak N] = Vec.new();
+    w.push(a);
+    w
+}
+
+fn main() {
+    let dead = build();
+    println(probe(dead));
+}

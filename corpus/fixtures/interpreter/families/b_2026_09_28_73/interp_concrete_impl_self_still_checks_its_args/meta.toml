@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_09_28_73.rs::interp_concrete_impl_self_still_checks_its_args"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

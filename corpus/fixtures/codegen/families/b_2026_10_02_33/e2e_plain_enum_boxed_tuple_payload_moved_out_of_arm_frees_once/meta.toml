@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_02_33.rs::e2e_plain_enum_boxed_tuple_payload_moved_out_of_arm_frees_once"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_02_33.rs::asan_plain_enum_boxed_tuple_payload_moved_out_of_arm_frees_once"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

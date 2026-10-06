@@ -1,0 +1,30 @@
+
+fn id[T](v: T) -> T { return v; }
+fn pick[T](a: T, b: T) -> T { return id(a); }
+fn keep[T](a: T, b: T) -> T { return a; }
+fn echo[T](x: T) -> T { return x; }
+fn nest[T](x: T) -> T { return id(id(x)); }
+fn takeout[T](b: T) -> T { match b { v => { return v; } } }
+fn three[T](a: T, b: T, c: T) -> T { return b; }
+fn mk() -> Vec[i64] { let v: Vec[i64] = [10, 20, 30, 40]; return v; }
+fn main() {
+    let x: Vec[i64] = [1, 2, 3, 4, 5, 6, 7, 8];
+    let y: Vec[i64] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    let ns: Vec[String] = ["alphaalphaalpha", "betabetabeta"];
+    let mut k = 0;
+    let mut t = 0;
+    while k < 20 {
+        let r1 = pick(x.clone(), y.clone()); t = t + r1[0];
+        let r2 = keep(x.clone(), y.clone()); t = t + r2[1];
+        let r3 = echo(x.clone()); t = t + r3[2];
+        let r4 = nest(x.clone()); t = t + r4[3];
+        let r5 = takeout(x.clone()); t = t + r5[4];
+        let r6 = three(x.clone(), y.clone(), mk()); t = t + r6[0];
+        let r7 = keep(ns.clone(), ns.clone()); t = t + r7.len();
+        let r8 = keep(x.clone(), [90, 91, 92]); t = t + r8[5];
+        k = k + 1;
+    }
+    println(t);
+    println(x.len());
+    println(ns[1]);
+}

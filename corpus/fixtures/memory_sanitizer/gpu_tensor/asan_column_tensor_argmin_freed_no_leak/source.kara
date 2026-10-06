@@ -1,0 +1,25 @@
+
+fn idx(o: Option[i64]) -> i64 {
+    match o {
+        Some(i) => i,
+        None => -1,
+    }
+}
+fn inner() -> i64 {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    let a = idx(c.argmin()) + idx(c.argmax());
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    let b = idx(t.argmin()) + idx(t.argmax());
+    // Fresh-temp receiver — must be freed by the owned-temp path.
+    let d = idx(Column.from_vec([2, 8, 1, 8]).argmax());
+    a + b + d
+}
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        acc = acc + inner();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}

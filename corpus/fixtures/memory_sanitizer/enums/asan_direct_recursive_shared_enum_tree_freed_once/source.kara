@@ -1,0 +1,15 @@
+
+shared enum Expr {
+    Num(i64),
+    Add(Expr, Expr),
+}
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(a, b) => eval(a) + eval(b),
+    }
+}
+fn main() {
+    let e = Add(Num(3), Add(Num(4), Num(5)));
+    println(eval(e));
+}

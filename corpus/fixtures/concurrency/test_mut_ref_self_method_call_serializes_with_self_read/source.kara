@@ -1,0 +1,13 @@
+
+        effect resource Tape;
+        struct S { pos: i64, start: i64 }
+        impl S {
+            fn bump(mut ref self) writes(Tape) { self.pos = self.pos + 1; }
+            fn step(mut ref self) -> i64 {
+                self.bump();
+                self.start = self.pos;
+                self.start
+            }
+        }
+        fn main() { let mut s = S { pos: 0, start: 0 }; let n = s.step(); }
+        

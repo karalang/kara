@@ -1,0 +1,31 @@
+
+fn interp(x: Option[Option[String]]) { println(f"i:{x}"); }
+
+fn matched(x: Option[Option[String]]) {
+    match x { Some(inner) => { println(f"m:{inner}"); } None => { println("mn"); } }
+}
+
+fn unused(x: Option[Option[String]]) { println("u"); }
+
+fn other(x: Option[Result[String, String]]) { println(f"o:{x}"); }
+
+fn triple(x: Option[Option[Option[String]]]) { println(f"t:{x}"); }
+
+fn admitted(x: Result[Option[String], String]) { println(f"a:{x}"); }
+
+fn ident(x: Option[Option[String]]) -> Option[Option[String]] { return x; }
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        interp(Some(Some(f"in-{n}-padpadpad")));
+        matched(Some(Some(f"ma-{n}-padpadpad")));
+        unused(Some(Some(f"un-{n}-padpadpad")));
+        other(Some(Ok(f"ot-{n}-padpadpad")));
+        triple(Some(Some(Some(f"tr-{n}-padpadpad"))));
+        admitted(Ok(Some(f"ad-{n}-padpadpad")));
+        let r = ident(Some(Some(f"id-{n}-padpadpad")));
+        println(f"r:{r}");
+        n = n + 1;
+    }
+}

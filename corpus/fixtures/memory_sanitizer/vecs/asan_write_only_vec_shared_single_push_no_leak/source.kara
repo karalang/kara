@@ -1,0 +1,10 @@
+
+shared struct Item { val: i64, tag: i64 }
+shared struct Node { val: i64, mut next: Option[Node] }
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    v.push(Item { val: 1, tag: 2 });
+    let mut w: Vec[Node] = Vec.new();
+    w.push(Node { val: 1, next: Some(Node { val: 2, next: None }) });
+    println("done");
+}

@@ -1,0 +1,90 @@
+// LeetCode #52: N-Queens II — marker arrays, count threaded by mutable reference.
+//
+// Same row-by-row search as the ★ file ([`bitmask_count`](bitmask_count.kara)) and the
+// SAME count for every n; the axis that changes is two-fold — how occupancy is stored and
+// how the running count is accumulated.
+//
+// Occupancy uses three boolean marker arrays (the array-of-bools idiom the permutation and
+// #51 katas lean on), flipped in lockstep and tested in O(1):
+//
+//   - `cols[c]`              — column c occupied.                 index 0 .. n-1
+//   - `diag1[row+col]`       — the ↘ diagonal through (row,col).  index 0 .. 2n-2
+//   - `diag2[row-col+(n-1)]` — the ↙ diagonal; `+(n-1)` bias      index 0 .. 2n-2
+//     shifts `row-col ∈ [-(n-1), n-1]` into `[0, 2n-2]`.
+//
+// Each choice is bracketed set-three-marks / recurse / clear-three-marks — the textbook
+// backtracking undo. Unlike the ★ file's by-value masks, these arrays are shared mutable
+// state, so the clear-on-return is mandatory.
+//
+// The count is accumulated the OTHER way from ★: instead of a `-> i64` that sums its
+// children's return values, `count` returns nothing and bumps a `total: mut ref i64`
+// accumulator threaded through the whole DFS. This is the same `mut ref i64` out-parameter
+// shape the #51 benchmark's counting kernel uses, and the contrast with ★'s pure return
+// value is the point — two idiomatic ways to tally a search, reaching the identical answer.
+//
+// LeetCode bounds: 1 ≤ n ≤ 9; the sweep runs to 11. i64 throughout.
+
+fn count(
+    n: i64,
+    row: i64,
+    cols: mut ref Vec[bool],
+    diag1: mut ref Vec[bool],
+    diag2: mut ref Vec[bool],
+    total: mut ref i64,
+) {
+    if row == n {
+        total = total + 1;           // a full board — tally one solution
+        return;
+    }
+    let mut c = 0;
+    while c < n {
+        let d1 = row + c;               // ↘ diagonal key
+        let d2 = row - c + (n - 1);  // ↙ diagonal key, biased non-negative
+        if not cols[c] and not diag1[d1] and not diag2[d2] {
+            cols[c] = true;
+            diag1[d1] = true;
+            diag2[d2] = true;
+            count(n, row + 1, cols, diag1, diag2, total);
+            cols[c] = false;            // undo all three markers on the way back up
+            diag1[d1] = false;
+            diag2[d2] = false;
+        }
+        c = c + 1;
+    }
+}
+
+fn solve(n: i64) -> i64 {
+    let mut cols: Vec[bool] = Vec.new();
+    let mut diag1: Vec[bool] = Vec.new();
+    let mut diag2: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        cols.push(false);
+        i = i + 1;
+    }
+    let span = 2 * n - 1;         // both diagonal axes hold 2n-1 keys
+    let mut j = 0;
+    while j < span {
+        diag1.push(false);
+        diag2.push(false);
+        j = j + 1;
+    }
+    let mut total: i64 = 0;
+    count(n, 0, mut cols, mut diag1, mut diag2, mut total);
+    total
+}
+
+// ---- test harness (identical to the ★ file) -------------------------------
+
+fn main() {
+    let mut s: String = "counts:";
+    let mut n = 1;
+    while n <= 11 {
+        let c = solve(n);
+        println(f"n={n} -> {c}");
+        s.push(' ');
+        s.push_str(f"{c}");
+        n = n + 1;
+    }
+    println(s);
+}

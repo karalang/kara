@@ -1,0 +1,85 @@
+// Benchmark harness for LeetCode #242 — Valid Anagram.
+//
+// Build-once + punch (BENCHMARKS.md): the string pairs are built once, then
+// each punch runs the full frequency pass. Rebuilding them per iteration would
+// be a vectorizable refill loop that swamps the measurement.
+//
+// Both outcomes cost the same here by construction: the counting loop has no
+// early exit, so it always walks the whole input, and only the 26-slot
+// verification differs. Even-indexed pairs are true anagrams (t is s reversed);
+// odd-indexed pairs flip one character, so they fail at the final check having
+// done identical work.
+
+fn is_anagram(s: ref String, t: ref String) -> bool {
+    let sb = s.bytes();
+    let tb = t.bytes();
+    if sb.len() != tb.len() {
+        return false;
+    }
+    let mut count: Array[i64, 26] = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ];
+    let mut i = 0;
+    while i < sb.len() {
+        count[(sb[i] as i64) - 97] = count[(sb[i] as i64) - 97] + 1;
+        count[(tb[i] as i64) - 97] = count[(tb[i] as i64) - 97] - 1;
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < 26 {
+        if count[j] != 0 {
+            return false;
+        }
+        j = j + 1;
+    }
+    return true;
+}
+
+fn main() {
+    let np = 8;
+    let sl = 20000;
+    let iters = 8000;
+
+    let mut esses: Vec[String] = Vec.new();
+    let mut tees: Vec[String] = Vec.new();
+    let mut j = 0;
+    while j < np {
+        let mut sj = String.new();
+        let mut k = 0;
+        while k < sl {
+            sj.push((97 + ((k * 7 + j) % 26)) as u8 as char);
+            k = k + 1;
+        }
+        // t is s reversed — same multiset, so an anagram. For odd j one
+        // character is shifted, which breaks the multiset without changing the
+        // length, so the counting loop still runs in full.
+        let sb = sj.bytes();
+        let mut tj = String.new();
+        let mut m = sl - 1;
+        while m >= 0 {
+            let mut b = sb[m] as i64;
+            if j % 2 == 1 {
+                if m == 0 { b = 97 + ((b - 97 + 1) % 26); }
+            }
+            tj.push(b as u8 as char);
+            m = m - 1;
+        }
+        esses.push(sj);
+        tees.push(tj);
+        j = j + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 3) % np;
+        if is_anagram(esses[idx], tees[idx]) {
+            sink = sink + (it + 1);
+        } else {
+            sink = sink + 1;
+        }
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

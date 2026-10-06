@@ -1,0 +1,33 @@
+read
+dR1/t1
+  ok101
+dR101/t101
+call
+dR2/t2
+  eat102
+dR102/t102
+inner
+dR3/t3
+  got103
+dR103/t103
+esc
+dR4/t4
+  got104
+dR104/t104
+errc
+dR5/t5
+  eat105
+dR105/t105
+wread
+dR6/t6
+  ok106
+dW106/x106y106
+winner
+dR7/t7
+  got107
+dW107/x107y107
+wesc
+dR8/t8
+  got108
+dW108/x108y108
+done

@@ -1,0 +1,12 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    let mut count = 0;
+    for g in v.iter().chunk_by(|x| x) {
+        for x in g {
+            println(x);
+        }
+        count = count + 1;
+    }
+    println(f"groups:{count}");
+}

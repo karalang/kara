@@ -1,0 +1,100 @@
+// LeetCode #110: Balanced Binary Tree — bottom-up single pass (★).
+//
+// A tree is height-balanced when every node's two subtrees differ in height by at most one.
+// The naive check recomputes each node's subtree heights from scratch (O(n^2)); the clever
+// one folds height and balance into a SINGLE post-order pass: `check` returns a subtree's
+// height, or the sentinel -1 the moment any subtree is found unbalanced, so the -1 propagates
+// straight up and the walk short-circuits. `is_balanced` is then just `check(root) != -1`.
+// O(n), one visit per node. Node type mirrors kata [#104](../104-maximum-depth-of-binary-tree/)
+// — a `shared struct TreeNode` (RC).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => {
+            if v < n.val {
+                n.left = insert(n.left, v);
+            } else {
+                n.right = insert(n.right, v);
+            }
+            Some(n)
+        }
+    }
+}
+
+// Returns the subtree's height, or -1 if it (or any subtree) is unbalanced.
+fn check(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let lh = check(n.left);
+            if lh == -1 {
+                return -1;
+            }
+            let rh = check(n.right);
+            if rh == -1 {
+                return -1;
+            }
+            let diff = lh - rh;
+            let absdiff = if diff < 0 { -diff } else { diff };
+            if absdiff > 1 {
+                return -1;
+            }
+            if lh > rh { 1 + lh } else { 1 + rh }
+        }
+    }
+}
+
+fn is_balanced(root: Option[TreeNode]) -> bool {
+    check(root) != -1
+}
+
+// A perfectly balanced tree over the values [lo, hi] via middle-pick (always balanced).
+fn build_balanced(lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: mid, left: None, right: None };
+    node.left = build_balanced(lo, mid - 1);
+    node.right = build_balanced(mid + 1, hi);
+    Some(node)
+}
+
+// A right-skewed chain of length `len` (insert 0,1,…,len-1 in ascending order — each goes
+// right), unbalanced for len >= 3.
+fn build_chain(len: i64) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    let mut i = 0;
+    while i < len {
+        root = insert(root, i);
+        i = i + 1;
+    }
+    root
+}
+
+fn main() {
+    // Alternate balanced (even t) and skewed (odd t) trees, so the verdict is a clean mix.
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        let n = 7 + t;
+        let root = if (t % 2) == 0 {
+            build_balanced(0, n - 1)
+        } else {
+            build_chain(n)
+        };
+        let bal = is_balanced(root);
+        let bit = if bal { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        println(f"tree {t}: balanced={bal}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/io_runtime.rs::test_e2e_fs_read_lines_missing_file_returns_err"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

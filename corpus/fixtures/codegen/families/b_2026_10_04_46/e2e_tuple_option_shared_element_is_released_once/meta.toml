@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_04_46.rs::e2e_tuple_option_shared_element_is_released_once"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_04_46.rs::asan_tuple_option_shared_element_is_released_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

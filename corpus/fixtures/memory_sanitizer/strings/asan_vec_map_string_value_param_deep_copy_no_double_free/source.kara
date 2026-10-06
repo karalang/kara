@@ -1,0 +1,16 @@
+
+fn id(v: Vec[Map[i64, String]]) -> Vec[Map[i64, String]] {
+    v
+}
+
+fn main() {
+    let mut v: Vec[Map[i64, String]] = Vec.new();
+    let mut m: Map[i64, String] = Map.new();
+    let mut s = String.new();
+    s.push_str("payload-in-nested-map");
+    m.insert(7i64, s);
+    v.push(m);
+    let r = id(v);
+    println(r.len());
+    match r[0].get(7i64) { Some(g) => println(g), None => println("missing") }
+}

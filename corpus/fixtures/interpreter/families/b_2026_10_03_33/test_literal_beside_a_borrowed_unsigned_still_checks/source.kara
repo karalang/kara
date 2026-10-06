@@ -1,0 +1,19 @@
+enum Tok { Eof, ByteTok(u8) }
+fn code(t: ref Tok) -> i64 {
+    match t {
+        ByteTok(b) => {
+            if b == 43 {
+                return 2000;
+            }
+            if b > 40 {
+                return 41;
+            }
+            return 2;
+        }
+        Eof => {}
+    }
+    return 0;
+}
+fn main() {
+    println(f"{code(Tok.ByteTok(43))} {code(Tok.ByteTok(42))} {code(Tok.ByteTok(1))}");
+}

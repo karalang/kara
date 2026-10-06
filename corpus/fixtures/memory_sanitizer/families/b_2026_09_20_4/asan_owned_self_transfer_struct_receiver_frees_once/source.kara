@@ -1,0 +1,38 @@
+struct D { s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"  d{self.s}") } }
+struct Ha { g: Array[String, 2] }
+struct In { g: Array[String, 2] }
+struct Hn { i: In, n: i64 }
+struct Hd { g: Array[D, 2] }
+fn eat(h: Ha) { println(f"  ate {h.g[0]}") }
+fn mka() -> Array[String, 2] { return [f"aaaaaaaa-1", f"bbbbbbbb-2"] }
+impl Ha {
+    fn give(self) { println("  held") }
+    fn take(self) -> Array[String, 2] { return self.g }
+    fn fwd(self) { eat(self) }
+    fn two(self) { self.give() }
+    fn peek(ref self) -> i64 { return self.g[1].len() }
+}
+impl Hn { fn give(self) { println(f"  held {self.n}") } }
+impl Hd { fn give(self) { println("  held") } }
+fn pass(h: Ha) { h.give() }
+fn main() {
+    let a = Ha { g: mka() };
+    println(f"peek {a.peek()}");
+    a.give();
+    let b = Ha { g: mka() };
+    let t = b.take();
+    println(f"take {t[1]}");
+    let c = Ha { g: mka() };
+    c.fwd();
+    let e = Ha { g: mka() };
+    e.two();
+    pass(Ha { g: mka() });
+    Ha { g: mka() }.give();
+    let n = Hn { i: In { g: mka() }, n: 3 };
+    n.give();
+    println("drops");
+    let d = Hd { g: [D { s: f"1" }, D { s: f"2" }] };
+    d.give();
+    println("end")
+}

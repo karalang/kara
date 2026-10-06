@@ -1,0 +1,5 @@
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.b}"); } }
+fn go() -> i64 { let t = mkp(9); let mut i = 0i64; let mut n = 0i64;
+  while i < 3i64 { n = n + takep(t); i = i + 1; }
+  return n; }
+fn main() { println(go()); }

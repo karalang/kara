@@ -1,0 +1,33 @@
+
+shared struct Node { val: i64 }
+
+fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }
+
+fn show(t: Option[Node]) -> i64 {
+    match t { None => { return 0; } Some(n) => { return n.val; } }
+}
+
+fn main() {
+    let mut s = 0;
+    let mut i = 0;
+    while i < 5 {
+        // Plain `if`, alternating which arm is taken.
+        let a = make(i);
+        let b = make(i + 100);
+        let t = if i % 2 == 0 { a } else { b };
+        s = s + show(t) + show(t) + show(t);
+        // MIXED arms: a borrowed binding against a fresh producer. The
+        // over-retaining wrong fix leaks here, which is what LSan catches.
+        let c = make(i + 1000);
+        let u = if i % 2 == 0 { c } else { make(7) };
+        s = s + show(u) + show(u) + show(u);
+        // `if let`, alternating THEN and ELSE arms.
+        let d = make(i + 10000);
+        let e = make(i + 20000);
+        let o = if i % 2 == 0 { Some(1) } else { None };
+        let w = if let Some(z) = o { d } else { e };
+        s = s + show(w) + show(w) + show(w);
+        i = i + 1;
+    }
+    println(s);
+}

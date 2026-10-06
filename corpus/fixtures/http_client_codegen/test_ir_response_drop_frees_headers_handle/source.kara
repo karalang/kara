@@ -1,0 +1,13 @@
+
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    let url = "http://127.0.0.1:65535/";
+    match c.get(url) {
+        Ok(resp) => {
+            println(resp.status());
+        }
+        Err(e) => {
+            println(e.message());
+        }
+    }
+}

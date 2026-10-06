@@ -1,0 +1,52 @@
+// Benchmark workload — binary search find-min on a rotated sorted array.
+//
+// N=2_000_000 deterministic input: sorted [1..N], then rotated by pivot
+// R=N/3. K=2_000_000 outer iterations because each O(log n) call is only
+// ~21 comparisons; large K gets total inner work into the same order as
+// the linear-scan workload (~42 M comparisons vs ~20 M). The same data is
+// re-used across calls — the bench measures how cheaply each frontend
+// dispatches one find_min, not how quickly it sorts.
+// Tune N / K in step with ../README.md § Benchmarks.
+
+fn find_min(nums: Slice[i64]) -> i64 {
+    // Indices carried as u64: `lo`, `hi` are non-negative and `lo <= hi`
+    // throughout, so signed arithmetic does no useful work and forces the
+    // backend to emit a sign-rounding `cinc` plus arithmetic shift for the
+    // mid-point. With u64 the mid-compute folds to `sub + add ..., lsr #1`
+    // (two instructions, fused shift-add) and the loop guard uses `b.lo`
+    // (unsigned) instead of `b.lt`. Mirrors Rust's `let mut lo: usize`.
+    let n: u64 = nums.len() as u64;
+    let mut lo: u64 = 0u64;
+    let mut hi: u64 = n - 1u64;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2u64;
+        if nums[mid] > nums[hi] {
+            lo = mid + 1u64;
+        } else {
+            hi = mid;
+        }
+    }
+    nums[lo]
+}
+
+fn main() {
+    let n = 2000000;
+    let r = 666666;
+    // Pre-allocate to avoid log₂(N) realloc + copy churn during fill. The
+    // doubling-realloc pattern of Vec.new + push leaves old+new heap regions
+    // alive at the final doubling (transient 2× peak RSS); Vec.with_capacity
+    // takes one allocation. Mirrors rust's Vec::with_capacity(N).
+    let mut data: Vec[i64] = Vec.with_capacity(n);
+    for i in 0..n {
+        // data[i] = ((i + r) mod n) + 1  →  sorted [1..n] rotated by r.
+        // Values land in [1, n]; the minimum is 1, located at index n - r.
+        data.push(((i + r) % n) + 1);
+    }
+
+    // Sum-of-results sink so the optimizer cannot elide the K calls.
+    let mut sum = 0;
+    for _ in 0..2000000 {
+        sum = sum + find_min(data.as_slice());
+    }
+    println(sum);
+}

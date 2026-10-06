@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut out: Vec[f64] = Vec.new();
+    #[par_order_free]
+    for k in 0i64..100i64 {
+        out.push((k as f64) * 0.5);
+    }
+    let mut s: f64 = 0.0;
+    let mut i: i64 = 0i64;
+    while i < out.len() {
+        s = s + out[i];
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(s as i64);
+}

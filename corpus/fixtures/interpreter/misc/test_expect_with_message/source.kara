@@ -1,0 +1,1 @@
+fn main() { let x = None; x.expect("value required"); }

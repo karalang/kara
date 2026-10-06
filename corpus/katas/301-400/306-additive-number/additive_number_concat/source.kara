@@ -1,0 +1,135 @@
+// LeetCode 306 — Additive Number, by generating and comparing.
+//
+// THE ARM: do not match the sum against the input as you go. GENERATE the
+// whole sequence from its first two numbers, concatenate its digits, and
+// compare that string to the input.
+//
+// The other arms check each sum against the input the moment it is computed,
+// which lets them abandon a bad (a, b) pair on its very first mismatch. This
+// arm cannot: it has no idea whether it is on the right track until the
+// generated digits are as long as the input, so it always runs the sequence to
+// full length before learning anything. That is strictly more work, and it is
+// the point — it separates "the sum's digits appear at this offset" from "the
+// concatenation of the whole sequence IS the input", which are the same
+// property stated at two different granularities.
+//
+// It also fails differently, which is what makes it worth having. An
+// off-by-one in the star arm's `pos` advance shows up as a mismatch at some
+// later offset; the same slip here shows up as a length disagreement at the
+// end. A bug that happens to keep offsets consistent while corrupting a digit
+// is invisible to one and loud in the other.
+//
+// The stopping rule is the only subtle part: the generated sequence grows
+// without bound, so it must stop as soon as its length REACHES the input's.
+// Overshooting is a mismatch, not an error — 1, 1, 2, 3 concatenates to "1123"
+// which is longer than "112", so "112" is correctly rejected rather than
+// truncated into a false positive.
+// Decimal digits of the input's [lo, hi) span, most significant first.
+fn digits_of(bytes: Slice[u8], lo: i64, hi: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in lo..hi { out.push((bytes[i] - b'0') as i64); }
+    return out;
+}
+// Schoolbook addition, most-significant-first, exact at any length.
+fn add_digits(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut rev: Vec[i64] = Vec.new();
+    let mut i = a.len() - 1;
+    let mut j = b.len() - 1;
+    let mut carry = 0;
+    // i and j are signed, so the "walked off the front" test is >= 0 rather
+    // than a wrapping comparison.
+    while i >= 0 or j >= 0 or carry > 0 {
+        let mut sum = carry;
+        if i >= 0 { sum = sum + a[i]; i = i - 1; }
+        if j >= 0 { sum = sum + b[j]; j = j - 1; }
+        rev.push(sum % 10);
+        carry = sum / 10;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = rev.len() - 1;
+    while k >= 0 { out.push(rev[k]); k = k - 1; }
+    return out;
+}
+// Does `num` spell exactly the input's digits starting at `pos`?
+fn matches_at(bytes: Slice[u8], pos: i64, num: ref Vec[i64]) -> bool {
+    if pos + num.len() > bytes.len() { return false; }
+    for k in 0..num.len() {
+        if (bytes[pos + k] - b'0') as i64 != num[k] { return false; }
+    }
+    return true;
+}
+// A number may not carry a leading zero unless it IS zero.
+fn no_leading_zero(bytes: Slice[u8], lo: i64, hi: i64) -> bool {
+    return hi - lo == 1 or bytes[lo] != b'0';
+}
+
+fn digits_eq(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() { return false; }
+    for i in 0..a.len() { if a[i] != b[i] { return false; } }
+    return true;
+}
+
+fn is_additive(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    if n < 3 { return false; }
+    let whole = digits_of(bytes, 0, n);
+
+    for len1 in 1..(n - 1) {
+        if not no_leading_zero(bytes, 0, len1) { break; }
+        for len2 in 1..(n - len1) {
+            if not no_leading_zero(bytes, len1, len1 + len2) { break; }
+            let mut a = digits_of(bytes, 0, len1);
+            let mut b = digits_of(bytes, len1, len1 + len2);
+            // The concatenation so far: the two seeds, then every sum.
+            let mut built: Vec[i64] = Vec.new();
+            for d in a { built.push(d); }
+            for d in b { built.push(d); }
+            let mut count = 2;
+            while built.len() < n {
+                let c = add_digits(a, b);
+                for d in c { built.push(d); }
+                a = b;
+                b = c;
+                count = count + 1;
+            }
+            if count > 2 and digits_eq(built, whole) { return true; }
+        }
+    }
+    return false;
+}
+
+fn report(s: ref String) {
+    println("\"" + s + "\" -> " + is_additive(s).to_string());
+}
+
+fn main() {
+    // The three examples from the LeetCode statement.
+    report("112358".to_string());
+    report("199100199".to_string());
+    report("1023".to_string());
+    // Shortest possible: three single digits.
+    report("000".to_string());
+    report("011".to_string());
+    report("123".to_string());
+    report("122".to_string());
+    // Too short to hold three numbers.
+    report("".to_string());
+    report("1".to_string());
+    report("12".to_string());
+    // Leading zeros are the whole trap: 1,02,3 must not count.
+    report("1023456".to_string());
+    report("0235".to_string());
+    // All zeros of every length — 0+0=0 forever.
+    report("0000".to_string());
+    report("00000".to_string());
+    // A carry that lengthens the sum, which is where in-place matching earns
+    // its keep: 99 + 1 = 100 is three digits where its inputs were two.
+    report("199100".to_string());
+    // 35 digits, the stated maximum, and far past what i64 can hold.
+    report("11235813213455891442333776109871597258441816765109461771128657".to_string());
+    // Three numbers that each exceed i64: (10^20 - 1) + 1 = 10^20. The
+    // `_i64` arm returns None here; this arm answers it exactly.
+    report("999999999999999999991100000000000000000000".to_string());
+    report("12345678910111213141516171819202122".to_string());
+}

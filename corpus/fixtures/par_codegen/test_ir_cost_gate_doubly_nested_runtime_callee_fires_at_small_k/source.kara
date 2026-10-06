@@ -1,0 +1,21 @@
+
+fn scan2(a: i64, b: i64) -> i64 {
+    let mut i: i64 = 0i64;
+    let mut acc: i64 = 0i64;
+    while i < a {
+        let mut j: i64 = 0i64;
+        while j < b {
+            acc = acc + i * j;
+            j = j + 1i64;
+        }
+        i = i + 1i64;
+    }
+    acc
+}
+fn main() {
+    let mut sum: i64 = 0i64;
+    for _ in 0i64..10i64 {
+        sum = sum + scan2(40i64, 40i64);
+    }
+    println(sum);
+}

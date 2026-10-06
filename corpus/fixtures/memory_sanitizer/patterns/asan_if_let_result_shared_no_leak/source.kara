@@ -1,0 +1,27 @@
+
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[Node, i64] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => Err(1),
+        Some(n) => Ok(n),
+    }
+}
+fn caller() -> i64 {
+    let d = take();
+    let mut r = 0;
+    if let Ok(n) = d {
+        r = n.val;
+    }
+    r
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + caller();
+        i = i + 1;
+    }
+    println(f"{t}");
+}

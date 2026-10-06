@@ -1,0 +1,12 @@
+
+struct E { level: String, message: String, items: Vec[i64] }
+fn ev(e: E) {
+    let mut line = f"[{e.level}] {e.message}";
+    for x in e.items { line = line + f" {x}"; }
+    println(line);
+}
+fn main() {
+    ev(E { level: "info", message: "one", items: Vec.new() });
+    println("between");
+    ev(E { level: "warn", message: "two", items: Vec.new() });
+}

@@ -1,0 +1,189 @@
+// LeetCode #25: Reverse Nodes in k-Group — iterative O(n), O(1) extra.
+//
+// Given the head of a singly linked list, reverse the nodes k at a time and
+// return the new head. Nodes must be re-linked, not have their values
+// rewritten, and a trailing partial group (fewer than k nodes) stays in its
+// original order. This is the Hard generalization of kata
+// [#24](../24-swap-nodes-in-pairs/): k = 2 degenerates to exactly that swap,
+// and the trailing partial group generalizes its odd-length singleton.
+//
+// Each round handles one group, anchored by a `group_prev` cursor (initially
+// a dummy before the head — the same load-bearing trick as katas #2/#19/#21/
+// #24, so reversing the head group needs no special case):
+//
+//   1. Probe: walk k nodes from `group_prev.next`. If the walk falls off the
+//      end, fewer than k remain — the suffix stays as-is and we're done. The
+//      probe comes to rest on the first node *after* the group (`rest`).
+//   2. Reverse: the standard three-local pointer reversal (`prev`/`cur`/saved
+//      `next`), run exactly k steps, with `prev` seeded to `rest` rather than
+//      None — so the old group head (which becomes the group *tail*) links
+//      straight to the suffix and no fix-up pass is needed.
+//   3. Graft: `group_prev.next = prev` (the old k-th node, now the group
+//      head), then `group_prev` advances to the old group head (now the
+//      tail), which anchors the next group.
+//
+//   group_prev → n1 → n2 → … → nk → rest
+//     becomes
+//   group_prev → nk → … → n2 → n1 → rest
+//
+// Unlike kata #24's fixed three-store pair dance, the reversal loop displaces
+// a node on *every* step: `cur = node.next` then `node.next = prev` rewrites
+// the field a live pattern binding was unwrapped from, k times per group —
+// the alias-under-displacement shape that found kata #24's refcount bug, now
+// in a loop instead of a straight line. The probe's `break` out of a `match`
+// arm inside `while` exercises the other kata-#24 fix (early-exit cleanup
+// drains) every round.
+//
+// LeetCode bounds: 1 ≤ k ≤ n ≤ 5000, 0 ≤ Node.val ≤ 1000 — i32 would
+// suffice; values are i64 for uniformity with the rest of the corpus
+// (contrast kata [#18](../18-4sum/), where the 10⁹ bound forces i64).
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn reverse_k_group(head: Option[ListNode], k: i64) -> Option[ListNode] {
+    // Dummy before the head: the first group grafts onto `group_prev.next`
+    // like every other group, so reversing the head group is not special.
+    let dummy = ListNode { val: 0, next: head };
+    let mut group_prev = dummy;
+
+    loop {
+        // Step 1 — probe k nodes ahead. `probe` ends on the node after the
+        // group; if the list runs out first, the partial suffix stays put.
+        let mut probe = group_prev.next;
+        let mut count = 0;
+        let mut full = true;
+        while count < k {
+            match probe {
+                Some(node) => {
+                    probe = node.next;
+                    count = count + 1;
+                }
+                None => {
+                    full = false;
+                    break;
+                }
+            }
+        }
+        if not full {
+            break;
+        }
+
+        if let Some(group_head) = group_prev.next {
+            // Step 2 — reverse exactly k nodes. `prev` seeds with the rest of
+            // the list, so the old group head (the new tail) links straight
+            // to the suffix; no second pass to reattach it.
+            let mut prev = probe;
+            let mut cur = group_prev.next;
+            let mut j = 0;
+            while j < k {
+                if let Some(node) = cur {
+                    // Save the onward link, then point this node backwards.
+                    // The store displaces the field `cur` was unwrapped from
+                    // while `node` is still live — every step of every group.
+                    cur = node.next;
+                    node.next = prev;
+                    prev = Some(node);
+                }
+                j = j + 1;
+            }
+
+            // Step 3 — graft the reversed group in and advance the anchor to
+            // the old group head, now the group tail.
+            group_prev.next = prev;
+            group_prev = group_head;
+        } else {
+            // Unreachable: the probe just verified k ≥ 1 nodes exist.
+            break;
+        }
+    }
+
+    dummy.next
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn report(arr: Slice[i64], k: i64) {
+    let head = from_array(arr);
+    let out = reverse_k_group(head, k);
+    println(to_string(out));
+}
+
+fn main() {
+    // LeetCode example 1 — pairs, trailing singleton → [2, 1, 4, 3, 5].
+    let case1: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case1, 2);
+
+    // LeetCode example 2 — one full triple, partial [4, 5] tail stays
+    // → [3, 2, 1, 4, 5].
+    let case2: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case2, 3);
+
+    // Singleton, k = 1 → [1].
+    let case3: Array[i64, 1] = [1];
+    report(case3, 1);
+
+    // k = 1 — identity in values, but every node still walks the re-link
+    // path in groups of one → [1, 2, 3, 4, 5].
+    let case4: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case4, 1);
+
+    // k = n — the whole list is one group: full reversal → [5, 4, 3, 2, 1].
+    let case5: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case5, 5);
+
+    // k = 2, even length — exactly kata #24's swap → [2, 1, 4, 3, 6, 5].
+    let case6: Array[i64, 6] = [1, 2, 3, 4, 5, 6];
+    report(case6, 2);
+
+    // Two full groups of four, n % k == 0 → [4, 3, 2, 1, 8, 7, 6, 5].
+    let case7: Array[i64, 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    report(case7, 4);
+
+    // All values equal — the reversal is invisible in values but still
+    // re-links every node; output must match the input → [7, 7, 7, 7].
+    let case8: Array[i64, 4] = [7, 7, 7, 7];
+    report(case8, 2);
+
+    // Constraint bounds (values span [0, 1000]) → [999, 0, 1000, 1, 500].
+    let case9: Array[i64, 5] = [1000, 0, 999, 1, 500];
+    report(case9, 3);
+}

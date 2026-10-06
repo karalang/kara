@@ -1,0 +1,9 @@
+
+        fn fetch(u: ref String) -> i64 with reads(Network) suspends { return 1; }
+        fn main() {
+            let a = "http://a";
+            let b = "http://b";
+            let x = fetch(a);
+            let y = fetch(b);
+        }
+        

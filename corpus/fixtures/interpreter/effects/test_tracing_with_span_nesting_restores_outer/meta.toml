@@ -1,0 +1,13 @@
+source = "tests/interpreter/effects.rs::test_tracing_with_span_nesting_restores_outer"
+dedup_of = []
+expect = "error:E0508"
+exit = 1
+tags = ["closure"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

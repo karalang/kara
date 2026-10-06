@@ -1,0 +1,12 @@
+
+struct Node { id: i64, next: Option[Node], tag: String }
+impl Drop for Node { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+
+fn mkn(i: i64) -> Node { return Node { id: i, next: Option.None, tag: f"t{i}" }; }
+
+fn main() {
+    let one: Node = Node { id: 9, next: Option.Some(mkn(10)), tag: "n" };
+    println(one.id);
+    let deep: Node = Node { id: 11, next: Option.Some(Node { id: 12, next: Option.Some(mkn(13)), tag: "d" }), tag: "e" };
+    println(deep.id);
+}

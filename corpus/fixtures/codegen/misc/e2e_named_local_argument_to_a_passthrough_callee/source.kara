@@ -1,0 +1,20 @@
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct P { id: i64, name: String, xs: Vec[i64] }
+impl Drop for P { fn drop(mut ref self) { println(f"  dP{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
+fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
+fn pass(r: R) -> R { return r; }
+fn rebpass(r: R) -> R { let m = r; return m; }
+fn ppass(p: P) -> P { return p; }
+fn dies(r: R) -> i64 { return r.id; }
+fn main() {
+  println("named"); let a = mk(1); let z = pass(a); println(f"  v={z.inner.v}");
+  println("named_rebind"); let b = mk(2); let y = rebpass(b); println(f"  v={y.inner.v}");
+  println("fresh_temp"); let w = pass(mk(3)); println(f"  v={w.inner.v}");
+  println("copyable"); let c = mkp(4); let d = ppass(c); println(f"  v={d.id}");
+  println("dies_inside"); let e = mk(5); println(f"  v={dies(e)}");
+  println("two_in_a_row"); let g = mk(6); let h = pass(g); let n = mk(7); let q = rebpass(n); println(f"  v={h.inner.v}{q.inner.v}");
+  println("end");
+}

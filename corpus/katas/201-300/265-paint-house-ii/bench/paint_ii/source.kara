@@ -1,0 +1,115 @@
+// Benchmark workload for LeetCode #265 — Paint House II.
+//
+// Build-once + punch. One 4,000 x 32 cost matrix is generated once (a flat
+// row-major Vec, 1.0 MB, deliberately cache-resident) and the ★ O(n·k) DP is
+// punched through it 1,300 times.
+//
+// Each round rotates the row it starts from, wrapping, so no round repeats the
+// last and nothing is loop-invariant. The work per round is identical; only
+// which cost row lands at which DP step differs.
+//
+// WHAT THIS LANE MEASURES. Per house the DP does two passes over k values: a
+// REDUCTION that tracks (min, its index, second-min), and a MAP that writes the
+// next row. The reduction is the interesting half — its three-way update is a
+// carried dependency with a data-dependent branch, so it does not vectorise,
+// while the map beside it does. A single row therefore contains both a serial
+// scan and a vector-friendly one, and rows are strictly sequential because each
+// depends on the last.
+//
+// The two row buffers are allocated once and swapped, rather than a fresh Vec
+// per row. That is the natural way to write the loop and it keeps the lane about
+// the DP arithmetic instead of about allocation — which #254 already measures.
+//
+// The sink folds the per-round answer AND the final row, so a mirror that gets
+// the reduction subtly wrong (the second-minimum tie rule, say) cannot match by
+// landing on the same total from a different row.
+
+fn main() {
+    let n = 4000;
+    let k = 32;
+    let rounds = 1300;
+    let inf = 1000000000000;
+
+    // ---- build once ------------------------------------------------------
+    // Flat row-major: cost[i * k + c]. Values in 1..40, a narrow band, so tied
+    // row minima are common and the `t == idx1` branch is genuinely exercised.
+    let mut cost: Vec[i64] = Vec.new();
+    let mut state = 265265;
+    let mut z = 0;
+    while z < n * k {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        cost.push((state / 65536) % 40 + 1);
+        z = z + 1;
+    }
+
+    // Two row buffers, allocated once and swapped.
+    let mut prev: Vec[i64] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    let mut q = 0;
+    while q < k {
+        prev.push(0);
+        cur.push(0);
+        q = q + 1;
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let start = (r * 7919) % n;
+
+        let mut c = 0;
+        while c < k {
+            prev[c] = cost[start * k + c];
+            c = c + 1;
+        }
+
+        let mut i = 1;
+        while i < n {
+            // reduction: min, where it is, and the runner-up WITH multiplicity
+            let mut min1 = inf;
+            let mut idx1 = -1;
+            let mut min2 = inf;
+            let mut j = 0;
+            while j < k {
+                if prev[j] < min1 {
+                    min2 = min1;
+                    min1 = prev[j];
+                    idx1 = j;
+                } else {
+                    if prev[j] < min2 { min2 = prev[j]; }
+                }
+                j = j + 1;
+            }
+
+            // map: fill the next row
+            let row = ((start + i) % n) * k;
+            let mut t = 0;
+            while t < k {
+                let mut best = min1;
+                if t == idx1 { best = min2; }
+                cur[t] = cost[row + t] + best;
+                t = t + 1;
+            }
+
+            // swap the buffers
+            let tmp = prev;
+            prev = cur;
+            cur = tmp;
+            i = i + 1;
+        }
+
+        let mut answer = inf;
+        let mut fold = 0;
+        let mut p = 0;
+        while p < k {
+            if prev[p] < answer { answer = prev[p]; }
+            fold = (fold * 31 + prev[p]) % 1000000007;
+            p = p + 1;
+        }
+        sink = (sink * 131 + answer + fold) % 1000000007;
+        r = r + 1;
+    }
+
+    println(sink);
+}

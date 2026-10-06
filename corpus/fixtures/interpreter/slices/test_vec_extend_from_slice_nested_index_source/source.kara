@@ -1,0 +1,23 @@
+
+        fn main() {
+            let mut rows: Vec[Vec[i64]] = Vec.new();
+            let mut r0: Vec[i64] = Vec.new();
+            r0.push(10);
+            r0.push(20);
+            rows.push(r0);
+            let mut r1: Vec[i64] = Vec.new();
+            r1.push(30);
+            rows.push(r1);
+
+            let mut out: Vec[i64] = Vec.with_capacity(8);
+            let mut i = 0i64;
+            while i < 2 {
+                out.extend_from_slice(rows[i]);
+                i = i + 1;
+            }
+            println(out.len());
+            println(out[0]);
+            println(out[1]);
+            println(out[2]);
+        }
+    

@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::e2e_heap_free_drop_struct_handed_back_by_generic_fn_runs_its_body_once"
+dedup_of = ["tests/memory_sanitizer/enums.rs::asan_heap_free_drop_struct_handed_back_by_generic_fn_runs_its_body_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

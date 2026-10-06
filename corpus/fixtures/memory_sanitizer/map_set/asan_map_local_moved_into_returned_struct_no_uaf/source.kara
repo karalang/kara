@@ -1,0 +1,16 @@
+
+struct Box { m: Map[i64, i64], n: i64 }
+fn make(x: i64) -> Box {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(x, x * 2);
+    return Box { m: m, n: x };
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let b = make(i);
+        println(b.n + b.m.len());
+        i = i + 1;
+    }
+    println(99);
+}

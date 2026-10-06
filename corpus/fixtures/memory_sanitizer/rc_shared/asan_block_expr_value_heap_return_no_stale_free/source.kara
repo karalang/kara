@@ -1,0 +1,22 @@
+
+enum E { A(String), B }
+fn mk(n: i64) -> String { { f"r{n}" } }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        let a = { f"a{i}" };
+        println(a);
+        let b = { let p = "x" + "y"; p };
+        println(b);
+        let c = if i < 5 { f"c{i}" } else { f"d{i}" };
+        println(c);
+        let e1 = E.A("m" + "m");
+        let d = match e1 { E.A(n) => { f"<{n}>" }, E.B => "z" };
+        println(d);
+        let e2 = E.A("k" + "k");
+        let g = match e2 { E.A(n) => { let p = f"[{n}]"; p }, E.B => "z" };
+        println(g);
+        println(mk(i));
+        i = i + 1;
+    }
+}

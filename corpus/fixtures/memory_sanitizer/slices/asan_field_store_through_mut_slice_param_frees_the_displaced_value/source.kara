@@ -1,0 +1,33 @@
+
+struct E { name: String, n: i64 }
+struct Tags { items: Vec[String], n: i64 }
+
+fn set_name(s: mut Slice[E]) { s[0].name = "replacedreplacedreplaced"; }
+fn set_all(s: mut Slice[E]) {
+    let mut i = 0;
+    while i < s.len() { s[i].name = "uniformuniformuniform"; i = i + 1; }
+}
+fn set_items(s: mut Slice[Tags]) { s[0].items = ["freshfreshfresh"]; }
+
+fn main() {
+    let mut es: Vec[E] = Vec.new();
+    es.push(E { name: "alphabetical", n: 7 });
+    es.push(E { name: "betamaximum", n: 8 });
+
+    // One displaced String.
+    set_name(mut es);
+    println(f"{es[0].name} {es[1].name}");
+
+    // Every element displaced, in a loop.
+    set_all(mut es);
+    println(f"{es[0].name} {es[1].name} {es.len()}");
+
+    // A displaced CONTAINER field, which strands more than one buffer if the
+    // old value is dropped shallowly or not at all.
+    let mut ts: Vec[Tags] = Vec.new();
+    let seed: Vec[String] = ["oldoldoldoldold", "olderolderolder"];
+    ts.push(Tags { items: seed, n: 1 });
+    set_items(mut ts);
+    println(f"{ts[0].items[0]} {ts[0].items.len()}");
+    println("end");
+}

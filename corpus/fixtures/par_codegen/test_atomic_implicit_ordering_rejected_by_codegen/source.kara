@@ -1,0 +1,8 @@
+
+par struct Counter { count: Atomic[i64] }
+fn bump(c: ref Counter) { let _ = c.count.fetch_add(1); }
+fn main() {
+    let c = Counter { count: Atomic.new(0) };
+    bump(c);
+    println(c.count.load(MemoryOrdering.Relaxed));
+}

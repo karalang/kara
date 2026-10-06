@@ -1,0 +1,12 @@
+
+import std.embeddings.{cosine_similarity_batched, dot_batched};
+fn main() {
+    let q: Tensor[f32, [2]] = Tensor.from([1.0f32, 0.0f32]);
+    let corpus: Tensor[f32, [2, 2]] = Tensor.from([[1.0f32, 0.0f32], [0.0f32, 1.0f32]]);
+    let cs = cosine_similarity_batched(q, corpus);
+    println(cs[0]);
+    println(cs[1]);
+    let db = dot_batched(q, corpus);
+    println(db[0]);
+    println(db[1]);
+}

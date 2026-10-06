@@ -1,0 +1,1 @@
+fn main() { for c in "abc" { println(c); } }

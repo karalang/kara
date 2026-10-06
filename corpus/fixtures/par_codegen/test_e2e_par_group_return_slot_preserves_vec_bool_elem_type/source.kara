@@ -1,0 +1,15 @@
+
+fn helper(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut visited: Vec[bool] = Vec.filled(n, false);
+    let mut bucket: Map[i64, i64] = Map.new();
+    let i = 1i64;
+    if i > 0 and not visited[i - 1] {
+        return 1;
+    }
+    0
+}
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    println(helper(a));
+}

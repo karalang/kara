@@ -1,0 +1,12 @@
+
+shared enum Value { Num(i64), Nothing }
+fn extract(v: Value) -> i64 {
+    match v {
+        Num(n) => n,
+        Nothing => 0,
+    }
+}
+fn main() {
+    let v = Num(42);
+    println(extract(v));
+}

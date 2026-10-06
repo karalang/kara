@@ -1,0 +1,6 @@
+
+fn a() -> i32 {{ 1 }}
+fn main() {{
+    let x = a();
+    let y = a();
+}}

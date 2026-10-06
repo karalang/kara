@@ -1,0 +1,40 @@
+
+struct R { id: i64, tag: String }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}-heap-string-long-enough-to-allocate" }; }
+enum E { X(R), Y }
+struct S { e: E }
+impl E { fn clear(mut ref self) { self = E.Y; } fn k(ref self) -> i64 { match self { E.X(r) => r.id, E.Y => 0 } } }
+fn clr(e: mut ref E) { e = E.Y; }
+fn c1() { let mut g = E.X(mk(20)); match g { E.X(t) => { g = E.X(mk(3)); println(f"x{t.tag}") } E.Y => { println("x0") } } }
+fn c2() { let mut g = E.X(mk(21)); match g { E.X(t) => { g = E.Y; println(f"x{t.tag}") } E.Y => { println("x0") } } }
+fn c3() { let mut g = E.X(mk(22)); match g { E.X(t) => { println(f"x{t.tag}"); g = E.X(mk(4)); } E.Y => { println("x0") } }; match g { E.X(t) => println(t.id), E.Y => println(0) } }
+fn c4() { let mut g = E.X(mk(23)); if let E.X(t) = g { g = E.X(mk(5)); println(f"x{t.tag}") } }
+fn c5() { let mut g = E.X(mk(24)); match g { E.X(t) => { clr(mut g); println(f"x{t.tag}") } E.Y => { println("x0") } } }
+fn c6() { let g = E.X(mk(25)); match g { E.X(t) => { match g { E.X(u) => println(u.id), E.Y => println(0) }; println(f"x{t.tag}") } E.Y => { println("x0") } } }
+fn c7() { let mut g = E.X(mk(27)); match g { E.X(t) => { println(f"x{t.tag}") } E.Y => { println("x0") } }; g = E.Y; match g { E.X(t) => println(t.id), E.Y => println(0) } }
+fn c8() { let mut g = E.X(mk(28)); while let E.X(t) = g { g = E.Y; println(f"x{t.tag}") } }
+fn c9() { let mut s = S { e: E.X(mk(30)) }; match s.e { E.X(t) => { s.e = E.Y; println(f"x{t.tag}") } E.Y => { println("x0") } } }
+fn c10() { let mut g = E.X(mk(31)); match g { E.X(t) => { g.clear(); println(f"x{t.tag}") } E.Y => { println("x0") } } }
+fn c11() { let g = E.X(mk(32)); match g { E.X(t) => { println(g.k()); println(f"x{t.tag}") } E.Y => { println("x0") } }; println(g.k()) }
+fn c12() { let mut g = E.X(mk(33)); match g { E.X(t) => { println(f"x{t.tag}") } E.Y => { println("x0") } }; match g { E.X(t) => println(t.tag), E.Y => println(0) } }
+fn c14() { let mut g = E.X(mk(35)); let mut i = 0; while let E.X(t) = g { println(f"x{t.tag}"); i = i + 1; if i > 1 { g = E.Y; } } }
+fn c15() { let mut g = E.X(mk(36)); match g { E.X(t) => { if t.id > 0 { println(t.id); g = E.Y; } else { println(0) } } E.Y => { println("x0") } }; match g { E.X(t) => println(t.id), E.Y => println(0) } }
+fn c13() { let mut g = E.X(mk(34)); match g { E.X(t) => { let u = t; g = E.X(mk(3)); println(u.tag) } E.Y => { println("x0") } } }
+fn main() {
+    c1()
+    c2()
+    c3()
+    c4()
+    c5()
+    c6()
+    c7()
+    c8()
+    c9()
+    c10()
+    c11()
+    c12()
+    c13()
+    c14()
+    c15()
+    println("end")
+}

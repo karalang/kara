@@ -1,0 +1,10 @@
+
+        effect resource R;
+        fn report(v: ref Vec[String]) writes(R) {}
+        fn main() {
+            let a: Vec[String] = ["x", "y"];
+            report(a);
+            let b: Vec[String] = ["z"];
+            report(b);
+        }
+        

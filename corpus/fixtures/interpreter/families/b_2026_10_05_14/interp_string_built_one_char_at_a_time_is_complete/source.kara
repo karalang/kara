@@ -1,0 +1,7 @@
+fn main() {
+    let mut s = String.new();
+    for i in 0..20000 { s.push(if i % 2 == 0 { 'a' } else { 'b' }); }
+    let mut t = String.new();
+    for i in 0..2000 { t.push_str("xyz"); }
+    println(f"{s.len()} {t.len()} {s.char_at(19999)} {t.char_at(5999)}");
+}

@@ -1,0 +1,31 @@
+
+struct Res { tag: i64, buf: Vec[i64] }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
+        self.buf.clear();
+    }
+}
+struct Wrap { r: Res }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        let mut b1: Vec[i64] = Vec.new();
+        b1.push(i);
+        let mut b2: Vec[i64] = Vec.new();
+        b2.push(i);
+        let v: Vec[Res] = [Res { tag: 1, buf: b1 }, Res { tag: 2, buf: b2 }];
+        n = n + v.len();
+
+        // Drop-bearing element FIELD, reached through the container — the
+        // shape B-2026-07-29-39's field walk went silent on one Vec deep.
+        let mut b3: Vec[i64] = Vec.new();
+        b3.push(i);
+        let w: Vec[Wrap] = [Wrap { r: Res { tag: 3, buf: b3 } }];
+        n = n + w.len();
+        i = i + 1;
+    }
+    println(n);
+}

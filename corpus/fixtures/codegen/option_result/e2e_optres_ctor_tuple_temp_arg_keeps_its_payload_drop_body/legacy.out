@@ -1,0 +1,34 @@
+opttemp
+  rd1
+dR1/t1/1
+dR11/t11/1
+opttemp end
+errtemp
+  rd3
+dR3/t3/1
+errtemp end
+enumtemp
+  rd4
+dR4/t4/1
+dR44/t44/1
+enumtemp end
+destr
+  rd5
+dR5/t5/1
+dR55/t55/1
+destr end
+nonetemp
+  rd6
+dR6/t6/1
+nonetemp end
+localarg
+  rd7
+dR7/t7/1
+dR77/t77/1
+localarg end
+localonly
+  rd8
+dR8/t8/1
+dR88/t88/1
+localonly end
+done

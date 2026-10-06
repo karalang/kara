@@ -1,0 +1,69 @@
+// LeetCode #33 bench harness — Kāra, the one-pass modified binary search (★).
+//
+// The headline ★ style: a single O(log n) pass that, at each midpoint, decides
+// which half is sorted and whether the target lies in it — no pivot pre-pass, no
+// allocation. Pure branchy integer compute (the data-dependent branch is what
+// makes binary search interesting to a backend: each step's direction depends on
+// a comparison the predictor can't pre-resolve).
+//
+// Workload: build one fixed rotated-sorted array of length N=4096 once (values
+// 2*((p+ROT)%N) — distinct, ascending-then-wrapped, even so odd targets MISS),
+// then run search() TOTAL times for targets that cycle through [0, 2N), so ~half
+// hit and ~half miss (both control-flow paths exercised). The target varies with
+// the loop index, so no comparator can hoist the pure call out of the loop; fold
+// each result index into a checksum (the un-elidable sink). The accumulator
+// carries a loop-borne dependency, so this is a single-lane (seq) bench by
+// construction.
+
+fn search(nums: ref Vec[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = len - 1;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] == target {
+            return mid;
+        }
+        if nums[lo] <= nums[mid] {
+            if nums[lo] <= target and target < nums[mid] {
+                hi = mid - 1;
+            } else {
+                lo = mid + 1;
+            }
+        } else {
+            if nums[mid] < target and target <= nums[hi] {
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+    }
+    -1
+}
+
+fn main() {
+    let n = 4096;
+    let rot = 1365;
+    let total = 18000000;
+    let modulus = 1000000007;
+
+    // Fixed rotated-sorted array: sorted [0,2,4,..,2(N-1)] rotated left by ROT.
+    let mut nums: Vec[i64] = Vec.new();
+    let mut p = 0;
+    while p < n {
+        nums.push(2 * ((p + rot) % n));
+        p = p + 1;
+    }
+
+    // Cycle targets through [0, 2N): even -> hit, odd -> miss.
+    let span = 2 * n;
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        let target = k % span;
+        let idx = search(nums, n, target);
+        acc = (acc + idx + 2) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

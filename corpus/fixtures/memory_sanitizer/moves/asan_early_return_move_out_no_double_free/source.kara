@@ -1,0 +1,15 @@
+
+fn maybe_take(flag: bool) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(42i64);
+    if flag {
+        return v;
+    }
+    v
+}
+fn main() {
+    let v1 = maybe_take(true);
+    let v2 = maybe_take(false);
+    println(v1[0]);
+    println(v2[0]);
+}

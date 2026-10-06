@@ -1,0 +1,6 @@
+
+fn main() {
+    let mut x: i64 = 10;
+    x += 5;
+    println(x);
+}

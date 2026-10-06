@@ -1,0 +1,1 @@
+fn main() { let n = 1; println(f"outer={f"inner={n}"}"); }

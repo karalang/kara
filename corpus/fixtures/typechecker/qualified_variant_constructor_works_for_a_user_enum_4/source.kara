@@ -1,0 +1,3 @@
+struct R { id: i64 }
+enum Ho[T] { Full(T), Empty }
+fn main() { let x: Ho[i64] = Ho[i64].Full(R { id: 5 }); println("end"); }

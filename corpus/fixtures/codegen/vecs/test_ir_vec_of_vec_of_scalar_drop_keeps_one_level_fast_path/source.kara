@@ -1,0 +1,13 @@
+
+fn build() -> Vec[Vec[i64]] {
+    let mut outer: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1_i64);
+    outer.push(a);
+    return outer;
+}
+
+fn main() {
+    let vv = build();
+    println(vv.len());
+}

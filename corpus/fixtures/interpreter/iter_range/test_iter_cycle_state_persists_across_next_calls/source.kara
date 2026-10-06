@@ -1,0 +1,10 @@
+
+fn main() {
+    let v = [7, 8];
+    let mut it = v.iter().cycle();
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+}

@@ -1,0 +1,21 @@
+cases 5832 brute_cases 1056 swaps_checked 9600
+P1 brute disagreements 0
+P2 greedy-vs-stack disagreements 0
+P3 mask-vs-stack disagreements 0
+P4 permutation-of-distinct failures 0
+P5 subsequence failures 0
+P6 relabel-commutes stack failures 0
+P6 relabel-commutes greedy failures 0
+P6 relabel-commutes mask failures 0
+P7 idempotence stack failures 0
+P7 idempotence greedy failures 0
+P7 idempotence mask failures 0
+P8 append-alphabet stack failures 0
+P8 append-alphabet greedy failures 0
+P8 append-alphabet mask failures 0
+P9 distinct-fixpoint stack failures 0
+P9 distinct-fixpoint greedy failures 0
+P9 distinct-fixpoint mask failures 0
+P10 local-optimality failures 0
+P11 first-letter failures 0
+DIFFERENTIAL OK

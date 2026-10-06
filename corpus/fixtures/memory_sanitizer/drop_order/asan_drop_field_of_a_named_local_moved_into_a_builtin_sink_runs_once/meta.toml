@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/drop_order.rs::asan_drop_field_of_a_named_local_moved_into_a_builtin_sink_runs_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

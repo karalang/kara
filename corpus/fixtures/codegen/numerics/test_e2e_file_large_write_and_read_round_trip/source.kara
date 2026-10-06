@@ -1,0 +1,22 @@
+
+fn main() with reads(FileSystem) writes(FileSystem) {{
+    match File.create("{path}") {{
+        Ok(f) => {{
+            let mut data: Vec[u8] = Vec.with_capacity(256);
+            let mut i: i64 = 0;
+            while i < 256 {{
+                data.push(65u8);
+                i = i + 1;
+            }}
+            match f.write(data) {{
+                Ok(_) => println("wrote"),
+                Err(_) => println("err"),
+            }}
+            match f.flush() {{
+                Ok(_) => println("flushed"),
+                Err(_) => println("flush-err"),
+            }}
+        }}
+        Err(_) => println("create-err"),
+    }}
+}}

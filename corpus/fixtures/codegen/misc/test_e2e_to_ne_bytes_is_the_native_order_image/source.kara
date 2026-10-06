@@ -1,0 +1,39 @@
+
+fn total(b: ref Slice[u8]) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < b.len() { s = s + b[i] as i64; i = i + 1; }
+    s
+}
+fn by_value(b: Slice[u8]) -> i64 { b.len() }
+
+fn main() {
+    let n: u16 = 4660u16;      // 0x1234
+    let b = n.to_ne_bytes();
+    println(b.len());
+    println(b[0]);
+    println(b[1]);
+
+    // A BOUND array handed to a `ref Slice[u8]` parameter.
+    println(total(b));
+
+    // A TEMPORARY handed straight to a slice parameter, both param shapes.
+    let w: u32 = 16909060u32;  // 0x01020304
+    println(total(w.to_ne_bytes()));
+    println(by_value(w.to_ne_bytes()));
+
+    // Negative receiver: the bytes are the two's-complement image at the
+    // RECEIVER's width, not the i64 model's.
+    let sg: i16 = -2i16;
+    let sb = sg.to_ne_bytes();
+    println(sb[0]);
+    println(sb[1]);
+
+    // Every width the surface admits.
+    let a8: u8 = 7u8;
+    let a64: u64 = 7u64;
+    let ab = a8.to_ne_bytes();
+    let db = a64.to_ne_bytes();
+    println(ab.len());
+    println(db.len());
+}

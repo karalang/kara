@@ -1,0 +1,8 @@
+
+struct C { n: i64 }
+impl C { fn step(self, by: i64) -> i64 requires by > 0 { self.n + by } }
+fn main() {
+    let c = C { n: 5 };
+    println(c.step(-1));
+    println(42);
+}

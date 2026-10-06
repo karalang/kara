@@ -1,0 +1,74 @@
+// Benchmark workload — sorted-key Group Anagrams (LeetCode #49).
+//
+// Deterministic input, identical across every language mirror: N=20_000
+// words of length L=8 drawn from G=1_000 anagram classes (20 words/class).
+// Word `i` belongs to class `g = i % G`; its letters are the L consecutive
+// alphabet letters starting at `g` (`seed(g)[k] = 'a' + (g+k) % 26`), rotated
+// left by `(i / G) % L` so the 20 members of a class are DISTINCT orderings
+// of the same multiset — real anagrams, not copies. Every class has a unique
+// letter multiset, so the grouping yields exactly G=1_000 groups every call.
+//
+// `count_groups` is the sorted-key spine of ../sorted_key.kara: each word's
+// `sorted()` key is looked up in a `Map[String, i64]`; a miss opens a new
+// group. It borrows the word list (`ref`) so the same input is regrouped on
+// every call. K=40 outer iterations amortize process startup against
+// algorithm time. Sink = K × G = 40 × 1000 = 40_000.
+//
+// Built with KARAC_AUTO_PAR=0 in bench.sh: the K-loop is a count-reduction
+// that auto-par would otherwise dispatch, but the per-call grouping is the
+// unit of work being measured, so the seq lane is the apples-to-apples row
+// against rustc -O / clang -O3 / go build (BENCH.md two-lane protocol).
+
+fn count_groups(words: ref Vec[String]) -> i64 {
+    let mut index_of: Map[String, i64] = Map.new();
+    let mut groups = 0;
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        let w = ref words[i];
+        let key = w.sorted();
+        match index_of.get(key) {
+            Some(_) => {},
+            None => {
+                index_of.insert(w.sorted(), groups);
+                groups = groups + 1;
+            }
+        }
+        i = i + 1;
+    }
+    groups
+}
+
+fn make_words(n: i64, g: i64, l: i64) -> Vec[String] {
+    let alphabet: String = "abcdefghijklmnopqrstuvwxyz";
+    let mut words: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let grp = i % g;
+        let rot = (i / g) % l;
+        // seed(grp): L consecutive alphabet letters starting at grp.
+        let mut seed: String = "";
+        let mut k = 0;
+        while k < l {
+            let idx = (grp + k) % 26;
+            seed.push_str(alphabet.substring(idx, idx + 1));
+            k = k + 1;
+        }
+        // rotate left by rot: seed[rot:] + seed[:rot].
+        let mut word: String = "";
+        word.push_str(seed.substring(rot, l));
+        word.push_str(seed.substring(0, rot));
+        words.push(word);
+        i = i + 1;
+    }
+    words
+}
+
+fn main() {
+    let words = make_words(20000, 1000, 8);
+    let mut sum = 0;
+    for _ in 0..40 {
+        sum = sum + count_groups(words);
+    }
+    println(sum);
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::e2e_live_local_handed_out_of_a_discarded_branch_runs_payload_body_once"
+dedup_of = ["tests/interpreter/enums.rs::test_live_local_handed_out_of_a_discarded_branch_runs_payload_body_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

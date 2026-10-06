@@ -1,0 +1,11 @@
+fn main() {
+            let a: String = String.from('Z');
+            println(a);
+            let ch: char = 'Q';
+            let b: String = ch.into();
+            println(b);
+            let c: String = '😀'.into();
+            println(c);
+            let d: String = String.from('A') + "BC";
+            println(d);
+        }

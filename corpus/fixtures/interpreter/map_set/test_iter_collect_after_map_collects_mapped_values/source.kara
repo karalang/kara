@@ -1,0 +1,8 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let xs: Vec[i64] = v.iter().map(|x| x * 10).collect();
+    for x in xs {
+        println(x);
+    }
+}

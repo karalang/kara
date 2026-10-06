@@ -1,0 +1,25 @@
+enum G1[T] { Y(T), N }
+struct Ho[T] { g: Option[G1[T]] }
+struct Hr[T] { g: Result[G1[T], i64] }
+
+fn optW[T](g: G1[T], c: bool) -> Ho[T] { if c { return Ho { g: Option.Some(g) } } return Ho { g: Option.None }; }
+fn optAll[T](g: G1[T]) -> Ho[T] { return Ho { g: Option.Some(g) }; }
+fn resW[T](g: G1[T], c: bool) -> Hr[T] { if c { return Hr { g: Result.Ok(g) } } return Hr { g: Result.Err(7) }; }
+fn optBare[T](g: G1[T], c: bool) -> Option[G1[T]] { if c { return Option.Some(g) } return Option.None; }
+fn eats[T](g: G1[T], c: bool) -> i64 { match g { G1.Y(v) => { return 1; } G1.N => { return 0; } } }
+
+fn shwO(o: Option[G1[String]]) { match o { Option.Some(i) => { match i { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } } Option.None => { println("  none") } } }
+fn shwR(r: Result[G1[String], i64]) { match r { Result.Ok(i) => { match i { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } } Result.Err(e) => { println("  err") } } }
+
+fn main() {
+    println("optT");     { let g: G1[String] = G1.Y(f"aaaaaaaa-1"); let h = optW(g, true); shwO(h.g) }
+    println("optF");     { let g: G1[String] = G1.Y(f"aaaaaaaa-2"); let h = optW(g, false); shwO(h.g) }
+    println("optAll");   { let g: G1[String] = G1.Y(f"aaaaaaaa-3"); let h = optAll(g); shwO(h.g) }
+    println("resT");     { let g: G1[String] = G1.Y(f"aaaaaaaa-4"); let h = resW(g, true); shwR(h.g) }
+    println("resF");     { let g: G1[String] = G1.Y(f"aaaaaaaa-5"); let h = resW(g, false); shwR(h.g) }
+    println("bareT");    { let g: G1[String] = G1.Y(f"aaaaaaaa-6"); let o = optBare(g, true); shwO(o) }
+    println("bareF");    { let g: G1[String] = G1.Y(f"aaaaaaaa-7"); let o = optBare(g, false); shwO(o) }
+    println("diesin");   { let g: G1[String] = G1.Y(f"aaaaaaaa-8"); let n = eats(g, true); println(f"  e{n}") }
+    println("discard");  { let g: G1[String] = G1.Y(f"aaaaaaaa-9"); optW(g, true); println("  x") }
+    println("end");
+}

@@ -1,0 +1,6 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1);
+    assert_eq(m.get("a"), 1);
+}

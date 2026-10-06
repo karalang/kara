@@ -1,0 +1,6 @@
+fn p(x: i64) -> i64 { println(f"p{x}"); x }
+fn main() {
+    let mut v: Vec[i64] = [0, 0];
+    v[p(1)] += p(8);
+    println(f"{v[1]}");
+}

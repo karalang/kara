@@ -1,0 +1,642 @@
+// LeetCode #321: Create Maximum Number — differential + property harness.
+//
+// Four arms, each reaching the answer by a different route:
+//
+//   star      try every split, shrink each side by stack, merge on suffixes (★)
+//   dp        best(i, j, l) over every suffix pair and length
+//   frontier  one digit at a time, keeping every state that ties
+//   brute     every subsequence pair, every interleaving
+//
+// The properties below do not know how any arm works:
+//
+//   P1   dp agrees with star
+//   P2   frontier agrees with star
+//   P3   brute agrees with star                       (m + n <= BRUTE_MAX)
+//   P4   the answer has exactly k digits, each 0..9
+//   P5   the answer is REALIZABLE: an interleaving of a subsequence of nums1
+//        and a subsequence of nums2
+//   P6   no randomly sampled realizable sequence beats it
+//   P7   swapping the arrays does not change it
+//   P8   appending a digit to either array never makes it smaller
+//   P9   its first digit is the largest digit that can lead a k-digit answer
+//   P10  at k = m + n it uses every digit exactly once (same multiset)
+//   P11  a strictly increasing relabelling of the digits commutes with it
+//   P12  it is a fixed point: max(answer, [], k) == answer
+//   P13  deleting any one digit of the (k + 1)-answer gives a legal k-digit
+//        sequence, so none of those deletions may beat the k-answer
+//
+// P5 and P6 are the two that watch the machine rather than an arm. P5 says
+// the answer was legally BUILT — an arm that invents a digit, reorders one
+// array, or reuses a position fails it however large its answer is. P6 is
+// the other half: it samples the statement's own search space (random
+// selections, random interleavings) and asks whether anything in it beats the
+// answer, so it keeps working at sizes where the brute force cannot. Between
+// them, "legal" and "not beaten" are the whole definition of the problem.
+//
+// Sizing. Every bound here is set by the TREE-WALK interpreter, not by the
+// JIT: the repo's A/B rule wants this harness byte-identical under `karac run`,
+// `karac run --interp` and both `karac build` modes.
+const SMALL_MAX: i64 = 5;       // exhaustive tier: every (m, n) up to this, every k
+const BRUTE_MAX: i64 = 8;       // the brute force runs where m + n <= this
+const DRAWS: i64 = 1;           // random arrays per (m, n, radix)
+const MEDIUM_CASES: i64 = 24;   // medium tier: m, n up to MEDIUM_MAX, no brute
+const MEDIUM_MAX: i64 = 12;
+const SAMPLES: i64 = 16;        // P6 random competitors per case
+
+// -------------------------------------------------------------- arms ---
+
+// The largest length-`keep` subsequence of `nums`, by monotonic stack.
+fn max_subsequence(nums: ref Vec[i64], keep: i64) -> Vec[i64] {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut drop = nums.len() - keep;
+    for i in 0..nums.len() {
+        let d = nums[i];
+        while drop > 0 and not stack.is_empty() and stack[stack.len() - 1] < d {
+            stack.pop();
+            drop = drop - 1;
+        }
+        stack.push(d);
+    }
+    // Any drops left over come off the tail: those are the smallest trailing
+    // digits the stack never had a reason to pop.
+    while stack.len() > keep {
+        stack.pop();
+    }
+    return stack;
+}
+
+// Is a[i..] lexicographically greater than b[j..]? A proper prefix is smaller.
+fn suffix_greater(a: ref Vec[i64], i: i64, b: ref Vec[i64], j: i64) -> bool {
+    let mut x = i;
+    let mut y = j;
+    while x < a.len() and y < b.len() and a[x] == b[y] {
+        x = x + 1;
+        y = y + 1;
+    }
+    if y == b.len() {
+        return x < a.len();
+    }
+    if x == a.len() {
+        return false;
+    }
+    return a[x] > b[y];
+}
+
+fn merge(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < a.len() or j < b.len() {
+        if suffix_greater(a, i, b, j) {
+            out.push(a[i]);
+            i = i + 1;
+        } else {
+            out.push(b[j]);
+            j = j + 1;
+        }
+    }
+    return out;
+}
+
+// Lexicographic `a > b` over equal-length digit vectors.
+fn greater_star(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    return suffix_greater(a, 0, b, 0);
+}
+
+fn max_star(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[i64] {
+    let m = nums1.len();
+    let n = nums2.len();
+    let mut best: Vec[i64] = Vec.new();
+    let mut lo = k - n;
+    if lo < 0 { lo = 0; }
+    let mut hi = k;
+    if hi > m { hi = m; }
+    let mut i = lo;
+    while i <= hi {
+        let left = max_subsequence(nums1, i);
+        let right = max_subsequence(nums2, k - i);
+        let candidate = merge(left, right);
+        if best.is_empty() or greater_star(candidate, best) {
+            best = candidate;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn feasible(m: i64, n: i64, i: i64, j: i64, l: i64) -> bool {
+    return (m - i) + (n - j) >= l;
+}
+
+// Lexicographic `a > b`; a proper prefix is smaller.
+fn greater_dp(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    let mut x = 0;
+    while x < a.len() and x < b.len() {
+        if a[x] != b[x] { return a[x] > b[x]; }
+        x = x + 1;
+    }
+    return a.len() > b.len();
+}
+
+fn cons(d: i64, rest: ref Vec[i64]) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(d);
+    for x in 0..rest.len() { v.push(rest[x]); }
+    return v;
+}
+
+fn max_dp(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[i64] {
+    let m = nums1.len();
+    let n = nums2.len();
+    let w = n + 1;
+    let cells = (m + 1) * w;
+
+    // Layer 0: the empty sequence, everywhere.
+    let mut prev: Vec[Vec[i64]] = Vec.new();
+    for c in 0..cells { prev.push(Vec.new()); }
+
+    for l in 1..(k + 1) {
+        let mut cur: Vec[Vec[i64]] = Vec.new();
+        for c in 0..cells { cur.push(Vec.new()); }
+        // Descending i and j, so the same-layer "skip" cells are filled first.
+        let mut i = m;
+        while i >= 0 {
+            let mut j = n;
+            while j >= 0 {
+                if feasible(m, n, i, j, l) {
+                    let mut best: Vec[i64] = Vec.new();
+                    let mut have = false;
+                    if i < m {
+                        let take = cons(nums1[i], prev[(i + 1) * w + j]);
+                        if not have or greater_dp(take, best) { best = take; have = true; }
+                        if feasible(m, n, i + 1, j, l) {
+                            let skip = cur[(i + 1) * w + j].clone();
+                            if greater_dp(skip, best) { best = skip; }
+                        }
+                    }
+                    if j < n {
+                        let take = cons(nums2[j], prev[i * w + j + 1]);
+                        if not have or greater_dp(take, best) { best = take; have = true; }
+                        if feasible(m, n, i, j + 1, l) {
+                            let skip = cur[i * w + j + 1].clone();
+                            if greater_dp(skip, best) { best = skip; }
+                        }
+                    }
+                    cur[i * w + j] = best;
+                }
+                j = j - 1;
+            }
+            i = i - 1;
+        }
+        prev = cur;
+    }
+    return prev[0].clone();
+}
+
+// The first index p >= from with a[p] == d and at least `need` digits left
+// after it across both arrays (`other` = digits remaining on the other side);
+// -1 if there is none.
+fn first_feasible(a: ref Vec[i64], from: i64, d: i64, other: i64, need: i64) -> i64 {
+    let mut p = from;
+    while p < a.len() {
+        if (a.len() - p - 1) + other < need { return -1; }
+        if a[p] == d { return p; }
+        p = p + 1;
+    }
+    return -1;
+}
+
+fn max_frontier(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[i64] {
+    let m = nums1.len();
+    let n = nums2.len();
+    let w = n + 1;
+    let mut out: Vec[i64] = Vec.new();
+    let mut fi: Vec[i64] = [0];
+    let mut fj: Vec[i64] = [0];
+    let mut seen: Vec[bool] = Vec.new();
+    for c in 0..((m + 1) * w) { seen.push(false); }
+
+    for step in 0..k {
+        let need = k - step - 1;
+        // The largest digit any state can place here.
+        let mut digit = -1;
+        let mut d = 9;
+        while d >= 0 and digit < 0 {
+            for s in 0..fi.len() {
+                if first_feasible(nums1, fi[s], d, n - fj[s], need) >= 0
+                    or first_feasible(nums2, fj[s], d, m - fi[s], need) >= 0 {
+                    digit = d;
+                }
+            }
+            d = d - 1;
+        }
+        out.push(digit);
+
+        // Every state that can place it moves on; the rest are dropped.
+        let mut ni: Vec[i64] = Vec.new();
+        let mut nj: Vec[i64] = Vec.new();
+        for s in 0..fi.len() {
+            let p = first_feasible(nums1, fi[s], digit, n - fj[s], need);
+            if p >= 0 and not seen[(p + 1) * w + fj[s]] {
+                seen[(p + 1) * w + fj[s]] = true;
+                ni.push(p + 1);
+                nj.push(fj[s]);
+            }
+            let q = first_feasible(nums2, fj[s], digit, m - fi[s], need);
+            if q >= 0 and not seen[fi[s] * w + q + 1] {
+                seen[fi[s] * w + q + 1] = true;
+                ni.push(fi[s]);
+                nj.push(q + 1);
+            }
+        }
+        for s in 0..ni.len() { seen[ni[s] * w + nj[s]] = false; }
+        fi = ni;
+        fj = nj;
+    }
+    return out;
+}
+
+// Lexicographic `a > b` over equal-length vectors.
+fn greater_brute(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    for x in 0..a.len() {
+        if a[x] != b[x] { return a[x] > b[x]; }
+    }
+    return false;
+}
+
+// Every interleaving of a[i..] and b[j..] appended to `cur`; the largest
+// complete one is kept in `best`.
+fn interleave(a: ref Vec[i64], i: i64, b: ref Vec[i64], j: i64,
+        cur: mut ref Vec[i64], best: mut ref Vec[i64], have: mut ref bool) {
+    if i == a.len() and j == b.len() {
+        if not have or greater_brute(cur, best) {
+            best.clear();
+            for x in 0..cur.len() { best.push(cur[x]); }
+            have = true;
+        }
+        return;
+    }
+    if i < a.len() {
+        cur.push(a[i]);
+        interleave(a, i + 1, b, j, cur, best, have);
+        cur.pop();
+    }
+    if j < b.len() {
+        cur.push(b[j]);
+        interleave(a, i, b, j + 1, cur, best, have);
+        cur.pop();
+    }
+}
+
+// Every length-`want` subsequence of nums[from..], appended to `cur`, pushed
+// onto `out`.
+fn subsequences(nums: ref Vec[i64], from: i64, want: i64, cur: mut ref Vec[i64],
+        out: mut ref Vec[Vec[i64]]) {
+    if want == 0 {
+        out.push(cur.clone());
+        return;
+    }
+    let mut p = from;
+    while p < nums.len() {
+        cur.push(nums[p]);
+        subsequences(nums, p + 1, want - 1, cur, out);
+        cur.pop();
+        p = p + 1;
+    }
+}
+
+fn max_brute(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[i64] {
+    let mut best: Vec[i64] = Vec.new();
+    let mut have = false;
+    for i in 0..(k + 1) {
+        if i <= nums1.len() and k - i <= nums2.len() {
+            let mut lefts: Vec[Vec[i64]] = Vec.new();
+            let mut rights: Vec[Vec[i64]] = Vec.new();
+            let mut scratch: Vec[i64] = Vec.new();
+            subsequences(nums1, 0, i, mut scratch, mut lefts);
+            subsequences(nums2, 0, k - i, mut scratch, mut rights);
+            for x in 0..lefts.len() {
+                for y in 0..rights.len() {
+                    let mut cur: Vec[i64] = Vec.new();
+                    interleave(lefts[x], 0, rights[y], 0, mut cur, mut best, mut have);
+                }
+            }
+        }
+    }
+    return best;
+}
+
+// ----------------------------------------------------------- helpers ---
+
+// Lexicographic `a > b`; a proper prefix is smaller. Deliberately written
+// fresh rather than borrowed from an arm, so no arm grades itself.
+fn lex_greater(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    let mut x = 0;
+    while x < a.len() and x < b.len() {
+        if a[x] != b[x] { return a[x] > b[x]; }
+        x = x + 1;
+    }
+    return a.len() > b.len();
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() { return false; }
+    for x in 0..a.len() {
+        if a[x] != b[x] { return false; }
+    }
+    return true;
+}
+
+// Is `s` an interleaving of a subsequence of `a` and a subsequence of `b`?
+// Tracks every (i, j) reachable after matching a prefix of `s`, advancing each
+// side to the FIRST later occurrence of the digit: an earlier match leaves a
+// superset of the options a later one would.
+fn realizable(s: ref Vec[i64], a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    let w = b.len() + 1;
+    let mut seen: Vec[bool] = Vec.new();
+    for c in 0..((a.len() + 1) * w) { seen.push(false); }
+    let mut si: Vec[i64] = [0];
+    let mut sj: Vec[i64] = [0];
+    for t in 0..s.len() {
+        let d = s[t];
+        if d < 0 or d > 9 { return false; }
+        let mut ni: Vec[i64] = Vec.new();
+        let mut nj: Vec[i64] = Vec.new();
+        for x in 0..si.len() {
+            let mut p = si[x];
+            while p < a.len() and a[p] != d { p = p + 1; }
+            if p < a.len() and not seen[(p + 1) * w + sj[x]] {
+                seen[(p + 1) * w + sj[x]] = true;
+                ni.push(p + 1);
+                nj.push(sj[x]);
+            }
+            let mut q = sj[x];
+            while q < b.len() and b[q] != d { q = q + 1; }
+            if q < b.len() and not seen[si[x] * w + q + 1] {
+                seen[si[x] * w + q + 1] = true;
+                ni.push(si[x]);
+                nj.push(q + 1);
+            }
+        }
+        for x in 0..ni.len() { seen[ni[x] * w + nj[x]] = false; }
+        if ni.is_empty() { return false; }
+        si = ni;
+        sj = nj;
+    }
+    return true;
+}
+
+// A uniformly chosen `want`-subset of `nums`, in order (selection sampling).
+fn pick(nums: ref Vec[i64], want: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut need = want;
+    let mut left = nums.len();
+    for p in 0..nums.len() {
+        if need > 0 and next(seed) % left < need {
+            out.push(nums[p]);
+            need = need - 1;
+        }
+        left = left - 1;
+    }
+    return out;
+}
+
+// A random legal k-digit sequence: a random split, a random subsequence from
+// each side, and a random interleaving of the two.
+fn competitor(a: ref Vec[i64], b: ref Vec[i64], k: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut lo = k - b.len();
+    if lo < 0 { lo = 0; }
+    let mut hi = k;
+    if hi > a.len() { hi = a.len(); }
+    let i = lo + next(seed) % (hi - lo + 1);
+    let left = pick(a, i, seed);
+    let right = pick(b, k - i, seed);
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = 0;
+    let mut y = 0;
+    while x < left.len() or y < right.len() {
+        let rl = left.len() - x;
+        let rr = right.len() - y;
+        if next(seed) % (rl + rr) < rl {
+            out.push(left[x]);
+            x = x + 1;
+        } else {
+            out.push(right[y]);
+            y = y + 1;
+        }
+    }
+    return out;
+}
+
+// The largest digit that can open a k-digit answer: a digit at position p of
+// one array qualifies when at least k - 1 digits remain after it in total.
+fn best_lead(a: ref Vec[i64], b: ref Vec[i64], k: i64) -> i64 {
+    let mut best = -1;
+    for p in 0..a.len() {
+        if (a.len() - p - 1) + b.len() >= k - 1 and a[p] > best { best = a[p]; }
+    }
+    for q in 0..b.len() {
+        if a.len() + (b.len() - q - 1) >= k - 1 and b[q] > best { best = b[q]; }
+    }
+    return best;
+}
+
+fn census(v: ref Vec[i64]) -> Vec[i64] {
+    let mut c: Vec[i64] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    for x in 0..v.len() { c[v[x]] += 1; }
+    return c;
+}
+
+fn appended(v: ref Vec[i64], d: i64) -> Vec[i64] {
+    let mut out = v.clone();
+    out.push(d);
+    return out;
+}
+
+// d -> 2d + 1 is strictly increasing and keeps 0..4 inside 0..9.
+fn relabel(v: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in 0..v.len() { out.push(2 * v[x] + 1); }
+    return out;
+}
+
+fn fits_relabel(v: ref Vec[i64]) -> bool {
+    for x in 0..v.len() {
+        if v[x] > 4 { return false; }
+    }
+    return true;
+}
+
+fn without(v: ref Vec[i64], skip: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in 0..v.len() {
+        if x != skip { out.push(v[x]); }
+    }
+    return out;
+}
+
+// --------------------------------------------------------- generator ---
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn draw(len: i64, radix: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for x in 0..len { v.push(next(seed) % radix); }
+    return v;
+}
+
+// ---------------------------------------------------------- checking ---
+
+struct Tally {
+    cases: i64,
+    brute_cases: i64,
+    samples: i64,
+    relabels: i64,
+    p: Vec[i64],
+}
+
+fn fail(tally: mut ref Tally, prop: i64) {
+    tally.p[prop] += 1;
+}
+
+fn check(a: ref Vec[i64], b: ref Vec[i64], k: i64, with_brute: bool,
+        seed: mut ref i64, tally: mut ref Tally) {
+    tally.cases += 1;
+    let m = a.len();
+    let n = b.len();
+    let ans = max_star(a, b, k);
+
+    if not same(max_dp(a, b, k), ans) { fail(tally, 1); }
+    if not same(max_frontier(a, b, k), ans) { fail(tally, 2); }
+    if with_brute {
+        tally.brute_cases += 1;
+        if not same(max_brute(a, b, k), ans) { fail(tally, 3); }
+    }
+
+    // P4: k digits, each a digit.
+    if ans.len() != k { fail(tally, 4); }
+    for x in 0..ans.len() {
+        if ans[x] < 0 or ans[x] > 9 { fail(tally, 4); }
+    }
+
+    // P5: legally built.
+    if not realizable(ans, a, b) { fail(tally, 5); }
+
+    // P6: nothing sampled from the statement's own space beats it.
+    for s in 0..SAMPLES {
+        let rival = competitor(a, b, k, seed);
+        tally.samples += 1;
+        if lex_greater(rival, ans) { fail(tally, 6); }
+    }
+
+    // P7: the arrays are interchangeable.
+    if not same(max_star(b, a, k), ans) { fail(tally, 7); }
+
+    // P8: one more digit on either side can only help.
+    let extra = next(seed) % 10;
+    let mut ds: Vec[i64] = [0, 9, extra];
+    for x in 0..ds.len() {
+        if lex_greater(ans, max_star(appended(a, ds[x]), b, k)) { fail(tally, 8); }
+        if lex_greater(ans, max_star(a, appended(b, ds[x]), k)) { fail(tally, 8); }
+    }
+
+    // P9: the lead digit is the best lead there is.
+    if k > 0 and ans[0] != best_lead(a, b, k) { fail(tally, 9); }
+
+    // P10: taking everything uses everything.
+    if k == m + n {
+        let mut both = a.clone();
+        for x in 0..b.len() { both.push(b[x]); }
+        if not same(census(ans), census(both)) { fail(tally, 10); }
+    }
+
+    // P11: an order-preserving relabel commutes with the answer.
+    if fits_relabel(a) and fits_relabel(b) {
+        tally.relabels += 1;
+        if not same(max_star(relabel(a), relabel(b), k), relabel(ans)) { fail(tally, 11); }
+    }
+
+    // P12: the answer is its own answer.
+    let empty: Vec[i64] = Vec.new();
+    if not same(max_star(ans, empty, k), ans) { fail(tally, 12); }
+
+    // P13: every one-digit deletion of the (k + 1)-answer is a legal k-digit
+    // sequence, so none of them may beat the k-answer.
+    if k < m + n {
+        let up = max_star(a, b, k + 1);
+        for x in 0..up.len() {
+            if lex_greater(without(up, x), ans) { fail(tally, 13); }
+        }
+    }
+}
+
+// -------------------------------------------------------------- main ---
+
+fn main() {
+    let mut tally = Tally { cases: 0, brute_cases: 0, samples: 0, relabels: 0,
+        p: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] };
+    let mut seed = 32117;
+
+    // Small tier: every (m, n) up to SMALL_MAX, four radixes (all zeros, two
+    // digits, three digits, all ten), every k from 0 to m + n; the brute force
+    // joins in wherever m + n <= BRUTE_MAX.
+    let mut radixes: Vec[i64] = [1, 2, 3, 10];
+    for m in 0..(SMALL_MAX + 1) {
+        for n in 0..(SMALL_MAX + 1) {
+            for r in 0..radixes.len() {
+                for d in 0..DRAWS {
+                    let a = draw(m, radixes[r], mut seed);
+                    let b = draw(n, radixes[r], mut seed);
+                    for k in 0..(m + n + 1) {
+                        check(a, b, k, m + n <= BRUTE_MAX, mut seed, mut tally);
+                    }
+                }
+            }
+        }
+    }
+
+    // Hand-picked ties: equal heads whose suffixes agree for a while.
+    let mut ta: Vec[Vec[i64]] = [[6, 7], [2, 5, 6, 4, 4, 0], [6, 7, 6, 7, 6, 7, 0],
+        [8, 9, 9], [5, 5, 5, 1], [4, 4, 4, 4]];
+    let mut tb: Vec[Vec[i64]] = [[6, 0, 4], [7, 3, 8, 0, 6, 5, 7, 6, 2], [6, 7, 6, 7, 6, 7, 1],
+        [8, 9, 9, 1], [5, 5, 5, 2], [4, 4, 4, 4, 3]];
+    for t in 0..ta.len() {
+        let a = ta[t].clone();
+        let b = tb[t].clone();
+        for k in 0..(a.len() + b.len() + 1) {
+            check(a, b, k, a.len() + b.len() <= BRUTE_MAX, mut seed, mut tally);
+        }
+    }
+
+    // Medium tier: larger arrays, no brute force — P6 and P13 carry it.
+    for c in 0..MEDIUM_CASES {
+        let m = next(mut seed) % (MEDIUM_MAX + 1);
+        let n = next(mut seed) % (MEDIUM_MAX + 1);
+        let radix = radixes[1 + next(mut seed) % 3];
+        let a = draw(m, radix, mut seed);
+        let b = draw(n, radix, mut seed);
+        let k = next(mut seed) % (m + n + 1);
+        check(a, b, k, false, mut seed, mut tally);
+    }
+
+    println(f"cases {tally.cases} brute-cases {tally.brute_cases} samples {tally.samples} relabel-cases {tally.relabels}");
+    println(f"P1  dp-vs-star disagreements {tally.p[1]}");
+    println(f"P2  frontier-vs-star disagreements {tally.p[2]}");
+    println(f"P3  brute-vs-star disagreements {tally.p[3]}");
+    println(f"P4  wrong length or non-digit {tally.p[4]}");
+    println(f"P5  unrealizable answers {tally.p[5]}");
+    println(f"P6  sampled rivals that beat the answer {tally.p[6]}");
+    println(f"P7  swap-symmetry failures {tally.p[7]}");
+    println(f"P8  append-monotonicity failures {tally.p[8]}");
+    println(f"P9  lead-digit failures {tally.p[9]}");
+    println(f"P10 take-everything multiset failures {tally.p[10]}");
+    println(f"P11 relabel-commutes failures {tally.p[11]}");
+    println(f"P12 fixed-point failures {tally.p[12]}");
+    println(f"P13 k+1 deletion-bound failures {tally.p[13]}");
+    let mut total = 0;
+    for x in 0..tally.p.len() { total = total + tally.p[x]; }
+    if total == 0 { println("DIFFERENTIAL OK"); } else { println("DIFFERENTIAL FAILED"); }
+}

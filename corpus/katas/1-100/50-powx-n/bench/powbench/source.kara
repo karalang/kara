@@ -1,0 +1,45 @@
+// Bench spine of LeetCode #50 Pow(x, n) — see ../README.md § Benchmarks.
+//
+// Recursive fast-power (exponentiation by squaring, the ★ solver's core) over a
+// deterministic stream of N×K (x, n) pairs. Each result's raw IEEE-754 bit
+// pattern (`.to_bits()`) is summed into a wrapping u64 sink, then masked to the
+// non-negative i64 range so every language prints the same decimal — the sink
+// is bit-exact across kara/rust/c/go/py because the algorithm performs the same
+// multiplications in the same order and f64 multiply is a single correctly
+// rounded IEEE-754 op. The sink participates in I/O so nothing can be elided.
+//
+// Inputs are constructed by pure integer arithmetic then one exact float build:
+// x = 1.0 + h/2048 with h in [0, 2047] (h/2048 is a multiple of 2^-11, exact),
+// n in [-64, 64]. Both derivations are perturbed by the outer rep so the K
+// repetitions are not identical (defeats loop hoisting). x in [1, 2) with
+// |n| ≤ 64 keeps every result finite and normal (no inf/underflow).
+
+fn fast_pow(x: f64, n: i64) -> f64 {
+    if n == 0 { return 1.0; }
+    let half = fast_pow(x, n / 2);
+    if n % 2 == 0 { half * half } else { half * half * x }
+}
+fn my_pow(x: f64, n: i64) -> f64 {
+    if n < 0 { 1.0 / fast_pow(x, -n) } else { fast_pow(x, n) }
+}
+
+fn main() {
+    let n_iters: i64 = 400000;
+    let k_reps: i64 = 20;
+    let inv2048: f64 = 0.00048828125;   // 2^-11, exact
+    let mask: u64 = 9223372036854775807;
+    let mut acc: u64 = 0;
+    let mut rep: i64 = 0;
+    while rep < k_reps {
+        let mut i: i64 = 0;
+        while i < n_iters {
+            let h: i64 = ((i + rep * 7919) * 2654435761) & 2047;
+            let x: f64 = 1.0 + h.to_f64() * inv2048;
+            let n: i64 = ((i + rep) % 129) - 64;
+            acc = acc.wrapping_add(my_pow(x, n).to_bits());
+            i = i + 1;
+        }
+        rep = rep + 1;
+    }
+    println(acc & mask);
+}

@@ -1,0 +1,222 @@
+// LeetCode #324: Wiggle Sort II — quickselect the median, then a three-way
+// partition through a virtual index.
+//
+// Reorder `nums` in place so that nums[0] < nums[1] > nums[2] < nums[3] ...
+// The input is promised to have such an order.
+//
+// The sorting arm only needs ONE fact from the sort: which values are above
+// the median and which below. Quickselect finds the median in expected O(n)
+// and a three-way partition places everything else around it, with no copy.
+//
+// The partition runs over a VIRTUAL index. Slot i of the virtual array is
+// slot (1 + 2i) % (n | 1) of the real one, so the virtual array visits the
+// real odd slots first (1, 3, 5, ...) and then the even ones (0, 2, 4, ...).
+// Partition the virtual array as "larger than the median, equal, smaller", and
+// the larger values land in the odd slots, the smaller ones at the far end of
+// the even slots, and the copies of the median fill what is left: the tail of
+// the odd slots and the head of the even ones, the two places furthest apart.
+// That is the same "keep the median's copies apart" idea as the sorting arm's
+// descending interleave, reached without sorting.
+//
+// The arrangement it prints is a different valid wiggle from the sorting
+// arm's; the differential checks that both are wiggles of the same values.
+//
+// Expected O(n) time, O(1) extra space.
+
+// The k-th smallest value (0-based). Reorders `a` as it goes.
+fn select(a: mut ref Vec[i64], k: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = a.len() - 1;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let pivot = median3(a[lo], a[mid], a[hi]);
+        // Dutch national flag over [lo, hi].
+        let mut lt = lo;
+        let mut i = lo;
+        let mut gt = hi;
+        while i <= gt {
+            if a[i] < pivot {
+                a.swap(lt, i);
+                lt += 1;
+                i += 1;
+            } else if a[i] > pivot {
+                a.swap(i, gt);
+                gt -= 1;
+            } else {
+                i += 1;
+            }
+        }
+        if k < lt {
+            hi = lt - 1;
+        } else if k > gt {
+            lo = gt + 1;
+        } else {
+            return pivot;
+        }
+    }
+    return a[k];
+}
+
+fn median3(x: i64, y: i64, z: i64) -> i64 {
+    if (x <= y and y <= z) or (z <= y and y <= x) {
+        return y;
+    }
+    if (y <= x and x <= z) or (z <= x and x <= y) {
+        return x;
+    }
+    return z;
+}
+
+fn wiggle_sort(nums: mut ref Vec[i64]) {
+    let n = nums.len();
+    let median = select(nums, n / 2);
+    let m = n | 1;
+    let mut left = 0;
+    let mut i = 0;
+    let mut right = n - 1;
+    while i <= right {
+        let vi = (1 + 2 * i) % m;
+        if nums[vi] > median {
+            nums.swap((1 + 2 * left) % m, vi);
+            left += 1;
+            i += 1;
+        } else if nums[vi] < median {
+            nums.swap(vi, (1 + 2 * right) % m);
+            right -= 1;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+fn is_wiggle(a: ref Vec[i64]) -> bool {
+    for i in 1..a.len() {
+        if i % 2 == 1 and a[i] <= a[i - 1] {
+            return false;
+        }
+        if i % 2 == 0 and a[i] >= a[i - 1] {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Same values with the same counts, compared by sorting both.
+fn same_values(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut x = a.clone();
+    let mut y = b.clone();
+    x.sort();
+    y.sort();
+    for i in 0..x.len() {
+        if x[i] != y[i] {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn show(a: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..a.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(f"{a[i]}");
+    }
+    s.push(']');
+    return s;
+}
+
+fn verdict(out: ref Vec[i64], input: ref Vec[i64]) -> String {
+    if not same_values(out, input) {
+        return "NOT A PERMUTATION";
+    }
+    if not is_wiggle(out) {
+        return "NOT A WIGGLE";
+    }
+    return "ok";
+}
+
+fn report(input: Vec[i64]) {
+    let mut nums = input.clone();
+    wiggle_sort(mut nums);
+    println(f"{show(input)} -> {show(nums)} {verdict(nums, input)}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// An input that is known to have an answer: build a wiggle directly (even
+// slots from [0, k), odd slots from [k, 2k)), then shuffle it. Small `k` means
+// many repeats, which is the hard case.
+fn wiggle_input(n: i64, k: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if i % 2 == 0 {
+            a.push(next(seed) % k);
+        } else {
+            a.push(k + next(seed) % k);
+        }
+    }
+    // Fisher-Yates.
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next(seed) % (i + 1);
+        a.swap(i, j);
+        i -= 1;
+    }
+    return a;
+}
+
+// Order-sensitive, so two arms that agree on it agree on the arrangement.
+fn checksum(a: ref Vec[i64]) -> i64 {
+    let mut h = 0;
+    for i in 0..a.len() {
+        h = (h * 31 + a[i] + 1) % 1000000007;
+    }
+    return h;
+}
+
+fn main() {
+    // The two examples from the problem statement.
+    report([1, 5, 1, 1, 6, 4]);
+    report([1, 3, 2, 2, 3, 1]);
+
+    // The smallest inputs.
+    report([7]);
+    report([2, 1]);
+    report([1, 1, 2]);
+
+    // The median straddles the halves: ascending interleave fails all three.
+    report([4, 5, 5, 6]);
+    report([5, 6, 5, 6, 5, 6]);
+    report([1, 1, 2, 2, 2, 3]);
+
+    // The largest value the problem allows, 5000, on both sides of a slot.
+    report([0, 5000, 0, 5000, 4999]);
+
+    // Already a wiggle, and sorted descending.
+    report([1, 3, 2, 4, 3, 5]);
+    report([9, 8, 7, 6, 5, 4, 3]);
+
+    // Small random inputs: every arm prints these.
+    let mut seed = 324;
+    let mut sizes: Vec[i64] = [5, 8, 11];
+    for t in 0..sizes.len() {
+        report(wiggle_input(sizes[t], 2 + t, mut seed));
+    }
+
+    // Large random inputs. Values stay within the problem's 0..5000.
+    let mut big: Vec[i64] = [1000, 20001, 50000];
+    let mut ks: Vec[i64] = [3, 50, 2500];
+    for t in 0..big.len() {
+        let input = wiggle_input(big[t], ks[t], mut seed);
+        let mut nums = input.clone();
+        wiggle_sort(mut nums);
+        println(f"n={big[t]} k={ks[t]} -> {checksum(nums)} {verdict(nums, input)}");
+    }
+}

@@ -1,0 +1,28 @@
+
+struct P { x: i64 }
+struct Q { y: i64 }
+
+impl P { fn double(self) -> i64 { self.x * 2 } }
+
+fn get(n: i64) -> Option[P] { Some(P { x: 5 + n }) }
+fn getres(n: i64) -> Result[P, Q] { Ok(P { x: 9 + n }) }
+fn geterr(n: i64) -> Result[P, Q] { Err(Q { y: 99 + n }) }
+fn nested(n: i64) -> Option[Option[P]] { Some(Some(P { x: 42 + n })) }
+fn plain(n: i64) -> P { P { x: 7 + n } }
+
+fn main() {
+    let n: i64 = env.args().len();
+    println(get(n).unwrap().x);
+    println(get(n).expect("missing").x);
+    println(get(n).unwrap_or(P { x: 0 }).x);
+    println(getres(n).unwrap().x);
+    println(geterr(n).unwrap_err().y);
+    println(nested(n).unwrap().unwrap().x);
+    let o: Option[P] = Some(P { x: 3 + n });
+    println(o.unwrap().x);
+    println(plain(n).x);
+    println(P { x: 11 + n }.x);
+    println(get(n).unwrap().double());
+    let b: P = get(n).unwrap();
+    println(b.x);
+}

@@ -1,0 +1,12 @@
+
+fn main() {
+    let k_iters: i64 = 100000i64;
+    let mut sum: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let hit: bool = (i % 3i64) == 0i64;
+        if hit { sum += 3i64; } else { sum += 1i64; }
+        i = i + 1i64;
+    }
+    println(sum);
+}

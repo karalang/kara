@@ -1,0 +1,79 @@
+// LeetCode 166 — Fraction to Recurring Decimal.
+//
+// Given numerator/denominator, return the fraction as a decimal string. If the
+// fractional part repeats, wrap the repeating block in parentheses:
+//   1/2   -> "0.5"      2/1 -> "2"      2/3 -> "0.(6)"      4/333 -> "0.(012)"
+//
+// Long division. Emit the integer part, then generate fractional digits one at a
+// time from the running remainder. The key: a remainder that RECURS means the
+// digits from its first occurrence onward repeat forever — so record each
+// remainder's digit position in a Map, and when one repeats, parenthesise from
+// that position.
+
+fn abs_i64(x: i64) -> i64 { if x < 0 { return -x; } return x; }
+
+fn fraction(num: i64, den: i64) -> String {
+    if num == 0 { return "0"; }
+
+    let mut out: String = "";
+    // Sign: negative iff exactly one of num/den is negative.
+    if (num < 0 and den > 0) or (num > 0 and den < 0) {
+        out.push_str("-");
+    }
+
+    let n = abs_i64(num);
+    let d = abs_i64(den);
+    let int_part = n / d;
+    out.push_str(f"{int_part}");
+    let mut rem = n % d;
+    if rem == 0 {
+        return out;
+    }
+
+    out.push_str(".");
+    // Generate fractional digits, tracking where each remainder first appeared.
+    let mut digits: Vec[i64] = Vec.new();
+    let mut pos: Map[i64, i64] = Map.new();
+    let mut repeat_start = -1;
+    while rem != 0 {
+        match pos.get(rem) {
+            Some(idx) => {
+                repeat_start = idx;
+                rem = 0; // stop the loop; we've closed the cycle
+            }
+            None => {
+                let _ = pos.insert(rem, digits.len());
+                rem = rem * 10;
+                digits.push(rem / d);
+                rem = rem % d;
+            }
+        }
+    }
+
+    let m = digits.len();
+    let mut i = 0;
+    while i < m {
+        if i == repeat_start { out.push_str("("); }
+        out.push_str(f"{digits[i]}");
+        i = i + 1;
+    }
+    if repeat_start >= 0 { out.push_str(")"); }
+    return out;
+}
+
+fn report(num: i64, den: i64) {
+    println(fraction(num, den));
+}
+
+fn main() {
+    report(1, 2);      // 0.5
+    report(2, 1);      // 2
+    report(2, 3);      // 0.(6)
+    report(4, 333);    // 0.(012)
+    report(1, 6);      // 0.1(6)
+    report(-50, 8);    // -6.25
+    report(1, -3);     // -0.(3)
+    report(0, 5);      // 0
+    report(7, 12);     // 0.58(3)
+    report(22, 7);     // 3.(142857)
+}

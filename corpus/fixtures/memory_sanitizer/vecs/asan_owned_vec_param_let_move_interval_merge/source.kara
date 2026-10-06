@@ -1,0 +1,72 @@
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn merge_two(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: None };
+    let mut tail = dummy;
+    let mut a = l1;
+    let mut b = l2;
+    loop {
+        if let Some(na) = a {
+            if let Some(nb) = b {
+                if na.val <= nb.val {
+                    tail.next = Some(na);
+                    tail = na;
+                    a = na.next;
+                } else {
+                    tail.next = Some(nb);
+                    tail = nb;
+                    b = nb.next;
+                }
+            } else {
+                tail.next = a;
+                break;
+            }
+        } else {
+            tail.next = b;
+            break;
+        }
+    }
+    dummy.next
+}
+
+fn merge_k(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+    let mut work = lists;
+    let k = work.len();
+    if k == 0 {
+        return None;
+    }
+    let mut interval = 1;
+    while interval < k {
+        let mut i = 0;
+        while i + interval < k {
+            work[i] = merge_two(work[i].clone(), work[i + interval].clone());
+            i = i + 2 * interval;
+        }
+        interval = 2 * interval;
+    }
+    work[0]
+}
+
+fn main() {
+    let n1 = ListNode { val: 1, next: None };
+    let n2 = ListNode { val: 2, next: None };
+    let n3 = ListNode { val: 3, next: None };
+    let mut v: Vec[Option[ListNode]] = Vec.new();
+    v.push(Some(n1));
+    v.push(Some(n2));
+    v.push(Some(n3));
+    let mut cur = merge_k(v);
+    loop {
+        match cur {
+            Some(node) => {
+                println(node.val);
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+}

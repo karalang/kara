@@ -1,0 +1,43 @@
+fn pick(b: i128, k: i64) -> i128 {
+    match k {
+        0 => 0,
+        1 => b + 1,
+        _ => -1,
+    }
+}
+
+fn pk(b: i128, c: bool) -> i128 {
+    if c { 1 } else { b }
+}
+
+fn ret_lit() -> i128 {
+    7
+}
+
+fn main() {
+    println("start")
+    let b: i128 = 100000000000000000000i128;
+    println(pick(b, 0).to_string())
+    println(pick(b, 1).to_string())
+    println(pick(b, 2).to_string())
+    println(pk(b, true).to_string())
+    println(pk(b, false).to_string())
+    let c = if b > 0 { b - 3 } else { 0 };
+    println(c.to_string())
+    let d = if b < 0 { 0 } else { b - 3 };
+    println(d.to_string())
+    let u: u128 = 340282366920938463463374607431768211455u128;
+    let e = if u > 0 { u } else { 0 };
+    println(e.to_string())
+    let f: u128 = match 3 { 1 => 5, _ => u - 1 };
+    println(f.to_string())
+    println((ret_lit() + b).to_string())
+    let o: Option[i128] = if b > 0 { Some(b) } else { None };
+    match o { Some(z) => println(z.to_string()), None => println("n") }
+    let w: i128 = b.wrapping_add(-1i128);
+    println(w.to_string())
+    let x: i128 = (-b).wrapping_mul(3);
+    println(x.to_string())
+    let y: u128 = u.wrapping_add(1);
+    println(y.to_string())
+}

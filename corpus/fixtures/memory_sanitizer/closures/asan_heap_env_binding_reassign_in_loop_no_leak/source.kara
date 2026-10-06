@@ -1,0 +1,11 @@
+
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut g = make(0i64);
+    let mut i = 1i64;
+    while i <= 50i64 {
+        g = make(i * 10i64);
+        i = i + 1;
+    }
+    println(f"{g(5i64)}");
+}

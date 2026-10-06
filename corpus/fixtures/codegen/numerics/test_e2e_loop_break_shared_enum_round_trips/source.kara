@@ -1,0 +1,13 @@
+
+shared enum Tree { Leaf(i64), Node(i64, i64) }
+
+fn pick() -> Tree {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        let t = Tree.Node(i, i * 2);
+        if i == 2 { break t }
+    }
+}
+
+fn main() { match pick() { Leaf(a) => println(a), Node(a, b) => println(a + b) } }

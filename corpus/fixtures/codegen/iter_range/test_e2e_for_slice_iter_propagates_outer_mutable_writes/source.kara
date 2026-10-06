@@ -1,0 +1,12 @@
+
+fn maxv(nums: Slice[i64]) -> i64 {
+    let mut m = 0i64;
+    for v in nums.iter() {
+        if v > m { m = v; }
+    }
+    m
+}
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 4, 6];
+    println(maxv(a));
+}

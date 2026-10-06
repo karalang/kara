@@ -1,0 +1,28 @@
+
+struct Hold { arr: Array[String, 2], v: Vec[String] }
+impl Hold {
+    fn pa(ref self) -> ref Array[String, 2] { return self.arr; }
+    fn pv(ref self) -> ref Vec[String] { return self.v; }
+}
+fn pav(h: ref Hold) -> ref Vec[String] { return h.v; }
+fn mkv(n: i64) -> Vec[String] { return [f"b191920-own-aaaaaaaaaaaaaaaa-{n}", f"b191920-own-bbbb-{n}"]; }
+fn mkn(n: i64) -> Vec[Vec[i64]] { return [[n, n + 1, n + 2], [n]]; }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        let h = Hold {
+            arr: [f"b191920-arr-cccccccccccccccc-{i}", f"b191920-arr-dddd-{i}"],
+            v: [f"b191920-vec-eeeeeeeeeeeeeeee-{i}", f"b191920-vec-ffff-{i}"],
+        };
+        println(f"own:{mkv(i)[0].len()}");
+        println(f"ownclone:{mkv(i)[1].clone()}");
+        println(f"borrarr:{h.pa()[0].len()}");
+        println(f"borrvec:{h.pv()[1].len()}");
+        println(f"borrfree:{pav(h)[0].len()}");
+        let a: ref Array[String, 2] = h.pa();
+        println(f"bound:{a[1].len()}");
+        println(f"nested:{mkn(i)[0].len()}");
+        println(f"orig:{h.arr[0].len()}");
+        i = i + 1;
+    }
+}

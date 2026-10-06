@@ -1,0 +1,119 @@
+// LeetCode #54: Spiral Matrix — boundary shrinking, O(m·n) time (★).
+//
+// Return every element of an m×n matrix in spiral order: walk the outermost ring clockwise,
+// then the next ring in, and so on. The most direct factoring holds FOUR WALLS and peels one
+// layer per outer iteration:
+//
+//     top    — the topmost row not yet emitted
+//     bottom — the bottommost row not yet emitted
+//     left   — the leftmost column not yet emitted
+//     right  — the rightmost column not yet emitted
+//
+// One layer is four passes: the top row left→right, the right column top→bottom, the bottom
+// row right→left, the left column bottom→top. After each pass the matching wall moves inward
+// (`top++`, `right--`, `bottom--`, `left++`). The loop runs while `top <= bottom && left <=
+// right`, i.e. while an unemitted rectangle remains.
+//
+// The two guards `if top <= bottom` (before the bottom row) and `if left <= right` (before the
+// left column) are the whole correctness subtlety: when the matrix has an odd number of rows or
+// columns, the final layer degenerates to a SINGLE row or column that the first two passes have
+// already fully emitted. Without the guards that lone line would be walked a second time —
+// e.g. the middle `5` of the 3×3, or the `[1,2,3,4,5]` single row. The guards re-check the
+// (already shrunk) walls before the reverse passes and skip them when the rectangle has
+// collapsed to a line. No visited grid, O(1) extra state beyond the output.
+//
+// The siblings reach the identical order two other ways: [`spiral_visited`](spiral_visited.kara)
+// walks with a turn-right-on-wall rule over a visited grid, and [`spiral_steps`](spiral_steps.kara)
+// drops the walls entirely for the run-length pattern n, m−1, n−1, m−2, … .
+//
+// LeetCode bounds: 1 ≤ m, n ≤ 10, −100 ≤ matrix[i][j] ≤ 100 — every value fits trivially in i64.
+
+fn spiral(m: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let rows = m.len();
+    let first = ref m[0];                       // borrow the first row for its width
+    let cols = first.len();
+    let mut top = 0;
+    let mut bottom = rows - 1;
+    let mut left = 0;
+    let mut right = cols - 1;
+    while top <= bottom and left <= right {
+        let mut c = left;                   // top row, left → right
+        while c <= right {
+            out.push(m[top][c]);
+            c = c + 1;
+        }
+        top = top + 1;
+        let mut r = top;                    // right column, top → bottom
+        while r <= bottom {
+            out.push(m[r][right]);
+            r = r + 1;
+        }
+        right = right - 1;
+        if top <= bottom {                  // bottom row, right → left
+            let mut c2 = right;
+            while c2 >= left {
+                out.push(m[bottom][c2]);
+                c2 = c2 - 1;
+            }
+            bottom = bottom - 1;
+        }
+        if left <= right {                  // left column, bottom → top
+            let mut r2 = bottom;
+            while r2 >= top {
+                out.push(m[r2][left]);
+                r2 = r2 - 1;
+            }
+            left = left + 1;
+        }
+    }
+    out
+}
+
+// ---- test harness (shared verbatim by all three solvers) ------------------
+
+fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+    let m = grid;
+    let order = spiral(m);
+    let mut line: String = "[";
+    let mut k = 0;
+    let len = order.len();
+    let mut chk = 0;                      // positional checksum Σ (k+1)·order[k]
+    while k < len {
+        if k > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{order[k]}");
+        chk = chk + (k + 1) * order[k];
+        k = k + 1;
+    }
+    line.push(']');
+    println(line);
+    s.push(' ');
+    s.push_str(f"{chk}");
+}
+
+fn main() {
+    // One bracketed spiral per case, then a `sums:` fold of per-case checksums that all three
+    // solvers and the oracle print identically for a byte-for-byte diff.
+    let mut s: String = "sums:";
+
+    report([[1, 2, 3], [4, 5, 6], [7, 8, 9]], mut s);                 // 3×3 square
+    report([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]], mut s);     // 3×4 wide
+    report([[1]], mut s);                                             // 1×1
+    report([[1, 2], [3, 4]], mut s);                                 // 2×2
+    report([[1, 2, 3, 4, 5]], mut s);                                // 1×5 single row
+    report([[1], [2], [3], [4]], mut s);                             // 4×1 single column
+    report([[7, 9, 6]], mut s);                                      // 1×3 single row
+    report([[1, 2], [3, 4], [5, 6], [7, 8]], mut s);                 // 4×2 tall
+    report([[1, 2, 3, 4, 5],                                         // 5×5 deep spiral
+            [16, 17, 18, 19, 6],
+            [15, 24, 25, 20, 7],
+            [14, 23, 22, 21, 8],
+            [13, 12, 11, 10, 9]], mut s);
+    report([[-1, -2], [-3, -4]], mut s);                             // 2×2 negatives
+    report([[1, 2, 3], [4, 5, 6]], mut s);                           // 2×3 wide
+    report([[3], [2]], mut s);                                       // 2×1 tall
+
+    println(s);
+}

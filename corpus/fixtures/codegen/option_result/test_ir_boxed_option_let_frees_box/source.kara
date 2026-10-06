@@ -1,0 +1,6 @@
+
+struct Wide { a: i64, b: i64, c: i64, d: i64 }
+fn main() {
+    let o: Option[Wide] = Some(Wide { a: 1, b: 2, c: 3, d: 4 });
+    println(0);
+}

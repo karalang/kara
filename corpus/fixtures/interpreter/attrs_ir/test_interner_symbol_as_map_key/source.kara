@@ -1,0 +1,8 @@
+fn main() {
+             let mut tab: Interner = Interner.new();
+             let a = tab.intern("k");
+             let b = tab.intern("k");
+             let mut counts: Map[Symbol, i64] = Map.new();
+             counts.insert(a, 42);
+             println(counts.get(b).unwrap_or(0));
+         }

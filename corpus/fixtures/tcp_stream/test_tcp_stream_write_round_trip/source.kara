@@ -1,0 +1,8 @@
+
+            fn main() {
+                let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let stream = listener.accept().unwrap();
+                let msg: String = "hello from kara\n";
+                let _n = stream.write(msg.bytes());
+            }
+        

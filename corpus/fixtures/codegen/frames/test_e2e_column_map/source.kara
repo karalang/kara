@@ -1,0 +1,15 @@
+
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let d = c.map(|x| x * 2);
+    println(f"{d.sum()}");
+    let cf: Column[f64] = Column.from_vec([1.5, 2.5, 4.0]);
+    let df = cf.map(|x| x + 0.5);
+    println(f"{df.sum()}");
+    let k: i64 = 100;
+    let e = c.map(|x| x + k);
+    println(f"{e.sum()}");
+    let x: i64 = 7;
+    let g = c.map(|x| x * x);
+    println(f"{g.sum()} {x}");
+}

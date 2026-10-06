@@ -1,0 +1,8 @@
+
+fn main() {
+    let arr: Array[i64, 3] = [10, 20, 30];
+    let [a, b, c] = arr;
+    println(a);
+    println(b);
+    println(c);
+}

@@ -1,0 +1,4 @@
+fn go() -> i64 { let t = mkp(9); let mut n = 0i64;
+  for _k in 0i64..3i64 { n = n + takep(t); }
+  return n; }
+fn main() { println(go()); }

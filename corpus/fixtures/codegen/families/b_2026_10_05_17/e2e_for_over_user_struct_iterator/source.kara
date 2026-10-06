@@ -1,0 +1,100 @@
+struct CountUp { current: i64, limit: i64 }
+impl Iterator for CountUp {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.current >= self.limit { return None }
+        self.current += 1;
+        Some(self.current - 1)
+    }
+}
+struct Words { items: Vec[String], i: i64 }
+impl Iterator for Words {
+    type Item = String;
+    fn next(mut ref self) -> Option[String] {
+        if self.i >= self.items.len() { return None }
+        self.i += 1;
+        Some(self.items[self.i - 1].clone())
+    }
+}
+struct Pairs { n: i64, i: i64 }
+impl Iterator for Pairs {
+    type Item = (i64, String);
+    fn next(mut ref self) -> Option[(i64, String)] {
+        if self.i >= self.n { return None }
+        self.i += 1;
+        Some((self.i, f"p{self.i}"))
+    }
+}
+struct Rep[T] { v: T, n: i64 }
+impl[T: Clone] Iterator for Rep[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.n <= 0 { return None }
+        self.n -= 1;
+        Some(self.v.clone())
+    }
+}
+struct Nested { items: Vec[Vec[i64]], o: i64, k: i64 }
+impl Nested { fn new(items: Vec[Vec[i64]]) -> Nested { Nested { items: items, o: 0, k: 0 } } }
+impl Iterator for Nested {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        while self.o < self.items.len() {
+            if self.k < self.items[self.o].len() {
+                self.k += 1;
+                return Some(self.items[self.o][self.k - 1]);
+            }
+            self.o += 1;
+            self.k = 0;
+        }
+        None
+    }
+}
+struct Tok { s: String }
+impl Drop for Tok { fn drop(mut ref self) { println(f"drop {self.s}"); } }
+struct Holder { c: CountUp }
+fn mk() -> CountUp { CountUp { current: 0, limit: 3 } }
+fn words(n: i64) -> Words { let mut v: Vec[String] = Vec.new(); for i in 0..n { v.push(f"w{i}"); } Words { items: v, i: 0 } }
+fn sum_it(c: CountUp) -> i64 { let mut s = 0; for v in c { s += v; } s }
+fn first_big(c: CountUp) -> i64 { for v in c { if v > 2 { return v } } -1 }
+fn stop_at_w1() { for s in words(4) { if s == "w1" { return } println(f"r:{s}"); } }
+fn main() {
+    for v in CountUp { current: 0, limit: 3 } { println(f"a:{v}"); }
+    let c = CountUp { current: 5, limit: 7 };
+    for v in c { println(f"b:{v}"); }
+    for v in mk() { println(f"c:{v}"); }
+    for s in Words { items: vec!["x".to_string(), "yy".to_string()], i: 0 } { println(f"d:{s} {s.len()}"); }
+    for s in Words { items: vec!["x".to_string(), "stop".to_string(), "z".to_string()], i: 0 } {
+        if s == "stop" { break }
+        println(f"e:{s}");
+    }
+    outer: for a in CountUp { current: 0, limit: 4 } {
+        for b in CountUp { current: 0, limit: 4 } {
+            if b == 2 { continue outer }
+            if a == 2 { break outer }
+            println(f"f:{a}{b}");
+        }
+    }
+    for a in CountUp { current: 0, limit: 5 } { if a % 2 == 0 { continue } println(f"g:{a}"); }
+    for (k, s) in Pairs { n: 2, i: 0 } { println(f"h:{k}={s}"); }
+    for x in Rep { v: 7, n: 2 } { println(f"i:{x}"); }
+    let r = Rep { v: "hi".to_string(), n: 2 };
+    for s in r { println(f"j:{s}"); }
+    let mut total = 0;
+    for v in Nested.new(vec![vec![1, 2], vec![], vec![3]]) { total += v; }
+    println(f"k:{total}");
+    println(f"l:{sum_it(CountUp { current: 0, limit: 5 })} {first_big(CountUp { current: 0, limit: 9 })} {first_big(mk())}");
+    let mut acc: Vec[String] = Vec.new();
+    for s in words(3) { acc.push(s); }
+    println(f"m:{acc.len()} {acc[2]}");
+    stop_at_w1();
+    let t = Tok { s: "t".to_string() };
+    let h = Holder { c: CountUp { current: 2, limit: 4 } };
+    for v in h.c { println(f"n:{v}"); }
+    let cs = vec![CountUp { current: 0, limit: 2 }];
+    for c2 in cs { for v in c2 { println(f"o:{v}"); } }
+    let x = if total > 0 { CountUp { current: 5, limit: 6 } } else { mk() };
+    for v in x { println(f"p:{v}"); }
+    for v in { CountUp { current: 9, limit: 10 } } { println(f"q:{v}"); }
+    println(f"end {t.s}");
+}

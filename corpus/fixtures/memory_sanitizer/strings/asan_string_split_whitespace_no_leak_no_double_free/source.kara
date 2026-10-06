@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let text = "   alpha-token-payload-aaaaaaaaaaaaaa   beta-token-payload-bbbbbbbbbbbbbb   ";
+        let ws = text.split_whitespace();
+        total = total + ws.len();
+        for w in ws { total = total + w.len(); }
+        i = i + 1;
+    }
+    println(f"{total}");
+}

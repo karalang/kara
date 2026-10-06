@@ -1,0 +1,457 @@
+// LeetCode 297 — three-codec differential.
+//
+//   A  preorder + `#` sentinels     cursor-driven recursive descent   codec.kara
+//   B  level order, trimmed         FIFO queue, flat loop             codec_level.kara
+//   C  nested parentheses           depth-matched recursive descent   codec_paren.kara
+//
+// THREE ENCODINGS THAT AGREE ON NOTHING BUT THE TREE. They differ in traversal
+// order (preorder vs breadth-first), in how absence is recorded (a sentinel
+// token vs a trimmed row vs a delimiter pair), and in how parsing is driven (a
+// shared cursor vs a queue vs brace matching). A bug in one has no route into
+// the others — which is what makes agreement evidence rather than coincidence.
+//
+// THE STRINGS ARE NOT COMPARABLE AND ARE NEVER COMPARED. Each arm's encoding is
+// its own; the differential compares RECONSTRUCTED TREES, fingerprinted through
+// A's preorder form. Comparing encodings across arms would test the formats,
+// not the codecs.
+//
+//   P1  round-trip identity — deserialize(serialize(t)) is t, for every arm
+//   P2  cross-format agreement — all three reconstruct the SAME tree
+//   P3  serialization is a function of the tree — equal trees, equal strings,
+//       and re-serializing a round-tripped tree reproduces the string exactly
+//   P4  structure survives — node count, height and the in-order value
+//       sequence are unchanged by a round trip
+//   P5  the shapes that break naive codecs: right-only spines (C's empty pair),
+//       negative values (every arm's tokenizer), duplicate values (structure is
+//       not recoverable from the multiset), and deep spines
+//
+// P4 IS THE ONE THAT CATCHES A MIRRORED TREE. P1 and P2 both compare through a
+// fingerprint that is itself a preorder walk, so an arm that swapped left and
+// right CONSISTENTLY in both directions would round-trip perfectly and agree
+// with itself. The in-order sequence is what distinguishes them, because
+// mirroring reverses it.
+//
+// BANDS ARE SIZED BY THE TREE-WALK INTERPRETER, the slowest of the four
+// surfaces every kata must agree on.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn node(v: i64, l: Option[TreeNode], r: Option[TreeNode]) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+// ------------------------------- arm A
+
+fn ser_into(t: Option[TreeNode], out: mut ref Vec[String]) {
+    match t {
+        None => {
+            out.push("#");
+        }
+        Some(n) => {
+            out.push(n.val.to_string());
+            ser_into(n.left, out);
+            ser_into(n.right, out);
+        }
+    }
+}
+
+fn serialize(t: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    ser_into(t, mut parts);
+    return parts.join(",");
+}
+
+// One shared cursor for the whole recursion — the string is a transcript of the
+// call tree, and this is the read head replaying it.
+fn de_at(tokens: ref Vec[String], i: mut ref i64) -> Option[TreeNode] {
+    if i >= tokens.len() {
+        return None;
+    }
+    let tok = ref tokens[i];
+    i = i + 1;
+    if tok == "#" {
+        return None;
+    }
+    let v = match i64.parse(tok) {
+        Some(x) => x,
+        None => 0,
+    };
+    let l = de_at(tokens, i);
+    let r = de_at(tokens, i);
+    return node(v, l, r);
+}
+
+fn deserialize(s: ref String) -> Option[TreeNode] {
+    if s.len() == 0 {
+        return None;
+    }
+    let tokens = s.split(",");
+    let mut i = 0;
+    return de_at(tokens, mut i);
+}
+
+// ------------------------------- arm B
+
+fn serialize_level(t: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut q: VecDeque[Option[TreeNode]] = VecDeque.new();
+    q.push_back(t);
+    while q.len() > 0 {
+        match q.pop_front() {
+            Some(slot) => {
+                match slot {
+                    None => {
+                        parts.push("#");
+                    }
+                    Some(n) => {
+                        parts.push(n.val.to_string());
+                        q.push_back(n.left);
+                        q.push_back(n.right);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    // Trim the trailing sentinel row: everything after the last real value is
+    // recoverable from position alone, so emitting it is pure overhead. This is
+    // what makes the encoding shorter than preorder on a bushy tree, and what
+    // makes it NON-CANONICAL against a version that keeps them — both parse to
+    // the same tree from different strings, which is exactly why the
+    // differential compares trees and never level-order strings.
+    let mut last = parts.len();
+    while last > 0 and parts[last - 1] == "#" {
+        last = last - 1;
+    }
+    let mut trimmed: Vec[String] = Vec.new();
+    let mut k = 0;
+    while k < last {
+        trimmed.push(parts[k]);
+        k = k + 1;
+    }
+    return trimmed.join(",");
+}
+
+fn deserialize_level(s: ref String) -> Option[TreeNode] {
+    if s.len() == 0 {
+        return None;
+    }
+    let tokens = s.split(",");
+    if tokens.len() == 0 or tokens[0] == "#" {
+        return None;
+    }
+    let root_val = match i64.parse(tokens[0]) {
+        Some(x) => x,
+        None => 0,
+    };
+    let root = TreeNode { val: root_val, left: None, right: None };
+    let mut q: VecDeque[TreeNode] = VecDeque.new();
+    q.push_back(root);
+
+    let mut i = 1;
+    while q.len() > 0 and i < tokens.len() {
+        match q.pop_front() {
+            Some(parent) => {
+                // Left child, then right — the same order serialize pushed them.
+                if i < tokens.len() {
+                    let tok = ref tokens[i];
+                    i = i + 1;
+                    if tok != "#" {
+                        let v = match i64.parse(tok) { Some(x) => x, None => 0 };
+                        let child = TreeNode { val: v, left: None, right: None };
+                        parent.left = Some(child);
+                        q.push_back(child);
+                    }
+                }
+                if i < tokens.len() {
+                    let tok = ref tokens[i];
+                    i = i + 1;
+                    if tok != "#" {
+                        let v = match i64.parse(tok) { Some(x) => x, None => 0 };
+                        let child = TreeNode { val: v, left: None, right: None };
+                        parent.right = Some(child);
+                        q.push_back(child);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+    return Some(root);
+}
+
+// ------------------------------- arm C
+
+fn ser_paren(t: Option[TreeNode]) -> String {
+    match t {
+        None => {
+            return "";
+        }
+        Some(n) => {
+            let mut s = n.val.to_string();
+            let has_left = match n.left { Some(_) => true, None => false };
+            let has_right = match n.right { Some(_) => true, None => false };
+            // The empty left pair is emitted only when a right child follows it.
+            if has_left or has_right {
+                s.push_str("(");
+                s.push_str(ser_paren(n.left));
+                s.push_str(")");
+            }
+            if has_right {
+                s.push_str("(");
+                s.push_str(ser_paren(n.right));
+                s.push_str(")");
+            }
+            return s;
+        }
+    }
+}
+
+// Index of the `)` matching the `(` at `open`, by depth counting.
+fn match_paren(b: ref Slice[u8], open: i64) -> i64 {
+    let mut depth = 0;
+    let mut i = open;
+    while i < b.len() {
+        if b[i] == 40u8 {
+            depth = depth + 1;
+        }
+        if b[i] == 41u8 {
+            depth = depth - 1;
+            if depth == 0 {
+                return i;
+            }
+        }
+        i = i + 1;
+    }
+    return b.len();
+}
+
+fn de_paren_range(b: ref Slice[u8], lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo >= hi {
+        return None;
+    }
+    // Read the integer: an optional leading `-`, then digits.
+    let mut i = lo;
+    if b[i] == 45u8 {
+        i = i + 1;
+    }
+    while i < hi and b[i] >= 48u8 and b[i] <= 57u8 {
+        i = i + 1;
+    }
+    let mut digits = String.new();
+    let mut k = lo;
+    while k < i {
+        digits.push(b[k] as char);
+        k = k + 1;
+    }
+    let v = match i64.parse(digits) { Some(x) => x, None => 0 };
+
+    let mut l: Option[TreeNode] = None;
+    let mut r: Option[TreeNode] = None;
+    if i < hi and b[i] == 40u8 {
+        let close = match_paren(b, i);
+        l = de_paren_range(b, i + 1, close);
+        i = close + 1;
+        if i < hi and b[i] == 40u8 {
+            let close2 = match_paren(b, i);
+            r = de_paren_range(b, i + 1, close2);
+        }
+    }
+    return node(v, l, r);
+}
+
+fn de_paren(s: ref String) -> Option[TreeNode] {
+    let b: Slice[u8] = s.bytes();
+    return de_paren_range(b, 0, b.len());
+}
+
+// ------------------------------- harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn fingerprint_into(t: Option[TreeNode], out: mut ref Vec[String]) {
+    match t {
+        None => { out.push("#"); }
+        Some(n) => {
+            out.push(n.val.to_string());
+            fingerprint_into(n.left, out);
+            fingerprint_into(n.right, out);
+        }
+    }
+}
+
+fn fingerprint(t: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    fingerprint_into(t, mut parts);
+    return parts.join(",");
+}
+
+fn count_nodes(t: Option[TreeNode]) -> i64 {
+    match t {
+        None => { return 0; }
+        Some(n) => { return 1 + count_nodes(n.left) + count_nodes(n.right); }
+    }
+}
+
+fn height(t: Option[TreeNode]) -> i64 {
+    match t {
+        None => { return 0; }
+        Some(n) => {
+            let l = height(n.left);
+            let r = height(n.right);
+            if l > r { return 1 + l; }
+            return 1 + r;
+        }
+    }
+}
+
+// In-order, which is what a MIRRORED tree reverses — the fingerprint cannot see
+// that, because it is itself a preorder walk.
+fn inorder_into(t: Option[TreeNode], out: mut ref Vec[String]) {
+    match t {
+        None => {}
+        Some(n) => {
+            inorder_into(n.left, out);
+            out.push(n.val.to_string());
+            inorder_into(n.right, out);
+        }
+    }
+}
+
+fn inorder(t: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    inorder_into(t, mut parts);
+    return parts.join(",");
+}
+
+// Grow a random tree by inserting at a random walk position, so shapes range
+// from bushy to spine-like rather than all being balanced.
+fn grow(n: i64, spread: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if n <= 0 {
+        return None;
+    }
+    seed = lcg(seed);
+    let v = seed % spread - spread / 2;
+    seed = lcg(seed);
+    // Split the remaining nodes between the two sides; a skewed split makes a
+    // spine, an even one makes a bush.
+    let left_n = if n <= 1 { 0 } else { seed % n };
+    let right_n = n - 1 - left_n;
+    let l = grow(left_n, spread, seed);
+    let r = grow(right_n, spread, seed);
+    return node(v, l, r);
+}
+
+fn right_spine(n: i64) -> Option[TreeNode] {
+    if n <= 0 {
+        return None;
+    }
+    return node(n, None, right_spine(n - 1));
+}
+
+fn left_spine(n: i64) -> Option[TreeNode] {
+    if n <= 0 {
+        return None;
+    }
+    return node(-n, left_spine(n - 1), None);
+}
+
+fn main() {
+    let trees = 900;
+    let mut seed = 29729;
+
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut total_nodes = 0;
+
+    let mut t = 0;
+    while t < trees {
+        let n = t % 24;
+        let spread = if t % 3 == 0 { 6 } else { 400 };
+        let tree = grow(n, spread, mut seed);
+        total_nodes = total_nodes + count_nodes(tree);
+
+        let want = fingerprint(tree);
+        let want_nodes = count_nodes(tree);
+        let want_height = height(tree);
+        let want_inorder = inorder(tree);
+
+        // P1 — every arm round-trips to itself.
+        let a = deserialize(serialize(tree));
+        let b = deserialize_level(serialize_level(tree));
+        let c = de_paren(ser_paren(tree));
+        if fingerprint(a) != want or fingerprint(b) != want or fingerprint(c) != want {
+            p1 = p1 + 1;
+        }
+
+        // P2 — and to each other.
+        if fingerprint(a) != fingerprint(b) or fingerprint(a) != fingerprint(c) {
+            p2 = p2 + 1;
+        }
+
+        // P3 — re-serializing a round-tripped tree reproduces the string.
+        if serialize(a) != serialize(tree)
+            or serialize_level(b) != serialize_level(tree)
+            or ser_paren(c) != ser_paren(tree) {
+            p3 = p3 + 1;
+        }
+
+        // P4 — structure survives, including the in-order sequence a mirror
+        // would reverse and the fingerprint would miss.
+        if count_nodes(a) != want_nodes or height(a) != want_height or inorder(a) != want_inorder {
+            p4 = p4 + 1;
+        }
+        if count_nodes(b) != want_nodes or height(b) != want_height or inorder(b) != want_inorder {
+            p4 = p4 + 1;
+        }
+        if count_nodes(c) != want_nodes or height(c) != want_height or inorder(c) != want_inorder {
+            p4 = p4 + 1;
+        }
+
+        t = t + 1;
+    }
+
+    // P5 — the shapes that break naive codecs.
+    let mut p5 = 0;
+    let mut s = 1;
+    while s <= 40 {
+        let rs = right_spine(s);   // C's empty-pair case, s deep
+        let ls = left_spine(s);    // negative values throughout
+        let mut which = 0;
+        while which < 2 {
+            let tree = if which == 0 { rs } else { ls };
+            let want = fingerprint(tree);
+            if fingerprint(deserialize(serialize(tree))) != want { p5 = p5 + 1; }
+            if fingerprint(deserialize_level(serialize_level(tree))) != want { p5 = p5 + 1; }
+            if fingerprint(de_paren(ser_paren(tree))) != want { p5 = p5 + 1; }
+            which = which + 1;
+        }
+        s = s + 1;
+    }
+    // Duplicate values: structure is not recoverable from the multiset alone.
+    let dup = node(5, node(5, node(5, None, None), None), node(5, None, node(5, None, None)));
+    let dw = fingerprint(dup);
+    if fingerprint(deserialize(serialize(dup))) != dw { p5 = p5 + 1; }
+    if fingerprint(deserialize_level(serialize_level(dup))) != dw { p5 = p5 + 1; }
+    if fingerprint(de_paren(ser_paren(dup))) != dw { p5 = p5 + 1; }
+
+    println(f"trees {trees} nodes {total_nodes}");
+    println(f"P1 round-trip failures {p1}");
+    println(f"P2 cross-format disagreements {p2}");
+    println(f"P3 re-serialization mismatches {p3}");
+    println(f"P4 structure/in-order failures {p4}");
+    println(f"P5 adversarial-shape failures {p5}");
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

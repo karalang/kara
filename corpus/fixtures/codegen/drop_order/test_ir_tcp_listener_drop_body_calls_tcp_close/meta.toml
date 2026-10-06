@@ -1,0 +1,13 @@
+source = "tests/codegen/drop_order.rs::test_ir_tcp_listener_drop_body_calls_tcp_close"
+dedup_of = ["tests/codegen/drop_order.rs::test_ir_main_invokes_tcp_drop_wrapper_at_scope_exit"]
+expect = "skip"
+exit = 0
+tags = ["nondeterministic"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "output differs between two legacy runs (a bound port, scheduling or timing)"

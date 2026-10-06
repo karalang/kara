@@ -1,0 +1,35 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct P { a: R, b: R }
+struct Wb { p: (R, R), n: i64, pad: i64, q: i64 }
+fn v8(o: Option[((R, R), i64)]) -> (R, R) { match o { Option.Some(t) => { return (t.0.0, t.0.1); } Option.None => { return (R { id: 0 }, R { id: 0 }); } } }
+fn h1(o: Option[(R, R)]) -> (R, R) { match o { Option.Some(t) => { return (t.0, t.1); } Option.None => { return (R { id: 0 }, R { id: 0 }); } } }
+fn mix(o: Option[((R, R), R)]) -> (R, R) { match o { Option.Some(t) => { return (t.0.0, t.1); } Option.None => { return (R { id: 0 }, R { id: 0 }); } } }
+fn sl(o: Option[(R, R)]) -> P { match o { Option.Some(t) => { return P { a: t.1, b: t.0 }; } Option.None => { return P { a: R { id: 0 }, b: R { id: 0 } }; } } }
+fn tl(o: Option[((R, R), i64)]) -> (R, R) { match o { Option.Some(t) => (t.0.0, t.0.1), Option.None => (R { id: 0 }, R { id: 0 }) } }
+fn sc(o: Option[(R, R)]) -> (i64, R) { match o { Option.Some(t) => { return (t.0.id, t.1); } Option.None => { return (0, R { id: 0 }); } } }
+fn nl(o: Option[(R, R)]) -> (R, R) { match o { Option.Some(t) => { return (t.1, R { id: 99 }); } Option.None => { return (R { id: 0 }, R { id: 0 }); } } }
+fn bx(o: Option[Wb]) -> (R, R) { match o { Option.Some(w) => { return (w.p.0, w.p.1); } Option.None => { return (R { id: 0 }, R { id: 0 }); } } }
+fn rs(o: Result[((R, R), i64), i64]) -> (R, R) { match o { Result.Ok(t) => { return (t.0.0, t.0.1); } Result.Err(e) => { return (R { id: e }, R { id: e }); } } }
+fn main() {
+    println("v8 temp"); { let g = v8(Option.Some(((R { id: 81 }, R { id: 82 }), 3))); println(f"  got:{g.0.id},{g.1.id}") }
+    println("v8 named"); { let a = Option.Some(((R { id: 83 }, R { id: 84 }), 3)); let g = v8(a); println(f"  got:{g.0.id},{g.1.id}") }
+    println("h1 temp"); { let g = h1(Option.Some((R { id: 11 }, R { id: 12 }))); println(f"  got:{g.0.id},{g.1.id}") }
+    println("h1 named"); { let a = Option.Some((R { id: 13 }, R { id: 14 })); let g = h1(a); println(f"  got:{g.0.id},{g.1.id}") }
+    println("mix temp"); { let g = mix(Option.Some(((R { id: 31 }, R { id: 32 }), R { id: 33 }))); println(f"  got:{g.0.id},{g.1.id}") }
+    println("mix named"); { let a = Option.Some(((R { id: 34 }, R { id: 35 }), R { id: 36 })); let g = mix(a); println(f"  got:{g.0.id},{g.1.id}") }
+    println("sl temp"); { let g = sl(Option.Some((R { id: 41 }, R { id: 42 }))); println(f"  got:{g.a.id},{g.b.id}") }
+    println("sl named"); { let a = Option.Some((R { id: 43 }, R { id: 44 })); let g = sl(a); println(f"  got:{g.a.id},{g.b.id}") }
+    println("tl temp"); { let g = tl(Option.Some(((R { id: 51 }, R { id: 52 }), 1))); println(f"  got:{g.0.id},{g.1.id}") }
+    println("tl named"); { let a = Option.Some(((R { id: 53 }, R { id: 54 }), 1)); let g = tl(a); println(f"  got:{g.0.id},{g.1.id}") }
+    println("sc temp"); { let g = sc(Option.Some((R { id: 61 }, R { id: 62 }))); println(f"  got:{g.0},{g.1.id}") }
+    println("nl temp"); { let g = nl(Option.Some((R { id: 71 }, R { id: 72 }))); println(f"  got:{g.0.id},{g.1.id}") }
+    println("nl named"); { let a = Option.Some((R { id: 73 }, R { id: 74 })); let g = nl(a); println(f"  got:{g.0.id},{g.1.id}") }
+    println("bx temp"); { let g = bx(Option.Some(Wb { p: (R { id: 91 }, R { id: 92 }), n: 1, pad: 2, q: 3 })); println(f"  got:{g.0.id},{g.1.id}") }
+    println("bx named"); { let a = Option.Some(Wb { p: (R { id: 93 }, R { id: 94 }), n: 1, pad: 2, q: 3 }); let g = bx(a); println(f"  got:{g.0.id},{g.1.id}") }
+    println("rs temp"); { let g = rs(Result.Ok(((R { id: 21 }, R { id: 22 }), 3))); println(f"  got:{g.0.id},{g.1.id}") }
+    println("rs named"); { let a: Result[((R, R), i64), i64] = Result.Ok(((R { id: 23 }, R { id: 24 }), 3)); let g = rs(a); println(f"  got:{g.0.id},{g.1.id}") }
+    println("rs err"); { let g = rs(Result.Err(7)); println(f"  got:{g.0.id},{g.1.id}") }
+    println("none"); { let a: Option[(R, R)] = Option.None; let g = h1(a); println(f"  got:{g.0.id},{g.1.id}") }
+    println("end")
+}

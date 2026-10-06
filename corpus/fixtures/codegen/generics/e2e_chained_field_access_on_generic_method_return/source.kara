@@ -1,0 +1,34 @@
+
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+struct Box[T] { v: T }
+struct P { v: Wide }
+enum Col { Red, Green, Blue }
+impl[T] Box[T] {
+    fn take(self) -> T { self.v }
+    fn wrap(self) -> Box[T] { Box { v: self.v } }
+}
+impl P { fn take(self) -> Wide { self.v } }
+fn main() {
+    let n: i64 = env.args().len();
+    // (a) the reported shape — chained field on a bare-`T` return.
+    let w = Box { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 6 } };
+    println(w.take().f);
+    // (b) the one-condition-apart bound form, which always worked.
+    let w2 = Box { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 7 } };
+    let x = w2.take();
+    println(x.f);
+    // (c) NON-generic control: `P.take` registers a concrete return name.
+    let p = P { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 8 } };
+    println(p.take().f);
+    // (d) the row's related note — a `Box[T]` return, chained through the
+    // wrapper's own field, which needs the intermediate's generic ARGS.
+    let w3 = Box { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 9 } };
+    println(w3.wrap().v.f);
+    // (e) a `-> T` at `T = <enum>`, matched on directly.
+    let c: Box[Col] = Box { v: if n > 0 { Col.Green } else { Col.Red } };
+    match c.take() {
+        Col.Red => println(1),
+        Col.Green => println(2),
+        Col.Blue => println(3),
+    }
+}

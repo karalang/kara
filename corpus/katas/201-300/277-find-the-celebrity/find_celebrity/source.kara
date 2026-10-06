@@ -1,0 +1,116 @@
+// LeetCode 277 — Find the Celebrity. (Premium.)
+//
+// `n` people. A CELEBRITY is known by everyone else and knows nobody. There is
+// at most one. The only thing you may ask is `knows(a, b)`. Return the
+// celebrity's index, or -1.
+//
+// THE ★ MECHANISM: ONE QUESTION ELIMINATES ONE PERSON. That is the whole
+// problem, and it is worth stating before any code:
+//
+//     knows(a, b) == true   ->  A IS NOT THE CELEBRITY   (celebrities know nobody)
+//     knows(a, b) == false  ->  B IS NOT THE CELEBRITY   (everyone knows the celebrity)
+//
+// Either answer removes exactly one candidate, and never zero. So `n - 1`
+// questions reduce `n` people to a single survivor, and no cleverness can beat
+// that: nothing else is on offer, since each call has two outcomes and each
+// outcome kills one person.
+//
+// The linear form keeps a running `cand` and walks once:
+//
+//     cand = 0; for i in 1..n: if knows(cand, i) { cand = i }
+//
+// When `knows(cand, i)` is true, `cand` is out and `i` inherits the slot. When
+// false, `i` is out and `cand` survives. Either way the loop has eliminated
+// everyone it has passed.
+//
+// THE SURVIVOR IS NOT YET AN ANSWER, which is the half that gets skipped. The
+// scan proves "nobody except `cand` can be the celebrity" — it does NOT prove
+// `cand` is one. A graph where nobody is a celebrity still leaves a survivor.
+// So the second phase asks, for every other `j`: does `cand` know `j` (must be
+// no), and does `j` know `cand` (must be yes). Only then is it an answer.
+//
+// COST: `n - 1` for the scan and up to `2(n - 1)` for the check, so at most
+// `3(n - 1)` calls. The differential asserts that bound on every case rather
+// than trusting it — the call count is a second oracle this problem hands you
+// for free, and a solver can be perfectly correct while quietly making O(n²)
+// calls, which is the thing the problem is actually asking you not to do.
+
+fn knows(m: ref Vec[Vec[bool]], a: i64, b: i64, calls: mut ref i64) -> bool {
+    calls = calls + 1;
+    return m[a][b];
+}
+
+fn find_celebrity(m: ref Vec[Vec[bool]], n: i64, calls: mut ref i64) -> i64 {
+    // Phase 1 — eliminate down to one survivor in n-1 questions.
+    let mut cand = 0;
+    let mut i = 1;
+    while i < n {
+        if knows(m, cand, i, calls) {
+            cand = i;
+        }
+        i = i + 1;
+    }
+
+    // Phase 2 — the survivor still has to prove it.
+    let mut j = 0;
+    while j < n {
+        if j != cand {
+            if knows(m, cand, j, calls) {
+                return -1;
+            }
+            if not knows(m, j, cand, calls) {
+                return -1;
+            }
+        }
+        j = j + 1;
+    }
+    return cand;
+}
+
+fn row(bits: Vec[i64]) -> Vec[bool] {
+    let mut r: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < bits.len() {
+        r.push(bits[i] == 1);
+        i = i + 1;
+    }
+    return r;
+}
+
+fn main() {
+    // knows[a][b] — the diagonal is unused (nobody is asked about themselves).
+    // Case 1: person 1 is the celebrity — 0 and 2 know 1, 1 knows nobody.
+    let m1: Vec[Vec[bool]] = [
+        row([0, 1, 0]),
+        row([0, 0, 0]),
+        row([0, 1, 0]),
+    ];
+    // Case 2: nobody — 1 is known by all but knows 2.
+    let m2: Vec[Vec[bool]] = [
+        row([0, 1, 0]),
+        row([0, 0, 1]),
+        row([0, 1, 0]),
+    ];
+    // Case 3: single person, trivially a celebrity.
+    let m3: Vec[Vec[bool]] = [row([0])];
+    // Case 4: person 0 is the celebrity.
+    let m4: Vec[Vec[bool]] = [
+        row([0, 0, 0, 0]),
+        row([1, 0, 1, 0]),
+        row([1, 0, 0, 1]),
+        row([1, 1, 0, 0]),
+    ];
+    // Case 5: two people who know each other — neither qualifies.
+    let m5: Vec[Vec[bool]] = [row([0, 1]), row([1, 0])];
+
+    let cases: Vec[Vec[Vec[bool]]] = [m1, m2, m3, m4, m5];
+    let mut c = 0;
+    while c < cases.len() {
+        let n = cases[c].len();
+        let mut calls = 0;
+        let who = find_celebrity(cases[c], n, mut calls);
+        let bound = 3 * (n - 1);
+        println(f"n={n} celebrity={who} calls={calls} (bound {bound})");
+        c = c + 1;
+    }
+}

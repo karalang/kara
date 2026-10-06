@@ -1,0 +1,74 @@
+// LeetCode #316: Remove Duplicate Letters — a monotone stack with a lookahead.
+//
+// Keep a stack of the answer so far. Walking left to right, a letter already on
+// the stack is skipped (it is placed, and placed as early as it can be). Otherwise
+// pop every stack top that is BIGGER than the new letter AND still has a later
+// occurrence — popping it now and re-adding it later yields a smaller string —
+// then push. The two conditions are the two ways this can go wrong: pop a letter
+// with no later copy and it is lost; keep a bigger letter that could be deferred
+// and the result is not the smallest. `last[c]` is the index of the final
+// occurrence of each letter, computed in one pass before the walk.
+//
+// Every letter is pushed at most once and popped at most once: O(n).
+
+fn remove_duplicate_letters(s: ref String) -> String {
+    let bs = s.bytes();
+    let n = bs.len();
+
+    let mut last: Vec[i64] = Vec.new();
+    for k in 0..26 { last.push(-1); }
+    for i in 0..n { last[(bs[i] - b'a') as i64] = i; }
+
+    let mut on_stack: Vec[bool] = Vec.new();
+    for k in 0..26 { on_stack.push(false); }
+
+    let mut stack: Vec[u8] = Vec.new();
+    for i in 0..n {
+        let c = bs[i];
+        let ci = (c - b'a') as i64;
+        if on_stack[ci] { continue; }
+        while stack.len() > 0 {
+            let top = stack[stack.len() - 1];
+            if top > c and last[(top - b'a') as i64] > i {
+                stack.pop();
+                on_stack[(top - b'a') as i64] = false;
+            } else {
+                break;
+            }
+        }
+        stack.push(c);
+        on_stack[ci] = true;
+    }
+
+    let mut out = String.new();
+    for i in 0..stack.len() { out.push(stack[i] as char); }
+    return out;
+}
+
+// ------------------------------------------------------------- demo ---
+
+fn main() {
+    let mut cases: Vec[String] = Vec.new();
+    cases.push("bcabc");                 // LeetCode: abc
+    cases.push("cbacdcbc");              // LeetCode: acdb
+    cases.push("a");
+    cases.push("aaaa");
+    cases.push("abcabc");                // abc — never pop what has no later copy
+    cases.push("cba");                   // cba — nothing has a later copy
+    cases.push("bbcaac");                // bac
+    cases.push("leetcode");              // letcod
+    cases.push("zyxzyxzyx");             // xyz
+    cases.push("ecbacba");               // eacb
+    cases.push("bcac");                  // bac — the pop must check `last`, not "seen"
+
+    let mut acc = 0;
+    for c in 0..cases.len() {
+        let r = remove_duplicate_letters(cases[c]);
+        let rb = r.bytes();
+        for j in 0..rb.len() {
+            acc = (acc * 131 + (rb[j] as i64)) % 1000000007;
+        }
+        println(f"case {c}: {cases[c]} -> {r}");
+    }
+    println(f"sink: {acc}");
+}

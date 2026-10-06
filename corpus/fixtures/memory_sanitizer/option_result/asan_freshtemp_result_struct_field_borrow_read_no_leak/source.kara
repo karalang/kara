@@ -1,0 +1,15 @@
+
+struct W { s: String }
+fn f() -> Result[W, i64] { Ok(W { s: "boom".to_string() }) }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {
+        match f() {
+            Ok(w) => { n = n + w.s.len(); }
+            Err(e) => { n = n + e; }
+        }
+        i = i + 1;
+    }
+    println(n.to_string());
+}

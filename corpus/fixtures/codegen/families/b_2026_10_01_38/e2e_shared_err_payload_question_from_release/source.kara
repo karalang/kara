@@ -1,0 +1,29 @@
+
+shared struct Sh { k: i64, s: String }
+fn hs(k: i64) -> String { f"heap-string-long-enough-{k}" }
+struct E2 { n: i64 }
+impl From[Sh] for E2 { fn from(s: Sh) -> E2 { E2 { n: s.s.len() } } }
+struct E3 { inner: Sh }
+impl From[Sh] for E3 { fn from(s: Sh) -> E3 { E3 { inner: s } } }
+fn mk(k: i64) -> Result[i64, Sh] { if k > 5 { Result.Err(Sh { k: k, s: hs(k) }) } else { Result.Ok(k) } }
+fn f1(k: i64) -> Result[i64, E2] { let r = mk(k); let x = r?; Result.Ok(x) }
+fn f2(k: i64) -> Result[i64, E2] { let x = mk(k)?; Result.Ok(x) }
+fn f3(k: i64) -> Result[i64, E3] { let x = mk(k)?; Result.Ok(x) }
+fn f4(k: i64) -> Result[i64, E3] { let r = mk(k); let x = r?; Result.Ok(x) }
+fn f5(n: i64) -> Result[i64, E2] { let mut t = 0; for i in 1..n { let x = mk(i)?; t = t + x; } Result.Ok(t) }
+fn f6(r: Result[i64, Sh]) -> Result[i64, E2] { let x = r?; Result.Ok(x) }
+fn p2(r: Result[i64, E2]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) } }
+fn p3(r: Result[i64, E3]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) } }
+fn main() {
+    p2(f1(8))
+    p2(f1(2))
+    p2(f2(8))
+    p3(f3(8))
+    p3(f4(9))
+    p3(f4(3))
+    p2(f5(9))
+    p2(f6(mk(8)))
+    let a = mk(9);
+    p2(f6(a))
+    println("end")
+}

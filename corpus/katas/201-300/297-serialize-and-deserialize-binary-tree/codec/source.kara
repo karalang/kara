@@ -1,0 +1,125 @@
+// LeetCode 297 — Serialize and Deserialize Binary Tree.
+//
+// Turn a binary tree into a string, and that string back into the same tree.
+// The values carry no ordering guarantee and may repeat, so the encoding has to
+// carry the SHAPE — knowing the multiset of values tells you nothing about
+// which tree they came from.
+//
+//         1              "1,2,#,#,3,4,#,#,5,#,#"
+//        / \
+//       2   3
+//          / \
+//         4   5
+//
+// THE PROBLEM IS THE NULLS, NOT THE VALUES. A preorder walk of the values alone
+// is ambiguous: `1,2,3` is three different trees. What disambiguates it is
+// recording where the children ARE NOT — every absent child becomes a `#`, so
+// the traversal is total over the 2n+1 positions of an n-node tree rather than
+// partial over its n values. That is the whole trick, and it is why the encoded
+// length is proportional to nodes-plus-nulls rather than nodes.
+//
+// THE ★ MECHANISM: PREORDER, SENTINEL-TERMINATED, CURSOR-CONSUMED. Serialize by
+// walking root-left-right and emitting `#` at every empty slot. Deserialize by
+// walking the token list in the SAME order with a single moving cursor:
+//
+//     token is `#`   ->  this slot is empty, consume one token, return None
+//     otherwise      ->  build a node, then recursively fill left, then right
+//
+// The recursion order is doing the work. Because serialize emitted root before
+// left before right, and deserialize consumes in exactly that order, the cursor
+// never needs to look ahead or back — the string is a transcript of the call
+// tree, replayed. Get the order wrong in either direction and the shape comes
+// back mirrored or mangled with no error raised, which is what makes P1's
+// round-trip the property worth testing rather than spot-checking a few trees.
+//
+// WHY A CURSOR AND NOT A SPLIT-OFF QUEUE. Deserialize needs one shared, mutable
+// read position across the whole recursion. Passing an index by `mut ref`
+// through the recursive calls is the direct expression of that; rebuilding a
+// remainder list at every level would be O(n²) in copies and would obscure that
+// the algorithm is a single left-to-right pass.
+//
+// NEGATIVE VALUES ARE THE EASY BUG. `-` is not the separator and `#` is not a
+// digit, so nothing here needs escaping — but a hand-rolled tokenizer that
+// scans for a leading digit, or that treats `-` as a delimiter, breaks on the
+// first negative value and passes every test that only uses positives. The
+// differential feeds negatives deliberately for that reason.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: None, right: None });
+}
+
+fn node(v: i64, l: Option[TreeNode], r: Option[TreeNode]) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+// ---------------------------------------------------------------- serialize
+
+fn ser_into(t: Option[TreeNode], out: mut ref Vec[String]) {
+    match t {
+        None => {
+            out.push("#");
+        }
+        Some(n) => {
+            out.push(n.val.to_string());
+            ser_into(n.left, out);
+            ser_into(n.right, out);
+        }
+    }
+}
+
+fn serialize(t: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    ser_into(t, mut parts);
+    return parts.join(",");
+}
+
+// ---------------------------------------------------------------- deserialize
+
+// One shared cursor for the whole recursion — the string is a transcript of the
+// call tree, and this is the read head replaying it.
+fn de_at(tokens: ref Vec[String], i: mut ref i64) -> Option[TreeNode] {
+    if i >= tokens.len() {
+        return None;
+    }
+    let tok = ref tokens[i];
+    i = i + 1;
+    if tok == "#" {
+        return None;
+    }
+    let v = match i64.parse(tok) {
+        Some(x) => x,
+        None => 0,
+    };
+    let l = de_at(tokens, i);
+    let r = de_at(tokens, i);
+    return node(v, l, r);
+}
+
+fn deserialize(s: ref String) -> Option[TreeNode] {
+    if s.len() == 0 {
+        return None;
+    }
+    let tokens = s.split(",");
+    let mut i = 0;
+    return de_at(tokens, mut i);
+}
+
+fn report(t: Option[TreeNode]) {
+    let s = serialize(t);
+    let round = serialize(deserialize(s.clone()));
+    println(f"{s}  |  round-trip {round}");
+}
+
+fn main() {
+    report(node(1, leaf(2), node(3, leaf(4), leaf(5))));
+    report(None);
+    report(leaf(7));
+    report(node(-1, leaf(-2), None));
+    report(node(5, node(5, leaf(5), None), leaf(5)));
+}

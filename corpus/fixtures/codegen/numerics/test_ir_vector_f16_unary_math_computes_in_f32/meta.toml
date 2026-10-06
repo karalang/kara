@@ -1,0 +1,13 @@
+source = "tests/codegen/numerics.rs::test_ir_vector_f16_unary_math_computes_in_f32"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

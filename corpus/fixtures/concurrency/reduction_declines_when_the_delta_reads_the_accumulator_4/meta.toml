@@ -1,0 +1,13 @@
+source = "tests/concurrency.rs::reduction_declines_when_the_delta_reads_the_accumulator"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

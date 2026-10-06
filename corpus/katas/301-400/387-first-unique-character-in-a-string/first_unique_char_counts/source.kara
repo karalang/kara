@@ -1,0 +1,62 @@
+// LeetCode 387 — fixed-alphabet variant.
+//
+// The constraint says `s` is lowercase English letters only, so a 26-slot
+// count array replaces the Map: no hashing, no allocation beyond one Vec.
+// Kept alongside the Map version because each is a distinct codegen surface —
+// this one exercises indexed Vec accumulate + a bounds-checked scan, the other
+// exercises map insert / get / keys().
+
+fn first_uniq_char(s: ref String) -> i64 {
+    let bs = s.bytes();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 26 { counts.push(0); k = k + 1; }
+
+    let mut i = 0;
+    while i < bs.len() {
+        let idx = (bs[i] - b'a') as i64;
+        counts[idx] = counts[idx] + 1;
+        i = i + 1;
+    }
+
+    let mut j = 0;
+    while j < bs.len() {
+        let idx = (bs[j] - b'a') as i64;
+        if counts[idx] == 1 { return j; }
+        j = j + 1;
+    }
+    -1
+}
+
+fn unique_count(s: ref String) -> i64 {
+    let bs = s.bytes();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 26 { counts.push(0); k = k + 1; }
+    let mut i = 0;
+    while i < bs.len() {
+        let idx = (bs[i] - b'a') as i64;
+        counts[idx] = counts[idx] + 1;
+        i = i + 1;
+    }
+    let mut uniq = 0;
+    let mut c = 0;
+    while c < 26 {
+        if counts[c] == 1 { uniq = uniq + 1; }
+        c = c + 1;
+    }
+    uniq
+}
+
+fn report(s: ref String) {
+    println(f"{s} -> {first_uniq_char(s)} (uniq={unique_count(s)})");
+}
+
+fn main() {
+    report("leetcode");
+    report("loveleetcode");
+    report("aabb");
+    report("z");
+    report("");
+    report("abcabcd");
+}

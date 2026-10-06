@@ -1,0 +1,20 @@
+
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+struct Box[T] { v: T }
+impl[T] Box[T] { fn take(self) -> T { self.v } }
+fn main() {
+    let n: i64 = env.args().len();
+    let c2: Box[Box[i64]] = Box { v: Box { v: 41i64 } };
+    println(c2.take().take());
+    let c3: Box[Box[Box[i64]]] = Box { v: Box { v: Box { v: 7i64 } } };
+    println(c3.take().take().take());
+    let s2: Box[Box[String]] = Box { v: Box { v: "hi" } };
+    println(s2.take().take());
+    let w2: Box[Box[Wide]] = Box { v: Box { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 6 } } };
+    println(w2.take().take().f);
+    // Negative controls — single-level instantiations keep their symbols.
+    let p1: Box[Wide] = Box { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 9 } };
+    println(p1.take().f);
+    let p2: Box[i64] = Box { v: 5i64 };
+    println(p2.take());
+}

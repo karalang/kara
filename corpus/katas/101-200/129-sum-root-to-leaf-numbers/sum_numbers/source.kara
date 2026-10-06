@@ -1,0 +1,78 @@
+// LeetCode #129: Sum Root to Leaf Numbers — DFS with a running path-number.
+//
+// Each root-to-leaf path spells a base-10 number (digits top to bottom); return
+// the sum over all such paths. One DFS carrying the running value
+// `cur = cur * 10 + node.val`; at a leaf the running value IS the path number.
+// Node type mirrors #112/#124 — a `shared struct TreeNode` (RC).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn sum_dfs(node: Option[TreeNode], acc: i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let cur = acc * 10 + n.val;
+            let left_none = match n.left { None => true, Some(_) => false };
+            let right_none = match n.right { None => true, Some(_) => false };
+            if left_none and right_none {
+                cur
+            } else {
+                sum_dfs(n.left, cur) + sum_dfs(n.right, cur)
+            }
+        }
+    }
+}
+
+fn sum_numbers(root: Option[TreeNode]) -> i64 {
+    sum_dfs(root, 0)
+}
+
+fn digit(i: i64, seed: i64) -> i64 {
+    ((i * 7 + seed * 3) % 9) + 1
+}
+
+fn build_balanced(lo: i64, hi: i64, seed: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: digit(mid, seed), left: None, right: None };
+    node.left = build_balanced(lo, mid - 1, seed);
+    node.right = build_balanced(mid + 1, hi, seed);
+    Some(node)
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    Some(TreeNode { val: v, left: None, right: None })
+}
+
+fn main() {
+    let m = 1000000007;
+    let mut sink = 0;
+
+    // [1,2,3] -> 12 + 13 = 25
+    let e1 = TreeNode { val: 1, left: leaf(2), right: leaf(3) };
+    sink = (sink * 1000003 + sum_numbers(Some(e1))) % m;
+
+    // [4,9,0,5,1] -> 495 + 491 + 40 = 1026
+    let e2_left = TreeNode { val: 9, left: leaf(5), right: leaf(1) };
+    let e2 = TreeNode { val: 4, left: Some(e2_left), right: leaf(0) };
+    sink = (sink * 1000003 + sum_numbers(Some(e2))) % m;
+
+    // single node
+    sink = (sink * 1000003 + sum_numbers(leaf(7))) % m;
+
+    let mut t = 0;
+    while t < 6 {
+        let n = 7 + t * 2;
+        let root = build_balanced(0, n - 1, t + 1);
+        sink = (sink * 1000003 + sum_numbers(root)) % m;
+        t = t + 1;
+    }
+
+    println(f"sink: {sink}");
+}

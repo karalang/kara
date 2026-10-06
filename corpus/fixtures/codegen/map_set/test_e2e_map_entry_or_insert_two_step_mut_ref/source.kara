@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let r = m.entry("a".to_string()).or_insert(10_i64);
+    *r += 1;
+    r += 1;
+    println(*r);
+    println(m.get_or("a".to_string(), 0_i64));
+}

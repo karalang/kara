@@ -1,0 +1,56 @@
+// Bench spine of LeetCode #53 Maximum Subarray — see ../README.md § Benchmarks.
+//
+// The ★ solver's Kadane kernel run over MANY arrays: a deterministic LCG streams
+// pseudo-random values in [-50, 49] straight into the running (`here`, `best`)
+// recurrence, restarting every W elements to simulate W-length input arrays, and
+// each array's answer is folded into one i64 sink. So the workload is exactly
+// "solve max-subarray on a batch of arrays" — the kernel this kata is about — with
+// no allocation: elements are generated inline, never stored.
+//
+// Everything is overflow-safe by construction (Kāra traps on i64 overflow): the LCG
+// is the classic glibc recurrence mod 2^31, so `state < 2^31` and the product
+// `1103515245 * state < 2^61` stays well inside i64; values are `state % 100 - 50`;
+// and the fold of WINDOWS array-answers, each bounded by W*49, stays far below i64.
+// The generator is integer-only and identical across languages, so the sink is
+// BIT-EXACT and cross-language-diffable (kara/rust/c/go/py all print the same value).
+//
+// Pure branchy-free integer kernel (one multiply, one mod, a compare, an add per
+// element); built KARAC_AUTO_PAR=0 — a single left-to-right scan with no cross-branch
+// parallel structure worth engaging.
+
+fn main() {
+    let m: i64 = 1103515245;       // glibc LCG multiplier
+    let inc: i64 = 12345;          // glibc LCG increment
+    let modulus: i64 = 2147483648; // 2^31
+    let windows: i64 = 120000;     // number of simulated input arrays
+    let w: i64 = 1000;             // length of each array
+
+    let mut state: i64 = 1;        // LCG seed
+    let mut sink: i64 = 0;
+    let mut k: i64 = 0;
+    while k < windows {
+        // First element of this array seeds Kadane's two running values.
+        state = (state * m + inc) % modulus;
+        let v0 = (state % 100) - 50;
+        let mut best = v0;
+        let mut here = v0;
+        let mut j = 1;
+        while j < w {
+            state = (state * m + inc) % modulus;
+            let v = (state % 100) - 50;
+            // Kadane: extend the current run or restart at v, then track the best.
+            if here + v > v {
+                here = here + v;
+            } else {
+                here = v;
+            }
+            if here > best {
+                best = here;
+            }
+            j = j + 1;
+        }
+        sink = sink + best;        // fold this array's answer into the sink
+        k = k + 1;
+    }
+    println(sink);
+}

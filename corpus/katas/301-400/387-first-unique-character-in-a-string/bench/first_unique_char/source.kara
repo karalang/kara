@@ -1,0 +1,72 @@
+// Benchmark harness for LeetCode #387 — Map (general-alphabet) approach.
+//
+// Build-once + punch (BENCHMARKS.md): the haystack is built once as a Vec of
+// byte values, then each iteration mutates a single byte and re-runs both
+// passes. Re-deriving a String per iteration would be a vectorizable refill
+// loop that dominates the measurement.
+//
+// `unique_count` drives a `keys()` walk, which is the surface the inline
+// bucket walk (kara ledger B-2026-07-24-2) lowers.
+
+fn first_uniq_char(bs: ref Vec[i64]) -> i64 {
+    let mut counts: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < bs.len() {
+        let c = bs[i];
+        let n = match counts.get(c) { Some(v) => v, None => 0 };
+        let _ = counts.insert(c, n + 1);
+        i = i + 1;
+    }
+
+    let mut j = 0;
+    while j < bs.len() {
+        let c = bs[j];
+        let n = match counts.get(c) { Some(v) => v, None => 0 };
+        if n == 1 { return j; }
+        j = j + 1;
+    }
+    -1
+}
+
+fn unique_count(bs: ref Vec[i64]) -> i64 {
+    let mut counts: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < bs.len() {
+        let c = bs[i];
+        let n = match counts.get(c) { Some(v) => v, None => 0 };
+        let _ = counts.insert(c, n + 1);
+        i = i + 1;
+    }
+    let mut uniq = 0;
+    for k in counts.keys() {
+        let n = match counts.get(k) { Some(v) => v, None => 0 };
+        if n == 1 { uniq = uniq + 1; }
+    }
+    uniq
+}
+
+fn main() {
+    let n = 4000;
+    let iters = 2000;
+
+    // 25 distinct repeating chars ('a'..'y'), plus a single 'z' at the end so
+    // the unique character sits at the far end of the scan (worst case).
+    let mut bs: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        bs.push(97 + (i % 25));
+        i = i + 1;
+    }
+    bs[n - 1] = 122;
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let p = (it * 7919) % n;
+        bs[p] = 97 + (it % 25);
+        sink = sink + first_uniq_char(bs);
+        sink = sink + unique_count(bs);
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

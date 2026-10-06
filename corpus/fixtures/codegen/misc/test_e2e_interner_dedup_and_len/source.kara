@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut tab: Interner = Interner.new();
+    let a = tab.intern("hello");
+    let b = tab.intern("hello");
+    let c = tab.intern("world");
+    println(a == b);
+    println(a == c);
+    println(tab.len());
+}

@@ -1,0 +1,34 @@
+
+struct Q { n: String, k: i64 }
+fn s_of(i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str(f"payload-padded-out-well-past-thirty-six-bytes-{i}");
+    return s;
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut names: Vec[(String, i64)] = Vec.new();
+    let mut qs: Vec[Q] = Vec.new();
+    let mut i = base;
+    while i < base + 30 {
+        names.push((s_of(i), i));
+        qs.push(Q { n: s_of(i * 3), k: i });
+        i = i + 1;
+    }
+    let a = names.iter().filter(|p| p.1 > 10).count();
+    let b = names.iter().filter(|(n, _)| n.len() > 40).count();
+    let c = names.iter().fold(0, |acc, (n, k)| acc + n.len() + k);
+    let d: Vec[i64] = names.iter().map(|(n, k)| n.len() + k).collect();
+    let e: Vec[String] = names.iter().map(|(n, _)| n.clone()).collect();
+    let f = names.iter().map(|(n, k)| n.len() * k).sum();
+    let g = qs.iter().filter(|Q { n, k }| n.len() > 40 + k * 0).count();
+    let h: Vec[i64] = qs.iter().map(|Q { n, k }| n.len() + k).collect();
+    let j = names.iter().any(|(n, _)| n.len() == 0);
+    let mut l = 0;
+    for y in names.iter().map(|(n, k)| n.len() + k) {
+        l = l + y;
+    }
+    if a > 0 and b > 0 and c > 0 and d.len() == 30 and e.len() == 30 and f > 0 and g > 0 and h.len() == 30 and not j and l > 0 {
+        println("done");
+    }
+}

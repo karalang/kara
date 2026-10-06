@@ -1,0 +1,27 @@
+
+shared struct Node { val: i64, kids: Vec[Node] }
+fn sum(n: frozen Node) -> i64 {
+    let mut s: i64 = n.val;
+    let mut i: i64 = 0;
+    while i < n.kids.len() {
+        s = s + sum(n.kids[i]);
+        i = i + 1;
+    }
+    s
+}
+fn drive(n: frozen Node, times: i64) -> i64 {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < times {
+        t = t + sum(n);
+        i = i + 1;
+    }
+    t
+}
+fn main() {
+    let l1 = Node { val: 3, kids: [] };
+    let l2 = Node { val: 4, kids: [] };
+    let mid = Node { val: 2, kids: [l1, l2] };
+    let root = Node { val: 1, kids: [mid] };
+    println(drive(root, 400i64));
+}

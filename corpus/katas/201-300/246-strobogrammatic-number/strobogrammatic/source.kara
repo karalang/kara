@@ -1,0 +1,98 @@
+// LeetCode 246 — Strobogrammatic Number. (Premium.)
+//
+// A number is strobogrammatic if it reads the same after rotating the page 180
+// degrees. The thing worth noticing is that rotation does TWO things at once:
+// each digit turns into another digit, AND the whole string reverses. Miss the
+// second and you have written a different problem — `"6996"` passes a
+// digits-are-rotatable check and fails the real one.
+//
+// Only five digits survive: 0->0, 1->1, 8->8, 6->9, 9->6. The other five
+// (2,3,4,5,7) turn into nothing legible, so one occurrence anywhere is fatal.
+//
+// Two-pointer form: for every pair (lo, hi) closing in from the ends,
+// rot(num[lo]) must equal num[hi]. Note `lo <= hi` rather than `lo < hi` — on an
+// odd-length number the centre character pairs with ITSELF, and that is exactly
+// what forbids 6 and 9 in the middle (rot('6') is '9', which is not '6'). A
+// `lo < hi` loop would skip the centre and wrongly accept "619" reversed —
+// which is why `"689"` and `"69896"` are both in the test set.
+//
+// Returning early on the first bad pair is not an optimisation here; it is what
+// keeps the scan O(n) worst case with no allocation at all.
+
+// The rotation map, as a total function: `None` means the digit does not
+// survive rotation, which the caller treats as an immediate reject.
+fn rotate_digit(c: char) -> Option[char] {
+    if c == '0' { return Some('0'); }
+    if c == '1' { return Some('1'); }
+    if c == '8' { return Some('8'); }
+    if c == '6' { return Some('9'); }
+    if c == '9' { return Some('6'); }
+    return None;
+}
+
+fn is_strobogrammatic(num: ref String) -> bool {
+    let cs: Vec[char] = num.chars().collect();
+    let mut lo = 0;
+    let mut hi = cs.len() - 1;
+    while lo <= hi {
+        match rotate_digit(cs[lo]) {
+            None => { return false; }
+            Some(r) => {
+                if r != cs[hi] {
+                    return false;
+                }
+            }
+        }
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    return true;
+}
+
+fn report(num: ref String) {
+    if is_strobogrammatic(num) {
+        println(f"{num} : true");
+    } else {
+        println(f"{num} : false");
+    }
+}
+
+fn main() {
+    // Single digits: only 0, 1 and 8 survive rotating in place.
+    report("0");
+    report("1");
+    report("8");
+    report("6");
+    report("9");
+    report("2");
+
+    // LeetCode's examples.
+    report("69");
+    report("88");
+    report("962");
+
+    // Pairs: the rotation must land on the OTHER end.
+    report("96");
+    report("11");
+    report("18");
+    report("00");
+
+    // Odd length — the centre pairs with itself, so 6/9 cannot sit there.
+    report("101");
+    report("181");
+    report("609");
+    report("916");
+    report("619");
+    report("689");
+
+    // Longer, and the near-miss that catches a reverse-only implementation.
+    report("6009");
+    report("6996");
+    report("1001");
+    report("88088");
+    report("69896");
+
+    // Any forbidden digit anywhere is fatal, even surrounded by valid pairs.
+    report("10501");
+    report("6739");
+}

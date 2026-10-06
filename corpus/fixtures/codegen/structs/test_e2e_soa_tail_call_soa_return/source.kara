@@ -1,0 +1,16 @@
+
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn bump(g: Vec[E]) -> Vec[E] {
+    let mut out: Vec[E] = Vec.new();
+    let mut i = 0;
+    while i < g.len() { let e = g[i]; out.push(E { x: e.x + 1.0, y: e.y }); i = i + 1; }
+    out
+}
+fn step(g: Vec[E]) -> Vec[E] with panics { bump(g) }
+fn main() with panics {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 1.0, y: 2.0 });
+    let r: Vec[E] = step(grid);
+    println(r[0].x);
+}

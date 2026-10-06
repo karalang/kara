@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut a: Set[i64] = Set.new();
+    a.insert(1_i64);
+    a.insert(2_i64);
+    a.insert(3_i64);
+    let mut b: Set[i64] = Set.new();
+    b.insert(2_i64);
+    let d: Set[i64] = a.difference(b);
+    a.insert(99_i64);
+    a.remove(1_i64);
+    println(d.len());
+    println(d.contains(1_i64));
+    println(d.contains(3_i64));
+    println(d.contains(99_i64));
+}

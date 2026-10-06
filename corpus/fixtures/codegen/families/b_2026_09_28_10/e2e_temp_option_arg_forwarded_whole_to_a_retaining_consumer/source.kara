@@ -1,0 +1,25 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
+fn eat2(o: Option[S]) { println("x") }
+fn eatp(o: Option[S], v: mut ref Vec[S]) { match o { Option.Some(s) => v.push(s), Option.None => println("n") } }
+fn fw(h: Option[S]) { eat2(h); println("after") }
+fn fw2(h: Option[S]) { fw(h) }
+fn fc(h: Option[S], c: bool) { if c { eat2(h) } else { match h { Option.Some(s) => println(f"m{s.id}"), Option.None => println("n") } } println("afc") }
+fn rec(h: Option[S], n: i64) { if n > 0 { rec(h, n - 1) } else { eat2(h) } }
+fn reb(h: Option[S]) { let m = h; eat2(m); println("arb") }
+fn fp(h: Option[S], v: mut ref Vec[S]) { eatp(h, v); println("afp") }
+fn main() {
+    fw(Option.Some(mks(1)));
+    let o = Option.Some(mks(2));
+    fw(o);
+    fw2(Option.Some(mks(3)));
+    fc(Option.Some(mks(4)), true);
+    fc(Option.Some(mks(5)), false);
+    rec(Option.Some(mks(6)), 2);
+    reb(Option.Some(mks(7)));
+    let mut v: Vec[S] = Vec.new();
+    fp(Option.Some(mks(8)), mut v);
+    println(f"n{v.len()}");
+    println("end")
+}

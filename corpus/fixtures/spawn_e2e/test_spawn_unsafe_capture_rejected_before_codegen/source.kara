@@ -1,0 +1,9 @@
+
+            shared struct Cache { n: i64 }
+            fn use_it(c: Cache) -> i64 { 0 }
+            fn main() {
+                let c = Cache { n: 1 };
+                let mut tg = TaskGroup.new();
+                tg.spawn(|| use_it(c));
+            }
+        

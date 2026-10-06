@@ -1,0 +1,38 @@
+
+struct Pair { word: String, n: i64 }
+struct Deep { inner: Pair, tag: i64 }
+struct Outer { mid: Deep, label: String }
+fn sink(s: String) -> String { s + "!" }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 20 {
+        let mut ds: Vec[Deep] = Vec.new();
+        ds.push(Deep { inner: Pair { word: f"a{k + i}", n: 1 }, tag: 2 });
+        let bound = ds[0].inner.word;
+        acc = acc + bound.len();
+        let mut out: Vec[String] = Vec.new();
+        out.push(ds[0].inner.word);
+        acc = acc + out[0].len();
+        let passed = sink(ds[0].inner.word);
+        acc = acc + passed.len();
+        let held = Pair { word: ds[0].inner.word, n: 9 };
+        acc = acc + held.word.len() + held.n;
+        let still = ds[0].inner.word;
+        acc = acc + still.len();
+        let mut xs: Vec[Outer] = Vec.new();
+        xs.push(Outer {
+            mid: Deep { inner: Pair { word: f"b{k + i}", n: 3 }, tag: 4 },
+            label: f"L{k + i}",
+        });
+        let deep = xs[0].mid.inner.word;
+        acc = acc + deep.len();
+        let mut ps: Vec[Pair] = Vec.new();
+        ps.push(Pair { word: f"c{k + i}", n: 5 });
+        let flat = ps[0].word;
+        acc = acc + flat.len() + ps[0].word.len();
+        i = i + 1;
+    }
+    println(acc > 0);
+}

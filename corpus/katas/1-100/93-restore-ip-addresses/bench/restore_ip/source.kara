@@ -1,0 +1,79 @@
+// Benchmark workload — Restore IP Addresses (LeetCode #93).
+// The kata's engine is the segment enumeration + validation (which cut points give four
+// valid 0..255 segments). Building the address strings would make this an allocation
+// bench, so instead the bench FOLDS the segment values of every valid quadruple through
+// a rolling polynomial hash — no strings. To keep each call doing different work (so
+// nothing hoists), the digits are computed inline from the iteration index
+// (`digit(pos) = (pos*7 + iter) % 10`, no array), and the three-dot triple loop with the
+// leading-zero / <=255 validity test runs over them. CRUCIALLY the input length varies
+// per iteration (`n = 4 + iter%9`, i.e. 4..12 — the real range for a restorable string),
+// so no engine can statically unroll/vectorize a fixed 12-element enumeration and erase
+// the checked scalar work (that degenerate fixed-shape version distorted the bench — see
+// CLAUDE.md "vectorizable loop" pitfall). K=6,500,000 iterations. See ../README.md.
+
+fn digit(pos: i64, iter: i64) -> i64 {
+    (pos * 7 + iter) % 10
+}
+
+// Segment value if the [start, start+len) window is a valid IP segment, else -1.
+fn seg_val(start: i64, len: i64, iter: i64) -> i64 {
+    if len < 1 or len > 3 {
+        return -1;
+    }
+    if len > 1 and digit(start, iter) == 0 {
+        return -1;                          // leading zero
+    }
+    let mut v = 0;
+    let mut i = 0;
+    while i < len {
+        v = v * 10 + digit(start + i, iter);
+        i = i + 1;
+    }
+    if v > 255 {
+        return -1;
+    }
+    v
+}
+
+fn restore_fold(n: i64, iter: i64, seed: i64) -> i64 {
+    let mut acc = seed;
+    let mut a = 1;
+    while a <= 3 and a < n {
+        let v0 = seg_val(0, a, iter);
+        if v0 >= 0 {
+            let mut b = a + 1;
+            while b <= a + 3 and b < n {
+                let v1 = seg_val(a, b - a, iter);
+                if v1 >= 0 {
+                    let mut c = b + 1;
+                    while c <= b + 3 and c < n {
+                        let v2 = seg_val(b, c - b, iter);
+                        let v3 = seg_val(c, n - c, iter);
+                        if v2 >= 0 and v3 >= 0 {
+                            acc = (acc * 131 + v0 * 1000000 + v1 * 10000
+                                + v2 * 100 + v3 + 1) % 1000000007;
+                        }
+                        c = c + 1;
+                    }
+                }
+                b = b + 1;
+            }
+        }
+        a = a + 1;
+    }
+    acc
+}
+
+fn main() {
+    let total = 6500000;
+    let modulus = 1000000007;
+
+    let mut sum = 0;
+    let mut iter = 0;
+    while iter < total {
+        let n = 4 + (iter % 9);          // 4..12 — data-dependent length
+        sum = (sum * 131 + restore_fold(n, iter, iter)) % modulus;
+        iter = iter + 1;
+    }
+    println(f"{sum}");
+}

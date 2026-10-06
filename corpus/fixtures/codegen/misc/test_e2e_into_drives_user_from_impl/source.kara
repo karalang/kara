@@ -1,0 +1,11 @@
+
+struct Inches { n: i64 }
+struct Cm { n: i64 }
+impl From for Cm {
+    fn from(i: Inches) -> Cm { Cm { n: i.n * 254 / 100 } }
+}
+fn main() {
+    let i: Inches = Inches { n: 10 };
+    let c: Cm = i.into();
+    println(c.n);
+}

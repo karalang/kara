@@ -1,0 +1,70 @@
+// Benchmark workload for LeetCode #275 — H-Index II.
+//
+// Build-once + punch. One sorted 262,144-element citation array is built once,
+// then 6,000,000 h-index binary searches run over PREFIXES of it, the prefix
+// length varying per query so every search has a different `n`, a different
+// answer, and a different path through the array.
+//
+// WHAT THIS LANE MEASURES: BINARY SEARCH OVER A FLAT ARRAY. Per query the work
+// is ~18 iterations of `mid = lo + (hi - lo) / 2`, one load at `mid`, and a
+// data-dependent branch — each load's address depending on the previous
+// comparison. The corpus has a tree walk with stacks (#272), a byte scan (#266)
+// and a bulk memcpy (#271); this is the flat-array search, where the address
+// chain is ARITHMETIC rather than a pointer dereference and the branch is
+// unpredictable by construction.
+//
+// THE PREFIX LENGTH IS WHAT MAKES IT A BENCHMARK. Running the same query 6
+// million times would measure a warm branch predictor and one cached path.
+// Varying `n` per query changes both the search path and the answer, so the
+// predictor gets no help and the load addresses genuinely differ.
+//
+// SIZED AT 2 MiB ON PURPOSE. #261 measured this corpus's own limit: the same
+// kata's sigma went 1.3% -> 2.0% -> 22.8% at working sets of 1 MB, 3 MB and
+// 13 MB, and at the top of that range the run-to-run variance exceeds the gap
+// between languages. 262,144 `i64` is 2 MiB, which keeps ~18 dependent loads
+// mostly in L2/L3 and the measurement rankable. It is a deliberate trade: a
+// larger array would be a purer memory-latency lane and an unrankable one.
+//
+// NOTHING ALLOCATES IN THE PUNCH LOOP. The array is built once; the search is
+// four scalars.
+
+fn h_index_prefix(citations: ref Vec[i64], n: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if citations[mid] >= n - mid { hi = mid; } else { lo = mid + 1; }
+    }
+    return n - lo;
+}
+
+fn main() {
+    let size = 262144;
+    let queries = 6000000;
+
+    // ---- build once: a non-decreasing citation array ---------------------
+    let mut citations: Vec[i64] = Vec.new();
+    let mut state = 275275;
+    let mut cur = 0;
+    let mut i = 0;
+    while i < size {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        cur = cur + (state / 256) % 3;
+        citations.push(cur);
+        i = i + 1;
+    }
+    let top = citations[size - 1];
+
+    // ---- punch ------------------------------------------------------------
+    let mut sink = 0;
+    let mut q = 0;
+    while q < queries {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let n = 1 + (state / 256) % size;
+        sink = (sink * 131 + h_index_prefix(citations, n)) % 1000000007;
+        q = q + 1;
+    }
+
+    println(sink);
+    println(f"size {size} queries {queries} top {top}");
+}

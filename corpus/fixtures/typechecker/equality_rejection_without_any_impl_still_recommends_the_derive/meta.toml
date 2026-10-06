@@ -1,0 +1,13 @@
+source = "tests/typechecker.rs::equality_rejection_without_any_impl_still_recommends_the_derive"
+dedup_of = []
+expect = "error:E0208"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,10 @@
+
+        fn main() {
+            let mut acc: i64 = 100i64;
+            let mut k: i64 = 1i64;
+            while k < 5i64 {
+                acc /= k;
+                k = k + 1i64;
+            }
+        }
+        

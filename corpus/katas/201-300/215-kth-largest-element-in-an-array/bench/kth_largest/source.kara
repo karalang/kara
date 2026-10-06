@@ -1,0 +1,59 @@
+// Benchmark workload for LeetCode #215 — Kth Largest Element in an Array.
+//
+// Quickselect's Lomuto partition, run once on a fixed array, is a converging-
+// pointer kernel an optimizer can partly erase. The honest scale workload runs
+// quickselect PASSES times, and REBUILDS the array from the shared PRNG stream
+// every pass — the input differs each pass (the stream never repeats), so the
+// work cannot be hoisted, and the data-dependent swaps stay real. A fixed
+// last-element pivot keeps it deterministic; the k-th largest value is unique
+// regardless of pivot choice, so every language agrees. Sink = sum of the k-th
+// largest values over all passes.
+
+fn partition(a: mut ref Vec[i64], lo: i64, hi: i64) -> i64 {
+    let pivot = a[hi];
+    let mut i = lo;
+    let mut j = lo;
+    while j < hi {
+        if a[j] < pivot {
+            a[i], a[j] = a[j], a[i];
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    a[i], a[hi] = a[hi], a[i];
+    return i;
+}
+
+fn quickselect(a: mut ref Vec[i64], lo: i64, hi: i64, target: i64) -> i64 {
+    if lo == hi { return a[lo]; }
+    let p = partition(a, lo, hi);
+    if p == target { return a[p]; }
+    if target < p { return quickselect(a, lo, p - 1, target); }
+    return quickselect(a, p + 1, hi, target);
+}
+
+fn main() {
+    let n = 120000;
+    let passes = 420;
+    let k = 40000;
+    let target = n - k;             // ascending index of the k-th largest
+
+    let mut a: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < n { a.push(0); z = z + 1; }
+
+    let mut state = 12345;
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let mut i = 0;
+        while i < n {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            a[i] = state;
+            i = i + 1;
+        }
+        sink = sink + quickselect(mut a, 0, n - 1, target);
+        p = p + 1;
+    }
+    println(sink);
+}

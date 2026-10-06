@@ -1,0 +1,13 @@
+
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a heap string element padded beyond thirty-six bytes ok");
+    return v;
+}
+
+fn main() {
+    match names().get(0) {
+        Some(s) => println(s),
+        None => println("none"),
+    };
+}

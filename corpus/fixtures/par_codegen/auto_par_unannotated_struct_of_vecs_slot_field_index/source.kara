@@ -1,0 +1,39 @@
+
+struct Taps {
+    los: Vec[i64],
+    wgts: Vec[f64],
+}
+
+fn make_taps(n: i64) -> Taps {
+    let mut los: Vec[i64] = Vec.new();
+    let mut wgts: Vec[f64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        los.push(n - 1 - i);
+        wgts.push((i as f64) + 0.5);
+        i = i + 1;
+    }
+    Taps { los: los, wgts: wgts }
+}
+
+fn consume(sw: i64, dw: i64) -> f64 {
+    let tx = make_taps(dw);
+    let mut tmp: Vec[f64] = Vec.filled(dw, 0.0);
+    let mut x: i64 = 0;
+    while x < dw {
+        let lo = tx.los[x];
+        tmp[x] = tx.wgts[lo] * ((sw + x) as f64);
+        x = x + 1;
+    }
+    let mut acc = 0.0;
+    x = 0;
+    while x < dw {
+        acc = acc + tmp[x];
+        x = x + 1;
+    }
+    acc
+}
+
+fn main() {
+    println(consume(3, 4));
+}

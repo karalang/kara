@@ -1,0 +1,13 @@
+source = "tests/codegen/frames.rs::e2e_derived_display_renders_vector_and_narrow_float_fields"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

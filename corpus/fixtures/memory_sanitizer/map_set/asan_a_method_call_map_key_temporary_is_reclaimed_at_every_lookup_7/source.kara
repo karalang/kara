@@ -1,0 +1,15 @@
+
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+} }
+fn main() {
+    let mut s: Set[(String, String)] = Set.new();
+    let mut v: Vec[(String, String)] = Vec.new();
+    let g: Mk = Mk { p: f"x" };
+    s.insert(g.make(0i64));
+    v.push(g.make(0i64));
+    if s.contains(g.make(0i64)) { println("s:hit"); } else { println("s:miss"); }
+    if v.contains(g.make(0i64)) { println("v:hit"); } else { println("v:miss"); }
+    println(f"len:{s.len()}");
+}

@@ -1,0 +1,139 @@
+// LeetCode #34: Find First and Last Position of Element in Sorted Array
+//                 — two textbook bound searches (lower_bound / upper_bound).
+//
+// A non-decreasing array (duplicates allowed) and a target. Return [first, last]
+// — the smallest and largest index where nums[i] == target — or [-1, -1] if the
+// target is absent. Must run in O(log n): the duplicates form a contiguous run,
+// and the whole problem is "find the two ends of that run without scanning it".
+//
+// The canonical decomposition: two HALF-OPEN bound searches over the same array.
+//
+//   - lower_bound(target)  = the first index i with nums[i] >= target.
+//   - upper_bound(target)  = the first index i with nums[i] >  target.
+//
+// Both are ordinary binary searches that never test for equality — they only ever
+// shrink toward a boundary, so they always converge to a single insertion point
+// in [0, len]. Once you have them:
+//
+//   - if lo == len  OR  nums[lo] != target  ->  target absent, return [-1, -1].
+//   - else the run of equal values is exactly [lo, hi), so the answer is
+//     [lower_bound, upper_bound - 1].
+//
+// Why two searches and not one-then-scan: a single binary search finds SOME
+// occurrence in O(log n), but the matching run can be O(n) long (think a whole
+// array of one value), so walking outward from a hit to the ends is O(n) — the
+// thing the O(log n) constraint forbids. lower/upper bound find the ends directly,
+// each in O(log n), with no equality short-circuit to muddy the invariant.
+//
+// `lo < target ? ... ` strictly: lower_bound advances when nums[mid] < target
+// (so it stops at the FIRST >=); upper_bound advances when nums[mid] <= target
+// (so it stops at the first strictly >). The single `<` vs `<=` difference is the
+// whole distinction between the two ends — same loop, one comparator flipped.
+
+// First index i in [0, len] with nums[i] >= target (the run's left end).
+fn lower_bound(nums: Slice[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = len;                       // half-open: hi can reach len
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] < target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+// First index i in [0, len] with nums[i] > target (one past the run's right end).
+fn upper_bound(nums: Slice[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = len;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] <= target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+// Returns the packed pair (first, last); last == -1 (with first == -1) means absent.
+fn search_first(nums: Slice[i64], len: i64, target: i64) -> i64 {
+    let lo = lower_bound(nums, len, target);
+    if lo == len or nums[lo] != target {
+        return -1;
+    }
+    lo
+}
+
+fn search_last(nums: Slice[i64], len: i64, target: i64) -> i64 {
+    let lo = lower_bound(nums, len, target);
+    if lo == len or nums[lo] != target {
+        return -1;
+    }
+    upper_bound(nums, len, target) - 1
+}
+
+fn fmt(nums: Slice[i64], len: i64) -> String {
+    let mut s: String = "[";
+    for i in 0..len {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(nums: Slice[i64], len: i64, target: i64) {
+    let first = search_first(nums, len, target);
+    let last = search_last(nums, len, target);
+    println(f"{fmt(nums, len)} target={target} -> [{first}, {last}]");
+}
+
+fn main() {
+    // LeetCode examples.
+    let a1: Array[i64, 6] = [5, 7, 7, 8, 8, 10];
+    report(a1, 6, 8);                // [3, 4]
+    report(a1, 6, 6);                // [-1, -1]
+
+    let a2: Array[i64, 0] = [];
+    report(a2, 0, 0);                // [-1, -1]
+
+    // Single-element array, hit and miss.
+    let a3: Array[i64, 1] = [1];
+    report(a3, 1, 1);                // [0, 0]
+    report(a3, 1, 0);                // [-1, -1]
+
+    // The whole array is the target — run spans [0, len-1].
+    let a4: Array[i64, 5] = [2, 2, 2, 2, 2];
+    report(a4, 5, 2);                // [0, 4]
+    report(a4, 5, 1);                // [-1, -1] (below all)
+    report(a4, 5, 3);                // [-1, -1] (above all)
+
+    // Target run at the very start and very end.
+    let a5: Array[i64, 7] = [4, 4, 5, 6, 7, 9, 9];
+    report(a5, 7, 4);                // [0, 1]
+    report(a5, 7, 9);                // [5, 6]
+    report(a5, 7, 5);                // [2, 2] (singleton run)
+    report(a5, 7, 8);                // [-1, -1] (gap)
+
+    // Negatives and a long interior run.
+    let a6: Array[i64, 9] = [-5, -3, -3, -3, 0, 0, 1, 4, 4];
+    report(a6, 9, -3);               // [1, 3]
+    report(a6, 9, 0);                // [4, 5]
+    report(a6, 9, 4);                // [7, 8]
+    report(a6, 9, -5);               // [0, 0]
+    report(a6, 9, 2);                // [-1, -1]
+
+    // Two elements, all four target relations.
+    let a7: Array[i64, 2] = [1, 3];
+    report(a7, 2, 1);                // [0, 0]
+    report(a7, 2, 3);                // [1, 1]
+    report(a7, 2, 2);                // [-1, -1]
+    report(a7, 2, 0);                // [-1, -1]
+}

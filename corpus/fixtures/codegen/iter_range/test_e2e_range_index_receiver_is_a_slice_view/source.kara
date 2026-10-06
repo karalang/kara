@@ -1,0 +1,13 @@
+
+fn main() {
+    let nums: Vec[i64] = [10i64, 20i64, 30i64, 40i64, 50i64];
+    println(f"01 {nums[1..4].len()}");
+    println(f"02 {nums[1..4].is_empty()} {nums[2..2].is_empty()}");
+    let w = nums[1..4].to_vec();
+    println(f"03 {w.len()} {w[0i64]} {w[2i64]}");
+    match nums[3..5].first() { Some(x) => println(f"04 {x}"), None => println("04 none") }
+    println(f"05 {nums[0..3].contains(20i64)}");
+    let words: Vec[String] = ["alpha", "beta", "gamma"];
+    let ws = words[1..3].to_vec();
+    println(f"06 {words[1..3].len()} {ws[1i64]}");
+}

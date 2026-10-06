@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 100_i64);
+    m.insert(2_i64, 200_i64);
+    m.insert(3_i64, 300_i64);
+    let vs: Vec[i64] = m.values();
+    println(vs.len());
+    let mut sum: i64 = 0;
+    for v in vs {
+        sum = sum + v;
+    }
+    println(sum);
+}

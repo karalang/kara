@@ -1,0 +1,11 @@
+
+fn read_it() -> Result[String, IoError] reads(Env) {
+    let s: String = env.var("__KARAC_E2E_QMARK_NO_SUCH__")?;
+    Ok(s)
+}
+fn main() reads(Env) {
+    match read_it() {
+        Ok(v) => { println(v); }
+        Err(_) => { println("io-err"); }
+    }
+}

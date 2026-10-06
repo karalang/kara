@@ -1,0 +1,16 @@
+
+struct Counter { n: i64 }
+impl Counter {
+    fn inc(mut ref self) { self.n = self.n + 1; }
+}
+struct Box { c: Counter }
+fn main() {
+    let mut b = Box { c: Counter { n: 10 } };
+    b.c.inc();
+    b.c.inc();
+    println(b.c.n);
+    let mut v = [Counter { n: 100 }, Counter { n: 200 }];
+    v[1].inc();
+    v[1].inc();
+    println(v[1].n);
+}

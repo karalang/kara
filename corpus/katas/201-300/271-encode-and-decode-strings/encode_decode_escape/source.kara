@@ -1,0 +1,133 @@
+// LeetCode 271 — Encode and Decode Strings, by escaping.
+//
+// The only one of the three that actually looks at the payload. Pick a
+// separator, and make it unambiguous by escaping it wherever it occurs:
+//
+//     ';'  ->  "\;"        the separator, neutralised
+//     '\'  ->  "\\"        the escape character itself, or the rule is circular
+//
+// Both rules are needed and the second is the one that gets forgotten. Escape
+// only the separator and the payload "a\" followed by "b" encodes as `;a\;b`,
+// which decodes as the single string `a;b` — the escape character has silently
+// eaten the separator it was never meant to touch.
+//
+// THE SEPARATOR PREFIXES, IT DOES NOT JOIN, and that is not a style choice. A
+// joining separator cannot distinguish [] from [""] — both render as "" — which
+// is the collision the ★ file's header avoids by construction. Prefixing each
+// element instead gives "" and ";" respectively, and the decoder reads "a run
+// starts at every unescaped separator" rather than "elements are what lies
+// between separators".
+//
+// This form is the reason length-prefixing wins in practice: it is O(n) like the
+// others but with a branch per byte, it makes the encoded size data-dependent,
+// and every one of its rules is a place to be wrong. The ★ file's decoder never
+// examines a payload byte at all.
+
+fn encode(items: ref Vec[String]) -> String {
+    // Built as BYTES. `out.push(b as char)` would re-encode every byte above
+    // 127 as its own codepoint — "héllo" comes back "hÃ©llo" — and this form is
+    // more exposed to that than the length-prefixed ones, because it is the only
+    // one that inspects the payload byte by byte at all.
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < items.len() {
+        out.push(59u8);                        // ';' prefix, never join
+        for b in items[i].bytes() {
+            if b == 59u8 {                     // ';'
+                out.push(92u8); out.push(59u8);
+            } else {
+                if b == 92u8 {                 // the escape character itself
+                    out.push(92u8); out.push(92u8);
+                } else {
+                    out.push(b);               // multi-byte text passes through
+                }
+            }
+        }
+        i = i + 1;
+    }
+    // Escaping only ever inserts ASCII before ASCII, so the result is valid
+    // UTF-8 whenever the inputs were.
+    match String.from_utf8(out) {
+        Ok(s) => { return s; }
+        Err(e) => { return ""; }
+    }
+}
+
+fn decode(data: ref String) -> Vec[String] {
+    let mut bytes: Vec[u8] = Vec.new();
+    for b in data.bytes() { bytes.push(b); }
+
+    let mut out: Vec[String] = Vec.new();
+    let mut raw: Vec[u8] = Vec.new();
+    let mut started = false;
+    let mut p = 0;
+    while p < bytes.len() {
+        let b = bytes[p];
+        if b == 59u8 {                          // an unescaped ';' starts a run
+            if started {
+                match String.from_utf8(raw) {
+                    Ok(s) => { out.push(s); }
+                    Err(e) => { out.push(""); }
+                }
+                raw = Vec.new();
+            }
+            started = true;
+            p = p + 1;
+        } else {
+            if b == 92u8 {                      // '\' — take the next byte raw
+                raw.push(bytes[p + 1]);
+                p = p + 2;
+            } else {
+                raw.push(b);
+                p = p + 1;
+            }
+        }
+    }
+    if started {
+        match String.from_utf8(raw) {
+            Ok(s) => { out.push(s); }
+            Err(e) => { out.push(""); }
+        }
+    }
+    return out;
+}
+
+fn show(items: ref Vec[String]) -> String {
+    let mut s = "[";
+    let mut i = 0;
+    while i < items.len() {
+        if i > 0 { s = s + ","; }
+        s = s + "\"" + items[i] + "\"";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn report(items: ref Vec[String]) {
+    let enc = encode(items);
+    let dec = decode(enc);
+    let mut ok = "OK";
+    if show(dec) != show(items) { ok = "ROUND-TRIP FAILED"; }
+    println(f"{show(items)} -> \"{enc}\" -> {show(dec)} {ok}");
+}
+
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("abc"); a.push("de");
+    report(a);
+    let empty: Vec[String] = Vec.new();
+    report(empty);
+    let mut b: Vec[String] = Vec.new();
+    b.push("");
+    report(b);
+    // ★ the payload ending in a backslash, which a separator-only escape eats
+    let mut c: Vec[String] = Vec.new();
+    c.push("a\\"); c.push("b");
+    report(c);
+    let mut d: Vec[String] = Vec.new();
+    d.push("a;b"); d.push(";;;"); d.push("\\;");
+    report(d);
+    let mut u: Vec[String] = Vec.new();
+    u.push("héllo"); u.push("日本語");
+    report(u);
+}

@@ -1,0 +1,6 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let s: String = v.iter().fold("", |acc, x| f"{acc}{x},");
+    println(s);
+}

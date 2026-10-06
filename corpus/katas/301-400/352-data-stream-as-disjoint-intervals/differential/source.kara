@@ -1,0 +1,368 @@
+// LeetCode #352: Data Stream as Disjoint Intervals — differential test.
+//
+// The four arms (sorted map, sorted vectors, union-find, bitset) run side by
+// side on pseudo-random streams, and an independent oracle rebuilds the
+// intervals from a presence table after every value. Properties:
+//
+//   P1  after every value, all four arms report the oracle's intervals
+//   P2  the intervals are sorted, disjoint and not adjacent (each next start
+//       is at least end + 2), and together cover exactly the unique values
+//   P3  adding a value already seen changes nothing
+//   P4  adding a value changes the interval count by +1 (alone), 0 (extends
+//       one interval) or -1 (bridges two), and which one is decided by
+//       whether v - 1 and v + 1 were seen
+//   P5  the final intervals do not depend on the order the values arrived:
+//       the same set added ascending and descending gives the same answer
+//
+// Printed: the number of checks, a checksum over every report, and the
+// number of failures, which must be 0.
+
+struct ByMap {
+    starts: SortedMap[i64, i64],
+}
+
+impl ByMap {
+    fn new() -> ByMap {
+        return ByMap { starts: SortedMap.new() };
+    }
+
+    fn add_num(mut ref self, value: i64) {
+        let mut start = value;
+        let mut end = value;
+        if let Some((s, e)) = self.starts.floor(value) {
+            if e >= value {
+                return;
+            }
+            if e == value - 1 {
+                start = s;
+            }
+        }
+        if let Some((s, e)) = self.starts.ceiling(value + 1) {
+            if s == value + 1 {
+                end = e;
+                self.starts.remove(s);
+            }
+        }
+        self.starts.insert(start, end);
+    }
+
+    fn get_intervals(ref self) -> Vec[(i64, i64)] {
+        let mut out: Vec[(i64, i64)] = Vec.new();
+        for (s, e) in self.starts {
+            out.push((s, e));
+        }
+        return out;
+    }
+}
+
+struct ByVec {
+    starts: Vec[i64],
+    ends: Vec[i64],
+}
+
+impl ByVec {
+    fn new() -> ByVec {
+        return ByVec { starts: Vec.new(), ends: Vec.new() };
+    }
+
+    // The index of the first interval that starts after `value`.
+    fn first_after(ref self, value: i64) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.starts.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.starts[mid] <= value {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    fn add_num(mut ref self, value: i64) {
+        let i = self.first_after(value);
+        let joins_left = i > 0 and self.ends[i - 1] >= value - 1;
+        if i > 0 and self.ends[i - 1] >= value {
+            return;
+        }
+        let joins_right = i < self.starts.len() and self.starts[i] == value + 1;
+        if joins_left and joins_right {
+            self.ends[i - 1] = self.ends[i];
+            self.starts.remove(i);
+            self.ends.remove(i);
+        } else if joins_left {
+            self.ends[i - 1] = value;
+        } else if joins_right {
+            self.starts[i] = value;
+        } else {
+            self.starts.insert(i, value);
+            self.ends.insert(i, value);
+        }
+    }
+
+    fn get_intervals(ref self) -> Vec[(i64, i64)] {
+        let mut out: Vec[(i64, i64)] = Vec.new();
+        for i in 0..self.starts.len() {
+            out.push((self.starts[i], self.ends[i]));
+        }
+        return out;
+    }
+}
+
+struct ByUnionFind {
+    seen: Vec[bool],
+    parent: Vec[i64],
+}
+
+impl ByUnionFind {
+    fn new() -> ByUnionFind {
+        let mut parent: Vec[i64] = Vec.new();
+        for v in 0..10002 {
+            parent.push(v);
+        }
+        return ByUnionFind { seen: Vec.filled(10002, false), parent: parent };
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        let mut node = x;
+        while self.parent[node] != node {
+            self.parent[node] = self.parent[self.parent[node]];
+            node = self.parent[node];
+        }
+        return node;
+    }
+
+    fn add_num(mut ref self, value: i64) {
+        if self.seen[value] {
+            return;
+        }
+        self.seen[value] = true;
+        if self.seen[value + 1] {
+            self.parent[value] = self.find(value + 1);
+        }
+        if value > 0 and self.seen[value - 1] {
+            let left = self.find(value - 1);
+            self.parent[left] = self.find(value);
+        }
+    }
+
+    fn get_intervals(mut ref self) -> Vec[(i64, i64)] {
+        let mut out: Vec[(i64, i64)] = Vec.new();
+        let mut v = 0;
+        while v <= 10000 {
+            if self.seen[v] {
+                let end = self.find(v);
+                out.push((v, end));
+                v = end + 1;
+            } else {
+                v += 1;
+            }
+        }
+        return out;
+    }
+}
+
+struct ByBitset {
+    words: Vec[u64],
+}
+
+impl ByBitset {
+    fn new() -> ByBitset {
+        return ByBitset { words: Vec.filled(157, 0) };
+    }
+
+    fn add_num(mut ref self, value: i64) {
+        let one: u64 = 1;
+        self.words[value / 64] = self.words[value / 64] | (one << (value % 64) as u64);
+    }
+
+    // The first position at or after `from` whose bit equals `want`, or
+    // 157 * 64 when there is none.
+    fn next_bit(ref self, from: i64, want: bool) -> i64 {
+        let mut w = from / 64;
+        if w >= 157 {
+            return 157 * 64;
+        }
+        let mut word = self.words[w];
+        if not want {
+            word = ~word;
+        }
+        word = word >> (from % 64) as u64 << (from % 64) as u64;
+        while word == 0 {
+            w += 1;
+            if w == 157 {
+                return 157 * 64;
+            }
+            word = self.words[w];
+            if not want {
+                word = ~word;
+            }
+        }
+        return w * 64 + word.trailing_zeros() as i64;
+    }
+
+    fn get_intervals(ref self) -> Vec[(i64, i64)] {
+        let mut out: Vec[(i64, i64)] = Vec.new();
+        let mut v = self.next_bit(0, true);
+        while v < 157 * 64 {
+            let after = self.next_bit(v, false);
+            out.push((v, after - 1));
+            v = self.next_bit(after, true);
+        }
+        return out;
+    }
+}
+
+fn same(a: ref Vec[(i64, i64)], b: ref Vec[(i64, i64)]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        let (s1, e1) = a[i];
+        let (s2, e2) = b[i];
+        if s1 != s2 or e1 != e2 {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The intervals of the values marked in `seen`, by a plain scan.
+fn oracle(seen: ref Vec[bool]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut v = 0;
+    while v < seen.len() {
+        if seen[v] {
+            let start = v;
+            while v + 1 < seen.len() and seen[v + 1] {
+                v += 1;
+            }
+            out.push((start, v));
+        }
+        v += 1;
+    }
+    return out;
+}
+
+fn well_formed(intervals: ref Vec[(i64, i64)], unique: i64) -> bool {
+    let mut covered = 0;
+    let mut prev_end = -2;
+    for (s, e) in intervals {
+        if s > e or s < prev_end + 2 {
+            return false;
+        }
+        covered += e - s + 1;
+        prev_end = e;
+    }
+    return covered == unique;
+}
+
+fn next_value(state: mut ref i64, limit: i64) -> i64 {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return (state >> 8) % (limit + 1);
+}
+
+fn main() {
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut checksum = 0;
+
+    // P1-P4 on streams over ranges of several sizes, including values at 0
+    // and at the top of the problem's range.
+    let limits = [9, 40, 300, 10000];
+    // Values forced into the widest stream so runs touch both ends of the range.
+    let edges = [0, 10000, 1, 9999];
+    let lengths = [30, 120, 400, 300];
+    for t in 0..4 {
+        let limit = limits[t];
+        let mut m = ByMap.new();
+        let mut v = ByVec.new();
+        let mut u = ByUnionFind.new();
+        let mut b = ByBitset.new();
+        let mut seen: Vec[bool] = Vec.filled(10001, false);
+        let mut unique = 0;
+        let mut state: i64 = 352 + t;
+        let mut count = 0;
+        for i in 0..lengths[t] {
+            let mut value = next_value(mut state, limit);
+            if limit == 10000 and i % 25 == 0 {
+                value = edges[(i / 25) % 4];
+            }
+            let was_seen = seen[value];
+            let left = value > 0 and seen[value - 1];
+            let right = value < 10000 and seen[value + 1];
+            m.add_num(value);
+            v.add_num(value);
+            u.add_num(value);
+            b.add_num(value);
+            if not was_seen {
+                seen[value] = true;
+                unique += 1;
+            }
+            let want = oracle(seen);
+            let got = m.get_intervals();
+            // P1
+            checks += 1;
+            if not (same(got, want) and same(v.get_intervals(), want) and same(u.get_intervals(), want) and same(b.get_intervals(), want)) {
+                failures += 1;
+                println(f"P1 failed: limit {limit} step {i} value {value}");
+            }
+            // P2
+            checks += 1;
+            if not well_formed(got, unique) {
+                failures += 1;
+                println(f"P2 failed: limit {limit} step {i}");
+            }
+            // P3 and P4
+            checks += 1;
+            let delta = got.len() - count;
+            let expected = if was_seen {
+                0
+            } else if left and right {
+                -1
+            } else if left or right {
+                0
+            } else {
+                1
+            };
+            if delta != expected {
+                failures += 1;
+                println(f"P3/P4 failed: limit {limit} step {i} value {value} delta {delta}");
+            }
+            count = got.len();
+            for (s, e) in got {
+                checksum = (checksum * 31 + s * 7 + e) % 1000000007;
+            }
+        }
+    }
+
+    // P5: one set of values, added in three orders.
+    let mut values: Vec[i64] = Vec.new();
+    let mut state: i64 = 7;
+    for _ in 0..200 {
+        values.push(next_value(mut state, 500));
+    }
+    let mut forward = ByMap.new();
+    let mut backward = ByMap.new();
+    let mut ascending = ByVec.new();
+    let mut sorted_values = values.clone();
+    sorted_values.sort();
+    for i in 0..values.len() {
+        forward.add_num(values[i]);
+        backward.add_num(values[values.len() - 1 - i]);
+        ascending.add_num(sorted_values[i]);
+    }
+    checks += 1;
+    let f = forward.get_intervals();
+    if not (same(f, backward.get_intervals()) and same(f, ascending.get_intervals())) {
+        failures += 1;
+        println("P5 failed");
+    }
+
+    println(f"{checks} checks, checksum {checksum}");
+    println(f"failures {failures}");
+    if failures == 0 {
+        println("all properties hold");
+    }
+}

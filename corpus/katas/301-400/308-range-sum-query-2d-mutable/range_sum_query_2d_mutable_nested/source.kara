@@ -1,0 +1,178 @@
+// LeetCode 308 — arm E: the SAME 2D Fenwick tree, nested rather than flat.
+//
+// Identical mathematics to the ★ arm — the same nested lowbit climb, the same
+// descent, the same four-term inclusion-exclusion — differing in one thing: the
+// tree is a `Vec[Vec[i64]]` indexed `tree[x][y]` instead of one flat `Vec[i64]`
+// indexed `tree[x * stride + y]`.
+//
+// WHY BOTH LAYOUTS ARE IN THE CORPUS. They cannot disagree on the arithmetic,
+// so a disagreement between them is a fault in a memory access path rather than
+// in the algorithm — the role #304's flat/nested pair plays there. Carrying the
+// pair turns the differential into a layout test as well as an algorithm test.
+//
+// AND IT IS THE FASTER ONE, WHICH IS NOT THE INTUITION. Measured on this kata's
+// benchmark workload, the nested tree beats the flat one by 1.59x in kāra
+// (374.4 ms vs 596.9 ms). #304 found the same inversion at 1.18x and traced it
+// to checked arithmetic: the flat form's `x * stride + y` is a CHECKED multiply
+// and two checked adds on every access, while nested indexing performs the same
+// address computation inside the pointer load where no overflow check applies.
+// The effect is larger here because this arm's index arithmetic sits in a
+// DOUBLY nested walk, so it runs far more often per operation. The folk rule
+// "flatten your 2D arrays" is sound advice derived from unchecked languages,
+// and it inverts in a checked-by-default one.
+//
+// See this kata's README § Benchmarks for the full measurement, and #304's for
+// the controlled cross-language experiment that established the cause.
+
+struct NestedMatrix {
+    tree: Vec[Vec[i64]],
+    data: Vec[i64],
+    h: i64,
+    w: i64,
+}
+
+impl NestedMatrix {
+    fn new(m: ref Vec[Vec[i64]]) -> NestedMatrix {
+        let h = m.len();
+        let mut w = 0;
+        if h > 0 { w = m[0].len(); }
+
+        let mut tree: Vec[Vec[i64]] = Vec.new();
+        for r in 0..(h + 1) {
+            let mut row: Vec[i64] = Vec.new();
+            for c in 0..(w + 1) { row.push(0); }
+            tree.push(row);
+        }
+        let mut data: Vec[i64] = Vec.new();
+        for i in 0..(h * w) {
+            data.push(0);
+        }
+        let mut st = NestedMatrix { tree: tree, data: data, h: h, w: w };
+        for r in 0..h {
+            for c in 0..w {
+                st.update(r, c, m[r][c]);
+            }
+        }
+        return st;
+    }
+
+    // Fold `delta` into every slot covering (r, c) — a climb in both dimensions.
+    fn add(mut ref self, r: i64, c: i64, delta: i64) {
+        let mut x = r + 1;
+        while x <= self.h {
+            let mut y = c + 1;
+            while y <= self.w {
+                self.tree[x][y] += delta;
+                y += y & -y;
+            }
+            x += x & -x;
+        }
+    }
+
+    fn update(mut ref self, r: i64, c: i64, val: i64) {
+        let delta = val - self.data[r * self.w + c];
+        self.data[r * self.w + c] = val;
+        self.add(r, c, delta);
+    }
+
+    // Sum of the origin-rectangle [0, r) x [0, c) — a descent in both dimensions.
+    fn prefix(ref self, r: i64, c: i64) -> i64 {
+        let mut total = 0;
+        let mut x = r;
+        while x > 0 {
+            let mut y = c;
+            while y > 0 {
+                total += self.tree[x][y];
+                y -= y & -y;
+            }
+            x -= x & -x;
+        }
+        return total;
+    }
+
+    fn sum_region(ref self, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+        return self.prefix(r2 + 1, c2 + 1)
+             - self.prefix(r1, c2 + 1)
+             - self.prefix(r2 + 1, c1)
+             + self.prefix(r1, c1);
+    }
+}
+
+fn new_structure(m: ref Vec[Vec[i64]]) -> NestedMatrix {
+    return NestedMatrix.new(m);
+}
+
+fn matrix_of(flat: Slice[i64], w: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < flat.len() {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < w {
+            row.push(flat[i + c]);
+            c = c + 1;
+        }
+        m.push(row);
+        i = i + w;
+    }
+    return m;
+}
+
+// `ops` is a flat list of (kind, a, b, c, d) 5-tuples:
+//   kind 0 = update(a, b, c)        — write value c at (a, b); d ignored
+//   kind 1 = sum_region(a, b, c, d) — the rectangle (a,b)..(c,d)
+fn report(flat: Slice[i64], w: i64, ops: Slice[i64]) {
+    let m = matrix_of(flat, w);
+    let h = m.len();
+    let mut st = new_structure(m);
+    let mut line = String.new();
+    line.push_str(f"{h}x{w} ->");
+    let mut k = 0;
+    while k + 4 < ops.len() {
+        let kind = ops[k];
+        let a = ops[k + 1];
+        let b = ops[k + 2];
+        let c = ops[k + 3];
+        let d = ops[k + 4];
+        if kind == 0 {
+            st.update(a, b, c);
+            line.push_str(f" u({a},{b},{c})");
+        } else {
+            line.push_str(f" {st.sum_region(a, b, c, d)}");
+        }
+        k = k + 5;
+    }
+    println(line);
+}
+
+fn main() {
+    // The matrix from the LeetCode statement.
+    report([3, 0, 1, 4, 2,
+            5, 6, 3, 2, 1,
+            1, 2, 0, 1, 5,
+            4, 1, 0, 1, 7,
+            1, 0, 3, 0, 5], 5,
+           [1, 2, 1, 4, 3,   0, 3, 2, 2, 0,   1, 2, 1, 4, 3,
+            1, 0, 0, 4, 4,   1, 1, 1, 2, 2]);
+    // A single cell, written and re-read.
+    report([42], 1, [1, 0, 0, 0, 0,  0, 0, 0, -5, 0,  1, 0, 0, 0, 0]);
+    // One row and one column of the same values.
+    report([1, 2, 3, 4], 4, [1, 0, 0, 0, 3,  0, 0, 2, 10, 0,  1, 0, 0, 0, 3,  1, 0, 2, 0, 2]);
+    report([1, 2, 3, 4], 1, [1, 0, 0, 3, 0,  0, 2, 0, 10, 0,  1, 0, 0, 3, 0,  1, 2, 0, 2, 0]);
+    // Writing the value already present must change nothing.
+    report([4, 4, 4, 4], 2, [1, 0, 0, 1, 1,  0, 1, 1, 4, 0,  1, 0, 0, 1, 1,  1, 1, 1, 1, 1]);
+    // All negative, then a write that flips a sign.
+    report([-1, -2, -3,
+            -4, -5, -6,
+            -7, -8, -9], 3,
+           [1, 0, 0, 2, 2,  1, 1, 1, 2, 2,  0, 0, 0, 100, 0,  1, 0, 0, 2, 2,  1, 0, 0, 0, 0]);
+    // Every cell of a 2x3 written in turn, reading the whole matrix each time.
+    report([0, 0, 0,
+            0, 0, 0], 3,
+           [0, 0, 0, 1, 0,  1, 0, 0, 1, 2,  0, 1, 2, 5, 0,  1, 0, 0, 1, 2,
+            0, 0, 2, 3, 0,  1, 0, 0, 1, 2,  1, 0, 1, 1, 2]);
+    // Large magnitudes that cancel.
+    report([100000, -100000,
+            -100000, 100000], 2,
+           [1, 0, 0, 1, 1,  0, 0, 1, 100000, 0,  1, 0, 0, 1, 1,  1, 0, 0, 0, 1]);
+}

@@ -1,0 +1,1 @@
+fn main() { let t: (Array[String, 2], i64) = (Array[f"a", f"b"], 7); println(f"{t.1}"); }

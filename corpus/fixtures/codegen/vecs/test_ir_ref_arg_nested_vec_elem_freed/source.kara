@@ -1,0 +1,14 @@
+
+fn make_vv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a");
+    return v;
+}
+
+fn show(v: ref Vec[String]) {
+    println(v.len());
+}
+
+fn main() {
+    show(make_vv());
+}

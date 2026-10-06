@@ -1,0 +1,97 @@
+// LeetCode #226: Invert Binary Tree — iterative BFS.
+//
+// Walk the tree level by level with a queue. At every visited node, swap
+// the (left, right) pointers in place, then enqueue both children for
+// later visits. The swap-on-visit ordering means each node is mutated
+// before its (now-swapped) children are queued, but that's fine — once a
+// node is in the queue we only read its `val` and its (already-final)
+// children, never its original orientation.
+//
+// O(n) time, O(w) auxiliary queue space for max width w.
+//
+// Mirrors recursive.kara's `Option[TreeNode] -> Option[TreeNode]` shape so
+// the two files diff cleanly and produce identical output.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn invert(root: Option[TreeNode]) -> Option[TreeNode] {
+    match root {
+        None => None,
+        Some(node) => {
+            let mut queue = VecDeque.new();
+            queue.push_back(node);
+            loop {
+                match queue.pop_front() {
+                    None => { break; },
+                    Some(current) => {
+                        let tmp = current.left;
+                        current.left = current.right;
+                        current.right = tmp;
+                        if let Some(left) = current.left {
+                            queue.push_back(left);
+                        }
+                        if let Some(right) = current.right {
+                            queue.push_back(right);
+                        }
+                    }
+                }
+            }
+            Some(node)
+        }
+    }
+}
+
+fn report(root: Option[TreeNode]) {
+    let inverted = invert(root);
+    match inverted {
+        None => {},
+        Some(node) => {
+            let mut queue = VecDeque.new();
+            queue.push_back(node);
+            loop {
+                match queue.pop_front() {
+                    None => { break; },
+                    Some(current) => {
+                        println(current.val);
+                        if let Some(left) = current.left {
+                            queue.push_back(left);
+                        }
+                        if let Some(right) = current.right {
+                            queue.push_back(right);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    let tree1 = Some(TreeNode {
+        val: 4,
+        left: Some(TreeNode {
+            val: 2,
+            left: Some(TreeNode { val: 1, left: None, right: None }),
+            right: Some(TreeNode { val: 3, left: None, right: None }),
+        }),
+        right: Some(TreeNode {
+            val: 7,
+            left: Some(TreeNode { val: 6, left: None, right: None }),
+            right: Some(TreeNode { val: 9, left: None, right: None }),
+        }),
+    });
+    report(tree1);
+
+    let tree2 = Some(TreeNode {
+        val: 2,
+        left: Some(TreeNode { val: 1, left: None, right: None }),
+        right: Some(TreeNode { val: 3, left: None, right: None }),
+    });
+    report(tree2);
+
+    report(None);
+}

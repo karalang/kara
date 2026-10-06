@@ -1,0 +1,18 @@
+
+struct Rec { name: String, n: i64 }
+fn build(n: i64) -> Vec[Vec[Rec]] {
+    let mut outer: Vec[Vec[Rec]] = Vec.new();
+    let mut a: Vec[Rec] = Vec.new();
+    a.push(Rec { name: f"alpha string padded out beyond thirty-six bytes {n}", n: 1_i64 });
+    a.push(Rec { name: f"beta string padded out beyond thirty-six bytes {n}", n: 2_i64 });
+    outer.push(a);
+    return outer;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let vv = build(i);
+        println(vv.len());
+        i = i + 1;
+    };
+}

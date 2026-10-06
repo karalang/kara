@@ -1,0 +1,68 @@
+// Benchmark workload for LeetCode #174 — Dungeon Game.
+//
+// Build-once + punch: a large m×n dungeon of signed PRNG values is generated once
+// (32-bit LCG, overflow-safe in i64), then the backward min-health DP is run
+// `PASSES` times, each preceded by a single-cell sign flip so the optimizer
+// cannot hoist the repeated computation. The DP fills from the bottom-right; each
+// cell needs `max(1, min(down, right) - cell)`, a data-dependent min/max/branch
+// chain with a loop-carried right/down dependency — it does NOT vectorize: a
+// genuine scalar compute + memory kernel. Sink = sum of dp[0][0] over all passes.
+
+fn max_i64(a: i64, b: i64) -> i64 { if a > b { return a; } return b; }
+fn min_i64(a: i64, b: i64) -> i64 { if a < b { return a; } return b; }
+
+fn calculate_minimum_hp(grid: ref Vec[i64], dp: mut ref Vec[i64], m: i64, n: i64) -> i64 {
+    let mut i = m - 1;
+    while i >= 0 {
+        let base = i * n;
+        let mut j = n - 1;
+        while j >= 0 {
+            let cell = grid[base + j];
+            let mut need = 0;
+            if i == m - 1 and j == n - 1 {
+                need = max_i64(1, 1 - cell);
+            } else if i == m - 1 {
+                need = max_i64(1, dp[base + j + 1] - cell);
+            } else if j == n - 1 {
+                need = max_i64(1, dp[base + n + j] - cell);
+            } else {
+                let ahead = min_i64(dp[base + n + j], dp[base + j + 1]);
+                need = max_i64(1, ahead - cell);
+            }
+            dp[base + j] = need;
+            j = j - 1;
+        }
+        i = i - 1;
+    }
+    return dp[0];
+}
+
+fn main() {
+    let m = 200;
+    let n = 200;
+    let passes = 2000;
+    let total = m * n;
+
+    let mut grid: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut c = 0;
+    while c < total {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        grid.push((state % 121) - 100);
+        c = c + 1;
+    }
+
+    let mut dp: Vec[i64] = Vec.new();
+    let mut d = 0;
+    while d < total { dp.push(0); d = d + 1; }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let idx = (p * 131 + 7) % total;
+        grid[idx] = -grid[idx];
+        sink = sink + calculate_minimum_hp(grid, mut dp, m, n);
+        p = p + 1;
+    }
+    println(sink);
+}

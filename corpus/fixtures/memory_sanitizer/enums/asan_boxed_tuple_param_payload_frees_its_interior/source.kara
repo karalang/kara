@@ -1,0 +1,35 @@
+
+fn whole(x: Option[(String, String)]) {
+    match x { Some(t) => { println(f"w:{t.0}"); } None => { println("wn"); } }
+}
+
+fn wild(x: Option[(String, String)]) {
+    match x { Some(_) => { println("i"); } None => { println("in"); } }
+}
+
+fn consume(x: Option[(String, String)], out: mut ref Vec[String]) {
+    match x { Some((a, b)) => { out.push(a); out.push(b); } None => {} }
+}
+
+fn wide(x: Option[(String, i64, i64, i64)]) {
+    match x { Some(t) => { println(f"x:{t.0}"); } None => { println("xn"); } }
+}
+
+fn arr(x: Option[Array[String, 2]]) {
+    match x { Some(t) => { println(f"a:{t[0]}"); } None => { println("an"); } }
+}
+
+fn main() {
+    let mut out: Vec[String] = Vec.new();
+    let mut n = 0;
+    while n < 3 {
+        whole(Some((f"whole-{n}-padpad", f"snd-{n}-padpad")));
+        wild(Some((f"wild-{n}-padpad", f"snd-{n}-padpad")));
+        consume(Some((f"con-{n}-padpad", f"snd-{n}-padpad")), mut out);
+        wide(Some((f"wide-{n}-padpad", 1, 2, 3)));
+        let a: Array[String, 2] = [f"arr-{n}-padpad", f"snd-{n}-padpad"];
+        arr(Some(a));
+        n = n + 1;
+    }
+    println(f"c:{out.len()}");
+}

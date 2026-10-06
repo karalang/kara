@@ -1,0 +1,58 @@
+one
+tkd 1
+dR1
+two
+tkr 2
+dR2
+three
+skd 3
+dR3
+four
+skr 4
+dR4
+five
+sku
+dR5
+six
+skt 6
+dR6
+seven
+skg 7
+dR7
+eight
+ska 8
+dR8
+nine-t
+skn 9
+skn-out
+dR9
+ten-f
+skn-out
+dR10
+eleven-t
+dR11
+twelve-f
+skm 12
+dR12
+thirteen
+ek 13
+dR13
+fourteen
+mk 14
+dR14
+fifteen-named
+skd 15
+dR15
+sixteen-mnamed
+mk 16
+dR16
+seventeen-tnamed
+tkd 17
+dR17
+eighteen-local
+sl 30
+dR30
+nineteen-leaf
+vk 19
+dR19
+end

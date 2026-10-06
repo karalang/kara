@@ -1,0 +1,13 @@
+source = "tests/codegen/vecs.rs::test_e2e_elem_optres_field_reads_copy_and_match_interp"
+dedup_of = ["tests/memory_sanitizer/vecs.rs::asan_elem_optres_field_reads_copy_and_free_once"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

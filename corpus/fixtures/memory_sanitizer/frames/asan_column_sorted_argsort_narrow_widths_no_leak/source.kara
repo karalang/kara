@@ -1,0 +1,24 @@
+
+fn inner() -> i64 {
+    let mut ci: Column[i32] = Column.with_capacity(4);
+    ci.push(5); ci.push(1); ci.push_null(); ci.push(3);
+    let cs: Vec[i32] = ci.sorted();
+    let ca: Vec[i64] = ci.argsort();
+    let cu: Column[u32] = Column.from_vec([30, 10, 20]);
+    let us: Vec[u32] = cu.sorted();
+    let ua: Vec[i64] = cu.argsort();
+    let mut cf: Column[f32] = Column.with_capacity(4);
+    cf.push(2.5); cf.push_null(); cf.push(1.5); cf.push(0.5);
+    let fs: Vec[f32] = cf.sorted();
+    let fa: Vec[i64] = cf.argsort();
+    cs.len() + ca[0] + us.len() + ua[0] + fs.len() + fa[0]
+}
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        acc = acc + inner();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}

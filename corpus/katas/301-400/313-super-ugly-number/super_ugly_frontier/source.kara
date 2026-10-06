@@ -1,0 +1,103 @@
+// LeetCode 313 — Super Ugly Number, as a closure computation.
+//
+// THE ARM: forget merging. Take the DEFINITION — the super ugly numbers are
+// the closure of {1} under multiplication by `primes` — and compute the
+// closure directly, smallest element first.
+//
+// Hold a frontier of discovered-but-not-yet-emitted values in an ordered set.
+// Repeatedly take its minimum, emit it, and insert that value times each
+// prime. After n rounds the nth value emitted is the answer.
+//
+// WHY THE ORDERED SET REPLACES ALL THE TIE MACHINERY. The other three arms
+// each spend real code on the fact that 6 is reachable as 2*3 and as 3*2: the
+// star arm advances both pointers, the `_canonical` arm forbids one of the two
+// derivations, the `_heap` arm discards the second copy on the way out. Here a
+// set simply does not contain the same value twice, so the duplicate is absorbed
+// by the container and no arm-level code exists for it at all. That makes this
+// the arm whose dedup logic cannot be mutated, and correspondingly the arm that
+// proves the least about the other three — it is here for MECHANISM diversity,
+// not to double-check the pointer arithmetic.
+//
+// WHY EMITTING THE MINIMUM IS SAFE, which is the one thing this arm actually
+// has to argue. When x is taken as the frontier minimum, could some super ugly
+// number smaller than x still be undiscovered? No: any such y > 1 is p * u for
+// a super ugly u < y < x, and u was emitted earlier (induction on the emission
+// order), so the round that emitted u inserted p * u = y into the frontier.
+// Anything smaller than x is therefore already IN the frontier, and x being
+// the minimum means there is nothing smaller. So the emission order is exactly
+// the sorted order.
+//
+// THE COST is what the merge arms exist to avoid. This arm inserts k values
+// per round and never bounds the frontier, so it holds O(n * k) entries and
+// pays a tree operation on each, against the merge arms' k stream heads. It is
+// the clearest statement of the problem and the wrong way to compute it at
+// scale — the benchmark uses the star arm.
+//
+// SortedSet, not Set: iteration and minimum have to be by key order. A hashed
+// Set has no minimum to take, and its walk order is per-process random.
+
+fn nth_super_ugly(n: i64, primes: ref Vec[i64]) -> i64 {
+    if n <= 0 { return 0; }
+    let k = primes.len();
+    if k == 0 { return 1; }
+
+    let mut frontier: SortedSet[i64] = SortedSet.new();
+    frontier.insert(1);
+
+    let mut emitted = 0;
+    let mut last = 0;
+    while emitted < n {
+        match frontier.min() {
+            Some(x) => {
+                frontier.remove(x);
+                last = x;
+                emitted = emitted + 1;
+                // Only expand while more output is still wanted; the final
+                // round would otherwise insert k values nobody reads.
+                if emitted < n {
+                    for i in 0..k { frontier.insert(x * primes[i]); }
+                }
+            },
+            None => {
+                // Unreachable while emitted < n: the frontier is refilled on
+                // every round that is not the last.
+                return 0;
+            }
+        }
+    }
+
+    return last;
+}
+
+fn render(primes: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < primes.len() {
+        if i > 0 { s.push_str(","); }
+        s.push_str(primes[i].to_string());
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(n: i64, vals: Slice[i64]) {
+    let mut primes: Vec[i64] = Vec.new();
+    for v in vals { primes.push(v); }
+    println("n=" + n.to_string() + " " + render(primes) + " -> "
+        + nth_super_ugly(n, primes).to_string());
+}
+
+fn main() {
+    report(12, [2, 7, 13, 19]);
+    report(1, [2, 3, 5]);
+    report(11, [2, 3, 5]);
+    report(20, [2, 3, 5]);
+    report(1, [7]);
+    report(6, [7]);
+    report(15, [2, 101]);
+    report(25, [2, 3, 5, 7, 11, 13]);
+    report(20, [5, 2, 3]);
+    report(100, [2, 7, 13, 19]);
+}

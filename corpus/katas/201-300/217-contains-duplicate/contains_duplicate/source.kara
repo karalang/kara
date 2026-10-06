@@ -1,0 +1,55 @@
+// LeetCode 217 — Contains Duplicate.
+//
+// Return true if any value appears at least twice in the array, false if every
+// element is distinct.
+//
+// One linear pass with a `Set[i64]` of values seen so far: the first time a
+// value is encountered again, it's already in the set, so return true. If the
+// scan finishes without a repeat, every element was unique. O(n) time, O(n)
+// space — the classic hash-set membership test.
+
+fn contains_duplicate(nums: Slice[i64]) -> bool {
+    let mut seen: Set[i64] = Set.new();
+    let n = nums.len();
+    let mut i = 0;
+    while i < n {
+        let x = nums[i];
+        if seen.contains(x) {
+            return true;
+        }
+        seen.insert(x);
+        i = i + 1;
+    }
+    return false;
+}
+
+fn report(nums: Slice[i64]) {
+    if contains_duplicate(nums) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 3, 1];
+    report(a);                                      // true
+
+    let b: Array[i64, 4] = [1, 2, 3, 4];
+    report(b);                                      // false
+
+    let c: Array[i64, 10] = [1, 1, 1, 3, 3, 4, 3, 2, 4, 2];
+    report(c);                                      // true
+
+    let d: Array[i64, 0] = [];
+    report(d);                                      // false
+
+    let e: Array[i64, 1] = [1];
+    report(e);                                      // false
+
+    let f: Array[i64, 2] = [-1, -1];
+    report(f);                                      // true
+
+    let g: Array[i64, 5] = [-3, 0, 7, 9, -3];
+    report(g);                                      // true
+}

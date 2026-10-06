@@ -1,0 +1,5 @@
+
+fn main() {
+    println("before exit");
+    process.exit(42);
+}

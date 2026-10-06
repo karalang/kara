@@ -1,0 +1,13 @@
+source = "tests/codegen/option_result.rs::e2e_named_optres_arg_does_not_double_a_consumed_part_body"
+dedup_of = ["tests/interpreter/option_result.rs::test_named_optres_arg_does_not_double_a_consumed_part_body"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

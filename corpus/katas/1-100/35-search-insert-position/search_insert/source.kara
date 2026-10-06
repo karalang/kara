@@ -1,0 +1,108 @@
+// LeetCode #35: Search Insert Position — the canonical half-open lower_bound (★).
+//
+// A SORTED array of DISTINCT integers and a target. Return the index of the
+// target if present, otherwise the index where it would be inserted to keep the
+// array sorted. Must run in O(log n).
+//
+//   [1,3,5,6], target = 5  ->  2   (found at index 2)
+//   [1,3,5,6], target = 2  ->  1   (would insert between 1 and 3)
+//   [1,3,5,6], target = 7  ->  4   (would append at the end)
+//   [1,3,5,6], target = 0  ->  0   (would prepend at the front)
+//
+// The whole problem collapses to a single observation: "found index" and "insert
+// index" are the SAME number — the first index i with nums[i] >= target. If the
+// target is present, that i lands exactly on it (distinct values, so no run to
+// disambiguate); if it is absent, that i is where it belongs. So this is
+// `lower_bound` verbatim, and there is no separate found-vs-absent branch at all.
+//
+// The half-open form is the tightest way to compute it:
+//
+//   - lo = 0, hi = len.  The answer lives in the CLOSED-ABOVE range [lo, hi] but
+//     hi tracks "one past a known-too-big" so the live window is half-open [lo, hi).
+//   - On nums[mid] < target the answer is strictly right of mid: lo = mid + 1.
+//   - Otherwise (nums[mid] >= target) mid itself is a candidate: hi = mid (NOT
+//     mid - 1 — we must keep mid in the window since it might be the answer).
+//   - The loop never tests equality, so it cannot early-return; it always narrows
+//     to a single point, and `lo == hi` at exit is the insertion index in [0, len].
+//
+// Because hi can reach len, the answer naturally includes the append case (target
+// greater than everything -> lo == len) with no special casing.
+//
+// This is the exact shape the midpoint bounds-check fix (B-2026-06-16-1) targets:
+// `let mid = lo + (hi - lo) / 2` under a strict `while lo < hi`, so the `nums[mid]`
+// access folds its bounds check away. See the bench README.
+
+// First index i in [0, len] with nums[i] >= target — the found-or-insert position.
+fn search_insert(nums: Slice[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = len;                       // half-open: hi can reach len (append case)
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] < target {
+            lo = mid + 1;                // answer is strictly right of mid
+        } else {
+            hi = mid;                       // nums[mid] >= target — mid stays a candidate
+        }
+    }
+    lo
+}
+
+fn fmt(nums: Slice[i64], len: i64) -> String {
+    let mut s: String = "[";
+    for i in 0..len {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(nums: Slice[i64], len: i64, target: i64) {
+    let idx = search_insert(nums, len, target);
+    println(f"{fmt(nums, len)} target={target} -> {idx}");
+}
+
+fn main() {
+    // LeetCode examples.
+    let a1: Array[i64, 4] = [1, 3, 5, 6];
+    report(a1, 4, 5);                // 2 (found)
+    report(a1, 4, 2);                // 1 (insert middle)
+    report(a1, 4, 7);                // 4 (append)
+    report(a1, 4, 0);                // 0 (prepend)
+
+    // Empty array — everything inserts at 0.
+    let a2: Array[i64, 0] = [];
+    report(a2, 0, 5);                // 0
+
+    // Single element, all three relations.
+    let a3: Array[i64, 1] = [2];
+    report(a3, 1, 1);                // 0 (before)
+    report(a3, 1, 2);                // 0 (found)
+    report(a3, 1, 3);                // 1 (after)
+
+    // Every element matched exactly (found at its own index).
+    let a4: Array[i64, 5] = [1, 3, 5, 7, 9];
+    report(a4, 5, 1);                // 0
+    report(a4, 5, 3);                // 1
+    report(a4, 5, 5);                // 2
+    report(a4, 5, 7);                // 3
+    report(a4, 5, 9);                // 4
+
+    // Every gap landed in (insert positions between elements).
+    report(a4, 5, 0);                // 0 (below all)
+    report(a4, 5, 2);                // 1
+    report(a4, 5, 4);                // 2
+    report(a4, 5, 6);                // 3
+    report(a4, 5, 8);                // 4
+    report(a4, 5, 10);               // 5 (above all)
+
+    // Negatives.
+    let a5: Array[i64, 6] = [-9, -4, -1, 0, 3, 8];
+    report(a5, 6, -9);               // 0 (found, first)
+    report(a5, 6, -5);               // 1 (insert)
+    report(a5, 6, 0);                // 3 (found)
+    report(a5, 6, 8);                // 5 (found, last)
+    report(a5, 6, 100);              // 6 (append)
+}

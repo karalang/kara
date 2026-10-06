@@ -1,0 +1,39 @@
+struct H { n: i64 }
+impl H {
+    fn show[T: Display](ref self, x: Option[T]) { println(f"m {self.n} {x}"); }
+}
+
+fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn showr[T: Display](x: Result[T, String]) { println(f"{x}"); }
+
+fn main() {
+    show(Some(7));
+    show(Some("hi"));
+
+    let v: Vec[i64] = vec![1];
+    show(Some(v));
+    let vs: Vec[String] = vec!["p" + "q"];
+    show(Some(vs));
+    let vv: Vec[Vec[i64]] = vec![vec![1, 2]];
+    show(Some(vv));
+
+    let a2: Array[i64, 2] = [1, 2];
+    show(Some(a2));
+    let a3: Array[i64, 3] = [3, 4, 5];
+    show(Some(a3));
+
+    let c: Array[i64, 2] = [6, 7];
+    let sl: Slice[i64] = c[0..2];
+    show(Some(sl));
+
+    let t: (i64, i64) = (8, 9);
+    show(Some(t));
+
+    let rv: Vec[i64] = vec![1, 2];
+    showr(Ok(rv));
+
+    let h = H { n: 3 };
+    h.show(Some(7));
+    let mv: Vec[i64] = vec![4];
+    h.show(Some(mv));
+}

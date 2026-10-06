@@ -1,0 +1,5 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn f(a: Option[R], c: bool) -> Option[R] { if c { return a } None }
+fn main() { let b = f(Some(mkr(1)), false); println("got"); println("end-main") }

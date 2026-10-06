@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(7_i64);
+    let r1 = s.remove(7_i64);
+    let r2 = s.remove(7_i64);
+    println(r1);
+    println(r2);
+    println(s.contains(7_i64));
+}

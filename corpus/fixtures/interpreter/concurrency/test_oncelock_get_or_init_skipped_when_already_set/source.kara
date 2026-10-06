@@ -1,0 +1,6 @@
+fn main() {
+             let cell: OnceLock[String] = OnceLock.new();
+             let _ = cell.set("hello");
+             let s = cell.get_or_init(|| "world");
+             println(s);
+         }

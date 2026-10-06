@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_e2e_mut_ref_self_method_in_fstring_and_match_persists"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

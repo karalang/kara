@@ -1,0 +1,36 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" }; }
+struct S3 { a: R, b: R }
+struct S4 { a: R, b: R, c: R }
+struct Mix { a: R, k: i64, c: R }
+struct Inner { p: R }
+struct Outer { i: Inner, z: R }
+fn eat(r: R) -> i64 { return r.id; }
+
+fn in_order() -> i64 { let s: S3 = S3 { a: mk(1), b: mk(2) }; let S3 { a, b } = s; return a.id + b.id; }
+fn swapped() -> i64 { let s: S3 = S3 { a: mk(3), b: mk(4) }; let S3 { b, a } = s; return a.id + b.id; }
+fn three_rotated() -> i64 { let s: S4 = S4 { a: mk(5), b: mk(6), c: mk(7) }; let S4 { c, a, b } = s; return a.id + b.id + c.id; }
+fn renamed_swap() -> i64 { let s: S3 = S3 { a: mk(8), b: mk(9) }; let S3 { b: y, a: x } = s; return x.id + y.id; }
+fn desugared_control() -> i64 { let s: S3 = S3 { a: mk(10), b: mk(11) }; let b: R = s.b; let a: R = s.a; return a.id + b.id; }
+fn rest_swapped() -> i64 { let s: S4 = S4 { a: mk(12), b: mk(13), c: mk(14) }; let S4 { c, a, .. } = s; return a.id + c.id; }
+fn wild_mixed() -> i64 { let s: S4 = S4 { a: mk(15), b: mk(16), c: mk(17) }; let S4 { c, b: _, a } = s; return a.id + c.id; }
+fn scalar_between() -> i64 { let s: Mix = Mix { a: mk(18), k: 9, c: mk(19) }; let Mix { c, a, k } = s; return a.id + c.id + k; }
+fn nested_swapped() -> i64 { let o: Outer = Outer { i: Inner { p: mk(20) }, z: mk(21) }; let Outer { z, i } = o; return z.id + i.p.id; }
+fn moved_leaf() -> i64 { let s: S3 = S3 { a: mk(22), b: mk(23) }; let S3 { b, a } = s; return eat(b) + a.id; }
+fn in_order_three() -> i64 { let s: S4 = S4 { a: mk(24), b: mk(25), c: mk(26) }; let S4 { a, b, c } = s; return a.id + b.id + c.id; }
+
+fn main() {
+    println("in_order"); let v1: i64 = in_order(); println(f"  v={v1}");
+    println("swapped"); let v2: i64 = swapped(); println(f"  v={v2}");
+    println("three_rotated"); let v3: i64 = three_rotated(); println(f"  v={v3}");
+    println("renamed_swap"); let v4: i64 = renamed_swap(); println(f"  v={v4}");
+    println("desugared_control"); let v5: i64 = desugared_control(); println(f"  v={v5}");
+    println("rest_swapped"); let v6: i64 = rest_swapped(); println(f"  v={v6}");
+    println("wild_mixed"); let v7: i64 = wild_mixed(); println(f"  v={v7}");
+    println("scalar_between"); let v8: i64 = scalar_between(); println(f"  v={v8}");
+    println("nested_swapped"); let v9: i64 = nested_swapped(); println(f"  v={v9}");
+    println("moved_leaf"); let v10: i64 = moved_leaf(); println(f"  v={v10}");
+    println("in_order_three"); let v11: i64 = in_order_three(); println(f"  v={v11}");
+    println("end");
+}

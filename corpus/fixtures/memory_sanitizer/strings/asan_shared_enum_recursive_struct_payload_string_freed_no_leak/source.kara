@@ -1,0 +1,34 @@
+
+struct Id { name: String, off: i64 }
+struct Bin { left: E, right: E, off: i64 }
+shared enum E { Ident(Id), Add(Bin) }
+fn render(e: E) -> String {
+    let mut out = "".to_string();
+    match e {
+        Ident(n) => { out.push_str(n.name); }
+        Add(b) => {
+            out.push_str(render(b.left));
+            out.push_str(render(b.right));
+        }
+    }
+    out
+}
+fn ident(s: String) -> E {
+    E.Ident(Id { name: s, off: 0 })
+}
+fn make() -> E {
+    E.Add(Bin {
+        left: ident("left_identifier_long_enough_to_force_heap".to_string()),
+        right: ident("right_identifier_long_enough_to_force_heap".to_string()),
+        off: 0,
+    })
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        total = total + render(make()).len();
+        i = i + 1;
+    }
+    println(total);
+}

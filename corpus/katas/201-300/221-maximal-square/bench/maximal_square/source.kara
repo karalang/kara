@@ -1,0 +1,71 @@
+// Benchmark workload for LeetCode #221 — Maximal Square.
+//
+// Build-once + punch: a large 0/1 grid is generated once with a deterministic
+// 32-bit LCG (overflow-safe in i64 — no wrapping needed), then the maximal-square
+// DP is run `PASSES` times, each preceded by a single-cell flip so the optimizer
+// cannot hoist the repeated computation. The DP is the space-optimized 1-D form
+// (one `dp` row reused, a saved diagonal) — its cur[j]->cur[j-1] left dependency
+// is loop-carried, so it does NOT vectorize: a genuine scalar compute + memory
+// kernel. Sink = sum of the max side length over all passes.
+
+fn max_side(grid: ref Vec[i64], dp: mut ref Vec[i64], rows: i64, cols: i64) -> i64 {
+    let mut jz = 0;
+    while jz < cols { dp[jz] = 0; jz = jz + 1; }
+    let mut best = 0;
+    let mut i = 0;
+    while i < rows {
+        let base = i * cols;
+        let mut prev_diag = 0;
+        let mut j = 0;
+        while j < cols {
+            let temp = dp[j];
+            if grid[base + j] == 1 {
+                let mut v = 1;
+                if i != 0 and j != 0 {
+                    let mut m = dp[j];
+                    if dp[j - 1] < m { m = dp[j - 1]; }
+                    if prev_diag < m { m = prev_diag; }
+                    v = m + 1;
+                }
+                dp[j] = v;
+                if v > best { best = v; }
+            } else {
+                dp[j] = 0;
+            }
+            prev_diag = temp;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn main() {
+    let rows = 800;
+    let cols = 800;
+    let passes = 150;
+    let total = rows * cols;
+
+    let mut grid: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut c = 0;
+    while c < total {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        if state % 100 < 62 { grid.push(1); } else { grid.push(0); }
+        c = c + 1;
+    }
+
+    let mut dp: Vec[i64] = Vec.new();
+    let mut d = 0;
+    while d < cols { dp.push(0); d = d + 1; }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let idx = (p % rows) * cols + ((p * 131 + 7) % cols);
+        grid[idx] = 1 - grid[idx];
+        sink = sink + max_side(grid, mut dp, rows, cols);
+        p = p + 1;
+    }
+    println(sink);
+}

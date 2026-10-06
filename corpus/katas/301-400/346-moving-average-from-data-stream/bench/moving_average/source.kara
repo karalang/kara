@@ -1,0 +1,43 @@
+// Benchmark workload for LeetCode #346 — the ★ arm (moving_average.kara),
+// timed as written: a VecDeque window and a running sum.
+//
+// One MovingAverage of window WINDOW reads LEN pseudo-random values in the
+// problem's range, -100000..=100000. Every average it returns is added to a
+// running total, which is the sink, so no call can be skipped. The window
+// fills after WINDOW values and from then on every call pushes one value and
+// pops one.
+
+const LEN: i64 = 10000000;
+const WINDOW: i64 = 1000;
+
+struct MovingAverage {
+    size: i64,
+    window: VecDeque[i64],
+    sum: i64,
+}
+
+impl MovingAverage {
+    fn new(size: i64) -> MovingAverage {
+        return MovingAverage { size: size, window: VecDeque.new(), sum: 0 };
+    }
+
+    fn next(mut ref self, val: i64) -> f64 {
+        self.window.push_back(val);
+        self.sum += val;
+        if self.window.len() > self.size {
+            self.sum -= self.window.pop_front().unwrap();
+        }
+        return self.sum as f64 / self.window.len() as f64;
+    }
+}
+
+fn main() {
+    let mut m = MovingAverage.new(WINDOW);
+    let mut seed = 346;
+    let mut sink = 0.0;
+    for _ in 0..LEN {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        sink += m.next(seed / 16 % 200001 - 100000);
+    }
+    println(f"sink {sink:.3}");
+}

@@ -1,0 +1,7 @@
+
+fn main() {
+    let ci: Column[i64] = Column.from_vec([2, 3, 4]);
+    let cf: Column[f64] = Column.from_vec([1.5, 2.0, 4.0]);
+    println(f"{ci.prod()}");
+    println(f"{cf.prod()}");
+}

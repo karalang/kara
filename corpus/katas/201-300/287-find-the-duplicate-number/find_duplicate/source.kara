@@ -1,0 +1,58 @@
+// LeetCode 287 — Find the Duplicate Number.
+//
+// `nums` has n+1 values in [1, n], so by pigeonhole at least one value repeats.
+// Find it WITHOUT modifying the array and in O(1) extra space.
+//
+// Read each index i as a pointer to index nums[i]. Because every value is in
+// [1, n], following these pointers from index 0 stays in-bounds and, since some
+// value repeats, two indices point to the same place — so the functional graph
+// contains a cycle, and the cycle's entrance is exactly the duplicate value.
+// Floyd's tortoise-and-hare finds it:
+//
+//   phase 1 — advance slow by 1 and fast by 2 until they meet inside the cycle;
+//   phase 2 — reset one walker to the start; advance both by 1; they meet at the
+//             cycle entrance = the duplicate.
+//
+// O(n) time, O(1) space, array untouched.
+
+fn find_duplicate(nums: Slice[i64]) -> i64 {
+    let mut slow = nums[0];
+    let mut fast = nums[0];
+
+    // Phase 1: find a meeting point inside the cycle.
+    slow = nums[slow];
+    fast = nums[nums[fast]];
+    while slow != fast {
+        slow = nums[slow];
+        fast = nums[nums[fast]];
+    }
+
+    // Phase 2: walk from the start in lockstep to the cycle entrance.
+    let mut finder = nums[0];
+    while finder != slow {
+        finder = nums[finder];
+        slow = nums[slow];
+    }
+    return finder;
+}
+
+fn report(nums: Slice[i64]) {
+    println(f"{find_duplicate(nums)}");
+}
+
+fn main() {
+    let a: Array[i64, 5] = [1, 3, 4, 2, 2];
+    report(a);                                      // 2
+
+    let b: Array[i64, 5] = [3, 1, 3, 4, 2];
+    report(b);                                      // 3
+
+    let c: Array[i64, 2] = [1, 1];
+    report(c);                                      // 1
+
+    let d: Array[i64, 5] = [2, 2, 2, 2, 2];
+    report(d);                                      // 2
+
+    let e: Array[i64, 8] = [1, 4, 6, 7, 2, 3, 5, 6];
+    report(e);                                      // 6
+}

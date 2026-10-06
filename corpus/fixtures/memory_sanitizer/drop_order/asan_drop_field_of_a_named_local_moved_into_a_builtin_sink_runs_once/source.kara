@@ -1,0 +1,23 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, name: String, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
+enum Bx { P(D), N }
+fn a() { let w = mkw(1); let mut xs: Vec[D] = Vec.new(); xs.push(w.r); println(f"a{xs.len()}") }
+fn b() { let w = mkw(2); let xs: Vec[D] = [w.s]; println(f"b{xs.len()}") }
+fn c() { let w = mkw(3); let o = Some(w.r); println(f"c{o.is_some()}") }
+fn d() { let w = mkw(4); let x = Bx.P(w.r); match x { Bx.P(p) => println(f"d{p.id}"), Bx.N => println("dn") } }
+fn e() { let w = mkw(5); let mut m: Map[i64, D] = Map.new(); m.insert(1, w.r); println(f"e{m.len()}") }
+fn f() { let w = mkw(6); let mut q: VecDeque[D] = VecDeque.new(); q.push_back(w.r); q.push_front(w.s); println(f"f{q.len()}") }
+fn g() { let w = mkw(7); let mut xs: Vec[D] = Vec.new(); if w.b > 3 { xs.push(w.r); } println(f"g{xs.len()} {w.name}") }
+fn main() {
+    a();
+    b();
+    c();
+    d();
+    e();
+    f();
+    g();
+    println("end")
+}

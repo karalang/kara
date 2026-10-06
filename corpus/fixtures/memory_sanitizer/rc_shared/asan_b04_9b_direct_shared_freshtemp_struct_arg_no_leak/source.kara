@@ -1,0 +1,22 @@
+
+shared enum Val { Nothing, Ident(String), Num(i64) }
+struct DirH { value: Val }
+
+fn borrow_dir(h: DirH) -> i64 {
+    let mut r = 0;
+    match h.value { Val.Ident(_) => { r = 1; } _ => {} }
+    r
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 5 {
+        // INLINE fresh-temp arg — the leaking shape (no `let` binding).
+        total = total + borrow_dir(DirH {
+            value: Val.Ident("b049b_direct_shared_freshtemp_payload_omega_ffff".to_string()),
+        });
+        i = i + 1;
+    }
+    println(total);
+}

@@ -1,0 +1,9 @@
+
+fn deref_at(v: ref Vec[i64], i: i64) -> bool { v[i] >= 0 }
+fn at(v: ref Vec[i64], i: i64) -> i64 requires deref_at(v, i) { 0 }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(3);
+    println(at(v, 99));
+    println(42);
+}

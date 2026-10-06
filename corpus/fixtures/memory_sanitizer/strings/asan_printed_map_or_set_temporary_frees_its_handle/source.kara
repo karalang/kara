@@ -1,0 +1,56 @@
+
+#[derive(Hash, Eq, Display)]
+struct P { name: String }
+fn mk() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    let _ = m.insert("kkkkkkkkkkkkkkkk", 1);
+    return m;
+}
+fn mkset() -> Set[String] {
+    let mut s: Set[String] = Set.new();
+    s.insert("eeeeeeeeeeeeeeeeee");
+    return s;
+}
+fn mksorted() -> SortedMap[String, i64] {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    let _ = m.insert("zzzzzzzzzzzzzzzz", 1);
+    let _ = m.insert("aaaaaaaaaaaaaaaa", 2);
+    return m;
+}
+fn mksortedset() -> SortedSet[String] {
+    let mut s: SortedSet[String] = SortedSet.new();
+    s.insert("wwwwwwwwwwwwwwwww");
+    return s;
+}
+fn mkvecval() -> Map[String, Vec[String]] {
+    let mut m: Map[String, Vec[String]] = Map.new();
+    let inner: Vec[String] = ["one_one_one_one", "two_two_two_two"];
+    let _ = m.insert("vvvvvvvvvvvvvvvv", inner);
+    return m;
+}
+fn mknested() -> Map[String, Set[String]] {
+    let mut inner: Set[String] = Set.new();
+    inner.insert("nnnnnnnnnnnnnnnnnn");
+    let mut m: Map[String, Set[String]] = Map.new();
+    let _ = m.insert("qqqqqqqqqqqqqqqq", inner);
+    return m;
+}
+fn mkstructkey() -> Map[P, i64] {
+    let mut m: Map[P, i64] = Map.new();
+    let _ = m.insert(P { name: "pppppppppppppppp" }, 4);
+    return m;
+}
+fn main() {
+    let mut k = 0;
+    while k < 20 {
+        println(f"{mk()}");
+        println(f"{mkset()}");
+        println(f"{mksorted()}");
+        println(f"{mksortedset()}");
+        println(f"{mkvecval()}");
+        println(f"{mknested()}");
+        println(f"{mkstructkey()}");
+        k = k + 1;
+    }
+    println("done");
+}

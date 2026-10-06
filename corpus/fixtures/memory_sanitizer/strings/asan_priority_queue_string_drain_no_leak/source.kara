@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut q: PriorityQueue[String] = PriorityQueue.new();
+    q.push("pear"); q.push("apple"); q.push("fig"); q.push("banana");
+    let sorted = q.into_sorted_vec();
+    let mut i = 0;
+    while i < sorted.len() { println(sorted[i]); i = i + 1; }
+    // Elements dropped in place rather than transferred out.
+    let mut r: PriorityQueue[String] = PriorityQueue.max_first();
+    r.push("x"); r.push("yy");
+    r.clear();
+    println(r.len());
+    // O(n) heapify then a partial drain: some elements handed out, the rest
+    // dropped with the queue.
+    let mut p = PriorityQueue.from(["delta", "alpha", "charlie", "bravo"]);
+    match p.pop() { Some(v) => { println(v); } None => {} }
+    println(p.len());
+}

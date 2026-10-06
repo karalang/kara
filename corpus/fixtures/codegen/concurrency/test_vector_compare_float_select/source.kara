@@ -1,0 +1,9 @@
+
+fn main() {
+    let a = Vector[f64, 2](1.5, 9.0);
+    let b = Vector[f64, 2](2.0, 3.0);
+    let m = a <= b;
+    println(m[0]); println(m[1]);
+    let pick = (a <= b).select(a, b);
+    println(pick[0]); println(pick[1]);
+}

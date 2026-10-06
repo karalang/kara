@@ -1,0 +1,122 @@
+// LeetCode 309 — Best Time to Buy and Sell Stock with Cooldown
+//
+// Unlimited transactions over a price series, with one rule added to #122: the
+// day AFTER a sale you may not buy. That single constraint is what turns a
+// greedy problem into a state machine — #122's answer is "pocket every positive
+// one-day gain", and here that is merely an upper bound, because the cooldown
+// can force you to skip a rise you would otherwise have taken.
+//
+// THE ARM: a three-state machine carried as three rolling scalars.
+//
+//     hold  the best profit while HOLDING stock at the end of day i
+//     sold  the best profit having SOLD on day i          (tomorrow is cooldown)
+//     rest  the best profit holding nothing and FREE to buy
+//
+//     hold[i] = max(hold[i-1], rest[i-1] - price[i])   buy only from `rest`
+//     sold[i] =     hold[i-1] + price[i]               selling is forced-from-hold
+//     rest[i] = max(rest[i-1], sold[i-1])              yesterday's sale frees today
+//
+// The cooldown lives entirely in `rest[i] = ... sold[i-1]`: a sale on day i-1
+// reaches `rest` only on day i, so a buy cannot see it until day i+1. There is
+// no explicit "cooldown counter" anywhere — the delay is a consequence of the
+// state graph's shape, which is what makes the formulation worth knowing.
+//
+// THE CHARACTERISTIC BUG IS THE UPDATE ORDER — but not on the line one would
+// guess, and the difference was measured rather than assumed.
+//
+// All three lines read the PREVIOUS day's values, so the obvious hazard is
+// forgetting to snapshot. Do it on the `sold` line — let it read today's `hold`
+// instead of yesterday's — and NOTHING BREAKS. The algebra says why: today's
+// hold is `max(prev_hold, prev_rest - price)`, so the slip computes
+// `max(true_sold, prev_rest)`, and since `rest` is already at least `prev_rest`
+// both the rest-chain and the final `max(sold, rest)` absorb the difference.
+// Checked over 32,000 random series against the correct form: zero
+// disagreements. It is not a bug, and the kata's mutation battery keeps it as a
+// control that must NOT fire.
+//
+// The line the snapshot actually protects is `rest`. If it reads TODAY's `sold`
+// rather than yesterday's, the cooldown vanishes entirely — a sale on day i
+// reaches `rest` the same day, so a buy on day i+1 can see it, which is exactly
+// what the rule forbids. That mutation fires four properties. The differential
+// carries an arm that materialises full arrays and spells `sold[i - 1]` in the
+// index, so it cannot commit the slip by accident.
+//
+// The answer is `max(sold, rest)` and never `hold`: ending the series still
+// holding stock means the last purchase was never realised.
+
+fn max_profit(prices: ref Vec[i64]) -> i64 {
+    let n = prices.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut hold = -prices[0];
+    let mut sold = 0;
+    let mut rest = 0;
+    for i in 1..n {
+        // Snapshot yesterday BEFORE any of the three is overwritten.
+        let prev_hold = hold;
+        let prev_sold = sold;
+        let prev_rest = rest;
+        hold = prev_hold;
+        if prev_rest - prices[i] > hold {
+            hold = prev_rest - prices[i];
+        }
+        sold = prev_hold + prices[i];
+        rest = prev_rest;
+        if prev_sold > rest {
+            rest = prev_sold;
+        }
+    }
+    if sold > rest {
+        return sold;
+    }
+    return rest;
+}
+
+fn render(prices: Slice[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < prices.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(f"{prices[i]}");
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(prices: Slice[i64]) {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..prices.len() {
+        v.push(prices[i]);
+    }
+    let mut line = String.new();
+    line.push_str(render(prices));
+    line.push_str(f" -> {max_profit(v)}");
+    println(line);
+}
+
+fn main() {
+    // The example from the LeetCode statement: buy, sell, cooldown, buy, sell.
+    report([1, 2, 3, 0, 2]);
+    // The second statement example.
+    report([1]);
+    // Empty.
+    report([]);
+    // Strictly decreasing — never profitable, answer 0.
+    report([5, 4, 3, 2, 1]);
+    // Strictly increasing — one buy and one sell beats churning under cooldown.
+    report([1, 2, 3, 4, 5]);
+    // A saw-tooth, where the cooldown actually costs something.
+    report([1, 4, 1, 4, 1, 4]);
+    // Two clean humps separated by a trough.
+    report([2, 8, 1, 9]);
+    // Flat prices — no profit anywhere.
+    report([7, 7, 7, 7]);
+    // A single spike late.
+    report([3, 3, 3, 100]);
+    // Negative prices are not in the statement's domain, but the recurrence is
+    // defined over any integers, and every arm must still agree.
+    report([-5, -1, -8, -2]);
+}

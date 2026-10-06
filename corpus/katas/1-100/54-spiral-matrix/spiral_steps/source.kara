@@ -1,0 +1,111 @@
+// LeetCode #54: Spiral Matrix — run-length simulation, O(m·n), no walls, no visited grid.
+//
+// Same order as the ★ file ([`spiral_boundary`](spiral_boundary.kara)); this derivation keeps
+// NEITHER four walls NOR a visited grid — just the observation that a spiral is a fixed sequence
+// of straight RUNS whose lengths are completely determined by the shape. For an m×n matrix the
+// run lengths, in order, are
+//
+//     n, m−1, n−1, m−2, n−2, m−3, …
+//
+// i.e. the horizontal runs count down n, n−1, n−2, … and the vertical runs count down
+// m−1, m−2, m−3, …, and the two interleave (horizontal, vertical, horizontal, vertical, …). The
+// walk cycles the same four clockwise headings as [`spiral_visited`](spiral_visited.kara)
+// (right, down, left, up), taking the next run's worth of steps in each before turning.
+//
+// The single subtlety is termination: the run lengths stay positive until the matrix is
+// exhausted and then go non-positive, so the loop simply STOPS at the first run whose length is
+// ≤ 0. That one rule handles every degenerate shape — a single row (`ver = m−1 = 0` ends it
+// after the first horizontal run), a single column (the first horizontal run is length 1, the
+// vertical run drains the rest, the next horizontal run is 0 → stop). No bounds checks and no
+// per-cell "have I been here" test: the arithmetic alone guarantees each cell is visited once.
+//
+// The walker starts at `(0, −1)` — one cell LEFT of the top-left — so the very first rightward
+// step lands on `(0, 0)`. `hor` / `ver` are the next horizontal / vertical run lengths and a
+// `horizontal` toggle alternates which one feeds the current run. This is the leanest of the
+// three: O(1) extra state and a single `m[r][c]` read per cell.
+//
+// LeetCode bounds: 1 ≤ m, n ≤ 10, −100 ≤ matrix[i][j] ≤ 100 — every value fits trivially in i64.
+
+fn spiral(m: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let rows = m.len();
+    let first = ref m[0];
+    let cols = first.len();
+    let dr: Array[i64, 4] = [0, 1, 0, -1];      // right, down, left, up
+    let dc: Array[i64, 4] = [1, 0, -1, 0];
+    let mut out: Vec[i64] = Vec.new();
+    let mut hor = cols;                                     // next horizontal run length
+    let mut ver = rows - 1;                              // next vertical run length
+    let mut horizontal = true;                             // horizontal run feeds first
+    let mut d = 0;                                        // heading, starts "right"
+    let mut r = 0;
+    let mut c = -1;                                       // one left of (0,0); first step lands there
+    while hor > 0 or ver > 0 {
+        let run = if horizontal { hor } else { ver };
+        if run <= 0 {
+            break;                                          // first exhausted run ends the walk
+        }
+        let mut k = 0;
+        while k < run {
+            r = r + dr[d];
+            c = c + dc[d];
+            out.push(m[r][c]);
+            k = k + 1;
+        }
+        d = (d + 1) % 4;                              // turn clockwise for the next run
+        if horizontal {
+            hor = hor - 1;
+        } else {
+            ver = ver - 1;
+        }
+        horizontal = not horizontal;
+    }
+    out
+}
+
+// ---- test harness (shared verbatim by all three solvers) ------------------
+
+fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+    let m = grid;
+    let order = spiral(m);
+    let mut line: String = "[";
+    let mut k = 0;
+    let len = order.len();
+    let mut chk = 0;                      // positional checksum Σ (k+1)·order[k]
+    while k < len {
+        if k > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{order[k]}");
+        chk = chk + (k + 1) * order[k];
+        k = k + 1;
+    }
+    line.push(']');
+    println(line);
+    s.push(' ');
+    s.push_str(f"{chk}");
+}
+
+fn main() {
+    // One bracketed spiral per case, then a `sums:` fold of per-case checksums that all three
+    // solvers and the oracle print identically for a byte-for-byte diff.
+    let mut s: String = "sums:";
+
+    report([[1, 2, 3], [4, 5, 6], [7, 8, 9]], mut s);                 // 3×3 square
+    report([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]], mut s);     // 3×4 wide
+    report([[1]], mut s);                                             // 1×1
+    report([[1, 2], [3, 4]], mut s);                                 // 2×2
+    report([[1, 2, 3, 4, 5]], mut s);                                // 1×5 single row
+    report([[1], [2], [3], [4]], mut s);                             // 4×1 single column
+    report([[7, 9, 6]], mut s);                                      // 1×3 single row
+    report([[1, 2], [3, 4], [5, 6], [7, 8]], mut s);                 // 4×2 tall
+    report([[1, 2, 3, 4, 5],                                         // 5×5 deep spiral
+            [16, 17, 18, 19, 6],
+            [15, 24, 25, 20, 7],
+            [14, 23, 22, 21, 8],
+            [13, 12, 11, 10, 9]], mut s);
+    report([[-1, -2], [-3, -4]], mut s);                             // 2×2 negatives
+    report([[1, 2, 3], [4, 5, 6]], mut s);                           // 2×3 wide
+    report([[3], [2]], mut s);                                       // 2×1 tall
+
+    println(s);
+}

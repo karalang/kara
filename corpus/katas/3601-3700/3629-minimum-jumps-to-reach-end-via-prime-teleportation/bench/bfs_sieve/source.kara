@@ -1,0 +1,102 @@
+// Benchmark workload — BFS + sieve solution to LeetCode #3629.
+//
+// N=50_000 deterministic input. nums[i] = (i * 7919 + 13) % 999983 + 2
+// keeps values in [2, ~10^6] so cap (= max(nums)) is ~10^6 — that drives the
+// full O(cap log log cap) sieve, which dominates wall-clock for this kata.
+// K=50 outer iterations amortize per-process startup so algorithm time
+// dominates measurement. Tune N / K in step with ../README.md § Benchmarks.
+
+fn build_factors(cap: i64) -> Vec[Vec[i64]] {
+    let mut factors: Vec[Vec[i64]] = Vec.filled(cap + 1, Vec.new());
+    for i in 2..=cap {
+        if factors[i].is_empty() {
+            for j in (i..=cap).step_by(i) {
+                factors[j].push(i);
+            }
+        }
+    }
+    factors
+}
+
+fn min_jumps(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    if n <= 1 {
+        return 0;
+    }
+
+    let mut cap = 1;
+    for v in nums.iter() {
+        if v > cap {
+            cap = v;
+        }
+    }
+
+    let factors = build_factors(cap);
+
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    for j in 0..n {
+        let v = nums[j];
+        if v >= 2 {
+            for p in factors[v].iter() {
+                bucket.entry(p).or_insert(Vec.new()).push(j);
+            }
+        }
+    }
+
+    let mut visited: Vec[bool] = Vec.filled(n, false);
+    visited[0] = true;
+
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((0, 0));
+
+    loop {
+        let popped = queue.pop_front();
+        match popped {
+            None => { break; },
+            Some(node) => {
+                let (i, d) = node;
+                if i == n - 1 {
+                    return d;
+                }
+                if i > 0 and not visited[i - 1] {
+                    visited[i - 1] = true;
+                    queue.push_back((i - 1, d + 1));
+                }
+                if i + 1 < n and not visited[i + 1] {
+                    visited[i + 1] = true;
+                    queue.push_back((i + 1, d + 1));
+                }
+                let v = nums[i];
+                if v >= 2 and factors[v][0] == v {
+                    match bucket.remove(v) {
+                        Some(indices) => {
+                            for j in indices.into_iter() {
+                                if not visited[j] {
+                                    visited[j] = true;
+                                    queue.push_back((j, d + 1));
+                                }
+                            }
+                        },
+                        None => {},
+                    }
+                }
+            },
+        }
+    }
+
+    -1
+}
+
+fn main() {
+    let mut data: Array[i64, 50000] = [0; 50000];
+    for i in 0..50000 {
+        data[i] = (i * 7919 + 13) % 999983 + 2;
+    }
+
+    // Sum-of-results sink so the optimizer cannot elide the K calls.
+    let mut sum = 0;
+    for _ in 0..50 {
+        sum = sum + min_jumps(data);
+    }
+    println(sum);
+}

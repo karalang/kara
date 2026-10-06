@@ -1,0 +1,124 @@
+// LeetCode #320 — grow the answer one letter at a time, by editing strings.
+//
+// Neither of the other two arms is inductive: the ★ arm decodes each mask from
+// scratch, and the backtracking arm builds a fresh path down every root-to-leaf
+// route. This one is. It holds the complete answer for the prefix
+// `word[0..k]`, and turns it into the complete answer for `word[0..k+1]` by
+// extending every entry in the two possible ways:
+//
+//   keep `c`     append the letter
+//   count `c`    the entry's trailing number goes up by one — or, if it does
+//                not end in a number, a "1" is appended
+//
+// Level 0 is the single empty abbreviation, and level k has 2^k entries, so
+// the doubling is visible in the data structure rather than argued about.
+//
+// The second rule is where this arm earns its place. The other two carry the
+// pending run as an INTEGER and format it once, at the end; this one has
+// already committed the run to text and has to go back into the string to
+// change it. `bump_tail` scans back over the trailing digits, re-parses them,
+// and re-emits the incremented value. That is a decimal carry done on a string
+// — "9" becomes "10" and the entry gets longer — and it is a completely
+// different way to be wrong from the other arms, which is the point of having
+// it. An off-by-one in a run length shows up here as a parse or a carry bug,
+// not as a miscounted loop.
+//
+// It also costs more than the alternatives: every level copies every entry, so
+// the work is sum over k of 2^k * O(k) — the same 2^n * n order as the ★ arm,
+// but with string copies where the ★ arm has byte appends.
+//
+// The empty word needs nothing special: the letter loop does not run, and the
+// initial level — one empty string — is returned as the answer.
+
+// Append one counted letter to an abbreviation: bump its trailing number, or
+// start one at 1 when the entry ends in a letter (or is empty).
+fn bump_tail(abbr: ref String) -> String {
+    let b = abbr.bytes();
+    let n = b.len();
+
+    // Scan back over the trailing decimal digits.
+    let mut cut = n;
+    while cut > 0 and b[cut - 1] >= b'0' and b[cut - 1] <= b'9' {
+        cut = cut - 1;
+    }
+
+    if cut == n {
+        // Ends in a letter, or is empty: the run starts here.
+        let mut grown = abbr.clone();
+        grown.push_str("1");
+        return grown;
+    }
+
+    // Re-parse the trailing number, increment, re-emit. The carry is real:
+    // "9" -> "10" makes the abbreviation one byte longer.
+    let mut value = 0;
+    for i in cut..n {
+        value = value * 10 + ((b[i] - b'0') as i64);
+    }
+    let mut grown = String.new();
+    for i in 0..cut {
+        grown.push(b[i] as char);
+    }
+    grown.push_str((value + 1).to_string());
+    return grown;
+}
+
+fn abbreviations(word: ref String) -> Vec[String] {
+    let bs = word.bytes();
+
+    // Level 0: the empty prefix has exactly one abbreviation, the empty string.
+    let mut level: Vec[String] = Vec.new();
+    level.push(String.new());
+
+    for i in 0..bs.len() {
+        let mut grown: Vec[String] = Vec.new();
+        for t in 0..level.len() {
+            let entry = level[t].clone();
+            // Keep the letter.
+            let mut kept = entry.clone();
+            kept.push(bs[i] as char);
+            grown.push(kept);
+            // Count the letter.
+            grown.push(bump_tail(entry));
+        }
+        level = grown;
+    }
+    return level;
+}
+
+fn report(word: String) {
+    let all = abbreviations(word);
+    println(f"\"{word}\" -> {all.len()}");
+    let mut line = String.new();
+    for i in 0..all.len() {
+        if i > 0 { line.push_str(" "); }
+        line.push_str(all[i]);
+    }
+    println(line);
+}
+
+fn main() {
+    report("word");
+    report("");
+    report("a");
+    report("ab");
+    report("abc");
+    report("aaaa");
+    report("leet");
+
+    // Eleven letters: the trailing-number carry has to fire ("9" -> "10",
+    // "10" -> "11") for the runs that reach double digits.
+    let w = "abcdefghijk";
+    let all = abbreviations(w);
+    let mut two_digit = 0;
+    for i in 0..all.len() {
+        let b = all[i].bytes();
+        for j in 0..(b.len() - 1) {
+            if b[j] >= b'0' and b[j] <= b'9' and b[j + 1] >= b'0' and b[j + 1] <= b'9' {
+                two_digit = two_digit + 1;
+                break;
+            }
+        }
+    }
+    println(f"\"{w}\" -> {all.len()} abbreviations, {two_digit} with a two-digit run");
+}

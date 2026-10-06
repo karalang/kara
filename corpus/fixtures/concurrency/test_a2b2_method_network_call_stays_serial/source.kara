@@ -1,0 +1,14 @@
+
+        struct Listener { fd: i64 }
+        struct Conn { fd: i64 }
+        impl Listener {
+            fn accept(ref self) -> Conn with sends(Network) receives(Network) {
+                return Conn { fd: 0 };
+            }
+        }
+        fn main() {
+            let l = Listener { fd: 0 };
+            let a = l.accept();
+            let b = l.accept();
+        }
+        

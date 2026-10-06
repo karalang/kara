@@ -1,0 +1,17 @@
+
+        struct Conn { id: i64 }
+        impl Drop for Conn {
+            fn drop(mut ref self) { println(7); }
+        }
+        fn serve_one(listener: TcpListener, c: Conn) {
+            let _stream = listener.accept().unwrap();
+            println(1);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let c = Conn { id: 0 };
+            let mut tg = TaskGroup.new();
+            tg.spawn(|| serve_one(listener, c));
+            println(2);
+        }
+    

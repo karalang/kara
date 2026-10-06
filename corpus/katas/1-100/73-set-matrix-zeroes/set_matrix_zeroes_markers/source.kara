@@ -1,0 +1,131 @@
+// LeetCode #73: Set Matrix Zeroes — O(m+n) row/column flag arrays.
+//
+// The clean textbook form the O(1) star
+// ([`set_matrix_zeroes.kara`](set_matrix_zeroes.kara)) is the space-optimised
+// follow-up to. Two boolean flag arrays instead of overloading the matrix's own
+// first row/column:
+//
+//   pass 1  scan every cell; if m[i][j]==0 record row_zero[i]=true, col_zero[j]=true
+//   pass 2  zero m[i][j] whenever row_zero[i] or col_zero[j] is set
+//
+// No marker-role/data-role collision (the whole subtlety of the O(1) form is gone
+// because the flags live outside the matrix), so the two passes need no ordering
+// care beyond "mark before apply". It agrees with the star on every case and is
+// kept as the readable cross-check. O(m+n) extra space, O(m·n) time.
+//
+// LeetCode bounds: 1 ≤ m, n ≤ 200, -2³¹ ≤ v < 2³¹ — every value fits in i64.
+
+fn set_zeroes(m: mut ref Vec[Vec[i64]]) {
+    let rows = m.len();
+    if rows == 0 {
+        return;
+    }
+    let cols = m[0].len();
+
+    // Flag arrays, seeded false.
+    let mut row_zero: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < rows {
+        row_zero.push(false);
+        i = i + 1;
+    }
+    let mut col_zero: Vec[bool] = Vec.new();
+    let mut j = 0;
+    while j < cols {
+        col_zero.push(false);
+        j = j + 1;
+    }
+
+    // Pass 1: mark the rows and columns that own a zero.
+    i = 0;
+    while i < rows {
+        j = 0;
+        while j < cols {
+            if m[i][j] == 0 {
+                row_zero[i] = true;
+                col_zero[j] = true;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    // Pass 2: zero every cell in a marked row or column.
+    i = 0;
+    while i < rows {
+        j = 0;
+        while j < cols {
+            if row_zero[i] or col_zero[j] {
+                m[i][j] = 0;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}
+
+// ---- test harness (shared verbatim with set_matrix_zeroes.kara) ----------------
+
+fn print_grid(m: ref Vec[Vec[i64]]) {
+    let rows = m.len();
+    let mut i = 0;
+    while i < rows {
+        let row = ref m[i];
+        let w = row.len();
+        let mut s: String = "[";
+        let mut j = 0;
+        while j < w {
+            if j > 0 {
+                s.push_str(", ");
+            }
+            s.push_str(f"{row[j]}");
+            j = j + 1;
+        }
+        s.push(']');
+        println(s);
+        i = i + 1;
+    }
+}
+
+fn hash_grid(m: ref Vec[Vec[i64]]) -> i64 {
+    let mut acc = 0;
+    let rows = m.len();
+    let mut i = 0;
+    while i < rows {
+        let row = ref m[i];
+        let w = row.len();
+        let mut j = 0;
+        while j < w {
+            acc = (acc * 131 + row[j]) % 1000000007;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    acc
+}
+
+fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+    let mut m = grid;
+    set_zeroes(mut m);
+    print_grid(m);
+    println("---");
+    s.push(' ');
+    s.push_str(f"{hash_grid(m)}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report([[1, 1, 1], [1, 0, 1], [1, 1, 1]], mut s);
+    report([[0, 1, 2, 0], [3, 4, 5, 2], [1, 3, 1, 5]], mut s);
+    report([[0]], mut s);
+    report([[7]], mut s);
+    report([[1, 2], [3, 4]], mut s);
+    report([[0, 0], [0, 0]], mut s);
+    report([[5, 0, 9, 3]], mut s);
+    report([[5], [0], [9], [3]], mut s);
+    report([[1, 2, 3], [0, 4, 5], [6, 7, 8]], mut s);
+    report([[1, 0, 3], [4, 5, 6], [7, 8, 9]], mut s);
+
+    println(s);
+}

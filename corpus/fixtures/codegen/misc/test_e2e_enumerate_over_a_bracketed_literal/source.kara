@@ -1,0 +1,20 @@
+
+fn main() {
+    let mut e = 0;
+    for (i, x) in [1, 2, 3].iter().enumerate() { e = e + i * x; }
+    println(e);
+
+    for (i, x) in [10, 20, 30].iter().enumerate() { println(i * 100 + x); }
+
+    let mut d = 0;
+    for (i, x) in [4, 5].into_iter().enumerate() { d = d + i * x; }
+    println(d);
+
+    for (i, x) in [1, 2].iter().enumerate() {
+        for y in [100, 200] { println(i * 1000 + x * 10 + y); }
+    }
+
+    let mut f = 0.0;
+    for (i, x) in [1.5, 2.25].iter().enumerate() { f = f + (i as f64) * x; }
+    println(f);
+}

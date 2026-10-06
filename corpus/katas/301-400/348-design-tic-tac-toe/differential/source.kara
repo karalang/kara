@@ -1,0 +1,473 @@
+// Differential and property check for LeetCode #348.
+//
+// Five tic-tac-toe implementations, plus an oracle that rescans every line of
+// the board after each move:
+//
+//   by_count    signed counters per line             (tic_tac_toe.kara)
+//   by_board    the board, four lines read back       (tic_tac_toe_board.kara)
+//   by_player   unsigned counters per player          (tic_tac_toe_per_player.kara)
+//   by_map      signed counters in a Map              (tic_tac_toe_map.kara)
+//   by_closure  signed counters captured by a closure (tic_tac_toe_closure.kara)
+//   by_oracle   after each move, check all n rows, n columns and both diagonals
+//
+// Inputs: every board size 1..9, 160 games each. A game is every cell of the
+// board in a shuffled order, and half the games are steered so that player 1
+// takes a whole line early, which makes wins common instead of rare.
+//
+// Properties:
+//   P1  all five equal the oracle exactly
+//   P2  transposing every move, (r, c) -> (c, r), changes no result
+//   P3  mirroring every move, (r, c) -> (r, n - 1 - c), changes no result
+//   P4  a game nobody wins fills the board: it has n * n moves
+//   P5  only the last move of a game can return a winner, and it returns the
+//       player who made it
+
+struct TttCount {
+    n: i64,
+    rows: Vec[i64],
+    cols: Vec[i64],
+    diag: i64,
+    anti: i64,
+}
+
+impl TttCount {
+    fn new(n: i64) -> TttCount {
+        let mut rows: Vec[i64] = Vec.new();
+        let mut cols: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            rows.push(0);
+            cols.push(0);
+        }
+        return TttCount { n: n, rows: rows, cols: cols, diag: 0, anti: 0 };
+    }
+
+    fn make_move(mut ref self, row: i64, col: i64, player: i64) -> i64 {
+        let d = if player == 1 { 1 } else { -1 };
+        self.rows[row] += d;
+        self.cols[col] += d;
+        if row == col {
+            self.diag += d;
+        }
+        if row + col == self.n - 1 {
+            self.anti += d;
+        }
+        let goal = d * self.n;
+        if self.rows[row] == goal or self.cols[col] == goal or self.diag == goal or self.anti == goal {
+            return player;
+        }
+        return 0;
+    }
+}
+
+struct TttBoard {
+    n: i64,
+    board: Vec[Vec[i64]],
+}
+
+impl TttBoard {
+    fn new(n: i64) -> TttBoard {
+        let mut board: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(0);
+            }
+            board.push(row);
+        }
+        return TttBoard { n: n, board: board };
+    }
+
+    fn make_move(mut ref self, row: i64, col: i64, player: i64) -> i64 {
+        self.board[row][col] = player;
+        let n = self.n;
+        let mut whole_row = true;
+        let mut whole_col = true;
+        let mut whole_diag = row == col;
+        let mut whole_anti = row + col == n - 1;
+        for k in 0..n {
+            if self.board[row][k] != player {
+                whole_row = false;
+            }
+            if self.board[k][col] != player {
+                whole_col = false;
+            }
+            if self.board[k][k] != player {
+                whole_diag = false;
+            }
+            if self.board[k][n - 1 - k] != player {
+                whole_anti = false;
+            }
+        }
+        if whole_row or whole_col or whole_diag or whole_anti {
+            return player;
+        }
+        return 0;
+    }
+}
+
+struct TttPer {
+    n: i64,
+    counts: Vec[Vec[i64]],
+}
+
+impl TttPer {
+    fn new(n: i64) -> TttPer {
+        let mut counts: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..2 {
+            let mut lines: Vec[i64] = Vec.new();
+            for _ in 0..2 * n + 2 {
+                lines.push(0);
+            }
+            counts.push(lines);
+        }
+        return TttPer { n: n, counts: counts };
+    }
+
+    fn make_move(mut ref self, row: i64, col: i64, player: i64) -> i64 {
+        let n = self.n;
+        let p = player - 1;
+        let mut won = false;
+        let mut lines: Vec[i64] = [row, n + col];
+        if row == col {
+            lines.push(2 * n);
+        }
+        if row + col == n - 1 {
+            lines.push(2 * n + 1);
+        }
+        for line in lines {
+            self.counts[p][line] += 1;
+            if self.counts[p][line] == n {
+                won = true;
+            }
+        }
+        if won {
+            return player;
+        }
+        return 0;
+    }
+}
+
+struct TttMap {
+    n: i64,
+    lines: Map[(i64, i64), i64],
+}
+
+impl TttMap {
+    fn new(n: i64) -> TttMap {
+        return TttMap { n: n, lines: Map.new() };
+    }
+
+    fn bump(mut ref self, key: (i64, i64), d: i64) -> bool {
+        let v = self.lines.get(key).unwrap_or(0) + d;
+        self.lines.insert(key, v);
+        return v == d * self.n;
+    }
+
+    fn make_move(mut ref self, row: i64, col: i64, player: i64) -> i64 {
+        let d = if player == 1 { 1 } else { -1 };
+        let mut won = self.bump((0, row), d);
+        won = self.bump((1, col), d) or won;
+        if row == col {
+            won = self.bump((2, 0), d) or won;
+        }
+        if row + col == self.n - 1 {
+            won = self.bump((3, 0), d) or won;
+        }
+        if won {
+            return player;
+        }
+        return 0;
+    }
+}
+
+fn by_count(n: i64, moves: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut game = TttCount.new(n);
+    let mut out: Vec[i64] = Vec.new();
+    let mut player = 1;
+    for (r, c) in moves {
+        let w = game.make_move(r, c, player);
+        out.push(w);
+        if w != 0 {
+            break;
+        }
+        player = 3 - player;
+    }
+    return out;
+}
+
+fn by_board(n: i64, moves: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut game = TttBoard.new(n);
+    let mut out: Vec[i64] = Vec.new();
+    let mut player = 1;
+    for (r, c) in moves {
+        let w = game.make_move(r, c, player);
+        out.push(w);
+        if w != 0 {
+            break;
+        }
+        player = 3 - player;
+    }
+    return out;
+}
+
+fn by_player(n: i64, moves: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut game = TttPer.new(n);
+    let mut out: Vec[i64] = Vec.new();
+    let mut player = 1;
+    for (r, c) in moves {
+        let w = game.make_move(r, c, player);
+        out.push(w);
+        if w != 0 {
+            break;
+        }
+        player = 3 - player;
+    }
+    return out;
+}
+
+fn by_map(n: i64, moves: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut game = TttMap.new(n);
+    let mut out: Vec[i64] = Vec.new();
+    let mut player = 1;
+    for (r, c) in moves {
+        let w = game.make_move(r, c, player);
+        out.push(w);
+        if w != 0 {
+            break;
+        }
+        player = 3 - player;
+    }
+    return out;
+}
+
+fn by_closure(n: i64, moves: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut rows: Vec[i64] = Vec.new();
+    let mut cols: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        rows.push(0);
+        cols.push(0);
+    }
+    let mut diag = 0;
+    let mut anti = 0;
+    let mut make_move = |row: i64, col: i64, player: i64| {
+        let d = if player == 1 { 1 } else { -1 };
+        rows[row] += d;
+        cols[col] += d;
+        if row == col {
+            diag += d;
+        }
+        if row + col == n - 1 {
+            anti += d;
+        }
+        let goal = d * n;
+        if rows[row] == goal or cols[col] == goal or diag == goal or anti == goal {
+            return player;
+        }
+        return 0;
+    };
+
+    let mut out: Vec[i64] = Vec.new();
+    let mut player = 1;
+    for (r, c) in moves {
+        let w = make_move(r, c, player);
+        out.push(w);
+        if w != 0 {
+            break;
+        }
+        player = 3 - player;
+    }
+    return out;
+}
+
+fn by_oracle(n: i64, moves: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut board: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(0);
+        }
+        board.push(row);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut player = 1;
+    for (r, c) in moves {
+        board[r][c] = player;
+        let mut winner = 0;
+        let mut d1 = true;
+        let mut d2 = true;
+        for i in 0..n {
+            let mut row_full = true;
+            let mut col_full = true;
+            for j in 0..n {
+                if board[i][j] != player {
+                    row_full = false;
+                }
+                if board[j][i] != player {
+                    col_full = false;
+                }
+            }
+            if row_full or col_full {
+                winner = player;
+            }
+            if board[i][i] != player {
+                d1 = false;
+            }
+            if board[i][n - 1 - i] != player {
+                d2 = false;
+            }
+        }
+        if d1 or d2 {
+            winner = player;
+        }
+        out.push(winner);
+        if winner != 0 {
+            break;
+        }
+        player = 3 - player;
+    }
+    return out;
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for k in 0..a.len() {
+        if a[k] != b[k] {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Every cell in a shuffled order. When `steer` is set, the cells of one line
+// (a row, a column or a diagonal, picked by the seed) are moved to the even
+// positions 0, 2, 4, .. so player 1 plays exactly that line from the start
+// and wins it by move 2n - 1 at the latest.
+fn game(n: i64, seed: i64, steer: bool) -> Vec[(i64, i64)] {
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..n {
+        for c in 0..n {
+            cells.push((r, c));
+        }
+    }
+    let mut x = seed * 2654435761 % 4294967296 + 1;
+    let mut k = cells.len() - 1;
+    while k > 0 {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        let j = x / 16 % (k + 1);
+        let t = cells[k];
+        cells[k] = cells[j];
+        cells[j] = t;
+        k -= 1;
+    }
+    if not steer {
+        return cells;
+    }
+    x = (x * 1103515245 + 12345) % 2147483648;
+    let kind = x / 16 % 4;
+    x = (x * 1103515245 + 12345) % 2147483648;
+    let idx = x / 16 % n;
+    let mut line: Vec[(i64, i64)] = Vec.new();
+    for i in 0..n {
+        if kind == 0 {
+            line.push((idx, i));
+        } else if kind == 1 {
+            line.push((i, idx));
+        } else if kind == 2 {
+            line.push((i, i));
+        } else {
+            line.push((i, n - 1 - i));
+        }
+    }
+    let mut rest: Vec[(i64, i64)] = Vec.new();
+    for cell in cells {
+        let mut on_line = false;
+        for l in line {
+            if l == cell {
+                on_line = true;
+            }
+        }
+        if not on_line {
+            rest.push(cell);
+        }
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut li = 0;
+    let mut ri = 0;
+    while li < line.len() or ri < rest.len() {
+        if out.len() % 2 == 0 and li < line.len() {
+            out.push(line[li]);
+            li += 1;
+        } else if ri < rest.len() {
+            out.push(rest[ri]);
+            ri += 1;
+        } else {
+            out.push(line[li]);
+            li += 1;
+        }
+    }
+    return out;
+}
+
+fn main() {
+    let mut failures = 0;
+    let mut games = 0;
+    let mut wins1 = 0;
+    let mut wins2 = 0;
+    let mut moves_total = 0;
+    for n in 1..10 {
+        for g in 0..160 {
+            games += 1;
+            let moves = game(n, n * 1000 + g, g % 2 == 0);
+            let want = by_oracle(n, moves);
+            if not same(by_count(n, moves), want) or not same(by_board(n, moves), want)
+                or not same(by_player(n, moves), want) or not same(by_map(n, moves), want)
+                or not same(by_closure(n, moves), want) {
+                println(f"P1 FAIL n={n} g={g}");
+                failures += 1;
+            }
+
+            let mut transposed: Vec[(i64, i64)] = Vec.new();
+            let mut mirrored: Vec[(i64, i64)] = Vec.new();
+            for (r, c) in moves {
+                transposed.push((c, r));
+                mirrored.push((r, n - 1 - c));
+            }
+            if not same(by_count(n, transposed), want) {
+                println(f"P2 FAIL n={n} g={g}");
+                failures += 1;
+            }
+            if not same(by_count(n, mirrored), want) {
+                println(f"P3 FAIL n={n} g={g}");
+                failures += 1;
+            }
+
+            let last = want[want.len() - 1];
+            if last == 0 and want.len() != n * n {
+                println(f"P4 FAIL n={n} g={g}");
+                failures += 1;
+            }
+            for k in 0..want.len() {
+                let mover = if k % 2 == 0 { 1 } else { 2 };
+                let ok = if k == want.len() - 1 { want[k] == 0 or want[k] == mover } else { want[k] == 0 };
+                if not ok {
+                    println(f"P5 FAIL n={n} g={g} k={k}");
+                    failures += 1;
+                }
+            }
+
+            moves_total += want.len();
+            if last == 1 {
+                wins1 += 1;
+            } else if last == 2 {
+                wins2 += 1;
+            }
+        }
+    }
+    println(f"{games} games: player 1 won {wins1}, player 2 won {wins2}, {moves_total} moves");
+    println(f"failures {failures}");
+    if failures == 0 {
+        println("all properties hold");
+    }
+}

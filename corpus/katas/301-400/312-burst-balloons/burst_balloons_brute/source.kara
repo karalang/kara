@@ -1,0 +1,94 @@
+// LeetCode 312 — Burst Balloons, by exhaustive search over burst orders.
+//
+// THE ARM: assume nothing. Actually burst the balloons.
+//
+// This is the only arm that does not know the last-burst reframing, and that
+// is precisely what makes it worth writing. The DP arms all rest on one claim
+// — that fixing the LAST balloon burst in an interval splits it into two
+// independent subproblems — and a bug in that claim would be invisible to any
+// test that compares them to each other, because all three share it.
+//
+// So this arm implements the problem statement and nothing more: maintain the
+// row of surviving balloons, pick one, pay nums[left] * nums[i] * nums[right]
+// against the balloons ACTUALLY adjacent right now, remove it, recurse. The
+// neighbour lookup is a live scan of the surviving row rather than an index
+// computation, so the coupling that breaks the forward framing — bursting a
+// balloon makes its neighbours adjacent — happens here by construction
+// instead of being reasoned about.
+//
+// It is O(n!) and it is supposed to be. The point of this arm is not to be
+// usable; it is to be OBVIOUSLY CORRECT on inputs small enough to run, and to
+// disagree loudly with any arm whose cleverness is wrong. It agrees with all
+// three DP arms on every input up to n = 8 in the differential harness, which
+// is what promotes the reframing from a plausible argument to a checked one.
+//
+// A note on the recursion: `alive` is passed by value on purpose. Bursting is
+// destructive, and a shared row would have every branch of the search see the
+// previous branch's removals. The clone per level is exactly the cost of
+// backtracking, and at these sizes it is cheaper than being clever about it.
+
+fn best_from(alive: Vec[i64]) -> i64 {
+    let n = alive.len();
+    if n == 0 { return 0; }
+
+    let mut best = 0;
+    for i in 0..n {
+        // The neighbours are whatever survives on either side, RIGHT NOW.
+        let mut left = 1;
+        if i > 0 { left = alive[i - 1]; }
+        let mut right = 1;
+        if i + 1 < n { right = alive[i + 1]; }
+        let paid = left * alive[i] * right;
+
+        // Burst it: build the row that survives this choice.
+        let mut rest: Vec[i64] = Vec.new();
+        for j in 0..n {
+            if j != i { rest.push(alive[j]); }
+        }
+
+        let total = paid + best_from(rest);
+        if total > best { best = total; }
+    }
+    return best;
+}
+
+fn max_coins(nums: ref Vec[i64]) -> i64 {
+    let mut alive: Vec[i64] = Vec.new();
+    for i in 0..nums.len() { alive.push(nums[i]); }
+    return best_from(alive);
+}
+
+fn render(nums: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { s.push_str(","); }
+        s.push_str(nums[i].to_string());
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(vals: Slice[i64]) {
+    let mut nums: Vec[i64] = Vec.new();
+    for v in vals { nums.push(v); }
+    println(render(nums) + " -> " + max_coins(nums).to_string());
+}
+
+fn main() {
+    // The same cases as the primary arm, minus the ones n! cannot reach.
+    report([3, 1, 5, 8]);
+    report([1, 5]);
+    report([]);
+    report([7]);
+    report([3, 0, 5]);
+    report([0, 0, 0]);
+    report([1, 2, 3, 4, 5]);
+    report([5, 4, 3, 2, 1]);
+    report([2, 2, 2, 2]);
+    report([1, 1, 1, 1, 1, 1]);
+    report([1, 100, 1]);
+    report([9, 76, 64, 21, 97, 60]);
+}

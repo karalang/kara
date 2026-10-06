@@ -1,0 +1,64 @@
+// Benchmark workload for LeetCode #203 — Remove Linked List Elements.
+//
+// Build-once + punch on an index-pool list (`val[]` + `next[]`, -1 = null). A big
+// list of N PRNG values is built once; each pass re-links it to sequential order,
+// removes every node equal to a per-pass `target` (so each pass differs and can't
+// be hoisted), then traverses the survivors summing their values. The remove and
+// the survivor walk are pointer chases (`cur = next[cur]`) — inherently serial,
+// non-vectorizable, data-dependent. Sink = sum of surviving values over all passes.
+
+fn main() {
+    let n = 3000;
+    let passes = 40000;
+    let vrange = 50;
+
+    let mut val: Vec[i64] = Vec.new();
+    let mut nxt: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        val.push(state % vrange);
+        nxt.push(-1);
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let target = p % vrange;
+        // Re-link to sequential 0 -> 1 -> ... -> n-1.
+        let mut r = 0;
+        while r < n {
+            if r + 1 < n { nxt[r] = r + 1; } else { nxt[r] = -1; }
+            r = r + 1;
+        }
+        // Drop leading matches so the head is clean.
+        let mut head = 0;
+        while head != -1 and val[head] == target {
+            head = nxt[head];
+        }
+        if head != -1 {
+            let mut prev = head;
+            let mut cur = nxt[head];
+            while cur != -1 {
+                if val[cur] == target {
+                    nxt[prev] = nxt[cur];
+                } else {
+                    prev = cur;
+                }
+                cur = nxt[cur];
+            }
+        }
+        // Sum the survivors.
+        let mut pass_sum = 0;
+        let mut c = head;
+        while c != -1 {
+            pass_sum = pass_sum + val[c];
+            c = nxt[c];
+        }
+        sink = sink + pass_sum;
+        p = p + 1;
+    }
+    println(sink);
+}

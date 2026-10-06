@@ -1,0 +1,118 @@
+// LeetCode 272 — rank every value by distance, keep the first k.
+//
+// No search-tree property is used at all: collect every node, order the whole
+// set by an EXPLICIT KEY — distance first, value as the tie-break — take the
+// first k, then sort those ascending. O(n²) as written (a selection sort, kept
+// so the mirrors are line-for-line identical), and O(n log n) with any real
+// sort. Against O(h + k) that is not competitive, and it is not meant to be.
+//
+// IT IS HERE BECAUSE IT DECIDES DIFFERENTLY. Both other solvers get the tie rule
+// for free from a structural fact — the predecessor / the left index is
+// necessarily the smaller value, so `<=` on a distance is the entire rule and
+// there is no value comparison anywhere. This one has no such structure to lean
+// on: it compares two arbitrary nodes and must say, in as many words, that a
+// smaller VALUE wins an equal DISTANCE:
+//
+//     if d < best_d or (d == best_d and v < best_v) { ... }
+//
+// So the two mechanisms cannot share a tie-rule bug. 270 established the pattern
+// the hard way: two same-shaped solvers agreed perfectly while both were wrong,
+// and only the structurally-deciding third one caught it. Here the split runs
+// the other way — two structural solvers and one explicit-key solver — but it is
+// the same requirement, that the third disagree about METHOD and not merely
+// about code.
+//
+// EXACT `==` ON f64 IS NOT A SMELL. A tie arises when the target sits at the
+// midpoint of two integers; both distances are then the same representable
+// value, produced by the same subtraction, so they compare equal exactly.
+
+fn collect(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+           root: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    stack.push(root);
+    while stack.len() > 0 {
+        let node = stack[stack.len() - 1];
+        stack.pop();
+        out.push(val[node]);
+        if left[node] >= 0 { stack.push(left[node]); }
+        if right[node] >= 0 { stack.push(right[node]); }
+    }
+    return out;
+}
+
+fn closest_k(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+             root: i64, target: f64, k: i64) -> Vec[i64] {
+    let mut vals = collect(val, left, right, root);
+    let n = vals.len();
+    let mut want = k;
+    if want > n { want = n; }
+
+    // Selection sort by (distance, value), stopped after `want` positions —
+    // the ranking this solver exists to perform, written out.
+    let mut i = 0;
+    while i < want {
+        let mut best = i;
+        let mut best_d = (vals[i] as f64 - target).abs();
+        let mut j = i + 1;
+        while j < n {
+            let d = (vals[j] as f64 - target).abs();
+            if d < best_d or (d == best_d and vals[j] < vals[best]) {
+                best = j;
+                best_d = d;
+            }
+            j = j + 1;
+        }
+        let tmp = vals[i];
+        vals[i] = vals[best];
+        vals[best] = tmp;
+        i = i + 1;
+    }
+
+    // The first `want` entries are the answer, in distance order; the corpus
+    // returns ascending, so sort the winners.
+    let mut out: Vec[i64] = Vec.new();
+    let mut p = 0;
+    while p < want {
+        out.push(vals[p]);
+        p = p + 1;
+    }
+    let mut a = 0;
+    while a < out.len() {
+        let mut small = a;
+        let mut b = a + 1;
+        while b < out.len() {
+            if out[b] < out[small] { small = b; }
+            b = b + 1;
+        }
+        let t = out[a];
+        out[a] = out[small];
+        out[small] = t;
+        a = a + 1;
+    }
+    return out;
+}
+
+fn show(xs: ref Vec[i64]) -> String {
+    let mut s = "[";
+    let mut i = 0;
+    while i < xs.len() {
+        if i > 0 { s = s + ","; }
+        s = s + f"{xs[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    let val: Vec[i64] = [4, 2, 5, 1, 3];
+    let left: Vec[i64] = [1, 3, -1, -1, -1];
+    let right: Vec[i64] = [2, 4, -1, -1, -1];
+
+    println(show(closest_k(val, left, right, 0, 3.714286, 2)));
+    println(show(closest_k(val, left, right, 0, 3.714286, 4)));
+    println(show(closest_k(val, left, right, 0, 2.5, 1)));
+    println(show(closest_k(val, left, right, 0, 2.5, 3)));
+    println(show(closest_k(val, left, right, 0, -10.0, 3)));
+    println(show(closest_k(val, left, right, 0, 3.5, 9)));
+}

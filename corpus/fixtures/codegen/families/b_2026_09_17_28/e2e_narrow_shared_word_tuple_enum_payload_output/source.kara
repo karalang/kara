@@ -1,0 +1,30 @@
+enum M { P((bool, i32, String)), Q }
+enum N { P((String, i32, bool)), Q }
+enum K { P((u8, u8, u8, String, i32)), Q }
+enum L { P((i32, String), i64), Q }
+fn take(m: M) -> i64 { match m { M.P((b, k, s)) => { return s.len() + k as i64; }, M.Q => { return 0; } } }
+fn peek(m: M) -> i64 { match m { M.P((b, k, s)) => { return k as i64; }, M.Q => { return 0; } } }
+fn ign(m: M) -> i64 { return 5; }
+fn keepS(m: M) -> String { match m { M.P((b, k, s)) => { return s; }, M.Q => { return f"q"; } } }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let g = M.P((true, 3i32, f"row-aaaaaaaaaaaaaaaaaaaaaa-{i}"));
+        let h = N.P((f"nnn-aaaaaaaaaaaaaaaaaaaaaa-{i}", 4i32, false));
+        let k = K.P((1u8, 2u8, 3u8, f"kkk-aaaaaaaaaaaaaaaaaaaaaa-{i}", 9i32));
+        let l = L.P((7i32, f"lll-aaaaaaaaaaaaaaaaaaaaaa-{i}"), 5);
+        let u = M.P((false, 1i32, f"unused-aaaaaaaaaaaaaaaaaaa-{i}"));
+        println(f"a{take(M.P((false, 2i32, f"tk-aaaaaaaaaaaaaaaaaaaaaaa-{i}")))}");
+        println(f"b{peek(M.P((false, 6i32, f"pk-aaaaaaaaaaaaaaaaaaaaaaa-{i}")))}");
+        println(f"c{ign(M.P((false, 6i32, f"ig-aaaaaaaaaaaaaaaaaaaaaaa-{i}")))}");
+        println(f"d{keepS(M.P((true, 1i32, f"ks-aaaaaaaaaaaaaaaaaaaaaaa-{i}")))}");
+        let g2 = M.P((true, 8i32, f"mv-aaaaaaaaaaaaaaaaaaaaaaa-{i}"));
+        println(f"e{take(g2)}");
+        match g { M.P((b, kk, s)) => println(f"f{b}{kk}{s}"), M.Q => println("q") }
+        match h { N.P((s, kk, b)) => println(f"g{b}{kk}{s}"), N.Q => println("q") }
+        match k { K.P((x, y, z, s, w)) => println(f"h{x}{y}{z}{w}{s}"), K.Q => println("q") }
+        match l { L.P((x, s), n) => println(f"j{x}{n}{s}"), L.Q => println("q") }
+        i = i + 1;
+    }
+    println("end");
+}

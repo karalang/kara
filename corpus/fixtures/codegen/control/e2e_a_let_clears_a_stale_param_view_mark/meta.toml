@@ -1,0 +1,13 @@
+source = "tests/codegen/control.rs::e2e_a_let_clears_a_stale_param_view_mark"
+dedup_of = ["tests/interpreter/control.rs::test_a_let_clears_a_stale_param_view_mark"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

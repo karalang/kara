@@ -1,0 +1,11 @@
+
+fn main() {
+    let xs: Vec[i64] = [1, 2, 3, 4, 5, 6];
+    let mut seen = 0;
+    let mut s = 0;
+    for x in xs.iter().take_while(|v| seen < 3) {
+        seen = seen + 1;
+        s = s + x;
+    }
+    println(s);
+}

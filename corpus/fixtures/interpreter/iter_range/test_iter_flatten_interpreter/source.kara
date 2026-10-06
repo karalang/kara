@@ -1,0 +1,21 @@
+
+fn main() {
+    let nested: Vec[Vec[i64]] = [[1, 2], [3, 4], [5]];
+    let flat: Vec[i64] = nested.iter().flatten().collect();
+    println(flat.get(0));
+    println(flat.get(4));
+    for x in nested.iter().flatten() { print(x); }
+    println("");
+    // String elements
+    let words: Vec[Vec[String]] = [["a", "b"], ["c"]];
+    for w in words.iter().flatten() { print(w); }
+    println("");
+    // empty inners interspersed
+    let e: Vec[Vec[i64]] = [[], [1], [], [2, 3], []];
+    let f: Vec[i64] = e.iter().flatten().collect();
+    println(f.len());
+    // compose downstream: flatten then map / filter+sum / count
+    println(nested.iter().flatten().map(|x| x * 2).collect().get(2));
+    println(nested.iter().flatten().filter(|x| x % 2 == 1).sum());
+    println(nested.iter().flatten().count());
+}

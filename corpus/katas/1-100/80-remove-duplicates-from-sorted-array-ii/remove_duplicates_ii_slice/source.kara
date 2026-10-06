@@ -1,0 +1,82 @@
+// LeetCode #80: Remove Duplicates from Sorted Array II — two-pointer over a mut Slice.
+//
+// Identical algorithm to remove_duplicates_ii.kara (the ★) — the same `nums[k-2]`
+// two-slot look-back — but the dedup function takes a `mut Slice[i64]` view instead
+// of owning a `mut ref Vec[i64]`. This is the most faithful encoding of the
+// LeetCode contract ("modify nums in place, return k"): the callee gets a mutable
+// *window* onto the caller's storage, never the container itself, so it can overwrite
+// within bounds but cannot grow or shrink the backing Vec. A distinct ownership +
+// codegen surface — the call site coerces `mut nums` (a `ref mut Vec[i64]`) to
+// `mut Slice[i64]`, and the slice's own `.len()` bounds the sweep. Same borrow shape
+// as kata #26 (its m = 1 sibling) and #31/#88.
+
+fn remove_dups(nums: mut Slice[i64]) -> i64 {
+    let n = nums.len();
+    if n <= 2 {
+        return n;
+    }
+    let mut k = 2;
+    let mut i = 2;
+    while i < n {
+        if nums[i] != nums[k - 2] {
+            nums[k] = nums[i];
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    k
+}
+
+fn report(vals: ref Vec[i64], acc: mut ref i64) {
+    // Copy the case's values into a fresh mutable Vec, then hand the dedup a mutable
+    // slice over it (mut nums coerces Vec -> mut Slice at the call boundary).
+    let mut nums: Vec[i64] = Vec.new();
+    let n = vals.len();
+    let mut i = 0;
+    while i < n {
+        nums.push(vals[i]);
+        i = i + 1;
+    }
+    let k = remove_dups(mut nums);
+
+    print(f"k={k}: [");
+    let mut j = 0;
+    while j < k {
+        if j > 0 {
+            print(", ");
+        }
+        print(f"{nums[j]}");
+        j = j + 1;
+    }
+    println("]");
+
+    let mut a = (acc * 131 + (k + 1)) % 1000000007;
+    let mut p = 0;
+    while p < k {
+        a = (a * 131 + (nums[p] + 1)) % 1000000007;
+        p = p + 1;
+    }
+    acc = a;
+}
+
+fn make(vals: Array[i64, 9], len: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < len {
+        v.push(vals[i]);
+        i = i + 1;
+    }
+    v
+}
+
+fn main() {
+    let mut acc = 0;
+    report(make([1, 1, 1, 2, 2, 3, 0, 0, 0], 6), mut acc);
+    report(make([0, 0, 1, 1, 1, 1, 2, 3, 3], 9), mut acc);
+    report(make([1, 2, 3, 0, 0, 0, 0, 0, 0], 3), mut acc);
+    report(make([1, 1, 0, 0, 0, 0, 0, 0, 0], 2), mut acc);
+    report(make([7, 0, 0, 0, 0, 0, 0, 0, 0], 1), mut acc);
+    report(make([0, 0, 0, 0, 0, 0, 0, 0, 0], 0), mut acc);
+    report(make([5, 5, 5, 5, 0, 0, 0, 0, 0], 4), mut acc);
+    println(f"sink: {acc}");
+}

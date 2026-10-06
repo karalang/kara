@@ -1,0 +1,12 @@
+
+fn main() {
+    let a: i64 = 1;
+    let b: i64 = 5;
+    println(a.cmp(b).is_lt());
+    let o = a.cmp(b);
+    println(o.is_gt());
+    let lt: Option[Ordering] = Some(Ordering.Less);
+    let no: Option[Ordering] = None;
+    println(f"{lt.is_lt()} {lt.is_ge()}");
+    println(f"{no.is_lt()} {no.is_eq()}");
+}

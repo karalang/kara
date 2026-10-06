@@ -1,0 +1,9 @@
+struct Bag { items: Vec[String] }
+impl Bag {
+    fn first(ref self, hint: ref String) -> ref String { self.items[0] }
+}
+fn main() {
+    let b = Bag { items: ["x".to_string()] };
+    let r = b.first("unused".to_string());
+    println(r);
+}

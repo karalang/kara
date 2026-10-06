@@ -1,0 +1,8 @@
+
+fn main() {
+    let bc: BoundedChannel[String] = BoundedChannel.new(2, OnFull.FailFast);
+    match bc.send("hello") { Ok(_) => println(1), Err(_) => println(0), }
+    match bc.send("world") { Ok(_) => println(1), Err(_) => println(0), }
+    match bc.recv() { Some(s) => println(s), None => println("none"), }
+    // "world" left undrained — its blob is freed by the channel's Drop.
+}

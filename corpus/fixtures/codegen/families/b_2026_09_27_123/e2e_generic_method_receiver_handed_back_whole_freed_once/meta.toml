@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_27_123.rs::e2e_generic_method_receiver_handed_back_whole_freed_once"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_09_27_123.rs::asan_generic_method_receiver_handed_back_whole_freed_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

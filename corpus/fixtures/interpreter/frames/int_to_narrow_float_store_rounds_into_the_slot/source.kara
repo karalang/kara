@@ -1,0 +1,24 @@
+
+struct H { mut f: f32 }
+struct G { mut f: f64 }
+
+fn main() {
+    let big = 4294967295u32;
+    let mid = 2147483647i32;
+    let mut h = H { f: 0 as f32 };
+    h.f = big;
+    println(f"01 {h.f}");
+    h.f = mid;
+    println(f"02 {h.f}");
+    let mut vf: Vec[f32] = Vec.new();
+    vf.push(big);
+    println(f"03 {vf[0i64]}");
+    vf[0i64] = mid;
+    println(f"04 {vf[0i64]}");
+    let mut g = G { f: 0.0 };
+    g.f = big;
+    println(f"05 {g.f}");
+    let mut vd: Vec[f64] = Vec.new();
+    vd.push(big);
+    println(f"06 {vd[0i64]}");
+}

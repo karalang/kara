@@ -1,0 +1,9 @@
+
+        fn clobber_a(tx: Sender[i64]) -> i64 with writes(tx) { return 1; }
+        fn clobber_b(tx: Sender[i64]) -> i64 with writes(tx) { return 2; }
+        fn main() {
+            let c = 0;
+            let x = clobber_a(c);
+            let y = clobber_b(c);
+        }
+        

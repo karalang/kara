@@ -1,0 +1,209 @@
+// Differential for #356: the four arms against an oracle that never uses the
+// min + max insight -- it tries every candidate line between the extremes,
+// in doubled coordinates, and asks whether that one maps every point onto a
+// point. Random sets of 0 to 10 points with x in -4..=4 and y in 0..=2, so
+// collisions, duplicates and points on the line are all common; half of them
+// are built symmetric.
+//
+//   P1  every arm returns the oracle's answer
+//   P2  shifting every x by the same amount does not change the answer
+//   P3  negating every x does not change the answer
+//   P4  duplicating every point does not change the answer
+//   P5  a set built symmetric about a line reflects
+//
+// The arms are copied from the kata's four files, renamed.
+
+fn by_set(points: ref Vec[(i64, i64)]) -> bool {
+    if points.is_empty() {
+        return true;
+    }
+    let mut lo = points[0].0;
+    let mut hi = points[0].0;
+    let mut seen: Set[(i64, i64)] = Set.new();
+    for (x, y) in points.iter() {
+        lo = lo.min(x);
+        hi = hi.max(x);
+        seen.insert((x, y));
+    }
+    let sum = lo + hi;
+    for (x, y) in points.iter() {
+        if not seen.contains((sum - x, y)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn by_rows(points: ref Vec[(i64, i64)]) -> bool {
+    if points.is_empty() {
+        return true;
+    }
+    let mut rows: Map[i64, Vec[i64]] = Map.new();
+    let mut lo = points[0].0;
+    let mut hi = points[0].0;
+    for (x, y) in points.iter() {
+        lo = lo.min(x);
+        hi = hi.max(x);
+        rows.entry(y).or_insert(Vec.new()).push(x);
+    }
+    let sum = lo + hi;
+    for (_, xs) in rows.iter() {
+        let mut row = xs.clone();
+        row.sort();
+        row.dedup();
+        let n = row.len();
+        for i in 0..n {
+            if row[i] + row[n - 1 - i] != sum {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn mirror_canonical(points: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut sorted = points;
+    sorted.sort();
+    sorted.dedup();
+    sorted
+}
+
+fn by_mirror(points: ref Vec[(i64, i64)]) -> bool {
+    if points.is_empty() {
+        return true;
+    }
+    let lo = points.iter().map(|p| p.0).min().unwrap();
+    let hi = points.iter().map(|p| p.0).max().unwrap();
+    let images: Vec[(i64, i64)] = points.iter().map(|p| (lo + hi - p.0, p.1)).collect();
+    mirror_canonical(points.clone()) == mirror_canonical(images)
+}
+
+fn by_pairs(points: ref Vec[(i64, i64)]) -> bool {
+    let n = points.len();
+    if n == 0 {
+        return true;
+    }
+    let mut lo = points[0].0;
+    let mut hi = points[0].0;
+    for i in 1..n {
+        if points[i].0 < lo {
+            lo = points[i].0;
+        }
+        if points[i].0 > hi {
+            hi = points[i].0;
+        }
+    }
+    for i in 0..n {
+        let want = (lo + hi - points[i].0, points[i].1);
+        let mut found = false;
+        let mut j = 0;
+        while j < n and not found {
+            if points[j] == want {
+                found = true;
+            }
+            j += 1;
+        }
+        if not found {
+            return false;
+        }
+    }
+    true
+}
+
+fn oracle(points: ref Vec[(i64, i64)]) -> bool {
+    if points.is_empty() {
+        return true;
+    }
+    let mut lo = points[0].0;
+    let mut hi = points[0].0;
+    for p in points.iter() {
+        if p.0 < lo {
+            lo = p.0;
+        }
+        if p.0 > hi {
+            hi = p.0;
+        }
+    }
+    // Candidate lines x = c / 2 for every doubled c between the extremes.
+    for c in (2 * lo)..=(2 * hi) {
+        let mut every = true;
+        for p in points.iter() {
+            let mut found = false;
+            for q in points.iter() {
+                if q.1 == p.1 and q.0 * 2 == c * 2 - p.0 * 2 {
+                    found = true;
+                }
+            }
+            if not found {
+                every = false;
+            }
+        }
+        if every {
+            return true;
+        }
+    }
+    false
+}
+
+fn all_arms(points: ref Vec[(i64, i64)]) -> Vec[bool] {
+    vec![by_set(points), by_rows(points), by_mirror(points), by_pairs(points)]
+}
+
+fn check(case: i64, what: String, ok: bool, failures: mut ref i64) {
+    if not ok {
+        failures += 1;
+        if failures <= 10 {
+            println(f"FAIL case {case}: {what}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 3560;
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut yes = 0;
+    for case in 0..3000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (seed / 65536) % 11;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let center2 = (seed / 65536) % 17 - 8;
+        let symmetric = case % 2 == 0;
+        let mut points: Vec[(i64, i64)] = Vec.new();
+        while points.len() < n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let x = (seed / 65536) % 9 - 4;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let y = (seed / 65536) % 3;
+            points.push((x, y));
+            if symmetric {
+                // The image through x = center2 / 2 is (center2 - x, y).
+                points.push((center2 - x, y));
+            }
+        }
+        let want = oracle(points);
+        if want {
+            yes += 1;
+        }
+        for got in all_arms(points) {
+            check(case, f"P1 arm {got} != oracle {want} for {points}", got == want, mut failures);
+            checks += 1;
+        }
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let shift = (seed / 65536) % 7 - 3;
+        let shifted: Vec[(i64, i64)] = points.iter().map(|p| (p.0 + shift, p.1)).collect();
+        check(case, "P2 shift", by_set(shifted) == want, mut failures);
+        let negated: Vec[(i64, i64)] = points.iter().map(|p| (0 - p.0, p.1)).collect();
+        check(case, "P3 negate", by_rows(negated) == want, mut failures);
+        let mut doubled = points.clone();
+        for p in points.iter() {
+            doubled.push(p);
+        }
+        check(case, "P4 duplicate", by_mirror(doubled) == want, mut failures);
+        if symmetric {
+            check(case, "P5 built symmetric", want, mut failures);
+        }
+        checks += 4;
+    }
+    println(f"3000 cases, {checks} checks, {yes} reflect, {failures} failures");
+}

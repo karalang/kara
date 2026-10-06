@@ -1,0 +1,11 @@
+
+#[derive(Message)]
+struct Plain { v: i64 }
+
+#[derive(Message)]
+struct Zig { #[karac::proto(sint64)] v: i64 }
+
+fn main() {
+    println(Plain { v: -5 }.encode().len());
+    println(Zig { v: -5 }.encode().len());
+}

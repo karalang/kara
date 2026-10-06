@@ -1,0 +1,47 @@
+scalar
+dR101/t101
+dR1/t1
+  z1
+method
+dR102/t102
+dR2/t2
+  z2
+nodest
+dR103/t103
+dR3/t3
+  no
+three
+dR204/t204
+dR104/t104
+dR4/t4
+  z4
+own
+dHOwn
+dR105/t105
+dR5/t5
+  z5
+whole
+dR106/t106
+  z6
+dR6/t6
+plain
+dR7/t7
+  z4
+move
+  z8
+dR8/t8
+threehop
+dR209/t209
+dR109/t109
+dR9/t9
+  z9
+shared
+dR212/112
+dR211/111
+  s111
+live
+  z10
+  b110
+dR110/t110
+dR10/t10
+done

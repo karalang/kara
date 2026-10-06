@@ -1,0 +1,14 @@
+
+shared struct N { mut v: i64 }
+fn fill(w: mut ref Vec[weak N]) {
+    let a: N = N { v: 7i64 };
+    w.push(a);
+    match w[0] { Some(x) => { println(x.v); } None => { println(0 - 1); } }
+}
+fn churn(d: i64) -> i64 { if d <= 0i64 { 0i64 } else { d + churn(d - 1i64) } }
+fn main() {
+    let mut w: Vec[weak N] = Vec.new();
+    fill(mut w);
+    println(churn(64i64));
+    match w[0] { Some(x) => { println(x.v); } None => { println(0 - 2); } }
+}

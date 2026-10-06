@@ -1,0 +1,20 @@
+
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Two { a: R, b: R }
+struct Ho2 { a: R, b: Option[R] }
+fn mk(k: i64) -> R { return R { id: k, tag: f"t{k}", xs: [k] } }
+fn pDes(h: Two) { let Two { a, b: _ } = h; println("in") }
+fn main() {
+    { let h: Two = Two { a: mk(1), b: mk(101) }; let Two { a, b: _ } = h; println("one") }
+    { let h: Two = Two { a: mk(2), b: mk(102) }; let Two { a: _, b } = h; println("two") }
+    { let h: Two = Two { a: mk(3), b: mk(103) }; let Two { a: _, b: _ } = h; println("three") }
+    { let h: Two = Two { a: mk(4), b: mk(104) }; let Two { a, b: _ } = h; println(f"use{a.id}"); println("four") }
+    { let h: Two = Two { a: mk(5), b: mk(105) }; let Two { a, b } = h; println("five") }
+    { let h: Two = Two { a: mk(6), b: mk(106) }; println("six") }
+    { pDes(Two { a: mk(7), b: mk(107) }); println("seven") }
+    { let h: Two = Two { a: mk(8), b: mk(108) }; let Two { a, b: _ } = h; let q: Two = Two { a: mk(9), b: mk(109) }; println("eight") }
+    { let h: Ho2 = Ho2 { a: mk(10), b: Option.Some(mk(110)) }; let Ho2 { a, b: _ } = h; println("nine") }
+    { let h: Two = Two { a: mk(11), b: mk(111) }; let Two { a: _, b } = h; println("ten") }
+    println("end")
+}

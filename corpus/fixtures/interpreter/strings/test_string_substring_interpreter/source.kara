@@ -1,0 +1,9 @@
+fn main() {
+            let s: String = "/todos/42";
+            println(s.substring(7));
+            println(s.substring(0));
+            println(s.substring(100));
+            println(s.substring(-1));
+            let empty: String = "";
+            println(empty.substring(0));
+        }

@@ -1,0 +1,33 @@
+
+fn main() {
+    // design.md's own example.
+    let evens = Vec.from_fn(5, |i| i * 2);
+    println(evens.len());
+    println(evens[0]);
+    println(evens[4]);
+
+    // Zero elements: no slot is ever written.
+    let e: Vec[i64] = Vec.from_fn(0, |i| i);
+    println(e.len());
+
+    // A RUNTIME count, so the loop bound is not a constant to fold.
+    let n = 4;
+    let sq = Vec.from_fn(n, |i| i * i);
+    println(sq[3]);
+
+    // The function is a closure: an outer binding it captures must be live at
+    // every index, not only the first.
+    let base = 100;
+    let off = Vec.from_fn(3, |i| base + i);
+    println(off[2]);
+
+    // Element type pushed down from the annotation — a NARROW element whose
+    // stride differs from the body's natural i64 width.
+    let narrow: Vec[i32] = Vec.from_fn(3, |i| 7);
+    println(narrow[0]);
+    println(narrow[2]);
+
+    // Nested collection element.
+    let rows: Vec[Vec[i64]] = Vec.from_fn(2, |i| Vec.filled(2, i));
+    println(rows[1][0]);
+}

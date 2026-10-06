@@ -1,0 +1,46 @@
+// LeetCode 191 — Number of 1 Bits. Benchmark kernel (Brian Kernighan popcount).
+//
+// Build-once + punch: fill N deterministic LCG values, then sum the Hamming
+// weight of `nums[i] ^ round` over K rounds. XOR-ing with the round index makes
+// each round's input differ, so the pure popcount can't be hoisted, and the
+// Kernighan loop (`x &= x-1`) is a data-dependent chain — not auto-vectorizable —
+// so this measures a genuine sequential ALU workload, not memory bandwidth.
+//
+// N = 2_000_000, K = 10. Identical LCG, perturbation and algorithm across the
+// C / Rust / Go / Python mirrors (honest bench).
+
+fn hamming_weight(n: i64) -> i64 {
+    let mut count = 0;
+    let mut x = n;
+    while x != 0 {
+        x = x & (x - 1);
+        count = count + 1;
+    }
+    return count;
+}
+
+fn main() {
+    let n = 2000000;
+    let k = 10;
+
+    let mut nums: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        nums.push(state);
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut round = 0;
+    while round < k {
+        let mut j = 0;
+        while j < n {
+            sink = sink + hamming_weight(nums[j] ^ round);
+            j = j + 1;
+        }
+        round = round + 1;
+    }
+    println(sink);
+}

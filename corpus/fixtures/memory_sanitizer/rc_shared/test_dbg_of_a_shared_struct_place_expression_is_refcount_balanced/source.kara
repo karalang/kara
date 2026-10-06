@@ -1,0 +1,15 @@
+
+shared struct Flat { a: i64, b: String }
+shared struct Link { v: i64, mut next: Option[Link] }
+fn main() {
+    let f = Flat { a: 1_i64, b: "t".to_uppercase() };
+    dbg(f);
+    let f2 = dbg(f);
+    println(f"{f2.a}");
+
+    let tail = Link { v: 2_i64, next: None };
+    let head = Link { v: 1_i64, next: Some(tail) };
+    dbg(head);
+    let head2 = dbg(head);
+    println(f"{head2.v}");
+}

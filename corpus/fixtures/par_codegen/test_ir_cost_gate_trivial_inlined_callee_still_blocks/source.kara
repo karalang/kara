@@ -1,0 +1,9 @@
+
+fn double(x: i64) -> i64 { x + x }
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..100i64 {
+        sum = sum + double(k);
+    }
+    println(sum);
+}

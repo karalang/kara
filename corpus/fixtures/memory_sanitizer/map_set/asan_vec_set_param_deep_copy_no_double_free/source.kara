@@ -1,0 +1,16 @@
+
+fn id(v: Vec[Set[i64]]) -> Vec[Set[i64]] {
+    v
+}
+
+fn main() {
+    let mut v: Vec[Set[i64]] = Vec.new();
+    let mut s: Set[i64] = Set.new();
+    s.insert(1i64);
+    s.insert(2i64);
+    v.push(s);
+    let r = id(v);
+    println(r.len());
+    println(r[0].contains(1i64));
+    println(r[0].contains(9i64));
+}

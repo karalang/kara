@@ -1,0 +1,7 @@
+
+        #[require_simd]
+        fn add4(a: Vector[i32, 4], b: Vector[i32, 4]) -> Vector[i32, 4] {
+            a + b
+        }
+        fn main() {}
+    

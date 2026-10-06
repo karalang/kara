@@ -1,0 +1,7 @@
+
+par struct Node { val: i64, next: Option[Node] }
+fn main() {
+    let leaf = Node { val: 2, next: Option.None };
+    let head = Node { val: 1, next: Option.Some(leaf) };
+    println(head.val);
+}

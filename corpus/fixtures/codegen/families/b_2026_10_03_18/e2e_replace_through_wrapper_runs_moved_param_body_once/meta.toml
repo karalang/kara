@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_03_18.rs::e2e_replace_through_wrapper_runs_moved_param_body_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

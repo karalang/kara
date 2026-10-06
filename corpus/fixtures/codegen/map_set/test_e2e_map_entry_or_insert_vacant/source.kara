@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.entry(7_i64).or_insert(42_i64);
+    let v = m.get(7_i64);
+    match v {
+        Some(x) => println(x),
+        None => println(0_i64),
+    }
+}

@@ -1,0 +1,41 @@
+struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+struct W { p: Option[R] }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
+fn eat(xa: Option[R]) -> i64 { match xa { Option.Some(ra) => { ra.id }, Option.None => { 0 } } }
+fn give() -> Option[R] { let (_, ob) = (mk(56), Option.Some(mk(156))); return ob }
+
+fn bind()   { let (_, oc) = (mk(32), Option.Some(mk(132))); println("  b") }
+fn bindsib(){ let (ad, bd) = (mk(48), Option.Some(mk(148))); println(f"  rd{ad.id}") }
+fn slot0()  { let (oe, ke) = (Option.Some(mk(72)), 5); println(f"  k{ke}") }
+fn nested() { let ((_, of), nf) = ((mk(2), Option.Some(mk(102))), 3); println(f"  n{nf}") }
+fn nestpl() { let tg = ((mk(6), Option.Some(mk(106))), 7); let ((_, og), ng) = tg; println(f"  p{ng}") }
+fn loopb()  { let mut i = 0; while i < 2 { let (_, oh) = (mk(64), Option.Some(mk(164))); i = i + 1; } println("  l") }
+fn consume(){ let (_, oi) = (mk(52), Option.Some(mk(152))); match oi { Option.Some(ri) => { println(f"  c{ri.id}") }, Option.None => { println("  z") } } }
+fn moved()  { let (_, oj) = (mk(54), Option.Some(mk(154))); let qj = oj; println(f"  m{qj.is_some()}") }
+fn ret()    { let zk = give(); println(f"  r{zk.is_some()}") }
+fn arg()    { let (_, ol) = (mk(58), Option.Some(mk(158))); println(f"  a{eat(ol)}") }
+fn field()  { let (_, om) = (mk(76), Option.Some(mk(176))); let wm = W { p: om }; println(f"  f{wm.p.is_some()}") }
+fn instr()  { let (_, on) = (mk(60), Option.Some(f"q60")); println("  s") }
+fn none()   { let np: Option[R] = Option.None; let (_, op) = (mk(62), np); println("  o") }
+fn plainel(){ let (_, oq) = (mk(9), mk(109)); println("  q") }
+fn wildcd() { let (_, _) = (mk(31), Option.Some(mk(131))); println("  w") }
+
+fn main() {
+  println("bind");    bind()
+  println("bindsib"); bindsib()
+  println("slot0");   slot0()
+  println("nested");  nested()
+  println("nestpl");  nestpl()
+  println("loopb");   loopb()
+  println("consume"); consume()
+  println("moved");   moved()
+  println("ret");     ret()
+  println("arg");     arg()
+  println("field");   field()
+  println("instr");   instr()
+  println("none");    none()
+  println("plainel"); plainel()
+  println("wildcd");  wildcd()
+  println("done")
+}

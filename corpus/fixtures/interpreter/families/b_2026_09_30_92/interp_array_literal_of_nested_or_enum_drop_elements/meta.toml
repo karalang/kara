@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_09_30_92.rs::interp_array_literal_of_nested_or_enum_drop_elements"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_09_30_92.rs::asan_array_literal_of_nested_or_enum_drop_elements"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

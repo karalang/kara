@@ -1,0 +1,9 @@
+
+fn main() {
+    let v = Vec[1, 2, 3];
+    let s: Slice[i64] = v.as_slice();
+    let xs: Vec[i64] = s.iter().map(|x| x * 2).collect();
+    for x in xs {
+        println(x);
+    }
+}

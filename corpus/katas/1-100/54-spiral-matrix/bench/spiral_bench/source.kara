@@ -1,0 +1,88 @@
+// Bench spine of LeetCode #54 Spiral Matrix — see ../README.md § Benchmarks.
+//
+// The ★ solver's boundary-shrinking spiral run over MANY matrices: a deterministic LCG fills a
+// fixed 24×24 buffer with pseudo-random values in [-50, 49], the buffer is traversed in spiral
+// order, and each emitted cell is folded into a POSITION-WEIGHTED checksum — `(pos+1) * value`,
+// where `pos` is the cell's rank in the spiral. That weighting is deliberate: it makes the
+// TRAVERSAL ORDER observable, so the kernel is genuinely "walk the matrix spirally" and cannot
+// collapse to an order-independent row-major sum. Each matrix's checksum is folded into one i64
+// sink, over 200 000 matrices — no per-iteration allocation, the 24×24 buffer is a single fixed
+// stack array reused every iteration.
+//
+// Everything is overflow-safe by construction (Kāra traps on i64 overflow): the LCG is the
+// classic glibc recurrence mod 2^31, so `state < 2^31` and the product `1103515245 * state <
+// 2^61` stays well inside i64; values are `state % 100 - 50`; each cell's term is bounded by
+// 576 * 50 and a matrix's checksum by 576 * that, so the fold of 200 000 matrix-checksums stays
+// far below i64. The generator and traversal are integer-only and identical across languages, so
+// the sink is BIT-EXACT and cross-language-diffable (kara/rust/c/go/py all print the same value).
+//
+// Built KARAC_AUTO_PAR=0 — a single sequential fill-then-spiral scan with no cross-branch
+// parallel structure worth engaging.
+
+fn main() {
+    let m: i64 = 1103515245;       // glibc LCG multiplier
+    let inc: i64 = 12345;          // glibc LCG increment
+    let modulus: i64 = 2147483648; // 2^31
+    let windows: i64 = 200000;     // number of simulated input matrices
+    let rows: i64 = 24;
+    let cols: i64 = 24;
+    let n: i64 = 576;              // rows * cols
+
+    let mut grid: Array[i64, 576] = [0; 576];
+    let mut state: i64 = 1;        // LCG seed
+    let mut sink: i64 = 0;
+    let mut k: i64 = 0;
+    while k < windows {
+        // Fill the buffer row-major with the next 576 LCG values.
+        let mut idx = 0;
+        while idx < n {
+            state = (state * m + inc) % modulus;
+            grid[idx] = (state % 100) - 50;
+            idx = idx + 1;
+        }
+        // Boundary-shrinking spiral, folding a position-weighted checksum.
+        let mut local = 0;
+        let mut pos = 0;
+        let mut top = 0;
+        let mut bottom = rows - 1;
+        let mut left = 0;
+        let mut right = cols - 1;
+        while top <= bottom and left <= right {
+            let mut c = left;
+            while c <= right {
+                local = local + (pos + 1) * grid[top * cols + c];
+                pos = pos + 1;
+                c = c + 1;
+            }
+            top = top + 1;
+            let mut r = top;
+            while r <= bottom {
+                local = local + (pos + 1) * grid[r * cols + right];
+                pos = pos + 1;
+                r = r + 1;
+            }
+            right = right - 1;
+            if top <= bottom {
+                let mut c2 = right;
+                while c2 >= left {
+                    local = local + (pos + 1) * grid[bottom * cols + c2];
+                    pos = pos + 1;
+                    c2 = c2 - 1;
+                }
+                bottom = bottom - 1;
+            }
+            if left <= right {
+                let mut r2 = bottom;
+                while r2 >= top {
+                    local = local + (pos + 1) * grid[r2 * cols + left];
+                    pos = pos + 1;
+                    r2 = r2 - 1;
+                }
+                left = left + 1;
+            }
+        }
+        sink = sink + local;       // fold this matrix's checksum into the sink
+        k = k + 1;
+    }
+    println(f"{sink}");
+}

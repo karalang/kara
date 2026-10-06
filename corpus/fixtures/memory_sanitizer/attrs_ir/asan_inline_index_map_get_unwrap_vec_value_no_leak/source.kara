@@ -1,0 +1,26 @@
+
+fn takes(s: String) -> i64 {
+    s.len()
+}
+fn main() {
+    let mut m: Map[i64, Vec[i64]] = Map.new();
+    m.insert(1, [10, 20, 30]);
+    let mut s: Map[i64, Vec[String]] = Map.new();
+    s.insert(1, ["alpha", "beta", "gamma"]);
+    let mut n: Map[i64, Vec[Vec[i64]]] = Map.new();
+    n.insert(7, [[1, 2], [3, 4, 5]]);
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 60 {
+        acc = acc + m.get(1).unwrap()[1];
+        acc = acc + s.get(1).unwrap()[0].len();
+        acc = acc + takes(s.get(1).unwrap()[2].clone());
+        let w = s.get(1).unwrap()[1].clone();
+        acc = acc + w.len();
+        let inner = n.get(7).unwrap()[1].clone();
+        acc = acc + inner[2];
+        i = i + 1;
+    }
+    println(acc);
+    println(s.get(1).unwrap()[0]);
+}

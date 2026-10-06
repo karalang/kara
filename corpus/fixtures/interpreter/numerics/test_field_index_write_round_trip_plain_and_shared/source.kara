@@ -1,0 +1,19 @@
+
+        struct Holder { tag: i64, mut items: Vec[i64] }
+        shared struct Cell { mut vals: Vec[i64] }
+        fn main() {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(41);
+            v.push(42);
+            let mut h = Holder { tag: 7, items: v };
+            h.items[0] = 99;
+            println(h.items[0]);
+            println(h.items[1]);
+
+            let mut w: Vec[i64] = Vec.new();
+            w.push(5);
+            let c = Cell { vals: w };
+            c.vals[0] = 6;
+            println(c.vals[0]);
+        }
+    

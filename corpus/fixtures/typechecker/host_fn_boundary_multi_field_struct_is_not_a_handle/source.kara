@@ -1,0 +1,6 @@
+
+struct Pair { a: i64, b: i64 }
+
+host fn bad_pair(p: Pair) with reads(Clock);
+
+fn main() {}

@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let s: String = "   abcdefghijklmnopqrstuvwxyz0123456789   ";
+        let a = s.trim_start();
+        let b = s.trim_end();
+        total = total + a.len() + b.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

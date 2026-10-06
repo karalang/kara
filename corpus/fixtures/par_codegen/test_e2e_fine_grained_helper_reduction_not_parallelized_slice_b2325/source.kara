@@ -1,0 +1,67 @@
+
+fn pow10(n: i64) -> i64 {
+    let mut r = 1i64;
+    let mut i = 0i64;
+    while i < n {
+        r = r * 10i64;
+        i = i + 1i64;
+    }
+    return r;
+}
+fn num_digits(x: i64) -> i64 {
+    if x == 0i64 { return 1i64; }
+    let mut n = 0i64;
+    let mut t = x;
+    while t > 0i64 {
+        n = n + 1i64;
+        t = t / 10i64;
+    }
+    return n;
+}
+fn concat_val(a: i64, b: i64) -> i64 {
+    return a * pow10(num_digits(b)) + b;
+}
+fn ordered(a: i64, b: i64) -> bool {
+    return concat_val(a, b) >= concat_val(b, a);
+}
+fn sort_desc(arr: mut ref Vec[i64]) {
+    let n = arr.len();
+    let mut i = 1i64;
+    while i < n {
+        let key = arr[i];
+        let mut j = i - 1i64;
+        while j >= 0i64 {
+            if ordered(key, arr[j]) { arr[j + 1i64] = arr[j]; j = j - 1i64; }
+            else { j = 0i64 - 1i64; }
+        }
+        i = i + 1i64;
+    }
+}
+fn checksum(arr: ref Vec[i64]) -> i64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    let n = arr.len();
+    while i < n {
+        acc = (acc * 131i64 + arr[i]) % 1000000007i64;
+        i = i + 1i64;
+    }
+    return acc;
+}
+fn main() {
+    let width = 80i64;
+    let passes = 4i64;
+    let mut sink = 0i64;
+    let mut p = 0i64;
+    while p < passes {
+        let mut arr: Vec[i64] = Vec.new();
+        let mut k = 0i64;
+        while k < width {
+            arr.push(((k * 37i64 + p * 13i64) % 997i64) + 1i64);
+            k = k + 1i64;
+        }
+        sort_desc(mut arr);
+        sink = sink + checksum(arr);
+        p = p + 1i64;
+    }
+    println(sink);
+}

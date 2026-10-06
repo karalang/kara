@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_05_107.rs::e2e_param_destructured_out_of_a_tuple_literal_runs_its_body_once"
+dedup_of = ["tests/interpreter/families/b_2026_10_05_107.rs::interp_param_destructured_out_of_a_tuple_literal_runs_its_body_once", "tests/memory_sanitizer/families/b_2026_10_05_107.rs::asan_param_destructured_out_of_a_tuple_literal_runs_its_body_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

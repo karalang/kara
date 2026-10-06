@@ -1,0 +1,17 @@
+struct Bag { xs: Vec[i64] }
+fn bump(s: mut Slice[i64]) { s[0] = s[0] + 100; }
+fn head(s: Slice[i64]) -> i64 { return s[0]; }
+fn poke(b: mut ref Bag) { bump(b.xs); }
+impl Bag {
+    fn go(mut ref self) { bump(mut self.xs); }
+    fn peek(ref self) -> i64 { return head(self.xs); }
+}
+fn main() {
+    let mut a: Bag = Bag { xs: Vec.new() };
+    a.xs.push(1); a.xs.push(2);
+    a.go();
+    println(f"{a.peek()}");
+    poke(mut a);
+    println(f"{a.peek()} {a.xs[1]}");
+    println("end");
+}

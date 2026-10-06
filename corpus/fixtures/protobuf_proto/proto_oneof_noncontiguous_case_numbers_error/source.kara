@@ -1,0 +1,6 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    message E { int64 id = 1; oneof c { int64 a = 3; int64 b = 4; } }
+";
+fn main() {}

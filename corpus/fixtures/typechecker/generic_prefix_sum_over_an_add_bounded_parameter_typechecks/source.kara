@@ -1,0 +1,16 @@
+
+fn prefix[T: Copy + Add](xs: ref Vec[T], zero: T) -> Vec[T] {
+    let mut p: Vec[T] = Vec.new();
+    p.push(zero);
+    let mut i: i64 = 0;
+    while i < xs.len() {
+        p.push(p[i] + xs[i]);
+        i = i + 1;
+    }
+    return p;
+}
+fn main() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    let r = prefix(v, 0);
+    println(f"{r[3]}");
+}

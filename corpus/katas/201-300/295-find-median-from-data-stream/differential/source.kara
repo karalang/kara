@@ -1,0 +1,454 @@
+// LeetCode 295 — three-arm differential.
+//
+//   A  two heaps        max-heap lower half + min-heap upper half   median_finder.kara
+//   B  sorted vec       binary search + insert, read the middle     median_finder_sorted.kara
+//   C  ordered multiset SortedMap value->count, walk to the rank    median_finder_multiset.kara
+//   D  stdlib heaps     the SAME algorithm as A on PriorityQueue    median_finder_stdlib.kara
+//
+// A and B are both POSITIONAL — they hold elements and the median is wherever
+// the middle happens to land. A misreading of "median" for even counts would
+// sit in both and the diff would stay silent. C is the reason this is worth
+// running: it stores no positions at all, only counts per distinct value, and
+// finds the median by rank. It cannot share a positional bug because it has no
+// positions.
+//
+// The five properties are read off the problem statement, not off any
+// implementation:
+//
+//   P1  all FOUR arms agree after EVERY add, not just at the end
+//   P2  the median depends only on the multiset — reordering the stream cannot move it
+//   P3  A's heap invariant holds: max(lo) <= min(hi), and the sizes stay balanced
+//   P4  min <= median <= max, and for an odd count the median is a member of the stream
+//   P5  i64.MIN and i64.MAX survive — the negation max-heap would PANIC here
+//
+// P5 is the one that justifies a design decision rather than checking a result.
+// The standard way to get a max-heap from a min-heap is to store negated
+// values; `-i64.MIN` overflows, and Kāra traps integer overflow by default, so
+// that version does not return a wrong answer — it dies. Every other test in
+// this file passes on the negation version, which is what makes it worth a
+// property of its own.
+//
+// BANDS ARE SIZED BY THE TREE-WALK INTERPRETER, the slowest of the four
+// surfaces every kata must agree on. B is O(n) per insert and C is O(d) per
+// query, so the streams stay short and numerous rather than long and few —
+// which is also the better shape for finding bugs, since every prefix of every
+// stream is a comparison.
+
+// ---------------------------------------------------------------- arm A
+
+struct Heap {
+    mut data: Vec[i64],
+    max: bool,
+}
+
+fn heap_new(max: bool) -> Heap {
+    return Heap { data: Vec.new(), max: max };
+}
+
+fn heap_len(h: ref Heap) -> i64 {
+    return h.data.len();
+}
+
+fn outranks(h: ref Heap, a: i64, b: i64) -> bool {
+    if h.max {
+        return a > b;
+    }
+    return a < b;
+}
+
+fn heap_peek(h: ref Heap) -> i64 {
+    return h.data[0];
+}
+
+fn heap_swap(h: mut ref Heap, i: i64, j: i64) {
+    let t = h.data[i];
+    h.data[i] = h.data[j];
+    h.data[j] = t;
+}
+
+fn heap_push(h: mut ref Heap, v: i64) {
+    h.data.push(v);
+    let mut i = h.data.len() - 1;
+    let mut climbing = true;
+    while climbing and i > 0 {
+        let parent = (i - 1) / 2;
+        if outranks(h, h.data[i], h.data[parent]) {
+            heap_swap(h, i, parent);
+            i = parent;
+        } else {
+            climbing = false;
+        }
+    }
+}
+
+fn heap_pop(h: mut ref Heap) -> i64 {
+    let top = h.data[0];
+    match h.data.pop() {
+        Some(last) => {
+            if h.data.len() > 0 {
+                h.data[0] = last;
+                let n = h.data.len();
+                let mut i = 0;
+                let mut sinking = true;
+                while sinking {
+                    let l = 2 * i + 1;
+                    let r = l + 1;
+                    let mut best = i;
+                    if l < n and outranks(h, h.data[l], h.data[best]) {
+                        best = l;
+                    }
+                    if r < n and outranks(h, h.data[r], h.data[best]) {
+                        best = r;
+                    }
+                    if best == i {
+                        sinking = false;
+                    } else {
+                        heap_swap(h, i, best);
+                        i = best;
+                    }
+                }
+            }
+        }
+        None => {}
+    }
+    return top;
+}
+
+struct MedianFinder {
+    mut lo: Heap,
+    mut hi: Heap,
+}
+
+fn mf_new() -> MedianFinder {
+    return MedianFinder { lo: heap_new(true), hi: heap_new(false) };
+}
+
+fn mf_add(m: mut ref MedianFinder, v: i64) {
+    heap_push(m.lo, v);
+    let moved = heap_pop(m.lo);
+    heap_push(m.hi, moved);
+    if heap_len(m.hi) > heap_len(m.lo) {
+        let back = heap_pop(m.hi);
+        heap_push(m.lo, back);
+    }
+}
+
+fn mf_median(m: ref MedianFinder) -> f64 {
+    if heap_len(m.lo) > heap_len(m.hi) {
+        return heap_peek(m.lo) as f64;
+    }
+    return (heap_peek(m.lo) as f64 + heap_peek(m.hi) as f64) / 2.0;
+}
+
+// ---------------------------------------------------------------- arm B
+
+struct SortedStream {
+    mut data: Vec[i64],
+}
+
+fn ss_new() -> SortedStream {
+    return SortedStream { data: Vec.new() };
+}
+
+fn lower_bound(data: ref Vec[i64], v: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = data.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if data[mid] < v {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+fn ss_add(s: mut ref SortedStream, v: i64) {
+    let at = lower_bound(s.data, v);
+    s.data.insert(at, v);
+}
+
+fn ss_median(s: ref SortedStream) -> f64 {
+    let n = s.data.len();
+    if n % 2 == 1 {
+        return s.data[n / 2] as f64;
+    }
+    return (s.data[n / 2 - 1] as f64 + s.data[n / 2] as f64) / 2.0;
+}
+
+// ---------------------------------------------------------------- arm C
+
+struct CountingStream {
+    mut counts: SortedMap[i64, i64],
+    mut total: i64,
+}
+
+fn cs_new() -> CountingStream {
+    return CountingStream { counts: SortedMap.new(), total: 0 };
+}
+
+fn cs_add(c: mut ref CountingStream, v: i64) {
+    let seen = match c.counts.get(v) {
+        Some(n) => n,
+        None => 0,
+    };
+    let _ = c.counts.insert(v, seen + 1);
+    c.total = c.total + 1;
+}
+
+fn cs_median(c: ref CountingStream) -> f64 {
+    let first_rank = (c.total + 1) / 2;
+    let second_rank = c.total / 2 + 1;
+    let mut seen = 0;
+    let mut first = 0;
+    let mut second = 0;
+    let mut have_first = false;
+    let mut have_second = false;
+    for k in c.counts.keys() {
+        let n = match c.counts.get(k) {
+            Some(x) => x,
+            None => 0,
+        };
+        seen = seen + n;
+        if not have_first and seen >= first_rank {
+            first = k;
+            have_first = true;
+        }
+        if not have_second and seen >= second_rank {
+            second = k;
+            have_second = true;
+        }
+    }
+    return (first as f64 + second as f64) / 2.0;
+}
+
+// ---------------------------------------------------------------- arm D
+//
+// The same algorithm as A, on the stdlib `PriorityQueue` instead of the
+// hand-rolled `Heap`. It is here because a collection that landed the same day
+// deserves a cross-check against three implementations that share none of its
+// code — and because `peek` (B-2026-08-25-32) is what makes the O(1) query
+// expressible at all.
+
+struct StdFinder {
+    mut lo: PriorityQueue[i64],
+    mut hi: PriorityQueue[i64],
+}
+
+fn sf_new() -> StdFinder {
+    return StdFinder { lo: PriorityQueue.max_first(), hi: PriorityQueue.new() };
+}
+
+fn sf_add(m: mut ref StdFinder, v: i64) {
+    m.lo.push(v);
+    match m.lo.pop() { Some(moved) => { m.hi.push(moved); } None => {} }
+    if m.hi.len() > m.lo.len() {
+        match m.hi.pop() { Some(back) => { m.lo.push(back); } None => {} }
+    }
+}
+
+fn sf_median(m: ref StdFinder) -> f64 {
+    if m.lo.len() > m.hi.len() {
+        return match m.lo.peek() { Some(v) => v as f64, None => 0.0 };
+    }
+    let a = match m.lo.peek() { Some(v) => v as f64, None => 0.0 };
+    let b = match m.hi.peek() { Some(v) => v as f64, None => 0.0 };
+    return (a + b) / 2.0;
+}
+
+// ---------------------------------------------------------------- harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+// A's structural invariant, checked from the outside: every element of the
+// max-heap is <= every element of the min-heap, and the halves stay balanced.
+//
+// `heap_root_dominates` takes the heap itself rather than reaching through the
+// owner as `m.lo.data[i]`: chained field receivers are deferred in codegen
+// (the compiler rejects that shape with a fix-it), and passing the heap is the
+// better factoring anyway — the check belongs to the heap, not to its owner.
+fn heap_root_dominates(h: ref Heap) -> bool {
+    let n = h.data.len();
+    if n == 0 {
+        return true;
+    }
+    let top = h.data[0];
+    let mut i = 0;
+    while i < n {
+        if h.max and h.data[i] > top {
+            return false;
+        }
+        if not h.max and h.data[i] < top {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn heap_invariant_holds(m: ref MedianFinder) -> bool {
+    let nlo = heap_len(m.lo);
+    let nhi = heap_len(m.hi);
+    if nlo != nhi and nlo != nhi + 1 {
+        return false;
+    }
+    if not heap_root_dominates(m.lo) or not heap_root_dominates(m.hi) {
+        return false;
+    }
+    if nlo == 0 or nhi == 0 {
+        return true;
+    }
+    return heap_peek(m.lo) <= heap_peek(m.hi);
+}
+
+fn main() {
+    let streams = 900;
+    let max_len = 40;
+
+    let mut p1 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut adds = 0;
+    let mut state = 7;
+
+    let mut s = 0;
+    while s < streams {
+        // Wider spread on some streams, deliberately repeat-heavy on others, so
+        // arm C's distinct-key path and its within-run median both get hit.
+        let spread = if s % 3 == 0 { 5 } else { 200 };
+        let len = 1 + s % max_len;
+
+        let mut a = mf_new();
+        let mut b = ss_new();
+        let mut c = cs_new();
+        let mut d = sf_new();
+        let mut seen: Vec[i64] = Vec.new();
+
+        let mut i = 0;
+        while i < len {
+            state = lcg(state);
+            let v = state % spread - spread / 2;
+
+            mf_add(mut a, v);
+            ss_add(mut b, v);
+            cs_add(mut c, v);
+            sf_add(mut d, v);
+            seen.push(v);
+            adds = adds + 1;
+
+            let ma = mf_median(a);
+            let mb = ss_median(b);
+            let mc = cs_median(c);
+            let md = sf_median(d);
+            if ma != mb or ma != mc or ma != md {
+                p1 = p1 + 1;
+            }
+
+            if not heap_invariant_holds(a) {
+                p3 = p3 + 1;
+            }
+
+            // P4 — bracketing, and membership when the count is odd.
+            let mut lo_v = seen[0];
+            let mut hi_v = seen[0];
+            let mut k = 0;
+            while k < seen.len() {
+                if seen[k] < lo_v { lo_v = seen[k]; }
+                if seen[k] > hi_v { hi_v = seen[k]; }
+                k = k + 1;
+            }
+            if ma < lo_v as f64 or ma > hi_v as f64 {
+                p4 = p4 + 1;
+            }
+            if seen.len() % 2 == 1 {
+                let mut member = false;
+                let mut t = 0;
+                while t < seen.len() {
+                    if seen[t] as f64 == ma { member = true; }
+                    t = t + 1;
+                }
+                if not member {
+                    p4 = p4 + 1;
+                }
+            }
+
+            i = i + 1;
+        }
+        s = s + 1;
+    }
+
+    // P2 — order independence. Same multiset, reversed and rotated.
+    let mut p2 = 0;
+    let mut t = 0;
+    while t < 240 {
+        let len = 2 + t % 17;
+        let mut vals: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < len {
+            state = lcg(state);
+            vals.push(state % 90 - 45);
+            i = i + 1;
+        }
+
+        let mut f1 = mf_new();
+        let mut i1 = 0;
+        while i1 < vals.len() {
+            mf_add(mut f1, vals[i1]);
+            i1 = i1 + 1;
+        }
+
+        let mut f2 = mf_new();
+        let mut i2 = vals.len() - 1;
+        while i2 >= 0 {
+            mf_add(mut f2, vals[i2]);
+            i2 = i2 - 1;
+        }
+
+        let mut f3 = mf_new();
+        let rot = vals.len() / 2;
+        let mut i3 = 0;
+        while i3 < vals.len() {
+            mf_add(mut f3, vals[(i3 + rot) % vals.len()]);
+            i3 = i3 + 1;
+        }
+
+        if mf_median(f1) != mf_median(f2) or mf_median(f1) != mf_median(f3) {
+            p2 = p2 + 1;
+        }
+        t = t + 1;
+    }
+
+    // P5 — the extremes. A negation-based max-heap traps here rather than
+    // returning a wrong answer, so this is a liveness check, not a value check.
+    let mut p5 = 0;
+    let extremes = [i64.MIN, i64.MAX, 0, i64.MIN, i64.MAX, -1, 1, i64.MIN];
+    let mut e = mf_new();
+    let mut f = ss_new();
+    let mut g = sf_new();
+    let mut ei = 0;
+    while ei < extremes.len() {
+        mf_add(mut e, extremes[ei]);
+        ss_add(mut f, extremes[ei]);
+        sf_add(mut g, extremes[ei]);
+        if mf_median(e) != ss_median(f) or mf_median(e) != sf_median(g) {
+            p5 = p5 + 1;
+        }
+        ei = ei + 1;
+    }
+
+    println(f"streams {streams} adds {adds}");
+    println(f"P1 four-arm disagreements {p1}");
+    println(f"P2 order-dependence failures {p2}");
+    println(f"P3 heap-invariant failures {p3}");
+    println(f"P4 bracketing/membership failures {p4}");
+    println(f"P5 extreme-value failures {p5}");
+    println(f"median after the extremes {mf_median(e)}");
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

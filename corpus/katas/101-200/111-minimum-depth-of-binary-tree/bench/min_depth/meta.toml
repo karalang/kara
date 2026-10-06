@@ -1,0 +1,13 @@
+source = "kara-katas/leetcode/101-200/111-minimum-depth-of-binary-tree/bench/min_depth.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench", "shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

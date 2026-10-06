@@ -1,0 +1,39 @@
+
+enum Tok { Word(String), Num(i64) }
+struct MHolder { m: Map[i64, i64] }
+struct SHolder { s: Set[i64] }
+struct EInner { t: Tok }
+struct EOuter { inner: EInner }
+struct MInner { m: Map[i64, i64] }
+struct MOuter { inner: MInner }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let mut mp: Map[i64, i64] = Map.new();
+        mp.insert(i, i * 10); mp.insert(i + 1, i * 20);
+        let f: MHolder = MHolder { m: mp };
+        let g: MHolder = f;
+        total = total + g.m.len();
+        let mut mp2: Map[i64, i64] = Map.new();
+        mp2.insert(i, 1); mp2.insert(i + 1, 2); mp2.insert(i + 2, 3);
+        let o: MOuter = MOuter { inner: MInner { m: mp2 } };
+        let bound: MInner = o.inner;
+        total = total + bound.m.len();
+        let mut st: Set[i64] = Set.new();
+        st.insert(i); st.insert(i + 1);
+        let sf: SHolder = SHolder { s: st };
+        let sg: SHolder = sf;
+        total = total + sg.s.len();
+        let mut b: String = String.new();
+        b.push_str("padded well past inline width to force heap alloc here");
+        let eo: EOuter = EOuter { inner: EInner { t: Tok.Word(b) } };
+        let eb: EInner = eo.inner;
+        match eb.t {
+            Tok.Word(w) => { total = total + w.len(); },
+            Tok.Num(n) => { total = total + n; },
+        }
+        i = i + 1;
+    }
+    println(total);
+}

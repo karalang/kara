@@ -1,0 +1,18 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" }; }
+enum W2 { Two(R, R), None2 }
+enum W1 { One(R), None1 }
+fn take(r: R) -> i64 { let w: W2 = W2.Two(r, mk(2)); let w2: W2 = w; return 7; }
+fn take_ctl(r: R) -> i64 { let w: W2 = W2.Two(r, mk(4)); return 7; }
+fn take1(r: R) -> i64 { let w: W1 = W1.One(r); let w2: W1 = w; return 7; }
+fn take_twice(r: R) -> i64 { let w: W2 = W2.Two(r, mk(8)); let w2: W2 = w; let w3: W2 = w2; return 7; }
+fn take_swap(r: R) -> i64 { let w: W2 = W2.Two(mk(10), r); let w2: W2 = w; return 7; }
+fn main() {
+    { let v: i64 = take(mk(1)); println(f"v={v}"); println("one") }
+    { let v: i64 = take_ctl(mk(3)); println(f"v={v}"); println("two") }
+    { let v: i64 = take1(mk(5)); println(f"v={v}"); println("three") }
+    { let v: i64 = take_twice(mk(7)); println(f"v={v}"); println("four") }
+    { let v: i64 = take_swap(mk(9)); println(f"v={v}"); println("five") }
+    println("end")
+}

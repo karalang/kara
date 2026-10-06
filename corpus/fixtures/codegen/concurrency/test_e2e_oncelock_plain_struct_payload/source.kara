@@ -1,0 +1,10 @@
+
+struct Config { timeout: i64, retries: i64 }
+fn main() {
+    let c: OnceLock[Config] = OnceLock.new();
+    match c.set(Config { timeout: 30, retries: 5 }) { Ok(_) => println(1), Err(_) => println(0), }
+    match c.get() {
+        Some(cfg) => { println(cfg.timeout); println(cfg.retries); },
+        None => println(-1),
+    }
+}

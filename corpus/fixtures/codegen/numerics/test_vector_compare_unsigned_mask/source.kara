@@ -1,0 +1,7 @@
+
+fn main() {
+    let a = Vector[u32, 2](3000000000, 5);
+    let b = Vector[u32, 2](10, 10);
+    let m = a < b;
+    println(m[0]); println(m[1]);
+}

@@ -1,0 +1,20 @@
+
+fn main() {
+    for i in (0..5).rev() { print(i); }
+    println("");
+    for i in (1..=4).rev() { print(i); }
+    println("");
+    for i in (5..5).rev() { print(i); }
+    println("E");
+    let v: Vec[i64] = [10, 20, 30, 40];
+    let mut s: i64 = 0;
+    for i in (0..4).rev() { s = s + v[i]; }
+    println(s);
+    let w: Vec[i64] = (0..3).rev().collect();
+    println(w.get(0));
+    println((0..4).rev().fold(0, |acc, x| acc * 10 + x));
+    println((0..4).rev().sum());
+    println((1..=3).rev().count());
+    for a in (0..2).rev() { for b in (0..2).rev() { print(f"{a}{b} "); } }
+    println("");
+}

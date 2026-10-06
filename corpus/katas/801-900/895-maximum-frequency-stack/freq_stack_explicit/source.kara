@@ -1,0 +1,79 @@
+// LeetCode #895: Maximum Frequency Stack — freq counts + per-frequency stacks.
+//
+// `push(x)` records x at its NEW frequency; `pop()` returns the most frequent
+// element, breaking ties toward the one pushed most recently. The standard
+// solution is two maps and a running maximum:
+//
+//   freq  : Map[i64, i64]        how many copies of x are live
+//   buckets : Map[i64, Vec[i64]]   for each frequency f, the elements that
+//                                reached f, in push order
+//   maxfreq                      the largest f with a non-empty buckets
+//
+// `push` bumps `freq[x]` to f and appends x to `buckets[f]`; `pop` takes the
+// LAST element of `buckets[maxfreq]`, which is exactly the most-recent among the
+// most-frequent, then decrements. Both are O(1).
+//
+// The interesting surface here is `Map[i64, Vec[i64]]` — a container nested
+// inside a container, mutated in place through a `mut ref self` method. That
+// is the shape where a stale element pointer or an over-eager temp drop shows
+// up as a wrong answer rather than a crash.
+
+struct FreqStack {
+    freq: Map[i64, i64],
+    buckets: Map[i64, Vec[i64]],
+    maxfreq: i64,
+}
+
+fn new_freq_stack() -> FreqStack {
+    return FreqStack { freq: Map.new(), buckets: Map.new(), maxfreq: 0 };
+}
+
+impl FreqStack {
+    fn push(mut ref self, x: i64) {
+        let f = self.freq.get_or(x, 0) + 1;
+        self.freq.insert(x, f);
+        if f > self.maxfreq {
+            self.maxfreq = f;
+        }
+        match self.buckets.get(f) {
+            Some(bucket) => {
+                let mut b = bucket;
+                b.push(x);
+                self.buckets.insert(f, b);
+            }
+            None => {
+                let mut b: Vec[i64] = Vec.new();
+                b.push(x);
+                self.buckets.insert(f, b);
+            }
+        }
+    }
+
+    fn pop(mut ref self) -> i64 {
+        let mut b = self.buckets.get_or(self.maxfreq, Vec.new());
+        let x = b[b.len() - 1];
+        b.pop();
+        let empty = b.is_empty();
+        self.buckets.insert(self.maxfreq, b);
+        self.freq.insert(x, self.freq.get_or(x, 0) - 1);
+        if empty {
+            self.maxfreq = self.maxfreq - 1;
+        }
+        return x;
+    }
+}
+
+fn main() {
+    let mut st = new_freq_stack();
+    st.push(5);
+    st.push(7);
+    st.push(5);
+    st.push(7);
+    st.push(4);
+    st.push(5);
+    // freq: 5->3, 7->2, 4->1  => pops are 5, 7, 5, 4
+    println(st.pop().to_string());
+    println(st.pop().to_string());
+    println(st.pop().to_string());
+    println(st.pop().to_string());
+}

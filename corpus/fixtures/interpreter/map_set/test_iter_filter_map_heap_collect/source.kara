@@ -1,0 +1,7 @@
+
+enum Tok { Word(String), Num(i64) }
+fn main() {
+    let v = [Tok.Word("hi".to_string()), Tok.Num(3), Tok.Word("yo".to_string())];
+    let words: Vec[String] = v.iter().filter_map(|t| match t { Tok.Word(s) => Some(s.to_uppercase()), Tok.Num(_) => None }).collect();
+    println(words.join(","));
+}

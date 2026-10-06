@@ -1,0 +1,115 @@
+// LeetCode 250 — Count Univalue Subtrees, reverse index scan.
+//
+// No recursion, no stack, no memo array beyond one `Vec[bool]` — a single
+// descending pass over the node pool.
+//
+// The trick is a property of the BUILDER, not of the problem: `build` fills the
+// pool in level order, pushing each node's children after the node itself, so a
+// child's index is ALWAYS greater than its parent's. Walking i from n-1 down to
+// 0 therefore visits every node only after both of its children — which is
+// exactly the post-order guarantee the other two files pay a call stack or an
+// explicit one to obtain.
+//
+// This is the fastest of the three and the least portable: it is correct only
+// for pool-ordered trees. A pool built by BST insertion (#230) or by any
+// depth-first construction breaks the index invariant and this file with it.
+// The README states that dependency plainly — it is a property worth knowing you
+// are relying on, not one to discover later.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn build(vals: Slice[i64], null_val: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let len = vals.len();
+    if len == 0 or vals[0] == null_val {
+        return nodes;
+    }
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < len {
+        let cur = queue[head];
+        head = head + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let li = nodes.len() - 1;
+            nodes[cur].left = li;
+            queue.push(li);
+        }
+        i = i + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let ri = nodes.len() - 1;
+            nodes[cur].right = ri;
+            queue.push(ri);
+        }
+        i = i + 1;
+    }
+    return nodes;
+}
+
+fn count_univalue(vals: Slice[i64], null_val: i64) -> i64 {
+    let nodes = build(vals, null_val);
+    let n = nodes.len();
+    if n == 0 {
+        return 0;
+    }
+
+    let mut uni: Vec[bool] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        uni.push(false);
+        k = k + 1;
+    }
+
+    let mut total = 0;
+    let mut i = n - 1;
+    while i >= 0 {
+        let left = nodes[i].left;
+        let right = nodes[i].right;
+        let mut ok = true;
+        if left != -1 {
+            if not uni[left] or nodes[left].val != nodes[i].val {
+                ok = false;
+            }
+        }
+        if right != -1 {
+            if not uni[right] or nodes[right].val != nodes[i].val {
+                ok = false;
+            }
+        }
+        uni[i] = ok;
+        if ok {
+            total = total + 1;
+        }
+        i = i - 1;
+    }
+    return total;
+}
+
+fn main() {
+    let null = -1000;
+
+    let a: Array[i64, 7] = [5, 1, 5, 5, 5, -1000, 5];
+    println(f"{count_univalue(a, null)}");
+    let b: Array[i64, 0] = [];
+    println(f"{count_univalue(b, null)}");
+    let c: Array[i64, 1] = [1];
+    println(f"{count_univalue(c, null)}");
+    let d: Array[i64, 3] = [1, 1, 1];
+    println(f"{count_univalue(d, null)}");
+    let e: Array[i64, 3] = [1, 1, 2];
+    println(f"{count_univalue(e, null)}");
+    let f: Array[i64, 7] = [5, 5, 5, 5, 5, -1000, 5];
+    println(f"{count_univalue(f, null)}");
+    let g: Array[i64, 7] = [1, 2, 3, 4, 5, 6, 7];
+    println(f"{count_univalue(g, null)}");
+    let h: Array[i64, 7] = [7, 7, 7, 7, 7, 7, 7];
+    println(f"{count_univalue(h, null)}");
+}

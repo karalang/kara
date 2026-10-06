@@ -1,0 +1,15 @@
+
+shared enum Sh { A(String), B }
+impl Drop for Sh { fn drop(mut ref self) { println("dSh"); } }
+fn mkSh(n: i64) -> Sh { return Sh.A(f"payloadpayload{n}"); }
+
+#[allow(partial_move_of_drop_enum)]
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let out = match mkSh(i) { Sh.A(s) => { s } Sh.B => { "none".to_string() } };
+        println(f"w[{out}]");
+        i = i + 1;
+    }
+    println("done");
+}

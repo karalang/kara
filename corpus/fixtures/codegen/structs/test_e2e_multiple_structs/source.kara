@@ -1,0 +1,8 @@
+
+struct Vec2 { x: i64, y: i64 }
+fn dot(a: Vec2, b: Vec2) -> i64 { a.x * b.x + a.y * b.y }
+fn main() {
+    let a = Vec2 { x: 1, y: 2 };
+    let b = Vec2 { x: 3, y: 4 };
+    println(dot(a, b));
+}

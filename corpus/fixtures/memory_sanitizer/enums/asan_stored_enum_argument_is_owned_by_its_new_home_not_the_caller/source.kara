@@ -1,0 +1,25 @@
+
+enum Es { A(String), B }
+impl Drop for Es { fn drop(mut ref self) { println("dEs") } }
+fn mkes(i: i64) -> Es { return Es.A(f"e{i}"); }
+impl Es { fn is_a(ref self) -> i64 { match self { Es.A(s) => { return 1; } Es.B => { return 0; } } } }
+
+struct BoxS { mut ys: Vec[Es] }
+impl BoxS {
+    fn puts(mut ref self, e: Es) { self.ys.push(e); }
+    fn stash(b: mut ref BoxS, e: Es) { b.ys.push(e); }
+}
+fn pute(b: mut ref BoxS, e: Es) { b.ys.push(e); }
+fn stashg[T](v: mut ref Vec[T], x: T) { v.push(x); }
+
+fn c_meth()   { let mut d = BoxS { ys: Vec.new() }; d.puts(mkes(61)); println(f"a{d.ys.len()}"); }
+fn c_ctor()   { let mut d = BoxS { ys: Vec.new() }; d.puts(Es.A("z")); println(f"b{d.ys.len()}"); }
+fn c_free()   { let mut d = BoxS { ys: Vec.new() }; pute(mut d, mkes(76)); println(f"c{d.ys.len()}"); }
+fn c_assoc()  { let mut d = BoxS { ys: Vec.new() }; BoxS.stash(mut d, mkes(78)); println(f"d{d.ys.len()}"); }
+fn c_generic(){ let mut v: Vec[Es] = Vec.new(); stashg(mut v, mkes(75)); println(f"e{v.len()}"); }
+fn c_plain()  { let e = mkes(79); println(f"f{e.is_a()}"); }
+
+fn main() {
+    c_meth(); c_ctor(); c_free(); c_assoc(); c_generic(); c_plain();
+    println("end");
+}

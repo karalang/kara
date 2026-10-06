@@ -1,0 +1,31 @@
+fn main() {
+    let a: u64 = 18446744073709551615u64;
+    let b: u64 = 0;
+    println(f"{a < b} {(a, 1) < (b, 1)} {(1, a) > (1, b)} {(b, 1) <= (a, 0)}");
+    let mut u: Vec[(u64, i8)] = Vec.new();
+    u.push((18446744073709551615u64, -1));
+    u.push((0, 5));
+    u.push((9223372036854775808u64, -128));
+    u.push((1, 127));
+    println(f"{u.is_sorted()}");
+    let s = u.sorted();
+    println(f"{s}");
+    u.sort();
+    println(f"{u} {u.is_sorted()}");
+    println(f"{u.binary_search((9223372036854775808u64, -128))}");
+    let mut nv: Vec[Vec[u64]] = Vec.new();
+    nv.push(vec![18446744073709551615u64]);
+    nv.push(vec![3]);
+    nv.sort();
+    println(f"{nv}");
+    let mut c: Vec[(u64, i64)] = Vec.new();
+    c.push((18446744073709551615u64, 1));
+    c.push((2, 1));
+    c.sort_by(|x, y| x.cmp(y));
+    println(f"cmp {c}");
+    let arr: Array[u64, 2] = [18446744073709551615u64, 0];
+    let arr2: Array[u64, 2] = [0, 0];
+    println(f"arr {arr > arr2}");
+    let neg = (-1, 2) < (0, 2);
+    println(f"signed {neg}");
+}

@@ -1,0 +1,38 @@
+
+struct Stat { service: String }
+#[derive(Clone)]
+struct Entry { service: String }
+struct Bag { tags: Vec[String] }
+
+fn agg(entries: Vec[Entry]) -> Vec[Stat] {
+    let mut index: Map[String, usize] = Map.new();
+    let mut stats: Vec[Stat] = Vec.new();
+    let mut i = 0;
+    while i < entries.len() {
+        let e = entries[i].clone();
+        let _ = index.insert(e.service, 0 as usize);
+        stats.push(Stat { service: e.service });
+        i = i + 1;
+    }
+    return stats;
+}
+
+fn tag_once(b: Bag) -> Vec[String] {
+    let mut seen: Set[Vec[String]] = Set.new();
+    let _ = seen.insert(b.tags);
+    return b.tags;
+}
+
+fn main() {
+    let mut es: Vec[Entry] = Vec.new();
+    es.push(Entry { service: "alphabetical" });
+    es.push(Entry { service: "betamaximum" });
+    let out = agg(es);
+    println(f"{out[0].service} {out[1].service} {out.len()}");
+
+    let mut tags: Vec[String] = Vec.new();
+    tags.push("gamma-ray-burst");
+    let back = tag_once(Bag { tags: tags });
+    println(f"{back[0]} {back.len()}");
+    println("end");
+}

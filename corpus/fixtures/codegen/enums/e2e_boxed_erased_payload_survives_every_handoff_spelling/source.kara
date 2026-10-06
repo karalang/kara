@@ -1,0 +1,17 @@
+enum G1[T] { Y(T), N }
+struct H[T] { g: G1[T] }
+struct H2[T] { h: H[T] }
+fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }
+fn wrapNest[T](g: G1[T], c: bool) -> H2[T] { if c { return H2 { h: H { g: g } } } return H2 { h: H { g: G1.N } } }
+fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
+fn fnTail() { let g: G1[String] = G1.Y(f"aaaaaaaa-6"); let h = wrap(g, true); shw(h.g) }
+
+fn main() {
+    println("tail");   { let g: G1[String] = G1.Y(f"aaaaaaaa-1"); let h = wrap(g, true); shw(h.g) }
+    println("stmt");   { let g: G1[String] = G1.Y(f"aaaaaaaa-2"); let h = wrap(g, true); shw(h.g); }
+    println("tailF");  { let g: G1[String] = G1.Y(f"aaaaaaaa-3"); let h = wrap(g, false); shw(h.g) }
+    println("chain");  { let g: G1[String] = G1.Y(f"aaaaaaaa-4"); let h = wrapNest(g, true); shw(h.h.g) }
+    println("chainF"); { let g: G1[String] = G1.Y(f"aaaaaaaa-5"); let h = wrapNest(g, false); shw(h.h.g) }
+    println("fnTail"); fnTail()
+    println("end")
+}

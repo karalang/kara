@@ -1,0 +1,5 @@
+fn takep(p: P) -> i64 { return p.b; }
+fn go() -> i64 { let t = mkp(9); let mut r = payload(); let mut i = 0i64;
+  while i < 3i64 { takep(t); i = i + 1; }
+  return r.len(); }
+fn main() { println(go()); }

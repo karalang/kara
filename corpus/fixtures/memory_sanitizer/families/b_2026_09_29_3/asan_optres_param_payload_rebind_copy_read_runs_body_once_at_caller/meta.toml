@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_09_29_3.rs::asan_optres_param_payload_rebind_copy_read_runs_body_once_at_caller"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

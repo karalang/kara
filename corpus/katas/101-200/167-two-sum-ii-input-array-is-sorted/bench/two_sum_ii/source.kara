@@ -1,0 +1,58 @@
+// Benchmark workload for LeetCode #167 — Two Sum II (sorted, two-pointer).
+//
+// Build-once + punch: one large strictly-increasing (sorted, distinct) array is
+// generated once via a deterministic 32-bit LCG feeding positive gaps, then the
+// O(n) two-pointer sweep is run for PASSES PRNG-chosen targets. Each target is
+// arr[a]+arr[b] for distinct PRNG indices a,b, so a solution always exists and
+// the sweep converges from both ends with a data-dependent branch (advance lo
+// vs. retreat hi) and a loop-carried lo/hi dependency — it does NOT vectorize.
+// Every target differs, so nothing hoists. Sink = sum of the returned 1-based
+// index pairs across all passes.
+
+fn two_sum(arr: ref Vec[i64], target: i64) -> Array[i64, 2] {
+    let mut lo = 0;
+    let mut hi = arr.len() - 1;
+    while lo < hi {
+        let sum = arr[lo] + arr[hi];
+        if sum == target {
+            return [lo + 1, hi + 1];
+        }
+        if sum < target {
+            lo = lo + 1;
+        } else {
+            hi = hi - 1;
+        }
+    }
+    return [-1, -1]; // unreachable — a solution is guaranteed
+}
+
+fn main() {
+    let n = 20000;
+    let passes = 20000;
+
+    let mut arr: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut val = 0;
+    let mut c = 0;
+    while c < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        val = val + 1 + (state % 3); // gaps 1..3 -> sorted, distinct
+        arr.push(val);
+        c = c + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let a = state % n;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let mut b = state % n;
+        if a == b { b = (a + 1) % n; }
+        let target = arr[a] + arr[b];
+        let r = two_sum(arr, target);
+        sink = sink + r[0] + r[1];
+        p = p + 1;
+    }
+    println(sink);
+}

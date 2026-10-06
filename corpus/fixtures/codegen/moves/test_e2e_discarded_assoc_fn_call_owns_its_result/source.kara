@@ -1,0 +1,29 @@
+
+struct Q { id: i64, name: String }
+impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.id}") } }
+fn mkq(i: i64) -> Q { return Q { id: i, name: f"q{i}" }; }
+struct W { q: Q, n: i64 }
+enum Ev { A(Q), B(i64) }
+struct Hold { n: i64 }
+impl Q {
+  fn make2() -> Q { return mkq(62); }
+  fn passq(q: Q) -> Q { return q; }
+  fn count() -> i64 { return 7; }
+}
+impl W { fn mkw() -> W { return W { q: mkq(77), n: 1 }; } }
+impl Ev { fn mke() -> Ev { return Ev.A(mkq(71)); } }
+impl Hold { fn make3(ref self) -> Q { return mkq(63); } }
+fn mke2() -> Ev { return Ev.A(mkq(76)); }
+fn main() {
+  let h = Hold { n: 0 };
+  Q.make2();
+  Q.passq(mkq(64));
+  let _ = Q.make2();
+  Q.count();
+  W.mkw();
+  Ev.mke();
+  Ev.A(mkq(70));
+  mke2();
+  h.make3();
+  println("end");
+}

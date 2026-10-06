@@ -1,0 +1,4 @@
+fn go() -> i64 { let t = mkp(9); let mut v: Vec[String] = Vec.new();
+  v.push(t.a);
+  return v.len(); }
+fn main() { println(go()); }

@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut i: i64 = 0i64;
+    while i < 5i64 {
+        let k: String = f"stable-key-padding-padding";
+        match m.try_insert(k, i) {
+            Ok(o) => match o { Some(v) => println(v), None => println("fresh") },
+            Err(_) => println("oom"),
+        }
+        i = i + 1;
+    }
+    println(m.len());
+}

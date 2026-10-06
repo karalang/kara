@@ -1,0 +1,16 @@
+
+const LO: i64 = 10;
+const HI: i64 = 20;
+fn classify(n: i64) -> i64 {
+    match n {
+        ..LO => 1,
+        LO..=HI => 2,
+        _ => 3,
+    }
+}
+fn main() {
+    println(classify(5));    // below LO → 1
+    println(classify(10));   // lower bound → 2
+    println(classify(20));   // upper bound (inclusive) → 2
+    println(classify(25));   // above → 3
+}

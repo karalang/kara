@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let text = "first-line-payload-aaaaaaaaaaaaaaaa\r\n\r\nthird-line-payload-bbbbbbbbbbbbbbbb\n";
+        let ls = text.lines();
+        total = total + ls.len();
+        for l in ls { total = total + l.len(); }
+        i = i + 1;
+    }
+    println(f"{total}");
+}

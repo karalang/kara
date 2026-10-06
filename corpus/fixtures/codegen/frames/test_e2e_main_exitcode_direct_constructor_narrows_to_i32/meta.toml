@@ -1,0 +1,13 @@
+source = "tests/codegen/frames.rs::test_e2e_main_exitcode_direct_constructor_narrows_to_i32"
+dedup_of = []
+expect = "panic:7"
+exit = 7
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 7
+rules = []
+backends = []
+env = {}
+note = ""

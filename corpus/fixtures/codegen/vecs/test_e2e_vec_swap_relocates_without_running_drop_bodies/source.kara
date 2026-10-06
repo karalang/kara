@@ -1,0 +1,12 @@
+
+struct Item { id: i64, tag: String }
+impl Drop for Item { fn drop(mut ref self) { println(f"D{self.id}"); } }
+struct Bag { xs: Vec[Item] }
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.xs.push(Item { id: 1, tag: "first_payload_long_enough_to_heap".to_string() });
+    b.xs.push(Item { id: 2, tag: "second_payload_long_enough_to_heap".to_string() });
+    println("built");
+    b.xs.swap(0, 1);
+    println(f"{b.xs[0].id}{b.xs[1].id}");
+}

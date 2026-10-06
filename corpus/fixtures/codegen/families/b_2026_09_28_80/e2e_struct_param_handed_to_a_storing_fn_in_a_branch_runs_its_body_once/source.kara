@@ -1,0 +1,22 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn skeep(t: S, v: mut ref Vec[S]) { v.push(t) }
+fn csf(t: S, v: mut ref Vec[S], c: bool) { if c { skeep(t, v) } }
+fn rkeep(t: R, v: mut ref Vec[R]) { v.push(t) }
+fn crf(t: R, v: mut ref Vec[R], k: i64) { match k { 1 => rkeep(t, v), _ => println("no") } }
+fn main() {
+    let mut u: Vec[S] = Vec.new();
+    csf(mks(1), mut u, false);
+    csf(mks(2), mut u, true);
+    let a = mks(3);
+    csf(a, mut u, false);
+    println(f"n{u.len()}");
+    let mut w: Vec[R] = Vec.new();
+    crf(R { id: 4 }, mut w, 0);
+    crf(R { id: 5 }, mut w, 1);
+    println(f"m{w.len()}");
+    println("end")
+}

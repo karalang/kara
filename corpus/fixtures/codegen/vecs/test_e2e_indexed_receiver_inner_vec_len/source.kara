@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut outer: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    a.push(2);
+    a.push(3);
+    outer.push(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(10);
+    outer.push(b);
+    println(outer[0].len());
+    println(outer[1].len());
+}

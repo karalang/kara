@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut m: Map[String, Vec[i64]] = Map.new();
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    m.insert("vec-value-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), v);
+    match m.remove("vec-value-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()) {
+        Some(got) => println(got.len()),
+        None => println(-1_i64),
+    }
+    println(m.len());
+}

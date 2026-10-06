@@ -1,0 +1,80 @@
+// Benchmark workload for LeetCode #222 — Count Complete Tree Nodes.
+//
+// Build-once + punch: a large complete binary tree is materialised ONCE as an
+// index pool (Vec[Node]; node i has children 2i+1 / 2i+2, -1 = null), then the
+// O(log^2 n) spine-height count is run PASSES times, each rooted at a different
+// near-top subtree (start = p mod TOP_SPAN, cycling the topmost few levels so
+// every call is a heavy traversal). count_nodes walks the far-left and far-right
+// spines (nodes[cur].left / .right — a pointer chase through the pool that does
+// NOT vectorize), returns 2^h - 1 for a perfect subtree, and otherwise recurses
+// into both children: a data-dependent branch (lh == rh) and recursion depth. The
+// per-pass start varies, so the optimizer cannot hoist the repeated evaluation.
+// Sink = the accumulated (mod) sum of the counts.
+
+struct Node {
+    val: i64,
+    left: i64,
+    right: i64,
+}
+
+fn build(n: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let l = 2 * i + 1;
+        let r = 2 * i + 2;
+        let lc = if l < n { l } else { -1 };
+        let rc = if r < n { r } else { -1 };
+        nodes.push(Node { val: i, left: lc, right: rc });
+        i = i + 1;
+    }
+    return nodes;
+}
+
+fn left_height(nodes: ref Vec[Node], idx: i64) -> i64 {
+    let mut h = 0;
+    let mut cur = idx;
+    while cur != -1 {
+        h = h + 1;
+        cur = nodes[cur].left;
+    }
+    return h;
+}
+
+fn right_height(nodes: ref Vec[Node], idx: i64) -> i64 {
+    let mut h = 0;
+    let mut cur = idx;
+    while cur != -1 {
+        h = h + 1;
+        cur = nodes[cur].right;
+    }
+    return h;
+}
+
+fn count_nodes(nodes: ref Vec[Node], idx: i64) -> i64 {
+    if idx == -1 { return 0; }
+    let lh = left_height(nodes, idx);
+    let rh = right_height(nodes, idx);
+    if lh == rh {
+        return (1 << lh) - 1;
+    }
+    return 1 + count_nodes(nodes, nodes[idx].left) + count_nodes(nodes, nodes[idx].right);
+}
+
+fn main() {
+    let n = 2000000;
+    let passes = 2000000;
+    let top_span = 2048;                  // cycle the topmost subtree roots
+    let modulus = 1000000007;
+
+    let nodes = build(n);
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let start = p % top_span;
+        sink = (sink + count_nodes(nodes, start)) % modulus;
+        p = p + 1;
+    }
+    println(sink);
+}

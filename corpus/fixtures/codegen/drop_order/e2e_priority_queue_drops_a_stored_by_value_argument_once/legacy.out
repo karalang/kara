@@ -1,0 +1,6 @@
+stored
+pop 1
+drop 1
+pop 3
+drop 3
+end

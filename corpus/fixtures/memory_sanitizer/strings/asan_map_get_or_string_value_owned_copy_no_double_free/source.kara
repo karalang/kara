@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    let k = "key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    let v = "val-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();
+    m.insert(k.clone(), v);
+    let hit = m.get_or(k.clone(), "dflt-cccccccccccccccccccccccccccccccc".to_string());
+    let miss = m.get_or("absent-dddddddddddddddddddddddddddddd".to_string(),
+                        "dflt-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string());
+    println(hit);
+    println(miss);
+}

@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let _ = m.insert(1, 42);
+    println(m.get(1).is_some());
+    println(m.get(2).is_some());
+    println(m.get(1).is_none());
+    println(m.get(2).is_none());
+}

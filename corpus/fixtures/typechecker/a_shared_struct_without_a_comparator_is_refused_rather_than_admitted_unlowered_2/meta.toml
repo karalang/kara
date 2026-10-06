@@ -1,0 +1,13 @@
+source = "tests/typechecker.rs::a_shared_struct_without_a_comparator_is_refused_rather_than_admitted_unlowered"
+dedup_of = []
+expect = "error:E0208"
+exit = 1
+tags = ["shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

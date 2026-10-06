@@ -1,0 +1,98 @@
+// LeetCode #325: Maximum Size Subarray Sum Equals k — every start, every end.
+//
+// The quadratic oracle the other arms are checked against. For each start j
+// it extends the end i one value at a time, keeping the running sum, and
+// records the length whenever the sum is k. No map at all.
+//
+// O(n^2) time, O(1) extra space.
+
+fn max_sub_len(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    for j in 0..n {
+        let mut s = 0;
+        for i in j..n {
+            s += nums[i];
+            if s == k and i - j + 1 > best {
+                best = i - j + 1;
+            }
+        }
+    }
+    return best;
+}
+
+fn show(a: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..a.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(f"{a[i]}");
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(nums: Vec[i64], k: i64) {
+    println(f"{show(nums)} k={k} -> {max_sub_len(nums, k)}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// Values in [-r, r].
+fn random_input(n: i64, r: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        a.push(next(seed) % (2 * r + 1) - r);
+    }
+    return a;
+}
+
+fn main() {
+    // The two examples from the problem statement.
+    report([1, -1, 5, -2, 3], 3);
+    report([-2, -1, 2, 1], 1);
+
+    // No subarray sums to k.
+    report([1, 2, 3], 7);
+    report([5], 4);
+
+    // A single element, equal to k, and the whole array.
+    report([5], 5);
+    report([1, 2, 3], 6);
+
+    // k = 0: the longest zero-sum run, and an all-zero array.
+    report([3, -3, 1, -1, 2], 0);
+    report([0, 0, 0, 0], 0);
+
+    // A prefix sum repeats: the FIRST occurrence must win, the later one is
+    // shorter. Overwriting it gives 2 here instead of 6.
+    report([1, -1, 1, -1, 1, -1], 0);
+
+    // Negative k, and the problem's extremes: values +-10^4.
+    report([-5, 2, -3, 4, -1], -6);
+    report([10000, -10000, 10000, -10000, 10000], 10000);
+
+    // Small random inputs: every arm prints these.
+    let mut seed = 325;
+    let sizes: Vec[i64] = [6, 9, 12, 15];
+    let ranges: Vec[i64] = [2, 3, 5, 1];
+    for t in 0..sizes.len() {
+        let a = random_input(sizes[t], ranges[t], mut seed);
+        let k = next(mut seed) % 7 - 3;
+        report(a, k);
+    }
+
+    // Larger inputs, still small enough for the quadratic arm.
+    let big: Vec[i64] = [500, 2000, 3000];
+    let rs: Vec[i64] = [3, 50, 10000];
+    for t in 0..big.len() {
+        let a = random_input(big[t], rs[t], mut seed);
+        for _ in 0..4 {
+            let k = (next(mut seed) % 41 - 20) * rs[t] / 4;
+            println(f"n={big[t]} r={rs[t]} k={k} -> {max_sub_len(a, k)}");
+        }
+    }
+}

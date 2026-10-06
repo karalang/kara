@@ -1,0 +1,19 @@
+
+fn vmap() -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1_i64, "first value string padded out beyond thirty-six bytes");
+    m.insert(2_i64, "second value string padded out beyond thirty-six byte");
+    m.insert(3_i64, "third value string padded out beyond thirty-six bytess");
+    return m;
+}
+
+fn main() {
+    let mut i = 1;
+    while i < 4 {
+        match vmap().get(i) {
+            Some(s) => println(s),
+            None => println("none"),
+        };
+        i = i + 1;
+    };
+}

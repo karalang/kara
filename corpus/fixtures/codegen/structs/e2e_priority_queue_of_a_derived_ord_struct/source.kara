@@ -1,0 +1,18 @@
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Task { pri: i64, id: i64 }
+fn main() {
+    let mut q: PriorityQueue[Task] = PriorityQueue.new();
+    q.push(Task { pri: 3, id: 30 });
+    q.push(Task { pri: 1, id: 10 });
+    q.push(Task { pri: 2, id: 20 });
+    match q.peek() { Some(t) => { println(t.id); } None => {} }
+    println(q.len());
+    while q.len() > 0 {
+        match q.pop() { Some(t) => { println(t.id); } None => {} }
+    }
+    let mut m: PriorityQueue[Task] = PriorityQueue.max_first();
+    m.push(Task { pri: 3, id: 30 });
+    m.push(Task { pri: 1, id: 10 });
+    match m.peek() { Some(t) => { println(t.id); } None => {} }
+}

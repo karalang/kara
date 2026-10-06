@@ -1,0 +1,13 @@
+
+#[derive(Display)]
+enum Color { Red, Green, Blue }
+fn main() {
+    let a = Color.Green;
+    println(a.to_string());
+    println(f"c={a}");
+    println(a);
+    let b = Color.Red;
+    println(b);
+    let c = Color.Blue;
+    println(c);
+}

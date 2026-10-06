@@ -1,0 +1,5 @@
+
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    println(ws.fd);
+}

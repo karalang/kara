@@ -1,0 +1,5 @@
+fn main() {
+         let r = Regex.compile("[0-9]+").unwrap();
+         let ms = r.find_all("abc 123 def 456");
+         println(ms.len());
+     }

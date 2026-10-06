@@ -1,0 +1,56 @@
+// LeetCode 186 — Reverse Words in a String II. (Premium.)
+//
+// Reverse the ORDER of the words in a character array IN PLACE, with O(1) extra
+// space. Words are separated by single spaces, no leading/trailing spaces. The
+// two-reversal trick: first reverse the ENTIRE array, then reverse each
+// individual word back. "the sky" → reverse all → "yks eht" → reverse each word
+// → "sky the". Both steps are in-place index swaps.
+
+fn reverse_range(a: mut ref Vec[char], lo: i64, hi: i64) {
+    let mut i = lo;
+    let mut j = hi;
+    while i < j {
+        let t: char = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        i = i + 1;
+        j = j - 1;
+    }
+}
+
+fn reverse_words(s: String) -> String {
+    let mut a: Vec[char] = s.chars().collect();
+    let n = a.len();
+    if n > 0 {
+        reverse_range(mut a, 0, n - 1);
+    }
+    // Reverse each maximal non-space run back to reading order.
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or a[i] == ' ' {
+            if i > start {
+                reverse_range(mut a, start, i - 1);
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    let mut out: String = "";
+    for c in a {
+        out.push(c);
+    }
+    return out;
+}
+
+fn report(s: String) {
+    println(reverse_words(s));
+}
+
+fn main() {
+    report("the sky is blue");       // blue is sky the
+    report("hello world");           // world hello
+    report("a");                     // a
+    report("a b c");                 // c b a
+    report("perfect makes practice"); // practice makes perfect
+}

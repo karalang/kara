@@ -1,0 +1,62 @@
+// Benchmark kernel for LeetCode #340 (Longest Substring with At Most K
+// Distinct Characters), the ★ arm as written: a sliding window with a count
+// per character in a Map.
+//
+// Eight pseudo-random strings (20,000 letters each, drawn from alphabets of
+// 4 to 52 letters) are generated once. Round r takes string r % 8 and
+// k = (r * 7) % 30 + 1, for 400 rounds. The sink is a rolling hash of every
+// round's answer.
+
+fn longest_k_distinct(s: ref String, k: i64) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut counts: Map[char, i64] = Map.new();
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..cs.len() {
+        let c = cs[right];
+        counts.insert(c, counts.get(c).unwrap_or(0) + 1);
+        while counts.len() > k {
+            let d = cs[left];
+            let n = counts.get(d).unwrap() - 1;
+            if n == 0 {
+                counts.remove(d);
+            } else {
+                counts.insert(d, n);
+            }
+            left += 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    return best;
+}
+
+// ---- input --------------------------------------------------------------
+
+fn next(state: mut ref i64) -> i64 {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return state >> 8;
+}
+
+fn gen_text(seed: i64, n: i64, alpha: i64) -> String {
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".chars().collect();
+    let mut state = seed;
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push(letters[next(mut state) % alpha]);
+    }
+    return out;
+}
+
+fn main() {
+    let alphas = vec![4, 8, 12, 20, 26, 34, 44, 52];
+    let mut texts: Vec[String] = Vec.new();
+    for i in 0..8 {
+        texts.push(gen_text(1000 + i, 20000, alphas[i]));
+    }
+    let mut h = 0;
+    for r in 0..400 {
+        let k = (r * 7) % 30 + 1;
+        h = (h * 31 + longest_k_distinct(texts[r % 8], k)) % 1000000007;
+    }
+    println(h);
+}

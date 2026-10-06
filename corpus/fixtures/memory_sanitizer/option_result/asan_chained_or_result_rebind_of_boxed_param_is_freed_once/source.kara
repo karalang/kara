@@ -1,0 +1,48 @@
+
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+struct W { r: R, s: String, t: String }
+fn mw(i: i64) -> W { W { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}", t: f"another-long-heap-string-{i}" } }
+fn chain(a: Option[S]) -> i64 { let c = a; let d = c; let e = d; println("in"); 1 }
+fn chain_mut(a: Option[S]) -> i64 { let c = a; let mut d = c; println("in"); 2 }
+fn chain_match(a: Option[S]) -> i64 { let c = a; let d = c; match d { Some(s) => s.r.id, None => 0 } }
+fn chain_if(a: Option[S], k: bool) -> i64 { let c = a; if k { let d = c; println("in") }; 4 }
+fn res_ok(a: Result[W, i64]) -> i64 { let c = a; println("in"); 5 }
+fn res_err(a: Result[i64, W]) -> i64 { let c = a; println("in"); 6 }
+fn res_both(a: Result[W, W]) -> i64 { let c = a; println("in"); 7 }
+fn res_match(a: Result[W, i64]) -> i64 { let c = a; match c { Ok(w) => w.r.id, Err(e) => e } }
+fn res_chain_mut(a: Result[W, i64]) -> i64 { let mut c = a; let d = c; println("in"); 9 }
+fn main() {
+    let a: Option[S] = Some(mk(1));
+    println(f"k{chain(a)}");
+    println(f"k{chain(Some(mk(2)))}");
+    let b: Option[S] = Some(mk(3));
+    println(f"k{chain_mut(b)}");
+    println(f"k{chain_mut(Some(mk(4)))}");
+    let c: Option[S] = Some(mk(5));
+    println(f"k{chain_match(c)}");
+    println(f"k{chain_match(Some(mk(6)))}");
+    let d: Option[S] = Some(mk(7));
+    println(f"k{chain_if(d, true)}");
+    println(f"k{chain_if(Some(mk(8)), false)}");
+    let e: Result[W, i64] = Ok(mw(9));
+    println(f"k{res_ok(e)}");
+    println(f"k{res_ok(Ok(mw(10)))}");
+    let f: Result[i64, W] = Err(mw(11));
+    println(f"k{res_err(f)}");
+    println(f"k{res_err(Err(mw(12)))}");
+    println(f"k{res_err(Ok(0))}");
+    let g: Result[W, W] = Err(mw(13));
+    println(f"k{res_both(g)}");
+    println(f"k{res_both(Ok(mw(14)))}");
+    let h: Result[W, i64] = Ok(mw(15));
+    println(f"k{res_match(h)}");
+    println(f"k{res_match(Ok(mw(16)))}");
+    println(f"k{res_match(Err(17))}");
+    let m: Result[W, i64] = Ok(mw(18));
+    println(f"k{res_chain_mut(m)}");
+    println(f"k{res_chain_mut(Ok(mw(19)))}");
+    println("end")
+}

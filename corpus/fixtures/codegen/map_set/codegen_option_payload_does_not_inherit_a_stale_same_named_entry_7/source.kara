@@ -1,0 +1,5 @@
+fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn main() {
+    show(Some(7));
+    show(Some("hi"));
+}

@@ -1,0 +1,14 @@
+
+#[derive(Hash, Eq, PartialEq)]
+shared struct K { id: i64, name: String }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let mut i = 0i64;
+    while i < 20i64 {
+        let k = K { id: i, name: f"key-{i}-padding-padding-padding" };
+        m.insert(k, i);
+        m.remove(k);
+        i = i + 1;
+    }
+    println(f"{m.len()}");
+}

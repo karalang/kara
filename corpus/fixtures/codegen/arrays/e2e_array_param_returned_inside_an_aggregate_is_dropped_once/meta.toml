@@ -1,0 +1,13 @@
+source = "tests/codegen/arrays.rs::e2e_array_param_returned_inside_an_aggregate_is_dropped_once"
+dedup_of = ["tests/memory_sanitizer/arrays.rs::asan_array_param_returned_inside_an_aggregate_is_freed_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

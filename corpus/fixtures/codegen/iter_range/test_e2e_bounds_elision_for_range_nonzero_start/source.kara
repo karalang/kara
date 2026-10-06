@@ -1,0 +1,17 @@
+
+fn sum_skip_first(v: ref Vec[i64]) -> i64 {
+    let n = v.len();
+    let mut acc = 0i64;
+    for i in 1..n {
+        acc = acc + v[i];
+    }
+    acc
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(100);
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    println(sum_skip_first(v));
+}

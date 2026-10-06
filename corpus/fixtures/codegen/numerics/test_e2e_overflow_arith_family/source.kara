@@ -1,0 +1,17 @@
+
+fn main() {
+    let a = 2000000000i32;
+    match a.checked_add(2000000000i32) { Some(v) => println(v), None => println(-1i32) }
+    match a.checked_add(100i32) { Some(v) => println(v), None => println(-1i32) }
+    println(a.saturating_add(2000000000i32));
+    let u: u8 = 3u8;
+    println(u.saturating_sub(10u8));
+    let pair = a.overflowing_add(2000000000i32);
+    println(pair.0);
+    if pair.1 { println(1i32); } else { println(0i32); }
+    let big = 9000000000000000000i64;
+    match big.checked_add(big) { Some(v) => println(v), None => println(-7i64) }
+    let w: u32 = 4000000000u32;
+    println(w.checked_mul(2u32).is_none());
+    println(w.saturating_add(1000000000u32));
+}

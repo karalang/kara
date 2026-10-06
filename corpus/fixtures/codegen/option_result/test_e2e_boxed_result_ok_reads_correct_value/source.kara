@@ -1,0 +1,11 @@
+
+struct Wide6 { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+fn make() -> Result[Wide6, i64] {
+    return Ok(Wide6 { a: 1, b: 2, c: 3, d: 4, e: 5, f: 600 });
+}
+fn main() {
+    match make() {
+        Ok(w) => println(w.f),
+        Err(n) => println(n),
+    }
+}

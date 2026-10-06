@@ -1,0 +1,10 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn main() {
+    let x = [R { id: 1 }, R { id: 11 }, R { id: 21 }];
+    defer {
+        println("defer");
+    }
+    let oob1: Vec[i64] = [1];
+    println(f"{oob1[5]}");
+}

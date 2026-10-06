@@ -1,0 +1,20 @@
+
+fn shout(s: ref String) {
+    println(s);
+    println(s.len());
+}
+
+fn main() {
+    let mut names: Vec[String] = Vec.new();
+    names.push("al" + "ice");
+    names.push("b" + "ob");
+    names.push("ca" + "rol");
+    let mut i = 0;
+    while i < 3 {
+        match names.get(i) {
+            Some(n) => shout(n),
+            None => println("none"),
+        };
+        i = i + 1;
+    };
+}

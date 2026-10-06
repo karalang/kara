@@ -1,0 +1,8 @@
+
+fn main() {
+    let n: i64 = env.args().len() as i64;
+    let base: i32 = -2147483648i32;
+    let a: i32 = base + (n as i32) - 1i32;
+    println(a);
+    println(-a);
+}

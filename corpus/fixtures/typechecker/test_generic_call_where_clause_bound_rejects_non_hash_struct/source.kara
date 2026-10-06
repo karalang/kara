@@ -1,0 +1,6 @@
+struct P { x: i64 }
+           fn use_hash[T](_x: T) where T: Hash {}
+           fn main() {
+               let p = P { x: 1 };
+               use_hash(p);
+           }

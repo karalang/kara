@@ -1,0 +1,15 @@
+
+fn maybe() -> Option[i64] { None }
+fn use_vec() -> Option[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    let _ = maybe()?;
+    Some(v.len() as i64)
+}
+fn main() {
+    match use_vec() {
+        Some(n) => println(n),
+        None => println(0),
+    }
+}

@@ -1,0 +1,10 @@
+
+fn dyn_part() -> String {
+    "x"
+}
+
+fn main() {
+    let s = "a";
+    let out = f"{s}{dyn_part()}";
+    println(out);
+}

@@ -1,0 +1,25 @@
+
+effect resource Reporter;
+
+host fn report(x: i64) -> i64 with writes(Reporter);
+host fn log_str(ptr: *const u8, len: i64) with writes(Reporter);
+
+fn task_body(id: i64) -> i64 with writes(Reporter) {
+    report(id)
+}
+
+fn main() with writes(Reporter) {
+    // host fn from the primary worker: the (worker→main→worker) proxy.
+    let doubled = report(21);
+    println(doubled);
+    // string arg: (ptr, len) into the SHARED linear memory the main
+    // thread reads directly.
+    let msg = c"threaded kara host";
+    log_str(msg.as_ptr(), msg.len());
+    // host fn from a POOL worker: the spawned task proxies to main on
+    // the identical shared control block.
+    let h: TaskHandle[i64] = spawn(|| task_body(100));
+    let r: i64 = h.join();
+    println(r);
+    println("guest-done");
+}

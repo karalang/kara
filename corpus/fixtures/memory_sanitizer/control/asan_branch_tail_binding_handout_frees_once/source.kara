@@ -1,0 +1,108 @@
+
+enum E { A(String), B }
+fn mkA(n: i64) -> String { return f"A{n}-aaaaaaaaaaaa"; }
+fn mkB(n: i64) -> String { return f"B{n}-bbbbbbbbbbbbbbbbbbbbbbbb"; }
+fn use_s(s: String) -> i64 { return s.len(); }
+fn tail_block(n: i64) -> String { let t = mkB(n); { t } }
+fn tail_branch(n: i64, c: bool) -> String { let t = mkB(n); if c { t } else { mkA(n) } }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let c = n > 0;
+
+    let a1 = mkB(n);
+    let ra1 = { a1 }.contains("bbb");
+    println(f"a1={ra1} {a1}");
+    let a2 = mkB(n);
+    let ra2 = { { a2 } }.contains("bbb");
+    println(f"a2={ra2} {a2}");
+
+    let b1 = mkB(n);
+    let rb1 = if c { b1 } else { mkA(n) }.contains("bbb");
+    println(f"b1={rb1} {b1}");
+    let b2 = mkB(n);
+    let rb2 = if n < 0 { mkA(n) } else { b2 }.contains("bbb");
+    println(f"b2={rb2} {b2}");
+    let b3 = mkA(n);
+    let b4 = mkB(n);
+    let rb3 = if c { b3 } else { b4 }.contains("aaa");
+    println(f"b3={rb3} {b3} {b4}");
+
+    let c1 = mkB(n);
+    let rc1 = match n { 0 => mkA(n), _ => c1 }.contains("bbb");
+    println(f"c1={rc1} {c1}");
+    let c2 = mkB(n);
+    let rc2 = match n { 1 => c2, _ => mkA(n) }.contains("bbb");
+    println(f"c2={rc2} {c2}");
+    let c3 = mkB(n);
+    let o3: Option[i64] = Option.Some(n);
+    let rc3 = if let Option.Some(_x) = o3 { c3 } else { mkA(n) }.contains("bbb");
+    println(f"c3={rc3} {c3}");
+
+    let d1 = mkB(n);
+    println({ d1 });
+    println(f"d1={d1}");
+    let d2 = mkB(n);
+    let rd2 = "x" + { d2 };
+    println(f"d2={rd2}");
+    let d3 = mkB(n);
+    let rd3 = f"[{if c { d3 } else { mkA(n) }}]";
+    println(f"d3={rd3}");
+    let d4 = mkB(n);
+    { d4 };
+    println(f"d4={d4}");
+
+    let e1 = mkB(n);
+    let re1 = { e1 };
+    println(f"e1={re1}");
+    let e2 = mkB(n);
+    let re2 = if n < 0 { mkA(n) } else { e2 };
+    println(f"e2={re2}");
+    let e3 = mkB(n);
+    let re3 = use_s({ e3 });
+    println(f"e3={re3}");
+    let e4 = mkB(n);
+    let re4 = use_s(if n < 0 { mkA(n) } else { e4 });
+    println(f"e4={re4}");
+    let e5 = mkB(n);
+    let mut ev: Vec[String] = Vec.new();
+    ev.push(if n < 0 { mkA(n) } else { e5 });
+    println(f"e5={ev[0]}");
+    let re6 = tail_block(n);
+    println(f"e6={re6}");
+    let re7 = tail_branch(n, c);
+    println(f"e7={re7}");
+
+    let mut i = 0;
+    while i < 3 {
+        let f1 = mkB(n + i);
+        let rf1 = if i < 3 { f1 } else { mkA(n) }.contains("bbb");
+        println(f"f1={rf1}");
+        i = i + 1;
+    }
+
+    let rg1 = if c { mkA(n) } else { mkB(n) }.contains("aaa");
+    println(f"g1={rg1}");
+    let rg2 = { mkA(n) }.contains("aaa");
+    println(f"g2={rg2}");
+    let rg3 = use_s(if c { mkA(n) } else { mkB(n) });
+    println(f"g3={rg3}");
+    let h1 = mkB(n);
+    if c { mkA(n) } else { h1 };
+    println(f"h1={h1}");
+
+    let i1 = { let t = mkB(n); t };
+    println(f"i1={i1}");
+    let e = E.A("k");
+    let i2 = match e { E.A(x) => { let p = f"[{x}]"; p }, E.B => "z" };
+    println(f"i2={i2}");
+    let v: Vec[String] = ["b", "a"];
+    let i3: Vec[String] = v.sorted();
+    println(f"i3={i3[0]} {v[0]}");
+    let o4: Option[String] = Option.Some(mkB(n));
+    let i4 = match o4 { Option.Some(x) => x, Option.None => mkA(n) };
+    println(f"i4={i4}");
+    let vv: Vec[i64] = Vec[1i64, 2i64, 3i64];
+    let i5: Vec[Vec[i64]] = vv.iter().chunks(2i64).collect();
+    println(f"i5={i5.len()}");
+}

@@ -1,0 +1,14 @@
+remove:
+drop 1 a1
+0
+swapremove:
+drop 2 b2
+0
+bound:
+drop 3 c3
+0
+survivor:
+drop 4 d4
+1
+drop 5 e5
+end

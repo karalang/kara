@@ -1,0 +1,13 @@
+
+fn main() {
+    let name = "ka" + "ra";
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    let b = m.get("b");
+    match b {
+        Some(val) => println(val),
+        None => println(0),
+    }
+    println(name);
+}

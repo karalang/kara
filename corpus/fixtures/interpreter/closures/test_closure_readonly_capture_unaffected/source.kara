@@ -1,0 +1,6 @@
+
+fn main() {
+    let base: i64 = 10;
+    let add = |x: i64| { base + x };
+    println(add(5i64).to_string());
+}

@@ -1,0 +1,39 @@
+
+fn twin() -> i64 {
+    let mut cols: SortedMap[i64, i64] = SortedMap.new();
+    cols.insert(1, 1);
+    let mut only: SortedSet[i64] = SortedSet.new();
+    only.insert(4);
+    return cols.len() + only.len();
+}
+fn colliding() -> String {
+    let mut cols: Map[i64, i64] = Map.new();
+    for i in 0..12 { cols.insert((i * 37) % 97 - 50, i); }
+    let k = cols.keys();
+    let mut s = "".to_string();
+    for i in 0..k.len() { s = s + k[i].to_string() + ","; }
+    return s;
+}
+fn clean() -> String {
+    let mut zzz: Map[i64, i64] = Map.new();
+    for i in 0..12 { zzz.insert((i * 37) % 97 - 50, i); }
+    let k = zzz.keys();
+    let mut s = "".to_string();
+    for i in 0..k.len() { s = s + k[i].to_string() + ","; }
+    return s;
+}
+fn main() {
+    println(if colliding() == clean() { "01 same" } else { "01 DIVERGED" });
+    let mut cols: Map[i64, i64] = Map.new();
+    cols.insert(7, 7);
+    println(cols);
+    println(f"03 {cols}");
+    let mut only: Set[i64] = Set.new();
+    only.insert(5);
+    println(only);
+    let mut keep: SortedMap[i64, i64] = SortedMap.new();
+    keep.insert(9, 9);
+    keep.insert(3, 3);
+    println(keep);
+    println(twin());
+}

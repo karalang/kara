@@ -1,0 +1,44 @@
+// LeetCode #319 — the literal simulation: flip the bulbs and count them.
+//
+// This arm does exactly what the statement describes and nothing else. It
+// allocates `n + 1` bulbs, runs round `i` for every `i` from 1 to `n` flipping
+// every `i`-th bulb, and then counts what is left on. No divisor argument, no
+// perfect squares, no square root — none of the reasoning the other three arms
+// depend on appears here at all, which is what makes it the oracle.
+//
+// The cost is the harmonic sum: round `i` touches `n/i` bulbs, so the total is
+// `n * (1 + 1/2 + 1/3 + … + 1/n)`, about `n * ln(n)`. For `n` of a million
+// that is roughly fourteen million toggles, against six Newton iterations for
+// the same answer. The gap between those two numbers is the whole kata.
+//
+// Index 0 is allocated and never touched, so bulb `b` really lives at slot
+// `b`. Paying one wasted slot to avoid an off-by-one everywhere else is a good
+// trade in an arm whose entire job is to be obviously correct.
+
+fn bulb_switch(n: i64) -> i64 {
+    let mut on: Vec[bool] = Vec.new();
+    for _ in 0..(n + 1) { on.push(false); }
+
+    for step in 1..(n + 1) {
+        let mut b = step;
+        while b <= n {
+            on[b] = not on[b];
+            b += step;
+        }
+    }
+
+    let mut count = 0;
+    for b in 1..(n + 1) {
+        if on[b] { count += 1; }
+    }
+    return count;
+}
+
+fn main() {
+    let cases: Vec[i64] = [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 15, 16, 99, 100, 101,
+                           4095, 4096, 10000];
+    for i in 0..cases.len() {
+        let n = cases[i];
+        print("n = " + n.to_string() + " -> " + bulb_switch(n).to_string() + "\n");
+    }
+}

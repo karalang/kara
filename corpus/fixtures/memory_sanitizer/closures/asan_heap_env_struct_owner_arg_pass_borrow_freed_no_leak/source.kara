@@ -1,0 +1,9 @@
+
+struct H { f: Fn(i64) -> i64, g: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn use_it(h: H) -> i64 { (h.f)(1i64) + (h.g)(2i64) }
+fn main() {
+    let a = H { f: make(10i64), g: make(20i64) };
+    let r = use_it(a);
+    println(f"{r + (a.f)(1i64) + (a.g)(1i64)}");
+}

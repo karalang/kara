@@ -1,0 +1,44 @@
+shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct Q[U] { u: U }
+struct Qn[U] { u: U, n: i64 }
+struct Qv[U] { u: U, v: U }
+struct W { u: S2 }
+fn mk(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn r1() { let mut q = Q { u: mk(9) }; let x = q.u; q.u = mk(8); println(f"x{q.u.id} {x.id}") }
+fn r2() { let mut q = Q { u: mk(9) }; let c = q.u.id > 3; if c { let x = q.u; println(f"m{x.id}") } q.u = mk(8); println(f"x{q.u.id}") }
+fn r3() { let mut q = W { u: mk(9) }; let x = q.u; q.u = mk(8); println(f"x{q.u.id} {x.id}") }
+fn r4() { let mut q = W { u: mk(9) }; let c = q.u.id > 3; if c { let x = q.u; println(f"m{x.id}") } q.u = mk(8); println(f"x{q.u.id}") }
+fn r5() { let mut q = Q { u: mk(9) }; let x = q.u; println(f"x{x.id}") }
+fn r6() { let mut q = Qn { u: mk(9), n: 1 }; let x = q.u; q.u = mk(8); println(f"x{q.u.id} {x.id} {q.n}") }
+fn r7() { let mut q = Qv { u: mk(9), v: mk(5) }; let x = q.u; q.u = mk(8); println(f"x{q.u.id} {x.id}") }
+fn k1() { let mut q = W { u: mk(9) }; let x = q.u; let c = x.id > 3; if c { q.u = mk(8); } println(f"x{x.id}") }
+fn k2() {
+  let mut q = W { u: mk(1) }; let mut i = 0;
+  while i < 2 { let x = q.u; println(f"t{x.id}"); q.u = mk(i + 5); i += 1; }
+}
+fn k3() { let mut q = W { u: mk(9) }; { let x = q.u; println(f"b{x.id}") } q.u = mk(8); println(f"x{q.u.id}") }
+fn k4w() -> W { let mut q = W { u: mk(9) }; let x = q.u; println(f"m{x.id}"); q.u = mk(8); return q }
+fn k4() { let w = k4w(); println(f"x{w.u.id}") }
+fn k7() {
+  let mut q = Q { u: mk(9) }; let x = q.u; println(f"x{x.id}")
+  q.u = mk(8); let y = q.u; q.u = mk(7); println(f"y{y.id}{q.u.id}")
+}
+fn k8() { let mut q = W { u: mk(9) }; let x = q.u; println(f"x{x.id}") }
+fn main() {
+  println("-r1"); r1()
+  println("-r2"); r2()
+  println("-r3"); r3()
+  println("-r4"); r4()
+  println("-r5"); r5()
+  println("-r6"); r6()
+  println("-r7"); r7()
+  println("-k1"); k1()
+  println("-k2"); k2()
+  println("-k3"); k3()
+  println("-k4"); k4()
+  println("-k7"); k7()
+  println("-k8"); k8()
+  println("end")
+}

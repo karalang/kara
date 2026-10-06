@@ -1,0 +1,15 @@
+
+fn spin(n: i64) -> i64 {
+    let mut s: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n { s = s + i; i = i + 1; }
+    return s;
+}
+
+fn main() {
+    let name = "ka" + "ra";
+    let mut m: Map[String, i64] = Map.new();
+    let heavy = spin(8);
+    m.insert("a", 1);
+    println(heavy - heavy);
+}

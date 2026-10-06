@@ -1,0 +1,12 @@
+
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Holder] = Some(Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i });
+        if let Some(Holder { name, id }) = o {
+            println(name.len() + id);
+        }
+        i = i + 1;
+    };
+}

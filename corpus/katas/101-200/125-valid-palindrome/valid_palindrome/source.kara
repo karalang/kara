@@ -1,0 +1,88 @@
+// LeetCode #125: Valid Palindrome — two-pointer in-place scan.
+//
+// A string is a valid palindrome if, after lowercasing letters and dropping
+// every non-alphanumeric byte, it reads the same forwards and backwards.
+//
+// Two indices walk inward over the zero-copy `bytes()` view; each skips bytes
+// that fail `is_alnum`, then the surviving pair is compared case-folded:
+//
+//   alnum filter  ->  is_alnum(b)          (b'0'..b'9' | b'a'..b'z' | b'A'..b'Z')
+//   case fold     ->  to_lower(b)          ('A'..'Z' + (b'a' - b'A'))
+//
+// This *directly* exercises the self-hosted lexer's identifier/keyword scan
+// surface: the same `is_alpha` / `is_ascii_digit` byte predicates and ASCII
+// case-fold, with no allocation — the bytes are classified and compared in
+// place, never copied into a buffer.
+
+fn is_alnum(b: u8) -> bool {
+    (b >= b'0' and b <= b'9')
+        or (b >= b'a' and b <= b'z')
+        or (b >= b'A' and b <= b'Z')
+}
+
+fn to_lower(b: u8) -> u8 {
+    if b >= b'A' and b <= b'Z' { b + (b'a' - b'A') } else { b }
+}
+
+fn is_palindrome(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    if n == 0 {
+        return true;
+    }
+
+    let mut i = 0;
+    let mut j = n - 1;
+    while i < j {
+        while i < j and not is_alnum(bytes[i]) {
+            i = i + 1;
+        }
+        while i < j and not is_alnum(bytes[j]) {
+            j = j - 1;
+        }
+        if i < j {
+            if to_lower(bytes[i]) != to_lower(bytes[j]) {
+                return false;
+            }
+            i = i + 1;
+            j = j - 1;
+        }
+    }
+    true
+}
+
+fn report(s: ref String) {
+    if is_palindrome(s) {
+        println(f"\"{s}\" -> true");
+    } else {
+        println(f"\"{s}\" -> false");
+    }
+}
+
+fn main() {
+    // LeetCode canonical examples.
+    report("A man, a plan, a canal: Panama");  // true
+    report("race a car");                       // false
+    report(" ");                                // true  (empty after filtering)
+
+    // Case folding.
+    report("Able was I ere I saw elBA");        // true
+    report("No lemon, no melon");               // true
+
+    // Digits participate.
+    report("0P");                               // false (0 vs p)
+    report("a1b2b1a");                          // true
+    report("1a2");                              // false
+
+    // Punctuation-only / single char / empty.
+    report(".,");                               // true
+    report("a");                                // true
+    report("");                                 // true
+    report("aa");                               // true
+    report("ab");                               // false
+
+    // Mixed punctuation between alnum.
+    report("Madam, I'm Adam");                  // true
+    report("Was it a car or a cat I saw?");     // true
+    report("Mr. Owl ate my metal worm");        // true
+}

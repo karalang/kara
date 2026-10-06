@@ -1,0 +1,10 @@
+
+fn main() with reads(FileSystem) {
+    match FileSystem.read_to_string("/nonexistent_karac_rts_test.txt") {
+        Ok(_) => println("unexpected-ok"),
+        Err(e) => match e {
+            IoError.NotFound => println("not-found"),
+            _ => println("other"),
+        },
+    }
+}

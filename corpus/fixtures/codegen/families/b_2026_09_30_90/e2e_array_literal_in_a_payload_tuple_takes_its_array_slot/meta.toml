@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_30_90.rs::e2e_array_literal_in_a_payload_tuple_takes_its_array_slot"
+dedup_of = ["tests/interpreter/families/b_2026_09_30_90.rs::PAYLOADS"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

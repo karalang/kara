@@ -1,0 +1,10 @@
+
+import std.wasi.{FileSystem, Clock};
+
+fn snapshot() with reads(FileSystem) reads(Clock) {
+}
+
+fn main() {
+    snapshot();
+    println("std.wasi ok");
+}

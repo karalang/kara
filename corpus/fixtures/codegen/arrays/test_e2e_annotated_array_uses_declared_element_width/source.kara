@@ -1,0 +1,28 @@
+
+struct P { a: Array[i64, 2] }
+fn take(a: Array[i64, 2]) -> i64 { return a[0i64]; }
+fn give() -> Array[i64, 2] { let v = 200u8; return [v, v]; }
+fn givetail() -> Array[i64, 2] { let v = 200u8; [v, v] }
+
+fn main() {
+    let v = 200u8;
+
+    let a: Array[i64, 2] = [v, v];
+    println(f"01 {a[0i64]}");
+
+    let s = 100i8;
+    let b: Array[i64, 2] = [s, s];
+    println(f"02 {b[0i64]}");
+
+    let c: Array[i64, 2] = [v as i64, v as i64];
+    println(f"03 {c[0i64]}");
+
+    let r1 = give();     println(f"04 {r1[0i64]}");
+    let r2 = givetail(); println(f"05 {r2[0i64]}");
+    println(f"06 {take([v, v])}");
+    let p = P { a: [v, v] };
+    println(f"07 {p.a[0i64]}");
+
+    let w: Vector[i64, 2] = Vector[i64, 2].from_array([v, v]);
+    println(f"08 {w.reduce_sum()}");
+}

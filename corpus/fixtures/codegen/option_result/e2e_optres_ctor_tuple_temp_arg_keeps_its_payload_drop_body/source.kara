@@ -1,0 +1,20 @@
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+enum W { A(R), N }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+
+fn optArg(t: (R, Option[R]))       -> i64 { println(f"  rd{t.0.id}"); return 0; }
+fn resArg(t: (R, Result[R, i64]))  -> i64 { println(f"  rd{t.0.id}"); return 0; }
+fn enumArg(t: (R, W))              -> i64 { println(f"  rd{t.0.id}"); return 0; }
+fn destr(t: (R, Option[R]))        -> i64 { let (r, o) = t; println(f"  rd{r.id}"); return 0; }
+
+fn main() {
+    println("opttemp");  let _ = optArg((mk(1), Option.Some(mk(11))));  println("opttemp end")
+    println("errtemp");  let _ = resArg((mk(3), Result.Err(7)));        println("errtemp end")
+    println("enumtemp"); let _ = enumArg((mk(4), W.A(mk(44))));         println("enumtemp end")
+    println("destr");    let _ = destr((mk(5), Option.Some(mk(55))));   println("destr end")
+    println("nonetemp"); let _ = optArg((mk(6), Option.None));          println("nonetemp end")
+    println("localarg"); let a = (mk(7), Option.Some(mk(77))); let _ = optArg(a); println("localarg end")
+    println("localonly"); let b = (mk(8), Option.Some(mk(88))); println(f"  rd{b.0.id}"); println("localonly end")
+    println("done")
+}

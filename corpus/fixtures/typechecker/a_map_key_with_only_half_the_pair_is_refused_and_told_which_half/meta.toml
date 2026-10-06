@@ -1,0 +1,13 @@
+source = "tests/typechecker.rs::a_map_key_with_only_half_the_pair_is_refused_and_told_which_half"
+dedup_of = []
+expect = "error:E0232"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

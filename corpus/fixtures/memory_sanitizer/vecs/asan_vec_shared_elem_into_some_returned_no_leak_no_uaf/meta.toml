@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/vecs.rs::asan_vec_shared_elem_into_some_returned_no_leak_no_uaf"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

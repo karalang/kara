@@ -1,0 +1,13 @@
+source = "corpus/tools/drop-model/matrix.py::tuple__returned"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "spec"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

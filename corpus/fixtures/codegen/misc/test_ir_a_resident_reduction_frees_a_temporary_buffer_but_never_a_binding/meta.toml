@@ -1,0 +1,13 @@
+source = "tests/codegen/misc.rs::test_ir_a_resident_reduction_frees_a_temporary_buffer_but_never_a_binding"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["deferred:gpu"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

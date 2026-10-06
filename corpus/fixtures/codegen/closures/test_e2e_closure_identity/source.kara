@@ -1,0 +1,5 @@
+
+fn main() {
+    let f = |x: i64| x;
+    println(f(42));
+}

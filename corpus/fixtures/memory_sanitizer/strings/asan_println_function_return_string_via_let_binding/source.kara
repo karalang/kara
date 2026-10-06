@@ -1,0 +1,11 @@
+
+fn make() -> String {
+    let a = "made ";
+    let b = "string";
+    return a + b;
+}
+
+fn main() {
+    let m = make();
+    println(m);
+}

@@ -1,0 +1,114 @@
+// LeetCode #83: Remove Duplicates from Sorted List — structural recursion.
+//
+// Same keep-one dedup as remove_duplicates_list.kara (the ★), by recursion instead of
+// the in-place cursor. Dedup the tail first, then decide the front node's fate:
+//
+//   head.next = delete_duplicates(head.next)
+//   return  head.next  if head.val == head.next.val   // front is a dup of the
+//           head       otherwise                       // already-deduped successor
+//
+// After the recursive call, `head.next` is the head of a fully-deduped suffix. If it
+// carries the same value as `head`, then `head` is a redundant copy and is dropped by
+// returning `head.next`; otherwise `head` is kept with its rewired tail. O(n)
+// recursion depth, one frame per node — the mirror of kata #82's recursive form.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn delete_duplicates(head: Option[ListNode]) -> Option[ListNode] {
+    match head {
+        Some(node) => {
+            node.next = delete_duplicates(node.next);
+            let mut drop_self = false;
+            match node.next {
+                Some(nxt) => {
+                    if node.val == nxt.val {
+                        drop_self = true;
+                    }
+                }
+                None => {}
+            }
+            if drop_self {
+                node.next
+            } else {
+                Some(node)
+            }
+        }
+        None => None,
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn report(arr: Slice[i64], acc: mut ref i64) {
+    let out = delete_duplicates(from_array(arr));
+    println(to_string(out));
+    let mut a = acc;
+    let mut cur = out;
+    let mut count = 0;
+    loop {
+        match cur {
+            Some(node) => {
+                a = (a * 131 + (node.val + 1000)) % 1000000007;
+                count = count + 1;
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+    acc = (a * 131 + (count + 1)) % 1000000007;
+}
+
+fn main() {
+    let mut acc = 0;
+    report([1, 1, 2], mut acc);
+    report([1, 1, 2, 3, 3], mut acc);
+    report([1, 1, 1], mut acc);
+    report([1, 2, 3], mut acc);
+    let empty: Array[i64, 0] = [];
+    report(empty, mut acc);
+    report([7], mut acc);
+    report([1, 1, 2, 2, 3, 3], mut acc);
+    report([1, 2, 2], mut acc);
+    report([-2, -2, -2, 0, 1], mut acc);
+    report([5, 5, 5, 5], mut acc);
+    println(f"sink: {acc}");
+}

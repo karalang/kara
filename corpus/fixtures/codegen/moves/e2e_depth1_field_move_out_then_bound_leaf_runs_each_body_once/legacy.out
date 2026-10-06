@@ -1,0 +1,48 @@
+bound
+  x=3
+  dR3/n3
+  dR2/n2
+  dR1/n1
+renamed
+  x=6
+  dR6/n6
+  dR5/n5
+  dR4/n4
+inner
+  x=7
+  dR8/n8
+  dR7/n7
+  dR9/n9
+option
+  dR11/n11
+  x
+  dR10/n10
+param
+  x=14
+  dR14/n14
+  dR13/n13
+  dR12/n12
+rebound
+  dR16/n16
+  dR15/n15
+  x=17
+  dR17/n17
+  dR23/n23
+  dR22/n22
+  dR21/n21
+early
+  dR20/n20
+  dR19/n19
+  dR18/n18
+  20
+kept
+  dR20/n20
+  dR19/n19
+  dR18/n18
+  0
+wild
+  x=26
+  dR26/n26
+  dR25/n25
+  dR24/n24
+end

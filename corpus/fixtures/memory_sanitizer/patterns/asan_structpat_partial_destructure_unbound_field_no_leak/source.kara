@@ -1,0 +1,13 @@
+
+struct Pair2 { first: String, second: String }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Pair2] = Some(Pair2 { first: f"first payload padded beyond thirty-six bytes {i}", second: f"second payload padded beyond thirty-six bytes {i}" });
+        match o {
+            Some(Pair2 { first, .. }) => { println(first.len()); },
+            None => { println("missing"); },
+        }
+        i = i + 1;
+    };
+}

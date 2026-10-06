@@ -1,0 +1,22 @@
+struct FakeEnv {}
+         impl FakeEnv { fn args(self) -> Vec[String] { ["prog", "upper", "--name", "bob"] } }
+         fn main() {
+             with_provider[Env](FakeEnv {}, || {
+                 let parser = Parser.new("greet")
+                     .subcommand("upper", Parser.new("upper").arg("--name", Arg.string()));
+                 match parser.parse() {
+                     Ok(args) => {
+                         match args.sub {
+                             Some(s) => {
+                                 match s.get_string("--name") {
+                                     Ok(n) => println(n),
+                                     Err(e) => println(e.message),
+                                 }
+                             }
+                             None => println("no_sub"),
+                         }
+                     }
+                     Err(e) => println(e.message),
+                 }
+             });
+         }

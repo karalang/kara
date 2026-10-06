@@ -1,0 +1,91 @@
+// Benchmark workload — Validate Binary Search Tree (LeetCode #98), the ★ bounds check.
+//
+// A validation is O(n), and validating a FIXED tree K times would be hoisted (a
+// loop-invariant tree gives a constant result). So this is a build-then-validate
+// workload: each of K = 200_000 iterations BUILDS a fresh 63-node balanced BST
+// (a `shared struct TreeNode` tree, RC-allocated) and runs the kata ★'s recursive
+// `(lo, hi)`-bounds validator over it, folding the result into a rolling hash.
+//
+// This deliberately stresses the RC / Option / recursion surface end to end —
+// the per-node RC allocation and drop of `build`, plus the `match`-driven
+// recursive traversal of `is_valid` over `Option[TreeNode]` children. Unlike the
+// scalar/array katas it is allocation-inclusive by design (building trees is what
+// tree code does), the closest analogue being the linked-list katas
+// [#19](../../19-remove-nth-node-from-end-of-list/) / [#61](../../61-rotate-list/).
+//
+// Non-hoistable: `build` takes a per-iteration `shift = k % 1000`, so a different
+// (still valid) tree is constructed every time and the malloc/RC traffic is real;
+// the loop-carried sink `acc = (acc*131 + shift + valid?1:0) % 1e9+7` folds both
+// the shift and the validation result, so neither `build` nor `is_valid` can be
+// optimised away. The hash is a loop-carried dependency, so the loop is NOT a
+// reduction karac's auto-par pass can split — single-threaded by construction,
+// comparable to the native mirrors per-core. Seq-only kata, same discipline as
+// #55/#62/#66/#68/#69/#70.
+//
+// Every node value is `shift + rank` with shift < 1000 and rank < 63, so all
+// values stay tiny — well inside i64.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// Balanced BST over the values shift+lo .. shift+hi (sorted-array-to-BST): the
+// midpoint is the root, halves recurse — always a valid BST.
+fn build(lo: i64, hi: i64, shift: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = lo + (hi - lo) / 2;
+    Some(TreeNode {
+        val: shift + mid,
+        left: build(lo, mid - 1, shift),
+        right: build(mid + 1, hi, shift),
+    })
+}
+
+fn is_valid(node: Option[TreeNode], lo: Option[i64], hi: Option[i64]) -> bool {
+    match node {
+        None => true,
+        Some(n) => {
+            let v = n.val;
+            match lo {
+                Some(l) => {
+                    if v <= l {
+                        return false;
+                    }
+                }
+                None => {}
+            }
+            match hi {
+                Some(h) => {
+                    if v >= h {
+                        return false;
+                    }
+                }
+                None => {}
+            }
+            is_valid(n.left, lo, Some(v)) and is_valid(n.right, Some(v), hi)
+        }
+    }
+}
+
+fn main() {
+    let total: i64 = 200000;
+    let modulus: i64 = 1000000007;
+    let size: i64 = 63;
+
+    let mut acc: i64 = 0;
+    let mut k: i64 = 0;
+    while k < total {
+        let shift = k % 1000;
+        let root = build(0, size - 1, shift);
+        let ok = is_valid(root, None, None);
+        let bit = if ok { 1 } else { 0 };
+        acc = (acc * 131 + shift + bit) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

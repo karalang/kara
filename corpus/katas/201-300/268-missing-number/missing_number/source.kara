@@ -1,0 +1,41 @@
+// LeetCode 268 — Missing Number.
+//
+// `nums` holds n distinct values drawn from [0, n], so exactly one of the n+1
+// possible values is absent. XOR gives an overflow-free O(n) / O(1) solution:
+// fold together every index 0..n AND every array value. Each present value
+// cancels with its matching index, so what survives is the one index (value)
+// that never appeared — the missing number. (The Gauss-sum method also works but
+// can overflow for large n; Kāra checks integer overflow by default, so XOR is
+// the clean choice here.)
+
+fn missing_number(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut acc = n;                            // start with index n (no value pairs it)
+    let mut i = 0;
+    while i < n {
+        acc = acc ^ i ^ nums[i];
+        i = i + 1;
+    }
+    return acc;
+}
+
+fn report(nums: Slice[i64]) {
+    println(f"{missing_number(nums)}");
+}
+
+fn main() {
+    let a: Array[i64, 3] = [3, 0, 1];
+    report(a);                                      // 2
+
+    let b: Array[i64, 2] = [0, 1];
+    report(b);                                      // 2
+
+    let c: Array[i64, 9] = [9, 6, 4, 2, 3, 5, 7, 0, 1];
+    report(c);                                      // 8
+
+    let d: Array[i64, 1] = [0];
+    report(d);                                      // 1
+
+    let e: Array[i64, 1] = [1];
+    report(e);                                      // 0
+}

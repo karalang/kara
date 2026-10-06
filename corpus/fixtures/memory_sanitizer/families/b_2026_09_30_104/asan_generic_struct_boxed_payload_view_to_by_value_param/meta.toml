@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_09_30_104.rs::asan_generic_struct_boxed_payload_view_to_by_value_param"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

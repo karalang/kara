@@ -1,0 +1,13 @@
+
+struct Holder {
+    name: String,
+}
+
+fn make(s: String) -> Holder {
+    Holder { name: s }
+}
+
+fn main() {
+    let h = make(f"nm{3}");
+    println(h.name);
+}

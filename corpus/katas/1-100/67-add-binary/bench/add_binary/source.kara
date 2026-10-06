@@ -1,0 +1,51 @@
+// Benchmark workload for LeetCode #67 — Add Binary.
+//
+// Build-once + punch: one big 0/1 bit buffer is generated with a deterministic
+// 32-bit LCG (overflow-safe in i64; bits taken from the HIGH bits to dodge the
+// LCG's short-period low bits). Each pass adds two fixed-width windows of that
+// buffer column-by-column from the least-significant end, rippling a carry — a
+// loop-carried dependency that does NOT vectorize. A single-bit punch before
+// each add keeps the optimizer from hoisting. Sink = running total of the
+// popcount (set-bit count, carry-out included) of every column-add result.
+
+fn add_popcount(bits: ref Vec[i64], off_a: i64, off_b: i64) -> i64 {
+    let mut carry = 0;
+    let mut pop = 0;
+    let mut k = 95;
+    while k >= 0 {
+        let sum = carry + bits[off_a + k] + bits[off_b + k];
+        pop = pop + (sum & 1);
+        carry = sum >> 1;
+        k = k - 1;
+    }
+    pop = pop + carry;
+    return pop;
+}
+
+fn main() {
+    let bn = 2000000;
+    let passes = 2600000;
+    let width = 96;
+
+    let mut bits: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut c = 0;
+    while c < bn {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        bits.push((state >> 16) & 1);
+        c = c + 1;
+    }
+
+    let span = bn - width;
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let idx = (p * 101 + 7) % bn;
+        bits[idx] = 1 - bits[idx];
+        let off_a = (p * 37) % span;
+        let off_b = (p * 53 + 17) % span;
+        sink = sink + add_popcount(bits, off_a, off_b);
+        p = p + 1;
+    }
+    println(sink);
+}

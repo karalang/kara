@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/strings.rs::asan_regex_find_option_match_heap_no_leak"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["deferred:regex"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

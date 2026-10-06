@@ -1,0 +1,70 @@
+// LeetCode #52: N-Queens II — three integer bitmasks, count returned by value (★).
+//
+// N-Queens II asks only for the NUMBER of distinct n×n queen placements, not the
+// boards. That single change — a count instead of a listing — collapses the whole
+// solution-materialization apparatus of [#51](../51-n-queens/): there is no board to
+// render, no `queens` path to snapshot, no `out` vector to grow. What is left is the
+// bare search, and the cleanest way to say "how many leaves does this tree have?" is a
+// function that RETURNS that number and lets the recursion sum the children:
+//
+//     if row == n { return 1 }          // this row-by-row descent reached a full board
+//     total += count(child)             // otherwise, sum over every legal column
+//
+// The occupancy state is the same three-integer bitmask the #51 bitmask solver used —
+// one bit per column and per diagonal, threaded BY VALUE so backtracking is automatic
+// (the parent keeps its own copy; there is nothing to clear on the way back up):
+//
+//   - `cols`  — bit c set ⇒ column c taken.
+//   - `diag1` — the ↘ diagonals, keyed by `row + col`.
+//   - `diag2` — the ↙ diagonals, keyed by `row - col + (n-1)` (biased non-negative).
+//
+// A candidate column `c` in the current `row` is legal iff none of its three bits is set;
+// descending ORs those bits in. Because `count` is a pure `-> i64` with no `mut ref`
+// accumulator, the search state is EXACTLY its arguments — the purest of the three lenses
+// here. The sibling files reach the identical counts two other ways:
+// [`marker_arrays`](marker_arrays.kara) threads a `mut ref i64` accumulator instead of
+// returning, and [`symmetry`](symmetry.kara) searches only half the first row and doubles.
+//
+// The count sequence is the (in)famous 1, 0, 0, 2, 10, 4, 40, 92, 352, 724, 2680 for
+// n = 1 … 11 — note n = 2 and n = 3 have none. LeetCode bounds: 1 ≤ n ≤ 9; the sweep below
+// runs to 11 to exercise deeper trees. i64 throughout; every shift stays well inside i64.
+
+fn count(n: i64, row: i64, cols: i64, diag1: i64, diag2: i64) -> i64 {
+    if row == n {
+        return 1;                    // a full board — one solution
+    }
+    let mut total = 0;
+    let mut c = 0;
+    while c < n {
+        let bit_c = 1 << c;
+        let bit_d1 = 1 << (row + c);
+        let bit_d2 = 1 << (row - c + (n - 1));
+        if (cols & bit_c) == 0 and (diag1 & bit_d1) == 0 and (diag2 & bit_d2) == 0 {
+            // Masks passed by value with this column's bits OR'd in; the parent's copies
+            // stay as they were, so there is nothing to undo on return.
+            total = total + count(n, row + 1, cols | bit_c, diag1 | bit_d1, diag2 | bit_d2);
+        }
+        c = c + 1;
+    }
+    total
+}
+
+fn solve(n: i64) -> i64 {
+    count(n, 0, 0, 0, 0)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // Print the count for each board size and fold them into one summary line.
+    let mut s: String = "counts:";
+    let mut n = 1;
+    while n <= 11 {
+        let c = solve(n);
+        println(f"n={n} -> {c}");
+        s.push(' ');
+        s.push_str(f"{c}");
+        n = n + 1;
+    }
+    println(s);
+}

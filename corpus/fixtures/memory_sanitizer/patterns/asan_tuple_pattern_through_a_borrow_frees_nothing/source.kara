@@ -1,0 +1,31 @@
+
+fn s_of(i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str(f"payload-padded-out-well-past-thirty-six-bytes-{i}");
+    return s;
+}
+fn walk(ps: ref Vec[(String, String)]) -> i64 {
+    let mut n = 0;
+    for (name, tag) in ps { n += name.len() + tag.len(); }
+    return n;
+}
+fn index(ps: ref Vec[(String, String)]) -> i64 {
+    let mut n = 0;
+    for i in 0..ps.len() {
+        let (name, tag) = ref ps[i];
+        n += name.len() - tag.len();
+    }
+    return n;
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut ps: Vec[(String, String)] = Vec.new();
+    let mut i = base;
+    while i < base + 40 {
+        ps.push((s_of(i), s_of(i * 7)));
+        i = i + 1;
+    }
+    let a = walk(ps);
+    let b = index(ps);
+    if a > 0 and b <= 0 { println("done"); }
+}

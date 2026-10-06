@@ -1,0 +1,34 @@
+
+enum K { A(String), B }
+enum K2 { A(String, i64), B }
+struct G { q: Option[K], w: Option[K2], t: Option[(String, i64)], m: Option[Map[i64, String]], r: Result[K, String] }
+fn mk(i: i64) -> String { f"alpha-{i}-long-enough-to-heap" }
+fn mg(i: i64) -> G {
+    let mut mm: Map[i64, String] = Map.new();
+    mm.insert(i, mk(i));
+    G { q: Some(K.A(mk(i))), w: Some(K2.A(mk(i), 5)), t: Some((mk(i), 3)), m: Some(mm), r: Ok(K.A(mk(i))) }
+}
+fn main() {
+    let g: Vec[G] = [mg(1), mg(22)];
+    let mut keep: Vec[String] = [];
+    let mut n = 0;
+    match g[0].q { Some(K.A(s)) => { n = n + s.len(); } _ => {} }
+    match g[0].q { Some(K.A(s)) => { n = n + s.len(); } _ => {} }
+    if let Some(K.A(s)) = g[0].q { n = n + s.len(); }
+    match g[0].q { Some(k) => { match k { K.A(s) => { n = n + s.len(); } K.B => {} } } None => {} }
+    match g[0].q { Some(K.A(s)) if s.len() > 100 => { n = n + 1000; } Some(K.A(s)) => { keep.push(s); } _ => {} }
+    println(f"q {n} {keep.len()}");
+    n = 0;
+    match g[0].w { Some(K2.A(_, k)) => { n = n + k; } _ => {} }
+    match g[0].w { Some(K2.A(s, k)) => { n = n + s.len() + k; } _ => {} }
+    match g[0].t { Some((s, k)) => { keep.push(s); n = n + k; } _ => {} }
+    match g[0].t { Some((s, _)) => { n = n + s.len(); } _ => {} }
+    match g[1].r { Ok(K.A(s)) => { n = n + s.len(); } _ => {} }
+    match g[1].r { Ok(K.A(s)) => { n = n + s.len(); } _ => {} }
+    println(f"w {n} {keep.len()}");
+    n = 0;
+    match g[1].m { Some(m) => { n = n + m.len(); } None => {} }
+    if let Some(m) = g[1].m { n = n + m.get(22).unwrap().len(); }
+    match g[1].m { Some(m) => { n = n + m.len(); } None => {} }
+    println(f"m {n} {keep[0]} {keep[1]}");
+}

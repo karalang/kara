@@ -1,0 +1,31 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}" }; }
+struct Carrier { s: String }
+
+fn ostr()   { let (r, o) = (mk(1), Option.Some(f"p1")); println(f"  a{r.id}{o.is_some()}") }
+fn owild()  { let (r, _) = (mk(2), Option.Some(f"p2")); println(f"  b{r.id}") }
+fn rstr()   { let (r, o) = (mk(3), Result[String, i64].Ok(f"p3")); println(f"  c{r.id}{o.is_ok()}") }
+fn ovec()   { let (r, o) = (mk(4), Option.Some([4, 4, 4])); println(f"  d{r.id}{o.is_some()}") }
+fn vwild()  { let (r, _) = (mk(5), Option.Some([5, 5])); println(f"  e{r.id}") }
+fn ocarry() { let (r, o) = (mk(6), Option.Some(Carrier { s: f"p6" })); println(f"  f{r.id}{o.is_some()}") }
+fn omove()  { let (r, o) = (mk(7), Option.Some(f"p7")); let q = o; println(f"  g{r.id}{q.is_some()}") }
+fn oarm()   { let (r, o) = (mk(8), Option.Some(f"p8")); match o { Option.Some(s) => println(f"  h{s}"), Option.None => println("  hz") } println(f"  i{r.id}") }
+fn rarm()   { let (r, o) = (mk(9), Result[String, i64].Ok(f"p9")); match o { Result.Ok(s) => println(f"  j{s}"), Result.Err(e) => println(f"  jz{e}") } println(f"  k{r.id}") }
+fn odrop()  { let (r, o) = (mk(10), Option.Some(mk(110))); println(f"  l{r.id}{o.is_some()}") }
+fn loops()  { let mut i = 0; while i < 2 { let (r, o) = (mk(11), Option.Some(f"p11")); println(f"  m{r.id}{o.is_some()}"); i = i + 1; } println("  n") }
+
+fn main() {
+  println("ostr");   ostr()
+  println("owild");  owild()
+  println("rstr");   rstr()
+  println("ovec");   ovec()
+  println("vwild");  vwild()
+  println("ocarry"); ocarry()
+  println("omove");  omove()
+  println("oarm");   oarm()
+  println("rarm");   rarm()
+  println("odrop");  odrop()
+  println("loops");  loops()
+  println("done")
+}

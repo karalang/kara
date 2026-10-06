@@ -1,0 +1,28 @@
+
+fn make_grid() -> Vec[Vec[i64]] {
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(10_i64);
+    a.push(11_i64);
+    a.push(12_i64);
+    a.push(13_i64);
+    g.push(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(20_i64);
+    b.push(21_i64);
+    b.push(22_i64);
+    b.push(23_i64);
+    g.push(b);
+    return g;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 2 {
+        match make_grid().get(i) {
+            Some(r) => println(r[1]),
+            None => println(0_i64),
+        };
+        i = i + 1;
+    };
+}

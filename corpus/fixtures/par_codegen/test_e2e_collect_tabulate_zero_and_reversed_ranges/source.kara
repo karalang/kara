@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    out.push(41i64);
+    out.push(42i64);
+    #[par_order_free]
+    for k in 0i64..0i64 {
+        out.push(k);
+    }
+    #[par_order_free]
+    for k in 5i64..3i64 {
+        out.push(k);
+    }
+    println(out.len());
+    println(out[0i64]);
+    println(out[1i64]);
+}

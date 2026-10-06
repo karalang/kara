@@ -1,0 +1,11 @@
+
+fn main() {
+    let n = env.args().len() as i64;
+    let one: f32 = n as f32;
+    let a: f16 = (one * 65504.0f32) as f16;
+    let b: f16 = (one * 3.0f32) as f16;
+    let u: Vector[f16, 4] = Vector[f16, 4](a, b, a, b);
+    let v: Vector[f16, 4] = Vector[f16, 4](b, b, b, b);
+    let w = u * v;
+    println(f"{w[0]}");
+}

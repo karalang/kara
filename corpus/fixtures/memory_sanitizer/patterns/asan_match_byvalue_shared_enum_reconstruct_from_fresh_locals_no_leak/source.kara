@@ -1,0 +1,34 @@
+
+shared enum Expr { Num(i64), Add(BinOp) }
+struct BinOp { left: Expr, right: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+    }
+}
+fn fold(e: Expr) -> Expr {
+    match e {
+        Num(n) => Num(n),
+        Add(b) => {
+            let l: Expr = Num(1);
+            let r: Expr = Num(2);
+            Add(BinOp { left: l, right: r })
+        }
+    }
+}
+fn build(n: i64) -> Expr {
+    if n <= 0 { Num(n) }
+    else { Add(BinOp { left: Num(n), right: build(n - 1) }) }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 60 {
+        let t: Expr = build(3);
+        let t2: Expr = fold(t);
+        total = total + eval(t2);
+        i = i + 1;
+    }
+    println(total);
+}

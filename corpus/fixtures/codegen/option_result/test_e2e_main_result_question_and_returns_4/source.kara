@@ -1,0 +1,8 @@
+
+fn pick(x: i64) -> Result[(), i64] {
+    if x > 0 { return Ok(()); }
+    Err(99)
+}
+fn main() -> Result[(), i64] {
+    pick(0 - 1)
+}

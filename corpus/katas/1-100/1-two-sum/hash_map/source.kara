@@ -1,0 +1,40 @@
+// LeetCode #1: Two Sum — hash-map O(n)
+//
+// Single pass: for each element, look up its complement (target - nums[i])
+// in a Map[value -> earliest index]. Hit ⇒ return [seen_index, i]. Miss ⇒
+// record nums[i] and continue.
+//
+// Mirrors brute_force.kara's `Slice[i64] -> Array[i64, 2]` shape so the
+// two files diff line-for-line and produce identical output. Once
+// Option[T] is solid in the interpreter, return type should become
+// Option[(i64, i64)] and the [-1, -1] sentinel can go away.
+
+fn two_sum(nums: Slice[i64], target: i64) -> Array[i64, 2] {
+    let mut seen: Map[i64, i64] = Map.new();
+    let n = nums.len();
+    for i in 0..n {
+        let complement = target - nums[i];
+        match seen.get(complement) {
+            Some(j) => return [j, i],
+            None => seen.insert(nums[i], i),
+        }
+    }
+    [-1, -1]
+}
+
+fn report(nums: Slice[i64], target: i64) {
+    let result = two_sum(nums, target);
+    println(result[0]);
+    println(result[1]);
+}
+
+fn main() {
+    let nums1: Array[i64, 4] = [2, 7, 11, 15];
+    report(nums1, 9);   // expect: 0, 1
+
+    let nums2: Array[i64, 3] = [3, 2, 4];
+    report(nums2, 6);   // expect: 1, 2
+
+    let nums3: Array[i64, 2] = [3, 3];
+    report(nums3, 6);   // expect: 0, 1
+}

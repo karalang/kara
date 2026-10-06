@@ -1,0 +1,159 @@
+// LeetCode #61: Rotate List — two-segment splice, O(L) time, O(1) extra.
+//
+// Same result as `rotate_list.kara`, same O(L) cost, but it never forms the
+// full ring. It cuts the list into a front segment and a back segment and
+// re-joins them in the other order:
+//
+//   measure L, find the tail
+//   s = k % L                         (0 → nothing to do)
+//   walk (L - s - 1) steps → new_tail (the last node of the FRONT segment)
+//   new_head    = new_tail.next        (first node of the BACK segment)
+//   new_tail.next = None               (terminate the front segment)
+//   tail.next   = head                 (hang the front segment behind the back)
+//   return new_head
+//
+// Where `rotate_list.kara` closes a ring and then makes one cut, this makes
+// the cut first (splitting into `[..new_tail] [new_head..tail]`) and then
+// stitches the front behind the back with `tail.next = head`. Two stores
+// instead of ring-plus-one-cut; the arithmetic that locates the split — index
+// `L - s - 1` for the new tail — is identical, and so is the `s == 0` early
+// return. Because `s` is in `1 .. L-1` once the no-op case is out, the new tail
+// is strictly before the old tail, so the two field writes never touch the
+// same node and their order is free.
+//
+// Reads-before-writes is the ownership-sensitive part, the same discipline the
+// ring version needs: `new_head = new_tail.next` retains the back segment into
+// a local *before* `new_tail.next = None` clears that edge, so nulling the
+// field never frees the node `new_head` now names. `tail.next = head` then
+// stores an alias (a retain) onto the segment that local still holds.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn rotate_right(head: Option[ListNode], k: i64) -> Option[ListNode] {
+    // One pass: count the nodes (L) and hold onto the tail.
+    let mut len = 0;
+    let mut cur = head;
+    let mut tail = head;
+    loop {
+        match cur {
+            Some(node) => {
+                len = len + 1;
+                tail = Some(node);
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+
+    // Empty list, or a rotation that is a whole multiple of the length: no-op.
+    if len == 0 {
+        return None;
+    }
+    let shift = k % len;
+    if shift == 0 {
+        return head;
+    }
+
+    // Walk to the last node of the front segment (index L - shift - 1).
+    let steps = len - shift - 1;
+    let mut new_tail = head;
+    let mut i = 0;
+    while i < steps {
+        if let Some(node) = new_tail {
+            new_tail = node.next;
+        }
+        i = i + 1;
+    }
+
+    // Split off the back segment as the new front, terminate the front, then
+    // hang the front segment behind the back via the old tail.
+    let mut new_head = head;
+    if let Some(nt) = new_tail {
+        new_head = nt.next;
+        nt.next = None;
+    }
+    if let Some(t) = tail {
+        t.next = head;
+    }
+    new_head
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn report(arr: Slice[i64], k: i64) {
+    let head = from_array(arr);
+    let out = rotate_right(head, k);
+    println(to_string(out));
+}
+
+fn main() {
+    // Same ten cases as `rotate_list.kara` — the two must diff line-for-line.
+    let case1: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case1, 2);   // [4, 5, 1, 2, 3]
+
+    let case2: Array[i64, 3] = [0, 1, 2];
+    report(case2, 4);   // [2, 0, 1]
+
+    let case3: Array[i64, 0] = [];
+    report(case3, 0);   // []
+
+    let case4: Array[i64, 0] = [];
+    report(case4, 3);   // []
+
+    let case5: Array[i64, 1] = [1];
+    report(case5, 99);  // [1]
+
+    let case6: Array[i64, 2] = [1, 2];
+    report(case6, 1);   // [2, 1]
+
+    let case7: Array[i64, 2] = [1, 2];
+    report(case7, 2);   // [1, 2]
+
+    let case8: Array[i64, 3] = [1, 2, 3];
+    report(case8, 2000000000); // [2, 3, 1]
+
+    let case9: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case9, 5);   // [1, 2, 3, 4, 5]
+
+    let case10: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case10, 7);  // [4, 5, 1, 2, 3]
+}

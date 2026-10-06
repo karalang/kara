@@ -1,0 +1,9 @@
+
+fn scale[D](a: ref Tensor[f32, [D]], k: f32) -> f32 {
+    let p: Tensor[f32, [D]] = a * k;
+    p.sum()
+}
+fn main() {
+    let x: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]);
+    println(f"{scale(x, 2.0f32)}");
+}

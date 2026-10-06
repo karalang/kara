@@ -1,0 +1,21 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+fn mkr(n: i64) -> R { return R { s: f"r-string-longer-than-sso-{n}" }; }
+fn g(fail: bool) -> Result[i64, String] { if fail { return Err(f"e"); } return Ok(1); }
+fn ex() -> Result[i64, String] { let x = mkw(5).b + g(false)?; return Ok(x); }
+fn ret() -> i64 { return mkw(6).b; }
+fn main() {
+    println(f"v{mkw(1).r.id}");
+    let o = Some(mkr(2)); println(o.unwrap().s.len());
+    let c = true; let x = if c { mkw(3).b } else { 0 }; println(f"x{x}");
+    let c2 = false; let y = if c2 { mkw(4).b } else { 0 }; println(f"y{y}");
+    match ex() { Ok(v) => println(f"ok{v}"), Err(e) => println(e) }
+    println(f"r{ret()}");
+    for i in 0..2 { println(mkw(10 + i).s.name); }
+    println("end")
+}

@@ -1,0 +1,1 @@
+fn main() { let s = "bdac"; println(s.sorted_by(|a, b| b.cmp(a))); }

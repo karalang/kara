@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(5);
+    v.push(6);
+    v.push(7);
+    let total = par {
+        let x = v[0];
+        let y = 100;
+        x + y
+    };
+    println(total);
+}

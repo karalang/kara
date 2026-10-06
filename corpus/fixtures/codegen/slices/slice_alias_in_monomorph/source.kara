@@ -1,0 +1,12 @@
+
+fn saxpy[T](y: mut Slice[T], x: Slice[T]) {
+    let n = y.len();
+    let mut i = 0;
+    while i < n { y[i] = x[i]; i = i + 1; }
+}
+fn main() {
+    let mut a = [1, 2, 3];
+    let b = [4, 5, 6];
+    saxpy(a.as_slice_mut(), b.as_slice());
+    print(0);
+}

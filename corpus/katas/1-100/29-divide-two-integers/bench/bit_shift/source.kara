@@ -1,0 +1,56 @@
+// Benchmark workload — bit-shift long division, LeetCode #29.
+//
+// N = 5_000_000 divide() calls. For each call a (dividend, divisor) pair is
+// drawn from the classic glibc LCG (a = 1103515245, c = 12345, m = 2^31,
+// seeded 1): the dividend spans the full signed-31-bit range (state shifted
+// to [-2^30, 2^30)) and the divisor is a small nonzero magnitude in
+// [-1000, 999] (zero remapped to 1). Small divisors give large quotients, so
+// each call's inner doubling loop does real work (~up to ~20 shifts), and the
+// magnitudes of dividend and quotient vary unpredictably across calls — the
+// `a >= (temp << 1)` branch is a genuine data-dependent load, not a fixed
+// trip count the predictor can learn.
+//
+// Sink: running sum of every quotient (fits i64) — printed so the divisions
+// participate in I/O and cannot be elided. Every mirror steps the identical
+// LCG in plain i64 arithmetic, so all five see byte-identical inputs and must
+// print the same sink; bench.sh fails loudly on any mismatch.
+
+fn divide(dividend: i64, divisor: i64) -> i64 {
+    let int_max = 2147483647;
+    let int_min = -2147483648;
+    if dividend == int_min and divisor == -1 {
+        return int_max;
+    }
+    let negative = (dividend < 0) != (divisor < 0);
+    let mut a = dividend.abs();
+    let b = divisor.abs();
+    let mut result = 0;
+    while a >= b {
+        let mut temp = b;
+        let mut multiple = 1;
+        while a >= (temp << 1) {
+            temp = temp << 1;
+            multiple = multiple << 1;
+        }
+        a = a - temp;
+        result = result + multiple;
+    }
+    if negative { -result } else { result }
+}
+
+fn main() {
+    let n = 5000000;
+    let mut state = 1;
+    let mut sum = 0;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let dividend = state - 1073741824;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let mut divisor = (state % 2000) - 1000;
+        if divisor == 0 { divisor = 1; }
+        sum = sum + divide(dividend, divisor);
+        i = i + 1;
+    }
+    println(sum);
+}

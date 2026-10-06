@@ -1,0 +1,121 @@
+// Benchmark workload — iterative BFS invert.
+//
+// N=2_000 nodes built by random-walk insertion under a deterministic LCG.
+// The walk branches on BIT 16, not bit 0: a power-of-two-modulus LCG has
+// period 2 in its low bit (odd multiplier, odd increment => the low bit
+// simply alternates), so `state & 1` would descend left,right,left,right
+// forever and build a zig-zag PATH of depth n/2 and BFS width 2 rather
+// than a tree. High-order bits carry the full period. Same convention as
+// katas #26/#27/#238. The same generator runs in all five languages, so
+// they see the same shape. K=10 invert cycles inside the
+// timing window; the BFS-position-weighted sum sink at the end reads the
+// final structure so the compiler cannot elide the work.
+// Tune N / K in step with ../README.md § Benchmarks.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn invert(root: Option[TreeNode]) -> Option[TreeNode] {
+    match root {
+        None => None,
+        Some(node) => {
+            let mut queue = VecDeque.new();
+            queue.push_back(node);
+            loop {
+                match queue.pop_front() {
+                    None => { break; },
+                    Some(current) => {
+                        let tmp = current.left;
+                        current.left = current.right;
+                        current.right = tmp;
+                        if let Some(left) = current.left {
+                            queue.push_back(left);
+                        }
+                        if let Some(right) = current.right {
+                            queue.push_back(right);
+                        }
+                    }
+                }
+            }
+            Some(node)
+        }
+    }
+}
+
+fn build_tree(n: i64) -> Option[TreeNode] {
+    if n <= 0 {
+        return None;
+    }
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for i in 0..n {
+        nodes.push(TreeNode { val: i, left: None, right: None });
+    }
+    let mut state: i64 = 12345;
+    for i in 1..n {
+        let mut cur = nodes[0];
+        loop {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let bit = (state / 65536) % 2;
+            if bit == 0 {
+                match cur.left {
+                    None => {
+                        cur.left = Some(nodes[i]);
+                        break;
+                    },
+                    Some(child) => { cur = child; },
+                }
+            } else {
+                match cur.right {
+                    None => {
+                        cur.right = Some(nodes[i]);
+                        break;
+                    },
+                    Some(child) => { cur = child; },
+                }
+            }
+        }
+    }
+    Some(nodes[0])
+}
+
+fn bfs_sink(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => 0,
+        Some(node) => {
+            let mut sum: i64 = 0;
+            let mut pos: i64 = 0;
+            let mut queue = VecDeque.new();
+            queue.push_back(node);
+            loop {
+                match queue.pop_front() {
+                    None => { break; },
+                    Some(cur) => {
+                        pos = pos + 1;
+                        sum = sum + cur.val * pos;
+                        if let Some(l) = cur.left {
+                            queue.push_back(l);
+                        }
+                        if let Some(r) = cur.right {
+                            queue.push_back(r);
+                        }
+                    }
+                }
+            }
+            sum
+        }
+    }
+}
+
+fn main() {
+    let mut root = build_tree(2000);
+    let mut sink = 0;
+    for i in 0..10 {
+        sink = bfs_sink(root);
+        root = invert(root);
+    }
+    sink = bfs_sink(root);
+    println(sink);
+}

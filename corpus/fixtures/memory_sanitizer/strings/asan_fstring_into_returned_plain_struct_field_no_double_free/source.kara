@@ -1,0 +1,12 @@
+
+struct Resp { status: i64, body: String }
+fn make(id: i64, name: String) -> Resp {
+    Resp { status: 200, body: f"id={id} name={name}" }
+}
+fn main() {
+    let r = make(7, "Alice");
+    println(r.status);
+    println(r.body);
+    println(r.body);
+    println(r.body);
+}

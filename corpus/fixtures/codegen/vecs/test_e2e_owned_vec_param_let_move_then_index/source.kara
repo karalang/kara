@@ -1,0 +1,52 @@
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn pick(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    if let Some(n1) = l1 {
+        let _ = n1.val;
+        l1
+    } else {
+        l2
+    }
+}
+
+fn merge_k(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+    let mut work = lists;
+    let k = work.len();
+    if k == 0 {
+        return None;
+    }
+    let mut interval = 1;
+    while interval < k {
+        let mut i = 0;
+        while i + interval < k {
+            work[i] = pick(work[i].clone(), work[i + interval].clone());
+            i = i + 2 * interval;
+        }
+        interval = 2 * interval;
+    }
+    work[0]
+}
+
+fn main() {
+    let n3 = ListNode { val: 3, next: None };
+    let n2 = ListNode { val: 2, next: Some(n3) };
+    let n1 = ListNode { val: 1, next: Some(n2) };
+    let mut v: Vec[Option[ListNode]] = Vec.new();
+    v.push(Some(n1));
+    v.push(None);
+    v.push(None);
+    let mut cur = merge_k(v);
+    loop {
+        match cur {
+            Some(node) => {
+                println(node.val);
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+}

@@ -1,0 +1,16 @@
+
+struct E { msg: String }
+fn use_s(x: String) -> i64 { x.len() }
+fn f() -> Result[i64, E] { Err(E { msg: "rejected".to_string() }) }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {
+        match f() {
+            Ok(v) => { n = n + v; }
+            Err(e) => { n = n + use_s(e.msg); }
+        }
+        i = i + 1;
+    }
+    println(n.to_string());
+}

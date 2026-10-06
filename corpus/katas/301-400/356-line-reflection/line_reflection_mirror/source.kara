@@ -1,0 +1,79 @@
+// LeetCode #356: Line Reflection -- the set reflects exactly when its mirror
+// image is the same set, so build both as sorted, deduplicated lists and
+// compare them.
+//
+// The image of (x, y) through 2c = min x + max x is (min + max - x, y).
+// Sorting and deduplicating the points and their images puts both sets in one
+// canonical order, and the line reflects the set exactly when the two lists
+// are equal element by element.
+
+fn canonical(points: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut sorted = points;
+    sorted.sort();
+    sorted.dedup();
+    sorted
+}
+
+fn is_reflected(points: ref Vec[(i64, i64)]) -> bool {
+    if points.is_empty() {
+        return true;
+    }
+    let lo = points.iter().map(|p| p.0).min().unwrap();
+    let hi = points.iter().map(|p| p.0).max().unwrap();
+    let images: Vec[(i64, i64)] = points.iter().map(|p| (lo + hi - p.0, p.1)).collect();
+    canonical(points.clone()) == canonical(images)
+}
+
+fn show(label: String, points: Vec[(i64, i64)]) {
+    println(f"{label}: {is_reflected(points)}");
+}
+
+fn main() {
+    show("example 1", vec![(1, 1), (-1, 1)]);
+    show("example 2", vec![(1, 1), (-1, -1)]);
+
+    show("no points", Vec.new());
+    show("one point", vec![(5, -3)]);
+    show("a point on the line with its pair", vec![(0, 0), (-2, 4), (2, 4)]);
+    show("duplicates on one side", vec![(1, 1), (1, 1), (3, 1)]);
+    show("half-integer line", vec![(0, 7), (1, 7), (0, 2), (1, 2)]);
+    show("same xs, wrong ys", vec![(0, 0), (4, 1)]);
+    show("column of points on the line", vec![(3, 0), (3, 5), (3, -5)]);
+    show("one stray point", vec![(-5, 0), (5, 0), (-1, 2), (1, 2), (2, 9)]);
+    show("negative coordinates", vec![(-10, -1), (-6, -1), (-8, 3)]);
+    show("large coordinates", vec![(-100000000, 0), (100000000, 0), (0, 100000000)]);
+
+    // A long run: 2,000 random sets, half of them built symmetric around a
+    // random line and then possibly broken by one moved point.
+    let mut seed: i64 = 356;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for case in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (seed / 65536) % 12;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let center = (seed / 65536) % 21 - 10;
+        let mut points: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let x = (seed / 65536) % 9 - 4;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let y = (seed / 65536) % 5;
+            points.push((x, y));
+            if case % 2 == 0 {
+                points.push((center - x, y));
+            }
+        }
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        if case % 4 == 0 and points.len() > 0 {
+            let i = (seed / 65536) % points.len();
+            points[i] = (points[i].0 + 1, points[i].1);
+        }
+        let r = is_reflected(points);
+        if r {
+            yes += 1;
+        }
+        checksum = (checksum * 3 + if r { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"2000 random sets: {yes} reflect, checksum {checksum}");
+}

@@ -1,0 +1,147 @@
+// LeetCode 272 — Closest Binary Search Tree Value II. (Premium.)
+//
+// Given a BST, a floating-point `target` and an integer `k`, return the k node
+// values closest to the target. LeetCode accepts any order; this corpus returns
+// them ASCENDING so three independent solvers can be compared directly.
+//
+// The tree is parallel arrays — `val`, `left`, `right`, `-1` for a missing
+// child — so every mirror is identical and the algorithm is the traversal, not
+// the representation. Same shape as 270.
+//
+// THE ★ MECHANISM: TWO STACKS, MERGED. In-order, the values fall either side of
+// the target: predecessors descending away from it and successors ascending away
+// from it. Both sequences are sorted by DISTANCE — a predecessor further back is
+// strictly further away, and likewise forward. So the k closest are a merge of
+// two already-sorted streams, and the work is O(h + k): no full traversal, no
+// sorting, no examining a value that is not a candidate.
+//
+// Each stack is a partial in-order iterator. Descending from the root, a node
+// smaller than the target goes on the predecessor stack and the walk continues
+// right; a node at or above it goes on the successor stack and the walk
+// continues left. Afterwards the top of each stack is that side's nearest
+// value, and popping one advances that iterator by a single step.
+//
+// THE TIE RULE IS DECIDED BY STRUCTURE HERE, which is the point of this
+// spelling. When the two candidates are equidistant the answer must be the
+// SMALLER value (the corpus's rule, inherited from 270), and the predecessor is
+// ALWAYS the smaller of the two — it is below the target and the successor is at
+// or above it. So `<=` on the distance comparison is the whole tie-break; there
+// is no value comparison to get wrong. A solver that writes `<` hands the last
+// slot to the larger value and is wrong only on exact midpoints.
+//
+// THE OUTPUT COMES OUT SORTED FOR FREE. Taken predecessors are descending and
+// taken successors are ascending, so keeping them in two vectors and reversing
+// the first gives ascending order in O(k) — no sort of the result at all.
+
+fn advance_pred(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+                pred: mut ref Vec[i64]) -> i64 {
+    let node = pred[pred.len() - 1];
+    pred.pop();
+    // The next predecessor is the largest value in this node's left subtree:
+    // its right spine, pushed so the deepest sits on top.
+    let mut cur = left[node];
+    while cur >= 0 {
+        pred.push(cur);
+        cur = right[cur];
+    }
+    return val[node];
+}
+
+fn advance_succ(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+                succ: mut ref Vec[i64]) -> i64 {
+    let node = succ[succ.len() - 1];
+    succ.pop();
+    let mut cur = right[node];
+    while cur >= 0 {
+        succ.push(cur);
+        cur = left[cur];
+    }
+    return val[node];
+}
+
+fn closest_k(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+             root: i64, target: f64, k: i64) -> Vec[i64] {
+    // Seed both iterators with one descent: O(h), and it visits each node once.
+    let mut pred: Vec[i64] = Vec.new();
+    let mut succ: Vec[i64] = Vec.new();
+    let mut cur = root;
+    while cur >= 0 {
+        if (val[cur] as f64) < target {
+            pred.push(cur);
+            cur = right[cur];
+        } else {
+            succ.push(cur);
+            cur = left[cur];
+        }
+    }
+
+    let mut lower: Vec[i64] = Vec.new();   // taken predecessors, descending
+    let mut upper: Vec[i64] = Vec.new();   // taken successors, ascending
+    let mut taken = 0;
+    while taken < k {
+        let have_p = pred.len() > 0;
+        let have_s = succ.len() > 0;
+        if have_p == false and have_s == false {
+            // k exceeded the node count — return everything there was.
+            taken = k;
+        } else {
+            let mut take_pred = have_p;
+            if have_p and have_s {
+                let dp = (val[pred[pred.len() - 1]] as f64 - target).abs();
+                let ds = (val[succ[succ.len() - 1]] as f64 - target).abs();
+                // `<=`, not `<`: on a tie the predecessor is the smaller value.
+                take_pred = dp <= ds;
+            }
+            if take_pred {
+                lower.push(advance_pred(val, left, right, mut pred));
+            } else {
+                upper.push(advance_succ(val, left, right, mut succ));
+            }
+            taken = taken + 1;
+        }
+    }
+
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = lower.len() - 1;
+    while i >= 0 {
+        out.push(lower[i]);
+        i = i - 1;
+    }
+    let mut j = 0;
+    while j < upper.len() {
+        out.push(upper[j]);
+        j = j + 1;
+    }
+    return out;
+}
+
+fn show(xs: ref Vec[i64]) -> String {
+    let mut s = "[";
+    let mut i = 0;
+    while i < xs.len() {
+        if i > 0 { s = s + ","; }
+        s = s + f"{xs[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    //        4
+    //      /   \
+    //     2     5
+    //    / \
+    //   1   3
+    let val: Vec[i64] = [4, 2, 5, 1, 3];
+    let left: Vec[i64] = [1, 3, -1, -1, -1];
+    let right: Vec[i64] = [2, 4, -1, -1, -1];
+
+    println(show(closest_k(val, left, right, 0, 3.714286, 2)));
+    println(show(closest_k(val, left, right, 0, 3.714286, 4)));
+    // Exact midpoint of 2 and 3: the tie goes to the smaller value.
+    println(show(closest_k(val, left, right, 0, 2.5, 1)));
+    println(show(closest_k(val, left, right, 0, 2.5, 3)));
+    // Target below every value, and k past the node count.
+    println(show(closest_k(val, left, right, 0, -10.0, 3)));
+    println(show(closest_k(val, left, right, 0, 3.5, 9)));
+}

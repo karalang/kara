@@ -1,0 +1,3 @@
+
+fn make() -> i64 { return 3; }
+fn main() { let r = ref make(); println(f"{r}"); }

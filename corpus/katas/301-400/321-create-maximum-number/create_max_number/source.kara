@@ -1,0 +1,191 @@
+// LeetCode #321: Create Maximum Number — split, shrink each side, merge.
+//
+// Given two arrays of digits, `nums1` (length m) and `nums2` (length n), and a
+// length `k <= m + n`, build the largest k-digit number whose digits are drawn
+// from both arrays with each array's relative order preserved.
+//
+//   nums1 = [3, 4, 6, 5]   nums2 = [9, 1, 2, 5, 8, 3]   k = 5  ->  [9, 8, 6, 5, 3]
+//
+// The problem looks like one search over interleavings. It is really three
+// small problems stacked on top of each other, and each of them is easy:
+//
+//   1. SPLIT. Whatever the answer is, some number `i` of its digits came from
+//      nums1 and the other `k - i` from nums2. Try every feasible `i`:
+//      `i <= m`, `k - i <= n`.
+//
+//   2. SHRINK. For a fixed `i`, the digits taken from nums1 should be the
+//      largest length-`i` subsequence of nums1, full stop — whatever merge
+//      comes next, a larger subsequence can only produce a larger merge. The
+//      largest subsequence is a monotonic stack: walk the array, and while the
+//      incoming digit beats the stack top AND there are still enough digits
+//      left to refill the stack to length `i`, pop. That is `drop = m - i`
+//      pops at most, each one paid for by a larger digit arriving.
+//
+//   3. MERGE. Interleave the two kept subsequences into the largest sequence.
+//      At each step take the larger head — and when the heads are EQUAL, the
+//      head alone does not decide: take from the side whose whole remaining
+//      suffix is lexicographically larger (a proper prefix counts as smaller).
+//
+// Step 3's tie rule is the one line of this problem that has to be right. With
+// `[6, 7]` and `[6, 0, 4]` both heads are 6; taking nums2's 6 first leaves
+// `[6, 7]` against `[0, 4]` and yields 6 6 7 0 4, while taking nums1's 6 first
+// lets the 7 through next: 6 7 6 0 4. Comparing just the next digit is not
+// enough either — the suffixes can agree for many positions before they part.
+//
+// The answer is the largest merge over all splits. Cost: O(k) splits, each
+// O(m + n) to shrink and O(k^2) worst case to merge (the suffix compare), so
+// O(k^3) in the worst case and close to O(k (m + n)) on random digits.
+
+// The largest length-`keep` subsequence of `nums`, by monotonic stack.
+fn max_subsequence(nums: ref Vec[i64], keep: i64) -> Vec[i64] {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut drop = nums.len() - keep;
+    for i in 0..nums.len() {
+        let d = nums[i];
+        while drop > 0 and not stack.is_empty() and stack[stack.len() - 1] < d {
+            stack.pop();
+            drop = drop - 1;
+        }
+        stack.push(d);
+    }
+    // Any drops left over come off the tail: those are the smallest trailing
+    // digits the stack never had a reason to pop.
+    while stack.len() > keep {
+        stack.pop();
+    }
+    return stack;
+}
+
+// Is a[i..] lexicographically greater than b[j..]? A proper prefix is smaller.
+fn suffix_greater(a: ref Vec[i64], i: i64, b: ref Vec[i64], j: i64) -> bool {
+    let mut x = i;
+    let mut y = j;
+    while x < a.len() and y < b.len() and a[x] == b[y] {
+        x = x + 1;
+        y = y + 1;
+    }
+    if y == b.len() {
+        return x < a.len();
+    }
+    if x == a.len() {
+        return false;
+    }
+    return a[x] > b[y];
+}
+
+fn merge(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < a.len() or j < b.len() {
+        if suffix_greater(a, i, b, j) {
+            out.push(a[i]);
+            i = i + 1;
+        } else {
+            out.push(b[j]);
+            j = j + 1;
+        }
+    }
+    return out;
+}
+
+// Lexicographic `a > b` over equal-length digit vectors.
+fn greater(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    return suffix_greater(a, 0, b, 0);
+}
+
+fn max_number(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[i64] {
+    let m = nums1.len();
+    let n = nums2.len();
+    let mut best: Vec[i64] = Vec.new();
+    let mut lo = k - n;
+    if lo < 0 { lo = 0; }
+    let mut hi = k;
+    if hi > m { hi = m; }
+    let mut i = lo;
+    while i <= hi {
+        let left = max_subsequence(nums1, i);
+        let right = max_subsequence(nums2, k - i);
+        let candidate = merge(left, right);
+        if best.is_empty() or greater(candidate, best) {
+            best = candidate;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..v.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(v[i].to_string());
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(nums1: Vec[i64], nums2: Vec[i64], k: i64) {
+    let answer = max_number(nums1, nums2, k);
+    println(f"{show(nums1)} {show(nums2)} k={k} -> {show(answer)}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn digits(len: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..len {
+        v.push(next(seed) % 10);
+    }
+    return v;
+}
+
+fn main() {
+    // The three examples from the problem statement.
+    report([3, 4, 6, 5], [9, 1, 2, 5, 8, 3], 5);
+    report([6, 7], [6, 0, 4], 5);
+    report([3, 9], [8, 9], 3);
+
+    // Equal heads whose suffixes agree for several digits before they part —
+    // the case a one-digit lookahead gets wrong.
+    report([2, 5, 6, 4, 4, 0], [7, 3, 8, 0, 6, 5, 7, 6, 2], 15);
+    report([6, 7, 6, 7, 6, 7, 0], [6, 7, 6, 7, 6, 7, 1], 14);
+    report([8, 9, 9], [8, 9, 9, 1], 6);
+
+    // Edges: k = 0, an empty side, every digit taken, all digits equal.
+    report([1, 2, 3], [4, 5], 0);
+    report([], [1, 2, 3], 2);
+    report([5, 4, 3], [], 3);
+    report([1, 2], [3], 3);
+    report([0, 0, 0], [0, 0], 4);
+    report([9, 9], [9, 9, 9], 3);
+
+    // Small random cases — every arm prints these, including the brute force.
+    let mut seed = 321;
+    let mut small: Vec[i64] = [3, 5, 7];
+    for t in 0..small.len() {
+        let len = small[t];
+        let a = digits(len, mut seed);
+        let b = digits(len + 1, mut seed);
+        report(a, b, len + len / 2 + 1);
+    }
+
+    // Larger random cases, for the fast arm only: print a fold of the answer.
+    let mut sizes: Vec[i64] = [20, 60, 150];
+    for t in 0..sizes.len() {
+        let len = sizes[t];
+        let a = digits(len, mut seed);
+        let b = digits(len + 7, mut seed);
+        let k = len + len / 2;
+        let answer = max_number(a, b, k);
+        let mut fold = 0;
+        for i in 0..answer.len() {
+            fold = (fold * 131 + answer[i] + 1) % 1000000007;
+        }
+        println(f"m={len} n={len + 7} k={k} -> {answer.len()} digits, fold {fold}");
+    }
+}

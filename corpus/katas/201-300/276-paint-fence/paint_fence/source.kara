@@ -1,0 +1,77 @@
+// LeetCode 276 — Paint Fence. (Premium.)
+//
+// `n` posts, `k` colours. No THREE consecutive posts may share a colour — two
+// in a row is fine. Return how many ways the fence can be painted.
+//
+// THE ★ MECHANISM: TWO ROLLING STATES. The rule looks at a window of three, but
+// carrying the last two colours is unnecessary — all that matters about the
+// previous post is WHETHER IT MATCHED THE ONE BEFORE IT. That one bit splits
+// every valid painting of `i` posts into two disjoint classes:
+//
+//     same[i] — post i has the same colour as post i-1
+//     diff[i] — post i has a different colour from post i-1
+//
+// and the transitions fall straight out of the rule:
+//
+//     same[i] = diff[i-1]              // to repeat post i-1, i-1 must have
+//                                      // DIFFERED from i-2, or i-2..i are three
+//                                      // in a row
+//     diff[i] = (same[i-1] + diff[i-1]) * (k - 1)
+//                                      // any valid painting extended by any of
+//                                      // the other k-1 colours
+//
+// So the answer is `same[n] + diff[n]` in O(n) time and O(1) space, and the
+// three-in-a-row rule never has to be re-checked — it is enforced entirely by
+// `same[i] = diff[i-1]` refusing to chain.
+//
+// THE BASE CASES ARE WHERE THIS GOES WRONG. `same[2] = k` (pick a colour, repeat
+// it) and `diff[2] = k * (k - 1)`, which sum to `k * k` — every painting of two
+// posts is legal, since the rule needs three. A solver that starts the loop at
+// 2 instead of 3, or seeds `same[1] = k`, is right for `n = 1` and wrong from
+// `n = 3` on.
+//
+// OVERFLOW IS A REAL CONSTRAINT HERE, NOT A FOOTNOTE. `diff` multiplies by
+// `k - 1` every step, so the answer grows like `(k-1)^n`: at `k = 100000` it
+// leaves `i64` before `n = 5`. Kāra checks integer overflow by default and will
+// TRAP; C and Rust wrap silently and print a wrong answer with no complaint.
+// LeetCode papers over this by promising its testcases fit in 32 bits. This
+// corpus does not paper over it — see the differential, whose generator has to
+// compute its own safe envelope before it can pick an `n`.
+
+fn num_ways(n: i64, k: i64) -> i64 {
+    if n == 0 { return 0; }
+    if n == 1 { return k; }
+    let mut same = k;                 // both of the first two posts: one colour
+    let mut diff = k * (k - 1);    // the first two differ
+    let mut i = 3;
+    while i <= n {
+        let next_same = diff;         // repeating is only legal after a change
+        let next_diff = (same + diff) * (k - 1);
+        same = next_same;
+        diff = next_diff;
+        i = i + 1;
+    }
+    return same + diff;
+}
+
+fn main() {
+    let cases: Vec[Vec[i64]] = [
+        [1, 1],    // 1   — one post, one colour
+        [1, 5],    // 5
+        [2, 2],    // 4   — every two-post painting is legal
+        [3, 2],    // 6   — the two all-same paintings are out
+        [7, 2],    // 42
+        [2, 4],    // 16
+        [3, 4],    // 60
+        [4, 3],    // 66
+        [10, 3],   // 27408
+        [20, 2],   // 21892
+    ];
+    let mut i = 0;
+    while i < cases.len() {
+        let n = cases[i][0];
+        let k = cases[i][1];
+        println(f"n={n} k={k} -> {num_ways(n, k)}");
+        i = i + 1;
+    }
+}

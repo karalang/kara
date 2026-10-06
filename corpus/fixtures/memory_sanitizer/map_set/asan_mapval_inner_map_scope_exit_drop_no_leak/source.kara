@@ -1,0 +1,16 @@
+
+fn build(n: i64) -> Map[i64, Map[i64, String]] {
+    let mut inner: Map[i64, String] = Map.new();
+    inner.insert(n, f"inner payload padded out beyond thirty-six bytes {n}");
+    let mut m: Map[i64, Map[i64, String]] = Map.new();
+    m.insert(n, inner);
+    m
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let m = build(i);
+        println(m.len());
+        i = i + 1;
+    };
+}

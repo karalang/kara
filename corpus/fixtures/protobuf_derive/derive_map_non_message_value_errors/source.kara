@@ -1,0 +1,7 @@
+
+struct Plain { v: i64 }
+
+#[derive(Message)]
+struct D { m: Map[String, Plain] }
+
+fn main() {}

@@ -1,0 +1,6 @@
+
+fn main() {
+    let a = Vector[i64, 3](1, 2, 3);
+    let b = Vector[f64, 3](1.0, 2.0, 3.0);
+    let _ = a.cross(b);
+}

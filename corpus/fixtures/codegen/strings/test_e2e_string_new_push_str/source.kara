@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut s: String = String.new();
+    s.push_str("hello");
+    s.push_str(" world");
+    println(s);
+    println(s.len());
+}

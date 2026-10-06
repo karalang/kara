@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m.insert("key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+             "val-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string());
+    m.insert("key-cccccccccccccccccccccccccccccccccccc".to_string(),
+             "val-dddddddddddddddddddddddddddddddddddd".to_string());
+    let ks: Vec[String] = m.keys();
+    let vs: Vec[String] = m.values();
+    let es: Vec[(String, String)] = m.entries();
+    // Counts only — entries() order is non-deterministic; a clean exit proves
+    // no double-free (it crashed before any read pre-fix). Content correctness
+    // is covered by the codegen E2E `test_e2e_map_string_values_entries_owned`.
+    println(ks.len());
+    println(vs.len());
+    println(es.len());
+}

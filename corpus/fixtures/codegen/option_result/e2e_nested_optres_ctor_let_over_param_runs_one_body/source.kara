@@ -1,0 +1,37 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+fn fl(r: R, keep: bool) -> i64 { if keep { let o = Option.Some(r); println("held"); } return 7; }
+fn flb(r: R, keep: bool) -> i64 { if keep { let o = Some(r); println("held"); } return 7; }
+fn flt(r: R) -> i64 { let o = Option.Some(r); println("held"); return 7; }
+fn flr(r: R, keep: bool) -> i64 { if keep { let o: Result[R, i64] = Result.Ok(r); println("held"); } return 7; }
+fn flu(r: R, keep: bool) -> i64 { if keep { let o = Option.Some(r); println("held"); let p = o; println("used"); } return 7; }
+fn fln(r: R, n: i64) -> i64 { let o = Option.Some(r); println("held"); return n; }
+struct K { z: i64 }
+impl K {
+    fn l(ref self, r: R, keep: bool) -> i64 { if keep { let o = Option.Some(r); println("held"); } return 7; }
+    fn lb(ref self, r: R, keep: bool) -> i64 { if keep { let o = Some(r); println("held"); } return 7; }
+    fn lt(ref self, r: R) -> i64 { let o = Option.Some(r); println("held"); return 7; }
+    fn lr(ref self, r: R, keep: bool) -> i64 { if keep { let o: Result[R, i64] = Result.Ok(r); println("held"); } return 7; }
+    fn ln(ref self, r: R, n: i64) -> i64 { let o = Option.Some(r); println("held"); return n; }
+}
+fn main() {
+    let k = K { z: 0 };
+    println("fl-f"); let _ = fl(mk(1), false);
+    println("fl-t"); let _ = fl(mk(2), true);
+    println("flb-t"); let _ = flb(mk(3), true);
+    println("flt"); let _ = flt(mk(4));
+    println("flr-t"); let _ = flr(mk(5), true);
+    println("flu-t"); let _ = flu(mk(6), true);
+    println("fln"); let _ = fln(mk(7), 9);
+    println("fl-n"); let a = mk(8); let _ = fl(a, true);
+    println("ml-f"); let _ = k.l(mk(11), false);
+    println("ml-t"); let _ = k.l(mk(12), true);
+    println("mlb-t"); let _ = k.lb(mk(13), true);
+    println("mlt"); let _ = k.lt(mk(14));
+    println("mlr-t"); let _ = k.lr(mk(15), true);
+    println("mln"); let _ = k.ln(mk(16), 9);
+    println("ml-n"); let b = mk(17); let _ = k.l(b, true);
+    println("ml-var"); let t = true; let _ = k.l(mk(18), t);
+    println("end");
+}

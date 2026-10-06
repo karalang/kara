@@ -1,0 +1,16 @@
+shared struct CaptureExporter {
+             mut span_count: i64,
+             mut event_count: i64,
+         }
+         impl Exporter for CaptureExporter {
+             fn export_span(ref self, span: Span) { self.span_count = self.span_count + 1; }
+             fn export_event(ref self, event: LogEvent) { self.event_count = self.event_count + 1; }
+         }
+         fn main() {
+             let e = CaptureExporter { span_count: 0, event_count: 0 };
+             e.export_span(Span.root("a", 1));
+             e.export_span(Span.root("b", 2));
+             e.export_event(LogEvent.info("c"));
+             println(e.span_count);
+             println(e.event_count);
+         }

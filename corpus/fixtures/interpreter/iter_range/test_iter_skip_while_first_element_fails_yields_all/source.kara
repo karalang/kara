@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = [10, 20, 30];
+    for x in v.iter().skip_while(|x| x < 5) {
+        println(x);
+    }
+}

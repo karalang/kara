@@ -1,0 +1,13 @@
+source = "tests/typechecker.rs::a_body_annotated_container_of_t_does_not_poison_method_calls"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

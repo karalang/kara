@@ -1,0 +1,12 @@
+
+import std.secret.{Secret};
+fn check(tok: ref Secret[String]) -> bool {
+    let ref_val: Secret[String] = Secret.new("hunter2-token-01");
+    return tok.ct_eq(ref_val)
+}
+fn main() {
+    let a: Secret[String] = Secret.new("hunter2-token-01");
+    let b: Secret[String] = Secret.new("different-secret1");
+    println(check(a));
+    println(check(b));
+}

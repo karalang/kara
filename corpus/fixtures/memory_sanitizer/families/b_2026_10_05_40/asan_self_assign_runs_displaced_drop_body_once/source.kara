@@ -1,0 +1,15 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+struct H { r: R, n: i64 }
+impl H {
+    fn swap_in(mut ref self, id: i64) { self = H { r: R { id: id, tag: f"t{id}" }, n: self.n + 1 }; }
+    fn maybe(mut ref self, b: bool) { if b { self = H { r: R { id: 50, tag: "c".to_string() }, n: 0 }; } }
+}
+fn main() {
+    let mut h = H { r: R { id: 1, tag: "a".to_string() }, n: 0 };
+    h.swap_in(2);
+    println(f"{h.r.id} {h.r.tag} {h.n}");
+    h.maybe(false);
+    h.maybe(true);
+    println(f"{h.r.id} {h.n}");
+}

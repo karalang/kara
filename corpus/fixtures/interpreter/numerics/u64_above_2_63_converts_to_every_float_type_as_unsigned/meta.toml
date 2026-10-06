@@ -1,0 +1,13 @@
+source = "tests/interpreter/numerics.rs::u64_above_2_63_converts_to_every_float_type_as_unsigned"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

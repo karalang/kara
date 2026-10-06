@@ -1,0 +1,13 @@
+source = "kara-katas/leetcode/1-100/97-interleaving-string/interleave.kara"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["closure", "deferred:dataframe"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

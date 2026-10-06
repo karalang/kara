@@ -1,0 +1,18 @@
+
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Box3 { xs: Vec[R] }
+
+fn build(k: i64) -> Box3 {
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: k, tag: f"t" });
+    let bx: Box3 = Box3 { xs: v };
+    println("callee-end");
+    return bx
+}
+
+fn main() {
+    println("A");
+    let a: Box3 = build(9);
+    println("B");
+}

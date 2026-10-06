@@ -1,0 +1,113 @@
+// LeetCode 313 — Super Ugly Number, with duplicates made impossible.
+//
+// THE ARM: the same k-way merge as the star arm, but every super ugly number
+// is REACHABLE BY EXACTLY ONE (stream, element) pair, so no two streams can
+// ever offer the same value and there is no tie to resolve.
+//
+// The star arm emits 6 once by noticing that streams 2 and 3 both offered it
+// and advancing both. This arm arranges for only one of them to offer it.
+//
+// THE CANONICALISATION. Every super ugly number has a unique multiset of
+// prime factors. Order those factors by their INDEX IN `primes` and single out
+// the lowest-indexed one; peeling one copy of it off leaves a smaller super
+// ugly number. That gives each x > 1 exactly one parent, hence exactly one
+// (stream, element) pair that may produce it:
+//
+//     x = ugly[j] * primes[i]   is emitted by stream i   only if   i <= spf[j]
+//
+// where spf[j] is the index of the lowest-indexed prime factor of ugly[j], and
+// spf[0] = k for the number 1 (no prime factors, so every stream may take it).
+// The condition says: primes[i] is allowed to be the lowest-indexed factor of
+// the product, which is exactly the canonical form. Take 6 with
+// primes = [2, 3]: stream 0 may form it from 3 (spf = 1 >= 0), stream 1 may
+// not form it from 2 (spf = 0 < 1). One producer, no tie.
+//
+// NOTE WHAT THE ORDER IS FOR. `spf` is the lowest INDEX, not the smallest
+// VALUE. Nothing here requires `primes` to be sorted — any fixed total order
+// on the primes canonicalises the factorisation just as well, because all the
+// argument needs is that "lowest-indexed factor" names one prime. The
+// differential checks this directly: permuting `primes` must not change any
+// answer, and this is the arm that would notice if the reasoning had quietly
+// leaned on ascending values.
+//
+// THE POINTERS SKIP RATHER THAN STEP. `spf` is not monotone along `ugly`, so
+// stream i's next element is not simply idx[i] + 1 — it is the next position
+// whose spf is at least i, which may be several ahead. Hence the skip loop.
+//
+// STREAMS CANNOT STARVE, which is the one thing that could send a pointer off
+// the end of the array. When stream i consumes ugly[j] it appends a value
+// whose spf is exactly i, and i <= i, so that value is itself a legal future
+// element for stream i. Every stream therefore always has at least one
+// qualifying element at or after its pointer, and the skip loop below always
+// halts inside the array. There is no guard for it: an out-of-range read would
+// panic loudly, which is the right outcome if the invariant is ever wrong.
+
+fn nth_super_ugly(n: i64, primes: ref Vec[i64]) -> i64 {
+    if n <= 0 { return 0; }
+    let k = primes.len();
+    if k == 0 { return 1; }
+
+    let mut ugly: Vec[i64] = Vec.new();
+    ugly.push(1);
+    // spf[j] — index of the lowest-indexed prime factor of ugly[j]. The
+    // sentinel k for 1 makes every stream eligible to consume it.
+    let mut spf: Vec[i64] = Vec.new();
+    spf.push(k);
+
+    let mut idx: Vec[i64] = Vec.new();
+    for i in 0..k { idx.push(0); }
+
+    while ugly.len() < n {
+        // Skip to each stream's next LEGAL element.
+        for i in 0..k {
+            while spf[idx[i]] < i { idx[i] = idx[i] + 1; }
+        }
+        // The candidates are pairwise distinct, so the minimum has exactly one
+        // producer and a strict comparison names it.
+        let mut best = primes[0] * ugly[idx[0]];
+        let mut winner = 0;
+        for i in 1..k {
+            let c = primes[i] * ugly[idx[i]];
+            if c < best { best = c; winner = i; }
+        }
+        ugly.push(best);
+        // The product's lowest-indexed prime factor is primes[winner].
+        spf.push(winner);
+        idx[winner] = idx[winner] + 1;
+    }
+
+    return ugly[n - 1];
+}
+
+fn render(primes: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < primes.len() {
+        if i > 0 { s.push_str(","); }
+        s.push_str(primes[i].to_string());
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(n: i64, vals: Slice[i64]) {
+    let mut primes: Vec[i64] = Vec.new();
+    for v in vals { primes.push(v); }
+    println("n=" + n.to_string() + " " + render(primes) + " -> "
+        + nth_super_ugly(n, primes).to_string());
+}
+
+fn main() {
+    report(12, [2, 7, 13, 19]);
+    report(1, [2, 3, 5]);
+    report(11, [2, 3, 5]);
+    report(20, [2, 3, 5]);
+    report(1, [7]);
+    report(6, [7]);
+    report(15, [2, 101]);
+    report(25, [2, 3, 5, 7, 11, 13]);
+    report(20, [5, 2, 3]);
+    report(100, [2, 7, 13, 19]);
+}

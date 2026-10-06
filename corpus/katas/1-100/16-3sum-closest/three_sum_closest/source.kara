@@ -1,0 +1,127 @@
+// LeetCode #16: 3Sum Closest — sort + two-pointer, O(n²) time, O(1) extra.
+//
+// Given an integer array `nums` (n ≥ 3) and an integer `target`, return the
+// sum of three elements `nums[i] + nums[j] + nums[k]` (i, j, k pairwise
+// distinct) whose value is closest to `target`. The problem guarantees a
+// unique answer in magnitude; ties on |sum - target| are resolved by
+// whichever the algorithm visits first (LeetCode accepts any).
+//
+// Brute force is O(n³). The kata-15 trick — sort first, then for each fixed
+// smallest element `s[i]` collapse the remaining pair search into a single
+// linear two-pointer crawl over the sorted suffix — applies here too, with
+// one shape change: instead of *collecting* every zero-sum triplet (with
+// dedup), we *track the running closest* and steer the two pointers by sign
+// of `sum - target`:
+//
+//   sum < target  ⇒  current sum too small,  advance `lo`.
+//   sum > target  ⇒  current sum too big,    retreat `hi`.
+//   sum == target ⇒  unbeatable distance 0, return immediately.
+//
+// Two consequences of the "track a scalar, don't enumerate" shape are worth
+// calling out:
+//
+//   - **No dedup needed.** Kata 15 had to skip repeated smallest values
+//     (outer) and walk past repeated pair values (inner) to avoid emitting
+//     duplicate triplets. Here we only emit one scalar at the end, so
+//     redundant comparisons are wasted work but not *wrong* work — we drop
+//     the dedup machinery entirely and the loop is correspondingly tighter.
+//
+//   - **No `s[i] > 0` early-out.** Kata 15 could break once the smallest
+//     element went positive because all-positive triplets can never sum to
+//     0. With an arbitrary `target` no such monotone wall exists — a
+//     positive `s[i]` may still yield the closest sum (target = 100,
+//     s = [5,5,5] returns 15). The only early-exit is the exact-hit return.
+//
+// `best` is seeded with the first valid triplet (`s[0]+s[1]+s[2]`) rather
+// than a sentinel + bool flag; LeetCode's `n ≥ 3` constraint makes this
+// safe, and it lets the hot loop's update guard be a clean numeric compare.
+//
+// Values are i64 throughout. LeetCode bounds entries by 10^4 in absolute
+// value, so any three-term sum (and any `sum - target`) fits comfortably in
+// i64; no overflow guard needed.
+
+fn abs_i64(x: i64) -> i64 {
+    if x < 0 { -x } else { x }
+}
+
+fn three_sum_closest(nums: Slice[i64], target: i64) -> i64 {
+    let mut s: Vec[i64] = Vec.from_slice(nums);
+    s.sort_by(|a, b| a.cmp(b));
+    let n = s.len();
+    // Seed `best` with the smallest three; n ≥ 3 is a problem precondition.
+    let mut best: i64 = s[0] + s[1] + s[2];
+    let mut i = 0;
+    while i < n - 2 {
+        let mut lo = i + 1;
+        let mut hi = n - 1;
+        while lo < hi {
+            let sum = s[i] + s[lo] + s[hi];
+            if sum == target {
+                return sum;
+            }
+            if abs_i64(sum - target) < abs_i64(best - target) {
+                best = sum;
+            }
+            if sum < target {
+                lo = lo + 1;
+            } else {
+                hi = hi - 1;
+            }
+        }
+        i = i + 1;
+    }
+    best
+}
+
+fn report(nums: Slice[i64], target: i64) {
+    println(three_sum_closest(nums, target));
+}
+
+fn main() {
+    // LeetCode reference example — sorted [-4,-1,1,2]; with target 1 the
+    // crawl finds -1+2+1 = 2 (distance 1), the unique closest.
+    let case1: Array[i64, 4] = [-1, 2, 1, -4];
+    report(case1, 1);                                  // expect: 2
+
+    // Exact-hit fast path — sum == target on the very first triplet.
+    let case2: Array[i64, 3] = [0, 0, 0];
+    report(case2, 0);                                  // expect: 0
+
+    // Target far below every reachable sum — best is the *smallest* triplet
+    // sum 0+1+1 = 2, found on the first i, lo, hi after sort.
+    let case3: Array[i64, 4] = [1, 1, 1, 0];
+    report(case3, -100);                               // expect: 2
+
+    // Single triplet — the algorithm short-circuits on the equality check.
+    let case4: Array[i64, 3] = [1, 2, 3];
+    report(case4, 6);                                  // expect: 6
+
+    // All-negative input, target 0 — proves no `s[i] > 0` early-out fires
+    // (kata 15 would break immediately; this kata must crawl the whole way).
+    let case5: Array[i64, 3] = [-1, -2, -3];
+    report(case5, 0);                                  // expect: -6
+
+    // Symmetric range with an exact hit available — -1+2+3 = 4 lands first
+    // (i=2, lo=5, hi=6 after sort), returning immediately.
+    let case6: Array[i64, 7] = [-3, -2, -1, 0, 1, 2, 3];
+    report(case6, 4);                                  // expect: 4
+
+    // All-positive triplet with a large target — counter-example to the
+    // kata-15 early-out; the only reachable sum is 15.
+    let case7: Array[i64, 3] = [5, 5, 5];
+    report(case7, 100);                                // expect: 15
+
+    // Tightly-packed negatives, target deep below the minimum reachable
+    // sum (-100 + -50 + 1 = -149). The crawl must walk hi inward through
+    // the small positives before landing on the smallest-magnitude
+    // approach.
+    let case8: Array[i64, 5] = [-100, -50, 1, 2, 3];
+    report(case8, -150);                               // expect: -149
+
+    // Symmetric input around 0 with ties — sorted [-1,-1,1,1]; at i=0,
+    // lo=1, hi=3 the first sum is -1, then we move lo (sum < 0) and reach
+    // sum = 1 (equal distance, no strict-less update). `best` stays at -1.
+    // (LeetCode accepts either; the kara/py mirrors agree on first-seen.)
+    let case9: Array[i64, 4] = [-1, -1, 1, 1];
+    report(case9, 0);                                  // expect: -1
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_79.rs::e2e_caller_retained_param_returns_cloned_struct_field"
+dedup_of = ["tests/interpreter/families/b_2026_09_29_79.rs::interp_caller_retained_param_returns_cloned_struct_field", "tests/memory_sanitizer/families/b_2026_09_29_79.rs::asan_caller_retained_param_returns_cloned_struct_field"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared", "uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

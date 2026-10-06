@@ -1,0 +1,20 @@
+
+fn main() {
+    let min: i64 = -9223372036854775808;
+    let max: i64 = 9223372036854775807;
+    let ubig: u64 = 18446744073709551615u64;
+    let umid: u64 = 9223372036854775808u64;
+    println(min);
+    println(max);
+    println(ubig);
+    println(umid);
+    println(f"{min} {max} {ubig} {umid}");
+    let i8v: i8 = -128;
+    let i32v: i32 = -2147483648;
+    let u32v: u32 = 4294967295;
+    println(f"{i8v} {i32v} {u32v}");
+    println(0);
+    println(f"{0}");
+    let v: Vec[i64] = [0, -1, -9223372036854775808, 9223372036854775807];
+    println(f"{v}");
+}

@@ -1,0 +1,515 @@
+// LeetCode #323: Number of Connected Components — differential + property
+// harness.
+//
+// Four arms, each reaching the count by a different route:
+//
+//   star     union-find with union by size and path compression (★)
+//   dfs      flood from every unseen node over adjacency lists, with a stack
+//   bfs      the same sweep with a queue, over a packed CSR adjacency array
+//   labels   push the smallest index across every edge until nothing moves
+//
+// plus an oracle that is none of them: a boolean transitive closure
+// (Warshall), run where the graph is small enough for n^3.
+//
+// The properties below do not know how any arm works:
+//
+//   P1   dfs agrees with star
+//   P2   bfs agrees with star
+//   P3   labels agrees with star
+//   P4   the transitive closure agrees with star          (small graphs)
+//   P5   max(1, n - edges) <= answer <= n                 (0 for n = 0)
+//   P6   the order of the edge list does not matter (reversed, shuffled)
+//   P7   swapping the ends of every edge changes nothing
+//   P8   relabelling the nodes by a random permutation changes nothing
+//   P9   doubling every edge and adding a self-loop at every node changes
+//        nothing
+//   P10  adding one edge lowers the answer by at most one, and by exactly
+//        one when the closure says its ends were apart; removing one raises
+//        it by at most one
+//   P11  the answer adds over a disjoint union of two graphs
+//   P12  one extra node joined to every node leaves exactly one component
+//   P13  a spanning forest has exactly n - answer edges: keep each edge only
+//        if it lowers the count of the edges kept so far, and exactly
+//        n - answer are kept, leaving the count at the answer
+//
+// P4 and P13 are the two that check the answer rather than an arm. P4 is
+// reachability computed from nothing but its definition. P13 checks the
+// answer against the other thing it determines, the size of a spanning
+// forest, which ties the count to the edges that actually do the connecting.
+//
+// Sizing. Every bound here is set by the TREE-WALK interpreter, not by the
+// JIT: the repo's A/B rule wants this harness byte-identical under
+// `karac run`, `karac run --interp` and both `karac build` modes.
+const EXHAUSTIVE_MAX: i64 = 5;  // every simple graph on 0..=EXHAUSTIVE_MAX nodes (1100 graphs)
+const CLOSURE_MAX: i64 = 12;    // the closure runs up to this many nodes
+const RANDOM_CASES: i64 = 240;  // random multigraphs, loops and repeats allowed
+const RANDOM_MAX: i64 = 12;
+const MEDIUM_CASES: i64 = 24;   // larger sparse graphs, no closure
+const MEDIUM_MAX: i64 = 200;
+
+// -------------------------------------------------------------- arms ---
+
+struct DisjointSet {
+    parent: Vec[i64],
+    size: Vec[i64],
+    sets: i64,
+}
+
+impl DisjointSet {
+    fn new(n: i64) -> DisjointSet {
+        let mut parent: Vec[i64] = Vec.new();
+        for i in 0..n {
+            parent.push(i);
+        }
+        return DisjointSet { parent: parent, size: Vec.filled(n, 1), sets: n };
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        let mut root = x;
+        while self.parent[root] != root {
+            root = self.parent[root];
+        }
+        // Second pass: point everything on the path straight at the root.
+        let mut cur = x;
+        while self.parent[cur] != root {
+            let next = self.parent[cur];
+            self.parent[cur] = root;
+            cur = next;
+        }
+        return root;
+    }
+
+    fn merge(mut ref self, a: i64, b: i64) {
+        let mut ra = self.find(a);
+        let mut rb = self.find(b);
+        if ra == rb {
+            return;
+        }
+        if self.size[ra] < self.size[rb] {
+            let t = ra;
+            ra = rb;
+            rb = t;
+        }
+        self.parent[rb] = ra;
+        self.size[ra] += self.size[rb];
+        self.sets -= 1;
+    }
+}
+
+fn count_star(n: i64, edges: ref Vec[(i64, i64)]) -> i64 {
+    let mut ds = DisjointSet.new(n);
+    for (a, b) in edges {
+        ds.merge(a, b);
+    }
+    return ds.sets;
+}
+
+fn count_dfs(n: i64, edges: ref Vec[(i64, i64)]) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        adj.push(Vec.new());
+    }
+    for (a, b) in edges {
+        adj[a].push(b);
+        adj[b].push(a);
+    }
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    let mut count = 0;
+    for start in 0..n {
+        if seen[start] {
+            continue;
+        }
+        count += 1;
+        seen[start] = true;
+        let mut stack: Vec[i64] = [start];
+        while not stack.is_empty() {
+            let v = stack.pop().unwrap();
+            for w in adj[v] {
+                if not seen[w] {
+                    seen[w] = true;
+                    stack.push(w);
+                }
+            }
+        }
+    }
+    return count;
+}
+
+fn count_bfs(n: i64, edges: ref Vec[(i64, i64)]) -> i64 {
+    // Degrees, then prefix sums: start[v] is where v's neighbours begin.
+    let mut start: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..edges.len() {
+        let (a, b) = edges[i];
+        start[a + 1] += 1;
+        start[b + 1] += 1;
+    }
+    for v in 0..n {
+        start[v + 1] += start[v];
+    }
+    let mut fill = start.clone();
+    let mut nbr: Vec[i64] = Vec.filled(2 * edges.len(), 0);
+    for i in 0..edges.len() {
+        let (a, b) = edges[i];
+        nbr[fill[a]] = b;
+        fill[a] += 1;
+        nbr[fill[b]] = a;
+        fill[b] += 1;
+    }
+
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    let mut count = 0;
+    for s in 0..n {
+        if seen[s] {
+            continue;
+        }
+        count += 1;
+        seen[s] = true;
+        queue.push_back(s);
+        while let Some(v) = queue.pop_front() {
+            for k in start[v]..start[v + 1] {
+                let w = nbr[k];
+                if not seen[w] {
+                    seen[w] = true;
+                    queue.push_back(w);
+                }
+            }
+        }
+    }
+    return count;
+}
+
+fn count_labels(n: i64, edges: ref Vec[(i64, i64)]) -> i64 {
+    let mut label: Vec[i64] = Vec.new();
+    for v in 0..n {
+        label.push(v);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (a, b) in edges {
+            let low = min(label[a], label[b]);
+            if label[a] != low or label[b] != low {
+                label[a] = low;
+                label[b] = low;
+                changed = true;
+            }
+        }
+    }
+    let mut count = 0;
+    for v in 0..n {
+        if label[v] == v {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+// ----------------------------------------------------------- oracles ---
+
+// Boolean transitive closure (Warshall). reach[i][j] after the triple loop
+// says whether j is reachable from i. A node starts a component exactly when
+// no smaller node reaches it. No forest, no traversal, no fixed point: just
+// the definition of reachability, cubed.
+fn components_closure(n: i64, edges: ref Vec[(i64, i64)]) -> i64 {
+    let mut reach: Vec[Vec[bool]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[bool] = Vec.filled(n, false);
+        row[i] = true;
+        reach.push(row);
+    }
+    for (a, b) in edges {
+        reach[a][b] = true;
+        reach[b][a] = true;
+    }
+    for k in 0..n {
+        for i in 0..n {
+            if reach[i][k] {
+                for j in 0..n {
+                    if reach[k][j] {
+                        reach[i][j] = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut count = 0;
+    for j in 0..n {
+        let mut first = true;
+        for i in 0..j {
+            if reach[i][j] {
+                first = false;
+            }
+        }
+        if first {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+// ------------------------------------------------------ transformations ---
+
+fn reversed(edges: ref Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut i = edges.len() - 1;
+    while i >= 0 {
+        out.push(edges[i]);
+        i -= 1;
+    }
+    return out;
+}
+
+fn flipped(edges: ref Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for (a, b) in edges {
+        out.push((b, a));
+    }
+    return out;
+}
+
+fn shuffled(edges: ref Vec[(i64, i64)], seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut out = edges.clone();
+    let mut i = out.len() - 1;
+    while i > 0 {
+        let j = next(seed) % (i + 1);
+        out.swap(i, j);
+        i -= 1;
+    }
+    return out;
+}
+
+// Relabel every node through a random permutation of 0..n-1.
+fn relabelled(n: i64, edges: ref Vec[(i64, i64)], seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut perm: Vec[i64] = Vec.new();
+    for v in 0..n {
+        perm.push(v);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next(seed) % (i + 1);
+        perm.swap(i, j);
+        i -= 1;
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for (a, b) in edges {
+        out.push((perm[a], perm[b]));
+    }
+    return out;
+}
+
+// Every edge twice, plus a self-loop at every node.
+fn padded(n: i64, edges: ref Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for (a, b) in edges {
+        out.push((a, b));
+        out.push((b, a));
+    }
+    for v in 0..n {
+        out.push((v, v));
+    }
+    return out;
+}
+
+// The disjoint union of two graphs: the second one's nodes shifted up by n1.
+fn disjoint_union(n1: i64, e1: ref Vec[(i64, i64)], e2: ref Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut out = e1.clone();
+    for (a, b) in e2 {
+        out.push((a + n1, b + n1));
+    }
+    return out;
+}
+
+// One extra node, n, joined to every existing node.
+fn with_hub(n: i64, edges: ref Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut out = edges.clone();
+    for v in 0..n {
+        out.push((n, v));
+    }
+    return out;
+}
+
+fn without(edges: ref Vec[(i64, i64)], skip: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for i in 0..edges.len() {
+        if i != skip {
+            out.push(edges[i]);
+        }
+    }
+    return out;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn random_edges(n: i64, m: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for i in 0..m {
+        let a = next(seed) % n;
+        let b = next(seed) % n;
+        edges.push((a, b));
+    }
+    return edges;
+}
+
+// ---------------------------------------------------------- checking ---
+
+struct Tally {
+    cases: i64,
+    closure_cases: i64,
+    edge_cases: i64,
+    p: Vec[i64],
+}
+
+fn fail(tally: mut ref Tally, prop: i64) {
+    tally.p[prop] += 1;
+}
+
+fn check(n: i64, edges: ref Vec[(i64, i64)], other_n: i64, other: ref Vec[(i64, i64)], seed: mut ref i64, tally: mut ref Tally) {
+    tally.cases += 1;
+    let ans = count_star(n, edges);
+
+    if count_dfs(n, edges) != ans { fail(tally, 1); }
+    if count_bfs(n, edges) != ans { fail(tally, 2); }
+    if count_labels(n, edges) != ans { fail(tally, 3); }
+    if n <= CLOSURE_MAX {
+        tally.closure_cases += 1;
+        if components_closure(n, edges) != ans { fail(tally, 4); }
+    }
+
+    // P5: each edge can merge at most two components into one.
+    let mut floor = n - edges.len();
+    if n > 0 and floor < 1 { floor = 1; }
+    if n == 0 { floor = 0; }
+    if ans < floor or ans > n { fail(tally, 5); }
+
+    // P6: the order of the edge list does not matter.
+    if count_star(n, reversed(edges)) != ans { fail(tally, 6); }
+    if count_star(n, shuffled(edges, seed)) != ans { fail(tally, 6); }
+
+    // P7: an undirected edge has no direction.
+    if count_star(n, flipped(edges)) != ans { fail(tally, 7); }
+
+    // P8: the names of the nodes do not matter.
+    if count_star(n, relabelled(n, edges, seed)) != ans { fail(tally, 8); }
+
+    // P9: repeated edges and self-loops change nothing.
+    if count_star(n, padded(n, edges)) != ans { fail(tally, 9); }
+
+    // P10: adding an edge lowers the count by at most one; removing one
+    // raises it by at most one.
+    if n > 0 {
+        let a = next(seed) % n;
+        let b = next(seed) % n;
+        let mut plus = edges.clone();
+        plus.push((a, b));
+        let after = count_star(n, plus);
+        if after != ans and after != ans - 1 { fail(tally, 10); }
+        // And it lowers the count exactly when a and b were apart, which the
+        // closure can say independently on the small cases.
+        if n <= CLOSURE_MAX {
+            let mut probe = edges.clone();
+            probe.push((a, b));
+            let apart = components_closure(n, probe) < components_closure(n, edges);
+            if apart != (after == ans - 1) { fail(tally, 10); }
+        }
+    }
+    if edges.len() > 0 {
+        tally.edge_cases += 1;
+        let k = next(seed) % edges.len();
+        let after = count_star(n, without(edges, k));
+        if after != ans and after != ans + 1 { fail(tally, 10); }
+    }
+
+    // P11: counts add over a disjoint union.
+    let joined = disjoint_union(n, edges, other);
+    if count_star(n + other_n, joined) != ans + count_star(other_n, other) { fail(tally, 11); }
+
+    // P12: a hub joined to every node leaves one component.
+    if count_star(n + 1, with_hub(n, edges)) != 1 { fail(tally, 12); }
+
+    // P13: n - answer edges suffice to connect each component. Keep an edge
+    // only when it lowers the count of the edges kept so far: the kept edges
+    // are a spanning forest, and there are exactly n - answer of them.
+    let mut kept: Vec[(i64, i64)] = Vec.new();
+    let mut have = n;
+    for (a, b) in edges {
+        let mut trial = kept.clone();
+        trial.push((a, b));
+        let c = count_star(n, trial);
+        if c < have {
+            kept = trial;
+            have = c;
+        }
+    }
+    if kept.len() != n - ans or have != ans { fail(tally, 13); }
+}
+
+// -------------------------------------------------------------- main ---
+
+fn main() {
+    let mut tally = Tally { cases: 0, closure_cases: 0, edge_cases: 0,
+        p: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] };
+    let mut seed = 32317;
+    let empty: Vec[(i64, i64)] = Vec.new();
+
+    // Exhaustive tier: every simple graph on 0..=EXHAUSTIVE_MAX nodes. Graph
+    // `mask` keeps the pair list's k-th pair when bit k is set.
+    for n in 0..(EXHAUSTIVE_MAX + 1) {
+        let mut pairs: Vec[(i64, i64)] = Vec.new();
+        for a in 0..n {
+            for b in (a + 1)..n {
+                pairs.push((a, b));
+            }
+        }
+        for mask in 0..(1 << pairs.len()) {
+            let mut edges: Vec[(i64, i64)] = Vec.new();
+            for k in 0..pairs.len() {
+                if (mask >> k) & 1 == 1 {
+                    edges.push(pairs[k]);
+                }
+            }
+            let other = random_edges(3, next(mut seed) % 4, mut seed);
+            check(n, edges, 3, other, mut seed, mut tally);
+        }
+    }
+
+    // Random multigraphs: loops and repeats allowed, up to RANDOM_MAX nodes.
+    for c in 0..RANDOM_CASES {
+        let n = 1 + next(mut seed) % RANDOM_MAX;
+        let m = next(mut seed) % (2 * n + 1);
+        let edges = random_edges(n, m, mut seed);
+        let on = 1 + next(mut seed) % 5;
+        let other = random_edges(on, next(mut seed) % 6, mut seed);
+        check(n, edges, on, other, mut seed, mut tally);
+    }
+
+    // Medium tier: larger sparse graphs, where the closure is too slow and
+    // the other three arms and the properties carry it.
+    for c in 0..MEDIUM_CASES {
+        let n = 20 + next(mut seed) % MEDIUM_MAX;
+        let m = next(mut seed) % (n + 1);
+        let edges = random_edges(n, m, mut seed);
+        check(n, edges, 0, empty, mut seed, mut tally);
+    }
+
+    println(f"cases {tally.cases} closure-cases {tally.closure_cases} edge-removal-cases {tally.edge_cases}");
+    println(f"P1  dfs-vs-star disagreements {tally.p[1]}");
+    println(f"P2  bfs-vs-star disagreements {tally.p[2]}");
+    println(f"P3  labels-vs-star disagreements {tally.p[3]}");
+    println(f"P4  closure-vs-star disagreements {tally.p[4]}");
+    println(f"P5  bound failures {tally.p[5]}");
+    println(f"P6  edge-order failures {tally.p[6]}");
+    println(f"P7  edge-direction failures {tally.p[7]}");
+    println(f"P8  relabelling failures {tally.p[8]}");
+    println(f"P9  repeat-and-loop failures {tally.p[9]}");
+    println(f"P10 one-edge-change failures {tally.p[10]}");
+    println(f"P11 disjoint-union failures {tally.p[11]}");
+    println(f"P12 hub failures {tally.p[12]}");
+    println(f"P13 spanning-forest failures {tally.p[13]}");
+    let mut total = 0;
+    for x in 0..tally.p.len() { total = total + tally.p[x]; }
+    if total == 0 { println("DIFFERENTIAL OK"); } else { println("DIFFERENTIAL FAILED"); }
+}

@@ -1,0 +1,61 @@
+// LeetCode #95 — idiomatic RC-SHARING variant of the benchmark workload.
+// Identical to generate_trees.kara EXCEPT it does not deep-copy: each root
+// reuses the SAME `shared struct TreeNode` subtree instance (`left: lefts[li]`,
+// `right: rights[ri]`) that every other root pairing with it also references —
+// the natural Kāra solution, and the whole point of the problem. It does
+// asymptotically less allocation than the deep-copy mirrors, so it is kept OUT
+// of the same-work cross-language table (which forces every language onto
+// deep-copy) and measured separately; see ../README.md § Benchmarks. Same K,
+// same canonical sink 569418406 as the deep-copy mirror.
+shared struct TreeNode { val: i64, mut left: Option[TreeNode], mut right: Option[TreeNode] }
+
+fn build_all(lo: i64, hi: i64) -> Vec[Option[TreeNode]] {
+    let mut result: Vec[Option[TreeNode]] = Vec.new();
+    if lo > hi { result.push(None); return result; }
+    let mut i = lo;
+    while i <= hi {
+        let lefts = build_all(lo, i - 1);
+        let rights = build_all(i + 1, hi);
+        let mut li = 0;
+        while li < lefts.len() {
+            let mut ri = 0;
+            while ri < rights.len() {
+                result.push(Some(TreeNode { val: i, left: lefts[li], right: rights[ri] }));
+                ri = ri + 1;
+            }
+            li = li + 1;
+        }
+        i = i + 1;
+    }
+    result
+}
+
+fn serialize(node: Option[TreeNode], out: mut ref String) {
+    match node { None => { out.push_str("#,"); } Some(n) => { out.push_str(f"{n.val},"); serialize(n.left, out); serialize(n.right, out); } }
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut rep = 0;
+    while rep < 250 {
+        let mut n = 1;
+        while n <= 8 {
+            let trees = build_all(1, n);
+            let count = trees.len();
+            acc = (acc * 131 + (count + 1)) % 1000000007;
+            let mut t = 0;
+            while t < count {
+                let mut s: String = "";
+                serialize(trees[t].clone(), mut s);
+                let bytes = s.bytes();
+                let mut j = 0;
+                while j < bytes.len() { acc = (acc * 131 + (bytes[j] as i64)) % 1000000007; j = j + 1; }
+                acc = (acc * 131 + 7) % 1000000007;
+                t = t + 1;
+            }
+            n = n + 1;
+        }
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

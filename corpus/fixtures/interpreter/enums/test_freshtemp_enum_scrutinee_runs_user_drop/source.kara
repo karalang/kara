@@ -1,0 +1,10 @@
+enum Step { Yield(i64), Stop }
+        impl Drop for Step { fn drop(mut ref self) { println("DROP"); } }
+        fn next(i: i64) -> Step { if i < 3 { Step.Yield(i) } else { Step.Stop } }
+        fn main() {
+            if let Step.Yield(v) = next(0) { println(f"Y {v}"); } else { println("MISS"); }
+            println("AFTER");
+            let mut i: i64 = 0;
+            while let Step.Yield(v) = next(i) { println(f"I {v}"); i = i + 1; }
+            println("DONE");
+        }

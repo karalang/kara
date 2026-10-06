@@ -1,0 +1,6 @@
+
+fn main() {
+    let s: String = "abc".to_string();
+    println(s.to_string());
+    println("lit".to_string());
+}

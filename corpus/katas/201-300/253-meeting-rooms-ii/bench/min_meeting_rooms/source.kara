@@ -1,0 +1,152 @@
+// Benchmark workload for LeetCode #253 — Meeting Rooms II.
+//
+// Build-once + punch. 150,000 intervals are generated and shuffled once; each
+// round sorts a fresh copy by start and runs the min-heap room count to
+// completion.
+//
+// Two choices keep this measuring the algorithm:
+//
+//   * Meetings OVERLAP heavily — starts are drawn from a window that advances
+//     slowly relative to the durations, so the heap holds tens of entries rather
+//     than one or two. A packed non-overlapping set would keep the heap at size
+//     1 and measure only the sort.
+//   * The set is SHUFFLED once and each round sorts a fresh copy of that order,
+//     so no round after the first hits an already-sorted fast path.
+//
+// The heap sift depends on values the previous sift moved, so the maintenance is
+// loop-carried and does not vectorize. Sink folds the peak room count per round.
+
+fn heap_push(heap: mut ref Vec[i64], v: i64) {
+    heap.push(v);
+    let mut i = heap.len() - 1;
+    while i > 0 {
+        let parent = (i - 1) / 2;
+        if heap[i] < heap[parent] {
+            let tmp = heap[i];
+            heap[i] = heap[parent];
+            heap[parent] = tmp;
+            i = parent;
+        } else {
+            break;
+        }
+    }
+}
+
+fn heap_pop(heap: mut ref Vec[i64]) {
+    let n = heap.len();
+    if n == 0 {
+        return;
+    }
+    let last = match heap.pop() {
+        Some(v) => v,
+        None => 0,
+    };
+    if n == 1 {
+        return;
+    }
+    heap[0] = last;
+    let m = heap.len();
+    let mut i = 0;
+    while true {
+        let l = 2 * i + 1;
+        let r = 2 * i + 2;
+        let mut smallest = i;
+        if l < m and heap[l] < heap[smallest] {
+            smallest = l;
+        }
+        if r < m and heap[r] < heap[smallest] {
+            smallest = r;
+        }
+        if smallest == i {
+            break;
+        }
+        let tmp = heap[i];
+        heap[i] = heap[smallest];
+        heap[smallest] = tmp;
+        i = smallest;
+    }
+}
+
+fn min_meeting_rooms(intervals: Slice[(i64, i64)]) -> i64 {
+    let mut s: Vec[(i64, i64)] = Vec.from_slice(intervals);
+    s.sort_by(|a, b| a.0.cmp(b.0));
+
+    let mut heap: Vec[i64] = Vec.new();
+    let mut rooms = 0;
+    let mut i = 0;
+    while i < s.len() {
+        // Free every room whose meeting has already ended. `<=`: a meeting
+        // ending exactly now releases its room for this one.
+        while heap.len() > 0 and heap[0] <= s[i].0 {
+            heap_pop(mut heap);
+        }
+        heap_push(mut heap, s[i].1);
+        if heap.len() > rooms {
+            rooms = heap.len();
+        }
+        i = i + 1;
+    }
+    return rooms;
+}
+
+fn main() {
+    let n = 150000;
+    let rounds = 25;
+
+    // ---- build once: heavily overlapping, then shuffled ------------------
+    let mut base: Vec[(i64, i64)] = Vec.new();
+    let mut state = 253253;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        // Start advances ~1 per meeting; durations reach ~60, so roughly 30
+        // meetings are live at any instant and the heap stays deep.
+        let jitter = (state / 65536) % 8;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let dur = (state / 65536) % 60 + 1;
+        let s = i + jitter;
+        base.push((s, s + dur));
+        i = i + 1;
+    }
+    let mut k = base.len() - 1;
+    while k > 0 {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let wd0 = state / 65536;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let swap = (wd0 * 32768 + state / 65536) % (k + 1);
+        let tmp = base[k];
+        base[k] = base[swap];
+        base[swap] = tmp;
+        k = k - 1;
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut s: Vec[(i64, i64)] = Vec.new();
+        let mut c = 0;
+        while c < n {
+            s.push(base[c]);
+            c = c + 1;
+        }
+        s.sort_by(|a, b| a.0.cmp(b.0));
+
+        let mut heap: Vec[i64] = Vec.new();
+        let mut rooms = 0;
+        let mut j = 0;
+        while j < n {
+            while heap.len() > 0 and heap[0] <= s[j].0 {
+                heap_pop(mut heap);
+            }
+            heap_push(mut heap, s[j].1);
+            if heap.len() > rooms {
+                rooms = heap.len();
+            }
+            j = j + 1;
+        }
+        sink = (sink * 31 + rooms) % 1000000007;
+        r = r + 1;
+    }
+    println(sink);
+}

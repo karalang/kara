@@ -1,0 +1,13 @@
+source = "kara-katas/leetcode/301-400/314-binary-tree-vertical-order-traversal/differential.kara"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["closure", "deferred:dataframe", "differential", "shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

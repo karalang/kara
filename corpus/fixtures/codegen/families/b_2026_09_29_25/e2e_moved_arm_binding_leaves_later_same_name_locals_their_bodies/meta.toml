@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_25.rs::e2e_moved_arm_binding_leaves_later_same_name_locals_their_bodies"
+dedup_of = ["tests/interpreter/families/b_2026_09_29_25.rs::interp_moved_arm_binding_leaves_later_same_name_locals_their_bodies", "tests/memory_sanitizer/families/b_2026_09_29_25.rs::asan_moved_arm_binding_leaves_later_same_name_locals_their_bodies"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

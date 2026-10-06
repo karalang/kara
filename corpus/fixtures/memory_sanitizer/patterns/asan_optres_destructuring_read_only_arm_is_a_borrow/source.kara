@@ -1,0 +1,35 @@
+
+struct S1 { s: String }
+struct S2 { s: String, t: String }
+struct Inner { s: String }
+struct Outer { i: Inner }
+struct Sint { n: i64 }
+fn main() {
+    let a: Option[S1] = Some(S1 { s: f"alpha" });
+    match a { Some(S1 { s }) => { println(s); } None => {} }
+    match a { Some(S1 { s }) => println(s), None => println("no-a") }
+
+    let b: Option[S2] = Some(S2 { s: f"bee", t: f"tee" });
+    match b { Some(S2 { s, t }) => { println(s); } None => {} }
+    match b { Some(S2 { s, t }) => println(t), None => println("no-b") }
+
+    let c: Option[(String, i64)] = Some((f"tup", 1));
+    match c { Some((s, n)) => { println(s); } None => {} }
+    match c { Some((s, n)) => println(s), None => println("no-c") }
+
+    let d: Option[Outer] = Some(Outer { i: Inner { s: f"deep" } });
+    match d { Some(Outer { i }) => { println(i.s); } None => {} }
+    match d { Some(Outer { i }) => println(i.s), None => println("no-d") }
+
+    let e: Result[S1, i64] = Ok(S1 { s: f"okr" });
+    match e { Ok(S1 { s }) => { println(s); } Err(_) => {} }
+    match e { Ok(S1 { s }) => println(s), Err(_) => println("no-e") }
+
+    let g: Option[S1] = Some(S1 { s: f"iflet" });
+    if let Some(S1 { s }) = g { println(s); }
+    if let Some(S1 { s }) = g { println(s); } else { println("no-g"); }
+
+    let h: Option[Sint] = Some(Sint { n: 7 });
+    match h { Some(Sint { n }) => { println(n); } None => {} }
+    match h { Some(Sint { n }) => println(n), None => println("no-h") }
+}

@@ -1,0 +1,6 @@
+fn ok() -> Result[i64, AllocError] { return Ok(7); }
+fn main() -> Result[(), AllocError] {
+    let x = ok()?;
+    println(x);
+    return Ok(());
+}

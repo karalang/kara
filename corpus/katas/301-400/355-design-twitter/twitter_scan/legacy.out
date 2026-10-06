@@ -1,0 +1,12 @@
+example feed 1: [5]
+example feed 2: [6, 5]
+example feed 3: [5]
+nobody has posted: []
+following yourself shows each tweet once: [70]
+unfollowing yourself keeps your own tweets: [70]
+unfollowing a stranger is a no-op: [70]
+only the ten newest: [814, 813, 812, 811, 810, 809, 808, 807, 806, 805]
+interleaved authors: [90, 71, 814, 813, 812, 811, 810, 809, 808, 807]
+following twice changes nothing: [90, 71, 814, 813, 812, 811, 810, 809, 808, 807]
+a follower's view is not shared: [814, 813, 812, 811, 810, 809, 808, 807, 806, 805]
+20000 random operations: 6117 feeds, 7999 tweets, checksum 801085385

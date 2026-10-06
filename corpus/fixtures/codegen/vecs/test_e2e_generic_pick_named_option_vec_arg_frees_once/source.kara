@@ -1,0 +1,2 @@
+fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
+fn main() { let a = Some([f"heap-string-longer-than-sso-1", f"x"]); println(f"{pick(a, [f"d", f"e"]).len()}"); println("end") }

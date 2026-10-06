@@ -1,0 +1,61 @@
+// LeetCode #38: Count and Say — streaming state-machine run-length encoding (★).
+//
+// countAndSay(1) = "1"; each later term is the RUN-LENGTH ENCODING of the previous one,
+// read aloud as "<count><digit>" for each maximal run of equal digits. "3322251" is
+// "two 3s, three 2s, one 5, one 1" = "23321511". So the sequence 1, 11, 21, 1211,
+// 111221, 312211, … each term literally *says* the one before it. #38 is pure string
+// transformation: no search, no arithmetic beyond counting — the whole problem is
+// reading runs and writing their (length, digit) pairs.
+//
+// This ★ style encodes each term in a SINGLE left-to-right pass with a two-field state
+// machine: carry the current run's digit and its length; for each character, extend the
+// run if it matches, else FLUSH "<len><digit>" to the output and open a new run. One
+// final flush closes the last run. The n-fold unfolding is a plain loop: start from "1"
+// and apply the encode n-1 times.
+//
+//   - `say` reads `for c in s.chars()`, comparing each `char` against the open run's
+//     digit; `run_len == 0` marks "no run open yet" (the first character).
+//   - The count is appended as its decimal text (`push_str(f"{run_len}")`) — counts can
+//     exceed 9 for general digit strings — and the digit as a single `char` (`push`).
+//   - `count_and_say(n)` loops the encode, rebinding `s` to each new term.
+
+fn say(s: ref String) -> String {
+    let mut out: String = "";
+    let mut run_digit: char = '0';
+    let mut run_len = 0;
+    for c in s.chars() {
+        if run_len != 0 and c == run_digit {
+            run_len = run_len + 1;
+        } else {
+            if run_len != 0 {
+                out.push_str(f"{run_len}");
+                out.push(run_digit);
+            }
+            run_digit = c;
+            run_len = 1;
+        }
+    }
+    if run_len != 0 {
+        out.push_str(f"{run_len}");
+        out.push(run_digit);
+    }
+    out
+}
+
+fn count_and_say(n: i64) -> String {
+    let mut s: String = "1";
+    let mut k = 1;
+    while k < n {
+        s = say(s);
+        k = k + 1;
+    }
+    s
+}
+
+fn main() {
+    let mut n = 1;
+    while n <= 12 {
+        println(f"{n}: {count_and_say(n)}");
+        n = n + 1;
+    }
+}

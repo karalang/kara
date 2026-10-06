@@ -1,0 +1,6 @@
+
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let n: i64 = v.iter().filter(|x| x > 2).count();
+    println(n);
+}

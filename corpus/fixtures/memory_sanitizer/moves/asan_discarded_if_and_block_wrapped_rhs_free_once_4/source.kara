@@ -1,0 +1,12 @@
+
+fn make_vec(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(n);
+    return v;
+}
+fn main() {
+    let cond = true;
+    { if cond { make_vec(1) } else { make_vec(2) } }
+    let _ = if cond { make_vec(3) } else { make_vec(4) };
+    println("dropped");
+}

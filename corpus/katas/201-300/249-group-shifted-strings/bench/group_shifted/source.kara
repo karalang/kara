@@ -1,0 +1,103 @@
+// Benchmark workload for LeetCode #249 — Group Shifted Strings.
+//
+// A MAP-INSERTION workload, and specifically the heap-valued form:
+// `Map[String, Vec[String]]` with `entry(k).or_insert(Vec.new()).push(w)` —
+// appending in place into the map's own slot, no read-clone-reinsert. #49's
+// `map_of_lists.kara` deliberately keeps the clone form as an ownership probe
+// and warns it is O(k²) per key (kara B-2026-08-03-9), so the two katas measure
+// genuinely different things despite both being "group strings by a key".
+//
+// Build-once + punch: 120,000 words are derived ONCE as shifts of a small seed
+// set, then the grouping runs 5 times over that fixed corpus.
+//
+// Drawing words as shifts of a few seeds rather than uniformly is load-bearing,
+// the same way it is in the kata's differential. Uniform random letters make
+// almost every word its own group, so the map degenerates to 120k singleton
+// insertions and the append path — the thing being measured — barely runs. Shift
+// families give ~2-3 words per group, so collisions are the common case.
+//
+// Sink = group count folded with a first-seen-order checksum, so group IDENTITY
+// and ORDER both matter, not just the count.
+
+fn canonical(word: ref String) -> String {
+    let bytes = word.bytes();
+    let n = bytes.len();
+    if n == 0 {
+        return "";
+    }
+    let shift = (bytes[0] as i64) - (b'a' as i64);
+    let mut out: String = "";
+    let mut i = 0;
+    while i < n {
+        let c = (((bytes[i] as i64) - (b'a' as i64) - shift) + 26) % 26;
+        out.push_str(f"{c},");
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    let words_n = 120000;
+    let rounds = 5;
+
+    // ---- build the corpus once -------------------------------------------
+    let mut words: Vec[String] = Vec.new();
+    let mut state = 249249;
+    let mut w = 0;
+    while w < words_n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let len = (state / 65536) % 10 + 3;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let seed = (state / 65536) % 40;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let shift = (state / 65536) % 26;
+
+        let mut s: String = "";
+        let mut i = 0;
+        while i < len {
+            // Deterministic per (seed, position), then shifted — words sharing a
+            // seed and length are in the same shift family.
+            let base = (seed * 7 + i * 11) % 26;
+            let ch = (base + shift) % 26;
+            let c = ((97 + ch) as u8) as char;
+            s.push_str(f"{c}");
+            i = i + 1;
+        }
+        words.push(s);
+        w = w + 1;
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut table: Map[String, Vec[String]] = Map.new();
+        let mut groups = 0;
+        let mut keysum = 0;
+        let mut i = 0;
+        while i < words.len() {
+            let key = canonical(words[i]);
+            // `key` is BORROWED twice (bytes, contains_key) and CONSUMED once
+            // (entry). A side `Vec[String]` of first-seen keys would consume it a
+            // second time, and `karac check` flags exactly that as an RC fallback
+            // — which in a benchmark would measure refcount traffic instead of
+            // map insertion. The order-sensitive part of the sink is carried by
+            // `keysum` folded in encounter order instead.
+            let kb = key.bytes();
+            let mut j = 0;
+            while j < kb.len() {
+                keysum = (keysum * 31 + (kb[j] as i64)) % 1000000007;
+                j = j + 1;
+            }
+            if not table.contains_key(key) {
+                groups = groups + 1;
+            }
+            table.entry(key).or_insert(Vec.new()).push(words[i]);
+            i = i + 1;
+        }
+        sink = (sink * 131 + groups) % 1000000007;
+        sink = (sink * 31 + keysum) % 1000000007;
+        r = r + 1;
+    }
+    println(sink);
+}

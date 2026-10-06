@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m["alice"] = 1_i64;
+    m["bob"] = 2_i64;
+    m["alice"] = 100_i64;
+    println(m["alice"]);
+    println(m["bob"]);
+}

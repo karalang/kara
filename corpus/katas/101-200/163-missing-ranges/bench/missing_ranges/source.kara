@@ -1,0 +1,57 @@
+// Benchmark workload for LeetCode #163 — Missing Ranges.
+//
+// Build-once + slide: one large strictly-increasing (sorted, distinct) array is
+// generated once via a deterministic 32-bit LCG feeding positive gaps, then the
+// one-pass missing-ranges sweep is run over a sliding sub-window PASSES times.
+// Each pass covers a DIFFERENT slice (and slightly different bounds), so the
+// scan is genuinely data-dependent and cannot be hoisted. The sweep is a
+// loop-carried `prev` reduction with a data-dependent gap>=2 branch — it does
+// NOT vectorize. The sink is purely NUMERIC (no range-string formatting): the
+// count of emitted ranges plus a checksum of every range's two endpoints.
+
+fn missing_ranges(arr: ref Vec[i64], start: i64, len: i64, lower: i64, upper: i64) -> Array[i64, 2] {
+    let mut count = 0;
+    let mut checksum = 0;
+    let mut prev = lower - 1;
+    let mut i = 0;
+    while i <= len {
+        let cur = if i < len { arr[start + i] } else { upper + 1 };
+        if cur - prev >= 2 {
+            count = count + 1;
+            checksum = checksum + (prev + 1) + (cur - 1);
+        }
+        prev = cur;
+        i = i + 1;
+    }
+    return [count, checksum];
+}
+
+fn main() {
+    let n = 1000000;
+    let window = 2000;
+    let passes = 120000;
+
+    let mut arr: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut val = 0;
+    let mut c = 0;
+    while c < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        val = val + 1 + (state % 3); // gaps 1..3 -> sorted, distinct
+        arr.push(val);
+        c = c + 1;
+    }
+
+    let span = n - window;
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let start = (p * 7919) % span;
+        let lower = arr[start];
+        let upper = arr[start + window - 1] + (p % 5);
+        let r = missing_ranges(arr, start, window, lower, upper);
+        sink = sink + r[0] + r[1];
+        p = p + 1;
+    }
+    println(sink);
+}

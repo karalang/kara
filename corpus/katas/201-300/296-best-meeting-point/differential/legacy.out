@@ -1,0 +1,9 @@
+cases 3240
+P1 arm disagreements 0
+P2 witness mismatches 0
+P3 translation asymmetries 0
+P4 transpose asymmetries 0
+P5 reflection asymmetries 0
+P6 monotonicity violations 0
+P7 fixed-shape failures 0
+DIFFERENTIAL OK

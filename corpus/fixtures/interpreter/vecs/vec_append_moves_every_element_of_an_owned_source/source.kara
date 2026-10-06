@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(10); a.push(20);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(30); b.push(40);
+    a.append(b);
+    println(f"{a.len()} {a[0]} {a[1]} {a[2]} {a[3]}");
+    let mut e: Vec[String] = Vec.new();
+    let mut f: Vec[String] = Vec.new();
+    f.push("solo");
+    e.append(f);
+    println(f"{e.len()} {e[0]}");
+}

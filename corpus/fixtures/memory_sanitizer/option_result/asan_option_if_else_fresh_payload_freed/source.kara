@@ -1,0 +1,8 @@
+
+fn main() {
+    let c = true;
+    let mut a = String.new();
+    a.push_str("noncall-if-runtime-heap-payload");
+    let x = if c { Some(a) } else { None };
+    println("done");
+}

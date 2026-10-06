@@ -1,0 +1,7 @@
+
+par struct Counter { count: Atomic[i64], label: i64 }
+fn label_of(c: Counter) -> i64 { c.label }
+fn main() {
+    let c = Counter { count: Atomic.new(0), label: 7 };
+    println(label_of(c));
+}

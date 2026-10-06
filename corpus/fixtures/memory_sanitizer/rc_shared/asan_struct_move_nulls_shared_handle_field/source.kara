@@ -1,0 +1,12 @@
+
+shared struct Cell { mut value: i64 }
+struct Cmd { cell: Cell }
+fn main() {
+    let c = Cell { value: 1 };
+    let mut v: Vec[Cmd] = Vec.new();
+    let cmd = Cmd { cell: c };
+    v.push(cmd);
+    c.value = 9;
+    println(c.value);
+    println(v[0].cell.value);
+}

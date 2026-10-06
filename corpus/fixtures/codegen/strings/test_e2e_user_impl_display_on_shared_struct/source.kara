@@ -1,0 +1,12 @@
+
+shared struct Sh { v: i64 }
+impl Display for Sh {
+    fn to_string(ref self) -> String { f"sh({self.v})" }
+}
+fn main() {
+    let a = Sh { v: 1 };
+    println(f"top={a}")
+    println(a.to_string())
+    let v = [Sh { v: 2 }];
+    println(f"vec={v}")
+}

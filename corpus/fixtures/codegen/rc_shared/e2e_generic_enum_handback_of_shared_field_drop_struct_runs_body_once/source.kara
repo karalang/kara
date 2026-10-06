@@ -1,0 +1,54 @@
+shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+struct H { n: i64 }
+impl H { fn wrap[T](ref self, v: T) -> Option[T] { return Some(v) } }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }
+fn mid[T](v: T, c: bool) -> Option[T] { if c { return Some(v) } return None }
+fn rd(x: ref S2) { println(f"rd{x.id}") }
+fn eat2(s: S2) { println(f"x{s.id}") }
+fn a_bound() { let s = mk2(1); let h = mkh(s); println("a") }
+fn b_mid_some() { let s = mk2(2); let o = mid(s, true); println("b") }
+fn c_mid_none() { let s = mk2(3); let o = mid(s, false); println("c") }
+fn d_discard() { let s = mk2(4); mkh(s); println("d") }
+fn e_underscore() { let s = mk2(5); let _ = mkh(s); println("e") }
+fn f_match_ho() {
+    let s = mk2(6); let h = mkh(s); println("f")
+    match h { Ho.Full(x) => println(f"got{x.id}"), Ho.Empty => println("none") }
+    println("f after")
+}
+fn g_match_opt() {
+    let s = mk2(7); let o = mid(s, true); println("g")
+    match o { Some(x) => println(f"got{x.id}"), None => println("none") }
+    println("g after")
+}
+fn h_ref_arm() {
+    let s = mk2(8); let o = mid(s, true);
+    match o { Some(x) => rd(x), None => println("none") }
+    let t = mk2(9); let k = mkh(t);
+    match k { Ho.Full(x) => rd(x), Ho.Empty => println("none") }
+    println("h after")
+}
+fn i_loop() { for i in 10..12 { let s = mk2(i); let h = mkh(s); println(f"i{i}") } }
+fn j_method() { let hh = H { n: 1 }; let s = mk2(13); let o = hh.wrap(s); println("j") }
+fn k_local() {
+    let o = Some(mk2(14)); if let Some(x) = o { println(f"k{x.id}") }
+    let p = Some(mk2(15)); match p { Some(x) => eat2(x), None => println("none") }
+    let q = Some(mk2(16)); match q { Some(x) => rd(x), None => println("none") }
+}
+fn main() {
+    a_bound()
+    b_mid_some()
+    c_mid_none()
+    d_discard()
+    e_underscore()
+    f_match_ho()
+    g_match_opt()
+    h_ref_arm()
+    i_loop()
+    j_method()
+    k_local()
+    println("end")
+}

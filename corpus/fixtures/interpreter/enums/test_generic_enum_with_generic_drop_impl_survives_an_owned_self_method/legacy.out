@@ -1,0 +1,55 @@
+repro
+  x1
+  dG
+  dR20
+gnone
+  x5
+  dG
+  dR21
+glocal
+  dG
+  x1
+gnarrow
+  x5
+  dG
+kread
+  x1
+  dK
+  dR22
+hnone
+  x5
+  dR23
+hread
+  dR24
+  x1
+htemp
+  dR25
+  x5
+pnone
+  x5
+  dR26
+ptemp
+  dR27
+  x5
+pcall
+  dR28
+  x5
+twomono
+  x5
+  dG
+  dR29
+  y5
+  dG
+enone
+  x5
+  dE
+  dR30
+eread
+  x1
+  dE
+  dR31
+snone
+  x5
+  dS
+  dR32
+end

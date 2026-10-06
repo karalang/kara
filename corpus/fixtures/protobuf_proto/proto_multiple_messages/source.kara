@@ -1,0 +1,16 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    message Point { int64 x = 1; int64 y = 2; }
+    message Tag { string label = 1; }
+";
+
+fn main() {
+    let p = Point { x: 3, y: 4 };
+    let rp = Point.decode(p.encode());
+    println(rp.x);
+    println(rp.y);
+    let t = Tag { label: "hi" };
+    let rt = Tag.decode(t.encode());
+    println(rt.label);
+}

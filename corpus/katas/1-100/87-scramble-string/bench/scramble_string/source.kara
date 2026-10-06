@@ -1,0 +1,124 @@
+// Benchmark workload — Scramble String (LeetCode #87).
+// Two lanes over ONE workload: a batch of K=60000 INDEPENDENT scramble decisions (the
+// memoized ★). Each iteration builds a length-12 string s1 and a per-iteration
+// permutation s2 (s2[j] = s1[(j*5 + iter) % 12], a coprime-step permutation, so no
+// call hoists), runs the O(n⁴) top-down memoized scramble, and folds the FILLED MEMO
+// STATE into a work-sensitive per-iteration checksum. The K checksums are combined
+// through a plain associative SUM (order-independent, so parallel == sequential).
+//
+//   - SEQ lane: the batch run single-threaded — kara (KARAC_AUTO_PAR=0) vs
+//     rustc -O / clang -O3 / go build per-core.
+//   - PAR lane: the SAME batch, parallel — the default `karac build` AUTO-PARALLELIZES
+//     the `for k in 0..K` sum reduction with NO hand-written parallel code, raced
+//     against hand-tuned C-pthreads / rayon / goroutines (kata #75/#84/#86 framing).
+//
+// This is a compute-bound recursion (the memo is the only allocation), so it parallel-
+// scales well — the clean auto-par case in contrast to #86's allocation-bound list
+// workload. See ../README.md § Benchmarks.
+
+fn scramble(s1: ref Vec[u8], i1: i64, s2: ref Vec[u8], i2: i64, len: i64,
+        memo: mut ref Vec[i64], n: i64) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let key = (i1 * n + i2) * (n + 1) + len;
+    if memo[key] != -1 {
+        return memo[key] == 1;
+    }
+    let mut equal = true;
+    let mut k = 0;
+    while k < len {
+        if s1[i1 + k] != s2[i2 + k] {
+            equal = false;
+            break;
+        }
+        k = k + 1;
+    }
+    if equal {
+        memo[key] = 1;
+        return true;
+    }
+    // Fixed 26-slot count table on the stack (a fresh Array[i64, 26], re-zeroed each
+    // call) — the same shape C's `int64_t counts[26]` and Rust's `[0i64; 26]` use, so
+    // the hot recursion allocates nothing (contrast a per-call Vec.new(), which heap-
+    // allocates and grows every call — see ../87.. bench notes).
+    let mut counts: Array[i64, 26] = [0; 26];
+    let mut c = 0;
+    k = 0;
+    while k < len {
+        let a = (s1[i1 + k] as i64) - 97;
+        let b = (s2[i2 + k] as i64) - 97;
+        counts[a] = counts[a] + 1;
+        counts[b] = counts[b] - 1;
+        k = k + 1;
+    }
+    c = 0;
+    while c < 26 {
+        if counts[c] != 0 {
+            memo[key] = 0;
+            return false;
+        }
+        c = c + 1;
+    }
+    let mut split = 1;
+    while split < len {
+        if scramble(s1, i1, s2, i2, split, memo, n)
+            and scramble(s1, i1 + split, s2, i2 + split, len - split, memo, n) {
+            memo[key] = 1;
+            return true;
+        }
+        if scramble(s1, i1, s2, i2 + len - split, split, memo, n)
+            and scramble(s1, i1 + split, s2, i2, len - split, memo, n) {
+            memo[key] = 1;
+            return true;
+        }
+        split = split + 1;
+    }
+    memo[key] = 0;
+    false
+}
+
+fn one(len: i64, seed: i64) -> i64 {
+    let mut s1: Vec[u8] = Vec.new();
+    let mut s2: Vec[u8] = Vec.new();
+    let mut j = 0;
+    while j < len {
+        s1.push((97 + (j % 8)) as u8);
+        j = j + 1;
+    }
+    j = 0;
+    while j < len {
+        s2.push(s1[(j * 5 + seed) % len]);
+        j = j + 1;
+    }
+    let cells = len * len * (len + 1);
+    let mut memo: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < cells {
+        memo.push(-1);
+        i = i + 1;
+    }
+    let r = if scramble(s1, 0, s2, 0, len, mut memo, len) { 1 } else { 0 };
+    // Work-sensitive checksum: fold the filled memo state so the sink reflects the
+    // actual recursion, not just the boolean answer.
+    let mut h = r;
+    i = 0;
+    while i < cells {
+        h = (h * 131 + (memo[i] + 2)) % 1000000007;
+        i = i + 1;
+    }
+    h
+}
+
+fn main() {
+    let len = 12;
+    let total = 60000;
+
+    // Associative sum over K independent scramble decisions; the default build auto-
+    // parallelizes this `for` reduction, KARAC_AUTO_PAR=0 keeps it single-threaded.
+    let mut sum = 0;
+    for k in 0..total {
+        sum = sum + one(len, k);
+    }
+    println(f"{sum}");
+}

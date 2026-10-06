@@ -1,0 +1,13 @@
+peek 10
+  held
+take bbbbbbbb-2
+  ate aaaaaaaa-1
+  held
+  held
+  held
+  held 3
+drops
+  held
+  d1
+  d2
+end

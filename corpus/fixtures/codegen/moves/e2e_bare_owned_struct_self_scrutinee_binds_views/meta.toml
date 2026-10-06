@@ -1,0 +1,13 @@
+source = "tests/codegen/moves.rs::e2e_bare_owned_struct_self_scrutinee_binds_views"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

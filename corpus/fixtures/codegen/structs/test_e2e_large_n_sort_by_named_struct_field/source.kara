@@ -1,0 +1,21 @@
+
+struct Score { v: i64 }
+fn main() {
+    let mut v: Vec[Score] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 100 {
+        v.push(Score { v: (i * 37 + 5) % 100 });
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.v.cmp(b.v));
+    let mut bad: i64 = 0;
+    let mut prev: i64 = -1;
+    let mut j: i64 = 0;
+    while j < 100 {
+        let s = v.get(j).unwrap();
+        if s.v < prev { bad = bad + 1; }
+        prev = s.v;
+        j = j + 1;
+    }
+    println(bad);
+}

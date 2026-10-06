@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    println(f"v={v}");
+    println(v.to_string());
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("k", 9);
+    println(f"m={m}");
+    println(m.to_string());
+    let mut s: Set[i64] = Set.new();
+    s.insert(7);
+    println(s.to_string());
+    let nested: Vec[Vec[i64]] = [[1], [2, 3]];
+    println(f"n={nested}");
+}

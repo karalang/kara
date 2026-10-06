@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_28_24.rs::e2e_temp_option_arg_forwarded_to_a_method_that_keeps_the_payload"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_09_28_24.rs::asan_temp_option_arg_forwarded_to_a_method_that_keeps_the_payload"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,14 @@
+
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let cond: bool = k > 5i64;
+                if cond {
+                    sum = sum + 1i64;
+                    let _local: i64 = k * 2i64;
+                }
+                k = k + 1i64;
+            }
+        }
+        

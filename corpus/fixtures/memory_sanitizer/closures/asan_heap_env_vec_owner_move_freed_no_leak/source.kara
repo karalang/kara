@@ -1,0 +1,12 @@
+
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> Vec[Fn(i64) -> i64] { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(k)); v.push(make(k + 5i64)); let w = v; w }
+fn main() {
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    v.push(make(10i64));
+    v.push(make(20i64));
+    let w = v;
+    let x = w;
+    let r = build(30i64);
+    println(f"{(x[0])(1i64) + (x[1])(1i64) + (r[0])(2i64) + (r[1])(2i64)}");
+}

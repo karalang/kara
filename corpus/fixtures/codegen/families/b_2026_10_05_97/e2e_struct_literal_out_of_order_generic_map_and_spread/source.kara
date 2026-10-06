@@ -1,0 +1,16 @@
+struct Bx[T] { a: T, b: i64 }
+struct C { m: Map[i64, String], k: i64 }
+struct F { a: i64, b: i64, c: String }
+fn mk[T](v: T) -> Bx[T] { return Bx { b: 2, a: v }; }
+fn main() {
+    let x = Bx { b: 1, a: "s".to_string() };
+    println(f"x:{x.a} {x.b}");
+    let y = mk(4.5);
+    println(f"y:{y.a} {y.b}");
+    let mut c = C { k: 9, m: Map.new() };
+    c.m.insert(1, "one".to_string());
+    println(f"c:{c.k} {c.m.len()}");
+    let f = F { c: "fc".to_string(), b: 2, a: 1 };
+    let f2 = F { b: 20, ..f };
+    println(f"f:{f2.a} {f2.b} {f2.c}");
+}

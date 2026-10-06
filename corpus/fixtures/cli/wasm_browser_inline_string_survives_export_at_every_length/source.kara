@@ -1,0 +1,5 @@
+
+#[target(wasm_browser)]
+pub fn pick(s: String, n: i32) -> String { return s.substring(0, n as i64); }
+
+fn main() {}

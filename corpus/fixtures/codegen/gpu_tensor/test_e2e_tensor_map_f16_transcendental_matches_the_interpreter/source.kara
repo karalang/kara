@@ -1,0 +1,6 @@
+
+fn main() {
+    let t: Tensor[f16, [4]] = Tensor.from([4.0f16, 6.0f16, 7.0f16, 20.0f16]);
+    let m = t.map(|x| x.tanh());
+    println(f"{m[0]} {m[1]} {m[2]} {m[3]}");
+}

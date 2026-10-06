@@ -1,0 +1,19 @@
+
+        shared struct Inner {{ v: i64 }}
+        shared struct S {{ items: Vec[Inner] }}
+        fn run(s: {mode}S, out: mut ref Vec[i64]) {{
+            for i in 0..2048 {{
+                let k = s.items[0];
+                let mut acc: i64 = 0;
+                let mut t: i64 = 0;
+                while t < 200 {{ acc = acc + k.v * i + t; t = t + 1; }}
+                out[i] = acc;
+            }}
+        }}
+        fn main() {{
+            let s = S {{ items: [Inner {{ v: 3 }}] }};
+            let mut out: Vec[i64] = Vec.filled(2048, 0);
+            run(s, mut out);
+            println(out[10]);
+        }}
+        

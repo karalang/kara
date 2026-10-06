@@ -1,0 +1,46 @@
+
+fn main() {
+    let mut a = "abc";
+    a.push_str(a);
+    println(f"01 {a} {a.len()}");
+
+    let mut b = String.new();
+    b.push_str("wxyz");
+    b.push_str(b);
+    println(f"02 {b} {b.len()}");
+
+    let mut c = String.new();
+    c.push_str("pq");
+    c.push_str(c);
+    c.push_str(c);
+    c.push_str(c);
+    println(f"03 {c} {c.len()}");
+
+    let mut d = String.new();
+    let mut i = 0i64;
+    while i < 5000i64 { d.push_str("abcdefgh"); i = i + 1i64; }
+    d.push_str(d);
+    println(f"04 {d.len()}");
+    println(f"05 {d[0..8]} {d[39992..40000]} {d[40000..40008]} {d[79992..80000]}");
+
+    let mut e = String.new();
+    e.push_str("hello");
+    let w = "world";
+    e.push_str(w);
+    println(f"06 {e} {e.len()}");
+
+    let s2 = "abcdefghij";
+    let mut out = String.new();
+    out.push_str(s2[2..6]);
+    out.push_str(s2[0..2]);
+    println(f"07 {out} {out.len()}");
+
+    let mut g = String.new();
+    g.push_str("");
+    g.push_str(g);
+    println(f"08 [{g}] {g.len()}");
+    let mut h = String.new();
+    h.push_str("zz");
+    h.push_str("");
+    println(f"09 {h} {h.len()}");
+}

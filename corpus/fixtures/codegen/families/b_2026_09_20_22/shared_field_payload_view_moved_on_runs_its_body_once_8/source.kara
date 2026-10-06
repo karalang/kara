@@ -1,0 +1,15 @@
+shared struct Sh { s: String }
+struct Wsh { h: Sh }
+impl Drop for Wsh { fn drop(mut ref self) { println(f"  dWsh-{self.h.s}") } }
+struct Wpl { a: String }
+impl Drop for Wpl { fn drop(mut ref self) { println(f"  dWpl-{self.a}") } }
+enum Esh { A(Wsh), B }
+enum Epl { A(Wpl), B }
+struct Wsx { h: Sh, s: String }
+impl Drop for Wsx { fn drop(mut ref self) { println(f"  dWsx-{self.h.s}-{self.s}") } }
+enum Esx { A(Wsx), B }
+enum E2 { A(Wsh, i64), B }
+fn mk(s: String) -> Wsh { return Wsh { h: Sh { s: s } } }
+fn eat(w: Wsh) { println(f"  ate:{w.h.s}") }
+fn f(b: Esx) -> i64 { let mut out = Wsx { h: Sh { s: f"OUT" }, s: f"o" }; match b { Esx.A(w) => { let m = w; out = m; } Esx.B => { } } return 7; }
+fn main() { println(f"  r:{f(Esx.A(Wsx { h: Sh { s: f"PAY" }, s: f"p" }))}"); }

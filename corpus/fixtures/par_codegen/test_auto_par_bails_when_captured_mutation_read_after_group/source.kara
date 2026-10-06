@@ -1,0 +1,23 @@
+
+effect resource R1;
+effect resource R2;
+
+struct Counter { n: i64 }
+
+impl Counter {
+    fn bump_a(mut ref self) writes(R1) {
+        self.n = self.n + 1;
+    }
+    fn bump_b(mut ref self) writes(R2) {
+        self.n = self.n + 1;
+    }
+}
+
+fn main() {
+    let mut a: Counter = Counter { n: 0 };
+    let mut b: Counter = Counter { n: 0 };
+    a.bump_a();
+    b.bump_b();
+    let _x: i64 = a.n;
+    let _y: i64 = b.n;
+}

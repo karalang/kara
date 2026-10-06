@@ -1,0 +1,107 @@
+// LeetCode 285 — the recursive formulation.
+//
+// The iterative walk carries `best` as mutable state across the descent. Written
+// recursively the same idea needs no state at all, because the recursion IS the
+// state:
+//
+//     succ(node, target):
+//         node is absent      -> None
+//         node.key <= target  -> succ(node.right, target)
+//         otherwise           -> succ(node.left, target)  ??  node.key
+//
+// The last line is the whole difference. `node` is a candidate — its key is
+// greater than the target — but a better one may live in its left subtree, so
+// ask there FIRST and fall back to this node only if the subtree has nothing.
+// `??` says exactly that: take the left answer if it exists, otherwise mine.
+//
+// WHY THIS IS WORTH KEEPING BESIDE THE ITERATIVE VERSION. They are the same
+// algorithm, and the mutable `best` is what the recursion's fallback replaces —
+// so a slip in one has no counterpart in the other. Updating `best` on the wrong
+// branch is an assignment bug with no recursive analogue; returning the left
+// answer unconditionally (dropping the `?? node.key`) is a fallback bug with no
+// iterative analogue. Different places to be wrong, same answer.
+//
+// It is also where `??` earns its place over a `match`: the fallback is the
+// entire semantic content of the line, and a three-line match arm around it
+// would bury that.
+
+struct Bst {
+    key: Vec[i64],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+fn bst_insert(t: mut ref Bst, k: i64) {
+    if t.key.len() == 0 {
+        t.key.push(k);
+        t.left.push(0 - 1);
+        t.right.push(0 - 1);
+        return;
+    }
+    let mut cur = 0;
+    let mut more = true;
+    while more {
+        if k < t.key[cur] {
+            if t.left[cur] < 0 {
+                t.key.push(k);
+                t.left.push(0 - 1);
+                t.right.push(0 - 1);
+                t.left[cur] = t.key.len() - 1;
+                more = false;
+            } else {
+                cur = t.left[cur];
+            }
+        } else {
+            if t.right[cur] < 0 {
+                t.key.push(k);
+                t.left.push(0 - 1);
+                t.right.push(0 - 1);
+                t.right[cur] = t.key.len() - 1;
+                more = false;
+            } else {
+                cur = t.right[cur];
+            }
+        }
+    }
+}
+
+fn build(keys: ref Vec[i64]) -> Bst {
+    let mut t = Bst { key: Vec.new(), left: Vec.new(), right: Vec.new() };
+    let mut i = 0;
+    while i < keys.len() {
+        bst_insert(mut t, keys[i]);
+        i = i + 1;
+    }
+    return t;
+}
+
+fn successor_from(t: ref Bst, node: i64, target: i64) -> Option[i64] {
+    if node < 0 { return None; }
+    if t.key[node] <= target {
+        return successor_from(t, t.right[node], target);
+    }
+    // this node is a candidate; a smaller one may be on its left
+    return Some(successor_from(t, t.left[node], target) ?? t.key[node]);
+}
+
+fn successor(t: ref Bst, target: i64) -> Option[i64] {
+    if t.key.len() == 0 { return None; }
+    return successor_from(t, 0, target);
+}
+
+fn main() {
+    let keys: Vec[i64] = [20, 9, 25, 5, 12, 11, 14];
+    let t = build(keys);
+
+    // `?.` reads naturally here: "the successor's value, if there is one"
+    let mut probes: Vec[i64] = [5, 9, 11, 14, 20, 25, 13];
+    let mut i = 0;
+    while i < probes.len() {
+        let p = probes[i];
+        let s = successor(t, p);
+        println(f"successor of {p} -> {s}");
+        i = i + 1;
+    }
+    let empty = build([]);
+    println(f"successor in an empty tree -> {successor(empty, 1)}");
+}

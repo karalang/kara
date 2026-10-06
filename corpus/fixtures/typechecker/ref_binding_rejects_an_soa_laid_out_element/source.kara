@@ -1,0 +1,12 @@
+
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+layout entities: Vec[Entity] {
+    group pos { x, y }
+    cold { vx, vy }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    entities.push(Entity { x: 1, y: 2, vx: 3, vy: 4 });
+    let e = ref entities[0];
+    println(e.x);
+}

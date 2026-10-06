@@ -1,0 +1,144 @@
+// Benchmark lane for LeetCode 295 — Find Median from Data Stream.
+//
+// N pseudorandom values are streamed in, and the median is read after EVERY
+// add — so the measured work is N inserts plus N queries against a structure
+// that grows to N/2 per heap.
+//
+// WHY THIS SHAPE RESISTS THE OPTIMIZER. BENCHMARKS.md warns that a refill loop
+// or a converging-pointer scan gets vectorised away, and the number left over
+// is the compiler's, not the algorithm's. A binary heap cannot go that way: the
+// sift path is a chain of DEPENDENT loads (each level's index comes from the
+// previous level's comparison), so there is nothing to widen and nothing to
+// reorder across. The structure is also rebuilt continuously rather than built
+// once, so no part of it hoists out.
+//
+// THE SINK IS AN INTEGER ON PURPOSE. The median of integers is always an exact
+// half-integer, so TWICE the median is always a whole number. Hashing that
+// keeps the cross-language sink exact — no float formatting, no rounding, and
+// no chance that five languages agree on the algorithm and disagree on the
+// seventeenth digit of a printed double.
+//
+// Mirrors: medianfinder.c / .rs / .py / go-seq/main.go — same algorithm.
+
+struct Heap {
+    mut data: Vec[i64],
+    max: bool,
+}
+
+fn heap_new(max: bool) -> Heap {
+    return Heap { data: Vec.new(), max: max };
+}
+
+fn heap_len(h: ref Heap) -> i64 {
+    return h.data.len();
+}
+
+fn outranks(h: ref Heap, a: i64, b: i64) -> bool {
+    if h.max {
+        return a > b;
+    }
+    return a < b;
+}
+
+fn heap_peek(h: ref Heap) -> i64 {
+    return h.data[0];
+}
+
+fn heap_swap(h: mut ref Heap, i: i64, j: i64) {
+    let t = h.data[i];
+    h.data[i] = h.data[j];
+    h.data[j] = t;
+}
+
+fn heap_push(h: mut ref Heap, v: i64) {
+    h.data.push(v);
+    let mut i = h.data.len() - 1;
+    let mut climbing = true;
+    while climbing and i > 0 {
+        let parent = (i - 1) / 2;
+        if outranks(h, h.data[i], h.data[parent]) {
+            heap_swap(h, i, parent);
+            i = parent;
+        } else {
+            climbing = false;
+        }
+    }
+}
+
+fn heap_pop(h: mut ref Heap) -> i64 {
+    let top = h.data[0];
+    match h.data.pop() {
+        Some(last) => {
+            if h.data.len() > 0 {
+                h.data[0] = last;
+                let n = h.data.len();
+                let mut i = 0;
+                let mut sinking = true;
+                while sinking {
+                    let l = 2 * i + 1;
+                    let r = l + 1;
+                    let mut best = i;
+                    if l < n and outranks(h, h.data[l], h.data[best]) {
+                        best = l;
+                    }
+                    if r < n and outranks(h, h.data[r], h.data[best]) {
+                        best = r;
+                    }
+                    if best == i {
+                        sinking = false;
+                    } else {
+                        heap_swap(h, i, best);
+                        i = best;
+                    }
+                }
+            }
+        }
+        None => {}
+    }
+    return top;
+}
+
+struct MedianFinder {
+    mut lo: Heap,
+    mut hi: Heap,
+}
+
+fn mf_new() -> MedianFinder {
+    return MedianFinder { lo: heap_new(true), hi: heap_new(false) };
+}
+
+fn mf_add(m: mut ref MedianFinder, v: i64) {
+    heap_push(m.lo, v);
+    let moved = heap_pop(m.lo);
+    heap_push(m.hi, moved);
+    if heap_len(m.hi) > heap_len(m.lo) {
+        let back = heap_pop(m.hi);
+        heap_push(m.lo, back);
+    }
+}
+
+// Twice the median — always a whole number, so the sink stays integral.
+fn mf_twice_median(m: ref MedianFinder) -> i64 {
+    if heap_len(m.lo) > heap_len(m.hi) {
+        return 2 * heap_peek(m.lo);
+    }
+    return heap_peek(m.lo) + heap_peek(m.hi);
+}
+
+fn main() {
+    let n = 2000000;
+    let mut state = 12345;
+    let mut mf = mf_new();
+    let mut checksum = 0;
+
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 0x7fffffff;
+        let v = state % 1000003 - 500000;
+        mf_add(mut mf, v);
+        checksum = (checksum * 31 + mf_twice_median(mf)) % 1000000007;
+        i = i + 1;
+    }
+
+    println(f"adds {n} checksum {checksum}");
+}

@@ -1,0 +1,21 @@
+
+enum Item { Go(Vec[i64]), Stop(Vec[i64]) }
+fn mk(x: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(x);
+    return v;
+}
+fn step(c: i64) -> Item {
+    if c < 3 {
+        return Item.Go(mk(c));
+    }
+    return Item.Stop(mk(99));
+}
+fn main() {
+    let mut c: i64 = 0;
+    while let Go(xs) = step(c) {
+        println(xs.len() + c);
+        c = c + 1;
+    }
+    println(c);
+}

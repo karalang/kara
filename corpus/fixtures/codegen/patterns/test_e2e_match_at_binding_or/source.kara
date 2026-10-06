@@ -1,0 +1,12 @@
+
+fn f(n: i64) -> i64 {
+    match n {
+        x @ 1 | x @ 2 => x * 100,
+        other => other,
+    }
+}
+fn main() {
+    println(f(1));  // matches → x=1 → 100
+    println(f(2));  // matches → x=2 → 200
+    println(f(9));  // catch-all → 9
+}

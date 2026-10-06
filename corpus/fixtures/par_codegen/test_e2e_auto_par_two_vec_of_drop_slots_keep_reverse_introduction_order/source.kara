@@ -1,0 +1,17 @@
+
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+
+fn mk(k: i64) -> Vec[R] {
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: k, tag: f"t" });
+    return v
+}
+
+fn main() {
+    println("lead");
+    let a: Vec[R] = mk(1);
+    let b: Vec[R] = mk(2);
+    println(f"{a[0].id} {b[0].id}");
+    println("post");
+}

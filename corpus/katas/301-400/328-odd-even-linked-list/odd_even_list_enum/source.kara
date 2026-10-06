@@ -1,0 +1,120 @@
+// LeetCode #328: Odd Even Linked List — rebuild a persistent list.
+//
+// The list is a `shared enum`: `Nil` or `Cons(value, rest)`, immutable and
+// reference-counted. Nothing is relinked. `alternate(l, true)` copies the
+// nodes at odd positions into a new list, `alternate(l, false)` those at
+// even positions, and `append` puts the second after the first, copying the
+// first. The input list is left intact.
+//
+// O(n) time; O(n) new nodes, and O(n) stack for the recursion.
+
+shared enum List {
+    Nil,
+    Cons(i64, List),
+}
+
+// Every other node of `l`, starting with its first if `keep`.
+fn alternate(l: List, keep: bool) -> List {
+    match l {
+        List.Nil => List.Nil,
+        List.Cons(v, rest) => {
+            if keep {
+                List.Cons(v, alternate(rest, false))
+            } else {
+                alternate(rest, true)
+            }
+        }
+    }
+}
+
+fn append(a: List, b: List) -> List {
+    match a {
+        List.Nil => b,
+        List.Cons(v, rest) => List.Cons(v, append(rest, b)),
+    }
+}
+
+fn odd_even_list(head: List) -> List {
+    return append(alternate(head, true), alternate(head, false));
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn from_vec(values: ref Vec[i64]) -> List {
+    let mut head = List.Nil;
+    let mut i = values.len() - 1;
+    while i >= 0 {
+        head = List.Cons(values[i], head);
+        i -= 1;
+    }
+    return head;
+}
+
+fn to_vec(head: List) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut cur = head;
+    let mut more = true;
+    while more {
+        match cur {
+            List.Nil => {
+                more = false;
+            }
+            List.Cons(v, rest) => {
+                out.push(v);
+                cur = rest;
+            }
+        }
+    }
+    return out;
+}
+fn report(values: Vec[i64]) {
+    let got = to_vec(odd_even_list(from_vec(values)));
+    println(f"{values} -> {got}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn main() {
+    // The examples from the problem statement.
+    report([1, 2, 3, 4, 5]);
+    report([2, 1, 3, 5, 6, 4, 7]);
+
+    // Edge cases: empty, one, two and three nodes, repeated values.
+    report([]);
+    report([1]);
+    report([1, 2]);
+    report([1, 2, 3]);
+    report([7, 7, 7, 7]);
+    report([-1, 0, -1, 0, -1, 0]);
+
+    // Larger lists, reported by a checksum of the positions: each value is
+    // its 1-based position, so the result must read 1, 3, 5, ..., 2, 4, ...
+    for n in [10, 11, 1000, 1001, 10000] {
+        let mut values: Vec[i64] = Vec.new();
+        for i in 1..n + 1 {
+            values.push(i);
+        }
+        let got = to_vec(odd_even_list(from_vec(values)));
+        let mut sum = 0;
+        let mut k = 1;
+        for v in got {
+            sum = (sum * 31 + v * k) % 1000000007;
+            k += 1;
+        }
+        println(f"n={n}: first {got[0]}, first even {got[(n + 1) / 2]}, last {got[n - 1]}, hash {sum}");
+    }
+
+    // Random values.
+    let mut seed = 328;
+    for _ in 0..3 {
+        let n = next(mut seed) % 9 + 1;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next(mut seed) % 100);
+        }
+        report(values);
+    }
+}

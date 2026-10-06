@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("alice");
+    s.insert("bob");
+    s.insert("alice");
+    println(s.len());
+}

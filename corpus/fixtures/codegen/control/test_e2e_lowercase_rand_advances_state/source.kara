@@ -1,0 +1,6 @@
+
+fn main() with reads(RandomSource) {
+    let a = rand.next_u64();
+    let b = rand.next_u64();
+    if a != b { println("rand-advanced"); } else { println("rand-stuck"); }
+}

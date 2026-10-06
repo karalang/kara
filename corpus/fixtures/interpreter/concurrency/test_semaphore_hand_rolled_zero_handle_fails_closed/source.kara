@@ -1,0 +1,4 @@
+fn main() {
+         let fake = Semaphore { handle_id: 0 };
+         match fake.acquire(1000) { Ok(_) => println("ok??"), Err(SemaphoreError.Timeout) => println("timeout") }
+     }

@@ -1,0 +1,5 @@
+
+        fn main() {
+            let Point { x, y } = point;
+        }
+    

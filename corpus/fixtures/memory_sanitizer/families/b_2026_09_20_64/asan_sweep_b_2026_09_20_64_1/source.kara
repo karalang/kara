@@ -1,0 +1,6 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i } }
+enum Slot[T] { S(T), N }
+fn seen(x: Slot[Array[R, 2]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+fn main() { let a: Array[R, 2] = [mkr(1), mkr(2)]; seen(Slot.S(a)); println("end") }

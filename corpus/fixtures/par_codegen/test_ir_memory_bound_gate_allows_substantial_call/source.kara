@@ -1,0 +1,19 @@
+
+fn heavy(x: i64) -> i64 {
+    let mut acc: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < x {
+        acc = acc + k;
+        k = k + 1i64;
+    }
+    acc
+}
+fn main() {
+    let v: Vec[i64] = Vec.filled(1000i64, 5i64);
+    let s = v.as_slice();
+    let mut sum: i64 = 0i64;
+    for k in 0i64..3000i64 {
+        sum = sum + s[k % 1000i64] + heavy(50i64);
+    }
+    println(sum);
+}

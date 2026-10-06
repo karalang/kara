@@ -1,0 +1,81 @@
+// LeetCode 232 — Implement Queue using Stacks.
+//
+// Build a FIFO queue (push, pop, peek, empty) using only LIFO stack operations
+// (push to the back, pop from the back, peek the back).
+//
+// Two stacks. New elements go onto an INBOX stack. When a value is needed from
+// the front, and the OUTBOX is empty, pour the whole inbox into the outbox —
+// popping the inbox reverses its order, so the outbox now has the oldest element
+// on top. `pop` / `peek` then read the outbox top. Each element is moved between
+// stacks at most once, so the operations are amortized O(1).
+//
+// Each stack is a `Vec[i64]` (push at the back, pop from the back).
+
+struct MyQueue {
+    inbox: Vec[i64],
+    outbox: Vec[i64],
+}
+
+fn q_new() -> MyQueue {
+    return MyQueue { inbox: Vec.new(), outbox: Vec.new() };
+}
+
+fn q_push(q: mut ref MyQueue, x: i64) {
+    q.inbox.push(x);
+}
+
+// Ensure the outbox holds the queue's front on top (pour the inbox in only when
+// the outbox has run dry, preserving FIFO order).
+fn refill(q: mut ref MyQueue) {
+    if q.outbox.len() == 0 {
+        while q.inbox.len() > 0 {
+            let v = match q.inbox.pop() {
+                Some(x) => x,
+                None => 0,
+            };
+            q.outbox.push(v);
+        }
+    }
+}
+
+fn q_pop(q: mut ref MyQueue) -> i64 {
+    refill(q);
+    return match q.outbox.pop() {
+        Some(x) => x,
+        None => -1,
+    };
+}
+
+fn q_peek(q: mut ref MyQueue) -> i64 {
+    refill(q);
+    return q.outbox[q.outbox.len() - 1];
+}
+
+fn q_empty(q: ref MyQueue) -> bool {
+    return q.inbox.len() == 0 and q.outbox.len() == 0;
+}
+
+fn show_bool(b: bool) {
+    if b { println("true"); } else { println("false"); }
+}
+
+fn main() {
+    let mut q = q_new();
+
+    q_push(mut q, 1);
+    q_push(mut q, 2);
+    q_push(mut q, 3);
+    println(q_peek(mut q));         // 1  — front
+    println(q_pop(mut q));          // 1
+    println(q_pop(mut q));          // 2
+    show_bool(q_empty(q));          // false — 3 remains
+
+    q_push(mut q, 4);
+    println(q_pop(mut q));          // 3  — still FIFO across the push
+    println(q_pop(mut q));          // 4
+    show_bool(q_empty(q));          // true
+
+    q_push(mut q, 5);
+    println(q_peek(mut q));         // 5
+    show_bool(q_empty(q));          // false
+}

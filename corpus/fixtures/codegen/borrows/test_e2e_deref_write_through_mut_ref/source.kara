@@ -1,0 +1,7 @@
+
+fn set_val(r: mut ref i64) { *r = 99; }
+fn main() {
+    let mut x: i64 = 1;
+    set_val(mut x);
+    println(x);
+}

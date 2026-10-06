@@ -1,0 +1,391 @@
+// LeetCode 313 — five arms against each other and against seven properties
+// that follow from the STATEMENT rather than from any implementation.
+//
+//   A  k-way merge, pointer per prime, ties advance every match
+//   B  the same merge, canonicalised so ties cannot arise
+//   C  the same merge through a binary heap, ties discarded on the way out
+//   D  the closure of {1} under multiplication, via an ordered set
+//   E  trial division on every integer in turn — the definition, nothing added
+//
+// WHAT THE ARMS CANNOT SHARE. A, B and C are three schedulings of ONE
+// premise: that every super ugly number x > 1 is p * u for a listed prime p
+// and a SMALLER super ugly u, so the sequence can be generated from its own
+// prefix. If that premise were wrong all three would be wrong together and
+// agree perfectly. D is a genuinely different mechanism — it computes a
+// closure rather than merging streams — but it rests on the same premise. E
+// rests on nothing: it tests membership one integer at a time and never
+// generates anything.
+//
+// SO WHY ANY PROPERTIES AT ALL, when E is a complete and independent oracle?
+// This is worth stating plainly, because it is the thing that decides how much
+// the property set is actually worth here.
+//
+// Wherever E runs, it settles the case outright. Any property that is a
+// function of THE ANSWER ALONE is then implied by P1: if arm A returned
+// exactly what E returned, and E is right, then A's answer is super ugly, is
+// larger than the previous one, and matches every closed form — necessarily,
+// with nothing left for a property to catch. Inside E's range the properties
+// are LOCALISERS, not detectors. They say how an arm is wrong, not that it is.
+//
+// E's range is the constraint. It scans every integer up to the answer, so it
+// is bounded by the ANSWER's magnitude, while A-D are bounded by n. The two
+// diverge fast: with primes = [13] the 12th super ugly number is 13^11, which
+// E would need ~1.8e12 iterations to reach and A produces in eleven steps. So
+// the case space below is deliberately built to run past E:
+//
+//   TIER 1 — answer <= 3000. All five arms. E is complete; P2-P7 localise.
+//   TIER 2 — answer beyond that, up to 1e15. Four arms and the properties,
+//            which are now the only thing standing between a wrong merge and
+//            a green run.
+//
+// The tier-2 count is reported, because a property set whose whole coverage
+// sits inside an oracle's range has not been tested for its actual job.
+//
+// FOUR PROPERTIES NO ARM COMPUTES. Each relates SEPARATE invocations, or
+// reaches an answer by a route no arm takes, so each catches a fault that is
+// symmetric across every arm — the failure mode all-arms agreement is blind to.
+//
+//   P3, membership: the returned value is super ugly, checked by factoring it.
+//   A-D never factor anything; they multiply. This is the property that
+//   catches OVER-generation — a value emitted that does not belong at all —
+//   and unlike E it costs one factorisation rather than a scan, so it runs in
+//   tier 2 at full strength.
+//
+//   P5, the single-prime closed form: with one prime, the nth term is exactly
+//   p^(n-1). An external answer, computed by repeated multiplication, that no
+//   arm's structure can produce by accident.
+//
+//   P6, permutation invariance: the answer is a property of the SET of primes,
+//   so permuting the input array must not change it. Every arm walks the array
+//   in one fixed direction, and arm B indexes its canonicalisation by POSITION
+//   in that array — so if B's argument had quietly leaned on the primes being
+//   sorted by value, this is what would say so.
+//
+//   P7, superset monotonicity: adding a prime can only make the super ugly
+//   numbers denser, so the nth one cannot get larger. It relates two runs over
+//   DIFFERENT prime sets, which is the one axis none of the arms varies.
+//
+// P2 AND P4 ARE THE WEAKER TWO, and it is worth being exact about why rather
+// than listing all seven as equals.
+//
+//   P2, strict increase, is the direct test for the failure mode this problem
+//   is actually about — a duplicate emitted because a tie advanced one stream
+//   and not the other. That makes it valuable and NOT independent: arm D gets
+//   it free from the set, and arm C enforces it with the very comparison the
+//   property checks. It is a real detector for A and B and a tautology for C
+//   and D.
+//
+//   P4, no gaps between consecutive answers, is the completeness half of P3 —
+//   P3 says nothing invalid is emitted, P4 says nothing valid is skipped, and
+//   together they pin the answer exactly. It is also the only property here
+//   that costs a SCAN, so it is gated to gaps of at most 1000 and its coverage
+//   is reported separately. On a sparse prime set the gap between consecutive
+//   terms is enormous and the check simply does not run.
+
+const OR_LIMIT: i64 = 3000;          // tier-1 oracle ceiling
+const NMAX: i64 = 45;                // most terms asked of any prime set
+const CEIL: i64 = 1000000000000000;  // answers stay below this, so no product overflows
+const GAP_CAP: i64 = 1000;           // widest gap P4 will scan
+
+// ---------------------------------------------------------------- oracle ---
+
+fn is_super_ugly(m: i64, primes: ref Vec[i64]) -> bool {
+    let mut r = m;
+    for i in 0..primes.len() {
+        let p = primes[i];
+        while r % p == 0 { r = r / p; }
+    }
+    return r == 1;
+}
+
+// Arm E, amortised: one upward scan collects every super ugly number up to
+// `limit`, and the nth term for every n in range is then a lookup. Same
+// algorithm as `super_ugly_brute.kara`, run once per prime set instead of
+// once per (prime set, n).
+fn oracle_list(primes: ref Vec[i64], limit: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut m = 1;
+    while m <= limit {
+        if is_super_ugly(m, primes) { out.push(m); }
+        m = m + 1;
+    }
+    return out;
+}
+
+// ------------------------------------------------------------------ arms ---
+
+fn solve_a(n: i64, primes: ref Vec[i64]) -> i64 {
+    if n <= 0 { return 0; }
+    let k = primes.len();
+    if k == 0 { return 1; }
+    let mut ugly: Vec[i64] = Vec.new();
+    ugly.push(1);
+    let mut idx: Vec[i64] = Vec.new();
+    for i in 0..k { idx.push(0); }
+    while ugly.len() < n {
+        let mut best = primes[0] * ugly[idx[0]];
+        for i in 1..k {
+            let c = primes[i] * ugly[idx[i]];
+            if c < best { best = c; }
+        }
+        for i in 0..k {
+            if primes[i] * ugly[idx[i]] == best { idx[i] = idx[i] + 1; }
+        }
+        ugly.push(best);
+    }
+    return ugly[n - 1];
+}
+
+fn solve_b(n: i64, primes: ref Vec[i64]) -> i64 {
+    if n <= 0 { return 0; }
+    let k = primes.len();
+    if k == 0 { return 1; }
+    let mut ugly: Vec[i64] = Vec.new();
+    ugly.push(1);
+    let mut spf: Vec[i64] = Vec.new();
+    spf.push(k);
+    let mut idx: Vec[i64] = Vec.new();
+    for i in 0..k { idx.push(0); }
+    while ugly.len() < n {
+        for i in 0..k {
+            while spf[idx[i]] < i { idx[i] = idx[i] + 1; }
+        }
+        let mut best = primes[0] * ugly[idx[0]];
+        let mut winner = 0;
+        for i in 1..k {
+            let c = primes[i] * ugly[idx[i]];
+            if c < best { best = c; winner = i; }
+        }
+        ugly.push(best);
+        spf.push(winner);
+        idx[winner] = idx[winner] + 1;
+    }
+    return ugly[n - 1];
+}
+
+#[derive(Ord, Eq)]
+struct Cand {
+    val: i64,
+    pi: i64,
+    ui: i64,
+}
+
+fn solve_c(n: i64, primes: ref Vec[i64]) -> i64 {
+    if n <= 0 { return 0; }
+    let k = primes.len();
+    if k == 0 { return 1; }
+    let mut ugly: Vec[i64] = Vec.new();
+    ugly.push(1);
+    let mut pq: PriorityQueue[Cand] = PriorityQueue.new();
+    for i in 0..k { pq.push(Cand { val: primes[i], pi: i, ui: 0 }); }
+    while ugly.len() < n {
+        match pq.pop() {
+            Some(c) => {
+                if c.val > ugly[ugly.len() - 1] { ugly.push(c.val); }
+                let next = c.ui + 1;
+                pq.push(Cand { val: primes[c.pi] * ugly[next], pi: c.pi, ui: next });
+            },
+            None => { return 0; }
+        }
+    }
+    return ugly[n - 1];
+}
+
+fn solve_d(n: i64, primes: ref Vec[i64]) -> i64 {
+    if n <= 0 { return 0; }
+    let k = primes.len();
+    if k == 0 { return 1; }
+    let mut frontier: SortedSet[i64] = SortedSet.new();
+    frontier.insert(1);
+    let mut emitted = 0;
+    let mut last = 0;
+    while emitted < n {
+        match frontier.min() {
+            Some(x) => {
+                frontier.remove(x);
+                last = x;
+                emitted = emitted + 1;
+                if emitted < n {
+                    for i in 0..k { frontier.insert(x * primes[i]); }
+                }
+            },
+            None => { return 0; }
+        }
+    }
+    return last;
+}
+
+// ------------------------------------------------------------- case space ---
+
+// How many terms this prime set may be asked for before an answer would pass
+// CEIL. Case SELECTION only — it decides which n are tested, never what the
+// right answer is.
+fn safe_terms(primes: ref Vec[i64]) -> i64 {
+    let k = primes.len();
+    let mut ugly: Vec[i64] = Vec.new();
+    ugly.push(1);
+    let mut idx: Vec[i64] = Vec.new();
+    for i in 0..k { idx.push(0); }
+    while ugly.len() < NMAX {
+        let mut best = primes[0] * ugly[idx[0]];
+        for i in 1..k {
+            let c = primes[i] * ugly[idx[i]];
+            if c < best { best = c; }
+        }
+        if best > CEIL { return ugly.len(); }
+        for i in 0..k {
+            if primes[i] * ugly[idx[i]] == best { idx[i] = idx[i] + 1; }
+        }
+        ugly.push(best);
+    }
+    return NMAX;
+}
+
+fn subset_of(pool: ref Vec[i64], mask: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..pool.len() {
+        if (mask / pow2(i)) % 2 == 1 { out.push(pool[i]); }
+    }
+    return out;
+}
+
+fn pow2(e: i64) -> i64 {
+    let mut v = 1;
+    for i in 0..e { v = v * 2; }
+    return v;
+}
+
+fn reversed(v: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = v.len();
+    while i > 0 { i = i - 1; out.push(v[i]); }
+    return out;
+}
+
+fn rotated(v: ref Vec[i64], by: i64) -> Vec[i64] {
+    let n = v.len();
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..n { out.push(v[(i + by) % n]); }
+    return out;
+}
+
+fn main() {
+    let mut pool: Vec[i64] = Vec.new();
+    for p in [2, 3, 5, 7, 11, 13] { pool.push(p); }
+
+    let mut cases = 0;
+    let mut tier2 = 0;
+    let mut p4_checked = 0;
+    let mut p5_checked = 0;
+
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6 = 0;
+    let mut p7 = 0;
+
+    let mut mask = 1;
+    while mask < pow2(pool.len()) {
+        let primes = subset_of(pool, mask);
+        let k = primes.len();
+        let oracle = oracle_list(primes, OR_LIMIT);
+        let cap = safe_terms(primes);
+
+        // The superset partner for P7: a prime the pool never contains, so
+        // `wider` is always a strict superset of `primes`.
+        let mut wider: Vec[i64] = Vec.new();
+        for i in 0..k { wider.push(primes[i]); }
+        wider.push(17);
+
+        let mut n = 1;
+        while n <= cap {
+            let ra = solve_a(n, primes);
+            let rb = solve_b(n, primes);
+            let rc = solve_c(n, primes);
+            let rd = solve_d(n, primes);
+
+            // P1 — the arms agree with each other, and with the oracle
+            // wherever the oracle reaches.
+            if ra != rb or ra != rc or ra != rd { p1 += 1; }
+            if n <= oracle.len() {
+                if ra != oracle[n - 1] { p1 += 1; }
+            } else {
+                tier2 += 1;
+            }
+
+            // P2 — strictly increasing, and the first term is 1. The direct
+            // test for a duplicate slipping through a tie.
+            if n == 1 {
+                if ra != 1 { p2 += 1; }
+            } else {
+                if ra <= solve_a(n - 1, primes) { p2 += 1; }
+            }
+
+            // P3 — the answer is super ugly, established by FACTORING it.
+            // No arm factors anything. Costs one factorisation, so it runs at
+            // full strength in tier 2.
+            if not is_super_ugly(ra, primes) { p3 += 1; }
+
+            // P4 — nothing valid was skipped: no super ugly number lies
+            // strictly between consecutive answers. The only property here
+            // that costs a scan, so it is gated on the gap.
+            if n < cap {
+                let nxt = solve_a(n + 1, primes);
+                if nxt - ra <= GAP_CAP {
+                    p4_checked += 1;
+                    let mut m = ra + 1;
+                    while m < nxt {
+                        if is_super_ugly(m, primes) { p4 += 1; }
+                        m = m + 1;
+                    }
+                }
+            }
+
+            // P5 — one prime: the nth term is exactly p^(n-1), reached by
+            // repeated multiplication rather than by any merge.
+            if k == 1 {
+                p5_checked += 1;
+                let mut want = 1;
+                for i in 0..(n - 1) { want = want * primes[0]; }
+                if ra != want { p5 += 1; }
+            }
+
+            // P6 — the answer depends on the SET, not on the order the primes
+            // arrive in. Arm B canonicalises by POSITION, so this is what
+            // would notice if that argument had leaned on ascending values.
+            if solve_a(n, reversed(primes)) != ra { p6 += 1; }
+            if solve_b(n, reversed(primes)) != ra { p6 += 1; }
+            if k > 1 {
+                let rot = rotated(primes, n % k);
+                if solve_b(n, rot) != ra { p6 += 1; }
+            }
+
+            // P7 — a denser set cannot push the nth term up.
+            if solve_a(n, wider) > ra { p7 += 1; }
+
+            cases += 1;
+            n = n + 1;
+        }
+        mask = mask + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"tier2 beyond-oracle cases {tier2}");
+    println(f"P4 gap scans run {p4_checked}");
+    println(f"P5 closed-form checks run {p5_checked}");
+    println(f"P1 arm/oracle disagreements {p1}");
+    println(f"P2 monotonicity failures {p2}");
+    println(f"P3 membership failures {p3}");
+    println(f"P4 skipped-value failures {p4}");
+    println(f"P5 closed-form failures {p5}");
+    println(f"P6 permutation failures {p6}");
+    println(f"P7 superset failures {p7}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

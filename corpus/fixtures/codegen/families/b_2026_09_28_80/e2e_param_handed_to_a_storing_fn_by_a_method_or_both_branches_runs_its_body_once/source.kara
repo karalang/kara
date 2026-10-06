@@ -1,0 +1,25 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn skeep(t: S, v: mut ref Vec[S]) { v.push(t) }
+fn okeep(t: Option[S], v: mut ref Vec[Option[S]]) { v.push(t) }
+struct H { xs: Vec[S], ys: Vec[Option[S]] }
+impl H {
+    fn put(mut ref self, t: S, c: bool) { if c { skeep(t, mut self.xs) } }
+    fn opt(mut ref self, t: Option[S], c: bool) { if c { okeep(t, mut self.ys) } }
+}
+fn two(t: Option[S], v: mut ref Vec[Option[S]], w: mut ref Vec[Option[S]], c: bool) { if c { okeep(t, v) } else { okeep(t, w) } }
+fn main() {
+    let mut h = H { xs: Vec.new(), ys: Vec.new() };
+    h.put(mks(1), false);
+    h.put(mks(2), true);
+    h.opt(Option.Some(mks(3)), false);
+    h.opt(Option.Some(mks(4)), true);
+    println(f"h{h.xs.len()} {h.ys.len()}");
+    let mut p: Vec[Option[S]] = Vec.new();
+    let mut q: Vec[Option[S]] = Vec.new();
+    two(Option.Some(mks(5)), mut p, mut q, false);
+    two(Option.Some(mks(6)), mut p, mut q, true);
+    println(f"p{p.len()} {q.len()}");
+    println("end")
+}

@@ -1,0 +1,2 @@
+enum Box2[T] { V(T), N }
+fn main() { let z: Box2[String] = Box2.V("aaaaaaaaaaaaaaaa"); println("ok"); }

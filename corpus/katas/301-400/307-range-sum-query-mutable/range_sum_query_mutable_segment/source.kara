@@ -1,0 +1,146 @@
+// LeetCode 307 — arm B: an iterative segment tree.
+//
+// A complete binary tree flattened into a `Vec` of length 2n. The leaves live
+// at [n, 2n) — leaf `i` of the array is slot `n + i` — and every internal slot
+// holds the sum of its two children, so slot 1 is the whole array. Both
+// operations walk the tree, but neither uses a bit trick:
+//
+//   update(i, v)   writes leaf n+i, then repairs each ancestor by RE-ADDING
+//                  its two children: tree[x] = tree[2x] + tree[2x+1]
+//   sum_range(l,r) walks the two frontiers inward, taking a slot into the
+//                  answer only when it is the ODD child of its parent —
+//                  which is exactly when its sibling lies outside the range
+//
+// WHY IT EARNS ITS PLACE NEXT TO THE FENWICK ARM. The two structures answer
+// the same question with disjoint index arithmetic. The Fenwick arm's
+// characteristic bug is a swapped lowbit direction; there is no lowbit here at
+// all. This arm's characteristic bug is the half-open/closed confusion in the
+// query frontier — `r + 1` versus `r`, and whether to test the low or the high
+// pointer first — which the Fenwick arm cannot commit because it never carries
+// two pointers. Neither can make the other's mistake, and the naive arm can
+// make neither.
+//
+// It also repairs from CHILDREN rather than absorbing a delta, so it needs no
+// copy of the original array — unlike the Fenwick arm, which must know the old
+// value to compute `val - old`. That difference is why a corrupted `data`
+// shadow in the Fenwick arm shows up here as a disagreement.
+
+struct SegTree {
+    tree: Vec[i64],
+    n: i64,
+}
+
+impl SegTree {
+    fn new(nums: ref Vec[i64]) -> SegTree {
+        let n = nums.len();
+        let mut tree: Vec[i64] = Vec.new();
+        for i in 0..(2 * n) {
+            tree.push(0);
+        }
+        // Leaves first, then every internal node from the bottom up.
+        for i in 0..n {
+            tree[n + i] = nums[i];
+        }
+        let mut x = n - 1;
+        while x > 0 {
+            tree[x] = tree[2 * x] + tree[2 * x + 1];
+            x = x - 1;
+        }
+        return SegTree { tree: tree, n: n };
+    }
+
+    fn update(mut ref self, i: i64, val: i64) {
+        let mut x = self.n + i;
+        self.tree[x] = val;
+        x = x / 2;
+        while x > 0 {
+            self.tree[x] = self.tree[2 * x] + self.tree[2 * x + 1];
+            x = x / 2;
+        }
+    }
+
+    fn sum_range(ref self, l: i64, r: i64) -> i64 {
+        let mut total = 0;
+        let mut lo = self.n + l;
+        let mut hi = self.n + r + 1;   // half-open on the right
+        while lo < hi {
+            // An odd low pointer is a right child: its sibling is out of range.
+            if lo % 2 == 1 {
+                total += self.tree[lo];
+                lo = lo + 1;
+            }
+            // An odd high pointer means the slot below it is in range.
+            if hi % 2 == 1 {
+                hi = hi - 1;
+                total += self.tree[hi];
+            }
+            lo = lo / 2;
+            hi = hi / 2;
+        }
+        return total;
+    }
+}
+
+fn new_structure(nums: ref Vec[i64]) -> SegTree {
+    return SegTree.new(nums);
+}
+
+fn render(nums: Slice[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(f"{nums[i]}");
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+// `ops` is a flat list of (kind, a, b) triples: kind 0 = update(a, b),
+// kind 1 = sum_range(a, b).
+fn report(nums: Slice[i64], ops: Slice[i64]) {
+    let mut arr: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        arr.push(nums[i]);
+    }
+    let mut st = new_structure(arr);
+    let mut line = String.new();
+    line.push_str(render(nums));
+    line.push_str(" ->");
+    let mut k = 0;
+    while k + 2 < ops.len() {
+        let kind = ops[k];
+        let a = ops[k + 1];
+        let b = ops[k + 2];
+        if kind == 0 {
+            st.update(a, b);
+            line.push_str(f" u({a},{b})");
+        } else {
+            line.push_str(f" {st.sum_range(a, b)}");
+        }
+        k = k + 3;
+    }
+    println(line);
+}
+
+fn main() {
+    // The example from the LeetCode statement.
+    report([1, 3, 5], [1, 0, 2,  0, 1, 2,  1, 0, 2]);
+    // Every single-element read, before and after a write.
+    report([2, 7, 4], [1, 0, 0,  1, 1, 1,  1, 2, 2,  0, 1, 9,  1, 1, 1,  1, 0, 2]);
+    // One element.
+    report([42], [1, 0, 0,  0, 0, -5,  1, 0, 0]);
+    // Writing the value that is already there must change nothing.
+    report([4, 4, 4, 4], [1, 0, 3,  0, 2, 4,  1, 0, 3,  1, 2, 2]);
+    // Negatives, and a write that flips a sign.
+    report([-1, -2, -3, -4], [1, 0, 3,  1, 1, 2,  0, 0, 10,  1, 0, 3,  1, 0, 0]);
+    // Every prefix of a longer array, then a write in the middle.
+    report([5, 1, 8, 2, 9, 3], [1, 0, 0,  1, 0, 1,  1, 0, 2,  1, 0, 3,  1, 0, 4,  1, 0, 5,
+                               0, 3, 100,  1, 0, 5,  1, 3, 3,  1, 4, 5]);
+    // Large magnitudes that cancel.
+    report([100000, -100000, 100000], [1, 0, 2,  0, 1, 100000,  1, 0, 2,  1, 1, 1]);
+    // A power-of-two length, where the Fenwick and segment trees are widest.
+    report([1, 2, 3, 4, 5, 6, 7, 8], [1, 0, 7,  0, 7, 0,  1, 0, 7,  1, 7, 7,  1, 4, 6]);
+}

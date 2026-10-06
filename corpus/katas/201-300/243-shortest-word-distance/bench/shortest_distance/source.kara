@@ -1,0 +1,113 @@
+// Benchmark harness for LeetCode #243 — Shortest Word Distance.
+//
+// Build-once + punch (BENCHMARKS.md): the 20,000-word list is built ONCE, then
+// each punch runs the kata's one-pass two-last-seen-index scan unchanged for a
+// different (word1, word2) pair. Rebuilding the list per query would be a refill
+// loop whose allocation swamps the scan we mean to measure.
+//
+// What this kata measures: STRING EQUALITY IN A HOT SCAN. The loop body is two
+// `String == String` tests and a rarely-taken `min` update, repeated over 40M
+// slots. There is nothing else in it — no hashing, no allocation, no arithmetic
+// worth naming — so the spread across languages is very nearly a direct read on
+// how each one compiles "compare these two strings and branch".
+//
+// Three deliberate choices keep that read honest:
+//
+//   * Every word is 9 bytes and shares the 5-byte prefix "delta", so the length
+//     check never discriminates and no comparison exits on the first byte. Each
+//     one walks into the suffix before it can decide. A vocabulary of random
+//     lengths would have turned this into a length-check benchmark.
+//   * Every one of the 20,000 slots holds its OWN copy of its word (`.clone()`
+//     per slot), so no language can shortcut an equality test by noticing the
+//     two operands share a data pointer. Go's `==` has exactly that fast path,
+//     and letting `list[i]` alias the vocabulary entry would have handed Go a
+//     free win the other four don't get.
+//   * The scan has no early exit. `best` reaches its final value early and then
+//     stops changing, but the walk still visits every slot, so the measured work
+//     is data-independent and the timing is stable.
+//
+// Sink: a rolling polynomial hash of the 2,000 distances. It is loop-carried —
+// each `acc` needs the previous one — so the punch loop is NOT a reduction the
+// auto-par pass can split. This kata is sequential by construction and directly
+// comparable to the native mirrors on a per-core codegen-quality basis.
+
+fn shortest_distance(words: ref Slice[String], word1: ref String, word2: ref String) -> i64 {
+    let n = words.len();
+    let mut last1 = -1;
+    let mut last2 = -1;
+    let mut best = n;
+    let mut i = 0;
+    while i < n {
+        if words[i] == word1 {
+            last1 = i;
+            if last2 >= 0 {
+                best = min(best, last1 - last2);
+            }
+        } else if words[i] == word2 {
+            last2 = i;
+            if last1 >= 0 {
+                best = min(best, last2 - last1);
+            }
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+// Overflow-free 31-bit LCG: 1103515245 * state + 12345 (mod 2^31). The low bits
+// of an LCG are weak, so every draw below uses bits 16..23 (`/ 65536 % 256`).
+fn lcg(state: i64) -> i64 {
+    (state * 1103515245 + 12345) & 2147483647
+}
+
+fn main() {
+    let vocab_n = 256;
+    let n = 20000;
+    let iters = 2000;
+
+    // 256 distinct 9-byte words: "delta" + 4 letters over a 4-letter alphabet.
+    let mut alpha: Vec[String] = Vec.new();
+    alpha.push("a"); alpha.push("b"); alpha.push("c"); alpha.push("d");
+
+    let mut vocab: Vec[String] = Vec.new();
+    let mut v = 0;
+    while v < vocab_n {
+        let mut w: String = "delta";
+        w.push_str(alpha[(v / 64) % 4]);
+        w.push_str(alpha[(v / 16) % 4]);
+        w.push_str(alpha[(v / 4) % 4]);
+        w.push_str(alpha[v % 4]);
+        vocab.push(w);
+        v = v + 1;
+    }
+
+    // The list: each slot gets its own copy, so equality never sees two
+    // operands sharing a data pointer.
+    let mut list: Vec[String] = Vec.new();
+    let mut state = 1;
+    let mut i = 0;
+    while i < n {
+        state = lcg(state);
+        list.push(vocab[(state / 65536) % vocab_n].clone());
+        i = i + 1;
+    }
+
+    // Each vocabulary word lands in ~78 of the 20,000 slots, so both query
+    // words are present with certainty and the distances genuinely vary.
+    let mut acc = 0;
+    let mut qstate = 7;
+    let mut k = 0;
+    while k < iters {
+        qstate = lcg(qstate);
+        let a = (qstate / 65536) % vocab_n;
+        qstate = lcg(qstate);
+        let mut b = (qstate / 65536) % vocab_n;
+        if b == a {
+            b = (b + 1) % vocab_n;
+        }
+        let d = shortest_distance(list, vocab[a], vocab[b]);
+        acc = (acc * 131 + d) % 1000000007;
+        k = k + 1;
+    }
+    println(f"{acc}");
+}

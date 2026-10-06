@@ -1,0 +1,13 @@
+source = "tests/codegen/option_result.rs::e2e_rc_fallback_optres_local_frees_its_payload"
+dedup_of = ["tests/memory_sanitizer/option_result.rs::asan_rc_fallback_optres_local_frees_its_payload"]
+expect = "stdout"
+exit = 0
+tags = ["uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

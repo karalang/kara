@@ -1,0 +1,11 @@
+
+struct Counter { n: i64 }
+impl Counter {
+    fn bump(mut ref self) { self.n = self.n + 1; }
+    fn peek(ref self) -> i64 { return self.n; }
+}
+fn main() {
+    let mut c: Counter = Counter { n: 0 };
+    c.bump();
+    print(c.peek());
+}

@@ -1,0 +1,10 @@
+
+fn take(m: mut ref Mutex[i64]) -> i64 {
+    lock m x { return x; }
+    0
+}
+fn main() {
+    let mut m = Mutex.new(7);
+    let a = take(mut m);
+    lock m v { println(a + v); }
+}

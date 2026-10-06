@@ -1,0 +1,20 @@
+
+struct Box[T] { v: T }
+struct Two[T] { v: T, n: i64 }
+fn take(b: Box[String]) -> String { b.v }
+fn take2(b: Two[String]) -> String { b.v }
+fn main() {
+    // Runtime-derived payload: a constant-folded one is a dead allocation the
+    // optimizer deletes, and the fixture then passes vacuously against the
+    // unfixed compiler (B-2026-08-04-17 — this pin was written that way first
+    // and had to be corrected).
+    let n: i64 = env.args().len();
+    let mut i: i64 = 0;
+    while i < 4 {
+        let bx = Box { v: "concrete-payload-past-inline-width".repeat(n) };
+        println(take(bx).len());
+        let tw = Two { v: "second-payload-past-inline-width".repeat(n), n: i };
+        println(take2(tw).len());
+        i = i + 1;
+    }
+}

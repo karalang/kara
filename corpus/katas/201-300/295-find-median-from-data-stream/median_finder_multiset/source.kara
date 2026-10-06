@@ -1,0 +1,84 @@
+// LeetCode 295 — Find Median from Data Stream, OVER AN ORDERED MULTISET.
+//
+// A third mechanism that shares nothing with the other two. No heap, no
+// shifting array: a `SortedMap[i64, i64]` from value to how many times it has
+// been seen, which is a multiset held in ascending key order by a B-tree.
+//
+// Insert is one map update — O(log n), and O(log d) in the number of DISTINCT
+// values, which is the interesting part when a stream repeats itself hard. A
+// thousand copies of the same number cost one key here and a thousand slots in
+// both of the others.
+//
+// THE QUERY IS WHERE IT PAYS FOR THAT. `SortedMap` has no order-statistic
+// operation — no "give me the k-th key" — so finding the middle means walking
+// keys from the smallest, accumulating counts until the running total passes
+// the half-way mark. That is O(d), and it makes this the SLOWEST of the three
+// per query while being the cheapest per distinct insert.
+//
+// Two positions are needed, not one. For an even count the median straddles
+// the (n/2)-th and (n/2 + 1)-th elements, which may be the same key (when a run
+// covers both) or adjacent keys (when it does not). Walking once and picking up
+// both as they go by is what `median` does below; picking up only the second
+// and looking backwards is the version that gets the run case wrong.
+//
+// WHY IT EARNS ITS PLACE IN THE DIFFERENTIAL: it never compares a new value
+// against an existing one, never swaps, and never moves an element. If the two
+// heaps and the sorted vec share a misreading of "median", this arm does not
+// share it — it is the definition applied to counts rather than to positions.
+
+struct CountingStream {
+    mut counts: SortedMap[i64, i64],
+    mut total: i64,
+}
+
+fn cs_new() -> CountingStream {
+    return CountingStream { counts: SortedMap.new(), total: 0 };
+}
+
+fn cs_add(c: mut ref CountingStream, v: i64) {
+    let seen = match c.counts.get(v) {
+        Some(n) => n,
+        None => 0,
+    };
+    let _ = c.counts.insert(v, seen + 1);
+    c.total = c.total + 1;
+}
+
+// Walk ascending, accumulating counts, and pick up the elements at the two
+// one-based ranks the median needs. For an odd total they are the same rank.
+fn cs_median(c: ref CountingStream) -> f64 {
+    let first_rank = (c.total + 1) / 2;
+    let second_rank = c.total / 2 + 1;
+    let mut seen = 0;
+    let mut first = 0;
+    let mut second = 0;
+    let mut have_first = false;
+    let mut have_second = false;
+    for k in c.counts.keys() {
+        let n = match c.counts.get(k) {
+            Some(x) => x,
+            None => 0,
+        };
+        seen = seen + n;
+        if not have_first and seen >= first_rank {
+            first = k;
+            have_first = true;
+        }
+        if not have_second and seen >= second_rank {
+            second = k;
+            have_second = true;
+        }
+    }
+    return (first as f64 + second as f64) / 2.0;
+}
+
+fn main() {
+    let mut c = cs_new();
+    let stream = [1, 3, 2, 4, 0, 9, 7];
+    let mut i = 0;
+    while i < stream.len() {
+        cs_add(mut c, stream[i]);
+        println(f"add {stream[i]} -> median {cs_median(c)}");
+        i = i + 1;
+    }
+}

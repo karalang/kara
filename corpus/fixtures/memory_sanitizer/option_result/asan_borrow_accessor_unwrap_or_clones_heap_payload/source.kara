@@ -1,0 +1,19 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. Map value — the filed reproduction.
+        let mut m: Map[String, String] = Map.new();
+        m.insert(f"k{i}", f"al{i}");
+        println(m.get(f"k{i}").unwrap_or(f"-"));
+        // 2. Vec element — the same accessor family.
+        let mut vv: Vec[String] = Vec.new();
+        vv.push(f"bb{i}");
+        println(vv.get(0).unwrap_or(f"-"));
+        // 3. CONTROL — absent key, so the DEFAULT is returned and must not be
+        // cloned (that would leak it once per iteration).
+        println(m.get(f"zz{i}").unwrap_or(f"dd{i}"));
+        i = i + 1;
+    }
+    println("end");
+}

@@ -1,0 +1,17 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
+fn mka(k: i64) -> Array[R, 2] { return [mkr(k), mkr(k + 1)] }
+fn eat(a: Array[R, 2]) -> i64 { return a[0].id }
+fn keep(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; return u[1].id }, Option.None => { return 0 } } }
+fn push() -> i64 { let a: Array[R, 2] = mka(10); let mut w: Vec[Array[R, 2]] = Vec.new(); match Option.Some(a) { Option.Some(v) => { w.push(v) }, Option.None => {} }; return w.len() }
+fn tail() -> i64 { let a: Array[R, 2] = mka(20); let k: Array[R, 2] = match Option.Some(a) { Option.Some(v) => v, Option.None => mka(0) }; return k[1].id }
+fn rebeat() -> i64 { let a: Array[R, 2] = mka(30); match Option.Some(a) { Option.Some(v) => { let u = v; return eat(u) }, Option.None => { return 0 } } }
+fn main() {
+    let b = mka(40);
+    println(f"keep {keep(b)}")
+    println(f"push {push()}")
+    println(f"tail {tail()}")
+    println(f"rebeat {rebeat()}")
+    println("end")
+}

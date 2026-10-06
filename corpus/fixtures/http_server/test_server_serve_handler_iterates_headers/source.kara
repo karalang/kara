@@ -1,0 +1,30 @@
+
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                let hdrs: Vec[(String, String)] = req.headers();
+                let mut found_echo = 0;
+                let mut found_host = 0;
+                for (k, v) in hdrs {
+                    if k == "x-test-echo" {
+                        if v == "greetings" {
+                            found_echo = 1;
+                        }
+                    }
+                    if k == "host" {
+                        found_host = 1;
+                    }
+                }
+                let body = if found_echo == 1 {
+                    if found_host == 1 { "both" } else { "echo-only" }
+                } else {
+                    "no-echo"
+                };
+                Response { status: 200, body: body }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        

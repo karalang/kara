@@ -1,0 +1,6 @@
+
+fn main() {
+    let t: Tensor[u64, [4]] = Tensor.from([4, 2, 7, 1]);
+    let s: Vec[u64] = t.sorted();
+    println(f"{s[0]},{s[3]}");
+}

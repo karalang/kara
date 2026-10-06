@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/vecs.rs::asan_vec_shared_struct_clone_temp_by_value_arg_releases_elements"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let s = "the quick brown fox jumps over the lazy dog";
+        let it = s.chars();
+        let a: Vec[char] = it.collect();
+        let b: Vec[char] = it.collect();
+        total = total + a.len() + b.len();
+        let it2 = s.chars();
+        for c in it2 { if c == 'o' { total = total + 1; } }
+        i = i + 1;
+    }
+    println(f"{total}");
+}

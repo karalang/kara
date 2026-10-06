@@ -1,0 +1,13 @@
+source = "tests/interpreter/gpu_tensor.rs::user_trait_impl_over_slice_dispatches"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

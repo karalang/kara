@@ -1,0 +1,15 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct H4 { o: Option[Res], t: i64 }
+fn main() {
+    println("a");
+    {
+        let h = H4 { o: Option.Some(Res { id: 1, name: f"aa{1}" }), t: 2 };
+        let x = h.o;
+        println(h.t);
+    }
+    println("end");
+}

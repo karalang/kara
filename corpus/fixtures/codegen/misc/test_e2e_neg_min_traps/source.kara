@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut m = -9223372036854775807;
+    m = m - 1;
+    let n = -m;
+    println(n);
+}

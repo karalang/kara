@@ -1,0 +1,18 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Inner { xs: Vec[Res] }
+struct Outer { inner: Inner, tag: i64 }
+fn main() {
+    println("a");
+    {
+        let mut v: Vec[Outer] = Vec.new();
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"n{1}" });
+        v.push(Outer { inner: Inner { xs: xs }, tag: 5 });
+        println(v.len());
+    }
+    println("end");
+}

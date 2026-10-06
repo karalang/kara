@@ -1,0 +1,9 @@
+
+        effect resource Db;
+        fn write1() writes(Db) { }
+        fn write2() writes(Db) { }
+        fn main() {
+            write1();
+            write2();
+        }
+        

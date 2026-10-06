@@ -1,0 +1,60 @@
+// LeetCode 155 — Min Stack.
+//
+// A stack with O(1) push / pop / top / getMin. The trick: alongside the value
+// stack keep a parallel `mins` stack whose top is always the minimum of the
+// values below it — on push, store `min(x, current_min)`; on pop, discard both
+// tops together. getMin is then just `mins.last()`. (Corpus style: a plain
+// struct plus free functions taking `mut ref` / `ref`, as in #146.)
+
+struct MinStack {
+    mut data: Vec[i64],
+    mut mins: Vec[i64],
+}
+
+fn ms_new() -> MinStack {
+    return MinStack { data: Vec.new(), mins: Vec.new() };
+}
+
+fn ms_push(st: mut ref MinStack, x: i64) {
+    st.data.push(x);
+    let m = st.mins.len();
+    if m == 0 or x <= st.mins[m - 1] {
+        st.mins.push(x);
+    } else {
+        st.mins.push(st.mins[m - 1]);
+    }
+}
+
+fn ms_pop(st: mut ref MinStack) {
+    st.data.pop();
+    st.mins.pop();
+}
+
+fn ms_top(st: ref MinStack) -> i64 {
+    return st.data[st.data.len() - 1];
+}
+
+fn ms_get_min(st: ref MinStack) -> i64 {
+    return st.mins[st.mins.len() - 1];
+}
+
+fn main() {
+    let mut st = ms_new();
+    ms_push(mut st, -2);
+    ms_push(mut st, 0);
+    ms_push(mut st, -3);
+    println(ms_get_min(st).to_string()); // -3
+    ms_pop(mut st);
+    println(ms_top(st).to_string());     // 0
+    println(ms_get_min(st).to_string()); // -2
+
+    // A second scenario exercising a new-minimum after pops.
+    ms_push(mut st, -5);
+    println(ms_get_min(st).to_string()); // -5
+    println(ms_top(st).to_string());     // -5
+    ms_pop(mut st);
+    println(ms_get_min(st).to_string()); // -2
+    ms_pop(mut st);
+    println(ms_top(st).to_string());     // -2
+    println(ms_get_min(st).to_string()); // -2
+}

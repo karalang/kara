@@ -1,0 +1,50 @@
+// Benchmark workload for LeetCode #136 — Single Number.
+//
+// Build-once + punch: one big array is generated once with the canonical
+// single-number shape — M value pairs plus one lone element — using a
+// deterministic 32-bit LCG (overflow-safe in i64; values from the HIGH bits to
+// dodge the LCG's short-period low bits). Each pass toggles one bit of one
+// element (so the array — and its fold — changes every pass and the optimizer
+// cannot hoist) then XOR-folds the whole array: the paired values cancel and
+// the lone survivor drops out. Per-op is one XOR, so total work is made large
+// with a wide array and many passes. Sink = running total of the folds.
+
+fn single_number(nums: ref Vec[i64]) -> i64 {
+    let mut acc = 0;
+    let n = nums.len();
+    let mut i = 0;
+    while i < n {
+        acc = acc ^ nums[i];
+        i = i + 1;
+    }
+    return acc;
+}
+
+fn main() {
+    let pairs = 140000;
+    let passes = 3400;
+    let n = 2 * pairs + 1;
+
+    let mut nums: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut k = 0;
+    while k < pairs {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let v = state >> 16;
+        nums.push(v);
+        nums.push(v);
+        k = k + 1;
+    }
+    state = (state * 1103515245 + 12345) & 2147483647;
+    nums.push(state >> 16);
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let idx = (p * 97 + 13) % n;
+        nums[idx] = nums[idx] ^ (1 << (p % 14));
+        sink = sink + single_number(nums);
+        p = p + 1;
+    }
+    println(sink);
+}

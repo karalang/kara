@@ -1,0 +1,16 @@
+fn f(s: String) -> i64 { s.len() }
+fn mk(i: i64) -> String { f"heap-string-longer-than-sso-{i}" }
+fn main() {
+    let mut n = 0;
+    while n < 2 {
+        let a = mk(n + 1); println(a); let _ = (a, 1);
+        let b = mk(n + 2); println(b); (b, 2);
+        let c: Vec[i64] = [n, 2, 3]; println(f"c{c[0]}"); let _ = (c, 3);
+        let d = mk(n + 4); println(d); let label: Option[String] = Some(mk(n + 40)); (label, d);
+        let e = mk(n + 5); println(e); let _ = ((e, 5), 5);
+        let g = mk(n + 6); println(f"n{(f(g), 6).0}");
+        let h = mk(n + 7); println(h); let x = if n > 0 { (h, 7); 3 } else { 4 }; println(f"x{x}");
+        n = n + 1;
+    }
+    println("end")
+}

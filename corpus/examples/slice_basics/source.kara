@@ -1,0 +1,50 @@
+// Slice[T] — borrowed views into contiguous memory.
+// Demonstrates: Array / Vec coercion, range indexing, .as_slice(),
+// in-place mutation through `mut Slice[T]`.
+
+fn sum(xs: Slice[i64]) -> i64 {
+    let mut acc = 0;
+    for x in xs {
+        acc = acc + x;
+    }
+    acc
+}
+
+fn first(xs: Slice[i64]) -> i64 {
+    xs[0]
+}
+
+fn double_each(xs: mut Slice[i64]) {
+    let mut i = 0;
+    while i < 5 {
+        xs[i] = xs[i] * 2;
+        i = i + 1;
+    }
+}
+
+fn main() {
+    // One signature, two containers.
+    let a: Array[i64, 4] = [1, 2, 3, 4];
+    println(sum(a));         // 10
+
+    let mut v: Vec[i64] = Vec.new();
+    v.push(100);
+    v.push(200);
+    v.push(300);
+    println(sum(v));         // 600
+
+    // Sub-range slicing.
+    let a5: Array[i64, 5] = [10, 20, 30, 40, 50];
+    println(sum(a5[1..4]));  // 20 + 30 + 40 = 90
+
+    // .as_slice() expression-position escape hatch.
+    let s = a.as_slice();
+    println(first(s));       // 1
+
+    // In-place mutation through a mutable slice — the writes are
+    // visible in the caller's Array.
+    let mut nums: Array[i64, 5] = [1, 2, 3, 4, 5];
+    double_each(mut nums);
+    println(nums[0]);        // 2
+    println(nums[4]);        // 10
+}

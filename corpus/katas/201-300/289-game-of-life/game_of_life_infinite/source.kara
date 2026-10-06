@@ -1,0 +1,171 @@
+// LeetCode 289 — Game of Life on an INFINITE board.
+//
+// The problem's own follow-up: "the board is infinite, which could cause
+// problems when the active area encroaches upon the border. How would you
+// address it?"
+//
+// A Vec[Vec[i64]] cannot answer that, because it is exactly a fixed rectangle
+// with a border to encroach upon. Growing it does not help — a glider walks
+// away forever, so any rectangle is eventually too small, and one that starts
+// big is mostly zeros. The representation has to stop storing dead cells.
+//
+//     Set[i64]   the live cells, keyed by a packed (row, col)
+//
+// Nothing else exists. There is no border because there is no rectangle, and
+// coordinates are free to go NEGATIVE — a glider sent up-left runs as happily
+// as one sent down-right, which is the concrete test at the bottom of this file
+// and the thing the ★ file cannot do at all.
+//
+// THE LOOP INVERTS. The array version sweeps every cell and asks "how many live
+// neighbours?", which costs O(mn) whether two cells are live or two million.
+// With only live cells stored, the sweep has nothing to iterate — the board is
+// mostly nothing. So the question inverts: instead of asking each cell about
+// its neighbours, each LIVE cell tells its neighbours about itself. Counting
+// those tallies gives, for every cell adjacent to something live, how many live
+// neighbours it has — and a cell adjacent to nothing live cannot be born, so
+// its absence from the tally is the answer. Cost is O(live), independent of how
+// much empty space surrounds it.
+//
+// PACKING. `Map[i64, i64]` keyed on `r * STRIDE + c` keeps one hashable key per
+// cell. STRIDE must exceed the coordinate range in use; the offset keeps the
+// packed key non-negative for negative coordinates, so the encoding survives
+// the very case the whole file exists to support.
+
+fn pack(r: i64, c: i64) -> i64 {
+    return (r + 1000000) * 4000000 + (c + 1000000);
+}
+
+fn unpack_row(k: i64) -> i64 {
+    return (k / 4000000) - 1000000;
+}
+
+fn unpack_col(k: i64) -> i64 {
+    return (k % 4000000) - 1000000;
+}
+
+// Each live cell contributes 1 to each of its 8 neighbours' tallies.
+fn step(live: ref Set[i64]) -> Set[i64] {
+    let mut tally: Map[i64, i64] = Map.new();
+    for k in live {
+        let r = unpack_row(k);
+        let c = unpack_col(k);
+        let mut dr = -1;
+        while dr <= 1 {
+            let mut dc = -1;
+            while dc <= 1 {
+                if not (dr == 0 and dc == 0) {
+                    let nk = pack(r + dr, c + dc);
+                    match tally.get(nk) {
+                        None => { let _ = tally.insert(nk, 1); }
+                        Some(v) => { let _ = tally.insert(nk, v + 1); }
+                    }
+                }
+                dc = dc + 1;
+            }
+            dr = dr + 1;
+        }
+    }
+
+    // A cell absent from the tally has no live neighbour, so it cannot be born
+    // and — if it was live — cannot survive. Not iterating it IS the rule.
+    let mut next: Set[i64] = Set.new();
+    for (k, n) in tally {
+        if n == 3 or (n == 2 and live.contains(k)) {
+            let _ = next.insert(k);
+        }
+    }
+    return next;
+}
+
+fn from_grid(board: ref Vec[Vec[i64]]) -> Set[i64] {
+    let mut live: Set[i64] = Set.new();
+    let rows = board.len();
+    let mut r = 0;
+    while r < rows {
+        let cols = board[r].len();
+        let mut c = 0;
+        while c < cols {
+            if board[r][c] == 1 { let _ = live.insert(pack(r, c)); }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return live;
+}
+
+// Render a fixed window, so output is comparable with the array solvers.
+fn render_window(live: ref Set[i64], r0: i64, c0: i64, rows: i64, cols: i64) -> String {
+    let mut s = String.new();
+    let mut r = r0;
+    while r < r0 + rows {
+        let mut c = c0;
+        while c < c0 + cols {
+            if live.contains(pack(r, c)) { s.push('#'); } else { s.push('.'); }
+            c = c + 1;
+        }
+        s.push('\n');
+        r = r + 1;
+    }
+    return s;
+}
+
+fn report(label: String, board: Vec[Vec[i64]], steps: i64) {
+    println(f"{label}:");
+    let mut live = from_grid(board);
+    let mut k = 0;
+    while k < steps {
+        live = step(live);
+        k = k + 1;
+    }
+    print(render_window(live, 0, 0, board.len(), board[0].len()));
+    println("");
+}
+
+fn main() {
+    // The same cases as the array solvers, windowed to the original rectangle,
+    // so these lines are directly comparable.
+    let ex: Vec[Vec[i64]] = [[0, 1, 0], [0, 0, 1], [1, 1, 1], [0, 0, 0]];
+    report("example after 1 step", ex, 1);
+
+    let blinker: Vec[Vec[i64]] = [[0, 0, 0], [1, 1, 1], [0, 0, 0]];
+    report("blinker after 1 step", blinker.clone(), 1);
+    report("blinker after 2 steps (back to start)", blinker, 2);
+
+    let block: Vec[Vec[i64]] = [[1, 1], [1, 1]];
+    report("block after 3 steps (still life)", block, 3);
+
+    let glider: Vec[Vec[i64]] = [
+        [0, 1, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+    ];
+    report("glider after 4 steps (shifted 1,1)", glider.clone(), 4);
+
+    let lonely: Vec[Vec[i64]] = [[0, 0, 0], [0, 1, 0], [0, 0, 0]];
+    report("lone cell dies", lonely, 1);
+
+    // What no fixed rectangle can do: run the glider far past the edge of the
+    // 6x6 box it started in, then look where it actually went.
+    println("glider after 40 steps, viewed at its new home (10,10):");
+    let mut far = from_grid(glider);
+    let mut k = 0;
+    while k < 40 {
+        far = step(far);
+        k = k + 1;
+    }
+    print(render_window(far, 10, 10, 5, 5));
+    println("");
+
+    // And NEGATIVE coordinates: a blinker placed left of and above the origin
+    // oscillates exactly as one placed anywhere else.
+    println("blinker at (-5,-5), one step:");
+    let mut neg: Set[i64] = Set.new();
+    let _ = neg.insert(pack(-5, -6));
+    let _ = neg.insert(pack(-5, -5));
+    let _ = neg.insert(pack(-5, -4));
+    neg = step(neg);
+    print(render_window(neg, -7, -7, 5, 5));
+}

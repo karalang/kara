@@ -1,0 +1,71 @@
+// Benchmark workload — Search a 2D Matrix (LeetCode #74).
+// Flattened binary search (the kata's ★), build-once + punch: a 100×100 sorted
+// matrix is built ONCE (values 0,2,4,… so every even target is present and every
+// odd one absent), then K=10_000_000 queries are run against it, each folding its
+// hit/miss bit into a rolling polynomial hash. The search — O(log m·n) per query —
+// is the measured work; the one-time O(m·n) build is negligible. Targets cycle
+// k % (2·m·n) so ~half hit and ~half miss, defeating any branch-prediction
+// shortcut. See ../README.md § Benchmarks.
+
+fn search_matrix(m: ref Vec[Vec[i64]], target: i64) -> bool {
+    let rows = m.len();
+    if rows == 0 {
+        return false;
+    }
+    let cols = m[0].len();
+    if cols == 0 {
+        return false;
+    }
+
+    let mut lo = 0;
+    let mut hi = rows * cols - 1;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        let v = m[mid / cols][mid % cols];
+        if v == target {
+            return true;
+        } else if v < target {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    false
+}
+
+fn main() {
+    let rows = 100;
+    let cols = 100;
+    let total = 10000000;
+    let modulus = 1000000007;
+    let range = 2 * rows * cols;                // 20000: even in-matrix, odd absent
+
+    // Build the sorted matrix once: m[i][j] = (i*cols + j) * 2.
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < rows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < cols {
+            row.push((i * cols + j) * 2);
+            j = j + 1;
+        }
+        m.push(row);
+        i = i + 1;
+    }
+
+    // Punch K queries against the fixed matrix.
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        let target = k % range;
+        let found = search_matrix(m, target);
+        let mut bit = 0;
+        if found {
+            bit = 1;
+        }
+        acc = (acc * 131 + bit) % modulus;
+        k = k + 1;
+    }
+    println(f"{acc}");
+}

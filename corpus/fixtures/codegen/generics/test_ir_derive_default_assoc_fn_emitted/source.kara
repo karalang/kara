@@ -1,0 +1,7 @@
+
+#[derive(Default)]
+struct Config { timeout_ms: i64, verbose: bool }
+fn main() {
+    let c = Config.default();
+    println(c.timeout_ms);
+}

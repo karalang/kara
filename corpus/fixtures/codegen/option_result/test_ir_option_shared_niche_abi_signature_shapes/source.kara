@@ -1,0 +1,19 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+impl ListNode {
+    fn step(ref self) -> Option[ListNode] { self.next }
+}
+fn make() -> Option[ListNode] {
+    Some(ListNode { val: 1, next: None })
+}
+fn ident(head: Option[ListNode]) -> Option[ListNode] { head }
+fn opt_i64(x: Option[i64]) -> Option[i64] { x }
+fn main() {
+    let a = ident(make());
+    let b = opt_i64(Some(3));
+    let n = ListNode { val: 2, next: None };
+    let c = n.step();
+    if a.is_some() { println(1); }
+    if b.is_some() { println(2); }
+    if c.is_none() { println(3); }
+}

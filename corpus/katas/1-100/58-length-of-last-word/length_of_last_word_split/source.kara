@@ -1,0 +1,44 @@
+// LeetCode #58: Length of Last Word — split on spaces, take the last
+// non-empty word, O(n) time + O(n) for the word list.
+//
+// The Python-idiomatic reading of this problem is `s.split()[-1]` — break
+// the string into words and take the last one's length. Kāra v1 has no
+// whitespace-collapsing `split_whitespace`, so this uses `split(" ")`, which
+// yields an EMPTY string between each pair of consecutive spaces (and for
+// leading/trailing spaces). The `w.len() > 0` guard skips those empties, so
+// the last non-empty entry is the answer — equivalent to Python's
+// whitespace split.
+//
+// Heavier than the reverse scan in `length_of_last_word.kara` (it allocates
+// the whole word list and walks every word, not just the tail), but it's the
+// natural "words, then last" phrasing and an independent cross-check.
+
+fn length_of_last_word(s: ref String) -> i64 {
+    let words = s.split(" ");
+    let mut last_len = 0;
+    for w in words.iter() {
+        // Consecutive / leading / trailing spaces produce empty pieces;
+        // skip them so `last_len` tracks the last real word.
+        if w.len() > 0 {
+            last_len = w.len();
+        }
+    }
+    last_len
+}
+
+fn report(s: ref String) {
+    let r = length_of_last_word(s);
+    println(f"{s}: {r}");
+}
+
+fn main() {
+    report("Hello World");                 // expect: 5
+    report("   fly me   to   the moon  "); // expect: 4
+    report("luffy is still joyboy");       // expect: 6
+    report("word");                        // expect: 4
+    report("a");                           // expect: 1
+    report("   lead");                     // expect: 4
+    report("day ");                        // expect: 3
+    report("a   bb   ccc   ");             // expect: 3
+    report("hello a");                     // expect: 1
+}

@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let v: Vec[String] = ["delta".to_string(), "alpha".to_string(), "charlie".to_string(), "bravo".to_string()];
+        let s: Vec[String] = v.sorted();
+        // sorted clone: alpha, bravo, charlie, delta — use each
+        let mut j: i64 = 0;
+        while j < s.len() { acc = acc + s[j].len(); j = j + 1; }
+        // receiver survives, unsorted — use each
+        let mut k: i64 = 0;
+        while k < v.len() { acc = acc + v[k].len(); k = k + 1; }
+        i = i + 1;
+    }
+    println(acc);
+}

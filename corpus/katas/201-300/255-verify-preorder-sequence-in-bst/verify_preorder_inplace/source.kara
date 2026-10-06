@@ -1,0 +1,72 @@
+// LeetCode 255 — Verify Preorder Sequence in BST, in place.
+//
+// The ★ file's stack never holds anything the input array is not already
+// holding: at every step it is a prefix of values already read. So the input can
+// BE the stack. Keep an index `top` marking how much of the array is currently
+// stack, and overwrite `preorder[top]` on each push.
+//
+// O(1) extra space instead of O(n) — the classic follow-up — and the price is
+// that the input is destroyed. That price is explicit in the signature:
+// `mut Slice[i64]`, so the mutation is announced at the callee and visible at
+// the call. In a language without that marking the destruction is invisible and
+// the follow-up looks free.
+//
+// The overwrite is always at or behind the read position — `top <= i` holds at
+// every step, since each push follows at least one read — so it can never
+// clobber a value not yet examined. That is the whole safety argument, and it is
+// why the trick does not generalise to algorithms whose stack can outgrow the
+// prefix.
+
+fn verify_preorder(preorder: mut Slice[i64]) -> bool {
+    let mut top = 0; // preorder[0..top) is the stack
+    let mut lower = -9223372036854775807 - 1;
+    let mut i = 0;
+    while i < preorder.len() {
+        let x = preorder[i];
+        if x < lower {
+            return false;
+        }
+        while top > 0 and preorder[top - 1] < x {
+            lower = preorder[top - 1];
+            top = top - 1;
+        }
+        preorder[top] = x; // safe: top <= i always
+        top = top + 1;
+        i = i + 1;
+    }
+    return true;
+}
+
+fn report(preorder: mut Slice[i64], label: ref String) {
+    let ok = verify_preorder(preorder);
+    println(f"{label} -> {ok}");
+}
+
+fn main() {
+    let mut a: Array[i64, 5] = [5, 2, 1, 3, 6];
+    report(mut a, "[5,2,1,3,6]");
+    let mut b: Array[i64, 5] = [5, 2, 6, 1, 3];
+    report(mut b, "[5,2,6,1,3]");
+    let mut c: Array[i64, 0] = [];
+    report(mut c, "[]");
+    let mut d: Array[i64, 1] = [1];
+    report(mut d, "[1]");
+    let mut e: Array[i64, 2] = [1, 2];
+    report(mut e, "[1,2]");
+    let mut f: Array[i64, 2] = [2, 1];
+    report(mut f, "[2,1]");
+    let mut g: Array[i64, 3] = [2, 3, 1];
+    report(mut g, "[2,3,1]");
+    let mut h: Array[i64, 3] = [1, 3, 2];
+    report(mut h, "[1,3,2]");
+    let mut i: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(mut i, "[1,2,3,4,5]");
+    let mut j: Array[i64, 5] = [5, 4, 3, 2, 1];
+    report(mut j, "[5,4,3,2,1]");
+    let mut k: Array[i64, 6] = [10, 5, 1, 7, 40, 50];
+    report(mut k, "[10,5,1,7,40,50]");
+    let mut l: Array[i64, 7] = [10, 5, 1, 7, 40, 50, 30];
+    report(mut l, "[10,5,1,7,40,50,30]");
+    let mut m: Array[i64, 2] = [-9223372036854775808, 5];
+    report(mut m, "[i64.MIN,5]");
+}

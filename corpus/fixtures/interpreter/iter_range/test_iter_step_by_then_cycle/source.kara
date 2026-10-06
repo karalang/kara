@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    for x in v.iter().step_by(2).cycle().take(7) {
+        println(x);
+    }
+}

@@ -1,0 +1,23 @@
+
+struct City { a: i64, b: i64, c: i64, d: i64 }
+struct Holder { city: Option[City] }
+struct Bag { items: Vec[Holder] }
+
+fn main() {
+    let mut b = Bag { items: Vec.new() };
+    let mut i = 0;
+    while i < 6 {
+        b.items.push(Holder { city: Some(City { a: i, b: i, c: i, d: i }) });
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut k = 0;
+    while k < 6 {
+        let viaroot = b.items[k].city;
+        match viaroot { Some(c) => { total = total + c.a; } None => { total = total + 100; } }
+        let viabranch = match k % 2 { 0 => { b.items[k].city } _ => { None } };
+        match viabranch { Some(c) => { total = total + c.b; } None => { total = total + 1; } }
+        k = k + 1;
+    }
+    println(total);
+}

@@ -1,0 +1,107 @@
+// LeetCode #75: Sort Colors — counting sort, two passes, O(1) extra space.
+//
+// The straightforward form the Dutch-flag ★
+// ([`sort_colors.kara`](sort_colors.kara)) is the one-pass follow-up to. Because
+// the only values are 0, 1, 2, just COUNT each colour, then overwrite the array
+// with that many 0s, then 1s, then 2s:
+//
+//   pass 1: c0, c1, c2 = tallies of 0/1/2
+//   pass 2: a[0 .. c0)          = 0
+//           a[c0 .. c0+c1)      = 1
+//           a[c0+c1 .. n)       = 2
+//
+// Two passes over the array, three counters — O(n) time, O(1) extra space (the
+// counters), but it reads every element twice where the Dutch-flag partition
+// touches each once. It agrees with the ★ on every case; kept as the obvious
+// baseline and cross-check.
+//
+// LeetCode bounds: 1 ≤ n ≤ 300, values ∈ {0,1,2} — every value fits i64 trivially.
+
+fn sort_colors(a: mut ref Vec[i64]) {
+    let n = a.len();
+    if n == 0 {
+        return;
+    }
+
+    // Pass 1: tally the three colours.
+    let mut c0 = 0;
+    let mut c1 = 0;
+    let mut i = 0;
+    while i < n {
+        if a[i] == 0 {
+            c0 = c0 + 1;
+        } else if a[i] == 1 {
+            c1 = c1 + 1;
+        }
+        i = i + 1;
+    }
+
+    // Pass 2: overwrite in order — 0s, then 1s, then 2s.
+    let ones_end = c0 + c1;
+    i = 0;
+    while i < n {
+        if i < c0 {
+            a[i] = 0;
+        } else if i < ones_end {
+            a[i] = 1;
+        } else {
+            a[i] = 2;
+        }
+        i = i + 1;
+    }
+}
+
+// ---- test harness (shared verbatim with sort_colors.kara) ----------------------
+
+fn print_arr(a: ref Vec[i64]) {
+    let n = a.len();
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{a[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    println(s);
+}
+
+fn hash_arr(a: ref Vec[i64]) -> i64 {
+    let mut acc = 0;
+    let n = a.len();
+    let mut i = 0;
+    while i < n {
+        acc = (acc * 131 + a[i]) % 1000000007;
+        i = i + 1;
+    }
+    acc
+}
+
+fn report(grid: Vec[i64], s: mut ref String) {
+    let mut a = grid;
+    sort_colors(mut a);
+    print_arr(a);
+    s.push(' ');
+    s.push_str(f"{hash_arr(a)}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report([2, 0, 2, 1, 1, 0], mut s);
+    report([2, 0, 1], mut s);
+    report([0], mut s);
+    report([1], mut s);
+    report([2], mut s);
+    report([2, 2, 2], mut s);
+    report([0, 0, 0], mut s);
+    report([1, 1, 1], mut s);
+    report([0, 1, 2], mut s);
+    report([2, 1, 0], mut s);
+    report([2, 0, 1, 2, 1, 0, 0, 2, 1], mut s);
+    report([1, 0, 2, 0, 1, 2, 1, 0], mut s);
+
+    println(s);
+}

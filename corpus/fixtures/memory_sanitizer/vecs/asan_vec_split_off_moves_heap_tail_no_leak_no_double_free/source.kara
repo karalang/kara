@@ -1,0 +1,19 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut v: Vec[String] = Vec.new();
+        v.push("alpha".to_string());
+        v.push("beta".to_string());
+        v.push("gamma".to_string());
+        v.push("delta".to_string());
+        let t: Vec[String] = v.split_off(2);
+        let mut j: i64 = 0;
+        while j < v.len() { acc = acc + v[j].len(); j = j + 1; }
+        let mut k: i64 = 0;
+        while k < t.len() { acc = acc + t[k].len(); k = k + 1; }
+        i = i + 1;
+    }
+    println(acc);
+}

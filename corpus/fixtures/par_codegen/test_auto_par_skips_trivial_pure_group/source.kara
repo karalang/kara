@@ -1,0 +1,6 @@
+
+fn main() {
+    let _a = 1_i64;
+    let _b = 2_i64;
+    let _c = 3_i64;
+}

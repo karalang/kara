@@ -1,0 +1,14 @@
+
+fn main() {
+    let id1 = |s: String| s;
+    let id2 = |s: String| { s };
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 30i64 {
+        let a = id1(String.from("first-payload"));
+        let b = id2(String.from("second-payload"));
+        total = total + a.len() + b.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

@@ -1,0 +1,15 @@
+
+fn store(m: mut ref Map[String, i64], k: String) {
+    m.insert(k, 1_i64);
+}
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut a1 = String.new();
+    a1.push_str("ins-param-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    store(mut m, a1);
+    let mut a2 = String.new();
+    a2.push_str("ins-param-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    store(mut m, a2);
+    println(m.len());
+}

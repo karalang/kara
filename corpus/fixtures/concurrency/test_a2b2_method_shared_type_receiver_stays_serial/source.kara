@@ -1,0 +1,17 @@
+
+        shared struct Conn { mut fd: i64 }
+        impl Conn {
+            fn ping(mut ref self) -> i64 with sends(Network) receives(Network) {
+                self.fd = self.fd + 1;
+                return self.fd;
+            }
+        }
+        fn main() {
+            let a = Conn { fd: 0 };
+            let b = a;
+            let x = a.ping();
+            let y = b.ping();
+            println(x);
+            println(y);
+        }
+        

@@ -1,0 +1,48 @@
+// Benchmark workload — Climbing Stairs (LeetCode #70), the rolling-counter ★.
+//
+// A single climb(n) is O(n) with n ≤ 45 — cheap — so the workload runs the ★'s
+// two-counter Fibonacci recurrence ([`../climbing_stairs.kara`](../climbing_stairs.kara))
+// K = 30_000_000 times over a SWEEP of n = 1 + k%45 (every step count in [1,45]),
+// folding each result into a rolling hash. No allocation — the whole body is the
+// scalar recurrence loop, so this is a pure integer-add / branch benchmark.
+//
+// Sweeping n across [1, 45] makes each iteration re-run the recurrence to a
+// different depth (nothing hoistable to a constant), and the loop-carried sink
+// `acc = (acc*131 + climb(n)) % 1e9+7` is a genuine dependency, so the K-loop is
+// NOT a reduction karac's auto-par pass can split — single-threaded by
+// construction, comparable to the native mirrors per-core. Seq-only kata, same
+// discipline as #55/#62/#63/#64/#66/#68/#69.
+//
+// Every count stays ≤ ways(45) = 1_836_311_903, far inside i64.
+
+fn climb(n: i64) -> i64 {
+    if n <= 2 {
+        return n;
+    }
+    let mut a = 1;
+    let mut b = 2;
+    let mut i = 3;
+    while i <= n {
+        let next = a + b;
+        a = b;
+        b = next;
+        i = i + 1;
+    }
+    b
+}
+
+fn main() {
+    let total: i64 = 30000000;
+    let modulus: i64 = 1000000007;
+    let span: i64 = 45;
+
+    let mut acc: i64 = 0;
+    let mut k: i64 = 0;
+    while k < total {
+        let n = 1 + (k % span);
+        acc = (acc * 131 + climb(n)) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

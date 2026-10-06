@@ -1,0 +1,15 @@
+
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4];
+    let mut total = 0i64;
+    v.iter().for_each(|x: i64| { total = total + x; });
+    println(f"{total}");
+    v.iter().map(|x: i64| x * 2i64).for_each(|x: i64| { total = total + x; });
+    println(f"{total}");
+    let mut ev = 0i64;
+    v.iter().filter(|x: i64| x % 2i64 == 0i64).for_each(|x: i64| { ev = ev + x; });
+    println(f"{ev}");
+    let mut rng = 0i64;
+    (1i64..5i64).for_each(|x: i64| { rng = rng + x; });
+    println(f"{rng}");
+}

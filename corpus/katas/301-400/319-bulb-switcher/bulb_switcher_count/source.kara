@@ -1,0 +1,36 @@
+// LeetCode #319 — count the squares directly, with no square root at all.
+//
+// Same reasoning as the ★ arm: the bulbs left on are the perfect squares up
+// to `n`. But where that arm computes `floor(sqrt(n))` and calls it a count,
+// this one *counts* — it walks `k = 1, 2, 3, …` and stops when `k*k` passes
+// `n`. No division, no convergence argument, no Newton iteration to get
+// wrong: just the definition of "how many squares are there".
+//
+// It is `O(sqrt(n))` against the ★ arm's `O(log log n)`, which for `n` around
+// a billion is about 31,600 iterations against six. That is the trade this
+// arm exists to make visible — and it is also why it is a useful cross-check:
+// an isqrt that is one too high or one too low on some awkward `n` cannot
+// hide behind an arm that never computes a square root.
+//
+// The guard is `(k + 1) * (k + 1) <= n` rather than `k * k <= n` with a
+// post-decrement, so `k` is the answer at every point in the loop, including
+// `n = 0`. Domain: `n <= 9223372030926249001`, past which the square of the
+// candidate would not fit in an i64 — the same ceiling `floor(sqrt(i64::MAX))`
+// imposes on any arm that squares its answer.
+
+fn bulb_switch(n: i64) -> i64 {
+    let mut k = 0;
+    while (k + 1) * (k + 1) <= n {
+        k += 1;
+    }
+    return k;
+}
+
+fn main() {
+    let cases: Vec[i64] = [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 15, 16, 99, 100, 101,
+                           999999, 1000000, 1000000000];
+    for i in 0..cases.len() {
+        let n = cases[i];
+        print("n = " + n.to_string() + " -> " + bulb_switch(n).to_string() + "\n");
+    }
+}

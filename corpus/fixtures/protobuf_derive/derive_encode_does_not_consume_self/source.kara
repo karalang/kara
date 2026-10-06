@@ -1,0 +1,11 @@
+
+#[derive(Message)]
+struct Person { name: String, age: i64 }
+
+fn main() {
+    let p = Person { name: "Ada", age: 36 };
+    let b1 = p.encode();
+    let b2 = p.encode();
+    println(b1.len() == b2.len());
+    println(p.name);
+}

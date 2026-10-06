@@ -1,0 +1,115 @@
+// LeetCode 270 — Closest Binary Search Tree Value. (Premium.)
+//
+// Given a BST and a floating-point `target`, return the node value closest to
+// it. If two values are equally close, return the SMALLER one.
+//
+// The tree is held as parallel arrays — `val`, `left`, `right`, with -1 for a
+// missing child — rather than a linked node type. That keeps every mirror
+// identical and sidesteps nothing: the algorithm is the descent, not the
+// representation.
+//
+// THE DESCENT CANNOT JUST RUN TO A LEAF. The closest value is very often an
+// ANCESTOR of where the search ends. Descending toward `target` in a BST narrows
+// the interval containing it, and the best candidate is whichever bound was
+// tightest on the way down — so the answer has to be tracked at every step, not
+// read off the final node. A solver that returns the last node visited is right
+// on the easy cases and wrong whenever the target falls in a gap.
+//
+// THE TIE RULE IS THE OTHER HALF, and it is where a correct-looking comparison
+// goes wrong. With `target = 2.5` and values 2 and 3 the distances are exactly
+// equal, and the answer is 2. Written as
+//
+//     if diff < best_diff { best = v; }          // strict — keeps the first seen
+//
+// the winner depends on VISIT ORDER, which differs between a descent and a full
+// scan, so two correct-looking solvers disagree on exactly the inputs where the
+// rule matters. The comparison has to break the tie on VALUE:
+//
+//     if diff < best_diff or (diff == best_diff and v < best) { ... }
+//
+// Exact equality on f64 is not a smell here: a tie arises when target sits at
+// the midpoint of two integers, and both distances are then the same
+// representable value — computed by the same subtraction, so they compare equal.
+
+fn abs_f(x: f64) -> f64 {
+    if x < 0.0 { return 0.0 - x; }
+    return x;
+}
+
+fn closest(val: ref Vec[i64], left: ref Vec[i64], right: ref Vec[i64],
+           root: i64, target: f64) -> i64 {
+    let mut best = val[root];
+    let mut best_diff = abs_f(val[root] as f64 - target);
+    let mut cur = root;
+    while cur >= 0 {
+        let v = val[cur];
+        let d = abs_f(v as f64 - target);
+        // `<` alone would keep whichever candidate the traversal happened to
+        // reach first; the value tie-break is what makes the answer unique.
+        if d < best_diff or (d == best_diff and v < best) {
+            best = v;
+            best_diff = d;
+        }
+        if (v as f64) < target {
+            cur = right[cur];
+        } else {
+            cur = left[cur];
+        }
+    }
+    return best;
+}
+
+fn report(label: ref String, val: ref Vec[i64], left: ref Vec[i64],
+          right: ref Vec[i64], root: i64, target: f64) {
+    println(f"{label} target={target} -> {closest(val, left, right, root, target)}");
+}
+
+fn main() {
+    // [4,2,5,1,3] — the LeetCode example tree
+    //        4
+    //      2   5
+    //     1 3
+    let mut val: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    val.push(4); left.push(1); right.push(2);   // 0: 4
+    val.push(2); left.push(3); right.push(4);   // 1: 2
+    val.push(5); left.push(-1); right.push(-1); // 2: 5
+    val.push(1); left.push(-1); right.push(-1); // 3: 1
+    val.push(3); left.push(-1); right.push(-1); // 4: 3
+
+    report("[4,2,5,1,3]", val, left, right, 0, 3.714286);   // 4
+    report("[4,2,5,1,3]", val, left, right, 0, 0.5);        // 1
+    report("[4,2,5,1,3]", val, left, right, 0, 100.0);      // 5
+
+    // ★ ties: target exactly between two values — the smaller wins
+    report("[4,2,5,1,3]", val, left, right, 0, 2.5);        // 2, not 3
+    report("[4,2,5,1,3]", val, left, right, 0, 4.5);        // 4, not 5
+    report("[4,2,5,1,3]", val, left, right, 0, 1.5);        // 1, not 2
+
+    // ★ the answer is an ANCESTOR of where the descent ends: target 3.4 walks
+    // 4 -> 2 -> 3 and stops, but 3 is closer than nothing below it
+    report("[4,2,5,1,3]", val, left, right, 0, 3.4);        // 3
+    report("[4,2,5,1,3]", val, left, right, 0, 3.6);        // 4
+
+    // exact hits
+    report("[4,2,5,1,3]", val, left, right, 0, 2.0);        // 2
+    report("[4,2,5,1,3]", val, left, right, 0, 5.0);        // 5
+
+    // a single node
+    let mut v2: Vec[i64] = Vec.new();
+    let mut l2: Vec[i64] = Vec.new();
+    let mut r2: Vec[i64] = Vec.new();
+    v2.push(7); l2.push(-1); r2.push(-1);
+    report("[7]", v2, l2, r2, 0, -3.25);                    // 7
+
+    // a right spine, where every step must reconsider the best
+    let mut v3: Vec[i64] = Vec.new();
+    let mut l3: Vec[i64] = Vec.new();
+    let mut r3: Vec[i64] = Vec.new();
+    v3.push(1); l3.push(-1); r3.push(1);
+    v3.push(10); l3.push(-1); r3.push(2);
+    v3.push(100); l3.push(-1); r3.push(-1);
+    report("[1,10,100] spine", v3, l3, r3, 0, 6.0);         // 10
+    report("[1,10,100] spine", v3, l3, r3, 0, 5.5);         // 1 — tied with 10 at 4.5
+}

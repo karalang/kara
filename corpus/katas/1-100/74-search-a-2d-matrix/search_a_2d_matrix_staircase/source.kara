@@ -1,0 +1,86 @@
+// LeetCode #74: Search a 2D Matrix — staircase walk from the top-right, O(m+n).
+//
+// The pointer-walk that needs only the WEAKER "rows sorted, columns sorted"
+// property (it is the canonical solution to the follow-up kata
+// [#240](../../201-300/)). Start at the top-right corner. That cell is the
+// largest in its row and the smallest in its column, so each comparison rules out
+// a whole row or a whole column:
+//
+//   start r,c = 0, cols-1
+//     m[r][c] == target  ->  found
+//     m[r][c] >  target  ->  c -= 1   (drop this column — everything below is larger)
+//     m[r][c] <  target  ->  r += 1   (drop this row — everything left is smaller)
+//
+// O(m+n) — asymptotically weaker than the two binary-search solvers
+// ([`search_a_2d_matrix.kara`](search_a_2d_matrix.kara) is O(log m·n)), but it
+// makes no use of the row-start ordering and so is the more general shape. Kept as
+// a third bug-finding surface and a cross-check: it agrees with both binary
+// searches on every query.
+//
+// LeetCode bounds: 1 ≤ m, n ≤ 100, -10⁴ ≤ v, target ≤ 10⁴ — every value fits in i64.
+
+fn search_matrix(m: ref Vec[Vec[i64]], target: i64) -> bool {
+    let rows = m.len();
+    if rows == 0 {
+        return false;
+    }
+    let cols = m[0].len();
+    if cols == 0 {
+        return false;
+    }
+
+    let mut r = 0;
+    let mut c = cols - 1;
+    while r < rows and c >= 0 {
+        let v = m[r][c];
+        if v == target {
+            return true;
+        } else if v > target {
+            c = c - 1;                          // this column is too big — step left
+        } else {
+            r = r + 1;                          // this row is too small — step down
+        }
+    }
+    false
+}
+
+// ---- test harness (shared verbatim with search_a_2d_matrix.kara) ---------------
+
+fn report(m: ref Vec[Vec[i64]], target: i64, s: mut ref String) {
+    let found = search_matrix(m, target);
+    println(f"search({target}) = {found}");
+    s.push(' ');
+    if found {
+        s.push('1');
+    } else {
+        s.push('0');
+    }
+}
+
+fn main() {
+    let mut s: String = "res:";
+
+    let a = [[1, 3, 5, 7], [10, 11, 16, 20], [23, 30, 34, 60]];
+    report(a, 3, mut s);
+    report(a, 13, mut s);
+    report(a, 1, mut s);
+    report(a, 60, mut s);
+    report(a, 0, mut s);
+    report(a, 100, mut s);
+    report(a, 16, mut s);
+    report(a, 22, mut s);
+
+    let b = [[5]];
+    report(b, 5, mut s);
+    report(b, 4, mut s);
+
+    let c = [[1, 2, 3, 4, 5]];
+    report(c, 4, mut s);
+    report(c, 6, mut s);
+
+    let d = [[1], [3], [5], [7]];
+    report(d, 5, mut s);
+    report(d, 6, mut s);
+
+    println(s);
+}

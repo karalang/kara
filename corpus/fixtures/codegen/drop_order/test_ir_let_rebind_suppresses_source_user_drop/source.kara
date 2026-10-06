@@ -1,0 +1,10 @@
+
+struct Foo { x: i64 }
+impl Drop for Foo {
+    fn drop(mut ref self) {}
+}
+fn main() {
+    let f = Foo { x: 1 };
+    let g = f;
+    println(g.x);
+}

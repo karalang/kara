@@ -1,0 +1,52 @@
+// Semantic search over pre-computed embeddings — a tiny end-to-end demo of
+// the `std.embeddings` surface (RAG / nearest-neighbour retrieval shape).
+//
+// Each "document" is an embedding vector (here 3-dimensional for legibility;
+// real embeddings are 384–1536-wide). A query is scored against the whole
+// corpus with ONE batched cosine-similarity call, then `top_k` ranks the best
+// matches as `(index, score)` pairs — exactly the retrieval step a vector
+// search runs after the embedding model produces the vectors.
+//
+// The scores are exact 0 / 1 on every backend: cosine similarity is
+// scale-invariant, so "kittens" ([3,0,0], a scaled "cats" vector) scores 1.0
+// against the "feline" query just like "cats" ([1,0,0]) does — the retrieval
+// keys on direction, not magnitude.
+//
+// Run it:  karac run examples/semantic_search.kara
+//
+// Expected output (the query retrieves the two feline documents):
+//   cats
+//   1
+//   kittens
+//   1
+
+import std.embeddings.{cosine_similarity_batched, top_k};
+
+fn main() {
+    // Corpus: four documents as the rows of a [4, 3] embedding matrix.
+    //   doc 0  "cats"     ~ [1, 0, 0]   feline
+    //   doc 1  "kittens"  ~ [3, 0, 0]   feline (same direction as cats)
+    //   doc 2  "dogs"     ~ [0, 1, 0]   canine
+    //   doc 3  "wolves"   ~ [0, 2, 0]   canine
+    let corpus: Tensor[f32, [4, 3]] = Tensor.from([
+        [1.0f32, 0.0f32, 0.0f32],
+        [3.0f32, 0.0f32, 0.0f32],
+        [0.0f32, 1.0f32, 0.0f32],
+        [0.0f32, 2.0f32, 0.0f32],
+    ]);
+    let names = ["cats", "kittens", "dogs", "wolves"];
+
+    // Query "feline" lands in the cats/kittens region of the space.
+    let query: Tensor[f32, [3]] = Tensor.from([1.0f32, 0.0f32, 0.0f32]);
+
+    // One call scores the query against every corpus row → a Vec[f32] of
+    // cosine similarities; top_k keeps the two best as (index, score) pairs.
+    let scores = cosine_similarity_batched(query, corpus);
+    let ranked = top_k(scores, 2);
+
+    for pair in ranked.iter() {
+        let (idx, score) = pair;
+        println(names[idx]);
+        println(score);
+    }
+}

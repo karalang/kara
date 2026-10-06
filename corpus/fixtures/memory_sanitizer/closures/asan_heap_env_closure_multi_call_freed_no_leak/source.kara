@@ -1,0 +1,8 @@
+
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let f = make(20i64);
+    let a = f(1i64);
+    let b = f(2i64);
+    println(f"{a + b}");
+}

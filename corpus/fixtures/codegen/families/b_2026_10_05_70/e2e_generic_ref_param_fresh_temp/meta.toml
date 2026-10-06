@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_05_70.rs::e2e_generic_ref_param_fresh_temp"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_05_70.rs::asan_generic_ref_param_fresh_temp"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

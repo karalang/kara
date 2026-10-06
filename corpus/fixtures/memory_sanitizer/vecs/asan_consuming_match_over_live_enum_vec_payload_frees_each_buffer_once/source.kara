@@ -1,0 +1,21 @@
+
+enum E { A(Vec[String]), B }
+enum N { A(Vec[i64]), B }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. The bug: consumed by the arm, source read again afterwards.
+        let e: E = E.A([f"aa{i}", f"bb{i}"]);
+        match e { E.A(v) => { for s in v { println(s); } } E.B => { println("-"); } }
+        match e { E.A(v) => { for s in v { println(s); } } E.B => { println("-"); } }
+        // 2. CONTROL — source DEAD after the consuming match, so no clone.
+        let d: E = E.A([f"dd{i}"]);
+        match d { E.A(v) => { for s in v { println(s); } } E.B => { println("-"); } }
+        // 3. CONTROL — scalar elements, exact without the element walk.
+        let n: N = N.A([i, i]);
+        match n { N.A(v) => { for s in v { println(s); } } N.B => { println("-"); } }
+        match n { N.A(v) => { for s in v { println(s); } } N.B => { println("-"); } }
+        i = i + 1;
+    }
+    println("end");
+}

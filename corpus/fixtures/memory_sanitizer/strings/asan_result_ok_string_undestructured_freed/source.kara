@@ -1,0 +1,6 @@
+
+fn mk(n: i64) -> Result[String, i64] { Ok(f"ok-value-{n}-runtime-heap") }
+fn main() {
+    let x = mk(42);
+    println("done");
+}

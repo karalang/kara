@@ -1,0 +1,49 @@
+
+enum Wrap {
+    W(Option[String]),
+    N(Option[i64]),
+    R(Result[String, i64]),
+    Empty,
+}
+
+fn take(w: Wrap) -> i64 {
+    match w {
+        Wrap.W(Option.Some(s)) => s.len(),
+        Wrap.W(Option.None) => -1,
+        Wrap.N(Option.Some(n)) => n,
+        Wrap.N(Option.None) => -2,
+        Wrap.R(Result.Ok(s)) => s.len(),
+        Wrap.R(Result.Err(e)) => e,
+        Wrap.Empty => -3,
+    }
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        // matched out
+        let a: Wrap = Wrap.W(Option.Some("boxed payload well past inline width"));
+        match a {
+            Wrap.W(Option.Some(s)) => { acc = acc + s.len(); },
+            _ => { acc = acc - 1; },
+        }
+        // NEVER matched out — the box must still be freed
+        let b: Wrap = Wrap.N(Option.Some(7));
+        match b {
+            Wrap.Empty => { acc = acc - 1; },
+            _ => { acc = acc + 1; },
+        }
+        // whole-value MOVE — source and destination share one box
+        let c: Wrap = Wrap.R(Result.Ok("boxed result payload past inline width"));
+        let c2 = c;
+        acc = acc + take(c2);
+        // a FRESH TEMP enum by value — no binding to hang a drop on, so the
+        // call site is the only frame that can own its box
+        acc = acc + take(Wrap.N(Option.Some(2)));
+        // no box at all — the null-box direction through the same callee
+        acc = acc + take(Wrap.Empty);
+        i = i + 1;
+    }
+    println(acc);
+}

@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/moves.rs::asan_soa_layout_named_param_base_aos_and_mono_soa_no_leak"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:layout"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

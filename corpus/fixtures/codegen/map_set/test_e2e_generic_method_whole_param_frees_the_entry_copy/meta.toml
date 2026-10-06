@@ -1,0 +1,13 @@
+source = "tests/codegen/map_set.rs::test_e2e_generic_method_whole_param_frees_the_entry_copy"
+dedup_of = ["tests/par_codegen.rs::test_e2e_auto_par_generic_method_whole_param_frees_the_entry_copy"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

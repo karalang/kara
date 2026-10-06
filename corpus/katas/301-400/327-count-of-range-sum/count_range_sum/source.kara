@@ -1,0 +1,141 @@
+// LeetCode #327: Count of Range Sum — merge sort over the prefix sums.
+//
+// Given an integer array nums and two integers lower and upper, return the
+// number of range sums S(i, j) = nums[i] + ... + nums[j], i <= j, that lie in
+// [lower, upper].
+//
+//   nums = [-2, 5, -1], lower = -2, upper = 2  ->  3   ([0,0], [2,2], [0,2])
+//   nums = [0],         lower = 0,  upper = 0  ->  1
+//
+// With p[0] = 0 and p[k] = nums[0] + ... + nums[k-1], the range sum S(i, j)
+// is p[j+1] - p[i], so the answer counts pairs a < b with
+// lower <= p[b] - p[a] <= upper. Sort the prefix sums by merge sort: when the
+// two sorted halves are about to be merged, every pair with a in the left
+// half and b in the right half is counted at once, by walking two pointers
+// over the right half. For each p[a] on the left, the right-half values in
+// [p[a] + lower, p[a] + upper] form a window, and since the left half is
+// sorted the window only moves right.
+//
+// O(n log n) time, O(n) space.
+
+fn count_and_sort(p: mut ref Vec[i64], tmp: mut ref Vec[i64], lo: i64, hi: i64, lower: i64, upper: i64) -> i64 {
+    if hi - lo <= 1 {
+        return 0;
+    }
+    let mid = lo + (hi - lo) / 2;
+    let mut count = count_and_sort(p, tmp, lo, mid, lower, upper) + count_and_sort(p, tmp, mid, hi, lower, upper);
+
+    // Count the cross pairs: for each a in [lo, mid), the b in [mid, hi)
+    // with p[a] + lower <= p[b] <= p[a] + upper.
+    let mut start = mid;
+    let mut end = mid;
+    for a in lo..mid {
+        while start < hi and p[start] < p[a] + lower {
+            start += 1;
+        }
+        while end < hi and p[end] <= p[a] + upper {
+            end += 1;
+        }
+        count += end - start;
+    }
+
+    // Merge the two sorted halves through tmp.
+    let mut i = lo;
+    let mut j = mid;
+    let mut k = lo;
+    while i < mid and j < hi {
+        if p[i] <= p[j] {
+            tmp[k] = p[i];
+            i += 1;
+        } else {
+            tmp[k] = p[j];
+            j += 1;
+        }
+        k += 1;
+    }
+    while i < mid {
+        tmp[k] = p[i];
+        i += 1;
+        k += 1;
+    }
+    while j < hi {
+        tmp[k] = p[j];
+        j += 1;
+        k += 1;
+    }
+    for t in lo..hi {
+        p[t] = tmp[t];
+    }
+    return count;
+}
+
+fn count_range_sum(nums: ref Vec[i64], lower: i64, upper: i64) -> i64 {
+    let mut p: Vec[i64] = Vec.new();
+    p.push(0);
+    let mut s = 0;
+    for x in nums {
+        s += x;
+        p.push(s);
+    }
+    let mut tmp: Vec[i64] = Vec.new();
+    for _ in 0..p.len() {
+        tmp.push(0);
+    }
+    let n = p.len();
+    return count_and_sort(mut p, mut tmp, 0, n, lower, upper);
+}
+
+fn report(nums: ref Vec[i64], lower: i64, upper: i64) {
+    println(f"{nums} [{lower}, {upper}] -> {count_range_sum(nums, lower, upper)}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn random_input(n: i64, r: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        a.push(next(seed) % (2 * r + 1) - r);
+    }
+    return a;
+}
+
+const I32_MIN: i64 = -2147483648;
+const I32_MAX: i64 = 2147483647;
+
+fn main() {
+    // The examples from the problem statement.
+    report([-2, 5, -1], -2, 2);
+    report([0], 0, 0);
+
+    // Edge cases.
+    report([1], 0, 0);
+    report([5], 5, 5);
+    report([0, 0, 0], 0, 0);
+    report([1, -1, 1, -1], 0, 0);
+    report([3, 3, 3], 4, 5);
+    report([1, 2, 3], -100, 100);
+    report([-1, -2, -3], 1, 100);
+    report([2, -2, 2, -2, 2], -1, 1);
+
+    // Values at the 32-bit limits, so the sums need 64 bits.
+    report([I32_MAX, I32_MAX, I32_MAX], 4294967294, 6442450941);
+    report([I32_MIN, I32_MAX, I32_MIN], I32_MIN, -1);
+
+    // Random inputs, small enough to print.
+    let mut seed = 327;
+    for t in 0..4 {
+        let nums = random_input(8, 5, mut seed);
+        report(nums, t - 2, t + 2);
+    }
+
+    // Larger random inputs, reported by count only.
+    for n in [500, 2000, 3000] {
+        let nums = random_input(n, 100, mut seed);
+        for w in [0, 10, 100, 1000] {
+            println(f"n={n} w={w} -> {count_range_sum(nums, -w, w)}");
+        }
+    }
+}

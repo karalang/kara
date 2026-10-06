@@ -1,0 +1,52 @@
+
+enum Tok { Id(String), Int(i64) }
+struct Span { tok: Tok, off: i64 }
+struct Wrap { sp: Span, hi: i64 }
+struct Deep { w: Wrap, tag: i64 }
+fn sink(s: String) -> i64 { s.len() }
+fn mk_wrap(n: i64) -> Wrap { Wrap { sp: Span { tok: Tok.Id(f"w-{n}"), off: n }, hi: n + 1 } }
+fn fwd(w: Wrap) -> Wrap { w }
+fn peek(w: ref Wrap) -> i64 { w.hi }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 4 {
+        // Nested leak path: Wrap built, kept live (hi read), dropped WITHOUT
+        // destructure — Wrap's drop must free sp.tok's payload (the #18 leak).
+        let a = Wrap { sp: Span { tok: Tok.Id(f"a-{i}"), off: i }, hi: i };
+        if a.hi > 99999 { println("never"); }
+
+        // Struct-literal MOVE: a Span local moved into a Wrap literal, then the
+        // Wrap dropped undestructured. The source `span` must not also free the
+        // enum payload (move-suppression vs the now-active nested drop).
+        let span = Span { tok: Tok.Id(f"s-{i}"), off: i };
+        let m = Wrap { sp: span, hi: i };
+        if m.hi > 99999 { println("never"); }
+
+        // Transfer-out + nested match-consume (the double-free risk): the bound
+        // String moves into `sink`; `c`'s drop must skip the consumed field.
+        let b = mk_wrap(i);
+        let c = fwd(b);
+        match c.sp.tok { Id(s) => { acc = acc + sink(s); } Int(n) => { if n > 99999 { println("never"); } } }
+
+        // Local nested match-consume (no function in the path).
+        let d = Wrap { sp: Span { tok: Tok.Id(f"d-{i}"), off: i }, hi: i };
+        match d.sp.tok { Id(s) => { acc = acc + sink(s); } Int(n) => { if n > 99999 { println("never"); } } }
+
+        // Read-then-reuse a Wrap (caller-retains aliasing), then drop it
+        // undestructured — the nested payload must be freed exactly once.
+        let r = mk_wrap(i);
+        let x = peek(r);
+        let y = peek(r);
+        if x + y > 99999 { println("never"); }
+
+        // Three-level nesting: Deep -> Wrap -> Span -> Tok, dropped
+        // undestructured — the recursive struct-drop routing must descend.
+        let deep = Deep { w: mk_wrap(i), tag: i };
+        if deep.tag > 99999 { println("never"); }
+
+        i = i + 1;
+    }
+    if acc > 99999 { println("never"); }
+    println("done");
+}

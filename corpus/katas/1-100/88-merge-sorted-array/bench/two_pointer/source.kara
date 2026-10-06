@@ -1,0 +1,81 @@
+// Benchmark workload — two-pointer-from-back O(m + n) Merge Sorted Array.
+//
+// m = n = 1_000_000 (total = 2_000_000), K = 10 outer iterations.
+// Inputs are maximally alternating so the merge takes one from each side at
+// every step — worst case for the branch predictor and the compare:
+//   prefix_a = [0, 2, 4, ..., 2m-2]   (sorted, length m, lives in front of workspace)
+//   b        = [1, 3, 5, ..., 2n-1]   (sorted, length n)
+//   merged   = [0, 1, 2, ..., m+n-1]  (one merge of m+n distinct ints)
+//
+// Each outer iteration refills the front of `workspace` from `prefix_a` before
+// calling `merge` (the merge mutates in place; without a refill, subsequent
+// iterations would be no-ops). Refill is O(m) and is part of the measured
+// time — same overhead in all three implementations.
+//
+// Sink: sum of `workspace[total - 1]` across K iterations.
+// Per-iter that value is the merged array's last element = max(2m-2, 2n-1) = 2n-1.
+// K × (2n - 1) = 10 × 1_999_999 = 19_999_990.
+
+fn merge(nums1: mut Slice[i64], m: i64, nums2: Slice[i64], n: i64) {
+    let mut i = m - 1;
+    let mut j = n - 1;
+    let mut k = m + n - 1;
+    while j >= 0 {
+        if i >= 0 and nums1[i] > nums2[j] {
+            nums1[k] = nums1[i];
+            i = i - 1;
+        } else {
+            nums1[k] = nums2[j];
+            j = j - 1;
+        }
+        k = k - 1;
+    }
+}
+
+fn main() {
+    let m = 1000000;
+    let n = 1000000;
+    let total = m + n;
+
+    // Pre-allocate with Vec.filled so the build doesn't pay log-N capacity
+    // growths; then fill via indexed write. `Vec.with_capacity` + push is
+    // available too (landed karac c8fd7c42) and was A/B-measured 2026-06-05:
+    // 15.4 ± 0.7 ms vs this shape's 15.1 ± 0.9 ms — no win. At MiB-scale
+    // allocations the kernel hands back zeroed pages, so filled's zero-init
+    // pass is ~free, while push pays a len-increment + cap-check per
+    // element. See README § Runtime for the recorded non-win.
+    let mut prefix_a: Vec[i64] = Vec.filled(m, 0);
+    let mut ia = 0;
+    while ia < m {
+        prefix_a[ia] = 2 * ia;
+        ia = ia + 1;
+    }
+
+    let mut b: Vec[i64] = Vec.filled(n, 0);
+    let mut ib = 0;
+    while ib < n {
+        b[ib] = 2 * ib + 1;
+        ib = ib + 1;
+    }
+
+    // Workspace holds m + n i64s; the back n slots are scratch (filled with
+    // zeros), the front m slots are refilled from prefix_a each outer iter.
+    // Single-shot bulk allocation via `Vec.filled` mirrors Rust's
+    // `vec![0; TOTAL]` — the prior `Vec.new() + push N times` form measured
+    // ~3× slower than Rust due to log-N capacity growths, dominating the
+    // bench's wall-clock (see kata-88 commit notes).
+    let mut workspace: Vec[i64] = Vec.filled(total, 0);
+
+    let mut sum = 0;
+    for _ in 0..10 {
+        // Refill the sorted prefix into the front m slots.
+        let mut p = 0;
+        while p < m {
+            workspace[p] = prefix_a[p];
+            p = p + 1;
+        }
+        merge(mut workspace, m, b, n);
+        sum = sum + workspace[total - 1];
+    }
+    println(sum);
+}

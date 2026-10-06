@@ -1,0 +1,6 @@
+
+        trait DatabaseProvider { fn q(ref self, k: i64) -> i64; }
+        effect resource UserDB: DatabaseProvider;
+        fn use_db(k: i64) -> i64 with reads(UserDB) { return UserDB.q(k); }
+        fn main() { use_db(1); }
+        

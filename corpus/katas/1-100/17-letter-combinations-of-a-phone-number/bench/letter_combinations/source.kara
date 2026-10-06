@@ -1,0 +1,110 @@
+// Benchmark workload — Letter Combinations of a Phone Number
+// (LeetCode #17).
+//
+// M = 8 distinct test cases, each a digit-string of length 0..4 covering
+// the full LeetCode constraint range: "" (the empty-input sentinel),
+// "2"/"7" (single 3- and 4-letter groups), "23"/"79" (two-digit mixed
+// shapes), "234" (three 3-letter groups, 27 combos), "279" (mixed
+// 3·4·4 = 48 combos), "2349" (four-digit case with one 4-letter group,
+// 3·3·3·4 = 108 combos). Built once into a Vec[String] before the timed
+// loop. Per outer iter we rotate `idx = k % M` and call
+// letter_combinations on that case, so the call is never loop-invariant
+// (LLVM can't hoist it out of the K loop) and the eight distinct
+// (digit-length, group-pattern) pairs keep the per-call alloc-sizing
+// path from learning any single output cardinality.
+//
+// K = 100_000 outer iters. Per-iter work: a Vec[String] of cardinality
+// 0..108 — each combo is one fresh String of length L (the digit count),
+// built by copy-prefix + push-letter. At K=100k that's on the order of
+// (0 + 3 + 4 + 9 + 16 + 27 + 48 + 108) × K/M ≈ 215 × 12500 ≈ 2.7×10⁶
+// String allocs total — the heaviest small-allocation workload in the
+// 1-100 leetcode tranche, by an order of magnitude over kata 14's
+// single-prefix-per-call shape. K dropped 10× vs kata 14/16's K=1M
+// because the per-call output cardinality scales as 4^L, not as 1.
+//
+// Sink (`sum`) is the running total of every returned Vec[String]'s
+// length = (K / M) × (0 + 3 + 4 + 9 + 16 + 27 + 48 + 108) = 12500 × 215
+// = 2_687_500. A closed form, so every mirror (kara/rust/c/go/py) must
+// print 2687500 before timing starts; bench.sh fails loudly on mismatch.
+//
+// Two-lane kata: `sum = sum + r.len()` is the slice-1 allow-list
+// reduction shape, so karac emits a karac_par_reduce dispatch by default.
+// KARAC_AUTO_PAR=0 builds the seq-lane comparator — see bench/bench.sh.
+//
+// Same `let prefix = out[i]` per-iter memory-discipline binding as the
+// src/letter_combinations.kara mirror — see that file's header for the
+// per-iter inner-String cleanup rationale.
+
+fn letter_combinations(digits: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let digit_bytes = digits.bytes();
+    let n = digit_bytes.len();
+    if n == 0 {
+        return out;
+    }
+
+    let mut groups: Vec[String] = Vec.new();
+    groups.push("abc");   // 2
+    groups.push("def");   // 3
+    groups.push("ghi");   // 4
+    groups.push("jkl");   // 5
+    groups.push("mno");   // 6
+    groups.push("pqrs");  // 7
+    groups.push("tuv");   // 8
+    groups.push("wxyz");  // 9
+    let two: u8 = b'2';
+
+    out.push("");
+    let mut d = 0;
+    while d < n {
+        let idx = (digit_bytes[d] as i64) - (two as i64);
+        let prev_len = out.len();
+        let mut next: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < prev_len {
+            let prefix = ref out[i];
+            for letter in groups[idx].chars() {
+                let mut s: String = "";
+                s.push_str(prefix);
+                s.push(letter);
+                next.push(s);
+            }
+            i = i + 1;
+        }
+        out = next;
+        d = d + 1;
+    }
+    out
+}
+
+fn main() {
+    let m_cases: i64 = 8;
+    let k_iters: i64 = 100000;
+
+    // M cases covering empty / single-digit / multi-digit / mixed-group
+    // shapes across the LeetCode constraint range.
+    let mut cases: Vec[String] = Vec.new();
+    cases.push("");
+    cases.push("2");
+    cases.push("7");
+    cases.push("23");
+    cases.push("79");
+    cases.push("234");
+    cases.push("279");
+    cases.push("2349");
+
+    // Reduction shape: `sum = sum + r.len()` per iter. The analyzer
+    // recognizes the allow-listed `+` accumulator and karac's default
+    // build emits a karac_par_reduce dispatch. `r` is a Vec[String]
+    // allocated fresh inside letter_combinations and dropped at
+    // end-of-iter scope.
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % m_cases;
+        let r = letter_combinations(cases[idx]);
+        sum = sum + r.len();
+        k = k + 1;
+    }
+    println(sum);
+}

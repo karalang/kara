@@ -1,0 +1,291 @@
+// LeetCode 257 — differential harness.
+//
+// Runs all THREE path builders over randomized trees: the string-accumulating
+// recursion, the numeric-path-with-join recursion, and the explicit-stack
+// worklist.
+//
+// The comparison is deliberately ORDER-SENSITIVE — a positional digest over the
+// rendered paths, not a set or a sorted list. That is not fussiness: the
+// iterative file's correctness depends on pushing the RIGHT child before the
+// left, because the stack is LIFO, and getting that backwards produces exactly
+// the right SET of paths in fully reversed order. Measured, not assumed —
+// swapping the two pushes turns `[1->2->4,1->2->5,1->3->6,1->3->7]` into
+// `[1->3->7,1->3->6,1->2->5,1->2->4]`. A sorted-set comparison would call those
+// identical and the bug would ship.
+//
+// The generator biases hard toward SPINDLY trees. A uniformly random tree is
+// bushy, every path is short, and the ★ file's O(n · depth) prefix copying never
+// diverges from the join file's O(leaves · depth) — the two look identical and
+// the interesting difference is untested. Drawing a high null-rate per side, and
+// occasionally forcing a pure spine, produces trees with depth close to n and
+// one or two leaves, which is where the two strategies actually differ.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn build(vals: ref Vec[i64], null_val: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let len = vals.len();
+    if len == 0 or vals[0] == null_val {
+        return nodes;
+    }
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < len {
+        let cur = queue[head];
+        head = head + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let li = nodes.len() - 1;
+            nodes[cur].left = li;
+            queue.push(li);
+        }
+        i = i + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let ri = nodes.len() - 1;
+            nodes[cur].right = ri;
+            queue.push(ri);
+        }
+        i = i + 1;
+    }
+    return nodes;
+}
+
+fn make_case(seed: i64, null_val: i64) -> Vec[i64] {
+    let mut state = seed;
+    let mut out: Vec[i64] = Vec.new();
+
+    state = (state * 1103515245 + 12345) & 2147483647;
+    let slots = (state / 65536) % 26;
+    if slots == 0 {
+        return out;
+    }
+    state = (state * 1103515245 + 12345) & 2147483647;
+    let spine = (state / 65536) % 3 == 0; // one case in three is a pure spine
+
+    state = (state * 1103515245 + 12345) & 2147483647;
+    out.push((state / 65536) % 41 - 20); // values include negatives and 0
+
+    let mut s = 1;
+    while s < slots {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let roll = (state / 65536) % 100;
+        // A pure spine alternates value/null; otherwise a high null-rate keeps
+        // the tree spindly rather than bushy.
+        let want_null = if spine { s % 2 == 0 } else { roll < 55 };
+        if want_null {
+            out.push(null_val);
+        } else {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            out.push((state / 65536) % 41 - 20);
+        }
+        s = s + 1;
+    }
+    return out;
+}
+
+// ---- builder 1: string prefix extended at every node ---------------------
+
+fn walk_str(nodes: ref Vec[Node], node: i64, prefix: ref String, out: mut ref Vec[String]) {
+    let left = nodes[node].left;
+    let right = nodes[node].right;
+    if left == -1 and right == -1 {
+        let mut done: String = "";
+        done.push_str(prefix);
+        out.push(done);
+        return;
+    }
+    if left != -1 {
+        let mut next: String = "";
+        next.push_str(prefix);
+        next.push_str("->");
+        next.push_str(f"{nodes[left].val}");
+        walk_str(nodes, left, next, out);
+    }
+    if right != -1 {
+        let mut next: String = "";
+        next.push_str(prefix);
+        next.push_str("->");
+        next.push_str(f"{nodes[right].val}");
+        walk_str(nodes, right, next, out);
+    }
+}
+
+fn paths_str(nodes: ref Vec[Node]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if nodes.len() == 0 {
+        return out;
+    }
+    let mut root_s: String = "";
+    root_s.push_str(f"{nodes[0].val}");
+    walk_str(nodes, 0, root_s, mut out);
+    return out;
+}
+
+// ---- builder 2: numeric path, join at the leaf ---------------------------
+
+fn walk_join(nodes: ref Vec[Node], node: i64, path: mut ref Vec[i64], out: mut ref Vec[String]) {
+    path.push(nodes[node].val);
+    let left = nodes[node].left;
+    let right = nodes[node].right;
+    if left == -1 and right == -1 {
+        let mut s: String = "";
+        let mut i = 0;
+        while i < path.len() {
+            if i > 0 {
+                s.push_str("->");
+            }
+            s.push_str(f"{path[i]}");
+            i = i + 1;
+        }
+        out.push(s);
+    } else {
+        if left != -1 {
+            walk_join(nodes, left, path, out);
+        }
+        if right != -1 {
+            walk_join(nodes, right, path, out);
+        }
+    }
+    let _ = path.pop();
+}
+
+fn paths_join(nodes: ref Vec[Node]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if nodes.len() == 0 {
+        return out;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    walk_join(nodes, 0, mut path, mut out);
+    return out;
+}
+
+// ---- builder 3: explicit stack -------------------------------------------
+
+// Both children extend the same prefix, so the extension is a function taking a
+// `ref String`. Inlining it twice would read the owned prefix twice, and an
+// owned local passed to `push_str` counts as a CONSUME even though the callee
+// only copies bytes — the ownership checker reports the second read as an RC
+// fallback. Routing through a `ref` parameter borrows instead, which is what is
+// actually meant and what `is_str_like` in the typechecker exists to allow.
+fn extend(prefix: ref String, v: i64) -> String {
+    let mut s: String = "";
+    s.push_str(prefix);
+    s.push_str("->");
+    s.push_str(f"{v}");
+    return s;
+}
+
+struct Frame {
+    node: i64,
+    prefix: String,
+}
+
+fn paths_iter(nodes: ref Vec[Node]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if nodes.len() == 0 {
+        return out;
+    }
+    let mut root_s: String = "";
+    root_s.push_str(f"{nodes[0].val}");
+    let mut stack: Vec[Frame] = Vec.new();
+    stack.push(Frame { node: 0, prefix: root_s });
+    while stack.len() > 0 {
+        let f = match stack.pop() {
+            Some(v) => v,
+            None => Frame { node: -1, prefix: "" },
+        };
+        if f.node == -1 {
+            continue;
+        }
+        let left = nodes[f.node].left;
+        let right = nodes[f.node].right;
+        if left == -1 and right == -1 {
+            out.push(f.prefix);
+        } else {
+            // Bind the prefix ONCE. Reading `f.prefix` twice moves the field out
+            // of the owned frame twice, which the ownership checker reports as
+            // an RC fallback (`direct re-use after consume`); one owned local
+            // that both children borrow from says what is meant.
+            let pfx = f.prefix;
+            if right != -1 {
+                stack.push(Frame { node: right, prefix: extend(pfx, nodes[right].val) });
+            }
+            if left != -1 {
+                stack.push(Frame { node: left, prefix: extend(pfx, nodes[left].val) });
+            }
+        }
+    }
+    return out;
+}
+
+// Positional: path ORDER is part of the answer, not just the multiset.
+fn digest_of(paths: ref Vec[String]) -> i64 {
+    let mut h = 1;
+    let mut i = 0;
+    while i < paths.len() {
+        let b = paths[i].bytes();
+        let mut k = 0;
+        while k < b.len() {
+            h = (h * 1000003 + (b[k] as i64)) % 1000000007;
+            k = k + 1;
+        }
+        h = (h * 31 + 7) % 1000000007; // separator, so order matters
+        i = i + 1;
+    }
+    return h;
+}
+
+fn main() {
+    let cases = 4000;
+    let null = -1000;
+    let mut seed = 257257;
+
+    let mut mismatches = 0;
+    let mut total_paths = 0;
+    let mut total_nodes = 0;
+    let mut max_depth_seen = 0;
+    let mut digest = 0;
+
+    let mut c = 0;
+    while c < cases {
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let vals = make_case(seed, null);
+        let nodes = build(vals, null);
+
+        let a = paths_str(nodes);
+        let b = paths_join(nodes);
+        let d = paths_iter(nodes);
+
+        let da = digest_of(a);
+        if a.len() != b.len() or a.len() != d.len() or da != digest_of(b) or da != digest_of(d) {
+            mismatches = mismatches + 1;
+        }
+        total_paths = total_paths + a.len();
+        total_nodes = total_nodes + nodes.len();
+        // Longest rendered path is a proxy for depth; spindly trees make it big.
+        let mut i = 0;
+        while i < a.len() {
+            if a[i].bytes().len() > max_depth_seen {
+                max_depth_seen = a[i].bytes().len();
+            }
+            i = i + 1;
+        }
+        digest = (digest * 131 + da) % 1000000007;
+        c = c + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"nodes {total_nodes}");
+    println(f"paths {total_paths}");
+    println(f"longest rendered path {max_depth_seen}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

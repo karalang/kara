@@ -1,0 +1,29 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"x{i}" } }
+struct W { a: String, b: String, c: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.a.len()}") } }
+fn mkw() -> W { return W { a: f"aaa{1}", b: f"bbb{1}", c: f"ccc{1}" } }
+enum Ho[T] { Full(T), Empty }
+impl[T] Ho[T] { fn mk(v: T) -> Ho[T] { return Ho.Full(v); } }
+fn mkg(v: R) -> Ho[R] { return Ho.Full(v) }
+fn mkf() -> Ho[R] { return Ho.Full(mkr(30)) }
+fn mkgw(v: W) -> Ho[W] { return Ho.Full(v) }
+fn idh(h: Ho[R]) -> Ho[R] { h }
+fn takeit(x: Ho[R]) { match x { Full(r) => { println(f"f:{r.id}") } Empty => { println("e") } } }
+fn takew(x: Ho[W]) { match x { Full(w) => { println(f"w:{w.a.len()}") } Empty => { println("e") } } }
+fn hold(x: Ho[R]) { println("h") }
+fn holdw(x: Ho[W]) { println("hw") }
+fn main() {
+    { takeit(mkg(mkr(9))); println("k1") }
+    { takeit(mkf()); println("k2") }
+    { takeit(Ho.mk(mkr(31))); println("k3") }
+    { hold(mkg(mkr(32))); println("k4") }
+    { takew(mkgw(mkw())); println("k5") }
+    { holdw(mkgw(mkw())); println("k6") }
+    { let h = mkg(mkr(33)); takeit(idh(h)); println("k7") }
+    { takeit(idh(mkg(mkr(34)))); println("k8") }
+    { mkg(mkr(35)); println("k9") }
+    { let a = mkg(mkr(36)); takeit(a); println("k10") }
+    println("end")
+}

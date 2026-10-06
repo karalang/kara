@@ -1,0 +1,80 @@
+// LeetCode #69: Sqrt(x) — Newton's method (integer form), O(log log x) iterations.
+//
+// The same floor(sqrt(x)) as the ★ ([`sqrtx.kara`](sqrtx.kara)), reached by
+// Newton–Raphson on f(r) = r² − x instead of a binary search. Each step replaces
+// the estimate `r` with the average of `r` and `x / r`:
+//
+//   r  <-  (r + x / r) / 2
+//
+// In real arithmetic this converges quadratically to √x; in INTEGER arithmetic
+// (with `/` truncating) the same iteration monotonically decreases `r` from an
+// overestimate and settles at exactly floor(√x). Starting from `r = x` (an
+// overestimate for x ≥ 1), iterate while `r*r > x`; when the test fails, `r` is
+// the floor. The truncating division is what makes the integer version land on
+// the floor rather than oscillate: `x / r` rounds toward zero, so the average
+// can never overshoot below the true root.
+//
+// `x == 0` is handled up front — the loop would divide by `r = 0` — returning 0.
+// For x ≥ 1 the first `r` is `x` and `r*r` (up to x² ≈ 4.6e18 for x ≤ 2.1e9) fits
+// i64; every later `r` only shrinks, so no `r*r` on the path overflows. Kāra's
+// default overflow checking makes that bound load-bearing: an i32 `r*r` would
+// trap, so i64 keeps the natural squaring test honest (same reasoning as the ★).
+//
+// Newton converges in a handful of steps even for x near 2^31 (far fewer than
+// binary search's ~31), which is why it is the classic fast integer-sqrt; it is
+// kept here as the convergence-vs-bisection contrast and an independent
+// cross-check of the ★.
+
+fn my_sqrt(x: i64) -> i64 {
+    if x == 0 {
+        return 0;                 // avoid the division by r = 0 below
+    }
+    let mut r = x;
+    while r * r > x {
+        r = (r + x / r) / 2;      // truncating average — descends to the floor
+    }
+    r
+}
+
+// ---- test harness (shared verbatim with sqrtx.kara) --------------------------
+
+fn report(x: i64, s: mut ref String) {
+    let r = my_sqrt(x);
+    println(f"sqrt({x}) = {r}");
+    s.push(' ');
+    s.push_str(f"{r}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report(0, mut s);            // 0
+    report(1, mut s);            // 1
+    report(2, mut s);            // 1
+    report(3, mut s);            // 1
+    report(4, mut s);            // 2
+    report(5, mut s);            // 2
+    report(8, mut s);            // 2
+    report(9, mut s);            // 3
+    report(10, mut s);           // 3
+    report(15, mut s);           // 3
+    report(16, mut s);           // 4
+    report(17, mut s);           // 4
+    report(24, mut s);           // 4
+    report(25, mut s);           // 5
+    report(26, mut s);           // 5
+    report(35, mut s);           // 5
+    report(36, mut s);           // 6
+    report(48, mut s);           // 6
+    report(49, mut s);           // 7
+    report(99, mut s);           // 9
+    report(100, mut s);          // 10
+    report(101, mut s);          // 10
+    report(2147395600, mut s);   // 46340
+    report(2147483647, mut s);   // 46340
+    report(1000000000, mut s);   // 31622
+    report(46340, mut s);        // 215
+    report(46341, mut s);        // 215
+
+    println(s);
+}

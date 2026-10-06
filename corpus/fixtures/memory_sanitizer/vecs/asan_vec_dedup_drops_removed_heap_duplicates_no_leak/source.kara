@@ -1,0 +1,22 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut v: Vec[String] = Vec.new();
+        v.push("aa".to_string());
+        v.push("aa".to_string());
+        v.push("bbbb".to_string());
+        v.push("bbbb".to_string());
+        v.push("bbbb".to_string());
+        v.push("c".to_string());
+        v.dedup();
+        let mut j: i64 = 0;
+        while j < v.len() {
+            acc = acc + v[j].len();
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    println(acc);
+}

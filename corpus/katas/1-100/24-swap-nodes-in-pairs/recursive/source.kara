@@ -1,0 +1,124 @@
+// LeetCode #24: Swap Nodes in Pairs — recursive O(n), O(n/2) stack.
+//
+// Same swap as `iterative.kara`, but the cursor loop is replaced by
+// structural recursion two nodes at a time:
+//
+//   swap(first → second → rest) = second → first → swap(rest)
+//   swap(none | singleton)      = unchanged
+//
+// The recursive call handles the rest of the list *first* (its result lands
+// in `first.next`), then the local pair is reversed by pointing `second` back
+// at `first` and returning `second` as the new front. The base cases return
+// the remaining zero- or one-node suffix whole — the recursive analogue of
+// the iterative form's trailing-singleton break.
+//
+// This is the recursive peer of kata [#21](../21-merge-two-sorted-lists/)'s
+// `recursive.kara`, and it mixes the same two return flavors that kata's
+// per-branch refcount compensation fix covered: `Some(second)` returns an
+// *alias* the constructor retains, while the base case returns the bare
+// parameter `head` — each arm needs its own treatment, not a function-wide
+// one. One frame per *pair* (depth n/2, ≤ 50 at LeetCode's 100-node bound);
+// the shape is not tail-recursive (the call's result feeds a field store
+// before the return), same TCO caveat as kata 21 — see kara
+// `docs/deferred.md § Tail-Call Optimization`.
+//
+// `first.next = swap_pairs(second.next)` consumes the freshly-owned chain the
+// recursive call returns (a +1 transfer), while `second.next = Some(first)`
+// stores an alias that must retain — both store flavors in two adjacent
+// lines, on re-parented (not append-built) nodes.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn swap_pairs(head: Option[ListNode]) -> Option[ListNode] {
+    if let Some(first) = head {
+        if let Some(second) = first.next {
+            // Swap the front pair; the recursion has already swapped `rest`.
+            first.next = swap_pairs(second.next);
+            second.next = Some(first);
+            Some(second)
+        } else {
+            // Trailing singleton — already "swapped".
+            head
+        }
+    } else {
+        // Empty suffix.
+        None
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn report(arr: Slice[i64]) {
+    let head = from_array(arr);
+    let out = swap_pairs(head);
+    println(to_string(out));
+}
+
+fn main() {
+    // Same nine cases as `iterative.kara` — the two must diff line-for-line.
+    let case1: Array[i64, 4] = [1, 2, 3, 4];
+    report(case1); // [2, 1, 4, 3]
+
+    let case2: Array[i64, 0] = [];
+    report(case2); // []
+
+    let case3: Array[i64, 1] = [1];
+    report(case3); // [1]
+
+    let case4: Array[i64, 2] = [1, 2];
+    report(case4); // [2, 1]
+
+    let case5: Array[i64, 3] = [1, 2, 3];
+    report(case5); // [2, 1, 3]
+
+    let case6: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case6); // [2, 1, 4, 3, 5]
+
+    let case7: Array[i64, 6] = [1, 2, 3, 4, 5, 6];
+    report(case7); // [2, 1, 4, 3, 6, 5]
+
+    let case8: Array[i64, 4] = [7, 7, 7, 7];
+    report(case8); // [7, 7, 7, 7]
+
+    let case9: Array[i64, 4] = [100, 0, 99, 1];
+    report(case9); // [0, 100, 1, 99]
+}

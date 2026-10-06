@@ -1,0 +1,3 @@
+
+fn handle(s: TlsStream) {}
+fn main() {}

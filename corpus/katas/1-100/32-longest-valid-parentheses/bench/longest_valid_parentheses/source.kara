@@ -1,0 +1,73 @@
+// LeetCode #32 bench harness — Kāra, the index-stack longest-valid-parens (★).
+//
+// The headline ★ style: a `Vec[i64]` stack of unmatched-boundary indices seeded
+// with a -1 base sentinel; on '(' push the index, on ')' pop and measure the gap
+// to the new top. Allocated FRESH per call (as the solution function does) — so
+// the bench includes the stack approach's real per-call small-Vec allocation, not
+// an amortized reuse.
+//
+// Workload: build one fixed pseudo-random parens buffer of length L once, then
+// run longest_valid over a SLIDING WINDOW [start, start+W) of it TOTAL times, the
+// window offset varying with the iteration index k so no comparator can fold the
+// pure call out of the loop; fold each window's answer into a checksum (the
+// un-elidable sink). This is a SEQUENTIAL throughput bench — the loop accumulates
+// into one scalar with a loop-borne dependency, so it does not auto-parallelize.
+
+fn longest_valid_window(buf: ref Vec[u8], start: i64, w: i64) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    stack.push(-1);
+    let mut best = 0;
+    let mut i = 0;
+    while i < w {
+        if buf[start + i] == b'(' {
+            stack.push(i);
+        } else {
+            let _ = stack.pop();
+            if stack.is_empty() {
+                stack.push(i);
+            } else {
+                let top = stack[stack.len() - 1];
+                let len = i - top;
+                if len > best {
+                    best = len;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    best
+}
+
+fn main() {
+    let big_l = 4096;
+    let w = 2048;
+    let total = 330000;
+    let modulus = 1000000007;
+
+    // Build a fixed pseudo-random parens buffer (LCG-driven bit -> '(' / ')').
+    let mut buf: Vec[u8] = Vec.new();
+    let mut x = 0x12345;
+    let mut p = 0;
+    while p < big_l {
+        x = (x * 1103515245 + 12345) & 0x7fffffff;
+        if (x & 1) == 0 {
+            buf.push(b'(');
+        } else {
+            buf.push(b')');
+        }
+        p = p + 1;
+    }
+
+    // Slide the window across the buffer; fold each answer into the checksum.
+    let span = big_l - w + 1;
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        let start = (k * 7) % span;
+        let r = longest_valid_window(buf, start, w);
+        acc = (acc + r) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

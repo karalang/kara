@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::codegen_generic_forward_to_a_second_generic_resolves_the_payload"
+dedup_of = ["tests/interpreter/enums.rs::test_generic_forward_to_a_second_generic_resolves_the_payload"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

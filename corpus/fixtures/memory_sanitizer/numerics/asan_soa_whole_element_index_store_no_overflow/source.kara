@@ -1,0 +1,21 @@
+
+struct Cell { a: f64, b: f64, c: f64, d: f64, e: f64 }
+layout grid: Vec[Cell] { group lo { a, b } group hi { c, d, e } }
+fn main() with panics {
+    let mut sum = 0.0;
+    let mut k = 0;
+    while k < 20 {
+        let mut grid: Vec[Cell] = Vec.new();
+        let mut i = 0;
+        while i < 8 { grid.push(Cell { a: 0.0, b: 0.0, c: 0.0, d: 0.0, e: 0.0 }); i = i + 1; }
+        let mut j = 0;
+        while j < grid.len() {
+            grid[j] = Cell { a: (j + 1) as f64, b: 1.0, c: 2.0, d: 3.0, e: 4.0 };
+            j = j + 1;
+        }
+        let mut r = 0;
+        while r < grid.len() { sum = sum + grid[r].a; r = r + 1; }
+        k = k + 1;
+    }
+    println(sum);
+}

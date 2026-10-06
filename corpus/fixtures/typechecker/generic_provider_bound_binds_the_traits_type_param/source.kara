@@ -1,0 +1,6 @@
+
+        trait Channel[T] { fn send(ref self, v: T) -> T; }
+        effect resource RequestCh: Channel[i64];
+        fn push(v: i64) -> i64 with sends(RequestCh) { return RequestCh.send(v); }
+        fn main() { push(1); }
+        

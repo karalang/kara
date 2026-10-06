@@ -1,0 +1,63 @@
+
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+
+fn while_first(p: R) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 3 {
+        println(f"w{i}");
+        let mut out: R = R { id: 90 + i, tag: f"t" };
+        if i == 0 { out = p; }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+
+fn while_middle(p: R) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 3 {
+        println(f"m{i}");
+        let mut out: R = R { id: 60 + i, tag: f"t" };
+        if i == 1 { out = p; }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+
+fn outside(p: R) -> i64 {
+    let mut out: R = R { id: 70, tag: f"t" };
+    let mut i: i64 = 0;
+    while i < 3 {
+        println(f"o{i}");
+        if i == 1 { out = p; }
+        i = i + 1;
+    }
+    return out.id
+}
+
+fn nested(p: R) -> i64 {
+    let mut acc: i64 = 0;
+    for a in 0..2 {
+        for b in 0..2 {
+            println(f"n{a}{b}")
+            let mut out: R = R { id: 10 * a + b, tag: f"t" };
+            if a == 0 and b == 1 { out = p; }
+            acc = acc + out.id;
+        }
+    }
+    return acc
+}
+
+fn main() {
+    println(f"a{while_first(R { id: 5, tag: f"q" })}");
+    println("-");
+    println(f"b{while_middle(R { id: 6, tag: f"q" })}");
+    println("-");
+    println(f"c{outside(R { id: 7, tag: f"q" })}");
+    println("-");
+    println(f"d{nested(R { id: 8, tag: f"q" })}");
+}

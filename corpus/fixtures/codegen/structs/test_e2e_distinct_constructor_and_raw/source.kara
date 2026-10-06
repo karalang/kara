@@ -1,0 +1,7 @@
+
+distinct type UserId = i64;
+fn main() {
+    let u = UserId(42);
+    let r: i64 = u.raw();
+    println(r);
+}

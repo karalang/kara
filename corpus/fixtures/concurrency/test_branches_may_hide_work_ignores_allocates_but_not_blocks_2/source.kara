@@ -1,0 +1,9 @@
+
+        fn wait_a() -> i64 blocks { 1 }
+        fn wait_b() -> i64 blocks { 2 }
+        fn main() {
+            let x = wait_a();
+            let y = wait_b();
+            println((x + y).to_string());
+        }
+        

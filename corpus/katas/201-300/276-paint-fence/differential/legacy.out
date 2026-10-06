@@ -1,0 +1,7 @@
+cases 474
+of which checked against the DEFINITION (brute force) 75
+largest n reached, all k (k=1 never grows, so it runs to the walk cap) 200
+envelope at k=2 89, at k=100000 3
+brute-force disagreements 0
+digest 338090785
+mismatches 0

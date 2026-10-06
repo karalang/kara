@@ -1,0 +1,9 @@
+
+        resource Db;
+        fn read_a() -> i32 with reads(Db) { 1 }
+        fn read_b() -> i32 with reads(Db) { 2 }
+        fn main() with reads(Db) {
+            let x = read_a();
+            let y = read_b();
+        }
+        

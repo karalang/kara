@@ -1,0 +1,10 @@
+
+struct Pair { n: i64, s: String }
+fn main() {
+    let mut i = 0i64;
+    while i < 3i64 {
+        let t = Pair { n: i, s: f"item-{i}" };
+        println(t.s);
+        i = i + 1;
+    }
+}

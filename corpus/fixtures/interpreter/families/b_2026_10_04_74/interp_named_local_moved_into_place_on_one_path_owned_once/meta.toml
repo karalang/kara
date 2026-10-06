@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_04_74.rs::interp_named_local_moved_into_place_on_one_path_owned_once"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_04_74.rs::asan_named_local_moved_into_place_on_one_path_owned_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

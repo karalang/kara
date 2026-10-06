@@ -1,0 +1,99 @@
+// Benchmark lane for LeetCode #298 — longest consecutive downward path.
+//
+// WORKLOAD: build ONE perfect tree of depth 20 (1,048,575 nodes), then make 40
+// full passes over it. Build-once + punch, per BENCHMARKS.md: the tree is
+// constructed a single time so the measurement is the TRAVERSAL, not the
+// allocator.
+//
+// THE PASSES DIFFER BY THEIR STEP. Pass `d` asks for the longest downward path
+// whose values increase by exactly `d` — `d = 1` is the kata's problem, and
+// `d = 2..40` is the same traversal with a different constant in one
+// comparison. That is what makes the sink non-trivial: 40 passes over one fixed
+// tree with a fixed rule would produce the same number 40 times and hash
+// nothing. Varying the step changes the answer per pass while leaving the work
+// per pass identical, so the measurement stays a clean O(n) tree walk.
+//
+// VALUES ARE ASSIGNED TOP-DOWN, PARENT PLUS A SMALL DELTA, so consecutive runs
+// actually occur. A balanced build over a shuffled array would put no relation
+// between a node and its children at all, every run would have length 1, and
+// the `run = arriving + 1` branch — the one the algorithm is about — would
+// never be taken.
+//
+// PERFECT RATHER THAN RANDOM SHAPE: depth 20 in every language, so no arm can
+// win or lose on stack depth, and the recursion is nowhere near any default
+// limit. A random shape would also make the tree differ between languages
+// unless the RNG were reimplemented identically, which is a portability cost
+// with no measurement benefit here.
+//
+// SINK: a polynomial hash over all 40 answers. It reads every pass's result, so
+// a traversal that got one step wrong changes it, and it stays a single integer
+// for exact cross-language comparison.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn build(depth: i64, parent_val: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if depth <= 0 {
+        return None;
+    }
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    let v = parent_val + seed % 3 - 1;
+    let l = build(depth - 1, v, seed);
+    let r = build(depth - 1, v, seed);
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+// Longest downward path whose values rise by exactly `step`.
+// Returns the run starting at `t`; folds the global best into `best`.
+fn down(t: Option[TreeNode], step: i64, best: mut ref i64) -> i64 {
+    match t {
+        None => {
+            return 0;
+        }
+        Some(n) => {
+            let l = down(n.left, step, best);
+            let r = down(n.right, step, best);
+            let mut run = 1;
+            match n.left {
+                None => { }
+                Some(c) => {
+                    if c.val == n.val + step and l + 1 > run { run = l + 1; }
+                }
+            }
+            match n.right {
+                None => { }
+                Some(c) => {
+                    if c.val == n.val + step and r + 1 > run { run = r + 1; }
+                }
+            }
+            if run > best { best = run; }
+            return run;
+        }
+    }
+}
+
+fn longest_with_step(t: Option[TreeNode], step: i64) -> i64 {
+    let mut best = 0;
+    let _ = down(t, step, mut best);
+    return best;
+}
+
+fn main() {
+    let depth = 20;
+    let passes = 40;
+
+    let mut seed = 12345;
+    let tree = build(depth, 0, mut seed);
+
+    let mut checksum = 0;
+    let mut d = 1;
+    while d <= passes {
+        checksum = (checksum * 31 + longest_with_step(tree, d)) % 1000000007;
+        d = d + 1;
+    }
+
+    println(f"depth {depth} passes {passes} checksum {checksum}");
+}

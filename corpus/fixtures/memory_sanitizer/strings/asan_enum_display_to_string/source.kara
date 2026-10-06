@@ -1,0 +1,12 @@
+
+#[derive(Display)]
+enum Color { Red, Green, Blue }
+#[derive(Display)]
+struct Tagged { c: Color, n: i64 }
+fn main() {
+    let a = Color.Green;
+    let s = a.to_string();
+    println(s);
+    let t = Tagged { c: Color.Blue, n: 9 };
+    println(t.to_string());
+}

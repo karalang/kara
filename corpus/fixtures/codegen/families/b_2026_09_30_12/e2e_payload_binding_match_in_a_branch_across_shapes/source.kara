@@ -1,0 +1,45 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"s{i}" } }
+enum E { A(S), B(i64) }
+enum F { P(S, S), Q(S) }
+fn c2(c: bool) -> i64 {
+  let t = F.P(mks(20), mks(21));
+  if c { match t { F.P(x, y) => { let k = x; println(f"k{k.id}") } F.Q(q) => {} } }
+  return 0
+}
+fn c3(c: bool) -> i64 {
+  let mut t = E.A(mks(30));
+  if c { match t { E.A(s) => { let k = s; println("k") } E.B(n) => {} } }
+  t = E.A(mks(31));
+  return 0
+}
+fn c4(c: bool) -> i64 {
+  let mut t = E.B(0);
+  let mut i = 0;
+  while i < 2 { t = E.A(mks(40 + i)); if c and i == 0 { match t { E.A(s) => { let k = s; println("k") } E.B(n) => {} } }; i = i + 1; }
+  return 0
+}
+fn c5(c: bool, d: bool) -> i64 {
+  let t = E.A(mks(50));
+  if c { if d { match t { E.A(s) => { println(f"k{s.id}") } E.B(n) => {} } } }
+  return 0
+}
+fn c6(c: bool) -> i64 {
+  let t = E.A(mks(60));
+  if c { match t { E.A(s) => { let k = s; println("k") } E.B(n) => {} } } else { println("e") }
+  return 0
+}
+fn c7(c: bool) -> i64 {
+  let t = E.A(mks(70));
+  if c { let r = match t { E.A(s) => s, E.B(n) => mks(n) }; println(f"r{r.id}") }
+  return 0
+}
+fn main() {
+  println(f"r {c2(false)}"); println(f"r {c2(true)}")
+  println(f"r {c3(false)}"); println(f"r {c3(true)}")
+  println(f"r {c4(false)}"); println(f"r {c4(true)}")
+  println(f"r {c5(false, true)}"); println(f"r {c5(true, false)}"); println(f"r {c5(true, true)}")
+  println(f"r {c6(false)}"); println(f"r {c6(true)}")
+  println(f"r {c7(false)}"); println(f"r {c7(true)}")
+}

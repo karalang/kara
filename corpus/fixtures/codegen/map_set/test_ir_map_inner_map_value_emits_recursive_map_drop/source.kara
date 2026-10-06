@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut inner: Map[i64, String] = Map.new();
+    inner.insert(1, "a heap string padded out beyond thirty-six bytes!");
+    let mut m: Map[i64, Map[i64, String]] = Map.new();
+    m.insert(2, inner);
+    println(m.len());
+}

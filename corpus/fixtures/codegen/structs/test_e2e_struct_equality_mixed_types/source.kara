@@ -1,0 +1,10 @@
+
+#[derive(Eq)]
+struct Pair { name: String, value: i64 }
+fn main() {
+    let a = Pair { name: "hello", value: 42 };
+    let b = Pair { name: "hello", value: 42 };
+    let c = Pair { name: "world", value: 42 };
+    if a == b { println(1); } else { println(0); }
+    if a == c { println(1); } else { println(0); }
+}

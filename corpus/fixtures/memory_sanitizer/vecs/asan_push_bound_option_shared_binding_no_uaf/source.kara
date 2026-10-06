@@ -1,0 +1,11 @@
+
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn count_nodes(node: Option[Node]) -> i64 {
+    match node { None => 0, Some(n) => 1 + count_nodes(n.left) + count_nodes(n.right) }
+}
+fn main() {
+    let mut out: Vec[Option[Node]] = Vec.new();
+    let orig = Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None });
+    out.push(orig);
+    println(count_nodes(out[0].clone()));
+}

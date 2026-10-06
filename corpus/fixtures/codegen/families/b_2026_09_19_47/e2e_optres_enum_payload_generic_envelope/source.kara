@@ -1,0 +1,16 @@
+struct S1 { v: i64, s: String }
+impl Drop for S1 { fn drop(mut ref self) { println(f"  dS{self.v}") } }
+enum G[T] { X(T), Y }
+enum Hq { P(Option[Vec[S1]]), Q }
+enum Ha { P(Option[Array[S1, 1]]), Q }
+enum Hr { P(Result[Vec[S1], i64]), Q }
+fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
+fn main() {
+    println("ctl"); { let mut w: Vec[S1] = []; w.push(s(1)); let o: Option[Vec[S1]] = Option.Some(w); println("  x") }
+    println("gvec"); { let mut w: Vec[S1] = []; w.push(s(2)); let o: Option[Vec[S1]] = Option.Some(w); let g = G.X(o); println("  x") }
+    println("garr"); { let o: Option[Array[S1, 1]] = Option.Some([s(3)]); let g = G.X(o); println("  x") }
+    println("gres"); { let mut w: Vec[S1] = []; w.push(s(4)); let o: Result[Vec[S1], i64] = Result.Ok(w); let g = G.X(o); println("  x") }
+    println("gopt2"); { let mut w: Vec[S1] = []; w.push(s(5)); let o: Option[Option[Vec[S1]]] = Option.Some(Option.Some(w)); let g = G.X(o); println("  x") }
+    println("gstruct"); { let o: Option[S1] = Option.Some(s(9)); let g = G.X(o); println("  x") }
+    println("end")
+}

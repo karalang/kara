@@ -1,0 +1,12 @@
+
+fn main() {
+    let x = Vector[f64, 4].from_array([1.0, 2.0, 5.0, -1.0]);
+    let e = x.exp();
+    println(e[0]); println(e[1]); println(e[2]); println(e[3]);
+    let y = Vector[f64, 4].from_array([2.0, 10.0, 0.001, 1000000.0]);
+    let l = y.ln();
+    println(l[0]); println(l[1]); println(l[2]); println(l[3]);
+    let d = Vector[f64, 2].from_array([0.0, -2.0]);
+    let ld = d.ln();
+    println(ld[0]); println(ld[1]);
+}

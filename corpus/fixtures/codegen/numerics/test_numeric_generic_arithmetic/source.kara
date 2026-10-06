@@ -1,0 +1,8 @@
+
+fn add3[T: Numeric](a: T, b: T, c: T) -> T { a + b + c }
+fn neg[T: Numeric](x: T) -> T { -x }
+fn main() {
+    println(add3(1, 2, 3));
+    println(add3(1.5, 2.5, 3.0));
+    println(neg(5));
+}

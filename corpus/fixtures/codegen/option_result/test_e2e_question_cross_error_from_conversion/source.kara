@@ -1,0 +1,17 @@
+
+struct RawError { code: i64 }
+struct MyError { code: i64 }
+impl From for MyError {
+    fn from(e: RawError) -> MyError { MyError { code: e.code * 2_i64 } }
+}
+fn lookup() -> Result[i64, RawError] { Err(RawError { code: 7_i64 }) }
+fn process() -> Result[i64, MyError] {
+    let _ = lookup()?;
+    Ok(0_i64)
+}
+fn main() {
+    match process() {
+        Ok(_) => println(0_i64),
+        Err(e) => println(e.code),
+    }
+}

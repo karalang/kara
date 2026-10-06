@@ -1,0 +1,13 @@
+
+struct Hold { pr: (String, String) }
+impl Hold { fn pair(ref self) -> (String, String) { return self.pr; } }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let h: Hold = Hold { pr: (f"aaaaaaaaaaaaaaaa-0", f"bbbbbbbbbbbb-0") };
+    m.insert(h.pair(), 0i64);
+    match m.get(h.pair()) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"h0:{h.pr.0}");
+    println(f"len:{m.len()}");
+}

@@ -1,0 +1,10 @@
+
+fn id(s: String) -> String {
+    s
+}
+
+fn main() {
+    let a = f"abc{1}";
+    let b = id(a);
+    println(b);
+}

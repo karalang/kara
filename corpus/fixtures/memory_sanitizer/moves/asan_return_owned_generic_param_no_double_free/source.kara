@@ -1,0 +1,17 @@
+
+fn echo[T](x: T) -> T { x }
+fn main() {
+    let mut r: i64 = 0;
+    while r < 3 {
+        let a: String = echo(f"fresh-{r}-aaaa");
+        println(a);
+        let s: String = f"local-{r}-bbbb";
+        let b: String = echo(s);
+        println(b);
+        let vi: Vec[i64] = echo([r, r + 1, r + 2]);
+        println(f"{vi[2]}");
+        let vs: Vec[String] = echo([f"e-{r}-x", f"e-{r}-y"]);
+        println(vs[1]);
+        r = r + 1;
+    }
+}

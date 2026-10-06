@@ -1,0 +1,72 @@
+// LeetCode #9: Palindrome Number — half-reverse with overflow-free i32.
+// O(log10 |x|) time, O(1) space.
+//
+// The follow-up question on the LeetCode page asks: solve without
+// converting to a string. The classic trick is to reverse only *half*
+// of the digits — once the reversed tail meets or exceeds the
+// remaining head, the two halves describe the same digit positions
+// and we compare. This avoids the kata #7 overflow problem entirely:
+// half of any i32 fits in i32 with room to spare (max 5-digit half is
+// 99999 << INT_MAX), so no overflow rail is needed.
+//
+// Early-reject shortcuts:
+//   x < 0                      — negatives have a sign that no reverse
+//                                can reproduce.
+//   x % 10 == 0 and x != 0     — a non-zero number ending in 0 would
+//                                need a leading 0 in the reverse, which
+//                                integers can't represent (10 → 01 = 1).
+//                                Zero itself is a palindrome.
+//
+// Loop invariant: at every iteration the *original* x has been split
+// into (head = current x, tail = reversed). The loop terminates when
+// head ≤ tail, which is exactly the midpoint:
+//   - Even digit count:  head == tail   (e.g. 1221 → x=12, reversed=12)
+//   - Odd  digit count:  head == tail/10 — middle digit lives in tail's
+//                        ones place and is irrelevant to symmetry
+//                        (e.g. 12321 → x=12, reversed=123, 12 == 123/10).
+//
+// Kāra's `%` and `/` are truncated (sign-of-dividend), same as kata #7,
+// but here the early `x < 0` reject means the loop only ever sees
+// non-negative values — semantics match Python's floor division on
+// non-negatives, so the Python mirror needs no c_div/c_mod helpers.
+
+fn is_palindrome(x: i32) -> bool {
+    if x < 0i32 or (x % 10i32 == 0i32 and x != 0i32) {
+        return false;
+    }
+    let mut x = x;
+    let mut reversed: i32 = 0i32;
+    while x > reversed {
+        reversed = reversed * 10i32 + x % 10i32;
+        x = x / 10i32;
+    }
+    x == reversed or x == reversed / 10i32
+}
+
+fn report(x: i32) {
+    let r = is_palindrome(x);
+    println(f"is_palindrome({x}): {r}");
+}
+
+fn main() {
+    report(121i32);            // expect: true   (odd-length, palindrome)
+    report(-121i32);           // expect: false  (negative)
+    report(10i32);             // expect: false  (trailing zero, not zero)
+    report(0i32);              // expect: true   (zero is a palindrome)
+    report(1i32);              // expect: true   (single digit)
+    report(11i32);             // expect: true   (two-digit palindrome)
+    report(12i32);             // expect: false  (two-digit non-palindrome)
+    report(12321i32);          // expect: true   (5-digit palindrome)
+    report(1221i32);           // expect: true   (4-digit palindrome)
+    report(123i32);            // expect: false  (3-digit non-palindrome)
+    report(1000000001i32);     // expect: true   (10-digit palindrome, edges only)
+    report(1234567899i32);     // expect: false  (10-digit non-palindrome)
+    report(1234554321i32);     // expect: true   (10-digit palindrome)
+    report(2147483647i32);     // expect: false  (INT_MAX, not palindrome)
+    report(-2147483648i32);    // expect: false  (INT_MIN, negative)
+    report(9i32);              // expect: true   (single-digit)
+    report(99i32);             // expect: true   (two equal digits)
+    report(909i32);            // expect: true   (odd-length, palindrome)
+    report(900i32);            // expect: false  (trailing zero)
+    report(1000021i32);        // expect: false  (looks symmetric at glance, isn't)
+}

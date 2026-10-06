@@ -1,0 +1,15 @@
+
+fn res(i: i64) -> Result[String, String] {
+    if i % 3 == 0 { Ok("ok-value".to_string()) } else { Err(f"err-{i}") }
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < base + 199 {
+        let b = res(i).unwrap_or(f"res-default-{i}");
+        total = total + (b.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}

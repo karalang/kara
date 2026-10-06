@@ -1,0 +1,21 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("inline:");
+    {
+        let mut t: Vec[(Res, i64)] = Vec.new();
+        t.push((Res { id: 9, name: f"in{9}" }, 8));
+        println(t.len());
+    }
+    println("named:");
+    {
+        let mut u: Vec[(Res, i64)] = Vec.new();
+        let r = Res { id: 4, name: f"tt{4}" };
+        u.push((r, 8));
+        println(u.len());
+    }
+    println("end");
+}

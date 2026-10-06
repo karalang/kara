@@ -1,0 +1,5 @@
+
+struct W[T] { v: T }
+impl[T: Ord] W[T] { fn cmp(ref self) -> bool { return true; } }
+fn make() -> W[f64] { let x: f64 = 1.5; let w = W { v: x }; return w; }
+fn main() { let w = make(); println(f"{w.cmp()}"); }

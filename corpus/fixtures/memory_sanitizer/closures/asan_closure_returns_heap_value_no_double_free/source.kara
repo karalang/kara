@@ -1,0 +1,20 @@
+
+fn mk() -> String { f"made" }
+fn compute() -> Vec[i64] { Vec[9, 8] }
+fn main() {
+    let f2: Fn() -> String = || { let s = f"hi"; s };
+    let f4: Fn() -> String = || { let s: String = mk(); s };
+    let f5: Fn() -> String = || f"direct";
+    let f1: Fn() -> Vec[i64] = || { let v: Vec[i64] = Vec[1, 2, 3]; v };
+    let f3: Fn() -> Vec[i64] = || { let w = compute(); w };
+    let r2: String = f2();
+    let r4: String = f4();
+    let r5: String = f5();
+    let r1: Vec[i64] = f1();
+    let r3: Vec[i64] = f3();
+    println(r2);
+    println(r4);
+    println(r5);
+    println(r1.len());
+    println(r3.len());
+}

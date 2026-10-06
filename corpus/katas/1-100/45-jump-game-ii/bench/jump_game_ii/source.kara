@@ -1,0 +1,58 @@
+// LeetCode #45 bench harness — Kāra, the greedy range-expansion matcher (★).
+//
+// The headline ★ style: one cursor, with `farthest`/`current_end`/`jumps` scalars collapsing
+// the layered BFS into a single left-to-right scan. O(1) space; O(n) time.
+//
+// Workload: build a reachable array `nums` (length n, each entry in 1..4 so every index can
+// always step at least one forward — the answer is well-defined under every punch) ONCE, then
+// TOTAL times punch a single slot (`nums[k%n] = 1 + k%9`, a bigger reach that shortens some
+// jumps), run the greedy min-jumps scan, and fold the jump count into a rolling checksum. The
+// punches are NOT reverted, so the array state carries forward and the answer varies with the
+// loop index (no hoisting); the checksum carries a loop-borne dependency, so this is a
+// single-lane (seq) bench by construction. All five language mirrors fold the identical answer
+// sequence and print the identical checksum.
+
+fn jump(nums: ref Vec[i64], n: i64) -> i64 {
+    let mut jumps = 0;
+    let mut current_end = 0;
+    let mut farthest = 0;
+    let mut i = 0;
+    while i < n - 1 {
+        if i + nums[i] > farthest {
+            farthest = i + nums[i];
+        }
+        if i == current_end {
+            jumps = jumps + 1;
+            current_end = farthest;
+        }
+        i = i + 1;
+    }
+    jumps
+}
+
+fn main() {
+    let total = 200000;
+    let modulus = 1000000007;
+
+    // Build nums, length n, each entry in 1..4 (always reachable).
+    let n = 1000;
+    let mut nums: Vec[i64] = Vec.new();
+    let mut a = 0;
+    while a < n {
+        nums.push(1 + (a % 4));
+        a = a + 1;
+    }
+
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        // O(1) punch: widen one slot's reach; not reverted, so the array evolves and the
+        // jump count varies with the loop index without an O(n) refill.
+        nums[k % n] = 1 + (k % 9);
+        let ans = jump(nums, n);
+        acc = (acc * 131 + ans) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

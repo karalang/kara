@@ -1,0 +1,8 @@
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { p: R, q: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { p: R { s: f"p{t}" }, q: R { s: f"q{t}" }, n: n } }
+fn main() {
+    { let h = mk("0", 0); if h.n == 0 { let x = h.p; println(x.s) } else { let y = h.q; println(y.s) }; println("k") }
+    println("end")
+}

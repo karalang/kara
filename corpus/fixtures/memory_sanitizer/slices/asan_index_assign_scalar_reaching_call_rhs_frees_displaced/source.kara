@@ -1,0 +1,25 @@
+
+struct Pair { word: String, n: i64 }
+fn mk(n: i64) -> Pair { Pair { word: f"m{n}", n: n } }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 40 {
+        let mut ps: Vec[Pair] = Vec.new();
+        ps.push(Pair { word: f"alpha{k + i}", n: 1 });
+        ps[0] = mk(ps[0].n + k);
+        acc = acc + ps[0].word.len();
+        let mut qs: Vec[Pair] = Vec.new();
+        qs.push(Pair { word: f"beta{k + i}", n: 2 });
+        qs[0] = mk(k + i);
+        acc = acc + qs[0].word.len();
+        let mut rs: Vec[Pair] = Vec.new();
+        rs.push(Pair { word: f"gamma{k + i}", n: 3 });
+        rs.push(Pair { word: f"delta{k + i}", n: 4 });
+        rs[1] = mk(rs[0].n * 2 + rs[1].n);
+        acc = acc + rs[1].word.len();
+        i = i + 1;
+    }
+    println(acc > 0);
+}

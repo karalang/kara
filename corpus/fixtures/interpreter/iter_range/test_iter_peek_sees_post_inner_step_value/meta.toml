@@ -1,0 +1,13 @@
+source = "tests/interpreter/iter_range.rs::test_iter_peek_sees_post_inner_step_value"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

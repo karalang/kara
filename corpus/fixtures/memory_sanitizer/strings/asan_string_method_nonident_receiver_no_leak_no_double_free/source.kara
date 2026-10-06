@@ -1,0 +1,15 @@
+
+fn make_csv() -> String { return "a,bb,ccc,dddd"; }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let call_fields = make_csv().split(',');
+        total = total + call_fields.len();
+        for f in call_fields { total = total + f.len(); }
+        let lit_fields = "p,qq,rrr".split(',');
+        total = total + lit_fields.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

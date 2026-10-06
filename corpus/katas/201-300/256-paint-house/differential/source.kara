@@ -1,0 +1,211 @@
+// LeetCode 256 — differential harness.
+//
+// Runs all THREE formulations over randomized cost tables: the rolling three
+// scalars, the full DP table, and the top-down memoised recursion. Any
+// disagreement is a bug in one of them — or in the compiler.
+//
+// The generator varies the COST STRUCTURE deliberately, because a uniform draw
+// tests one regime only. Four families:
+//
+//   * uniform — the baseline, where the cheapest colour usually differs between
+//     neighbours and adjacency rarely binds;
+//   * one-cheap-colour — the same colour is cheapest at every house, so the
+//     constraint binds at every step and the optimum must alternate. This is the
+//     family that separates a correct solver from one that just picks the
+//     per-house minimum;
+//   * ties — costs drawn from {0,1}, so equal alternatives are everywhere and any
+//     tie-break asymmetry between the three shows up;
+//   * large — values near 10^9, where an n-house total approaches i64 range.
+//     Kara traps on overflow rather than wrapping, so a solver that accumulates
+//     differently would abort rather than silently disagree.
+//
+// Sink folds every answer positionally, so WHICH case produced what matters.
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+fn make_case(seed: i64) -> Vec[(i64, i64, i64)] {
+    let mut state = seed;
+    let mut out: Vec[(i64, i64, i64)] = Vec.new();
+
+    state = (state * 1103515245 + 12345) & 2147483647;
+    let n = (state / 65536) % 12;
+    state = (state * 1103515245 + 12345) & 2147483647;
+    let family = (state / 65536) % 4;
+
+    let mut i = 0;
+    while i < n {
+        if family == 0 {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let x = (state / 65536) % 100;
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let y = (state / 65536) % 100;
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let z = (state / 65536) % 100;
+            out.push((x, y, z));
+        } else if family == 1 {
+            // colour 0 always cheapest -> the constraint binds every step
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let lo = (state / 65536) % 5;
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let hi1 = (state / 65536) % 50 + 50;
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let hi2 = (state / 65536) % 50 + 50;
+            out.push((lo, hi1, hi2));
+        } else if family == 2 {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let x = (state / 65536) % 2;
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let y = (state / 65536) % 2;
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let z = (state / 65536) % 2;
+            out.push((x, y, z));
+        } else {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let x = (state / 65536) % 1000 + 999000000;
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let y = (state / 65536) % 1000 + 999000000;
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let z = (state / 65536) % 1000 + 999000000;
+            out.push((x, y, z));
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn solve_rolling(costs: ref Vec[(i64, i64, i64)]) -> i64 {
+    let n = costs.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut r = costs[0].0;
+    let mut b = costs[0].1;
+    let mut g = costs[0].2;
+    let mut i = 1;
+    while i < n {
+        let n_r = costs[i].0 + min2(b, g);
+        let n_b = costs[i].1 + min2(r, g);
+        let n_g = costs[i].2 + min2(r, b);
+        r = n_r;
+        b = n_b;
+        g = n_g;
+        i = i + 1;
+    }
+    return min2(r, min2(b, g));
+}
+
+fn solve_table(costs: ref Vec[(i64, i64, i64)]) -> i64 {
+    let n = costs.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut dp: Vec[(i64, i64, i64)] = Vec.new();
+    dp.push(costs[0]);
+    let mut i = 1;
+    while i < n {
+        let prev = dp[i - 1];
+        dp.push((
+            costs[i].0 + min2(prev.1, prev.2),
+            costs[i].1 + min2(prev.0, prev.2),
+            costs[i].2 + min2(prev.0, prev.1),
+        ));
+        i = i + 1;
+    }
+    let last = dp[n - 1];
+    return min2(last.0, min2(last.1, last.2));
+}
+
+fn cost_of(costs: ref Vec[(i64, i64, i64)], i: i64, c: i64) -> i64 {
+    if c == 0 {
+        return costs[i].0;
+    }
+    if c == 1 {
+        return costs[i].1;
+    }
+    return costs[i].2;
+}
+
+fn best(
+    costs: ref Vec[(i64, i64, i64)],
+    i: i64,
+    c: i64,
+    memo: mut ref Vec[i64],
+    seen: mut ref Vec[bool],
+) -> i64 {
+    let n = costs.len();
+    if i == n {
+        return 0;
+    }
+    let key = i * 3 + c;
+    if seen[key] {
+        return memo[key];
+    }
+    let a = (c + 1) % 3;
+    let b = (c + 2) % 3;
+    let sub_a = best(costs, i + 1, a, memo, seen);
+    let sub_b = best(costs, i + 1, b, memo, seen);
+    let total = cost_of(costs, i, c) + min2(sub_a, sub_b);
+    memo[key] = total;
+    seen[key] = true;
+    return total;
+}
+
+fn solve_memo(costs: ref Vec[(i64, i64, i64)]) -> i64 {
+    let n = costs.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut memo: Vec[i64] = Vec.new();
+    let mut seen: Vec[bool] = Vec.new();
+    let mut k = 0;
+    while k < n * 3 {
+        memo.push(0);
+        seen.push(false);
+        k = k + 1;
+    }
+    let r = best(costs, 0, 0, mut memo, mut seen);
+    let b = best(costs, 0, 1, mut memo, mut seen);
+    let g = best(costs, 0, 2, mut memo, mut seen);
+    return min2(r, min2(b, g));
+}
+
+fn main() {
+    let cases = 6000;
+    let mut seed = 256256;
+
+    let mut mismatches = 0;
+    let mut total_houses = 0;
+    let mut empty_cases = 0;
+    let mut digest = 0;
+
+    let mut c = 0;
+    while c < cases {
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let costs = make_case(seed);
+
+        let a = solve_rolling(costs);
+        let b = solve_table(costs);
+        let d = solve_memo(costs);
+
+        if a != b or a != d {
+            mismatches = mismatches + 1;
+        }
+        total_houses = total_houses + costs.len();
+        if costs.len() == 0 {
+            empty_cases = empty_cases + 1;
+        }
+        digest = (digest * 131 + (a % 1000000007)) % 1000000007;
+        c = c + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"houses {total_houses}");
+    println(f"empty cases {empty_cases}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

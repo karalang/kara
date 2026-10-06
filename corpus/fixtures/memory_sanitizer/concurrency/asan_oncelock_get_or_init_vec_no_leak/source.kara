@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceCell[Vec[i64]] = OnceCell.new();
+        let xs = cell.get_or_init(|| Vec[10i64, 20i64, 30i64]);
+        match xs.get(1i64) { Some(n) => { total = total + n + xs.len(); }, None => {} }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

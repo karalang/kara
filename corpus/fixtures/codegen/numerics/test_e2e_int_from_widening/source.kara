@@ -1,0 +1,6 @@
+
+fn main() {
+    let x: i32 = 7;
+    let y: i64 = i64.from(x);
+    println(y);
+}

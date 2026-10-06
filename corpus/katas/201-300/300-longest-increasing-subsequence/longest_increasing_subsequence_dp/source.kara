@@ -1,0 +1,70 @@
+// LeetCode 300 — Longest Increasing Subsequence, the O(n^2) DP.
+//
+// `best[i]` is the length of the longest increasing subsequence ENDING AT i.
+// Every such subsequence's second-to-last element is some j < i with
+// nums[j] < nums[i], so
+//
+//     best[i] = 1 + max{ best[j] : j < i and nums[j] < nums[i] }      (0 if none)
+//
+// and the answer is the max over all i. That recurrence is a direct transcript
+// of the problem statement, which is exactly why it belongs next to the
+// patience-sorting version: the O(n log n) arm is fast but its `tails` array is
+// a summary rather than a witness, and it is easy to convince yourself of a
+// slightly wrong invariant for it. This one is obviously right and obviously
+// slow. When the differential says they agree on 30,000 arrays, the fast arm
+// inherits this one's evident correctness.
+//
+// Note where STRICTNESS lives here: the `nums[j] < nums[i]` guard, one `<`.
+// In the fast arm it is the `>=` in a binary-search comparison. Two unrelated
+// spellings of the same rule, in two unrelated places — so a differential
+// between them actually tests it, which it would not if both arms said `<` in
+// the same shape.
+
+fn lis_length(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+
+    let mut best: Vec[i64] = Vec.filled(n, 1);
+    let mut answer = 1;
+
+    let mut i = 1;
+    while i < n {
+        let mut j = 0;
+        while j < i {
+            if nums[j] < nums[i] and best[j] + 1 > best[i] {
+                best[i] = best[j] + 1;
+            }
+            j = j + 1;
+        }
+        if best[i] > answer { answer = best[i]; }
+        i = i + 1;
+    }
+
+    return answer;
+}
+
+fn report(nums: Vec[i64]) {
+    let mut line = String.new();
+    line.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { line.push_str(", "); }
+        line.push_str(f"{nums[i]}");
+        i = i + 1;
+    }
+    line.push_str("]");
+    println(f"{line} -> {lis_length(nums)}");
+}
+
+fn main() {
+    report([10, 9, 2, 5, 3, 7, 101, 18]);
+    report([0, 1, 0, 3, 2, 3]);
+    report([7, 7, 7, 7]);
+    report([]);
+    report([1]);
+    report([5, 4, 3, 2, 1]);
+    report([1, 2, 3, 4, 5]);
+    report([2, 2, 2, 1, 3]);
+    report([-5, -3, -8, 0, -1]);
+    report([1, 3, 2, 4, 3, 5]);
+}

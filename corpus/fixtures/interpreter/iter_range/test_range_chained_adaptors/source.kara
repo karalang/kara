@@ -1,0 +1,7 @@
+
+fn main() {
+    let xs: Vec[i64] = (0..10).map(|x| x * 2).filter(|x| x > 5).collect();
+    for x in xs {
+        println(x);
+    }
+}

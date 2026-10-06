@@ -1,0 +1,42 @@
+
+enum E { A(Array[String, 2]), B }
+enum E2 { A((String, String, String)), B }
+enum E3 { A(String), B }
+enum Ev { A(Vec[String]), B }
+enum G[T] { Y(T), N }
+
+struct R { name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR:{self.name}"); } }
+enum P { A(R), B }
+
+enum D { A(String), B }
+impl Drop for D { fn drop(mut ref self) { println("dD"); } }
+
+fn mk(i: i64) -> E { return E.A([f"aa-{i}-xxxxxxxxxxxx", f"bb-{i}-yyyyyyyyyyyy"]); }
+fn mk2(i: i64) -> E2 { return E2.A((f"cc-{i}-xxxxxxxxxxxx", f"dd-{i}-yyyyyyyyyyyy", f"ee-{i}-zzzzzzzzzzzz")); }
+fn mk3(i: i64) -> E3 { return E3.A(f"ff-{i}-xxxxxxxxxxxx"); }
+fn mkv(i: i64) -> Ev { let mut v: Vec[String] = Vec.new(); v.push(f"vv-{i}-xxxxxxxxxxxx"); return Ev.A(v); }
+fn mkg(i: i64) -> G[Array[String, 2]] { return G.Y([f"gg-{i}-xxxxxxxxxxxx", f"hh-{i}-yyyyyyyyyyyy"]); }
+fn mkp(i: i64) -> P { return P.A(R { name: f"pp-{i}" }); }
+fn mkd(i: i64) -> D { return D.A(f"dd-{i}-xxxxxxxxxxxx"); }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        mk(i);
+        let _ = mk(i);
+        mk2(i);
+        mk3(i);
+        mkv(i);
+        mkg(i);
+        if i > 0 { mk(i); } else { mk(i); }
+        match i { 0 => { mk3(i); } _ => { mk3(i); } }
+        println(f"round:{i}");
+        mkp(i);
+        mkd(i);
+        let kept = mk(i);
+        match kept { E.A(x) => { println(f"kept:{x[0]}"); } E.B => {} }
+        i = i + 1;
+    }
+    println("end");
+}

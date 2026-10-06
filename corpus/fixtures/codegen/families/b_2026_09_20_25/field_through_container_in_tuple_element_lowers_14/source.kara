@@ -1,0 +1,1 @@
+struct B2 { a: Array[P, 1], k: i64 } fn main() { let b = B2 { a: [P { n: 5 }], k: 7 }; println(f"r:{b.a[0].n}") }

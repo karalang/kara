@@ -1,0 +1,10 @@
+
+        effect resource Db;
+        fn update(id: i64) with writes(Db[id]) { }
+        fn main() {
+            let x = 1;
+            let y = 2;
+            update(x);
+            update(y);
+        }
+        

@@ -1,0 +1,134 @@
+// LeetCode 306 — Additive Number, over machine integers.
+//
+// THE ARM: the star arm's search, with each number held as an i64 instead of
+// as a digit list — and an honest `None` on every input where that is not
+// good enough.
+//
+// This is the arm the problem's own follow-up asks about ("how would you
+// handle overflow for very large input integers?"), written the way one writes
+// it before thinking about the question. The input is up to 35 digits, so the
+// leading numbers can run to ~17 digits and their sums to 18 or more; i64
+// holds 19. A straightforward integer version does not degrade gracefully on
+// those inputs, it OVERFLOWS — and because Kāra checks arithmetic by default
+// that is a panic, not a silently wrong answer.
+//
+// So this arm refuses rather than guesses: `is_additive_i64` returns
+// `Option[bool]`, and it is `None` exactly when the input is longer than 18
+// digits. That bound is what makes the `Some` answers SOUND rather than merely
+// lucky, and the argument is worth writing down because it is not obvious:
+//
+//   * With n <= 18, every span of the input is at most 18 digits, so every
+//     number PARSED from it is at most 10^18 - 1.
+//   * A sum is only ever formed from two numbers that are already in the
+//     sequence, and the sequence only advances (a = b, b = c) when c MATCHED a
+//     stretch of the input — which bounds c by 10^18 - 1 as well.
+//   * So every value this arm adds is at most 10^18 - 1 and every sum is at
+//     most 2 * 10^18 - 2, comfortably inside i64's 9.22 * 10^18.
+//
+// The compounding that would break the bound — c feeding d feeding e, growing
+// like Fibonacci — cannot happen, because a sum that does not match ends the
+// verification before it is ever added to anything.
+//
+// The differential compares this arm to the others only where it answers, and
+// reports how many cases that was. The star arm answers everywhere.
+
+const I64_SAFE_DIGITS: i64 = 18;
+
+fn parse_span(bytes: Slice[u8], lo: i64, hi: i64) -> i64 {
+    let mut v = 0;
+    for i in lo..hi { v = v * 10 + (bytes[i] - b'0') as i64; }
+    return v;
+}
+
+fn no_leading_zero(bytes: Slice[u8], lo: i64, hi: i64) -> bool {
+    return hi - lo == 1 or bytes[lo] != b'0';
+}
+
+// Number of decimal digits in v (v >= 0).
+fn width_of(v: i64) -> i64 {
+    if v == 0 { return 1; }
+    let mut w = 0;
+    let mut t = v;
+    while t > 0 { w = w + 1; t = t / 10; }
+    return w;
+}
+
+// Does the input spell `v` starting at `pos`?
+fn matches_at(bytes: Slice[u8], pos: i64, v: i64) -> bool {
+    let w = width_of(v);
+    if pos + w > bytes.len() { return false; }
+    return parse_span(bytes, pos, pos + w) == v;
+}
+
+fn is_additive_i64(s: ref String) -> Option[bool] {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    // Beyond this the arithmetic below is not guaranteed to fit, so the arm
+    // declines instead of overflowing.
+    if n > I64_SAFE_DIGITS { return None; }
+    if n < 3 { return Some(false); }
+
+    for len1 in 1..(n - 1) {
+        if not no_leading_zero(bytes, 0, len1) { break; }
+        for len2 in 1..(n - len1) {
+            if not no_leading_zero(bytes, len1, len1 + len2) { break; }
+            let mut a = parse_span(bytes, 0, len1);
+            let mut b = parse_span(bytes, len1, len1 + len2);
+            let mut pos = len1 + len2;
+            let mut ok = true;
+            let mut steps = 0;
+            while pos < n and ok {
+                let c = a + b;
+                if matches_at(bytes, pos, c) {
+                    pos = pos + width_of(c);
+                    a = b;
+                    b = c;
+                    steps = steps + 1;
+                } else {
+                    ok = false;
+                }
+            }
+            if ok and pos == n and steps > 0 { return Some(true); }
+        }
+    }
+    return Some(false);
+}
+
+fn report(s: ref String) {
+    let verdict = match is_additive_i64(s) {
+        Some(v) => { v.to_string() },
+        None => { "None (over 18 digits)".to_string() },
+    };
+    println("\"" + s + "\" -> " + verdict);
+}
+
+fn main() {
+    // The three examples from the LeetCode statement.
+    report("112358".to_string());
+    report("199100199".to_string());
+    report("1023".to_string());
+    // Shortest possible: three single digits.
+    report("000".to_string());
+    report("011".to_string());
+    report("123".to_string());
+    report("122".to_string());
+    // Too short to hold three numbers.
+    report("".to_string());
+    report("1".to_string());
+    report("12".to_string());
+    // Leading zeros are the whole trap: 1,02,3 must not count.
+    report("1023456".to_string());
+    report("0235".to_string());
+    // All zeros of every length — 0+0=0 forever.
+    report("0000".to_string());
+    report("00000".to_string());
+    // A carry that lengthens the sum, which is where in-place matching earns
+    // its keep: 99 + 1 = 100 is three digits where its inputs were two.
+    report("199100".to_string());
+    // 35 digits, the stated maximum, and far past what i64 can hold.
+    report("11235813213455891442333776109871597258441816765109461771128657".to_string());
+    // Three numbers that each exceed i64: (10^20 - 1) + 1 = 10^20. The
+    // `_i64` arm returns None here; this arm answers it exactly.
+    report("999999999999999999991100000000000000000000".to_string());
+    report("12345678910111213141516171819202122".to_string());
+}

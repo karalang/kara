@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/vecs.rs::asan_readonly_match_over_enum_vec_payload_frees_each_element_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

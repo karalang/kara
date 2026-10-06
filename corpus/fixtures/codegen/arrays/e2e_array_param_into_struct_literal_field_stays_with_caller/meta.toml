@@ -1,0 +1,13 @@
+source = "tests/codegen/arrays.rs::e2e_array_param_into_struct_literal_field_stays_with_caller"
+dedup_of = ["tests/memory_sanitizer/arrays.rs::asan_array_param_into_struct_literal_field_stays_with_caller", "tests/memory_sanitizer/families/b_2026_09_20_64.rs::asan_sweep_b_2026_09_23_6_1"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

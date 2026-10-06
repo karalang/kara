@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut oks: i64 = 0;
+    let mut errs: i64 = 0;
+    while i < 200 {
+        match i8.try_from(i) {
+            Ok(v) => { oks = oks + 1; }
+            Err(e) => { if e.len() > 0 { errs = errs + 1; } }
+        }
+        i = i + 1;
+    }
+    println(f"{oks}");
+    println(f"{errs}");
+}

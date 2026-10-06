@@ -1,0 +1,123 @@
+// LeetCode 267 — Palindrome Permutation II, iteratively.
+//
+// The ★ file's insight — a palindrome is determined by its first half — reached
+// without recursion. Build the half multiset as a sorted array, then walk it
+// with next-permutation and mirror each arrangement.
+//
+// The two halves-based forms fail differently, which is why both are here. The
+// backtracking form can get its DEDUPLICATION wrong: iterate over positions
+// instead of over distinct characters and "aabb" yields "abba" twice. This form
+// cannot — next-permutation over a sorted multiset visits each arrangement once
+// by construction — but it can get the MIRROR wrong instead, and an off-by-one
+// there (mirroring from `half_len - 1` versus `half_len`, or forgetting that the
+// middle character is not part of the half) produces strings of the wrong length
+// or with a doubled centre. Neither mistake resembles the other.
+//
+// The `while true { ... if not next_perm { break } }` shape is deliberate: the
+// FIRST arrangement is the sorted half itself and must be emitted before any
+// permutation step, which a plain `while next_perm(...)` loop would skip.
+
+fn next_perm(a: mut ref Vec[i64]) -> bool {
+    let n = a.len();
+    if n < 2 { return false; }
+    let mut i = n - 2;
+    while i >= 0 and a[i] >= a[i + 1] {
+        i = i - 1;
+    }
+    if i < 0 { return false; }
+    let mut j = n - 1;
+    while a[j] <= a[i] {
+        j = j - 1;
+    }
+    let t = a[i]; a[i] = a[j]; a[j] = t;
+    let mut lo = i + 1;
+    let mut hi = n - 1;
+    while lo < hi {
+        let u = a[lo]; a[lo] = a[hi]; a[hi] = u;
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    return true;
+}
+
+fn generate(s: ref String) -> Vec[String] {
+    let mut counts: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 128 {
+        counts.push(0);
+        i = i + 1;
+    }
+    for b in s.bytes() {
+        counts[b] = counts[b] + 1;
+    }
+
+    let mut odd = 0;
+    let mut middle = -1;
+    let mut half: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < 128 {
+        if counts[c] % 2 == 1 {
+            odd = odd + 1;
+            middle = c;
+        }
+        let mut k = 0;
+        let take = counts[c] / 2;
+        while k < take {
+            half.push(c);       // built in ascending c, so already sorted
+            k = k + 1;
+        }
+        c = c + 1;
+    }
+
+    let mut out: Vec[String] = Vec.new();
+    if odd > 1 {
+        return out;
+    }
+
+    while true {
+        let mut str = "";
+        let mut p = 0;
+        while p < half.len() {
+            str = str + f"{half[p] as u8 as char}";
+            p = p + 1;
+        }
+        if middle >= 0 {
+            str = str + f"{middle as u8 as char}";
+        }
+        let mut q = half.len() - 1;
+        while q >= 0 {
+            str = str + f"{half[q] as u8 as char}";
+            q = q - 1;
+        }
+        out.push(str);
+        if not next_perm(mut half) {
+            break;
+        }
+    }
+    return out;
+}
+
+fn report(s: ref String) {
+    let res = generate(s);
+    let mut line = "";
+    let mut i = 0;
+    while i < res.len() {
+        if i > 0 { line = line + ","; }
+        line = line + res[i];
+        i = i + 1;
+    }
+    println(f"\"{s}\" ({res.len()}) [{line}]");
+}
+
+fn main() {
+    report("aabb");
+    report("abc");
+    report("aabbc");
+    report("");
+    report("a");
+    report("aa");
+    report("aaa");
+    report("aabbcc");
+    report("aaaabb");
+    report("carerac");
+}

@@ -1,0 +1,9 @@
+
+fn main() {
+    let v = [10, 20, 30];
+    let mut it = v.iter().enumerate();
+    let (a, ax) = it.next().unwrap();
+    let (b, bx) = it.next().unwrap();
+    println(f"{a}:{ax}");
+    println(f"{b}:{bx}");
+}

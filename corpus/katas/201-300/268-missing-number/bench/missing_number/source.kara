@@ -1,0 +1,61 @@
+// Benchmark harness for LeetCode #268 — Missing Number.
+//
+// Build-once + punch (BENCHMARKS.md): four 1,000,000-element arrays are built
+// once, each drawn from [0, n] with a different value omitted, then punched in
+// rotation. The XOR fold is order-independent, so the arrays are filled in a
+// scrambled order (stride-coprime walk) purely so the read pattern is not a
+// straight `arr[i] == i` identity that invites a peephole.
+
+fn missing_number(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut acc = n;
+    let mut i = 0;
+    while i < n {
+        acc = acc ^ i ^ nums[i];
+        i = i + 1;
+    }
+    return acc;
+}
+
+fn main() {
+    let np = 4;
+    let n = 1000000;
+    let iters = 850;
+
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut p = 0;
+    while p < np {
+        // The omitted value, spread across the range so each array differs.
+        let missing = 200000 * p + 137;
+
+        let mut arr: Vec[i64] = Vec.new();
+        let mut z = 0;
+        while z < n {
+            arr.push(0);
+            z = z + 1;
+        }
+        // Values 0..=n minus `missing`, written at stride-coprime positions.
+        let mut t = 0;
+        let mut v = 0;
+        while t < n {
+            if v == missing {
+                v = v + 1;
+            }
+            let idx = (t * 499979) % n;
+            arr[idx] = v;
+            v = v + 1;
+            t = t + 1;
+        }
+        arrays.push(arr);
+        p = p + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 3) % np;
+        sink = (sink * 31 + missing_number(arrays[idx])) % 1000000007;
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

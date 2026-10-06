@@ -1,0 +1,7 @@
+cases 4000
+nodes built 83402
+cases where a DECISION STEP saw a tie 844
+targets outside the value range 1103
+cases with k > n 851
+digest 836880122
+mismatches 0

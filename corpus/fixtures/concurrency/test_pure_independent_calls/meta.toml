@@ -1,0 +1,13 @@
+source = "tests/concurrency.rs::test_pure_independent_calls"
+dedup_of = ["tests/concurrency.rs::test_pure_compute_still_parallelizes_alongside_output_guard", "tests/concurrency.rs::test_reason_pure_computations", "tests/concurrency.rs::test_pure_group_is_trivial"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

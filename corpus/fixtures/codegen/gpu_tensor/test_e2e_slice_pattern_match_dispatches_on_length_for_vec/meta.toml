@@ -1,0 +1,13 @@
+source = "tests/codegen/gpu_tensor.rs::test_e2e_slice_pattern_match_dispatches_on_length_for_vec"
+dedup_of = ["tests/interpreter/gpu_tensor.rs::test_slice_pattern_match_dispatches_on_length_for_vec"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

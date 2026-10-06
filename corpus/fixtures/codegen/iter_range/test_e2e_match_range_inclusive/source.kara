@@ -1,0 +1,14 @@
+
+fn classify(n: i64) -> i64 {
+    match n {
+        10..=20 => 111,
+        _ => 999,
+    }
+}
+fn main() {
+    println(classify(5));    // below → 999
+    println(classify(10));   // lower bound → 111
+    println(classify(15));   // inside → 111
+    println(classify(20));   // upper bound (inclusive) → 111
+    println(classify(21));   // above → 999
+}

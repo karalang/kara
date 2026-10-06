@@ -1,0 +1,24 @@
+
+shared struct Node2 {
+    val: i64,
+}
+
+fn main() {
+    let mut v: Vec[Option[Node2]] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5i64 {
+        let x = Some(Node2 { val: i * 10i64 });
+        v.push(x);
+        i = i + 1i64;
+    }
+    let mut total: i64 = 0;
+    let mut j: i64 = 0;
+    while j < 5i64 {
+        match v[j] {
+            Some(n) => { total = total + n.val; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(total);
+}

@@ -1,0 +1,9 @@
+
+struct Body { mass: f32, speed: f32 }
+struct Sim  { grid: GpuBuffer[Body], step: i32 }
+
+fn main() {
+    let bodies: Vec[Body] = [Body { mass: 1.0, speed: 2.0 }];
+    let sim = Sim { grid: gpu.upload(bodies), step: 0 };
+    println(sim.step);
+}

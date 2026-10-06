@@ -1,0 +1,9 @@
+
+shared enum Sh { S((String, i64)), N }
+fn mkL(t: String) -> (String, i64) { return (f"L-{t}-aaaaaaaaaaa", 7); }
+fn main() {
+    let keep = Sh.S(mkL("t"));
+    match keep { Sh.S(x) => { let u = x; println(f"L:{u.0}"); } Sh.N => { println("e"); } }
+    match keep { Sh.S(y) => { println(f"L-again:{y.1}/{y.0}"); } Sh.N => { println("e2"); } }
+    println("done");
+}

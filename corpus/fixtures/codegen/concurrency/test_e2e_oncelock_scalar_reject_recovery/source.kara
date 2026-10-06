@@ -1,0 +1,11 @@
+
+fn main() {
+    let cell: OnceLock[i64] = OnceLock.new();
+    match cell.set(10) { Ok(_) => {} Err(_) => {} }
+    match cell.set(77) {
+        Ok(_) => { println(-1); }
+        Err(e) => { println(e.rejected); }
+    }
+    let direct: AlreadySetError[i64] = AlreadySetError { rejected: 42 };
+    println(direct.rejected);
+}

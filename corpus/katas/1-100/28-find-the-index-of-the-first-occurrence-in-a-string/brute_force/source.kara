@@ -1,0 +1,66 @@
+// LeetCode #28: Find the Index of the First Occurrence in a String —
+// brute-force sliding window.
+//
+// Return the index of the first occurrence of `needle` in `haystack`, or -1
+// if it does not occur. An empty needle matches at index 0 (the C strstr /
+// std convention LeetCode adopts).
+//
+// Brute force: try every start position i in 0..=(hn - nn); at each, compare
+// needle against the haystack window byte-for-byte, bailing on the first
+// mismatch. O(hn · nn) worst case (e.g. haystack "aaaa…a", needle "aa…ab"),
+// O(1) extra space. The KMP variant in kmp.kara trades a needle-sized LPS
+// table for an O(hn + nn) guarantee.
+//
+// `bytes()` is a zero-copy Slice[u8] view with O(1) positional access. The
+// LeetCode constraints restrict inputs to lowercase English letters, so each
+// character is one ASCII byte and the byte index equals the char index —
+// the byte view is exact, no Vec[char] snapshot needed.
+//
+// `j < nn and window[i + j] == needle[j]` relies on short-circuit `and`:
+// once j reaches nn the indexed read is never evaluated, so the inner loop
+// can use the loop variable as both the match counter and the bound.
+
+fn str_str(haystack: ref String, needle: ref String) -> i64 {
+    let h = haystack.bytes();
+    let nee = needle.bytes();
+    let hn = h.len();
+    let nn = nee.len();
+    if nn == 0 {
+        return 0;
+    }
+    if nn > hn {
+        return -1;
+    }
+    let mut i = 0;
+    while i <= hn - nn {
+        let mut j = 0;
+        while j < nn and h[i + j] == nee[j] {
+            j = j + 1;
+        }
+        if j == nn {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn report(haystack: ref String, needle: ref String) {
+    let r = str_str(haystack, needle);
+    println(f"{haystack} ~ {needle}: {r}");
+}
+
+fn main() {
+    report("sadbutsad", "sad");        // expect: 0   (also occurs at 6)
+    report("leetcode", "leeto");       // expect: -1
+    report("hello", "ll");             // expect: 2
+    report("a", "a");                  // expect: 0
+    report("", "");                    // expect: 0   (empty needle)
+    report("abc", "");                 // expect: 0   (empty needle)
+    report("aaa", "aaaa");             // expect: -1  (needle longer)
+    report("mississippi", "issip");    // expect: 4
+    report("abababcabab", "ababc");    // expect: 4   (backtrack-heavy)
+    report("aaaaab", "aab");           // expect: 3   (brute-force worst case)
+    report("abc", "abc");              // expect: 0   (whole string)
+    report("abc", "c");                // expect: 2   (last char)
+}

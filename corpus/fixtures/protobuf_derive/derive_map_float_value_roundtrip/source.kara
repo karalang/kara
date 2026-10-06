@@ -1,0 +1,13 @@
+
+#[derive(Message)]
+struct Doc { scores: Map[String, f64] }
+
+fn main() {
+    let mut scores: Map[String, f64] = Map.new();
+    scores.insert("a", 1.5);
+    scores.insert("b", -2.25);
+    let back = Doc.decode(Doc { scores: scores }.encode());
+    println(back.scores.len());
+    println(match back.scores.get("a") { Option.Some(x) => x == 1.5, Option.None => false });
+    println(match back.scores.get("b") { Option.Some(x) => x == -2.25, Option.None => false });
+}

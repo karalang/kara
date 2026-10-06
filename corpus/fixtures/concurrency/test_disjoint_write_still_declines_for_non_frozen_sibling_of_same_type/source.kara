@@ -1,0 +1,22 @@
+
+        shared struct S { val: i64 }
+        fn heavy(s: frozen S, k: i64) -> i64 {
+            let mut acc: i64 = 0;
+            let mut t: i64 = 0;
+            while t < 200 { acc = acc + s.val * k + t; t = t + 1; }
+            acc
+        }
+        fn heavy2(s: S, k: i64) -> i64 { s.val + k }
+        fn run(s: frozen S, u: S, out: mut ref Vec[i64]) {
+            for i in 0..2048 {
+                out[i] = heavy(s, i) + heavy2(u, i);
+            }
+        }
+        fn main() {
+            let s = S { val: 3 };
+            let u = S { val: 5 };
+            let mut out: Vec[i64] = Vec.filled(2048, 0);
+            run(s, u, mut out);
+            println(out[10]);
+        }
+        

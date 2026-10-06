@@ -1,0 +1,6 @@
+
+        fn main() {
+            let v: Vec[i64] = Vec.with_capacity(-1);
+            println(v.len());
+        }
+    

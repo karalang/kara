@@ -1,0 +1,81 @@
+
+effect resource Log;
+
+trait Named {
+    type Label;
+    fn label(ref self) -> Self.Label;
+}
+
+struct Holder { items: Vec[i64] }
+impl Named for Holder {
+    type Label = String;
+    fn label(ref self) -> String { f"holder:{self.items.len()}" }
+}
+
+enum Colour { Red, Blue }
+impl Named for Colour {
+    type Label = String;
+    fn label(ref self) -> String {
+        match self { Colour.Red => "red", Colour.Blue => "blue" }
+    }
+}
+
+shared struct Node { name: String }
+impl Named for Node {
+    type Label = String;
+    fn label(ref self) -> String { self.name }
+}
+
+struct Emitter { n: i64 }
+impl Named for Emitter {
+    type Label = String;
+    fn label(ref self) -> String with writes(Log) { f"emit:{self.n}" }
+}
+
+fn a_holder(n: i64) -> impl Named[Label = String] { Holder { items: [n, n] } }
+fn a_colour() -> impl Named[Label = String] { Colour.Blue }
+fn a_node() -> impl Named[Label = String] { Node { name: "n1" } }
+fn an_emitter() -> impl Named[Label = String] with writes(Log) { Emitter { n: 5 } }
+
+// No inline binding — the caller annotates instead. Same substitution.
+fn bare(n: i64) -> impl Named { Holder { items: [n] } }
+
+// Both branches return the same concrete witness.
+fn pick(hi: bool) -> impl Named[Label = String] {
+    if hi { Holder { items: [1, 2, 3] } } else { Holder { items: [7] } }
+}
+
+// The existential flows INTO a generic (argument-position `impl Trait`),
+// which must monomorphize on a type the call site cannot name.
+fn shout(x: impl Named[Label = String]) -> String { x.label() }
+
+struct Factory { seed: i64 }
+impl Factory {
+    fn build(ref self) -> impl Named[Label = String] { Holder { items: [self.seed] } }
+}
+
+fn main() {
+    // Bound to a `let`, then called.
+    let h = a_holder(4);
+    println(h.label());
+    // Called directly on the return value.
+    println(a_holder(4).label());
+
+    println(a_colour().label());
+    println(a_node().label());
+    println(an_emitter().label());
+
+    let b = bare(9);
+    let bl: String = b.label();
+    println(bl);
+
+    println(pick(true).label());
+    println(pick(false).label());
+
+    println(shout(a_holder(1)));
+
+    let f = Factory { seed: 6 };
+    println(f.build().label());
+    let g = f.build();
+    println(g.label());
+}

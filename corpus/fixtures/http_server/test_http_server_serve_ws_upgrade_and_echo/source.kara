@@ -1,0 +1,33 @@
+
+            fn route(req: Request) -> Response {
+                match req.path() {
+                    "/ws" => Response { status: 101, body: "" },
+                    "/health" => Response { status: 200, body: "ok" },
+                    _ => Response { status: 404, body: "" },
+                }
+            }
+
+            fn on_ws(ws: WebSocket) {
+                let mut buf: Array[u8, 4096] = [0u8; 4096];
+                loop {
+                    let r = ws.recv_text(mut buf);
+                    match r {
+                        Result.Ok(n) => {
+                            if n == 0 { break; }
+                            match ws.send_text(buf[0..n]) {
+                                Result.Ok(_) => {}
+                                Result.Err(_) => { break; }
+                            }
+                        }
+                        Result.Err(_) => { break; }
+                    }
+                }
+            }
+
+            fn main() {
+                match Server.serve_ws("127.0.0.1:0", route, on_ws) {
+                    Ok(_) => {}
+                    Err(e) => println("serve failed"),
+                }
+            }
+        

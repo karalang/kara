@@ -1,0 +1,17 @@
+named_method
+  len=1
+  dR1
+fresh_method
+  len=1
+  dR2
+named_free_fn
+  len=1
+  dR3
+copy_supported_method
+  len=1
+  dS4
+two_named
+  len=2
+  dR5
+  dR6
+end

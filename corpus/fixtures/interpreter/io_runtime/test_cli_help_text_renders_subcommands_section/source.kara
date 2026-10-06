@@ -1,0 +1,7 @@
+fn main() {
+         let parser = Parser.new("greet")
+             .subcommand("upper", Parser.new("upper").about("uppercase"))
+             .subcommand("lower", Parser.new("lower").about("lowercase"));
+         let h = parser.help_text();
+         println(h);
+     }

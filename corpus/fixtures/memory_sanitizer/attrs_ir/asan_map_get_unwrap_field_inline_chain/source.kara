@@ -1,0 +1,13 @@
+
+shared struct Node {
+    val: i64,
+    mut neighbors: Vec[Node],
+}
+
+fn main() {
+    let mut visited: Map[i64, Node] = Map.new();
+    let _ = visited.insert(0_i64, Node { val: 100, neighbors: Vec.new() });
+    let _ = visited.insert(1_i64, Node { val: 200, neighbors: Vec.new() });
+    println(visited.get(0_i64).unwrap().val);
+    println(visited.get(1_i64).unwrap().val);
+}

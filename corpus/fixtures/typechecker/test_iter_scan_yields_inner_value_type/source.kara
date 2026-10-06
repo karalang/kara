@@ -1,0 +1,8 @@
+fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().scan(0, |state, item| {
+                 let new_state = state + item;
+                 Some((new_state, "tick"))
+             });
+             let _s: String = it.next().unwrap();
+         }

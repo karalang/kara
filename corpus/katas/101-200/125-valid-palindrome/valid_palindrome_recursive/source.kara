@@ -1,0 +1,81 @@
+// LeetCode #125: Valid Palindrome — recursive two-pointer.
+//
+// The same inward-walking two-pointer scan as the iterative style, but the
+// loop is the call stack: `check(bytes, i, j)` skips non-alnum bytes at each
+// end, compares the case-folded pair, then recurses on `(i+1, j-1)`. Base
+// case `i >= j` (pointers met / crossed) returns true.
+//
+// Exercises a different codegen surface from the iterative styles — recursion
+// over a `Slice[u8]` argument with byte indexing — while hammering the same
+// `is_alpha` / `is_ascii_digit` predicates and ASCII case-fold.
+
+fn is_alnum(b: u8) -> bool {
+    (b >= b'0' and b <= b'9')
+        or (b >= b'a' and b <= b'z')
+        or (b >= b'A' and b <= b'Z')
+}
+
+fn to_lower(b: u8) -> u8 {
+    if b >= b'A' and b <= b'Z' { b + (b'a' - b'A') } else { b }
+}
+
+fn check(bytes: Slice[u8], i: i64, j: i64) -> bool {
+    if i >= j {
+        return true;
+    }
+    if not is_alnum(bytes[i]) {
+        return check(bytes, i + 1, j);
+    }
+    if not is_alnum(bytes[j]) {
+        return check(bytes, i, j - 1);
+    }
+    if to_lower(bytes[i]) != to_lower(bytes[j]) {
+        return false;
+    }
+    check(bytes, i + 1, j - 1)
+}
+
+fn is_palindrome(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    if n == 0 {
+        return true;
+    }
+    check(bytes, 0, n - 1)
+}
+
+fn report(s: ref String) {
+    if is_palindrome(s) {
+        println(f"\"{s}\" -> true");
+    } else {
+        println(f"\"{s}\" -> false");
+    }
+}
+
+fn main() {
+    // LeetCode canonical examples.
+    report("A man, a plan, a canal: Panama");  // true
+    report("race a car");                       // false
+    report(" ");                                // true  (empty after filtering)
+
+    // Case folding.
+    report("Able was I ere I saw elBA");        // true
+    report("No lemon, no melon");               // true
+
+    // Digits participate.
+    report("0P");                               // false (0 vs p)
+    report("a1b2b1a");                          // true
+    report("1a2");                              // false
+
+    // Punctuation-only / single char / empty.
+    report(".,");                               // true
+    report("a");                                // true
+    report("");                                 // true
+    report("aa");                               // true
+    report("ab");                               // false
+
+    // Mixed punctuation between alnum.
+    report("Madam, I'm Adam");                  // true
+    report("Was it a car or a cat I saw?");     // true
+    report("Mr. Owl ate my metal worm");        // true
+}

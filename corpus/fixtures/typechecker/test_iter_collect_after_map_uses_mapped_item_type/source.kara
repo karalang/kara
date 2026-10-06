@@ -1,0 +1,4 @@
+fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _xs: Vec[String] = v.iter().map(|x| if x > 0 { "pos" } else { "neg" }).collect();
+         }

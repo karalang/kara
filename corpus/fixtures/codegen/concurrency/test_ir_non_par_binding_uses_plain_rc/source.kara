@@ -1,0 +1,10 @@
+
+shared struct Counter { val: i64 }
+fn use_c(c: Counter) -> i64 { c.val }
+fn main() {
+    let cond: bool = false;
+    let c = Counter { val: 7 };
+    let d = c;
+    if cond { use_c(d); }
+    use_c(d);
+}

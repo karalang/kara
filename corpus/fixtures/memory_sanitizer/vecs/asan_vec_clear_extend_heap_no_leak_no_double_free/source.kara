@@ -1,0 +1,20 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let mut v: Vec[String] = Vec.new();
+        v.push("payload-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        v.push("payload-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        v.push("payload-cccccccccccccccccccccccccccccccc");
+        v.clear();
+        v.push("payload-dddddddddddddddddddddddddddddddd");
+        let mut w: Vec[String] = Vec.new();
+        w.push("payload-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        w.push("payload-ffffffffffffffffffffffffffffffff");
+        v.extend(w);
+        total = total + v[0].len() + v[1].len() + v[2].len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

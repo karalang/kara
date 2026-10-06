@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_05_71.rs::interp_tuple_destructured_from_a_branch_owns_its_leaves"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_05_71.rs::asan_tuple_destructured_from_a_branch_owns_its_leaves"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

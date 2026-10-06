@@ -1,0 +1,5 @@
+
+fn bump(x: mut ref i64) { x = x + 1; }
+fn read_only(y: ref i64) -> i64 { return y; }
+fn two(a: mut ref i64, b: mut ref i64) { a = a + b; }
+fn main() { let mut n: i64 = 41; bump(mut n); print(n); }

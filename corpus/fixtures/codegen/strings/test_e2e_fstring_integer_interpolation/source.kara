@@ -1,0 +1,6 @@
+
+fn main() {
+    let x = 42;
+    let s = f"value={x}";
+    println(s);
+}

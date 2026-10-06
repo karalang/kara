@@ -1,0 +1,10 @@
+
+#[derive(Display)]
+struct Point { x: i64, y: i64 }
+#[derive(Display)]
+struct Wrap { p: Point, name: String, ok: bool }
+fn main() {
+    let w = Wrap { p: Point { x: 1, y: 2 }, name: "hi", ok: true };
+    println(w);
+    println(w.to_string());
+}

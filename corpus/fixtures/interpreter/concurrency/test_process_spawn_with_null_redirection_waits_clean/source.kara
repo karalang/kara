@@ -1,0 +1,14 @@
+fn main() {
+         let cmd = Command.new("/bin/echo")
+             .arg("this-output-is-discarded")
+             .stdout(Stdio.Null);
+         match cmd.spawn() {
+             Ok(child) => {
+                 match child.wait() {
+                     Ok(status) => println(status.success),
+                     Err(_) => println("wait_err"),
+                 }
+             }
+             Err(_) => println("spawn_err"),
+         }
+     }

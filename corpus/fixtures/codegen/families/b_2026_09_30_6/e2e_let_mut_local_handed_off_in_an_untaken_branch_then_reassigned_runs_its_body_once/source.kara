@@ -1,0 +1,23 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+enum E { A(S), B(i64) }
+impl E {
+  fn m1(self) -> i64 { return match self { E.A(s) => s.id, E.B(n) => n } }
+}
+fn keep(e: E) -> E { return e }
+fn r1(c: bool) -> i64 { let mut t = E.A(mks(1)); if c { let y = t; println("y") }; t = E.A(mks(2)); println("re"); return 0 }
+fn r2(c: bool) -> i64 { let mut t = E.A(mks(3)); if c { let k = keep(t); println("k") }; t = E.A(mks(4)); println("re"); return t.m1() }
+fn r3(c: bool) -> i64 { let mut t = E.A(mks(5)); let mut i = 0; while i < 2 { if c { let y = t; println("y"); t = E.A(mks(6 + i)); }; i = i + 1; }; return 0 }
+fn r5(c: bool) -> i64 { let mut t = E.A(mks(20)); if c { println(f"m {t.m1()}") }; t = E.A(mks(21)); println("re"); return 0 }
+fn r6(c: bool) -> i64 { let mut o = Option.Some(mks(30)); if c { let y = o; println("y") }; o = Option.Some(mks(31)); println("re"); return 0 }
+fn r7(c: bool) -> i64 { let mut t = E.A(mks(40)); if c { let y = t; println("y") }; t = E.A(mks(41)); t = E.A(mks(42)); println("re"); return 0 }
+fn r8(c: bool) -> i64 { let mut t = E.A(mks(50)); if c { let y = t; println("y") }; if not c { t = E.A(mks(51)); }; println("re"); return 0 }
+fn main() {
+  let mut k = 0;
+  while k < 2 { let c = k == 1; println(f"c {c}")
+    println(f"r {r1(c)}"); println(f"r {r2(c)}"); println(f"r {r3(c)}");
+    println(f"r {r5(c)}"); println(f"r {r6(c)}"); println(f"r {r7(c)}"); println(f"r {r8(c)}")
+    k = k + 1; }
+  println("end")
+}

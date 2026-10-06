@@ -1,0 +1,569 @@
+// LeetCode 301 — three arms against each other, against an exhaustive oracle,
+// and against seven properties that follow from the STATEMENT rather than from
+// any implementation.
+//
+//   A  bounded DFS, budget from a one-pass count, duplicates killed by a Set
+//   B  breadth-first by removal count — minimality is the search order
+//   C  scan-and-canonicalise — unique by construction, no Set anywhere
+//   D  exhaustive subset enumeration over paren positions — the oracle
+//
+// WHY FOUR. #301 asks for two different things at once and they fail
+// independently: the minimum removal COUNT, and the complete SET of strings
+// achieving it. An arm can be right about one and wrong about the other, and
+// most plausible bugs are exactly that shape — a dedup guard that is slightly
+// too strong drops real answers while every returned answer stays valid and
+// minimal, so "spot-check the output" says nothing.
+//
+// The arms are chosen so that no two of them can be wrong about minimality in
+// the same way. A derives it by COUNTING (the one-pass unmatchable tally);
+// B derives it by SEARCH ORDER (shallowest level containing anything valid);
+// C derives it by CONSTRUCTION (a repair is only ever applied at a genuine
+// violation). Three unrelated arguments for one number.
+//
+// D is the honest oracle, and the reason it earns its place is that it embodies
+// no argument at all: enumerate every subset of the paren positions, keep the
+// valid ones, take those with the fewest deletions. It cannot be subtly wrong
+// about minimality because it does not reason about minimality — it measures
+// it. Exponential, so it runs only on the short cases, which is exactly where
+// the tie-and-duplicate structure that breaks dedup logic actually lives.
+//
+// THE GENERATOR MATTERS MORE THAN THE COUNT. The interesting inputs are the
+// ones with RUNS of identical parens — "((()" and ")))(" — because runs are the
+// entire source of duplicate leaves, and duplicate leaves are what every
+// dedup strategy here is trying to handle. A uniform random string over
+// { '(', ')', 'a' } produces short runs; the generator below therefore also
+// emits run-heavy shapes on purpose, and the mutation table in README.md is
+// what says whether that was enough.
+
+// ------------------------------------------------------------------ shared
+
+fn str_less(a: ref String, b: ref String) -> bool {
+    let ab = a.bytes();
+    let bb = b.bytes();
+    let n = if ab.len() < bb.len() { ab.len() } else { bb.len() };
+    let mut i = 0;
+    while i < n {
+        if ab[i] != bb[i] { return ab[i] < bb[i]; }
+        i = i + 1;
+    }
+    return ab.len() < bb.len();
+}
+
+fn sort_strings(items: mut ref Vec[String]) {
+    let mut i = 1;
+    while i < items.len() {
+        let mut j = i;
+        while j > 0 and str_less(items[j], items[j - 1]) {
+            items.swap(j, j - 1);
+            j = j - 1;
+        }
+        i = i + 1;
+    }
+}
+
+fn same_list(a: ref Vec[String], b: ref Vec[String]) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn is_valid(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let mut open = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'(' {
+            open = open + 1;
+        } else if c == b')' {
+            open = open - 1;
+            if open < 0 { return false; }
+        }
+        i = i + 1;
+    }
+    return open == 0;
+}
+
+fn drop_at(s: ref String, skip: i64) -> String {
+    let bytes = s.bytes();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i != skip { out.push(bytes[i] as char); }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn reverse_string(s: ref String) -> String {
+    let bytes = s.bytes();
+    let mut out = String.new();
+    let mut i = bytes.len();
+    while i > 0 {
+        i = i - 1;
+        out.push(bytes[i] as char);
+    }
+    return out;
+}
+
+// Reverse, and swap '(' with ')'. A bijection on strings that carries valid
+// strings to valid strings, and subsequences to subsequences. P6.
+fn mirror(s: ref String) -> String {
+    let bytes = s.bytes();
+    let mut out = String.new();
+    let mut i = bytes.len();
+    while i > 0 {
+        i = i - 1;
+        let c = bytes[i];
+        if c == b'(' {
+            out.push(b')' as char);
+        } else if c == b')' {
+            out.push(b'(' as char);
+        } else {
+            out.push(c as char);
+        }
+    }
+    return out;
+}
+
+// The non-paren characters, in order. Must be preserved exactly. P3.
+fn skeleton(s: ref String) -> String {
+    let bytes = s.bytes();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c != b'(' and c != b')' { out.push(c as char); }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn is_subsequence(w: ref String, s: ref String) -> bool {
+    let wb = w.bytes();
+    let sb = s.bytes();
+    let mut wi = 0;
+    let mut si = 0;
+    while wi < wb.len() and si < sb.len() {
+        if wb[wi] == sb[si] { wi = wi + 1; }
+        si = si + 1;
+    }
+    return wi == wb.len();
+}
+
+fn removal_budget(s: ref String) -> i64 {
+    let bytes = s.bytes();
+    let mut lrem = 0;
+    let mut rrem = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'(' {
+            lrem = lrem + 1;
+        } else if c == b')' {
+            if lrem > 0 { lrem = lrem - 1; } else { rrem = rrem + 1; }
+        }
+        i = i + 1;
+    }
+    return lrem + rrem;
+}
+
+// -------------------------------------------------------------------- arm A
+
+fn walk_a(
+    bytes: Slice[u8],
+    i: i64,
+    open: i64,
+    lrem: i64,
+    rrem: i64,
+    cur: ref String,
+    seen: mut ref Set[String],
+    out: mut ref Vec[String],
+) {
+    if i == bytes.len() {
+        if lrem == 0 and rrem == 0 and open == 0 {
+            if not seen.contains(cur) {
+                seen.insert(cur.to_string());
+                out.push(cur.to_string());
+            }
+        }
+        return;
+    }
+    let c = bytes[i];
+    if c == b'(' and lrem > 0 {
+        walk_a(bytes, i + 1, open, lrem - 1, rrem, cur, seen, out);
+    } else if c == b')' and rrem > 0 {
+        walk_a(bytes, i + 1, open, lrem, rrem - 1, cur, seen, out);
+    }
+    let mut next = cur.to_string();
+    next.push(c as char);
+    if c == b'(' {
+        walk_a(bytes, i + 1, open + 1, lrem, rrem, next, seen, out);
+    } else if c == b')' {
+        if open > 0 {
+            walk_a(bytes, i + 1, open - 1, lrem, rrem, next, seen, out);
+        }
+    } else {
+        walk_a(bytes, i + 1, open, lrem, rrem, next, seen, out);
+    }
+}
+
+fn solve_a(s: ref String) -> Vec[String] {
+    let bytes = s.bytes();
+    let mut lrem = 0;
+    let mut rrem = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'(' {
+            lrem = lrem + 1;
+        } else if c == b')' {
+            if lrem > 0 { lrem = lrem - 1; } else { rrem = rrem + 1; }
+        }
+        i = i + 1;
+    }
+    let mut seen: Set[String] = Set.new();
+    let mut out: Vec[String] = Vec.new();
+    let empty: String = "";
+    walk_a(bytes, 0, 0, lrem, rrem, empty, mut seen, mut out);
+    sort_strings(mut out);
+    return out;
+}
+
+// -------------------------------------------------------------------- arm B
+
+fn solve_b(s: ref String) -> Vec[String] {
+    let mut frontier: Vec[String] = Vec.new();
+    frontier.push(s.to_string());
+    loop {
+        let mut found: Vec[String] = Vec.new();
+        let mut k = 0;
+        while k < frontier.len() {
+            if is_valid(frontier[k]) { found.push(frontier[k].to_string()); }
+            k = k + 1;
+        }
+        if found.len() > 0 {
+            sort_strings(mut found);
+            return found;
+        }
+        let mut next: Vec[String] = Vec.new();
+        let mut seen: Set[String] = Set.new();
+        let mut f = 0;
+        while f < frontier.len() {
+            let cur = frontier[f].to_string();
+            let bytes = cur.bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                let c = bytes[i];
+                if c == b'(' or c == b')' {
+                    let cand = drop_at(cur, i);
+                    if not seen.contains(cand) {
+                        seen.insert(cand.to_string());
+                        next.push(cand);
+                    }
+                }
+                i = i + 1;
+            }
+            f = f + 1;
+        }
+        frontier = next;
+    }
+}
+
+// -------------------------------------------------------------------- arm C
+
+fn repair_c(s: ref String, last_i: i64, last_j: i64, open: u8, close: u8, out: mut ref Vec[String]) {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut count = 0;
+    let mut i = last_i;
+    while i < n {
+        let c = bytes[i];
+        if c == open {
+            count = count + 1;
+        } else if c == close {
+            count = count - 1;
+        }
+        if count < 0 {
+            let mut j = last_j;
+            while j <= i {
+                if bytes[j] == close and (j == last_j or bytes[j - 1] != close) {
+                    let cand = drop_at(s, j);
+                    repair_c(cand, i, j, open, close, out);
+                }
+                j = j + 1;
+            }
+            return;
+        }
+        i = i + 1;
+    }
+    let rev = reverse_string(s);
+    if open == b'(' {
+        repair_c(rev, 0, 0, b')', b'(', out);
+    } else {
+        out.push(rev);
+    }
+}
+
+fn solve_c(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    repair_c(s, 0, 0, b'(', b')', mut out);
+    sort_strings(mut out);
+    return out;
+}
+
+// ------------------------------------------------------- arm D, the oracle
+
+// Every subset of the paren positions, deleted; keep the valid results with
+// the fewest deletions. 2^p work, so short inputs only — but it embodies no
+// argument about minimality, which is the whole point of having it.
+fn solve_d(s: ref String, popcnt: ref Vec[i64]) -> Vec[String] {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    let mut parens = 0;
+    let mut i = 0;
+    while i < n {
+        if bytes[i] == b'(' or bytes[i] == b')' { parens = parens + 1; }
+        i = i + 1;
+    }
+
+    let mut best = -1;
+    let mut out: Vec[String] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+
+    let total = 1 << parens;
+    let mut mask = 0;
+    while mask < total {
+        // Once a valid subset has been seen, anything deleting MORE cannot
+        // win — the only pruning here, and it is a fact about the search, not
+        // about parentheses.
+        let deletions = popcnt[mask];
+        if best == -1 or deletions <= best {
+            let mut cand = String.new();
+            let mut b = 0;
+            let mut k = 0;
+            while k < n {
+                let ch = bytes[k];
+                if ch == b'(' or ch == b')' {
+                    if (mask >> b) & 1 == 0 { cand.push(ch as char); }
+                    b = b + 1;
+                } else {
+                    cand.push(ch as char);
+                }
+                k = k + 1;
+            }
+            if is_valid(cand) {
+                if best == -1 or deletions < best {
+                    best = deletions;
+                    out = Vec.new();
+                    seen = Set.new();
+                }
+                if not seen.contains(cand) {
+                    seen.insert(cand.to_string());
+                    out.push(cand);
+                }
+            }
+        }
+        mask = mask + 1;
+    }
+
+    sort_strings(mut out);
+    return out;
+}
+
+// ---------------------------------------------------------------- harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+// `shape` picks the alphabet mix. 0 = paren-only (maximum tie density),
+// 1 = parens with a letter, 2 = run-heavy: every draw is repeated, which is
+// the shape that manufactures the duplicate leaves dedup logic exists for.
+fn gen_case(state: mut ref i64, len: i64, shape: i64) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < len {
+        state = lcg(state);
+        let r = (state / 65536) % 3;
+        let mut c = b'a';
+        if shape == 0 {
+            if r % 2 == 0 { c = b'('; } else { c = b')'; }
+        } else if shape == 1 {
+            if r == 0 { c = b'('; } else if r == 1 { c = b')'; } else { c = b'a'; }
+        } else {
+            if r % 2 == 0 { c = b'('; } else { c = b')'; }
+        }
+        out.push(c as char);
+        if shape == 2 and i + 1 < len {
+            out.push(c as char);
+            i = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn main() {
+    let mut state = 30100;
+
+    // popcount table for the oracle's 2^p subset walk, built once.
+    let mut popcnt: Vec[i64] = Vec.new();
+    popcnt.push(0);
+    let mut m = 1;
+    while m < 8192 {
+        popcnt.push(popcnt[m >> 1] + (m & 1));
+        m = m + 1;
+    }
+
+    let mut cases = 0;
+    let mut oracle_cases = 0;
+
+    let mut p1 = 0;   // the three arms disagree
+    let mut p2 = 0;   // a returned string is not valid
+    let mut p3 = 0;   // not a subsequence, or a non-paren character moved
+    let mut p4 = 0;   // lengths not uniform, or not n - one-pass budget
+    let mut p5 = 0;   // duplicates returned, or an empty answer set
+    let mut p6 = 0;   // mirror invariance broken
+    let mut p7 = 0;   // disagrees with the exhaustive oracle
+
+    let lengths: Vec[i64] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12];
+
+    let mut round = 0;
+    while round < 40 {
+        let mut shape = 0;
+        while shape < 3 {
+            let mut li = 0;
+            while li < lengths.len() {
+                let len = lengths[li];
+                let s = gen_case(mut state, len, shape);
+                cases = cases + 1;
+
+                let a = solve_a(s);
+                let b = solve_b(s);
+                let c = solve_c(s);
+
+                // P1 — three unrelated minimality arguments, one answer set.
+                if not same_list(a, b) { p1 = p1 + 1; }
+                if not same_list(a, c) { p1 = p1 + 1; }
+
+                // P5 — at least one answer, and no repeats. Checked on EVERY
+                // arm, not just the one P2/P3/P4 interrogate: the two dedup
+                // guards that make arm C unique by construction live nowhere
+                // else, so a P5 that only looked at arm A would leave them
+                // covered by P1 alone. Sorted, so a duplicate is adjacent.
+                if a.len() == 0 or b.len() == 0 or c.len() == 0 { p5 = p5 + 1; }
+                let mut d = 1;
+                while d < a.len() {
+                    if a[d] == a[d - 1] { p5 = p5 + 1; }
+                    d = d + 1;
+                }
+                d = 1;
+                while d < b.len() {
+                    if b[d] == b[d - 1] { p5 = p5 + 1; }
+                    d = d + 1;
+                }
+                d = 1;
+                while d < c.len() {
+                    if c[d] == c[d - 1] { p5 = p5 + 1; }
+                    d = d + 1;
+                }
+
+                // P4 — every answer has the same length, and that length is
+                // exactly n minus the one-pass unmatchable count.
+                let want_len = s.bytes().len() - removal_budget(s);
+                let mut k = 0;
+                while k < a.len() {
+                    if a[k].bytes().len() != want_len { p4 = p4 + 1; }
+                    k = k + 1;
+                }
+
+                // P2, P3 — each answer is valid, is a subsequence of the
+                // input, and carries the input's non-paren characters
+                // unchanged and in order.
+                let skel = skeleton(s);
+                let mut m = 0;
+                while m < a.len() {
+                    if not is_valid(a[m]) { p2 = p2 + 1; }
+                    if not is_subsequence(a[m], s) { p3 = p3 + 1; }
+                    if skeleton(a[m]) != skel { p3 = p3 + 1; }
+                    m = m + 1;
+                }
+
+                // P6 — the answer set of the mirrored input is the mirror of
+                // the answer set. A property no arm computes.
+                let mir = solve_c(mirror(s));
+                let mut back: Vec[String] = Vec.new();
+                let mut q = 0;
+                while q < mir.len() {
+                    back.push(mirror(mir[q]));
+                    q = q + 1;
+                }
+                sort_strings(mut back);
+                if not same_list(a, back) { p6 = p6 + 1; }
+
+                // P7 — the exhaustive oracle, on inputs short enough for 2^p.
+                let mut parens = 0;
+                let sb = s.bytes();
+                let mut t = 0;
+                while t < sb.len() {
+                    if sb[t] == b'(' or sb[t] == b')' { parens = parens + 1; }
+                    t = t + 1;
+                }
+                if parens <= 10 {
+                    oracle_cases = oracle_cases + 1;
+                    if not same_list(a, solve_d(s, popcnt)) { p7 = p7 + 1; }
+                }
+
+                li = li + 1;
+            }
+            shape = shape + 1;
+        }
+        round = round + 1;
+    }
+
+    // Shapes whose answer the statement fixes outright, at every size.
+    let mut fixed = 1;
+    while fixed <= 12 {
+        let mut opens = String.new();
+        let mut closes = String.new();
+        let mut balanced = String.new();
+        let mut i = 0;
+        while i < fixed {
+            opens.push(b'(' as char);
+            closes.push(b')' as char);
+            balanced.push_str("()");
+            i = i + 1;
+        }
+        // All '(' or all ')' — everything goes, one empty answer.
+        let ao = solve_a(opens);
+        if ao.len() != 1 or ao[0] != "" { p4 = p4 + 1; }
+        let ac = solve_a(closes);
+        if ac.len() != 1 or ac[0] != "" { p4 = p4 + 1; }
+        // Already valid — itself, alone, untouched.
+        let ab = solve_a(balanced);
+        if ab.len() != 1 or ab[0] != balanced { p4 = p4 + 1; }
+        fixed = fixed + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"oracle cases {oracle_cases}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 invalid results {p2}");
+    println(f"P3 subsequence/skeleton violations {p3}");
+    println(f"P4 length violations {p4}");
+    println(f"P5 duplicate or empty answer sets {p5}");
+    println(f"P6 mirror asymmetries {p6}");
+    println(f"P7 oracle disagreements {p7}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

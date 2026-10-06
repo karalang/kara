@@ -1,0 +1,9 @@
+
+struct Inner { v: i64 }
+struct Outer { inner: Inner }
+
+let CFG: Outer = Outer { inner: Inner { v: 3 } };
+
+fn main() {
+    println(CFG.inner.v.to_string());
+}

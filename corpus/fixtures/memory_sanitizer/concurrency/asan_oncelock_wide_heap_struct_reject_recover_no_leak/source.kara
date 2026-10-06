@@ -1,0 +1,16 @@
+
+struct Rec { id: i64, name: String }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Rec] = OnceLock.new();
+        match cell.set(Rec { id: 1i64, name: "first".to_string() }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set(Rec { id: 2i64, name: "second".to_string() }) {
+            Ok(_) => {},
+            Err(e) => { let r: Rec = e.rejected; total = total + r.id + r.name.len(); },
+        }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

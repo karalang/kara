@@ -1,0 +1,16 @@
+fn main() {
+         let cmd = Command.new("/bin/sleep").arg("60");
+         match cmd.spawn() {
+             Ok(child) => {
+                 match child.kill() {
+                     Ok(_) => println("killed"),
+                     Err(_) => println("kill_err"),
+                 }
+                 match child.wait() {
+                     Ok(status) => println(status.success),
+                     Err(_) => println("wait_err"),
+                 }
+             }
+             Err(_) => println("spawn_err"),
+         }
+     }

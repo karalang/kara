@@ -1,0 +1,8 @@
+
+        fn main() {
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                k = k + 1i64;
+            }
+        }
+        

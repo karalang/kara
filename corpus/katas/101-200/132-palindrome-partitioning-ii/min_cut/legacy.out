@@ -1,0 +1,16 @@
+aab: 1
+a: 0
+ab: 1
+aabaa: 0
+abccba: 0
+racecar: 0
+noonabbad: 2
+abcde: 4
+aaaaa: 0
+cabababcbc: 3
+lcg0(len=20): 1
+lcg1(len=28): 8
+lcg2(len=36): 35
+lcg3(len=44): 1
+lcg4(len=52): 16
+sink: 532220985

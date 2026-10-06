@@ -1,0 +1,11 @@
+fn main() {
+            println("a-b-c-d".replacen("-", "_", 2));
+            println("x.x.x".replacen(".", "!", 10));
+            println("aaaa".replacen("a", "bb", 3));
+            println("1,2,3".replacen(",", ";", 0));
+            println("1,2,3".replacen(",", ";", -1));
+            let s: String = "one two two two";
+            println(s.replacen("two", "2", 2));
+            // Receiver untouched (fresh owned copy).
+            println(s);
+        }

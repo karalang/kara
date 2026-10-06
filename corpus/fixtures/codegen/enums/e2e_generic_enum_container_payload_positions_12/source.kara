@@ -1,0 +1,14 @@
+
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+
+fn main() {
+let a1: Vec[R] = [mkr(1)];
+let b1: Vec[Vec[R]] = [a1];
+let c1: Vec[Vec[Vec[R]]] = [b1];
+let s: Slot[Vec[Vec[Vec[R]]]] = Slot.S(c1);
+println("mid");
+println("end");
+}

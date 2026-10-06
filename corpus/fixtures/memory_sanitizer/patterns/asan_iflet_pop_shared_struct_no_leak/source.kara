@@ -1,0 +1,14 @@
+
+shared struct N { val: i64 }
+fn main() {
+    let mut st: Vec[N] = Vec.new();
+    st.push(N { val: 1i64 });
+    st.push(N { val: 2i64 });
+    st.push(N { val: 3i64 });
+    let mut sum = 0i64;
+    // if let form
+    if let Some(a) = st.pop() { sum = sum + a.val; }
+    // while let form drains the rest
+    while let Some(b) = st.pop() { sum = sum + b.val; }
+    println(sum.to_string());
+}

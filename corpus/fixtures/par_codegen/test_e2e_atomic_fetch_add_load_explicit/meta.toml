@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_e2e_atomic_fetch_add_load_explicit"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

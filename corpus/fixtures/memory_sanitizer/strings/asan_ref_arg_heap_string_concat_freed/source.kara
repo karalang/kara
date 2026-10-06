@@ -1,0 +1,10 @@
+
+fn show_len(s: ref String) {
+    println(s.len());
+}
+
+fn main() {
+    let a = "left ";
+    let b = "right";
+    show_len(a + b);
+}

@@ -1,0 +1,8 @@
+
+struct Bag { items: Vec[i64] }
+impl Drop for Bag {
+    fn drop(mut ref self) {}
+}
+fn main() {
+    let b = Bag { items: Vec.new() };
+}

@@ -1,0 +1,10 @@
+
+fn fetch(u: ref String) -> i64 with reads(Network) suspends { return u.len(); }
+fn main() {
+    let a = "aaaaaaaaaaaaaaaaaaaa";
+    let b = "bbbbbbbbbbbbbbbbbbbb";
+    let x = fetch(a);
+    let y = fetch(b);
+    println(x);
+    println(y);
+}

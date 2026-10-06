@@ -1,0 +1,11 @@
+
+fn f(n: i64) -> i64 {
+    match n {
+        x @ (1 | 2 | 3) => x * 100,
+        other => other,
+    }
+}
+fn main() {
+    println(f(2));  // grouped or matches → 200
+    println(f(9));  // must NOT match the grouped or → 9
+}

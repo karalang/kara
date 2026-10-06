@@ -1,0 +1,13 @@
+source = "tests/interpreter/strings.rs::test_char_ascii_case_and_is_ascii_interpreter"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

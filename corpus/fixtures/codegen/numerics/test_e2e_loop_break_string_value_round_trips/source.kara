@@ -1,0 +1,7 @@
+
+fn pick() -> String {
+    let mut i = 0;
+    loop { i = i + 1; if i == 2 { break f"got{i}" } }
+}
+
+fn main() { println(pick()); }

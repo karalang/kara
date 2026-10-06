@@ -1,0 +1,17 @@
+
+        fn main() {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(10);
+            v.push(20);
+            v.push(30);
+            let a = v.pop();
+            let b = v.pop();
+            let c = v.pop();
+            let d = v.pop();
+            println(a);
+            println(b);
+            println(c);
+            println(d);
+            println(v.len());
+        }
+    

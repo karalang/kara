@@ -1,0 +1,1 @@
+ERROR at line 2: cannot move `u.name` out of a borrowed place; write `u.name.clone()`

@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut inputs: Vec[i64] = Vec.new();
+    inputs.push(10i64);
+    inputs.push(20i64);
+    inputs.push(30i64);
+    inputs.push(40i64);
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        let idx: i64 = k % 4i64;
+        sum = sum + inputs[idx];
+        inputs.push(k);
+        k = k + 1i64;
+    }
+    println(sum);
+}

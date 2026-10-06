@@ -1,0 +1,43 @@
+
+struct Person { name: String, note: String, age: i64 }
+
+fn twoheap(k: i64) -> (Person, String) {
+    return (
+        Person { name: "ada".to_string(), note: "unread".to_string(), age: k },
+        "sib".to_string(),
+    );
+}
+fn twostr(k: i64) -> (String, String) { return (f"a{k}", f"b{k}"); }
+fn plainpair(k: i64) -> (String, i64) { return (f"s{k}", k + 1); }
+fn structpair(k: i64) -> (Person, i64) {
+    return (Person { name: "ada".to_string(), note: "unread".to_string(), age: k }, k);
+}
+
+fn main() {
+    // non-consuming reads: the temp's drop must free the element it hands out
+    println(twoheap(1).1);
+    println(twostr(1).0);
+    println(plainpair(1).0);
+    println(twostr(2).0.len());
+    println(plainpair(2).1);
+    // consuming positions: the destination takes that element over
+    let w = twoheap(3).1;
+    println(w);
+    let x = twostr(3).0;
+    println(x);
+    let mut o: Vec[String] = Vec.new();
+    o.push(twostr(4).0);
+    println(o[0]);
+    // both elements read out of separate temps
+    println(twostr(5).0);
+    println(twostr(5).1);
+    // controls that were always clean
+    let a = twoheap(6);
+    println(a.1);
+    let _b = twoheap(7);
+    // composition with B-2026-08-28-3: a field read through the projection
+    println(structpair(8).0.name);
+    println(twoheap(9).0.name);
+    let y = twoheap(10).0.name;
+    println(y);
+}

@@ -1,0 +1,12 @@
+
+#[derive(Display)]
+enum MyErr { Bad }
+fn helper(x: i64) -> Result[i64, MyErr] {
+    if x < 0 { return Err(MyErr.Bad); }
+    Ok(x + 1)
+}
+fn main() -> Result[(), MyErr] {
+    let v = helper(0 - 5)?;
+    println(v);
+    Ok(())
+}

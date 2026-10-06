@@ -1,0 +1,31 @@
+
+struct Holder {{ f: File }}
+fn make(path: String) -> Holder with reads(FileSystem) panics {{
+    match File.open(path) {{
+        Ok(fh) => Holder {{ f: fh }},
+        Err(_) => panic("open-failed"),
+    }}
+}}
+fn main() with reads(FileSystem) writes(FileSystem) panics {{
+    let mut buf: Array[u8, 4] = [0u8; 4];
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {{
+        // (a) moved through a return, then dropped by the caller's binding.
+        let h = make("{path}");
+        match h.f.read(mut buf) {{ Ok(_) => {{ n = n + 1i64; }} Err(_) => {{}} }}
+        // (b) popped out — ownership moves to the `Some` binding.
+        let mut hs: Vec[File] = Vec.new();
+        match File.open("{path}") {{ Ok(f) => {{ hs.push(f); }} Err(_) => {{}} }}
+        match hs.pop() {{
+            Some(g) => {{ match g.read(mut buf) {{ Ok(_) => {{ n = n + 1i64; }} Err(_) => {{}} }} }}
+            None => {{}}
+        }}
+        // (c) field read into a fresh binding while the struct is still live.
+        let h2 = make("{path}");
+        let g2 = h2.f;
+        match g2.read(mut buf) {{ Ok(_) => {{ n = n + 1i64; }} Err(_) => {{}} }}
+        i = i + 1;
+    }}
+    println(n.to_string());
+}}

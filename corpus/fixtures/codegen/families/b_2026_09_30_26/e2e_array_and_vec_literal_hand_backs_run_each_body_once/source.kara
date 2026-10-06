@@ -1,0 +1,33 @@
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+fn mkd(n: i64) -> D { return D { id: n, s: f"sssssssssssssssssssssssssssssssssss{n}" } }
+struct K { n: i64 }
+impl K { fn vpair(ref self, a: D, b: D) -> Vec[D] { Vec[a, b] } }
+fn tail(a: D, b: D) -> Array[D, 2] { [a, b] }
+fn usea(xs: Array[D, 2]) -> i64 { return xs[0].id + xs[1].id }
+fn vtail(a: D, b: D) -> Vec[D] { Vec[a, b] }
+fn keep1(a: D, b: D) -> Array[D, 1] { [a] }
+fn condv(a: D, k: bool) -> Vec[D] { if k { return Vec[a]; } Vec[mkd(90)] }
+fn witha(a: D) -> Array[D, 2] { return Array[a, mkd(91)]; }
+fn nest(a: D, b: D) -> (Array[D, 1], D) { ([a], b) }
+fn fwd(a: D) -> Array[D, 1] { keep1(a, mkd(92)) }
+fn condt(a: D, k: bool) -> Array[D, 1] { if k { [a] } else { [mkd(93)] } }
+fn tup(a: D, b: D) -> (D, D) { (a, b) }
+fn main() {
+    println(f"a {usea(tail(mkd(1), mkd(2)))}")
+    { let x = tail(mkd(3), mkd(4)); println(f"b {x[0].id}") }
+    { let p = mkd(5); let q = mkd(6); let x = tail(p, q); println(f"c {x[1].id}") }
+    { let x = vtail(mkd(7), mkd(8)); println(f"d {x.len()}") }
+    { let x = keep1(mkd(9), mkd(10)); println(f"e {x[0].id}") }
+    { let p = mkd(11); let q = mkd(12); let x = keep1(p, q); println(f"f {x[0].id}") }
+    { let x = condv(mkd(13), true); println(f"g {x.len()}") }
+    { let x = condv(mkd(14), false); println(f"h {x[0].id}") }
+    { let x = witha(mkd(15)); println(f"i {x[1].id}") }
+    { let k = K { n: 0 }; let x = k.vpair(mkd(16), mkd(17)); println(f"j {x.len()}") }
+    { let x = nest(mkd(18), mkd(19)); println(f"k {x.1.id}") }
+    { let x = fwd(mkd(20)); println(f"l {x[0].id}") }
+    { let p = mkd(21); let x = condt(p, true); println(f"m {x[0].id}") }
+    { let p = mkd(22); let x = condt(p, false); println(f"n {x[0].id}") }
+    { let x = tup(mkd(23), mkd(24)); println(f"o {x.0.id}") }
+    println("end")
+}

@@ -1,0 +1,19 @@
+
+struct Pair { a: i64, b: i64 }
+fn set_to(n: mut ref i64, v: i64) -> i64 { *n = v; v }
+fn set_a(p: mut ref Pair, v: i64) -> i64 { p.a = v; v }
+fn mutate(p: mut ref Pair) -> i64 {
+    match p {
+        whole @ Pair { a, b } => {
+            let _ = set_to(a, 5);
+            let _ = set_to(b, 9);
+            set_a(whole, 7)
+        }
+    }
+}
+fn main() {
+    let mut p = Pair { a: 1, b: 2 };
+    let _ = mutate(mut p);
+    println(p.a);
+    println(p.b);
+}

@@ -1,0 +1,6 @@
+example: [0, 0, 0, 0, 0, 0, 1]
+one cell: [1]
+column: [0, 0, 0, 0, 0, 2]
+anti-diagonal: [0, 0, 0, 0, 0, 0, 1]
+draw: [0, 0, 0, 0, 0, 0, 0, 0, 0]
+1000 random games: player 1 won 83, player 2 won 28, 553336 moves

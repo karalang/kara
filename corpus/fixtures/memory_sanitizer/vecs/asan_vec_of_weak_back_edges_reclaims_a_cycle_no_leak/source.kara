@@ -1,0 +1,29 @@
+
+shared struct N { v: i64, mut ns: Vec[weak N] }
+
+fn build(seed: i64) -> i64 {
+    let a = N { v: seed, ns: Vec.new() };
+    let b = N { v: seed + 1, ns: Vec.new() };
+    let c = N { v: seed + 2, ns: Vec.new() };
+    let d = N { v: seed + 3, ns: Vec.new() };
+    a.ns.push(b); a.ns.push(d);
+    b.ns.push(a); b.ns.push(c);
+    c.ns.push(b); c.ns.push(d);
+    d.ns.push(a); d.ns.push(c);
+    return a.ns.len() + b.ns.len() + c.ns.len() + d.ns.len();
+}
+
+// Overwrites the dead frame the handles lived in, so LSan cannot mistake
+// stack residue for reachability. See the doc comment.
+fn churn(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    let pad: i64 = n * 3;
+    return pad + churn(n - 1);
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let edges = build(seed);
+    let noise = churn(2000);
+    println(edges + noise - noise);
+}

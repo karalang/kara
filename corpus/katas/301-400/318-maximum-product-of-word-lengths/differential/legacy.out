@@ -1,0 +1,21 @@
+cases 2175 nonzero 1367 pairable 1693 nonempty 1934 private-alphabet 28
+P1 mask-vs-oracle disagreements 0
+P2 dedup-vs-oracle disagreements 0
+P3 sorted-vs-oracle disagreements 0
+P4 reversed failures 0
+P4 shuffled failures 0
+P5 duplicate-word failures 0
+P6 relabel mask failures 0
+P6 relabel dedup failures 0
+P6 relabel sets failures 0
+P6 relabel sorted failures 0
+P7 drop-never-helps failures 0
+P8 add-never-hurts failures 0
+P9 witness collides 0
+P9 witness product mismatch 0
+P9 zero-answer-with-disjoint-pair 0
+P10 repeat-growth out of range 0
+P11 private-alphabet closed form failures 0
+P12 mask/table bit mismatch 0
+P12 mask/table pair mismatch 0
+DIFFERENTIAL OK

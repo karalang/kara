@@ -1,0 +1,6 @@
+fn main() {
+         let rl = RateLimiter.new_token_bucket(1, 1);
+         println(rl.try_acquire("a"));
+         println(rl.try_acquire("a"));
+         println(rl.try_acquire("b"));
+     }

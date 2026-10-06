@@ -1,0 +1,19 @@
+
+fn make_v() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("first iter string padded out beyond thirty-six bytes");
+    v.push("second iter string padded out beyond thirty-six byte");
+    return v;
+}
+
+fn main() {
+    let mut pass = 0;
+    while pass < 3 {
+        let mut total = 0_i64;
+        for s in make_v().iter() {
+            total = total + s.len();
+        };
+        println(total);
+        pass = pass + 1;
+    };
+}

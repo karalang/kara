@@ -1,0 +1,22 @@
+
+struct Inner { s: String }
+enum Tok { Id(String), Eof }
+struct S { a: String, b: String, inner: Inner, tok: Tok, n: i64 }
+fn main() {
+    let v = S {
+        a: "aa".to_string(),
+        b: "bb".to_string(),
+        inner: Inner { s: "deep".to_string() },
+        tok: Tok.Id("tok".to_string()),
+        n: 7,
+    };
+    match v {
+        S { a, b: _, inner, tok, n } => {
+            let Inner { s } = inner;
+            println(a);
+            println(s);
+            match tok { Id(t) => println(t), Eof => println("eof") }
+            println(n.to_string());
+        }
+    }
+}

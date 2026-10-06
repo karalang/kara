@@ -1,0 +1,11 @@
+
+struct H { f: Fn(i64) -> i64, name: String }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> H { let a = H { f: make(k), name: "an independently heap-copied payload" }; let s = a; s }
+fn main() {
+    let a = H { f: make(10i64), name: "another sufficiently long heap string here" };
+    let s = a;
+    let t = s;
+    let r = build(20i64);
+    println(f"{(a.f)(1i64) + (s.f)(1i64) + (t.f)(1i64) + (r.f)(2i64)}");
+}

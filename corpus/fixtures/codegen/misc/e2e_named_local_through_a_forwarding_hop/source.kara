@@ -1,0 +1,24 @@
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct P { id: i64, name: String, xs: Vec[i64] }
+impl Drop for P { fn drop(mut ref self) { println(f"  dP{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
+fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
+fn f(r: R) -> R { return r; }
+fn ppass(p: P) -> P { return p; }
+fn dies(r: R) -> i64 { return r.id; }
+fn via(r: R) -> R { return f(r); }
+fn via2(r: R) -> R { let m = r; return f(m); }
+fn pvia(p: P) -> P { return ppass(p); }
+fn dvia(r: R) -> i64 { return dies(r); }
+fn mvia(r: R, c: bool) -> R { if c { return f(r); } return mk(99); }
+fn main() {
+  println("named_hop"); let a = mk(1); let z = via(a); println(f"  v={z.inner.v}");
+  println("fresh_hop"); let w = via(mk(2)); println(f"  v={w.inner.v}");
+  println("rebind_hop"); let b = mk(3); let y = via2(b); println(f"  v={y.inner.v}");
+  println("copyable_hop"); let c = mkp(4); let d = pvia(c); println(f"  v={d.id}");
+  println("dies_in_hop"); let e = mk(5); println(f"  v={dvia(e)}");
+  println("mixed_dies_inside"); let g = mk(6); let h = mvia(g, false); println(f"  v={h.id}");
+  println("end");
+}

@@ -1,0 +1,32 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
+
+struct Mo { m: Map[i64, String], r: R, z: i64 }
+impl Drop for Mo { fn drop(mut ref self) { println(f"dMo{self.z}") } }
+fn moOwn(h: Mo) -> i64 { println("  in"); return h.z; }
+
+struct Ao { a: Array[i64, 2], r: R, z: i64 }
+impl Drop for Ao { fn drop(mut ref self) { println(f"dAo{self.z}") } }
+fn aoOwn(h: Ao) -> i64 { println("  in"); return h.z; }
+
+struct Cs { s: String, r: R, z: i64 }
+impl Drop for Cs { fn drop(mut ref self) { println(f"dCs{self.z}") } }
+fn csOwn(h: Cs) -> i64 { println("  in"); return h.z; }
+
+fn moTemp()  { let mut m: Map[i64, String] = Map.new(); m.insert(1, f"v1"); let _ = moOwn(Mo { m: m, r: mk(3), z: 21 }); }
+fn moLocal() { let mut m: Map[i64, String] = Map.new(); m.insert(2, f"v2"); let h = Mo { m: m, r: mk(4), z: 22 }; let _ = moOwn(h); }
+fn aoTemp()  { let _ = aoOwn(Ao { a: [7, 8], r: mk(5), z: 23 }); }
+fn aoLocal() { let h = Ao { a: [7, 8], r: mk(6), z: 24 }; let _ = aoOwn(h); }
+fn csTemp()  { let _ = csOwn(Cs { s: f"s7", r: mk(7), z: 25 }); }
+fn csLocal() { let h = Cs { s: f"s8", r: mk(8), z: 26 }; let _ = csOwn(h); }
+
+fn main() {
+    println("moTemp");  moTemp();
+    println("moLocal"); moLocal();
+    println("aoTemp");  aoTemp();
+    println("aoLocal"); aoLocal();
+    println("csTemp");  csTemp();
+    println("csLocal"); csLocal();
+    println("done");
+}

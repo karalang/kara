@@ -1,0 +1,8 @@
+fn pr(o: Option[f64]) { match o { Some(x) => println(x), None => println(-1.0), } }
+        fn main() {
+            pr(f64.parse("3.14"));
+            pr(f64.parse("1e10"));
+            pr(f64.parse("-2.5"));
+            pr(f64.parse("notnum"));
+            pr(f64.parse("42"));
+        }

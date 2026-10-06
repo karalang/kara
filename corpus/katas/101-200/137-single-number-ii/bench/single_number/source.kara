@@ -1,0 +1,113 @@
+// Benchmark harness for LeetCode #137 — Single Number II.
+//
+// Build-once + punch (BENCHMARKS.md): four arrays are built once, then each
+// punch runs BOTH bit-trick variants over one of them and cross-checks that
+// they agree — the same discipline the kata itself uses.
+//
+// Benching both is the point. They solve the same problem with wildly
+// different instruction mixes:
+//   A) ones/twos FSM      — one pass, ~6 bitwise ops per element, O(n)
+//   B) per-bit count mod 3 — 32 passes, a shift/mask/compare per bit, O(32n)
+// Variant B does roughly 32x the work of A on identical data, so a single
+// benchmark covers both a tight bitwise loop and a nested counting loop.
+//
+// Each array holds every value exactly three times plus one loner. The three
+// copies are INTERLEAVED (three passes over the value list) rather than
+// adjacent, so the FSM's state actually cycles through its residues instead of
+// resetting every third element.
+
+fn mask32() -> i64 {
+    4294967295
+}
+
+fn sign_extend32(v: i64) -> i64 {
+    if v >= 2147483648 {
+        v - 4294967296
+    } else {
+        v
+    }
+}
+
+fn single_ones_twos(nums: ref Vec[i64]) -> i64 {
+    let mask = mask32();
+    let mut ones = 0;
+    let mut twos = 0;
+    let mut i = 0;
+    while i < nums.len() {
+        let x = nums[i] & mask;
+        ones = (ones ^ x) & (~twos) & mask;
+        twos = (twos ^ x) & (~ones) & mask;
+        i = i + 1;
+    }
+    sign_extend32(ones)
+}
+
+fn single_bitcount(nums: ref Vec[i64]) -> i64 {
+    let mut res = 0;
+    let mut b = 0;
+    while b < 32 {
+        let mut cnt = 0;
+        let mut i = 0;
+        while i < nums.len() {
+            if ((nums[i] >> b) & 1) == 1 {
+                cnt = cnt + 1;
+            }
+            i = i + 1;
+        }
+        if (cnt % 3) != 0 {
+            res = res | (1 << b);
+        }
+        b = b + 1;
+    }
+    sign_extend32(res)
+}
+
+fn main() {
+    let np = 4;
+    let k = 30000;
+    let iters = 40;
+
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut j = 0;
+    while j < np {
+        let mut vals: Vec[i64] = Vec.new();
+        let mut x = j + 1;
+        let mut t = 0;
+        while t < k {
+            x = (x * 1103515245 + 12345) % 2147483648;
+            let hi = x / 65536;
+            x = (x * 1103515245 + 12345) % 2147483648;
+            vals.push((hi * 32768 + x / 65536) % 100000);
+            t = t + 1;
+        }
+        let mut arr: Vec[i64] = Vec.new();
+        let mut pass = 0;
+        while pass < 3 {
+            let mut q = 0;
+            while q < k {
+                arr.push(vals[q]);
+                q = q + 1;
+            }
+            pass = pass + 1;
+        }
+        arr.push(999983 + j);
+        arrays.push(arr);
+        j = j + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 3) % np;
+        let a = single_ones_twos(arrays[idx]);
+        let b = single_bitcount(arrays[idx]);
+        // Cross-check: the two variants must agree, so a divergence shows up in
+        // the sink rather than passing silently.
+        if a != b {
+            sink = sink + 1000000000;
+        }
+        sink = (sink + a + b) % 1000000007;
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

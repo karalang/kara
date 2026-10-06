@@ -1,0 +1,90 @@
+// LeetCode #72: Edit Distance — rolling two-row DP, O(m·n) time, O(n) space.
+//
+// The same Levenshtein recurrence as the ★
+// ([`edit_distance.kara`](edit_distance.kara)), rolled onto two rows. Row `i` of
+// the table depends only on row `i-1` (the diagonal `dp[i-1][j-1]` and the up
+// `dp[i-1][j]`) and on the current row's left cell (`dp[i][j-1]`), so keeping the
+// PREVIOUS row plus the row being built is enough:
+//
+//   prev  holds  dp[i-1][*]   (seeded to 0..n, the empty-`a` border)
+//   cur   holds  dp[i][*]     (cur[0] = i, the empty-`b` border)
+//
+//   match:  cur[j] = prev[j-1]
+//   else:   cur[j] = 1 + min(prev[j-1], prev[j], cur[j-1])
+//                            \_diag_/   \_up_/   \_left_/
+//
+// After each row, `prev` is replaced by `cur` and the next row is built. This is
+// the O(n)-space form of kata [#62](../62-unique-paths/)'s rolling row applied to
+// a two-string table (a full second row is carried rather than #62's single
+// updated-in-place array, because Edit Distance reads BOTH `prev[j-1]` (diagonal)
+// and `prev[j]` (up), which a single in-place row would clobber). It agrees with
+// the full-table ★ on every case; kept as the space optimisation and cross-check.
+//
+// ASCII input, distances ≤ max(m, n) ≤ 500 — i64 throughout, no overflow risk.
+
+fn edit_distance(a: ref String, b: ref String) -> i64 {
+    let ab = a.bytes();
+    let bb = b.bytes();
+    let m = a.len();
+    let n = b.len();
+
+    // prev = dp row for the empty prefix of `a`: dp[0][j] = j.
+    let mut prev: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j <= n {
+        prev.push(j);
+        j = j + 1;
+    }
+
+    let mut i = 1;
+    while i <= m {
+        let mut cur: Vec[i64] = Vec.new();
+        cur.push(i);                          // dp[i][0] = i
+        let mut c = 1;
+        while c <= n {
+            if ab[i - 1] == bb[c - 1] {
+                let d = prev[c - 1];
+                cur.push(d);                  // match: carry the diagonal
+            } else {
+                let diag = prev[c - 1];
+                let up = prev[c];
+                let left = cur[c - 1];
+                cur.push(1 + min(diag, min(up, left)));
+            }
+            c = c + 1;
+        }
+        prev = cur;                           // roll: the new row becomes prev
+        i = i + 1;
+    }
+
+    prev[n]
+}
+
+// ---- test harness (shared verbatim with edit_distance.kara) --------------------
+
+fn report(a: String, b: String, s: mut ref String) {
+    let d = edit_distance(a, b);
+    println(f"edit(\"{a}\",\"{b}\") = {d}");
+    s.push(' ');
+    s.push_str(f"{d}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report("horse", "ros", mut s);              // 3
+    report("intention", "execution", mut s);    // 5
+    report("", "", mut s);                      // 0
+    report("", "abc", mut s);                   // 3
+    report("abc", "", mut s);                   // 3
+    report("abc", "abc", mut s);                // 0
+    report("a", "b", mut s);                    // 1
+    report("kitten", "sitting", mut s);         // 3
+    report("sunday", "saturday", mut s);        // 3
+    report("plasma", "altruism", mut s);        // 6
+    report("abcdef", "azced", mut s);           // 3
+    report("distance", "instance", mut s);      // 2
+    report("x", "", mut s);                     // 1
+
+    println(s);
+}

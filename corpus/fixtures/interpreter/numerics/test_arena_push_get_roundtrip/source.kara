@@ -1,0 +1,9 @@
+fn main() {
+             let a: Arena[i64] = Arena.new();
+             let r0 = a.push(10);
+             let r1 = a.push(20);
+             let r2 = a.push(30);
+             println(a.get(r0));
+             println(a.get(r1));
+             println(a.get(r2));
+         }

@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_ir_cost_gate_doubly_nested_runtime_callee_fires_at_small_k"
+dedup_of = ["tests/par_codegen.rs::test_e2e_doubly_nested_runtime_callee_par_matches_serial"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

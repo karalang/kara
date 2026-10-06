@@ -1,0 +1,16 @@
+
+fn head_or(v: Vec[i64], default: i64) -> i64 {
+    match v {
+        [first, ..] => first,
+        [] => default,
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    let empty: Vec[i64] = Vec.new();
+    println(head_or(v, -1));
+    println(head_or(empty, -1));
+}

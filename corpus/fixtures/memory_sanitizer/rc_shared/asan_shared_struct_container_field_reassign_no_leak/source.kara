@@ -1,0 +1,27 @@
+
+shared struct Node { name: String, mut size: i64, mut children: Vec[Node] }
+shared struct Reg { mut label: String, mut tags: Vec[String], mut m: Map[String, i64], mut s: Set[String] }
+fn main() {
+    let root = Node { name: "rootrootrootroot", size: 1, children: Vec.new() };
+    let kid = Node { name: "kidkidkidkidkidk", size: 2, children: Vec.new() };
+    root.children.push(kid);
+    let r = Reg { label: "seedseedseedseedseed", tags: Vec.new(), m: Map.new(), s: Set.new() };
+    let mut k = 0;
+    while k < 20 {
+        r.tags.push("alphabetalphabetalphabet");
+        let _ = r.m.insert("gammagammagammagammagam", k);
+        let _ = r.s.insert("deltadeltadeltadeltadel");
+
+        let fresh_t: Vec[String] = Vec.new();
+        let fresh_m: Map[String, i64] = Map.new();
+        let fresh_s: Set[String] = Set.new();
+
+        r.tags = fresh_t;
+        r.m = fresh_m;
+        r.s = fresh_s;
+        k = k + 1;
+    }
+    let kept: Vec[Node] = Vec.new();
+    root.children = kept;
+    println(f"{r.tags.len()} {r.m.len()} {r.s.len()} {root.children.len()}");
+}

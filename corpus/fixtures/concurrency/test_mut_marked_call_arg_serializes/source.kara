@@ -1,0 +1,10 @@
+
+        fn add_one(out: mut ref Vec[i64]) {
+            out.push(7);
+        }
+        fn main() {
+            let mut out: Vec[i64] = Vec.new();
+            add_one(mut out);
+            println(out.len());
+        }
+        

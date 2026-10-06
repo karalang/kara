@@ -1,0 +1,24 @@
+
+trait Functor {
+    type Mapped[U];
+    fn map_to_i64(ref self) -> Self.Mapped[i64];
+}
+struct Doubler {}
+impl Functor for Doubler {
+    type Mapped[U] = Vec[U];
+    fn map_to_i64(ref self) -> Vec[i64] {
+        let mut v: Vec[i64] = Vec.new();
+        v.push(21i64);
+        v.push(42i64);
+        v
+    }
+}
+fn caller(d: ref Doubler) -> Vec[i64] {
+    d.map_to_i64()
+}
+fn main() {
+    let dbl = Doubler {};
+    let result = caller(dbl);
+    println(f"{result[0]}");
+    println(f"{result[1]}");
+}

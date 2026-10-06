@@ -1,0 +1,22 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+fn mk2(i: i64) -> Option[S] { Some(mk(i)) }
+fn mk2o(x: S) -> Option[S] { Some(x) }
+fn chk(x: S) -> bool { mk2o(x).is_some() }
+impl S { fn wrap(self) -> Option[S] { Some(self) } fn probe(self) -> bool { self.wrap().is_some() } }
+fn main() {
+    let v = vec![mk(1), mk(2)];
+    let a = v.first().is_some();
+    let b = v.get(1).is_some();
+    println(f"a{a} b{b} {v.len()}");
+    let o = mk2(3);
+    let c = o.is_some();
+    println(f"c{c}");
+    let t = chk(mk(4));
+    println(f"t{t}");
+    let u = mk(5).probe();
+    println(f"u{u}");
+    println("end")
+}

@@ -1,0 +1,15 @@
+
+struct FakeEnv {}
+impl FakeEnv {
+    fn args(self) -> Vec[String] {
+        let mut v: Vec[String] = Vec.new();
+        v.push("alpha");
+        v.push("beta");
+        v.push("gamma");
+        v
+    }
+}
+fn count() -> i64 reads(Env) { env.args().len() }
+fn main() reads(Env) {
+    with_provider[Env](FakeEnv {}, || { println(count()); });
+}

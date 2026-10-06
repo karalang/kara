@@ -1,0 +1,21 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn from3() -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let n2 = ListNode { val: 2, next: None };
+    let n3 = ListNode { val: 3, next: None };
+    n2.next = Some(n3);
+    head.next = Some(n2);
+    Some(head)
+}
+fn poke(head: Option[ListNode]) {
+    if let Some(first) = head {
+        if let Some(second) = first.next {
+            first.next = second.next;
+            println(second.val);
+        }
+    }
+}
+fn main() {
+    poke(from3());
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_05_13.rs::e2e_self_param_in_concrete_generic_enum_impl"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_05_13.rs::asan_self_param_in_concrete_generic_enum_impl"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

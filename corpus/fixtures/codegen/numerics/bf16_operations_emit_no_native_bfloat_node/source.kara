@@ -1,0 +1,22 @@
+
+#[derive(PartialEq)]
+shared struct Sb { x: bf16 }
+fn main() {
+    let n = env.args().len() as i64;
+    let a: bf16 = (n as f32) as bf16;
+    let b: bf16 = ((n + 1) as f32) as bf16;
+    println(f"cmp={a < b} {a <= b} {a > b} {a >= b} {a == b} {a != b}");
+    println(f"arith={a + b} {a - b} {a * b} {a / b}");
+    println(f"unary={-a} {a.abs()}");
+    println(f"minmax={a.min(b)} {a.max(b)}");
+    println(f"clamp={b.clamp(a, b)}");
+    let s1 = Sb { x: a };
+    let s2 = Sb { x: a };
+    println(f"eq={s1 == s2}");
+    let v: Vec[bf16] = [b, a, b];
+    println(f"contains={v.contains(a)}");
+    let mut m: Map[Bf16, i64] = Map.new();
+    let _ = m.insert(Bf16.from(a), 1);
+    println(f"map={m.len()}");
+    println(f"fmt={a} back={a as f32}");
+}

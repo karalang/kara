@@ -1,0 +1,28 @@
+
+fn label(v: ref Vec[i64]) -> String {
+    match v {
+        [] => "empty",
+        [a, b] => "pair",
+        _ => "other",
+    }
+}
+fn sum2(v: ref Vec[i64]) -> i64 {
+    match v {
+        [a, b] => a + b,
+        _ => -1,
+    }
+}
+fn main() {
+    let e: Vec[i64] = Vec.new();
+    let mut p: Vec[i64] = Vec.new();
+    p.push(3);
+    p.push(4);
+    let mut t: Vec[i64] = Vec.new();
+    t.push(1);
+    t.push(2);
+    t.push(3);
+    println(label(e));
+    println(label(p));
+    println(label(t));
+    println(f"{sum2(p)}");
+}

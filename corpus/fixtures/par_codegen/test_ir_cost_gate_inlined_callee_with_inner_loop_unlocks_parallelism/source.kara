@@ -1,0 +1,15 @@
+
+fn helper() -> i64 {
+    let mut acc: i64 = 0i64;
+    for j in 0i64..50i64 {
+        acc = acc + j;
+    }
+    acc
+}
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..3000i64 {
+        sum = sum + helper();
+    }
+    println(sum);
+}

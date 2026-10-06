@@ -1,0 +1,5 @@
+fn main() {
+         Log.set_exporter(NoOpExporter {});
+         Log.info("i");
+         Log.error("e");
+     }

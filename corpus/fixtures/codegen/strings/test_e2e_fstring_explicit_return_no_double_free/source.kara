@@ -1,0 +1,11 @@
+
+fn pick(id: i64) -> String {
+    if id > 0 { return f"pos={id}"; }
+    f"nonpos={id}"
+}
+fn main() {
+    let a = pick(5);
+    let b = pick(-3);
+    println(a);
+    println(b);
+}

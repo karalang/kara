@@ -1,0 +1,125 @@
+// Benchmark workload for LeetCode #333 — the post-order arm
+// (largest_bst.kara), timed as written.
+//
+// Build once, then punch (BENCHMARKS.md). One random BST of NODES distinct
+// values is built once by inserting a shuffled range into the index pool. Each
+// of PUNCHES punches gives one random node a random value, which usually
+// breaks the BST around it, solves, and puts the value back, so every punch
+// walks the whole tree.
+//
+// Each answer is folded into a rolling hash, which is the sink.
+
+const NODES: i64 = 100000;
+const PUNCHES: i64 = 200;
+const MODULUS: i64 = 1073741789;
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+struct Info {
+    bst: bool,
+    size: i64,
+    lo: i64,
+    hi: i64,
+}
+
+fn visit(nodes: ref Vec[Node], node: i64, best: mut ref i64) -> Info {
+    let val = nodes[node].val;
+    let left = nodes[node].left;
+    let right = nodes[node].right;
+    let mut bst = true;
+    let mut size = 1;
+    let mut lo = val;
+    let mut hi = val;
+    if left != -1 {
+        let l = visit(nodes, left, best);
+        if l.bst and l.hi < val {
+            size += l.size;
+            lo = l.lo;
+        } else {
+            bst = false;
+        }
+    }
+    if right != -1 {
+        let r = visit(nodes, right, best);
+        if r.bst and r.lo > val {
+            size += r.size;
+            hi = r.hi;
+        } else {
+            bst = false;
+        }
+    }
+    if bst and size > best {
+        best = size;
+    }
+    return Info { bst: bst, size: size, lo: lo, hi: hi };
+}
+
+fn largest_bst_subtree(nodes: ref Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    let mut best = 0;
+    let _ = visit(nodes, 0, mut best);
+    return best;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn wide(seed: mut ref i64) -> i64 {
+    let hi = next(seed);
+    return hi * 32768 + next(seed);
+}
+
+fn insert(nodes: mut ref Vec[Node], v: i64) {
+    nodes.push(Node { val: v, left: -1, right: -1 });
+    let id = nodes.len() - 1;
+    let mut cur = 0;
+    while cur != id {
+        if v < nodes[cur].val {
+            if nodes[cur].left == -1 {
+                nodes[cur].left = id;
+            }
+            cur = nodes[cur].left;
+        } else {
+            if nodes[cur].right == -1 {
+                nodes[cur].right = id;
+            }
+            cur = nodes[cur].right;
+        }
+    }
+}
+
+fn main() {
+    let mut seed = 333;
+    let mut vals: Vec[i64] = Vec.new();
+    for i in 0..NODES {
+        vals.push(i * 2);
+    }
+    for i in 0..NODES {
+        let j = i + wide(mut seed) % (NODES - i);
+        let t = vals[i];
+        vals[i] = vals[j];
+        vals[j] = t;
+    }
+    let mut nodes: Vec[Node] = Vec.new();
+    for v in vals {
+        insert(mut nodes, v);
+    }
+    let mut sink = 0;
+    for _ in 0..PUNCHES {
+        let at = wide(mut seed) % NODES;
+        let old = nodes[at].val;
+        nodes[at].val = wide(mut seed) % (2 * NODES);
+        let answer = largest_bst_subtree(nodes);
+        nodes[at].val = old;
+        sink = (sink * 1000003 + answer) % MODULUS;
+    }
+    println(f"{sink}");
+}

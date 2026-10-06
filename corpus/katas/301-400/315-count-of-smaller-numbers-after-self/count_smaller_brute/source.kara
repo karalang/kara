@@ -1,0 +1,52 @@
+// LeetCode #315: Count of Smaller Numbers After Self — the definition, O(n^2).
+//
+// For each i, scan everything to its right and count the strictly smaller
+// values. Nothing to get wrong, which is the point: this is the oracle the
+// differential measures the other three arms against.
+
+fn count_smaller(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let mut c = 0;
+        for j in (i + 1)..n {
+            if nums[j] < nums[i] { c = c + 1; }
+        }
+        counts.push(c);
+    }
+    return counts;
+}
+
+// ------------------------------------------------------------- demo ---
+
+fn fmt(v: ref Vec[i64]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..v.len() {
+        if i > 0 { s = s + ","; }
+        s = s + v[i].to_string();
+    }
+    return s + "]";
+}
+
+fn main() {
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    cases.push([5, 2, 6, 1]);            // LeetCode: [2,1,1,0]
+    cases.push([-1]);                    // [0]
+    cases.push([-1, -1]);                // [0,0] — equal is not smaller
+    cases.push([]);
+    cases.push([3, 3, 3, 3]);
+    cases.push([1, 2, 3, 4, 5]);         // ascending: all zero
+    cases.push([5, 4, 3, 2, 1]);         // descending: n-1-i
+    cases.push([-10000, 10000, 0, -10000, 7, 7, -3]);
+    cases.push([2, 0, 1]);
+
+    let mut acc = 0;
+    for c in 0..cases.len() {
+        let counts = count_smaller(cases[c]);
+        for j in 0..counts.len() {
+            acc = (acc * 131 + counts[j] + 1) % 1000000007;
+        }
+        println(f"case {c}: {fmt(counts)}");
+    }
+    println(f"sink: {acc}");
+}

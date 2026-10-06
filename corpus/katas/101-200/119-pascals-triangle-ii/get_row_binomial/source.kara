@@ -1,0 +1,57 @@
+// LeetCode #119 — binomial (multiplicative) variant.
+//
+// The rowIndex-th row is the row of binomial coefficients `C(rowIndex, j)`, so it can be produced
+// left-to-right with a single running value and no in-place update at all: `C(n, 0) = 1` and
+// `C(n, j) = C(n, j-1) * (n - j + 1) / j`. Every intermediate is an exact integer, so the division
+// is exact. A distinct mechanism from the in-place rolling `get_row.kara` (a pure forward multiply,
+// no index-assignment), which must produce the identical row — same `row_hash`.
+
+fn get_row(row_index: i64) -> Vec[i64] {
+    let mut row: Vec[i64] = Vec.new();
+    let mut c = 1; // C(row_index, 0)
+    let mut j = 0;
+    while j <= row_index {
+        row.push(c);
+        c = c * (row_index - j) / (j + 1);
+        j = j + 1;
+    }
+    row
+}
+
+fn row_hash(row: ref Vec[i64]) -> i64 {
+    let mut h = 1;
+    let mut j = 0;
+    while j < row.len() {
+        h = (h * 131 + row[j]) % 1000000007;
+        j = j + 1;
+    }
+    (h * 31 + row.len() + 7) % 1000000007
+}
+
+fn main() {
+    let mut r = 0;
+    while r <= 6 {
+        let row = get_row(r);
+        let mut line = "";
+        let mut c = 0;
+        while c < row.len() {
+            if c > 0 {
+                line = line + " ";
+            }
+            line = line + f"{row[c]}";
+            c = c + 1;
+        }
+        println(f"row {r}: {line}");
+        r = r + 1;
+    }
+
+    let mut acc = 0;
+    let mut n = 0;
+    while n <= 33 {
+        let row = get_row(n);
+        let h = row_hash(row);
+        acc = (acc * 131 + h) % 1000000007;
+        n = n + 1;
+    }
+    println(f"sink: {acc}");
+}

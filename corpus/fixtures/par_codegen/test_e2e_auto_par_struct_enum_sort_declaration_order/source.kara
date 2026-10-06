@@ -1,0 +1,24 @@
+
+#[derive(Eq, Ord, Clone)]
+struct Rect { width: i64, height: i64 }
+#[derive(Eq, Ord, Clone)]
+enum Shape { Circle(i64), Rect(i64, i64), Unit }
+fn stag(s: Shape) -> i64 {
+    match s { Shape.Circle(r) => 100 + r, Shape.Rect(w, h) => 200 + w * 10 + h, Shape.Unit => 300 }
+}
+fn main() {
+    let mut v: Vec[Rect] = Vec.new();
+    v.push(Rect { width: 2, height: 1 });
+    v.push(Rect { width: 1, height: 9 });
+    v.sort();
+    let mut i = 0;
+    while i < v.len() { let r = v[i].clone(); println(f"{r.width},{r.height}"); i = i + 1; }
+    let mut s: Vec[Shape] = Vec.new();
+    s.push(Shape.Rect(2, 1));
+    s.push(Shape.Circle(9));
+    s.push(Shape.Unit);
+    s.push(Shape.Circle(3));
+    s.sort();
+    let mut j = 0;
+    while j < s.len() { let sh = s[j].clone(); println(f"{stag(sh)}"); j = j + 1; }
+}

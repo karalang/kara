@@ -1,0 +1,123 @@
+// LeetCode #46: Permutations — used-array mutable-path backtracking (★).
+//
+// Given an array of DISTINCT integers `nums`, return every ordering of all the elements.
+// There are exactly n! of them. Unlike the combination katas ([#39](../39-combination-sum/),
+// [#40](../40-combination-sum-ii/)), order *is* the answer here — [1,2,3] and [2,1,3] are two
+// different permutations, not one — so there is no index-monotone walk to lean on: every level
+// of the DFS may pick *any* still-unused element, not just elements to the right of the last
+// pick. The job is therefore to track which elements are already spent on the current branch.
+//
+// The ★ style does that with a parallel `Vec[bool]` `used` marker plus one mutable `path`:
+//
+//   - the leaf is `path.len() == n` — every element placed; SNAPSHOT the path (`path.clone()`)
+//     into the output and return.
+//   - the loop tries every index `i in 0..n`; an index is descended into only when `not used[i]`.
+//     `used[i] = true` / `path.push(nums[i])` / recurse / `path.pop()` / `used[i] = false`
+//     brackets the choice so both the path and the marker array are exactly restored on the way
+//     back up — the textbook backtracking move, here with TWO things to undo (the path entry and
+//     the used flag) rather than one.
+//
+// Because the loop always scans `0..n` in index order and picks the first unused index first,
+// the permutations come out in the canonical "lexicographic by original index" order — for
+// `[1,2,3]`: [1,2,3],[1,3,2],[2,1,3],[2,3,1],[3,1,2],[3,2,1], exactly LeetCode's listing. The
+// two sibling files ([`_scan`](permutations_scan.kara), [`_snapshot`](permutations_snapshot.kara))
+// emit the identical order by construction.
+//
+// `used`, `path`, and the accumulator all thread through the recursion as `mut ref` bindings;
+// the root call in `permute` writes the call-site `mut` markers (all three are fresh owned
+// bindings there), and the interior call forwards the already-mut-ref bindings unmarked, per the
+// call-site-marker rule. The `Vec[bool]` marker is the sub-word-element collection that kata
+// [#44](../44-wildcard-matching/) stressed — see that kata's ledger for the element-store-width
+// fix this relies on.
+//
+// LeetCode bounds: 1 ≤ n ≤ 6, -10 ≤ nums[i] ≤ 10, all distinct. i64 throughout for corpus
+// uniformity (every value and the n! ≤ 720 count fit trivially).
+
+fn backtrack(
+    nums: ref Vec[i64],
+    used: mut ref Vec[bool],
+    path: mut ref Vec[i64],
+    out: mut ref Vec[Vec[i64]],
+) {
+    let n = nums.len();
+    if path.len() == n {
+        // Every element placed — record this permutation by snapshot.
+        out.push(path.clone());
+        return;
+    }
+    let mut i = 0;
+    while i < n {
+        // Any still-unused element may go next — there is no index-monotone shortcut.
+        if not used[i] {
+            used[i] = true;
+            path.push(nums[i]);
+            backtrack(nums, used, path, out);
+            path.pop();
+            used[i] = false;
+        }
+        i = i + 1;
+    }
+}
+
+fn permute(nums: Slice[i64]) -> Vec[Vec[i64]] {
+    let xs: Vec[i64] = Vec.from_slice(nums);
+    let n = xs.len();
+    let mut used: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        used.push(false);
+        i = i + 1;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    backtrack(xs, mut used, mut path, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(perm: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = perm.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{perm[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn report(nums: Slice[i64]) {
+    let perms = permute(nums);
+    let count = perms.len();
+    let input: Vec[i64] = Vec.from_slice(nums);
+    println(f"{show(input)} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(show(perms[i]));
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    // LeetCode example 1 — the canonical 3! = 6 listing.
+    report([1, 2, 3]);
+
+    // LeetCode example 2 — 2! = 2.
+    report([0, 1]);
+
+    // LeetCode example 3 — the singleton.
+    report([1]);
+
+    // Unsorted input: order is by original INDEX, not by value, so the first
+    // permutation echoes the input as given ([5,3,4]) — not a sorted [3,4,5].
+    report([5, 3, 4]);
+
+    // A denser case — 4! = 24 permutations.
+    report([1, 2, 3, 4]);
+}

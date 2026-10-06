@@ -1,0 +1,7 @@
+
+struct Counter { n: i64 }
+impl Counter {
+    fn doubled(ref self) -> i64 { self.n * 2 }
+    pub fn report(ref self) -> i64 { self.doubled() + 1 }
+}
+fn main() { let c = Counter { n: 10 }; println(c.report()); }

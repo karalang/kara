@@ -1,0 +1,13 @@
+source = "tests/codegen/option_result.rs::test_e2e_unwrap_hands_a_map_payload_to_its_binding"
+dedup_of = ["tests/memory_sanitizer/option_result.rs::asan_unwrap_hands_a_map_payload_to_its_binding"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

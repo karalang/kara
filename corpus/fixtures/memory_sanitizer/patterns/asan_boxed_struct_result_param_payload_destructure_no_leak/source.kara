@@ -1,0 +1,60 @@
+
+struct P { a: String, b: String, c: i64, d: i64 }
+struct Q { m: String, n: String, o: i64, p: i64 }
+struct W { g: String, h: i64, i: i64, j: i64, k: i64, l: i64 }
+struct Inner { s: String, t: String }
+struct N { i: Inner, u: String, v: i64, w: i64, x: i64 }
+
+fn partial(x: Result[P, i64]) {
+    match x { Ok(P { a, b, .. }) => { println(f"p:{a}:{b}"); } Err(e) => { println(f"pe:{e}"); } }
+}
+
+fn unbound(x: Result[P, i64]) {
+    match x { Ok(P { a, .. }) => { println(f"u:{a}"); } Err(e) => { println(f"ue:{e}"); } }
+}
+
+fn tested(x: Result[P, i64]) {
+    match x { Ok(P { a: _, b, .. }) => { println(f"t:{b}"); } Err(e) => { println(f"te:{e}"); } }
+}
+
+fn whole(x: Result[P, i64]) {
+    match x { Ok(r) => { println(f"w:{r.a}"); } Err(e) => { println(f"we:{e}"); } }
+}
+
+fn errside(x: Result[i64, P]) {
+    match x { Ok(v) => { println(f"k:{v}"); } Err(P { a, b, .. }) => { println(f"r:{a}:{b}"); } }
+}
+
+fn bothsides(x: Result[P, Q]) {
+    match x { Ok(P { a, b, .. }) => { println(f"b:{a}:{b}"); } Err(Q { m, n, .. }) => { println(f"c:{m}:{n}"); } }
+}
+
+fn onefield(x: Result[W, i64]) {
+    match x { Ok(W { g, .. }) => { println(f"o:{g}"); } Err(e) => { println(f"oe:{e}"); } }
+}
+
+fn nested(x: Result[N, i64]) {
+    match x { Ok(N { i: Inner { s, .. }, u, .. }) => { println(f"n:{s}:{u}"); } Err(e) => { println(f"ne:{e}"); } }
+}
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        partial(Ok(P { a: f"pa-{n}-padpad", b: f"pb-{n}-padpad", c: 1, d: 2 }));
+        unbound(Ok(P { a: f"ua-{n}-padpad", b: f"ub-{n}-padpad", c: 3, d: 4 }));
+        tested(Ok(P { a: f"ta-{n}-padpad", b: f"tb-{n}-padpad", c: 5, d: 6 }));
+        whole(Ok(P { a: f"wa-{n}-padpad", b: f"wb-{n}-padpad", c: 7, d: 8 }));
+        // The NAMED-LOCAL spelling, which ABORTED rather than leaked: its let
+        // site owns the box, so only the callee-side disarm keeps the arm's
+        // bindings from becoming a second owner.
+        let named: Result[P, i64] = Ok(P { a: f"na-{n}-padpad", b: f"nb-{n}-padpad", c: 9, d: 0 });
+        partial(named);
+        errside(Err(P { a: f"ra-{n}-padpad", b: f"rb-{n}-padpad", c: 1, d: 2 }));
+        errside(Ok(7));
+        bothsides(Ok(P { a: f"ba-{n}-padpad", b: f"bb-{n}-padpad", c: 1, d: 2 }));
+        bothsides(Err(Q { m: f"cm-{n}-padpad", n: f"cn-{n}-padpad", o: 1, p: 2 }));
+        onefield(Ok(W { g: f"og-{n}-padpad", h: 1, i: 2, j: 3, k: 4, l: 5 }));
+        nested(Ok(N { i: Inner { s: f"ns-{n}-padpad", t: f"nt-{n}-padpad" }, u: f"nu-{n}-padpad", v: 1, w: 2, x: 3 }));
+        n = n + 1;
+    }
+}

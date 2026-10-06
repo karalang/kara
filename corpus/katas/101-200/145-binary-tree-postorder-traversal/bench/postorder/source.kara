@@ -1,0 +1,91 @@
+// Benchmark workload for LeetCode #145 — Binary Tree Postorder Traversal.
+//
+// Build-once + punch: a large binary tree is built ONCE into an index pool
+// (BST insertion of PRNG values, node 0 = root), then ITERATIVE postorder via
+// the classic two-stack method is run `PASSES` times. Each pass first bumps one
+// node's value so the optimizer cannot hoist the repeated traversal. The first
+// stack drives a data-dependent pointer-chase over the index pool (a node pushes
+// its 0/1/2 children), the second stack replays the collected nodes in reverse
+// to yield postorder — genuinely non-vectorizable scalar + memory work.
+// Sink = a position-weighted checksum of the postorder visit order, over all
+// passes. Both stacks are preallocated Vecs driven by explicit stack pointers
+// (no pop()/clear()), so every language runs the identical algorithm.
+
+fn main() {
+    let n = 50000;
+    let passes = 250;
+
+    // Node pool.
+    let mut val: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+
+    // Generate node values with the shared LCG (high bits), init children to -1.
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        val.push(state / 65536);
+        left.push(0 - 1);
+        right.push(0 - 1);
+        i = i + 1;
+    }
+
+    // Wire a binary tree by BST insertion; node 0 is the root.
+    i = 1;
+    while i < n {
+        let mut cur = 0;
+        let mut placed = false;
+        while not placed {
+            if val[i] < val[cur] {
+                if left[cur] < 0 { left[cur] = i; placed = true; }
+                else { cur = left[cur]; }
+            } else {
+                if right[cur] < 0 { right[cur] = i; placed = true; }
+                else { cur = right[cur]; }
+            }
+        }
+        i = i + 1;
+    }
+
+    // Two preallocated explicit stacks.
+    let mut s1: Vec[i64] = Vec.new();
+    let mut s2: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < n { s1.push(0); s2.push(0); z = z + 1; }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        // Perturb one node so the traversal can't be hoisted across passes.
+        let idx = p % n;
+        val[idx] = val[idx] + 1;
+
+        let mut s1p = 0;
+        s1[s1p] = 0;          // push root
+        s1p = s1p + 1;
+        let mut s2p = 0;
+        while s1p > 0 {
+            s1p = s1p - 1;
+            let node = s1[s1p];
+            s2[s2p] = node;
+            s2p = s2p + 1;
+            let l = left[node];
+            let r = right[node];
+            if l >= 0 { s1[s1p] = l; s1p = s1p + 1; }
+            if r >= 0 { s1[s1p] = r; s1p = s1p + 1; }
+        }
+        // Replay s2 in reverse -> postorder.
+        let mut pos = 0;
+        let mut acc = 0;
+        while s2p > 0 {
+            s2p = s2p - 1;
+            let node = s2[s2p];
+            acc = acc + val[node] * (pos + 1);
+            pos = pos + 1;
+        }
+        sink = sink + acc;
+        p = p + 1;
+    }
+    println(sink);
+}

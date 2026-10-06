@@ -1,0 +1,10 @@
+
+struct Score { v: i64 }
+fn main() {
+    let mut v: Vec[Score] = Vec.new();
+    v.push(Score { v: 30 });
+    v.push(Score { v: 10 });
+    v.push(Score { v: 20 });
+    v.sort_by(|a, b| a.v.cmp(b.v));
+    for s in v.iter() { println(s.v); }
+}

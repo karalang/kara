@@ -1,0 +1,37 @@
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { r: R, n: i64 }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
+fn consume(x: R) -> i64 { return x.id }
+fn wrap(x: R) -> R { return x }
+fn stash(x: R, v: mut ref Vec[R]) { v.push(x) }
+fn wrapw(x: R) -> W { return W { r: x, n: 1 } }
+fn t_fwd_let(t: (R, i64)) -> R { let (r, k) = t; wrap(r) }
+fn t_fwd_let_ret(t: (R, i64)) -> R { let (r, k) = t; return wrap(r); }
+fn t_stash_let(t: (R, i64), v: mut ref Vec[R]) -> i64 { let (r, k) = t; stash(r, v); k }
+fn t_consume_let(t: (R, i64)) -> i64 { let (r, k) = t; consume(r) }
+fn t_fwdw_let(t: (R, i64)) -> W { let (r, k) = t; wrapw(r) }
+fn s_fwd_let(w: W) -> R { let W { r, n } = w; wrap(r) }
+fn s_stash_let(w: W, v: mut ref Vec[R]) -> i64 { let W { r, n } = w; stash(r, v); n }
+fn b_stash(x: R, v: mut ref Vec[R]) { stash(x, v) }
+fn b_stash_ret(x: R, v: mut ref Vec[R]) -> i64 { stash(x, v); 7 }
+fn b_fwd(x: R) -> R { wrap(x) }
+fn b_consume(x: R) -> i64 { consume(x) }
+fn main() {
+    { let a: R = t_fwd_let((mk(1), 0)); println(f"r{a.id}"); println("one") }
+    { let a: R = t_fwd_let_ret((mk(2), 0)); println(f"r{a.id}"); println("two") }
+    { let mut v: Vec[R] = []; let d: i64 = t_stash_let((mk(3), 0), mut v); println(f"r{d} n{v.len()}"); println("three") }
+    { let d: i64 = t_consume_let((mk(4), 0)); println(f"r{d}"); println("four") }
+    { let w: W = t_fwdw_let((mk(5), 0)); println(f"r{w.r.id}"); println("five") }
+    { let a: R = s_fwd_let(W { r: mk(6), n: 1 }); println(f"r{a.id}"); println("six") }
+    { let mut v: Vec[R] = []; let d: i64 = s_stash_let(W { r: mk(7), n: 1 }, mut v); println(f"r{d} n{v.len()}"); println("seven") }
+    { let mut v: Vec[R] = []; b_stash(mk(8), mut v); println(f"n{v.len()}"); println("eight") }
+    { let mut v: Vec[R] = []; let d: i64 = b_stash_ret(mk(9), mut v); println(f"r{d} n{v.len()}"); println("nine") }
+    { let a: R = b_fwd(mk(10)); println(f"r{a.id}"); println("ten") }
+    { let d: i64 = b_consume(mk(11)); println(f"r{d}"); println("eleven") }
+    { let t: (R, i64) = (mk(13), 0); let a: R = t_fwd_let(t); println(f"r{a.id}"); println("thirteen") }
+    { let t: (R, i64) = (mk(14), 0); let mut v: Vec[R] = []; let d: i64 = t_stash_let(t, mut v); println(f"r{d} n{v.len()}"); println("fourteen") }
+    { let x: R = mk(15); let mut v: Vec[R] = []; b_stash(x, mut v); println(f"n{v.len()}"); println("fifteen") }
+    { let w: W = W { r: mk(16), n: 1 }; let a: R = s_fwd_let(w); println(f"r{a.id}"); println("sixteen") }
+    println("end")
+}

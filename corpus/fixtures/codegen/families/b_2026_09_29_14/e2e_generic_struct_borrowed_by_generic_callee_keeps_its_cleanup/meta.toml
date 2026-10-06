@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_14.rs::e2e_generic_struct_borrowed_by_generic_callee_keeps_its_cleanup"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_09_29_14.rs::asan_generic_struct_borrowed_by_generic_callee_keeps_its_cleanup"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

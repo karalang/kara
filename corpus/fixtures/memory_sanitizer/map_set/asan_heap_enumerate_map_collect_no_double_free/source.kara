@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "alpha-enum-map-payload-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "bravo-enum-map-payload-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "charlie-enum-map-payload-cccccccccccccccccc".to_string()
+        ];
+        let a: Vec[String] = w.iter().enumerate().map(|p| p.1).collect();
+        let b: Vec[i64] = w.iter().enumerate().map(|p| p.0 + p.1.len()).collect();
+        let c: Vec[String] = w.iter().skip(1i64).enumerate().map(|p| p.1).collect();
+        let a2: String = a[2].clone();
+        let c0: String = c[0].clone();
+        println(f"{a.len()} {a2} {b[0]} {b[2]} {c.len()} {c0}");
+        round = round + 1i64;
+    }
+}

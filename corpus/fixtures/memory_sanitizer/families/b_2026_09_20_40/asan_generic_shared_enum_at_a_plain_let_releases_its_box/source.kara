@@ -1,0 +1,14 @@
+
+shared enum S[T] { Y(T), N }
+shared enum M { Y(String), N }
+fn main() {
+    let s: S[String] = S.Y(f"ccccccccccccccccc{38}");
+    println("a");
+    let t: S[Array[String, 2]] = S.Y([f"x-{1}", f"y-{2}"]);
+    println("b");
+    let u: S[String] = S.Y(f"taken-{3}");
+    match u { S.Y(v) => println(f"c:{v}"), S.N => println("c:none") }
+    let w: S[i64] = S.Y(7);
+    let m: M = M.Y(f"mono-{4}");
+    println("end");
+}

@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let v: Vec[String] = ["delta".to_string(), "alpha".to_string(), "charlie".to_string(), "bravo".to_string()];
+        let s: Vec[String] = v.sorted_by(|a, b| b.cmp(a));
+        // descending clone: delta first — fold its head length in twice so a
+        // wrong order changes the oracle
+        acc = acc + s[0].len();
+        let mut j: i64 = 0;
+        while j < s.len() { acc = acc + s[j].len(); j = j + 1; }
+        let mut k: i64 = 0;
+        while k < v.len() { acc = acc + v[k].len(); k = k + 1; }
+        i = i + 1;
+    }
+    println(acc);
+}

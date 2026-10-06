@@ -1,0 +1,13 @@
+source = "tests/codegen/vecs.rs::test_e2e_vec_clone_independent_buffers"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

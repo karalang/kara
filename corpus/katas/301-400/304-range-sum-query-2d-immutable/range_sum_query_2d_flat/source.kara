@@ -1,0 +1,123 @@
+// LeetCode 304 — arm B: the SAME algorithm on a flat buffer.
+//
+// Identical arithmetic to the nested arm, identical inclusion-exclusion, but
+// the table is one contiguous Vec[i64] of (h+1)*(w+1) cells and every access
+// goes through a stride multiply: pre[r * stride + c].
+//
+// WHY BOTH LAYOUTS ARE WORTH CARRYING. The two arms cannot disagree on the
+// mathematics — they are the same four terms in the same order — so any
+// disagreement between them is a fault in how a layout is BUILT or READ, not
+// in the algorithm. Nested indexing (`pre[r + 1][c + 1] = ...`) is a compound
+// assignment through two levels of Vec, which is a different code path from a
+// single-level store into a flat buffer. Running both against the same queries
+// turns the differential into a layout test as well as an algorithm test,
+// which is the kind of coverage a single-arm kata cannot buy.
+//
+// It is also the layout every mirror language uses, so the benchmark measures
+// this arm rather than the nested one.
+
+struct FlatMatrix { pre: Vec[i64], stride: i64 }
+
+fn new_flat_matrix(m: ref Vec[Vec[i64]]) -> FlatMatrix {
+    let h = m.len();
+    let mut w = 0;
+    if h > 0 { w = m[0].len(); }
+    let stride = w + 1;
+
+    let mut pre: Vec[i64] = Vec.new();
+    let cells = (h + 1) * stride;
+    let mut i = 0;
+    while i < cells {
+        pre.push(0);
+        i = i + 1;
+    }
+
+    let mut r = 0;
+    while r < h {
+        let mut c = 0;
+        while c < w {
+            let here = (r + 1) * stride + (c + 1);
+            let above = r * stride + (c + 1);
+            let left = (r + 1) * stride + c;
+            let corner = r * stride + c;
+            pre[here] = pre[above] + pre[left] - pre[corner] + m[r][c];
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+
+    return FlatMatrix { pre: pre, stride: stride };
+}
+
+impl FlatMatrix {
+    fn sum_region(ref self, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+        let s = self.stride;
+        return self.pre[(r2 + 1) * s + (c2 + 1)]
+             - self.pre[r1 * s + (c2 + 1)]
+             - self.pre[(r2 + 1) * s + c1]
+             + self.pre[r1 * s + c1];
+    }
+}
+
+fn matrix_of(flat: Slice[i64], w: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < flat.len() {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < w {
+            row.push(flat[i + c]);
+            c = c + 1;
+        }
+        m.push(row);
+        i = i + w;
+    }
+    return m;
+}
+
+// `qs` is a flat list of (r1, c1, r2, c2) quadruples.
+fn report(flat: Slice[i64], w: i64, qs: Slice[i64]) {
+    let m = matrix_of(flat, w);
+    let h = m.len();
+    let nm = new_flat_matrix(m);
+    let mut line = String.new();
+    line.push_str(f"{h}x{w} ->");
+    let mut q = 0;
+    while q + 3 < qs.len() {
+        let r1 = qs[q];
+        let c1 = qs[q + 1];
+        let r2 = qs[q + 2];
+        let c2 = qs[q + 3];
+        line.push_str(f" [{r1},{c1},{r2},{c2}]={nm.sum_region(r1, c1, r2, c2)}");
+        q = q + 4;
+    }
+    println(line);
+}
+
+fn main() {
+    // The matrix from the LeetCode statement.
+    report([3, 0, 1, 4, 2,
+            5, 6, 3, 2, 1,
+            1, 2, 0, 1, 5,
+            4, 1, 0, 1, 7,
+            1, 0, 3, 0, 5], 5,
+           [2, 1, 4, 3,  1, 1, 2, 2,  1, 2, 2, 4,  0, 0, 4, 4,  0, 0, 0, 0]);
+    // A single cell.
+    report([7], 1, [0, 0, 0, 0]);
+    // One row, and the same values as one column.
+    report([1, 2, 3, 4, 5], 5, [0, 0, 0, 4,  0, 1, 0, 3,  0, 2, 0, 2]);
+    report([1, 2, 3, 4, 5], 1, [0, 0, 4, 0,  1, 0, 3, 0,  2, 0, 2, 0]);
+    // All negative — sign errors are invisible on non-negative data.
+    report([0 - 1, 0 - 2, 0 - 3,
+            0 - 4, 0 - 5, 0 - 6,
+            0 - 7, 0 - 8, 0 - 9], 3,
+           [0, 0, 2, 2,  1, 1, 2, 2,  0, 0, 0, 0,  2, 2, 2, 2]);
+    // Every answer zero.
+    report([0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0], 4, [0, 0, 2, 3,  1, 1, 1, 2]);
+    // Large magnitudes that cancel.
+    report([100000, 0 - 100000, 100000,
+            0 - 100000, 100000, 0 - 100000], 3,
+           [0, 0, 1, 2,  0, 0, 0, 2,  1, 0, 1, 2]);
+}

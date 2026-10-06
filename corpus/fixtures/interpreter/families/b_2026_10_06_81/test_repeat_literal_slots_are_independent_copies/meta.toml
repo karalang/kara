@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_06_81.rs::test_repeat_literal_slots_are_independent_copies"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

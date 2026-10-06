@@ -1,0 +1,7 @@
+
+struct P { x: i64, y: i64 }
+fn main() {
+    let mut p = P { x: 1, y: 2 };
+    p = P { x: 10, y: 20 };
+    println((p.x + p.y).to_string());
+}

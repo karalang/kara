@@ -1,0 +1,98 @@
+// LeetCode #44: Wildcard Matching — bottom-up 2D DP table, O(m·n) time and space.
+//
+// The greedy ★ file collapses the search into four scalars; this file makes the recurrence
+// literal in a full table. Let dp[i][j] = "does the length-i prefix of s match the length-j
+// prefix of p?" The answer is dp[n][m]. The table is the textbook factoring — no backtracking
+// argument, just fill every cell from its neighbours:
+//
+//   - p[j-1] is `*` → it can match the EMPTY string (carry dp[i][j-1]) or absorb one more s
+//                     char (carry dp[i-1][j]); OR the two.
+//   - p[j-1] is `?` or equals s[i-1] → a single-char match: dp[i][j] = dp[i-1][j-1].
+//   - otherwise     → no match; the cell stays false.
+//
+// Seeds: dp[0][0] = true (empty matches empty), and the first row dp[0][j] is true only while
+// p[0..j] is all `*` (each `*` matching the empty string) — every other empty-s cell is false.
+//
+// The table is stored FLAT in one `Vec[bool]` of (n+1)·(m+1) cells, indexed `i*(m+1)+j`,
+// rather than a `Vec[Vec[bool]]` of rows — one allocation, contiguous, and the index
+// arithmetic is the point (the O(m·n)-space contrast to the greedy scalars; the
+// [`_dp1d`](wildcard_matching_dp1d.kara) file rolls this down to two rows for O(n) space).
+// `Slice[u8]` over the bytes, `b'?'`/`b'*'` literals, as in [#10](../10-regular-expression-matching/).
+
+fn is_match_bytes(s: Slice[u8], p: Slice[u8]) -> bool {
+    let n = s.len();
+    let m = p.len();
+    let w = m + 1; // row width (columns 0..=m)
+
+    // Flat (n+1)·(m+1) table, all false to start.
+    let mut dp: Vec[bool] = Vec.new();
+    let total = (n + 1) * w;
+    let mut t = 0;
+    while t < total {
+        dp.push(false);
+        t = t + 1;
+    }
+
+    // Seed: empty s vs empty p matches; empty s vs p[0..j] matches only through leading '*'s.
+    dp[0] = true;
+    let mut j = 1;
+    while j <= m {
+        if p[j - 1] == b'*' {
+            dp[j] = dp[j - 1];
+        }
+        j = j + 1;
+    }
+
+    // Fill row by row.
+    let mut i = 1;
+    while i <= n {
+        let mut c = 1;
+        while c <= m {
+            let idx = i * w + c;
+            if p[c - 1] == b'*' {
+                // '*' matches empty (left) or absorbs one more s char (up).
+                dp[idx] = dp[(i - 1) * w + c] or dp[i * w + (c - 1)];
+            } else if p[c - 1] == b'?' or p[c - 1] == s[i - 1] {
+                dp[idx] = dp[(i - 1) * w + (c - 1)];
+            }
+            // else: leave false
+            c = c + 1;
+        }
+        i = i + 1;
+    }
+
+    dp[n * w + m]
+}
+
+fn is_match(s: ref String, p: ref String) -> bool {
+    is_match_bytes(s.bytes(), p.bytes())
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn report(s: ref String, p: ref String) {
+    let r = is_match(s, p);
+    println(f"{r}");
+}
+
+fn main() {
+    report("aa", "a"); // false
+    report("aa", "*"); // true
+    report("cb", "?a"); // false
+    report("adceb", "*a*b"); // true
+    report("acdcb", "a*c?b"); // false
+
+    report("", ""); // true
+    report("", "*"); // true
+    report("", "?"); // false
+    report("", "***"); // true
+
+    report("abc", "???"); // true
+    report("abc", "??"); // false
+    report("abc", "*c"); // true
+    report("abc", "a*"); // true
+
+    report("aaaa", "***a"); // true
+    report("abcabczzzde", "*abc???de*"); // true
+    report("mississippi", "m*si?p*."); // false
+}

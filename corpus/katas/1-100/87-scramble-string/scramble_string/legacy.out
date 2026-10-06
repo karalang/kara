@@ -1,0 +1,15 @@
+great ~ rgeat: true
+abcde ~ caebd: false
+a ~ a: true
+ ~ : true
+ab ~ ba: true
+ab ~ ab: true
+abc ~ bca: true
+abcd ~ badc: true
+abcd ~ cdab: true
+aabb ~ bbaa: true
+abcd ~ acbd: true
+abcde ~ edcba: true
+abc ~ abd: false
+greatabc ~ rgeatabc: true
+sink: 445872774

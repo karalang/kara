@@ -1,0 +1,32 @@
+
+effect resource Net;
+effect resource Disk;
+effect resource Db;
+effect resource Cache;
+
+fn busy_sum(n: i64) -> i64 {{
+    let mut sum: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {{
+        sum = sum + i;
+        i = i + 1;
+    }}
+    sum
+}}
+
+fn read_net() -> i64 reads(Net) {{ busy_sum({n}) + 1 }}
+fn read_disk() -> i64 reads(Disk) {{ busy_sum({n}) + 2 }}
+fn read_db() -> i64 reads(Db) {{ busy_sum({n}) + 3 }}
+fn read_cache() -> i64 reads(Cache) {{ busy_sum({n}) + 4 }}
+
+fn combine(a: i64, b: i64, c: i64, d: i64) -> i64 {{
+    a + b + c + d
+}}
+
+fn main() {{
+    let result_1 = read_net();
+    let result_2 = read_disk();
+    let result_3 = read_db();
+    let result_4 = read_cache();
+    println(combine(result_1, result_2, result_3, result_4));
+}}

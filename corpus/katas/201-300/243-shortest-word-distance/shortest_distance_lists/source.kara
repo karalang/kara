@@ -1,0 +1,76 @@
+// LeetCode 243 — Shortest Word Distance, the index-list variant.
+//
+// The other canonical shape: collect EVERY position of each word, then find the
+// closest cross-pair by merging the two ascending lists with a two-pointer walk.
+// Advance whichever cursor is behind — the one that is ahead can only get
+// farther from its partner, so the pair it would form next is never better.
+//
+// Same O(n) time as `shortest_distance.kara`, but O(n) space instead of O(1),
+// and it needs two passes over the list rather than one. It earns its place
+// because it is the shape that survives the sequel: LeetCode #244 (Shortest
+// Word Distance II) asks the same question repeatedly against a fixed list, and
+// the answer there is to build these position lists ONCE and keep only the
+// merge in the query path. Here the lists are rebuilt per call, so this variant
+// is strictly the slower way to answer a single query — kept as a distinct
+// compiler surface (Vec[i64] growth + `.abs()` + two cursors) and as the honest
+// starting point for #244.
+
+fn positions_of(words: ref Slice[String], word: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        if words[i] == word {
+            out.push(i);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn shortest_distance(words: ref Slice[String], word1: ref String, word2: ref String) -> i64 {
+    let p1 = positions_of(words, word1);
+    let p2 = positions_of(words, word2);
+    let mut best = words.len();
+    let mut a = 0;
+    let mut b = 0;
+    while a < p1.len() and b < p2.len() {
+        best = min(best, (p1[a] - p2[b]).abs());
+        // Whichever position is smaller has nothing left to gain from the
+        // current partner; step it forward.
+        if p1[a] < p2[b] {
+            a = a + 1;
+        } else {
+            b = b + 1;
+        }
+    }
+    return best;
+}
+
+fn report(words: ref Slice[String], word1: ref String, word2: ref String) {
+    println(f"{word1} <-> {word2} : {shortest_distance(words, word1, word2)}");
+}
+
+fn main() {
+    let d1: Array[String, 5] = ["practice", "makes", "perfect", "coding", "makes"];
+    report(d1, "coding", "practice");   // 3
+    report(d1, "makes", "coding");      // 1
+
+    let d2: Array[String, 7] = ["a", "b", "x", "x", "x", "a", "b"];
+    report(d2, "a", "b");               // 1
+    report(d2, "b", "a");               // 1
+
+    let d3: Array[String, 2] = ["a", "b"];
+    report(d3, "a", "b");               // 1
+
+    let d4: Array[String, 6] = ["p", "q", "p", "q", "p", "q"];
+    report(d4, "p", "q");               // 1
+
+    let d5: Array[String, 6] = ["m", "z", "z", "z", "n", "m"];
+    report(d5, "m", "n");               // 1
+
+    // One list comes back empty, so the merge loop never runs and `best` stays
+    // at the n upper bound — no special case needed.
+    let d6: Array[String, 3] = ["one", "two", "three"];
+    report(d6, "two", "four");          // 3
+}

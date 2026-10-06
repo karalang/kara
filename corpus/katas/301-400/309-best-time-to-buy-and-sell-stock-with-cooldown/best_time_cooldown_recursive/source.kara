@@ -1,0 +1,168 @@
+// LeetCode 309 — arm D: the state machine as it reads, memoised.
+//
+// The other three arms all run the recurrence FORWARD, filling day i from day
+// i-1. This one states the problem the way the statement does — "standing at
+// day i in state s, what is the best I can still make?" — and recurses
+// BACKWARD, memoising (day, state):
+//
+//     best(i, free)     = max( best(i+1, free),  -price[i] + best(i+1, hold) )
+//     best(i, hold)     = max( best(i+1, hold),   price[i] + best(i+1, cool) )
+//     best(i, cool)     =      best(i+1, free)
+//
+// and the answer is `best(0, free)`. The cooldown is the `cool` state doing
+// nothing but consuming a day.
+//
+// WHY THE DIRECTION MATTERS TO THE DIFFERENTIAL. Every forward arm shares an
+// assumption the statement never makes: that the optimum at day i depends only
+// on a bounded summary of days before it. That is true here, but it is the
+// thing all three forward arms would get wrong TOGETHER if the state set were
+// insufficient — and three-way agreement could not see it. Recursing backward
+// over an explicit (day, state) space makes no such compression: it enumerates
+// the machine. If the forward summary were missing a state, this arm is where
+// it would show.
+//
+// ENDING WHILE HOLDING IS NOT A VALID SCHEDULE, and saying so is the whole
+// subtlety of writing this arm backward. A forward arm answers `max(sold,
+// rest)` and simply never consults `hold`, so the question never arises. Here
+// it does: `best(n, hold)` has no continuation, and returning 0 for it would
+// let a path buy and then stop — which is free money whenever a price is
+// NEGATIVE, since buying at a negative price is a gain. The first draft of this
+// arm did exactly that and answered 8 on `[-5, -1, -8, -2]` where the true
+// optimum is 6 (buy -8, sell -2); the negative-price case in `main` is what
+// caught it.
+//
+// The fix is `Option[i64]`, not a sentinel: an impossible terminal is `None`
+// and cannot be confused with a legitimate answer, whereas any integer sentinel
+// is a value some input could legitimately produce. `seen` stays a separate
+// flag because `None` already means "impossible" and must not also mean "not
+// yet computed".
+
+struct Memo {
+    val: Vec[Option[i64]],
+    seen: Vec[i64],
+    prices: Vec[i64],
+    n: i64,
+}
+
+impl Memo {
+    fn new(prices: ref Vec[i64]) -> Memo {
+        let n = prices.len();
+        let mut val: Vec[Option[i64]] = Vec.new();
+        let mut seen: Vec[i64] = Vec.new();
+        for i in 0..((n + 1) * 3) {
+            val.push(None);
+            seen.push(0);
+        }
+        let mut p: Vec[i64] = Vec.new();
+        for i in 0..n {
+            p.push(prices[i]);
+        }
+        return Memo { val: val, seen: seen, prices: p, n: n };
+    }
+
+    // state: 0 = free to buy, 1 = holding, 2 = cooling down
+    fn best(mut ref self, i: i64, state: i64) -> Option[i64] {
+        if i == self.n {
+            // Free and cooling are valid places to stop; HOLDING is not.
+            if state == 1 {
+                return None;
+            }
+            return Some(0);
+        }
+        let key = i * 3 + state;
+        if self.seen[key] == 1 {
+            return self.val[key];
+        }
+        let mut answer: Option[i64] = None;
+        if state == 0 {
+            answer = self.best(i + 1, 0);
+            match self.best(i + 1, 1) {
+                Some(v) => { answer = better(answer, v - self.prices[i]); }
+                None => {}
+            }
+        } else if state == 1 {
+            answer = self.best(i + 1, 1);
+            match self.best(i + 1, 2) {
+                Some(v) => { answer = better(answer, v + self.prices[i]); }
+                None => {}
+            }
+        } else {
+            answer = self.best(i + 1, 0);
+        }
+        self.val[key] = answer;
+        self.seen[key] = 1;
+        return answer;
+    }
+}
+
+// Keep the larger of an Option and a candidate.
+fn better(current: Option[i64], candidate: i64) -> Option[i64] {
+    match current {
+        Some(v) => {
+            if candidate > v {
+                return Some(candidate);
+            }
+            return Some(v);
+        }
+        None => { return Some(candidate); }
+    }
+}
+
+fn max_profit(prices: ref Vec[i64]) -> i64 {
+    if prices.len() == 0 {
+        return 0;
+    }
+    let mut m = Memo.new(prices);
+    match m.best(0, 0) {
+        Some(v) => { return v; }
+        None => { return 0; }
+    }
+}
+
+fn render(prices: Slice[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < prices.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(f"{prices[i]}");
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(prices: Slice[i64]) {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..prices.len() {
+        v.push(prices[i]);
+    }
+    let mut line = String.new();
+    line.push_str(render(prices));
+    line.push_str(f" -> {max_profit(v)}");
+    println(line);
+}
+
+fn main() {
+    // The example from the LeetCode statement: buy, sell, cooldown, buy, sell.
+    report([1, 2, 3, 0, 2]);
+    // The second statement example.
+    report([1]);
+    // Empty.
+    report([]);
+    // Strictly decreasing — never profitable, answer 0.
+    report([5, 4, 3, 2, 1]);
+    // Strictly increasing — one buy and one sell beats churning under cooldown.
+    report([1, 2, 3, 4, 5]);
+    // A saw-tooth, where the cooldown actually costs something.
+    report([1, 4, 1, 4, 1, 4]);
+    // Two clean humps separated by a trough.
+    report([2, 8, 1, 9]);
+    // Flat prices — no profit anywhere.
+    report([7, 7, 7, 7]);
+    // A single spike late.
+    report([3, 3, 3, 100]);
+    // Negative prices are not in the statement's domain, but the recurrence is
+    // defined over any integers, and every arm must still agree.
+    report([-5, -1, -8, -2]);
+}

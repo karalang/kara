@@ -1,0 +1,4 @@
+fn main() {
+             let a: Arena[i64] = Arena.new();
+             println(a.handle_id > 0);
+         }

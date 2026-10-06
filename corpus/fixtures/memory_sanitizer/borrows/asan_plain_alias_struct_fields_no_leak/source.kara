@@ -1,0 +1,30 @@
+
+type Name = String;
+type Ints = Vec[i64];
+
+struct Holder { label: Name, nums: Ints }
+
+fn build(n: i64) -> Holder {
+    let mut v: Ints = Vec.new();
+    let mut i = 0i64;
+    while i < n + 7i64 { v.push(i); i = i + 1i64; }
+    return Holder { label: f"held-{n}-runtime-heap", nums: v };
+}
+
+fn weigh(h: Holder) -> i64 {
+    let mut w = 0i64;
+    if h.label.contains("runtime-heap") { w = w + 1i64; }
+    return w + h.nums[0i64] + h.nums.len();
+}
+
+fn main() {
+    let base: i64 = env.args().len();
+    let mut total = 0i64;
+    let mut k = 0i64;
+    while k < base + 49i64 {
+        let h = build(base);
+        total = total + weigh(h);
+        k = k + 1i64;
+    }
+    println(total);
+}

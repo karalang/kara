@@ -1,0 +1,23 @@
+
+struct Counter { items: Vec[String], base: i64 }
+impl Counter {
+    fn m_get(ref self) -> i64 {
+        match self.items.get(0) {
+            Some(s) => return self.base + s.len(),
+            None => return self.base,
+        };
+    }
+}
+fn make_counter() -> Counter {
+    let mut c = Counter { items: Vec.new(), base: 100_i64 };
+    c.items.push("first field string padded beyond thirty-six bytes ok");
+    c.items.push("second field string padded beyond thirty-six byte");
+    return c;
+}
+fn main() {
+    let mut p = 0;
+    while p < 3 {
+        println(make_counter().m_get());
+        p = p + 1;
+    };
+}

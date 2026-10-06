@@ -1,0 +1,8 @@
+
+type Even = i64 where self % 2 == 0;
+fn main() {
+    match Even.try_from(4) {
+        Ok(v) => println(v),
+        Err(_) => println(-1),
+    }
+}

@@ -1,0 +1,5 @@
+
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let _ = a.reverse(2);
+}

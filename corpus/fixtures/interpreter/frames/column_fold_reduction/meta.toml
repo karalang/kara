@@ -1,0 +1,13 @@
+source = "tests/interpreter/frames.rs::column_fold_reduction"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["closure", "deferred:dataframe"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

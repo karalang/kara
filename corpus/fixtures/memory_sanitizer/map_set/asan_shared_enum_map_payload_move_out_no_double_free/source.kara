@@ -1,0 +1,24 @@
+
+shared enum Store { Empty, Full(Map[i64, u64]) }
+fn build(k: i64) -> Store {
+    let mut m: Map[i64, u64] = Map.new();
+    let _ = m.insert(k, 9u64);
+    let _ = m.insert(k + 1i64, 10u64);
+    Store.Full(m)
+}
+fn drop_no_move(k: i64) -> i64 {
+    let x = build(k);
+    match x { Store.Full(_) => 99i64, Store.Empty => 0i64 }
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 40i64 {
+        let s = build(i);
+        match s {
+            Store.Full(m) => { println(m.len()); }
+            Store.Empty => { println(0); }
+        }
+        let _ = drop_no_move(i);
+        i = i + 1;
+    }
+}

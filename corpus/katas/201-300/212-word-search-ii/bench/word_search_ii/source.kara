@@ -1,0 +1,120 @@
+// Benchmark workload for LeetCode #212 — Word Search II.
+//
+// Build-once + fresh input: the word trie (index-pool) is built ONCE from NWORDS
+// PRNG words over a small alphabet, then the trie-guided board DFS is run RUNS
+// times, each over a FRESH SIZE x SIZE board drawn from the ongoing PRNG stream —
+// so every run is a genuinely distinct search that cannot be hoisted. Word-end
+// flags are restored before each run (the DFS clears each on collection, the real
+// Word Search II "collect once" semantics). The DFS is a backtracking grid walk
+// in lockstep with the trie — dead trie edges prune whole branches, a
+// data-dependent traversal that does NOT vectorize. The sink checksums every trie
+// node the walk descends into (plus each collected word's identity), so it
+// reflects the actual board-dependent traversal, not just the near-invariant
+// count of completed words. Sink = accumulated traversal checksum over all runs.
+
+fn dfs(
+    board: mut ref Vec[i64],
+    children: ref Vec[i64],
+    is_end: mut ref Vec[i64],
+    alpha: i64,
+    size: i64,
+    r: i64,
+    c: i64,
+    node: i64,
+) -> i64 {
+    let cell = board[r * size + c];
+    if cell == -1 { return 0; }                // already on the path
+    let nxt = children[node * alpha + cell];
+    if nxt == 0 { return 0; }                  // no trie edge -> prune
+    let mut cnt = nxt;                               // checksum each descended node
+    if is_end[nxt] == 1 {
+        is_end[nxt] = 0;                          // collect each word once per run
+        cnt = cnt + nxt;                             // + collected-word identity
+    }
+    board[r * size + c] = -1;                     // mark visited
+    if r > 0 { cnt = cnt + dfs(board, children, is_end, alpha, size, r - 1, c, nxt); }
+    if r + 1 < size { cnt = cnt + dfs(board, children, is_end, alpha, size, r + 1, c, nxt); }
+    if c > 0 { cnt = cnt + dfs(board, children, is_end, alpha, size, r, c - 1, nxt); }
+    if c + 1 < size { cnt = cnt + dfs(board, children, is_end, alpha, size, r, c + 1, nxt); }
+    board[r * size + c] = cell;                      // restore
+    return cnt;
+}
+
+fn main() {
+    let alpha = 6;
+    let size = 12;
+    let cells = size * size;
+    let nwords = 4000;
+    let runs = 40000;
+
+    let mut children: Vec[i64] = Vec.new();
+    let mut is_end0: Vec[i64] = Vec.new();
+    let mut a = 0;
+    while a < alpha { children.push(0); a = a + 1; }
+    is_end0.push(0);                              // root at index 0
+
+    let mut state = 12345;
+
+    // Build trie once.
+    let mut w = 0;
+    while w < nwords {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let len = 5 + state % 4;               // 5..8
+        let mut cur = 0;
+        let mut k = 0;
+        while k < len {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let ch = state % alpha;
+            let nxt = children[cur * alpha + ch];
+            if nxt == 0 {
+                let idx = is_end0.len();
+                let mut aa = 0;
+                while aa < alpha { children.push(0); aa = aa + 1; }
+                is_end0.push(0);
+                children[cur * alpha + ch] = idx;
+                cur = idx;
+            } else {
+                cur = nxt;
+            }
+            k = k + 1;
+        }
+        is_end0[cur] = 1;
+        w = w + 1;
+    }
+
+    let nnodes = is_end0.len();
+    let mut is_end: Vec[i64] = Vec.new();
+    let mut board: Vec[i64] = Vec.new();
+    let mut ii = 0;
+    while ii < nnodes { is_end.push(0); ii = ii + 1; }
+    let mut jj = 0;
+    while jj < cells { board.push(0); jj = jj + 1; }
+
+    let mut sink = 0;
+    let mut run = 0;
+    while run < runs {
+        let mut i = 0;
+        while i < nnodes { is_end[i] = is_end0[i]; i = i + 1; }
+        // Fresh board each run from the ongoing PRNG stream.
+        let mut bi = 0;
+        while bi < cells {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            board[bi] = state % alpha;
+            bi = bi + 1;
+        }
+        let mut found = 0;
+        let mut r = 0;
+        while r < size {
+            let mut c = 0;
+            while c < size {
+                found = found + dfs(mut board, children, mut is_end, alpha, size, r, c, 0);
+                c = c + 1;
+            }
+            r = r + 1;
+        }
+        sink = sink + found;
+        run = run + 1;
+    }
+
+    println(sink);
+}

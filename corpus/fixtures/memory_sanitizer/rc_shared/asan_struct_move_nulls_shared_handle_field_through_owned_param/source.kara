@@ -1,0 +1,17 @@
+
+shared struct Cell { mut value: i64 }
+struct Cmd { cell: Cell }
+struct Ed { stack: Vec[Cmd] }
+impl Ed {
+    fn record(mut ref self, cell: Cell) {
+        let cmd = Cmd { cell: cell };
+        self.stack.push(cmd);
+    }
+}
+fn main() {
+    let mut ed = Ed { stack: Vec.new() };
+    let c = Cell { value: 5 };
+    ed.record(c);
+    ed.record(c);
+    println(c.value);
+}

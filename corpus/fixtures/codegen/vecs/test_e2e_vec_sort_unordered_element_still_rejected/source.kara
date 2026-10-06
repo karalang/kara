@@ -1,0 +1,8 @@
+
+struct P { x: i64 }
+fn main() {
+    let mut v: Vec[P] = Vec.new();
+    v.push(P { x: 1 });
+    v.sort();
+    println(v.len());
+}

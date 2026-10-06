@@ -1,0 +1,31 @@
+
+fn echo[T](x: T) -> T { return x; }
+fn takeout[T](b: T) -> T { match b { v => { return v; } } }
+fn iflet[T](b: T) -> T { if let w = b { return w; } return b; }
+fn letelse[T](b: T) -> T { let w = b else { return b; }; return w; }
+fn main() {
+    let mut k: i64 = 0;
+    let mut t: i64 = 0;
+    while k < 3 {
+        let vs: Vec[String] = [f"row-{k}-aaaaaaaa", f"row-{k}-bbbbbbbb"];
+        let r1: Vec[String] = takeout(vs);
+        println(r1[0]);
+        let vi: Vec[i64] = [k, k + 1, k + 2];
+        let r2: Vec[i64] = takeout(vi);
+        t = t + r2[2];
+        let s: String = f"str-{k}-cccccccc";
+        let r3: String = takeout(s);
+        println(r3);
+        let es: Vec[String] = [f"ec-{k}-dddddddd", f"ec-{k}-eeeeeeee"];
+        let r4: Vec[String] = echo(es);
+        println(r4[1]);
+        let fs: Vec[String] = [f"il-{k}-ffffffff", f"il-{k}-gggggggg"];
+        let r5: Vec[String] = iflet(fs);
+        println(r5[0]);
+        let gs: Vec[String] = [f"le-{k}-hhhhhhhh", f"le-{k}-iiiiiiii"];
+        let r6: Vec[String] = letelse(gs);
+        println(r6[1]);
+        k = k + 1;
+    }
+    println(f"{t}");
+}

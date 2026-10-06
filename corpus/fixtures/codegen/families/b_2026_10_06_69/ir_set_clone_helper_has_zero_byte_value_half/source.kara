@@ -1,0 +1,7 @@
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(5);
+    let mut t = s.clone();
+    t.remove(5);
+    println(f"{t.len()} {s.len()}");
+}

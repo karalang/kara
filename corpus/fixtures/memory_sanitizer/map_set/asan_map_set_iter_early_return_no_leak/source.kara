@@ -1,0 +1,34 @@
+
+fn first_ge(m: Map[i64, i64], thresh: i64) -> i64 {
+    for (k, v) in m {
+        if v >= thresh { return v; }   // early return mid-iteration
+    }
+    return -1i64;
+}
+
+fn has_elem(s: Set[i64], target: i64) -> bool {
+    for x in s {
+        if x == target { return true; }   // early return out of set iteration
+    }
+    return false;
+}
+
+fn main() {
+    let mut hits = 0i64;
+    let mut i = 0i64;
+    while i < 300i64 {
+        let mut m: Map[i64, i64] = Map.new();
+        let _ = m.insert(1i64, 10i64);
+        let _ = m.insert(2i64, 20i64);
+        let _ = m.insert(3i64, 30i64);
+        if first_ge(m, 15i64) >= 0i64 { hits = hits + 1i64; }
+
+        let mut s: Set[i64] = Set.new();
+        s.insert(4i64);
+        s.insert(5i64);
+        s.insert(6i64);
+        if has_elem(s, 5i64) { hits = hits + 1i64; }
+        i = i + 1;
+    }
+    println(hits);
+}

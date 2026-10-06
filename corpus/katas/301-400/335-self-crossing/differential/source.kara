@@ -1,0 +1,327 @@
+// Differential test for #335 Self Crossing: the four arms against a
+// brute-force oracle that walks the path one unit at a time and reports a
+// crossing the first time it steps on a point it has already visited.
+// Every move has length at least 1 and every turn is a right angle, so two
+// segments can only meet at a lattice point, and stepping on one twice is
+// exactly the path crossing or touching itself.
+
+fn sc_main(d: ref Vec[i64]) -> bool {
+    let n = d.len();
+    for i in 3..n {
+        if d[i] >= d[i - 2] and d[i - 1] <= d[i - 3] {
+            return true;
+        }
+        if i >= 4 and d[i - 1] == d[i - 3] and d[i] + d[i - 4] >= d[i - 2] {
+            return true;
+        }
+        if i >= 5
+            and d[i - 2] >= d[i - 4]
+            and d[i] + d[i - 4] >= d[i - 2]
+            and d[i - 1] <= d[i - 3]
+            and d[i - 1] + d[i - 5] >= d[i - 3]
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn sc_phases(dist: ref Vec[i64]) -> bool {
+    let mut d = dist.clone();
+    let n = d.len();
+    let mut i: i64 = 0;
+    while i < n and (i < 2 or d[i] > d[i - 2]) {
+        i += 1;
+    }
+    if i == n {
+        return false;
+    }
+    if (i >= 4 and d[i] >= d[i - 2] - d[i - 4]) or (i == 3 and d[i] == d[i - 2]) {
+        d[i - 1] -= d[i - 3];
+    }
+    i += 1;
+    while i < n {
+        if d[i] >= d[i - 2] {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+struct Seg {
+    x_lo: i64,
+    x_hi: i64,
+    y_lo: i64,
+    y_hi: i64,
+}
+
+fn seg(x1: i64, y1: i64, x2: i64, y2: i64) -> Seg {
+    return Seg { x_lo: x1.min(x2), x_hi: x1.max(x2), y_lo: y1.min(y2), y_hi: y1.max(y2) };
+}
+
+fn meets(a: ref Seg, b: ref Seg) -> bool {
+    return a.x_lo <= b.x_hi and b.x_lo <= a.x_hi and a.y_lo <= b.y_hi and b.y_lo <= a.y_hi;
+}
+
+fn sc_window(d: ref Vec[i64]) -> bool {
+    // north, west, south, east
+    let dx = [0, -1, 0, 1];
+    let dy = [1, 0, -1, 0];
+    let mut segs: Vec[Seg] = Vec.new();
+    let mut x: i64 = 0;
+    let mut y: i64 = 0;
+    for i in 0..d.len() {
+        let nx = x + dx[i % 4] * d[i];
+        let ny = y + dy[i % 4] * d[i];
+        let s = seg(x, y, nx, ny);
+        let mut back = 3;
+        while back <= 5 and back <= i {
+            if meets(s, segs[i - back]) {
+                return true;
+            }
+            back += 1;
+        }
+        segs.push(s);
+        x = nx;
+        y = ny;
+    }
+    return false;
+}
+
+fn sc_stream(d: ref Vec[i64]) -> bool {
+    let mut p1: i64 = 0;
+    let mut p2: i64 = 0;
+    let mut p3: i64 = 0;
+    let mut p4: i64 = 0;
+    let mut p5: i64 = 0;
+    let mut seen: i64 = 0;
+    for x in d {
+        if seen >= 3 and x >= p2 and p1 <= p3 {
+            return true;
+        }
+        if seen >= 4 and p1 == p3 and x + p4 >= p2 {
+            return true;
+        }
+        if seen >= 5 and p2 >= p4 and x + p4 >= p2 and p1 <= p3 and p1 + p5 >= p3 {
+            return true;
+        }
+        p5 = p4;
+        p4 = p3;
+        p3 = p2;
+        p2 = p1;
+        p1 = x;
+        seen += 1;
+    }
+    return false;
+}
+
+// The index of the first move that steps on an old point, or -1.
+fn first_crossing(d: ref Vec[i64]) -> i64 {
+    let dx = [0, -1, 0, 1];
+    let dy = [1, 0, -1, 0];
+    let mut visited: Set[(i64, i64)] = Set.new();
+    let mut x: i64 = 0;
+    let mut y: i64 = 0;
+    visited.insert((0, 0));
+    for i in 0..d.len() {
+        for _ in 0..d[i] {
+            x += dx[i % 4];
+            y += dy[i % 4];
+            if visited.contains((x, y)) {
+                return i;
+            }
+            visited.insert((x, y));
+        }
+    }
+    return -1;
+}
+
+fn oracle(d: ref Vec[i64]) -> bool {
+    return first_crossing(d) >= 0;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn shown(d: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in d.iter() {
+        parts.push(x.to_string());
+    }
+    return parts.join(", ");
+}
+
+fn fail(failures: mut ref i64, what: String, d: ref Vec[i64]) {
+    if failures < 10 {
+        println(f"FAIL {what}: [{shown(d)}]");
+    }
+    failures += 1;
+}
+
+// P1, P2: the arms agree with each other and with the oracle.
+fn check_answer(d: ref Vec[i64], failures: mut ref i64) -> bool {
+    let want = oracle(d);
+    let a = sc_main(d);
+    if sc_phases(d) != a or sc_window(d) != a or sc_stream(d) != a {
+        fail(failures, "P1 arms disagree", d);
+    }
+    if a != want {
+        fail(failures, "P2 oracle", d);
+    }
+    return want;
+}
+
+fn reversed(d: ref Vec[i64]) -> Vec[i64] {
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = d.len();
+    while i > 0 {
+        i -= 1;
+        r.push(d[i]);
+    }
+    return r;
+}
+
+fn scaled(d: ref Vec[i64], k: i64) -> Vec[i64] {
+    let mut r: Vec[i64] = Vec.new();
+    for x in d.iter() {
+        r.push(x * k);
+    }
+    return r;
+}
+
+fn prefix(d: ref Vec[i64], n: i64) -> Vec[i64] {
+    let mut r: Vec[i64] = Vec.new();
+    for i in 0..n {
+        r.push(d[i]);
+    }
+    return r;
+}
+
+fn check_properties(d: ref Vec[i64], failures: mut ref i64) {
+    let a = sc_main(d);
+    // P3: walking the path backwards covers the same points. Backwards the
+    // turns are clockwise, and mirroring makes them counter-clockwise again
+    // without changing whether the path meets itself.
+    let r = reversed(d);
+    if sc_main(r) != a or sc_phases(r) != a or sc_window(r) != a or sc_stream(r) != a {
+        fail(failures, "P3 reversal", d);
+    }
+    // P4: scaling every move by the same factor keeps the answer.
+    let s = scaled(d, 3);
+    if sc_main(s) != a or sc_phases(s) != a or sc_window(s) != a or sc_stream(s) != a {
+        fail(failures, "P4 scaling", d);
+    }
+    // P5: a path that crosses still crosses with one more move.
+    let mut longer = d.clone();
+    longer.push(1);
+    if a and not (sc_main(longer) and sc_phases(longer) and sc_window(longer) and sc_stream(longer)) {
+        fail(failures, "P5 extension", d);
+    }
+    // P6: the shortest prefix that crosses ends at the oracle's first
+    // crossing move.
+    let first = first_crossing(d);
+    let mut shortest: i64 = -1;
+    for n in 1..d.len() + 1 {
+        let p = prefix(d, n);
+        if shortest < 0 and sc_main(p) and sc_phases(p) and sc_window(p) and sc_stream(p) {
+            shortest = n - 1;
+        }
+    }
+    if shortest != first {
+        fail(failures, "P6 first crossing", d);
+    }
+    // P7: adding 2000 * i to move i makes every move longer than the one
+    // two before it (moves are at most 1000), an outward spiral, which
+    // never crosses.
+    let mut grown: Vec[i64] = Vec.new();
+    for i in 0..d.len() {
+        grown.push(d[i] + 2000 * i);
+    }
+    if sc_main(grown) or sc_phases(grown) or sc_window(grown) or sc_stream(grown) {
+        fail(failures, "P7 outward spiral", d);
+    }
+    // P8: moves of 200 - 2i, less one where move i was odd, make every move shorter
+    // than the one two before it, an inward spiral from the first move,
+    // which never crosses either.
+    let mut inward: Vec[i64] = Vec.new();
+    for i in 0..d.len() {
+        inward.push(200 - 2 * i - d[i] % 2);
+    }
+    if sc_main(inward) or sc_phases(inward) or sc_window(inward) or sc_stream(inward) or oracle(inward) {
+        fail(failures, "P8 inward spiral", d);
+    }
+}
+
+fn main() {
+    let mut failures: i64 = 0;
+    // Every array of 0 to 7 moves of length 1 to 4.
+    let mut exhaustive: i64 = 0;
+    let mut crossing: i64 = 0;
+    for len in 0..8 {
+        let mut total: i64 = 1;
+        for _ in 0..len {
+            total *= 4;
+        }
+        for code in 0..total {
+            let mut d: Vec[i64] = Vec.new();
+            let mut c = code;
+            for _ in 0..len {
+                d.push(1 + c % 4);
+                c /= 4;
+            }
+            if check_answer(d, mut failures) {
+                crossing += 1;
+            }
+            check_properties(d, mut failures);
+            exhaustive += 1;
+        }
+    }
+    // Random arrays of 0 to 40 moves with lengths up to 2, 5, 20 and 1000.
+    let mut seed = 335;
+    let mut random: i64 = 0;
+    let mut random_crossing: i64 = 0;
+    let ranges = [2, 5, 20, 1000];
+    for k in 0..2000 {
+        let n = next(mut seed) % 41;
+        let range = ranges[k % 4];
+        let mut d: Vec[i64] = Vec.new();
+        if k % 5 < 2 {
+            // An outward spiral that turns inward at move `turn`: the turning
+            // move is anywhere up to the move two before it, and every move
+            // after it is shorter than the one two before, until a move would
+            // reach zero. The near misses at the turn are the hard cases.
+            let turn = next(mut seed) % (n + 1);
+            for i in 0..n {
+                let two_back = if i >= 2 { d[i - 2] } else { 0 };
+                if i < turn {
+                    d.push(two_back + 1 + next(mut seed) % 3);
+                } else if i == turn {
+                    if i >= 2 {
+                        d.push(1 + next(mut seed) % two_back);
+                    } else {
+                        d.push(1 + next(mut seed) % range);
+                    }
+                } else {
+                    let m = two_back - 1 - next(mut seed) % 3;
+                    if m < 1 {
+                        break;
+                    }
+                    d.push(m);
+                }
+            }
+        } else {
+            for _ in 0..n {
+                d.push(1 + next(mut seed) % range);
+            }
+        }
+        if check_answer(d, mut failures) {
+            random_crossing += 1;
+        }
+        check_properties(d, mut failures);
+        random += 1;
+    }
+    println(f"{exhaustive} exhaustive arrays ({crossing} crossing), {random} random arrays ({random_crossing} crossing), {failures} failures");
+}

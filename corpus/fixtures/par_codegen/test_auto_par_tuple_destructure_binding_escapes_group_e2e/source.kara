@@ -1,0 +1,9 @@
+
+fn pair() -> (String, String) { (f"L", f"R") }
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    let (a, b) = pair();
+    v.push(a);
+    println(b);
+    println(v[0]);
+}

@@ -1,0 +1,6 @@
+cases 1680, of which contain a duplicate 1204
+greedy answers differing from the lex-smallest 794
+sort-then-pair answers EQUAL to the lex-smallest 1680
+answers lexicographically BELOW the brute-force minimum: greedy 0, sorted 0
+digest 677552294
+invalid (wiggle or multiset): greedy 0, sorted 0, brute 0

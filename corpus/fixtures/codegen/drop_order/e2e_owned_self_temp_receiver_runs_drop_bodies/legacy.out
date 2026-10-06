@@ -1,0 +1,40 @@
+temp-recv-fields
+  rd1
+dR101/t101
+dR1/t1
+temp-recv-own
+  id2
+dR2/t2
+temp-recv-ownd
+  od3
+dOwnD3
+dR3/t3
+temp-recv-pair
+  pr4
+dR104/t104
+dR4/t4
+temp-recv-refself
+  bo5
+dR105/t105
+dR5/t5
+param-twin
+  pd6
+dR106/t106
+dR6/t6
+local-recv
+  rd7
+dR107/t107
+dR7/t7
+scalar-return
+dR8/t8
+  v16
+returns-self
+  m9
+dR9/t9
+hands-field-out
+  g10
+dR10/t10
+generic-return
+dR11/t11
+  built
+done

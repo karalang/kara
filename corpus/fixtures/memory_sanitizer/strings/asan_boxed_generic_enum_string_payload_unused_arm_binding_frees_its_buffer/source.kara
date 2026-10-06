@@ -1,0 +1,36 @@
+
+enum G1[T] { Y(T), N }
+
+// c1 — THE CELL. Generic callee, arm binds `va` and never reads it.
+fn g_unused[T](g: G1[T]) -> i64 { match g { Y(va) => { return 1i64; } N => { return 0i64; } } }
+// c2 — same callee, WILDCARD arm: binds nothing, so no retraction at all.
+fn g_wild[T](g: G1[T]) -> i64 { match g { Y(_) => { return 2i64; } N => { return 0i64; } } }
+// c3 — CONTROL that refutes the filed attribution. Concrete callee, same
+// boxed layout, same unused binding, clean before this fix and after it.
+fn c_unused(g: G1[String]) -> i64 { match g { Y(vc) => { return 3i64; } N => { return 0i64; } } }
+// c4 — generic callee whose arm CONSUMES its binding. Must stay a single
+// free: the arm owns the interior and the box's drop is retracted for it.
+fn g_take[T](g: G1[T]) -> G1[T] { match g { Y(vb) => { return Y(vb); } N => { return N; } } }
+// c5 — generic callee that READS its binding, the shape existing fixtures
+// already cover, included so a regression here cannot hide behind c1.
+fn g_read(g: G1[String]) -> i64 { match g { Y(vd) => { if vd.contains("row") { return 5i64; } return 9i64; } N => { return 0i64; } } }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0i64;
+    while i < 8i64 {
+        let c1: G1[String] = Y(f"row-aaaaaaaaaaaa-{i}-{n}");
+        println(f"c1:{g_unused(c1)}");
+        let c2: G1[String] = Y(f"row-bbbbbbbbbbbb-{i}-{n}");
+        println(f"c2:{g_wild(c2)}");
+        let c3: G1[String] = Y(f"row-cccccccccccc-{i}-{n}");
+        println(f"c3:{c_unused(c3)}");
+        let c4: G1[String] = Y(f"row-dddddddddddd-{i}-{n}");
+        let r4 = g_take(c4);
+        println("c4");
+        let c5: G1[String] = Y(f"row-eeeeeeeeeeee-{i}-{n}");
+        println(f"c5:{g_read(c5)}");
+        i = i + 1i64;
+    }
+    println("end");
+}

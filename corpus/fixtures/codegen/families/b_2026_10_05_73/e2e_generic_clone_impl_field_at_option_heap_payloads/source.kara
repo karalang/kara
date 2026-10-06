@@ -1,0 +1,11 @@
+struct G[T] { v: T }
+impl[T: Clone] G[T] { fn get(ref self) -> T { return self.v.clone(); } }
+fn main() {
+    let h = G { v: Some("hs".to_string()) };
+    let k = G { v: Some(vec!["a".to_string(), "bb".to_string()]) };
+
+    let y = h.get();
+    let z = k.get();
+    match y { Some(s) => println(f"{s}"), None => println("none") }
+    match z { Some(v) => println(f"{v.len()} {v[1]}"), None => println("none") }
+}

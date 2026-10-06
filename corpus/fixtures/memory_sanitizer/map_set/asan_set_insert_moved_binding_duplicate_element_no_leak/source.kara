@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    let mut a1 = String.new();
+    a1.push_str("set-dup-element-aaaaaaaaaaaaaaaaaaaaaaaa");
+    s.insert(a1);
+    let mut a2 = String.new();
+    a2.push_str("set-dup-element-aaaaaaaaaaaaaaaaaaaaaaaa");
+    s.insert(a2);
+    println(s.len());
+}

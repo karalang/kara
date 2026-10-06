@@ -1,0 +1,16 @@
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { o: Option[R], p: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { o: Some(R { s: f"o{t}" }), p: R { s: f"p{t}" }, n: n } }
+fn main() {
+    let mut i = 0;
+    while i < 2 {
+        let mut h = mk(f"{i}", 1 - i);
+        let x = h.p;
+        println(x.s);
+        if h.n > 0 { h.p = R { s: f"q{i}" }; };
+        println("k");
+        i = i + 1;
+    }
+    println("end")
+}

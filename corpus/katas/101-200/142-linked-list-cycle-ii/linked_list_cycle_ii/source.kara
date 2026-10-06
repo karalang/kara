@@ -1,0 +1,142 @@
+// LeetCode 142 — Linked List Cycle II.
+//
+// Return the node where the cycle begins, or null if there is none. Floyd's
+// two-phase algorithm: phase 1 finds a meeting point inside the cycle (slow +1,
+// fast +2); phase 2 resets one pointer to the head and advances both one step
+// at a time — they meet exactly at the cycle's entry (the classic distance
+// argument: the head-to-entry length equals the meeting-point-to-entry length).
+//
+// Same RC modeling as #141: nodes are `Vec`-owned (strong) and `next` is a
+// `weak Node` overlay, so a cyclic list is reclaimed leak-free.
+
+shared struct Node {
+    val: i64,
+    id: i64,
+    mut next: weak Node,
+}
+
+fn build(vals: Vec[i64], nxt: Vec[i64]) -> Vec[Node] {
+    let n: i64 = vals.len();
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        nodes.push(Node { val: vals[i], id: i, next: None });
+        i = i + 1;
+    }
+    i = 0;
+    while i < n {
+        if nxt[i] >= 0 {
+            nodes[i].next = nodes[nxt[i]];
+        }
+        i = i + 1;
+    }
+    return nodes;
+}
+
+// Returns the id of the cycle-entry node, or -1 if the list is acyclic.
+fn detect_cycle(head: Option[Node]) -> i64 {
+    let mut slow: Option[Node] = head;
+    let mut fast: Option[Node] = head;
+    let mut met: bool = false;
+
+    // Phase 1: find a meeting point (or fall off the end -> no cycle).
+    let mut go: bool = true;
+    while go {
+        match fast {
+            None => { return 0 - 1; }
+            Some(f1) => {
+                match f1.next {
+                    None => { return 0 - 1; }
+                    Some(f2) => { fast = f2.next; }
+                }
+            }
+        }
+        match slow {
+            None => { return 0 - 1; }
+            Some(s) => { slow = s.next; }
+        }
+        match slow {
+            None => { return 0 - 1; }
+            Some(sc) => {
+                match fast {
+                    None => {}
+                    Some(fc) => {
+                        if sc.id == fc.id {
+                            met = true;
+                            go = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if not met {
+        return 0 - 1;
+    }
+
+    // Phase 2: reset `slow` to head; advance both one step until they meet.
+    slow = head;
+    let mut go2: bool = true;
+    while go2 {
+        let mut sid: i64 = 0 - 1;
+        let mut fid: i64 = 0 - 1;
+        match slow {
+            None => { return 0 - 1; }
+            Some(s) => { sid = s.id; }
+        }
+        match fast {
+            None => { return 0 - 1; }
+            Some(f) => { fid = f.id; }
+        }
+        if sid == fid {
+            return sid;
+        }
+        match slow {
+            None => { return 0 - 1; }
+            Some(s) => { slow = s.next; }
+        }
+        match fast {
+            None => { return 0 - 1; }
+            Some(f) => { fast = f.next; }
+        }
+    }
+    return 0 - 1;
+}
+
+fn run(vals: Vec[i64], nxt: Vec[i64]) {
+    let n: i64 = vals.len();
+    let nodes: Vec[Node] = build(vals, nxt);
+    let head: Option[Node] = if n > 0 { Some(nodes[0]) } else { None };
+    println(detect_cycle(head).to_string());
+}
+
+fn main() {
+    // [3,2,0,-4], tail -> node 1  =>  cycle entry is node 1
+    let mut v1: Vec[i64] = Vec.new();
+    v1.push(3); v1.push(2); v1.push(0); v1.push(0 - 4);
+    let mut n1: Vec[i64] = Vec.new();
+    n1.push(1); n1.push(2); n1.push(3); n1.push(1);
+    run(v1, n1);
+
+    // [1,2], tail -> node 0  =>  entry is node 0
+    let mut v2: Vec[i64] = Vec.new();
+    v2.push(1); v2.push(2);
+    let mut n2: Vec[i64] = Vec.new();
+    n2.push(1); n2.push(0);
+    run(v2, n2);
+
+    // [1], no cycle  =>  -1
+    let mut v3: Vec[i64] = Vec.new();
+    v3.push(1);
+    let mut n3: Vec[i64] = Vec.new();
+    n3.push(0 - 1);
+    run(v3, n3);
+
+    // [1,2,3,4,5] linear  =>  -1
+    let mut v4: Vec[i64] = Vec.new();
+    v4.push(1); v4.push(2); v4.push(3); v4.push(4); v4.push(5);
+    let mut n4: Vec[i64] = Vec.new();
+    n4.push(1); n4.push(2); n4.push(3); n4.push(4); n4.push(0 - 1);
+    run(v4, n4);
+}

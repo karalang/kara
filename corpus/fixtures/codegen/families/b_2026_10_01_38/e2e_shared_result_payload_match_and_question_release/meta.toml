@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_01_38.rs::e2e_shared_result_payload_match_and_question_release"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,101 @@
+// LeetCode #39: Combination Sum — immutable-snapshot backtracking (functional shape).
+//
+// Same index-bounded DFS as the ★ file — pick candidates[start..], recurse at `i` (not
+// i+1) so a value can be reused, and the monotone "never go left of i" walk visits each
+// multiset of choices exactly once. The ONE axis that changes is how the current branch's
+// choices are carried.
+//
+// Where the ★ file threads a single mutable `path` and brackets every choice with
+// push/pop, this style carries the path as an OWNED `Vec[i64]` SNAPSHOT and never undoes
+// anything: descending into candidate `c` builds a FRESH child path (`path.clone()` then
+// `push(c)`) and hands it to the recursive call by move. "Undo" is implicit — the parent
+// still holds its own untouched copy, exactly as kata [#22](../22-generate-parentheses/)
+// carries each partial string as an immutable snapshot and extends it with `f"{cur}("`
+// rather than mutating shared state. At the leaf (`remaining == 0`) the snapshot already
+// IS the answer, so it is moved straight into the output — no final copy.
+//
+//   - the per-node `path.clone()` is the cost (O(path length) per descent), traded for
+//     zero pop bookkeeping and no shared mutable buffer — the path a child sees can never
+//     be disturbed by a sibling.
+//   - the accumulator `out` still threads as `mut ref Vec[Vec[i64]]`; the path is a plain
+//     owned parameter, moved (not borrowed) at each recursive call.
+//
+// This factoring leans on `Vec.clone()` through a parameter binding, the operation kata
+// #39 surfaced ([`B-2026-06-18-9`]) as mis-built when the receiver was a borrow — here the
+// path is owned, but the ★ file's leaf-snapshot clones a `mut ref` receiver, so the two
+// files together exercise both the owned and borrowed clone-receiver codegen paths.
+//
+// LeetCode bounds: 1 ≤ candidates.length ≤ 30, 2 ≤ candidates[i] ≤ 40 (all distinct),
+// 1 ≤ target ≤ 40. i64 throughout for corpus uniformity.
+
+fn backtrack(
+    candidates: ref Vec[i64],
+    start: i64,
+    remaining: i64,
+    path: Vec[i64],
+    out: mut ref Vec[Vec[i64]],
+) {
+    if remaining == 0 {
+        // The snapshot is already the combination — move it into the output.
+        out.push(path);
+        return;
+    }
+    let n = candidates.len();
+    let mut i = start;
+    while i < n {
+        let c = candidates[i];
+        if c <= remaining {
+            // Fresh child path = parent's snapshot + this choice. The parent's
+            // `path` is left untouched for the next loop iteration.
+            let mut next = path.clone();
+            next.push(c);
+            backtrack(candidates, i, remaining - c, next, out);
+        }
+        i = i + 1;
+    }
+}
+
+fn combination_sum(candidates: Slice[i64], target: i64) -> Vec[Vec[i64]] {
+    let cands: Vec[i64] = Vec.from_slice(candidates);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let seed: Vec[i64] = Vec.new();
+    backtrack(cands, 0, target, seed, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(combo: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = combo.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{combo[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn report(candidates: Slice[i64], target: i64) {
+    let combos = combination_sum(candidates, target);
+    let count = combos.len();
+    println(f"target={target} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(show(combos[i]));
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    report([2, 3, 6, 7], 7);
+    report([2, 3, 5], 8);
+    report([2], 1);
+    report([2], 6);
+    report([2, 3, 5], 12);
+}

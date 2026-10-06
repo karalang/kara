@@ -1,0 +1,13 @@
+
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd)]
+struct K { id: i64, name: String }
+fn main() {
+    let mut s: SortedSet[K] = SortedSet.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        s.insert(K { id: i, name: f"key-{i}-padding-padding-padding" });
+        s.remove(K { id: i, name: f"key-{i}-padding-padding-padding" });
+        i = i + 1;
+    }
+    println(f"{s.len()}");
+}

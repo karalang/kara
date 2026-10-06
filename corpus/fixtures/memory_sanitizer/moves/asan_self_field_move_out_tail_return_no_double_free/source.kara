@@ -1,0 +1,4 @@
+
+struct B { v: String, n: i64 }
+impl B { fn get(self) -> String { self.v } }
+fn main() { let b = B { v: "hi".to_string(), n: 5 }; println(b.get()); }

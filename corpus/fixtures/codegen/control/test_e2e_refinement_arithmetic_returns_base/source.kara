@@ -1,0 +1,6 @@
+
+type Doubled = i64 where self % 2 == 0;
+fn main() {
+    let d = 4 as Doubled;
+    println(d + d);
+}

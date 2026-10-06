@@ -1,0 +1,19 @@
+
+struct Box { s: String }
+enum Opt[T] { Yes(T), No }
+fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 500 {
+        let b: Box = Box { s: f"inside-{i}" };
+        let db: Box = Box { s: f"default" };
+        let r: Box = get(Opt.Yes(b), db);
+        total = total + r.s.len();
+        let db2: Box = Box { s: f"fallback-{i}" };
+        let r2: Box = get(Opt.No, db2);
+        total = total + r2.s.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

@@ -1,0 +1,10 @@
+
+struct Inner { owner: Outer, tag: String }
+struct Outer { kids: Vec[Inner], name: String }
+
+fn count(o: Outer) -> i64 { o.kids.len() }
+
+fn main() {
+    let o = Outer { kids: [], name: "root" };
+    println(count(o));
+}

@@ -1,0 +1,9 @@
+
+        effect resource R;
+        fn worker() writes(R) {}
+        fn main() {
+            let mut x = 0i64;
+            worker();
+            let mut y = 0i64;
+        }
+        

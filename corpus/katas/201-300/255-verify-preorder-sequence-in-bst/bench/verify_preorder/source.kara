@@ -1,0 +1,127 @@
+// Benchmark workload for LeetCode #255 — Verify Preorder Sequence in BST.
+//
+// Build-once + punch. A random BST over 200,000 distinct keys is built once and
+// traversed to produce a VALID preorder sequence; each round then verifies that
+// sequence end to end with the ★ ancestor-stack algorithm.
+//
+// The sequence must be VALID or the benchmark measures nothing. A rejecting
+// input returns at the first violation, so benching one would time how quickly a
+// counterexample appears — a property of the generator, not of the verifier.
+// Only a valid sequence forces all n elements through the stack.
+//
+// Keys are inserted in shuffled order, so the tree is a random BST of depth
+// ~2·log2(n) rather than a spine. That matters for the shape of the work: a
+// sorted insertion order would produce a pure right spine, whose preorder is
+// strictly increasing and whose verification pops on every single element —
+// a degenerate case that exercises the pop loop and nothing else.
+//
+// The ★ form is the kernel rather than the in-place variant because it does not
+// destroy its input: benching the destructive one would require a fresh copy per
+// round and would measure the copy alongside the algorithm.
+//
+// Each element is pushed once and popped at most once, and the pop is driven by
+// data-dependent comparisons, so the loop does not vectorise.
+
+fn main() {
+    let n = 200000;
+    let rounds = 250;
+
+    // ---- build once: a random BST, then its preorder --------------------
+    let mut val: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    let mut state = 255255;
+
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let v = state; // distinct with overwhelming probability at this scale
+        if val.len() == 0 {
+            val.push(v);
+            left.push(-1);
+            right.push(-1);
+        } else {
+            let mut cur = 0;
+            let mut placed = false;
+            while not placed {
+                if v == val[cur] {
+                    placed = true; // duplicate: drop
+                } else if v < val[cur] {
+                    if left[cur] == -1 {
+                        val.push(v);
+                        left.push(-1);
+                        right.push(-1);
+                        left[cur] = val.len() - 1;
+                        placed = true;
+                    } else {
+                        cur = left[cur];
+                    }
+                } else {
+                    if right[cur] == -1 {
+                        val.push(v);
+                        left.push(-1);
+                        right.push(-1);
+                        right[cur] = val.len() - 1;
+                        placed = true;
+                    } else {
+                        cur = right[cur];
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+
+    let mut preorder: Vec[i64] = Vec.new();
+    let mut walk: Vec[i64] = Vec.new();
+    walk.push(0);
+    while walk.len() > 0 {
+        let node = match walk.pop() {
+            Some(x) => x,
+            None => -1,
+        };
+        if node != -1 {
+            preorder.push(val[node]);
+            if right[node] != -1 {
+                walk.push(right[node]);
+            }
+            if left[node] != -1 {
+                walk.push(left[node]);
+            }
+        }
+    }
+
+    // ---- punch -----------------------------------------------------------
+    let m = preorder.len();
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut stack: Vec[i64] = Vec.new();
+        let mut lower = -9223372036854775807 - 1;
+        let mut ok = true;
+        let mut k = 0;
+        while k < m {
+            let x = preorder[k];
+            if x < lower {
+                ok = false;
+            }
+            while stack.len() > 0 and stack[stack.len() - 1] < x {
+                lower = match stack.pop() {
+                    Some(v) => v,
+                    None => lower,
+                };
+            }
+            stack.push(x);
+            k = k + 1;
+        }
+        // Fold the verdict AND the final bound, so a wrong walk is caught.
+        if ok {
+            sink = (sink * 31 + 1) % 1000000007;
+        } else {
+            sink = (sink * 31) % 1000000007;
+        }
+        sink = (sink * 131 + (lower % 1000000007)) % 1000000007;
+        r = r + 1;
+    }
+    println(f"{m} {sink}");
+}

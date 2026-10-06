@@ -1,0 +1,7 @@
+
+        fn f(v: ref Vec[i64], go: bool) {
+            let mut sum = 0;
+            if go { for x in v { sum = sum + x; } }
+        }
+        fn main() { println(1); }
+        

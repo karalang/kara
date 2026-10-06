@@ -1,0 +1,37 @@
+
+fn main() {{
+    match File.create("{path}") {{
+        Ok(f) => {{
+            let data = [65u8, 66u8, 67u8, 68u8];
+            match f.write(data[0..4]) {{ Ok(_) => {{}} Err(_) => println("write err") }}
+            match f.flush() {{ Ok(_) => {{}} Err(_) => println("flush err") }}
+        }}
+        Err(_) => println("create err"),
+    }}
+    match File.open("{path}") {{
+        Ok(g) => {{
+            match g.seek(SeekFrom.Start, 2i64) {{
+                Ok(p) => println("pos " + p.to_string()),
+                Err(_) => println("seek err"),
+            }}
+            let mut buf = [0u8, 0u8];
+            match g.read(mut buf) {{
+                Ok(n) => println("read " + n.to_string() + " b0 " + buf[0].to_string()),
+                Err(_) => println("read err"),
+            }}
+            match g.seek(SeekFrom.End, -1i64) {{
+                Ok(e) => println("end " + e.to_string()),
+                Err(_) => println("seek err"),
+            }}
+            match g.seek(SeekFrom.Current, 0i64) {{
+                Ok(c) => println("cur " + c.to_string()),
+                Err(_) => println("seek err"),
+            }}
+            match g.seek(SeekFrom.Start, -5i64) {{
+                Ok(_) => println("unexpected ok"),
+                Err(_) => println("neg rejected"),
+            }}
+        }}
+        Err(_) => println("open err"),
+    }}
+}}

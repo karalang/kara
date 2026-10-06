@@ -1,0 +1,22 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    syntax = \"proto3\";
+    enum Priority {
+        PRIORITY_LOW = 0;
+        PRIORITY_HIGH = 1;
+        PRIORITY_CRITICAL = 2;
+    }
+    message Ticket { string title = 1; Priority prio = 2; }
+";
+
+fn main() {
+    let t = Ticket { title: "bug", prio: Priority.PriorityHigh };
+    let back = Ticket.decode(t.encode());
+    println(back.title);
+    println(match back.prio {
+        Priority.PriorityLow => "low",
+        Priority.PriorityHigh => "high",
+        Priority.PriorityCritical => "critical",
+    });
+}

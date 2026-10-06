@@ -1,0 +1,113 @@
+// kara-katas/backend/supervised_echo/main.kara
+//
+// Demonstrates phase-8 line-74 error-cause branching over the std.tcp
+// construction surface — the kata that drove the named `TcpError`
+// variants (`AddrInUse` / `ConnectionRefused` / `PermissionDenied`)
+// into the compiler. Before that work every construction failure
+// surfaced as `TcpError.Other(-1)`, so neither scene below could be
+// written correctly: the picker couldn't tell "port busy" from a fatal
+// error, and the reconnect loop couldn't tell "server not up yet" from
+// a permanent failure. Both branches were dead.
+//
+// Two self-contained scenes, no concurrency needed:
+//   1. AddrInUse-aware port picker — bind the first free port in a
+//      range, stepping past any port already in use. The kata occupies
+//      the base port itself so the `AddrInUse` fallback fires
+//      deterministically (the "this port is taken / a server is already
+//      running here" signal).
+//   2. ConnectionRefused-aware reconnect — connect to a closed port,
+//      retrying a bounded number of times on `ConnectionRefused`
+//      ("server not up yet, back off and retry"), then giving up. Any
+//      other cause (`Other`, etc.) is fatal and ends the loop at once.
+//
+// **Structure note — two compiler limitations this kata surfaced**
+// (both pre-existing, both tracked in the karac trackers; see README):
+//   - `bind` is *not* a network-yielding effect (local socket setup),
+//     so `pick_port` can be a normal helper fn with an early `return`.
+//   - `connect` *is* network-yielding, so a helper fn that calls it
+//     becomes a phase-6 state machine that a plain call from `main`
+//     doesn't drive — it silently produces no output. So scene 2's
+//     reconnect loop is written inline in `main` (flag-based, no
+//     `return` — a bare `return;` in `main` is itself a separate
+//     codegen bug). Once those land, scene 2 factors into its own fn.
+//
+// Run with `KARAC_AUTO_PAR=0` for deterministic line ordering — the
+// scenes are independent, so the auto-parallelizer otherwise interleaves
+// their stdout. This is a feature demo, not an auto-par demo.
+
+// Bind the first free port in `[start, limit)`, stepping past any port
+// already in use. Returns after the first success (the listener drops at
+// the `return`, closing the fd) or when a non-AddrInUse cause stops the
+// search. `bind` carries no network-yield effect, so this composes as an
+// ordinary helper.
+fn pick_port(start: i64, limit: i64) {
+    let mut p = start;
+    while p < limit {
+        let addr = f"127.0.0.1:{p}";
+        match TcpListener.bind(addr) {
+            Result.Ok(listener) => {
+                println(f"  bound port {p}");
+                return;
+            }
+            Result.Err(TcpError.AddrInUse) => {
+                println(f"  port {p} in use — stepping to next");
+                p = p + 1;
+            }
+            Result.Err(TcpError.PermissionDenied) => {
+                println(f"  port {p} denied (privileged?) — stopping");
+                return;
+            }
+            Result.Err(_) => {
+                println(f"  port {p} failed for another reason — stopping");
+                return;
+            }
+        }
+    }
+    println("  no free port in range");
+}
+
+fn main() {
+    println("scene 1: AddrInUse-aware port picker");
+    // Occupy the base port so the picker must step past it. `held` stays
+    // alive (the port stays bound) for the whole picker run, then drops.
+    match TcpListener.bind("127.0.0.1:18080") {
+        Result.Ok(held) => {
+            println("  occupied 18080; picker starts at 18080");
+            pick_port(18080, 18090);
+        }
+        Result.Err(_) => {
+            println("  could not occupy 18080; picking from the range anyway");
+            pick_port(18080, 18090);
+        }
+    }
+
+    println("scene 2: ConnectionRefused-aware reconnect");
+    // Nothing listens on 19099, so every attempt is refused — the loop
+    // exhausts its budget and reports a clean give-up. Inlined here (not
+    // a helper) per the structure note above. `done` stands in for the
+    // early-`return` that a helper would use on the success / fatal arms.
+    let mut attempt = 1;
+    let mut done = false;
+    while attempt <= 3 {
+        if done == false {
+            let addr = f"127.0.0.1:{19099}";
+            match TcpStream.connect(addr) {
+                Result.Ok(stream) => {
+                    println("  connected");
+                    done = true;
+                }
+                Result.Err(TcpError.ConnectionRefused) => {
+                    println(f"  attempt {attempt}: connection refused — retrying");
+                    attempt = attempt + 1;
+                }
+                Result.Err(_) => {
+                    println("  fatal connect error — giving up");
+                    done = true;
+                }
+            }
+        } else {
+            attempt = attempt + 1;
+        }
+    }
+    println("  reconnect finished");
+}

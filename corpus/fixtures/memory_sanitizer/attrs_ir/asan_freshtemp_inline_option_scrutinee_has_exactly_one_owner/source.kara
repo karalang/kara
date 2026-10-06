@@ -1,0 +1,58 @@
+
+struct Wrap { s: String }
+shared struct Node { name: String }
+
+fn mkarr(n: i64) -> Option[Array[String, 1]] {
+    if n < 0 { return None; }
+    return Some([f"arr-aaaaaaaaaaaaaaaa-{n}"]);
+}
+fn mkstr(n: i64) -> Option[String] {
+    if n < 0 { return None; }
+    return Some(f"str-bbbbbbbbbbbbbbbb-{n}");
+}
+fn mkvec(n: i64) -> Option[Vec[String]] {
+    if n < 0 { return None; }
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"vec-cccccccccccccccc-{n}");
+    return Some(v);
+}
+fn mkscalar(n: i64) -> Option[Array[i64, 3]] {
+    if n < 0 { return None; }
+    return Some([n, n + 1, n + 2]);
+}
+fn mkwrap(n: i64) -> Option[Wrap] {
+    if n < 0 { return None; }
+    return Some(Wrap { s: f"wrp-dddddddddddddddd-{n}" });
+}
+fn mknode(n: i64) -> Option[Node] {
+    if n < 0 { return None; }
+    return Some(Node { name: f"nod-eeeeeeeeeeeeeeee-{n}" });
+}
+fn passthru(o: Option[String]) -> Option[String] { return o; }
+
+fn main() {
+    let mut n: i64 = 0;
+    while n < 3 {
+        match mkarr(n) { Some(a) => { println(f"arr-moved:{a[0]}"); } None => {} }
+        match mkarr(n) { Some(_) => { println("arr-wild"); } None => {} }
+        match mkstr(n) { Some(s) => { println(f"str-moved:{s}"); } None => {} }
+        match mkstr(n) { Some(_) => { println("str-wild"); } None => {} }
+        match mkstr(n) { Some(s) => { println(f"str-read:{s.len()}"); } None => {} }
+        match mkvec(n) { Some(v) => { println(f"vec-moved:{v[0]}"); } None => {} }
+        match mkvec(n) { Some(_) => { println("vec-wild"); } None => {} }
+        match mkscalar(n) { Some(a) => { println(f"scalar:{a[0]}"); } None => {} }
+        match mkwrap(n) { Some(w) => { println(f"wrap:{w.s}"); } None => {} }
+        match mknode(n) { Some(d) => { println(f"node:{d.name}"); } None => {} }
+
+        let src: Option[String] = Some(f"pas-ffffffffffffffff-{n}");
+        match passthru(src) { Some(s) => { println(f"pass:{s}"); } None => {} }
+
+        let held = mkarr(n);
+        match held { Some(a) => { println(f"held:{a[0]}"); } None => {} }
+
+        match mkstr(n) { Some(s) if n > 0 => { println(f"guard-hi:{s}"); } Some(s) => { println(f"guard-lo:{s}"); } None => {} }
+
+        n = n + 1;
+    }
+    println("end");
+}

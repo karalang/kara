@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_05_5.rs::e2e_one_word_array_field_in_enum_payload"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_05_5.rs::asan_one_word_array_field_in_enum_payload"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

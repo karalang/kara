@@ -1,0 +1,12 @@
+
+#[require_simd]
+fn f32_scale(x: f32, y: f32) -> f32 {
+    let a: Vector[f32, 4] = Vector[f32, 4](x, x, x, x);
+    let b: Vector[f32, 4] = Vector[f32, 4](y, y, y, y);
+    let c = a * b;
+    c[0] + c[1] + c[2] + c[3]
+}
+
+fn main() {
+    println(f32_scale(2.0, 0.5));
+}

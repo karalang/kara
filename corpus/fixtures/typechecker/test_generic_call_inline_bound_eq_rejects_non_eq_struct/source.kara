@@ -1,0 +1,6 @@
+struct P { x: i64 }
+           fn use_eq[T: Eq](_x: T) {}
+           fn main() {
+               let p = P { x: 1 };
+               use_eq(p);
+           }

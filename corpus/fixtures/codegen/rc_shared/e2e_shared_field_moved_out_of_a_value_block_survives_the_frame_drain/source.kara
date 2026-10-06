@@ -1,0 +1,23 @@
+shared struct Node { s: String }
+struct Box[T] { v: T }
+struct Holder { v: Node }
+
+fn main() {
+    let mut acc: i64 = 0;
+    // (a) GENERIC wrapper, field escaping a value-position block.
+    let x1 = { let b = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } }; b.v };
+    acc = acc + x1.s.len();
+    // (b) CONCRETE wrapper, same shape — broken at HEAD independently of
+    // generics, which is what makes this more than a companion case.
+    let x2 = { let h = Holder { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } }; h.v };
+    acc = acc + x2.s.len();
+    // (c) CONTROL, the non-block move-out that was already correct.
+    let b3 = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } };
+    let x3 = b3.v;
+    acc = acc + x3.s.len();
+    // (d) CONTROL, the concrete non-block move-out.
+    let h4 = Holder { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } };
+    let x4 = h4.v;
+    acc = acc + x4.s.len();
+    println(acc);
+}

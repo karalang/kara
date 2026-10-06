@@ -1,0 +1,32 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+impl ListNode {
+    fn step(self) -> Option[ListNode] { self.next }
+}
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn ident(head: Option[ListNode]) -> Option[ListNode] { head }
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut total = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        total = total + node.val;
+        cur = node.next;
+    }
+    total
+}
+fn main() {
+    let chain = make(4);
+    let node = chain.unwrap();
+    let rest = node.step();
+    println(sum(ident(rest)));
+}

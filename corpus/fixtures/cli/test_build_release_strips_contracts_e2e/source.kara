@@ -1,0 +1,3 @@
+
+fn checked(x: i64) -> i64 requires x > 100 { x }
+fn main() { println(checked(5)); }

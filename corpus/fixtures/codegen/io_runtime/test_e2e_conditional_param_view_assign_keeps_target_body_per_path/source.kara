@@ -1,0 +1,20 @@
+
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+
+#[allow(partial_move_of_drop_enum)]
+fn looped(b: E) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 2 {
+        let mut out: R = R { id: 90 + i, tag: f"t" };
+        match b { E.A(r) => { out = r; } E.B => { } }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+
+fn main() { println(f"e{looped(E.B)}"); }

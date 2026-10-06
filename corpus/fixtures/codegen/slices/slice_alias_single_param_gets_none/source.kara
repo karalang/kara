@@ -1,0 +1,7 @@
+
+fn scale(xs: mut Slice[f64], f: f64) {
+    let n = xs.len();
+    let mut i = 0;
+    while i < n { xs[i] = xs[i] * f; i = i + 1; }
+}
+fn main() { print(0); }

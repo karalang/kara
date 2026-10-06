@@ -1,0 +1,21 @@
+
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn xfer() -> i64 {
+    let mut dst: Vec[Option[Node]] = Vec.new();
+    dst.push(Some(Node { val: 10, left: None, right: None }));
+    let mut r: i64 = 0;
+    match dst[0] {
+        None => {}
+        Some(nd) => { r = nd.val; }
+    }
+    r
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + xfer();
+        i = i + 1;
+    }
+    println(t);
+}

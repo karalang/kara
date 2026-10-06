@@ -1,0 +1,9 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let mut p = v.iter().inspect(|x| println(f"pull:{x}")).peekable();
+    println(f"peek1:{p.peek().unwrap()}");
+    println(f"peek2:{p.peek().unwrap()}");
+    println(f"next:{p.next().unwrap()}");
+    println(f"peek3:{p.peek().unwrap()}");
+}

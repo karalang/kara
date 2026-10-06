@@ -1,0 +1,113 @@
+// LeetCode #43: Multiply Strings — the digit grid.
+//
+// Multiply two non-negative decimal strings, return the product as a string.
+// No int-conversion / no bignum — pure digit arithmetic. This is the heavier
+// sibling of the column-add katas (#67 add-binary, #415 add-strings): where
+// addition walks a single column, multiplication is an O(m·n) **grid**, every
+// digit of `a` against every digit of `b`, each partial product landing two
+// columns wide.
+//
+// The canonical no-scratch-strings form. A product of an m-digit and an n-digit
+// number is at most m+n digits, so a flat `Vec[i64]` of m+n slots holds the
+// whole answer; the partial product of `a[i]·b[j]` occupies columns (i+j) and
+// (i+j+1), most-significant-first:
+//
+//   sum         = a[i]·b[j] + res[i+j+1]    accumulate into the low column
+//   res[i+j+1]  = sum % 10                  the digit kept there
+//   res[i+j]   += sum / 10                  the carry ripples one column left
+//
+// Each slot can transiently exceed 9 (it is summed across several (i,j) pairs);
+// the `% 10` / `/ 10` redistribution on the next column that reaches it keeps
+// the invariant. After the grid, strip leading zeros and render through the
+// digit table `DIGITS[d..d+1]` — the same inverse nibble map as #415/#405.
+//
+// Three lexer surfaces at once: digit-char → value (`from_str_radix` arm),
+// base-10 carry arithmetic, and value → digit glyph (the §3 slice render) —
+// now over a two-dimensional accumulation instead of one column.
+
+fn multiply(a: ref String, b: ref String) -> String {
+    let digits: String = "0123456789";
+
+    let ab = a.bytes();
+    let bb = b.bytes();
+    let m = ab.len();
+    let n = bb.len();
+
+    // m+n slots, most-significant column first, all zero.
+    let mut res: Vec[i64] = Vec.new();
+    let mut t = 0;
+    while t < m + n {
+        res.push(0);
+        t = t + 1;
+    }
+
+    // The grid: every digit of `a` against every digit of `b`.
+    let mut i = m - 1;
+    while i >= 0 {
+        let d1 = (ab[i] - b'0') as i64;
+        let mut j = n - 1;
+        while j >= 0 {
+            let d2 = (bb[j] - b'0') as i64;
+            let lo = i + j + 1;
+            let hi = i + j;
+            let sum = d1 * d2 + res[lo];
+            res[lo] = sum % 10;
+            res[hi] = res[hi] + sum / 10;
+            j = j - 1;
+        }
+        i = i - 1;
+    }
+
+    // Strip leading zeros, then render each column through the digit table.
+    let mut out: String = "";
+    let mut k = 0;
+    while k < res.len() and res[k] == 0 {
+        k = k + 1;
+    }
+    while k < res.len() {
+        let d = res[k];
+        out.push_str(digits[d..d + 1]);
+        k = k + 1;
+    }
+
+    // All-zero grid (a or b was "0") leaves `out` empty.
+    if out.len() == 0 {
+        return "0";
+    }
+    out
+}
+
+fn report(a: ref String, b: ref String) {
+    println(f"\"{a}\" * \"{b}\" -> \"{multiply(a, b)}\"");
+}
+
+fn main() {
+    // LeetCode canonical examples.
+    report("2", "3");                       // 6
+    report("123", "456");                   // 56088
+
+    // Zeros — every path must collapse to a single "0".
+    report("0", "0");                       // 0
+    report("0", "52");                      // 0
+    report("99", "0");                      // 0
+
+    // Carry ripples / new most-significant digit.
+    report("9", "9");                       // 81
+    report("99", "99");                     // 9801
+    report("999", "999");                   // 998001
+    report("9999", "9999");                 // 99980001
+
+    // Unequal lengths.
+    report("123", "7");                     // 861
+    report("6", "123456");                  // 740736
+    report("25", "4");                      // 100
+
+    // Powers of ten — trailing-zero handling.
+    report("10", "10");                     // 100
+    report("100", "1000");                  // 100000
+
+    // Long operands (beyond any native int width — the no-bignum point).
+    report("123456789", "987654321");       // 121932631112635269
+    report("99999999999999999999", "99999999999999999999");
+    report("12345678901234567890", "98765432109876543210");
+}

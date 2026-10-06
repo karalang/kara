@@ -1,0 +1,25 @@
+
+trait Joiner {
+    fn concat(ref self) -> String;
+}
+impl Joiner for Vec[String] {
+    fn concat(ref self) -> String {
+        let mut out = String.new();
+        for s in self { out = out + s; }
+        out
+    }
+}
+fn callit[C: Joiner](c: ref C) -> String { c.concat() }
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let mut v: Vec[String] = Vec[
+            "blanket-vec-string-loop-alpha-aaaaaaaaaaaaaaaa".to_string(),
+            "blanket-vec-string-loop-bravo-bbbbbbbbbbbbbbbb".to_string()
+        ];
+        let direct: String = v.concat();
+        let mono: String = callit(v);
+        println(f"{direct} {mono} {v.len()}");
+        round = round + 1i64;
+    }
+}

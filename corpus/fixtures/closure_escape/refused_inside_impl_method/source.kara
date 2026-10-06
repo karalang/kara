@@ -1,0 +1,16 @@
+
+struct Fact { bias: i64 }
+
+impl Fact {
+    fn make(ref self) -> Fn(i64) -> i64 {
+        let b = self.bias;
+        let f = |x| x + b;
+        return f;
+    }
+}
+
+fn main() {
+    let fac = Fact { bias: 2 };
+    let f = fac.make();
+    println(f(1));
+}

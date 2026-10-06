@@ -1,0 +1,35 @@
+a:0
+a:1
+a:2
+b:5
+b:6
+c:0
+c:1
+c:2
+d:x 1
+d:yy 2
+e:x
+f:00
+f:01
+f:10
+f:11
+g:1
+g:3
+h:1=p1
+h:2=p2
+i:7
+i:7
+j:hi
+j:hi
+k:6
+l:10 3 -1
+m:3 w2
+r:w0
+n:2
+n:3
+o:0
+o:1
+p:5
+q:9
+end t
+drop t

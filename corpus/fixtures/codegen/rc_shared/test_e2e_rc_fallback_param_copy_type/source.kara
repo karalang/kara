@@ -1,0 +1,8 @@
+
+fn sink(x: i64) { }
+fn main() {
+    let val: i64 = 99;
+    let cond: bool = false;
+    if cond { sink(val); }
+    println(val);
+}

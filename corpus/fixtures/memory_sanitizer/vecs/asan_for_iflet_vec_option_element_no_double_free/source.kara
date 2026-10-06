@@ -1,0 +1,21 @@
+
+fn build(n: i64) -> Vec[Option[String]] {
+    let mut v: Vec[Option[String]] = Vec.new();
+    v.push(Some(f"alpha payload padded beyond thirty-six bytes {n}"));
+    v.push(None);
+    return v;
+}
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 4 {
+        let v = build(i);
+        for o in v {
+            if let Some(s) = o {
+                total = total + s.len();
+            }
+        }
+        i = i + 1;
+    };
+    println(total);
+}

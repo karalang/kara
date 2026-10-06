@@ -1,0 +1,48 @@
+
+fn by_val(v: Vec[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+fn by_ref(v: ref Vec[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+fn by_slice(v: Slice[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+struct Acc {
+    base: i64,
+}
+
+impl Acc {
+    fn tally(self, v: Vec[i32]) -> i64 {
+        let mut t = self.base;
+        for x in v {
+            t = t + (x as i64);
+        }
+        return t;
+    }
+}
+
+fn main() {
+    let a = by_val([10, 20, 30]);
+    let b = by_ref([10, 20, 30]);
+    let c = by_slice([10, 20, 30]);
+    let d = by_val([7; 3]);
+    let acc = Acc { base: 0 };
+    let e = acc.tally([1, 2, 3]);
+    println(a + b + c + d + e);
+}

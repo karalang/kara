@@ -1,0 +1,22 @@
+
+fn main() {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    let cs: Vec[i64] = c.sorted();
+    println(f"{cs[0]} {cs[1]} {cs[2]} {cs[3]} {cs[4]} {cs[5]}");
+    let ca: Vec[i64] = c.argsort();
+    println(f"{ca[0]} {ca[1]} {ca[2]} {ca[3]} {ca[4]} {ca[5]}");
+    let mut n: Column[i64] = Column.with_capacity(5);
+    n.push(10); n.push_null(); n.push(5); n.push_null(); n.push(20);
+    let ns: Vec[i64] = n.sorted();
+    println(f"{ns.len()} {ns[0]} {ns[1]} {ns[2]}");
+    let na: Vec[i64] = n.argsort();
+    println(f"{na.len()} {na[0]} {na[1]} {na[2]}");
+    let fc: Column[f64] = Column.from_vec([2.5, 1.5, 3.5, 1.5]);
+    let fs: Vec[f64] = fc.sorted();
+    println(f"{fs[0]} {fs[1]} {fs[2]} {fs[3]}");
+    let fa: Vec[i64] = fc.argsort();
+    println(f"{fa[0]} {fa[1]} {fa[2]} {fa[3]}");
+    let ec: Column[i64] = Column.with_capacity(0);
+    let es: Vec[i64] = ec.sorted();
+    println(f"{es.len()}");
+}

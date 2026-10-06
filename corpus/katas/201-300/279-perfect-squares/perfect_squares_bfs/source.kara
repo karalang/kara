@@ -1,0 +1,68 @@
+// LeetCode 279 — the same answer as a SHORTEST PATH.
+//
+// Read the problem as a graph: nodes are the integers 0..n, and from `k` there
+// is an edge to `k - j*j` for every square that fits. The answer is the length
+// of the shortest path from `n` to `0`, because a path of length L is exactly a
+// decomposition into L squares.
+//
+// So: breadth-first search from `n`, level by level. The first time 0 is
+// reached, the current level IS the answer — BFS explores in nondecreasing
+// distance, so no later path can be shorter.
+//
+// WHY IT IS WORTH KEEPING ALONGSIDE THE DP. Both are searches and both are
+// exact, but they explore in opposite directions and stop for different reasons.
+// The DP computes the answer for EVERY value up to `n` and reads off the last;
+// BFS computes it for `n` alone and abandons the rest, usually touching a small
+// fraction of the range. That makes their failure modes different: an off-by-one
+// in the DP's `j*j <= i` bound silently shifts a whole table, while the same slip
+// here just prunes an edge and shows up as an answer that is too large.
+//
+// IT IS ALSO FASTER IN PRACTICE for a single query, which the bench measures —
+// the DP's O(n√n) is a table it mostly does not need.
+
+fn least_squares(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    let mut seen: Vec[bool] = Vec.new();
+    let mut z = 0;
+    while z <= n { seen.push(false); z = z + 1; }
+
+    let mut frontier: Vec[i64] = Vec.new();
+    frontier.push(n);
+    seen[n] = true;
+    let mut level = 0;
+
+    while frontier.len() > 0 {
+        level = level + 1;
+        let mut next: Vec[i64] = Vec.new();
+        let mut f = 0;
+        while f < frontier.len() {
+            let cur = frontier[f];
+            let mut j = 1;
+            while j * j <= cur {
+                let nxt = cur - j * j;
+                if nxt == 0 {
+                    return level;
+                }
+                if not seen[nxt] {
+                    seen[nxt] = true;
+                    next.push(nxt);
+                }
+                j = j + 1;
+            }
+            f = f + 1;
+        }
+        frontier = next;
+    }
+    return 0;
+}
+
+fn main() {
+    let cases: Vec[i64] = [1, 2, 3, 4, 12, 13, 43, 48,
+                           99, 100, 9999];
+    let mut i = 0;
+    while i < cases.len() {
+        let n = cases[i];
+        println(f"n={n} -> {least_squares(n)}");
+        i = i + 1;
+    }
+}

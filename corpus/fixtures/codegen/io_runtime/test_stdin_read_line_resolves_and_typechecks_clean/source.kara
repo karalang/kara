@@ -1,0 +1,7 @@
+
+fn main() reads(Stdin) {
+    match Stdin.read_line() {
+        Ok(s) => { let _n = s.len(); }
+        Err(_) => {}
+    }
+}

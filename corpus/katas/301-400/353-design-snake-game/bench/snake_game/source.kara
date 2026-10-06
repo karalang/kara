@@ -1,0 +1,118 @@
+// Bench for LeetCode #353 -- the grid + ring-buffer arm, which is the same
+// algorithm in every language (the starred arm's Set has no C equivalent).
+//
+// Each of ROUNDS rounds builds a board of WIDTH x (HEIGHT + 2 * round) cells,
+// lays food three cells ahead of the snake along a Hamiltonian cycle until a
+// quarter of the board is eaten, and plays three full laps of the cycle. Every
+// move's result is folded into the sink.
+
+struct SnakeGame {
+    width: i64,
+    height: i64,
+    food: Vec[(i64, i64)],
+    next_food: i64,
+    ring: Vec[i64],
+    start: i64,
+    len: i64,
+    covered: Vec[bool],
+}
+
+impl SnakeGame {
+    fn new(width: i64, height: i64, food: Vec[(i64, i64)]) -> SnakeGame {
+        let cap = width * height;
+        let mut covered = vec![false; cap];
+        covered[0] = true;
+        SnakeGame { width, height, food, next_food: 0, ring: vec![0; cap], start: 0, len: 1, covered }
+    }
+
+    fn step(mut ref self, dir: char) -> i64 {
+        let cap = self.ring.len();
+        let head = self.ring[(self.start + self.len - 1) % cap];
+        let r = head / self.width;
+        let c = head % self.width;
+        let (nr, nc) = match dir {
+            'U' => (r - 1, c),
+            'D' => (r + 1, c),
+            'L' => (r, c - 1),
+            _ => (r, c + 1),
+        };
+        if nr < 0 or nr >= self.height or nc < 0 or nc >= self.width {
+            return -1;
+        }
+        let cell = nr * self.width + nc;
+        if self.next_food < self.food.len() and self.food[self.next_food] == (nr, nc) {
+            self.next_food += 1;
+        } else {
+            self.covered[self.ring[self.start]] = false;
+            self.start = (self.start + 1) % cap;
+            self.len -= 1;
+        }
+        if self.covered[cell] {
+            return -1;
+        }
+        self.ring[(self.start + self.len) % cap] = cell;
+        self.len += 1;
+        self.covered[cell] = true;
+        self.next_food
+    }
+
+    fn length(ref self) -> i64 {
+        self.len
+    }
+}
+
+const ROUNDS: i64 = 30;
+const WIDTH: i64 = 1000;
+const HEIGHT: i64 = 400;
+
+fn main() {
+    let mut sink: i64 = 0;
+    for round in 0..ROUNDS {
+        let w = WIDTH;
+        let h = HEIGHT + 2 * round;
+        let n = w * h;
+        // The cycle, one move per cell, and the cell each move lands on.
+        let mut moves: Vec[char] = Vec.new();
+        for _ in 0..w - 1 {
+            moves.push('R');
+        }
+        for row in 1..h {
+            moves.push('D');
+            let d = if row % 2 == 1 { 'L' } else { 'R' };
+            for _ in 0..w - 2 {
+                moves.push(d);
+            }
+        }
+        moves.push('L');
+        for _ in 0..h - 1 {
+            moves.push('U');
+        }
+        let mut food: Vec[(i64, i64)] = Vec.new();
+        let mut r = 0;
+        let mut c = 0;
+        let mut t = 0;
+        while food.len() < n / 4 {
+            let d = moves[t];
+            if d == 'U' {
+                r -= 1;
+            } else if d == 'D' {
+                r += 1;
+            } else if d == 'L' {
+                c -= 1;
+            } else {
+                c += 1;
+            }
+            if t % 3 == 2 {
+                food.push((r, c));
+            }
+            t += 1;
+        }
+        let mut g = SnakeGame.new(w, h, food);
+        for t in 0..3 * n {
+            let s = g.step(moves[t % n]);
+            sink = (sink * 31 + s + t) % 1000000007;
+        }
+        sink = (sink + g.length()) % 1000000007;
+    }
+    println(f"{sink}");
+}

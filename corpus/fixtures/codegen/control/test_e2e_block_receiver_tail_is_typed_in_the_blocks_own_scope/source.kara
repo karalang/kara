@@ -1,0 +1,11 @@
+
+struct Other { a: i64, n: i64 }
+struct Tag { n: i64, a: i64 }
+
+fn make() -> Tag { return Tag { n: 7, a: 99 }; }
+
+fn main() {
+    let x = Other { a: 5, n: 42 };
+    println({ let x = make(); x }.n);
+    println(x.n);
+}

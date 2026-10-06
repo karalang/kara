@@ -1,0 +1,16 @@
+
+        fn make() -> Vec[i64] {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(1);
+            return v;
+        }
+        fn consume(xs: Vec[i64]) -> Vec[i64] {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(xs.len());
+            return v;
+        }
+        fn main() {
+            let a = make();
+            let b = consume(a);
+        }
+        

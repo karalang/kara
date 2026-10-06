@@ -1,0 +1,13 @@
+source = "tests/codegen/option_result.rs::test_e2e_untyped_let_boxed_option_reads_correct_value"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

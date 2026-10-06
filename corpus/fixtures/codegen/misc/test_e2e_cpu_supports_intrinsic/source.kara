@@ -1,0 +1,8 @@
+
+fn main() {
+    println(cpu.supports("not-a-real-feature-xyz"));
+    let a = cpu.supports("avx2");
+    println(a == a);
+    let b = cpu.supports("neon");
+    println(b or not b);
+}

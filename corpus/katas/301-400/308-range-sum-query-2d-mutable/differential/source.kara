@@ -1,0 +1,615 @@
+// LeetCode 308 — five arms against each other and against seven properties
+// that follow from the STATEMENT rather than from any implementation.
+//
+//   A  2D Fenwick     — nested lowbit climb/descent, four-term inclusion-exclusion
+//   B  per-row Fenwick— 1D lowbit per row, ADDS disjoint row-slices
+//   C  per-row prefix — running sums, rebuilt on write, NO bit trick anywhere
+//   D  naive          — the matrix itself, the definition transcribed
+//   E  2D Fenwick, NESTED `Vec[Vec[i64]]` — arm A's mathematics, other layout
+//
+// A and E cannot disagree on the arithmetic, so a disagreement between THEM is
+// a fault in a memory access path rather than in the algorithm. E is also the
+// FASTER layout in kāra by 1.59x — see the README; the folk rule 'flatten your
+// 2D arrays' inverts under checked arithmetic.
+//
+// WHAT THE ARMS CANNOT SHARE. A is the only arm doing two-dimensional
+// inclusion-exclusion, so its four-term sign juggling — which it could get
+// wrong CONSISTENTLY, since the same four terms appear in every query — has no
+// counterpart anywhere else. A and B share the lowbit idiom and nothing more,
+// which makes the pair informative rather than redundant: if both disagree with
+// C and D, suspect the bit trick; if only A does, suspect its second dimension.
+// C reaches the same answers with nothing but running sums, and D maintains no
+// summary at all.
+//
+// NON-SQUARE SHAPES ARE LOAD-BEARING. Arm A's nested climb bounds its inner
+// loop by `w` and its outer by `h`, and resets the inner index on every outer
+// step. Transposing the bounds, or hoisting the reset, yields a structure that
+// is CORRECT ON EVERY SQUARE MATRIX and wrong on the rest. Twenty of the
+// twenty-five shapes here are non-square for exactly that reason — a differential
+// that tested only squares would pass a broken arm.
+//
+// P7 IS THE ONE NO ARM COMPUTES. A mutable structure's answers must depend only
+// on the matrix's CURRENT contents, never on the sequence of writes that
+// produced them. Every arm is inherently history-dependent — each carries
+// mutated state forward, none recomputes from scratch — so a history dependence
+// is exactly what four-way agreement is blind to, since all four would carry
+// it. Each final matrix is reached by four routes and all must agree.
+//
+// A PROPERTY DELIBERATELY ABSENT, FOR THE FOURTH KATA RUNNING. Split additivity
+// — cut a rectangle, sum the halves — is unfalsifiable for every prefix-shaped
+// arm: the shared boundary terms cancel regardless of what the table contains.
+// #303 found it in 1D, #304 MEASURED it in 2D (a prefix table built without
+// ever reading its input still satisfied it on all 432,000 queries), #307
+// inherited it. Arm A is `prefix(...)` differences in two dimensions, the same
+// shape again. Not re-derived here, only not used.
+
+// ------------------------------------------------------------------- arm A
+
+struct FenA {
+    tree: Vec[i64],
+    data: Vec[i64],
+    h: i64,
+    w: i64,
+}
+
+impl FenA {
+    fn new(m: ref Vec[Vec[i64]]) -> FenA {
+        let h = m.len();
+        let mut w = 0;
+        if h > 0 { w = m[0].len(); }
+
+        let mut tree: Vec[i64] = Vec.new();
+        for i in 0..((h + 1) * (w + 1)) {
+            tree.push(0);
+        }
+        let mut data: Vec[i64] = Vec.new();
+        for i in 0..(h * w) {
+            data.push(0);
+        }
+        let mut st = FenA { tree: tree, data: data, h: h, w: w };
+        for r in 0..h {
+            for c in 0..w {
+                st.update(r, c, m[r][c]);
+            }
+        }
+        return st;
+    }
+
+    // Fold `delta` into every slot covering (r, c) — a climb in both dimensions.
+    fn add(mut ref self, r: i64, c: i64, delta: i64) {
+        let stride = self.w + 1;
+        let mut x = r + 1;
+        while x <= self.h {
+            let mut y = c + 1;
+            while y <= self.w {
+                self.tree[x * stride + y] += delta;
+                y += y & -y;
+            }
+            x += x & -x;
+        }
+    }
+
+    fn update(mut ref self, r: i64, c: i64, val: i64) {
+        let delta = val - self.data[r * self.w + c];
+        self.data[r * self.w + c] = val;
+        self.add(r, c, delta);
+    }
+
+    // Sum of the origin-rectangle [0, r) x [0, c) — a descent in both dimensions.
+    fn prefix(ref self, r: i64, c: i64) -> i64 {
+        let stride = self.w + 1;
+        let mut total = 0;
+        let mut x = r;
+        while x > 0 {
+            let mut y = c;
+            while y > 0 {
+                total += self.tree[x * stride + y];
+                y -= y & -y;
+            }
+            x -= x & -x;
+        }
+        return total;
+    }
+
+    fn sum_region(ref self, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+        return self.prefix(r2 + 1, c2 + 1)
+             - self.prefix(r1, c2 + 1)
+             - self.prefix(r2 + 1, c1)
+             + self.prefix(r1, c1);
+    }
+}
+
+fn new_a(m: ref Vec[Vec[i64]]) -> FenA {
+    return FenA.new(m);
+}
+
+// ------------------------------------------------------------------- arm B
+
+struct RowFenB {
+    tree: Vec[i64],
+    data: Vec[i64],
+    h: i64,
+    w: i64,
+}
+
+impl RowFenB {
+    fn new(m: ref Vec[Vec[i64]]) -> RowFenB {
+        let h = m.len();
+        let mut w = 0;
+        if h > 0 { w = m[0].len(); }
+        let mut tree: Vec[i64] = Vec.new();
+        for i in 0..(h * (w + 1)) {
+            tree.push(0);
+        }
+        let mut data: Vec[i64] = Vec.new();
+        for i in 0..(h * w) {
+            data.push(0);
+        }
+        let mut st = RowFenB { tree: tree, data: data, h: h, w: w };
+        for r in 0..h {
+            for c in 0..w {
+                st.update(r, c, m[r][c]);
+            }
+        }
+        return st;
+    }
+
+    fn update(mut ref self, r: i64, c: i64, val: i64) {
+        let delta = val - self.data[r * self.w + c];
+        self.data[r * self.w + c] = val;
+        let base = r * (self.w + 1);
+        let mut y = c + 1;
+        while y <= self.w {
+            self.tree[base + y] += delta;
+            y += y & -y;
+        }
+    }
+
+    // Sum of row r's columns [0, c).
+    fn row_prefix(ref self, r: i64, c: i64) -> i64 {
+        let base = r * (self.w + 1);
+        let mut total = 0;
+        let mut y = c;
+        while y > 0 {
+            total += self.tree[base + y];
+            y -= y & -y;
+        }
+        return total;
+    }
+
+    fn sum_region(ref self, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+        let mut total = 0;
+        let mut r = r1;
+        while r <= r2 {
+            total += self.row_prefix(r, c2 + 1) - self.row_prefix(r, c1);
+            r = r + 1;
+        }
+        return total;
+    }
+}
+
+fn new_b(m: ref Vec[Vec[i64]]) -> RowFenB {
+    return RowFenB.new(m);
+}
+
+// ------------------------------------------------------------------- arm C
+
+struct RowPreC {
+    data: Vec[i64],
+    pre: Vec[i64],
+    h: i64,
+    w: i64,
+}
+
+impl RowPreC {
+    fn new(m: ref Vec[Vec[i64]]) -> RowPreC {
+        let h = m.len();
+        let mut w = 0;
+        if h > 0 { w = m[0].len(); }
+        let mut data: Vec[i64] = Vec.new();
+        for r in 0..h {
+            for c in 0..w {
+                data.push(m[r][c]);
+            }
+        }
+        let mut pre: Vec[i64] = Vec.new();
+        for i in 0..(h * (w + 1)) {
+            pre.push(0);
+        }
+        let mut st = RowPreC { data: data, pre: pre, h: h, w: w };
+        for r in 0..h {
+            st.rebuild_row(r);
+        }
+        return st;
+    }
+
+    fn rebuild_row(mut ref self, r: i64) {
+        let base = r * (self.w + 1);
+        self.pre[base] = 0;
+        for c in 0..self.w {
+            self.pre[base + c + 1] = self.pre[base + c] + self.data[r * self.w + c];
+        }
+    }
+
+    fn update(mut ref self, r: i64, c: i64, val: i64) {
+        self.data[r * self.w + c] = val;
+        self.rebuild_row(r);
+    }
+
+    fn sum_region(ref self, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+        let mut total = 0;
+        let mut r = r1;
+        while r <= r2 {
+            let base = r * (self.w + 1);
+            total += self.pre[base + c2 + 1] - self.pre[base + c1];
+            r = r + 1;
+        }
+        return total;
+    }
+}
+
+fn new_c(m: ref Vec[Vec[i64]]) -> RowPreC {
+    return RowPreC.new(m);
+}
+
+// ------------------------------------------------------------------- arm D
+
+struct NaiveD {
+    data: Vec[i64],
+    w: i64,
+}
+
+impl NaiveD {
+    fn new(m: ref Vec[Vec[i64]]) -> NaiveD {
+        let h = m.len();
+        let mut w = 0;
+        if h > 0 { w = m[0].len(); }
+        let mut data: Vec[i64] = Vec.new();
+        for r in 0..h {
+            for c in 0..w {
+                data.push(m[r][c]);
+            }
+        }
+        return NaiveD { data: data, w: w };
+    }
+
+    fn update(mut ref self, r: i64, c: i64, val: i64) {
+        self.data[r * self.w + c] = val;
+    }
+
+    fn sum_region(ref self, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+        let mut total = 0;
+        for r in r1..(r2 + 1) {
+            for c in c1..(c2 + 1) {
+                total += self.data[r * self.w + c];
+            }
+        }
+        return total;
+    }
+}
+
+fn new_d(m: ref Vec[Vec[i64]]) -> NaiveD {
+    return NaiveD.new(m);
+}
+
+// ------------------------------------------------------------------- arm E
+
+struct NestE {
+    tree: Vec[Vec[i64]],
+    data: Vec[i64],
+    h: i64,
+    w: i64,
+}
+
+impl NestE {
+    fn new(m: ref Vec[Vec[i64]]) -> NestE {
+        let h = m.len();
+        let mut w = 0;
+        if h > 0 { w = m[0].len(); }
+
+        let mut tree: Vec[Vec[i64]] = Vec.new();
+        for r in 0..(h + 1) {
+            let mut row: Vec[i64] = Vec.new();
+            for c in 0..(w + 1) { row.push(0); }
+            tree.push(row);
+        }
+        let mut data: Vec[i64] = Vec.new();
+        for i in 0..(h * w) {
+            data.push(0);
+        }
+        let mut st = NestE { tree: tree, data: data, h: h, w: w };
+        for r in 0..h {
+            for c in 0..w {
+                st.update(r, c, m[r][c]);
+            }
+        }
+        return st;
+    }
+
+    // Fold `delta` into every slot covering (r, c) — a climb in both dimensions.
+    fn add(mut ref self, r: i64, c: i64, delta: i64) {
+        let mut x = r + 1;
+        while x <= self.h {
+            let mut y = c + 1;
+            while y <= self.w {
+                self.tree[x][y] += delta;
+                y += y & -y;
+            }
+            x += x & -x;
+        }
+    }
+
+    fn update(mut ref self, r: i64, c: i64, val: i64) {
+        let delta = val - self.data[r * self.w + c];
+        self.data[r * self.w + c] = val;
+        self.add(r, c, delta);
+    }
+
+    // Sum of the origin-rectangle [0, r) x [0, c) — a descent in both dimensions.
+    fn prefix(ref self, r: i64, c: i64) -> i64 {
+        let mut total = 0;
+        let mut x = r;
+        while x > 0 {
+            let mut y = c;
+            while y > 0 {
+                total += self.tree[x][y];
+                y -= y & -y;
+            }
+            x -= x & -x;
+        }
+        return total;
+    }
+
+    fn sum_region(ref self, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+        return self.prefix(r2 + 1, c2 + 1)
+             - self.prefix(r1, c2 + 1)
+             - self.prefix(r2 + 1, c1)
+             + self.prefix(r1, c1);
+    }
+}
+
+fn new_e(m: ref Vec[Vec[i64]]) -> NestE {
+    return NestE.new(m);
+}
+
+// ------------------------------------------------------------------ harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) % 2147483648;
+}
+
+fn make_matrix(h: i64, w: i64, seed: i64) -> Vec[Vec[i64]] {
+    let mut state = seed;
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for r in 0..h {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..w {
+            state = lcg(state);
+            row.push(state % 21 - 10);
+        }
+        m.push(row);
+    }
+    return m;
+}
+
+fn grid_of(flat: ref Vec[i64], h: i64, w: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for r in 0..h {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..w {
+            row.push(flat[r * w + c]);
+        }
+        m.push(row);
+    }
+    return m;
+}
+
+// An independent rectangle sum over a flat reference grid, sharing no code
+// with any arm.
+fn oracle(flat: ref Vec[i64], w: i64, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+    let mut total = 0;
+    for r in r1..(r2 + 1) {
+        for c in c1..(c2 + 1) {
+            total += flat[r * w + c];
+        }
+    }
+    return total;
+}
+
+fn main() {
+    let mut matrices = 0;
+    let mut queries = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6 = 0;
+    let mut p7 = 0;
+
+    let mut h = 1;
+    while h <= 5 {
+        let mut w = 1;
+        while w <= 5 {
+            let mut round = 0;
+            while round < 40 {
+                let seed = 7919 * (h * 61 + w) + round * 104729 + 1;
+                let base = make_matrix(h, w, seed);
+
+                let mut a = new_a(base);
+                let mut b = new_b(base);
+                let mut c = new_c(base);
+                let mut d = new_d(base);
+                let mut e = new_e(base);
+                let mut ref_flat: Vec[i64] = Vec.new();
+                for r in 0..h {
+                    for cc in 0..w {
+                        ref_flat.push(base[r][cc]);
+                    }
+                }
+
+                let mut state = seed + 77;
+                let mut step = 0;
+                while step < 5 {
+                    // ---- exhaust the rectangle space at the CURRENT state
+                    let mut r1 = 0;
+                    while r1 < h {
+                        let mut r2 = r1;
+                        while r2 < h {
+                            let mut c1 = 0;
+                            while c1 < w {
+                                let mut c2 = c1;
+                                while c2 < w {
+                                    queries += 1;
+                                    let va = a.sum_region(r1, c1, r2, c2);
+
+                                    // P1 — four arms, one answer.
+                                    if b.sum_region(r1, c1, r2, c2) != va { p1 += 1; }
+                                    if c.sum_region(r1, c1, r2, c2) != va { p1 += 1; }
+                                    if d.sum_region(r1, c1, r2, c2) != va { p1 += 1; }
+                                    if e.sum_region(r1, c1, r2, c2) != va { p1 += 1; }
+
+                                    // P2 — a 1x1 rectangle is the cell itself.
+                                    if r1 == r2 and c1 == c2 {
+                                        if va != ref_flat[r1 * w + c1] { p2 += 1; }
+                                    }
+
+                                    // P3 — the whole matrix is the grand total.
+                                    if r1 == 0 and c1 == 0 and r2 == h - 1 and c2 == w - 1 {
+                                        if va != oracle(ref_flat, w, 0, 0, h - 1, w - 1) { p3 += 1; }
+                                    }
+
+                                    // P5 — every answer matches an independent recount.
+                                    if va != oracle(ref_flat, w, r1, c1, r2, c2) { p5 += 1; }
+
+                                    c2 = c2 + 1;
+                                }
+                                c1 = c1 + 1;
+                            }
+                            r2 = r2 + 1;
+                        }
+                        r1 = r1 + 1;
+                    }
+
+                    // ---- P6 — writing the value already there changes nothing.
+                    state = lcg(state);
+                    let r6 = state % h;
+                    state = lcg(state);
+                    let c6 = state % w;
+                    let before6 = a.sum_region(0, 0, h - 1, w - 1);
+                    a.update(r6, c6, ref_flat[r6 * w + c6]);
+                    b.update(r6, c6, ref_flat[r6 * w + c6]);
+                    c.update(r6, c6, ref_flat[r6 * w + c6]);
+                    d.update(r6, c6, ref_flat[r6 * w + c6]);
+                    e.update(r6, c6, ref_flat[r6 * w + c6]);
+                    if a.sum_region(0, 0, h - 1, w - 1) != before6 { p6 += 1; }
+
+                    // ---- P4 — a write is invertible.
+                    state = lcg(state);
+                    let r4 = state % h;
+                    state = lcg(state);
+                    let c4 = state % w;
+                    let old4 = ref_flat[r4 * w + c4];
+                    state = lcg(state);
+                    let tmp4 = state % 41 - 20;
+                    let snap = a.sum_region(0, 0, h - 1, w - 1);
+                    a.update(r4, c4, tmp4);
+                    a.update(r4, c4, old4);
+                    if a.sum_region(0, 0, h - 1, w - 1) != snap { p4 += 1; }
+
+                    // ---- a real write, keeping the reference in step
+                    state = lcg(state);
+                    let wr = state % h;
+                    state = lcg(state);
+                    let wc = state % w;
+                    state = lcg(state);
+                    let wv = state % 41 - 20;
+                    a.update(wr, wc, wv);
+                    b.update(wr, wc, wv);
+                    c.update(wr, wc, wv);
+                    d.update(wr, wc, wv);
+                    e.update(wr, wc, wv);
+                    ref_flat[wr * w + wc] = wv;
+
+                    step = step + 1;
+                }
+
+                // ---- P7 — HISTORY INDEPENDENCE: reach this content four ways.
+                let final_grid = grid_of(ref_flat, h, w);
+                let direct = new_a(final_grid);
+
+                let mut zero_grid: Vec[Vec[i64]] = Vec.new();
+                for r in 0..h {
+                    let mut row: Vec[i64] = Vec.new();
+                    for cc in 0..w { row.push(0); }
+                    zero_grid.push(row);
+                }
+
+                // route 1: row-major writes from zeros
+                let mut q1 = new_a(zero_grid);
+                for r in 0..h {
+                    for cc in 0..w { q1.update(r, cc, ref_flat[r * w + cc]); }
+                }
+                // route 2: COLUMN-major writes — a different order entirely
+                let mut q2 = new_a(zero_grid);
+                for cc in 0..w {
+                    for r in 0..h { q2.update(r, cc, ref_flat[r * w + cc]); }
+                }
+                // route 3: junk intermediates, then the real values twice
+                let mut q3 = new_a(zero_grid);
+                for r in 0..h {
+                    for cc in 0..w { q3.update(r, cc, 999); }
+                }
+                for r in 0..h {
+                    for cc in 0..w { q3.update(r, cc, ref_flat[r * w + cc]); }
+                }
+                for r in 0..h {
+                    for cc in 0..w { q3.update(r, cc, ref_flat[r * w + cc]); }
+                }
+
+                let mut a1 = 0;
+                while a1 < h {
+                    let mut a2 = a1;
+                    while a2 < h {
+                        let mut b1 = 0;
+                        while b1 < w {
+                            let mut b2 = b1;
+                            while b2 < w {
+                                let want = oracle(ref_flat, w, a1, b1, a2, b2);
+                                if direct.sum_region(a1, b1, a2, b2) != want { p7 += 1; }
+                                if q1.sum_region(a1, b1, a2, b2) != want { p7 += 1; }
+                                if q2.sum_region(a1, b1, a2, b2) != want { p7 += 1; }
+                                if q3.sum_region(a1, b1, a2, b2) != want { p7 += 1; }
+                                b2 = b2 + 1;
+                            }
+                            b1 = b1 + 1;
+                        }
+                        a2 = a2 + 1;
+                    }
+                    a1 = a1 + 1;
+                }
+
+                matrices += 1;
+                round = round + 1;
+            }
+            w = w + 1;
+        }
+        h = h + 1;
+    }
+
+    println(f"matrices {matrices}");
+    println(f"queries {queries}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 single-cell failures {p2}");
+    println(f"P3 whole-matrix failures {p3}");
+    println(f"P4 write-invertibility failures {p4}");
+    println(f"P5 independent-recount failures {p5}");
+    println(f"P6 idempotent-write failures {p6}");
+    println(f"P7 history-dependence failures {p7}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

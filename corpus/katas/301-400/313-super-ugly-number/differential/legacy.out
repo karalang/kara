@@ -1,0 +1,12 @@
+cases 2711
+tier2 beyond-oracle cases 575
+P4 gap scans run 2179
+P5 closed-form checks run 146
+P1 arm/oracle disagreements 0
+P2 monotonicity failures 0
+P3 membership failures 0
+P4 skipped-value failures 0
+P5 closed-form failures 0
+P6 permutation failures 0
+P7 superset failures 0
+DIFFERENTIAL OK

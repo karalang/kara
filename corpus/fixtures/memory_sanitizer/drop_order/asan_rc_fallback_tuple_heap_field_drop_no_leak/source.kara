@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut i = 0i64;
+    while i < 3i64 {
+        let t = (i, f"item-{i}");
+        println(t.1);
+        i = i + 1;
+    }
+}

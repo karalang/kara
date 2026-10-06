@@ -1,0 +1,10 @@
+struct H { n: i64 }
+impl H {
+    fn show[T: Display](ref self, x: Option[T]) { println(f"{self.n}:{x}"); }
+}
+fn main() {
+    let h = H { n: 1 };
+    h.show(Some(7));
+    let v: Vec[i64] = vec![1];
+    h.show(Some(v));
+}

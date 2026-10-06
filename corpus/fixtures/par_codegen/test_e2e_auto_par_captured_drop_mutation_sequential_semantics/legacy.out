@@ -1,0 +1,12 @@
+D: enum payload moved into arm binding
+arm sees 4
+drop 4
+E: overwrite via assignment
+drop 5
+drop 6
+after overwrite
+F: displaced map value
+drop 7
+drop 8
+after displace
+end

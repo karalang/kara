@@ -1,0 +1,9 @@
+01 SortedMap{aa: 2, mm: 3, zz: 1} 3
+02 SortedMap{aa: 2, mm: 3, zz: 1} 3
+03 aa,mm,zz,
+04 true false
+05 SortedSet{aa, mm, zz} 3 true
+06 aa,mm,zz,
+07 SortedMap{aa: 2, mm: 3, zz: 1} 3
+08 SortedSet{aa, mm, zz} 3
+09 {zz: 1} 1

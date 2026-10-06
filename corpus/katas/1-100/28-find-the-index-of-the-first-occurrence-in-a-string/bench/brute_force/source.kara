@@ -1,0 +1,59 @@
+// Benchmark workload — brute-force sliding-window strStr.
+//
+// Adversarial input that is the brute-force worst case: a haystack of
+// N-1 'a' bytes followed by a single 'b', searched for a needle of M-1 'a'
+// bytes followed by 'b'. The needle occurs only at the very end (index
+// N-M), so every start position 0..N-M matches M-1 'a's before failing on
+// the final byte — O(N · M) comparisons. The KMP mirror (kmp.kara) runs the
+// same input in O(N + M); the wall-time gap between the two on this input
+// is the whole point of carrying both approaches.
+//
+// N = 2_000_000, M = 16, K = 10 outer searches. The search reads only, so
+// the per-iteration call would be loop-invariant — but bounds-checked
+// indexing keeps it off LLVM's readonly list, so LICM leaves it in the
+// loop (same property kata #5's bench relies on). Sink = K × (N - M), a
+// real returned index that proves the full scan ran and found the match.
+//
+// Operates on Slice[u8] (97 = 'a', 98 = 'b') rather than String so the
+// O(N) setup is a uniform bulk fill across all five language mirrors, not
+// a per-byte append whose cost varies by runtime.
+
+fn str_str(haystack: Slice[u8], needle: Slice[u8]) -> i64 {
+    let hn = haystack.len();
+    let nn = needle.len();
+    if nn == 0 {
+        return 0;
+    }
+    if nn > hn {
+        return -1;
+    }
+    let mut i = 0;
+    while i <= hn - nn {
+        let mut j = 0;
+        while j < nn and haystack[i + j] == needle[j] {
+            j = j + 1;
+        }
+        if j == nn {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn main() {
+    let n = 2000000;
+    let m = 16;
+
+    let mut haystack: Vec[u8] = Vec.filled(n, 97u8);
+    haystack[n - 1] = 98u8;
+
+    let mut needle: Vec[u8] = Vec.filled(m, 97u8);
+    needle[m - 1] = 98u8;
+
+    let mut sum = 0;
+    for _ in 0..100 {
+        sum = sum + str_str(haystack, needle);
+    }
+    println(sum);
+}

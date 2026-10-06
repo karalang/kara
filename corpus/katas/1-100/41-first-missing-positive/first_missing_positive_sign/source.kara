@@ -1,0 +1,94 @@
+// LeetCode #41: First Missing Positive — in-place sign marking (negation = present-bit).
+//
+// Same O(n)-time / O(1)-space answer as the ★ cyclic-sort file, reached a different way:
+// instead of MOVING each value to its home slot, leave values in place and record presence
+// in the SIGN of the slot a value indexes. Index v-1's sign is the "is v present?" bit —
+// negative means "some value v was seen". Three linear passes, no swaps:
+//
+//   1. Neutralize: any value ≤ 0 or > n can never be the answer and must not corrupt a
+//      mark, so overwrite it with n+1 (a positive out-of-range sentinel). After this pass
+//      every slot is a positive value in [1, n+1].
+//   2. Mark: for each slot, read its magnitude v = |nums[i]| (the value may already be
+//      negated by an earlier mark); if v is in [1, n], make nums[v-1] negative — but only
+//      if it is currently positive, so a second sighting of v doesn't flip it back.
+//   3. Read: the first index i whose slot is still POSITIVE means value i+1 was never
+//      marked → answer i+1; if every slot is negative, all of 1..n are present → n+1.
+//
+// The contrast with the ★ file is the classic in-place pair: cyclic sort PERMUTES the array
+// so `index == value-1`, then reads the first mismatch; sign marking leaves positions fixed
+// and overloads the sign as a one-bit-per-slot presence table. Both are O(1) auxiliary
+// space and O(n) time; sign marking does strictly linear passes (no inner re-examination
+// loop) at the cost of clobbering the values' signs. `iabs` is a local helper — reading a
+// possibly-negated slot's magnitude is the one place a bare value isn't enough.
+//
+// LeetCode bounds: 1 ≤ n ≤ 10⁵, values in [-2³¹, 2³¹-1]; i64 holds the n+1 sentinel and any
+// negation without overflow.
+
+fn iabs(x: i64) -> i64 {
+    if x < 0 { -x } else { x }
+}
+
+fn first_missing_positive(nums: mut Slice[i64], n: i64) -> i64 {
+    // Pass 1: send every out-of-range value to the n+1 sentinel.
+    let mut i = 0;
+    while i < n {
+        if nums[i] <= 0 or nums[i] > n {
+            nums[i] = n + 1;
+        }
+        i = i + 1;
+    }
+    // Pass 2: mark presence of v by negating the sign at index v-1 (once).
+    i = 0;
+    while i < n {
+        let v = iabs(nums[i]);
+        if v >= 1 and v <= n {
+            let idx = v - 1;
+            if nums[idx] > 0 {
+                nums[idx] = -nums[idx];
+            }
+        }
+        i = i + 1;
+    }
+    // Pass 3: the first still-positive slot is the missing value.
+    let mut j = 0;
+    while j < n {
+        if nums[j] > 0 {
+            return j + 1;
+        }
+        j = j + 1;
+    }
+    n + 1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn report(nums: mut Slice[i64], n: i64) {
+    let ans = first_missing_positive(nums, n);
+    println(f"{ans}");
+}
+
+fn main() {
+    let mut a1: Array[i64, 3] = [1, 2, 0];
+    report(mut a1, 3); // 3
+
+    let mut a2: Array[i64, 4] = [3, 4, -1, 1];
+    report(mut a2, 4); // 2
+
+    let mut a3: Array[i64, 5] = [7, 8, 9, 11, 12];
+    report(mut a3, 5); // 1
+
+    let mut a4: Array[i64, 1] = [1];
+    report(mut a4, 1); // 2
+
+    let mut a5: Array[i64, 4] = [2, 2, 2, 2];
+    report(mut a5, 4); // 1
+
+    let mut a6: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(mut a6, 5); // 6
+
+    let mut a7: Array[i64, 3] = [-5, -3, -1];
+    report(mut a7, 3); // 1
+
+    let mut a8: Array[i64, 6] = [5, 3, 1, 2, 6, 5];
+    report(mut a8, 6); // 4
+}

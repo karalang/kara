@@ -1,0 +1,34 @@
+
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn rebuild(src: Vec[Cell]) -> Vec[Cell] {
+    let mut dst: Vec[Cell] = Vec.new();
+    let mut i = 0;
+    while i < src.len() {
+        dst.push(Cell { id: src[i].id + 1, name: f"rebuilt-soa-heap-string-payload-element-{i}" });
+        i = i + 1;
+    }
+    dst
+}
+fn init() -> Vec[Cell] {
+    let mut cells: Vec[Cell] = Vec.new();
+    let mut i = 0;
+    while i < 8 {
+        cells.push(Cell { id: i, name: f"initial-soa-heap-string-payload-element-{i}" });
+        i = i + 1;
+    }
+    cells
+}
+fn main() with panics {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut cells: Vec[Cell] = init();
+        let mut f = 0;
+        while f < 5 { cells = rebuild(cells); f = f + 1; }
+        let mut j = 0;
+        while j < cells.len() { total = total + cells[j].id; j = j + 1; }
+        k = k + 1;
+    }
+    println(total);
+}

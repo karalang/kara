@@ -1,0 +1,86 @@
+// LeetCode #52: N-Queens II — mirror-symmetry half-board bitmask (the ~2× pruning).
+//
+// Same three-integer bitmask counting kernel as the ★ file
+// ([`bitmask_count`](bitmask_count.kara)) and the SAME count for every n — but this
+// variant searches only HALF the first row and doubles, an optimization the counting
+// problem makes clean and the board-listing #51 could not use.
+//
+// The key fact: reflecting a whole solved board left↔right (column c ↦ n-1-c) sends a
+// valid placement to another valid placement. So if `f(c)` is the number of solutions whose
+// first-row queen sits in column c, then `f(c) == f(n-1-c)` for every c. The total is
+//
+//     Σ_c f(c)  =  2 · Σ_{c < n/2} f(c)   [ + f(n/2) when n is odd ]
+//
+// i.e. count the first-row queen only across the LEFT half of the board, double it, and —
+// for odd n, whose middle column has no distinct mirror partner — add the exact-center
+// column's count once. That fixes the first-row placement outside the recursion and lets
+// `count` explore rows 1..n-1 only, visiting ~half the tree the ★ solver walks.
+//
+// Why counting unlocks this and #51 could not: [#51](../51-n-queens/) must EMIT every board
+// in canonical column order, so it cannot skip the right half and fabricate the mirrored
+// boards for free without re-sorting. #52 wants only the tally, and `f(c) == f(n-1-c)` lets
+// the right half be inferred by arithmetic (`2 ·`) rather than searched.
+//
+// `count` is the by-value bitmask kernel unchanged from ★ — masks threaded by value, undo
+// automatic — just entered at `row = 1` with the first queen already placed:
+//
+//   - `cols`  — bit c set ⇒ column c taken.
+//   - `diag1` — the ↘ diagonals, keyed by `row + col`.
+//   - `diag2` — the ↙ diagonals, keyed by `row - col + (n-1)`.
+//
+// LeetCode bounds: 1 ≤ n ≤ 9; the sweep runs to 11. i64 throughout.
+
+fn count(n: i64, row: i64, cols: i64, diag1: i64, diag2: i64) -> i64 {
+    if row == n {
+        return 1;
+    }
+    let mut total = 0;
+    let mut c = 0;
+    while c < n {
+        let bit_c = 1 << c;
+        let bit_d1 = 1 << (row + c);
+        let bit_d2 = 1 << (row - c + (n - 1));
+        if (cols & bit_c) == 0 and (diag1 & bit_d1) == 0 and (diag2 & bit_d2) == 0 {
+            total = total + count(n, row + 1, cols | bit_c, diag1 | bit_d1, diag2 | bit_d2);
+        }
+        c = c + 1;
+    }
+    total
+}
+
+// Place the first-row queen at column `col`, then count completions of rows 1..n-1.
+fn count_first(n: i64, col: i64) -> i64 {
+    let bit_c = 1 << col;
+    let bit_d1 = 1 << (0 + col);          // row 0: ↘ key = col
+    let bit_d2 = 1 << (0 - col + (n - 1));
+    count(n, 1, bit_c, bit_d1, bit_d2)
+}
+
+fn solve(n: i64) -> i64 {
+    let half = n / 2;                         // left-half columns: 0 .. half-1
+    let mut total = 0;
+    let mut c = 0;
+    while c < half {
+        total = total + 2 * count_first(n, c); // each mirrors to a right-half column
+        c = c + 1;
+    }
+    if n % 2 == 1 {
+        total = total + count_first(n, half);     // exact-center column: no mirror partner
+    }
+    total
+}
+
+// ---- test harness (identical to the ★ file) -------------------------------
+
+fn main() {
+    let mut s: String = "counts:";
+    let mut n = 1;
+    while n <= 11 {
+        let c = solve(n);
+        println(f"n={n} -> {c}");
+        s.push(' ');
+        s.push_str(f"{c}");
+        n = n + 1;
+    }
+    println(s);
+}

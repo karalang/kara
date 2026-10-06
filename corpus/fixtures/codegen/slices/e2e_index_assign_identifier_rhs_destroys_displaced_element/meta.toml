@@ -1,0 +1,13 @@
+source = "tests/codegen/slices.rs::e2e_index_assign_identifier_rhs_destroys_displaced_element"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

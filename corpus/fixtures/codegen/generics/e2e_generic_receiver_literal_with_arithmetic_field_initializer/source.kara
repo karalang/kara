@@ -1,0 +1,22 @@
+
+struct Box[T] { v: T }
+impl[T] Box[T] { fn take(self) -> T { self.v } }
+fn main() {
+    let n: i64 = env.args().len();
+    let f: f64 = 1.5;
+    let a: i32 = 3i32;
+    let b: i32 = 4i32;
+    let u: u8 = 200u8;
+    let s: String = "ab";
+    println(Box { v: f * 2.0 }.take());             // the reported shape
+    println(Box { v: n + 41 }.take());              // correct-by-accident control
+    println(Box { v: a + b }.take());               // narrow signed
+    println(Box { v: u / 2u8 }.take());             // narrow unsigned
+    println(Box { v: a < b }.take());               // comparison -> bool
+    println(Box { v: n as f64 }.take());            // cast
+    println(Box { v: (n + 1i64) * 2i64 }.take());   // nested
+    println(Box { v: -f }.take());                  // lowered UNARY
+    println(Box { v: s + "cd" }.take());            // non-scalar control
+    let g = Box { v: f * 3.0 };                     // non-receiver position
+    println(g.v);
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/misc.rs::test_e2e_declined_copy_param_rebind_keeps_the_callers_ownership"
+dedup_of = ["tests/par_codegen.rs::test_e2e_auto_par_declined_copy_param_rebind_keeps_the_callers_ownership"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared", "uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

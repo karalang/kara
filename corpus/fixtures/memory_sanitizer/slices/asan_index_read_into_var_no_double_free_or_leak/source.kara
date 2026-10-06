@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut v: Vec[String] = [f"aa-padding", f"bb-padding"];
+    let mut s: String = f"old-padding";
+    s = v[1].clone();
+    println(s);
+    println(v[0]);
+    println(v[1]);
+}

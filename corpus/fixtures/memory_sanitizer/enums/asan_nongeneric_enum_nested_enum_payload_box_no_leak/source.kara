@@ -1,0 +1,51 @@
+
+struct Big { a: i64, b: i64, c: i64, d: i64, e: i64, s: String }
+enum WrapS { W(Big), Empty }
+enum WrapE { W(Option[String]), Empty }
+enum WrapR { W(Result[String, i64]), Empty }
+struct Holder { o: WrapE, n: i64 }
+fn consume(w: WrapE) -> i64 {
+    match w {
+        WrapE.W(Option.Some(s)) => if s.contains("payload") { 1 } else { 0 },
+        WrapE.W(Option.None) => -1,
+        WrapE.Empty => -2,
+    }
+}
+fn mk(n: i64, i: i64, tag: String) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str(tag);
+    s.push_str("-");
+    s.push_str((n + i).to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 60 {
+        let s: WrapS = WrapS.W(Big { a: 1, b: 2, c: 3, d: 4, e: 5, s: mk(n, i, "struct") });
+        match s {
+            WrapS.W(b) => { if b.s.ends_with("heap") { acc = acc + 1; } }
+            WrapS.Empty => { acc = acc - 1; }
+        }
+        let e: WrapE = WrapE.W(Option.Some(mk(n, i, "opt")));
+        match e {
+            WrapE.W(Option.Some(t)) => { if t.contains("payload") { acc = acc + 1; } }
+            WrapE.W(Option.None) => { acc = acc - 1; }
+            WrapE.Empty => { acc = acc - 1; }
+        }
+        let r: WrapR = WrapR.W(Result.Ok(mk(n, i, "res")));
+        match r {
+            WrapR.W(Result.Ok(t)) => { if t.contains("payload") { acc = acc + 1; } }
+            WrapR.W(Result.Err(x)) => { acc = acc + x; }
+            WrapR.Empty => { acc = acc - 1; }
+        }
+        let h = Holder { o: WrapE.W(Option.Some(mk(n, i, "field"))), n: 1 };
+        acc = acc + consume(h.o);
+        acc = acc + consume(WrapE.W(Option.Some(mk(n, i, "temp"))));
+        i = i + 1;
+    }
+    println(acc);
+}

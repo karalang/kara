@@ -1,0 +1,4 @@
+
+fn main() with writes(FileSystem) {
+    let _r = FileSystem.write("/tmp/karac_fs_write_tc.txt", "x");
+}

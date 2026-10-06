@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::e2e_owned_self_projection_scrutinee_runs_one_payload_body"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "move-from-borrow"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

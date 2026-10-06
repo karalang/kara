@@ -1,0 +1,8 @@
+
+fn main() {
+    let s = "ABC";
+    for c in s.chars() {
+        println(c);
+        println(f"-{c}-");
+    }
+}

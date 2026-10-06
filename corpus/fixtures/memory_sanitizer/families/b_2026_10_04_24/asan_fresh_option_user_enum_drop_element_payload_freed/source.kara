@@ -1,0 +1,13 @@
+struct D { id: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.id}") } }
+enum E { A(i64), B(Vec[D]) }
+fn main() {
+    let mut stack: Vec[E] = Vec.new();
+    let mut v: Vec[D] = Vec.new();
+    v.push(D { id: 1 });
+    stack.push(E.B(v));
+    stack.push(E.A(3));
+    let mut total = 0;
+    while let Some(item) = stack.pop() { total += 1; }
+    println(f"total {total}");
+}

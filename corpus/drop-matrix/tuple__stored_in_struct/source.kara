@@ -1,0 +1,8 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+struct H { s: (R, R, R), z: R }
+fn main() {
+    let x = (R { id: 1 }, R { id: 11 }, R { id: 21 });
+    let h = H { z: R { id: 1 }, s: x };
+    println("end");
+}

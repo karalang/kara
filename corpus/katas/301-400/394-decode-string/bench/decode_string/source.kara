@@ -1,0 +1,75 @@
+// LeetCode #394 bench harness — Kāra (iterative stack, byte scan).
+//
+// Same comment-free decode as the root `decode_string.kara` (byte-indexed scan,
+// zero-copy `s[i..j]` letter-run slice append, `String.repeat` for `cur*count`),
+// wrapped in the bench reduction: decode the fixed ENCODED template ITERS times,
+// reducing each pass to its decoded length. Sink = ITERS * 52 = 41 600 000.
+
+fn is_letter(b: u8) -> bool {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+    b != b'[' and b != b']' and not (b >= d0 and b <= d9)
+}
+
+fn decode_string(s: ref String) -> String {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    let mut str_stack: Vec[String] = Vec.new();
+    let mut num_stack: Vec[i64] = Vec.new();
+    let mut cur: String = "";
+    let mut k = 0;
+
+    let mut i = 0;
+    while i < n {
+        let b = bytes[i];
+        if b >= d0 and b <= d9 {
+            k = k * 10 + ((b - d0) as i64);
+            i = i + 1;
+        } else if b == b'[' {
+            str_stack.push(cur);
+            num_stack.push(k);
+            cur = "";
+            k = 0;
+            i = i + 1;
+        } else if b == b']' {
+            let count = num_stack.pop().unwrap();
+            let prev = str_stack.pop().unwrap();
+            let mut newcur = prev;
+            newcur.push_str(cur.repeat(count));
+            cur = newcur;
+            i = i + 1;
+        } else {
+            let mut j = i;
+            while j < n and is_letter(bytes[j]) {
+                j = j + 1;
+            }
+            cur.push_str(s[i..j]);
+            i = j;
+        }
+    }
+    cur
+}
+
+fn pass_len(s: ref String) -> i64 {
+    // Bind the decode result before `.bytes()` — a method call on a bare
+    // call-result (non-identifier receiver) doesn't dispatch in codegen yet.
+    let decoded = decode_string(s);
+    decoded.bytes().len()
+}
+
+fn main() {
+    let encoded: String = "3[ab2[cd]ef]5[gh]2[ij3[kl]m]";
+    let iters = 800000;
+
+    let mut sum = 0;
+    let mut k = 0;
+    while k < iters {
+        sum = sum + pass_len(encoded);
+        k = k + 1;
+    }
+    println(sum);                  // 41600000
+}

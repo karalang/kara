@@ -1,0 +1,4 @@
+fn main() {
+             let r: Result[i64, String] = Result.Ok(42);
+             let _ = r.unwrap();
+         }

@@ -1,0 +1,14 @@
+
+shared struct Node { mut val: i64, mut next: Option[Node] }
+fn setit(prev: mut ref Option[Node], n: Node) { prev = Some(n); }
+fn main() {
+    let mut cur: Option[Node] = Some(Node { val: 1i64, next: None });
+    let a = Node { val: 2i64, next: None };
+    setit(mut cur, a);
+    let b = Node { val: 3i64, next: None };
+    setit(mut cur, b);
+    match cur {
+        None => { println("none"); }
+        Some(p) => { println(f"val: {p.val}"); }
+    }
+}

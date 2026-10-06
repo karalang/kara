@@ -1,0 +1,63 @@
+p_out
+  dE
+  dR1
+  got1
+  dR1
+p_out_mut
+  dE
+  dR2
+  got2
+  dR2
+p_field
+  dR3
+  got3
+  dR3
+p_consume
+  dR4
+  dE
+  dR4
+  got4
+p_read
+  dE
+  dR5
+  got5
+m_consume
+  dR6
+  dE
+  dR6
+  got6
+m_consume_mut
+  dR7
+  dE
+  dR7
+  got7
+m_consume_iflet
+  dR8
+  dE
+  dR8
+  got8
+m_let
+  dR9
+  dE
+  dR9
+  got9
+m_out
+  dE
+  dR10
+  got10
+  dR10
+m_read
+  dE
+  dR11
+  got11
+m_mixed/taken
+  dR12
+  dE
+  dR12
+  got12
+m_mixed/read
+  dR13
+  dE
+  dR13
+  got13
+end

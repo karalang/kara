@@ -1,0 +1,9 @@
+
+import std.embeddings.{cosine_similarity_matrix};
+fn main() {
+    let queries: Tensor[f32, [2, 2]] = Tensor.from([[3.0f32, 4.0f32], [4.0f32, -3.0f32]]);
+    let corpus: Tensor[f32, [3, 2]] = Tensor.from([[3.0f32, 4.0f32], [4.0f32, -3.0f32], [6.0f32, 8.0f32]]);
+    let m = cosine_similarity_matrix(queries, corpus);
+    println(m[0, 0]); println(m[0, 1]); println(m[0, 2]);
+    println(m[1, 0]); println(m[1, 1]); println(m[1, 2]);
+}

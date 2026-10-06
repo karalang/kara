@@ -1,0 +1,6 @@
+fn main() {
+             let v: Vec[i64] = Vec.new();
+             let w: Vec[i64] = Vec.new();
+             let mut it = v.iter().zip(w.iter().map(|x| if x > 0 { "pos" } else { "neg" }));
+             let (_a, _b): (i64, String) = it.next().unwrap();
+         }

@@ -1,0 +1,16 @@
+
+shared struct Wa { a: i64 }
+shared struct Wb { b: i64 }
+fn main() {
+    let x: Wa = Wa { a: 1 };
+    let y: Wb = Wb { b: 2 };
+    let mut ia: Vec[weak Wa] = Vec.new();
+    ia.push(x);
+    let mut ib: Vec[weak Wb] = Vec.new();
+    ib.push(y);
+    let mut oa: Vec[Vec[weak Wa]] = Vec.new();
+    oa.push(ia);
+    let mut ob: Vec[Vec[weak Wb]] = Vec.new();
+    ob.push(ib);
+    println(f"{oa.len()}{ob.len()}")
+}

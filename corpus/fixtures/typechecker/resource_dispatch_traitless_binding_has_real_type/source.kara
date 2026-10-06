@@ -1,0 +1,17 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+effect resource Store;
+struct FakeStore { n: i64 }
+impl FakeStore {
+    fn lookup(self, k: i64) -> Option[ListNode] { None }
+}
+fn probe() -> i64 reads(Store) {
+    let got = Store.lookup(1);
+    let n: i64 = got;
+    n
+}
+fn main() reads(Store) {
+    with_provider[Store](FakeStore { n: 5 }, || {
+        println(probe());
+    });
+}

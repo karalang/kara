@@ -1,0 +1,49 @@
+// LeetCode #153: Find Minimum in Rotated Sorted Array — binary search O(log n).
+//
+// The rotated array has at most one "drop" — the index where the minimum
+// lives. Invariant: the minimum is always in [lo, hi]. At each step,
+// compare nums[mid] against nums[hi]:
+//   - nums[mid] > nums[hi]  → the drop is strictly right of mid, so the
+//                             minimum is too: lo := mid + 1.
+//   - nums[mid] ≤ nums[hi]  → mid and everything to its right is already in
+//                             sorted order, so the minimum is at or left of
+//                             mid: hi := mid.
+// Comparing against `hi` (not `lo`) is what lets the no-rotation case
+// (already sorted) terminate cleanly without a separate first/last guard:
+// every iteration takes the second branch and hi shrinks to 0.
+
+fn find_min(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut lo = 0;
+    let mut hi = n - 1;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] > nums[hi] {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    nums[lo]
+}
+
+fn report(nums: Slice[i64]) {
+    println(find_min(nums));
+}
+
+fn main() {
+    let c1: Array[i64, 5] = [3, 4, 5, 1, 2];
+    report(c1);   // expect: 1
+
+    let c2: Array[i64, 7] = [4, 5, 6, 7, 0, 1, 2];
+    report(c2);   // expect: 0
+
+    let c3: Array[i64, 4] = [11, 13, 15, 17];
+    report(c3);   // expect: 11  (no effective rotation)
+
+    let c4: Array[i64, 1] = [5];
+    report(c4);   // expect: 5
+
+    let c5: Array[i64, 2] = [2, 1];
+    report(c5);   // expect: 1
+}

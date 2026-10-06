@@ -1,0 +1,8 @@
+fn w[T](v: T) -> i64 { let k = |x: T| x; let r = k(v); return 3; }
+fn back[T](v: T) -> T { let k = |x: T| x; return k(v); }
+fn main() {
+    let s = "named".to_string();
+    println(f"a:{w("s".to_string())} {w(s)} {w(vec![1, 2])} {w(5)}");
+    println(f"b:{back("t".to_string())} {back(vec!["u".to_string()]).len()} {back(7)}");
+    println("end");
+}

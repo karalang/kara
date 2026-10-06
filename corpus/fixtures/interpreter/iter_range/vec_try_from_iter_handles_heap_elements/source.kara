@@ -1,0 +1,13 @@
+
+fn build() -> Result[i64, AllocError] {
+    let src: Vec[String] = ["a", "bb", "ccc"];
+    let out: Vec[String] = Vec.try_from_iter(src.iter().map(|s| s.to_uppercase()))?;
+    println(f"{out.len()} {out[0]} {out[2]}");
+    return Ok(out.len());
+}
+fn main() {
+    match build() {
+        Ok(n) => { println(f"ok {n}"); }
+        Err(e) => { println("oom"); }
+    }
+}

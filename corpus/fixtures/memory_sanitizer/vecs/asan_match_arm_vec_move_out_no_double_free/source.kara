@@ -1,0 +1,19 @@
+
+fn make() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1i64);
+    v.push(2i64);
+    v
+}
+fn unwrap_or_default(opt: Option[Vec[i64]]) -> Vec[i64] {
+    match opt {
+        Some(v) => v,
+        None => Vec.new(),
+    }
+}
+fn main() {
+    let v = unwrap_or_default(Some(make()));
+    println(v[0]);
+    let w = unwrap_or_default(None);
+    println(w.len());
+}

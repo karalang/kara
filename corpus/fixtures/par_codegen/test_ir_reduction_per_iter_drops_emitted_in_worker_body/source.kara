@@ -1,0 +1,20 @@
+
+fn make_vec(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.with_capacity(n);
+    let mut i = 0i64;
+    while i < n {
+        v.push(i);
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let mut sum = 0i64;
+    let mut k = 0i64;
+    while k < 1000i64 {
+        let result = make_vec(64);
+        sum = sum + result.len();
+        k = k + 1;
+    }
+    println(sum);
+}

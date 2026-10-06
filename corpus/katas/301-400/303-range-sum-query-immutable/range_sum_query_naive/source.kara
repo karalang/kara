@@ -1,0 +1,92 @@
+// LeetCode 303 — Range Sum Query, Immutable, by just adding it up.
+//
+// Keep the array. For each query, walk from `left` to `right` and total the
+// elements. O(1) to build, O(n) per query — the exact inverse of the prefix-sum
+// arm's O(n) build and O(1) query.
+//
+// It is here for two reasons, and neither is "to be the slow one".
+//
+// FIRST, IT IS THE DEFINITION. `sum_range(l, r)` is *defined* as the sum of the
+// elements from l to r, and this transcribes that sentence with nothing in
+// between. The prefix arm computes the same number by subtracting two
+// quantities, neither of which appears in the problem statement, using an array
+// that is one longer than the input and indexed at `r + 1` and `l`. That is a
+// small pile of opportunities to be off by one, and the only way to know it is
+// right is to check it against something that cannot be off by one. This is
+// that something.
+//
+// SECOND, THE TRADE-OFF IS THE POINT OF THE PROBLEM. LeetCode 303 is filed
+// under design rather than algorithms because the interesting question is not
+// how to sum a range — it is which cost you want to pay and how many queries it
+// takes for the answer to flip. With q queries over n elements, prefix sums
+// cost O(n + q) and this costs O(q·n); they cross at q = 1. Literally one query
+// and the preprocessing has paid for itself, which is why the immutable variant
+// has exactly one sensible answer and why `bench/` measures the build and the
+// query separately rather than lumping them.
+
+struct NumArray {
+    nums: Vec[i64],
+}
+
+fn new_num_array(nums: ref Vec[i64]) -> NumArray {
+    let mut copy: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < nums.len() {
+        copy.push(nums[i]);
+        i = i + 1;
+    }
+    return NumArray { nums: copy };
+}
+
+impl NumArray {
+    fn sum_range(ref self, left: i64, right: i64) -> i64 {
+        let mut total = 0;
+        let mut i = left;
+        while i <= right {
+            total = total + self.nums[i];
+            i = i + 1;
+        }
+        return total;
+    }
+
+    fn len(ref self) -> i64 {
+        return self.nums.len();
+    }
+}
+
+fn render(nums: ref Vec[i64]) -> String {
+    let mut line = String.new();
+    line.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { line.push_str(", "); }
+        line.push_str(f"{nums[i]}");
+        i = i + 1;
+    }
+    line.push_str("]");
+    return line;
+}
+
+fn report(nums: Vec[i64], queries: Vec[i64]) {
+    let na = new_num_array(nums);
+    let mut line = String.new();
+    line.push_str(render(nums));
+    line.push_str(" ->");
+    let mut q = 0;
+    while q + 1 < queries.len() {
+        let l = queries[q];
+        let r = queries[q + 1];
+        line.push_str(f" [{l},{r}]={na.sum_range(l, r)}");
+        q = q + 2;
+    }
+    println(line);
+}
+
+fn main() {
+    report([-2, 0, 3, -5, 2, -1], [0, 2, 2, 5, 0, 5, 1, 1]);
+    report([1, 2, 3, 4, 5], [0, 4, 0, 0, 4, 4, 1, 3]);
+    report([7], [0, 0]);
+    report([0, 0, 0, 0], [0, 3, 1, 2]);
+    report([-1, -2, -3], [0, 2, 1, 2, 2, 2]);
+    report([100000, -100000, 100000], [0, 2, 0, 1, 1, 2]);
+}

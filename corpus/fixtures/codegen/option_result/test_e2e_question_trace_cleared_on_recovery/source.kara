@@ -1,0 +1,15 @@
+
+fn maybe(flag: bool) -> Result[i64, i64] {
+    if flag { Ok(1_i64) } else { Err(9_i64) }
+}
+fn after_recovery() -> Result[i64, i64] {
+    let _ = maybe(true)?;     // success — should clear any pushed frames
+    let _ = maybe(false)?;    // fresh failure — pushes one frame
+    Ok(0_i64)
+}
+fn main() {
+    match after_recovery() {
+        Ok(_) => println(0_i64),
+        Err(e) => println(e),
+    }
+}

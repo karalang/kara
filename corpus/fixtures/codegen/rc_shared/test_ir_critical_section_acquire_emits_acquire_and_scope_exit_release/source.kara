@@ -1,0 +1,6 @@
+
+fn f() with writes(Hardware) {
+    let _guard = critical_section.acquire();
+    println(7);
+}
+fn main() { f(); }

@@ -1,0 +1,77 @@
+// Benchmark workload for LeetCode #173 — Binary Search Tree Iterator.
+//
+// Build-once + punch: a large index-pool BST (`Vec[Node]`, i64 child indices,
+// -1 = null) is built once from a deterministic 32-bit LCG (overflow-safe in
+// i64). Then a full in-order traversal via an explicit stack iterator is run
+// `PASSES` times; before each pass one node's value is perturbed so the optimizer
+// cannot hoist the repeated walk. Each node is pushed and popped exactly once per
+// pass (amortised O(1) `next`), and the stack's LIFO discipline is a pointer-
+// chasing, non-vectorizing kernel. Sink = sum of position-weighted values across
+// all passes (pos = 1,2,3,… in in-order sequence).
+
+struct Node {
+    mut val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn insert(nodes: mut ref Vec[Node], root: i64, val: i64) -> i64 {
+    if root == -1 {
+        nodes.push(Node { val: val, left: -1, right: -1 });
+        return nodes.len() - 1;
+    }
+    if val < nodes[root].val {
+        let li = nodes[root].left;
+        let l = insert(nodes, li, val);
+        nodes[root].left = l;
+    } else {
+        let ri = nodes[root].right;
+        let r = insert(nodes, ri, val);
+        nodes[root].right = r;
+    }
+    return root;
+}
+
+fn main() {
+    let n = 4000;
+    let passes = 30000;
+
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut root = -1;
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let v = state % 1000;
+        root = insert(mut nodes, root, v);
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let idx = (p * 1315423911 + 7) % n;
+        nodes[idx].val = (nodes[idx].val + 1) % 1000;
+
+        let mut stack: Vec[i64] = Vec.new();
+        let mut cur = root;
+        while cur != -1 {
+            stack.push(cur);
+            cur = nodes[cur].left;
+        }
+        let mut pos = 1;
+        while stack.len() > 0 {
+            let top = stack[stack.len() - 1];
+            let _ = stack.pop();
+            sink = sink + pos * nodes[top].val;
+            pos = pos + 1;
+            let mut r = nodes[top].right;
+            while r != -1 {
+                stack.push(r);
+                r = nodes[r].left;
+            }
+        }
+        p = p + 1;
+    }
+    println(sink);
+}

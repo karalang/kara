@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    println(v);
+    println(f"v={v}");
+    let s = v.to_string();
+    println(s);
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("k", 9);
+    println(m.to_string());
+}

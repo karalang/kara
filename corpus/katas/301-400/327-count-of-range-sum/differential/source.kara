@@ -1,0 +1,280 @@
+// Differential and property check for LeetCode #327.
+//
+// Four implementations of the same function, run on the same random inputs:
+//
+//   by_merge   merge sort over the prefix sums      (count_range_sum.kara)
+//   by_bit     Fenwick tree over ranked prefix sums (count_range_sum_bit.kara)
+//   by_sorted  SortedMap of the prefix sums seen    (count_range_sum_sorted.kara)
+//   brute      every start, every end               (count_range_sum_brute.kara)
+//
+// Properties, over every round:
+//   P1  all four counts agree
+//   P2  0 <= count <= n(n+1)/2
+//   P3  widening the interval never lowers the count
+//   P4  an interval covering every range sum counts all n(n+1)/2 of them
+//   P5  splitting the interval at any point splits the count:
+//       count(lo, hi) = count(lo, m) + count(m + 1, hi)
+//   P6  negating every value and the interval keeps the count:
+//       count(nums, lo, hi) = count(-nums, -hi, -lo)
+//   P7  reversing nums keeps the count
+
+fn count_and_sort(p: mut ref Vec[i64], tmp: mut ref Vec[i64], lo: i64, hi: i64, lower: i64, upper: i64) -> i64 {
+    if hi - lo <= 1 {
+        return 0;
+    }
+    let mid = lo + (hi - lo) / 2;
+    let mut count = count_and_sort(p, tmp, lo, mid, lower, upper) + count_and_sort(p, tmp, mid, hi, lower, upper);
+
+    // Count the cross pairs: for each a in [lo, mid), the b in [mid, hi)
+    // with p[a] + lower <= p[b] <= p[a] + upper.
+    let mut start = mid;
+    let mut end = mid;
+    for a in lo..mid {
+        while start < hi and p[start] < p[a] + lower {
+            start += 1;
+        }
+        while end < hi and p[end] <= p[a] + upper {
+            end += 1;
+        }
+        count += end - start;
+    }
+
+    // Merge the two sorted halves through tmp.
+    let mut i = lo;
+    let mut j = mid;
+    let mut k = lo;
+    while i < mid and j < hi {
+        if p[i] <= p[j] {
+            tmp[k] = p[i];
+            i += 1;
+        } else {
+            tmp[k] = p[j];
+            j += 1;
+        }
+        k += 1;
+    }
+    while i < mid {
+        tmp[k] = p[i];
+        i += 1;
+        k += 1;
+    }
+    while j < hi {
+        tmp[k] = p[j];
+        j += 1;
+        k += 1;
+    }
+    for t in lo..hi {
+        p[t] = tmp[t];
+    }
+    return count;
+}
+
+fn by_merge(nums: ref Vec[i64], lower: i64, upper: i64) -> i64 {
+    let mut p: Vec[i64] = Vec.new();
+    p.push(0);
+    let mut s = 0;
+    for x in nums {
+        s += x;
+        p.push(s);
+    }
+    let mut tmp: Vec[i64] = Vec.new();
+    for _ in 0..p.len() {
+        tmp.push(0);
+    }
+    let n = p.len();
+    return count_and_sort(mut p, mut tmp, 0, n, lower, upper);
+}
+
+// The number of values in `sorted` that are <= x.
+fn rank_at_most(sorted: ref Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if sorted[mid] <= x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+// Add one at 1-based position i.
+fn bit_add(tree: mut ref Vec[i64], i: i64) {
+    let mut k = i;
+    while k < tree.len() {
+        tree[k] += 1;
+        k += k & -k;
+    }
+}
+
+// The total over positions 1..=i.
+fn bit_sum(tree: ref Vec[i64], i: i64) -> i64 {
+    let mut k = i;
+    let mut s = 0;
+    while k > 0 {
+        s += tree[k];
+        k -= k & -k;
+    }
+    return s;
+}
+
+fn by_bit(nums: ref Vec[i64], lower: i64, upper: i64) -> i64 {
+    let mut p: Vec[i64] = Vec.new();
+    p.push(0);
+    let mut s = 0;
+    for x in nums {
+        s += x;
+        p.push(s);
+    }
+    let mut sorted = p.clone();
+    sorted.sort();
+    sorted.dedup();
+
+    let mut tree: Vec[i64] = Vec.new();
+    for _ in 0..sorted.len() + 1 {
+        tree.push(0);
+    }
+    let mut count = 0;
+    for v in p {
+        // Earlier values in [v - upper, v - lower]: at most (v - lower),
+        // minus those below (v - upper).
+        count += bit_sum(tree, rank_at_most(sorted, v - lower)) - bit_sum(tree, rank_at_most(sorted, v - upper - 1));
+        bit_add(mut tree, rank_at_most(sorted, v));
+    }
+    return count;
+}
+
+fn by_sorted(nums: ref Vec[i64], lower: i64, upper: i64) -> i64 {
+    let mut seen: SortedMap[i64, i64] = SortedMap.new();
+    seen.insert(0, 1);
+    let mut p = 0;
+    let mut count = 0;
+    for x in nums {
+        p += x;
+        for (_, c) in seen.range(p - upper, p - lower) {
+            count += c;
+        }
+        *seen.entry(p).or_insert(0) += 1;
+    }
+    return count;
+}
+
+fn brute(nums: ref Vec[i64], lower: i64, upper: i64) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for i in 0..n {
+        let mut s = 0;
+        for j in i..n {
+            s += nums[j];
+            if s >= lower and s <= upper {
+                count += 1;
+            }
+        }
+    }
+    return count;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn random_input(n: i64, r: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        a.push(next(seed) % (2 * r + 1) - r);
+    }
+    return a;
+}
+
+fn negated(a: ref Vec[i64]) -> Vec[i64] {
+    let mut b: Vec[i64] = Vec.new();
+    for x in a {
+        b.push(-x);
+    }
+    return b;
+}
+
+fn reversed(a: ref Vec[i64]) -> Vec[i64] {
+    let mut b = a.clone();
+    b.reverse();
+    return b;
+}
+
+struct Tally {
+    rounds: i64,
+    total: i64,
+    failures: i64,
+}
+
+fn fail(t: mut ref Tally, what: String) {
+    println(what);
+    t.failures += 1;
+}
+
+fn check(nums: ref Vec[i64], lower: i64, upper: i64, t: mut ref Tally) {
+    let n = nums.len();
+    let a = by_merge(nums, lower, upper);
+    let b = by_bit(nums, lower, upper);
+    let c = by_sorted(nums, lower, upper);
+    let d = brute(nums, lower, upper);
+    t.rounds += 1;
+    t.total += d;
+    if a != d or b != d or c != d {
+        fail(t, f"P1 {nums} [{lower}, {upper}]: merge {a} bit {b} sorted {c} brute {d}");
+    }
+    let all = n * (n + 1) / 2;
+    if d < 0 or d > all {
+        fail(t, f"P2 {nums} [{lower}, {upper}]: {d} of {all}");
+    }
+    if by_merge(nums, lower - 1, upper + 1) < d {
+        fail(t, f"P3 {nums} [{lower}, {upper}]");
+    }
+    if by_merge(nums, -1000000000000000, 1000000000000000) != all {
+        fail(t, f"P4 {nums}");
+    }
+    if lower < upper {
+        let m = lower + (upper - lower) / 2;
+        if by_bit(nums, lower, m) + by_bit(nums, m + 1, upper) != d {
+            fail(t, f"P5 {nums} [{lower}, {upper}] at {m}");
+        }
+    }
+    if by_merge(negated(nums), -upper, -lower) != d {
+        fail(t, f"P6 {nums} [{lower}, {upper}]");
+    }
+    if by_sorted(reversed(nums), lower, upper) != d {
+        fail(t, f"P7 {nums} [{lower}, {upper}]");
+    }
+}
+
+fn main() {
+    let mut t = Tally { rounds: 0, total: 0, failures: 0 };
+
+    // Edge cases, including the empty array.
+    check([], 0, 0, mut t);
+    check([0], 0, 0, mut t);
+    check([7], 0, 0, mut t);
+    check([0, 0, 0, 0], 0, 0, mut t);
+    check([-2, 5, -1], -2, 2, mut t);
+    check([2147483647, 2147483647], 2147483647, 4294967294, mut t);
+    check([-2147483648, -2147483648], -4294967296, -2147483648, mut t);
+
+    // Random rounds: 0 to 29 values within +-1 to +-6, and an interval of
+    // width 0 to 8 near zero, so that most rounds count something.
+    let mut seed = 327;
+    for round in 0..600 {
+        let n = next(mut seed) % 30;
+        let r = round % 6 + 1;
+        let nums = random_input(n, r, mut seed);
+        let lower = next(mut seed) % 11 - 5;
+        let upper = lower + next(mut seed) % 9;
+        check(nums, lower, upper, mut t);
+    }
+
+    println(f"rounds {t.rounds}, range sums counted {t.total}, failures {t.failures}");
+    if t.failures == 0 {
+        println("all properties hold");
+    }
+}

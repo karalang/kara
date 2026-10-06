@@ -1,0 +1,19 @@
+
+fn main() {
+    let mut acc: Vec[i64] = Vec.new();
+    let mut push = |x: i64| { acc.push(x); };
+    let mut i: i64 = 0;
+    while i < 20 {
+        push(i);
+        i = i + 1;
+    }
+    println(acc.len());
+    let mut buf: String = "";
+    let mut append = |s: String| { buf.push_str(s); };
+    append("alpha beta gamma delta epsilon zeta well past inline");
+    println(buf.len());
+    let mut m: Map[String, i64] = Map.new();
+    let mut record = |k: String, v: i64| { m.insert(k, v); };
+    record("one", 1);
+    println(m.len());
+}

@@ -1,0 +1,147 @@
+// LeetCode #37 bench harness — Kāra, the bitmask-backtracking solver (★).
+//
+// The headline ★ style: solve a 9×9 board by depth-first backtracking with three
+// nine-element bitmask arrays (rows / cols / boxes). At the first empty cell (linear
+// order) try each digit whose bit is clear in rows[r] | cols[c] | boxes[b], set the
+// three bits, recurse, and on failure clear the cell and XOR the bits back off. The
+// masks make the candidate test O(1) and the undo a single XOR per unit — no
+// per-placement grid re-scan.
+//
+// The board is a fixed `Array[i64, 81]` borrowed as `mut ref Array[i64, 81]` (its
+// natural type — the length is part of the type, and the borrow lowers to a single
+// `ptr`, the closest analog to C's `int64_t *restrict` / Rust's `&mut [i64; 81]`);
+// the three masks are `mut ref Array[i64, 9]` borrows of stack locals reset per solve.
+// `mut ref` params carry LLVM `noalias` (Kāra's exclusive-borrow guarantee, enforced
+// at call sites since B-2026-06-17-6), so the four views are declared mutually
+// non-aliasing — the same disjointness C asserts with `restrict`. The hot path does NO
+// heap allocation (board + masks are all stack storage), so this measures
+// backtracking-search codegen, not the allocator.
+//
+// Workload: the template is Arto Inkala's 2012 "world's hardest sudoku" — the puzzle
+// engineered to force maximal backtracking. TOTAL times, copy the template into a
+// fresh working board, CLEAR cell `k % 81` (removing a clue can never make the puzzle
+// unsolvable, so every iteration completes), solve, and fold a POSITION-WEIGHTED
+// signature of the solved grid — sum of board[i]*(i+1) — into a rolling checksum. The
+// weight matters: an unweighted cell sum is 405 for ANY complete board, so it would
+// not detect a wrong placement; the weighted sum depends on WHERE each digit lands.
+// The cleared cell varies with the loop index, so no comparator can hoist the solve
+// out of the loop, and the checksum carries a loop-borne dependency, so this is a
+// single-lane (seq) bench by construction.
+
+fn box_index(r: i64, c: i64) -> i64 {
+    (r / 3) * 3 + c / 3
+}
+
+fn go(
+    board: mut ref Array[i64, 81],
+    rows: mut ref Array[i64, 9],
+    cols: mut ref Array[i64, 9],
+    boxes: mut ref Array[i64, 9],
+    pos: i64,
+) -> bool {
+    if pos == 81 {
+        return true;
+    }
+    let r = pos / 9;
+    let c = pos % 9;
+    if board[pos] != 0 {
+        return go(board, rows, cols, boxes, pos + 1);
+    }
+    let b = box_index(r, c);
+    let used = rows[r] | cols[c] | boxes[b];
+    let mut d = 1;
+    while d <= 9 {
+        let bit = 1 << d;
+        if (used & bit) == 0 {
+            board[pos] = d;
+            rows[r] = rows[r] | bit;
+            cols[c] = cols[c] | bit;
+            boxes[b] = boxes[b] | bit;
+            if go(board, rows, cols, boxes, pos + 1) {
+                return true;
+            }
+            board[pos] = 0;
+            rows[r] = rows[r] ^ bit;
+            cols[c] = cols[c] ^ bit;
+            boxes[b] = boxes[b] ^ bit;
+        }
+        d = d + 1;
+    }
+    false
+}
+
+fn solve(board: mut ref Array[i64, 81]) -> bool {
+    let mut rows: Array[i64, 9] = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut cols: Array[i64, 9] = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut boxes: Array[i64, 9] = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut i = 0;
+    while i < 81 {
+        let d = board[i];
+        if d != 0 {
+            let r = i / 9;
+            let c = i % 9;
+            let b = box_index(r, c);
+            let bit = 1 << d;
+            rows[r] = rows[r] | bit;
+            cols[c] = cols[c] | bit;
+            boxes[b] = boxes[b] | bit;
+        }
+        i = i + 1;
+    }
+    go(board, mut rows, mut cols, mut boxes, 0)
+}
+
+fn main() {
+    let total = 500;
+    let modulus = 1000000007;
+
+    // Arto Inkala's 2012 "world's hardest sudoku" — maximal backtracking, unique.
+    let template: Array[i64, 81] = [
+        8, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 3, 6, 0, 0, 0, 0, 0,
+        0, 7, 0, 0, 9, 0, 2, 0, 0,
+        0, 5, 0, 0, 0, 7, 0, 0, 0,
+        0, 0, 0, 0, 4, 5, 7, 0, 0,
+        0, 0, 0, 1, 0, 0, 0, 3, 0,
+        0, 0, 1, 0, 0, 0, 0, 6, 8,
+        0, 0, 8, 5, 0, 0, 0, 1, 0,
+        0, 9, 0, 0, 0, 0, 4, 0, 0,
+    ];
+
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        // Fresh working copy of the template.
+        let mut work: Array[i64, 81] = [
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let mut j = 0;
+        while j < 81 {
+            work[j] = template[j];
+            j = j + 1;
+        }
+        work[k % 81] = 0;             // clear cell k%81 (always still solvable)
+
+        solve(mut work);
+
+        // Position-weighted signature of the solved grid.
+        let mut sig = 0;
+        let mut i = 0;
+        while i < 81 {
+            sig = sig + work[i] * (i + 1);
+            i = i + 1;
+        }
+        acc = (acc * 31 + sig) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

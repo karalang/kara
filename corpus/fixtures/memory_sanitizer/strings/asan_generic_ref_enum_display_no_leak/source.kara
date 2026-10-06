@@ -1,0 +1,14 @@
+
+#[derive(Display)]
+enum IoErr { NotFound, Other(String) }
+fn wrap[E: Display](e: ref E) -> String { f"error: {e}" }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 200 {
+        let b: IoErr = IoErr.Other(String.from("boom"));
+        total = total + wrap(b).len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

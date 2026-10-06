@@ -1,0 +1,8 @@
+walk 5
+walk 5
+walk 6
+drop 1
+drop 2
+drop 3
+t 3
+end

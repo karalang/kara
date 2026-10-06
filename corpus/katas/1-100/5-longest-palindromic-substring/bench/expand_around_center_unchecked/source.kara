@@ -1,0 +1,74 @@
+// Benchmark workload — expand-around-center variant using `Vec.get_unchecked`
+// to bypass the runtime bounds check on every `chars[lo]` / `chars[hi]` read.
+//
+// Sibling of `expand_around_center.kara`; same algorithm, same workload (N =
+// 5000 single-char input, K = 100, sink = 500_000). The only difference is the
+// inner-loop indexing: `chars[i]` becomes `chars.get_unchecked(i)` inside a
+// single outer `unsafe { }` block whose safety preconditions are the same
+// facts the loop guard already proves (`0 <= lo` and `hi < n`, with hi
+// monotonically increasing from a value in `[0, n)` so hi >= 0 invariantly,
+// and lo monotonically decreasing from a value < n so lo < n invariantly).
+//
+// Purpose: quantify the bounds-check tax measured against Rust in
+// `wip-kata5-perf.md`. If `get_unchecked` closes the gap to ~1.0× of Rust,
+// the bounds check is precisely the residual; the safe-form dominator-aware
+// elision follow-up is then validated as the right design target. If not,
+// there's another factor and the elision project's scope reopens.
+
+fn expand(chars: ref Vec[char], lo0: i64, hi0: i64) -> Array[i64, 2] {
+    let mut lo = lo0;
+    let mut hi = hi0;
+    let n = chars.len();
+    // Safety: the loop guard proves `lo >= 0 and hi < n` before each
+    // indexing. The remaining bound (lo < n, hi >= 0) is proved
+    // transitively from the initial value range and monotonic update
+    // direction; same fact the safe-form needs from a dominator pass.
+    unsafe {
+        while lo >= 0 and hi < n and chars.get_unchecked(lo) == chars.get_unchecked(hi) {
+            lo = lo - 1;
+            hi = hi + 1;
+        }
+    }
+    [lo + 1, hi - lo - 1]
+}
+
+fn longest_palindrome(s: ref String) -> Array[i64, 2] {
+    let mut chars: Vec[char] = Vec.new();
+    for c in s.chars() {
+        chars.push(c);
+    }
+    let n = chars.len();
+    let mut best_start = 0;
+    let mut best_len = 0;
+    let mut i = 0;
+    while i < n {
+        let odd = expand(chars, i, i);
+        if odd[1] > best_len {
+            best_start = odd[0];
+            best_len = odd[1];
+        }
+        let even = expand(chars, i, i + 1);
+        if even[1] > best_len {
+            best_start = even[0];
+            best_len = even[1];
+        }
+        i = i + 1;
+    }
+    [best_start, best_len]
+}
+
+fn main() {
+    let mut data: String = String.new();
+    let mut i = 0;
+    while i < 5000 {
+        data.push_str("a");
+        i = i + 1;
+    }
+
+    let mut sum = 0;
+    for _ in 0..100 {
+        let r = longest_palindrome(data);
+        sum = sum + r[0] + r[1];
+    }
+    println(sum);
+}

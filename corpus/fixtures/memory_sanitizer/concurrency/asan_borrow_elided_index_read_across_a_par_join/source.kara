@@ -1,0 +1,35 @@
+
+fn spiral(m: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let rows = m.len();
+    let first = m[0].clone();
+    let cols = first.len();
+    let mut r = 0i64;
+    while r < rows {
+        let mut c = 0i64;
+        while c < cols {
+            out.push(m[r][c]);
+            c = c + 1i64;
+        }
+        r = r + 1i64;
+    }
+    out
+}
+
+fn report(grid: Vec[Vec[i64]]) {
+    let m = grid;
+    let order = spiral(m);
+    let mut line: String = "";
+    let mut k = 0i64;
+    while k < order.len() {
+        line.push_str(f"{order[k]} ");
+        k = k + 1i64;
+    }
+    println(line);
+}
+
+fn main() {
+    report([[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+    report([[1]]);
+    println("end");
+}

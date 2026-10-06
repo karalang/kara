@@ -1,0 +1,43 @@
+
+struct Inner { label: String, k: i64 }
+struct Hs { opt: Option[String], n: i64 }
+struct Ht { opt: Option[Inner], n: i64 }
+struct Hr { res: Result[String, i64], n: i64 }
+fn take_str(o: Option[String]) -> String {
+    match o {
+        Some(s) => s,
+        None => "none".to_string(),
+    }
+}
+fn take_struct(o: Option[Inner]) -> String {
+    match o {
+        Some(x) => x.label,
+        None => "none".to_string(),
+    }
+}
+fn take_res(r: Result[String, i64]) -> String {
+    match r {
+        Ok(s) => s,
+        Err(e) => e.to_string(),
+    }
+}
+fn main() {
+    let a = Hs { opt: Some("payload".to_string()), n: 1 };
+    println(take_str(a.opt));
+
+    let b = Ht { opt: Some(Inner { label: "deep".to_string(), k: 2 }), n: 2 };
+    println(take_struct(b.opt));
+
+    let r = Hr { res: Ok("okstr".to_string()), n: 3 };
+    println(take_res(r.res));
+
+    let c = Hs { opt: None, n: 4 };
+    println(take_str(c.opt));
+
+    let d = Ht { opt: Some(Inner { label: "kept".to_string(), k: 5 }), n: 5 };
+    println(d.n.to_string());
+    match d.opt {
+        Some(x) => println(x.label),
+        None => println("none"),
+    }
+}

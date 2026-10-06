@@ -1,0 +1,109 @@
+// LeetCode #47 bench harness — Kāra, the sorted used-array adjacent-skip backtracker (★).
+//
+// The headline ★ style: a DFS that at each level picks any still-unused element (tracked by a
+// parallel `Vec[bool]` `used` marker), with the input SORTED up front and a same-level
+// adjacent-duplicate skip (`nums[i] == nums[i-1] and not used[i-1]`) so that an input with
+// repeats yields each UNIQUE ordering exactly once. The path is one mutable `Vec[i64]` with
+// push/pop + flag flip/unflip, snapshotted (`path.clone()`) into a `Vec[Vec[i64]]` at each leaf
+// (`path.len() == n`). So this exercises the per-iteration sort, `Vec[bool]` indexed flips, the
+// adjacent dedup, per-node push/pop, the leaf clone, and nested-Vec heap growth — the unique
+// permutation enumeration is a `Vec[Vec]`-ALLOCATION workload, the duplicate-input sibling of
+// #46's and #40's enumerations.
+//
+// Workload: a fixed-size n = 8 multiset `nums` drawn from {1,2,3,4} (so always duplicate-heavy) is
+// permuted TOTAL times. `permute` sorts its OWN working copy each call, so the caller's array stays
+// in punch order; each iteration punches one slot (`nums[k % n] = 1 + (k % 4)`, not reverted, so
+// the multiset state carries forward) before solving, which keeps the per-iteration unique-perm set
+// (and its count) varying with `k` — no hoisting of a constant result. Every permutation's
+// position-weighted signature plus the count is folded into a rolling checksum that carries a
+// loop-borne dependency, so this is a single-lane (seq) bench by construction. All five language
+// mirrors fold the identical integer signature and must print the identical checksum before timing.
+
+fn backtrack(
+    nums: ref Vec[i64],
+    used: mut ref Vec[bool],
+    path: mut ref Vec[i64],
+    out: mut ref Vec[Vec[i64]],
+) {
+    let n = nums.len();
+    if path.len() == n {
+        out.push(path.clone());
+        return;
+    }
+    let mut i = 0;
+    while i < n {
+        if used[i] {
+            i = i + 1;
+            continue;
+        }
+        if i > 0 and nums[i] == nums[i - 1] and not used[i - 1] {
+            i = i + 1;
+            continue;
+        }
+        used[i] = true;
+        path.push(nums[i]);
+        backtrack(nums, used, path, out);
+        path.pop();
+        used[i] = false;
+        i = i + 1;
+    }
+}
+
+fn permute_unique(nums: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut xs: Vec[i64] = nums.clone();
+    xs.sort_by(|a, b| a.cmp(b));
+    let n = xs.len();
+    let mut used: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        used.push(false);
+        i = i + 1;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    backtrack(xs, mut used, mut path, mut out);
+    out
+}
+
+fn main() {
+    let total = 600;
+    let modulus = 1000000007;
+    let n = 8;
+
+    // Fixed-size n=8 multiset from {1,2,3,4}; values punched per iteration, count varies.
+    let mut nums: Vec[i64] = Vec.new();
+    let mut b = 0;
+    while b < n {
+        nums.push(1 + (b % 4));
+        b = b + 1;
+    }
+
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        // Punch one slot (no hoisting); not reverted, so state evolves across iterations.
+        nums[k % n] = 1 + (k % 4);
+        let perms = permute_unique(nums);
+
+        let mut sig = 0;
+        let m = perms.len();
+        let mut j = 0;
+        while j < m {
+            let perm = ref perms[j];
+            let mut s = 0;
+            let mut i = 0;
+            let pl = perm.len();
+            while i < pl {
+                s = s + perm[i] * (i + 1);
+                i = i + 1;
+            }
+            sig = (sig * 31 + s) % modulus;
+            j = j + 1;
+        }
+        sig = (sig + m) % modulus;
+        acc = (acc * 131 + sig) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

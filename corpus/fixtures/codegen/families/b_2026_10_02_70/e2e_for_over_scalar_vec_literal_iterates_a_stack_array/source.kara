@@ -1,0 +1,91 @@
+fn first_neg(k: i64) -> i64 {
+    for x in [3, k, -1, 9] {
+        if x < 0 {
+            return x;
+        }
+    }
+    return 0;
+}
+fn walk(r: i64, c: i64) -> i64 {
+    let mut s = 0;
+    for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        s = s * 10 + (r + dr) * 3 + (c + dc);
+    }
+    return s;
+}
+fn main() {
+    let mut t = 0;
+    for x in [1, 2, 3, 4, 5] {
+        if x == 2 {
+            continue;
+        }
+        if x == 5 {
+            break;
+        }
+        t += x;
+    }
+    println(f"a {t}");
+    println(f"b {first_neg(7)} {first_neg(-4)}");
+    println(f"c {walk(2, 3)}");
+    let mut f = 0.0;
+    for v in [0.5, 1.25, 2.0] {
+        f += v;
+    }
+    println(f"d {f}");
+    let mut n = 0;
+    for b in [true, false, true] {
+        if b {
+            n += 1;
+        }
+    }
+    println(f"e {n}");
+    let mut cs = "";
+    for ch in ['x', 'y', 'z'] {
+        cs = f"{cs}{ch}";
+    }
+    println(f"f {cs}");
+    for (i, x) in [10, 20, 30].iter().enumerate() {
+        println(f"g {i} {x}");
+    }
+    let mut acc = 0;
+    for x in [1, 2, 3].iter() {
+        acc += x;
+    }
+    println(f"h {acc}");
+    let mut p = 0;
+    outer: for a in [1, 2, 3] {
+        for b in [10, 20, 30] {
+            if b == 30 and a == 2 {
+                break outer;
+            }
+            p += a * b;
+        }
+    }
+    println(f"i {p}");
+    let mut q = 0;
+    for k in 0..3 {
+        for x in [k, k * 2, k * 3] {
+            q += x;
+        }
+    }
+    println(f"j {q}");
+    let mut last = (0, 0, 0);
+    for (a, b, c) in [(1, 2, 3), (4, 5, 6)] {
+        last = (c, b, a);
+    }
+    println(f"k {last.0} {last.1} {last.2}");
+    let mut u: u8 = 0;
+    for x in [1u8, 2u8, 250u8] {
+        u = u ^ x;
+    }
+    println(f"l {u}");
+    let w = found: {
+        for x in [4, 5, 6] {
+            if x == 5 {
+                break found x * 2;
+            }
+        }
+        0
+    };
+    println(f"m {w}");
+}

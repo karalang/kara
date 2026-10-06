@@ -1,0 +1,14 @@
+
+shared struct Node { val: i64 }
+fn helper() -> Node {
+    let mut m: Map[i64, Node] = Map.new();
+    let mut v: Vec[Node] = Vec.new();
+    let n = Node { val: 42 };
+    let _ = m.insert(1_i64, n);
+    v.push(n);
+    n
+}
+fn main() {
+    let r = helper();
+    println(r.val);
+}

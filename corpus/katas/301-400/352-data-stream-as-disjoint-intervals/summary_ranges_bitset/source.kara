@@ -1,0 +1,119 @@
+// LeetCode #352: Data Stream as Disjoint Intervals — a bitset over the
+// values.
+//
+// The values lie in 0..=10000, so 157 words of 64 bits hold one bit per
+// value. add_num sets a bit. get_intervals finds each run by counting
+// trailing zeros: the first set bit at or after a position starts a run, and
+// the first clear bit after that ends it, so whole empty or whole full words
+// are skipped 64 values at a time.
+//
+// add_num is O(1); get_intervals is O(range / 64 + k).
+
+struct SummaryRanges {
+    words: Vec[u64],
+}
+
+impl SummaryRanges {
+    fn new() -> SummaryRanges {
+        return SummaryRanges { words: Vec.filled(157, 0) };
+    }
+
+    fn add_num(mut ref self, value: i64) {
+        let one: u64 = 1;
+        self.words[value / 64] = self.words[value / 64] | (one << (value % 64) as u64);
+    }
+
+    // The first position at or after `from` whose bit equals `want`, or
+    // 157 * 64 when there is none.
+    fn next_bit(ref self, from: i64, want: bool) -> i64 {
+        let mut w = from / 64;
+        if w >= 157 {
+            return 157 * 64;
+        }
+        let mut word = self.words[w];
+        if not want {
+            word = ~word;
+        }
+        word = word >> (from % 64) as u64 << (from % 64) as u64;
+        while word == 0 {
+            w += 1;
+            if w == 157 {
+                return 157 * 64;
+            }
+            word = self.words[w];
+            if not want {
+                word = ~word;
+            }
+        }
+        return w * 64 + word.trailing_zeros() as i64;
+    }
+
+    fn get_intervals(ref self) -> Vec[(i64, i64)] {
+        let mut out: Vec[(i64, i64)] = Vec.new();
+        let mut v = self.next_bit(0, true);
+        while v < 157 * 64 {
+            let after = self.next_bit(v, false);
+            out.push((v, after - 1));
+            v = self.next_bit(after, true);
+        }
+        return out;
+    }
+}
+
+fn show(intervals: ref Vec[(i64, i64)]) -> String {
+    let mut text = "";
+    for (s, e) in intervals {
+        if text.len() > 0 {
+            text = text + " ";
+        }
+        text = text + f"[{s}, {e}]";
+    }
+    if text.len() == 0 {
+        return "(empty)";
+    }
+    return text;
+}
+
+// A pseudo-random stream: a linear congruential generator modulo 2^31,
+// reduced to 0..=limit.
+fn next_value(state: mut ref i64, limit: i64) -> i64 {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return (state >> 8) % (limit + 1);
+}
+
+fn main() {
+    // The example from the problem statement.
+    let mut ranges = SummaryRanges.new();
+    for v in [1, 3, 7, 2, 6] {
+        ranges.add_num(v);
+        println(f"add {v}: {show(ranges.get_intervals())}");
+    }
+
+    // Edge cases: a repeat, a value inside an interval, the ends of the range,
+    // a value that bridges two intervals, and values arriving in descending
+    // order.
+    let mut edge = SummaryRanges.new();
+    println(f"nothing added: {show(edge.get_intervals())}");
+    for v in [5, 5, 0, 10000, 3, 4, 9999, 9998, 2, 1, 6] {
+        edge.add_num(v);
+    }
+    println(f"edges: {show(edge.get_intervals())}");
+
+    // A long stream over 0..=10000 with a report every 3000 values.
+    let mut stream = SummaryRanges.new();
+    let mut state: i64 = 352;
+    let mut checksum = 0;
+    for i in 1..30001 {
+        stream.add_num(next_value(mut state, 10000));
+        if i % 3000 == 0 {
+            let intervals = stream.get_intervals();
+            let mut covered = 0;
+            for (s, e) in intervals {
+                covered += e - s + 1;
+                checksum = (checksum * 31 + s * 7 + e) % 1000000007;
+            }
+            println(f"after {i}: {intervals.len()} intervals covering {covered}");
+        }
+    }
+    println(f"checksum {checksum}");
+}

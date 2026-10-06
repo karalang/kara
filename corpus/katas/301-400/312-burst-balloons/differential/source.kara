@@ -1,0 +1,408 @@
+// LeetCode 312 — four arms against each other and against seven properties
+// that follow from the STATEMENT rather than from any implementation.
+//
+//   A  bottom-up interval DP, nested table   — shortest interval first
+//   B  the same recurrence, flat table       — same order, strided layout
+//   C  the same recurrence, top-down memo    — no order chosen at all
+//   D  exhaustive search over burst orders   — the statement, nothing added
+//   E  the same recurrence, generic table    — a monomorphisation surface
+//
+// WHAT THE ARMS CANNOT SHARE. A, B and C are three schedulings of ONE
+// recurrence, and they share its whole premise: that fixing the balloon burst
+// LAST in an interval splits it into two independent halves. If that premise
+// were wrong, all three would be wrong together and agree perfectly. Their
+// individual bugs are scheduling bugs — A can iterate intervals in an order
+// that reads unwritten cells, B can do the same through arithmetic that hides
+// which row it is touching, C cannot get the order wrong at all but can
+// confuse "computed 0" with "not computed" — and none of those is the premise.
+//
+// D IS THE ARM THAT ASSUMES NOTHING, and that is why it earns its O(n!). It
+// maintains the row of surviving balloons and pays each burst against whatever
+// is adjacent at the moment of bursting, so the coupling that makes the
+// FORWARD framing fail — removing a balloon makes its neighbours adjacent —
+// is present in it by construction rather than reasoned around. Every
+// agreement between D and the others on n <= 8 is a check of the reframing
+// itself, not of its implementation.
+//
+// P2 AND P6 ARE THE ONES NO ARM COMPUTES. Each relates SEPARATE invocations
+// to one another, so each catches a fault that is symmetric across every arm —
+// the failure mode all-arms agreement is blind to.
+//
+//   P2, reversal: bursting is symmetric under reversing the row, because a
+//   balloon's pay depends on its two neighbours and not on which side they are
+//   on. Every arm walks the row in one fixed direction and none of them knows
+//   this. Measured: it fires on every one of the five falsifying mutations
+//   below, at ~1800-2100 of 3024 cases each.
+//
+//   P6, the feasible lower bound: the answer is a MAXIMUM over orders, so it
+//   is at least the total paid by any particular order. The harness bursts
+//   left-to-right, simulating the statement directly, and asserts the arms are
+//   never below it. This is the only property that specifically catches
+//   UNDER-maximisation — a truncated candidate loop, or a recurrence whose
+//   terms have gone negative — which is what a too-early table read produces.
+//
+// P5 IS NOT ONE OF THEM, AND IT LOOKS LIKE IT SHOULD BE. Monotonicity — with
+// non-negative values, raising one balloon's number cannot lower the answer —
+// reads like the strongest property here: it constrains how the answer must
+// MOVE under a perturbation, which no arm computes even implicitly. It is also
+// very nearly a TAUTOLOGY over the mutations that can actually be made.
+//
+// The reason is structural. The computed answer is a maximum over sums of
+// products of non-negative values, and ANY expression of that shape is
+// monotone in each of its inputs — the maximum of monotone functions is
+// monotone. So monotonicity follows from the SHAPE of the computation and not
+// from its correctness, and every single-line mutation preserves the shape:
+// swapping indices, truncating the candidate loop, reading an unwritten cell,
+// duplicating a boundary factor. All of them stay monotone while being wrong.
+//
+// Measured: P5 fired on NONE of the six single-line mutations, including one
+// written specifically to be antitone (subtracting the boundary product). That
+// one fails to break it because `best` starts at 0 and only ever moves up, so
+// negative terms are clamped away and the answer collapses to 0 — which is
+// monotone. Breaking P5 took TWO simultaneous mutations, subtracting the
+// boundary product AND lowering the initial `best` past 0 so negatives
+// propagate; then it fires on 1751 of 3024 cases. So P5 is falsifiable in
+// principle and unfalsifiable by any plausible single slip.
+//
+// It is kept because it costs one call and it does pin the non-negativity
+// clamp, which is a real invariant. It is NOT counted as an independent check,
+// and a kata that presented it as one would be overstating its battery.
+
+// ------------------------------------------------------------------- arm A
+
+fn coins_a(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    for i in 0..n { a.push(nums[i]); }
+    a.push(1);
+
+    let w = n + 2;
+    let mut dp: Vec[Vec[i64]] = Vec.new();
+    for i in 0..w {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..w { row.push(0); }
+        dp.push(row);
+    }
+    for len in 2..w {
+        for i in 0..(w - len) {
+            let j = i + len;
+            let mut best = 0;
+            for k in (i + 1)..j {
+                let coins = dp[i][k] + dp[k][j] + a[i] * a[k] * a[j];
+                if coins > best { best = coins; }
+            }
+            dp[i][j] = best;
+        }
+    }
+    return dp[0][n + 1];
+}
+
+// ------------------------------------------------------------------- arm B
+
+fn coins_b(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    for i in 0..n { a.push(nums[i]); }
+    a.push(1);
+
+    let w = n + 2;
+    let mut dp: Vec[i64] = Vec.new();
+    for i in 0..(w * w) { dp.push(0); }
+
+    for len in 2..w {
+        for i in 0..(w - len) {
+            let j = i + len;
+            let ai = a[i];
+            let aj = a[j];
+            let base = i * w;
+            let mut best = 0;
+            for k in (i + 1)..j {
+                let coins = dp[base + k] + dp[k * w + j] + ai * a[k] * aj;
+                if coins > best { best = coins; }
+            }
+            dp[base + j] = best;
+        }
+    }
+    return dp[n + 1];
+}
+
+// ------------------------------------------------------------------- arm C
+
+struct Memo {
+    a: Vec[i64],
+    w: i64,
+    seen: Vec[Option[i64]],
+}
+
+impl Memo {
+    fn solve(mut ref self, i: i64, j: i64) -> i64 {
+        if j - i < 2 { return 0; }
+        let slot = i * self.w + j;
+        match self.seen[slot] {
+            Some(v) => { return v; }
+            None => {}
+        }
+        let mut best = 0;
+        let mut k = i + 1;
+        while k < j {
+            let coins = self.solve(i, k) + self.solve(k, j)
+                      + self.a[i] * self.a[k] * self.a[j];
+            if coins > best { best = coins; }
+            k = k + 1;
+        }
+        self.seen[slot] = Some(best);
+        return best;
+    }
+}
+
+fn coins_c(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    for i in 0..n { a.push(nums[i]); }
+    a.push(1);
+    let w = n + 2;
+    let mut seen: Vec[Option[i64]] = Vec.new();
+    for i in 0..(w * w) { seen.push(None); }
+    let mut m = Memo { a: a, w: w, seen: seen };
+    return m.solve(0, n + 1);
+}
+
+// ------------------------------------------------------------------- arm D
+
+fn brute(alive: Vec[i64]) -> i64 {
+    let n = alive.len();
+    if n == 0 { return 0; }
+    let mut best = 0;
+    for i in 0..n {
+        let mut left = 1;
+        if i > 0 { left = alive[i - 1]; }
+        let mut right = 1;
+        if i + 1 < n { right = alive[i + 1]; }
+        let paid = left * alive[i] * right;
+        let mut rest: Vec[i64] = Vec.new();
+        for j in 0..n {
+            if j != i { rest.push(alive[j]); }
+        }
+        let total = paid + brute(rest);
+        if total > best { best = total; }
+    }
+    return best;
+}
+
+fn coins_d(nums: ref Vec[i64]) -> i64 {
+    let mut alive: Vec[i64] = Vec.new();
+    for i in 0..nums.len() { alive.push(nums[i]); }
+    return brute(alive);
+}
+
+// ------------------------------------------------------------------- arm E
+
+// Arm B's recurrence and schedule behind a generic bounded table. Adds a
+// MONOMORPHISATION surface, not an algorithmic one -- it cannot disagree with
+// B for a reason about burst balloons, only for a reason about generics.
+
+trait Zero {
+    fn zero() -> Self;
+}
+
+impl Zero for i64 {
+    fn zero() -> i64 { return 0; }
+}
+
+struct Table[T] {
+    cells: Vec[T],
+    w: i64,
+}
+
+impl[T: Zero + Copy] Table[T] {
+    fn build(w: i64) -> Table[T] {
+        let mut cells: Vec[T] = Vec.new();
+        for i in 0..(w * w) { cells.push(T.zero()); }
+        return Table { cells: cells, w: w };
+    }
+    fn get(ref self, i: i64, j: i64) -> T {
+        return self.cells[i * self.w + j];
+    }
+    fn set(mut ref self, i: i64, j: i64, v: T) {
+        self.cells[i * self.w + j] = v;
+    }
+}
+
+fn coins_e(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    for i in 0..n { a.push(nums[i]); }
+    a.push(1);
+    let w = n + 2;
+    let mut dp: Table[i64] = Table.build(w);
+    for len in 2..w {
+        for i in 0..(w - len) {
+            let j = i + len;
+            let mut best = 0;
+            for k in (i + 1)..j {
+                let coins = dp.get(i, k) + dp.get(k, j) + a[i] * a[k] * a[j];
+                if coins > best { best = coins; }
+            }
+            dp.set(i, j, best);
+        }
+    }
+    return dp.get(0, n + 1);
+}
+
+// --------------------------------------------------------------- properties
+
+// Burst strictly left to right, simulating the statement. One feasible order,
+// so its total is a valid LOWER bound on the maximum.
+fn left_to_right(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut alive: Vec[i64] = Vec.new();
+    for i in 0..n { alive.push(nums[i]); }
+    let mut total = 0;
+    while alive.len() > 0 {
+        let m = alive.len();
+        let mut right = 1;
+        if m > 1 { right = alive[1]; }
+        // The leftmost balloon always has the sentinel on its left.
+        total += 1 * alive[0] * right;
+        let mut rest: Vec[i64] = Vec.new();
+        for j in 1..m { rest.push(alive[j]); }
+        alive = rest;
+    }
+    return total;
+}
+
+fn reversed(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = n;
+    while i > 0 {
+        r.push(nums[i - 1]);
+        i = i - 1;
+    }
+    return r;
+}
+
+fn sum_of(nums: ref Vec[i64]) -> i64 {
+    let mut s = 0;
+    for i in 0..nums.len() { s += nums[i]; }
+    return s;
+}
+
+fn max_of(nums: ref Vec[i64]) -> i64 {
+    // At least 1, because the sentinels are 1 and bound the boundary terms.
+    let mut m = 1;
+    for i in 0..nums.len() {
+        if nums[i] > m { m = nums[i]; }
+    }
+    return m;
+}
+
+fn make_row(n: i64, seed: i64, cap: i64) -> Vec[i64] {
+    let mut state = seed;
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        if state < 0 { state = -state; }
+        v.push(state % cap);
+    }
+    return v;
+}
+
+fn main() {
+    let mut cases = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6 = 0;
+    let mut p7 = 0;
+
+    let mut n = 0;
+    while n <= 8 {
+        let mut cap = 2;
+        while cap <= 20 {
+            let mut round = 0;
+            while round < 48 {
+                let seed = 7919 * (n * 37 + cap) + round * 7717 + 1;
+                let nums = make_row(n, seed, cap);
+
+                let ra = coins_a(nums);
+                let rb = coins_b(nums);
+                let rc = coins_c(nums);
+
+                // P1 — the four arms agree. D only for n small enough that
+                // n! is affordable; A/B/C on every case.
+                let re = coins_e(nums);
+                if ra != rb or ra != rc or ra != re { p1 += 1; }
+                if n <= 7 {
+                    if coins_d(nums) != ra { p1 += 1; }
+                }
+
+                // P2 — reversal invariance. No arm computes this.
+                let rev = reversed(nums);
+                if coins_a(rev) != ra { p2 += 1; }
+
+                // P3 — a lone balloon is paid 1 * x * 1.
+                if n == 1 {
+                    if ra != nums[0] { p3 += 1; }
+                }
+
+                // P4 — two balloons: burst one, the other is then flanked by
+                // both sentinels. a*b + max(a, b), from the statement.
+                if n == 2 {
+                    let mut bigger = nums[0];
+                    if nums[1] > bigger { bigger = nums[1]; }
+                    if ra != nums[0] * nums[1] + bigger { p4 += 1; }
+                }
+
+                // P5 — monotonicity under raising one entry. No arm computes
+                // this; it constrains how the answer MOVES.
+                if n > 0 {
+                    let idx = round % n;
+                    let mut bumped: Vec[i64] = Vec.new();
+                    for i in 0..n { bumped.push(nums[i]); }
+                    bumped[idx] = bumped[idx] + 1 + (round % 5);
+                    if coins_a(bumped) < ra { p5 += 1; }
+                }
+
+                // P6 — the maximum is at least any feasible order's total.
+                if ra < left_to_right(nums) { p6 += 1; }
+
+                // P7 — every burst pays at most M * nums[i] * M, so the total
+                // is at most M^2 * sum. A loose bound, but it fails loudly for
+                // an arm that double-counts a balloon.
+                let m = max_of(nums);
+                if ra > m * m * sum_of(nums) { p7 += 1; }
+
+                cases += 1;
+                round = round + 1;
+            }
+            cap = cap + 3;
+        }
+        n = n + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 reversal failures {p2}");
+    println(f"P3 single-balloon failures {p3}");
+    println(f"P4 two-balloon closed-form failures {p4}");
+    println(f"P5 monotonicity failures {p5}");
+    println(f"P6 feasible-lower-bound failures {p6}");
+    println(f"P7 upper-bound failures {p7}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

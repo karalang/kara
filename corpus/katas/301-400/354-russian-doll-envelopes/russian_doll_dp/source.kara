@@ -1,0 +1,57 @@
+// LeetCode #354: Russian Doll Envelopes -- the quadratic dynamic program.
+//
+// Sort by width, then `best[i]` is the longest chain that ends with envelope
+// i: one more than the best chain ending at any envelope that fits inside it.
+// Sorting by width alone is enough here, because the fit test checks both
+// sides strictly, so an equal-width envelope never counts as inside.
+
+fn max_envelopes(envelopes: ref Vec[(i64, i64)]) -> i64 {
+    let mut order = envelopes.clone();
+    order.sort();
+    let n = order.len();
+    let mut best: Vec[i64] = vec![1; n];
+    let mut answer = 0;
+    for i in 0..n {
+        let (wi, hi) = order[i];
+        for j in 0..i {
+            let (wj, hj) = order[j];
+            if wj < wi and hj < hi and best[j] + 1 > best[i] {
+                best[i] = best[j] + 1;
+            }
+        }
+        answer = answer.max(best[i]);
+    }
+    answer
+}
+
+fn show(label: String, envelopes: Vec[(i64, i64)]) {
+    println(f"{label}: {max_envelopes(envelopes)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("example 1", vec![(5, 4), (6, 4), (6, 7), (2, 3)]);
+    show("example 2", vec![(1, 1), (1, 1), (1, 1)]);
+    // Edge cases.
+    show("one envelope", vec![(7, 7)]);
+    show("same width, rising heights", vec![(3, 1), (3, 2), (3, 3), (3, 4)]);
+    show("same height, rising widths", vec![(1, 5), (2, 5), (3, 5)]);
+    show("a clean chain", vec![(1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]);
+    show("a chain given backwards", vec![(5, 5), (4, 4), (3, 3), (2, 2), (1, 1)]);
+    show("wide but short", vec![(10, 1), (1, 10), (2, 2), (3, 3)]);
+    show("ties break the chain", vec![(1, 2), (2, 3), (2, 4), (3, 5), (3, 4), (4, 6)]);
+
+    // A long run: 3,000 envelopes from a linear congruential generator, with
+    // widths and heights in 1..=1500 so that ties are common. The O(n^2) arm
+    // has to finish it under the interpreter, which caps the size.
+    let mut seed: i64 = 12345;
+    let mut big: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..3000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let w = seed % 1500 + 1;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let h = seed % 1500 + 1;
+        big.push((w, h));
+    }
+    println(f"3000 random envelopes: {max_envelopes(big)}");
+}

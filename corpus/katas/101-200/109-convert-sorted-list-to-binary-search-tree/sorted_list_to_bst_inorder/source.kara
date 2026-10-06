@@ -1,0 +1,96 @@
+// LeetCode #109: Convert Sorted Linked List to Binary Search Tree — inorder simulation with
+// a list cursor (O(1) extra space beyond recursion).
+//
+// The clever route that never materializes an array. First count the list length. Then build
+// the BST by an INORDER simulation: a subtree covering `[lo, hi]` list positions builds its
+// left subtree first (consuming the first half of the list), so that when it is the current
+// node's turn the shared list cursor is sitting exactly on this subtree's root value — read it,
+// advance the cursor one node, then build the right subtree from the rest. Because the list is
+// sorted (= the BST's inorder), consuming it left to right hands each node to the right place,
+// and the same `mid = (lo + hi) / 2` as the ★ builds the byte-identical balanced tree. The
+// cursor threads through the recursion as a `mut ref Option[ListNode]`, advanced in place
+// (the writeback surface hardened by kara `89fd514`). Node types mirror the ★ — `shared struct
+// ListNode` / `shared struct TreeNode`, both RC.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn count(head: ref Option[ListNode]) -> i64 {
+    match head {
+        None => 0,
+        Some(n) => 1 + count(n.next),
+    }
+}
+
+// Build the subtree covering list positions [lo, hi]; `cur` is the shared cursor into the
+// list, advanced one node exactly when this subtree's root value is consumed (inorder order).
+fn build_inorder(lo: i64, hi: i64, cur: mut ref Option[ListNode]) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let left = build_inorder(lo, mid - 1, cur);
+    // The cursor now sits on this subtree's root. Read its value and advance.
+    let mut v = 0;
+    match cur {
+        None => {}
+        Some(n) => {
+            v = n.val;
+            cur = n.next;
+        }
+    }
+    let node = TreeNode { val: v, left: left, right: None };
+    node.right = build_inorder(mid + 1, hi, cur);
+    Some(node)
+}
+
+fn sorted_list_to_bst(head: Option[ListNode]) -> Option[TreeNode] {
+    let n = count(head);
+    let mut cur = head;
+    build_inorder(0, n - 1, mut cur)
+}
+
+fn ser(node: Option[TreeNode], acc: mut ref i64) {
+    match node {
+        None => { acc = (acc * 131 + 1) % 1000000007; }
+        Some(n) => {
+            acc = (acc * 131 + (n.val + 2)) % 1000000007;
+            ser(n.left, acc);
+            ser(n.right, acc);
+        }
+    }
+}
+
+fn build_list(len: i64, off: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = len - 1;
+    while i >= 0 {
+        head = Some(ListNode { val: off + 1 + i, next: head });
+        i = i - 1;
+    }
+    head
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        let len = 8 + t;
+        let head = build_list(len, t);
+        let root = sorted_list_to_bst(head);
+        let mut s = 0;
+        ser(root, mut s);
+        acc = (acc * 1000003 + s) % 1000000007;
+        println(f"list {t}: len {len} sig {s}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

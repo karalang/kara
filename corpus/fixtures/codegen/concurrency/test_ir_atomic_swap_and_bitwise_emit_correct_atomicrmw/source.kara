@@ -1,0 +1,12 @@
+
+par struct B { v: Atomic[i64] }
+impl B {
+    fn a(ref self) -> i64 { self.v.fetch_and(6, MemoryOrdering.SeqCst) }
+    fn o(ref self) -> i64 { self.v.fetch_or(1, MemoryOrdering.SeqCst) }
+    fn x(ref self) -> i64 { self.v.fetch_xor(2, MemoryOrdering.SeqCst) }
+    fn s(ref self) -> i64 { self.v.swap(9, MemoryOrdering.SeqCst) }
+}
+fn main() {
+    let b = B { v: Atomic.new(7) };
+    let _ = b.a(); let _ = b.o(); let _ = b.x(); let _ = b.s();
+}

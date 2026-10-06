@@ -1,0 +1,21 @@
+
+struct Counter { items: Vec[String], base: i64 }
+impl Counter {
+    fn total(ref self) -> i64 {
+        let mut t = self.base;
+        for s in self.items.iter() { t = t + s.len(); };
+        return t;
+    }
+}
+fn make_counter(tag: i64) -> Counter {
+    let mut c = Counter { items: Vec.new(), base: tag };
+    c.items.push("first field string padded well beyond thirty-six bytes ok");
+    c.items.push("second field string padded well beyond thirty-six byte");
+    return c;
+}
+fn main() {
+    let a = make_counter(100_i64);
+    println(a.total());
+    let b = make_counter(200_i64);
+    println(b.total());
+}

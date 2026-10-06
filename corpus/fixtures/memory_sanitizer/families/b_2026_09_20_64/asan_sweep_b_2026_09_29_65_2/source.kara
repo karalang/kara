@@ -1,0 +1,5 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn q2(t: Option[S], c: bool) -> i64 { if c { let u = match t { Option.Some(v) => v, n => n.unwrap() }; return u.id }; println("q2"); return 1 }
+fn main() { let r = q2(Option.Some(mks(8)), false); println(f"r{r}"); println("end") }

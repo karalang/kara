@@ -1,0 +1,149 @@
+// LeetCode 248 — Strobogrammatic Number III. (Premium.)
+//
+// Count the strobogrammatic numbers in [low, high], both given as decimal
+// strings with no leading zeros.
+//
+// The generator is #247's, unchanged: build middle-outward, wrapping a legal
+// pair around the strobogrammatic numbers of length k-2, with only the
+// OUTERMOST layer barring a leading zero (which is why `n` rides along beside
+// `k`). What #248 adds is the range, and the range is where the interesting
+// decision is.
+//
+// THE RANGE TEST IS A STRING COMPARE, NOT A NUMERIC ONE. Every candidate this
+// enumerates for a given length HAS that length, and so does the bound it is
+// compared against — and for equal-length decimal strings without leading
+// zeros, lexicographic order IS numeric order. So `s < low` needs no parse.
+// That matters beyond tidiness: LeetCode allows bounds up to 15 digits, and a
+// solution that parses to i64 quietly inherits that ceiling. Comparing the
+// digits keeps the algorithm indifferent to how long the bounds are.
+//
+// Only the two boundary lengths need testing at all. A candidate whose length
+// sits strictly between len(low) and len(high) is in range by construction —
+// more digits than low, fewer than high — so it is counted without comparison.
+
+fn build(k: i64, n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if k == 0 {
+        out.push("");
+        return out;
+    }
+    if k == 1 {
+        out.push("0");
+        out.push("1");
+        out.push("8");
+        return out;
+    }
+
+    let mut pair_a: Vec[String] = Vec.new();
+    let mut pair_b: Vec[String] = Vec.new();
+    pair_a.push("0"); pair_b.push("0");
+    pair_a.push("1"); pair_b.push("1");
+    pair_a.push("6"); pair_b.push("9");
+    pair_a.push("8"); pair_b.push("8");
+    pair_a.push("9"); pair_b.push("6");
+
+    let inner = build(k - 2, n);
+    let mut i = 0;
+    while i < inner.len() {
+        let mut p = 0;
+        while p < 5 {
+            if pair_a[p] == "0" and k == n {
+                p = p + 1;
+            } else {
+                let mut s: String = pair_a[p].clone();
+                s.push_str(inner[i]);
+                s.push_str(pair_b[p]);
+                out.push(s);
+                p = p + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn strobogrammatic(n: i64) -> Vec[String] {
+    return build(n, n);
+}
+
+// Lexicographic compare of two equal-length digit strings: -1 / 0 / 1.
+// Written on `bytes()` (an O(1)-indexable `Slice[u8]` view, not a copy) so the
+// comparison is a plain byte walk.
+fn cmp_digits(a: ref String, b: ref String) -> i64 {
+    let xs = a.bytes();
+    let ys = b.bytes();
+    if xs.len() != ys.len() {
+        if xs.len() < ys.len() { return -1; }
+        return 1;
+    }
+    let mut i = 0;
+    while i < xs.len() {
+        if xs[i] != ys[i] {
+            if xs[i] < ys[i] { return -1; }
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn count_in_range(low: ref String, high: ref String) -> i64 {
+    let lo_len = low.bytes().len();
+    let hi_len = high.bytes().len();
+    if lo_len > hi_len {
+        return 0;
+    }
+    if lo_len == hi_len and cmp_digits(low, high) > 0 {
+        return 0;
+    }
+
+    let mut total = 0;
+    let mut len = lo_len;
+    while len <= hi_len {
+        let cands = strobogrammatic(len);
+        let mut i = 0;
+        while i < cands.len() {
+            let s = ref cands[i];
+            let mut keep = true;
+            if len == lo_len and cmp_digits(s, low) < 0 {
+                keep = false;
+            }
+            if len == hi_len and cmp_digits(s, high) > 0 {
+                keep = false;
+            }
+            if keep {
+                total = total + 1;
+            }
+            i = i + 1;
+        }
+        len = len + 1;
+    }
+    return total;
+}
+
+fn main() {
+    let mut lows: Vec[String] = Vec.new();
+    let mut highs: Vec[String] = Vec.new();
+    lows.push("50");   highs.push("100");
+    lows.push("0");    highs.push("0");
+    lows.push("0");    highs.push("9");
+    lows.push("1");    highs.push("1");
+    lows.push("8");    highs.push("8");
+    lows.push("0");    highs.push("100");
+    lows.push("10");   highs.push("1000");
+    lows.push("1");    highs.push("10000");
+    lows.push("100");  highs.push("999");
+    lows.push("11");   highs.push("69");
+    lows.push("69");   highs.push("69");
+    lows.push("609");  highs.push("906");
+    lows.push("2");    highs.push("3");
+    lows.push("1000"); highs.push("99999");
+    lows.push("6");    highs.push("9");
+
+    let mut c = 0;
+    while c < lows.len() {
+        let n = count_in_range(lows[c], highs[c]);
+        println(f"low={lows[c]} high={highs[c]} count={n}");
+        c = c + 1;
+    }
+}

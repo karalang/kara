@@ -1,0 +1,130 @@
+// LeetCode #51: N-Queens — three integer bitmasks (the constant-space, no-array lens).
+//
+// Same row-by-row DFS and the SAME canonical column order as the ★ file
+// ([`marker_arrays`](marker_arrays.kara)) and [`conflict_scan`](conflict_scan.kara), so it
+// emits the identical solution listing. The axis that changes is the representation of the
+// three occupancy sets: instead of ★'s three `Vec[bool]` arrays or the scan's re-derivation
+// from `queens`, this variant packs each set into the BITS of a single i64 and tests /
+// updates them with bit ops — the classic N-Queens bitmask, and the fastest of the three.
+//
+//   - `cols`  — bit c set ⇒ column c taken.
+//   - `diag1` — the ↘ diagonals, keyed by `row + col`; bit (row+col) set.
+//   - `diag2` — the ↙ diagonals, keyed by `row - col + (n-1)`; bit (row-col+n-1) set.
+//
+// A candidate column `c` in the current `row` is legal iff NONE of its three bits is set:
+//
+//     let bit_c  = 1 << c;
+//     let bit_d1 = 1 << (row + c);
+//     let bit_d2 = 1 << (row - c + (n - 1));
+//     legal  ⇔  (cols & bit_c) == 0  and  (diag1 & bit_d1) == 0  and  (diag2 & bit_d2) == 0
+//
+// Descending ORs those three bits in; on the way back up there is nothing to clear — each
+// recursive call receives the masks BY VALUE (i64 is a plain copied scalar), so the parent's
+// masks are untouched and "undo" is automatic. That is the payoff over ★: no set-then-clear
+// bracketing and no side arrays at all — the three integers ARE the whole search state. The
+// `queens` path is still threaded as a `mut ref` so a completed row assignment can be
+// snapshotted into a board; only the legality/occupancy machinery differs.
+//
+// Widths: n ≤ 9, so `row + c ≤ 16` and every shift stays far inside i64 — no overflow, no
+// need for u64. i64 throughout for corpus uniformity.
+
+fn place(
+    n: i64,
+    row: i64,
+    cols: i64,
+    diag1: i64,
+    diag2: i64,
+    queens: mut ref Vec[i64],
+    out: mut ref Vec[Vec[String]],
+) {
+    if row == n {
+        out.push(build_board(queens, n));
+        return;
+    }
+    let mut c = 0;
+    while c < n {
+        let bit_c = 1 << c;
+        let bit_d1 = 1 << (row + c);
+        let bit_d2 = 1 << (row - c + (n - 1));
+        if (cols & bit_c) == 0 and (diag1 & bit_d1) == 0 and (diag2 & bit_d2) == 0 {
+            queens.push(c);
+            // Masks passed by value with this column's bits OR'd in — the parent's copies
+            // stay as they were, so there is nothing to clear on return.
+            place(n, row + 1, cols | bit_c, diag1 | bit_d1, diag2 | bit_d2, queens, out);
+            queens.pop();
+        }
+        c = c + 1;
+    }
+}
+
+// Render one solved placement (queens[r] = column of the queen in row r) as n board rows.
+fn build_board(queens: ref Vec[i64], n: i64) -> Vec[String] {
+    let mut board: Vec[String] = Vec.new();
+    let mut r = 0;
+    while r < n {
+        let qc = queens[r];
+        let mut row: String = "";
+        let mut c = 0;
+        while c < n {
+            if c == qc {
+                row.push('Q');
+            } else {
+                row.push('.');
+            }
+            c = c + 1;
+        }
+        board.push(row);
+        r = r + 1;
+    }
+    board
+}
+
+fn solve(n: i64) -> Vec[Vec[String]] {
+    let mut queens: Vec[i64] = Vec.new();
+    let mut out: Vec[Vec[String]] = Vec.new();
+    place(n, 0, 0, 0, 0, mut queens, mut out);
+    out
+}
+
+// ---- test harness (identical to the ★ file) -------------------------------
+
+fn report(n: i64) {
+    let sols = solve(n);
+    let count = sols.len();
+    println(f"n={n} -> {count}");
+    let mut s = 0;
+    while s < count {
+        let board = ref sols[s];
+        let rows = board.len();
+        let mut r = 0;
+        while r < rows {
+            println(board[r]);
+            r = r + 1;
+        }
+        println("--");
+        s = s + 1;
+    }
+    println("====");
+}
+
+fn count_only(n: i64) -> i64 {
+    solve(n).len()
+}
+
+fn main() {
+    report(1);
+    report(2);
+    report(3);
+    report(4);
+    report(5);
+    report(6);
+
+    let mut s: String = "counts:";
+    let mut n = 1;
+    while n <= 9 {
+        s.push(' ');
+        s.push_str(f"{count_only(n)}");
+        n = n + 1;
+    }
+    println(s);
+}

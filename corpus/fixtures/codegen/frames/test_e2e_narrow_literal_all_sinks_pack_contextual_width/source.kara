@@ -1,0 +1,58 @@
+
+fn total(v: Vec[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+fn total_ref(v: ref Vec[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+fn total_slice(v: Slice[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+fn make() -> Vec[i32] {
+    return [10, 20, 30];
+}
+
+struct Holder {
+    v: Vec[i32],
+}
+
+impl Holder {
+    fn tally(self, extra: Vec[i32]) -> i64 {
+        let mut t = 0;
+        for x in self.v {
+            t = t + (x as i64);
+        }
+        for x in extra {
+            t = t + (x as i64);
+        }
+        return t;
+    }
+}
+
+fn main() {
+    println(total([10, 20, 30]));
+    println(total_ref([10, 20, 30]));
+    println(total_slice([10, 20, 30]));
+    println(total([7; 3]));
+    let m = make();
+    println(m[2]);
+    let h = Holder { v: [1, 2, 3] };
+    println(h.tally([4, 5, 6]));
+    let f: Vec[f64] = [1, 2, 3];
+    println(f[1]);
+}

@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha");
+    v.push("beta");
+    v[0] = "gamma";
+    println(v[0]);
+    println(v[1]);
+}

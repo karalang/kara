@@ -1,0 +1,83 @@
+
+enum T { A((String, String)), B }
+enum U { A((String, i64)), B }
+struct H { p: (String, String) }
+
+fn mk(n: i64) -> T {
+    return T.A((f"b1426-left-aaaaaaaaaaaaaaaa-{n}", f"b1426-right-bbbbbbbbbbbb-{n}"));
+}
+fn mku(n: i64) -> U { return U.A((f"b1426-mixed-cccccccccccccccc-{n}", n)); }
+
+fn take(p: (String, String)) -> i64 { return p.0.len() + p.1.len(); }
+fn takeu(p: (String, i64)) -> i64 { return p.0.len() + p.1; }
+fn takes(s: String) -> i64 { return s.len(); }
+
+struct Sink { n: i64 }
+impl Sink { fn eat(mut ref self, p: (String, String)) -> i64 { self.n = self.n + 1; return p.0.len(); } }
+
+fn main() {
+    let mut s = Sink { n: 0 };
+    let mut i: i64 = 0;
+    while i < 2 {
+        let e1: T = mk(i);
+        match e1 {
+            T.A(p) => { println(f"freefn:{take(p)}"); }
+            T.B => {}
+        }
+
+        match mk(i) {
+            T.A(p) => { println(f"freshtemp:{take(p)}"); }
+            T.B => {}
+        }
+
+        let e2: T = mk(i);
+        if let T.A(p) = e2 { println(f"iflet:{take(p)}"); }
+
+        let e3: T = mk(i);
+        match e3 {
+            T.A(p) => { println(f"methodarg:{s.eat(p)}"); }
+            T.B => {}
+        }
+
+        let e4: U = mku(i);
+        match e4 {
+            U.A(p) => { println(f"mixed:{takeu(p)}"); }
+            U.B => {}
+        }
+
+        let e5: T = mk(i);
+        match e5 {
+            T.A(p) => { println(f"readonly:{p.1.len()}"); }
+            T.B => {}
+        }
+
+        let e6: T = mk(i);
+        match e6 {
+            T.A(p) => { let q = p; println(f"rebind:{take(q)}"); }
+            T.B => {}
+        }
+
+        let e7: T = mk(i);
+        match e7 {
+            T.A(p) => { let h = H { p: p }; println(f"structlit:{h.p.0.len()}"); }
+            T.B => {}
+        }
+
+        let e8: T = mk(i);
+        let mut v: Vec[(String, String)] = Vec.new();
+        match e8 {
+            T.A(p) => { v.push(p); }
+            T.B => {}
+        }
+        println(f"push:{v.len()}");
+
+        let e9: T = mk(i);
+        match e9 {
+            T.A((a, b)) => { println(f"destructure:{takes(a) + takes(b)}"); }
+            T.B => {}
+        }
+
+        i = i + 1;
+    }
+    println(f"sink:{s.n}");
+}

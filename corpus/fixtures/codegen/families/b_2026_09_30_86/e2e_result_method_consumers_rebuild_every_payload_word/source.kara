@@ -1,0 +1,26 @@
+
+struct S { v: String, n: i64 }
+struct W { a: i64, b: i64, c: i64, d: i64 }
+fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
+fn mkr(k: i64) -> Result[S, i64] { Result.Ok(S { v: mk(k), n: k }) }
+fn mke(k: i64) -> Result[i64, S] { Result.Err(S { v: mk(k), n: k }) }
+fn mkw(k: i64) -> Result[W, i64] { Result.Ok(W { a: k, b: k + 1, c: k + 2, d: k + 3 }) }
+fn main() {
+    let r = mkr(1);
+    let g = r.unwrap();
+    println(f"{g.n} {g.v.len()}");
+    println(mkr(2).unwrap().n);
+    let g3 = mkr(3).expect("m");
+    println(g3.n);
+    let e = mke(4).unwrap_err();
+    println(e.n);
+    let u = mkr(5).unwrap_or(S { v: mk(0), n: 0 });
+    println(u.n);
+    let w = mkw(6).unwrap();
+    println(f"{w.a} {w.b} {w.c} {w.d}");
+    let wd = mkw(7).map(|x| x.d);
+    println(wd.unwrap());
+    let w8 = mkw(8).unwrap_or(W { a: 0, b: 0, c: 0, d: 0 });
+    println(w8.d);
+    println("end");
+}

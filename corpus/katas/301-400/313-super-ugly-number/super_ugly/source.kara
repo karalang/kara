@@ -1,0 +1,118 @@
+// LeetCode 313 — Super Ugly Number
+//
+// A SUPER UGLY NUMBER is a positive integer all of whose prime factors are
+// drawn from a given list `primes`. The first one is 1 (it has no prime
+// factors at all, so the condition holds vacuously). Given n and `primes`,
+// return the nth super ugly number.
+//
+//     n = 12, primes = [2, 7, 13, 19]  ->  32
+//     1, 2, 4, 7, 8, 13, 14, 16, 19, 26, 28, 32
+//
+// THE ARM: a k-way merge of k streams that are defined in terms of the
+// sequence being merged.
+//
+// The set of super ugly numbers is the closure of {1} under multiplication by
+// the primes. So every super ugly number x > 1 is p * u for some p in `primes`
+// and some SMALLER super ugly number u — smaller because every prime is at
+// least 2. That is the whole structure, and it says the answer is a merge:
+//
+//     stream i  =  primes[i] * u[0],  primes[i] * u[1],  primes[i] * u[2], ...
+//
+// Each stream is sorted, because `u` is sorted and multiplying by a positive
+// constant preserves order. The union of the k streams is exactly the super
+// ugly numbers greater than 1. Merging k sorted streams is routine.
+//
+// WHAT IS NOT ROUTINE is that the streams are defined over `u`, which is the
+// output of the merge. That self-reference is well founded rather than
+// circular: producing u[m] consumes some u[j] with primes[i] * u[j] = u[m],
+// and since primes[i] >= 2 we have u[j] < u[m], so j < m. Every element the
+// merge reads was already written. The merge feeds on its own prefix and
+// never needs a value it has not produced.
+//
+// THE TIE IS THE CRUX. Two streams can offer the same value — 6 is both
+// 2 * 3 and 3 * 2, and with primes = [2, 3] both streams offer it at once.
+// Emitting it once but advancing only the stream that "won" leaves the other
+// stream still holding 6, which it will then offer again as the next value,
+// and 6 is emitted twice. So the tie must advance EVERY pointer that produced
+// the minimum, not the first one found. That is the two-pass shape below: one
+// pass to find the minimum, a second to advance all the pointers that match
+// it. Collapsing the two passes into one — advancing as you scan — is subtly
+// wrong, because a pointer advanced early changes the candidate a later
+// comparison sees.
+//
+// The `_canonical` arm is the same merge with the tie made IMPOSSIBLE rather
+// than handled, and the `_brute` arm is the one that assumes none of this.
+
+fn nth_super_ugly(n: i64, primes: ref Vec[i64]) -> i64 {
+    if n <= 0 { return 0; }
+    let k = primes.len();
+    // With no primes at all, 1 is the only super ugly number.
+    if k == 0 { return 1; }
+
+    let mut ugly: Vec[i64] = Vec.new();
+    ugly.push(1);
+
+    // idx[i] is how far stream i has been consumed: the next value it offers
+    // is primes[i] * ugly[idx[i]].
+    let mut idx: Vec[i64] = Vec.new();
+    for i in 0..k { idx.push(0); }
+
+    while ugly.len() < n {
+        // Pass 1 — the minimum over the k stream heads.
+        let mut best = primes[0] * ugly[idx[0]];
+        for i in 1..k {
+            let c = primes[i] * ugly[idx[i]];
+            if c < best { best = c; }
+        }
+        // Pass 2 — advance EVERY stream that offered it, which is what keeps
+        // the output free of duplicates.
+        for i in 0..k {
+            if primes[i] * ugly[idx[i]] == best { idx[i] = idx[i] + 1; }
+        }
+        ugly.push(best);
+    }
+
+    return ugly[n - 1];
+}
+
+fn render(primes: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < primes.len() {
+        if i > 0 { s.push_str(","); }
+        s.push_str(primes[i].to_string());
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(n: i64, vals: Slice[i64]) {
+    let mut primes: Vec[i64] = Vec.new();
+    for v in vals { primes.push(v); }
+    println("n=" + n.to_string() + " " + render(primes) + " -> "
+        + nth_super_ugly(n, primes).to_string());
+}
+
+fn main() {
+    // The two examples from the LeetCode statement.
+    report(12, [2, 7, 13, 19]);
+    report(1, [2, 3, 5]);
+    // The classic ugly numbers are the primes [2,3,5] case, where ties are
+    // dense: 6, 10, 12, 15, 20, ... are each offered by two streams at once.
+    report(11, [2, 3, 5]);
+    report(20, [2, 3, 5]);
+    // One prime: the answer is a pure power, p^(n-1).
+    report(1, [7]);
+    report(6, [7]);
+    // Two primes that are far apart, so one stream dominates the low end.
+    report(15, [2, 101]);
+    // Many primes: the sequence starts out as almost every integer.
+    report(25, [2, 3, 5, 7, 11, 13]);
+    // Primes given out of ascending order — the answer is a property of the
+    // SET, so it must not depend on the order they arrive in.
+    report(20, [5, 2, 3]);
+    // A larger n, where the tie handling has had many chances to go wrong.
+    report(100, [2, 7, 13, 19]);
+}

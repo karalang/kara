@@ -1,0 +1,4 @@
+fn main() {
+         let r = Regex.compile("[0-9]+").unwrap();
+         println(r.replace_all("abc 123 def 456", "NUM"));
+     }

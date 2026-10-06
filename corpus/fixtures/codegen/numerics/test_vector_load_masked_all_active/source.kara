@@ -1,0 +1,9 @@
+
+fn main() {
+    let a: Array[i64, 4] = [5, 6, 7, 8];
+    let idx = Vector[i64, 4](0, 1, 2, 3);
+    let lim = Vector[i64, 4](9, 9, 9, 9);
+    let m = idx < lim;
+    let v = Vector[i64, 4].load_masked(a.as_slice(), m);
+    println(v[0]); println(v[1]); println(v[2]); println(v[3]);
+}

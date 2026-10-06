@@ -1,0 +1,10 @@
+
+const LOWER_A: char = 'a';
+const LOWER_Z: char = 'z';
+fn is_lower(c: char) -> i64 {
+    match c { LOWER_A..=LOWER_Z => 1, _ => 0 }
+}
+fn main() {
+    println(is_lower('m'));
+    println(is_lower('M'));
+}

@@ -1,0 +1,6 @@
+fn main() {
+         match Regex.compile("[invalid") {
+             Ok(r) => println("ok"),
+             Err(e) => println("err"),
+         }
+     }

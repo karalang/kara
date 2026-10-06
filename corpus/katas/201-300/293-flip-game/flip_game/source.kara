@@ -1,0 +1,83 @@
+// LeetCode 293 — Flip Game.
+//
+// A string of `+` and `-`. A move picks any two CONSECUTIVE `+` and flips both
+// to `-`. Return every state reachable in ONE move, in any order.
+//
+//     "++++"  ->  ["--++", "+--+", "++--"]
+//     "+"     ->  []            nothing to flip
+//     "----"  ->  []            no "++" anywhere
+//
+// The problem is small and the solution is a scan, which is exactly why it is
+// worth writing carefully: every interesting decision here is about STRINGS,
+// and Kara's String is UTF-8 with no O(1) indexing (design.md § Character
+// access). So the shape of the answer is decided before any logic:
+//
+//     let cs: Vec[char] = s.chars().collect();
+//
+// which design.md explicitly sanctions for repeated indexed access — "then
+// `chars[i]` is O(1) on a type where that is honest". Scanning `char_at(i)` in
+// a loop instead would be O(n) per read and O(n^2) overall, and the spec says
+// so at the same place. Kata #288 filed a bug claiming this idiom was forced by
+// a missing feature; it was not, and the row was closed as invalid. The idiom
+// is the recommended one.
+//
+// ONE ALLOCATION PER RESULT IS UNAVOIDABLE, since each answer is a separate
+// string, but the SCAN needs no allocation at all: walk the pairs once, and
+// build a string only where a flip is possible. `flip_game_rebuild.kara` does
+// the naive thing instead — rebuild a fresh Vec[char] per candidate position,
+// including at positions where no flip happens — to make the difference legible.
+
+fn next_states(s: ref String) -> Vec[String] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut out: Vec[String] = Vec.new();
+
+    let mut i = 0;
+    while i + 1 < n {
+        // A move needs two consecutive '+'. Everything else is skipped without
+        // touching the heap.
+        if cs[i] == '+' and cs[i + 1] == '+' {
+            let mut t = String.new();
+            let mut j = 0;
+            while j < n {
+                if j == i or j == i + 1 {
+                    t.push('-');
+                } else {
+                    t.push(cs[j]);
+                }
+                j = j + 1;
+            }
+            out.push(t);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn report(s: String) {
+    let states = next_states(s);
+    let mut line = String.new();
+    line.push_str(f"{s} -> [");
+    let mut i = 0;
+    while i < states.len() {
+        if i > 0 { line.push_str(", "); }
+        line.push_str(states[i]);
+        i = i + 1;
+    }
+    line.push_str("]");
+    println(line);
+}
+
+fn main() {
+    report("++++");        // expect: --++, +--+, ++--
+    report("+");           // expect: (none)
+    report("-");           // expect: (none)
+    report("");            // expect: (none)
+    report("----");        // expect: (none)
+    report("++");          // expect: --
+    report("+++");         // expect: --+, +--
+    report("+-+-+");       // expect: (none) — no two adjacent
+    report("++-++");       // expect: ---++, ++---
+    report("+++++");       // expect: four states, overlapping pairs
+    report("-++-");        // expect: ---- — only the middle pair qualifies
+}

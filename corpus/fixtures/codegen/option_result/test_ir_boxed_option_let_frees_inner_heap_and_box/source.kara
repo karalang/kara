@@ -1,0 +1,8 @@
+
+struct H { v: Vec[i64], a: i64, b: i64 }
+fn main() {
+    let mut vv: Vec[i64] = Vec.new();
+    vv.push(7_i64);
+    let o: Option[H] = Some(H { v: vv, a: 1, b: 2 });
+    println(0);
+}

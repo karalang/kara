@@ -1,0 +1,7 @@
+
+fn f(a: f16) -> f16 {
+    let v: Vector[f16, 4] = Vector[f16, 4](a, a, a, a);
+    let t = v.tanh();
+    t[0]
+}
+fn main() { println(f(6.0f16)); }

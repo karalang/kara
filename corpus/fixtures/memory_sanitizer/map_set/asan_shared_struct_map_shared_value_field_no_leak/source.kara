@@ -1,0 +1,15 @@
+
+shared struct Node { mut val: i64 }
+shared struct Owner { mut cache: Map[i64, Node] }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        let o = Owner { cache: Map.new() };
+        o.cache.insert(1, Node { val: 7 });
+        o.cache.insert(2, Node { val: 8 });
+        total = total + 1;
+        i = i + 1;
+    }
+    println(total.to_string());
+}

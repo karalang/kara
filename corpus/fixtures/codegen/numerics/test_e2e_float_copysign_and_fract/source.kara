@@ -1,0 +1,9 @@
+
+fn main() {
+    println((3.5f64).copysign(-1.0f64));
+    println((-3.5f64).copysign(1.0f64));
+    println((2.75f64).fract());
+    println((-2.75f64).fract());
+    println((5.0f64).fract());
+    println((0.1f64).fract());
+}

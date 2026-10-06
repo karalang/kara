@@ -1,0 +1,7 @@
+
+struct Counter { n: i64, impl invariant self.n >= 0 }
+impl Counter {
+    fn dec(mut ref self) { self.n = self.n - 1; }
+    pub fn drive(mut ref self) { self.dec(); }
+}
+fn main() { let mut c = Counter { n: 0 }; c.drive(); println(42); }

@@ -1,0 +1,91 @@
+// LeetCode #351: Android Unlock Patterns — the search without recursion.
+//
+// The star arm's search, with the call stack made explicit. path[d] is the
+// d-th key of the pattern being built and tried[d] the last key tried after
+// it, so backing up to depth d resumes the loop over next keys where it
+// stopped. The keys in the pattern are a bitmask, `used`.
+//
+// Every key is a start, as in the geometry arm; the line table is the star
+// arm's.
+//
+// O(9!) time in the worst case, O(9) space.
+
+fn line_table() -> Vec[i64] {
+    let mut over: Vec[i64] = Vec.filled(100, 0);
+    let lines = [(1, 3, 2), (4, 6, 5), (7, 9, 8), (1, 7, 4), (2, 8, 5), (3, 9, 6), (1, 9, 5), (3, 7, 5)];
+    for (a, b, mid) in lines {
+        over[a * 10 + b] = mid;
+        over[b * 10 + a] = mid;
+    }
+    return over;
+}
+
+fn number_of_patterns(m: i64, n: i64) -> i64 {
+    if m > n {
+        return 0;
+    }
+    let over = line_table();
+    let mut path: Vec[i64] = Vec.filled(10, 0);
+    let mut tried: Vec[i64] = Vec.filled(10, 0);
+    let mut total = 0;
+    for start in 1..10 {
+        path[1] = start;
+        tried[1] = 0;
+        let mut used = 1 << (start - 1);
+        let mut depth = 1;
+        if m <= 1 {
+            total += 1;
+        }
+        while depth > 0 {
+            let key = path[depth];
+            let mut next = tried[depth] + 1;
+            let mut found = 0;
+            if depth < n {
+                while next <= 9 {
+                    let mid = over[key * 10 + next];
+                    if used & (1 << (next - 1)) == 0 and (mid == 0 or used & (1 << (mid - 1)) != 0) {
+                        found = next;
+                        break;
+                    }
+                    next += 1;
+                }
+            }
+            if found == 0 {
+                used = used & ~(1 << (key - 1));
+                depth -= 1;
+            } else {
+                tried[depth] = found;
+                depth += 1;
+                path[depth] = found;
+                tried[depth] = 0;
+                used = used | (1 << (found - 1));
+                if depth >= m {
+                    total += 1;
+                }
+            }
+        }
+    }
+    return total;
+}
+
+fn main() {
+    // The examples from the problem statement.
+    println(f"m=1 n=1 -> {number_of_patterns(1, 1)}");
+    println(f"m=1 n=2 -> {number_of_patterns(1, 2)}");
+
+    // The patterns of each length on its own, and their sum.
+    let mut all = 0;
+    for k in 1..10 {
+        let c = number_of_patterns(k, k);
+        println(f"length {k}: {c}");
+        all += c;
+    }
+    println(f"lengths 1..9 one at a time: {all}");
+
+    // Ranges: every pattern, the classic lock screen's at least four keys, a
+    // range in the middle, and m > n, which has no patterns.
+    println(f"m=1 n=9 -> {number_of_patterns(1, 9)}");
+    println(f"m=4 n=9 -> {number_of_patterns(4, 9)}");
+    println(f"m=3 n=5 -> {number_of_patterns(3, 5)}");
+    println(f"m=9 n=1 -> {number_of_patterns(9, 1)}");
+}

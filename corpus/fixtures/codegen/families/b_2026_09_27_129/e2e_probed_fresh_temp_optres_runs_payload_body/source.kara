@@ -1,0 +1,38 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+fn mk2(i: i64) -> Option[S] { Some(mk(i)) }
+fn mkr(i: i64) -> Option[R] { Some(R { id: i }) }
+fn mkok(i: i64) -> Result[S, i64] { Ok(mk(i)) }
+fn mkerr(i: i64) -> Result[i64, S] { Err(mk(i)) }
+fn wrapo[T](x: T) -> Option[T] { Some(x) }
+struct F { n: i64 }
+impl F { fn mko(ref self, i: i64) -> Option[S] { Some(mk(i + self.n)) } }
+fn main() {
+    let a = mk2(1).is_some();
+    println(f"a{a}");
+    let b = mk2(2).is_none();
+    println(f"b{b}");
+    if mk2(3).is_some() { println("y3") }
+    let c = mkr(4).is_some();
+    println(f"c{c}");
+    let d = mkok(5).is_ok() and mkerr(6).is_err();
+    println(f"d{d}");
+    let e = mkok(7).is_err();
+    println(f"e{e}");
+    let g = wrapo(mk(8)).is_some();
+    println(f"g{g}");
+    let f = F { n: 100 };
+    let h = f.mko(9).is_some();
+    println(f"h{h}");
+    let k = Some(mk(10)).is_some();
+    println(f"k{k}");
+    let mut v = vec![mk(11), mk(12)];
+    let p = v.pop().is_some();
+    println(f"p{p} {v.len()}");
+    let mut i = 13;
+    while mk2(i).is_some() and i < 15 { i += 1; }
+    println(f"i{i}");
+    println("end")
+}

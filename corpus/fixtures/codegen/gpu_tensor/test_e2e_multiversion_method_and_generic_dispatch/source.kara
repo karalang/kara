@@ -1,0 +1,28 @@
+
+struct Acc { base: i64 }
+impl Acc {
+    #[multiversion(baseline, "avx2", "avx512f")]
+    fn dot(ref self, x: i64) -> i64 { self.base + x }
+
+    #[multiversion(baseline, "avx2")]
+    fn scale(mut ref self, k: i64) -> i64 {
+        self.base = self.base * k;
+        self.base
+    }
+
+    #[multiversion(baseline, "avx2")]
+    fn consume(self, y: i64) -> i64 { self.base + y }
+}
+
+#[multiversion(baseline, "avx2", "avx512f")]
+fn gadd[T: Add](a: T, b: T) -> T { a + b }
+
+fn main() {
+    let a = Acc { base: 100 };
+    println(a.dot(5));
+    let mut b = Acc { base: 3 };
+    println(b.scale(4));
+    let c = Acc { base: 7 };
+    println(c.consume(1));
+    println(gadd(20, 22));
+}

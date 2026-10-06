@@ -1,0 +1,13 @@
+
+#[derive(Clone)]
+struct Item { id: i64, tag: String }
+struct Bag { xs: Vec[Item] }
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.xs.push(Item { id: 1i64, tag: f"payload_one_{1}" });
+    b.xs.push(Item { id: 2i64, tag: f"payload_two_{2}" });
+    b.xs.push(Item { id: 3i64, tag: f"payload_three_{3}" });
+    let t = b.xs[0].clone();
+    b.xs[2] = t;
+    println(f"{b.xs[0].id}{b.xs[1].id}{b.xs[2].id}");
+}

@@ -1,0 +1,12 @@
+
+shared struct P { mut label: String }
+fn main() {
+    let p = P { label: "seedseedseedseedseed" };
+    let mut k = 0;
+    while k < 20 {
+        let fresh: String = f"epsilonepsilonepsilon-{k}-zetazetazeta";
+        p.label = fresh;
+        k = k + 1;
+    }
+    println(p.label);
+}

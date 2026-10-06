@@ -1,0 +1,33 @@
+
+fn fill(n: i64) -> i64 {
+    // presize rewrites `Vec.new()` -> `Vec.with_capacity(n)`; n == 0 here.
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < n {
+        v.push(i);
+        i = i + 1;
+    }
+    v.len()
+}
+fn main() {
+    let mut total: i64 = 0i64;
+    let mut r: i64 = 0i64;
+    while r < 3i64 {
+        total = total + fill(0i64);          // zero-cap presized Vec
+        let a: Vec[i64] = Vec.with_capacity(0i64);
+        total = total + a.len();             // direct zero-cap Vec
+        let s: String = String.with_capacity(0i64);
+        total = total + s.len();             // direct zero-cap String
+        let tv: Vec[i64] = Vec.try_with_capacity(0i64).unwrap();
+        total = total + tv.len();            // fallible zero-cap Vec -> Ok
+        let ts: String = String.try_with_capacity(0i64).unwrap();
+        total = total + ts.len();            // fallible zero-cap String -> Ok
+        r = r + 1i64;
+    }
+    println(f"{total}");
+    // A nonzero cap on the SAME path still grows and frees correctly.
+    let mut w: Vec[i64] = Vec.with_capacity(0i64);
+    w.push(7i64);
+    w.push(8i64);
+    println(f"{w.len()}");
+}

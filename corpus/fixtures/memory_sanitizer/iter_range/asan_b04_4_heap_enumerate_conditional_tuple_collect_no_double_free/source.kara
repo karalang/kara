@@ -1,0 +1,24 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "alpha-b044-payload-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "bravo-b044-payload-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "charlie-b044-payload-cccccccccccccccc".to_string(),
+            "delta-b044-payload-dddddddddddddddddddd".to_string()
+        ];
+        let f: Vec[(i64, String)] = w.iter().enumerate().filter(|p| p.0 > 0i64).collect();
+        let tw: Vec[(i64, String)] = w.iter().enumerate().take_while(|p| p.0 < 2i64).collect();
+        let sw: Vec[(i64, String)] = w.iter().enumerate().skip_while(|p| p.0 < 1i64).collect();
+        let ft: Vec[(i64, String)] = w.iter().enumerate().filter(|p| p.0 > 0i64).take(1i64).collect();
+        let ins: Vec[(i64, String)] = w.iter().enumerate().inspect(|p| p.0).collect();
+        let f0: (i64, String) = f[0].clone();
+        let tw0: (i64, String) = tw[0].clone();
+        let sw2: (i64, String) = sw[2].clone();
+        let ft0: (i64, String) = ft[0].clone();
+        let ins3: (i64, String) = ins[3].clone();
+        println(f"{f.len()}:{f0.1} {tw.len()}:{tw0.1} {sw.len()}:{sw2.1} {ft.len()}:{ft0.1} {ins.len()}:{ins3.1}");
+        round = round + 1i64;
+    }
+}

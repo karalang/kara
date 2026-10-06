@@ -1,0 +1,21 @@
+
+struct A { s: String }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 5 { v.push(A { s: "forloop_destructure_string_move_into_collector_x".to_string() }); i = i + 1; }
+    v
+}
+fn main() {
+    let items = build();
+    let mut collected: Vec[String] = Vec.new();
+    for a in items {
+        let A { s } = a;
+        collected.push(s);
+    }
+    let mut n: i64 = 0;
+    for c in collected {
+        n = n + c.len();
+    }
+    println(n);
+}

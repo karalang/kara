@@ -1,0 +1,10 @@
+
+fn dump(xs: Slice[i64]) {
+    println(xs.len());
+    println(xs[0]);
+    println(xs[3]);
+}
+fn main() {
+    let a: Array[i64, 4] = [2, 7, 11, 15];
+    dump(a);
+}

@@ -1,0 +1,8 @@
+
+fn main() {
+    println((3.7f64).saturating_to_i32());
+    println((1e30f64).saturating_to_i32());
+    println((-1e30f64).saturating_to_i32());
+    println((1e30f64).saturating_to_u8());
+    println((-1.0f64).saturating_to_u8());
+}

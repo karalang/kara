@@ -1,0 +1,13 @@
+source = "tests/codegen/numerics.rs::test_e2e_vector_simd_math_transcendentals"
+dedup_of = ["tests/interpreter/numerics.rs::test_vector_simd_math_transcendentals"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

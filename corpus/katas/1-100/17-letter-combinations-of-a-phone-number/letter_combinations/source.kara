@@ -1,0 +1,143 @@
+// LeetCode #17: Letter Combinations of a Phone Number — iterative BFS
+// expansion, O(L · 4^L) time / output.
+//
+// Each digit 2..9 maps to a group of 3 or 4 letters on a classic phone
+// keypad (2→abc, 3→def, 4→ghi, 5→jkl, 6→mno, 7→pqrs, 8→tuv, 9→wxyz). For
+// a digit string of length L the result holds 3^a · 4^b combinations
+// where a + b = L (digits 7 and 9 contribute the 4-letter groups). Empty
+// input returns an empty list — LeetCode's "no combinations" sentinel.
+//
+// Two natural shapes apply:
+//
+//   - **BFS / iterative.** Maintain a frontier of partial combinations
+//     and, for each digit, replace it with the cartesian extension by
+//     the digit's letter group. Frontier size grows by ×3 or ×4 per
+//     digit; final size equals the output cardinality.
+//
+//   - **DFS / backtracking.** Recursively build one combination at a
+//     time, appending and popping a single buffer.
+//
+// The BFS shape lowers more cleanly here: no recursion, the inner loop
+// is a tight `Vec[String].push` over the digit's letter group, and the
+// per-iter allocation is dominated by one fresh `String` per emitted
+// combination — the same shape kata [#14](../14-longest-common-prefix/)'s
+// auto-par bench's `sum = sum + r.len()` reduction sink wants.
+//
+// Letter groups live in a fixed `Vec[String]` of length 8, indexed by
+// `(digit_byte - b'2')`. LeetCode restricts input to '2'..'9' so the
+// (cast, index) pair needs no bounds check — a malformed input would
+// fail the problem precondition rather than the kata.
+//
+// `push_str(other: String)` on the result-prefix copy + `push(char)` on
+// the trailing letter is the same shape kata [#71](../71-simplify-path/)
+// uses for `out.push_str("/")` + `out.push(cs[p])` in its component-
+// reconstruction loop; both are the post-fix amortized-O(1) idiom that
+// landed in karac commit 7ef42b9 (2026-05-25).
+//
+// The `let prefix = out[i]` binding in the inner loop is a deliberate
+// memory-discipline pattern, not a workaround. Each per-iteration
+// `let`-binding registers a scope-exit `FreeVecBuffer` cleanup; at
+// end-of-iter (`i = i + 1i64`), prefix's cleanup fires and frees that
+// indexed String's character buffer. Without it, the inner String
+// buffers can only be reached at function-scope-exit cleanup of `out`,
+// but `out = next` has already replaced the buffer by then — every
+// intermediate iteration's inner Strings leak. With the per-iter
+// `let prefix = …` binding, RSS plateaus at ~1.3 MiB across K (matches
+// C/Rust); without it, RSS scales linearly with K (~15 MiB at K=100k).
+// See README § Memory discipline.
+
+fn letter_combinations(digits: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let digit_bytes = digits.bytes();
+    let n = digit_bytes.len();
+    if n == 0 {
+        return out;
+    }
+
+    // Phone keypad — index by `(digit - 2)`. Eight Strings, 3-4 bytes
+    // each; the allocation is dwarfed by the output Vec, and keeping
+    // the table local makes the function pure (no module-scope state).
+    let mut groups: Vec[String] = Vec.new();
+    groups.push("abc");   // 2
+    groups.push("def");   // 3
+    groups.push("ghi");   // 4
+    groups.push("jkl");   // 5
+    groups.push("mno");   // 6
+    groups.push("pqrs");  // 7
+    groups.push("tuv");   // 8
+    groups.push("wxyz");  // 9
+    let two: u8 = b'2';
+
+    // Seed the frontier with the empty prefix; the first digit's loop
+    // then writes its 3 or 4 single-letter Strings into `next`.
+    out.push("");
+    let mut d = 0;
+    while d < n {
+        let idx = (digit_bytes[d] as i64) - (two as i64);
+        let prev_len = out.len();
+        let mut next: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < prev_len {
+            // For each previous partial, append each of the digit's
+            // letters. push_str copies the prefix bytes in one stretch;
+            // push(letter) tacks on the trailing single char.
+            // `let prefix = out[i]` is a memory-discipline pattern (see
+            // header) — it adds a per-iter scope-exit cleanup that frees
+            // that indexed String's char buffer at end-of-iter.
+            let prefix = ref out[i];
+            for letter in groups[idx].chars() {
+                let mut s: String = "";
+                s.push_str(prefix);
+                s.push(letter);
+                next.push(s);
+            }
+            i = i + 1;
+        }
+        out = next;
+        d = d + 1;
+    }
+    out
+}
+
+fn report(digits: ref String) {
+    let combos = letter_combinations(digits);
+    let n = combos.len();
+    println(f"\"{digits}\" -> {n}");
+    let mut i = 0;
+    while i < n {
+        println(combos[i]);
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    // LeetCode reference example — "23" produces nine 2-letter combos
+    // in lexicographic order under the keypad's a-before-b ordering.
+    report("23");                                        // expect: 9 combos
+
+    // Empty input — the problem spec sentinel for "no combinations".
+    report("");                                          // expect: 0
+
+    // Single digit — exactly one group, 3 or 4 single-letter outputs.
+    report("2");                                         // expect: 3 (a,b,c)
+    report("7");                                         // expect: 4 (p,q,r,s)
+    report("9");                                         // expect: 4 (w,x,y,z)
+
+    // Mixed 3+4 group sizes — "27" produces 3·4 = 12 combos, exercising
+    // the per-digit group_len swap mid-walk.
+    report("27");                                        // expect: 12
+
+    // Both 4-letter digits — "79" produces 4·4 = 16, the densest 2-digit
+    // case in the keypad's product space.
+    report("79");                                        // expect: 16
+
+    // Three digits, all 3-letter groups — 3^3 = 27.
+    report("234");                                       // expect: 27
+
+    // Four digits, one 4-letter — 3·3·4·3 = 108.
+    report("2378");                                      // expect: 108
+
+    // LeetCode bound case — 4 digits, all 4-letter groups, 4^4 = 256.
+    report("7799");                                      // expect: 256
+}

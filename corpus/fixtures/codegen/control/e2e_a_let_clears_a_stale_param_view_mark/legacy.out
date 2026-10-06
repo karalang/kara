@@ -1,0 +1,17 @@
+tuple
+  arm1
+  fresh99
+dR99
+dR1
+tuple end
+enum
+  arm2
+  fresh98
+dR98
+dR2
+enum end
+selfrebind
+  arm3
+dR3
+selfrebind end
+done

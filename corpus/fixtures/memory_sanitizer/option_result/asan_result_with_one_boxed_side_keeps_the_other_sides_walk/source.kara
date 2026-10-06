@@ -1,0 +1,23 @@
+
+struct R2 { id: i64, name: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"d{self.name.contains("row")}") } }
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    while i < 8 {
+        // A — control: neither side boxes, already clean before the fix.
+        let a: Result[R2, i64] = Result.Ok(R2 { id: n + i, name: "row-" + (n + i).to_string() });
+        // B — inline `Ok` with heap beside a BOXED `Err`: the reported shape.
+        let b: Result[R2, Wide] = Result.Ok(R2 { id: n + i, name: "row-" + (n + i).to_string() });
+        // C — the mirror: BOXED `Ok` beside an inline-heap `Err`, the case
+        // B-2026-08-06-26's per-side gates were written to preserve.
+        let c: Result[Wide, R2] = Result.Err(R2 { id: n + i, name: "row-" + (n + i).to_string() });
+        // D — a CONSUMING arm over a one-side-boxed Result, which runs the
+        // disarm. Whole-area zeroing here nulls the box pointer and leaks.
+        let d: Result[R2, Wide] = Result.Ok(R2 { id: n + i, name: "row-" + (n + i).to_string() });
+        match d { Result.Ok(x) => { if x.name.contains("row") { } } Result.Err(_) => {} }
+        i = i + 1;
+    }
+}

@@ -1,0 +1,14 @@
+
+fn pair_sum(v: Vec[f64], p: i64) -> f64 {
+    let pair = Vector[f64, 2](v[p], v[p + 1]);
+    return pair.reduce_sum();
+}
+fn mixed(v: Vec[f64]) -> f64 {
+    let q = Vector[f64, 2](v[0], 5.0);
+    return q.reduce_sum();
+}
+fn main() {
+    let v: Vec[f64] = [1.0, 2.0, 3.0];
+    println(pair_sum(v, 1));
+    println(mixed(v));
+}

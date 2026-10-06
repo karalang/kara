@@ -1,0 +1,13 @@
+source = "tests/interpreter/strings.rs::test_string_to_cstring_ok_len_and_bytes"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,10 @@
+
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn main() {
+    let name: String = "ka" + "ra";
+    let mut m: Map[String, R] = Map.new();
+    m.insert("k", R { id: 7, tag: f"t" });
+    println(f"{name} {m.len()}");
+    println("post");
+}

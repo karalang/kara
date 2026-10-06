@@ -1,0 +1,31 @@
+struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"  dH{self.id}") } }
+
+fn scalarOut(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
+fn readAndScalarOut(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { println(f"  in{a.id}"); return b; } Option.None => { return 0; } } }
+fn firstOut(o: Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { return a; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn secondOut(o: Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { return b; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn middleOut(o: Option[(H, H, H)]) -> H { match o { Option.Some((a, b, c)) => { return b; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn bothOut(o: Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { println(f"  keep{b.id}"); return a; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn noneOut(o: Option[(H, H)]) -> i64 { match o { Option.Some((a, b)) => { return a.id + b.id; } Option.None => { return 0; } } }
+fn resultOut(r: Result[(H, i64), i64]) -> i64 { match r { Result.Ok((a, b)) => { return b; } Result.Err(e) => { return e; } } }
+
+fn main() {
+    println("scalar");
+    { let g: i64 = scalarOut(Option.Some((H { id: 1, s: "aaaaaaaaaaaa" }, 9))); println(f"  got:{g}"); }
+    println("readscalar");
+    { let g: i64 = readAndScalarOut(Option.Some((H { id: 2, s: "bbbbbbbbbbbb" }, 8))); println(f"  got:{g}"); }
+    println("first");
+    { let g = firstOut(Option.Some((H { id: 3, s: "cccccccccccc" }, H { id: 4, s: "dddddddddddd" }))); println(f"  got:{g.id}"); }
+    println("second");
+    { let g = secondOut(Option.Some((H { id: 5, s: "eeeeeeeeeeee" }, H { id: 6, s: "ffffffffffff" }))); println(f"  got:{g.id}"); }
+    println("middle");
+    { let g = middleOut(Option.Some((H { id: 7, s: "gggggggggggg" }, H { id: 8, s: "hhhhhhhhhhhh" }, H { id: 9, s: "iiiiiiiiiiii" }))); println(f"  got:{g.id}"); }
+    println("bothtouched");
+    { let g = bothOut(Option.Some((H { id: 10, s: "jjjjjjjjjjjj" }, H { id: 11, s: "kkkkkkkkkkkk" }))); println(f"  got:{g.id}"); }
+    println("noneout");
+    { let g: i64 = noneOut(Option.Some((H { id: 12, s: "llllllllllll" }, H { id: 13, s: "mmmmmmmmmmmm" }))); println(f"  got:{g}"); }
+    println("resultout");
+    { let g: i64 = resultOut(Result.Ok((H { id: 14, s: "nnnnnnnnnnnn" }, 7))); println(f"  got:{g}"); }
+    println("end");
+}

@@ -1,0 +1,24 @@
+
+import std.autograd.{Tape, Var};
+fn main() {
+    let t = Tape.new();
+    let x = Var.leaf(t, 2.0);
+    let three = Var.leaf(t, 3.0);
+    let f = x.mul(x).add(three.mul(x));
+    println(f.value()); f.backward(); println(x.grad());
+
+    let t2 = Tape.new();
+    let z = Var.leaf(t2, 0.0);
+    let s = z.sigmoid();
+    println(s.value()); s.backward(); println(z.grad());
+
+    let t3 = Tape.new();
+    let n = Var.leaf(t3, -2.0);
+    let rn = n.relu();
+    rn.backward(); println(n.grad());
+
+    let t4 = Tape.new();
+    let w = Var.leaf(t4, 0.0);
+    let y = w.tanh();
+    println(y.value()); y.backward(); println(w.grad());
+}

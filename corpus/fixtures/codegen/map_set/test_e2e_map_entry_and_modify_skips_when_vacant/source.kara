@@ -1,0 +1,6 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.entry(8_i64).and_modify(|v| { v += 1; });
+    println(m.is_empty());
+}

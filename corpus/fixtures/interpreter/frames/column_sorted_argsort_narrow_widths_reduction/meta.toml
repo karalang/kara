@@ -1,0 +1,13 @@
+source = "tests/interpreter/frames.rs::column_sorted_argsort_narrow_widths_reduction"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:dataframe"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

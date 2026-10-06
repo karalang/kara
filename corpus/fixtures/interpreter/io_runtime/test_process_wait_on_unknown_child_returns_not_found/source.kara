@@ -1,0 +1,8 @@
+fn main() {
+         let fake = Child { pid: 999999999 };
+         match fake.wait() {
+             Ok(_) => println("ok??"),
+             Err(IoError.NotFound) => println("not_found"),
+             Err(_) => println("other_err"),
+         }
+     }

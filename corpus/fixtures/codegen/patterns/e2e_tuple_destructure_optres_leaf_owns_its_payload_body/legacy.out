@@ -1,0 +1,28 @@
+loc1
+dR11/t11
+  rd1
+dR1/t1
+loc0
+dR20/t20
+  rd0
+ctl
+  rd3
+dR3/t3
+dR33/t33
+proj
+dR44/t44
+  rd4
+dR4/t4
+used
+  got55
+dR55/t55
+  rd5
+dR5/t5
+none
+  rd6
+dR6/t6
+annres
+dR77/t77
+  rd7
+dR7/t7
+done

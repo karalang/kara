@@ -1,0 +1,26 @@
+
+shared struct B { mut v: Vec[String] }
+shared struct Node { name: String, mut size: i64, mut children: Vec[Node], mut parent: weak Node }
+fn main() {
+    let b = B { v: Vec.new() };
+    b.v.push("alphabetalphabetalphabet");
+    b.v = b.v;
+    println(f"{b.v.len()} {b.v[0].len()}");
+    let x = B { v: Vec.new() };
+    let y = B { v: Vec.new() };
+    x.v.push("gammagammagammagammagam");
+    y.v.push("deltadeltadeltadeltadel");
+    x.v = y.v;
+    println(f"{x.v.len()} {x.v[0].len()}");
+    let root = Node { name: "rootrootrootroot", size: 10, children: Vec.new(), parent: None };
+    let a = Node { name: "aaaaaaaaaaaaaaaaaaa", size: 20, children: Vec.new(), parent: None };
+    let c = Node { name: "cccccccccccccccccc", size: 30, children: Vec.new(), parent: None };
+    a.parent = root;
+    c.parent = root;
+    root.children.push(a);
+    root.children.push(c);
+    let mut kept: Vec[Node] = Vec.new();
+    kept.push(c);
+    root.children = kept;
+    println(f"{root.children.len()} {root.children[0].size}");
+}

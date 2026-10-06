@@ -1,0 +1,177 @@
+// LeetCode 301 — Remove Invalid Parentheses, with no deduplication at all.
+//
+// Both other arms in this directory generate duplicates and then throw them
+// away with a Set. That is the honest fix, and it is also an admission: the
+// enumeration is wrong-shaped, and a hash set is being used to paper over it.
+// This arm fixes the shape instead. It never produces the same string twice, so
+// there is no Set, no `seen`, and no allocation proportional to the number of
+// duplicate leaves — which for a run of k identical parens with j to remove is
+// the C(k, j) the others pay in full before discarding.
+//
+// TWO IDEAS, and neither is obvious.
+//
+// 1. SCAN, DON'T BRANCH BLINDLY. Walk left to right carrying a counter. The
+//    first index `i` at which it goes negative is the first ')' with no partner
+//    — and crucially, EVERY repair of that prefix must delete one of the ')'
+//    at positions <= i. So instead of branching at every character, branch only
+//    over that one set of candidates, then resume the scan from `i` in the
+//    shortened string. Positions before the first violation are never
+//    reconsidered, because nothing there is broken.
+//
+// 2. CANONICALISE THE CHOICE, DON'T DEDUP IT. Two things would otherwise
+//    generate a string twice:
+//
+//      - deleting the same set of positions in a different ORDER. Killed by
+//        `last_j`: a recursive call may only delete at a position >= the one
+//        its parent deleted, so each set of positions is reached by exactly one
+//        increasing sequence.
+//      - deleting a DIFFERENT position from a run of identical ')'. Killed by
+//        `bytes[j - 1] != close`: only the first ')' of a consecutive run is a
+//        legal deletion point. Deleting any other one yields the same string.
+//
+//    Together those two guards make the enumeration a bijection onto the answer
+//    set, which is what "unique by construction" means here.
+//
+// THE MIRROR TRICK handles the other half of the problem. The scan above only
+// ever finds an unmatchable ')' — a surplus '(' produces no violation at all,
+// because the counter simply ends positive. Rather than write a second,
+// mirror-image scan, reverse the string and run the SAME scan with the roles of
+// '(' and ')' swapped: a surplus '(' in the original is a surplus ')' in the
+// reversal. The recursion bottoms out having reversed twice, so what it pushes
+// is in the original orientation.
+//
+// That symmetry is also property P6 in `differential.kara`, checked there as a
+// statement about the answer SET, independently of any arm relying on it.
+
+fn str_less(a: ref String, b: ref String) -> bool {
+    let ab = a.bytes();
+    let bb = b.bytes();
+    let n = if ab.len() < bb.len() { ab.len() } else { bb.len() };
+    let mut i = 0;
+    while i < n {
+        if ab[i] != bb[i] { return ab[i] < bb[i]; }
+        i = i + 1;
+    }
+    return ab.len() < bb.len();
+}
+
+fn sort_strings(items: mut ref Vec[String]) {
+    let mut i = 1;
+    while i < items.len() {
+        let mut j = i;
+        while j > 0 and str_less(items[j], items[j - 1]) {
+            items.swap(j, j - 1);
+            j = j - 1;
+        }
+        i = i + 1;
+    }
+}
+
+fn drop_at(s: ref String, skip: i64) -> String {
+    let bytes = s.bytes();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i != skip { out.push(bytes[i] as char); }
+        i = i + 1;
+    }
+    return out;
+}
+
+// Byte reversal, not character reversal — see the note in
+// `remove_invalid_parentheses.kara`. Sound here because the alphabet is
+// single-byte; on arbitrary UTF-8 this reverses a multi-byte sequence into
+// garbage, which is true of a byte reverse in every language, not just Kara.
+fn reverse_string(s: ref String) -> String {
+    let bytes = s.bytes();
+    let mut out = String.new();
+    let mut i = bytes.len();
+    while i > 0 {
+        i = i - 1;
+        out.push(bytes[i] as char);
+    }
+    return out;
+}
+
+// `last_i` — resume the scan here; everything before it is known repaired.
+// `last_j` — never delete before here; this is what kills order-permutations.
+fn repair(s: ref String, last_i: i64, last_j: i64, open: u8, close: u8, out: mut ref Vec[String]) {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    let mut count = 0;
+    let mut i = last_i;
+    while i < n {
+        let c = bytes[i];
+        if c == open {
+            count = count + 1;
+        } else if c == close {
+            count = count - 1;
+        }
+        if count < 0 {
+            // First unmatchable `close` is at i. Delete exactly one `close`
+            // from [last_j, i] — the first of each run only — and recurse.
+            // Resume at i, not i + 1: the string just lost a character, so
+            // index i now names what used to sit at i + 1.
+            let mut j = last_j;
+            while j <= i {
+                if bytes[j] == close and (j == last_j or bytes[j - 1] != close) {
+                    let cand = drop_at(s, j);
+                    repair(cand, i, j, open, close, out);
+                }
+                j = j + 1;
+            }
+            return;
+        }
+        i = i + 1;
+    }
+
+    // No unmatchable `close` remains. Flip the string and hunt the other kind.
+    let rev = reverse_string(s);
+    if open == b'(' {
+        repair(rev, 0, 0, b')', b'(', out);
+    } else {
+        // Reversed twice — back in the original orientation, and valid.
+        out.push(rev);
+    }
+}
+
+fn remove_invalid_parentheses(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    repair(s, 0, 0, b'(', b')', mut out);
+    sort_strings(mut out);
+    return out;
+}
+
+fn render(items: ref Vec[String]) -> String {
+    let mut line = String.new();
+    line.push_str("[");
+    let mut i = 0;
+    while i < items.len() {
+        if i > 0 { line.push_str(", "); }
+        line.push_str("\"");
+        line.push_str(items[i]);
+        line.push_str("\"");
+        i = i + 1;
+    }
+    line.push_str("]");
+    return line;
+}
+
+fn report(s: String) {
+    let got = remove_invalid_parentheses(s);
+    println(f"\"{s}\" -> {render(got)}");
+}
+
+fn main() {
+    report("()())()");
+    report("(a)())()");
+    report(")(");
+    report("");
+    report("(((");
+    report("n");
+    report("()");
+    report("()())()(");
+    report("()(()");
+    report("(a(b(c)d)");
+}

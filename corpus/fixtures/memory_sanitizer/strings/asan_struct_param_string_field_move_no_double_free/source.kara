@@ -1,0 +1,5 @@
+
+struct Named { name: String }
+fn build() -> Named { let mut s = String.new(); s.push_str("hi"); let n: Named = Named { name: s }; n }
+fn firstn(n: Named) -> i64 { let inner = n.name; inner.len() }
+fn main() { let n = build(); println(firstn(n)); }

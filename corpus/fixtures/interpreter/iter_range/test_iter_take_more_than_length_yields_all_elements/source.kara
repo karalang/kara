@@ -1,0 +1,6 @@
+
+fn main() {
+    let v = [1, 2];
+    let n: i64 = v.iter().take(100).count();
+    println(n);
+}

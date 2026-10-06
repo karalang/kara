@@ -1,0 +1,7 @@
+
+fn main() {
+    let v: Vec[i64] = Vec.filled(3, 42);
+    println(v.len());
+    println(v[0]);
+    println(v[2]);
+}

@@ -1,0 +1,69 @@
+// LeetCode #89: Gray Code — reflect-and-prefix construction.
+//
+// The same binary-reflected Gray code as gray_code.kara (the ★), built the way it is
+// defined rather than by its closed form. Start from G(0) = [0]. To go from G(k-1) to
+// G(k): keep G(k-1) as-is, then append a MIRRORED copy of it (iterated back-to-front)
+// with the new high bit `1 << (k-1)` OR-ed in:
+//
+//     G(k) = G(k-1)  ++  reverse(G(k-1)) each | (1 << (k-1))
+//
+// The reflection guarantees the single-bit-change property: within each half the bits
+// change as in G(k-1), and at the seam the two mirrored middle elements are identical
+// except for the freshly-added high bit. Doubling n times yields the 2ⁿ codes in the
+// same order as `i ^ (i >> 1)`. A distinct surface from the ★ — a growing `Vec[i64]`
+// read back-to-front while it is appended to, and a descending `i64` index to -1.
+
+fn gray_code(n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    out.push(0);
+    let mut k = 0;
+    while k < n {
+        let high = 1 << k;
+        let sz = out.len();
+        // Append the existing prefix in reverse, each with the new high bit set.
+        let mut j = sz - 1;
+        while j >= 0 {
+            out.push(out[j] | high);
+            j = j - 1;
+        }
+        k = k + 1;
+    }
+    out
+}
+
+fn show(g: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < g.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{g[i]}");
+        i = i + 1;
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(n: i64, acc: mut ref i64) {
+    let g = gray_code(n);
+    println(f"n={n}: {show(g)}");
+    let mut a = (acc * 131 + (g.len() + 1)) % 1000000007;
+    let mut i = 0;
+    while i < g.len() {
+        a = (a * 131 + (g[i] + 1)) % 1000000007;
+        i = i + 1;
+    }
+    acc = a;
+}
+
+fn main() {
+    let mut acc = 0;
+    report(0, mut acc);
+    report(1, mut acc);
+    report(2, mut acc);
+    report(3, mut acc);
+    report(4, mut acc);
+    report(5, mut acc);
+    println(f"sink: {acc}");
+}

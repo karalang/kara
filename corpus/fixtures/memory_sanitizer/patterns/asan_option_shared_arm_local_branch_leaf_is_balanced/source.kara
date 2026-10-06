@@ -1,0 +1,33 @@
+
+shared struct Node { val: i64 }
+
+fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }
+
+fn show(t: Option[Node]) -> i64 {
+    match t { None => { return 0; } Some(n) => { return n.val; } }
+}
+
+fn main() {
+    let mut s = 0;
+    let mut i = 0;
+    while i < 5 {
+        // Both arms hand out an arm-LOCAL, alternating which is taken.
+        let t = if i % 2 == 0 { let u = make(i); u } else { let v = make(i + 100); v };
+        s = s + show(t) + show(t) + show(t);
+        // MIXED: an arm-local against an enclosing binding.
+        let c = make(i + 1000);
+        let u2 = if i % 2 == 0 { let w = make(i + 7); w } else { c };
+        s = s + show(u2) + show(u2) + show(u2);
+        // The arm-local ALIASES an enclosing binding, which must outlive it.
+        let d = make(i + 10000);
+        let w2 = if i % 2 == 0 { let z = d; z } else { make(3) };
+        s = s + show(w2) + show(w2) + show(w2);
+        // `if let`, arm-local in the THEN arm.
+        let o = if i % 2 == 0 { Some(1) } else { None };
+        let e = make(i + 20000);
+        let x = if let Some(q) = o { let y = make(q + i); y } else { e };
+        s = s + show(x) + show(x) + show(x);
+        i = i + 1;
+    }
+    println(s);
+}

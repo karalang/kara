@@ -1,0 +1,10 @@
+
+fn main() {
+    let v: Vec[i64] = Vec[];
+    let w = ["a", "b"];
+    let mut it = v.iter().zip(w.iter());
+    match it.next() {
+        Some(_) => println("had value"),
+        None => println("empty"),
+    }
+}

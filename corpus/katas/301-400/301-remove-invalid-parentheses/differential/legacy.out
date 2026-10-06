@@ -1,0 +1,10 @@
+cases 1320
+oracle cases 1237
+P1 arm disagreements 0
+P2 invalid results 0
+P3 subsequence/skeleton violations 0
+P4 length violations 0
+P5 duplicate or empty answer sets 0
+P6 mirror asymmetries 0
+P7 oracle disagreements 0
+DIFFERENTIAL OK

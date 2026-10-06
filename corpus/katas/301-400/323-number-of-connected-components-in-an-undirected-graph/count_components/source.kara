@@ -1,0 +1,156 @@
+// LeetCode #323: Number of Connected Components in an Undirected Graph —
+// union-find.
+//
+// There are `n` nodes, labelled 0..n-1, and a list of undirected edges. Return
+// how many connected components the graph has.
+//
+//   n = 5  edges = [(0, 1), (1, 2), (3, 4)]          ->  2
+//   n = 5  edges = [(0, 1), (1, 2), (2, 3), (3, 4)]  ->  1
+//
+// Every node starts as a component of its own, so the answer starts at `n`.
+// An edge either joins two different components, which lowers the count by
+// one, or lands inside a component that already exists, which changes
+// nothing. So the whole problem is telling those two apart, edge by edge, and
+// a disjoint-set forest does exactly that: each component is a tree, its root
+// names it, and two nodes are in the same component when `find` gives them
+// the same root.
+//
+// Two standard tricks keep the trees shallow. `merge` hangs the smaller tree
+// under the larger one (union by size), so a tree of height h holds at least
+// 2^h nodes. `find` points every node it walks past straight at the root
+// (path compression), so the next walk from any of them is one step. Together
+// they make each operation effectively constant, and the whole count
+// O((n + edges) * alpha(n)).
+
+struct DisjointSet {
+    parent: Vec[i64],
+    size: Vec[i64],
+    sets: i64,
+}
+
+impl DisjointSet {
+    fn new(n: i64) -> DisjointSet {
+        let mut parent: Vec[i64] = Vec.new();
+        for i in 0..n {
+            parent.push(i);
+        }
+        return DisjointSet { parent: parent, size: Vec.filled(n, 1), sets: n };
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        let mut root = x;
+        while self.parent[root] != root {
+            root = self.parent[root];
+        }
+        // Second pass: point everything on the path straight at the root.
+        let mut cur = x;
+        while self.parent[cur] != root {
+            let next = self.parent[cur];
+            self.parent[cur] = root;
+            cur = next;
+        }
+        return root;
+    }
+
+    fn merge(mut ref self, a: i64, b: i64) {
+        let mut ra = self.find(a);
+        let mut rb = self.find(b);
+        if ra == rb {
+            return;
+        }
+        if self.size[ra] < self.size[rb] {
+            let t = ra;
+            ra = rb;
+            rb = t;
+        }
+        self.parent[rb] = ra;
+        self.size[ra] += self.size[rb];
+        self.sets -= 1;
+    }
+}
+
+fn count_components(n: i64, edges: ref Vec[(i64, i64)]) -> i64 {
+    let mut ds = DisjointSet.new(n);
+    for (a, b) in edges {
+        ds.merge(a, b);
+    }
+    return ds.sets;
+}
+
+fn show(edges: ref Vec[(i64, i64)]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..edges.len() {
+        if i > 0 { s.push_str(", "); }
+        let (a, b) = edges[i];
+        s.push_str(f"({a}, {b})");
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(n: i64, edges: Vec[(i64, i64)]) {
+    println(f"n={n} edges={show(edges)} -> {count_components(n, edges)}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// `m` random edges over nodes 0..n-1. Self-loops and repeats are allowed: the
+// statement does not promise a simple graph, and both must change nothing.
+fn random_edges(n: i64, m: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for i in 0..m {
+        let a = next(seed) % n;
+        let b = next(seed) % n;
+        edges.push((a, b));
+    }
+    return edges;
+}
+
+fn main() {
+    // The two examples from the problem statement.
+    report(5, [(0, 1), (1, 2), (3, 4)]);
+    report(5, [(0, 1), (1, 2), (2, 3), (3, 4)]);
+
+    // No edges: every node is alone.
+    report(1, []);
+    report(4, []);
+
+    // Edges that change nothing: a self-loop, a repeat, a reversed repeat,
+    // and a cycle's closing edge.
+    report(3, [(2, 2)]);
+    report(3, [(0, 1), (0, 1), (1, 0)]);
+    report(4, [(0, 1), (1, 2), (2, 0)]);
+
+    // Two components that only meet through the last edge, listed so that
+    // union by size has to hang the bigger tree correctly.
+    report(6, [(0, 1), (1, 2), (3, 4), (4, 5), (5, 3), (2, 3)]);
+
+    // A star, a path listed backwards, and isolated nodes at both ends.
+    report(7, [(3, 0), (3, 1), (3, 2), (3, 4), (3, 5)]);
+    report(6, [(4, 5), (3, 4), (2, 3), (1, 2)]);
+    report(8, [(2, 3), (4, 5)]);
+
+    // Small random graphs: every arm prints these.
+    let mut seed = 323;
+    let mut sizes: Vec[i64] = [6, 9, 12];
+    for t in 0..sizes.len() {
+        let n = sizes[t];
+        let edges = random_edges(n, n / 2 + t, mut seed);
+        report(n, edges);
+    }
+
+    // Large random graphs, for the fast arms only. Around m = n / 2 edges a
+    // random graph is just below its giant-component threshold, which is
+    // where the count is least predictable.
+    let mut big: Vec[i64] = [1000, 20000, 100000];
+    for t in 0..big.len() {
+        let n = big[t];
+        let m = n / 2 + t * n / 4;
+        let edges = random_edges(n, m, mut seed);
+        println(f"n={n} m={m} -> {count_components(n, edges)}");
+    }
+}

@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = [10, 20, 30, 40, 50];
+    for x in v.iter().skip(2) {
+        println(x);
+    }
+}

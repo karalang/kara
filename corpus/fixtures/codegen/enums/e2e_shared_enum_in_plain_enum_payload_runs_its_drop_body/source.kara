@@ -1,0 +1,29 @@
+struct R2 { s: String, t: String, u: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"  d2:{self.s.len()}") } }
+fn mkr(i: i64) -> R2 { return R2 { s: f"aaaaaaaaa", t: f"b", u: f"c" } }
+struct Z { n: i64 }
+impl Drop for Z { fn drop(mut ref self) { println(f"  dZ{self.n}") } }
+shared enum SMono { P(R2), Q }
+shared enum Sdd { P(R2), Q }
+impl Drop for Sdd { fn drop(mut ref self) { println("  dSdd") } }
+shared enum Sz { P(Z), Q }
+par enum PMono { P(R2), Q }
+enum H3 { P(SMono), Q }
+enum Hd { P(Sdd), Q }
+enum Hz { P(Sz), Q }
+enum Hp { P(PMono), Q }
+enum Hn { P(SMono), Q }
+shared enum Lst { Cons(R2, Lst), Nil }
+enum Plain { P(R2), Q }
+
+fn main() {
+    println("nested");   { let h: H3 = H3.P(SMono.P(mkr(1))); println("  mid") } println("  out")
+    println("par");      { let h: Hp = Hp.P(PMono.P(mkr(2))); println("  mid") } println("  out")
+    println("owndrop");  { let h: Hd = Hd.P(Sdd.P(mkr(3))); println("  mid") } println("  out")
+    println("noheap");   { let h: Hz = Hz.P(Sz.P(Z { n: 4 })); println("  mid") } println("  out")
+    println("qvar");     { let h: Hn = Hn.P(SMono.Q); println("  mid") } println("  out")
+    println("unitvar");  { let h: Hn = Hn.Q; println("  mid") } println("  out")
+    println("reclist");  { let a: Lst = Lst.Cons(mkr(5), Lst.Nil); let b: Lst = Lst.Cons(mkr(6), a); println("  mid") } println("  out")
+    println("control");  { let p: Plain = Plain.P(mkr(7)); println("  mid") } println("  out")
+    println("end")
+}

@@ -1,0 +1,53 @@
+// Benchmark workload — Sqrt(x) (LeetCode #69), the binary-search ★.
+//
+// A single ⌊√x⌋ is O(log x) — cheap — so the workload runs the kata ★'s binary
+// search ([`../sqrtx.kara`](../sqrtx.kara)) K = 3_000_000 times over a wide
+// SWEEP of x values, folding each result into a rolling hash. No allocation at
+// all: the whole body is the binary search (an integer `mid*mid <= x` compare
+// per step, ~31 steps for x near 2³¹), so this is a pure compute/branch
+// benchmark of the search loop — including the `mid*mid` product that Kāra
+// bounds-checks for overflow (in i64) where C/Rust would wrap.
+//
+// x sweep. `x = (k * 2654435761) % 2³¹` — a Knuth-multiplicative spread that
+// scatters x across the full [0, 2³¹) range as k advances, so every iteration
+// searches a different value (nothing hoistable) and the search genuinely runs
+// its full ~31-step depth. `k * 2654435761` for k < 3·10⁶ is < 8·10¹⁵, well
+// inside i64; the `% 2147483648` masks to the i32-max range the problem allows.
+//
+// Sink. A rolling polynomial hash `acc = (acc*131 + r) % 1e9+7` over the results
+// — a loop-carried dependency, so the loop is NOT a reduction karac's auto-par
+// pass can split: single-threaded by construction, comparable to the native
+// mirrors per-core. Seq-only kata, same discipline as #55/#62/#63/#64/#66/#68.
+
+fn my_sqrt(x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = x;
+    let mut ans = 0;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if mid * mid <= x {
+            ans = mid;
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    ans
+}
+
+fn main() {
+    let total: i64 = 3000000;
+    let modulus: i64 = 1000000007;
+    let range: i64 = 2147483648;      // 2^31
+
+    let mut acc: i64 = 0;
+    let mut k: i64 = 0;
+    while k < total {
+        let x = (k * 2654435761) % range;
+        let r = my_sqrt(x);
+        acc = (acc * 131 + r) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

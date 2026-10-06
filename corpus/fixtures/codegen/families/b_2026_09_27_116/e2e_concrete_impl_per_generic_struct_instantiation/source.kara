@@ -1,0 +1,12 @@
+struct Bx[T] { v: T, n: i64 }
+impl Bx[String] { fn get(self) -> String { self.v } fn tag(ref self) -> i64 { 1 } }
+impl Bx[Vec[i64]] { fn get(self) -> Vec[i64] { self.v } fn tag(ref self) -> i64 { 2 } }
+impl Bx[i64] { fn tag(ref self) -> i64 { 3 } }
+fn main() {
+    let a = Bx { v: "a-heap-string-long-xxxx".to_string(), n: 1 };
+    let b = Bx { v: vec![1, 2], n: 2 };
+    let c = Bx { v: 5, n: 3 };
+    println(f"{a.tag()} {b.tag()} {c.tag()}");
+    println(a.get());
+    println(f"{b.get().len()}");
+}

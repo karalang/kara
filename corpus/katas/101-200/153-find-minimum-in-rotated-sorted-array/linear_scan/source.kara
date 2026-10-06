@@ -1,0 +1,38 @@
+// LeetCode #153: Find Minimum in Rotated Sorted Array — linear scan O(n).
+//
+// Walks every element once and tracks the running minimum. This ignores the
+// rotation structure entirely and exists as a baseline against the O(log n)
+// binary_search variant — they should agree on every input.
+
+fn find_min(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut m = nums[0];
+    for i in 1..n {
+        let x = nums[i];
+        if x < m {
+            m = x;
+        }
+    }
+    m
+}
+
+fn report(nums: Slice[i64]) {
+    println(find_min(nums));
+}
+
+fn main() {
+    let c1: Array[i64, 5] = [3, 4, 5, 1, 2];
+    report(c1);   // expect: 1
+
+    let c2: Array[i64, 7] = [4, 5, 6, 7, 0, 1, 2];
+    report(c2);   // expect: 0
+
+    let c3: Array[i64, 4] = [11, 13, 15, 17];
+    report(c3);   // expect: 11  (no effective rotation)
+
+    let c4: Array[i64, 1] = [5];
+    report(c4);   // expect: 5
+
+    let c5: Array[i64, 2] = [2, 1];
+    report(c5);   // expect: 1
+}

@@ -1,0 +1,17 @@
+
+fn main() {{
+    let mut v: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    let flag = 1i64;
+    {pre_fill}
+    while j < 10i64 {{ v.push(0i64); j = j + 1i64; }}
+    let mut i = 0i64;
+    while i <= 0i64 {{
+        {enc_head}
+        let mut k = i + 9i64;
+        {post_init}
+        while k >= 0i64 {{ v[k] = 7i64; k = k - 1i64; }}
+        i = i + 1i64;
+    }}
+    println(f"len={{v.len()}}");
+}}

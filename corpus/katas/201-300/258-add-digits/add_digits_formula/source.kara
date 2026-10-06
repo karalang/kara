@@ -1,0 +1,48 @@
+// LeetCode 258 — Add Digits, closed form.
+//
+// The digital root in O(1): `1 + (num - 1) % 9` for `num > 0`, and `0` for zero.
+//
+// **Why it works.** `10 ≡ 1 (mod 9)`, so every power of ten is ≡ 1, and a number
+// is therefore congruent to the sum of its digits mod 9. Repeating the digit sum
+// preserves that congruence all the way down, so the single-digit result is the
+// unique value in `1..=9` congruent to `num` mod 9 — with zero as its own case,
+// since `0` is the only input whose answer is not in `1..=9`.
+//
+// **Why not `num % 9`.** That is the tempting spelling and it is wrong for every
+// multiple of nine: `9 % 9 == 0`, but the digital root of 9 is 9, not 0. The
+// `1 + (num - 1) % 9` form shifts the range so multiples of nine land on 9
+// instead of 0. Every multiple of nine in the test set below exists to catch
+// that, and `differential.kara` sweeps the whole range against the simulation
+// rather than trusting the derivation.
+//
+// **The zero case is not a wart.** `num = 0` would give `1 + (-1) % 9`, and
+// Kāra's `%` keeps the sign of the dividend (as C and Rust do, unlike Python),
+// so `(-1) % 9` is `-1` and the expression yields `0` — accidentally correct
+// here, but only accidentally. It is written as an explicit branch because the
+// reader should not have to reason about the sign rule to trust the answer.
+
+fn add_digits(num: i64) -> i64 {
+    if num == 0 {
+        return 0;
+    }
+    return 1 + (num - 1) % 9;
+}
+
+fn report(n: i64) {
+    println(f"{n} -> {add_digits(n)}");
+}
+
+fn main() {
+    report(38);
+    report(0);
+    report(9);
+    report(10);
+    report(18);
+    report(19);
+    report(99);
+    report(100);
+    report(12345);
+    report(999999999);
+    report(2147483647);
+    report(9223372036854775807);
+}

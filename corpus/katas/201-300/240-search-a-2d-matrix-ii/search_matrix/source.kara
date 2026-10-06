@@ -1,0 +1,60 @@
+// LeetCode 240 — Search a 2D Matrix II.
+//
+// The matrix is sorted along BOTH axes: every row ascends left→right and every
+// column ascends top→bottom. Search for `target` in O(m + n) with a staircase
+// walk that starts at the TOP-RIGHT corner:
+//
+//   - matrix[r][c] == target → found;
+//   - matrix[r][c] >  target → everything below in this column is even larger,
+//     so the column can't hold it → step LEFT (c − 1);
+//   - matrix[r][c] <  target → everything left in this row is even smaller, so
+//     the row can't hold it → step DOWN (r + 1).
+//
+// Each step eliminates a full row or column, so the walk visits at most m + n
+// cells. The matrix is passed as a flat row-major `Slice[i64]` with `rows`/`cols`
+// so `matrix[r][c] = flat[r * cols + c]`.
+
+fn search_matrix(flat: Slice[i64], rows: i64, cols: i64, target: i64) -> bool {
+    if rows == 0 or cols == 0 {
+        return false;
+    }
+    let mut r = 0;
+    let mut c = cols - 1;                    // top-right corner
+    while r < rows and c >= 0 {
+        let v = flat[r * cols + c];
+        if v == target {
+            return true;
+        } else if v > target {
+            c = c - 1;
+        } else {
+            r = r + 1;
+        }
+    }
+    return false;
+}
+
+fn report(flat: Slice[i64], rows: i64, cols: i64, target: i64) {
+    if search_matrix(flat, rows, cols, target) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    // 5x5, sorted both ways (the canonical LeetCode example).
+    let m: Array[i64, 25] = [
+        1,  4,  7,  11, 15,
+        2,  5,  8,  12, 19,
+        3,  6,  9,  16, 22,
+        10, 13, 14, 17, 24,
+        18, 21, 23, 26, 30
+    ];
+    report(m, 5, 5, 5);                    // true
+    report(m, 5, 5, 20);                   // false
+    report(m, 5, 5, 1);                    // true  (top-left)
+    report(m, 5, 5, 30);                   // true  (bottom-right)
+    report(m, 5, 5, 31);                   // false (above max)
+    report(m, 5, 5, 0);                    // false (below min)
+    report(m, 5, 5, 14);                   // true  (interior)
+}

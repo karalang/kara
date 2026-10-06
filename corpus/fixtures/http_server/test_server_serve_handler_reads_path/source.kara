@@ -1,0 +1,12 @@
+
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                Response { status: 200, body: req.path() }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        

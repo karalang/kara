@@ -1,0 +1,65 @@
+// LeetCode 295 — Find Median from Data Stream, KEEPING ONE SORTED VEC.
+//
+// The obvious data structure, and the one worth measuring against: hold every
+// number seen so far in ascending order, and read the middle out by index.
+//
+// Query is O(1) and needs no reasoning at all — the median of a sorted vec is
+// where the definition says it is. Insert is where the cost moved: binary
+// search finds the slot in O(log n), but opening it shifts every element after
+// it, so an insert is O(n) memory traffic.
+//
+// THAT IS NOT AUTOMATICALLY WORSE THAN THE HEAPS. A shift is a contiguous
+// memmove — one pass, perfectly predicted, vectorisable — while the heap's
+// O(log n) is a chain of dependent, cache-missing pointer hops. For small n the
+// vec wins outright; the crossover is a measurement, not a theorem, and
+// `bench/` is where it gets made rather than asserted.
+//
+// This arm is also the differential's reference: it is slow, but it is the
+// definition transcribed, so when the heaps and this disagree, this is right.
+
+struct SortedStream {
+    mut data: Vec[i64],
+}
+
+fn ss_new() -> SortedStream {
+    return SortedStream { data: Vec.new() };
+}
+
+// First index whose element is >= v — the slot v belongs in.
+fn lower_bound(data: ref Vec[i64], v: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = data.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if data[mid] < v {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+fn ss_add(s: mut ref SortedStream, v: i64) {
+    let at = lower_bound(s.data, v);
+    s.data.insert(at, v);
+}
+
+fn ss_median(s: ref SortedStream) -> f64 {
+    let n = s.data.len();
+    if n % 2 == 1 {
+        return s.data[n / 2] as f64;
+    }
+    return (s.data[n / 2 - 1] as f64 + s.data[n / 2] as f64) / 2.0;
+}
+
+fn main() {
+    let mut s = ss_new();
+    let stream = [1, 3, 2, 4, 0, 9, 7];
+    let mut i = 0;
+    while i < stream.len() {
+        ss_add(mut s, stream[i]);
+        println(f"add {stream[i]} -> median {ss_median(s)}");
+        i = i + 1;
+    }
+}

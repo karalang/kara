@@ -1,0 +1,9 @@
+
+fn pick(a: String, b: String) -> String {
+    let r = if a > b { a } else { b };
+    r
+}
+
+fn main() {
+    println(pick(f"apple", f"banana"));
+}

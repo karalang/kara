@@ -1,0 +1,60 @@
+
+fn mk() -> Array[i64, 3] { return [10, 20, 30]; }
+fn fs() -> Array[f64, 2] { return [1.5, 2.25]; }
+
+fn main() {
+    let mut a = 0;
+    for x in mk() { a = a + x; }
+    println(a);
+    let m = mk();
+    let mut b = 0;
+    for x in m { b = b + x; }
+    println(b);
+
+    let mut c = 0;
+    for x in mk().iter() { c = c + x; }
+    println(c);
+    let mut d = 0;
+    for x in mk().into_iter() { d = d + x; }
+    println(d);
+
+    let mut e = 0;
+    for (i, x) in mk().iter().enumerate() { e = e + i * x; }
+    println(e);
+    let mut f = 0;
+    for (i, x) in m.iter().enumerate() { f = f + i * x; }
+    println(f);
+
+    let u: u16 = 258u16;
+    let mut g = 0;
+    for x in u.to_ne_bytes() { g = g + (x as i64); }
+    println(g);
+    let mut h = 0;
+    for x in b"abc" { h = h + (x as i64); }
+    println(h);
+
+    let mut fl = 0.0;
+    for x in fs() { fl = fl + x; }
+    println(fl);
+
+    println(mk().iter().count());
+    println(u.to_ne_bytes().iter().count());
+
+    let mut k = 0;
+    for x in mk() { if x > 15 { break; } k = k + x; }
+    println(k);
+
+    // An ARRAY `self` inside an impl body, owned and borrowed. The `self`
+    // dispatch arm checked the five POINTER-backed container tables; a fixed
+    // array is none of them — it is an `[N x T]` slot — so this matched
+    // nothing and ran zero times too.
+    let s: Array[i64, 3] = [1, 2, 3];
+    println(s.total());
+    println(s.doubled());
+}
+
+trait Sums { fn total(self) -> i64; fn doubled(ref self) -> i64; }
+impl Sums for Array[i64, 3] {
+    fn total(self) -> i64 { let mut n = 0; for x in self { n = n + x; } return n; }
+    fn doubled(ref self) -> i64 { let mut n = 0; for x in self { n = n + x * 2; } return n; }
+}

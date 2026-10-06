@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_e2e_auto_par_rc_boxed_projection_copies_instead_of_sharing_an_owner"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

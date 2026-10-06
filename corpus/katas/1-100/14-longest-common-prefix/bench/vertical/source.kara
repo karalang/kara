@@ -1,0 +1,139 @@
+// Benchmark workload — Longest Common Prefix (LeetCode #14).
+//
+// M = 8 distinct test cases, each a Vec[String] of N = 16 strings sharing
+// a prefix of a different length (0, 2, 4, 7, 10, 13, 16, 20). Built once
+// into a Vec[Vec[String]] before the timed loop. Per outer iter we rotate
+// `idx = k % M` and call longest_common_prefix on that case, so the call
+// is never loop-invariant (LLVM can't hoist it out of the K loop) and the
+// input distribution sweeps the full range of prefix lengths the vertical
+// scan can hit — no single branch pattern the predictor fully learns.
+//
+// K = 1_000_000 outer iters. Per-iter work: a vertical scan over up to
+// prefix_len × N byte columns (tens to low-hundreds of byte compares)
+// plus one output String alloc of prefix_len chars. At K=1M that's on the
+// order of 10^8 byte ops + 10^6 small allocs — same shape class as kata
+// 13 / 71, so cross-kata wall-time comparisons stay meaningful.
+//
+// Each case's N strings share exactly `prefix_len` columns: all N begin
+// with the first `prefix_len` letters of the alphabet, then string s
+// diverges with six copies of its signature letter (the s-th letter), so
+// at column `prefix_len` the strings disagree and the LCP is exactly
+// `prefix_len`. Sink (`sum`) is the running total of every returned
+// prefix's length = (K / M) × (0+2+4+7+10+13+16+20) = 125000 × 72 =
+// 9_000_000. A closed form, so every mirror (kara/rust/c/go/py) must
+// print 9000000 before timing starts.
+//
+// Two-lane kata: `sum = sum + lcp.len()` is the slice-1 allow-list
+// reduction shape, so karac emits a karac_par_reduce dispatch by default.
+// KARAC_AUTO_PAR=0 builds the seq-lane comparator — see bench/bench.sh.
+
+fn prefix_string(s: ref String, k: i64) -> String {
+    let mut out: String = "";
+    let mut i = 0;
+    for c in s.chars() {
+        if i >= k {
+            break;
+        }
+        out.push(c);
+        i = i + 1;
+    }
+    out
+}
+
+fn longest_common_prefix(strs: ref Vec[String]) -> String {
+    let n = strs.len();
+    if n == 0 {
+        return "";
+    }
+    let first = strs[0].bytes();
+    let first_len = first.len();
+    let mut col = 0;
+    while col < first_len {
+        let c = first[col];
+        let mut s = 1;
+        while s < n {
+            let other = strs[s].bytes();
+            if col >= other.len() or other[col] != c {
+                return prefix_string(strs[0], col);
+            }
+            s = s + 1;
+        }
+        col = col + 1;
+    }
+    prefix_string(strs[0], first_len)
+}
+
+// The (n % 26)-th lowercase letter, by forward-walking the alphabet.
+fn nth_letter(n: i64) -> char {
+    let alphabet: String = "abcdefghijklmnopqrstuvwxyz";
+    let target = n % 26;
+    let mut i = 0;
+    for ch in alphabet.chars() {
+        if i == target {
+            return ch;
+        }
+        i = i + 1;
+    }
+    'a'
+}
+
+// A string = first `prefix_len` alphabet letters (the shared prefix)
+// followed by six copies of the signature letter `nth_letter(suffix_id)`.
+fn make_string(prefix_len: i64, suffix_id: i64) -> String {
+    let alphabet: String = "abcdefghijklmnopqrstuvwxyz";
+    let mut out: String = "";
+    let mut i = 0;
+    for ch in alphabet.chars() {
+        if i >= prefix_len {
+            break;
+        }
+        out.push(ch);
+        i = i + 1;
+    }
+    let sig = nth_letter(suffix_id);
+    let mut j = 0;
+    while j < 6 {
+        out.push(sig);
+        j = j + 1;
+    }
+    out
+}
+
+fn build_case(prefix_len: i64, count: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    let mut s = 0;
+    while s < count {
+        v.push(make_string(prefix_len, s));
+        s = s + 1;
+    }
+    v
+}
+
+fn main() {
+    let m_cases: i64 = 8;
+    let n_strings: i64 = 16;
+    let k_iters: i64 = 1000000;
+
+    let prefixes: Array[i64, 8] = [0, 2, 4, 7, 10, 13, 16, 20];
+
+    let mut sets: Vec[Vec[String]] = Vec.new();
+    let mut m = 0;
+    while m < m_cases {
+        sets.push(build_case(prefixes[m], n_strings));
+        m = m + 1;
+    }
+
+    // Reduction shape: `sum = sum + r.len()` per iter. The analyzer
+    // recognizes the allow-listed `+` accumulator and karac's default
+    // build emits a karac_par_reduce dispatch. `r` is allocated fresh
+    // inside longest_common_prefix and dropped at end-of-iter scope.
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % m_cases;
+        let r = longest_common_prefix(sets[idx]);
+        sum = sum + r.len();
+        k = k + 1;
+    }
+    println(sum);
+}

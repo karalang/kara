@@ -1,0 +1,79 @@
+// LeetCode 293 — Flip Game, rebuilding a buffer at EVERY position.
+//
+// Same answers as `flip_game.kara`; a deliberately worse inner loop, kept
+// because it is what "try every position" reads like when written directly:
+//
+//     for every i:  copy the whole string into a fresh buffer
+//                   if the pair at i is "++", flip it and keep the copy
+//                   otherwise throw the copy away
+//
+// The ★ file tests the pair FIRST and only then allocates. This one allocates
+// first and tests second, so a string with no legal move still does n copies of
+// n characters and returns nothing — O(n^2) of pure waste where the ★ file does
+// O(n) of comparisons and no allocation at all.
+//
+// WHY KEEP IT. Two reasons, and neither is "to look slow". First, it is the
+// honest control for the ★ file's claim: the two produce identical output, so
+// the difference is entirely in the work done to get there, which is what the
+// bench measures. Second, "-" strings are the common case in #294's search
+// tree, where this function is called on every node — so the ordering of the
+// test and the allocation is not a micro-optimisation there, it is the
+// difference between a search that finishes and one that does not.
+
+fn next_states(s: ref String) -> Vec[String] {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut out: Vec[String] = Vec.new();
+
+    let mut i = 0;
+    while i + 1 < n {
+        // Build the candidate unconditionally, decide afterwards.
+        let mut buf: Vec[char] = Vec.new();
+        let mut j = 0;
+        while j < n {
+            buf.push(cs[j]);
+            j = j + 1;
+        }
+        if buf[i] == '+' and buf[i + 1] == '+' {
+            buf[i] = '-';
+            buf[i + 1] = '-';
+            let mut t = String.new();
+            let mut k = 0;
+            while k < n {
+                t.push(buf[k]);
+                k = k + 1;
+            }
+            out.push(t);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn report(s: String) {
+    let states = next_states(s);
+    let mut line = String.new();
+    line.push_str(f"{s} -> [");
+    let mut i = 0;
+    while i < states.len() {
+        if i > 0 { line.push_str(", "); }
+        line.push_str(states[i]);
+        i = i + 1;
+    }
+    line.push_str("]");
+    println(line);
+}
+
+fn main() {
+    report("++++");
+    report("+");
+    report("-");
+    report("");
+    report("----");
+    report("++");
+    report("+++");
+    report("+-+-+");
+    report("++-++");
+    report("+++++");
+    report("-++-");
+}

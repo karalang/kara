@@ -1,0 +1,8 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let w = ["a", "b", "c"];
+    for (n, s) in v.iter().zip(w.iter()) {
+        println(f"{n}:{s}");
+    }
+}

@@ -1,0 +1,7 @@
+
+fn main() with reads(FileSystem) {
+    match FileSystem.read_lines("/nonexistent/karac-b38/xyz.txt") {
+        Ok(lines) => println(lines.len().to_string()),
+        Err(_) => println("io-err"),
+    }
+}

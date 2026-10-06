@@ -1,0 +1,14 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1i64, name: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut acc = 0i64;
+    while j < 5i64 {
+        acc = acc + m.get_or(Item { id: j, name: f"g-{j}-padding-padding-padding" }, 0i64);
+        j = j + 1i64;
+    }
+    println(f"{acc}{m.len()}");
+}

@@ -1,0 +1,102 @@
+// Benchmark workload for LeetCode #225 — Implement Stack using Queues.
+//
+// Synthetic driver: a deterministic 32-bit LCG (overflow-safe in i64) drives a
+// long sequence of push / pop / top operations against the queue-backed stack
+// (the kata's costly-push design — every push rotates the FIFO so the newest
+// element lands at the front). The op is chosen from the PRNG, biased to keep the
+// stack near a target size CAP so pushes stay O(CAP): the rotation loop is the
+// real kernel and it is a genuine pointer/queue shuffle that does not vectorize.
+// To keep memory bounded (the index-pool FIFO never reclaims dequeued slots), the
+// driver runs many independent PASSES, each on a FRESH stack, so per-pass growth
+// is freed between passes; the PRNG state and the running `sink` carry across.
+// Sink = the accumulated (mod) sum of every popped / peeked value.
+
+struct Queue {
+    data: Vec[i64],
+    mut head: i64,
+}
+
+fn q_new() -> Queue {
+    return Queue { data: Vec.new(), head: 0 };
+}
+
+fn q_size(q: ref Queue) -> i64 {
+    return q.data.len() - q.head;
+}
+
+fn q_empty(q: ref Queue) -> bool {
+    return q.head >= q.data.len();
+}
+
+fn q_enqueue(q: mut ref Queue, x: i64) {
+    q.data.push(x);
+}
+
+fn q_dequeue(q: mut ref Queue) -> i64 {
+    let v = q.data[q.head];
+    q.head = q.head + 1;
+    return v;
+}
+
+fn q_front(q: ref Queue) -> i64 {
+    return q.data[q.head];
+}
+
+fn stack_push(q: mut ref Queue, x: i64) {
+    q_enqueue(q, x);
+    let mut rotations = q_size(q) - 1;      // bring x to the front
+    while rotations > 0 {
+        let front = q_dequeue(q);
+        q_enqueue(q, front);
+        rotations = rotations - 1;
+    }
+}
+
+fn stack_pop(q: mut ref Queue) -> i64 {
+    return q_dequeue(q);
+}
+
+fn stack_top(q: ref Queue) -> i64 {
+    return q_front(q);
+}
+
+fn main() {
+    let passes = 12000;
+    let ops_per_pass = 1500;
+    let cap = 48;
+    let modulus = 1000000007;
+
+    let mut state = 12345;
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let mut s = q_new();
+        let mut j = 0;
+        while j < ops_per_pass {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let v = (state % 1000) + 1;
+            let sel = state % 4;
+            let size = q_size(s);
+            if size == 0 {
+                stack_push(mut s, v);
+            } else if size >= cap {
+                if state & 1 == 0 {
+                    sink = (sink + stack_pop(mut s)) % modulus;
+                } else {
+                    sink = (sink + stack_top(s)) % modulus;
+                }
+            } else {
+                if sel <= 1 {
+                    stack_push(mut s, v);
+                } else if sel == 2 {
+                    sink = (sink + stack_pop(mut s)) % modulus;
+                } else {
+                    sink = (sink + stack_top(s)) % modulus;
+                }
+            }
+            j = j + 1;
+        }
+        p = p + 1;
+    }
+    println(sink);
+}

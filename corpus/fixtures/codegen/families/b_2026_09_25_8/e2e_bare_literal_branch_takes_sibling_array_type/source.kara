@@ -1,0 +1,12 @@
+fn mk(n: i64) -> Array[String, 2] { return [f"a{n}", f"b{n}"] }
+fn main() {
+    let a: Option[Array[String, 1]] = None;
+    let r = match a { Some(s) => s, None => [f"heap-string-longer-than-sso-1"] };
+    println(f"{r[0]}");
+    let c = false;
+    let w = if c { mk(1) } else { [f"x{2}", f"y{3}"] };
+    println(f"{w[0]}{w[1]}");
+    let d: Option[Array[i64, 3]] = None;
+    let z = match d { Some(s) => s, None => [9; 3] };
+    println(f"{z[2]}");
+}

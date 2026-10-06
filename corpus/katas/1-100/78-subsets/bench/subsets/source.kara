@@ -1,0 +1,54 @@
+// Benchmark workload — Subsets (LeetCode #78).
+// Emit-at-every-node backtracking (the kata's ★). To measure the DFS recursion
+// rather than Vec-of-Vec allocation, the bench folds each subset (the current path,
+// snapshotted at every node) into a threaded accumulator instead of storing it — the
+// same 2^n-node tree, no per-node allocation. One reused `path` buffer carries the
+// current branch. The power set of nums = [1..16] (2^16 = 65536 subsets) is
+// enumerated K=300 times; the acc is seeded with the iteration index so nothing
+// hoists. See ../README.md § Benchmarks.
+
+fn enumerate(nums: ref Vec[i64], start: i64, path: mut ref Vec[i64], acc: i64) -> i64 {
+    // Every node is a subset — fold the current path (length marker + elements).
+    let mut a = acc;
+    let plen = path.len();
+    a = (a * 131 + (plen + 1)) % 1000000007;
+    let mut p = 0;
+    while p < plen {
+        a = (a * 131 + path[p]) % 1000000007;
+        p = p + 1;
+    }
+    // Extend with each remaining element.
+    let n = nums.len();
+    let mut i = start;
+    while i < n {
+        path.push(nums[i]);
+        a = enumerate(nums, i + 1, path, a);
+        path.pop();
+        i = i + 1;
+    }
+    a
+}
+
+fn main() {
+    let n = 16;
+    let total = 300;
+    let modulus = 1000000007;
+
+    // nums = [1..n], built once.
+    let mut nums: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        nums.push(i + 1);
+        i = i + 1;
+    }
+
+    let mut path: Vec[i64] = Vec.new();
+    let mut sum = 0;
+    let mut iter = 0;
+    while iter < total {
+        let r = enumerate(nums, 0, mut path, iter);
+        sum = (sum + r) % modulus;
+        iter = iter + 1;
+    }
+    println(f"{sum}");
+}

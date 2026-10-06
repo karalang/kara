@@ -1,0 +1,106 @@
+// LeetCode #62: Unique Paths — one rolling row of DP, O(m·n) time, O(min(m,n)) space (★).
+//
+// A robot sits at the top-left of an `m × n` grid and may step only RIGHT or
+// DOWN; how many distinct paths reach the bottom-right? The number of paths to
+// a cell is fixed by its two in-neighbours — you can only arrive from the cell
+// above or the cell to the left — so
+//
+//     paths[i][j] = paths[i-1][j] + paths[i][j-1]
+//
+// with `paths = 1` all along the top row and left column (a single straight run
+// of rights, or of downs, reaches those). That is the whole recurrence; kata
+// [#53](../53-maximum-subarray/)'s Kadane and kata [#55](../55-jump-game/)'s
+// reachability sweep are the same move — a grid/array relation collapsed to a
+// one-step recurrence you can fill in a fixed scan order.
+//
+// The space optimisation is the point of this file. The full table
+// ([`unique_paths_2d.kara`](unique_paths_2d.kara)) keeps every row, but the
+// recurrence only ever reads the row directly above, so a SINGLE array suffices
+// if it is updated in place, left to right:
+//
+//     dp[j]  currently holds  paths[i-1][j]   (the row above)
+//     dp[j] += dp[j-1]        ->  paths[i-1][j] + paths[i][j-1] = paths[i][j]
+//
+// At the moment `dp[j]` is read on the right it still holds the value from the
+// row above (not yet overwritten), while `dp[j-1]` was already advanced to the
+// current row this same pass — exactly the two neighbours the recurrence wants.
+// `dp[0]` is never touched after initialisation: the left column is always 1.
+// This is the classic knapsack-style "roll the 2-D table onto one row" trick,
+// and reading-before-overwriting in a left-to-right sweep is what makes it
+// sound — the same read-before-write discipline the linked-list katas turn on,
+// here over an array index instead of a `next` field.
+//
+// Rows and columns are symmetric (`paths(m, n) == paths(n, m)` — a path is just
+// a sequence of downs and rights, and swapping the axes swaps the two counts),
+// so the array is sized to the SMALLER dimension: O(min(m, n)) space. The
+// asymptotically cheaper closed form C(m+n-2, m-1) lives in the sibling
+// [`unique_paths_math.kara`](unique_paths_math.kara); this file is the DP that
+// generalises to obstacles (#63) and min-path-sum (#64), where no closed form
+// exists.
+//
+// LeetCode guarantees the answer is ≤ 2·10⁹ (it fits i32); the arithmetic is
+// i64 for uniformity with the rest of the corpus. Every `dp[j]` is a partial
+// path count and so is itself ≤ the final answer, so no intermediate overflows.
+
+fn unique_paths(m: i64, n: i64) -> i64 {
+    // Roll the table onto one array spanning the smaller axis: paths(m,n) is
+    // symmetric, so put the shorter side on the columns for O(min(m,n)) space.
+    let mut rows = m;
+    let mut cols = n;
+    if cols > rows {
+        let t = rows;
+        rows = cols;
+        cols = t;
+    }
+
+    // Top row: exactly one path (all rights) to every cell.
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < cols {
+        dp.push(1);
+        j = j + 1;
+    }
+
+    // Fold each subsequent row in place. dp[0] stays 1 (the left column);
+    // dp[c] += dp[c-1] combines the cell above (old dp[c]) with the cell to the
+    // left (already-updated dp[c-1]).
+    let mut i = 1;
+    while i < rows {
+        let mut c = 1;
+        while c < cols {
+            dp[c] = dp[c] + dp[c - 1];
+            c = c + 1;
+        }
+        i = i + 1;
+    }
+
+    dp[cols - 1]
+}
+
+// ---- test harness (shared verbatim by all three solvers + the Python mirror) --
+
+fn report(m: i64, n: i64, s: mut ref String) {
+    let ans = unique_paths(m, n);
+    println(f"{ans}");
+    s.push(' ');
+    s.push_str(f"{ans}");
+}
+
+fn main() {
+    // One answer per case, then a `sums:` fold every solver and the oracle
+    // print identically for a byte-for-byte diff.
+    let mut s: String = "sums:";
+
+    report(3, 7, mut s);    // 28     — LeetCode example 1, C(8,2)
+    report(3, 2, mut s);    // 3      — LeetCode example 2, C(3,2)
+    report(1, 1, mut s);    // 1      — single cell, C(0,0)
+    report(1, 10, mut s);   // 1      — single row (all rights)
+    report(10, 1, mut s);   // 1      — single column (all downs)
+    report(2, 2, mut s);    // 2      — C(2,1)
+    report(3, 3, mut s);    // 6      — C(4,2)
+    report(7, 3, mut s);    // 28     — symmetry with case 1
+    report(10, 10, mut s);  // 48620  — C(18,9)
+    report(51, 9, mut s);   // 1916797311 — near i32 max, exercises big counts
+
+    println(s);
+}

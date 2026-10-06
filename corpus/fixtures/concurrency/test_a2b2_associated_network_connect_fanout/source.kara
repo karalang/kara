@@ -1,0 +1,12 @@
+
+        struct Conn { fd: i64 }
+        impl Conn {
+            fn connect(addr: String) -> Conn with sends(Network) receives(Network) {
+                return Conn { fd: 0 };
+            }
+        }
+        fn main() {
+            let a = Conn.connect("host-a");
+            let b = Conn.connect("host-b");
+        }
+        

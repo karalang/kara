@@ -1,0 +1,50 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct W { id: i64, s: String, t: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"s{i}" } }
+fn mkw(i: i64) -> W { return W { id: i, s: f"s{i}", t: f"t{i}" } }
+fn g1(c: bool) -> i64 {
+  let t: Option[S] = Some(mks(1));
+  if c { match t { Some(s) => { let k = s; println(f"k{k.id}") } None => {} } }
+  return 0
+}
+fn g2(c: bool) -> i64 {
+  let t: Option[S] = Some(mks(2));
+  if c { if let Some(s) = t { let k = s; println("k") } } else { println("e") }
+  return 0
+}
+fn g3(c: bool, d: bool) -> i64 {
+  let t: Option[S] = Some(mks(3));
+  if c { if d { match t { Some(s) => { let k = s; println("k") } None => {} } } }
+  return 0
+}
+fn g4(c: bool) -> i64 {
+  let t: Result[W, i64] = Ok(mkw(4));
+  if c { match t { Ok(w) => { let k = w; println("k") } Err(e) => {} } }
+  return 0
+}
+fn g5(c: bool) -> i64 {
+  let t: Option[S] = Some(mks(5));
+  match t { Some(s) => { let k = s; println("k") } None => {} }
+  return 0
+}
+fn g6(c: bool) -> i64 {
+  let t: Option[S] = Some(mks(6));
+  if c { match t { Some(s) => { let k = s; return k.id } None => {} } }
+  return 0
+}
+fn g7(c: bool) -> i64 {
+  let t: Option[W] = Some(mkw(7));
+  if c { match t { Some(w) => { let k = w; println("k") } None => {} } }
+  return 0
+}
+fn main() {
+  println(f"r {g1(false)}"); println(f"r {g1(true)}")
+  println(f"r {g2(false)}"); println(f"r {g2(true)}")
+  println(f"r {g3(false, true)}"); println(f"r {g3(true, false)}"); println(f"r {g3(true, true)}")
+  println(f"r {g4(false)}"); println(f"r {g4(true)}")
+  println(f"r {g5(false)}")
+  println(f"r {g6(false)}"); println(f"r {g6(true)}")
+  println(f"r {g7(false)}"); println(f"r {g7(true)}")
+}

@@ -1,0 +1,97 @@
+// LeetCode 255 — Verify Preorder Sequence in BST, divide and conquer.
+//
+// The structural answer rather than the clever one. In a preorder traversal the
+// first element is the root; everything after it that is SMALLER forms the left
+// subtree, and the rest forms the right — and because it is a BST, those two
+// groups are contiguous. So find the split point, check the right group lies
+// wholly above the root, and recurse into both halves with tightened bounds.
+//
+// This is the definition transcribed, and it depends on no invariant beyond
+// "preorder = root, then left block, then right block". The other two files rest
+// on an argument about a monotonically rising lower bound; this one rests on
+// nothing, which makes it the differential's reference when they disagree.
+//
+// The cost is that it is O(n²) in the worst case: a pure left spine makes the
+// scan for the split point traverse the whole remaining range at every level.
+// The stack version is O(n) precisely because it never re-reads.
+//
+// The window is EXCLUSIVE on both sides, so distinct values are enforced
+// structurally — an equal value fails a bound rather than needing its own check.
+//
+// The bounds carry `has_min` / `has_max` FLAGS rather than i64 sentinels. Using
+// i64.MIN as "no lower bound" would be wrong here, not merely inelegant: i64.MIN
+// is itself a legal input value, so a sentinel makes an unbounded position
+// indistinguishable from one bounded at the extreme. `[i64.MIN, 5]` is in the
+// tests for exactly that. Flags cost four parameters and remove the ambiguity
+// entirely — and unlike a sentinel they do not silently narrow the domain.
+
+fn check(
+    preorder: Slice[i64],
+    lo: i64,
+    hi: i64,
+    has_min: bool,
+    min: i64,
+    has_max: bool,
+    max: i64,
+) -> bool {
+    if lo > hi {
+        return true; // empty subtree
+    }
+    let root = preorder[lo];
+    if has_min and root <= min {
+        return false;
+    }
+    if has_max and root >= max {
+        return false;
+    }
+    // The left block is the maximal run below the root; everything after it
+    // belongs to the right subtree and must exceed the root.
+    let mut split = lo + 1;
+    while split <= hi and preorder[split] < root {
+        split = split + 1;
+    }
+    let left_ok = check(preorder, lo + 1, split - 1, has_min, min, true, root);
+    let right_ok = check(preorder, split, hi, true, root, has_max, max);
+    return left_ok and right_ok;
+}
+
+fn verify_preorder(preorder: Slice[i64]) -> bool {
+    let n = preorder.len();
+    if n == 0 {
+        return true;
+    }
+    return check(preorder, 0, n - 1, false, 0, false, 0);
+}
+
+fn report(preorder: Slice[i64], label: ref String) {
+    println(f"{label} -> {verify_preorder(preorder)}");
+}
+
+fn main() {
+    let a: Array[i64, 5] = [5, 2, 1, 3, 6];
+    report(a, "[5,2,1,3,6]");
+    let b: Array[i64, 5] = [5, 2, 6, 1, 3];
+    report(b, "[5,2,6,1,3]");
+    let c: Array[i64, 0] = [];
+    report(c, "[]");
+    let d: Array[i64, 1] = [1];
+    report(d, "[1]");
+    let e: Array[i64, 2] = [1, 2];
+    report(e, "[1,2]");
+    let f: Array[i64, 2] = [2, 1];
+    report(f, "[2,1]");
+    let g: Array[i64, 3] = [2, 3, 1];
+    report(g, "[2,3,1]");
+    let h: Array[i64, 3] = [1, 3, 2];
+    report(h, "[1,3,2]");
+    let i: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(i, "[1,2,3,4,5]");
+    let j: Array[i64, 5] = [5, 4, 3, 2, 1];
+    report(j, "[5,4,3,2,1]");
+    let k: Array[i64, 6] = [10, 5, 1, 7, 40, 50];
+    report(k, "[10,5,1,7,40,50]");
+    let l: Array[i64, 7] = [10, 5, 1, 7, 40, 50, 30];
+    report(l, "[10,5,1,7,40,50,30]");
+    let m: Array[i64, 2] = [-9223372036854775808, 5];
+    report(m, "[i64.MIN,5]");
+}

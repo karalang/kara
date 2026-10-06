@@ -1,0 +1,129 @@
+// LeetCode #132: Palindrome Partitioning II — minimum cuts, O(n²) DP.
+//
+// `pal[i][j]` = s[i..=j] is a palindrome, filled by increasing length. `cut[i]`
+// = min cuts for the prefix s[0..=i]: 0 when the whole prefix is a palindrome,
+// else min over j of `cut[j-1] + 1` where s[j..=i] is a palindrome. Answer is
+// `cut[n-1]`. The DP sibling of #131 (which enumerates every partition) — here
+// we only need the minimum cut count, so a table replaces the backtracking.
+
+fn min_cut(s: String) -> i64 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    if n <= 1 {
+        return 0;
+    }
+
+    // pal[i][j] palindrome table.
+    let mut pal: Vec[Vec[bool]] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut row: Vec[bool] = Vec.new();
+        let mut j = 0;
+        while j < n {
+            row.push(i == j); // single chars are palindromes
+            j = j + 1;
+        }
+        pal.push(row);
+        i = i + 1;
+    }
+
+    // Fill by increasing substring length.
+    let mut length = 2;
+    while length <= n {
+        let mut lo = 0;
+        while lo <= n - length {
+            let hi = lo + length - 1;
+            let ends_match = bytes[lo] == bytes[hi];
+            let inner_ok = length == 2 or pal[lo + 1][hi - 1];
+            if ends_match and inner_ok {
+                pal[lo][hi] = true;
+            }
+            lo = lo + 1;
+        }
+        length = length + 1;
+    }
+
+    // cut[i] = min cuts for prefix s[0..=i].
+    let mut cut: Vec[i64] = Vec.new();
+    i = 0;
+    while i < n {
+        cut.push(0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < n {
+        if pal[0][i] {
+            cut[i] = 0;
+        } else {
+            let mut best = i; // at most i cuts
+            let mut j = 1;
+            while j <= i {
+                if pal[j][i] and (cut[j - 1] + 1) < best {
+                    best = cut[j - 1] + 1;
+                }
+                j = j + 1;
+            }
+            cut[i] = best;
+        }
+        i = i + 1;
+    }
+    cut[n - 1]
+}
+
+fn lcg_str(seed: i64, n: i64, alpha: i64) -> String {
+    let alphabet: String = "abcdefghijklmnopqrstuvwxyz";
+    let mut out: String = "";
+    let mut x = seed;
+    let mut k = 0;
+    while k < n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        let target = x % alpha;
+        let mut idx = 0;
+        for ch in alphabet.chars() {
+            if idx == target {
+                out.push(ch);
+            }
+            idx = idx + 1;
+        }
+        k = k + 1;
+    }
+    out
+}
+
+fn main() {
+    let m = 1000000007;
+    let mut sink = 0;
+
+    let mut cases: Vec[String] = Vec.new();
+    cases.push("aab");
+    cases.push("a");
+    cases.push("ab");
+    cases.push("aabaa");
+    cases.push("abccba");
+    cases.push("racecar");
+    cases.push("noonabbad");
+    cases.push("abcde");
+    cases.push("aaaaa");
+    cases.push("cabababcbc");
+
+    let mut i = 0;
+    while i < cases.len() {
+        let s = cases[i].clone();
+        let c = min_cut(s);
+        println(f"{cases[i]}: {c}");
+        sink = (sink * 1000003 + c) % m;
+        i = i + 1;
+    }
+
+    let mut t = 0;
+    while t < 5 {
+        let s = lcg_str(t + 1, 20 + t * 8, 2 + (t % 3));
+        let clen = s.bytes().len();
+        let c = min_cut(s);
+        println(f"lcg{t}(len={clen}): {c}");
+        sink = (sink * 1000003 + c) % m;
+        t = t + 1;
+    }
+
+    println(f"sink: {sink}");
+}

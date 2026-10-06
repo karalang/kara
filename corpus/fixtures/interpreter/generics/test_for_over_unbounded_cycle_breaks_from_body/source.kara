@@ -1,0 +1,12 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let mut n = 0;
+    let mut a = 0;
+    for x in v.iter().cycle() {
+        if n == 7 { break; }
+        n = n + 1;
+        a = a + x;
+    }
+    println(a);
+}

@@ -1,0 +1,16 @@
+
+fn build(n: i64) -> Vec[VecDeque[String]] {
+    let mut d: VecDeque[String] = VecDeque.new();
+    d.push_back(f"deque payload padded beyond thirty-six bytes {n}");
+    let mut v: Vec[VecDeque[String]] = Vec.new();
+    v.push(d);
+    v
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}

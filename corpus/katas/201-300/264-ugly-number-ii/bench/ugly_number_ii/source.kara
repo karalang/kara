@@ -1,0 +1,50 @@
+// Benchmark harness for LeetCode #264 — Ugly Number II.
+//
+// There is nothing to build once here: the DP table IS the work, and it is
+// rebuilt from scratch on every punch. So the workload is a punch loop over a
+// VARYING n — `nth_ugly` is pure, and a fixed n would let any of the five
+// compilers hoist the call out of the loop.
+//
+// n stays in [9000, 12000): the 12,200-th ugly number is ~5.08e18, so every
+// candidate `dp[i] * 5` still fits i64 and kara's checked multiply never traps.
+// Each punch allocates a fresh Vec and grows it to n, so the measurement is
+// half merge-pointer arithmetic and half Vec growth + allocation.
+
+fn nth_ugly(n: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    dp.push(1);
+
+    let mut i2 = 0;
+    let mut i3 = 0;
+    let mut i5 = 0;
+
+    while dp.len() < n {
+        let c2 = dp[i2] * 2;
+        let c3 = dp[i3] * 3;
+        let c5 = dp[i5] * 5;
+
+        let mut next = c2;
+        if c3 < next { next = c3; }
+        if c5 < next { next = c5; }
+
+        dp.push(next);
+
+        if c2 == next { i2 = i2 + 1; }
+        if c3 == next { i3 = i3 + 1; }
+        if c5 == next { i5 = i5 + 1; }
+    }
+    return dp[n - 1];
+}
+
+fn main() {
+    let iters = 12000;
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let n = 9000 + (it * 37) % 3001;
+        sink = (sink * 31 + nth_ugly(n)) % 1000000007;
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

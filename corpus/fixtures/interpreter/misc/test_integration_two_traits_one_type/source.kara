@@ -1,0 +1,23 @@
+
+trait Default {
+    fn default() -> Self;
+}
+trait FromI64 {
+    fn from_i64(n: i64) -> Self;
+}
+
+struct Counter { value: i64 }
+
+impl Default for Counter {
+    fn default() -> Counter { Counter { value: 0 } }
+}
+impl FromI64 for Counter {
+    fn from_i64(n: i64) -> Counter { Counter { value: n } }
+}
+
+fn main() {
+    let a: Counter = default();
+    let b: Counter = from_i64(7);
+    println(a.value);
+    println(b.value);
+}

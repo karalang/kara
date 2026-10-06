@@ -1,0 +1,14 @@
+
+fn choose(a: Vec[String], b: Vec[String], first: bool) -> Vec[String] {
+    if first { a } else { b }
+}
+
+fn main() {
+    let mut x: Vec[String] = Vec.new();
+    x.push(f"one");
+    x.push(f"two");
+    let mut y: Vec[String] = Vec.new();
+    y.push(f"three");
+    let r = choose(x, y, false);
+    println(r[0]);
+}

@@ -1,0 +1,95 @@
+// LeetCode #10: Regular Expression Matching — recursive matcher with
+// support for `.` (any single char) and `*` (zero or more of the
+// preceding element). O(2^(m+n)) worst case time; O(m+n) recursion
+// depth. The match must cover the entire input string, not a prefix.
+//
+// Two recursive cases driven by the current pattern character:
+//
+//   1. The next-after-current pattern char is `*` — `x*` matches zero
+//      or more copies of `x`. Two recursive branches:
+//        a. Skip the `x*` (zero matches): is_match(s, p[2..]).
+//        b. Consume one s char (s[0] must match `x`) and keep `x*` for
+//           a possible further match: is_match(s[1..], p).
+//      The branches are OR'd. Branch (b) only fires when first_match,
+//      which collapses the recursive expansion when the leading s char
+//      doesn't match `x` at all.
+//
+//   2. Otherwise — both pattern's first char and string's first char
+//      advance by 1 if and only if they match: first_match AND
+//      is_match(s[1..], p[1..]).
+//
+// Termination: pattern emptiness drives the base case (j == m). At
+// j == m the match holds iff s is also fully consumed (i == n). The
+// `*` branch can extend the recursion when consuming s chars, but
+// each non-`*` step reduces (n - i) + (m - j) by at least 1, and the
+// `*` branch's "skip" subcall reduces (m - j) by 2, so progress is
+// guaranteed; the worst-case branching factor of 2 is what gives the
+// exponential bound (a true bottom-up DP would close that to O(m*n)
+// but is overkill for the LeetCode-sized inputs the kata covers).
+//
+// We pass `Slice[u8]` + indices into the recursive helper rather than
+// subslicing because Kāra's `Slice[u8]` doesn't have an in-place
+// `[i..]` range-slice syntax today — and even if it did, allocating a
+// new slice header per recursive call would be wasteful when an index
+// pair captures the same window for free.
+
+fn is_match_at(s: Slice[u8], i: i64, p: Slice[u8], j: i64) -> bool {
+    let n = s.len();
+    let m = p.len();
+
+    if j == m {
+        return i == n;
+    }
+
+    let first_match: bool = i < n and (p[j] == s[i] or p[j] == b'.');
+
+    if j + 1 < m and p[j + 1] == b'*' {
+        // Either consume the entire `x*` with zero s chars, or eat one
+        // s char and keep `x*` for a possible further match.
+        return is_match_at(s, i, p, j + 2)
+            or (first_match and is_match_at(s, i + 1, p, j));
+    }
+
+    first_match and is_match_at(s, i + 1, p, j + 1)
+}
+
+fn is_match(s: ref String, p: ref String) -> bool {
+    is_match_at(s.bytes(), 0, p.bytes(), 0)
+}
+
+fn report(s: ref String, p: ref String) {
+    let r = is_match(s, p);
+    println(f"is_match(\"{s}\", \"{p}\"): {r}");
+}
+
+fn main() {
+    // LeetCode #10 reference examples first.
+    report("aa", "a");                      // false  (one 'a' can't match two)
+    report("aa", "a*");                     // true   (`a*` matches any 'a' run)
+    report("ab", ".*");                     // true   (`.*` matches anything)
+    report("aab", "c*a*b");                 // true   (`c*` zero-matches, `a*` eats "aa", then "b")
+    report("mississippi", "mis*is*p*.");    // false  (`p*.` can't span "ippi")
+
+    // Empty-string edges — base cases.
+    report("", "");                         // true   (both empty)
+    report("", "a*");                       // true   (`a*` zero-matches)
+    report("", "a*b*c*");                   // true   (all-`*` chain zero-matches)
+    report("", "a");                        // false  (s empty, p needs an 'a')
+    report("a", "");                        // false  (p empty, s has 'a')
+
+    // `*` interactions.
+    report("aaa", "a*a");                   // true   (`a*` eats "aa", final 'a' matches)
+    report("aaa", "ab*a*c*a");              // true   (`b*c*` zero, `a*` eats "a", then 'a')
+    report("aaa", "ab*a");                  // false  ('b*' zero, leaves "aa" vs "a" — too many a's)
+    report("ab", ".*c");                    // false  (no 'c' to anchor at end)
+    report("a", "a*a");                     // true   (`a*` zero, then 'a')
+    report("a", "ab*");                     // true   (`a` then `b*` zero)
+    report("abcd", "d*");                   // false  (`d*` can't match "abcd")
+    report("abc", "..");                    // false  (only matches 2-char input)
+    report("abc", "...");                   // true   (any 3-char string)
+    report("abc", "....");                  // false  (would need 4 chars)
+    report("aaab", "a*b");                  // true   (`a*` eats "aaa", then 'b')
+
+    // Long-tail edge — exercises the recursive-branch explosion.
+    report("aaaaaaaaaaaaab", "a*a*a*a*a*b");// true   (`b` anchors, all `a*` collectively eat "aaaa...a")
+}

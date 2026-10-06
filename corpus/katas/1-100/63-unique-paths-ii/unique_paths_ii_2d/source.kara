@@ -1,0 +1,105 @@
+// LeetCode #63: Unique Paths II — full DP table, O(m·n) time and space.
+//
+// The textbook form of the obstacle recurrence the ★ file
+// ([`unique_paths_ii.kara`](unique_paths_ii.kara)) rolls onto one row. Here the
+// whole grid of path counts is materialised: `paths[i][j]` is the number of
+// obstacle-free right/down routes from the start to cell `(i, j)`,
+//
+//     paths[i][j] = 0                              if grid[i][j] is an obstacle
+//     paths[i][j] = paths[i-1][j] + paths[i][j-1]  otherwise
+//
+// with `paths[0][0] = 1` when the start is clear. The answer is
+// `paths[m-1][n-1]`.
+//
+// Whereas the rolling version overwrites one array and reasons about
+// read-before-write ordering, the 2-D table has NO aliasing subtlety at all:
+// every cell is written exactly once, and the two cells it reads —
+// `paths[i-1][j]` in the previous (already-complete) row and `paths[i][j-1]`
+// earlier in the current row — are finalised before it is reached. Missing
+// neighbours (the top row's `i-1`, the left column's `j-1`) simply contribute 0,
+// so the single additive rule covers the borders too — no separate "seed the
+// first row/column to 1" pass, because past the first obstacle those borders are
+// no longer all-1s. Its cost is the O(m·n) grid it allocates, which the rolling
+// form trades away for O(n); keeping it here shows the space optimisation as a
+// diff and cross-checks the recurrence independently. The table is a
+// `Vec[Vec[i64]]`, the same 2-D shape as kata [#54](../54-spiral-matrix/), kata
+// [#48](../48-rotate-image/), and #62's own 2-D variant.
+//
+// LeetCode guarantees the answer ≤ 2·10⁹ (fits i32); i64 here for corpus
+// uniformity. Each cell is a partial path count ≤ the final answer, so nothing
+// overflows.
+
+fn unique_paths_with_obstacles(grid: ref Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+
+    // Build the m×n path-count table. An obstacle cell is 0; the start is 1 (if
+    // clear); every other cell sums whichever in-neighbours exist.
+    let mut paths: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < rows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < cols {
+            if grid[i][j] == 1 {
+                row.push(0);
+            } else if i == 0 and j == 0 {
+                row.push(1);
+            } else {
+                // paths[i-1] is the finished previous row; row[j-1] is the cell
+                // just written this pass. Absent neighbours contribute 0.
+                let mut v = 0;
+                if i > 0 {
+                    v = v + paths[i - 1][j];
+                }
+                if j > 0 {
+                    v = v + row[j - 1];
+                }
+                row.push(v);
+            }
+            j = j + 1;
+        }
+        paths.push(row);
+        i = i + 1;
+    }
+
+    paths[rows - 1][cols - 1]
+}
+
+// ---- test harness (shared verbatim with unique_paths_ii.kara) ----------------
+
+fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+    let ans = unique_paths_with_obstacles(grid);
+    println(f"{ans}");
+    s.push(' ');
+    s.push_str(f"{ans}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report([[0, 0, 0], [0, 1, 0], [0, 0, 0]], mut s);   // 2
+    report([[0, 1], [0, 0]], mut s);                    // 1
+    report([[0]], mut s);                               // 1
+    report([[1]], mut s);                               // 0
+    report([[1, 0], [0, 0]], mut s);                    // 0
+    report([[0, 0], [0, 1]], mut s);                    // 0
+    report([[0, 0], [1, 1], [0, 0]], mut s);            // 0
+    report([[0, 0, 0], [0, 0, 0], [0, 0, 0]], mut s);   // 6
+    report([[0, 0, 0, 0, 0, 0, 0],                      // 28
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0]], mut s);
+    report([[0, 0, 0, 0, 0],                            // 8
+            [0, 1, 0, 1, 0],
+            [0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0]], mut s);
+    report([[0, 0, 0, 0, 0]], mut s);                   // 1
+    report([[0, 0, 1, 0, 0]], mut s);                   // 0
+    report([[0, 0, 0, 0, 0],                            // 15
+            [0, 1, 0, 0, 0],
+            [0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0]], mut s);
+
+    println(s);
+}

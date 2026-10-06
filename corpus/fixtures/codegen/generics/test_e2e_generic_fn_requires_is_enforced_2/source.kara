@@ -1,0 +1,11 @@
+
+fn gen_req[T](v: ref Vec[T]) -> i64
+    requires v.len() > 1
+where T: Ord
+{ v.len() }
+fn main() {
+    let a: Vec[i64] = [1, 2, 3];
+    let s: Vec[String] = ["x", "y"];
+    println(gen_req(a));
+    println(gen_req(s));
+}

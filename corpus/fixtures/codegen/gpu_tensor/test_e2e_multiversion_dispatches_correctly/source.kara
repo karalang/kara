@@ -1,0 +1,11 @@
+
+#[multiversion(baseline, "avx2", "avx512f")]
+fn addup(a: i64, b: i64) -> i64 { a + b }
+
+#[multiversion(baseline, "avx2")]
+fn scale(v: i64) -> i64 { v * 3 }
+
+fn main() {
+    println(addup(20, 22));
+    println(scale(14));
+}

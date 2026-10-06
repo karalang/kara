@@ -1,0 +1,28 @@
+
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, s: String }
+fn idnest(o: Option[Option[i64]]) -> Option[Option[i64]] { o }
+fn idwide(o: Option[Wide]) -> Option[Wide] { o }
+fn mk(n: i64, i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str((n + i).to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        let a: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        let abk = idnest(a);
+        match abk { Option.Some(Option.Some(x)) => { acc = acc + x; } _ => { acc = acc - 1; } }
+        let w: Option[Wide] = Option.Some(Wide { a: 1, b: 2, c: 3, d: 4, e: 5, s: mk(n, i) });
+        let wbk = idwide(w);
+        match wbk { Option.Some(x) => { if x.s.contains("payload") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        let d: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        idnest(d);
+        i = i + 1;
+    }
+    println(acc);
+}

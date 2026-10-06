@@ -1,0 +1,37 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn make(n: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = n;
+    while i > 0 {
+        let node = ListNode { val: i, next: head };
+        head = Some(node);
+        i = i - 1;
+    }
+    head
+}
+fn nth(head: Option[ListNode], k: i64) -> Option[ListNode] {
+    if k == 0 {
+        return head;
+    }
+    if head.is_none() {
+        return None;
+    }
+    let node = head.unwrap();
+    nth(node.next, k - 1)
+}
+fn sum(head: Option[ListNode]) -> i64 {
+    let mut total = 0;
+    let mut cur = head;
+    while cur.is_some() {
+        let node = cur.unwrap();
+        total = total + node.val;
+        cur = node.next;
+    }
+    total
+}
+fn main() {
+    println(sum(nth(make(5), 3)));
+    println(sum(nth(make(5), 0)));
+    if nth(make(2), 5).is_none() { println(1); }
+}

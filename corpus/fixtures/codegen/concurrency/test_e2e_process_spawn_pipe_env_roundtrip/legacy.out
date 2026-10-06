@@ -1,0 +1,12 @@
+out=kara-spawn
+
+taken once
+code=0 success=true
+env=env-ok
+env-code=0
+wrote
+closed
+cat=through-the-pipe
+
+cat-code=0
+bad=NotFound

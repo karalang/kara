@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    let mut it = m.iter();
+    let (k1, v1) = it.next().unwrap();
+    let (k2, v2) = it.next().unwrap();
+    println(f"{k1}{v1}");
+    println(f"{k2}{v2}");
+}

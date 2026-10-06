@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut v: Vec[i32] = [10, 20, 30];
+    println(v[0]);
+    println(v[2]);
+    v.push(40);
+    println(v[3]);
+    let mut total = 0;
+    for x in v {
+        total = total + (x as i64);
+    }
+    println(total);
+    let c: Column[i32] = Column.from_vec([10, 20, 30]);
+    println(c.sum());
+    let e: Column[i8] = Column.from_vec([1, 2, 3]);
+    println(e.sum());
+}

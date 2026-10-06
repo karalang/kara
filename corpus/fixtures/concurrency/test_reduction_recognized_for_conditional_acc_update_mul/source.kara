@@ -1,0 +1,11 @@
+
+        fn main() {
+            let mut p: i64 = 1i64;
+            let mut k: i64 = 0i64;
+            while k < 10i64 {
+                let cond: bool = k > 2i64;
+                if cond { p = p * 2i64; }
+                k = k + 1i64;
+            }
+        }
+        

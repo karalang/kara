@@ -1,0 +1,24 @@
+
+fn ssort(xs: mut Slice[String]) { xs.sort(); }
+fn srev(xs: mut Slice[String]) { xs.reverse(); }
+fn sswap(xs: mut Slice[String]) { xs.swap(0i64, 2i64); }
+fn sfill(xs: mut Slice[String]) { xs.fill("zz"); }
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("pear"); v.push("apple"); v.push("fig");
+    ssort(v.as_slice_mut());
+    println(f"01 {v[0i64]} {v[1i64]} {v[2i64]}");
+    srev(v.as_slice_mut());
+    println(f"02 {v[0i64]} {v[1i64]} {v[2i64]}");
+    sswap(v.as_slice_mut());
+    println(f"03 {v[0i64]} {v[1i64]} {v[2i64]}");
+    {
+        let sv = v.as_slice();
+        let cs = sv.chunks(2i64);
+        let c0 = cs[0i64];
+        println(f"04 {cs.len()} {c0.len()} {c0[0i64]}");
+    }
+    sfill(v.as_slice_mut());
+    println(f"05 {v[0i64]} {v[1i64]} {v[2i64]}");
+}

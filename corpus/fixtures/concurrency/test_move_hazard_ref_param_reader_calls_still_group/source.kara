@@ -1,0 +1,20 @@
+
+        effect resource R;
+        effect resource S;
+        fn total(v: ref Vec[i64]) -> i64 writes(R) {
+            let mut t = 0;
+            for x in v.iter() { t = t + x; }
+            t
+        }
+        fn peak(v: ref Vec[i64]) -> i64 writes(S) {
+            let mut m = 0;
+            for x in v.iter() { if x > m { m = x; } }
+            m
+        }
+        fn main() {
+            let v: Vec[i64] = [3, 1, 4, 1, 5, 9, 2, 6];
+            let a = total(v);
+            let b = peak(v);
+            println(a + b);
+        }
+        

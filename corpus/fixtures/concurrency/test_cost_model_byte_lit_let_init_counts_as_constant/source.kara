@@ -1,0 +1,12 @@
+
+        fn main() {
+            let l: i64 = 80i64;
+            let zero: u8 = b'0';
+            let mut buf: Vec[u8] = Vec.new();
+            let mut j: i64 = 0i64;
+            println(l);
+            println(zero);
+            println(buf.len());
+            println(j);
+        }
+        

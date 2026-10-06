@@ -1,0 +1,121 @@
+// Benchmark workload — Set Matrix Zeroes (LeetCode #73).
+// O(1)-space first-row/col marker algorithm (the kata's ★), run K times over a
+// freshly built rows×cols matrix. Each iteration: build the matrix with all
+// non-zero values (1..9) via growing `Vec.new()+push` — a Vec of Vecs, NOT a
+// fixed 2-D array, so every language mirror grows the same dynamic structure
+// (the #72 fairness lesson) — punch THREE zeros at k-dependent positions, run
+// set_zeroes in place, then fold the surviving grid into a rolling hash.
+// Punching only three zeros keeps the result non-degenerate (three rows + three
+// columns get zeroed, the rest survive), so the hash actually varies with k.
+// See ../README.md § Benchmarks.
+
+fn set_zeroes(m: mut ref Vec[Vec[i64]]) {
+    let rows = m.len();
+    if rows == 0 {
+        return;
+    }
+    let cols = m[0].len();
+
+    let mut first_row_zero = false;
+    let mut first_col_zero = false;
+    let mut j = 0;
+    while j < cols {
+        if m[0][j] == 0 {
+            first_row_zero = true;
+        }
+        j = j + 1;
+    }
+    let mut i = 0;
+    while i < rows {
+        if m[i][0] == 0 {
+            first_col_zero = true;
+        }
+        i = i + 1;
+    }
+
+    i = 1;
+    while i < rows {
+        j = 1;
+        while j < cols {
+            if m[i][j] == 0 {
+                m[i][0] = 0;
+                m[0][j] = 0;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    i = 1;
+    while i < rows {
+        j = 1;
+        while j < cols {
+            if m[i][0] == 0 or m[0][j] == 0 {
+                m[i][j] = 0;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    if first_row_zero {
+        j = 0;
+        while j < cols {
+            m[0][j] = 0;
+            j = j + 1;
+        }
+    }
+    if first_col_zero {
+        i = 0;
+        while i < rows {
+            m[i][0] = 0;
+            i = i + 1;
+        }
+    }
+}
+
+fn main() {
+    let total = 100000;
+    let modulus = 1000000007;
+    let rows = 20;
+    let cols = 20;
+
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        // Build a fresh all-non-zero matrix (values 1..9) with growing Vecs.
+        let mut m: Vec[Vec[i64]] = Vec.new();
+        let mut i = 0;
+        while i < rows {
+            let mut row: Vec[i64] = Vec.new();
+            let mut j = 0;
+            while j < cols {
+                row.push(1 + (i * 31 + j * 17 + k) % 9);
+                j = j + 1;
+            }
+            m.push(row);
+            i = i + 1;
+        }
+
+        // Punch three zeros at k-dependent positions.
+        m[k % rows][k % cols] = 0;
+        m[(k * 7) % rows][(k * 13) % cols] = 0;
+        m[(k * 3) % rows][(k * 11) % cols] = 0;
+
+        set_zeroes(mut m);
+
+        // Fold the surviving grid.
+        i = 0;
+        while i < rows {
+            let row = ref m[i];
+            let mut j = 0;
+            while j < cols {
+                acc = (acc * 131 + row[j]) % modulus;
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    println(f"{acc}");
+}

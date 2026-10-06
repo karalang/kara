@@ -1,0 +1,24 @@
+
+struct R { id: i64, tag: String, buf: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.buf.len()}") } }
+enum Sv { Hold { inner: R }, Nil }
+impl Drop for Sv { fn drop(mut ref self) { println("dSv") } }
+enum Tv { A(R), Nil }
+impl Drop for Tv { fn drop(mut ref self) { println("dTv") } }
+
+fn mkr(n: i64) -> R {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 32 { v.push(i + n); i = i + 1; }
+    return R { id: n, tag: "t", buf: v };
+}
+
+fn eat(v: Sv) { println("e"); }
+fn eatt(v: Tv) { println("t"); }
+
+fn main() {
+    eat(Sv.Hold { inner: mkr(1) });
+    let a = Sv.Hold { inner: mkr(2) };
+    eat(a);
+    eatt(Tv.A(mkr(3)));
+}

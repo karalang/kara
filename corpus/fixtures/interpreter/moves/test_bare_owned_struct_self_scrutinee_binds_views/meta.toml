@@ -1,0 +1,13 @@
+source = "tests/interpreter/moves.rs::test_bare_owned_struct_self_scrutinee_binds_views"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["drop"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

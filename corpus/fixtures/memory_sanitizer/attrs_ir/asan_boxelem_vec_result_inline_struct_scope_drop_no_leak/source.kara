@@ -1,0 +1,16 @@
+
+struct Holder { name: String, id: i64 }
+fn build(n: i64) -> Vec[Result[Holder, i64]] {
+    let mut v: Vec[Result[Holder, i64]] = Vec.new();
+    v.push(Ok(Holder { name: f"holder payload padded beyond thirty-six bytes {n}", id: n }));
+    v.push(Err(n));
+    v
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}

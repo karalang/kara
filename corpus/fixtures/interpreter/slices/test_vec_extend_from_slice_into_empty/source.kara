@@ -1,0 +1,10 @@
+
+        fn main() {
+            let src: Vec[i64] = Vec.filled(4, 9);
+            let mut dst: Vec[i64] = Vec.new();
+            dst.extend_from_slice(src);
+            println(dst.len());
+            println(dst[0]);
+            println(dst[3]);
+        }
+    

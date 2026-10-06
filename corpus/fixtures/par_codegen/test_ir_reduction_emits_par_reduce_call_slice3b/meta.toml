@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_ir_reduction_emits_par_reduce_call_slice3b"
+dedup_of = ["tests/par_codegen.rs::ENV_LOCK", "tests/par_codegen.rs::test_e2e_reduction_for_range_add_i64_multi_worker_slice3b", "tests/par_codegen.rs::test_ir_reduction_descriptor_emits_per_iter_cost_units_slice3b8"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

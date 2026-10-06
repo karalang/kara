@@ -1,0 +1,7 @@
+
+fn snapshot() with reads(FileSystem) reads(Clock) sends(Network) sends(ProcessTable) {
+}
+
+fn main() {
+    snapshot();
+}

@@ -1,0 +1,12 @@
+
+fn main() {
+    let v: Vec[i64] = Vec.filled(5, 0);
+    println(v.len());
+    let mut i = 0i64;
+    let mut sum = 0i64;
+    while i < 5 {
+        sum = sum + v[i];
+        i = i + 1;
+    }
+    println(sum);
+}

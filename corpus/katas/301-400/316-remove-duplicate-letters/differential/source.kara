@@ -1,0 +1,437 @@
+// LeetCode #316: Remove Duplicate Letters — differential + property harness.
+//
+// Four arms: the monotone stack (★), the recursive greedy, the suffix-mask
+// scan, and the 2^n brute force. The brute is a COMPLETE oracle, so on the
+// cases it can reach (n <= BRUTE_NMAX) it settles everything; beyond that the
+// three fast arms are cross-checked and then held to properties that do not
+// know the algorithm:
+//
+//   P1   brute agreement (n <= BRUTE_NMAX)
+//   P2   greedy == stack
+//   P3   mask == stack
+//   P4   the answer is a permutation of the distinct letters of s
+//   P5   the answer is a subsequence of s
+//   P6   relabel commutes: solve(map(s)) == map(solve(s)) for two strictly
+//        increasing letter maps (shift, stride-2) — per arm
+//   P7   idempotence: solve(solve(s)) == solve(s) — per arm
+//   P8   appending the sorted alphabet gives the sorted alphabet — per arm
+//   P9   an all-distinct string is a fixed point: solve(reverse(answer)) — per arm
+//   P10  local optimality: no adjacent swap of the answer is both a
+//        subsequence of s and smaller
+//   P11  first letter closed form: the smallest letter at or before the
+//        earliest last-occurrence
+//
+// P6–P9 relate two invocations of the same arm, so they carry weight the
+// oracle cannot: a mutant that is wrong the same way on both inputs still has
+// to be wrong CONSISTENTLY under relabelling to slip P6.
+
+const NMAX: i64 = 40;
+const SEEDS: i64 = 24;
+const BRUTE_NMAX: i64 = 11;
+const BRUTE_SEEDS: i64 = 16;
+
+// -------------------------------------------------------------- arms ---
+
+fn solve_stack(s: ref String) -> String {
+    let bs = s.bytes();
+    let n = bs.len();
+    let mut last: Vec[i64] = Vec.new();
+    for k in 0..26 { last.push(-1); }
+    for i in 0..n { last[(bs[i] - b'a') as i64] = i; }
+    let mut on_stack: Vec[bool] = Vec.new();
+    for k in 0..26 { on_stack.push(false); }
+    let mut stack: Vec[u8] = Vec.new();
+    for i in 0..n {
+        let c = bs[i];
+        let ci = (c - b'a') as i64;
+        if on_stack[ci] { continue; }
+        while stack.len() > 0 {
+            let top = stack[stack.len() - 1];
+            if top > c and last[(top - b'a') as i64] > i {
+                stack.pop();
+                on_stack[(top - b'a') as i64] = false;
+            } else {
+                break;
+            }
+        }
+        stack.push(c);
+        on_stack[ci] = true;
+    }
+    let mut out = String.new();
+    for i in 0..stack.len() { out.push(stack[i] as char); }
+    return out;
+}
+
+fn greedy_rec(bs: ref Vec[u8]) -> String {
+    if bs.len() == 0 { return String.new(); }
+    let mut count: Vec[i64] = Vec.new();
+    for k in 0..26 { count.push(0); }
+    for i in 0..bs.len() { count[(bs[i] - b'a') as i64] += 1; }
+    let mut pos = 0;
+    for i in 0..bs.len() {
+        if bs[i] < bs[pos] { pos = i; }
+        let ci = (bs[i] - b'a') as i64;
+        count[ci] -= 1;
+        if count[ci] == 0 { break; }
+    }
+    let first = bs[pos];
+    let mut rest: Vec[u8] = Vec.new();
+    for i in (pos + 1)..bs.len() {
+        if bs[i] != first { rest.push(bs[i]); }
+    }
+    let mut out = String.new();
+    out.push(first as char);
+    out.push_str(greedy_rec(rest));
+    return out;
+}
+
+fn solve_greedy(s: ref String) -> String {
+    let bs = s.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    for i in 0..bs.len() { v.push(bs[i]); }
+    return greedy_rec(v);
+}
+
+fn solve_mask(s: ref String) -> String {
+    let bs = s.bytes();
+    let n = bs.len();
+    let mut suf: Vec[i64] = Vec.new();
+    for i in 0..(n + 1) { suf.push(0); }
+    let mut i = n - 1;
+    while i >= 0 {
+        suf[i] = suf[i + 1] | (1 << ((bs[i] - b'a') as i64));
+        i = i - 1;
+    }
+    let mut out = String.new();
+    let mut need = suf[0];
+    let mut start = 0;
+    while need != 0 {
+        let mut placed = false;
+        for c in 0..26 {
+            if placed { break; }
+            if (need & (1 << c)) == 0 { continue; }
+            let want = (c as u8) + b'a';
+            let mut p = start;
+            while p < n {
+                if bs[p] == want and (suf[p] & need) == need {
+                    out.push(want as char);
+                    need = need & ~(1 << c);
+                    start = p + 1;
+                    placed = true;
+                    break;
+                }
+                p = p + 1;
+            }
+        }
+    }
+    return out;
+}
+
+fn solve_brute(s: ref String) -> String {
+    let bs = s.bytes();
+    let n = bs.len();
+    let mut present: Vec[bool] = Vec.new();
+    for k in 0..26 { present.push(false); }
+    for i in 0..n { present[(bs[i] - b'a') as i64] = true; }
+    let mut k = 0;
+    for c in 0..26 { if present[c] { k = k + 1; } }
+    let mut best = String.new();
+    let mut have_best = false;
+    let limit = 1 << n;
+    let mut mask = 0;
+    while mask < limit {
+        let mut seen: Vec[bool] = Vec.new();
+        for c in 0..26 { seen.push(false); }
+        let mut cand = String.new();
+        let mut ok = true;
+        let mut taken = 0;
+        for i in 0..n {
+            if (mask & (1 << i)) != 0 {
+                let ci = (bs[i] - b'a') as i64;
+                if seen[ci] { ok = false; break; }
+                seen[ci] = true;
+                cand.push(bs[i] as char);
+                taken = taken + 1;
+            }
+        }
+        if ok and taken == k {
+            if not have_best or cand < best {
+                best = cand;
+                have_best = true;
+            }
+        }
+        mask = mask + 1;
+    }
+    return best;
+}
+
+fn solve_arm(arm: i64, s: ref String) -> String {
+    if arm == 0 { return solve_stack(s); }
+    if arm == 1 { return solve_greedy(s); }
+    return solve_mask(s);
+}
+
+// ----------------------------------------------------------- helpers ---
+
+fn from_bytes(v: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for i in 0..v.len() { s.push(v[i] as char); }
+    return s;
+}
+
+fn is_subsequence(small: ref String, big: ref String) -> bool {
+    let a = small.bytes();
+    let b = big.bytes();
+    let mut j = 0;
+    for i in 0..b.len() {
+        if j < a.len() and a[j] == b[i] { j = j + 1; }
+    }
+    return j == a.len();
+}
+
+fn sorted_distinct(s: ref String) -> String {
+    let bs = s.bytes();
+    let mut present: Vec[bool] = Vec.new();
+    for k in 0..26 { present.push(false); }
+    for i in 0..bs.len() { present[(bs[i] - b'a') as i64] = true; }
+    let mut out = String.new();
+    for c in 0..26 {
+        if present[c] { out.push(((c as u8) + b'a') as char); }
+    }
+    return out;
+}
+
+fn is_permutation_of_distinct(r: ref String, s: ref String) -> bool {
+    let rb = r.bytes();
+    let mut seen: Vec[bool] = Vec.new();
+    for k in 0..26 { seen.push(false); }
+    for i in 0..rb.len() {
+        let ci = (rb[i] - b'a') as i64;
+        if seen[ci] { return false; }
+        seen[ci] = true;
+    }
+    return sorted_distinct(r) == sorted_distinct(s);
+}
+
+// letter c -> 'a' + c*stride + shift, strictly increasing in c.
+fn relabel(s: ref String, stride: i64, shift: i64) -> String {
+    let bs = s.bytes();
+    let mut out = String.new();
+    for i in 0..bs.len() {
+        let c = (bs[i] - b'a') as i64;
+        out.push((((c * stride + shift) as u8) + b'a') as char);
+    }
+    return out;
+}
+
+fn reverse(s: ref String) -> String {
+    let bs = s.bytes();
+    let mut out = String.new();
+    let mut i = bs.len() - 1;
+    while i >= 0 { out.push(bs[i] as char); i = i - 1; }
+    return out;
+}
+
+fn swap_adjacent(s: ref String, at: i64) -> String {
+    let bs = s.bytes();
+    let mut out = String.new();
+    for i in 0..bs.len() {
+        if i == at { out.push(bs[i + 1] as char); }
+        else if i == at + 1 { out.push(bs[i - 1] as char); }
+        else { out.push(bs[i] as char); }
+    }
+    return out;
+}
+
+fn max_letter(s: ref String) -> i64 {
+    let bs = s.bytes();
+    let mut m = 0;
+    for i in 0..bs.len() {
+        let c = (bs[i] - b'a') as i64;
+        if c > m { m = c; }
+    }
+    return m;
+}
+
+// The first answer letter is the smallest letter at or before the earliest
+// index at which some letter occurs for the last time.
+fn first_letter_closed_form(s: ref String) -> u8 {
+    let bs = s.bytes();
+    let mut last: Vec[i64] = Vec.new();
+    for k in 0..26 { last.push(-1); }
+    for i in 0..bs.len() { last[(bs[i] - b'a') as i64] = i; }
+    let mut cut = bs.len() - 1;
+    for c in 0..26 {
+        if last[c] >= 0 and last[c] < cut { cut = last[c]; }
+    }
+    let mut best = bs[0];
+    for i in 0..(cut + 1) { if bs[i] < best { best = bs[i]; } }
+    return best;
+}
+
+// --------------------------------------------------------- generator ---
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// Random string of length n over the first k letters. Every fourth seed
+// biases toward a descending drift so long "pop chains" appear.
+fn grow(n: i64, k: i64, seed: mut ref i64, drift: bool) -> String {
+    let mut out = String.new();
+    let mut cur = k - 1;
+    for i in 0..n {
+        let r = next(seed);
+        let mut c = r % k;
+        if drift {
+            // step down with probability 3/4, else jump anywhere
+            if r % 4 != 0 { cur = cur - 1; if cur < 0 { cur = k - 1; } c = cur; }
+            else { cur = c; }
+        }
+        out.push(((c as u8) + b'a') as char);
+    }
+    return out;
+}
+
+// (zyx...)^m, (abc...)^m, and descending-then-ascending, over k letters.
+fn patterned(kind: i64, k: i64, m: i64) -> String {
+    let mut out = String.new();
+    if kind == 0 {
+        for r in 0..m { let mut c = k - 1; while c >= 0 { out.push(((c as u8) + b'a') as char); c = c - 1; } }
+    } else if kind == 1 {
+        for r in 0..m { for c in 0..k { out.push(((c as u8) + b'a') as char); } }
+    } else {
+        let mut c = k - 1;
+        while c >= 0 { out.push(((c as u8) + b'a') as char); c = c - 1; }
+        for r in 0..m { for c in 0..k { out.push(((c as u8) + b'a') as char); } }
+    }
+    return out;
+}
+
+// -------------------------------------------------------------- main ---
+
+fn main() {
+    let mut alphabets: Vec[i64] = Vec.new();
+    alphabets.push(2);
+    alphabets.push(3);
+    alphabets.push(4);
+    alphabets.push(5);
+    alphabets.push(8);
+    alphabets.push(26);
+
+    let mut cases = 0;
+    let mut brute_cases = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6: Vec[i64] = [0, 0, 0];
+    let mut p7: Vec[i64] = [0, 0, 0];
+    let mut p8: Vec[i64] = [0, 0, 0];
+    let mut p9: Vec[i64] = [0, 0, 0];
+    let mut p10 = 0;
+    let mut p11 = 0;
+    let mut swaps_checked = 0;
+
+    let mut inputs: Vec[String] = Vec.new();
+    for a in 0..alphabets.len() {
+        let k = alphabets[a];
+        for n in 1..(NMAX + 1) {
+            for sd in 0..SEEDS {
+                let mut seed = n * 7919 + sd * 104729 + k * 31;
+                inputs.push(grow(n, k, mut seed, sd % 4 == 3));
+            }
+        }
+        for kind in 0..3 {
+            for m in 1..5 { inputs.push(patterned(kind, k, m)); }
+        }
+    }
+    // Fresh seeds for the brute band so it is not a subset of the above.
+    let mut brute_inputs: Vec[String] = Vec.new();
+    for a in 0..alphabets.len() {
+        let k = alphabets[a];
+        for n in 1..(BRUTE_NMAX + 1) {
+            for sd in 0..BRUTE_SEEDS {
+                let mut seed = n * 6367 + sd * 9973 + k * 977 + 1;
+                brute_inputs.push(grow(n, k, mut seed, sd % 4 == 1));
+            }
+        }
+    }
+
+    for t in 0..brute_inputs.len() {
+        let s = brute_inputs[t].clone();
+        brute_cases = brute_cases + 1;
+        if solve_stack(s) != solve_brute(s) { p1 = p1 + 1; }
+    }
+
+    for t in 0..inputs.len() {
+        let s = inputs[t].clone();
+        cases = cases + 1;
+        let r = solve_stack(s);
+        if solve_greedy(s) != r { p2 = p2 + 1; }
+        if solve_mask(s) != r { p3 = p3 + 1; }
+        if not is_permutation_of_distinct(r, s) { p4 = p4 + 1; }
+        if not is_subsequence(r, s) { p5 = p5 + 1; }
+
+        let alphabet = sorted_distinct(s);
+        let hi = max_letter(s);
+        for arm in 0..3 {
+            let ra = solve_arm(arm, s);
+            // P6: two strictly increasing relabels; keep every letter inside a..z.
+            let shift = 25 - hi;
+            if relabel(ra, 1, shift) != solve_arm(arm, relabel(s, 1, shift)) { p6[arm] += 1; }
+            if hi <= 12 {
+                if relabel(ra, 2, 0) != solve_arm(arm, relabel(s, 2, 0)) { p6[arm] += 1; }
+            }
+            // P7: idempotence.
+            if solve_arm(arm, ra) != ra { p7[arm] += 1; }
+            // P8: s ++ sorted alphabet -> sorted alphabet.
+            let mut padded = s.clone();
+            padded.push_str(alphabet);
+            if solve_arm(arm, padded) != alphabet { p8[arm] += 1; }
+            // P9: any all-distinct string is a fixed point.
+            let rev = reverse(ra);
+            if solve_arm(arm, rev) != rev { p9[arm] += 1; }
+        }
+
+        // P10: local optimality under adjacent swaps.
+        let rb = r.bytes();
+        for at in 0..(rb.len() - 1) {
+            let sw = swap_adjacent(r, at);
+            if is_subsequence(sw, s) {
+                swaps_checked = swaps_checked + 1;
+                if not (r < sw) { p10 = p10 + 1; }
+            }
+        }
+
+        // P11: first letter closed form.
+        let fb = r.bytes();
+        if fb[0] != first_letter_closed_form(s) { p11 = p11 + 1; }
+    }
+
+    println(f"cases {cases} brute_cases {brute_cases} swaps_checked {swaps_checked}");
+    println(f"P1 brute disagreements {p1}");
+    println(f"P2 greedy-vs-stack disagreements {p2}");
+    println(f"P3 mask-vs-stack disagreements {p3}");
+    println(f"P4 permutation-of-distinct failures {p4}");
+    println(f"P5 subsequence failures {p5}");
+    println(f"P6 relabel-commutes stack failures {p6[0]}");
+    println(f"P6 relabel-commutes greedy failures {p6[1]}");
+    println(f"P6 relabel-commutes mask failures {p6[2]}");
+    println(f"P7 idempotence stack failures {p7[0]}");
+    println(f"P7 idempotence greedy failures {p7[1]}");
+    println(f"P7 idempotence mask failures {p7[2]}");
+    println(f"P8 append-alphabet stack failures {p8[0]}");
+    println(f"P8 append-alphabet greedy failures {p8[1]}");
+    println(f"P8 append-alphabet mask failures {p8[2]}");
+    println(f"P9 distinct-fixpoint stack failures {p9[0]}");
+    println(f"P9 distinct-fixpoint greedy failures {p9[1]}");
+    println(f"P9 distinct-fixpoint mask failures {p9[2]}");
+    println(f"P10 local-optimality failures {p10}");
+    println(f"P11 first-letter failures {p11}");
+    let total = p1 + p2 + p3 + p4 + p5 + p6[0] + p6[1] + p6[2] + p7[0] + p7[1] + p7[2]
+        + p8[0] + p8[1] + p8[2] + p9[0] + p9[1] + p9[2] + p10 + p11;
+    if total == 0 { println("DIFFERENTIAL OK"); } else { println("DIFFERENTIAL FAILED"); }
+}

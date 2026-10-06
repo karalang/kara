@@ -1,0 +1,5 @@
+
+fn main() {
+    let scale = |x: f64| x * 2.0;
+    println(scale(3.0));
+}

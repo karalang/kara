@@ -1,0 +1,21 @@
+struct R { id: i64, tag: String }
+fn mk(i: i64) -> R { return R { id: i, tag: f"tttttttttttttttttttttttt{i}" }; }
+enum G[T] { X(T), Y }
+enum P[T] { A(T), B(T) }
+fn twice() { let g: G[R] = G.X(mk(1)); match g { G.X(t) => { println(f"a{t.id}") } G.Y => { println("a0") } }; match g { G.X(t) => { println(f"a{t.tag.len()}") } G.Y => { println("a0") } } }
+fn then_iflet() { let g: G[R] = G.X(mk(2)); match g { G.X(t) => { println("b1") } G.Y => { println("b0") } }; if let G.X(t) = g { println(f"b{t.tag.len()}") } }
+fn vec_payload() { let g: G[Vec[String]] = G.X(["cccccccccccccccccccccccc", "dd"]); match g { G.X(v) => { println(f"c{v.len()}") } G.Y => { println("c0") } }; match g { G.X(v) => { println(f"c{v[0].len()}") } G.Y => { println("c0") } } }
+fn str_payload() { let g: G[String] = G.X("eeeeeeeeeeeeeeeeeeeeeeee"); match g { G.X(s) => { println(f"d{s.len()}") } G.Y => { println("d0") } }; match g { G.X(s) => { println(f"d{s}") } G.Y => { println("d0") } } }
+fn two_variants() { let g: P[R] = P.A(mk(3)); match g { P.A(t) => { println(f"e{t.id}") } P.B(t) => { println(f"eb{t.id}") } }; match g { P.A(t) => { println(f"e{t.tag.len()}") } P.B(t) => { println("eb") } } }
+fn moved_field() { let g: G[R] = G.X(mk(4)); match g { G.X(t) => { let u = t.tag; println(f"f{u.len()}") } G.Y => { println("f0") } } }
+fn looped() { let g: G[R] = G.X(mk(5)); for i in 0..3 { match g { G.X(t) => { println(f"g{t.id}") } G.Y => { println("g0") } } } }
+fn main() {
+    twice();
+    then_iflet();
+    vec_payload();
+    str_payload();
+    two_variants();
+    moved_field();
+    looped();
+    println("end");
+}

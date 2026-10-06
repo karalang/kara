@@ -1,0 +1,18 @@
+
+enum Tok { Word(String), Num(i64) }
+fn build(n: i64) -> Vec[Vec[Tok]] {
+    let mut outer: Vec[Vec[Tok]] = Vec.new();
+    let mut a: Vec[Tok] = Vec.new();
+    a.push(Tok.Word(f"alpha string padded out beyond thirty-six bytes {n}"));
+    a.push(Tok.Num(2_i64));
+    outer.push(a);
+    return outer;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let vv = build(i);
+        println(vv.len());
+        i = i + 1;
+    };
+}

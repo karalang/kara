@@ -1,0 +1,40 @@
+
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn same(p: Option[Node], q: Option[Node]) -> bool {
+    let mut sp: Vec[Option[Node]] = Vec.new();
+    let mut sq: Vec[Option[Node]] = Vec.new();
+    sp.push(p);
+    sq.push(q);
+    let mut result = true;
+    let mut go = true;
+    while go {
+        if sp.len() == 0 { go = false; }
+        else {
+            match sp.pop() {
+                Some(a) => { match sq.pop() {
+                    Some(b) => { match a {
+                        Some(an) => { match b {
+                            Some(bn) => {
+                                if an.val != bn.val { result = false; go = false; }
+                                else {
+                                    sp.push(an.left); sq.push(bn.left);
+                                    sp.push(an.right); sq.push(bn.right);
+                                }
+                            }
+                            None => { result = false; go = false; }
+                        } }
+                        None => { match b { Some(bn) => { result = false; go = false; } None => {} } }
+                    } }
+                    None => { go = false; }
+                } }
+                None => { go = false; }
+            }
+        }
+    }
+    result
+}
+fn main() {
+    let t1 = Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: Some(Node { val: 3, left: None, right: None }) });
+    let t2 = Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: Some(Node { val: 9, left: None, right: None }) });
+    if same(t1, t2) { println("equal"); } else { println("different"); }
+}

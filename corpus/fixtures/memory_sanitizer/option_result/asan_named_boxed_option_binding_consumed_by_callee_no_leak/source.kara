@@ -1,0 +1,62 @@
+
+fn classify(v: Option[Option[i64]]) -> i64 {
+    match v {
+        Option.Some(Option.Some(x)) => x,
+        Option.Some(Option.None) => -1,
+        Option.None => -2,
+    }
+}
+fn idnest(o: Option[Option[i64]]) -> Option[Option[i64]] { o }
+
+fn classifys(v: Option[Option[String]]) -> i64 {
+    match v {
+        Option.Some(Option.Some(s)) => { if s.contains("row") { 1 } else { 0 } }
+        Option.Some(Option.None) => -1,
+        Option.None => -2,
+    }
+}
+fn idnests(o: Option[Option[String]]) -> Option[Option[String]] { o }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        // A — the headline: a named binding consumed by a callee.
+        let bound: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        acc = acc + classify(bound) - n;
+        // B — fresh temp; the caller-side owner was retracted for this shape.
+        acc = acc + classify(Option.Some(Option.Some(n + i))) - n;
+        // C — bound passthrough, then consumed.
+        let src: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        let aka: Option[Option[i64]] = idnest(src);
+        acc = acc + classify(aka) - n;
+        // D — chained passthrough, then consumed.
+        let s2: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        let a1: Option[Option[i64]] = idnest(s2);
+        let a2: Option[Option[i64]] = idnest(a1);
+        acc = acc + classify(a2) - n;
+        // E — discarded passthrough: the source stays sole owner.
+        let d: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        idnest(d);
+        acc = acc + 1;
+        // F — None source: nothing to free on either side.
+        let z: Option[Option[i64]] = Option.None;
+        acc = acc + classify(z) + 2;
+        // A' .. D' — the same four consuming arms over a HEAP-BEARING inner,
+        // so a box drop that took the interior with it shows up as a
+        // double free and one that never ran shows up as a leak.
+        let hb: Option[Option[String]] = Option.Some(Option.Some("row-" + (n + i).to_string()));
+        acc = acc + classifys(hb);
+        acc = acc + classifys(Option.Some(Option.Some("row-" + (n + i).to_string())));
+        let hs: Option[Option[String]] = Option.Some(Option.Some("row-" + (n + i).to_string()));
+        let hk: Option[Option[String]] = idnests(hs);
+        acc = acc + classifys(hk);
+        let h2: Option[Option[String]] = Option.Some(Option.Some("row-" + (n + i).to_string()));
+        let g1: Option[Option[String]] = idnests(h2);
+        let g2: Option[Option[String]] = idnests(g1);
+        acc = acc + classifys(g2);
+        i = i + 1;
+    }
+    println(acc);
+}

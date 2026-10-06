@@ -1,0 +1,9 @@
+
+fn main() {
+    let k_iters: i64 = 100i64;
+    let mut acc: i64 = -1i64;
+    for k in 0i64..k_iters {
+        acc = acc & 255i64;
+    }
+    println(acc);
+}

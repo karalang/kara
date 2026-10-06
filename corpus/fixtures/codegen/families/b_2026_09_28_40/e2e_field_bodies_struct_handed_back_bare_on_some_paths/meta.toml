@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_28_40.rs::e2e_field_bodies_struct_handed_back_bare_on_some_paths"
+dedup_of = ["tests/interpreter/families/b_2026_09_28_40.rs::interp_field_bodies_struct_handed_back_bare_on_some_paths", "tests/memory_sanitizer/families/b_2026_09_28_40.rs::asan_field_bodies_struct_handed_back_bare_on_some_paths"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

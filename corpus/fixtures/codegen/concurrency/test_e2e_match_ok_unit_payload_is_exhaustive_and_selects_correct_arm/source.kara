@@ -1,0 +1,11 @@
+
+fn classify(r: Result[(), String]) -> i64 {
+    match r {
+        Ok(()) => 10,
+        Err(e) => 20,
+    }
+}
+fn main() {
+    println(classify(Err("x")));
+    println(classify(Ok(())));
+}

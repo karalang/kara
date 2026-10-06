@@ -1,0 +1,137 @@
+// LeetCode #113: Path Sum II — every root-to-LEAF path summing to `target` (★).
+//
+// The collect-all sibling of [#112](../112-path-sum/): where #112 returns a bool, this returns
+// the full list of qualifying paths (each a `Vec[i64]` of node values, root first). Canonical
+// solution: a depth-first walk carrying a **running path** and a **remaining target**, pushing
+// each node's value on the way down and popping it on the way back up (backtracking). When a LEAF
+// is reached with the remainder exhausted, snapshot the current path into the output. The output
+// and the running path are threaded through the recursion as `mut ref` accumulators — one shared
+// buffer, mutated in place, no per-node allocation beyond the snapshot on a hit. Node type mirrors
+// kata [#112](../112-path-sum/) — a `shared struct TreeNode` (RC).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// Backtracking DFS: `path` holds the values from the root to the current node; `out` collects a
+// COPY of `path` each time a leaf completes the target. Both are `mut ref` — a single buffer each,
+// threaded through every call and restored (`path.pop()`) as the walk unwinds.
+fn dfs(node: Option[TreeNode], target: i64, path: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    match node {
+        None => {}
+        Some(n) => {
+            path.push(n.val);
+            let rem = target - n.val;
+            let left_none = match n.left { None => true, Some(_) => false };
+            let right_none = match n.right { None => true, Some(_) => false };
+            if left_none and right_none {
+                if rem == 0 {
+                    // Snapshot the current root-to-leaf path into the output.
+                    let mut copy: Vec[i64] = Vec.new();
+                    let mut i = 0;
+                    while i < path.len() {
+                        copy.push(path[i]);
+                        i = i + 1;
+                    }
+                    out.push(copy);
+                }
+            } else {
+                dfs(n.left, rem, path, out);
+                dfs(n.right, rem, path, out);
+            }
+            // Backtrack: drop this node's value before returning to the parent.
+            match path.pop() {
+                None => {}
+                Some(_) => {}
+            }
+        }
+    }
+}
+
+fn path_sum(root: Option[TreeNode], target: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    dfs(root, target, mut path, mut out);
+    out
+}
+
+fn build_balanced(lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: mid, left: None, right: None };
+    node.left = build_balanced(lo, mid - 1);
+    node.right = build_balanced(mid + 1, hi);
+    Some(node)
+}
+
+// A PERFECT tree of the given depth with every node valued `val`: all 2^(depth-1) root-to-leaf
+// paths sum identically to `depth * val`, so one target collects *many* paths — the multiplicity
+// #113 is about (where #112 only needed one).
+fn build_perfect(depth: i64, val: i64) -> Option[TreeNode] {
+    if depth <= 0 {
+        return None;
+    }
+    let node = TreeNode { val: val, left: None, right: None };
+    node.left = build_perfect(depth - 1, val);
+    node.right = build_perfect(depth - 1, val);
+    Some(node)
+}
+
+// The sum of the leftmost root-to-leaf path — an achievable target so the verdict has real hits.
+fn leftmost_path_sum(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            match n.left {
+                Some(_) => n.val + leftmost_path_sum(n.left),
+                None => n.val + leftmost_path_sum(n.right),
+            }
+        }
+    }
+}
+
+// Fold every path (in DFS order) into a rolling hash: a per-path separator, then each value.
+fn hash_paths(paths: Vec[Vec[i64]]) -> i64 {
+    let mut h = 1;
+    let mut i = 0;
+    while i < paths.len() {
+        h = (h * 1000003 + 7) % 1000000007;
+        let mut j = 0;
+        while j < paths[i].len() {
+            h = (h * 131 + paths[i][j] + 1000) % 1000000007;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    h
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        // Two shapes, interleaved. Even t: a PERFECT tree — one target collects MANY identical
+        // paths (2^(depth-1) of them). Odd t: a balanced distinct-value tree with an achievable
+        // leftmost target — exactly one path, but with varied content.
+        let paths = if (t % 2) == 0 {
+            let depth = 3 + (t % 3);
+            let val = 2 + t;
+            let root = build_perfect(depth, val);
+            path_sum(root, depth * val)
+        } else {
+            let n = 7 + t;
+            let root = build_balanced(t * 20, t * 20 + n - 1);
+            path_sum(root, leftmost_path_sum(root))
+        };
+        let cnt = paths.len();
+        let h = hash_paths(paths);
+        acc = (acc * 131 + cnt + h) % 1000000007;
+        println(f"tree {t}: paths={cnt} hash={h}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

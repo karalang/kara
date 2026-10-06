@@ -1,0 +1,136 @@
+// Benchmark workload for LeetCode #207 — Course Schedule.
+//
+// Build-once + punch: a random directed graph (N nodes, M PRNG edges src->dst) is
+// built once as a CSR adjacency (flat `offset[]` + `adj[]`, the index-pool form of
+// the kata's adjacency list). Each pass copies the base in-degrees, adds one
+// synthetic prerequisite to a per-pass node (so the finished count changes and the
+// work can't be hoisted), then runs Kahn's topological sort — seed the zero-indegree
+// nodes, pop from a Vec+cursor FIFO, relax each out-edge, enqueue neighbours that
+// reach in-degree 0. The BFS relaxation is a data-dependent traversal (its frontier
+// depends on the graph), non-vectorizable. Sink = sum of finished counts over passes.
+
+fn main() {
+    let n = 5000;
+    let m = 15000;
+    let passes = 8000;
+
+    // Generate M edges src -> dst once.
+    let mut esrc: Vec[i64] = Vec.new();
+    let mut edst: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut e = 0;
+    while e < m {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let s = state % n;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let d = state % n;
+        esrc.push(s);
+        edst.push(d);
+        e = e + 1;
+    }
+
+    // Out-degree and base in-degree.
+    let mut outdeg: Vec[i64] = Vec.new();
+    let mut base_indeg: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < n {
+        outdeg.push(0);
+        base_indeg.push(0);
+        c = c + 1;
+    }
+    e = 0;
+    while e < m {
+        outdeg[esrc[e]] = outdeg[esrc[e]] + 1;
+        base_indeg[edst[e]] = base_indeg[edst[e]] + 1;
+        e = e + 1;
+    }
+
+    // CSR offsets (size n+1) via prefix sum.
+    let mut offset: Vec[i64] = Vec.new();
+    offset.push(0);
+    let mut acc = 0;
+    c = 0;
+    while c < n {
+        acc = acc + outdeg[c];
+        offset.push(acc);
+        c = c + 1;
+    }
+
+    // Fill CSR adjacency.
+    let mut adj: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < m {
+        adj.push(0);
+        z = z + 1;
+    }
+    let mut cursor: Vec[i64] = Vec.new();
+    c = 0;
+    while c < n {
+        cursor.push(offset[c]);
+        c = c + 1;
+    }
+    e = 0;
+    while e < m {
+        let sidx = cursor[esrc[e]];
+        adj[sidx] = edst[e];
+        cursor[esrc[e]] = sidx + 1;
+        e = e + 1;
+    }
+
+    // Reusable work arrays.
+    let mut indeg: Vec[i64] = Vec.new();
+    let mut queue: Vec[i64] = Vec.new();
+    c = 0;
+    while c < n {
+        indeg.push(0);
+        queue.push(0);
+        c = c + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        // Copy base in-degrees + a per-pass synthetic prerequisite.
+        c = 0;
+        while c < n {
+            indeg[c] = base_indeg[c];
+            c = c + 1;
+        }
+        let blocked = p % n;
+        indeg[blocked] = indeg[blocked] + 1;
+
+        // Seed zero-indegree nodes.
+        let mut qt = 0;
+        c = 0;
+        while c < n {
+            if indeg[c] == 0 {
+                queue[qt] = c;
+                qt = qt + 1;
+            }
+            c = c + 1;
+        }
+
+        // Kahn's BFS.
+        let mut qh = 0;
+        let mut finished = 0;
+        while qh < qt {
+            let node = queue[qh];
+            qh = qh + 1;
+            finished = finished + 1;
+            let mut k = offset[node];
+            let stop = offset[node + 1];
+            while k < stop {
+                let nb = adj[k];
+                indeg[nb] = indeg[nb] - 1;
+                if indeg[nb] == 0 {
+                    queue[qt] = nb;
+                    qt = qt + 1;
+                }
+                k = k + 1;
+            }
+        }
+        sink = sink + finished;
+        p = p + 1;
+    }
+    println(sink);
+}

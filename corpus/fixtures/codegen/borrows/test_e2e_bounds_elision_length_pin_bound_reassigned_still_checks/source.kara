@@ -1,0 +1,13 @@
+
+fn go(n: i64) -> i64 {
+    let mut cols = n;
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j < cols { dp.push(1i64); j = j + 1i64; }
+    cols = cols + 5i64;
+    let mut acc = 0i64;
+    let mut c = 0i64;
+    while c < cols { acc = acc + dp[c]; c = c + 1i64; }
+    acc
+}
+fn main() { println(go(4i64)); }

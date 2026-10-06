@@ -1,0 +1,77 @@
+// LeetCode #41: First Missing Positive — boolean seen-table (O(n) space baseline).
+//
+// The straightforward, non-clever solution, kept as the allocating contrast to the two
+// in-place O(1)-space solvers (★ cyclic sort, sign marking). Allocate a `Vec[bool]` of
+// size n+1 indexed by value, mark `seen[v] = true` for every in-range value v in [1, n],
+// then return the first v in 1..=n that was never seen — or n+1 if all are present. It does
+// NOT touch the input (no mutation), trading O(n) auxiliary space for the simplest possible
+// reasoning: `seen` is a literal presence table, no sign overloading or swap accounting.
+//
+// This is the version you'd write first and the one the two in-place solvers earn their
+// complexity against: same O(n) time, but O(n) extra space, and it leaves `nums` intact.
+// It exercises a different Kāra surface from the in-place pair — `Vec[bool]` allocation,
+// fill, and indexed read/write — rather than `mut Slice` swaps. The input is taken by a
+// shared `Slice[i64]` (a read-only borrowed view; no `mut`) since it is never written.
+//
+// LeetCode bounds: 1 ≤ n ≤ 10⁵, values in [-2³¹, 2³¹-1]; only [1, n] index `seen`.
+
+fn first_missing_positive(nums: Slice[i64], n: i64) -> i64 {
+    // Presence table over values 1..n (index 0 unused) — built fresh per call.
+    let mut seen: Vec[bool] = Vec.new();
+    let mut k = 0;
+    while k <= n {
+        seen.push(false);
+        k = k + 1;
+    }
+    // Mark each in-range value present.
+    let mut i = 0;
+    while i < n {
+        let v = nums[i];
+        if v >= 1 and v <= n {
+            seen[v] = true;
+        }
+        i = i + 1;
+    }
+    // First unseen value in 1..=n is the answer; else everything present ⇒ n+1.
+    let mut v = 1;
+    while v <= n {
+        if not seen[v] {
+            return v;
+        }
+        v = v + 1;
+    }
+    n + 1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn report(nums: Slice[i64], n: i64) {
+    let ans = first_missing_positive(nums, n);
+    println(f"{ans}");
+}
+
+fn main() {
+    let a1: Array[i64, 3] = [1, 2, 0];
+    report(a1, 3); // 3
+
+    let a2: Array[i64, 4] = [3, 4, -1, 1];
+    report(a2, 4); // 2
+
+    let a3: Array[i64, 5] = [7, 8, 9, 11, 12];
+    report(a3, 5); // 1
+
+    let a4: Array[i64, 1] = [1];
+    report(a4, 1); // 2
+
+    let a5: Array[i64, 4] = [2, 2, 2, 2];
+    report(a5, 4); // 1
+
+    let a6: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(a6, 5); // 6
+
+    let a7: Array[i64, 3] = [-5, -3, -1];
+    report(a7, 3); // 1
+
+    let a8: Array[i64, 6] = [5, 3, 1, 2, 6, 5];
+    report(a8, 6); // 4
+}

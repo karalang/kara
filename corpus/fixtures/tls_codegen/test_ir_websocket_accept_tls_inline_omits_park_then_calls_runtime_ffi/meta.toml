@@ -1,0 +1,13 @@
+source = "tests/tls_codegen.rs::test_ir_websocket_accept_tls_inline_omits_park_then_calls_runtime_ffi"
+dedup_of = ["tests/tls_codegen.rs::test_ir_websocket_accept_tls_wraps_conn_fd_in_result"]
+expect = "skip"
+exit = 101
+tags = ["nondeterministic", "panic"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 101
+rules = []
+backends = []
+env = {}
+note = "output differs between two legacy runs (a bound port, scheduling or timing)"

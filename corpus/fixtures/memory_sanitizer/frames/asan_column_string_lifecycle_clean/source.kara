@@ -1,0 +1,16 @@
+
+fn main() {
+    // Long payloads (>= 23 bytes) force real heap allocation (LSan misses
+    // short reachable strings) — see lsan-reachability-short-string-leaks.
+    // The source Vec is moved into from_vec (ownership), but its scope drop
+    // still frees its own element strings; from_vec deep-clones independent
+    // copies into the column, so the two never share a heap.
+    let v: Vec[String] = ["alpha_aaaaaaaaaaaaaaaaaaaaaaaa", "beta_bbbbbbbbbbbbbbbbbbbbbbbbb", "gamma_ccccccccccccccccccccccc"];
+    let c: Column[String] = Column.from_vec(v);
+    // iter_valid clones out into a fresh Vec[String] (dropped after the loop).
+    for s in c.iter_valid() { println(s.len()); }
+    // Move the column: `d` owns the heaps, `c`'s FreeColumn is suppressed.
+    let d = c;
+    println(d.valid_count());
+    for s in d.iter_valid() { println(s.len()); }
+}

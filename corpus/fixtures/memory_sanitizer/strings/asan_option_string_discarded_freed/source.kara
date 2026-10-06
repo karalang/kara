@@ -1,0 +1,6 @@
+
+fn mk(n: i64) -> Option[String] { Some(f"discarded-{n}-runtime-heap") }
+fn main() {
+    mk(3);
+    println("done");
+}

@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 100 {
+        let s = f"item-{i}";
+        v.insert(0, s);
+        i = i + 1;
+    }
+    println(v.len().to_string());
+}

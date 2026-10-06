@@ -1,0 +1,29 @@
+
+fn mk_set(n: i64) -> Set[i64] {
+    let mut s: Set[i64] = Set.new();
+    let mut i = 0;
+    while i < n { s.insert(i); i = i + 1; }
+    return s;
+}
+
+fn mk_map(n: i64) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    let mut i = 0;
+    while i < n { m.insert(f"k{i}", i); i = i + 1; }
+    return m;
+}
+
+fn main() {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 8 {
+        total = total + mk_set(3).len();
+        total = total + mk_map(2).len();
+        if mk_set(3).is_empty() { total = total + 100; }
+        if mk_map(2).is_empty() { total = total + 100; }
+        k = k + 1;
+    }
+    let bound = mk_map(4);
+    println(total);
+    println(bound.len());
+}

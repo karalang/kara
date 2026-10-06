@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/strings.rs::asan_cstr_to_string_slice_view_not_freed_and_copy_clean"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

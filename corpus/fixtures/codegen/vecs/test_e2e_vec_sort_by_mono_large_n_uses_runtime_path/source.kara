@@ -1,0 +1,23 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i: i64 = 0i64;
+    while i < 100i64 {
+        let x: i64 = (i * 1103515245i64 + 12345i64) % 1000i64;
+        v.push(x);
+        i = i + 1i64;
+    }
+    v.sort_by(|a, b| a.cmp(b));
+    println(v[0i64]);
+    println(v[50i64]);
+    println(v[99i64]);
+    let mut sorted: i64 = 1i64;
+    let mut j: i64 = 1i64;
+    while j < 100i64 {
+        if v[j - 1i64] > v[j] {
+            sorted = 0i64;
+        }
+        j = j + 1i64;
+    }
+    println(sorted);
+}

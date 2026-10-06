@@ -1,0 +1,14 @@
+
+struct Name { s: String }
+fn gid[T](a: T) -> T { a }
+fn gpick[T](a: T, b: T) -> T { a }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let x = gid(Name { s: f"gid-{i}-padding-padding" });
+        let y = gpick(Name { s: f"gpa-{i}-padding-padding" }, Name { s: f"gpb-{i}-padding-padding" });
+        println(x.s);
+        println(y.s);
+        i = i + 1;
+    }
+}

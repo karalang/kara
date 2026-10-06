@@ -1,0 +1,82 @@
+// LeetCode #42: Trapping Rain Water — monotonic stack, water filled in horizontal layers.
+//
+// The two array-based solvers (★ two-pointer, prefix/suffix maxima) accumulate water column
+// by column. The stack instead fills it in horizontal SLABS, settling each trapped basin the
+// moment its right wall appears. Keep a stack of bar indices whose heights are
+// non-increasing; when the current bar is taller than the bar on top, that top is the FLOOR
+// of a basin now bounded on the right by `i` and on the left by the new stack top:
+//
+//   while stack not empty and height[i] > height[stack.top]:
+//       floor = pop()                       // the basin's bottom
+//       if stack empty: break               // no left wall ⇒ water spills off the left
+//       left = stack.top                    // the left wall
+//       width  = i - left - 1               // columns strictly between the walls
+//       height = min(height[i], height[left]) - height[floor]   // slab depth above the floor
+//       water += width * height
+//
+// Each bar is pushed and popped at most once, so this is O(n) time despite the nested loop;
+// the stack costs O(n) space. It is the third distinct factoring of the same invariant: the
+// two-pointer file proves the far wall away and uses two scalars, the array file materializes
+// both maxima, and this one defers each column until its bounding right wall is known and
+// adds the rectangular slab between two walls. It exercises a different Kāra surface from the
+// other two — `Vec[i64]` driven as a STACK (`push`, `pop`, `is_empty`, and top-peek via
+// `stack[stack.len()-1]`) rather than indexed maxima arrays or a bare scan. `min` is the
+// `std.cmp` free function (Phase 8); n ≤ 2·10⁴, heights ≤ 10⁵, so widths × depths stay well
+// inside i64.
+
+fn trap(height: Slice[i64], n: i64) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut water = 0;
+    let mut i = 0;
+    while i < n {
+        // Every bar shorter than the incoming one closes a basin floored at the stack top.
+        while not stack.is_empty() and height[i] > height[stack[stack.len() - 1]] {
+            let floor = stack[stack.len() - 1];
+            let _ = stack.pop();
+            if stack.is_empty() {
+                // No left wall remains — water over `floor` spills off the left edge.
+                break;
+            }
+            let left = stack[stack.len() - 1];
+            let width = i - left - 1;
+            let depth = min(height[i], height[left]) - height[floor];
+            water = water + width * depth;
+        }
+        stack.push(i);
+        i = i + 1;
+    }
+    water
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn report(height: Slice[i64], n: i64) {
+    let ans = trap(height, n);
+    println(f"{ans}");
+}
+
+fn main() {
+    let a1: Array[i64, 12] = [0, 1, 0, 2, 1, 0, 1, 3, 2, 1, 2, 1];
+    report(a1, 12); // 6
+
+    let a2: Array[i64, 6] = [4, 2, 0, 3, 2, 5];
+    report(a2, 6); // 9
+
+    let a3: Array[i64, 1] = [5];
+    report(a3, 1); // 0
+
+    let a4: Array[i64, 3] = [2, 0, 2];
+    report(a4, 3); // 2
+
+    let a5: Array[i64, 6] = [3, 0, 0, 2, 0, 4];
+    report(a5, 6); // 10
+
+    let a6: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(a6, 5); // 0
+
+    let a7: Array[i64, 5] = [5, 4, 3, 2, 1];
+    report(a7, 5); // 0
+
+    let a8: Array[i64, 6] = [5, 2, 1, 2, 1, 5];
+    report(a8, 6); // 14
+}

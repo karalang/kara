@@ -1,0 +1,41 @@
+
+struct S { src: String, mut pos: i64, mut buf: String, mut bp: i64 }
+fn read4(s: mut ref S) -> String {
+    let n = s.src.len();
+    let mut chunk: String = "";
+    let mut c = 0i64;
+    while c < 4i64 and s.pos < n {
+        chunk.push_str(s.src[s.pos..s.pos + 1i64]);
+        s.pos = s.pos + 1i64;
+        c = c + 1i64;
+    }
+    return chunk;
+}
+fn consume(s: mut ref S, n: i64) -> String {
+    let mut r: String = "";
+    let mut t = 0i64;
+    while t < n {
+        if s.bp >= s.buf.len() {
+            s.buf = read4(s);
+            s.bp = 0i64;
+            if s.buf.len() == 0i64 { return r; }
+        }
+        r.push_str(s.buf[s.bp..s.bp + 1i64]);
+        s.bp = s.bp + 1i64;
+        t = t + 1i64;
+    }
+    return r;
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut iter = 0i64;
+    while iter < 100 {
+        let mut s = S { src: "HelloWorldFromKara", pos: 0i64, buf: "", bp: 0i64 };
+        let a = consume(mut s, 4i64);
+        let b = consume(mut s, 4i64);
+        let c = consume(mut s, 4i64);
+        total = total + a.len() + b.len() + c.len();
+        iter = iter + 1i64;
+    }
+    println(total);
+}

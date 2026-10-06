@@ -1,0 +1,11 @@
+
+fn mark_a() { println("a"); }
+fn mark_b() { println("b"); }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    defer { mark_a(); }
+    let mut w: Vec[i64] = Vec.new();
+    w.push(2_i64);
+    defer { mark_b(); }
+}

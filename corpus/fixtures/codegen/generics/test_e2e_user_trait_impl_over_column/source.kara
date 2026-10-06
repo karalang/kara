@@ -1,0 +1,17 @@
+
+trait Combo[T] { fn twice(ref self) -> T; fn quad(ref self) -> T; }
+impl Combo[i64] for Column[i64] {
+    fn twice(ref self) -> i64 { self.sum() + self.sum() }
+    fn quad(ref self) -> i64 { self.twice() + self.twice() }
+}
+trait Spread[T] { fn spread(ref self) -> T; fn scaled(ref self, k: T) -> T; }
+impl Spread[f64] for Column[f64] {
+    fn spread(ref self) -> f64 { self.max() - self.min() }
+    fn scaled(ref self, k: f64) -> f64 { self.sum() * k }
+}
+fn main() {
+    let ci: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let cf: Column[f64] = Column.from_vec([1.5, 4.0, 2.5]);
+    println(f"{ci.quad()}");
+    println(f"{cf.spread()} {cf.scaled(2.0)}");
+}

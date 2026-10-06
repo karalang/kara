@@ -1,0 +1,15 @@
+
+trait FromStr {
+    fn from_str(s: String) -> Self;
+}
+
+struct Tag { label: String }
+
+impl FromStr for Tag {
+    fn from_str(s: String) -> Tag { Tag { label: s } }
+}
+
+fn main() {
+    let t: Tag = from_str("hello");
+    println(t.label);
+}

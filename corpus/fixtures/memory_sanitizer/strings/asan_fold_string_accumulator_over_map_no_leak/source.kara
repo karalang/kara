@@ -1,0 +1,6 @@
+
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let j = v.iter().map(|y| y * 2).fold(String.from("<"), |acc, x| f"{acc}{x},");
+    println(j);
+}

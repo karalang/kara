@@ -1,0 +1,18 @@
+
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum Mix[T] { A(T), B(Vec[T]), N }
+fn main() {
+    let a: Vec[R] = [R { id: 1 }, R { id: 2 }];
+    let m: Mix[Vec[R]] = Mix.A(a);
+    println("mA");
+
+    let b: Array[R, 2] = [R { id: 3 }, R { id: 4 }];
+    let n: Mix[Array[R, 2]] = Mix.A(b);
+    println("mArr");
+
+    let c: Vec[R] = [R { id: 5 }, R { id: 6 }];
+    let o: Mix[Vec[R]] = Mix.A(c);
+    match o { Mix.A(v) => { println(f"got{v.len()}") } Mix.B(_) => { println("b") } Mix.N => { println("n") } }
+    println("end");
+}

@@ -1,0 +1,14 @@
+
+fn make_map() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a heap map key padded out beyond thirty-six bytes ok", 10_i64);
+    return m;
+}
+
+fn main() {
+    let mut total = 0_i64;
+    for (k, v) in make_map().iter() {
+        total = total + v + k.len();
+    };
+    println(total);
+}

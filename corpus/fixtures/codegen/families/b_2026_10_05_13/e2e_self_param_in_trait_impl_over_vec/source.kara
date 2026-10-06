@@ -1,0 +1,12 @@
+trait Join { fn joined(ref self, o: ref Self) -> i64; }
+impl Join for Vec[i64] { fn joined(ref self, o: ref Self) -> i64 { self.len() + o.len() } }
+struct W { n: i64 }
+impl Join for W { fn joined(ref self, o: ref Self) -> i64 { self.n + o.n } }
+fn main() {
+    let a = vec![1, 2];
+    let b = vec![3];
+    println(f"{a.joined(b)}");
+    let w = W { n: 4 };
+    let x = W { n: 5 };
+    println(f"{w.joined(x)}");
+}

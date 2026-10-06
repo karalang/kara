@@ -1,0 +1,9 @@
+
+        pub fn step(x: i64) -> i64 { x + 1 }
+        fn main() {
+            let a = step(0);
+            let b = step(a);
+            let c = step(b);
+            println(f"{c}");
+        }
+    

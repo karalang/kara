@@ -1,0 +1,9 @@
+
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: f"holder payload padded out beyond thirty-six bytes {7}", id: 7 };
+    m.insert(7, h);
+    m.remove(7);
+    println(m.len());
+}

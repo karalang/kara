@@ -1,0 +1,9 @@
+
+fn mk(n: i64) -> Option[String] { Some(f"wild-{n}-runtime-heap") }
+fn main() {
+    let x = mk(9);
+    match x {
+        Some(_) => { println("some"); }
+        None => { println("none"); }
+    };
+}

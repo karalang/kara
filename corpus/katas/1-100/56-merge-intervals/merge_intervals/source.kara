@@ -1,0 +1,109 @@
+// LeetCode #56: Merge Intervals — sort + linear sweep, O(n log n) time.
+//
+// Given an array of closed intervals `[(start, end), ...]`, merge any that
+// overlap (or touch — `[1,4]` and `[4,5]` merge into `[1,5]` per LeetCode's
+// closed-interval semantics) and return the disjoint union in start order.
+//
+// Sort by `start` first, then sweep: keep a running `(cur_start, cur_end)`
+// pair; for each next interval `(s, e)`, if `s <= cur_end` extend the
+// running pair (`cur_end = max(cur_end, e)`), else emit the running pair
+// and reset to `(s, e)`. Emit once at the end.
+//
+// The sort is the load-bearing step (O(n log n) dominates the O(n) sweep).
+// For Kāra v1 the natural form is `intervals.sort_by(|a, b| a.0.cmp(b.0))`:
+// the comparator pulls the first tuple component of each interval and
+// delegates to `i64.cmp`. This is the canonical "sort tuples by primary
+// key" idiom — slightly different from kata [#1665](../../1601-1700/1665-minimum-initial-energy-to-finish-tasks/)
+// which uses a computed key `(b.1 - b.0).cmp(a.1 - a.0)`.
+//
+// Values are i64 throughout. LeetCode bounds `start, end` by `[0, 10^4]`,
+// so all arithmetic stays well inside i64.
+
+fn merge_intervals(intervals: Slice[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut s: Vec[(i64, i64)] = Vec.from_slice(intervals);
+    s.sort_by(|a, b| a.0.cmp(b.0));
+    let mut result: Vec[(i64, i64)] = Vec.new();
+    let n = s.len();
+    if n == 0 {
+        return result;
+    }
+    let mut cur_start = s[0].0;
+    let mut cur_end = s[0].1;
+    let mut i = 1;
+    while i < n {
+        let interval = s[i];
+        if interval.0 <= cur_end {
+            // Overlap (or touch). Extend the running interval to cover
+            // both, taking the max of the two ends — the next interval
+            // may end before the running one (nested case).
+            if interval.1 > cur_end {
+                cur_end = interval.1;
+            }
+        } else {
+            // Disjoint. Emit the running interval and reset.
+            result.push((cur_start, cur_end));
+            cur_start = interval.0;
+            cur_end = interval.1;
+        }
+        i = i + 1;
+    }
+    // Flush the trailing running interval.
+    result.push((cur_start, cur_end));
+    result
+}
+
+fn report(intervals: Slice[(i64, i64)]) {
+    let merged = merge_intervals(intervals);
+    println(merged.len());
+    for m in merged.iter() {
+        println(m.0);
+        println(m.1);
+    }
+}
+
+fn main() {
+    // LeetCode reference example 1 — [1,3] and [2,6] overlap into [1,6];
+    // the other two stay disjoint.
+    let case1: Array[(i64, i64), 4] = [(1, 3), (2, 6), (8, 10), (15, 18)];
+    report(case1);                                        // expect: 3 / 1 6 / 8 10 / 15 18
+
+    // LeetCode reference example 2 — touching intervals merge under
+    // closed-interval semantics (LeetCode treats [1,4] and [4,5] as
+    // overlapping at point 4).
+    let case2: Array[(i64, i64), 2] = [(1, 4), (4, 5)];
+    report(case2);                                        // expect: 1 / 1 5
+
+    // Single interval — no merging possible, no edge-case crash.
+    let case3: Array[(i64, i64), 1] = [(5, 7)];
+    report(case3);                                        // expect: 1 / 5 7
+
+    // All disjoint — output mirrors input after sort.
+    let case4: Array[(i64, i64), 3] = [(1, 2), (3, 4), (5, 6)];
+    report(case4);                                        // expect: 3 / 1 2 / 3 4 / 5 6
+
+    // All mutually overlapping — collapses to one interval spanning the
+    // outer extremes. Tests the nested-interval branch (interval.1 may
+    // be smaller than cur_end, so we don't decrease cur_end).
+    let case5: Array[(i64, i64), 3] = [(1, 10), (2, 5), (3, 7)];
+    report(case5);                                        // expect: 1 / 1 10
+
+    // Reverse-sorted input — exercises the sort. Without the sort the
+    // sweep would never merge [1,3] into [8,10]'s window.
+    let case6: Array[(i64, i64), 3] = [(8, 10), (1, 3), (2, 6)];
+    report(case6);                                        // expect: 2 / 1 6 / 8 10
+
+    // Nested intervals — inner ones are fully contained in the outer's
+    // span and should leave cur_end unchanged.
+    let case7: Array[(i64, i64), 3] = [(1, 10), (2, 3), (4, 5)];
+    report(case7);                                        // expect: 1 / 1 10
+
+    // Adjacent (touching) — LeetCode's closed-interval semantics treat
+    // [1,3] and [3,5] as overlapping at point 3.
+    let case8: Array[(i64, i64), 2] = [(1, 3), (3, 5)];
+    report(case8);                                        // expect: 1 / 1 5
+
+    // Three identical intervals — the running pair never moves; we emit
+    // once at the end.
+    let case9: Array[(i64, i64), 3] = [(1, 5), (1, 5), (1, 5)];
+    report(case9);                                        // expect: 1 / 1 5
+}

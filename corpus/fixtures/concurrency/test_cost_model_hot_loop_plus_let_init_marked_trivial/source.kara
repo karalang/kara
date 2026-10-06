@@ -1,0 +1,14 @@
+
+        fn main() {
+            let mut v: Vec[i64] = Vec.new();
+            let mut i = 0i64;
+            while i < 10 {
+                v.push(i);
+                i = i + 1;
+            }
+            let mut r2 = 0i64;
+            let last = v.len() - 1;
+            println(v[last]);
+            println(r2);
+        }
+        

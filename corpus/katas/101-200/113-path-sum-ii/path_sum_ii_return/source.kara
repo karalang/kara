@@ -1,0 +1,132 @@
+// LeetCode #113: Path Sum II — return-based variant (no shared mutable accumulator).
+//
+// Where the ★ solver ([`path_sum_ii.kara`](path_sum_ii.kara)) threads one `mut ref` output buffer
+// and backtracks a running path, this one is purely functional: each call RETURNS the list of
+// qualifying paths rooted at its node. A leaf that hits the target returns `[[n.val]]`; an internal
+// node collects its children's paths and PREPENDS its own value to each. Same left-to-right DFS
+// order, so it must produce the identical sink — a distinct mechanism (return-and-prepend vs a
+// backtracking accumulator) as the cross-check. Exercises nested `Vec[Vec[i64]]` construction and
+// indexing (`sub[i][k]`, `sub[i].len()`) rather than in-place mutation. Node type mirrors
+// [#112](../112-path-sum/) — a `shared struct TreeNode` (RC).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// Append every path in `sub`, each prefixed with `head`, onto `res`.
+fn extend_prefixed(res: mut ref Vec[Vec[i64]], head: i64, sub: Vec[Vec[i64]]) {
+    let mut i = 0;
+    while i < sub.len() {
+        let mut np: Vec[i64] = Vec.new();
+        np.push(head);
+        let mut k = 0;
+        while k < sub[i].len() {
+            np.push(sub[i][k]);
+            k = k + 1;
+        }
+        res.push(np);
+        i = i + 1;
+    }
+}
+
+fn collect(node: Option[TreeNode], target: i64) -> Vec[Vec[i64]] {
+    let mut res: Vec[Vec[i64]] = Vec.new();
+    match node {
+        None => {}
+        Some(n) => {
+            let rem = target - n.val;
+            let left_none = match n.left { None => true, Some(_) => false };
+            let right_none = match n.right { None => true, Some(_) => false };
+            if left_none and right_none {
+                if rem == 0 {
+                    let mut p: Vec[i64] = Vec.new();
+                    p.push(n.val);
+                    res.push(p);
+                }
+            } else {
+                let lsub = collect(n.left, rem);
+                extend_prefixed(mut res, n.val, lsub);
+                let rsub = collect(n.right, rem);
+                extend_prefixed(mut res, n.val, rsub);
+            }
+        }
+    }
+    res
+}
+
+fn path_sum(root: Option[TreeNode], target: i64) -> Vec[Vec[i64]] {
+    collect(root, target)
+}
+
+fn build_perfect(depth: i64, val: i64) -> Option[TreeNode] {
+    if depth <= 0 {
+        return None;
+    }
+    let node = TreeNode { val: val, left: None, right: None };
+    node.left = build_perfect(depth - 1, val);
+    node.right = build_perfect(depth - 1, val);
+    Some(node)
+}
+
+fn build_balanced(lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: mid, left: None, right: None };
+    node.left = build_balanced(lo, mid - 1);
+    node.right = build_balanced(mid + 1, hi);
+    Some(node)
+}
+
+fn leftmost_path_sum(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            match n.left {
+                Some(_) => n.val + leftmost_path_sum(n.left),
+                None => n.val + leftmost_path_sum(n.right),
+            }
+        }
+    }
+}
+
+fn hash_paths(paths: Vec[Vec[i64]]) -> i64 {
+    let mut h = 1;
+    let mut i = 0;
+    while i < paths.len() {
+        h = (h * 1000003 + 7) % 1000000007;
+        let mut j = 0;
+        while j < paths[i].len() {
+            h = (h * 131 + paths[i][j] + 1000) % 1000000007;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    h
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        let paths = if (t % 2) == 0 {
+            let depth = 3 + (t % 3);
+            let val = 2 + t;
+            let root = build_perfect(depth, val);
+            path_sum(root, depth * val)
+        } else {
+            let n = 7 + t;
+            let root = build_balanced(t * 20, t * 20 + n - 1);
+            path_sum(root, leftmost_path_sum(root))
+        };
+        let cnt = paths.len();
+        let h = hash_paths(paths);
+        acc = (acc * 131 + cnt + h) % 1000000007;
+        println(f"tree {t}: paths={cnt} hash={h}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut s: Set[Vec[i64]] = Set.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(601i64); a.push(602i64); a.push(603i64);
+    a.push(604i64); a.push(605i64); a.push(606i64);
+    s.insert(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(601i64); b.push(602i64); b.push(603i64);
+    b.push(604i64); b.push(605i64); b.push(606i64);
+    s.insert(b);
+    println(s.len());
+}

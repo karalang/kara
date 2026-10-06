@@ -1,0 +1,28 @@
+
+fn main() {
+    let mut s: Set[Vec[i64]] = Set.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(101i64); a.push(102i64); a.push(103i64);
+    s.insert(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(101i64); b.push(102i64); b.push(103i64);
+    s.insert(b);
+    println(s.len());           // 1 — deduped by content
+    let mut c: Vec[i64] = Vec.new();
+    c.push(101i64); c.push(102i64); c.push(999i64);
+    s.insert(c);
+    println(s.len());           // 2 — distinct contents stay separate
+    let mut probe: Vec[i64] = Vec.new();
+    probe.push(101i64); probe.push(102i64); probe.push(103i64);
+    println(s.contains(probe)); // true
+    let mut rem: Vec[i64] = Vec.new();
+    rem.push(101i64); rem.push(102i64); rem.push(103i64);
+    println(s.remove(rem));     // true
+    println(s.len());           // 1
+    let mut u: Set[Vec[i64]] = Set.new();
+    let mut p: Vec[i64] = Vec.new(); p.push(7i64);
+    u.insert(p);
+    let mut q: Vec[i64] = Vec.new(); q.push(7i64); q.push(7i64);
+    u.insert(q);
+    println(u.len());           // 2 — same prefix, different length ≠ equal
+}

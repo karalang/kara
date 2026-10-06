@@ -1,0 +1,69 @@
+enum_true
+  dE
+  dR1
+  v=1
+enum_false
+  dR2
+  dE
+  v=102
+bare_true
+  dE
+  dR3
+  v=7
+bare_false
+  dE
+  dR4
+  v=0
+mut_true
+  dE
+  dR5
+  v=5
+loop_once
+  dE
+  dR6
+  v=9
+loop_zero
+  dE
+  dR7
+  v=0
+arm_taken
+  dE
+  dR8
+  v=1
+arm_other
+  dE
+  dR9
+  v=2
+temp_true
+  dE
+  dR10
+  v=10
+temp_false
+  dR11
+  dE
+  v=111
+struct_true
+  dS1
+  dR12
+  v=1
+struct_false
+  dS2
+  dR13
+  v=102
+both_arms
+  dS3
+  dR14
+  v=53
+top_let
+  dE
+  dR15
+  v=15
+plain
+  dE
+  dR16
+  v=1
+borrowed
+  dE
+  dR17
+  v=1
+end

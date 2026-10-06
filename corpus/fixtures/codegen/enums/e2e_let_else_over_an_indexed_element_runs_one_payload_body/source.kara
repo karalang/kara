@@ -1,0 +1,110 @@
+struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H { xs: Vec[E] }
+struct W { r: R, k: i64 }
+
+fn mkr(n: i64) -> R { let mut v: Vec[i64] = Vec.new(); v.push(n); return R { id: n, v: v } }
+fn mk(n: i64) -> E { return E.A(mkr(n)) }
+fn mkw(n: i64) -> W { return W { r: mkr(n), k: n } }
+fn mkv(n: i64) -> Vec[E] { let mut v: Vec[E] = Vec.new(); v.push(mk(n)); return v }
+
+#[allow(partial_move_of_drop_enum)]
+fn leg_bare() {
+    println("bare");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(1));
+    let E.A(r) = v[0] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println("bare end");
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn leg_live_after() {
+    println("liveafter");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(2));
+    let E.A(r) = v[0] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println(f"len {v.len()}");
+    println("liveafter end");
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn leg_field() {
+    println("field");
+    let mut xs: Vec[E] = Vec.new();
+    xs.push(mk(3));
+    let h = H { xs: xs };
+    let E.A(r) = h.xs[0] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println("field end");
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn leg_two() {
+    println("two");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(4));
+    v.push(mk(5));
+    let E.A(r) = v[1] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println("two end");
+}
+
+fn leg_opt() {
+    println("opt");
+    let mut v: Vec[Option[R]] = Vec.new();
+    v.push(Option.Some(mkr(6)));
+    let Option.Some(r) = v[0] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println("opt end");
+}
+
+fn leg_struct() {
+    println("struct");
+    let mut v: Vec[W] = Vec.new();
+    v.push(mkw(7));
+    let W { r, k } = v[0] else { println("no"); return }
+    println(f"got {r.id + k}");
+    println("struct end");
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn leg_temp() {
+    println("temp");
+    let E.A(r) = mkv(8)[0] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println("temp end");
+}
+
+fn leg_iflet() {
+    println("iflet");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(9));
+    if let E.A(r) = v[0] { println(f"got {r.id + r.v.len()}") }
+    println("iflet end");
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn leg_elsetaken() {
+    println("elsetaken");
+    let mut v: Vec[E] = Vec.new();
+    v.push(E.B);
+    let E.A(r) = v[0] else { println("no"); return }
+    println(f"got {r.id}");
+}
+
+fn main() {
+    leg_bare();
+    leg_live_after();
+    leg_field();
+    leg_two();
+    leg_opt();
+    leg_struct();
+    leg_temp();
+    leg_iflet();
+    leg_elsetaken();
+    println("end");
+}

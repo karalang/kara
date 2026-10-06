@@ -1,0 +1,22 @@
+
+shared struct S { id: i64, tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct H { s: S }
+struct W { p: (S, i64) }
+fn pick(a: (S, i64)) -> S { return a.0 }
+fn pick2(a: (S, i64)) -> S { a.0 }
+fn build(k: i64) -> (S, i64) { let s: S = S { id: k, tag: "b" }; return (s, 3) }
+fn main() {
+    { let a: (S, i64) = (S { id: 1, tag: "a" }, 3); println(f"r1={a.0.id}"); println(f"r2={a.0.id}"); println(f"r3={a.0.tag}"); }
+    { let b: (S, i64) = (S { id: 2, tag: "a" }, 3); }
+    { let a: (S, i64) = (S { id: 3, tag: "a" }, 3); let s: S = a.0; let u: S = a.0; println(f"v{s.id}{u.id}{a.0.id}"); }
+    { let a: (S, i64) = (S { id: 4, tag: "a" }, 3); let (s, n) = a; println(f"v{s.id}{n}"); }
+    { let a: (S, i64) = (S { id: 5, tag: "a" }, 3); let s: S = pick(a); println(f"v{s.id}"); }
+    { let a: (S, i64) = (S { id: 6, tag: "a" }, 3); let s: S = pick2(a); println(f"v{s.id}"); }
+    { let a: (S, i64) = (S { id: 7, tag: "a" }, 3); let h: H = H { s: a.0 }; println(f"v{h.s.id}{a.0.id}"); }
+    { let w: W = W { p: (S { id: 8, tag: "a" }, 3) }; let p: (S, i64) = w.p; println(f"v{p.0.id}"); }
+    { let a: (S, i64) = build(9); println(f"v{a.0.id}"); }
+    { let s: S = S { id: 10, tag: "a" }; let a: (S, i64) = (s, 1); let b: (S, i64) = (s, 2); println(f"v{a.0.id}{b.0.id}"); }
+    { let v: Vec[(S, i64)] = [(S { id: 11, tag: "a" }, 1), (S { id: 12, tag: "a" }, 2)]; let v2: Vec[(S, i64)] = v; println(f"v{v2[1].0.id}"); }
+    println("end");
+}

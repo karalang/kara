@@ -1,0 +1,17 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+struct W { k: i64, a: R, b: R }
+impl Drop for W { fn drop(mut ref self) { println(f"w{self.k}"); } }
+struct Q { w: W, t: (R, R) }
+fn consume(x: Q) {
+    let l = R { id: 9 };
+    println("in");
+}
+fn main() {
+    let mut x = Q { w: W { k: 5, a: R { id: 15 }, b: R { id: 25 } }, t: (R { id: 35 }, R { id: 45 }) };
+    for i in 0..2 {
+        consume(x);
+        x = Q { w: W { k: i + 0, a: R { id: i + 10 }, b: R { id: i + 20 } }, t: (R { id: i + 30 }, R { id: i + 40 }) };
+    }
+    println("done");
+}

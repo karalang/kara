@@ -1,0 +1,118 @@
+// LeetCode #93: Restore IP Addresses — three explicit dot-position loops.
+//
+// The same enumeration as restore_ip.kara (the ★), but the three dots are placed by a
+// triple-nested loop instead of recursion. A candidate address is fixed by three cut
+// points `a < b < c` — the four segments are `s[0,a)`, `s[a,b)`, `s[b,c)`, `s[c,n)`. Each
+// cut advances at most 3 past the previous (a segment is 1–3 digits), the fourth segment
+// `s[c,n)` must itself be 1–3 long, and all four must pass the same validity test (no
+// leading zero unless single-digit, value ≤ 255). Valid quadruples are joined with dots.
+//
+// It walks the identical candidate order as the ★'s DFS (part-1 length 1, then 2, then
+// 3, and so on), so the two produce the same list — a distinct surface (flat nested
+// loops + a reusable `valid` / `seg` helper pair) that must land byte-identical.
+
+fn to_bytes(str: ref String) -> Vec[u8] {
+    let b = str.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        v.push(b[i]);
+        i = i + 1;
+    }
+    v
+}
+
+fn valid_seg(s: ref Vec[u8], start: i64, len: i64) -> bool {
+    if len < 1 or len > 3 {
+        return false;
+    }
+    if len > 1 and s[start] == 48u8 {
+        return false;                      // leading zero
+    }
+    let mut val = 0;
+    let mut i = 0;
+    while i < len {
+        val = val * 10 + ((s[start + i] as i64) - 48);
+        i = i + 1;
+    }
+    val <= 255
+}
+
+fn seg_str(s: ref Vec[u8], start: i64, len: i64) -> String {
+    let mut r: String = "";
+    let mut i = 0;
+    while i < len {
+        let d = (s[start + i] as i64) - 48;
+        r.push_str(f"{d}");
+        i = i + 1;
+    }
+    r
+}
+
+fn restore(str: ref String) -> Vec[String] {
+    let s = to_bytes(str);
+    let n = s.len();
+    let mut out: Vec[String] = Vec.new();
+
+    let mut a = 1;
+    while a <= 3 and a < n {
+        let mut b = a + 1;
+        while b <= a + 3 and b < n {
+            let mut c = b + 1;
+            while c <= b + 3 and c < n {
+                if valid_seg(s, 0, a)
+                    and valid_seg(s, a, b - a)
+                    and valid_seg(s, b, c - b)
+                    and valid_seg(s, c, n - c) {
+                    let p0 = seg_str(s, 0, a);
+                    let p1 = seg_str(s, a, b - a);
+                    let p2 = seg_str(s, b, c - b);
+                    let p3 = seg_str(s, c, n - c);
+                    out.push(f"{p0}.{p1}.{p2}.{p3}");
+                }
+                c = c + 1;
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    out
+}
+
+fn report(str: String, acc: mut ref i64) {
+    let ips = restore(str);
+    let count = ips.len();
+    println(f"\"{str}\": {count}");
+    let mut i = 0;
+    while i < count {
+        println(ips[i]);
+        i = i + 1;
+    }
+    let mut a = (acc * 131 + (count + 1)) % 1000000007;
+    i = 0;
+    while i < count {
+        let bytes = ips[i].bytes();
+        let mut j = 0;
+        while j < bytes.len() {
+            a = (a * 131 + (bytes[j] as i64)) % 1000000007;
+            j = j + 1;
+        }
+        a = (a * 131 + 7) % 1000000007;
+        i = i + 1;
+    }
+    acc = a;
+}
+
+fn main() {
+    let mut acc = 0;
+    report("25525511135", mut acc);
+    report("0000", mut acc);
+    report("101023", mut acc);
+    report("1111", mut acc);
+    report("255255255255", mut acc);
+    report("010010", mut acc);
+    report("1", mut acc);
+    report("1234567890123", mut acc);
+    report("", mut acc);
+    println(f"sink: {acc}");
+}

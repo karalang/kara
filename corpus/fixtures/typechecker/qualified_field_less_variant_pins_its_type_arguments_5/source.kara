@@ -1,0 +1,3 @@
+enum Col { Red, Blue }
+fn takeit(x: Col) { match x { Red => { println("r") } Blue => { println("b") } } }
+fn main() { takeit(Col.Blue); println("end") }

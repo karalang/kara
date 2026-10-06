@@ -1,0 +1,95 @@
+// LeetCode #35: Search Insert Position — closed interval, track the candidate.
+//
+// Same answer as search_insert.kara (the found-or-insert index = first i with
+// nums[i] >= target), factored over a CLOSED interval [lo, hi] instead of the
+// half-open [lo, hi). The closed form needs an explicit answer register because
+// `lo == hi` is still a live cell to inspect, so "the loop fell through" no longer
+// coincides with "lo is the answer" — we carry the best candidate ourselves.
+//
+//   - lo = 0, hi = len - 1.  Both ends are real indices; the window is non-empty
+//     while lo <= hi.
+//   - ans starts at len — the append position, the answer when NOTHING is >= target.
+//   - On nums[mid] >= target: mid is a candidate insert point; record ans = mid and
+//     search LEFT (hi = mid - 1) for an even-earlier qualifying index.
+//   - On nums[mid] < target: everything up to mid is too small; go RIGHT
+//     (lo = mid + 1) and leave ans untouched.
+//
+// The bias is "pull the answer as far left as possible": every time we see a value
+// >= target we tentatively claim its index, then keep trying to beat it. When the
+// window empties, ans holds the leftmost qualifying index — or its len default if
+// the target outranks the whole array. This mirrors #34's biased edge-finder, the
+// difference being #34 records on EQUALITY (to find a run's end) while here we
+// record on >= (distinct values, so the first >= is the answer directly).
+//
+// Deliberately a `while lo <= hi` closed search — the counterpart to the ★ file's
+// half-open `while lo < hi`. Same O(log n), one extra register, equality folded
+// into the >= test rather than reconstructed afterward.
+
+fn search_insert(nums: Slice[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = len - 1;
+    let mut ans = len;                      // default: append (nothing >= target)
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] >= target {
+            ans = mid;                      // candidate insert point — try to beat it leftward
+            hi = mid - 1;
+        } else {
+            lo = mid + 1;                // mid too small — answer is strictly right
+        }
+    }
+    ans
+}
+
+fn fmt(nums: Slice[i64], len: i64) -> String {
+    let mut s: String = "[";
+    for i in 0..len {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(nums: Slice[i64], len: i64, target: i64) {
+    let idx = search_insert(nums, len, target);
+    println(f"{fmt(nums, len)} target={target} -> {idx}");
+}
+
+fn main() {
+    let a1: Array[i64, 4] = [1, 3, 5, 6];
+    report(a1, 4, 5);                // 2
+    report(a1, 4, 2);                // 1
+    report(a1, 4, 7);                // 4
+    report(a1, 4, 0);                // 0
+
+    let a2: Array[i64, 0] = [];
+    report(a2, 0, 5);                // 0
+
+    let a3: Array[i64, 1] = [2];
+    report(a3, 1, 1);                // 0
+    report(a3, 1, 2);                // 0
+    report(a3, 1, 3);                // 1
+
+    let a4: Array[i64, 5] = [1, 3, 5, 7, 9];
+    report(a4, 5, 1);                // 0
+    report(a4, 5, 3);                // 1
+    report(a4, 5, 5);                // 2
+    report(a4, 5, 7);                // 3
+    report(a4, 5, 9);                // 4
+    report(a4, 5, 0);                // 0
+    report(a4, 5, 2);                // 1
+    report(a4, 5, 4);                // 2
+    report(a4, 5, 6);                // 3
+    report(a4, 5, 8);                // 4
+    report(a4, 5, 10);               // 5
+
+    let a5: Array[i64, 6] = [-9, -4, -1, 0, 3, 8];
+    report(a5, 6, -9);               // 0
+    report(a5, 6, -5);               // 1
+    report(a5, 6, 0);                // 3
+    report(a5, 6, 8);                // 5
+    report(a5, 6, 100);              // 6
+}

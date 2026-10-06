@@ -1,0 +1,14 @@
+
+fn parse_int(flag: bool) -> Result[i64, i64] {
+    if flag { Ok(42_i64) } else { Err(99_i64) }
+}
+fn add_ten(flag: bool) -> Result[i64, i64] {
+    let x = parse_int(flag)?;
+    Ok(x + 10)
+}
+fn main() {
+    match add_ten(false) {
+        Ok(_) => println(0),
+        Err(e) => println(e),
+    }
+}

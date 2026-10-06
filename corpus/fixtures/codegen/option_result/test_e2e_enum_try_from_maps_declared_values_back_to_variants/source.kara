@@ -1,0 +1,56 @@
+
+const BASE: i64 = 16;
+
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
+
+#[repr(i8)]
+enum Neg { Down = -128, Up = 127 }
+
+#[repr(u16)]
+enum Wide { A = 1000, B = 65535 }
+
+#[repr(u8)]
+enum Op { Add = BASE + 1, Sub = BASE + 2 }
+
+fn probe(raw: u8) {
+    match UsbClass.try_from(raw) {
+        Ok(c) => println(f"ok{c.discriminant()}"),
+        Err(e) => match e {
+            DiscriminantError.OutOfRange { value } => println(f"no{0 - (value as i64)}"),
+        },
+    }
+}
+
+fn main() {
+    // Every declared value round-trips; every gap reports the value it saw.
+    probe(0u8);
+    probe(1u8);
+    probe(2u8);
+    probe(3u8);
+    probe(8u8);
+    probe(255u8);
+
+    // Signed repr at both boundaries, including a NEGATIVE declared value.
+    let lo: i8 = (0 - 128) as i8;
+    match Neg.try_from(lo) { Ok(n) => println(n.discriminant()), Err(_) => println(999) }
+    let hi: i8 = 127 as i8;
+    match Neg.try_from(hi) { Ok(n) => println(n.discriminant()), Err(_) => println(999) }
+    let mid: i8 = 0 as i8;
+    match Neg.try_from(mid) { Ok(n) => println(n.discriminant()), Err(_) => println(999) }
+
+    // Wide repr at the top of its range, and a near miss.
+    let top: u16 = 65535 as u16;
+    match Wide.try_from(top) { Ok(w) => println(w.discriminant()), Err(_) => println(999) }
+    let near: u16 = 1001 as u16;
+    match Wide.try_from(near) { Ok(w) => println(w.discriminant()), Err(_) => println(999) }
+
+    // A folded constant expression — the same fold both backends read.
+    match Op.try_from(17u8) { Ok(o) => println(o.discriminant()), Err(_) => println(999) }
+
+    // Round-trip against the outbound direction.
+    match UsbClass.try_from(UsbClass.MassStorage.discriminant()) {
+        Ok(c) => println(c.discriminant()),
+        Err(_) => println(999),
+    }
+}

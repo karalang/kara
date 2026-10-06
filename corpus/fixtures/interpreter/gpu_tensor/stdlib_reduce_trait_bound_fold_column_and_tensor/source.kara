@@ -1,0 +1,19 @@
+
+fn accumulate[C: Reduce[i64]](c: ref C) -> i64 {
+    c.fold(0, |a, x| a + x)
+}
+fn count_gt2[C: Reduce[i64]](c: ref C) -> i64 {
+    c.fold(0, |a, x| if x > 2 { a + 1 } else { a })
+}
+fn main() {
+    let col: Column[i64] = Column.from_vec([3, 1, 4, 1, 5]);
+    let t: Tensor[i64, [3]] = Tensor.from([10, 20, 5]);
+    let mut nulled: Column[i64] = Column.new();
+    nulled.push(10);
+    nulled.push_null();
+    nulled.push(30);
+    let empty: Column[i64] = Column.new();
+    println(f"{accumulate(col)} {accumulate(t)}");
+    println(f"{count_gt2(col)}");
+    println(f"{accumulate(nulled)} {accumulate(empty)}");
+}

@@ -1,0 +1,21 @@
+
+#[derive(Hash, Eq)]
+enum Color { Red, Green, Blue }
+
+fn main() {
+    let r: Color = Color.Red;
+    let g: Color = Color.Green;
+    let b: Color = Color.Blue;
+    match r {
+        Color.Red => println(0_i64),
+        _ => println(99_i64),
+    }
+    match g {
+        Color.Green => println(1_i64),
+        _ => println(99_i64),
+    }
+    match b {
+        Color.Blue => println(2_i64),
+        _ => println(99_i64),
+    }
+}

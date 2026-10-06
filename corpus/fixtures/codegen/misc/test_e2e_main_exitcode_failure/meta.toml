@@ -1,0 +1,13 @@
+source = "tests/codegen/misc.rs::test_e2e_main_exitcode_failure"
+dedup_of = []
+expect = "panic:1"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

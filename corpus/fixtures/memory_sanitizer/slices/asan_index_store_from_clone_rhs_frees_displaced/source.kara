@@ -1,0 +1,10 @@
+
+#[derive(Clone)]
+struct It { id: i64, name: String }
+fn main() {
+    let mut v: Vec[It] = Vec.new();
+    v.push(It { id: 1, name: f"aa{1}" });
+    v.push(It { id: 2, name: f"bb{2}" });
+    v[0] = v[1].clone();
+    println(f"{v[0].id}");
+}

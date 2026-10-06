@@ -1,0 +1,13 @@
+source = "tests/codegen/rc_shared.rs::e2e_shared_field_returned_from_a_caller_retains_param_keeps_its_ref"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

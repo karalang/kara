@@ -1,0 +1,33 @@
+
+struct MCall { object: Expr, method: String, args: Vec[i64] }
+shared enum Expr {
+    Lit(String),
+    MethodCall(MCall),
+}
+fn emit(e: Expr) -> i64 {
+    match e {
+        Lit(s) => s.len(),
+        MethodCall(mc) => mc.method.len() + mc.args.len(),
+    }
+}
+fn process(value: Expr) -> i64 {
+    match value {
+        Lit(s) => s.len(),
+        MethodCall(mc) => emit(MethodCall(mc)),
+    }
+}
+fn main() {
+    let mut total = 0i64;
+    let mut i = 0i64;
+    while i < 300 {
+        let inner: Expr = Lit("x".to_string());
+        let mut a: Vec[i64] = Vec.new();
+        a.push(1);
+        a.push(2);
+        let mc = MCall { object: inner, method: "substring".to_string(), args: a };
+        let v: Expr = MethodCall(mc);
+        total = total + process(v);
+        i = i + 1;
+    }
+    println(total);
+}

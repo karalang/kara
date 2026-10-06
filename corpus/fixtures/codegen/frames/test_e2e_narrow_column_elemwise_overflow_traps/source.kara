@@ -1,0 +1,9 @@
+
+fn main() {
+    let c: Column[i32] = Column.from_vec([2147483647]);
+    let d = c + 1;
+    match d[0] {
+        Some(x) => { println(x); },
+        None => { println("null"); },
+    }
+}

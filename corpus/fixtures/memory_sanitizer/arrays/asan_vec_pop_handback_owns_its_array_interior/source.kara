@@ -1,0 +1,50 @@
+
+fn take(a: Array[String, 2]) -> i64 {
+    println(f"moved-to-callee:{a[0]}");
+    return 1;
+}
+
+fn main() {
+    let mut v: Vec[Array[String, 2]] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 4 {
+        v.push(Array[f"row-aaaaaaaaaaaaaaaa-{i}", f"col-bbbbbbbbbbbbbbbb-{i}"]);
+        i = i + 1;
+    }
+    match v.first() { Some(a) => { println(f"first:{a[0]}"); } None => {} }
+    match v.last() { Some(a) => { println(f"last:{a[1]}"); } None => {} }
+    let o0 = v.pop();
+    match o0 { Some(a) => { println(f"bound:{a[0]}"); } None => {} }
+    let o1 = v.pop();
+    match o1 { Some(_) => { println("wild"); } None => {} }
+    let o2 = v.pop();
+    match o2 { Some(a) => { let _ = take(a); } None => {} }
+    let o3 = v.pop();
+    match o3 { Some(a) => { println(f"bound:{a[0]}"); } None => {} }
+    let o4 = v.pop();
+    match o4 { Some(a) => { println(f"never:{a[0]}"); } None => { println("empty"); } }
+
+    let mut sv: Vec[String] = Vec.new();
+    sv.push(f"str-cccccccccccccccc-0");
+    let so = sv.pop();
+    match so { Some(s) => { println(f"str:{s}"); } None => {} }
+
+    let mut nv: Vec[Vec[String]] = Vec.new();
+    let mut inner: Vec[String] = Vec.new();
+    inner.push(f"vec-dddddddddddddddd-0");
+    nv.push(inner);
+    let no = nv.pop();
+    match no { Some(w) => { println(f"vec:{w[0]}"); } None => {} }
+
+    let mut iv: Vec[Array[i64, 3]] = Vec.new();
+    iv.push(Array[7, 8, 9]);
+    let io = iv.pop();
+    match io { Some(a) => { println(f"scalar:{a[0]}"); } None => {} }
+
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    m.insert(1, Array[f"map-gggggggggggggggg-0", f"map-hhhhhhhhhhhhhhhh-1"]);
+    let mo = m.remove(1);
+    match mo { Some(a) => { println(f"maprm:{a[0]}"); } None => {} }
+
+    println("end");
+}

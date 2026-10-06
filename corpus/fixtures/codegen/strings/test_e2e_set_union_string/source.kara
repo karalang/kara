@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut a: Set[String] = Set.new();
+    a.insert("alpha");
+    a.insert("beta");
+    let mut b: Set[String] = Set.new();
+    b.insert("beta");
+    b.insert("gamma");
+    let u: Set[String] = a.union(b);
+    println(u.len());
+    println(u.contains("alpha"));
+    println(u.contains("beta"));
+    println(u.contains("gamma"));
+    println(u.contains("delta"));
+}

@@ -1,0 +1,72 @@
+// LeetCode #118 — binomial (multiplicative) variant.
+//
+// Each row is a row of binomial coefficients, so entry `C(i, j)` can be produced directly from its
+// left neighbour without reading the previous row at all: `C(i, 0) = 1` and
+// `C(i, j) = C(i, j-1) * (i - j + 1) / j`. Every intermediate is an exact integer (a binomial
+// coefficient), so the integer division is exact. A distinct mechanism from the additive
+// `generate.kara` (no dependence on the already-built table), which must produce the identical
+// triangle — same `triangle_hash`.
+
+fn generate(num_rows: i64) -> Vec[Vec[i64]] {
+    let mut tri: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < num_rows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 1; // C(i, 0)
+        let mut j = 0;
+        while j <= i {
+            row.push(c);
+            // Advance to C(i, j+1) = C(i, j) * (i - j) / (j + 1).
+            c = c * (i - j) / (j + 1);
+            j = j + 1;
+        }
+        tri.push(row);
+        i = i + 1;
+    }
+    tri
+}
+
+fn triangle_hash(tri: ref Vec[Vec[i64]]) -> i64 {
+    let mut h = 1;
+    let mut i = 0;
+    while i < tri.len() {
+        let row = ref tri[i];
+        let mut j = 0;
+        while j < row.len() {
+            h = (h * 131 + row[j]) % 1000000007;
+            j = j + 1;
+        }
+        h = (h * 31 + row.len() + 7) % 1000000007;
+        i = i + 1;
+    }
+    h
+}
+
+fn main() {
+    let small = generate(8);
+    let mut r = 0;
+    while r < small.len() {
+        let row = ref small[r];
+        let mut line = "";
+        let mut c = 0;
+        while c < row.len() {
+            if c > 0 {
+                line = line + " ";
+            }
+            line = line + f"{row[c]}";
+            c = c + 1;
+        }
+        println(f"row {r}: {line}");
+        r = r + 1;
+    }
+
+    let mut acc = 0;
+    let mut n = 1;
+    while n <= 30 {
+        let tri = generate(n);
+        let h = triangle_hash(tri);
+        acc = (acc * 131 + h) % 1000000007;
+        n = n + 1;
+    }
+    println(f"sink: {acc}");
+}

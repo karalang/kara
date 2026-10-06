@@ -1,0 +1,7 @@
+
+fn main() {
+    let bytes = c"abc".as_bytes();
+    println(bytes.len());
+    println(bytes[0]);
+    println(bytes[2]);
+}

@@ -1,0 +1,25 @@
+
+struct Inner { data: Vec[i64] }
+struct Outer { inner: Inner, extra: Vec[i64] }
+struct GInner[T] { data: Vec[T] }
+struct GOuter[T] { inner: GInner[T] }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 200 {
+        let mut d: Vec[i64] = Vec.new();
+        d.push(i); d.push(i + 1); d.push(i + 2);
+        let mut ex: Vec[i64] = Vec.new();
+        ex.push(i * 10); ex.push(i * 20);
+        let o: Outer = Outer { inner: Inner { data: d }, extra: ex };
+        let bound: Inner = o.inner;
+        total = total + bound.data.len() + o.extra.len();
+        let mut gd: Vec[i64] = Vec.new();
+        gd.push(i); gd.push(i + 1); gd.push(i + 2); gd.push(i + 3);
+        let g: GOuter[i64] = GOuter { inner: GInner { data: gd } };
+        let gb: GInner[i64] = g.inner;
+        total = total + gb.data.len();
+        i = i + 1;
+    }
+    println(total);
+}

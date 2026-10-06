@@ -1,0 +1,40 @@
+// LeetCode #121: Best Time to Buy and Sell Stock — one-pass O(n).
+//
+// Walk the price series once, keeping the minimum price seen so far. At each
+// day k, the best profit if we sell on day k is `prices[k] - min_so_far`. The
+// overall answer is the maximum of those over all k. O(n) time, O(1) space.
+
+fn max_profit(prices: Slice[i64]) -> i64 {
+    let n = prices.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut min_price = prices[0];
+    let mut best = 0;
+    for i in 1..n {
+        let p = prices[i];
+        if p < min_price {
+            min_price = p;
+        }
+        let profit = p - min_price;
+        if profit > best {
+            best = profit;
+        }
+    }
+    best
+}
+
+fn report(prices: Slice[i64]) {
+    println(max_profit(prices));
+}
+
+fn main() {
+    let case1: Array[i64, 6] = [7, 1, 5, 3, 6, 4];
+    report(case1);   // expect: 5  (buy at 1, sell at 6)
+
+    let case2: Array[i64, 5] = [7, 6, 4, 3, 1];
+    report(case2);   // expect: 0  (prices only fall)
+
+    let case3: Array[i64, 1] = [5];
+    report(case3);   // expect: 0  (single day, no trade possible)
+}

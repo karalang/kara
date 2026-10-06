@@ -1,0 +1,56 @@
+// LeetCode #97: Interleaving String — 1D rolling DP (O(min space)).
+//
+// The 2D recurrence (see interleave.kara) only ever reads row i-1 and the cell to the
+// left in row i, so a single Vec[bool] of length |s2|+1 suffices: overwrite dp[j] in
+// place while sweeping j left-to-right, and at the moment of the update dp[j] still
+// holds row i-1's value (the "from s1" term) while dp[j-1] already holds row i's
+// (the "from s2" term). Same answers as the 2D table, O(|s2|) memory instead of
+// O(|s1|*|s2|).
+
+fn is_interleave(s1: String, s2: String, s3: String) -> bool {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let c = s3.bytes();
+    let n = a.len();
+    let m = b.len();
+    if n + m != c.len() {
+        return false;
+    }
+    // One sized allocation for the rolling row (matches the mirrors' sized alloc).
+    let mut dp: Vec[bool] = Vec.filled(m + 1, false);
+    dp[0] = true;
+    let mut j = 1;
+    while j <= m {
+        dp[j] = dp[j - 1] and (b[j - 1] == c[j - 1]);
+        j = j + 1;
+    }
+    let mut i = 1;
+    while i <= n {
+        dp[0] = dp[0] and (a[i - 1] == c[i - 1]);
+        let mut jj = 1;
+        while jj <= m {
+            let up = dp[jj] and (a[i - 1] == c[i + jj - 1]);
+            let left = dp[jj - 1] and (b[jj - 1] == c[i + jj - 1]);
+            dp[jj] = up or left;
+            jj = jj + 1;
+        }
+        i = i + 1;
+    }
+    dp[m]
+}
+
+fn main() {
+    let mut acc = 0;
+    let s1s = ["aabcc", "aabcc", "", "a", "", "abc", "aa", "ab", "abababab", "aaaa"];
+    let s2s = ["dbbca", "dbbca", "", "", "b", "def", "ab", "cd", "babababa", "bbbb"];
+    let s3s = ["aadbbcbcac", "aadbbbaccc", "", "a", "b", "adbcef", "aaba", "acbd", "aabbababbaba", "aabbaabb"];
+    let mut k = 0;
+    while k < s1s.len() {
+        let ok = is_interleave(s1s[k].clone(), s2s[k].clone(), s3s[k].clone());
+        let bit = if ok { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        println(f"case {k}: {ok}");
+        k = k + 1;
+    }
+    println(f"sink: {acc}");
+}

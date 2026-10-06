@@ -1,0 +1,31 @@
+// Benchmark workload for LeetCode #168 — Excel Sheet Column Title.
+//
+// Sweep: run the bijective base-26 conversion (the heart of column_title) over
+// a huge contiguous range of column numbers 1..LIMIT. Each number peels off its
+// letters least-significant first via a subtract-1 / mod-26 / div-26 step with a
+// data-dependent trip count (log26 n) and a loop-carried remainder — it does
+// NOT vectorize. Instead of building/reversing the title String, each produced
+// letter's byte value (b'A'+rem = 65..90) is folded into a running checksum
+// (order-independent, so no allocation) — the sink.
+
+fn col_checksum(n: i64) -> i64 {
+    let mut x = n;
+    let mut acc = 0;
+    while x > 0 {
+        x = x - 1; // bijective base-26: shift to 0-based digit
+        acc = acc + (65 + (x % 26)); // 'A' = 65
+        x = x / 26;
+    }
+    return acc;
+}
+
+fn main() {
+    let limit = 50000000;
+    let mut sink = 0;
+    let mut n = 1;
+    while n <= limit {
+        sink = sink + col_checksum(n);
+        n = n + 1;
+    }
+    println(sink);
+}

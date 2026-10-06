@@ -1,0 +1,6 @@
+
+fn main() {
+    let v = Vector[u8, 4](200, 10, 50, 255);
+    println(v[0]);
+    println(v[3]);
+}

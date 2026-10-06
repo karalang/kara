@@ -1,0 +1,5 @@
+
+fn main() {
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k").unwrap();
+    let stream: TlsStream = listener.accept().unwrap();
+}

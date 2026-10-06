@@ -1,0 +1,17 @@
+struct R { name: String, id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
+fn mk(n: i64, s: String) -> R { R { name: s, id: n } }
+struct H { o: Option[R] }
+impl H { fn peek(ref self) -> i64 { match self.o { Some(r) => r.id, None => 0 } } }
+fn g6(x: ref Option[R]) -> i64 { let x = Some(mk(7, f"g")); match x { Some(r) => r.id, None => 0 } }
+fn g7(x: mut ref Option[R]) -> i64 { match x { Some(r) => r.id, None => 0 } }
+fn g8(x: ref Option[R]) -> i64 { let x = Some(mk(9, f"i")); let Some(r) = x else { return 0 }; r.id }
+fn g9(x: mut ref Option[R]) -> i64 { let Some(r) = x else { return 0 }; r.id }
+fn main() {
+    let a = Some(mk(1, f"a")); println(f"n{g6(a)}"); println("a6");
+    let mut b = Some(mk(2, f"b")); println(f"n{g7(mut b)}"); println("a7");
+    let c = Some(mk(3, f"c")); println(f"n{g8(c)}"); println("a8");
+    let mut d = Some(mk(4, f"d")); println(f"n{g9(mut d)}"); println("a9");
+    let h = H { o: Some(mk(5, f"h")) }; println(f"n{h.peek()}"); println("ah");
+    println("end")
+}

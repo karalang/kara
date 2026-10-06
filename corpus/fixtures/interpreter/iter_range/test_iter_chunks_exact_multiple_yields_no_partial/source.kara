@@ -1,0 +1,9 @@
+
+fn main() {
+    let v = [1, 2, 3, 4, 5, 6];
+    let groups: Vec[Vec[i64]] = v.iter().chunks(2).collect();
+    println(groups.len());
+    for g in groups {
+        println(g.len());
+    }
+}

@@ -1,0 +1,8 @@
+
+        fn main() {
+            let v: Vec[String] = Vec.filled(2, "hi");
+            println(v.len());
+            println(v[0]);
+            println(v[1]);
+        }
+    

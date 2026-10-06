@@ -1,0 +1,14 @@
+
+            struct Response {{ status: i64, body: String }}
+
+            fn handle(req: Request) -> Response {{
+                Response {{ status: 200, body: req.path() }}
+            }}
+
+            fn main() {{
+                let cert = "{cert_lit}";
+                let key = "{key_lit}";
+                let _result = Server.serve_tls("127.0.0.1:0", cert, key, handle);
+                println("server exited unexpectedly");
+            }}
+            

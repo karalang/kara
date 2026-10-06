@@ -1,0 +1,11 @@
+
+fn try_open(path: String) -> Result[i64, IoError] with reads(FileSystem) {{
+    let _f = File.open(path)?;
+    Ok(0_i64)
+}}
+fn main() with reads(FileSystem) {{
+    match try_open("{path}") {{
+        Ok(_) => println("ok-passthrough"),
+        Err(_) => println("unexpected-err"),
+    }}
+}}

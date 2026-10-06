@@ -1,0 +1,15 @@
+
+shared struct Counter { val: i64 }
+
+fn make_counter() -> Counter {
+    return Counter { val: 7 };
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        make_counter();
+        i = i + 1;
+    }
+    println("done");
+}

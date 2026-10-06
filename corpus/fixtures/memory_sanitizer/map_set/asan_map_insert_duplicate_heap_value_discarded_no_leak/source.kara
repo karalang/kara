@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    let k = "vkey-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    m.insert(k.clone(), "first-vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv".to_string());
+    m.insert(k.clone(), "second-wwwwwwwwwwwwwwwwwwwwwwwwwwww".to_string());
+    println(m.get_or(k.clone(), "x".to_string()));
+}

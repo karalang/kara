@@ -1,0 +1,5 @@
+
+fn main() {
+    stderr.println("lc-to-stderr");
+    stdout.println("lc-to-stdout");
+}

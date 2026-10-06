@@ -1,0 +1,112 @@
+// Benchmark workload for LeetCode #257 — Binary Tree Paths (string prefix at every node).
+//
+// Build-once + punch. One SPINDLY tree of 24,000 nodes is built once, then all
+// its root-to-leaf paths are produced 60 times.
+//
+// The tree shape is the entire point of this lane. Each node keeps ONE child
+// with high probability, so depth is close to n and there are only a handful of
+// leaves. That is where the two strategies diverge: extending a string at every
+// node moves O(n · depth) bytes, while pushing values and rendering once per
+// leaf moves O(leaves · depth). On a bushy tree the two are within a constant of
+// each other and this lane would measure nothing.
+//
+// This file is the \u2605 strategy: each node builds a fresh String from its
+// parent's prefix. On a spine that is O(n\u00b2) byte copying to produce one path.
+//
+// Sink = a positional digest over the rendered paths, so path ORDER is part of
+// what the mirrors must agree on — the iterative form's LIFO push order is easy
+// to get backwards and yields the right paths in reverse.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+// A pure left spine: depth n, exactly ONE leaf. This is the shape the two
+// strategies actually diverge on — see the README note on why 4%% branching
+// (an earlier version of this generator) makes BOTH walks quadratic.
+fn build_spindly(n: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut state = 257257;
+    state = (state * 1103515245 + 12345) & 2147483647;
+    nodes.push(Node { val: (state / 65536) % 100 - 50, left: -1, right: -1 });
+    let mut frontier = 0; // extend from the most recently added node
+    let mut made = 1;
+    while made < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let two = (state / 65536) % 100 < 0; // PURE SPINE: never branch — see README
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let v = (state / 65536) % 100 - 50;
+        nodes.push(Node { val: v, left: -1, right: -1 });
+        let child = nodes.len() - 1;
+        if nodes[frontier].left == -1 {
+            nodes[frontier].left = child;
+        } else {
+            nodes[frontier].right = child;
+        }
+        made = made + 1;
+        if not two {
+            frontier = child;
+        }
+    }
+    return nodes;
+}
+
+fn digest_of(paths: ref Vec[String]) -> i64 {
+    let mut h = 1;
+    let mut i = 0;
+    while i < paths.len() {
+        let b = paths[i].bytes();
+        let mut k = 0;
+        while k < b.len() {
+            h = (h * 1000003 + (b[k] as i64)) % 1000000007;
+            k = k + 1;
+        }
+        h = (h * 31 + 7) % 1000000007;
+        i = i + 1;
+    }
+    return h;
+}
+
+fn walk(nodes: ref Vec[Node], node: i64, prefix: ref String, out: mut ref Vec[String]) {
+    let left = nodes[node].left;
+    let right = nodes[node].right;
+    if left == -1 and right == -1 {
+        let mut done: String = "";
+        done.push_str(prefix);
+        out.push(done);
+        return;
+    }
+    if left != -1 {
+        let mut next: String = "";
+        next.push_str(prefix);
+        next.push_str("->");
+        next.push_str(f"{nodes[left].val}");
+        walk(nodes, left, next, out);
+    }
+    if right != -1 {
+        let mut next: String = "";
+        next.push_str(prefix);
+        next.push_str("->");
+        next.push_str(f"{nodes[right].val}");
+        walk(nodes, right, next, out);
+    }
+}
+
+fn main() {
+    let n = 12000;
+    let rounds = 1;
+    let nodes = build_spindly(n);
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut out: Vec[String] = Vec.new();
+        let mut root_s: String = "";
+        root_s.push_str(f"{nodes[0].val}");
+        walk(nodes, 0, root_s, mut out);
+        sink = (sink * 131 + digest_of(out)) % 1000000007;
+        r = r + 1;
+    }
+    println(sink);
+}

@@ -1,0 +1,10 @@
+
+shared struct Node { mut val: i64, mut random: weak Node }
+fn main() {
+    let a: Node = Node { val: 10i64, random: None };
+    let b: Node = Node { val: 20i64, random: None };
+    a.random = b;
+    b.random = a;
+    match a.random { Some(r) => { println(r.val.to_string()); } None => { println("none"); } }
+    match b.random { Some(r) => { println(r.val.to_string()); } None => { println("none"); } }
+}

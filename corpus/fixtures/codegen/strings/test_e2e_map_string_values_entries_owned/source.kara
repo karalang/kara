@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m.insert("k1".to_string(), "alpha".to_string());
+    let vs: Vec[String] = m.values();
+    println(vs.len());
+    for v in vs { println(v); }
+    for pair in m.entries() {
+        let (a, b) = pair;
+        println(f"{a}={b}");
+    }
+}

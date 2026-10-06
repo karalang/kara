@@ -1,0 +1,23 @@
+
+fn build() -> Result[i64, AllocError] {
+    let mut v: Vec[i64] = Vec.new();
+    v.try_push(1)?;
+    v.try_push(2)?;
+    v.try_reserve(16)?;
+    v.try_resize(4, 9)?;
+    let mut spare: Vec[i64] = Vec.new();
+    spare.push(7);
+    v.try_append(spare)?;
+    let mut s: String = String.new();
+    s.try_push_str("hi")?;
+    let mut other: Vec[i64] = Vec.new();
+    other.push(99);
+    println(f"{v.len()} {v[3]} {v[4]} {other[0]} [{s}]");
+    return Ok(v.len());
+}
+fn main() {
+    match build() {
+        Ok(n) => { println(f"ok {n}"); }
+        Err(e) => { println("alloc failed"); }
+    }
+}

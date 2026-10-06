@@ -1,0 +1,14 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn guard(x: Option[Option[R]], c: bool) -> Option[R] {
+    match x {
+        Some(inner) if c => inner,
+        _ => None,
+    }
+}
+fn main() {
+    let h = guard(Some(Some(mk(4))), false);
+    println("h");
+    println("end")
+}

@@ -1,0 +1,19 @@
+
+shared enum Expr { Num(i64), Bin(BinOp) }
+struct BinOp { left: Expr, right: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Bin(b) => eval(b.left) + eval(b.right),
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 40 {
+        let t: Expr = Bin(BinOp { left: Num(i), right: Bin(BinOp { left: Num(i), right: Num(2) }) });
+        total = total + eval(t);
+        i = i + 1;
+    }
+    println(total);
+}

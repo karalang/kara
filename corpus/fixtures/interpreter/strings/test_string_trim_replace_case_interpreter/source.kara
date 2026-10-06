@@ -1,0 +1,13 @@
+fn main() {
+            let s: String = "  Hello World  ";
+            println(s.trim());
+            println(s);
+            println("HeLLo".to_lowercase());
+            println("HeLLo".to_uppercase());
+            println("a-b-c".replace("-", "+"));
+            println("aaa".replace("a", "bb"));
+            println("straße".to_uppercase());
+            println("café".to_uppercase());
+            println("   ".trim());
+            println("Hello World".to_lowercase().replace(" ", "_"));
+        }

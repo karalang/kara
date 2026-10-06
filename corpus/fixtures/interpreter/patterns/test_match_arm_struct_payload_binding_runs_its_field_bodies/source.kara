@@ -1,0 +1,20 @@
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Ho2 { a: R, b: Option[R] }
+struct Two { a: R, b: R }
+struct Nest { inner: Two, z: i64 }
+enum Wrap { W(Ho2), T(Two), Nn(Nest), N }
+fn mk(k: i64) -> R { return R { id: k, tag: f"t{k}", xs: [k] } }
+fn main() {
+    { let w: Wrap = Wrap.W(Ho2 { a: mk(52), b: Option.Some(mk(152)) }); match w { Wrap.W(h) => { let Ho2 { a, b } = h; println("in") }, _ => println("n") } println("one") }
+    { let w: Wrap = Wrap.W(Ho2 { a: mk(55), b: Option.Some(mk(155)) }); match w { Wrap.W(h) => { println("in") }, _ => println("n") } println("two") }
+    { let w: Wrap = Wrap.W(Ho2 { a: mk(56), b: Option.Some(mk(156)) }); if let Wrap.W(h) = w { let Ho2 { a, b } = h; println("in") } println("three") }
+    { let w: Wrap = Wrap.T(Two { a: mk(57), b: mk(157) }); match w { Wrap.T(h) => { let Two { a, b } = h; println("in") }, _ => println("n") } println("four") }
+    { let w: Wrap = Wrap.T(Two { a: mk(58), b: mk(158) }); match w { Wrap.T(h) => { let Two { a, b: _ } = h; println("in") }, _ => println("n") } println("five") }
+    { let w: Wrap = Wrap.Nn(Nest { inner: Two { a: mk(59), b: mk(159) }, z: 1 }); match w { Wrap.Nn(h) => { let Nest { inner, z } = h; println("in") }, _ => println("n") } println("six") }
+    { let w: Wrap = Wrap.T(Two { a: mk(60), b: mk(160) }); match w { Wrap.T(h) => { println(f"use{h.a.id}") }, _ => println("n") } println("seven") }
+    { let w: Wrap = Wrap.T(Two { a: mk(61), b: mk(161) }); match w { Wrap.T(h) => { let g: Two = h; println("in") }, _ => println("n") } println("eight") }
+    { let w: Wrap = Wrap.T(Two { a: mk(62), b: mk(162) }); match w { Wrap.T(h) => { println("in") }, _ => println("n") } println("nine") }
+    { let w: Wrap = Wrap.T(Two { a: mk(63), b: mk(163) }); match w { _ => println("n") } println("ten") }
+    println("end")
+}

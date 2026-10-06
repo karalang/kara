@@ -1,0 +1,18 @@
+
+enum Dir { North, South, East, West }
+
+fn f(d: Dir) -> i64 {
+    match d {
+        Dir.North => 0,
+        Dir.South => 1,
+        Dir.East  => 2,
+        Dir.West  => 3,
+    }
+}
+
+fn main() {
+    println(f(Dir.North));
+    println(f(Dir.South));
+    println(f(Dir.East));
+    println(f(Dir.West));
+}

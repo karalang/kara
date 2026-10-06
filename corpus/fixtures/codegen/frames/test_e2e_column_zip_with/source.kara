@@ -1,0 +1,18 @@
+
+fn main() {
+    let a: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let b: Column[i64] = Column.from_vec([10, 20, 30, 40]);
+    let s = a.zip_with(b, |x, y| x + y);
+    println(f"{s.sum()}");
+    let c: Column[i64] = Column.from_vec([5, 1, 8]);
+    let d: Column[i64] = Column.from_vec([2, 9, 3]);
+    let m = c.zip_with(d, |x, y| if x > y { x } else { y });
+    println(f"{m.sum()}");
+    let f1: Column[f64] = Column.from_vec([1.5, 2.5]);
+    let f2: Column[f64] = Column.from_vec([0.5, 0.5]);
+    let fz = f1.zip_with(f2, |x, y| x + y);
+    println(f"{fz.sum()}");
+    let k: i64 = 100;
+    let cz = a.zip_with(b, |x, y| x + y + k);
+    println(f"{cz.sum()}");
+}

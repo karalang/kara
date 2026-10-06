@@ -1,0 +1,3 @@
+par struct Pa { n: i64 }
+enum Et { A(Pa), B }
+fn main() { let z = Et.A(Pa { n: 3 }); println("ok"); }

@@ -1,0 +1,16 @@
+
+#[derive(Display)]
+struct Point { x: i64, y: i64 }
+impl Point { fn describe(ref self) -> String { self.to_string() } }
+fn render(p: ref Point) -> String { p.to_string() }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 200 {
+        let p: Point = Point { x: 3, y: 4 };
+        total = total + render(p).len();
+        total = total + p.describe().len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

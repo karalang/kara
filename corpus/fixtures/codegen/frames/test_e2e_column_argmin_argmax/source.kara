@@ -1,0 +1,29 @@
+
+fn show(o: Option[i64]) {
+    match o {
+        Some(i) => println(f"{i}"),
+        None => println("none"),
+    }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    show(c.argmin());
+    show(c.argmax());
+    let fc: Column[f64] = Column.from_vec([2.5, 1.5, 3.5, 1.5]);
+    show(fc.argmin());
+    show(fc.argmax());
+    let mut n: Column[i64] = Column.new();
+    n.push(10);
+    n.push_null();
+    n.push(5);
+    n.push_null();
+    n.push(20);
+    show(n.argmin());
+    show(n.argmax());
+    let mut allnull: Column[i64] = Column.with_capacity(2);
+    allnull.push_null();
+    allnull.push_null();
+    show(allnull.argmin());
+    let empty: Column[i64] = Column.with_capacity(0);
+    show(empty.argmax());
+}

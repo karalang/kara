@@ -1,0 +1,310 @@
+// LeetCode 299 — Bulls and Cows: three arms against each other and against
+// five properties that follow from the STATEMENT rather than from any code.
+//
+// Three arms that agree prove nothing on their own if they share a mechanism —
+// they would share the misreading too, and the diff would stay silent. These
+// three do not share one:
+//
+//   A  two tallies, reconciled afterwards with min(count, count)
+//   B  one signed balance, reconciled as it goes
+//   C  no arithmetic on counts at all — mark bulls, then match positions and
+//      cross them off
+//
+// C in particular is a different KIND of algorithm: a matching, not a count. So
+// A == B == C is three readings agreeing.
+//
+// The properties are the other half, because all three could still be wrong in
+// the same direction if the author misread the problem once and wrote it out
+// three times. Each property below is derivable from the English statement
+// without reference to any implementation:
+//
+//   P1  the three arms agree
+//   P2  bulls + cows <= n, and both are non-negative
+//   P3  a guess equal to the secret is nA0B, and nothing else is
+//   P4  symmetry — swapping secret and guess changes neither count
+//   P5  bulls + cows == the multiset intersection size, computed independently
+//   P6  a guess that is a PERMUTATION of the secret has bulls + cows == n
+//
+// P5 is the load-bearing one and deserves a note. It is computed here by a
+// fourth routine that ignores positions entirely — just tally both strings in
+// full and sum the per-digit minimum. That is the textbook definition of what
+// bulls-plus-cows counts, and it is the identity the "1123"/"0111" case breaks
+// for every naive implementation. An arm that double-counts a repeated digit
+// passes P1..P4 and fails P5.
+//
+// P1 FIRST, THEN THE REST ON ONE ARM. P2..P6 read arm A's answer only, which
+// looks like a gap until you notice P1 runs on the same case: once the three
+// arms are known to agree, a property holding for A holds for all of them, so
+// checking three times would cost three times as much to learn the same thing.
+// The ordering is what makes that sound — if P1 ever fires, the arms disagree
+// and "arm A's answer" stops standing for the others, which is why P1's count
+// is printed separately rather than folded into a single pass/fail.
+//
+// Both halves are mutation-tested rather than assumed. Removing arm C's
+// crossing-off makes P1 fire on 7,283 of 27,000 cases; breaking all three arms
+// with the SAME misreading (drop the min, undirect the sign test, drop the
+// crossing-off) slips past P1's agreement check on many cases but fails P5 on
+// 20,235 — which is the scenario P5 exists for and the reason an independent
+// oracle earns its place next to three mutually-checking arms.
+//
+// ALPHABET SIZE IS THE KNOB THAT MATTERS. Random 10-digit strings almost never
+// repeat a digit in an interesting way, so a suite built on them would exercise
+// the easy path only and report green on an implementation that gets the whole
+// point of the problem wrong. The generator therefore sweeps alphabets of 2, 3
+// and 4 digits alongside the full 10 — at alphabet 2 over length 8, collisions
+// are the rule and the multiset reconciliation is under constant pressure.
+
+fn digit_index(c: char) -> i64 {
+    return (c as i64) - ('0' as i64);
+}
+
+// ------------------------------------------------------------------ arm A
+fn arm_a(secret: ref String, guess: ref String) -> String {
+    let s: Vec[char] = secret.chars().collect();
+    let g: Vec[char] = guess.chars().collect();
+    let n = s.len();
+    let mut bulls = 0;
+    let mut cows = 0;
+    let mut s_left: Vec[i64] = Vec.filled(10, 0);
+    let mut g_left: Vec[i64] = Vec.filled(10, 0);
+    let mut i = 0;
+    while i < n {
+        if s[i] == g[i] {
+            bulls = bulls + 1;
+        } else {
+            let si = digit_index(s[i]);
+            let gi = digit_index(g[i]);
+            s_left[si] = s_left[si] + 1;
+            g_left[gi] = g_left[gi] + 1;
+        }
+        i = i + 1;
+    }
+    let mut d = 0;
+    while d < 10 {
+        if s_left[d] < g_left[d] { cows = cows + s_left[d]; } else { cows = cows + g_left[d]; }
+        d = d + 1;
+    }
+    return f"{bulls}A{cows}B";
+}
+
+// ------------------------------------------------------------------ arm B
+fn arm_b(secret: ref String, guess: ref String) -> String {
+    let s: Vec[char] = secret.chars().collect();
+    let g: Vec[char] = guess.chars().collect();
+    let n = s.len();
+    let mut cnt: Vec[i64] = Vec.filled(10, 0);
+    let mut bulls = 0;
+    let mut cows = 0;
+    let mut i = 0;
+    while i < n {
+        if s[i] == g[i] {
+            bulls = bulls + 1;
+        } else {
+            let sd = digit_index(s[i]);
+            let gd = digit_index(g[i]);
+            if cnt[sd] < 0 { cows = cows + 1; }
+            cnt[sd] = cnt[sd] + 1;
+            if cnt[gd] > 0 { cows = cows + 1; }
+            cnt[gd] = cnt[gd] - 1;
+        }
+        i = i + 1;
+    }
+    return f"{bulls}A{cows}B";
+}
+
+// ------------------------------------------------------------------ arm C
+fn arm_c(secret: ref String, guess: ref String) -> String {
+    let s: Vec[char] = secret.chars().collect();
+    let g: Vec[char] = guess.chars().collect();
+    let n = s.len();
+    let mut used: Vec[bool] = Vec.filled(n, false);
+    let mut bulls = 0;
+    let mut i = 0;
+    while i < n {
+        if s[i] == g[i] {
+            bulls = bulls + 1;
+            used[i] = true;
+        }
+        i = i + 1;
+    }
+    let mut cows = 0;
+    i = 0;
+    while i < n {
+        if s[i] != g[i] {
+            let mut k = 0;
+            let mut found = false;
+            while k < n and not found {
+                if not used[k] and s[k] == g[i] and s[k] != g[k] {
+                    used[k] = true;
+                    found = true;
+                    cows = cows + 1;
+                }
+                k = k + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return f"{bulls}A{cows}B";
+}
+
+// --------------------------------------------------- independent oracles
+
+// P5's oracle: multiset intersection size, positions ignored entirely.
+fn multiset_overlap(secret: ref String, guess: ref String) -> i64 {
+    let mut sc: Vec[i64] = Vec.filled(10, 0);
+    let mut gc: Vec[i64] = Vec.filled(10, 0);
+    for c in secret.chars() { let d = digit_index(c); sc[d] = sc[d] + 1; }
+    for c in guess.chars()  { let d = digit_index(c); gc[d] = gc[d] + 1; }
+    let mut total = 0;
+    let mut d = 0;
+    while d < 10 {
+        if sc[d] < gc[d] { total = total + sc[d]; } else { total = total + gc[d]; }
+        d = d + 1;
+    }
+    return total;
+}
+
+// Parse "xAyB" back into its two numbers, so the properties can do arithmetic
+// on what the arms actually returned rather than on a private copy of it.
+fn parse_bulls(r: ref String) -> i64 {
+    let cs: Vec[char] = r.chars().collect();
+    let mut v = 0;
+    let mut i = 0;
+    while i < cs.len() and cs[i] != 'A' {
+        v = v * 10 + digit_index(cs[i]);
+        i = i + 1;
+    }
+    return v;
+}
+
+fn parse_cows(r: ref String) -> i64 {
+    let cs: Vec[char] = r.chars().collect();
+    let mut i = 0;
+    while i < cs.len() and cs[i] != 'A' { i = i + 1; }
+    i = i + 1;
+    let mut v = 0;
+    while i < cs.len() and cs[i] != 'B' {
+        v = v * 10 + digit_index(cs[i]);
+        i = i + 1;
+    }
+    return v;
+}
+
+// ---------------------------------------------------------------- harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn gen_str(state: mut ref i64, len: i64, alphabet: i64) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < len {
+        state = lcg(state);
+        let d = (state / 65536) % alphabet;
+        out.push(char.try_from((('0' as i64) + d) as u32).unwrap());
+        i = i + 1;
+    }
+    return out;
+}
+
+// A permutation of `s`, for P6 — Fisher-Yates over the characters.
+fn shuffled(state: mut ref i64, s: ref String) -> String {
+    let mut cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    if n > 1 {
+        let mut i = n - 1;
+        while i > 0 {
+            state = lcg(state);
+            let j = (state / 65536) % (i + 1);
+            let t = cs[i];
+            cs[i] = cs[j];
+            cs[j] = t;
+            i = i - 1;
+        }
+    }
+    let mut out = String.new();
+    for c in cs { out.push(c); }
+    return out;
+}
+
+fn main() {
+    let mut state = 20299;
+
+    let mut cases = 0;
+    let mut p1 = 0;   // three-arm disagreement
+    let mut p2 = 0;   // bulls + cows > n, or a negative count
+    let mut p3 = 0;   // identical guess is not nA0B, or a differing one is
+    let mut p4 = 0;   // asymmetry under swapping secret and guess
+    let mut p5 = 0;   // bulls + cows != multiset intersection
+    let mut p6 = 0;   // a permutation does not saturate
+
+    // Alphabet 2 and 3 are where repeats are the rule; 10 is the game as
+    // actually played. Length 0 and 1 are included to keep the edges live.
+    let alphabets: Vec[i64] = [2, 2, 3, 4, 10];
+    let lengths: Vec[i64] = [0, 1, 2, 3, 4, 5, 6, 8, 12];
+
+    let mut round = 0;
+    while round < 600 {
+        let mut ai = 0;
+        while ai < alphabets.len() {
+            let mut li = 0;
+            while li < lengths.len() {
+                let alphabet = alphabets[ai];
+                let len = lengths[li];
+
+                let secret = gen_str(mut state, len, alphabet);
+                let guess = gen_str(mut state, len, alphabet);
+                cases = cases + 1;
+
+                let a = arm_a(secret, guess);
+                let b = arm_b(secret, guess);
+                let c = arm_c(secret, guess);
+
+                // P1 — the three readings agree.
+                if a != b or b != c { p1 = p1 + 1; }
+
+                let bulls = parse_bulls(a);
+                let cows = parse_cows(a);
+
+                // P2 — the counts are a partition of at most the whole board.
+                if bulls < 0 or cows < 0 or bulls + cows > len { p2 = p2 + 1; }
+
+                // P3 — self-guess saturates as bulls, and only self-guess does.
+                let self_r = arm_a(secret, secret);
+                if parse_bulls(self_r) != len or parse_cows(self_r) != 0 { p3 = p3 + 1; }
+                if secret != guess and bulls == len { p3 = p3 + 1; }
+
+                // P4 — the relation is symmetric in its two arguments.
+                let swapped = arm_a(guess, secret);
+                if parse_bulls(swapped) != bulls or parse_cows(swapped) != cows { p4 = p4 + 1; }
+
+                // P5 — the independent multiset oracle.
+                if bulls + cows != multiset_overlap(secret, guess) { p5 = p5 + 1; }
+
+                // P6 — a permutation of the secret uses every digit.
+                let perm = shuffled(mut state, secret);
+                let pr = arm_a(secret, perm);
+                if parse_bulls(pr) + parse_cows(pr) != len { p6 = p6 + 1; }
+
+                li = li + 1;
+            }
+            ai = ai + 1;
+        }
+        round = round + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"P1 three-arm disagreements {p1}");
+    println(f"P2 range violations {p2}");
+    println(f"P3 identity failures {p3}");
+    println(f"P4 asymmetries {p4}");
+    println(f"P5 multiset-oracle mismatches {p5}");
+    println(f"P6 permutation-saturation failures {p6}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

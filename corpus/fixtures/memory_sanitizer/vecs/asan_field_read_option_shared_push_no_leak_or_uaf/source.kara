@@ -1,0 +1,23 @@
+
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 200 {
+        let root = Some(Node {
+            val: 1,
+            left: Some(Node { val: 2, left: None, right: None }),
+            right: Some(Node { val: 3, left: None, right: None }),
+        });
+        let mut stack: Vec[Option[Node]] = Vec.new();
+        match root {
+            None => {}
+            Some(n) => { stack.push(n.left); stack.push(n.right); }
+        }
+        for item in stack {
+            match item { None => {} Some(node) => { total = total + node.val; } }
+        }
+        i = i + 1;
+    }
+    println(f"{total}");
+}

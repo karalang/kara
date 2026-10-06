@@ -1,0 +1,14 @@
+
+enum Color { Red, Green, Blue }
+fn describe(c: Color) -> i64 {
+    match c {
+        Color.Red => 1,
+        Color.Green => 2,
+        Color.Blue => 3,
+    }
+}
+fn main() {
+    println(describe(Green));
+    println(describe(Red));
+    println(describe(Blue));
+}

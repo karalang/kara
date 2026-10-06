@@ -1,0 +1,122 @@
+// LeetCode #20: Valid Parentheses — single-pass scan with a stack of
+// the *expected closing bracket*. O(n) time, O(n) extra space for the
+// stack (worst case all-opens, e.g. "(((((").
+//
+// A string of brackets is valid when every opener is closed by a bracket
+// of the same type and in the right (LIFO) order. The canonical solution
+// is a stack:
+//
+//   - On an opener `(` `[` `{` → push the closer it *demands* (`)` `]` `}`).
+//   - On a closer → it must match `stack.pop()`. A mismatch, or a pop on
+//     an empty stack (a closer with no opener), means invalid.
+//   - At the end the stack must be empty — a non-empty stack is unclosed
+//     openers.
+//
+// Pushing the *expected closer* rather than the opener is the trick that
+// keeps the per-character work to a single byte equality (`top != b`)
+// instead of a six-way "does this opener match this closer" table. The
+// stack already speaks the closer's alphabet, so the closer branch never
+// has to translate.
+//
+// `s.bytes()` gives an O(1)-indexed `Slice[u8]` view over the String's
+// storage with no per-call allocation — the same zero-copy primitive
+// kata [#13](../13-roman-to-integer/) (Roman numerals) and kata
+// [#8](../8-string-to-integer-atoi/) (atoi) scan. LeetCode #20's alphabet
+// is exactly `()[]{}`, all single-byte ASCII, so the byte view is exact
+// and a `Vec[char]` snapshot would only add cost.
+//
+// `Vec[u8]` is the stack: `push` appends, `pop` returns `Option[u8]`
+// (`None` on empty — which *is* the "closer with no opener" case, so the
+// `None` arm handles it with no separate emptiness guard), and
+// `is_empty()` gives the final unclosed-openers check. This is the same
+// index/positional `Vec` stack kata [#71](../71-simplify-path/) uses for
+// path components, narrowed here to single bytes.
+//
+// > This kata is the first to pop a `u8` off a `Vec[u8]` and compare it
+// > against another `u8` (`top != b`). That surfaced a `karac` codegen
+// > bug — the `Option[u8]` payload word is i64 in the variant word
+// > stream, and the `Some(top)` binding wasn't narrowing it back to i8,
+// > so the comparison emitted `icmp ne i64, i8` and tripped LLVM module
+// > verification. Fixed in `karac` (`reconstruct_payload_value` now
+// > narrows every sub-64-bit Option payload binding to its surface
+// > width, the integer analogue of the existing `bool` → i1 narrowing);
+// > both `karac run` and `karac build` now produce identical output. See
+// > the README's § Kāra features exercised.
+
+fn is_valid(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    // The stack holds the closer each open bracket demands, so the closer
+    // branch is a single byte equality against the top of stack.
+    let mut stack: Vec[u8] = Vec.new();
+
+    let mut i = 0;
+    while i < n {
+        let b = bytes[i];
+        if b == b'(' or b == b'[' or b == b'{' {
+            // Opener: push the matching closer.
+            if b == b'(' {
+                stack.push(b')');
+            } else if b == b'[' {
+                stack.push(b']');
+            } else {
+                stack.push(b'}');
+            }
+        } else {
+            // Closer: must match the top of stack. `pop` returns `None`
+            // on an empty stack, which is exactly the "closer with no
+            // opener" case — no separate emptiness guard needed.
+            match stack.pop() {
+                Some(top) => {
+                    if top != b {
+                        return false;
+                    }
+                }
+                None => {
+                    return false;
+                }
+            }
+        }
+        i = i + 1;
+    }
+
+    // A non-empty stack means unclosed openers remain.
+    stack.is_empty()
+}
+
+fn report(s: ref String) {
+    if is_valid(s) {
+        println(f"\"{s}\" -> true");
+    } else {
+        println(f"\"{s}\" -> false");
+    }
+}
+
+fn main() {
+    // LeetCode example 1 — simple matched pair.
+    report("()");
+    // LeetCode example 2 — three matched pairs in sequence.
+    report("()[]{}");
+    // LeetCode example 3 — mismatched closer.
+    report("(]");
+    // LeetCode example 4 — correct types but interleaved (wrong order).
+    report("([)]");
+    // LeetCode example 5 — nested, all matched.
+    report("{[]}");
+
+    // Single opener — unclosed, stack non-empty at end → false.
+    report("(");
+    // Single closer — pop on empty stack → false.
+    report(")");
+    // Two openers — stack has two unclosed entries at end → false.
+    report("((");
+    // Lone closer of the third type → false.
+    report("]");
+    // Deeply nested, all three types, all matched → true.
+    report("([{}])");
+    // Opener count exceeds closer count → false.
+    report("(()");
+    // Empty string — no brackets, vacuously valid (stack empty) → true.
+    report("");
+}

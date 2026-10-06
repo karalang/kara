@@ -1,0 +1,5 @@
+let COUNTER: Atomic[i64] = Atomic.new(0);
+fn main() {
+    COUNTER.store(7, MemoryOrdering.SeqCst);
+    println(COUNTER.load(MemoryOrdering.SeqCst));
+}

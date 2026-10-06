@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::par_branch_block_body_binding_distinct_from_destructured_name"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

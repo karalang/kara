@@ -1,0 +1,23 @@
+
+struct Box[T] { v: T }
+impl[T] Box[T] {
+    fn get_ref(ref self) -> T { self.v }
+    fn get_val(self) -> T { self.v }
+}
+struct Pair[T] { a: T, b: T }
+impl[T: Sub] Pair[T] {
+    fn lo(ref self) -> T { self.a }
+    fn hi(ref self) -> T { self.b }
+    fn gap(ref self) -> T { self.hi() - self.lo() }
+}
+fn main() {
+    let bf = Box { v: 2.5 };
+    println(f"{bf.get_ref()}");
+    println(f"{bf.get_val()}");
+    let bi = Box { v: 42 };
+    println(f"{bi.get_ref()}");
+    let pf = Pair { a: 1.5, b: 9.0 };
+    println(f"{pf.gap()}");
+    let pi = Pair { a: 100, b: 7 };
+    println(f"{pi.gap()}");
+}

@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let r: Result[i64, String] = Err(f"boom");
+        // Scalar `T` + heap `E`: the receiver's Err buffer must reach the result
+        // exactly once, not be aliased into it and freed twice.
+        match r.map(|x| x + 1i64) {
+            Ok(v) => { total = total + v; }
+            Err(e) => { total = total + e.len(); }
+        }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

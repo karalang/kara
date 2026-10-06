@@ -1,0 +1,13 @@
+source = "tests/codegen/misc.rs::e2e_stdlib_priority_queue_peek_reads_the_root"
+dedup_of = ["tests/interpreter/misc.rs::test_priority_queue_peek_reads_the_root_without_removing_it"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

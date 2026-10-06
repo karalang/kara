@@ -1,0 +1,13 @@
+source = "kara-katas/leetcode/101-200/109-convert-sorted-list-to-binary-search-tree/sorted_list_to_bst_inorder.kara"
+dedup_of = []
+expect = "panic:-6"
+exit = -6
+tags = ["shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -6
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,5 @@
+fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut p = v.iter().map(|x| if x > 0 { "pos" } else { "neg" }).peekable();
+             let _s: String = p.peek().unwrap();
+         }

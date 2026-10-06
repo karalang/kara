@@ -1,0 +1,17 @@
+
+struct Name { s: String }
+fn id(a: Name) -> Name { a }
+fn pick(a: Name, b: Name) -> Name { a }
+fn choose(a: Name, b: Name, t: bool) -> Name { if t { a } else { b } }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let x = id(Name { s: f"id-{i}-padding-padding" });
+        let y = pick(Name { s: f"pa-{i}-padding-padding" }, Name { s: f"pb-{i}-padding-padding" });
+        let z = choose(Name { s: f"ca-{i}-padding-padding" }, Name { s: f"cb-{i}-padding-padding" }, true);
+        println(x.s);
+        println(y.s);
+        println(z.s);
+        i = i + 1;
+    }
+}

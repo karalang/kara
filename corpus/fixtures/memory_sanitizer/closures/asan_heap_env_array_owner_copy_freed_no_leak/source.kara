@@ -1,0 +1,10 @@
+
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> Array[Fn(i64) -> i64, 2] { let a: Array[Fn(i64) -> i64, 2] = [make(k), make(k + 5i64)]; let s = a; s }
+fn main() {
+    let a: Array[Fn(i64) -> i64, 2] = [make(10i64), make(20i64)];
+    let s = a;
+    let t = s;
+    let r = build(30i64);
+    println(f"{(a[0])(1i64) + (s[1])(1i64) + (t[0])(1i64) + (r[0])(2i64) + (r[1])(2i64)}");
+}

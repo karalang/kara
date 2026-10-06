@@ -1,0 +1,41 @@
+shared struct Node { s: String }
+struct Box[T] { v: T }
+struct Holder { v: Node }
+
+fn mk(i: i64, n: i64) -> Node {
+    return Node { s: f"blk-{i}-padded-out-to-force-a-real-heap-buffer-{n}" };
+}
+
+fn score(x: Node) -> i64 {
+    let mut r: i64 = x.s.len();
+    if x.s.contains("padded") { r = r + 1i64; }
+    return r;
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40i64 {
+        // (a) the reported shape — GENERIC wrapper, field escaping a block
+        let x1 = { let b = Box { v: mk(i, n) }; b.v };
+        acc = acc + score(x1);
+        // (b) the CONCRETE spelling, which leaked identically
+        let x2 = { let h = Holder { v: mk(i, n) }; h.v };
+        acc = acc + score(x2);
+        // (c) a NESTED value block — the recursion arm of the same suppressor
+        let x3 = { { let b = Box { v: mk(i, n) }; b.v } };
+        acc = acc + score(x3);
+        // CONTROL, correct before and after: the non-block move-out, whose
+        // owner's dec DOES run and whose receive-inc must therefore stay.
+        let b4 = Box { v: mk(i, n) };
+        let x4 = b4.v;
+        acc = acc + score(x4);
+        // CONTROL, a String field through the same block shape — the buffer
+        // types were never affected and must not start being.
+        let s5 = { let b = Box { v: f"str-{i}-padded-out-to-force-a-real-heap-{n}" }; b.v };
+        acc = acc + s5.len();
+        i = i + 1;
+    }
+    println(acc);
+}

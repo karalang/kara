@@ -1,0 +1,24 @@
+
+struct Box[T] {
+    v: T,
+}
+fn mkvec() -> Vec[String] {
+    let mut v = Vec.new();
+    v.push((1).to_string());
+    v.push((2).to_string());
+    v
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 50 {
+        let bs = Box { v: i.to_string() };
+        acc = acc + bs.v.len();
+        let bv = Box { v: [i, i + 1, i + 2] };
+        acc = acc + bv.v.len();
+        let bvs = Box { v: mkvec() };
+        acc = acc + bvs.v.len();
+        i = i + 1;
+    }
+    println(acc);
+}

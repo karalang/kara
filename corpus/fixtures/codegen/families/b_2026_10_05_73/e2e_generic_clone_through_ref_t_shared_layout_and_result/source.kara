@@ -1,0 +1,15 @@
+fn dup[T: Clone](x: ref T) -> T { return x.clone(); }
+fn main() {
+    let a: Option[String] = Some("aa".to_string());
+    let ov: Option[Vec[String]] = Some(vec!["v1".to_string(), "v2".to_string()]);
+    let a2 = dup(a);
+    let ov2 = dup(ov);
+    println(f"c:{a2.unwrap()}");
+    match ov2 { Some(v) => println(f"d:{v.len()} {v[0]} {v[1]}"), None => println("d:none") }
+    let r: Result[String, i64] = Ok("good".to_string());
+    let e: Result[i64, String] = Err("bad".to_string());
+    let r2 = dup(r);
+    let e2 = dup(e);
+    match r2 { Ok(s) => println(f"e:{s}"), Err(x) => println(f"e:{x}") }
+    match e2 { Ok(s) => println(f"f:{s}"), Err(x) => println(f"f:{x}") }
+}

@@ -1,0 +1,156 @@
+// LeetCode #68: Text Justification — two-phase (pack groups, then format).
+//
+// The same greedy pack + even-spread rule as the ★
+// ([`text_justification.kara`](text_justification.kara)), but split into two
+// clean passes instead of interleaving the packing and the string building:
+//
+//   Phase 1 — pack every line's WORD INDICES into groups. A group is the run of
+//             indices `[i, i+1, …, j-1]` the greedy fit selects; the groups are
+//             collected up front into a `Vec[Vec[i64]]`.
+//   Phase 2 — format each group into its line, knowing at that point exactly
+//             which group is last (the only one that is left-justified rather
+//             than fully justified alongside the single-word groups).
+//
+// Materialising the groups first makes the "is this the last line?" test a plain
+// index comparison against `groups.len() - 1` rather than the ★'s inline
+// `j == n`, and keeps the two concerns — *which words go on a line* and *how a
+// line is spaced* — in separate loops. It costs the extra `Vec[Vec[i64]]` of
+// indices the ★ avoids (the packing and formatting share one pass there), so it
+// is the clarity-vs-allocation contrast, and an independent cross-check of the
+// spacing arithmetic. The `Vec[Vec[i64]]` index groups are the same nested-Vec
+// shape as katas #62–64's DP tables.
+//
+// ASCII input, so `String.len()` is the character width; i64 throughout.
+
+fn pad_spaces(s: mut ref String, count: i64) {
+    let mut t = 0;
+    while t < count {
+        s.push(' ');
+        t = t + 1;
+    }
+}
+
+fn full_justify(words: ref Vec[String], max_width: i64) -> Vec[String] {
+    let n = words.len();
+
+    // Phase 1 — greedy pack into groups of word indices.
+    let mut groups: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut grp: Vec[i64] = Vec.new();
+        let mut j = i;
+        let mut line_chars = 0;
+        let mut count = 0;
+        while j < n {
+            let wl = words[j].len();
+            if line_chars + wl + count <= max_width {
+                line_chars = line_chars + wl;
+                count = count + 1;
+                grp.push(j);
+                j = j + 1;
+            } else {
+                break;
+            }
+        }
+        groups.push(grp);
+        i = j;
+    }
+
+    // Phase 2 — format each group; only the last group is left-justified (with
+    // the single-word groups).
+    let mut lines: Vec[String] = Vec.new();
+    let ng = groups.len();
+    let mut gi = 0;
+    while gi < ng {
+        let g = ref groups[gi];
+        let count = g.len();
+        let is_last = gi == ng - 1;
+
+        // Recover this line's total word length.
+        let mut line_chars = 0;
+        let mut c = 0;
+        while c < count {
+            line_chars = line_chars + words[g[c]].len();
+            c = c + 1;
+        }
+        let gaps = count - 1;
+        let total = max_width - line_chars;
+
+        let mut line: String = "";
+        if is_last or count == 1 {
+            let mut w = 0;
+            while w < count {
+                line.push_str(words[g[w]]);
+                if w < count - 1 {
+                    line.push(' ');
+                }
+                w = w + 1;
+            }
+            pad_spaces(mut line, max_width - line.len());
+        } else {
+            let base = total / gaps;
+            let extra = total % gaps;
+            let mut w = 0;
+            while w < count {
+                line.push_str(words[g[w]]);
+                if w < gaps {
+                    let mut sp = base;
+                    if w < extra {
+                        sp = sp + 1;
+                    }
+                    pad_spaces(mut line, sp);
+                }
+                w = w + 1;
+            }
+        }
+
+        lines.push(line);
+        gi = gi + 1;
+    }
+
+    lines
+}
+
+// ---- test harness (shared verbatim with text_justification.kara) -------------
+
+fn report(words: Vec[String], mw: i64, s: mut ref String) {
+    let lines = full_justify(words, mw);
+    let ln = lines.len();
+    let mut idx = 0;
+    while idx < ln {
+        let line = ref lines[idx];
+        let mut q: String = "\"";
+        q.push_str(line);
+        q.push('"');
+        println(q);
+
+        let bytes = line.bytes();
+        let bl = line.len();
+        let mut chk = 0;
+        let mut k = 0;
+        while k < bl {
+            chk = chk + (k + 1) * (bytes[k] as i64);
+            k = k + 1;
+        }
+        s.push(' ');
+        s.push_str(f"{chk}");
+        idx = idx + 1;
+    }
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report(["This", "is", "an", "example", "of", "text", "justification."], 16, mut s);
+    report(["What", "must", "be", "acknowledgment", "shall", "be"], 16, mut s);
+    report(["Science", "is", "what", "we", "understand", "well", "enough", "to",
+            "explain", "to", "a", "computer.", "Art", "is", "everything", "else",
+            "we", "do"], 20, mut s);
+    report(["a"], 5, mut s);
+    report(["hello"], 5, mut s);
+    report(["hi", "there"], 10, mut s);
+    report(["Listen", "to", "many,", "speak", "to", "a", "few."], 6, mut s);
+    report(["ask", "not", "what", "your", "country"], 9, mut s);
+
+    println(s);
+}

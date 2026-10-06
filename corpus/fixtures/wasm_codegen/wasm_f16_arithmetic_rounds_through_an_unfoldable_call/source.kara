@@ -1,0 +1,8 @@
+
+fn main() {
+    let n = env.args().len() as i64;
+    let one: f32 = n as f32;
+    let a: f16 = (one * 65504.0f32) as f16;
+    let b: f16 = (one * 3.0f32) as f16;
+    println(f"{a + b} {a - b} {a * b} {a / b}");
+}

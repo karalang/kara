@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::test_e2e_recursive_shared_enum_arg_correct"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

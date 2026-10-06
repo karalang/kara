@@ -1,0 +1,8 @@
+
+fn mycmp(a: i64, b: i64) -> Ordering { a.cmp(b) }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(30); v.push(10); v.push(20);
+    v.sort_by(mycmp);
+    for x in v.iter() { println(x); }
+}

@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/map_set.rs::asan_a_method_call_map_key_temporary_is_reclaimed_at_every_lookup"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["move-from-borrow"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

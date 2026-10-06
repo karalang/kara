@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("present-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 7_i64);
+    match m.remove("present-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()) {
+        Some(x) => println(x),
+        None => println(-1_i64),
+    }
+    println(m.len());
+}

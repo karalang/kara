@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_10_01_55.rs::asan_array_element_read_into_an_owning_sink_is_copied_string"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

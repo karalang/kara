@@ -1,0 +1,113 @@
+// LeetCode 253 — Meeting Rooms II. (Premium.)
+//
+// How many rooms does it take to hold every meeting? The answer is the maximum
+// number that are ever in progress at once.
+//
+// This file is the min-heap form. Walk the meetings in start order keeping a
+// heap of the END times of the meetings currently occupying a room. At each new
+// meeting, free every room whose end has already passed (heap minimum <= this
+// start), then take a room for this meeting. The rooms needed is the largest the
+// heap ever grows to.
+//
+// The heap is keyed on END time because the only question ever asked of the
+// occupied set is "has the EARLIEST-finishing one freed up yet" — a min-heap
+// answers that in O(1) and maintains it in O(log k).
+//
+// The occupied set is a `PriorityQueue[i64]` from the standard library —
+// smallest-first, which is exactly the "earliest finisher" this asks for, so no
+// direction argument is needed. `peek()` answers the release test without
+// disturbing the queue and `pop()` performs the release.
+//
+// This file used to hand-roll the heap over a `Vec[i64]`, because Kāra had no
+// stdlib one. The BENCH arm (`bench/min_meeting_rooms.kara`) still does, and
+// deliberately: its C / Rust / Go mirrors hand-roll the same sift loop so the
+// benchmark measures code generation rather than library maturity — the rule
+// [#295](../295-find-median-from-data-stream/) states. That reasoning governs
+// the benchmark only; the solution file is a dogfooding surface for the stdlib
+// type, which is why the two now differ on purpose.
+//
+// **Touching does not need a second room.** A meeting ending exactly as the next
+// begins frees its room in time, so the release test is `<=`, not `<`. That is
+// the same boundary [#252](../252-meeting-rooms/) turns on, and the reason
+// `[[1,5],[5,10]]` needs one room rather than two.
+
+fn min_meeting_rooms(intervals: Slice[(i64, i64)]) -> i64 {
+    let mut s: Vec[(i64, i64)] = Vec.from_slice(intervals);
+    s.sort_by(|a, b| a.0.cmp(b.0));
+
+    let mut occupied: PriorityQueue[i64] = PriorityQueue.new();
+    let mut rooms = 0;
+    let mut i = 0;
+    while i < s.len() {
+        // Free every room whose meeting has already ended. `<=`: a meeting
+        // ending exactly now releases its room for this one. `peek` reads the
+        // earliest end without removing it, so the test and the release stay
+        // separate steps.
+        while true {
+            let done = match occupied.peek() {
+                Some(end) => end <= s[i].0,
+                None => false,
+            };
+            if not done {
+                break;
+            }
+            let _freed = occupied.pop();
+        }
+        occupied.push(s[i].1);
+        if occupied.len() > rooms {
+            rooms = occupied.len();
+        }
+        i = i + 1;
+    }
+    return rooms;
+}
+
+fn report(intervals: Slice[(i64, i64)], label: ref String) {
+    println(f"{label} -> {min_meeting_rooms(intervals)}");
+}
+
+fn main() {
+    // [[0,30],[5,10],[15,20]] -> 2
+    let a: Array[(i64, i64), 3] = [(0, 30), (5, 10), (15, 20)];
+    report(a, "[[0,30],[5,10],[15,20]]");
+
+    // [[7,10],[2,4]] -> 1
+    let b: Array[(i64, i64), 2] = [(7, 10), (2, 4)];
+    report(b, "[[7,10],[2,4]]");
+
+    // [] -> 0
+    let c: Array[(i64, i64), 0] = [];
+    report(c, "[]");
+
+    // [[1,5]] -> 1
+    let d: Array[(i64, i64), 1] = [(1, 5)];
+    report(d, "[[1,5]]");
+
+    // [[1,5],[5,10]] -> 1 — TOUCHING reuses the room
+    let e: Array[(i64, i64), 2] = [(1, 5), (5, 10)];
+    report(e, "[[1,5],[5,10]]");
+
+    // [[1,10],[2,3]] -> 2 — nested needs its own room
+    let f: Array[(i64, i64), 2] = [(1, 10), (2, 3)];
+    report(f, "[[1,10],[2,3]]");
+
+    // [[1,3],[3,5],[5,7],[7,9]] -> 1 — a whole touching chain, one room
+    let g: Array[(i64, i64), 4] = [(1, 3), (3, 5), (5, 7), (7, 9)];
+    report(g, "[[1,3],[3,5],[5,7],[7,9]]");
+
+    // [[1,4],[2,5],[3,6]] -> 3 — a staircase, all three overlap at t=3.5
+    let h: Array[(i64, i64), 3] = [(1, 4), (2, 5), (3, 6)];
+    report(h, "[[1,4],[2,5],[3,6]]");
+
+    // [[1,2],[1,2],[1,2]] -> 3 — identical meetings each need a room
+    let i: Array[(i64, i64), 3] = [(1, 2), (1, 2), (1, 2)];
+    report(i, "[[1,2],[1,2],[1,2]]");
+
+    // [[9,10],[4,9],[4,17]] -> 2 — the LeetCode follow-up case
+    let j: Array[(i64, i64), 3] = [(9, 10), (4, 9), (4, 17)];
+    report(j, "[[9,10],[4,9],[4,17]]");
+
+    // [[2,11],[6,16],[11,16]] -> 2 — a release and a start at the same instant
+    let k: Array[(i64, i64), 3] = [(2, 11), (6, 16), (11, 16)];
+    report(k, "[[2,11],[6,16],[11,16]]");
+}

@@ -1,0 +1,4 @@
+
+pub shared struct Scell { n: i64, invariant self.n >= 0 }
+impl Scell { pub fn bad() -> Scell { Scell { n: 0 - 1 } } }
+fn main() { let c = Scell.bad(); println(c.n); println(42); }

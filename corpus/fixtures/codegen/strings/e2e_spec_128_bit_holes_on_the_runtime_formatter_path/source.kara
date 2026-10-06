@@ -1,0 +1,18 @@
+
+fn main() {
+    let big: u128 = 170141183460469231731687303715884105727u128;
+    let umax: u128 = 340282366920938463463374607431768211455u128;
+    let ineg: i128 = -1i128;
+    let ism: i128 = -7i128;
+    println(f"[{big:^44}]");
+    println(f"[{big:*>44}]");
+    println(f"[{umax:b}]");
+    println(f"[{ineg:b}]");
+    println(f"[{ism:^12}]");
+    println(f"[{ism:=^12}]");
+    let n64: i64 = -1;
+    let u8v: u8 = 255;
+    println(f"[{n64:b}]");
+    println(f"[{u8v:*>12b}]");
+    println(f"[{n64:^8}]");
+}

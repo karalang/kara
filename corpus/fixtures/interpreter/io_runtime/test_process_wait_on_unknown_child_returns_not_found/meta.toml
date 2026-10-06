@@ -1,0 +1,13 @@
+source = "tests/interpreter/io_runtime.rs::test_process_wait_on_unknown_child_returns_not_found"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

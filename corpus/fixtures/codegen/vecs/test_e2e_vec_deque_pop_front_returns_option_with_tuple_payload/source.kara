@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut q: VecDeque[(i64, i64)] = VecDeque.new();
+    q.push_back((0, 0));
+    let mut sum = 0i64;
+    loop {
+        match q.pop_front() {
+            None => { break; },
+            Some((i, d)) => {
+                sum = sum + i + d;
+                if i < 3 {
+                    q.push_back((i + 1, d + 1));
+                }
+            },
+        }
+    }
+    println(sum);
+}

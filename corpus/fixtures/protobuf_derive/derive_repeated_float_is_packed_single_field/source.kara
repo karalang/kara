@@ -1,0 +1,13 @@
+
+#[derive(Message)]
+struct Bag { ds: Vec[f64] }
+
+fn main() {
+    let mut r = ProtoReader.new(Bag { ds: [1.0, 2.0, 3.0] }.encode());
+    let (f, w) = r.read_tag();
+    let blob = r.read_len_delim();
+    println(f);
+    println(w);
+    println(blob.len());
+    println(r.at_end());
+}

@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/vecs.rs::asan_indexing_a_vec_returning_method_call_owns_its_temporary"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("alpha", 1_i64);
+    let r1 = m.remove("alpha");
+    match r1 {
+        Some(x) => println(x),
+        None => println(0_i64),
+    }
+    let r2 = m.remove("alpha");
+    match r2 {
+        Some(x) => println(x),
+        None => println(0_i64),
+    }
+}

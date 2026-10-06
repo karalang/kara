@@ -1,0 +1,7 @@
+
+fn copy2(dst: mut Slice[i64], src: mut Slice[i64]) {
+    let n = dst.len();
+    let mut i = 0;
+    while i < n { dst[i] = src[i]; i = i + 1; }
+}
+fn main() { print(0); }

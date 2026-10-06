@@ -1,0 +1,102 @@
+// LeetCode #74: Search a 2D Matrix — two binary searches (row, then column), O(log m + log n).
+//
+// Instead of flattening the grid ([`search_a_2d_matrix.kara`](search_a_2d_matrix.kara)),
+// exploit the two sort axes separately. First binary-search the ROWS for the last
+// row whose first element is ≤ target — the only row that could contain it, since
+// row starts are strictly increasing. Then binary-search THAT row's columns.
+//
+//   phase 1: largest `row` with m[row][0] <= target   (or none -> not present)
+//   phase 2: plain binary search of m[row][0 .. cols-1]
+//
+// Two O(log) searches instead of one over m·n; the same total asymptotics
+// (log m + log n = log(m·n)) by a different decomposition. It agrees with the
+// flattened ★ and the O(m+n) staircase
+// ([`search_a_2d_matrix_staircase.kara`](search_a_2d_matrix_staircase.kara)) on
+// every query; kept as the axis-separated cross-check.
+//
+// LeetCode bounds: 1 ≤ m, n ≤ 100, -10⁴ ≤ v, target ≤ 10⁴ — every value fits in i64.
+
+fn search_matrix(m: ref Vec[Vec[i64]], target: i64) -> bool {
+    let rows = m.len();
+    if rows == 0 {
+        return false;
+    }
+    let cols = m[0].len();
+    if cols == 0 {
+        return false;
+    }
+
+    // Phase 1: the candidate row — largest row whose first element is ≤ target.
+    let mut lo = 0;
+    let mut hi = rows - 1;
+    let mut row = -1;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if m[mid][0] <= target {
+            row = mid;
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if row < 0 {
+        return false;                              // target is below every row start
+    }
+
+    // Phase 2: binary-search the candidate row's columns.
+    let mut clo = 0;
+    let mut chi = cols - 1;
+    while clo <= chi {
+        let mid = clo + (chi - clo) / 2;
+        let v = m[row][mid];
+        if v == target {
+            return true;
+        } else if v < target {
+            clo = mid + 1;
+        } else {
+            chi = mid - 1;
+        }
+    }
+    false
+}
+
+// ---- test harness (shared verbatim with search_a_2d_matrix.kara) ---------------
+
+fn report(m: ref Vec[Vec[i64]], target: i64, s: mut ref String) {
+    let found = search_matrix(m, target);
+    println(f"search({target}) = {found}");
+    s.push(' ');
+    if found {
+        s.push('1');
+    } else {
+        s.push('0');
+    }
+}
+
+fn main() {
+    let mut s: String = "res:";
+
+    let a = [[1, 3, 5, 7], [10, 11, 16, 20], [23, 30, 34, 60]];
+    report(a, 3, mut s);
+    report(a, 13, mut s);
+    report(a, 1, mut s);
+    report(a, 60, mut s);
+    report(a, 0, mut s);
+    report(a, 100, mut s);
+    report(a, 16, mut s);
+    report(a, 22, mut s);
+
+    let b = [[5]];
+    report(b, 5, mut s);
+    report(b, 4, mut s);
+
+    let c = [[1, 2, 3, 4, 5]];
+    report(c, 4, mut s);
+    report(c, 6, mut s);
+
+    let d = [[1], [3], [5], [7]];
+    report(d, 5, mut s);
+    report(d, 6, mut s);
+
+    println(s);
+}

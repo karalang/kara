@@ -1,0 +1,13 @@
+
+fn main() {
+    let base = "abcdefghij";
+    let mut m: Map[String, i64] = Map.new();
+    let mut round = 0i64;
+    while round < 50 {
+        let mut v = 0i64;
+        while v < 5 { m.insert(base[v*2 .. v*2+2], v); v = v + 1; }
+        m.clear();
+        round = round + 1;
+    }
+    println(m.len());
+}

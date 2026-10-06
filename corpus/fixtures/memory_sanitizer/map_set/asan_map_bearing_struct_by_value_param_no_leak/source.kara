@@ -1,0 +1,22 @@
+
+struct MapH { m: Map[i64, String] }
+
+fn sink(h: MapH) -> i64 { h.m.len() }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        let mut m: Map[i64, String] = Map.new();
+        let mut s: String = String.new();
+        s.push_str("payload-");
+        s.push_str(n.to_string());
+        s.push_str("-padded-out-to-force-heap");
+        m.insert(1, s);
+        let h = MapH { m: m };
+        acc = acc + sink(h);
+        i = i + 1;
+    }
+    println(acc);
+}

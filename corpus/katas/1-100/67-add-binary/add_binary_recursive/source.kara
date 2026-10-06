@@ -1,0 +1,77 @@
+// LeetCode #67: Add Binary — recursive-descent variant.
+//
+// Where `add_binary.kara` builds the answer least-significant first and
+// reverses, this version lets the call stack hold the order: `add_at(i, j,
+// carry)` returns the binary sum of the prefixes `a[0..=i]` and `b[0..=j]`
+// (plus an incoming carry). It recurses on the *more-significant* part first,
+// then appends the current column's bit — so digits land MSB-first and no
+// reversal is needed.
+//
+//   sum   = carry + (a[i] - b'0') + (b[j] - b'0')
+//   prefix = add_at(i-1, j-1, sum / 2)        the higher-order bits
+//   answer = prefix ++ (b'0' + sum % 2)
+//
+// Same base-2 digit arithmetic and `b - b'0'` extraction as the iterative
+// style (the lexer's radix arm), over a different control shape: recursion
+// depth instead of an explicit reverse buffer. The base case (both pointers
+// exhausted and no carry) returns the empty string, which makes the all-zero
+// inputs collapse to a single "0" handled by the caller.
+
+fn add_at(ab: Slice[u8], bb: Slice[u8], i: i64, j: i64, carry: i64) -> String {
+    if i < 0 and j < 0 and carry == 0 {
+        return "";
+    }
+
+    let mut sum = carry;
+    let mut ni = i;
+    let mut nj = j;
+    if i >= 0 {
+        sum = sum + ((ab[i] - b'0') as i64);
+        ni = i - 1;
+    }
+    if j >= 0 {
+        sum = sum + ((bb[j] - b'0') as i64);
+        nj = j - 1;
+    }
+
+    let mut out = add_at(ab, bb, ni, nj, sum / 2);
+    if sum % 2 == 1 {
+        out.push('1');
+    } else {
+        out.push('0');
+    }
+    out
+}
+
+fn add_binary(a: ref String, b: ref String) -> String {
+    let ab = a.bytes();
+    let bb = b.bytes();
+    let r = add_at(ab, bb, ab.len() - 1, bb.len() - 1, 0);
+    // Both operands all-zero -> recursion bottoms out immediately to "".
+    if r.len() == 0 {
+        return "0";
+    }
+    r
+}
+
+fn report(a: ref String, b: ref String) {
+    println(f"\"{a}\" + \"{b}\" -> \"{add_binary(a, b)}\"");
+}
+
+fn main() {
+    report("11", "1");              // 100
+    report("1010", "1011");         // 10101
+
+    report("1", "1");               // 10
+    report("111", "1");             // 1000
+    report("1111", "1111");         // 11110
+
+    report("100", "110010");        // 110110
+    report("1", "111");             // 1000
+
+    report("0", "0");               // 0
+    report("0", "10101");           // 10101
+    report("1101", "0");            // 1101
+
+    report("10100000100100110110010000010101111011011001101110111111111101000000101111001110001111100001101", "110101001011101110001111100110001010111011010000100110101111100110001000111001000101111101110001100001110000000001");
+}

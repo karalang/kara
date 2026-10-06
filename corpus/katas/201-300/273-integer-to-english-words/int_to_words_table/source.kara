@@ -1,0 +1,111 @@
+// LeetCode 273 — precompute every three-digit group, then look it up.
+//
+// The other two solvers decide a number's spelling as they walk it. This one
+// spells ALL OF THEM FIRST — the 1,000 groups `000`..`999`, built bottom-up in a
+// table — and then the answer is three or four indexed reads plus the scale
+// words. Nothing is decided at query time.
+//
+// THE CONSTRUCTION IS ITSELF THE MECHANISM, and it is the inverse of the ★
+// solver's recursion. Where that one takes 837 apart into 8, 3 and 7 top-down,
+// this fills 0..19 from the lexicon, then 20..99 by composing a tens word with
+// an already-built units word, then 100..999 by composing a units word with an
+// ALREADY-BUILT entry of its own table — `g[837] = g[8] + " Hundred " + g[37]`.
+// The two-digit half of the answer is read back out of the table that is still
+// being written.
+//
+// ITS LEXICON IS A DIFFERENT TRANSCRIPTION. The other two solvers spell the
+// twenty-eight words as an `if`-chain; this one holds them as array literals. A
+// typo in one form is a disagreement the harness reports, which a shared helper
+// would have hidden — see 269, where factoring one derivation into a single
+// function took two injected bugs from detected to invisible.
+//
+// AND IT ASSEMBLES IN THE OPPOSITE DIRECTION. The ★ solver peels groups off the
+// right and prepends; this one walks descending magnitudes — a billion, a
+// million, a thousand, one — and appends. Three solvers, three joins: prepend,
+// collect-then-join, and append-with-a-leading-space-guard. A separator bug
+// belongs to exactly one of them.
+
+fn units_table() -> Vec[String] {
+    return ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight",
+            "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen",
+            "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+}
+
+fn tens_table() -> Vec[String] {
+    return ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy",
+            "Eighty", "Ninety"];
+}
+
+fn scale_table() -> Vec[String] {
+    return ["", "Thousand", "Million", "Billion"];
+}
+
+// Every three-digit group, 0..999. Entry 0 is the empty string, which is what
+// makes a zero group vanish from the assembled answer.
+fn build_groups() -> Vec[String] {
+    let u = units_table();
+    let t = tens_table();
+    let mut g: Vec[String] = Vec.new();
+
+    let mut i = 0;
+    while i < 20 {
+        g.push(u[i]);
+        i = i + 1;
+    }
+    let mut d = 2;
+    while d < 10 {
+        let mut r = 0;
+        while r < 10 {
+            if r == 0 { g.push(t[d]); } else { g.push(t[d] + " " + u[r]); }
+            r = r + 1;
+        }
+        d = d + 1;
+    }
+    let mut h = 1;
+    while h < 10 {
+        let mut r = 0;
+        while r < 100 {
+            // `g[r]` reads an entry this same loop already wrote.
+            if r == 0 { g.push(u[h] + " Hundred"); }
+            else { g.push(u[h] + " Hundred " + g[r]); }
+            r = r + 1;
+        }
+        h = h + 1;
+    }
+    return g;
+}
+
+fn number_to_words(n: i64, g: ref Vec[String], s: ref Vec[String]) -> String {
+    if n == 0 { return "Zero"; }
+    let mut out = "";
+    let mut rem = n;
+    let mut div = 1000000000;
+    let mut scale = 3;
+    while div >= 1 {
+        let part = rem / div;
+        if part > 0 {
+            if out != "" { out = out + " "; }
+            out = out + g[part];
+            if scale > 0 { out = out + " " + s[scale]; }
+        }
+        rem = rem % div;
+        div = div / 1000;
+        scale = scale - 1;
+    }
+    return out;
+}
+
+fn main() {
+    let g = build_groups();
+    let s = scale_table();
+    let cases: Vec[i64] = [
+        0, 5, 13, 20, 21, 100, 101, 110, 123,
+        1000, 1000000, 1000010, 12345, 1234567,
+        1000000000, 2147483647
+    ];
+    let mut i = 0;
+    while i < cases.len() {
+        println(f"{cases[i]} -> {number_to_words(cases[i], g, s)}");
+        i = i + 1;
+    }
+}

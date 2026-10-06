@@ -1,0 +1,81 @@
+// LeetCode 237 — Delete Node in a Linked List (shift-down variant).
+//
+// Same observable result, a different thing sacrificed. The ★ variant steals the
+// successor's value and unlinks the SUCCESSOR, so any reference someone else
+// holds to `node.next` is silently invalidated. This one slides every following
+// value back one slot and unlinks the TAIL instead: O(n) rather than O(1), but
+// the only node that stops being reachable is the last one.
+//
+// Neither can delete the slot it was handed — that is the shape of the problem.
+// You are given a node and no way back to its predecessor, so the node you were
+// pointed at always survives holding somebody else's value; the only choice is
+// WHICH node pays for it.
+
+struct Node {
+    mut val: i64,
+    mut next: i64,
+}
+
+fn build(vals: ref Slice[i64]) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let n = vals.len();
+    let mut i = 0;
+    while i < n {
+        let next = if i + 1 < n { i + 1 } else { -1 };
+        nodes.push(Node { val: vals[i], next: next });
+        i = i + 1;
+    }
+    return nodes;
+}
+
+// Walk from `node` to the last node, pulling each successor's value back one
+// slot, then cut the tail off. Requires a successor, exactly as the O(1) form
+// does — LeetCode guarantees `node` is not the tail.
+fn delete_node(nodes: mut ref Vec[Node], node: i64) {
+    let mut cur = node;
+    let mut succ = nodes[cur].next;
+    while nodes[succ].next != -1 {
+        nodes[cur].val = nodes[succ].val;
+        cur = succ;
+        succ = nodes[succ].next;
+    }
+    nodes[cur].val = nodes[succ].val;
+    nodes[cur].next = -1;
+}
+
+fn show(nodes: ref Vec[Node], head: i64) {
+    let mut out: String = "";
+    let mut cur = head;
+    let mut first = true;
+    while cur != -1 {
+        if first { first = false; } else { out.push_str(" "); }
+        out.push_str(f"{nodes[cur].val}");
+        cur = nodes[cur].next;
+    }
+    println(out);
+}
+
+fn report(vals: ref Slice[i64], node: i64) {
+    let mut nodes = build(vals);
+    delete_node(mut nodes, node);
+    show(nodes, 0);
+}
+
+fn main() {
+    let a: Array[i64, 4] = [4, 5, 1, 9];
+    report(a, 1);                       // 4 1 9
+    report(a, 2);                       // 4 5 9
+
+    let b: Array[i64, 2] = [1, 2];
+    report(b, 0);                       // 2
+
+    let c: Array[i64, 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+    report(c, 6);                       // 0 1 2 3 4 5 7
+
+    let d: Array[i64, 4] = [7, 7, 7, 7];
+    report(d, 2);                       // 7 7 7
+
+    let e: Array[i64, 3] = [1, 2, 3];
+    report(e, 0);                       // 2 3
+    report(e, 1);                       // 1 3
+}

@@ -1,0 +1,11 @@
+
+fn vmap() -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1_i64, "a value string padded out beyond thirty-six bytes ok");
+    return m;
+}
+
+fn main() {
+    let es: Vec[(i64, String)] = vmap().entries();
+    println(es.len());
+}

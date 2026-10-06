@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/enums.rs::asan_discarded_concrete_user_enum_temp_frees_its_payload"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

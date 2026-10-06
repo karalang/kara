@@ -1,0 +1,39 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Hd3 { r: R, n: i64 }
+struct Q { z: i64 }
+fn eat(o: Option[Hd3], k: bool) -> R {
+    match o { Some(t) => { if k { t.r } else { R { id: 1 } } } None => { R { id: 0 } } }
+}
+fn bare(o: Option[Hd3], k: bool) -> R {
+    match o { Some(t) => if k { t.r } else { R { id: 1 } }, None => R { id: 0 } }
+}
+fn res(o: Result[Hd3, i64], k: bool) -> R {
+    match o { Ok(t) => { if k { t.r } else { R { id: 1 } } } Err(e) => { R { id: 0 } } }
+}
+fn mixed(o: Option[Hd3], k: i64) -> R {
+    match o {
+        Some(t) => { if k == 0 { return t.r; } if k == 1 { t.r } else { R { id: 1 } } }
+        None => { R { id: 0 } }
+    }
+}
+impl Q {
+    fn take(ref self, o: Option[Hd3], k: bool) -> R {
+        match o { Some(t) => { if k { t.r } else { R { id: 1 } } } None => { R { id: 0 } } }
+    }
+}
+fn main() {
+    println("named-true"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = eat(a, true); println(f"  got:{g.id}") }
+    println("named-false"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = eat(a, false); println(f"  got:{g.id}") }
+    println("temp-true"); { let g = eat(Option.Some(Hd3 { r: R { id: 6 }, n: 2 }), true); println(f"  got:{g.id}") }
+    println("temp-false"); { let g = eat(Option.Some(Hd3 { r: R { id: 6 }, n: 2 }), false); println(f"  got:{g.id}") }
+    println("bare-true"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = bare(a, true); println(f"  got:{g.id}") }
+    println("bare-false"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = bare(a, false); println(f"  got:{g.id}") }
+    println("result-true"); { let a: Result[Hd3, i64] = Result.Ok(Hd3 { r: R { id: 5 }, n: 2 }); let g = res(a, true); println(f"  got:{g.id}") }
+    println("result-false"); { let a: Result[Hd3, i64] = Result.Ok(Hd3 { r: R { id: 5 }, n: 2 }); let g = res(a, false); println(f"  got:{g.id}") }
+    let mut k = 0;
+    while k < 3 { println(f"mixed-{k}"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = mixed(a, k); println(f"  got:{g.id}") } k = k + 1; }
+    println("method-true"); { let q = Q { z: 1 }; let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = q.take(a, true); println(f"  got:{g.id}") }
+    println("method-false"); { let q = Q { z: 1 }; let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = q.take(a, false); println(f"  got:{g.id}") }
+    println("end")
+}

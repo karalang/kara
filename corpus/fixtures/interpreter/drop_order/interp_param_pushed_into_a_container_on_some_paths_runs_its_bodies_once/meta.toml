@@ -1,0 +1,13 @@
+source = "tests/interpreter/drop_order.rs::interp_param_pushed_into_a_container_on_some_paths_runs_its_bodies_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

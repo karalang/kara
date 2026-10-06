@@ -1,0 +1,149 @@
+// LeetCode 307 — Range Sum Query, Mutable
+//
+// Build a structure over an integer array, then interleave two operations
+// freely: `update(i, val)` writes one element, `sum_range(l, r)` reads an
+// inclusive range. This is #303 with writes, and the writes change everything:
+// a prefix array answers #303 in O(1) but needs O(n) to absorb a single write,
+// which is why that structure is useless here.
+//
+// THE ARM: a Fenwick tree (binary indexed tree). Each slot `tree[x]` holds the
+// sum of the `lowbit(x)` elements ending at x, where `lowbit(x) = x & -x` is
+// the value of x's lowest set bit. That single trick makes both directions
+// logarithmic, and the two directions are OPPOSITE walks over the same bit:
+//
+//   add(i, delta)   climbs:  x += x & -x    — every slot COVERING i
+//   prefix(i)       descends: x -= x & -x   — the disjoint slots TILING [0, i)
+//
+// THE CHARACTERISTIC BUG IS SWAPPING THOSE TWO LINES. Both are one token
+// apart, both terminate, and both produce plausible-looking numbers; a tree
+// built by descending and read by climbing is simply wrong. It is the one
+// mistake this arm can make that no other arm in the kata can, which is why
+// the differential carries a segment tree (whose index math is entirely
+// different) and a naive arm (which has no index math at all).
+//
+// The tree is 1-INDEXED internally — `lowbit(0) == 0`, so a 0-indexed Fenwick
+// would loop forever on the first slot. The `i + 1` in `add` and the
+// `prefix(r + 1) - prefix(l)` in `sum_range` are the whole of the conversion.
+//
+// `data` carries the current array alongside the tree, because a Fenwick
+// absorbs a DELTA rather than a value: `update` has to know what was there
+// before in order to compute `val - old`.
+
+struct NumArray {
+    tree: Vec[i64],
+    data: Vec[i64],
+    n: i64,
+}
+
+impl NumArray {
+    fn new(nums: ref Vec[i64]) -> NumArray {
+        let n = nums.len();
+        let mut tree: Vec[i64] = Vec.new();
+        for i in 0..(n + 1) {
+            tree.push(0);
+        }
+        let mut data: Vec[i64] = Vec.new();
+        for i in 0..n {
+            data.push(0);
+        }
+        let mut st = NumArray { tree: tree, data: data, n: n };
+        for i in 0..n {
+            st.update(i, nums[i]);
+        }
+        return st;
+    }
+
+    // Fold `delta` into every slot that covers index i, climbing by lowbit.
+    fn add(mut ref self, i: i64, delta: i64) {
+        let mut x = i + 1;
+        while x <= self.n {
+            self.tree[x] += delta;
+            x += x & -x;
+        }
+    }
+
+    fn update(mut ref self, i: i64, val: i64) {
+        let delta = val - self.data[i];
+        self.data[i] = val;
+        self.add(i, delta);
+    }
+
+    // Sum of [0, i), gathered from the disjoint slots that tile it.
+    fn prefix(ref self, i: i64) -> i64 {
+        let mut total = 0;
+        let mut x = i;
+        while x > 0 {
+            total += self.tree[x];
+            x -= x & -x;
+        }
+        return total;
+    }
+
+    fn sum_range(ref self, l: i64, r: i64) -> i64 {
+        return self.prefix(r + 1) - self.prefix(l);
+    }
+}
+
+fn new_structure(nums: ref Vec[i64]) -> NumArray {
+    return NumArray.new(nums);
+}
+
+fn render(nums: Slice[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { s.push_str(", "); }
+        s.push_str(f"{nums[i]}");
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+// `ops` is a flat list of (kind, a, b) triples: kind 0 = update(a, b),
+// kind 1 = sum_range(a, b).
+fn report(nums: Slice[i64], ops: Slice[i64]) {
+    let mut arr: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        arr.push(nums[i]);
+    }
+    let mut st = new_structure(arr);
+    let mut line = String.new();
+    line.push_str(render(nums));
+    line.push_str(" ->");
+    let mut k = 0;
+    while k + 2 < ops.len() {
+        let kind = ops[k];
+        let a = ops[k + 1];
+        let b = ops[k + 2];
+        if kind == 0 {
+            st.update(a, b);
+            line.push_str(f" u({a},{b})");
+        } else {
+            line.push_str(f" {st.sum_range(a, b)}");
+        }
+        k = k + 3;
+    }
+    println(line);
+}
+
+fn main() {
+    // The example from the LeetCode statement.
+    report([1, 3, 5], [1, 0, 2,  0, 1, 2,  1, 0, 2]);
+    // Every single-element read, before and after a write.
+    report([2, 7, 4], [1, 0, 0,  1, 1, 1,  1, 2, 2,  0, 1, 9,  1, 1, 1,  1, 0, 2]);
+    // One element.
+    report([42], [1, 0, 0,  0, 0, -5,  1, 0, 0]);
+    // Writing the value that is already there must change nothing.
+    report([4, 4, 4, 4], [1, 0, 3,  0, 2, 4,  1, 0, 3,  1, 2, 2]);
+    // Negatives, and a write that flips a sign.
+    report([-1, -2, -3, -4], [1, 0, 3,  1, 1, 2,  0, 0, 10,  1, 0, 3,  1, 0, 0]);
+    // Every prefix of a longer array, then a write in the middle.
+    report([5, 1, 8, 2, 9, 3], [1, 0, 0,  1, 0, 1,  1, 0, 2,  1, 0, 3,  1, 0, 4,  1, 0, 5,
+                               0, 3, 100,  1, 0, 5,  1, 3, 3,  1, 4, 5]);
+    // Large magnitudes that cancel.
+    report([100000, -100000, 100000], [1, 0, 2,  0, 1, 100000,  1, 0, 2,  1, 1, 1]);
+    // A power-of-two length, where the Fenwick and segment trees are widest.
+    report([1, 2, 3, 4, 5, 6, 7, 8], [1, 0, 7,  0, 7, 0,  1, 0, 7,  1, 7, 7,  1, 4, 6]);
+}

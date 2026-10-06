@@ -1,0 +1,22 @@
+struct H { n: i64 }
+struct Held { rows: Array[String, 3] }
+impl H {
+    fn first(ref self, xs: ref Slice[String]) -> String { xs[0] }
+    fn count(ref self, xs: ref Slice[String]) -> i64 { xs.len() }
+}
+fn main() {
+    let h = H { n: 0 };
+    let held = Held { rows: ["alpha", "beta", "gamma"] };
+    let mut i = 0i64;
+    let mut total = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let owned: Array[String, 3] = ["one", "two", "three"];
+        total = total + h.count(owned) + h.count(held.rows);
+        last = h.first(owned);
+        i = i + 1;
+    }
+    println(last);
+    println(total);
+    println(held.rows[2]);
+}

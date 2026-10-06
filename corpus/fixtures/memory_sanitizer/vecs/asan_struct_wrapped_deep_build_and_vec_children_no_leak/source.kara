@@ -1,0 +1,33 @@
+
+shared enum Expr { Num(i64), Add(BinOp), Neg(Unary), Call(CallExpr) }
+struct BinOp { left: Expr, right: Expr }
+struct Unary { operand: Expr }
+struct CallExpr { callee: Expr, args: Vec[Expr] }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+        Neg(u) => 0 - eval(u.operand),
+        Call(c) => {
+            let mut acc = eval(c.callee);
+            for a in c.args { acc = acc + eval(a); }
+            acc
+        }
+    }
+}
+fn build(n: i64) -> Expr {
+    if n <= 0 { Num(0) }
+    else { Neg(Unary { operand: Add(BinOp { left: Num(n), right: build(n - 1) }) }) }
+}
+fn main() {
+    let mut args: Vec[Expr] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 10 { args.push(Num(i)); i = i + 1; }
+    let call = Call(CallExpr { callee: Num(100), args: args });
+    let mut forest: Vec[Expr] = Vec.new();
+    let mut j: i64 = 0;
+    while j < 30 { forest.push(build(j)); j = j + 1; }
+    let mut total: i64 = eval(call);
+    for t in forest { total = total + eval(t); }
+    println(total);
+}

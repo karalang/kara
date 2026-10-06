@@ -1,0 +1,13 @@
+source = "tests/codegen/moves.rs::e2e_projection_at_a_discarded_or_argument_tail_runs_its_body_once"
+dedup_of = ["tests/interpreter/moves.rs::test_projection_at_a_discarded_or_argument_tail_runs_its_body_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

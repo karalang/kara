@@ -1,0 +1,45 @@
+
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct H2 { v: R, r: R, n: i64 }
+fn mk(k: i64) -> R { R { id: k, s: f"a-heap-string-longer-than-sso-{k}" } }
+fn mo(k: i64) -> Option[H2] { if k > 0 { Option.Some(H2 { v: mk(k), r: mk(k * 10), n: 1 }) } else { Option.None } }
+fn rs(k: i64) -> Result[H2, i64] { if k > 0 { Result.Ok(H2 { v: mk(k), r: mk(k * 10), n: 1 }) } else { Result.Err(k) } }
+fn a1(k: i64) -> i64 { match mo(k) { Option.Some(H2 { v, .. }) => v.id, Option.None => 0 } }
+fn a2(k: i64) -> i64 { match mo(k) { Option.Some(H2 { v, r, n }) => v.id + r.id + n, Option.None => 0 } }
+fn a3(k: i64) -> i64 { match mo(k) { Option.Some(H2 { n, .. }) => n, Option.None => 0 } }
+fn a4(k: i64) -> i64 { match rs(k) { Result.Ok(H2 { v, .. }) => v.id, Result.Err(e) => e } }
+fn a5(k: i64) -> i64 { if let Option.Some(H2 { v, .. }) = mo(k) { v.id } else { 0 } }
+fn a6(k: i64) -> i64 { match mo(k) { Option.Some(H2 { v, .. }) => { println(v.s.len()); v.id }, Option.None => 0 } }
+fn a7(k: i64) -> i64 { match mo(k) { Option.Some(H2 { v, .. }) => { if v.id > 2 { return v.id } 0 }, Option.None => 0 } }
+fn a8(n: i64) -> i64 { let mut t = 0; for i in 1..n { let z = match mo(i) { Option.Some(H2 { v, .. }) => v.id, Option.None => 0 }; t = t + z; } t }
+fn a9(n: i64) -> i64 { let mut t = 0; for i in 1..n { let z = match mo(i) { Option.Some(H2 { v, .. }) => { if i == 2 { continue } v.id }, Option.None => 0 }; t = t + z; } t }
+fn a10(k: i64) -> i64 { if let Result.Ok(H2 { v, r, .. }) = rs(k) { v.id + r.id } else { 0 } }
+fn main() {
+    println(a1(3))
+    println("-")
+    println(a1(0))
+    println("-")
+    println(a2(3))
+    println("-")
+    println(a3(3))
+    println("-")
+    println(a4(3))
+    println("-")
+    println(a4(0))
+    println("-")
+    println(a5(3))
+    println("-")
+    println(a6(3))
+    println("-")
+    println(a7(3))
+    println("-")
+    println(a7(1))
+    println("-")
+    println(a8(3))
+    println("-")
+    println(a9(4))
+    println("-")
+    println(a10(4))
+    println("end")
+}

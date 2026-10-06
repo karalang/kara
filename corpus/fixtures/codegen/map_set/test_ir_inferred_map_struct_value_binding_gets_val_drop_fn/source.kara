@@ -1,0 +1,14 @@
+
+struct Holder { name: String, id: i64 }
+
+fn build() -> Map[i64, Holder] {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: "a heap string padded out beyond thirty-six bytes!", id: 1 };
+    m.insert(1, h);
+    return m;
+}
+
+fn main() {
+    let m = build();
+    println(m.len());
+}

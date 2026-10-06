@@ -1,0 +1,7 @@
+range 2..10000
+factorable 8770
+total combinations 129813
+max combinations 661 at n=8640
+deepest combination 13
+digest 198246826
+mismatches 0

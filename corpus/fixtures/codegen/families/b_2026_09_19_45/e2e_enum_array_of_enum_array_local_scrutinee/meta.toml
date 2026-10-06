@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_19_45.rs::e2e_enum_array_of_enum_array_local_scrutinee"
+dedup_of = ["tests/interpreter/families/b_2026_09_19_45.rs::test_enum_array_of_enum_array_local_scrutinee", "tests/memory_sanitizer/families/b_2026_09_19_45.rs::asan_enum_array_of_enum_array_local_scrutinee"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

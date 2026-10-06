@@ -1,0 +1,43 @@
+// LeetCode #96: Unique Binary Search Trees — count them with the Catalan recurrence (★).
+//
+// How many structurally unique BSTs store exactly the values 1..n? Pick each value r
+// as the root: everything smaller (1..r-1, which is r-1 values) forms the left subtree
+// and everything larger (r+1..n, which is n-r values) the right — and the shapes over a
+// contiguous range depend only on its SIZE. So if dp[k] is the count over any k values,
+//
+//     dp[n] = sum over r in 1..n of  dp[r-1] * dp[n-r]
+//
+// with dp[0] = 1 (the empty tree). That is exactly the Catalan number recurrence; dp[n]
+// is the nth Catalan number (1, 1, 2, 5, 14, 42, 132, 429, ... for n = 0, 1, 2, ...).
+// Bottom-up O(n^2) fill of a `Vec[i64]` table — the canonical DP for this problem, and
+// the count-only sibling of kata [#95](../95-unique-binary-search-trees-ii/), which
+// materialises the trees this one only counts.
+
+fn num_trees(n: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    dp.push(1);                       // dp[0] = 1 (empty tree)
+    let mut k = 1;
+    while k <= n {
+        let mut total = 0;
+        let mut r = 1;
+        while r <= k {
+            total = total + dp[r - 1] * dp[k - r];   // left count * right count
+            r = r + 1;
+        }
+        dp.push(total);
+        k = k + 1;
+    }
+    dp[n]
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut n = 1;
+    while n <= 19 {
+        let c = num_trees(n);
+        println(f"n={n}: {c}");
+        acc = (acc * 1000003 + c) % 1000000007;
+        n = n + 1;
+    }
+    println(f"sink: {acc}");
+}

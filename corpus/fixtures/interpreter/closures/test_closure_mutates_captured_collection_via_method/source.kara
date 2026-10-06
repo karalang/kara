@@ -1,0 +1,21 @@
+
+fn main() {
+    let mut buf: String = "";
+    let mut append = |s: String| { buf.push_str(s); };
+    append("a");
+    append("bc");
+    println(buf);
+
+    let mut m: Map[String, i64] = Map.new();
+    let mut record = |k: String, v: i64| { m.insert(k, v); };
+    record("x", 1);
+    record("y", 2);
+    println(m.len());
+
+    let mut acc: Vec[i64] = Vec.new();
+    let mut push = |x: i64| { acc.push(x); };
+    push(10);
+    push(20);
+    push(30);
+    println(acc.len());
+}

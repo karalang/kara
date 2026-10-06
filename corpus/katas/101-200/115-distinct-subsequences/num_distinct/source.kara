@@ -1,0 +1,75 @@
+// LeetCode #115: Distinct Subsequences — count distinct subsequences of `s` that equal `t` (★).
+//
+// A 2-D DP over the two strings: `dp[i][j]` is the number of distinct subsequences of the first `i`
+// characters of `s` that equal the first `j` characters of `t`. The empty target is matched exactly
+// one way (`dp[i][0] = 1`); a non-empty target has no match in an empty source (`dp[0][j>0] = 0`).
+// For an interior cell, `s[i-1]` can always be SKIPPED (`dp[i-1][j]` ways), and when it equals
+// `t[j-1]` it can additionally be USED to match that target character (`+ dp[i-1][j-1]` ways).
+// O(m·n) time and space. Inputs are ASCII, so `String.bytes()` indexing is exact.
+// Same 2-D-table shape as kata [#72](../../1-100/72-edit-distance/).
+
+fn num_distinct(s: ref String, t: ref String) -> i64 {
+    let sb = s.bytes();
+    let tb = t.bytes();
+    let m = s.len();
+    let n = t.len();
+
+    // (m+1)×(n+1) table; column 0 seeded to 1 (empty target), rest 0.
+    let mut dp: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i <= m {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j <= n {
+            if j == 0 {
+                row.push(1);
+            } else {
+                row.push(0);
+            }
+            j = j + 1;
+        }
+        dp.push(row);
+        i = i + 1;
+    }
+
+    // Fill row-major; every cell read (up, diag) is already final.
+    let mut r = 1;
+    while r <= m {
+        let mut c = 1;
+        while c <= n {
+            let skip = dp[r - 1][c]; // don't use s[r-1]
+            if sb[r - 1] == tb[c - 1] {
+                dp[r][c] = skip + dp[r - 1][c - 1]; // or use it to match t[c-1]
+            } else {
+                dp[r][c] = skip;
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+
+    dp[m][n]
+}
+
+fn main() {
+    let mut ss: Vec[String] = Vec.new();
+    let mut ts: Vec[String] = Vec.new();
+    ss.push("rabbbit");   ts.push("rabbit");
+    ss.push("babgbag");   ts.push("bag");
+    ss.push("aaaaaa");    ts.push("aaa");
+    ss.push("abcabcabc"); ts.push("abc");
+    ss.push("xyzzyx");    ts.push("xz");
+    ss.push("banana");    ts.push("ban");
+    ss.push("mississippi"); ts.push("issi");
+    ss.push("aaaaaaaaaa"); ts.push("aaaaa");
+
+    let mut acc = 0;
+    let mut i = 0;
+    while i < ss.len() {
+        let c = num_distinct(ss[i], ts[i]);
+        acc = (acc * 131 + c) % 1000000007;
+        println(f"pair {i}: count={c}");
+        i = i + 1;
+    }
+    println(f"sink: {acc}");
+}

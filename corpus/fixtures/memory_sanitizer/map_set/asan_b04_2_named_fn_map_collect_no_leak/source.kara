@@ -1,0 +1,18 @@
+
+fn tag(s: String) -> String { s }
+fn nlen(s: String) -> i64 { s.len() }
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "named-fn-map-payload-alpha-aaaaaaaaaaaaaaaaaa".to_string(),
+            "named-fn-map-payload-bravo-bbbbbbbbbbbbbbbbbb".to_string(),
+            "named-fn-map-payload-charlie-cccccccccccccccc".to_string()
+        ];
+        let mapped: Vec[String] = w.iter().map(tag).collect();
+        let lens: Vec[i64] = w.iter().map(nlen).collect();
+        let m1: String = mapped[1i64].clone();
+        println(f"{mapped.len()} {lens[0]} {lens[2]} {w.len()} {m1}");
+        round = round + 1i64;
+    }
+}

@@ -1,0 +1,24 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+enum Mono { P(R), Q }
+enum Ha { P(Array[Mono, 1]), Q }
+enum Hb { P(Array[Mono, 2]), Q }
+enum Hc { P(Array[Mono, 1], i64), Q }
+enum Hs { P(Array[R, 2]), Q }
+struct Ga { h: Ha }
+fn eata(h: Ha) -> i64 { return 1 }
+fn eatb(h: Hb) -> i64 { return 1 }
+fn r(i: i64) -> R { R { id: i, s: f"ssssssss{i}" } }
+fn main() {
+    println("let"); { let h = Ha.P([Mono.P(r(1))]); println("  x") }
+    println("disc"); { let _ = Ha.P([Mono.P(r(2))]); println("  x") }
+    println("move"); { let h = Ha.P([Mono.P(r(3))]); let h2 = h; println("  x") }
+    println("arm"); { let h = Ha.P([Mono.P(r(4))]); match h { Ha.P(a) => { println("  in") } Ha.Q => {} } }
+    println("arg"); { let n = eata(Ha.P([Mono.P(r(5))])); println(f"  {n}") }
+    println("field"); { let g = Ga { h: Ha.P([Mono.P(r(6))]) }; println("  x") }
+    println("wlet"); { let h = Hb.P([Mono.P(r(7)), Mono.Q]); println("  x") }
+    println("warg"); { let n = eatb(Hb.P([Mono.P(r(8)), Mono.P(r(9))])); println(f"  {n}") }
+    println("mlet"); { let h = Hc.P([Mono.P(r(10))], 3); println("  x") }
+    println("slet"); { let h = Hs.P([r(11), r(12)]); println("  x") }
+    println("end")
+}

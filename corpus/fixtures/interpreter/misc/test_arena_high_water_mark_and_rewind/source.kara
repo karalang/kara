@@ -1,0 +1,11 @@
+fn main() {
+             let a: Arena[i64] = Arena.new();
+             let _r0 = a.push(1);
+             let _r1 = a.push(2);
+             let cp = a.high_water_mark();
+             let _r2 = a.push(3);
+             let _r3 = a.push(4);
+             println(a.len());
+             a.rewind_to(cp);
+             println(a.len());
+         }

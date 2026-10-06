@@ -1,0 +1,61 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+
+fn eat(o: Option[(R, R)], k: bool) -> R {
+    match o {
+        Option.Some((a, b)) => { if k { return a; } return b; }
+        Option.None => { return R { id: 0 }; }
+    }
+}
+fn eatT(o: Option[(R, R)], k: bool) -> R {
+    match o {
+        Option.Some((a, b)) => if k { a } else { b },
+        Option.None => R { id: 0 },
+    }
+}
+fn eatRes(o: Result[(R, R), i64], k: bool) -> R {
+    match o {
+        Result.Ok((a, b)) => { if k { return a; } return b; }
+        Result.Err(_) => { return R { id: 0 }; }
+    }
+}
+fn cs(o: Option[(R, i64)], k: bool) -> R {
+    match o {
+        Option.Some((a, n)) => { if k { return a; } return R { id: n }; }
+        Option.None => { return R { id: 0 }; }
+    }
+}
+fn cs3(o: Option[(R, R, i64)], k: bool) -> R {
+    match o {
+        Option.Some((a, b, n)) => { if k { return a; } if n > 0 { return b; } return R { id: n }; }
+        Option.None => { return R { id: 0 }; }
+    }
+}
+fn nested(o: Option[(R, R)], k: i64) -> R {
+    match o {
+        Option.Some((a, b)) => { match k { 0 => { return a; } _ => { return b; } } }
+        Option.None => { return R { id: 0 }; }
+    }
+}
+
+fn main() {
+    println("tf"); { let g = eat(Option.Some((R { id: 5 }, R { id: 6 })), false); println(f"  got:{g.id}") }
+    println("tt"); { let g = eat(Option.Some((R { id: 7 }, R { id: 8 })), true); println(f"  got:{g.id}") }
+    println("nf"); { let a = Option.Some((R { id: 9 }, R { id: 10 })); let g = eat(a, false); println(f"  got:{g.id}") }
+    println("nt"); { let a = Option.Some((R { id: 11 }, R { id: 12 })); let g = eat(a, true); println(f"  got:{g.id}") }
+    println("none"); { let g = eat(Option.None, true); println(f"  got:{g.id}") }
+    println("tailf"); { let g = eatT(Option.Some((R { id: 19 }, R { id: 20 })), false); println(f"  got:{g.id}") }
+    println("tailt"); { let g = eatT(Option.Some((R { id: 21 }, R { id: 22 })), true); println(f"  got:{g.id}") }
+    println("resf"); { let g = eatRes(Result.Ok((R { id: 23 }, R { id: 24 })), false); println(f"  got:{g.id}") }
+    println("rest"); { let g = eatRes(Result.Ok((R { id: 25 }, R { id: 26 })), true); println(f"  got:{g.id}") }
+    println("csf"); { let g = cs(Option.Some((R { id: 27 }, 50)), false); println(f"  got:{g.id}") }
+    println("cst"); { let g = cs(Option.Some((R { id: 28 }, 60)), true); println(f"  got:{g.id}") }
+    println("csn"); { let a = Option.Some((R { id: 29 }, 70)); let g = cs(a, false); println(f"  got:{g.id}") }
+    println("c3a"); { let g = cs3(Option.Some((R { id: 30 }, R { id: 31 }, 1)), true); println(f"  got:{g.id}") }
+    println("c3b"); { let g = cs3(Option.Some((R { id: 32 }, R { id: 33 }, 1)), false); println(f"  got:{g.id}") }
+    println("c3c"); { let g = cs3(Option.Some((R { id: 34 }, R { id: 35 }, 0)), false); println(f"  got:{g.id}") }
+    println("n0"); { let g = nested(Option.Some((R { id: 36 }, R { id: 37 })), 0); println(f"  got:{g.id}") }
+    println("n1"); { let g = nested(Option.Some((R { id: 38 }, R { id: 39 })), 1); println(f"  got:{g.id}") }
+    println("disc"); { cs(Option.Some((R { id: 40 }, 200)), false); println("  x") }
+    println("end")
+}

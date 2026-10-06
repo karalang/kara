@@ -1,0 +1,31 @@
+
+struct H { a: Vec[i64], b: i64 }
+fn mkv(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); v.push(k + 1i64); return v; }
+fn mks(k: i64) -> String { let mut s: String = String.new(); s.push_str(f"pay-{k}"); return s; }
+fn dig(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+fn peek(v: ref Vec[i64]) -> i64 { return v[0i64] + v.len(); }
+fn bump(v: mut ref Vec[i64]) { v.push(42i64); }
+fn slen(s: ref String) -> i64 { return s.len(); }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut acc = 0i64;
+    let mut i = base;
+    while i < base + 100i64 {
+        let t1: (Vec[i64], i64) = (mkv(i), 5i64);
+        acc = acc + peek(t1.0) + t1.0[1i64];
+        let mut t2: (Vec[i64], i64) = (mkv(i), 5i64);
+        bump(mut t2.0);
+        acc = acc + t2.0.len() + t2.0[2i64];
+        let t3: (i64, Vec[i64]) = (5i64, mkv(i));
+        acc = acc + peek(t3.1);
+        let t4: (String, i64) = (mks(i), 5i64);
+        if t4.0.contains(dig(i)) { acc = acc + slen(t4.0); }
+        let h1: H = H { a: mkv(i), b: 5i64 };
+        acc = acc + peek(h1.a);
+        let mut h2: H = H { a: mkv(i), b: 5i64 };
+        bump(mut h2.a);
+        acc = acc + h2.a[2i64];
+        i = i + 1;
+    }
+    println(f"{acc}");
+}

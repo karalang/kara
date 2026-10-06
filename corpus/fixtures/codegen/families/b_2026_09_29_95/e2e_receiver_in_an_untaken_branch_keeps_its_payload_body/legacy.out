@@ -1,0 +1,38 @@
+c false
+dS1
+r 0
+dS2
+r 0
+dS3
+k 3
+r 0
+dS4
+r 0
+dS5
+r 0
+dS5
+r 0
+dS6
+after
+r 0
+r 0
+c true
+dS1
+r 1
+dS2
+r 2
+n
+dS3
+r 0
+dS4
+r 4
+dS5
+r 5
+dS5
+r 5
+dS6
+k 6
+after
+r 0
+r 7
+end

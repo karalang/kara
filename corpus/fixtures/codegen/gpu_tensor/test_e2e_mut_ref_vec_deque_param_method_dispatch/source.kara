@@ -1,0 +1,11 @@
+
+fn push_to(q: mut ref VecDeque[i64], x: i64) -> i64 {
+    q.push_back(x);
+    q.len()
+}
+fn main() {
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let _ = push_to(mut q, 5);
+    let n = push_to(mut q, 10);
+    println(n);
+}

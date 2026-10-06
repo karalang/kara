@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/closures.rs::asan_heap_env_local_string_capture_no_leak"
+dedup_of = []
+expect = "error:E0508"
+exit = 1
+tags = ["closure"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

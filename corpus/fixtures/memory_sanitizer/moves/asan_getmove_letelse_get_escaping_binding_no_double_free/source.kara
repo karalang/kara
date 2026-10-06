@@ -1,0 +1,14 @@
+
+fn read(m: ref Map[i64, String]) -> i64 {
+    let Some(s) = m.get(7) else { return 0 }
+    s.len()
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(7, f"map string payload padded beyond thirty-six bytes {7}");
+        println(read(m));
+        i = i + 1;
+    };
+}

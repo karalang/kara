@@ -1,0 +1,8 @@
+fn main() {
+            let a = "abc";
+            let b = "abd";
+            println(a < b);
+            println(b > a);
+            println(a <= "abc");
+            println(a >= "abc");
+        }

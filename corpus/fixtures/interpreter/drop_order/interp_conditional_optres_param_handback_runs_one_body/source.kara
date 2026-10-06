@@ -1,0 +1,21 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn tl(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+fn lt(a: Option[R], c: bool) -> Option[R] { let r: Option[R] = if c { a } else { None }; println("  mid"); r }
+fn mt(a: Option[R], c: bool) -> Option[R] { match c { true => a, false => None } }
+fn ml(a: Option[R], c: bool) -> Option[R] { let r: Option[R] = match c { true => a, false => None }; println("  mid"); r }
+fn rs(a: Result[R, i64], c: bool) -> Result[R, i64] { let r: Result[R, i64] = if c { a } else { Err(5) }; r }
+fn show(o: Option[R]) { match o { Some(x) => println(f"  y{x.id}"), None => println("  none") } }
+fn main() {
+    for c in [true, false] {
+        println(f"c={c}");
+        { let a = Some(mkr(1)); let b = tl(a, c); show(b); }
+        { let a = Some(mkr(2)); let b = lt(a, c); show(b); }
+        { let a = Some(mkr(3)); let b = mt(a, c); show(b); }
+        { let a = Some(mkr(4)); let b = ml(a, c); show(b); }
+        { let a: Result[R, i64] = Ok(mkr(5)); let b = rs(a, c); match b { Ok(x) => println(f"  y{x.id}"), Err(e) => println(f"  e{e}") } }
+    }
+    { let b = lt(Some(mkr(9)), true); show(b); }
+    println("end")
+}

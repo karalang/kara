@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/concurrency.rs::asan_a2b2_ephemeral_send_recv_owned_param_fanout_clean"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,24 @@
+
+#[derive(PartialEq)]
+struct F64 { x: i64, tag: i64 }
+#[derive(PartialEq)]
+shared struct F32 { x: i64, tag: i64 }
+#[derive(Eq, PartialEq)]
+struct F16 { x: i64, tag: i64 }
+fn main() {
+    let a = F64 { x: 1, tag: 1 };
+    let b = F64 { x: 1, tag: 2 };
+    let c = F64 { x: 1, tag: 1 };
+    println(f"plain-ne={a == b}");
+    println(f"plain-eq={a == c}");
+
+    let d = F32 { x: 1, tag: 1 };
+    let e = F32 { x: 1, tag: 2 };
+    println(f"shared-ne={d == e}");
+
+    let g = F16 { x: 1, tag: 1 };
+    let h = F16 { x: 1, tag: 2 };
+    println(f"derived-ne={g == h}");
+
+    println(f"fields={a.x} {a.tag}");
+}

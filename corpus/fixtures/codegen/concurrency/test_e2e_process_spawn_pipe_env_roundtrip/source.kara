@@ -1,0 +1,92 @@
+
+fn main() {
+    let cmd = Command.new("echo").arg("kara-spawn").stdout(Stdio.Piped);
+    match cmd.spawn() {
+        Ok(child) => {
+            match child.stdout() {
+                Some(o) => {
+                    match o.read_to_string() {
+                        Ok(text) => println(f"out={text}"),
+                        Err(e) => println("read failed"),
+                    }
+                }
+                None => println("no stdout handle"),
+            }
+            // Stream taken at most once.
+            match child.stdout() {
+                Some(o2) => println("second take?!"),
+                None => println("taken once"),
+            }
+            match child.wait() {
+                Ok(st) => println(f"code={st.code} success={st.success}"),
+                Err(e) => println("wait failed"),
+            }
+        }
+        Err(e) => println("spawn failed"),
+    }
+
+    let ecmd = Command.new("sh").arg("-c").arg("printf %s \"$KARA_E2E\"")
+        .env("KARA_E2E", "env-ok").stdout(Stdio.Piped);
+    match ecmd.spawn() {
+        Ok(child) => {
+            match child.stdout() {
+                Some(o) => {
+                    match o.read_to_string() {
+                        Ok(text) => println(f"env={text}"),
+                        Err(e) => println("env read failed"),
+                    }
+                }
+                None => println("no env stdout"),
+            }
+            match child.wait() {
+                Ok(st) => println(f"env-code={st.code}"),
+                Err(e) => println("env wait failed"),
+            }
+        }
+        Err(e) => println("env spawn failed"),
+    }
+
+    let cat = Command.new("cat").stdin(Stdio.Piped).stdout(Stdio.Piped);
+    match cat.spawn() {
+        Ok(child) => {
+            match child.stdin() {
+                Some(sin) => {
+                    match sin.write("through-the-pipe\n") {
+                        Ok(u) => println("wrote"),
+                        Err(e) => println("write failed"),
+                    }
+                    match sin.close() {
+                        Ok(u) => println("closed"),
+                        Err(e) => println("close failed"),
+                    }
+                }
+                None => println("no stdin handle"),
+            }
+            match child.stdout() {
+                Some(o) => {
+                    match o.read_to_string() {
+                        Ok(text) => println(f"cat={text}"),
+                        Err(e) => println("cat read failed"),
+                    }
+                }
+                None => println("no cat stdout"),
+            }
+            match child.wait() {
+                Ok(st) => println(f"cat-code={st.code}"),
+                Err(e) => println("cat wait failed"),
+            }
+        }
+        Err(e) => println("cat spawn failed"),
+    }
+
+    let bad = Command.new("definitely-not-a-binary-kara");
+    match bad.spawn() {
+        Ok(c) => println("bad spawned?!"),
+        Err(e) => {
+            match e {
+                IoError.NotFound => println("bad=NotFound"),
+                _ => println("bad=other"),
+            }
+        }
+    }
+}

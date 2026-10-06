@@ -1,0 +1,35 @@
+
+#[derive(Clone)]
+struct Pair { word: String, n: i64 }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 40 {
+        let mut ps: Vec[Pair] = Vec.new();
+        ps.push(Pair { word: f"alpha{k + i}", n: 1 });
+        ps.push(Pair { word: f"beta{k + i}", n: 2 });
+        ps[0] = ps[1].clone();
+        acc = acc + ps[0].word.len();
+        ps[0] = ps[0].clone();
+        acc = acc + ps[0].word.len();
+        let mut qs: Vec[Pair] = Vec.new();
+        qs.push(Pair { word: f"gamma{k + i}", n: 3 });
+        qs.push(Pair { word: f"delta{k + i}", n: 4 });
+        qs.swap(0, 1);
+        acc = acc + qs[0].word.len() + qs[1].word.len();
+        let mut rs: Vec[Pair] = Vec.new();
+        rs.push(Pair { word: f"gamma{k + i}", n: 3 });
+        rs.push(Pair { word: f"delta{k + i}", n: 4 });
+        rs.swap(0, 1);
+        acc = acc + rs[0].word.len() + rs[1].word.len();
+        let j = 1i64;
+        let mut ss: Vec[Pair] = Vec.new();
+        ss.push(Pair { word: f"eps{k + i}", n: 5 });
+        ss.push(Pair { word: f"zeta{k + i}", n: 6 });
+        ss[0] = ss[j].clone();
+        acc = acc + ss[0].word.len();
+        i = i + 1;
+    }
+    println(acc > 0);
+}

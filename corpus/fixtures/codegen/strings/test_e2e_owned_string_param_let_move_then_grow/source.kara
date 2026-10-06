@@ -1,0 +1,11 @@
+
+fn bang(s: String) -> String {
+    let mut t = s;
+    t.push_str("!");
+    t
+}
+
+fn main() {
+    let a = f"abc{1}";
+    println(bang(a));
+}

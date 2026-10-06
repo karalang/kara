@@ -1,0 +1,32 @@
+
+struct R { id: i64, name: String, xs: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", xs: [f"a{i}"] }; }
+fn br(r: R, keep: bool) -> i64 { if keep { let m = r; return m.id; } return 0; }
+fn fall(r: R, keep: bool) -> i64 { if keep { let m = r; println(f"in{m.id}"); } return 7; }
+fn els(r: R, keep: bool) -> i64 { if keep { return 4; } else { let m = r; return m.id; } }
+fn rd(r: R, keep: bool) -> i64 { if keep { let m = r; println(f"n={m.name}"); return 5; } println(f"s={r.name}"); return 6; }
+fn arm(r: R, k: i64) -> i64 { match k { 1 => { let m = r; return m.id; } _ => { return 0; } } }
+fn two(r: R, a: bool, b: bool) -> i64 { if a { if b { let m = r; return m.id; } return 2; } return 3; }
+fn top(r: R) -> i64 { let m = r; return m.id; }
+fn opt(r: R, keep: bool) -> Option[R] { if keep { let m = r; return Option.Some(m); } println("after"); return Option.None; }
+fn round() {
+  println(f"brF={br(mk(21), false)}");
+  println(f"brT={br(mk(22), true)}");
+  println(f"faF={fall(mk(23), false)}");
+  println(f"faT={fall(mk(24), true)}");
+  println(f"elF={els(mk(25), false)}");
+  println(f"elT={els(mk(26), true)}");
+  println(f"rdF={rd(mk(27), false)}");
+  println(f"rdT={rd(mk(28), true)}");
+  println(f"arF={arm(mk(29), 0)}");
+  println(f"arT={arm(mk(30), 1)}");
+  println(f"tw00={two(mk(31), false, false)}");
+  println(f"tw10={two(mk(32), true, false)}");
+  println(f"tw11={two(mk(33), true, true)}");
+  println(f"top={top(mk(34))}");
+  let _ = opt(mk(35), false);
+  let o = opt(mk(36), true);
+  match o { Option.Some(v) => { println(f"got{v.id}"); } _ => { println("none"); } }
+}
+fn main() { let mut i = 0; while i < 3 { round(); i = i + 1; } println("done"); }

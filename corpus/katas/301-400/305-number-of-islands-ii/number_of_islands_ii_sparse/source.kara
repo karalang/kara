@@ -1,0 +1,139 @@
+// LeetCode 305 — arm C: the same algorithm over a SPARSE map.
+//
+// The dense arms allocate m*n slots up front. That is the right call when the
+// grid is small, and the wrong one when the statement's grid is large and the
+// operation list is short — a 10^4 x 10^4 grid with 300 additions wants 300
+// entries, not 10^8. This arm keeps `parent` and `size` in `Map[i64, i64]`,
+// keyed by the encoded cell, so only land cells exist at all. "Is this cell
+// land?" becomes "is this key present?", which replaces the ★ arm's `-1`
+// sentinel entirely.
+//
+// It also unions by SIZE rather than by rank. The two are interchangeable for
+// correctness and both give the near-constant amortised bound with path
+// compression, but they are different code: rank tracks an upper bound on tree
+// height and only ever increments on a tie, whereas size tracks an exact count
+// and always adds. An off-by-one in one has no counterpart in the other.
+//
+// NOTE ON MAP ITERATION: nothing here walks the map. Kāra hashes with a
+// per-process random key, so `for (k, v) in m` yields a different order on
+// every run (see the repo CLAUDE.md), and a kata whose OUTPUT depended on that
+// order would fail the A/B rule for a reason that is not a compiler bug. This
+// arm only ever does keyed lookup and insertion, both order-independent, and
+// the island count it reports is a running integer rather than anything walked.
+
+struct SparseSet {
+    parent: Map[i64, i64],
+    size: Map[i64, i64],
+    count: i64,
+}
+
+impl SparseSet {
+    fn new() -> SparseSet {
+        return SparseSet { parent: Map.new(), size: Map.new(), count: 0 };
+    }
+
+    fn is_land(ref self, x: i64) -> bool {
+        return self.parent.contains_key(x);
+    }
+
+    fn add(mut ref self, x: i64) {
+        self.parent.insert(x, x);
+        self.size.insert(x, 1);
+        self.count += 1;
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        let mut root = x;
+        while self.parent[root] != root {
+            root = self.parent[root];
+        }
+        let mut cur = x;
+        while self.parent[cur] != root {
+            let next = self.parent[cur];
+            self.parent.insert(cur, root);
+            cur = next;
+        }
+        return root;
+    }
+
+    fn merge(mut ref self, a: i64, b: i64) {
+        let ra = self.find(a);
+        let rb = self.find(b);
+        if ra == rb {
+            return;
+        }
+        // Hang the smaller tree under the larger one.
+        let sa = self.size[ra];
+        let sb = self.size[rb];
+        if sa < sb {
+            self.parent.insert(ra, rb);
+            self.size.insert(rb, sa + sb);
+        } else {
+            self.parent.insert(rb, ra);
+            self.size.insert(ra, sa + sb);
+        }
+        self.count -= 1;
+    }
+}
+
+fn num_islands2(m: i64, n: i64, positions: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut ss = SparseSet.new();
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0..positions.len() {
+        let r = positions[k][0];
+        let c = positions[k][1];
+        let idx = r * n + c;
+        if not ss.is_land(idx) {
+            ss.add(idx);
+            if r > 0 and ss.is_land(idx - n) { ss.merge(idx, idx - n); }
+            if r < m - 1 and ss.is_land(idx + n) { ss.merge(idx, idx + n); }
+            if c > 0 and ss.is_land(idx - 1) { ss.merge(idx, idx - 1); }
+            if c < n - 1 and ss.is_land(idx + 1) { ss.merge(idx, idx + 1); }
+        }
+        out.push(ss.count);
+    }
+    return out;
+}
+
+fn pairs_of(flat: Slice[i64]) -> Vec[Vec[i64]] {
+    let mut ps: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i + 1 < flat.len() {
+        let mut p: Vec[i64] = Vec.new();
+        p.push(flat[i]);
+        p.push(flat[i + 1]);
+        ps.push(p);
+        i = i + 2;
+    }
+    return ps;
+}
+
+fn report(m: i64, n: i64, flat: Slice[i64]) {
+    let positions = pairs_of(flat);
+    let counts = num_islands2(m, n, positions);
+    let mut line = String.new();
+    line.push_str(f"{m}x{n} ->");
+    for k in 0..counts.len() {
+        line.push_str(f" {counts[k]}");
+    }
+    println(line);
+}
+
+fn main() {
+    // The example from the LeetCode statement.
+    report(3, 3, [0, 0,  0, 1,  1, 2,  2, 1]);
+    // A repeated position must not change the answer.
+    report(3, 3, [0, 0,  0, 0,  0, 1,  0, 1]);
+    // One cell.
+    report(1, 1, [0, 0]);
+    // A row filled left to right, then the gap that joins two runs.
+    report(1, 5, [0, 0,  0, 2,  0, 4,  0, 1,  0, 3]);
+    // A column, same shape rotated.
+    report(5, 1, [0, 0,  2, 0,  4, 0,  1, 0,  3, 0]);
+    // The centre of a plus closes four islands at once.
+    report(3, 3, [0, 1,  1, 0,  1, 2,  2, 1,  1, 1]);
+    // Fill a 2x3 grid completely — must end at exactly one island.
+    report(2, 3, [0, 0,  1, 1,  0, 2,  1, 0,  0, 1,  1, 2]);
+    // A ring around a hole never closes into one until the last cell.
+    report(3, 3, [0, 0,  0, 1,  0, 2,  1, 2,  2, 2,  2, 1,  2, 0,  1, 0]);
+}

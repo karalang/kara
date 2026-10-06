@@ -1,0 +1,339 @@
+// Differential for LeetCode 289 — the three solvers must agree on every board.
+//
+// The three disagree in representation, not in rules: the ★ file packs two
+// generations into one i64, the copy file keeps a second board, and the
+// infinite file stores only live cells in a Set with no rectangle at all. A
+// board where they diverge is a bug in whichever one is wrong, and running them
+// against each other is the only way to find out which.
+//
+// WHY RANDOM BOARDS AND NOT JUST THE FAMOUS PATTERNS. Blinkers and gliders are
+// sparse and well-behaved: every cell has few live neighbours and the
+// interesting counts (2 and 3) show up in isolation. A dense random board
+// drives the OTHER arms — counts of 4 through 8, which must all kill — and
+// packs live cells against the border, which is where an in-place encoding
+// leaks if `& 1` is ever forgotten. Three densities are swept for that reason:
+// sparse boards exercise birth, dense boards exercise overpopulation.
+//
+// THE INVARIANTS ARE CHECKED TOO, because agreement alone would be satisfied
+// by three identically-wrong solvers. A blinker must have period 2, a block
+// must never change, and an empty board must stay empty — properties that hold
+// for Conway's rules independent of any implementation here.
+
+fn next_rand(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 2147483647;
+}
+
+fn live_neighbours(board: ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
+    let rows = board.len();
+    let cols = board[0].len();
+    let mut n = 0;
+    let mut dr = -1;
+    while dr <= 1 {
+        let mut dc = -1;
+        while dc <= 1 {
+            if not (dr == 0 and dc == 0) {
+                let rr = r + dr;
+                let cc = c + dc;
+                if rr >= 0 and rr < rows and cc >= 0 and cc < cols {
+                    n = n + (board[rr][cc] & 1);
+                }
+            }
+            dc = dc + 1;
+        }
+        dr = dr + 1;
+    }
+    return n;
+}
+
+// --- arm 1: in-place two-bit encoding ---
+fn step_inplace(board: mut ref Vec[Vec[i64]]) {
+    let rows = board.len();
+    let cols = board[0].len();
+    let mut r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            let n = live_neighbours(board, r, c);
+            let alive = (board[r][c] & 1) == 1;
+            let lives = if alive { n == 2 or n == 3 } else { n == 3 };
+            if lives { board[r][c] = board[r][c] | 2; }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            board[r][c] = board[r][c] >> 1;
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+}
+
+// --- arm 2: second board ---
+fn step_copy(board: mut ref Vec[Vec[i64]]) {
+    let rows = board.len();
+    let cols = board[0].len();
+    let mut next: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r < rows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < cols {
+            let n = live_neighbours(board, r, c);
+            let alive = board[r][c] == 1;
+            let lives = if alive { n == 2 or n == 3 } else { n == 3 };
+            if lives { row.push(1); } else { row.push(0); }
+            c = c + 1;
+        }
+        next.push(row);
+        r = r + 1;
+    }
+    r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            board[r][c] = next[r][c];
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+}
+
+// --- arm 3: live-cell set, no rectangle ---
+fn pack(r: i64, c: i64) -> i64 {
+    return (r + 1000000) * 4000000 + (c + 1000000);
+}
+fn unpack_row(k: i64) -> i64 { return (k / 4000000) - 1000000; }
+fn unpack_col(k: i64) -> i64 { return (k % 4000000) - 1000000; }
+
+fn step_set(live: ref Set[i64]) -> Set[i64] {
+    let mut tally: Map[i64, i64] = Map.new();
+    for k in live {
+        let r = unpack_row(k);
+        let c = unpack_col(k);
+        let mut dr = -1;
+        while dr <= 1 {
+            let mut dc = -1;
+            while dc <= 1 {
+                if not (dr == 0 and dc == 0) {
+                    let nk = pack(r + dr, c + dc);
+                    match tally.get(nk) {
+                        None => { let _ = tally.insert(nk, 1); }
+                        Some(v) => { let _ = tally.insert(nk, v + 1); }
+                    }
+                }
+                dc = dc + 1;
+            }
+            dr = dr + 1;
+        }
+    }
+    let mut next: Set[i64] = Set.new();
+    for (k, n) in tally {
+        if n == 3 or (n == 2 and live.contains(k)) {
+            let _ = next.insert(k);
+        }
+    }
+    return next;
+}
+
+fn to_set(board: ref Vec[Vec[i64]]) -> Set[i64] {
+    let mut live: Set[i64] = Set.new();
+    let rows = board.len();
+    let mut r = 0;
+    while r < rows {
+        let cols = board[r].len();
+        let mut c = 0;
+        while c < cols {
+            if board[r][c] == 1 { let _ = live.insert(pack(r, c)); }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return live;
+}
+
+// COMPARING A BOUNDED ARM WITH AN UNBOUNDED ONE NEEDS A LIGHT CONE, and getting
+// this wrong is the first thing this differential taught me. Windowing the set
+// arm to the original rectangle and comparing looks obviously right and reports
+// 570 mismatches out of 1800 — every one of them at step 2 or later, none at
+// step 1. That is not a bug in any arm. The grid arms treat out-of-bounds as
+// permanently dead; the set arm lets a cell escape the rectangle at step 1, and
+// from OUTSIDE it legitimately feeds a birth back INSIDE at step 2. The two
+// models genuinely differ, and the interior is only common ground for one step.
+//
+// The fix is to give the grid arm room. Clipping error propagates inward at one
+// cell per generation, so padding the board with `steps + 1` dead cells on every
+// side keeps the artificial border out of the original window for the whole run.
+// Inside that window the bounded and unbounded models must then agree exactly,
+// and any difference IS a bug.
+fn pad_board(board: ref Vec[Vec[i64]], pad: i64) -> Vec[Vec[i64]] {
+    let rows = board.len();
+    let cols = board[0].len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r < rows + 2 * pad {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < cols + 2 * pad {
+            let sr = r - pad;
+            let sc = c - pad;
+            if sr >= 0 and sr < rows and sc >= 0 and sc < cols {
+                row.push(board[sr][sc]);
+            } else {
+                row.push(0);
+            }
+            c = c + 1;
+        }
+        out.push(row);
+        r = r + 1;
+    }
+    return out;
+}
+
+// Compare the set arm against a PADDED grid, over the original window only.
+fn set_matches_padded(live: ref Set[i64], padded: ref Vec[Vec[i64]], pad: i64,
+                      rows: i64, cols: i64) -> bool {
+    let mut r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            let in_set = live.contains(pack(r, c));
+            let in_grid = padded[r + pad][c + pad] == 1;
+            if in_set != in_grid { return false; }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return true;
+}
+
+fn grids_equal(a: ref Vec[Vec[i64]], b: ref Vec[Vec[i64]]) -> bool {
+    let rows = a.len();
+    let mut r = 0;
+    while r < rows {
+        let cols = a[r].len();
+        let mut c = 0;
+        while c < cols {
+            if a[r][c] != b[r][c] { return false; }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return true;
+}
+
+fn make_board(rows: i64, cols: i64, density: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r < rows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < cols {
+            seed = next_rand(seed);
+            let roll = (seed / 65536) % 100;
+            if roll < density { row.push(1); } else { row.push(0); }
+            c = c + 1;
+        }
+        b.push(row);
+        r = r + 1;
+    }
+    return b;
+}
+
+fn main() {
+    let mut seed = 987654321;
+    let mut cases = 0;
+    let mut mismatches = 0;
+    let mut inplace_vs_copy = 0;
+    let mut set_vs_grid = 0;
+
+    // Three densities x several shapes x several step counts. Sparse boards
+    // drive birth; dense boards drive the overpopulation arms.
+    let densities: Vec[i64] = [15, 40, 70];
+    let mut di = 0;
+    while di < densities.len() {
+        let density = densities[di];
+        let mut rows = 3;
+        while rows <= 7 {
+            let mut cols = 3;
+            while cols <= 7 {
+                let mut trial = 0;
+                while trial < 8 {
+                    let base = make_board(rows, cols, density, mut seed);
+
+                    let mut steps = 1;
+                    while steps <= 3 {
+                        let mut a = base.clone();
+                        let mut b = base.clone();
+                        let mut live = to_set(base);
+                        // Padded twin: far enough that the border cannot reach
+                        // the original window within `steps` generations.
+                        let pad = steps + 1;
+                        let mut p = pad_board(base, pad);
+
+                        let mut k = 0;
+                        while k < steps {
+                            step_inplace(mut a);
+                            step_copy(mut b);
+                            step_inplace(mut p);
+                            live = step_set(live);
+                            k = k + 1;
+                        }
+
+                        cases = cases + 1;
+                        if not grids_equal(a, b) {
+                            mismatches = mismatches + 1;
+                            inplace_vs_copy = inplace_vs_copy + 1;
+                        }
+                        if not set_matches_padded(live, p, pad, rows, cols) {
+                            mismatches = mismatches + 1;
+                            set_vs_grid = set_vs_grid + 1;
+                        }
+                        steps = steps + 1;
+                    }
+                    trial = trial + 1;
+                }
+                cols = cols + 1;
+            }
+            rows = rows + 1;
+        }
+        di = di + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"mismatches {mismatches}");
+    println(f"  in-place vs copy {inplace_vs_copy}");
+    println(f"  set vs grid      {set_vs_grid}");
+
+    // Invariants — agreement alone would be satisfied by three identical bugs.
+    let mut inv_fail = 0;
+
+    // A blinker has period 2.
+    let blinker: Vec[Vec[i64]] = [[0, 0, 0], [1, 1, 1], [0, 0, 0]];
+    let mut osc = blinker.clone();
+    step_inplace(mut osc);
+    if grids_equal(osc, blinker) { inv_fail = inv_fail + 1; }  // must DIFFER at 1
+    step_inplace(mut osc);
+    if not grids_equal(osc, blinker) { inv_fail = inv_fail + 1; }  // must RETURN at 2
+
+    // A block never changes.
+    let block: Vec[Vec[i64]] = [[1, 1], [1, 1]];
+    let mut still = block.clone();
+    let mut s = 0;
+    while s < 5 {
+        step_inplace(mut still);
+        if not grids_equal(still, block) { inv_fail = inv_fail + 1; }
+        s = s + 1;
+    }
+
+    // An empty board stays empty.
+    let empty: Vec[Vec[i64]] = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    let mut e = empty.clone();
+    step_inplace(mut e);
+    if not grids_equal(e, empty) { inv_fail = inv_fail + 1; }
+
+    println(f"invariant failures {inv_fail}");
+}

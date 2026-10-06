@@ -1,0 +1,10 @@
+
+fn mk() -> Option[Map[i64, i64]] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1i64, 10i64);
+    Some(m)
+}
+fn main() {
+    let om = mk();
+    println("done");
+}

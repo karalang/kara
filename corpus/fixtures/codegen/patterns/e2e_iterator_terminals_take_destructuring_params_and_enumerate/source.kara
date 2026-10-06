@@ -1,0 +1,23 @@
+
+struct P { x: i64, y: i64 }
+fn fixed(label: ref Vec[i64]) -> i64 {
+    return label.iter().enumerate().filter(|(i, l)| i == l).count();
+}
+fn main() {
+    let label = vec![0, 0, 2, 1, 4];
+    let v = vec![(1, 2), (5, 3), (4, 6)];
+    let ps = vec![P { x: 1, y: 2 }, P { x: 3, y: 4 }];
+    println(f"{fixed(label)} {label.iter().enumerate().count()}");
+    println(f"{label.iter().enumerate().map(|(i, l)| i * l).sum()}");
+    println(f"{label.iter().enumerate().filter(|(i, l)| i == l).map(|(i, l)| i + l).sum()}");
+    println(f"{label.iter().enumerate().any(|(i, l)| i > 3 and i == l)} {label.iter().enumerate().all(|(_, l)| l >= 0)}");
+    println(f"{v.iter().map(|(a, b)| a * b).sum()} {v.iter().filter(|(a, b)| a < b).count()}");
+    println(f"{ps.iter().map(|P { x, y }| x * y).sum()} {v.iter().position(|(a, b)| a > b)}");
+    println(f"{v.iter().any(|(a, b)| a > b)} {v.iter().find_map(|(a, b)| if a > b { Some(a - b) } else { None })}");
+    v.iter().for_each(|(a, b)| println(f"{a}-{b}"));
+    let (x, y) = v.iter().partition(|(a, b)| a < b);
+    println(f"{x.len()} {y.len()}");
+    for (i, l) in label.iter().enumerate().filter(|(i, l)| i != l) {
+        println(f"{i}:{l}");
+    }
+}

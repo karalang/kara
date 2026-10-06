@@ -1,0 +1,30 @@
+
+fn vshow(v: Vec[i64]) {
+    let mut s = "";
+    let mut i = 0;
+    while i < v.len() {
+        s = s + v[i].to_string() + ",";
+        i = i + 1;
+    }
+    println(s);
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    let cs = c.sorted();
+    vshow(cs);
+    let ca = c.argsort();
+    vshow(ca);
+
+    let mut n: Column[i64] = Column.with_capacity(5);
+    n.push(10); n.push_null(); n.push(5); n.push_null(); n.push(20);
+    let ns = n.sorted();
+    vshow(ns);
+    let na = n.argsort();
+    vshow(na);
+
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    let ts = t.sorted();
+    vshow(ts);
+    let ta = t.argsort();
+    vshow(ta);
+}

@@ -1,0 +1,24 @@
+
+struct Holder { pair: (String, i64), two: (String, String), n: i64 }
+fn render(h: ref Holder) -> i64 {
+    match h.pair {
+        (s, x) => { return ("t:".to_string() + s).len() + x; }
+    }
+    return -1;
+}
+fn left_only(h: ref Holder) -> i64 {
+    match h.two {
+        (a, _) => { return a.len(); }
+    }
+    return -1;
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = Holder { pair: ("tp".to_string(), 4), two: ("aa".to_string(), "bravo".to_string()), n: 1 };
+        acc = acc + render(a) + render(a) + left_only(a);
+        i = i + 1;
+    }
+    println(acc);
+}

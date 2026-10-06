@@ -1,0 +1,68 @@
+
+struct P { a: String, b: String, c: i64, d: i64 }
+struct Q { a: String, c: i64, d: i64, e: i64 }
+struct V { a: Vec[String], b: String, c: i64, d: i64 }
+struct J { u: String, v: String }
+struct Inner { j: J, t: String }
+struct N { i: Inner, b: String, c: i64, d: i64 }
+
+fn partial(x: Option[P]) {
+    match x { Some(P { a, b, .. }) => { println(f"p:{a}:{b}"); } None => { println("pn"); } }
+}
+
+fn allbound(x: Option[P]) {
+    match x { Some(P { a, b, c, d }) => { println(f"f:{a}:{b}:{c}{d}"); } None => { println("fn"); } }
+}
+
+fn tested(x: Option[P]) {
+    match x { Some(P { a: _, b, .. }) => { println(f"t:{b}"); } None => { println("tn"); } }
+}
+
+fn moveout(x: Option[P]) -> String {
+    match x { Some(P { a, .. }) => a, None => f"none" }
+}
+
+fn whole(x: Option[P]) {
+    match x { Some(t) => { println(f"w:{t.a}"); } None => { println("wn"); } }
+}
+
+fn onefield(x: Option[Q]) {
+    match x { Some(Q { a, .. }) => { println(f"o:{a}"); } None => { println("on"); } }
+}
+
+fn vecfield(x: Option[V]) {
+    match x { Some(V { a, b, .. }) => { println(f"v:{a.len()}:{b}"); } None => { println("vn"); } }
+}
+
+fn nested(x: Option[N]) {
+    match x { Some(N { i: Inner { t, .. }, b, .. }) => { println(f"n:{t}:{b}"); } None => { println("nn"); } }
+}
+
+fn deep(x: Option[N]) {
+    match x { Some(N { i: Inner { j: J { u, .. }, .. }, b, .. }) => { println(f"d:{u}:{b}"); } None => { println("dn"); } }
+}
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        partial(Some(P { a: f"pa-{n}-padpad", b: f"pb-{n}-padpad", c: 1, d: 2 }));
+        allbound(Some(P { a: f"fa-{n}-padpad", b: f"fb-{n}-padpad", c: 3, d: 4 }));
+        tested(Some(P { a: f"ta-{n}-padpad", b: f"tb-{n}-padpad", c: 5, d: 6 }));
+        let m = moveout(Some(P { a: f"ma-{n}-padpad", b: f"mb-{n}-padpad", c: 7, d: 8 }));
+        println(f"m:{m}");
+        whole(Some(P { a: f"wa-{n}-padpad", b: f"wb-{n}-padpad", c: 9, d: 0 }));
+        onefield(Some(Q { a: f"oa-{n}-padpad", c: 1, d: 2, e: 3 }));
+        let mut vs: Vec[String] = Vec.new();
+        vs.push(f"v0-{n}-padpad");
+        vs.push(f"v1-{n}-padpad");
+        vecfield(Some(V { a: vs, b: f"vb-{n}-padpad", c: 1, d: 2 }));
+        // A NAMED-BINDING argument reaches the same callee through a different
+        // caller-side owner (the let-site drop, not an arg temp) and aborted
+        // identically -- the row recorded only the fresh-temp spelling.
+        let named: Option[P] = Some(P { a: f"na-{n}-padpad", b: f"nb-{n}-padpad", c: 1, d: 2 });
+        partial(named);
+        nested(Some(N { i: Inner { j: J { u: f"nu-{n}-padpad", v: f"nv-{n}-padpad" }, t: f"nt-{n}-padpad" }, b: f"nb2-{n}-padpad", c: 1, d: 2 }));
+        deep(Some(N { i: Inner { j: J { u: f"du-{n}-padpad", v: f"dv-{n}-padpad" }, t: f"dt-{n}-padpad" }, b: f"db-{n}-padpad", c: 1, d: 2 }));
+        n = n + 1;
+    }
+}

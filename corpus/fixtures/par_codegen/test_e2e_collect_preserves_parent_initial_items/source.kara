@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut acc: Vec[i64] = Vec.new();
+    acc.push(0i64 - 1i64);
+    acc.push(0i64 - 2i64);
+    #[par_order_free]
+    for k in 0i64..100i64 {
+        acc.push(k);
+    }
+    let mut s: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < acc.len() {
+        s = s + acc[i];
+        i = i + 1i64;
+    }
+    println(acc.len());
+    println(s);
+}

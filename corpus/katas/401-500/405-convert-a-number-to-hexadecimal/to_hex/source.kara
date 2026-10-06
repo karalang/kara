@@ -1,0 +1,71 @@
+// LeetCode #405: Convert a Number to Hexadecimal — bitwise mask-and-shift.
+//
+// Render a 32-bit integer as lowercase hex. Negatives use the 32-bit two's
+// complement bit pattern; no leading zeros except "0" itself. Pure nibble
+// extraction — no library hex conversion:
+//
+//   n      = num & 0xffffffff       32-bit two's-complement, read unsigned
+//   nibble = n & 0xf                low 4 bits
+//   glyph  = HEX[nibble]            digit-table render (the inverse nibble map)
+//   n    >>= 4                       next nibble
+//
+// This is the radix-16 *render* — the exact inverse of the self-hosted lexer's
+// `from_str_radix` hex arm (the `0x...` int-literal path). #415 add-strings
+// established the `DIGITS[d..d+1]` digit-table slice at base 10; base 16 reuses
+// it verbatim with a 16-symbol table, and reaches the nibble by bit masking
+// instead of `% / `. Masking `num & 0xffffffff` into a positive i64 makes the
+// two's-complement bit pattern of a negative input fall out for free: -1 becomes
+// 4294967295 = 0xffffffff, and the unsigned value shifts right cleanly.
+
+fn to_hex(num: i64) -> String {
+    if num == 0 {
+        return "0";
+    }
+
+    let hexd: String = "0123456789abcdef";
+
+    // 32-bit two's-complement, read as an unsigned (hence positive i64) value.
+    let mut n = num & 0xffffffff;
+
+    // Nibbles, least-significant first.
+    let mut buf: Vec[i64] = Vec.new();
+    while n > 0 {
+        buf.push(n & 0xf);
+        n = n >> 4;
+    }
+
+    // Reverse into the MSB-first answer, rendering each nibble through the hex
+    // table: a one-byte zero-copy slice `HEX[d..d+1]` appended via push_str.
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        let d = buf[k];
+        out.push_str(hexd[d..d + 1]);
+        k = k - 1;
+    }
+    out
+}
+
+fn report(num: i64) {
+    println(f"{num} -> \"{to_hex(num)}\"");
+}
+
+fn main() {
+    // LeetCode canonical examples.
+    report(26);              // 1a
+    report(0);               // 0
+    report(-1);              // ffffffff
+
+    // Power-of-16 boundaries / single nibble.
+    report(1);               // 1
+    report(15);              // f
+    report(16);              // 10
+    report(255);             // ff
+    report(256);             // 100
+
+    // 32-bit signed extremes — two's complement.
+    report(2147483647);      // 7fffffff   (INT_MAX)
+    report(-2147483648);     // 80000000   (INT_MIN)
+    report(-26);             // ffffffe6
+    report(-256);            // ffffff00
+}

@@ -1,0 +1,39 @@
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct H  { pe: (R, i64) }
+struct H2 { pe: (R, i64), other: R }
+struct H3 { pe: (R, R) }
+struct G  { h: H }
+struct G2 { h: H, outer: R }
+struct G3 { h: H2 }
+struct G4 { g: G }
+
+fn n1() { let h = H { pe: (mk(21), 0) }; let (r, k) = h.pe; let m = r; println(f"  b{m.id}/{m.tag}/{m.xs.len()}") }
+fn n2() { let h = H { pe: (mk(22), 0) }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n3() { let t = (mk(23), 0); let (r, k) = t; let m = r; println(f"  b{m.id}/{m.tag}") }
+fn n4() { let h = H2 { pe: (mk(24), 0), other: mk(94) }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n5() { let h = H3 { pe: (mk(25), mk(95)) }; let (a, b) = h.pe; println(f"  b{a.id}/{b.id}") }
+fn n6() { let h = H { pe: (mk(26), 0) }; println(f"  b{h.pe.0.id}/{h.pe.0.tag}") }
+fn n7(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n8() { let g = G { h: H { pe: (mk(31), 0) } }; let (r, k) = g.h.pe; let m = r; println(f"  b{m.id}/{m.tag}/{m.xs.len()}") }
+fn n9() { let g = G2 { h: H { pe: (mk(32), 0) }, outer: mk(82) }; let (r, k) = g.h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n10() { let g = G3 { h: H2 { pe: (mk(33), 0), other: mk(83) } }; let (r, k) = g.h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n11() { let g = G4 { g: G { h: H { pe: (mk(34), 0) } } }; let (r, k) = g.g.h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n12() { let g = G { h: H { pe: (mk(35), 0) } }; println(f"  b{g.h.pe.0.id}/{g.h.pe.0.tag}") }
+
+fn main() {
+    println("local1hop");   n1();                      println("local1hop end")
+    println("norebind");    n2();                      println("norebind end")
+    println("baretuple");   n3();                      println("baretuple end")
+    println("sibling");     n4();                      println("sibling end")
+    println("bothelems");   n5();                      println("bothelems end")
+    println("noDestr");     n6();                      println("noDestr end")
+    println("paramroot");   n7(H { pe: (mk(27), 0) }); println("paramroot end")
+    println("twohop");      n8();                      println("twohop end")
+    println("outersib");    n9();                      println("outersib end")
+    println("midsib");      n10();                     println("midsib end")
+    println("threehop");    n11();                     println("threehop end")
+    println("deepNoDestr"); n12();                     println("deepNoDestr end")
+    println("done")
+}

@@ -1,0 +1,14 @@
+
+struct Rule { name: String, check: Fn(ref String) -> bool }
+
+fn min_len(n: i64) -> Fn(ref String) -> bool {
+    |s| (s.len() as i64) >= n
+}
+
+fn main() {
+    let mut rules: Vec[Rule] = Vec.new();
+    rules.push(Rule { name: "min8", check: min_len(8) });
+    let w: String = "password1";
+    let r = ref rules[0];
+    println((r.check)(w));
+}

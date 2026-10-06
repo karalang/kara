@@ -1,0 +1,72 @@
+// LeetCode #120: Triangle — minimum path sum from top to bottom, O(n) extra space (★).
+//
+// Given a triangle, return the minimum path sum from the apex to the base, stepping each row to an
+// ADJACENT index (`j` or `j+1`). The O(n)-space trick is a BOTTOM-UP rolling row: seed `dp` with the
+// last triangle row, then for each row `i` from the second-to-last up to the apex, collapse in place
+// `dp[k] = triangle[i][k] + min(dp[k], dp[k+1])`. `dp[0]` is the answer. One `Vec[i64]` rolls
+// upward; the `triangle` (a `Vec[Vec[i64]]`) is read-only — the surface here is nested indexing
+// `triangle[i][k]` feeding a rolling-1D in-place min-DP (distinct from #119's single-row add-roll).
+
+fn minimum_total(triangle: ref Vec[Vec[i64]]) -> i64 {
+    let n = triangle.len();
+    if n == 0 {
+        return 0;
+    }
+    // Seed dp with the base row.
+    let mut dp: Vec[i64] = Vec.filled(n, 0);
+    let mut j = 0;
+    while j < n {
+        dp[j] = triangle[n - 1][j];
+        j = j + 1;
+    }
+    // Roll upward: each row collapses into dp in place.
+    let mut i = n - 2;
+    while i >= 0 {
+        let mut k = 0;
+        while k <= i {
+            let a = dp[k];
+            let b = dp[k + 1];
+            let m = if a < b { a } else { b };
+            dp[k] = triangle[i][k] + m;
+            k = k + 1;
+        }
+        i = i - 1;
+    }
+    dp[0]
+}
+
+fn main() {
+    // LeetCode example 1: [[2],[3,4],[6,5,7],[4,1,8,3]] -> 2+3+5+1 = 11.
+    let t1: Vec[Vec[i64]] = [[2], [3, 4], [6, 5, 7], [4, 1, 8, 3]];
+    println(f"example1: {minimum_total(t1)}");
+
+    // LeetCode example 2: single apex.
+    let t2: Vec[Vec[i64]] = [[-10]];
+    println(f"example2: {minimum_total(t2)}");
+
+    // A wider triangle with a clear minimum.
+    let t3: Vec[Vec[i64]] = [[1], [2, 3], [4, 5, 6], [7, 8, 9, 10], [11, 12, 13, 14, 15]];
+    println(f"example3: {minimum_total(t3)}");
+
+    // Deterministic sink: build triangles of growing height with data-dependent
+    // values and fold every minimum path — a run==build determinism anchor.
+    let mut acc = 0;
+    let mut h = 1;
+    while h <= 40 {
+        let mut tri: Vec[Vec[i64]] = Vec.new();
+        let mut i = 0;
+        while i < h {
+            let mut row: Vec[i64] = Vec.new();
+            let mut j = 0;
+            while j <= i {
+                row.push((i * 31 + j * 17 + h * 7) % 100);
+                j = j + 1;
+            }
+            tri.push(row);
+            i = i + 1;
+        }
+        acc = (acc * 131 + minimum_total(tri) + h) % 1000000007;
+        h = h + 1;
+    }
+    println(f"sink: {acc}");
+}

@@ -1,0 +1,44 @@
+// LeetCode #1665: Minimum Initial Energy to Finish Tasks — greedy O(n log n).
+//
+// Each task is (actual, minimum): pay `actual` energy to finish, but you must
+// start with at least `minimum`. (Constraints guarantee actual <= minimum.)
+// Choose an order over all tasks that minimizes the starting energy E such
+// that, at the start of every task k, the cumulative energy left is >= min_k.
+//
+// Exchange argument: for any adjacent pair (i, j), order (i then j) keeps the
+// peak requirement lower iff minimum_i - actual_i >= minimum_j - actual_j.
+// So sort by (minimum - actual) descending and walk a running max:
+//
+//   E_initial = max over k of (sum_{i<k} actual_i + minimum_k)
+
+fn minimum_effort(tasks: Slice[(i64, i64)]) -> i64 {
+    let mut ordered: Vec[(i64, i64)] = Vec.from_slice(tasks);
+    ordered.sort_by(|a, b| (b.1 - b.0).cmp(a.1 - a.0));
+
+    let mut energy = 0;
+    let mut spent = 0;
+    for t in ordered.iter() {
+        let (actual, minimum) = t;
+        let need = spent + minimum;
+        if need > energy {
+            energy = need;
+        }
+        spent = spent + actual;
+    }
+    energy
+}
+
+fn report(tasks: Slice[(i64, i64)]) {
+    println(minimum_effort(tasks));
+}
+
+fn main() {
+    let case1: Array[(i64, i64), 3] = [(1, 2), (2, 4), (4, 8)];
+    report(case1);   // expect: 8
+
+    let case2: Array[(i64, i64), 5] = [(1, 3), (2, 4), (10, 11), (10, 12), (8, 9)];
+    report(case2);   // expect: 32
+
+    let case3: Array[(i64, i64), 6] = [(1, 7), (2, 8), (3, 9), (4, 10), (5, 11), (6, 12)];
+    report(case3);   // expect: 27
+}

@@ -1,0 +1,26 @@
+
+            #[derive(Ord, Eq, PartialEq, PartialOrd)]
+            struct Rec { name: String, age: i64 }
+            #[derive(Ord, Eq, PartialEq, PartialOrd)]
+            enum Priority { Low, Med, High }
+            fn tag(o: Ordering) -> String {
+                match o { Less => "lt".to_string(), Equal => "eq".to_string(), Greater => "gt".to_string() }
+            }
+            fn main() {
+                let r1 = Rec { name: "alice".to_string(), age: 30 };
+                let r2 = Rec { name: "alice".to_string(), age: 40 };
+                let r3 = Rec { name: "bob".to_string(), age: 10 };
+                println(tag(r1.cmp(r2)));
+                println(tag(r1.cmp(r3)));
+                println(tag(r2.cmp(r1)));
+                let lo = Priority.Low;
+                let hi = Priority.High;
+                let md = Priority.Med;
+                println(tag(lo.cmp(hi)));
+                println(tag(hi.cmp(md)));
+                println(tag(md.cmp(md)));
+                // min/max/clamp on struct types now resolve (they call .cmp)
+                let mx = max(r1, r3);
+                println(mx.name);
+            }
+        

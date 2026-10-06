@@ -1,0 +1,15 @@
+
+#[derive(Message)]
+struct M { nums: Vec[i64] }
+
+fn main() {
+    let mut bytes = Vec.new();
+    bytes.extend_from_slice(ProtoBuf.encode_tag(1, 0));
+    bytes.extend_from_slice(ProtoBuf.encode_varint_i64(5));
+    bytes.extend_from_slice(ProtoBuf.encode_tag(1, 0));
+    bytes.extend_from_slice(ProtoBuf.encode_varint_i64(-6));
+    let back = M.decode(bytes);
+    println(back.nums.len());
+    println(back.nums[0]);
+    println(back.nums[1]);
+}

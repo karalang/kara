@@ -1,0 +1,15 @@
+
+enum E { V((Vec[i64], String, i64)) }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(11);
+    v.push(22);
+    let e = V((v, "tag", 99));
+    match e {
+        V((xs, s, n)) => {
+            println(xs.len());
+            println(s);
+            println(n);
+        }
+    }
+}

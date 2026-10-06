@@ -1,0 +1,1 @@
+ERROR E0500 at line 5: `s` was moved into an escaping closure at line 4 (the closure is stored in a struct field)

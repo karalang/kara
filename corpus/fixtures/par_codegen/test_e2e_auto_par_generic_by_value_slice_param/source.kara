@@ -1,0 +1,13 @@
+
+fn gsum[T](s: Slice[T]) -> T { s[0] }
+fn glen[T](s: Slice[T]) -> i64 { s.len() }
+fn geti() -> i64 { 1 }
+fn main() {
+    let vi: Vec[i64] = [10, 20, 30];
+    let vi2: Vec[i64] = [5, 6];
+    let a = geti();
+    let b = geti();
+    println(a + b);
+    println(gsum(vi));
+    println(glen(vi2));
+}

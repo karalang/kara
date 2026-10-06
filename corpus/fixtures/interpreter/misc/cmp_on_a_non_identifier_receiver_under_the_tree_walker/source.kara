@@ -1,0 +1,34 @@
+
+#[derive(Ord, Eq)]
+struct P { a: i64, b: i64 }
+
+#[derive(Ord, Eq)]
+enum Suit { Clubs, Hearts, Spades }
+
+struct Rev { v: i64 }
+impl PartialEq for Rev { fn eq(ref self, other: ref Rev) -> bool { self.v == other.v } }
+impl Eq for Rev {}
+impl PartialOrd for Rev { fn partial_cmp(ref self, other: ref Rev) -> Option[Ordering] { Some(other.v.cmp(self.v)) } }
+impl Ord for Rev { fn cmp(ref self, other: ref Rev) -> Ordering { other.v.cmp(self.v) } }
+
+fn mk(a: i64) -> P { return P { a: a, b: 0 }; }
+fn suit() -> Suit { return Suit.Clubs; }
+
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    println(f"{tag(P { a: 1, b: 2 }.cmp(P { a: 1, b: 3 }))}");
+    println(f"{tag(P { a: 1, b: 2 }.cmp(P { a: 1, b: 2 }))}");
+    println(f"{tag(P { a: 9, b: 0 }.cmp(P { a: 1, b: 0 }))}");
+    println(f"{tag(mk(1).cmp(mk(2)))}");
+    println(f"{tag(suit().cmp(Suit.Spades))}");
+    let v = [P { a: 1, b: 2 }, P { a: 1, b: 3 }];
+    println(f"{tag(v[0].cmp(v[1]))}");
+    let t = (P { a: 5, b: 0 }, P { a: 1, b: 0 });
+    println(f"{tag(t.0.cmp(t.1))}");
+    println(f"{tag(Rev { v: 1 }.cmp(Rev { v: 2 }))}");
+}

@@ -1,0 +1,12 @@
+
+            fn main() {
+                match TcpListener.bind("127.0.0.1:0") {
+                    Result.Ok(listener) => { println(1); }
+                    Result.Err(_) => { println(99); }
+                }
+                match TcpListener.bind("not a valid address at all") {
+                    Result.Ok(_) => { println(98); }
+                    Result.Err(_) => { println(2); }
+                }
+            }
+        

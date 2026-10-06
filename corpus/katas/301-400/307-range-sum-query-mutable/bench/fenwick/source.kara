@@ -1,0 +1,97 @@
+// Benchmark — LeetCode 307, Range Sum Query (Mutable).
+//
+// Build-once + punch, per BENCHMARKS.md: a 65,536-element Fenwick tree and a
+// 200,000-operation script (half writes, half range reads) are built ONCE,
+// before the timed loop. The timed work is PASSES sweeps over that script.
+//
+// UNLIKE #305, NOTHING IS REBUILT PER PASS. A Fenwick tree is mutable and
+// stays valid across passes: writes and reads interleave forever without the
+// structure needing to be reconstructed. Each pass therefore starts from the
+// state the previous one left, which is deterministic and identical in all five
+// languages, and the measurement is pure operation cost with no per-pass
+// allocation folded in.
+//
+// THE MIX IS HALF AND HALF ON PURPOSE. A read-only script would measure only
+// `prefix`, which is the cheaper of the two walks; a write-only script would
+// measure only `add` and never touch the descending walk at all. Alternating
+// them also keeps the tree's cache lines hot in the pattern real use produces,
+// where a slot written by one operation is read by the next.
+//
+// THE SINK IS A MASK, NOT A MODULO — the lesson from #303, whose first draft
+// spent roughly 75% of its runtime in two 64-bit divisions and reported every
+// compiled language as tied. `& 0x3FFFFFFF` is one instruction.
+
+fn main() {
+    let n = 65536;
+    let ops = 200000;
+    let passes = 110;
+
+    // ---- the tree, built once
+    let mut tree: Vec[i64] = Vec.new();
+    for i in 0..(n + 1) {
+        tree.push(0);
+    }
+    let mut data: Vec[i64] = Vec.new();
+    for i in 0..n {
+        data.push(0);
+    }
+
+    // ---- the operation script, generated once
+    let mut kind: Vec[i64] = Vec.new();
+    let mut opa: Vec[i64] = Vec.new();
+    let mut opb: Vec[i64] = Vec.new();
+    let mut state = 20307;
+    for k in 0..ops {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let t = state % 2;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let x = state % n;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let y = state % n;
+        kind.push(t);
+        if t == 0 {
+            opa.push(x);
+            opb.push(y % 2001 - 1000);
+        } else {
+            if x <= y { opa.push(x); opb.push(y); } else { opa.push(y); opb.push(x); }
+        }
+    }
+
+    // ---- the timed work
+    let mut checksum = 0;
+    let mut p = 0;
+    while p < passes {
+        let mut k = 0;
+        while k < ops {
+            if kind[k] == 0 {
+                // update(i, val): absorb the delta, climbing by lowbit
+                let i = opa[k];
+                let delta = opb[k] - data[i];
+                data[i] = opb[k];
+                let mut x = i + 1;
+                while x <= n {
+                    tree[x] += delta;
+                    x += x & -x;
+                }
+            } else {
+                // sum_range(l, r) = prefix(r + 1) - prefix(l), descending
+                let mut hi = opb[k] + 1;
+                let mut total = 0;
+                while hi > 0 {
+                    total += tree[hi];
+                    hi -= hi & -hi;
+                }
+                let mut lo = opa[k];
+                while lo > 0 {
+                    total -= tree[lo];
+                    lo -= lo & -lo;
+                }
+                checksum = (checksum + total) & 0x3FFFFFFF;
+            }
+            k = k + 1;
+        }
+        p = p + 1;
+    }
+
+    println(f"checksum {checksum}");
+}

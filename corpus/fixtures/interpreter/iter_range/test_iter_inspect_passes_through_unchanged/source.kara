@@ -1,0 +1,8 @@
+
+fn main() {
+    let v = [10, 20, 30];
+    let xs: Vec[i64] = v.iter().inspect(|x| println(f"saw:{x}")).collect();
+    for x in xs {
+        println(x);
+    }
+}

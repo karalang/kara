@@ -1,0 +1,15 @@
+
+fn mk(n: i64) -> Array[String, 2] { return Array[f"item{n}", f"item{n + 1}"]; }
+fn mknum(n: i64) -> Array[i64, 2] { return Array[n, n + 1]; }
+
+fn main() {
+    println(mk(4)[0]);
+    println(mk(4)[1]);
+    println(mknum(9)[1]);
+    for i in 0..3 {
+        println(mk(i)[0]);
+    }
+    let p = mk(1);
+    println(p[0]);
+    println(p[1]);
+}

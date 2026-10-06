@@ -1,0 +1,30 @@
+
+shared struct Inner { v: i64 }
+struct Ri { id: i64, inner: Inner }
+impl Drop for Ri { fn drop(mut ref self) { println(f"dI{self.id}") } }
+fn mki(i: i64) -> Ri { return Ri { id: i, inner: Inner { v: i } }; }
+struct Sp { id: i64, name: String }
+impl Drop for Sp { fn drop(mut ref self) { println(f"dP{self.id}") } }
+fn mkp(i: i64) -> Sp { return Sp { id: i, name: f"p{i}" }; }
+struct Vi { mut xs: Vec[Ri] }
+
+fn gcond[T](v: mut ref Vec[T], x: T, k: bool) { if k { v.push(x); } }
+fn guncond[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn fcond(b: mut ref Vi, r: Ri, k: bool) { if k { b.xs.push(r); } }
+
+fn main() {
+    let mut a: Vec[Ri] = Vec.new();
+    gcond(mut a, mki(1), false);
+    gcond(mut a, mki(2), true);
+    println(f"n{a.len()}");
+    let mut b: Vec[Sp] = Vec.new();
+    gcond(mut b, mkp(3), false);
+    let mut c: Vec[Ri] = Vec.new();
+    guncond(mut c, mki(4));
+    println(f"m{c.len()}");
+    let mut d = Vi { xs: Vec.new() };
+    fcond(mut d, mki(5), false);
+    let mut i = 0;
+    while i < 3 { gcond(mut a, mki(i), false); i = i + 1; }
+    println("end");
+}

@@ -1,0 +1,32 @@
+
+struct Heap[T] { xs: Vec[T] }
+impl[T] Heap[T] {
+    fn pop_one(mut ref self) -> Option[T] { self.xs.pop() }
+    // Takes ONE element and drops the rest on the floor. The elements left
+    // behind are the ones that leaked.
+    fn take(self) -> Option[T] { let mut h = self; h.pop_one() }
+}
+struct PlainHeap { xs: Vec[Vec[i64]] }
+impl PlainHeap {
+    fn pop_one(mut ref self) -> Option[Vec[i64]] { self.xs.pop() }
+    fn take(self) -> Option[Vec[i64]] { let mut h = self; h.pop_one() }
+}
+fn main() {
+    // (a) the filed shape: `T` bound to `Vec[i64]`, which carries its own
+    // generic arg and so cannot survive a name-to-name substitution.
+    let a = Heap { xs: [[1, 2], [3], [4, 5, 6]] };
+    match a.take() { Some(v) => { println(f"a={v.len()}"); } None => {} }
+    // (b) control: HEAP-allocated Strings. Clean pre-fix — `String` is a single
+    // name, so the head-only map loses nothing.
+    let mut ss: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 3 { ss.push(f"item{i}"); i = i + 1; }
+    let b = Heap { xs: ss };
+    match b.take() { Some(v) => { println(f"b={v}"); } None => {} }
+    // (c) control: scalar element.
+    let c = Heap { xs: [7, 8, 9] };
+    match c.take() { Some(v) => { println(f"c={v}"); } None => {} }
+    // (d) control: the NON-generic twin at the same element type.
+    let d = PlainHeap { xs: [[1], [2], [3]] };
+    match d.take() { Some(v) => { println(f"d={v.len()}"); } None => {} }
+}

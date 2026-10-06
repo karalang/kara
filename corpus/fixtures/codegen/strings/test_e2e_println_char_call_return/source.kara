@@ -1,0 +1,18 @@
+
+fn f() -> char { 'A' }
+fn pick() -> char { 'Z' }
+fn jp() -> char { '日' }
+struct Box { c: char }
+impl Box {
+    fn get(self) -> char { self.c }
+}
+fn main() {
+    println(f());
+    println(f"{f()}");
+    let c = pick();
+    println(c);
+    let b = Box { c: 'M' };
+    println(b.get());
+    println(jp());
+    println(f"x={jp()}y");
+}

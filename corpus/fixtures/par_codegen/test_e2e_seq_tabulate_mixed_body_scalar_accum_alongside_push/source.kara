@@ -1,0 +1,21 @@
+
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    let mut sum: i64 = 0i64;
+    let n: i64 = 100i64;
+    let mut c: i64 = 0i64;
+    while c < n {
+        sum = sum + c;
+        out.push(c * c);
+        c = c + 1i64;
+    }
+    let mut ok: i64 = 1i64;
+    let mut i: i64 = 0i64;
+    while i < n {
+        if out[i] != i * i { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(sum);
+    println(ok);
+}

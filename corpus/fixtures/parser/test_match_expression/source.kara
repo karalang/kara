@@ -1,0 +1,8 @@
+
+        fn main() {
+            let x = match shape {
+                Circle { radius } => radius,
+                Rectangle { width, height } => width,
+            };
+        }
+    

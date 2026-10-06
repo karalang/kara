@@ -1,0 +1,27 @@
+
+fn main() {
+    let mut fx: Map[i64, i64, FxBuildHasher] = Map.new();
+    let mut d: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < 60000 {
+        let k = i % 40000;
+        fx.insert(k, fx.get(k).unwrap_or(0) + 1);
+        d.insert(k, d.get(k).unwrap_or(0) + 1);
+        i += 1;
+    }
+    let mut missing = 0;
+    let mut twos = 0;
+    let mut j = 0;
+    while j < 40000 {
+        match fx.get(j) {
+            Some(n) => { if n == 2 { twos += 1; } }
+            None => { missing += 1; }
+        }
+        match d.get(j) {
+            Some(n) => { if n == 2 { twos += 1; } }
+            None => { missing += 1; }
+        }
+        j += 1;
+    }
+    println(f"{fx.len()} {d.len()} missing={missing} twos={twos}");
+}

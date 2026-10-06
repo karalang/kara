@@ -1,0 +1,1 @@
+fn main() { let s = "dcba"; println(s.sorted_by(|a, b| if a < b { Ordering.Greater } else if a > b { Ordering.Less } else { Ordering.Equal })); }

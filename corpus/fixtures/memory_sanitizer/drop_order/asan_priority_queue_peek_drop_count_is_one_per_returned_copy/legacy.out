@@ -1,0 +1,14 @@
+built
+peek 1
+drop 1 a1
+peek 1
+drop 1 a1
+3
+draining
+pop 1
+drop 1 a1
+pop 2
+drop 2 bb2
+pop 3
+drop 3 ccc3
+end

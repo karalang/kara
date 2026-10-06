@@ -1,0 +1,183 @@
+// LeetCode 257 — Binary Tree Paths, iterative with an explicit stack.
+//
+// The ★ recursion with the call stack written out: a `Vec[Frame]` where each
+// frame carries the node and the rendered prefix that led to it. Popping a frame
+// either finishes a path (leaf) or pushes one frame per child with the extended
+// prefix.
+//
+// Each frame owns its own prefix `String`, which is what makes the iterative
+// form work at all: a worklist has no return point, so there is nowhere to undo
+// a shared buffer — the same reason #254's worklist copies its path. The
+// recursion can borrow a parent prefix because the parent outlives the call;
+// here the parent frame is gone by the time the child is processed.
+//
+// The stack is LIFO, so the RIGHT child must be pushed before the left for the
+// output to come out in the same left-first order as the two recursive files.
+// That ordering is easy to get backwards and produces a correct set of paths in
+// the wrong sequence — which a differential comparing rendered output catches
+// and one comparing a sorted set would not.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn build(vals: Slice[i64], null_val: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let len = vals.len();
+    if len == 0 or vals[0] == null_val {
+        return nodes;
+    }
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < len {
+        let cur = queue[head];
+        head = head + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let li = nodes.len() - 1;
+            nodes[cur].left = li;
+            queue.push(li);
+        }
+        i = i + 1;
+        if i < len and vals[i] != null_val {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let ri = nodes.len() - 1;
+            nodes[cur].right = ri;
+            queue.push(ri);
+        }
+        i = i + 1;
+    }
+    return nodes;
+}
+
+// Both children extend the same prefix, so the extension is a function taking a
+// `ref String`. Inlining it twice would read the owned prefix twice, and an
+// owned local passed to `push_str` counts as a CONSUME even though the callee
+// only copies bytes — the ownership checker reports the second read as an RC
+// fallback. Routing through a `ref` parameter borrows instead, which is what is
+// actually meant and what `is_str_like` in the typechecker exists to allow.
+fn extend(prefix: ref String, v: i64) -> String {
+    let mut s: String = "";
+    s.push_str(prefix);
+    s.push_str("->");
+    s.push_str(f"{v}");
+    return s;
+}
+
+struct Frame {
+    node: i64,
+    prefix: String,
+}
+
+fn binary_tree_paths(vals: Slice[i64], null_val: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let nodes = build(vals, null_val);
+    if nodes.len() == 0 {
+        return out;
+    }
+    let mut root_s: String = "";
+    root_s.push_str(f"{nodes[0].val}");
+
+    let mut stack: Vec[Frame] = Vec.new();
+    stack.push(Frame { node: 0, prefix: root_s });
+
+    while stack.len() > 0 {
+        let f = match stack.pop() {
+            Some(v) => v,
+            None => Frame { node: -1, prefix: "" },
+        };
+        if f.node == -1 {
+            continue;
+        }
+        let left = nodes[f.node].left;
+        let right = nodes[f.node].right;
+        if left == -1 and right == -1 {
+            out.push(f.prefix);
+        } else {
+            // Bind the prefix ONCE. Reading `f.prefix` twice moves the field out
+            // of the owned frame twice, which the ownership checker reports as
+            // an RC fallback (`direct re-use after consume`); one owned local
+            // that both children borrow from says what is meant.
+            let pfx = f.prefix;
+            // RIGHT first: the stack is LIFO, so the left child must be popped
+            // first to match the recursive files' output order.
+            if right != -1 {
+                stack.push(Frame { node: right, prefix: extend(pfx, nodes[right].val) });
+            }
+            if left != -1 {
+                stack.push(Frame { node: left, prefix: extend(pfx, nodes[left].val) });
+            }
+        }
+    }
+    return out;
+}
+
+fn render(paths: ref Vec[String]) -> String {
+    if paths.len() == 0 {
+        return "[]";
+    }
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < paths.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(paths[i]);
+        i = i + 1;
+    }
+    s.push_str("]");
+    return s;
+}
+
+fn report(vals: Slice[i64], null_val: i64, label: ref String) {
+    let paths = binary_tree_paths(vals, null_val);
+    println(f"{label} -> {render(paths)}");
+}
+
+fn main() {
+    let null = -1000;
+
+    // [1,2,3,null,5] -> ["1->2->5","1->3"]
+    let a: Array[i64, 5] = [1, 2, 3, -1000, 5];
+    report(a, null, "[1,2,3,null,5]");
+
+    // [1] -> ["1"]
+    let b: Array[i64, 1] = [1];
+    report(b, null, "[1]");
+
+    // [] -> []
+    let c: Array[i64, 0] = [];
+    report(c, null, "[]");
+
+    // [1,2] -> ["1->2"]  — the root has ONE child, so it is not a leaf
+    let d: Array[i64, 2] = [1, 2];
+    report(d, null, "[1,2]");
+
+    // [1,null,2] -> ["1->2"]  — the same, on the other side
+    let e: Array[i64, 3] = [1, -1000, 2];
+    report(e, null, "[1,null,2]");
+
+    // a full tree: every leaf is a path
+    let f: Array[i64, 7] = [1, 2, 3, 4, 5, 6, 7];
+    report(f, null, "[1,2,3,4,5,6,7]");
+
+    // a left spine — one path, depth 4. Level-order for a spine lists each
+    // node's absent sibling, so it is [1, 2,null, 3,null, 4,null] rather than
+    // a padded full-tree array (my first attempt padded to 15 and silently
+    // built 1-2-3, dropping the 4 — the array shape has to match the walk).
+    let g: Array[i64, 7] = [1, 2, -1000, 3, -1000, 4, -1000];
+    report(g, null, "[left spine 1-2-3-4]");
+
+    // negative values render with their sign
+    let h: Array[i64, 3] = [-1, -2, -3];
+    report(h, null, "[-1,-2,-3]");
+
+    // zero is a legitimate value, distinct from the null sentinel
+    let i: Array[i64, 3] = [0, 0, 0];
+    report(i, null, "[0,0,0]");
+}

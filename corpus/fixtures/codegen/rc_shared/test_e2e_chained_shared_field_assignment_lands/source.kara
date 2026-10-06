@@ -1,0 +1,60 @@
+
+shared struct Inner { mut n: i64, mut v: Vec[String] }
+shared struct Outer { mut inner: Inner, mut tag: i64 }
+shared struct L3 { mut n: i64 }
+shared struct L2 { mut c: L3 }
+shared struct L1 { mut b: L2 }
+struct PlainMid { mut inner: Inner }
+struct PlainInner { mut n: i64 }
+struct PlainNest { mut mid: PlainInner }
+
+impl Outer {
+    fn bump(ref self, k: i64) { self.inner.n = k; }
+}
+
+fn viaref(o: ref Outer, k: i64) { o.inner.n = k; }
+
+fn main() {
+    let o = Outer { inner: Inner { n: 5, v: Vec.new() }, tag: 0 };
+    o.inner.n = 9;
+    let b = o.inner;
+    println(f"01 {b.n}");
+
+    let a = o.inner;
+    a.v.push("one");
+    a.v.push("two");
+    let fresh: Vec[String] = Vec.new();
+    o.inner.v = fresh;
+    let c = o.inner;
+    println(f"02 {c.v.len()}");
+
+    let x = L1 { b: L2 { c: L3 { n: 1 } } };
+    x.b.c.n = 42;
+    let m = x.b;
+    let k = m.c;
+    println(f"03 {k.n}");
+
+    o.bump(77i64);
+    let d = o.inner;
+    println(f"04 {d.n}");
+
+    viaref(o, 88i64);
+    let e = o.inner;
+    println(f"05 {e.n}");
+
+    let g = Inner { n: 1, v: Vec.new() };
+    g.n = 3;
+    println(f"06 {g.n}");
+
+    let mut p = PlainMid { inner: Inner { n: 5, v: Vec.new() } };
+    p.inner.n = 11;
+    let q = p.inner;
+    println(f"07 {q.n}");
+
+    let mut pn = PlainNest { mid: PlainInner { n: 2 } };
+    pn.mid.n = 4;
+    println(f"08 {pn.mid.n}");
+
+    o.tag = 6;
+    println(f"09 {o.tag} {o.inner.n}");
+}

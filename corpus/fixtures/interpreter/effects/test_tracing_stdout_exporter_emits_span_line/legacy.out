@@ -1,0 +1,2 @@
+[span] request span_id=7
+[span] inner span_id=2 parent_id=1 route=/health

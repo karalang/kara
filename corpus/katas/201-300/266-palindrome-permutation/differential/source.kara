@@ -1,0 +1,241 @@
+// LeetCode 266 — differential harness.
+//
+// Runs all THREE deciders — byte histogram, toggled set, XOR bitmask — and, for
+// short inputs, checks them against a reference that shares none of their
+// reasoning.
+//
+// WHY A BRUTE-FORCE REFERENCE IS NEEDED HERE. All three deciders rest on the
+// SAME theorem: permutable iff at most one character has an odd count. If that
+// "at most" is misread as "exactly" — the natural slip, since a palindrome does
+// have a middle character — then every one of the three can be written wrong in
+// the same way and they will agree with each other perfectly. Three
+// implementations of one idea cannot adjudicate the idea.
+//
+// So for lengths up to 7 the harness enumerates EVERY permutation (via
+// next-permutation over the sorted bytes, which visits each distinct
+// arrangement of a multiset exactly once) and asks whether any of them reads
+// the same forwards and backwards. That reference knows nothing about counts,
+// parity or middles; it is the problem statement executed literally.
+//
+// GENERATOR DESIGN. Uniformly random strings are almost never permutable once
+// the alphabet grows, so the accept path would go untested. Three of the eight
+// families therefore CONSTRUCT permutable strings — pairs plus an optional lone
+// middle, then shuffled — and one perturbs such a string by a single character
+// to produce the hardest negatives, which share every structural property with
+// a true case except the answer. Alphabets are kept small (1..4 for the
+// brute-forced families) so that ties, and thus even counts, are common.
+//
+// Lengths above 7 are cross-checked between the three deciders only; the
+// factorial reference cannot follow them there, and that limit is stated rather
+// than papered over.
+
+fn is_pal(a: ref Vec[i64]) -> bool {
+    let n = a.len();
+    let mut i = 0;
+    let mut j = n - 1;
+    while i < j {
+        if a[i] != a[j] { return false; }
+        i = i + 1;
+        j = j - 1;
+    }
+    return true;
+}
+
+// Standard next-permutation. Returns false once the sequence is descending,
+// i.e. after the last arrangement.
+fn next_perm(a: mut ref Vec[i64]) -> bool {
+    let n = a.len();
+    if n < 2 { return false; }
+    let mut i = n - 2;
+    // `and` short-circuits, which is what keeps a[i] from being read at i = -1.
+    while i >= 0 and a[i] >= a[i + 1] {
+        i = i - 1;
+    }
+    if i < 0 { return false; }
+    let mut j = n - 1;
+    while a[j] <= a[i] {
+        j = j - 1;
+    }
+    let t = a[i]; a[i] = a[j]; a[j] = t;
+    let mut lo = i + 1;
+    let mut hi = n - 1;
+    while lo < hi {
+        let u = a[lo]; a[lo] = a[hi]; a[hi] = u;
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    return true;
+}
+
+// The reference: is ANY arrangement a palindrome? Knows nothing about parity.
+fn brute(chars: ref Vec[i64]) -> bool {
+    let mut a: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < chars.len() {
+        a.push(chars[i]);
+        i = i + 1;
+    }
+    a.sort();
+    if is_pal(a) { return true; }
+    while next_perm(mut a) {
+        if is_pal(a) { return true; }
+    }
+    return false;
+}
+
+fn by_counts(chars: ref Vec[i64]) -> bool {
+    let mut counts: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 256 { counts.push(0); i = i + 1; }
+    let mut p = 0;
+    while p < chars.len() {
+        counts[chars[p]] = counts[chars[p]] + 1;
+        p = p + 1;
+    }
+    let mut odd = 0;
+    let mut c = 0;
+    while c < 256 {
+        if counts[c] % 2 == 1 { odd = odd + 1; }
+        c = c + 1;
+    }
+    return odd <= 1;
+}
+
+fn by_toggle(chars: ref Vec[i64]) -> bool {
+    let mut odd: Set[i64] = Set.new();
+    let mut p = 0;
+    while p < chars.len() {
+        let ch = chars[p];
+        if odd.contains(ch) { odd.remove(ch); } else { odd.insert(ch); }
+        p = p + 1;
+    }
+    return odd.len() <= 1;
+}
+
+fn by_bits(chars: ref Vec[i64]) -> bool {
+    let mut mask = 0;
+    let mut p = 0;
+    while p < chars.len() {
+        mask = mask ^ (1 << (chars[p] - 97));
+        p = p + 1;
+    }
+    return mask & (mask - 1) == 0;
+}
+
+fn main() {
+    let cases = 4000;
+    let mut seed = 266266;
+
+    let mut mismatches = 0;
+    let mut brute_checked = 0;
+    let mut brute_disagreements = 0;
+    let mut trues = 0;
+    let mut even_len_true = 0;   // the `odd == 1` bug's blind spot
+    let mut digest = 0;
+
+    let mut c = 0;
+    while c < cases {
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let family = (seed / 65536) % 8;
+
+        let mut chars: Vec[i64] = Vec.new();
+
+        if family <= 3 {
+            // Random, short, small alphabet — brute-forceable.
+            let alpha = family + 1;                 // 1..4 distinct letters
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let n = (seed / 65536) % 8;          // 0..7
+            let mut i = 0;
+            while i < n {
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                chars.push(97 + (seed / 65536) % alpha);
+                i = i + 1;
+            }
+        }
+        if family == 4 or family == 5 {
+            // ★ Constructed permutable: pairs, plus an optional lone middle.
+            let mut pairs = 3;
+            let mut alpha = 4;
+            if family == 5 { pairs = 20; alpha = 8; }
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let np = (seed / 65536) % (pairs + 1);
+            let mut i = 0;
+            while i < np {
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                let ch = 97 + (seed / 65536) % alpha;
+                chars.push(ch);
+                chars.push(ch);
+                i = i + 1;
+            }
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            if (seed / 65536) % 2 == 1 {
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                chars.push(97 + (seed / 65536) % alpha);
+            }
+        }
+        if family == 6 {
+            // Long and uniformly random — almost always false.
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let n = (seed / 65536) % 41;
+            let mut i = 0;
+            while i < n {
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                chars.push(97 + (seed / 65536) % 8);
+                i = i + 1;
+            }
+        }
+        if family == 7 {
+            // ★ Near-miss: build a permutable string, then change ONE character.
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let np = (seed / 65536) % 4 + 1;
+            let mut i = 0;
+            while i < np {
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                let ch = 97 + (seed / 65536) % 4;
+                chars.push(ch);
+                chars.push(ch);
+                i = i + 1;
+            }
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let at = (seed / 65536) % chars.len();
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            chars[at] = 97 + (seed / 65536) % 4;
+        }
+
+        // Shuffle, so no decider can lean on the constructed layout.
+        let m = chars.len();
+        let mut sh = m - 1;
+        while sh > 0 {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let j = (seed / 65536) % (sh + 1);
+            let t = chars[sh]; chars[sh] = chars[j]; chars[j] = t;
+            sh = sh - 1;
+        }
+
+        let a = by_counts(chars);
+        let b = by_toggle(chars);
+        let d = by_bits(chars);
+        if a != b or a != d { mismatches = mismatches + 1; }
+
+        // The independent reference, where factorial cost allows.
+        if m <= 7 {
+            brute_checked = brute_checked + 1;
+            if brute(chars) != a { brute_disagreements = brute_disagreements + 1; }
+        }
+
+        if a { trues = trues + 1; }
+        if a and m % 2 == 0 { even_len_true = even_len_true + 1; }
+        let mut bit = 0;
+        if a { bit = 1; }
+        digest = (digest * 131 + bit * 7 + m) % 1000000007;
+        c = c + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"permutable {trues}");
+    println(f"even length AND permutable {even_len_true}");
+    println(f"brute-force verified {brute_checked}");
+    println(f"brute-force disagreements {brute_disagreements}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

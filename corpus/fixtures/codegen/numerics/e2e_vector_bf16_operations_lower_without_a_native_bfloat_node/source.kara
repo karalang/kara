@@ -1,0 +1,11 @@
+
+fn main() {
+    let a: Vector[bf16, 4] = Vector[bf16, 4](1.5bf16, 2.5bf16, 1.5bf16, 2.5bf16);
+    let b: Vector[bf16, 4] = Vector[bf16, 4].splat(0.5bf16);
+    println(f"add={(a + b).reduce_sum()} sub={(a - b).reduce_sum()}");
+    println(f"mul={(a * b).reduce_sum()} div={(a / b).reduce_sum()}");
+    println(f"cmp={(a > b)[0]} {(a < b)[0]} {(a == b)[0]}");
+    println(f"red={a.reduce_min()} {a.reduce_max()} {a.dot(b)}");
+    println(f"round={a.floor().reduce_sum()} {a.ceil().reduce_sum()}");
+    println(f"sqrt={a.sqrt().reduce_sum()}");
+}

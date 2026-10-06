@@ -1,0 +1,9 @@
+
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    let mut t: (Vec[i64], i64) = (v, 3);
+    t.0.push(10);
+    t.0.push(20);
+    println(f"len {t.0.len()} v0 {t.0[0]} v1 {t.0[1]}");
+    println("end");
+}

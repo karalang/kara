@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_19_38.rs::e2e_unbound_shared_unit_variant_is_released"
+dedup_of = ["tests/interpreter/families/b_2026_09_19_38.rs::test_unbound_shared_unit_variant_is_released", "tests/memory_sanitizer/families/b_2026_09_19_38.rs::asan_unbound_shared_unit_variant_is_released_clean"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

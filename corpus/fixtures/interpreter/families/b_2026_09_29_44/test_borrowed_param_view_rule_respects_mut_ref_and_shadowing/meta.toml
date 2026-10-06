@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_09_29_44.rs::test_borrowed_param_view_rule_respects_mut_ref_and_shadowing"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

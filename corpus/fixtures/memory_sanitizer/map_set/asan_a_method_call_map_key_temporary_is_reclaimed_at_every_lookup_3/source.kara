@@ -1,0 +1,13 @@
+
+struct Mk { p: String }
+impl Mk { fn build(n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+} }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    m.insert(Mk.build(0i64), 0i64);
+    match m.get(Mk.build(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}

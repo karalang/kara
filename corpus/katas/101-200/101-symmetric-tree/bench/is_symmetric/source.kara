@@ -1,0 +1,54 @@
+// Benchmark workload for LeetCode #101 — build 8 trees once (half symmetric via a
+// mirrored subtree, half asymmetric via a plain-copied subtree), then K reps of
+// recursive is_symmetric on a data-dependent-selected tree (idx = acc%8, seeded by
+// the running hash so nothing hoists), folding each verdict into a rolling hash.
+// Read-only crossed-lockstep traversal; each mirror uses its natural tree node
+// (Kara shared/RC, C/Go pointer, Rust Box + borrow).
+shared struct TreeNode { val: i64, mut left: Option[TreeNode], mut right: Option[TreeNode] }
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root { None => Some(TreeNode { val: v, left: None, right: None }), Some(n) => { if v < n.val { n.left = insert(n.left, v); } else { n.right = insert(n.right, v); } Some(n) } }
+}
+fn mirror(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node { None => None, Some(n) => Some(TreeNode { val: n.val, left: mirror(n.right), right: mirror(n.left) }) }
+}
+fn copy_tree(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node { None => None, Some(n) => Some(TreeNode { val: n.val, left: copy_tree(n.left), right: copy_tree(n.right) }) }
+}
+fn is_mirror(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
+    match a {
+        None => { match b { None => true, Some(_) => false } }
+        Some(an) => { match b { None => false, Some(bn) => an.val == bn.val and is_mirror(an.left, bn.right) and is_mirror(an.right, bn.left) } }
+    }
+}
+fn is_symmetric(root: Option[TreeNode]) -> bool {
+    match root { None => true, Some(n) => is_mirror(n.left, n.right) }
+}
+fn build(nums: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None; let mut i = 0;
+    while i < nums.len() { root = insert(root, nums[i]); i = i + 1; }
+    root
+}
+fn main() {
+    let base = [8,4,12,2,6,10,14,1,3,5,7,9,11,13,15];
+    let mut pool: Vec[Option[TreeNode]] = Vec.new();
+    let mut i = 0;
+    while i < 8 {
+        let mut lv: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < base.len() { lv.push(base[(k + i) % base.len()]); k = k + 1; }
+        let sub = build(lv);
+        let root = if (i % 2) == 0 { Some(TreeNode { val: 0, left: sub, right: mirror(sub) }) } else { Some(TreeNode { val: 0, left: sub, right: copy_tree(sub) }) };
+        pool.push(root);
+        i = i + 1;
+    }
+    let mut acc = 1;
+    let mut rep = 0;
+    while rep < 8000000 {
+        let idx = acc % 8;
+        let sym = is_symmetric(pool[idx].clone());
+        let bit = if sym { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

@@ -1,0 +1,13 @@
+
+struct Pair[T] { a: T, b: T }
+impl[T: Sub] Pair[T] {
+    fn lo(ref self) -> T { self.a }
+    fn hi(ref self) -> T { self.b }
+    fn gap(ref self) -> T { self.hi() - self.lo() }
+}
+fn main() {
+    let p = Pair { a: 3, b: 10 };
+    println(f"{p.gap()}");
+    let q = Pair { a: 100, b: 7 };
+    println(f"{q.gap()}");
+}

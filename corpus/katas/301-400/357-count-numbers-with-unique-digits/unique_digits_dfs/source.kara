@@ -1,0 +1,42 @@
+// LeetCode #357: Count Numbers with Unique Digits -- build every such number,
+// one digit at a time.
+//
+// The empty prefix stands for the number 0. Each prefix of one or more digits
+// is a number in its own right, so a call counts itself and then every way to
+// extend it by a digit not yet used, until the prefix is n digits long. A
+// bitmask records the digits used so far; the leading digit may not be 0.
+
+fn extend(len: i64, n: i64, base: i64, used: i64) -> i64 {
+    if len == n {
+        return 1;
+    }
+    let mut count = 1;
+    for d in 0..base {
+        if len == 0 and d == 0 {
+            continue;
+        }
+        if used & (1 << d) == 0 {
+            count += extend(len + 1, n, base, used | (1 << d));
+        }
+    }
+    count
+}
+
+fn count_unique(n: i64, base: i64) -> i64 {
+    extend(0, n, base, 0)
+}
+
+fn main() {
+    for n in 0..=8 {
+        println(f"n = {n}: {count_unique(n, 10)}");
+    }
+    for base in 2..=7 {
+        let mut row: Vec[String] = Vec.new();
+        // One length past the base: no number has more distinct digits than
+        // the base has digits, so the last two entries agree.
+        for n in 0..=(base + 1) {
+            row.push(f"{count_unique(n, base)}");
+        }
+        println(f"base {base}: {row.join(" ")}");
+    }
+}

@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let p = Parser.new("greet")
+            .about("greets someone")
+            .version("2.1")
+            .arg("--name", Arg.string().required().help("who to greet"))
+            .flag("--loud", 'l', "shout it");
+        match p.parse() {
+            Ok(args) => { println("parsed"); }
+            Err(e) => { println(f"err {e.message}"); }
+        }
+        let h = p.help_text();
+        println(f"len {h.len() > 0}");
+        i = i + 1;
+    }
+}

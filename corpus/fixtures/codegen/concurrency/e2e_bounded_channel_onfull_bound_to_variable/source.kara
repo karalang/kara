@@ -1,0 +1,7 @@
+
+fn main() {
+    let policy: OnFull = OnFull.Block;
+    let bc: BoundedChannel[i64] = BoundedChannel.new(2, policy);
+    match bc.send(7) { Ok(_) => println(1), Err(_) => println(-1), }
+    match bc.recv() { Some(v) => println(v), None => println(-99), }
+}

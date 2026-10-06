@@ -1,0 +1,7 @@
+fn main() {
+         Log.trace("t");
+         Log.debug("d");
+         Log.info("i");
+         Log.warn("w");
+         Log.error("e");
+     }

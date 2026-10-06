@@ -1,0 +1,11 @@
+
+shared struct Node { val: i64 }
+impl Node {
+    fn make() -> Node {
+        let n = Node { val: 7 };
+        n
+    }
+}
+fn main() {
+    println(Node.make().val);
+}

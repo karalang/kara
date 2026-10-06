@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_24_11.rs::e2e_let_bound_optres_handback_with_nested_drop_payload_has_one_owner"
+dedup_of = ["tests/interpreter/families/b_2026_09_24_11.rs::test_let_bound_optres_handback_with_nested_drop_payload_runs_one_body", "tests/memory_sanitizer/families/b_2026_09_24_11.rs::asan_let_bound_optres_handback_with_nested_drop_payload_frees_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

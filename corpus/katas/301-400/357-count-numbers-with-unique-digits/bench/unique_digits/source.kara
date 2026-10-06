@@ -1,0 +1,28 @@
+// Benchmark for #357: the kata's depth-first search, run at full width in
+// every base from 2 to 11 -- about 110 million calls, almost all of them in
+// base 11. The closed form answers in O(base); this measures the search.
+
+fn extend(len: i64, n: i64, base: i64, used: i64) -> i64 {
+    if len == n {
+        return 1;
+    }
+    let mut count = 1;
+    for d in 0..base {
+        if len == 0 and d == 0 {
+            continue;
+        }
+        if used & (1 << d) == 0 {
+            count += extend(len + 1, n, base, used | (1 << d));
+        }
+    }
+    count
+}
+
+fn main() {
+    let mut checksum: i64 = 0;
+    for base in 2..=11 {
+        let count = extend(0, base, base, 0);
+        checksum = (checksum * 31 + count) % 1000000007;
+    }
+    println(f"bases 2 to 11: checksum {checksum}");
+}

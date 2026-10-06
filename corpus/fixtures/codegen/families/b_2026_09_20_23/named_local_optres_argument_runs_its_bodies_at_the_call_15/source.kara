@@ -1,0 +1,13 @@
+struct W1 { v: i64 }
+impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
+struct W3 { v: i64, b: i64, c: i64 }
+impl Drop for W3 { fn drop(mut ref self) { println(f"dW3_{self.v}") } }
+struct S4 { v: i64, tag: String }
+impl Drop for S4 { fn drop(mut ref self) { println(f"dS4_{self.v}") } }
+struct S1 { tag: String }
+impl Drop for S1 { fn drop(mut ref self) { println(f"dS1_{self.tag}") } }
+struct H { n: i64 }
+impl H { fn m(self, o: Option[Array[W1, 1]]) -> i64 { match o { Some(x) => { return x[0].v + self.n } None => { return 0 } } }
+         fn a(o: Option[Array[W1, 1]]) -> i64 { match o { Some(x) => { return x[0].v } None => { return 0 } } } }
+fn take(o: Option[Array[W1, 1]]) -> i64 { match o { Some(x) => { return x[0].v } None => { return 0 } } }
+fn main() { let k = W1 { v: 7 }; let a: Array[W1, 1] = [W1 { v: 40 }]; let r = take(Some(a)); println(f"r:{r}"); println(f"k:{k.v}"); println("end") }

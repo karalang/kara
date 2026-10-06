@@ -1,0 +1,83 @@
+// LeetCode #44 bench harness — Kāra, the greedy two-pointer matcher (★).
+//
+// The headline ★ style: one cursor in each of `s` and `p`, with two scalars recording the last
+// `*` and the s-position it was aligned to, so a dead end rewinds to "let that `*` eat one more
+// char" instead of re-searching. O(1) space; O(m+n) amortized, O(m·n) worst case.
+//
+// Workload: build a string `s` ("abc" repeated) and a multi-star pattern `p`
+// ("*abc*abc*…*") ONCE, then TOTAL times punch a single s slot (cycling through a..d, where a
+// 'd' breaks an "abc" group so the answer flips), run the greedy match, and fold the boolean
+// (0/1) into a rolling checksum. The per-iteration cost is the greedy SCAN over `s` (locating
+// each group after a `*`), not an O(n) refill — the hot loop allocates nothing, the punch
+// varies the answer with the loop index (no hoisting), and the checksum carries a loop-borne
+// dependency, so this is a single-lane (seq) bench by construction. All five language mirrors
+// fold the identical answer sequence and print the identical checksum.
+
+fn is_match(s: ref Vec[u8], p: ref Vec[u8]) -> bool {
+    let n = s.len();
+    let m = p.len();
+    let mut i = 0;
+    let mut j = 0;
+    let mut star = -1;
+    let mut matched = 0;
+    while i < n {
+        if j < m and (p[j] == b'?' or p[j] == s[i]) {
+            i = i + 1;
+            j = j + 1;
+        } else if j < m and p[j] == b'*' {
+            star = j;
+            matched = i;
+            j = j + 1;
+        } else if star != -1 {
+            matched = matched + 1;
+            i = matched;
+            j = star + 1;
+        } else {
+            return false;
+        }
+    }
+    while j < m and p[j] == b'*' {
+        j = j + 1;
+    }
+    j == m
+}
+
+fn main() {
+    let total = 300000;
+    let modulus = 1000000007;
+
+    // Build s = "abc" repeated, length n.
+    let n = 240;
+    let mut s: Vec[u8] = Vec.new();
+    let mut a = 0;
+    while a < n {
+        s.push(b'a' + ((a % 3) as u8));
+        a = a + 1;
+    }
+
+    // Build p = "*abc" eight times then a trailing "*"  ("*abc*abc*…*abc*").
+    let mut p: Vec[u8] = Vec.new();
+    let mut g = 0;
+    while g < 8 {
+        p.push(b'*');
+        p.push(b'a');
+        p.push(b'b');
+        p.push(b'c');
+        g = g + 1;
+    }
+    p.push(b'*');
+
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        // O(1) punch: cycle one slot through a..d; a 'd' breaks an "abc" group so the
+        // match result flips, varying the folded answer without an O(n) refill.
+        s[k % n] = b'a' + ((k % 4) as u8);
+        let r = is_match(s, p);
+        let bit = if r { 1 } else { 0 };
+        acc = (acc * 131 + bit) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

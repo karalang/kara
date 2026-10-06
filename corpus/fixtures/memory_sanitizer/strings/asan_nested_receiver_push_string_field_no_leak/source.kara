@@ -1,0 +1,23 @@
+
+struct Row { cells: Vec[String] }
+struct Grid { rows: Vec[Row] }
+fn main() {
+    let mut g = Grid { rows: Vec.new() };
+    let mut r = 0i64;
+    while r < 8i64 {
+        g.rows.push(Row { cells: Vec.new() });
+        let mut c = 0i64;
+        while c < 4i64 {
+            g.rows[r].cells.push("cell".to_string());
+            c = c + 1i64;
+        }
+        r = r + 1i64;
+    }
+    let mut total = 0i64;
+    let mut i = 0i64;
+    while i < 8i64 {
+        total = total + g.rows[i].cells.len();
+        i = i + 1;
+    }
+    println(total);
+}

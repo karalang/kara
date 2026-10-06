@@ -1,0 +1,8 @@
+
+fn main() {
+    let v: Vec[String] = ["alpha", "beta", "gamma"];
+    match v.last(2) { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(0) { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(9) { Some(x) => { println(x); } None => { println("none"); } }
+    println(v[0]);
+}

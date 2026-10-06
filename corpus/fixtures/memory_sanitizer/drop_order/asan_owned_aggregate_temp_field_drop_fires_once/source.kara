@@ -1,0 +1,34 @@
+
+struct Res { tag: i64, buf: Vec[i64] }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
+        self.buf.clear();
+    }
+}
+struct Holder { label: String, r: Res }
+
+fn consume(h: Holder) -> i64 { h.r.tag + h.label.len() }
+fn pass(h: Holder) -> Holder { h }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Inline struct-literal arg: the caller temp owns the body AND the
+        // buffer, so this arm has to fire exactly once and free exactly once.
+        let mut b1: Vec[i64] = Vec.new();
+        b1.push(i);
+        n = n + consume(Holder { label: "lit", r: Res { tag: 1, buf: b1 } });
+
+        // Return passthrough: the callee entry-copies and returns an
+        // independent copy, so the caller temp's MEMORY is freed here but its
+        // BODY belongs to `p`. Firing both is the use-after-free this catches.
+        let mut b2: Vec[i64] = Vec.new();
+        b2.push(i);
+        let p = pass(Holder { label: "pt", r: Res { tag: 1, buf: b2 } });
+        n = n + p.r.tag;
+        i = i + 1;
+    }
+    println(n);
+}

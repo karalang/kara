@@ -1,0 +1,6 @@
+
+#[derive(Display)]
+enum O2[T] { Has { v: T }, Nope }
+#[derive(Display)]
+struct H { u: O2[i64] }
+fn main() { let h = H { u: O2.Has { v: 4 } }; println(f"{h}") }

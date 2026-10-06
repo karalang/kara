@@ -1,0 +1,12 @@
+
+        fn f(x: i64) -> i64 { return 1i64; }
+        fn main() {
+            let mut b: i64 = 0i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                b = b + f(i);
+                i = i + 1i64;
+            }
+            println(b);
+        }
+        

@@ -1,0 +1,8 @@
+
+fn main() {
+    let f: f32 = 2.5;
+    println(f as f64);
+    println(1.5f64 as f32);
+    println(1e300f64 as f32);
+    println(-1e300f64 as f32);
+}

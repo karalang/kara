@@ -1,0 +1,121 @@
+// Benchmark workload — 3Sum Closest (LeetCode #16).
+//
+// M = 8 distinct test cases, each a Vec[i64] of N = 16 values drawn from a
+// deterministic LCG into the range [-10, 10]. Built once into a
+// Vec[Vec[i64]] before the timed loop. Per outer iter we rotate
+// `idx = k % M` and call three_sum_closest on that case with a per-case
+// target chosen from a small bag {-12, -6, -1, 0, 1, 5, 11, 19} so the
+// closest-tracking branch sees varied (sum, target) deltas — some targets
+// are reachable (exact-hit return fires), some are deep outside the
+// reachable window (the running `best` saturates at the suffix extremum).
+//
+// K = 1_000_000 outer iters. Per-iter work: a Vec.from_slice copy of N
+// values, an O(N log N) sort, an O(N²) two-pointer scan (no dedup machinery,
+// unlike kata 15), and a scalar i64 return — no nested-Vec output. At K=1M
+// and N=16 that's on the order of 10^8 compares plus ~10^6 Vec-copy+sort
+// allocations, but the *output* allocation path kata 15 stresses is absent
+// here — the sink is just the running sum of returned scalars. That makes
+// this kata an interesting peer to kata 15: same sort + two-pointer core,
+// dramatically lighter allocator pressure.
+//
+// Sink: `sum = sum + three_sum_closest(...)`. The accumulator is the slice-1
+// allow-list reduction shape (associative + commutative `+`), so karac's
+// default build emits a karac_par_reduce dispatch. KARAC_AUTO_PAR=0 builds
+// the seq-lane comparator — see bench/bench.sh.
+//
+// The LCG stays inside i64 with no wraparound (1103515245 * state never
+// exceeds ~2.37e18 < i64::MAX). Every mirror (kara/rust/c/go/py) reproduces
+// the same stream and the same per-call closest sums, so all five must
+// print the same sink before timing starts; bench.sh fails loudly on
+// mismatch.
+
+fn abs_i64(x: i64) -> i64 {
+    if x < 0 { -x } else { x }
+}
+
+fn three_sum_closest(nums: Slice[i64], target: i64) -> i64 {
+    let mut s: Vec[i64] = Vec.from_slice(nums);
+    s.sort_by(|a, b| a.cmp(b));
+    let n = s.len();
+    let mut best: i64 = s[0] + s[1] + s[2];
+    let mut i = 0;
+    while i < n - 2 {
+        let mut lo = i + 1;
+        let mut hi = n - 1;
+        while lo < hi {
+            let sum = s[i] + s[lo] + s[hi];
+            if sum == target {
+                return sum;
+            }
+            if abs_i64(sum - target) < abs_i64(best - target) {
+                best = sum;
+            }
+            if sum < target {
+                lo = lo + 1;
+            } else {
+                hi = hi - 1;
+            }
+        }
+        i = i + 1;
+    }
+    best
+}
+
+// Overflow-free 31-bit LCG: 1103515245 * state + 12345 (mod 2^31).
+fn lcg_next(state: i64) -> i64 {
+    (1103515245 * state + 12345) % 2147483648
+}
+
+// One case = `count` values mapped into [-10, 10] from the LCG stream.
+fn build_case(seed: i64, count: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut state = seed;
+    let mut j = 0;
+    while j < count {
+        state = lcg_next(state);
+        v.push((state % 21) - 10);
+        j = j + 1;
+    }
+    v
+}
+
+fn target_for(idx: i64) -> i64 {
+    // Eight per-case targets spanning the reachable-sum range for N=16
+    // draws in [-10, 10]: some inside (exact-hit possible), some outside
+    // (running `best` saturates). Picked once at idx-time, no allocation.
+    if idx == 0       { -12 }
+    else if idx == 1  { -6 }
+    else if idx == 2  { -1 }
+    else if idx == 3  { 0 }
+    else if idx == 4  { 1 }
+    else if idx == 5  { 5 }
+    else if idx == 6  { 11 }
+    else                 { 19 }
+}
+
+fn main() {
+    let m_cases: i64 = 8;
+    let n_values: i64 = 16;
+    let k_iters: i64 = 1000000;
+
+    let mut sets: Vec[Vec[i64]] = Vec.new();
+    let mut m = 0;
+    while m < m_cases {
+        sets.push(build_case(m * 1000003 + 12345, n_values));
+        m = m + 1;
+    }
+
+    // Reduction shape: `sum = sum + three_sum_closest(...)` per iter.
+    // karac's default build recognizes the allow-listed `+` accumulator and
+    // emits a karac_par_reduce dispatch. The body's owned-Vec sort + scalar
+    // return has lighter per-worker memory pressure than kata 15's nested-
+    // Vec output, so the auto-par regime can spread more cleanly.
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % m_cases;
+        sum = sum + three_sum_closest(sets[idx].as_slice(), target_for(idx));
+        k = k + 1;
+    }
+    println(sum);
+}

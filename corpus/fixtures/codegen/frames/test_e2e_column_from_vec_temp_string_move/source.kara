@@ -1,0 +1,14 @@
+
+fn mk() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("delta".to_string());
+    v.push("echo".to_string());
+    v
+}
+fn main() {
+    let c: Column[String] = Column.from_vec(["alpha".to_string(), "beta".to_string(), "gamma".to_string()]);
+    let d: Column[String] = Column.from_vec(mk());
+    println(f"{c.len()} {d.len()}");
+    println(f"{c[0].unwrap()} {c[2].unwrap()}");
+    println(f"{d[1].unwrap()}");
+}

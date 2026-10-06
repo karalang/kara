@@ -1,0 +1,12 @@
+
+fn main() {
+    let bc: BoundedChannel[i64] = BoundedChannel.new(2, OnFull.FailFast);
+    match bc.send(10) { Ok(_) => println(1), Err(_) => println(-1), }
+    match bc.send(20) { Ok(_) => println(1), Err(_) => println(-1), }
+    match bc.send(30) { Ok(_) => println(1), Err(_) => println(-1), }
+    match bc.recv() { Some(v) => println(v), None => println(-99), }
+    match bc.recv() { Some(v) => println(v), None => println(-99), }
+    match bc.recv() { Some(v) => println(v), None => println(-99), }
+    match bc.send(40) { Ok(_) => println(1), Err(_) => println(-1), }
+    match bc.recv() { Some(v) => println(v), None => println(-99), }
+}

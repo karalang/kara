@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_ir_reduction_while_shape_emits_par_reduce_call_slice3b4"
+dedup_of = ["tests/par_codegen.rs::test_e2e_reduction_while_shape_multi_worker_slice3b4", "tests/par_codegen.rs::test_ir_reduction_worker_assumes_loop_var_nonneg"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

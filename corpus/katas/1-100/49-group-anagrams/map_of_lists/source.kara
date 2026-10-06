@@ -1,0 +1,124 @@
+// LeetCode #49: Group Anagrams — direct `Map[String, Vec[String]]` of lists.
+//
+// The third canonical phrasing, and the one most people reach for first: map
+// each anagram key straight to ITS LIST of words, instead of the index-map
+// indirection (`Map[key -> group index]` + a side `Vec[Vec[String]]`) that
+// [`count_signature.kara`](count_signature.kara) and [`sorted_key.kara`](sorted_key.kara)
+// use. Appending to a group here is a read-CLONE-modify-reinsert: `get` the
+// current `Vec[String]`, `push` the word, and `insert` it back — OVERWRITING the
+// existing key. That displaced-`Vec[String]` overwrite is a distinct ownership
+// surface from the index-map approaches (it stresses per-value drop of a
+// heap-of-heaps map value), which is exactly why it's worth writing as its own
+// variant — it is what found the two leaks recorded below.
+//
+// THE PHRASING IS A DELIBERATE PROBE, NOT A FORCED ONE. This comment used to say
+// "Kāra has no in-place map-value mutation", which is false: `entry(k).or_insert(..)`
+// yields a `mut ref V` into the map's own slot, and `table[k].push(w)` also
+// appends in place. The clone is kept HERE because displacing an existing value
+// is the surface under test and `or_insert` never displaces anything. Do not
+// copy this loop into new code — it is O(k²) in the number of occurrences per
+// key, which cost #244 a complexity class before it was noticed
+// (kara `B-2026-08-03-9`). #244's `shortest_distance_ii.kara` shows the form to
+// reach for by default. A first-seen-order key list keeps the
+// output deterministic — identical to the other two solvers and the oracle.
+//
+// Uses the same 26-bucket count signature as `count_signature.kara`; only the
+// grouping container differs.
+
+fn anagram_key(word: ref String) -> String {
+    let mut counts: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < 26 {
+        counts.push(0);
+        z = z + 1;
+    }
+    for b in word.bytes() {
+        let idx = (b as i64) - (b'a' as i64);
+        counts[idx] = counts[idx] + 1;
+    }
+    let mut key: String = "";
+    let mut i = 0;
+    while i < 26 {
+        key.push_str(f"{counts[i]}#");
+        i = i + 1;
+    }
+    key
+}
+
+fn group_anagrams(words: Vec[String]) -> Vec[Vec[String]] {
+    let mut table: Map[String, Vec[String]] = Map.new();
+    let mut order: Vec[String] = Vec.new(); // keys in first-appearance order
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        let word = words[i].clone();
+        let key = anagram_key(word);
+        match table.get(key) {
+            Some(existing) => {
+                // Append to the group and reinsert — OVERWRITES the key; the
+                // displaced old `Vec[String]` (inner Strings + buffer) is freed
+                // by the discard of `insert`'s Option result. `existing` is a
+                // borrow of the map's current list, so clone it before mutating
+                // (the map still owns the original until the reinsert lands).
+                let mut updated: Vec[String] = existing.clone();
+                updated.push(word);
+                let _ = table.insert(key, updated);
+            }
+            None => {
+                let mut fresh: Vec[String] = Vec.new();
+                fresh.push(word);
+                // `key` is needed both to key the map and to record first-seen
+                // order, so clone for one of the two owned uses.
+                let _ = table.insert(key.clone(), fresh);
+                order.push(key);
+            }
+        }
+        i = i + 1;
+    }
+    // Extract each group in first-seen order. `remove` MOVES the list out of the
+    // map (a bound result — no clone, no double-free).
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    let k = order.len();
+    let mut j = 0;
+    while j < k {
+        match table.remove(order[j]) {
+            Some(g) => groups.push(g),
+            None => {}
+        }
+        j = j + 1;
+    }
+    groups
+}
+
+fn join_words(words: ref Vec[String]) -> String {
+    let mut out: String = "";
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(words[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn report(words: Vec[String]) {
+    let groups = group_anagrams(words);
+    let g = groups.len();
+    println(f"{g} groups");
+    let mut j = 0;
+    while j < g {
+        println(join_words(groups[j]));
+        j = j + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    report(["eat", "tea", "tan", "ate", "nat", "bat"]);   // expect: 3 groups
+    report([""]);                                         // expect: 1 group
+    report(["a"]);                                        // expect: 1 group
+    report(["abc", "bca", "cab", "xyz", "zzz"]);          // expect: 3 groups
+}

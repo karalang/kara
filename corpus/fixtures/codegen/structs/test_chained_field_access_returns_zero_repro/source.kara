@@ -1,0 +1,7 @@
+
+struct Inner { name: String }
+struct Outer { inner: Inner }
+fn main() {
+    let o = Outer { inner: Inner { name: "alice" } };
+    println(o.inner.name);
+}

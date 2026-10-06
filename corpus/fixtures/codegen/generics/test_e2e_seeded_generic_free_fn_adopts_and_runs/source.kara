@@ -1,0 +1,11 @@
+
+struct Holder[T] { items: Vec[T] }
+fn wrap[T](v: Vec[T]) -> Holder[T] { Holder { items: v } }
+fn pair[T](a: Vec[T], b: Vec[T]) -> i64 { a.len() + b.len() }
+fn main() {
+    let h: Holder[u32] = wrap([30, 10, 20]);
+    println(h.items.len());
+    println(h.items[1]);
+    let sv: Vec[String] = ["a"];
+    println(pair(Vec.new(), sv));
+}

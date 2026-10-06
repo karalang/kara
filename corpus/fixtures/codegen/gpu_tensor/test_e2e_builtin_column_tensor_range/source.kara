@@ -1,0 +1,9 @@
+
+fn main() {
+    let ci: Column[i64] = Column.from_vec([3, 9, 1, 7]);
+    let cf: Column[f64] = Column.from_vec([1.5, 9.0, 4.0]);
+    let ti: Tensor[i64, [4]] = Tensor.from([2, 4, 6, 8]);
+    let tf: Tensor[f64, [3]] = Tensor.from([1.5, 9.0, 4.0]);
+    println(f"{ci.range()} {ti.range()}");
+    println(f"{cf.range()} {tf.range()}");
+}

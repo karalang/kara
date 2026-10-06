@@ -1,0 +1,8 @@
+
+fn main() {
+    let cmp = |a: i64, b: i64| a.cmp(b);
+    let mut v: Vec[i64] = Vec.new();
+    v.push(30); v.push(10); v.push(20);
+    v.sort_by(cmp);
+    for x in v.iter() { println(x); }
+}

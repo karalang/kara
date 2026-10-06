@@ -1,0 +1,90 @@
+// LeetCode #342: Power of Four — one set bit, in an even position.
+//
+// Given a 32-bit integer n, return true if n == 4^x for some integer x >= 0.
+// Follow-up: can you do it without loops or recursion?
+//
+//   16 -> true    5 -> false    1 -> true
+//
+// 4^x = 2^(2x), so a power of four is a power of two whose single set bit
+// sits at an even position: bit 0, 2, 4, ... 30. `n & (n - 1)` clears the
+// lowest set bit, so it is zero exactly when n has one bit set, and the mask
+// 0x55555555 (binary 0101...0101) keeps only the even positions.
+//
+// `n > 0` has to come first. It rules out 0, which has no bit set, and every
+// negative value, including -2^31, whose only set bit is the sign bit; and
+// `and` stops there, so `n - 1` is never computed at -2^31, where it would
+// overflow.
+//
+// O(1) time and space.
+
+fn is_power_of_four(n: i32) -> bool {
+    return n > 0 and (n & (n - 1)) == 0 and (n & 0x55555555) != 0;
+}
+
+fn report(n: i32) {
+    println(f"{n} -> {is_power_of_four(n)}");
+}
+
+const I32_MIN: i32 = -2147483648;
+const I32_MAX: i32 = 2147483647;
+
+fn main() {
+    // The examples from the problem statement.
+    report(16);
+    report(5);
+    report(1);
+
+    // More single values: small powers, powers of two that are not powers of
+    // four, and negatives.
+    report(0);
+    report(4);
+    report(64);
+    report(2);
+    report(8);
+    report(32);
+    report(-4);
+    report(-16);
+
+    // The largest power of four that fits in 32 bits, its neighbours, the
+    // largest power of two, and both ends of the range.
+    report(1073741824);
+    report(1073741823);
+    report(1073741825);
+    report(536870912);
+    report(I32_MAX);
+    report(I32_MIN);
+
+    // Every power of two from 2^0 to 2^30: the even exponents are powers of
+    // four, the odd ones are not, and no neighbour above 4 is either.
+    let mut p: i32 = 1;
+    let mut fours = 0;
+    let mut neighbours = 0;
+    for k in 0..31 {
+        if is_power_of_four(p) {
+            fours += 1;
+            if k % 2 == 1 {
+                println(f"wrong: 2^{k} accepted");
+            }
+        } else if k % 2 == 0 {
+            println(f"wrong: 2^{k} rejected");
+        }
+        if p > 4 and (is_power_of_four(p - 1) or is_power_of_four(p + 1)) {
+            neighbours += 1;
+        }
+        if k < 30 {
+            p *= 2;
+        }
+    }
+    println(f"powers 2^0..2^30: {fours} powers of four, {neighbours} neighbours above 4 accepted");
+
+    // A sweep: every n in [-1000, 1000000].
+    let mut count = 0;
+    let mut sum: i64 = 0;
+    for n in -1000i32..1000001 {
+        if is_power_of_four(n) {
+            count += 1;
+            sum += n as i64;
+        }
+    }
+    println(f"[-1000, 1000000]: {count} powers, sum {sum}");
+}

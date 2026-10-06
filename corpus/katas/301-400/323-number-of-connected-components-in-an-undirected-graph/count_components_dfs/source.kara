@@ -1,0 +1,111 @@
+// LeetCode #323: Number of Connected Components in an Undirected Graph —
+// depth-first search.
+//
+// Build the adjacency lists, then sweep the nodes in order. A node that has
+// not been seen yet starts a new component: count it, and flood out from it
+// with an explicit stack, marking everything reachable. When the stack runs
+// dry the component is exhausted, and the sweep moves on. Each node is pushed
+// at most once per incident edge and marked once, so this is O(n + edges).
+//
+// The ★ arm never builds a graph. It looks at one edge at a time and asks
+// whether it joins two groups. This arm never looks at an edge on its own. It
+// asks what one node can reach, which is the definition of a component read
+// literally.
+
+fn count_components(n: i64, edges: ref Vec[(i64, i64)]) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        adj.push(Vec.new());
+    }
+    for (a, b) in edges {
+        adj[a].push(b);
+        adj[b].push(a);
+    }
+    let mut seen: Vec[bool] = Vec.filled(n, false);
+    let mut count = 0;
+    for start in 0..n {
+        if seen[start] {
+            continue;
+        }
+        count += 1;
+        seen[start] = true;
+        let mut stack: Vec[i64] = [start];
+        while not stack.is_empty() {
+            let v = stack.pop().unwrap();
+            for w in adj[v] {
+                if not seen[w] {
+                    seen[w] = true;
+                    stack.push(w);
+                }
+            }
+        }
+    }
+    return count;
+}
+
+fn show(edges: ref Vec[(i64, i64)]) -> String {
+    let mut s = String.new();
+    s.push('[');
+    for i in 0..edges.len() {
+        if i > 0 { s.push_str(", "); }
+        let (a, b) = edges[i];
+        s.push_str(f"({a}, {b})");
+    }
+    s.push(']');
+    return s;
+}
+
+fn report(n: i64, edges: Vec[(i64, i64)]) {
+    println(f"n={n} edges={show(edges)} -> {count_components(n, edges)}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// `m` random edges over nodes 0..n-1. Self-loops and repeats are allowed: the
+// statement does not promise a simple graph, and both must change nothing.
+fn random_edges(n: i64, m: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    for i in 0..m {
+        let a = next(seed) % n;
+        let b = next(seed) % n;
+        edges.push((a, b));
+    }
+    return edges;
+}
+
+fn main() {
+    // The two examples from the problem statement.
+    report(5, [(0, 1), (1, 2), (3, 4)]);
+    report(5, [(0, 1), (1, 2), (2, 3), (3, 4)]);
+
+    // No edges: every node is alone.
+    report(1, []);
+    report(4, []);
+
+    // Edges that change nothing: a self-loop, a repeat, a reversed repeat,
+    // and a cycle's closing edge.
+    report(3, [(2, 2)]);
+    report(3, [(0, 1), (0, 1), (1, 0)]);
+    report(4, [(0, 1), (1, 2), (2, 0)]);
+
+    // Two components that only meet through the last edge, listed so that
+    // union by size has to hang the bigger tree correctly.
+    report(6, [(0, 1), (1, 2), (3, 4), (4, 5), (5, 3), (2, 3)]);
+
+    // A star, a path listed backwards, and isolated nodes at both ends.
+    report(7, [(3, 0), (3, 1), (3, 2), (3, 4), (3, 5)]);
+    report(6, [(4, 5), (3, 4), (2, 3), (1, 2)]);
+    report(8, [(2, 3), (4, 5)]);
+
+    // Small random graphs: every arm prints these.
+    let mut seed = 323;
+    let mut sizes: Vec[i64] = [6, 9, 12];
+    for t in 0..sizes.len() {
+        let n = sizes[t];
+        let edges = random_edges(n, n / 2 + t, mut seed);
+        report(n, edges);
+    }
+}

@@ -1,0 +1,12 @@
+
+fn main() {
+    let i = 7i64;
+    println(i.clone());
+    let f = 2.5f64;
+    println(f.clone());
+    println((-3i64).clone());
+    println(true.clone());
+    println('q'.clone());
+    let u = 99u64;
+    println(u.clone());
+}

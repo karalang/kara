@@ -1,0 +1,20 @@
+fn make() -> Tensor[f64, [2, 2]] {
+    let t: Tensor[f64, [2, 2]] = Tensor.full([2, 2], 9.0);
+    t
+}
+fn eat[T](t: T) -> i64 { 1 }
+fn first[T](t: Tensor[f64, [2, 2]], u: T) -> f64 { t[0, 0] }
+fn peek[U](t: ref Tensor[f64, [2, 2]], u: U) -> f64 { t[0, 0] }
+fn id[T](t: T) -> T { t }
+fn keepv[T](t: T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(t); v }
+fn main() {
+    println(eat(make()));
+    println(eat(make()));
+    println(first(make(), 1));
+    println(peek(make(), 1));
+    let a = id(make());
+    println(a[0, 0]);
+    let v = keepv(make());
+    println(v.len());
+    println("end");
+}

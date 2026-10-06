@@ -1,0 +1,23 @@
+
+struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}") } }
+struct Pl { tag: String }
+impl Drop for Pl { fn drop(mut ref self) { println(f"dP{self.tag.len()}") } }
+fn cell_vec() { let v: Vec[Box3[String]] = [Box3 { v: f"e1111111", tag: f"a" }]; println(f"  n{v.len()}"); println("  after") }
+fn cell_two() { let a: Vec[Box3[String]] = [Box3 { v: f"aaaaaaaa", tag: f"tt" }]; println(f"  a{a.len()}"); let b: Vec[Box3[i64]] = [Box3 { v: 7, tag: f"uuu" }]; println(f"  b{b.len()}") }
+fn cell_nest() { let vv: Vec[Vec[Box3[String]]] = [[Box3 { v: f"e3333333", tag: f"cccc" }]]; println(f"  vv{vv.len()}") }
+fn cell_arr() { let a: Array[Box3[String], 2] = [Box3 { v: f"e4444444", tag: f"ddddd" }, Box3 { v: f"e5555555", tag: f"eeeeee" }]; println(f"  arr{a[1].tag.len()}") }
+fn cell_map() { let mut m: Map[String, Box3[String]] = Map.new(); m.insert(f"k", Box3 { v: f"e6666666", tag: f"fffffff" }); println(f"  m{m.len()}") }
+fn cell_plain() { let p: Vec[Pl] = [Pl { tag: f"pppppppp" }]; println(f"  p{p.len()}") }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        println("vec"); cell_vec();
+        println("two"); cell_two();
+        println("nest"); cell_nest();
+        println("arr"); cell_arr();
+        println("map"); cell_map();
+        println("plain"); cell_plain();
+        i = i + 1;
+    }
+}

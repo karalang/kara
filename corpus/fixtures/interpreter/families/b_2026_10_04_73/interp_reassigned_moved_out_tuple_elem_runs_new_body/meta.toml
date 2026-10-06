@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_04_73.rs::interp_reassigned_moved_out_tuple_elem_runs_new_body"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_04_73.rs::asan_reassigned_moved_out_tuple_elem_runs_new_body"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

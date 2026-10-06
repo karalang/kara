@@ -1,0 +1,159 @@
+// LeetCode #68: Text Justification — greedy line packing + even space spread (★).
+//
+// Format `words` into lines of EXACTLY `max_width` characters, fully justified:
+// pack as many words per line as fit (words separated by at least one space),
+// then pad each line to the width by distributing the leftover spaces as evenly
+// as possible between the words — and when the spaces do not divide evenly, the
+// LEFT gaps get one extra each. Two lines break the rule: the LAST line and any
+// line holding a single word are LEFT-justified (single spaces, padded on the
+// right).
+//
+// The algorithm is two decisions per line:
+//
+//   1. Greedy pack. Starting at word i, keep adding words while
+//         (sum of word lengths) + (one space between each) <= max_width.
+//      With `count` words chosen and `line_chars` their total length, the
+//      minimal width is `line_chars + (count - 1)` — the `count - 1` single
+//      spaces. Stop when the next word would break that bound.
+//
+//   2. Distribute. `total = max_width - line_chars` spaces go into `gaps =
+//      count - 1` slots. Each slot gets `total / gaps`, and the first
+//      `total % gaps` slots get one extra — that "extra on the left" is the
+//      whole spacing subtlety. A single-word line (gaps == 0) and the last line
+//      skip this: single spaces, then right-pad.
+//
+// The greedy pack is optimal here because every word must appear in order and a
+// word never splits, so fitting the most words per line minimises the lines and
+// is forced — there is no DP to do (contrast the grid katas #62–64, where the
+// min/max over choices needed a table). The spacing is pure integer division:
+// `base = total / gaps`, `extra = total % gaps`, no floats.
+//
+// Inputs are ASCII, so `String.len()` (byte length) equals the character width
+// the problem measures. i64 throughout for corpus uniformity.
+
+// Append `count` spaces to `s`. Used for the even-spread gaps and the
+// right-pad of left-justified lines.
+fn pad_spaces(s: mut ref String, count: i64) {
+    let mut t = 0;
+    while t < count {
+        s.push(' ');
+        t = t + 1;
+    }
+}
+
+fn full_justify(words: ref Vec[String], max_width: i64) -> Vec[String] {
+    let mut lines: Vec[String] = Vec.new();
+    let n = words.len();
+
+    let mut i = 0;
+    while i < n {
+        // (1) Greedy pack: words[i .. j) is the widest run that fits.
+        let mut j = i;
+        let mut line_chars = 0;      // sum of the chosen words' lengths
+        let mut count = 0;           // how many words chosen
+        while j < n {
+            let wl = words[j].len();
+            // minimal width if we also take words[j]: line_chars + wl + count
+            // (count existing single-space gaps before this new word).
+            if line_chars + wl + count <= max_width {
+                line_chars = line_chars + wl;
+                count = count + 1;
+                j = j + 1;
+            } else {
+                break;
+            }
+        }
+
+        let gaps = count - 1;
+        let total = max_width - line_chars;   // spaces to place
+        let is_last = j == n;
+
+        // (2) Build the line.
+        let mut line: String = "";
+        if is_last or count == 1 {
+            // Left-justify: single spaces between words, then right-pad.
+            let mut g = 0;
+            while g < count {
+                line.push_str(words[i + g]);
+                if g < count - 1 {
+                    line.push(' ');
+                }
+                g = g + 1;
+            }
+            pad_spaces(mut line, max_width - line.len());
+        } else {
+            // Full-justify: spread `total` spaces over `gaps` slots, extra left.
+            let base = total / gaps;
+            let extra = total % gaps;
+            let mut g = 0;
+            while g < count {
+                line.push_str(words[i + g]);
+                if g < gaps {
+                    let mut sp = base;
+                    if g < extra {
+                        sp = sp + 1;     // leftmost `extra` gaps get +1
+                    }
+                    pad_spaces(mut line, sp);
+                }
+                g = g + 1;
+            }
+        }
+
+        lines.push(line);
+        i = j;
+    }
+
+    lines
+}
+
+// ---- test harness (shared verbatim by both solvers + the Python mirror) -------
+
+fn report(words: Vec[String], mw: i64, s: mut ref String) {
+    let lines = full_justify(words, mw);
+    // Each line is printed quoted (so trailing spaces are visible in a diff) and
+    // folded into a positional checksum Σ (k+1)·byte[k] — the byte-for-byte diff
+    // anchor. A spacing error changes the checksum even when the width does not.
+    let ln = lines.len();
+    let mut idx = 0;
+    while idx < ln {
+        let line = ref lines[idx];
+        let mut q: String = "\"";
+        q.push_str(line);
+        q.push('"');
+        println(q);
+
+        let bytes = line.bytes();
+        let bl = line.len();
+        let mut chk = 0;
+        let mut k = 0;
+        while k < bl {
+            chk = chk + (k + 1) * (bytes[k] as i64);
+            k = k + 1;
+        }
+        s.push(' ');
+        s.push_str(f"{chk}");
+        idx = idx + 1;
+    }
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    // LeetCode example 1.
+    report(["This", "is", "an", "example", "of", "text", "justification."], 16, mut s);
+    // LeetCode example 2 (last line and a single-word line).
+    report(["What", "must", "be", "acknowledgment", "shall", "be"], 16, mut s);
+    // LeetCode example 3 (wider, uneven spreads).
+    report(["Science", "is", "what", "we", "understand", "well", "enough", "to",
+            "explain", "to", "a", "computer.", "Art", "is", "everything", "else",
+            "we", "do"], 20, mut s);
+
+    // Edges.
+    report(["a"], 5, mut s);                  // single short word, right-pad
+    report(["hello"], 5, mut s);              // word fills the width exactly
+    report(["hi", "there"], 10, mut s);       // two words, last line left-justified
+    report(["Listen", "to", "many,", "speak", "to", "a", "few."], 6, mut s); // narrow width
+    report(["ask", "not", "what", "your", "country"], 9, mut s);
+
+    println(s);
+}

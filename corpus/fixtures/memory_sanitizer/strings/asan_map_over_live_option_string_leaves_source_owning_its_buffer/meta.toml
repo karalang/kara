@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/strings.rs::asan_map_over_live_option_string_leaves_source_owning_its_buffer"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

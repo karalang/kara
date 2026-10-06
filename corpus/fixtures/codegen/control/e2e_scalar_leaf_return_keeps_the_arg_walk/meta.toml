@@ -1,0 +1,13 @@
+source = "tests/codegen/control.rs::e2e_scalar_leaf_return_keeps_the_arg_walk"
+dedup_of = ["tests/interpreter/control.rs::test_scalar_leaf_return_keeps_the_arg_walk"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

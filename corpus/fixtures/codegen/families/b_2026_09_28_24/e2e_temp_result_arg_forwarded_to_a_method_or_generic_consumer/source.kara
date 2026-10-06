@@ -1,0 +1,18 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+fn geat[T](t: T) { println("gx") }
+struct K { k: i64 }
+impl K {
+    fn peek(ref self, x: Result[S, i64]) { match x { Ok(y) => println(f"p{y.r.id}"), Err(e) => println("e") } }
+    fn ae(x: Result[S, i64]) { println("ae") }
+}
+fn f1(a: Result[S, i64], q: K) { q.peek(a); println("after") }
+fn f2(a: Result[S, i64]) { K.ae(a); println("after") }
+fn f3(a: Result[S, i64]) { geat(a); println("after") }
+fn main() {
+    f1(Ok(mk(1)), K { k: 0 }); f2(Ok(mk(2))); f3(Ok(mk(3)));
+    let b: Result[S, i64] = Ok(mk(4)); f1(b, K { k: 0 }); f1(Err(9), K { k: 0 });
+    println("end")
+}

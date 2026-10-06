@@ -1,0 +1,38 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct TwoNarrow { a: i32, b: i32, s: String }
+#[derive(Hash, Eq, PartialEq)]
+struct AllScalar { a: i32, b: i32, c: i32 }
+#[derive(Hash, Eq, PartialEq)]
+enum Holder { W(TwoNarrow), S(AllScalar), N }
+#[derive(PartialEq)]
+enum Num { F(f64), I(i64), N }
+
+fn mk(n: i64) -> String { return f"v{n}"; }
+fn nan64(z: f64) -> f64 { return z / z; }
+fn negzero(z: f64) -> f64 { return -z; }
+
+fn main() {
+    let x: Holder = Holder.W(TwoNarrow { a: 1, b: 2, s: mk(1) });
+    let y: Holder = Holder.W(TwoNarrow { a: 1, b: 2, s: mk(1) });
+    println(f"subword={x == y}");
+    println(f"subword-ne-s={x == Holder.W(TwoNarrow { a: 1, b: 2, s: mk(2) })}");
+    println(f"subword-ne-a={x == Holder.W(TwoNarrow { a: 9, b: 2, s: mk(1) })}");
+    println(f"subword-ne-b={x == Holder.W(TwoNarrow { a: 1, b: 9, s: mk(1) })}");
+    println(f"subword-tag={x == Holder.N}");
+
+    let p: Holder = Holder.S(AllScalar { a: 1, b: 2, c: 3 });
+    println(f"scalarstruct={p == Holder.S(AllScalar { a: 1, b: 2, c: 3 })}");
+    println(f"scalarstruct-ne={p == Holder.S(AllScalar { a: 1, b: 2, c: 4 })}");
+
+    let z = 0.0;
+    let neg = negzero(z);
+    let nan = nan64(z);
+    println(f"zeros={Num.F(0.0) == Num.F(neg)}");
+    println(f"nan={Num.F(nan) == Num.F(nan)}");
+    println(f"floats={Num.F(1.5) == Num.F(1.5)}");
+    println(f"floats-ne={Num.F(1.5) == Num.F(2.5)}");
+    println(f"ints={Num.I(7) == Num.I(7)}");
+    println(f"ints-ne={Num.I(7) == Num.I(8)}");
+    println(f"num-tag={Num.F(1.5) == Num.N}");
+}

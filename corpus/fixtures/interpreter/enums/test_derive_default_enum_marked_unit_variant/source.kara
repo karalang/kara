@@ -1,0 +1,11 @@
+
+#[derive(Default)]
+enum Wrapped { Pair(i64, bool), #[default] Empty }
+
+fn main() {
+    let w = Wrapped.default();
+    match w {
+        Wrapped.Pair(n, b) => { println(n); println(b); }
+        Wrapped.Empty => { println("empty"); }
+    }
+}

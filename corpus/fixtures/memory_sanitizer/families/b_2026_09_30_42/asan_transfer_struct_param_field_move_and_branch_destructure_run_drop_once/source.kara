@@ -1,0 +1,30 @@
+struct G[T] { v: T, n: i64 }
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct Rs { id: i64, s: String }
+impl Drop for Rs { fn drop(mut ref self) { println(f"ds{self.id} {self.s.len()}") } }
+fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
+fn eat(r: Rs) -> i64 { r.id }
+fn giveg(g: G[Rs]) -> i64 { g.n }
+fn a1(g: G[Rs]) -> i64 { let w = g.v; println(w.s.len()); g.n }
+fn a2(g: G[Rs]) -> i64 { let w = g.v; eat(w) + g.n }
+fn a3(g: G[Rs]) -> Rs { let w = g.v; w }
+fn a4(g: G[R], c: bool) -> i64 { if c { match g { G { v, n } => n } } else { 0 } }
+fn a5(g: G[Rs], c: bool) -> i64 { if c { let G { v, n } = g; n } else { 0 } }
+fn a6(g: G[Vec[R]], c: bool) -> i64 { if c { let G { v, n } = g; println(v.len()); n } else { 0 } }
+fn a7(g: G[Rs], c: bool) -> i64 { if c { match g { G { v, n } => eat(v) + n } } else { giveg(g) } }
+fn main() {
+    println(a1(G { v: Rs { id: 1, s: mk(1) }, n: 10 }));
+    println(a2(G { v: Rs { id: 2, s: mk(2) }, n: 20 }));
+    let r = a3(G { v: Rs { id: 3, s: mk(3) }, n: 30 });
+    println(r.id);
+    println(a4(G { v: R { id: 4 }, n: 40 }, true));
+    println(a4(G { v: R { id: 5 }, n: 50 }, false));
+    println(a5(G { v: Rs { id: 6, s: mk(6) }, n: 60 }, true));
+    println(a5(G { v: Rs { id: 7, s: mk(7) }, n: 70 }, false));
+    println(a6(G { v: [R { id: 8 }, R { id: 9 }], n: 80 }, true));
+    println(a6(G { v: [R { id: 10 }], n: 90 }, false));
+    println(a7(G { v: Rs { id: 11, s: mk(11) }, n: 100 }, true));
+    println(a7(G { v: Rs { id: 12, s: mk(12) }, n: 110 }, false));
+    println("end");
+}

@@ -1,0 +1,21 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 200i64 {
+        let s = f"outer{i}";
+        {
+            let s = f"inner{i}";
+            total = total + s.len();
+        }
+        let mut j: i64 = 0i64;
+        while j < 2i64 {
+            let s = f"loop{i}";
+            total = total + s.len();
+            j = j + 1i64;
+        }
+        total = total + s.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

@@ -1,0 +1,28 @@
+
+fn main() {
+    let mut v: Vec[Map[String, i64]] = Vec.new();
+    v.push(Map.new());
+    v.push(Map.new());
+    let _ = v[0].insert(f"k{1}", 5);
+    match v[0].get(f"k{1}") { Some(x) => println(f"got {x}"), None => println("miss") }
+    println(f"m0 {v[0].len()} m1 {v[1].len()}");
+    let mut g: Vec[Map[String, i64]] = Vec.filled(2, Map.new());
+    let _ = g[0].insert(f"a{2}", 7);
+    println(f"g0 {g[0].len()} g1 {g[1].len()}");
+    let mut s: Vec[Set[i64]] = Vec.new();
+    s.push(Set.new());
+    let _ = s[0].insert(9i64);
+    println(f"s0 {s[0].len()}");
+    let mut d: Vec[SortedMap[i64, i64]] = Vec.filled(2, SortedMap.new());
+    let _ = d[0].insert(7i64, 70i64);
+    println(f"d0 {d[0].len()} d1 {d[1].len()}");
+    let mut q: VecDeque[Map[String, i64]] = VecDeque.new();
+    q.push_back(Map.new());
+    let _ = q[0].insert(f"z{3}", 4);
+    match q[0].get(f"z{3}") { Some(x) => println(f"qgot {x}"), None => println("qmiss") }
+    let mut w: Vec[Set[i64]] = Vec.new();
+    w.insert(0, Set.new());
+    let _ = w[0].insert(9i64);
+    println(f"w0 {w[0].len()}");
+    println("end");
+}

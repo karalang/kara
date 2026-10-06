@@ -1,0 +1,10 @@
+
+shared struct S { val: i64 }
+fn make() -> S {
+    let s = S { val: 42 };
+    s
+}
+fn main() {
+    let x = make();
+    println(x.val);
+}

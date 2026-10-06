@@ -1,0 +1,28 @@
+
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct G[T] { v: T, n: i64 }
+struct G2[T] { v: T, r: R }
+struct H2 { v: R, r: R }
+fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
+fn mr(k: i64) -> R { R { id: k, s: mk(k) } }
+fn take(g: G[String]) -> i64 { g.v.len() + g.n }
+fn takeg[T](g: G[T]) -> i64 { g.n }
+fn take2(g: G2[R]) -> i64 { g.v.id + g.r.id }
+fn takeh(g: H2) -> i64 { g.v.id + g.r.id }
+fn taker(g: G[R]) -> i64 { g.v.id + g.n }
+fn mo(k: i64) -> Option[G[String]] { Option.Some(G { v: mk(k), n: k }) }
+fn t1() -> i64 { let o = Option.Some(G { v: mk(1), n: 1 }); match o { Option.Some(g) => take(g), Option.None => 0 } }
+fn t2() -> i64 { let o = Option.Some(G2 { v: mr(2), r: mr(22) }); match o { Option.Some(g) => take2(g), Option.None => 0 } }
+fn t3() -> i64 { let o = Option.Some(H2 { v: mr(3), r: mr(33) }); match o { Option.Some(g) => takeh(g), Option.None => 0 } }
+fn t5() -> i64 { let o = Option.Some(G { v: mr(5), n: 5 }); match o { Option.Some(g) => taker(g), Option.None => 0 } }
+fn t6() -> i64 { match mo(6) { Option.Some(g) => take(g), Option.None => 0 } }
+fn t7() -> i64 { let o: Result[G[String], i64] = Result.Ok(G { v: mk(7), n: 7 }); match o { Result.Ok(g) => take(g), Result.Err(e) => e } }
+fn t8() -> i64 { let o = Option.Some(G { v: mk(8), n: 8 }); match o { Option.Some(g) => takeg(g), Option.None => 0 } }
+fn t9() -> i64 { let o = Option.Some(G { v: mk(9), n: 9 }); if let Option.Some(g) = o { take(g) } else { 0 } }
+fn t10() -> i64 { let o = Option.Some(G2 { v: mr(10), r: mr(100) }); match o { Option.Some(g) => { let a = take2(g); a }, Option.None => 0 } }
+fn main() {
+    println(t1()); println(t2()); println(t3()); println(t5()); println(t6())
+    println(t7()); println(t8()); println(t9()); println(t10())
+    println("end")
+}

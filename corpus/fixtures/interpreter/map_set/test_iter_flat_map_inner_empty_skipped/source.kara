@@ -1,0 +1,15 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    for x in v.iter().flat_map(|n| {
+        if n % 2 == 0 {
+            let inner = [n * 10];
+            inner.iter()
+        } else {
+            let inner: Vec[i64] = Vec[];
+            inner.iter()
+        }
+    }) {
+        println(x);
+    }
+}

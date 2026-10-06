@@ -1,0 +1,72 @@
+// LeetCode #70: Climbing Stairs — two rolling counters, O(n) time, O(1) space (★).
+//
+// You climb a staircase of `n` steps taking 1 or 2 steps at a time; how many
+// distinct ways reach the top? The last move is either a single step (from step
+// `n-1`) or a double step (from step `n-2`), and those two sets of paths are
+// disjoint, so
+//
+//     ways(n) = ways(n-1) + ways(n-2)
+//
+// with `ways(1) = 1` and `ways(2) = 2`. That is the Fibonacci recurrence
+// (`ways(n) = fib(n+1)`), and it is the same "sum the two ways in" move as the
+// grid katas [#62](../62-unique-paths/)–[#63](../63-unique-paths-ii/) collapsed
+// onto one dimension.
+//
+// The recurrence only ever looks back two terms, so no array is needed — carry
+// just the previous two counts in a pair of scalars and roll them forward:
+//
+//     a, b  hold  ways(i-2), ways(i-1)
+//     next = a + b = ways(i);  then  a, b  <-  b, next
+//
+// O(1) space, the scalar-accumulator analogue of the grid DP's rolling row. The
+// full-array form ([`climbing_stairs_dp.kara`](climbing_stairs_dp.kara)) keeps
+// every `ways(i)`, and a matrix-power form
+// ([`climbing_stairs_matrix.kara`](climbing_stairs_matrix.kara)) reaches the
+// answer in O(log n) — both agree with this ★.
+//
+// LeetCode caps n at 45, so `ways(45) = 1_836_311_903` fits comfortably in i64
+// (indeed in i32); the arithmetic is i64 for corpus uniformity and never nears
+// overflow.
+
+fn climb(n: i64) -> i64 {
+    if n <= 2 {
+        return n;
+    }
+    let mut a = 1;                 // ways(1)
+    let mut b = 2;                 // ways(2)
+    let mut i = 3;
+    while i <= n {
+        let next = a + b;             // ways(i) = ways(i-2) + ways(i-1)
+        a = b;
+        b = next;
+        i = i + 1;
+    }
+    b
+}
+
+// ---- test harness (shared verbatim by all three solvers + the Python mirror) --
+
+fn report(n: i64, s: mut ref String) {
+    let ways = climb(n);
+    println(f"climb({n}) = {ways}");
+    s.push(' ');
+    s.push_str(f"{ways}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report(1, mut s);            // 1
+    report(2, mut s);            // 2  — LeetCode example (2 -> 2)
+    report(3, mut s);            // 3  — LeetCode example (3 -> 3)
+    report(4, mut s);            // 5
+    report(5, mut s);            // 8
+    report(6, mut s);            // 13
+    report(10, mut s);          // 89
+    report(15, mut s);          // 987
+    report(20, mut s);          // 10946
+    report(30, mut s);          // 1346269
+    report(45, mut s);          // 1836311903 — the n = 45 cap
+
+    println(s);
+}

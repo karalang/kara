@@ -1,0 +1,63 @@
+// LeetCode 163 — Missing Ranges. (Premium.)
+//
+// Given a SORTED array `nums` (distinct, all within [lower, upper]) and the
+// inclusive bounds `lower`/`upper`, return the smallest sorted list of ranges
+// that cover every number in [lower, upper] NOT present in `nums`. A range is
+// printed as "a" if it's a single number, else "a->b".
+//
+// One pass. Track `prev` = the last number we've accounted for, initialised to
+// `lower - 1`. Sweep each element (plus a virtual `upper + 1` sentinel at the
+// end): whenever the gap `cur - prev` is at least 2 there are missing numbers
+// strictly between them, so emit the range [prev+1, cur-1]. Advance `prev` to
+// `cur` and continue.
+
+fn fmt_range(lo: i64, hi: i64) -> String {
+    if lo == hi { return f"{lo}"; }
+    return f"{lo}->{hi}";
+}
+
+fn missing_ranges(nums: Slice[i64], lower: i64, upper: i64) -> Vec[String] {
+    let mut res: Vec[String] = Vec.new();
+    let n = nums.len();
+    let mut prev = lower - 1;
+    let mut i = 0;
+    while i <= n {
+        let cur = if i < n { nums[i] } else { upper + 1 };
+        if cur - prev >= 2 {
+            res.push(fmt_range(prev + 1, cur - 1));
+        }
+        prev = cur;
+        i = i + 1;
+    }
+    return res;
+}
+
+fn report(nums: Slice[i64], lower: i64, upper: i64) {
+    let ranges = missing_ranges(nums, lower, upper);
+    let mut line: String = "";
+    let n = ranges.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 { line.push_str(", "); }
+        line.push_str(ranges[i]);
+        i = i + 1;
+    }
+    println(line);
+}
+
+fn main() {
+    let a: Array[i64, 5] = [0, 1, 3, 50, 75];
+    report(a, 0, 99);   // 2, 4->49, 51->74, 76->99
+
+    let b: Array[i64, 0] = [];
+    report(b, 1, 1);    // 1
+
+    let c: Array[i64, 0] = [];
+    report(c, -3, 2);   // -3->2
+
+    let d: Array[i64, 4] = [-1, 0, 1, 2];
+    report(d, -1, 2);   // (empty — nothing missing)
+
+    let e: Array[i64, 3] = [1, 3, 5];
+    report(e, 1, 5);    // 2, 4
+}

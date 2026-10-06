@@ -1,0 +1,21 @@
+
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+struct HoRes { a: R, b: Result[R, String] }
+fn mk(id: i64) -> R { return R { id: id, tag: f"tag-value-{id}" } }
+
+fn loc(k: i64)   { let h = HoRes { a: mk(k + 0), b: Result.Ok(mk(k + 1)) }; let HoRes { a, b } = h; println(f"rd{a.id}") }
+fn awild(k: i64) { let h = HoRes { a: mk(k + 2), b: Result.Ok(mk(k + 3)) }; let HoRes { a: _, b } = h; println(f"rb{k}") }
+fn used(k: i64)  { let h = HoRes { a: mk(k + 4), b: Result.Ok(mk(k + 5)) }; let HoRes { a, b } = h;
+                   match b { Result.Ok(x) => println(f"got{x.id}/{x.tag}"), Result.Err(e) => println(f"err{e}") }
+                   println(f"rd{a.id}") }
+fn errh(k: i64)  { let h = HoRes { a: mk(k + 6), b: Result.Err(f"errstring-{k}") }; let HoRes { a, b } = h; println(f"rd{a.id}") }
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let k = i * 10;
+        loc(k); awild(k); used(k); errh(k);
+        i = i + 1;
+    }
+}

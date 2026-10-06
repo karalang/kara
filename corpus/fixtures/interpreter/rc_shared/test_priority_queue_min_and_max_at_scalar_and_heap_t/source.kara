@@ -1,0 +1,33 @@
+
+fn main() {
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    q.push(5); q.push(1); q.push(4); q.push(2); q.push(3);
+    println(q.len());
+    println(q.is_empty());
+    let a = q.into_sorted_vec();
+    let mut i = 0;
+    while i < a.len() { println(a[i]); i = i + 1; }
+    let mut m: PriorityQueue[i64] = PriorityQueue.max_first();
+    m.push(5); m.push(1); m.push(4);
+    let b = m.into_sorted_vec();
+    let mut j = 0;
+    while j < b.len() { println(b[j]); j = j + 1; }
+    let v: Vec[i64] = [9, 7, 8, 1, 3];
+    let c = PriorityQueue.from(v).into_sorted_vec();
+    let mut k = 0;
+    while k < c.len() { println(c[k]); k = k + 1; }
+    let mut s: PriorityQueue[String] = PriorityQueue.new();
+    s.push("pear"); s.push("apple"); s.push("fig");
+    let d = s.into_sorted_vec();
+    let mut z = 0;
+    while z < d.len() { println(d[z]); z = z + 1; }
+    let e = PriorityQueue.max_first_from(["pear", "apple", "fig"]).into_sorted_vec();
+    let mut w = 0;
+    while w < e.len() { println(e[w]); w = w + 1; }
+    let mut f: PriorityQueue[i64] = PriorityQueue.new();
+    println(f.is_empty());
+    match f.pop() { Some(x) => { println(x); } None => { println("none"); } }
+    let empty: Vec[i64] = [];
+    let g = PriorityQueue.from(empty).into_sorted_vec();
+    println(g.len());
+}

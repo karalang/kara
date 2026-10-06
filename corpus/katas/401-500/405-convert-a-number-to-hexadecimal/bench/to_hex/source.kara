@@ -1,0 +1,58 @@
+// LeetCode #405 bench harness — Kāra, bitwise mask-and-shift hex render.
+//
+// The headline ★ style: `n & 0xf` nibble + `n >> 4`, buffer LSB-first, then
+// render each nibble through the const `HEX` table as a one-byte zero-copy
+// slice appended via `push_str` — the lexer's radix-16 *render* arm.
+//
+// This is a SEQUENTIAL string-building benchmark — the lexer's real shape:
+// concatenate the hex rendering of TOTAL distinct values into one growing
+// output buffer, then checksum its bytes. Persisting the output is what makes
+// the measurement honest: a per-render byte-sum would let an optimizing
+// comparator (rustc/clang/go) elide the heap String entirely and fold the work
+// to arithmetic, but a buffer that is built up and then observed cannot be
+// elided. The build carries a loop-borne dependency on `out`, so it does not
+// auto-parallelize — this is a single-lane (seq) bench by construction.
+
+fn to_hex(num: i64) -> String {
+    if num == 0 {
+        return "0";
+    }
+    let hexd: String = "0123456789abcdef";
+    let mut n = num & 0xffffffff;
+    let mut buf: Vec[i64] = Vec.new();
+    while n > 0 {
+        buf.push(n & 0xf);
+        n = n >> 4;
+    }
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        let d = buf[k];
+        out.push_str(hexd[d..d + 1]);
+        k = k - 1;
+    }
+    out
+}
+
+fn main() {
+    let total = 4000000;
+
+    // Build: concatenate every rendering into one buffer (sequential).
+    let mut out: String = "";
+    let mut k = 0;
+    while k < total {
+        let v = (k * 2654435761) & 0xffffffff;
+        out.push_str(to_hex(v));
+        k = k + 1;
+    }
+
+    // Observe: byte-checksum of the whole output (defeats render elision).
+    let b = out.bytes();
+    let mut sum = 0;
+    let mut j = 0;
+    while j < b.len() {
+        sum = sum + (b[j] as i64);
+        j = j + 1;
+    }
+    println(f"{sum}");
+}

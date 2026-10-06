@@ -1,0 +1,7 @@
+cases 4000
+permutable 2624
+even length AND permutable 1224
+brute-force verified 3065
+brute-force disagreements 0
+digest 216499248
+mismatches 0

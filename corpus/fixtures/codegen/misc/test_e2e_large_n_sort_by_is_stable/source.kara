@@ -1,0 +1,25 @@
+
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 80 {
+        v.push((i % 8, i));
+        i = i + 1;
+    }
+    v.sort_by(|x, y| x.0.cmp(y.0));
+    let mut bad: i64 = 0;
+    let mut pk: i64 = -1;
+    let mut po: i64 = -1;
+    let mut j: i64 = 0;
+    while j < 80 {
+        let t = v.get(j).unwrap();
+        if t.0 < pk { bad = bad + 1; }
+        if t.0 == pk {
+            if t.1 < po { bad = bad + 1; }
+        }
+        pk = t.0;
+        po = t.1;
+        j = j + 1;
+    }
+    println(bad);
+}

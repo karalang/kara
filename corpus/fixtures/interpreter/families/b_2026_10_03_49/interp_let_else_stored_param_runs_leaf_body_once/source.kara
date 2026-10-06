@@ -1,0 +1,14 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn one(x: Option[R], v: mut ref Vec[R]) -> i64 { let Some(w) = x else { return 0 }; v.push(w); return 1 }
+fn two(x: Option[Option[R]], v: mut ref Vec[R]) -> i64 { let Some(Some(w)) = x else { return 0 }; v.push(w); return 1 }
+fn step(x: Option[Option[R]], v: mut ref Vec[R]) -> i64 { let Some(o) = x else { return 0 }; let Some(w) = o else { return 2 }; v.push(w); return 1 }
+fn main() {
+    let mut v: Vec[R] = Vec.new();
+    println(one(Some(mk(1)), mut v));
+    println(two(Some(Some(mk(2))), mut v));
+    println(step(Some(Some(mk(3))), mut v));
+    println(v.len());
+    println("end");
+}

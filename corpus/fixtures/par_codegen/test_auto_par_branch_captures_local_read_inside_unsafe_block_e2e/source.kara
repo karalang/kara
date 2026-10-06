@@ -1,0 +1,10 @@
+
+unsafe extern "C" {
+    fn malloc(n: i64) -> *mut u8;
+    fn free(p: *mut u8);
+}
+fn main() {
+    let m = unsafe { malloc(8) };
+    unsafe { free(m) };
+    println("ok");
+}

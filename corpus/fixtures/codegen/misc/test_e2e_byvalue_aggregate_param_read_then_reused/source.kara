@@ -1,0 +1,9 @@
+
+struct S { s: String }
+fn take(v: S) { println(v.s) }
+fn main() {
+    let x = S { s: "hi".to_string() };
+    take(x);
+    take(x);
+    println(x.s);
+}

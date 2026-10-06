@@ -1,0 +1,26 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct S1 { r: R }
+struct H  { n: i64 }
+fn mk(n: i64) -> R { return R { id: n }; }
+fn read(x: R) -> i64 { return x.id; }
+
+impl H {
+    fn m1(ref self, r: R)        { println("  end") }
+    fn m2(ref self, r: R)        { let m = r; println("  end") }
+    fn m3(ref self, r: R)        { let m = r; read(m); println("  end") }
+    fn m4(ref self, r: R) -> i64 { let s = S1 { r: r }; let x = s.r; return 7; }
+    fn m5(ref self, t: (R, i64)) { let (a, b) = t; let m = a; read(m); println("  end") }
+    fn m6(ref self, t: (R, i64)) { let (a, b) = t; println("  end") }
+}
+
+fn main() {
+    let h = H { n: 0 };
+    println("m1 bare-die");       h.m1(mk(1))
+    println("m2 rebind-die");     h.m2(mk(2))
+    println("m3 into-call");      h.m3(mk(3))
+    println("m4 wrap-moveout");   let v = h.m4(mk(4)); println(f"  v={v}")
+    println("m5 destr-intocall"); h.m5((mk(5), 9))
+    println("m6 destr-die");      h.m6((mk(6), 9))
+    println("done")
+}

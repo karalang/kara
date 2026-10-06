@@ -1,0 +1,3 @@
+
+fn f[T: Numeric](x: T) -> T { let a = x; let b = x; return a + b; }
+fn main() { println(f"{f(7)}"); }

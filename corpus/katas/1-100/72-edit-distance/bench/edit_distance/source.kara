@@ -1,0 +1,79 @@
+// Benchmark workload — Edit Distance (LeetCode #72), the rolling two-row DP.
+//
+// A single edit distance is O(m·n); this runs the rolling O(n)-space form
+// ([`../edit_distance_rolling.kara`](../edit_distance_rolling.kara)) K = 400_000
+// times over per-iteration-generated string pairs, folding each distance into a
+// rolling hash. Each iteration builds two length-24 byte sequences from `k` over
+// a 4-letter alphabet — `a[p] = (p*7 + k) % 4`, `b[p] = (p*5 + 2k) % 4` — so both
+// strings (and thus the distance) change every iteration (nothing hoistable), and
+// the small alphabet guarantees a real mix of matches and mismatches so the
+// min-over-three recurrence does genuine work.
+//
+// What's measured is the DP kernel: the L×L `min(diag, up, left)` scan plus the
+// two `Vec[i64]` rolling rows and the per-iteration `Vec[u8]` string builds. The
+// loop-carried sink `acc = (acc*131 + d) % 1e9+7` is a genuine dependency, so the
+// loop is NOT a reduction karac's auto-par pass can split — single-threaded by
+// construction, comparable to the native mirrors per-core. Seq-only kata, same
+// discipline as #55/#62/#66/#68/#69/#70.
+//
+// Distances stay ≤ 24, tiny in i64.
+
+fn edit_distance(a: ref Vec[u8], b: ref Vec[u8]) -> i64 {
+    let m = a.len();
+    let n = b.len();
+
+    let mut prev: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j <= n {
+        prev.push(j);
+        j = j + 1;
+    }
+
+    let mut i = 1;
+    while i <= m {
+        let mut cur: Vec[i64] = Vec.new();
+        cur.push(i);
+        let mut c = 1;
+        while c <= n {
+            if a[i - 1] == b[c - 1] {
+                let d = prev[c - 1];
+                cur.push(d);
+            } else {
+                let diag = prev[c - 1];
+                let up = prev[c];
+                let left = cur[c - 1];
+                cur.push(1 + min(diag, min(up, left)));
+            }
+            c = c + 1;
+        }
+        prev = cur;
+        i = i + 1;
+    }
+
+    prev[n]
+}
+
+fn main() {
+    let total: i64 = 400000;
+    let modulus: i64 = 1000000007;
+    let len: i64 = 24;
+
+    let mut acc: i64 = 0;
+    let mut k: i64 = 0;
+    while k < total {
+        // Two length-24 strings over a 4-letter alphabet, both varying with k.
+        let mut a: Vec[u8] = Vec.new();
+        let mut b: Vec[u8] = Vec.new();
+        let mut p = 0;
+        while p < len {
+            a.push(((p * 7 + k) % 4) as u8);
+            b.push(((p * 5 + 2 * k) % 4) as u8);
+            p = p + 1;
+        }
+        let d = edit_distance(a, b);
+        acc = (acc * 131 + d) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

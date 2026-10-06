@@ -1,0 +1,16 @@
+
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                let body = match req.header("Content-Type") {
+                    Some(v) => v,
+                    None => "absent",
+                };
+                Response { status: 200, body: body }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        

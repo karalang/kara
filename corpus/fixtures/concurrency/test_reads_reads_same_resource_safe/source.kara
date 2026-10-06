@@ -1,0 +1,9 @@
+
+        effect resource Db;
+        fn read1() reads(Db) { }
+        fn read2() reads(Db) { }
+        fn main() {
+            read1();
+            read2();
+        }
+        

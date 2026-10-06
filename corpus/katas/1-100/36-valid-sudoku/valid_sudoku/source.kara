@@ -1,0 +1,172 @@
+// LeetCode #36: Valid Sudoku — single pass, three digit-bitmask arrays (★).
+//
+// A partially filled 9×9 board (0 marks an empty cell, 1–9 a placed digit). Decide
+// whether it is valid SO FAR: no digit repeats within any row, any column, or any
+// of the nine 3×3 sub-boxes. Empty cells impose nothing, and the board need not be
+// solvable — only the three no-duplicate rules matter.
+//
+// The whole problem is "have I seen this digit in this row / column / box already?"
+// asked 81 times. With nine distinct digits, a row's seen-set fits in a single
+// integer used as a BITMASK: bit d (1 << d) means "digit d is present in this row".
+// Same for each column and each box, so the entire state is three arrays of nine
+// i64 masks — 27 integers, O(1) per cell, one pass over the grid.
+//
+//   - For a filled cell (r, c) holding digit d, form bit = 1 << d.
+//   - The cell belongs to box (r/3)*3 + c/3 — integer division folds the 9×9 grid
+//     into a 3×3 grid of boxes, then back to a flat 0..9 box index.
+//   - If bit is ALREADY set in rows[r], cols[c], or boxes[box], a duplicate exists:
+//     the board is invalid, return immediately.
+//   - Otherwise set bit in all three masks and move on.
+//
+// One pass, three O(1) membership tests per cell, no allocation beyond the 27-mask
+// scratch. The early return on the first collision is what makes the common
+// (invalid) case cheap. Testing all three masks together is the crux: a digit can
+// be unique in its row and column yet collide inside its box, so all three
+// constraints must be checked at every cell, not in isolation.
+
+fn box_index(r: i64, c: i64) -> i64 {
+    (r / 3) * 3 + c / 3
+}
+
+fn is_valid(board: ref Vec[Vec[i64]]) -> bool {
+    // rows[i] / cols[i] / boxes[i] — a bitmask of digits already seen in unit i.
+    let mut rows: Vec[i64] = Vec.new();
+    let mut cols: Vec[i64] = Vec.new();
+    let mut boxes: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 9 {
+        rows.push(0);
+        cols.push(0);
+        boxes.push(0);
+        i = i + 1;
+    }
+
+    let mut r = 0;
+    while r < 9 {
+        let mut c = 0;
+        while c < 9 {
+            let d = board[r][c];
+            if d != 0 {
+                let bit = 1 << d;
+                let b = box_index(r, c);
+                if (rows[r] & bit) != 0
+                    or (cols[c] & bit) != 0
+                    or (boxes[b] & bit) != 0 {
+                    return false;
+                }
+                rows[r] = rows[r] | bit;
+                cols[c] = cols[c] | bit;
+                boxes[b] = boxes[b] | bit;
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    true
+}
+
+fn report(name: String, board: ref Vec[Vec[i64]]) {
+    if is_valid(board) {
+        println(f"{name} -> valid");
+    } else {
+        println(f"{name} -> invalid");
+    }
+}
+
+// LeetCode example 1 — a valid partial board.
+fn board_example1() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([5, 3, 0, 0, 7, 0, 0, 0, 0]);
+    b.push([6, 0, 0, 1, 9, 5, 0, 0, 0]);
+    b.push([0, 9, 8, 0, 0, 0, 0, 6, 0]);
+    b.push([8, 0, 0, 0, 6, 0, 0, 0, 3]);
+    b.push([4, 0, 0, 8, 0, 3, 0, 0, 1]);
+    b.push([7, 0, 0, 0, 2, 0, 0, 0, 6]);
+    b.push([0, 6, 0, 0, 0, 0, 2, 8, 0]);
+    b.push([0, 0, 0, 4, 1, 9, 0, 0, 5]);
+    b.push([0, 0, 0, 0, 8, 0, 0, 7, 9]);
+    b
+}
+
+// LeetCode example 2 — example 1 with the top-left 5 changed to 8. That 8 now
+// repeats in column 0 (row 3 is also 8) AND in the top-left box (cell (2,2) is 8).
+fn board_example2() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([8, 3, 0, 0, 7, 0, 0, 0, 0]);
+    b.push([6, 0, 0, 1, 9, 5, 0, 0, 0]);
+    b.push([0, 9, 8, 0, 0, 0, 0, 6, 0]);
+    b.push([8, 0, 0, 0, 6, 0, 0, 0, 3]);
+    b.push([4, 0, 0, 8, 0, 3, 0, 0, 1]);
+    b.push([7, 0, 0, 0, 2, 0, 0, 0, 6]);
+    b.push([0, 6, 0, 0, 0, 0, 2, 8, 0]);
+    b.push([0, 0, 0, 4, 1, 9, 0, 0, 5]);
+    b.push([0, 0, 0, 0, 8, 0, 0, 7, 9]);
+    b
+}
+
+// A fully empty board — vacuously valid (no constraint can fire).
+fn board_empty() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r < 9 {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < 9 {
+            row.push(0);
+            c = c + 1;
+        }
+        b.push(row);
+        r = r + 1;
+    }
+    b
+}
+
+// A complete, correctly solved board (the canonical solution of example 1) — valid.
+fn board_solved() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([5, 3, 4, 6, 7, 8, 9, 1, 2]);
+    b.push([6, 7, 2, 1, 9, 5, 3, 4, 8]);
+    b.push([1, 9, 8, 3, 4, 2, 5, 6, 7]);
+    b.push([8, 5, 9, 7, 6, 1, 4, 2, 3]);
+    b.push([4, 2, 6, 8, 5, 3, 7, 9, 1]);
+    b.push([7, 1, 3, 9, 2, 4, 8, 5, 6]);
+    b.push([9, 6, 1, 5, 3, 7, 2, 8, 4]);
+    b.push([2, 8, 7, 4, 1, 9, 6, 3, 5]);
+    b.push([3, 4, 5, 2, 8, 6, 1, 7, 9]);
+    b
+}
+
+// Duplicate confined to a ROW (same row, different column and box) — invalid.
+fn board_row_dup() -> Vec[Vec[i64]] {
+    let mut b = board_empty();
+    b[0][0] = 1;
+    b[0][8] = 1;
+    b
+}
+
+// Duplicate confined to a COLUMN (same column, different row and box) — invalid.
+fn board_col_dup() -> Vec[Vec[i64]] {
+    let mut b = board_empty();
+    b[0][0] = 2;
+    b[8][0] = 2;
+    b
+}
+
+// Duplicate confined to a BOX (same 3×3 box, different row and column) — invalid;
+// the case that defeats a row-and-column-only check.
+fn board_box_dup() -> Vec[Vec[i64]] {
+    let mut b = board_empty();
+    b[0][0] = 3;
+    b[1][1] = 3;
+    b
+}
+
+fn main() {
+    report("example1 (valid partial)", board_example1());     // valid
+    report("example2 (col+box dup)  ", board_example2());     // invalid
+    report("empty board            ", board_empty());         // valid
+    report("solved board           ", board_solved());        // valid
+    report("row-only duplicate     ", board_row_dup());       // invalid
+    report("col-only duplicate     ", board_col_dup());       // invalid
+    report("box-only duplicate     ", board_box_dup());       // invalid
+}

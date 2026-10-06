@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let sem = Semaphore.new(2);
+        match sem.acquire(0i64) { Ok(u) => { total = total + 1i64; }, Err(e) => {} }
+        match sem.acquire(0i64) { Ok(u) => { total = total + 1i64; }, Err(e) => {} }
+        match sem.acquire(0i64) { Ok(u) => { total = total + 1i64; }, Err(e) => {} }
+        sem.release();
+        let rl = RateLimiter.new_token_bucket(1i64, 2i64);
+        let key = f"client-{i}";
+        if rl.try_acquire(key) { total = total + 10i64; }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

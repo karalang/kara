@@ -1,0 +1,16 @@
+
+struct Stream { n: i64 }
+impl Stream {
+    fn fetch(mut ref self) -> i64 with sends(Network) receives(Network) {
+        self.n = self.n + 5;
+        return self.n;
+    }
+}
+fn main() {
+    let mut s1 = Stream { n: 10 };
+    let mut s2 = Stream { n: 20 };
+    let a = s1.fetch();
+    let b = s2.fetch();
+    println(a);
+    println(b);
+}

@@ -1,0 +1,10 @@
+
+struct Entity { x: i64, y: i64, hp: i64, label: i64 }
+fn main() {
+    let mut v: Vec[Entity] = Vec.new();
+    v.push(Entity { x: 1, y: 2, hp: 3, label: 5000 });
+    match v.pop() {
+        Some(e) => println(e.label),
+        None => println(-1),
+    }
+}

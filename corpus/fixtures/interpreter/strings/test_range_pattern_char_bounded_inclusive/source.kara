@@ -1,0 +1,13 @@
+
+fn classify(c: char) -> i32 {
+    match c {
+        'a'..='z' => 1,
+        'A'..='Z' => 2,
+        _ => 0,
+    }
+}
+fn main() {
+    println(classify('m'));
+    println(classify('M'));
+    println(classify('1'));
+}

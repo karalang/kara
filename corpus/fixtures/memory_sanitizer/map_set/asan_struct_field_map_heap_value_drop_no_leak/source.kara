@@ -1,0 +1,75 @@
+
+struct A { m: Map[i64, Vec[String]] }
+struct B { m: Map[String, Vec[String]] }
+struct C { m: Map[String, String] }
+struct D { m: Map[i64, Map[i64, String]] }
+struct E { s: Set[String] }
+struct F { m: Map[i64, Vec[i64]] }
+struct G { m: Map[i64, i64] }
+
+fn main() {
+    let mut a = A { m: Map.new() };
+    let mut i = 0i64;
+    while i < 40i64 {
+        let mut v: Vec[String] = Vec.new();
+        v.push(f"x{i}");
+        v.push(f"yy{i}");
+        a.m.insert(i, v);
+        i = i + 1;
+    }
+    println(f"a={a.m.len()}");
+
+    let mut b = B { m: Map.new() };
+    let mut j = 0i64;
+    while j < 40i64 {
+        let mut v: Vec[String] = Vec.new();
+        v.push(f"p{j}");
+        b.m.insert(f"k{j}", v);
+        j = j + 1i64;
+    }
+    println(f"b={b.m.len()}");
+
+    let mut c = C { m: Map.new() };
+    let mut k = 0i64;
+    while k < 20i64 {
+        c.m.insert(f"ck{k}", f"cv{k}");
+        k = k + 1i64;
+    }
+    println(f"c={c.m.len()}");
+
+    let mut d = D { m: Map.new() };
+    let mut n = 0i64;
+    while n < 10i64 {
+        let mut inner: Map[i64, String] = Map.new();
+        inner.insert(n, f"z{n}");
+        d.m.insert(n, inner);
+        n = n + 1i64;
+    }
+    println(f"d={d.m.len()}");
+
+    let mut e = E { s: Set.new() };
+    let mut q = 0i64;
+    while q < 20i64 {
+        e.s.insert(f"s{q}");
+        q = q + 1i64;
+    }
+    println(f"e={e.s.len()}");
+
+    let mut f = F { m: Map.new() };
+    let mut r = 0i64;
+    while r < 20i64 {
+        let mut vi: Vec[i64] = Vec.new();
+        vi.push(r);
+        f.m.insert(r, vi);
+        r = r + 1i64;
+    }
+    println(f"f={f.m.len()}");
+
+    let mut g = G { m: Map.new() };
+    let mut t = 0i64;
+    while t < 20i64 {
+        g.m.insert(t, t * 2i64);
+        t = t + 1i64;
+    }
+    println(f"g={g.m.len()}");
+}

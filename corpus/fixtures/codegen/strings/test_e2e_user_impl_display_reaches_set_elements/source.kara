@@ -1,0 +1,13 @@
+
+#[derive(Hash, Eq, PartialEq)]
+enum Ue { A { n: i64 }, B }
+impl Display for Ue {
+    fn to_string(ref self) -> String {
+        match self { A { n } => f"aye {n}", B => "bee" }
+    }
+}
+fn main() {
+    let mut s: Set[Ue] = Set.new();
+    s.insert(Ue.B);
+    println(f"set={s}")
+}

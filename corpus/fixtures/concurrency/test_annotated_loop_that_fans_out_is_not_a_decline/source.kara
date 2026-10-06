@@ -1,0 +1,9 @@
+
+        fn main() {
+            let mut out: Vec[i64] = Vec.new();
+            #[par_order_free]
+            for i in 0i64..100i64 {
+                out.push(i * 2i64);
+            }
+        }
+        

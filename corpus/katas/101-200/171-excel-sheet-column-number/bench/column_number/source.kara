@@ -1,0 +1,67 @@
+// LeetCode #171 bench harness — Kāra, Horner-fold bijective base-26 parse.
+//
+// The headline ★ style: `n = n * 26 + (b - 'A' + 1)` over a title's `bytes()` —
+// the lexer's `from_str_radix` accumulation arm. Parsing is pure arithmetic (no
+// allocation), so the benchmark is compute-bound — a clean measure of tight-loop
+// codegen, unlike the allocation-bound render side.
+//
+// Honesty rails: a tiny fixed corpus would let an optimizing comparator hoist
+// the handful of parse results into a table and fold the loop, so the corpus is
+// LEN=50000 *distinct* titles (generated once via `to_title`, the #168 inverse)
+// — too many to tabulate — and iteration k parses `corpus[k % LEN]`, varying the
+// input so each parse is genuinely recomputed. The outer `sum += to_number(...)`
+// reduction over k is embarrassingly parallel and recognized by karac's
+// auto-par-on-reduction pass; a second binary is built with KARAC_AUTO_PAR=0 for
+// the seq lane.
+
+fn to_title(num: i64) -> String {
+    let letters: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut buf: Vec[i64] = Vec.new();
+    let mut n = num;
+    while n > 0 {
+        n = n - 1;
+        buf.push(n % 26);
+        n = n / 26;
+    }
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        let d = buf[k];
+        out.push_str(letters[d..d + 1]);
+        k = k - 1;
+    }
+    out
+}
+
+fn to_number(title: ref String) -> i64 {
+    let tb = title.bytes();
+    let mut n = 0;
+    let mut i = 0;
+    while i < tb.len() {
+        n = n * 26 + ((tb[i] - b'A') as i64) + 1;
+        i = i + 1;
+    }
+    n
+}
+
+fn main() {
+    let len = 50000;
+    let k_iters = 100000000;
+
+    // Distinct-title corpus (built once; too many to tabulate).
+    let mut corpus: Vec[String] = Vec.new();
+    let mut i = 1;
+    while i <= len {
+        corpus.push(to_title(i));
+        i = i + 1;
+    }
+
+    let mut sum = 0;
+    let mut k = 0;
+    while k < k_iters {
+        let idx = k % len;
+        sum = sum + to_number(corpus[idx]);
+        k = k + 1;
+    }
+    println(f"{sum}");
+}

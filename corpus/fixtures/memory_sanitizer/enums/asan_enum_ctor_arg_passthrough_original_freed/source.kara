@@ -1,0 +1,13 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+enum E2 { B(Res), Empty }
+fn pass2(w: E2) -> E2 { println("passing"); return w; }
+fn main() {
+    println("a");
+    let f = pass2(E2.B(Res { id: 8, name: f"x{8}" }));
+    println("mid");
+    println("end");
+}

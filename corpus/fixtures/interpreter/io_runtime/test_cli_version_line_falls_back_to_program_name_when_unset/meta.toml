@@ -1,0 +1,13 @@
+source = "tests/interpreter/io_runtime.rs::test_cli_version_line_falls_back_to_program_name_when_unset"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

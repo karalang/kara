@@ -1,0 +1,20 @@
+
+struct P { x: f64, y: f64, m: f64 }
+layout ps: Vec[P] { group pos { x, y } group mass { m } }
+fn scatter(ps: mut ref Vec[P]) {
+    let mut i = 0;
+    while i < ps.len() {
+        ps[i] = P { x: (i + 1) as f64, y: (i + 2) as f64, m: (i + 3) as f64 };
+        i = i + 1;
+    }
+}
+fn main() with panics {
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { x: 0.0, y: 0.0, m: 0.0 });
+    ps.push(P { x: 0.0, y: 0.0, m: 0.0 });
+    scatter(mut ps);
+    let mut s = 0.0;
+    let mut j = 0;
+    while j < ps.len() { s = s + ps[j].x + ps[j].y + ps[j].m; j = j + 1; }
+    println(s);
+}

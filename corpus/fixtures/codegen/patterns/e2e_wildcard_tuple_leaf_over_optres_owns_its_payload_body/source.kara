@@ -1,0 +1,62 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+struct Ho { pe: (R, Option[R]) }
+
+fn mk(id: i64) -> R { return R { id: id, tag: f"t{id}" } }
+
+fn wr()    { let t = (mk(10), Option.Some(mk(110))); let (r, _) = t; println(f"  rd{r.id}") }
+fn wboth() { let t = (mk(12), Option.Some(mk(112))); let (_, _) = t; println("  x") }
+fn w0()    { let t = (Option.Some(mk(14)), 5); let (_, k) = t; println(f"  k{k}") }
+fn resw()  { let t: (R, Result[R, String]) = (mk(40), Result[R, String].Ok(mk(140)));
+             let (r, _) = t; println(f"  rd{r.id}") }
+fn nestw() { let t = ((mk(70), Option.Some(mk(170))), 3); let ((_, _), n) = t; println(f"  n{n}") }
+fn projw() { let h = Ho { pe: (mk(90), Option.Some(mk(190))) }; let (r, _) = h.pe; println(f"  rd{r.id}") }
+fn nonew() { let n: Option[R] = Option.None; let t = (mk(16), n); let (r, _) = t; println(f"  rd{r.id}") }
+fn loopw() { let mut i = 0;
+             while i < 2 { let t = (mk(80), Option.Some(mk(180))); let (_, _) = t; i = i + 1; }
+             println("  x") }
+fn bind()  { let t = (mk(21), Option.Some(mk(221))); let (a, b) = t; println(f"  rd{a.id}") }
+fn bothst(){ let t = (mk(50), mk(150)); let (_, _) = t; println("  x") }
+fn optstr(){ let t = (mk(60), Option.Some(f"x60")); let (r, _) = t; println(f"  rd{r.id}") }
+fn undest(){ let t = (mk(6), Option.Some(mk(66))); println(f"  rd{t.0.id}") }
+fn marm()  { let t = (mk(5), Option.Some(mk(105))); match t { (a, b) => { println("  m") } } }
+fn i64opt(){ let t = (7, Option.Some(mk(77))); let (_, o) = t; println("  z") }
+
+fn frw()   { let (r, _) = (mk(31), Option.Some(mk(131))); println(f"  rd{r.id}") }
+fn frres() { let (r, _) = (mk(35), Result[R, String].Ok(mk(135))); println(f"  rd{r.id}") }
+fn frw0()  { let (_, r) = (Option.Some(mk(41)), mk(141)); println(f"  rd{r.id}") }
+fn frboth(){ let (_, _) = (mk(42), Option.Some(mk(142))); println("  x") }
+fn frnest(){ let ((_, _), n) = ((mk(43), Option.Some(mk(143))), 4); println(f"  n{n}") }
+fn frloop(){ let mut i = 0;
+             while i < 2 { let (_, _) = (mk(44), Option.Some(mk(144))); i = i + 1; }
+             println("  x") }
+fn frstr() { let (r, _) = (mk(45), Option.Some(f"x45")); println(f"  rd{r.id}") }
+fn frplain(){ let (r, _) = (mk(46), mk(146)); println(f"  rd{r.id}") }
+fn frnone(){ let n: Option[R] = Option.None; let (r, _) = (mk(47), n); println(f"  rd{r.id}") }
+
+fn main() {
+    println("wr");     wr()
+    println("wboth");  wboth()
+    println("w0");     w0()
+    println("resw");   resw()
+    println("nestw");  nestw()
+    println("projw");  projw()
+    println("nonew");  nonew()
+    println("loopw");  loopw()
+    println("bind");   bind()
+    println("bothst"); bothst()
+    println("optstr"); optstr()
+    println("undest"); undest()
+    println("marm");   marm()
+    println("i64opt"); i64opt()
+    println("frw");     frw()
+    println("frres");   frres()
+    println("frw0");    frw0()
+    println("frboth");  frboth()
+    println("frnest");  frnest()
+    println("frloop");  frloop()
+    println("frstr");   frstr()
+    println("frplain"); frplain()
+    println("frnone");  frnone()
+    println("done")
+}

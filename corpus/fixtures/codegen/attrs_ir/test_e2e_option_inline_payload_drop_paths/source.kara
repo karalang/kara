@@ -1,0 +1,16 @@
+
+fn mk(n: i64) -> Option[String] { Some(f"v{n}") }
+fn main() {
+    let unused = mk(1);          // freed at scope exit, never read
+    mk(2);                        // discarded temp, freed at `;`
+    let bound = mk(3);
+    match bound {                 // arm binds payload → source free suppressed
+        Some(s) => { println(s); }
+        None => { println("none"); }
+    };
+    let cond = mk(4);
+    if let Some(s) = cond {       // if-let binding → source free suppressed
+        println(s);
+    }
+    println("end");
+}

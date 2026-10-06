@@ -1,0 +1,79 @@
+// LeetCode 214 — Shortest Palindrome.
+//
+// Prepend the minimum number of characters to the front of `s` so the result is
+// a palindrome; return that shortest palindrome.
+//
+// The minimum prepend is the reverse of everything after the LONGEST PALINDROMIC
+// PREFIX of `s`. Finding that prefix is a KMP trick: build `s + '#' + reverse(s)`
+// and compute its prefix-function (failure table). The failure value at the last
+// position is the length of the longest proper prefix of `s` that is also a
+// suffix of `reverse(s)` — exactly the longest prefix of `s` that reads the same
+// forwards and backwards. The '#' separator (a character not in the alphabet)
+// stops matches from spilling across the join. Answer = reverse of the tail after
+// that prefix, followed by `s`. O(n) time.
+
+fn shortest_palindrome(s: String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    if n == 0 { return ""; }
+
+    // combined = s + '#' + reverse(s)
+    let mut comb: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < n { comb.push(cs[i]); i = i + 1; }
+    comb.push('#');
+    i = n - 1;
+    while i >= 0 { comb.push(cs[i]); i = i - 1; }
+    let m = comb.len();
+
+    // KMP prefix-function: fail[i] = length of the longest proper
+    // prefix of comb[0..=i] that is also a suffix of it.
+    let mut fail: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < m { fail.push(0); z = z + 1; }
+    let mut len = 0;
+    let mut idx = 1;
+    while idx < m {
+        if comb[idx] == comb[len] {
+            len = len + 1;
+            fail[idx] = len;
+            idx = idx + 1;
+        } else if len > 0 {
+            len = fail[len - 1];
+        } else {
+            fail[idx] = 0;
+            idx = idx + 1;
+        }
+    }
+
+    let lps = fail[m - 1];        // longest palindromic prefix length
+    // Prepend reverse of the tail cs[lps..], then append the whole string.
+    let mut out: String = "";
+    let mut j = n - 1;
+    while j >= lps {
+        out.push(cs[j]);
+        j = j - 1;
+    }
+    let mut t = 0;
+    while t < n {
+        out.push(cs[t]);
+        t = t + 1;
+    }
+    return out;
+}
+
+fn report(s: String) {
+    println(shortest_palindrome(s));
+}
+
+fn main() {
+    report("aacecaaa");     // aaacecaaa
+    report("abcd");         // dcbabcd
+    report("");             // (empty)
+    report("a");            // a
+    report("aabba");        // abbaabba
+    report("aaaa");         // aaaa
+    report("ba");           // aba
+    report("abacd");        // dcabacd
+    report("abbacd");       // dcabbacd
+}

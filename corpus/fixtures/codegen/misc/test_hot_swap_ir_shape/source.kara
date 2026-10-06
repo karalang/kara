@@ -1,0 +1,6 @@
+
+pub fn answer() -> i64 { 42 }
+
+fn main() {
+    let _ = answer();
+}

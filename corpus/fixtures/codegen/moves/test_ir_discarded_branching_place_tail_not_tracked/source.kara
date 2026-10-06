@@ -1,0 +1,14 @@
+
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return v;
+}
+
+fn main() {
+    let cond = true;
+    let a = make_vec();
+    let b = make_vec();
+    { if cond { a } else { b } }
+    println(0);
+}

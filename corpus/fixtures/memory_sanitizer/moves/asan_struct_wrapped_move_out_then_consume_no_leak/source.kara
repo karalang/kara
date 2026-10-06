@@ -1,0 +1,31 @@
+
+shared enum Expr { Num(i64), Add(BinOp), Neg(Unary) }
+struct BinOp { left: Expr, right: Expr }
+struct Unary { operand: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+        Neg(u) => 0 - eval(u.operand),
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        // move-out then consume
+        let t1 = Add(BinOp { left: Num(3), right: Num(4) });
+        let t2 = t1;
+        total = total + eval(t2);
+        // move-out then drop WHOLE (no consume)
+        let u1 = Neg(Unary { operand: Num(5) });
+        let u2 = u1;
+        match u2 { Num(n) => { total = total + n; } Add(b) => { total = total + 0; } Neg(x) => { total = total + 0; } }
+        // subtree moved into a parent literal, then consumed
+        let sub = Add(BinOp { left: Num(2), right: Num(3) });
+        let p1 = Add(BinOp { left: sub, right: Num(10) });
+        total = total + eval(p1);
+        i = i + 1;
+    }
+    println(total);
+}

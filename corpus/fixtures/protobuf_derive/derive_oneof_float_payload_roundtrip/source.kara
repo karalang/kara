@@ -1,0 +1,12 @@
+
+enum Num { NotSet, D(f64), F(f32) }
+
+#[derive(Message)]
+struct Event { body: Num }
+
+fn main() {
+    let b1 = Event.decode(Event { body: Num.D(3.5) }.encode());
+    println(match b1.body { Num.D(x) => x == 3.5, _ => false });
+    let b2 = Event.decode(Event { body: Num.F(-1.25) }.encode());
+    println(match b2.body { Num.F(x) => x == -1.25, _ => false });
+}

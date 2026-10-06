@@ -1,0 +1,16 @@
+
+shared struct Bag { items: Vec[String] }
+impl Bag { fn count(self) -> i64 { self.items.len() } }
+fn make() -> Bag {
+    let mut v: Vec[String] = Vec.new();
+    v.push("first field string padded beyond thirty-six bytes ok");
+    v.push("second field string padded beyond thirty-six byte");
+    Bag { items: v }
+}
+fn main() {
+    let mut p = 0;
+    while p < 3 {
+        println(make().count());
+        p = p + 1;
+    };
+}

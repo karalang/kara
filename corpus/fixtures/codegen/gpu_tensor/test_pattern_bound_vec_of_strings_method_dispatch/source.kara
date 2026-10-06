@@ -1,0 +1,12 @@
+
+enum E { V(Vec[String]) }
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha");
+    v.push("beta");
+    v.push("gamma");
+    let e = V(v);
+    match e {
+        V(xs) => println(xs.len()),
+    }
+}

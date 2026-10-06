@@ -1,0 +1,8 @@
+
+fn main() {
+    let make = |n: i64| |x: i64| x + n;
+    let add5 = make(5);
+    let add10 = make(10);
+    println(add5(10));
+    println(add10(10));
+}

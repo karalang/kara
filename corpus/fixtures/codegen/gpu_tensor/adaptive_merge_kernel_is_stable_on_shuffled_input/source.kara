@@ -1,0 +1,46 @@
+
+fn check(v: Vec[(i64, i64)], n: i64) -> i64 {
+    let mut bad: i64 = 0i64;
+    let mut s: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < v.len() {
+        if i > 0i64 {
+            let p: (i64, i64) = v[i - 1i64];
+            let c: (i64, i64) = v[i];
+            if p.0 > c.0 { bad = bad + 1i64; }
+            if p.0 == c.0 and p.1 > c.1 { bad = bad + 1i64; }
+        }
+        s = s + v[i].1;
+        i = i + 1i64;
+    }
+    // Every original index must survive exactly once.
+    if s != n * (n - 1i64) / 2i64 { bad = bad + 1000i64; }
+    if v.len() != n { bad = bad + 1000i64; }
+    return bad;
+}
+fn build(n: i64, m: i64) -> Vec[(i64, i64)] {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut s: i64 = 12345i64;
+    let mut i: i64 = 0i64;
+    while i < n {
+        s = (s * 1103515245i64 + 12345i64) % 2147483648i64;
+        v.push((s % m, i));
+        i = i + 1i64;
+    }
+    return v;
+}
+fn main() {
+    let mut bad: i64 = 0i64;
+    // Heavy ties over a 64-key alphabet: shuffled enough for the probe to
+    // commit passes to the branchless kernel, with enough duplicates that a
+    // flipped tie-break cannot hide.
+    let mut a: Vec[(i64, i64)] = build(4096i64, 64i64);
+    a.sort_by(|x, y| x.0.cmp(y.0));
+    bad = bad + check(a, 4096i64);
+    // Near-distinct keys: a maximally unpredictable take sequence, so the
+    // branchless kernel is certain to be selected here.
+    let mut b: Vec[(i64, i64)] = build(4096i64, 1000000i64);
+    b.sort_by(|x, y| x.0.cmp(y.0));
+    bad = bad + check(b, 4096i64);
+    println(bad);
+}

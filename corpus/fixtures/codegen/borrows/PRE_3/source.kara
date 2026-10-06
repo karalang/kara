@@ -1,0 +1,4 @@
+fn go() -> i64 { let mut t = mko(); let mut i = 0i64;
+  while i < 2i64 { let s = t.a; i = i + 1; }
+  bumpi(mut t.q.v); return t.q.v; }
+fn main() { println(go()); }

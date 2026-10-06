@@ -1,0 +1,7 @@
+
+fn axpy(y: mut Slice[f64], x: Slice[f64], a: f64) {
+    let n = y.len();
+    let mut i = 0;
+    while i < n { y[i] = y[i] + x[i] * a; i = i + 1; }
+}
+fn main() { print(0); }

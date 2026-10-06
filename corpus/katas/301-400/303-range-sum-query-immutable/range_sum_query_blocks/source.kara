@@ -1,0 +1,152 @@
+// LeetCode 303 — Range Sum Query, Immutable, by square-root decomposition.
+//
+// Cut the array into block_sums of about sqrt(n) and precompute each block's total.
+// A query then swallows whole block_sums where it can and picks off individual
+// elements where it cannot:
+//
+//     nums   [3  1  4] [1  5  9] [2  6  5]      block size 3
+//     block_sums       8         15        13
+//     sum_range(1, 7)  =  1 + 4  +  15  +  2 + 6   =  28
+//                         ^ partial  ^ whole  ^ partial
+//
+// O(n) to build and O(sqrt n) per query — strictly worse than prefix sums on
+// both counts, for this problem. It is here anyway, for three reasons.
+//
+// IT IS A THIRD DERIVATION. Prefix sums get the answer by SUBTRACTING two
+// overlapping totals; this gets it by ADDING disjoint pieces. Nothing cancels
+// here, and no index is ever read at `+ 1`. The two arms therefore fail in
+// unrelated ways: the classic prefix bug is an off-by-one at the boundary, and
+// the classic block bug is a partial edge that swallows one element too many —
+// and neither mistake has any way to appear in the other arm.
+//
+// IT IS WHERE THIS PROBLEM GOES NEXT. Prefix sums are only optimal because the
+// array is IMMUTABLE. Make one element mutable and the whole prefix array
+// downstream of it is invalidated, an O(n) repair per update; the block
+// structure repairs in O(1) — one block total — and still answers in
+// O(sqrt n). That is LeetCode 307, and this arm is the reason the trade-off is
+// visible from here rather than a surprise later.
+//
+// IT PRODUCES A DIFFERENT NUMBER OF ADDITIONS FOR THE SAME ANSWER, which makes
+// it the arm most likely to notice an arithmetic fault that happens to be
+// symmetric in the input — the kind that survives a differential between two
+// arms that add the same values in the same order.
+
+// A NOTE ON THE FIELD NAME. The obvious name for this is `blocks`, and it does
+// not compile: `blocks` is one of Kara's eight effect verbs (§ Execution
+// Effects) and therefore a keyword, so it is rejected as an identifier — as a
+// local, as a field, everywhere. All eight are: reads, writes, sends,
+// receives, allocates, panics, blocks, suspends. Several are names ordinary
+// code reaches for without thinking; `struct IoStats { reads: i64 }` is
+// rejected for the same reason.
+//
+// The language has a designed answer — the raw-identifier escape from
+// design.md § Raw Identifiers — and it works on all three backends:
+//
+//     struct Decomp { r#blocks: Vec[i64] }     // legal, and d.r#blocks reads it
+//
+// This kata uses `block_sums` instead, not to dodge anything but because the
+// field genuinely holds the per-block TOTALS rather than the blocks. `r#blocks`
+// is the escape hatch when a collision has no such rename available.
+
+struct NumArray {
+    nums: Vec[i64],
+    block_sums: Vec[i64],
+    bsize: i64,
+}
+
+// Largest k with k*k <= n, and never below 1 so the block walk always advances.
+fn isqrt_at_least_one(n: i64) -> i64 {
+    let mut k = 1;
+    while (k + 1) * (k + 1) <= n {
+        k = k + 1;
+    }
+    return k;
+}
+
+fn new_num_array(nums: ref Vec[i64]) -> NumArray {
+    let n = nums.len();
+    let bsize = isqrt_at_least_one(n);
+
+    let mut copy: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        copy.push(nums[i]);
+        i = i + 1;
+    }
+
+    let mut block_sums: Vec[i64] = Vec.new();
+    let mut start = 0;
+    while start < n {
+        let mut total = 0;
+        let mut j = start;
+        while j < n and j < start + bsize {
+            total = total + nums[j];
+            j = j + 1;
+        }
+        block_sums.push(total);
+        start = start + bsize;
+    }
+
+    return NumArray { nums: copy, block_sums: block_sums, bsize: bsize };
+}
+
+impl NumArray {
+    fn sum_range(ref self, left: i64, right: i64) -> i64 {
+        let mut total = 0;
+        let mut i = left;
+        while i <= right {
+            // Take a whole block only when the cursor sits exactly on a block
+            // boundary AND the entire block fits inside the query. Either
+            // condition alone is the classic off-by-one here.
+            if i % self.bsize == 0 and i + self.bsize - 1 <= right {
+                total = total + self.block_sums[i / self.bsize];
+                i = i + self.bsize;
+            } else {
+                total = total + self.nums[i];
+                i = i + 1;
+            }
+        }
+        return total;
+    }
+
+    fn len(ref self) -> i64 {
+        return self.nums.len();
+    }
+}
+
+fn render(nums: ref Vec[i64]) -> String {
+    let mut line = String.new();
+    line.push_str("[");
+    let mut i = 0;
+    while i < nums.len() {
+        if i > 0 { line.push_str(", "); }
+        line.push_str(f"{nums[i]}");
+        i = i + 1;
+    }
+    line.push_str("]");
+    return line;
+}
+
+fn report(nums: Vec[i64], queries: Vec[i64]) {
+    let na = new_num_array(nums);
+    let mut line = String.new();
+    line.push_str(render(nums));
+    line.push_str(" ->");
+    let mut q = 0;
+    while q + 1 < queries.len() {
+        let l = queries[q];
+        let r = queries[q + 1];
+        line.push_str(f" [{l},{r}]={na.sum_range(l, r)}");
+        q = q + 2;
+    }
+    println(line);
+}
+
+fn main() {
+    report([-2, 0, 3, -5, 2, -1], [0, 2, 2, 5, 0, 5, 1, 1]);
+    report([1, 2, 3, 4, 5], [0, 4, 0, 0, 4, 4, 1, 3]);
+    report([7], [0, 0]);
+    report([0, 0, 0, 0], [0, 3, 1, 2]);
+    report([-1, -2, -3], [0, 2, 1, 2, 2, 2]);
+    report([100000, -100000, 100000], [0, 2, 0, 1, 1, 2]);
+}

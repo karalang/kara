@@ -1,0 +1,4 @@
+
+struct Bare { id: i64 }
+fn needs_eq[T: Eq](x: T) -> i64 { 2 }
+fn main() { println(needs_eq(Bare { id: 1 })); }

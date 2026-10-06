@@ -1,0 +1,13 @@
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct T { a: R, b: R, c: R, d: R, n: i64 }
+fn mk(t: String, n: i64) -> T { T { a: R { s: f"a{t}" }, b: R { s: f"b{t}" }, c: R { s: f"c{t}" }, d: R { s: f"d{t}" }, n: n } }
+fn main() {
+    for i in 0..4 {
+        let h = mk(f"{i}", i);
+        if h.n == 0 { let x = h.a; println(x.s) } else if h.n == 1 { let y = h.b; println(y.s) } else if h.n == 2 { let z = h.c; println(z.s) };
+        println("k")
+    }
+    { let g = mk("u", 0); let w = g.d; println(w.s); if g.n == 0 { let x = g.a; println(x.s) } else { let y = g.b; println(y.s) }; println("k2") }
+    println("end")
+}

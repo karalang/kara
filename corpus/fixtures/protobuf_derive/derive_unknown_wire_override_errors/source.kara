@@ -1,0 +1,5 @@
+
+#[derive(Message)]
+struct M { #[karac::proto(varint7)] x: i64 }
+
+fn main() {}

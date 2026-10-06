@@ -1,0 +1,10 @@
+
+effect resource Screen;
+
+host fn dom_clear() with writes(Screen);
+
+pub fn wipe() {
+    dom_clear();
+}
+
+fn main() {}

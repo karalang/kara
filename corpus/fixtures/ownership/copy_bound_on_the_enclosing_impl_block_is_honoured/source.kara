@@ -1,0 +1,9 @@
+
+struct Cell[T] { v: T }
+impl[T: Copy] Cell[T] {
+    fn from_vec(vs: ref Vec[T]) -> T { let a = vs[0]; return a; }
+}
+fn main() {
+    let vs: Vec[i64] = vec![4];
+    println(f"{Cell[i64].from_vec(vs)}");
+}

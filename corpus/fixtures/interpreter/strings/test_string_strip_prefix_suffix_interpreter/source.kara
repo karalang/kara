@@ -1,0 +1,9 @@
+fn main() {
+            let s = "hello world";
+            match s.strip_prefix("hello ") { Some(r) => println(f"p:{r}"), None => println("pn") }
+            match s.strip_prefix("xyz")    { Some(r) => println(f"p:{r}"), None => println("pn") }
+            match s.strip_suffix(" world") { Some(r) => println(f"s:{r}"), None => println("sn") }
+            match s.strip_suffix("xyz")    { Some(r) => println(f"s:{r}"), None => println("sn") }
+            match s.strip_prefix("hello world") { Some(r) => println(f"e:{r}"), None => println("en") }
+            match s.strip_prefix("")       { Some(r) => println(f"a:{r}"), None => println("an") }
+        }

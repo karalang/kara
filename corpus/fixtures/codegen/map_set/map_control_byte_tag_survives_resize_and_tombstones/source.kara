@@ -1,0 +1,108 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < 900 {
+        let _ = m.insert(i, i * 7);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < 900 {
+        let _ = m.remove(j);
+        j = j + 3;
+    }
+    let mut k = 0;
+    while k < 900 {
+        let _ = m.insert(k, k * 11);
+        k = k + 3;
+    }
+    let mut live = 0;
+    let mut wrong = 0;
+    let mut n = 0;
+    while n < 900 {
+        match m.get(n) {
+            Some(v) => {
+                live = live + 1;
+                let want = if n % 3 == 0 { n * 11 } else { n * 7 };
+                if v != want { wrong = wrong + 1; }
+            }
+            None => {}
+        }
+        n = n + 1;
+    }
+    let mut ghost = 0;
+    let mut g = 900;
+    while g < 1000 {
+        match m.get(g) {
+            Some(v) => {
+                ghost = ghost + 1;
+            }
+            None => {}
+        }
+        g = g + 1;
+    }
+    println(live);
+    println(wrong);
+    println(ghost);
+    println(m.len() as i64);
+
+    let mut sm: Map[String, i64] = Map.new();
+    let mut a = 0;
+    while a < 600 {
+        let _ = sm.insert("key" + a.to_string(), a * 3);
+        a = a + 1;
+    }
+    let mut b = 0;
+    while b < 600 {
+        let _ = sm.remove("key" + b.to_string());
+        b = b + 4;
+    }
+    let mut sfound = 0;
+    let mut swrong = 0;
+    let mut c = 0;
+    while c < 600 {
+        match sm.get("key" + c.to_string()) {
+            Some(v) => {
+                sfound = sfound + 1;
+                if v != c * 3 { swrong = swrong + 1; }
+            }
+            None => {}
+        }
+        c = c + 1;
+    }
+    let mut sghost = 0;
+    let mut d = 600;
+    while d < 700 {
+        match sm.get("key" + d.to_string()) {
+            Some(v) => {
+                sghost = sghost + 1;
+            }
+            None => {}
+        }
+        d = d + 1;
+    }
+    println(sfound);
+    println(swrong);
+    println(sghost);
+
+    let mut st: Set[String] = Set.new();
+    let mut e = 0;
+    while e < 600 {
+        st.insert("w" + e.to_string());
+        e = e + 1;
+    }
+    let mut hits = 0;
+    let mut f = 0;
+    while f < 600 {
+        if st.contains("w" + f.to_string()) { hits = hits + 1; }
+        f = f + 1;
+    }
+    let mut misses = 0;
+    let mut h = 600;
+    while h < 700 {
+        if st.contains("w" + h.to_string()) { misses = misses + 1; }
+        h = h + 1;
+    }
+    println(hits);
+    println(misses);
+}

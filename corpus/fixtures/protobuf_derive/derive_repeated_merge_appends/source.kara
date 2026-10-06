@@ -1,0 +1,13 @@
+
+#[derive(Message)]
+struct Bag { nums: Vec[i64], tags: Vec[String] }
+
+fn main() {
+    let mut acc = Bag { nums: [1, 2], tags: ["x"] };
+    let more = Bag { nums: [3], tags: ["y", "z"] };
+    acc.merge(more.encode());
+    println(acc.nums.len());
+    println(acc.nums[2]);
+    println(acc.tags.len());
+    println(acc.tags[2]);
+}

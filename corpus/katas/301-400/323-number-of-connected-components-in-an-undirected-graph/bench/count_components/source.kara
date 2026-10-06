@@ -1,0 +1,105 @@
+// Benchmark workload for LeetCode #323 — the ★ arm's disjoint-set forest.
+//
+// One forest over NODES nodes is allocated once. Each of PASSES passes resets
+// it to NODES singletons, then feeds it M random edges drawn from an LCG,
+// where M cycles through NODES/4, NODES/2, 3*NODES/4 and NODES: from well
+// below a random graph's giant-component threshold (M = NODES/2) to well
+// above it. Every edge is one `merge`, which is two `find`s with path
+// compression and a union by size.
+//
+// After each pass the component count and a stride-9973 sample of roots are
+// folded into a rolling hash, so both the count and the forest's shape stay
+// observable. The edges are never stored: the work being timed is the
+// forest's random walks over two 8 MB arrays, not an edge list's allocation.
+
+const NODES: i64 = 1000000;
+const PASSES: i64 = 16;
+const STRIDE: i64 = 9973;
+const MODULUS: i64 = 1073741789;
+
+struct DisjointSet {
+    parent: Vec[i64],
+    size: Vec[i64],
+    sets: i64,
+}
+
+impl DisjointSet {
+    fn new(n: i64) -> DisjointSet {
+        return DisjointSet { parent: Vec.filled(n, 0), size: Vec.filled(n, 1), sets: n };
+    }
+
+    fn reset(mut ref self) {
+        for i in 0..self.parent.len() {
+            self.parent[i] = i;
+            self.size[i] = 1;
+        }
+        self.sets = self.parent.len();
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        let mut root = x;
+        while self.parent[root] != root {
+            root = self.parent[root];
+        }
+        let mut cur = x;
+        while self.parent[cur] != root {
+            let next = self.parent[cur];
+            self.parent[cur] = root;
+            cur = next;
+        }
+        return root;
+    }
+
+    fn merge(mut ref self, a: i64, b: i64) {
+        let mut ra = self.find(a);
+        let mut rb = self.find(b);
+        if ra == rb {
+            return;
+        }
+        if self.size[ra] < self.size[rb] {
+            let t = ra;
+            ra = rb;
+            rb = t;
+        }
+        self.parent[rb] = ra;
+        self.size[ra] += self.size[rb];
+        self.sets -= 1;
+    }
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// A draw in 0..bound from two LCG steps (one step only reaches 32767).
+fn draw(seed: mut ref i64, bound: i64) -> i64 {
+    let hi = next(seed);
+    let lo = next(seed);
+    return (hi * 32768 + lo) % bound;
+}
+
+fn main() {
+    let mut seed = 323;
+    let mut sink = 0;
+    let mut ds = DisjointSet.new(NODES);
+
+    for p in 0..PASSES {
+        ds.reset();
+        let m = (1 + p % 4) * NODES / 4;
+        for e in 0..m {
+            let a = draw(mut seed, NODES);
+            let b = draw(mut seed, NODES);
+            ds.merge(a, b);
+        }
+        let mut probe = 0;
+        let mut i = 0;
+        while i < NODES {
+            probe = (probe * 31 + ds.find(i)) % MODULUS;
+            i = i + STRIDE;
+        }
+        sink = (sink * 131 + ds.sets + probe) % MODULUS;
+    }
+
+    println(f"sink {sink} components {ds.sets}");
+}

@@ -1,0 +1,11 @@
+
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    for x in v.iter() {
+        if x > 2 {
+            break;
+        }
+        println(x);
+    }
+    println(99);
+}

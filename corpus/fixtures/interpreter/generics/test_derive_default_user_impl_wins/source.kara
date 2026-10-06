@@ -1,0 +1,10 @@
+
+#[derive(Default)]
+struct C { x: i64 }
+
+impl C { fn default() -> C { C { x: 99 } } }
+
+fn main() {
+    let c = C.default();
+    println(c.x);
+}

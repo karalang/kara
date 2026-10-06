@@ -1,0 +1,14 @@
+
+fn maybe(flag: bool) -> Option[i64] {
+    if flag { Some(5_i64) } else { None }
+}
+fn add_ten(flag: bool) -> Option[i64] {
+    let x = maybe(flag)?;
+    Some(x + 10)
+}
+fn main() {
+    match add_ten(false) {
+        Some(n) => println(n),
+        None => println(0),
+    }
+}

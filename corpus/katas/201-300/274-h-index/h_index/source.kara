@@ -1,0 +1,52 @@
+// LeetCode 274 — H-Index.
+//
+// A researcher's h-index is the largest h such that at least h of their papers
+// have at least h citations each.
+//
+// Sort citations ascending. After sorting, the papers at positions [i, n) are the
+// `n - i` most-cited. If citation[i] ≥ n - i, then those `n - i` papers each have
+// at least `n - i` citations, giving an h-index of `n - i`; scanning from the
+// smallest i that satisfies this yields the maximum such h. O(n log n).
+
+fn h_index(cit: Slice[i64]) -> i64 {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < cit.len() {
+        v.push(cit[i]);
+        i = i + 1;
+    }
+    v.sort();                                   // ascending
+    let n = v.len();
+    let mut j = 0;
+    while j < n {
+        if v[j] >= n - j {
+            return n - j;
+        }
+        j = j + 1;
+    }
+    return 0;
+}
+
+fn report(cit: Slice[i64]) {
+    println(f"{h_index(cit)}");
+}
+
+fn main() {
+    let a: Array[i64, 5] = [3, 0, 6, 1, 5];
+    report(a);                                      // 3
+
+    let b: Array[i64, 3] = [1, 3, 1];
+    report(b);                                      // 1
+
+    let c: Array[i64, 1] = [0];
+    report(c);                                      // 0
+
+    let d: Array[i64, 1] = [100];
+    report(d);                                      // 1
+
+    let e: Array[i64, 4] = [4, 4, 4, 4];
+    report(e);                                      // 4
+
+    let f: Array[i64, 6] = [10, 8, 5, 4, 3, 0];
+    report(f);                                      // 4
+}

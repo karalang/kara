@@ -1,0 +1,43 @@
+struct P { a: i64, b: i64 }
+
+fn main() {
+    let sa: Array[i64, 3] = Array[10, 20, 30];
+    let g = ref sa[2];
+    println(f"scalar {g}");
+
+    let v: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let va: Array[Vector[i64, 4], 3] = Array[v, v, v];
+    let gv = ref va[2];
+    println(f"vector {gv.reduce_sum()}");
+
+    let pa: Array[P, 2] = Array[P { a: 1, b: 2 }, P { a: 3, b: 4 }];
+    let gp = ref pa[1];
+    println(f"struct {gp.a} {gp.b}");
+
+    let mut ma: Array[i64, 3] = Array[1, 2, 3];
+    let gm = ref ma[0];
+    ma[0] = 99;
+    println(f"alias {gm}");
+
+    let vv: Vec[i64] = [7, 8, 9];
+    let gc = ref vv[1];
+    println(f"vec {gc}");
+
+    let sv: Vec[i64] = [10, 20, 30];
+    let sl: Slice[i64] = sv.as_slice();
+    let gs = ref sl[2];
+    println(f"slice {gs}");
+    let ssum: i64 = gs + 5;
+    println(f"slicearith {ssum}");
+
+    let pv: Vec[P] = [P { a: 1, b: 2 }, P { a: 3, b: 4 }];
+    let pl: Slice[P] = pv.as_slice();
+    let gsp = ref pl[1];
+    println(f"slicestruct {gsp.a} {gsp.b}");
+
+    let mut mv: Vec[i64] = [1, 2, 3];
+    let ml: Slice[i64] = mv.as_slice();
+    let gsa = ref ml[0];
+    mv[0] = 77;
+    println(f"slicealias {gsa}");
+}

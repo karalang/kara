@@ -1,0 +1,7 @@
+
+shared struct Node { val: i64 }
+struct Owner { m: Map[i64, Node] }
+fn main() {
+    let _o = Owner { m: Map.new() };
+    println(42);
+}

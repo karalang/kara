@@ -1,0 +1,11 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct E { n: i64 }
+impl Drop for E { fn drop(mut ref self) { println(f"dropE {self.n}") } }
+fn main() {
+    let mut s: Set[E] = Set.new();
+    s.insert(E { n: 1 });
+    println("--before--");
+    s.clear();
+    println(f"--after len={s.len()}--");
+}

@@ -1,0 +1,26 @@
+
+fn gsorted[T](v: ref Vec[T]) -> Vec[T] { v.sorted() }
+fn main() {
+    let v: Vec[i64] = [3, 1, 2, 5, 4];
+    let s: Vec[i64] = v.sorted();
+    println(s.get(0)); println(s.get(4));
+    // receiver stays unsorted
+    println(v.get(0));
+    let u: Vec[u64] = [1u64 << 63, 5u64, 1u64 << 62];
+    let us: Vec[u64] = u.sorted();
+    println(f"{us[0]}");
+    let w: Vec[String] = ["banana", "apple", "cherry"];
+    let ws: Vec[String] = w.sorted();
+    println(ws.get(0));
+    println(w.get(0));
+    let f: Vec[f64] = [2.5, 1.1, 3.3];
+    let fs: Vec[f64] = gsorted(f);
+    println(fs.get(0));
+    // NaN must sort LAST and must not derange the rest — the comparator was
+    // `OLT`/`OGT`, which answers "equal" for every NaN comparison and so is
+    // intransitive; `[2.0, NaN, 1.0]` came back untouched under codegen while
+    // the interpreter sorted it correctly.
+    let n: Vec[f64] = [2.0, 0.0 / 0.0, 1.0];
+    let ns: Vec[f64] = gsorted(n);
+    println(f"{ns[0]} {ns[1]} {ns[2]}");
+}

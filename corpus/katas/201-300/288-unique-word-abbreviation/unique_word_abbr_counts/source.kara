@@ -1,0 +1,123 @@
+// LeetCode 288 — Unique Word Abbreviation, indexed by COUNT alone.
+//
+// Same answers as `unique_word_abbr.kara`; the smallest index of the three. It
+// keeps no words per abbreviation at all — only how many DISTINCT dictionary
+// words produce it:
+//
+//     Map[String, i64]   abbreviation -> distinct-word count
+//     Set[String]        the dictionary, deduplicated
+//
+// The three states of an abbreviation are then read off the count: absent is 0,
+// `Sole` is 1, `Conflicted` is 2-or-more. Where the ★ file matches a variant,
+// this file compares an integer.
+//
+// THE ONE PLACE IT HAS TO WORK HARDER. `Sole` carries the word, so the ★ file
+// answers "is that sole word the one I was asked about?" straight from the
+// bucket. A bare count of 1 does not say WHICH word it counted, so this file
+// asks the dictionary set instead:
+//
+//     count == 1  and  dict.contains(word)   ->  unique
+//
+// That is sound only because the count and the set are built from the same
+// deduplicated pass: if exactly one distinct dictionary word abbreviates to `a`,
+// and `word` is itself in the dictionary and abbreviates to `a`, then `word` MUST
+// be that word. Swap the set for a membership test against something else — a
+// second dictionary, say — and the inference silently breaks.
+//
+// THE DUPLICATE TRAP IS STRUCTURAL HERE, which is the file's real argument. The
+// count is only ever bumped on a word the set had not yet seen, so a repeated
+// dictionary word cannot inflate it. The ★ file avoids the same trap with an
+// explicit `prev != w` comparison; here the `Set` insert IS the guard, and there
+// is no separate check to forget.
+
+fn abbrev(w: ref String) -> String {
+    let cs: Vec[char] = w.chars().collect();
+    let n = cs.len();
+    if n <= 2 {
+        return w.clone();
+    }
+    let mut out = String.new();
+    out.push(cs[0]);
+    out.push_str(f"{n - 2}");
+    out.push(cs[n - 1]);
+    return out;
+}
+
+struct Index {
+    counts: Map[String, i64],
+    words: Set[String],
+}
+
+fn build(dict: Slice[String]) -> Index {
+    let mut counts: Map[String, i64] = Map.new();
+    let mut words: Set[String] = Set.new();
+    let n = dict.len();
+    let mut i = 0;
+    while i < n {
+        let w = ref dict[i];
+        // Only a word the set had NOT seen may bump a count.
+        if not words.contains(w) {
+            let _ = words.insert(w.clone());
+            let a = abbrev(w);
+            match counts.get(a) {
+                None => {
+                    let _ = counts.insert(a, 1);
+                }
+                Some(c) => {
+                    let _ = counts.insert(a, c + 1);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return Index { counts: counts, words: words };
+}
+
+fn is_unique(idx: ref Index, word: ref String) -> bool {
+    let a = abbrev(word);
+    let c = match idx.counts.get(a) {
+        Some(v) => v,
+        None => 0,
+    };
+    if c == 0 {
+        return true;
+    }
+    if c >= 2 {
+        return false;
+    }
+    // Exactly one distinct word owns this abbreviation. It is `word` iff `word`
+    // is in the dictionary at all.
+    return idx.words.contains(word);
+}
+
+fn report(idx: ref Index, word: String) {
+    println(f"is_unique({word}) = {is_unique(idx, word)}");
+}
+
+fn main() {
+    let dict: Vec[String] = ["deer", "door", "cake", "card"];
+    let idx = build(dict);
+
+    report(idx, "dear");
+    report(idx, "cart");
+    report(idx, "cane");
+    report(idx, "make");
+    report(idx, "cake");
+
+    let pair: Vec[String] = ["deer", "door"];
+    let pidx = build(pair);
+    report(pidx, "deer");
+    report(pidx, "dear");
+
+    let dup: Vec[String] = ["deer", "deer", "deer"];
+    let didx = build(dup);
+    report(didx, "deer");
+    report(didx, "dear");
+
+    let shorts: Vec[String] = ["it", "a", "do"];
+    let sidx = build(shorts);
+    report(sidx, "it");
+    report(sidx, "is");
+    report(sidx, "a");
+    report(sidx, "hello");
+}

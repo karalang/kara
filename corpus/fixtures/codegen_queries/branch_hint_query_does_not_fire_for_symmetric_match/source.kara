@@ -1,0 +1,9 @@
+
+        fn main() {
+            let x = 7;
+            match x {
+                0 => println("zero"),
+                _ => println("nonzero"),
+            }
+        }
+    

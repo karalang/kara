@@ -1,0 +1,16 @@
+
+pub const WORK: i64 = 100;
+
+fn use_work() -> i64 {
+    let mut sum: i64 = 0;
+    let mut i: i64 = 0;
+    while i < WORK {
+        sum = sum + i;
+        i = i + 1;
+    }
+    sum
+}
+
+fn main() {
+    println(use_work());
+}

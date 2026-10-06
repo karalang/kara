@@ -1,0 +1,110 @@
+// LeetCode 284 — the same wrapper, filling its slot LAZILY.
+//
+// The ★ version pulls one element at construction whether or not the caller ever
+// asks for anything. This one pulls only when `peek()` is actually called:
+//
+//     peek()      -> if the slot is empty, pull into it; return the slot
+//     next()      -> if the slot is full, hand it over and empty it;
+//                    otherwise pull straight from the underlying iterator
+//     has_next()  -> the slot is full OR the underlying has more
+//
+// CONSTRUCTION COSTS ZERO PULLS, and a caller that only ever calls `next()`
+// pulls exactly as many times as it takes elements — no lookahead at all. That
+// matters when the underlying iterator is expensive or effectful, which is the
+// realistic case for the wrapper this problem describes.
+//
+// THE PRICE IS IN THE SIGNATURE, and it is not a detail. `peek()` may have to
+// pull, so it MUTATES — `peek(p: mut ref Peeking)` here against
+// `peek(p: ref Peeking)` in the ★ version. A caller holding only a shared
+// reference can peek an eagerly-filled iterator and cannot peek a lazy one. That
+// is the real trade between the two, and it is invisible in a language without
+// declared parameter modes: the same two implementations in a language that
+// hides mutability differ only in when a side effect happens.
+//
+// `has_next` also gets harder: it must consider BOTH the slot and the underlying
+// iterator, where the eager version only had to ask about the slot. Two states
+// to reason about instead of one is exactly where the bugs go.
+
+struct Source {
+    data: Vec[i64],
+    mut pos: i64,
+    mut pulls: i64,
+}
+
+fn src_has_next(s: ref Source) -> bool {
+    return s.pos < s.data.len();
+}
+
+fn src_next(s: mut ref Source) -> i64 {
+    let v = s.data[s.pos];
+    s.pos = s.pos + 1;
+    s.pulls = s.pulls + 1;
+    return v;
+}
+
+struct Peeking {
+    mut src: Source,
+    mut slot: i64,
+    mut full: bool,
+}
+
+fn make_peeking(data: Vec[i64]) -> Peeking {
+    let s = Source { data: data, pos: 0, pulls: 0 };
+    return Peeking { src: s, slot: 0, full: false };
+}
+
+fn peek(p: mut ref Peeking) -> i64 {
+    if not p.full {
+        p.slot = src_next(p.src);
+        p.full = true;
+    }
+    return p.slot;
+}
+
+fn has_next(p: ref Peeking) -> bool {
+    if p.full { return true; }
+    return src_has_next(p.src);
+}
+
+fn next(p: mut ref Peeking) -> i64 {
+    if p.full {
+        p.full = false;
+        return p.slot;
+    }
+    return src_next(p.src);
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + f"{v[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    // drain, peeking before every next
+    let mut p = make_peeking([1, 2, 3]);
+    let mut out: Vec[i64] = Vec.new();
+    while has_next(p) {
+        out.push(peek(mut p));
+        out.push(next(mut p));
+    }
+    println(f"peek+next drain of [1,2,3] -> {show(out)} ({p.src.pulls} pulls)");
+
+    // peek must not advance: three peeks then a next
+    let mut q = make_peeking([7, 8]);
+    println(f"peek thrice: {peek(mut q)} {peek(mut q)} {peek(mut q)} then next: {next(mut q)}");
+
+    // the empty case
+    let e = make_peeking([]);
+    println(f"empty: has_next={has_next(e)}");
+
+    // a single element — the case a forwarding has_next drops
+    let mut one = make_peeking([42]);
+    let first = next(mut one);
+    println(f"single: got {first}, has_next now {has_next(one)}");
+}

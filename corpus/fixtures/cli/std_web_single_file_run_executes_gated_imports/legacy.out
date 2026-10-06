@@ -1,0 +1,1 @@
+stub: std.web.net.fetch: host-call lowering not wired yet (phase-10 `host fn`)

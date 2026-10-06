@@ -1,0 +1,17 @@
+floor 6: 5=50
+floor 8 after insert 7: 7=70
+floor 8 after remove 7: 5=50
+floor 5 after update: 5=55
+floor 4 after entry 3: 3=31
+walk: 1=10 3=31 5=55 9=90 
+floor 100 after clear: none
+max 2=20
+ceiling b: fig=3
+ceiling b after remove fig: pear=1
+ceiling b after insert banana: banana=4
+string walk: apple:2 banana:4 pear:1 
+set min 2
+set min after insert 1: 1
+set min after remove 1: 2
+set walk: 2 4 8 
+churn agreed 600 of 600, 50 keys left

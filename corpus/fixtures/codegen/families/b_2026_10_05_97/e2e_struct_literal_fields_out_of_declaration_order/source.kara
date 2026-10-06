@@ -1,0 +1,18 @@
+struct P { x: i64, y: i64 }
+struct Q { a: P, b: i64 }
+struct G { a: i64, s: String }
+shared struct H { a: i64, b: i64, t: String }
+struct R { v: Vec[i64], tag: String, n: i64 }
+fn id(x: i64) -> i64 { return x; }
+fn noisy(tag: String, v: i64) -> i64 { println(f"eval {tag}"); return v; }
+fn main() {
+    let n = id(3);
+    let q = Q { b: n, a: P { y: 0, x: 5 } };
+    println(f"q:{q.b} {q.a.x} {q.a.y}");
+    let g = G { s: "hi".to_string(), a: id(7) };
+    println(f"g:{g.a} {g.s}");
+    let h = H { t: "ht".to_string(), b: 3, a: 5 };
+    println(f"h:{h.a} {h.b} {h.t}");
+    let r = R { n: noisy("n", 4), tag: "rt".to_string(), v: vec![noisy("v", 1), 2] };
+    println(f"r:{r.n} {r.tag} {r.v.len()} {r.v[0]}");
+}

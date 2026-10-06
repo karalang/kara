@@ -1,0 +1,17 @@
+
+const LO: i64 = 10;
+const HI: i64 = 20;
+fn classify(n: i64) -> i64 {
+    match n {
+        ..LO => 1,
+        LO..=HI => 2,
+        _ => 3,
+    }
+}
+fn main() {
+    println(classify(5));
+    println(classify(10));
+    println(classify(15));
+    println(classify(20));
+    println(classify(25));
+}

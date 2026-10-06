@@ -1,0 +1,7 @@
+
+fn main() reads(Stdin) {
+    match Stdin.read_to_string() {
+        Ok(s) => { if s.len() == 0 { println("eof-ok"); } else { println("got-data"); } }
+        Err(_) => { println("io-err"); }
+    }
+}

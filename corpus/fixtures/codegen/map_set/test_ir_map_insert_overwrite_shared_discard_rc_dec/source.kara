@@ -1,0 +1,7 @@
+
+shared struct S { val: i64 }
+fn main() {
+    let mut m: Map[i64, S] = Map.new();
+    let _ = m.insert(1, S { val: 10 });
+    let _ = m.insert(1, S { val: 20 });
+}

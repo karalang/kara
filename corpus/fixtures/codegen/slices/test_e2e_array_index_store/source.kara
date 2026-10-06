@@ -1,0 +1,6 @@
+
+fn main() {
+    let mut a = [10, 20, 30];
+    a[2] = 99;
+    println(a[2]);
+}

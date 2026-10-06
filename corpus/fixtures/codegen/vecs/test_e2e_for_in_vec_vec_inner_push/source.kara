@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut v: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1_i64);
+    a.push(2_i64);
+    v.push(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(10_i64);
+    b.push(20_i64);
+    b.push(30_i64);
+    v.push(b);
+    for inner in v {
+        println(inner.len());
+    }
+}

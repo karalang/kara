@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut last_idx: Map[char, i64] = Map.new();
+    let mut i: i64 = 0_i64;
+    for c in "abca".chars() {
+        last_idx.insert(c, i);
+        i = i + 1_i64;
+    }
+    // Second pass: for each char in "abc", report its last-seen index.
+    // 'a' was overwritten at index 3 (last position in "abca"); 'b' at 1; 'c' at 2.
+    for c in "abc".chars() {
+        match last_idx.get(c) {
+            Some(v) => println(v),
+            None => println(-1_i64),
+        }
+    }
+}

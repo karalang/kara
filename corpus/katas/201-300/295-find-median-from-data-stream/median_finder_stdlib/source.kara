@@ -1,0 +1,93 @@
+// LeetCode 295 — Find Median from Data Stream, ON THE STDLIB `PriorityQueue`.
+//
+// The same two-heap algorithm as the ★ arm, with the hand-rolled `Heap` struct
+// deleted and `PriorityQueue[T: Ord]` called instead. This is what you would
+// actually write today; the ★ arm is what the exercise asks you to write.
+//
+// THE DIRECTION IS A CONSTRUCTOR, NOT A WRAPPER. `PriorityQueue.new()` pops the
+// SMALLEST element first and `PriorityQueue.max_first()` pops the largest, so
+// the lower half and the upper half are one call each:
+//
+//     lo = PriorityQueue.max_first()      largest of the small half at the root
+//     hi = PriorityQueue.new()            smallest of the large half at the root
+//
+// That is worth noticing because it is the opposite of Rust, whose `BinaryHeap`
+// is max-first and needs `std::cmp::Reverse` for the other direction. Kāra has
+// no such wrapper and instead ships both constructors, which is why this file
+// has no negation and no comparator plumbing — and therefore none of the
+// `-i64.MIN` overflow hazard the ★ arm's header spends a paragraph on.
+//
+// `peek` IS WHAT MAKES THIS EXPRESSIBLE AT THE RIGHT COST. The median is the
+// two roots, read on every query and removed on none of them. `PriorityQueue`
+// shipped without a `peek` and this file could not be written; that gap was
+// `B-2026-08-25-32`, and it is fixed. Without it the O(1) query degrades to a
+// `pop` + `push` pair — O(log n), and mutating where a reader wants `ref self`.
+//
+// WHAT IT COSTS: `peek` returns `Option[T]`, not `Option[ref T]`, so it COPIES
+// the root. Free for the `i64` here; a clone for a heap-carrying element type.
+// The reason is a stdlib-wide constraint rather than an oversight — the only
+// `Option[ref T]` returns in the stdlib are `#[compiler_builtin]` stubs whose
+// bodies are never evaluated, so a real Kāra body cannot return one.
+//
+// AS A DIFFERENTIAL ARM it is not merely the ★ arm rewritten. It exercises a
+// collection that landed the same day, on the exact shape its docs advertise,
+// against three implementations that share none of its code.
+
+struct MedianFinder {
+    mut lo: PriorityQueue[i64],
+    mut hi: PriorityQueue[i64],
+}
+
+fn mf_new() -> MedianFinder {
+    return MedianFinder { lo: PriorityQueue.max_first(), hi: PriorityQueue.new() };
+}
+
+fn mf_add(m: mut ref MedianFinder, v: i64) {
+    // The same unconditional three-step shuffle the ★ arm uses: push through
+    // `lo`, move its max to `hi`, pull back if `hi` outgrew `lo`. No case for
+    // the empty heap and none for the tie.
+    m.lo.push(v);
+    match m.lo.pop() {
+        Some(moved) => { m.hi.push(moved); }
+        None => {}
+    }
+    if m.hi.len() > m.lo.len() {
+        match m.hi.pop() {
+            Some(back) => { m.lo.push(back); }
+            None => {}
+        }
+    }
+}
+
+fn mf_median(m: ref MedianFinder) -> f64 {
+    if m.lo.len() > m.hi.len() {
+        return match m.lo.peek() {
+            Some(v) => v as f64,
+            None => 0.0,
+        };
+    }
+    let a = match m.lo.peek() {
+        Some(v) => v as f64,
+        None => 0.0,
+    };
+    let b = match m.hi.peek() {
+        Some(v) => v as f64,
+        None => 0.0,
+    };
+    return (a + b) / 2.0;
+}
+
+fn report(s: String) {
+    println(s);
+}
+
+fn main() {
+    let mut mf = mf_new();
+    let stream = [1, 3, 2, 4, 0, 9, 7];
+    let mut i = 0;
+    while i < stream.len() {
+        mf_add(mut mf, stream[i]);
+        println(f"add {stream[i]} -> median {mf_median(mf)}");
+        i = i + 1;
+    }
+}

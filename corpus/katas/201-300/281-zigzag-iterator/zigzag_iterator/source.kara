@@ -1,0 +1,121 @@
+// LeetCode 281 — Zigzag Iterator.
+//
+// Given two lists, return their elements alternately. `[1,2]` and `[3,4,5,6]`
+// gives `1 3 2 4 5 6` — once a list runs out, the rest of the other follows in
+// order.
+//
+// THE FOLLOW-UP IS THE REAL PROBLEM, and the two-list version is a special case
+// of it: "what if you are given k lists?" A solution written around `v1` and
+// `v2` with a boolean toggle answers the example and collapses at k=3, which is
+// why this kata is written for k from the start and passes k=2 as one case among
+// many.
+//
+// THE ★ MECHANISM: A CURSOR PER LIST, ADVANCED ROUND-ROBIN.
+//
+//     cursor[i] — how far into list i we have read
+//     turn      — whose turn it is
+//
+// `next()` hands back `lists[turn][cursor[turn]]`, bumps that cursor, then
+// advances `turn` to the next list that still has elements. That last step is
+// the whole problem: "next" is not `turn + 1`, it is the next NON-EXHAUSTED
+// list, wrapping — and an implementation that forgets to wrap, or that scans
+// forward without a bound, either skips elements or loops forever once the tail
+// lists are empty.
+//
+// WHY A PLAIN `turn = (turn + 1) % k` IS WRONG rather than merely inelegant:
+// with `[[1],[],[2]]` it would hand back 1, then try list 1 which is empty, and
+// either return garbage or stall. The advance has to SKIP, and it has to
+// terminate when nothing is left — which is exactly what `has_next` is for.
+//
+// KĀRA HAS NO ITERATOR PROTOCOL TO IMPLEMENT HERE, so the state lives in a
+// plain struct and the two operations are free functions over `mut ref` to it.
+// That is the same shape LeetCode's class would have, minus the ceremony, and it
+// keeps the state explicit — which for an iterator kata is the point, since
+// every bug in this problem is a state bug.
+
+struct Zigzag {
+    lists: Vec[Vec[i64]],
+    mut cursor: Vec[i64],
+    mut turn: i64,
+    mut remaining: i64,
+}
+
+fn make_zigzag(lists: Vec[Vec[i64]]) -> Zigzag {
+    let mut cursor: Vec[i64] = Vec.new();
+    let mut remaining = 0;
+    let mut i = 0;
+    while i < lists.len() {
+        cursor.push(0);
+        remaining = remaining + lists[i].len();
+        i = i + 1;
+    }
+    let mut z = Zigzag { lists: lists, cursor: cursor, turn: 0, remaining: remaining };
+    // the first turn must already be a live list, or next() would start on an
+    // empty one — the same skip the advance does, applied to the seed
+    settle(mut z);
+    return z;
+}
+
+// Move `turn` forward until it points at a list with elements left. Bounded by
+// the number of lists, so it terminates whether or not anything is live.
+fn settle(z: mut ref Zigzag) {
+    let k = z.lists.len();
+    let mut tried = 0;
+    while tried < k {
+        if z.cursor[z.turn] < z.lists[z.turn].len() {
+            return;
+        }
+        z.turn = (z.turn + 1) % k;
+        tried = tried + 1;
+    }
+}
+
+fn has_next(z: ref Zigzag) -> bool {
+    return z.remaining > 0;
+}
+
+fn next(z: mut ref Zigzag) -> i64 {
+    let t = z.turn;
+    let v = z.lists[t][z.cursor[t]];
+    z.cursor[t] = z.cursor[t] + 1;
+    z.remaining = z.remaining - 1;
+    z.turn = (t + 1) % z.lists.len();
+    settle(z);
+    return v;
+}
+
+fn drain(lists: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut z = make_zigzag(lists);
+    let mut out: Vec[i64] = Vec.new();
+    while has_next(z) {
+        out.push(next(mut z));
+    }
+    return out;
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + f"{v[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    let c1: Vec[Vec[i64]] = [[1, 2], [3, 4, 5, 6]];
+    let c2: Vec[Vec[i64]] = [[1], [], [2, 3]];
+    let c3: Vec[Vec[i64]] = [[1, 2, 3], [4], [5, 6]];
+    let c4: Vec[Vec[i64]] = [[], []];
+    let c5: Vec[Vec[i64]] = [[7]];
+    let c6: Vec[Vec[i64]] = [[], [1, 2], []];
+
+    println(f"{show(drain(c1))}");
+    println(f"{show(drain(c2))}");
+    println(f"{show(drain(c3))}");
+    println(f"{show(drain(c4))}");
+    println(f"{show(drain(c5))}");
+    println(f"{show(drain(c6))}");
+}

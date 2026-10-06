@@ -1,0 +1,8 @@
+fn main() {
+             let cell: OnceLock[i64] = OnceLock.new();
+             let a = cell.get_or_init(|| 7);
+             println(a);
+             let b = cell.get_or_init(|| 999);
+             println(b);
+             println(cell.is_set());
+         }

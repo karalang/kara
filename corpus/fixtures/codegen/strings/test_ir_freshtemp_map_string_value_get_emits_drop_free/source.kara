@@ -1,0 +1,13 @@
+
+fn vmap() -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1_i64, "a value string padded out beyond thirty-six bytes ok");
+    return m;
+}
+
+fn main() {
+    match vmap().get(1_i64) {
+        Some(s) => println(s),
+        None => println("none"),
+    };
+}

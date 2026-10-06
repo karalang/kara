@@ -1,0 +1,93 @@
+// Benchmark workload — half-reverse Palindrome Number (LeetCode #9).
+//
+// N = 1024 distinct i32 inputs, K = 50_000_000 outer iters. Per-call
+// work is at most ~5 half-reverse iters (the loop walks ⌈digits/2⌉
+// times before x meets reversed), plus the early-reject branch. The
+// `inputs[k % N]` fill alternates signs and varies digit counts so
+// reverse() can't be hoisted to a constant.
+//
+// To make the bench load palindrome and non-palindrome shapes in a
+// known ratio, every 16th input is rewritten to a true palindrome
+// (mirror the low 4 digits into the high 4) so the answer-true rate is
+// ~1/16; the rest fail early on either the negative check or a
+// digit-mismatch in the reverse loop. Sink = sum of `is_palindrome`
+// widened to i64 (count of palindromes seen across K iters), so the
+// answer participates in I/O and can't be DCE'd.
+//
+// The accumulator is i64 across K = 50M iters; with ~1/16 palindrome
+// rate the expected total is ~3M, well within i64. Three impls print
+// the same sink for the same N/K — gates the bench against silent
+// algorithmic drift.
+
+fn is_palindrome(x: i32) -> bool {
+    if x < 0i32 or (x % 10i32 == 0i32 and x != 0i32) {
+        return false;
+    }
+    let mut x = x;
+    let mut reversed: i32 = 0i32;
+    while x > reversed {
+        reversed = reversed * 10i32 + x % 10i32;
+        x = x / 10i32;
+    }
+    x == reversed or x == reversed / 10i32
+}
+
+fn main() {
+    let n: i64 = 1024;
+    let k_iters: i64 = 50000000;
+
+    // Deterministic LCG-style fill identical to kata #7's bench so the
+    // input distribution is reproducible; then every 16th entry is
+    // overwritten to a guaranteed 8-digit palindrome by mirroring its
+    // low 4 digits into the high 4 (`abcd` → `abcdDCBA` form). The
+    // result keeps the palindrome rate at a known ~1/16.
+    let mut inputs: Vec[i32] = Vec.with_capacity(n);
+    let mut i: i64 = 0;
+    while i < n {
+        let raw: i64 = i * 2654435769 + 305419896;
+        let v32: i32 = raw as i32;
+        if i % 16 == 0 {
+            // Build an 8-digit palindrome from the absolute value's
+            // low 4 digits. abs() is done by branching on the sign.
+            let mut lo: i32 = v32;
+            if lo < 0i32 {
+                lo = -lo;
+            }
+            // Reduce to 0..9999, then force ≥ 1000 so the high digit is
+            // non-zero — this prevents the mirror from ending in 0, which
+            // would trip is_palindrome's `x % 10 == 0 and x != 0` reject.
+            let four_raw: i32 = lo % 10000i32;
+            let four: i32 = if four_raw < 1000i32 { four_raw + 1000i32 } else { four_raw };
+            // Reverse the 4 digits of `four` (now guaranteed ≥ 1000).
+            let d0: i32 = four % 10i32;
+            let d1: i32 = (four / 10i32) % 10i32;
+            let d2: i32 = (four / 100i32) % 10i32;
+            let d3: i32 = (four / 1000i32) % 10i32;
+            let rev: i32 = d0 * 1000i32 + d1 * 100i32 + d2 * 10i32 + d3;
+            // High 4 digits = four (≥ 1000 → leading digit ≥ 1),
+            // low 4 digits = rev (low digit = d3 ≥ 1) → never ends in 0.
+            let pal: i32 = four * 10000i32 + rev;
+            inputs.push(pal);
+        } else {
+            inputs.push(v32);
+        }
+        i = i + 1;
+    }
+
+    // Reduction shape: `sum = sum + expr` per iter so the auto-par
+    // analyzer recognizes it (slice-1 allow-list: associative +
+    // commutative +). Conditional-mutation `if r { sum += 1 }` would
+    // not match. The if-expression `if r { 1 } else { 0 }` keeps the
+    // accumulation unconditional.
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % n;
+        let x: i32 = inputs[idx];
+        let r: bool = is_palindrome(x);
+        let inc: i64 = if r { 1 } else { 0 };
+        sum = sum + inc;
+        k = k + 1;
+    }
+    println(sum);
+}

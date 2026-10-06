@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut i = 0;
+    while i < 4 {
+        let mut v: Vec[Result[String, i64]] = Vec.new();
+        let r: Result[String, i64] = Ok(f"a payload padded out beyond thirty-six bytes {i}");
+        v.push(r);
+        println(v.len());
+        i = i + 1;
+    };
+}

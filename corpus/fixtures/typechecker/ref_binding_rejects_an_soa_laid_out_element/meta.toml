@@ -1,0 +1,13 @@
+source = "tests/typechecker.rs::ref_binding_rejects_an_soa_laid_out_element"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["deferred:layout"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

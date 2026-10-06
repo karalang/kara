@@ -1,0 +1,15 @@
+
+fn main() {
+    let c = true;
+    let mut v: Vec[String];
+    if c {
+        v = Vec.new();
+        v.push(f"aaaaaaaaaaaaaaaa{1}");
+        v.push(f"bbbbbbbbbbbbbbbb{2}");
+        v.push(f"cccccccccccccccc{3}");
+    } else {
+        v = Vec.new();
+    }
+    println(v.len());
+    println(v[2].len());
+}

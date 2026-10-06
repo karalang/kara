@@ -1,0 +1,96 @@
+// LeetCode #331: Verify Preorder Serialization of a Binary Tree — one pass over
+// the bytes.
+//
+// Same spec and slot count as `verify_preorder.kara`, without splitting. A
+// token starts at the first byte and after every comma; it is a `#` exactly
+// when its first byte is one, since a value is digits. So each comma, and the
+// start, is a decision point and every other byte is skipped.
+//
+// O(len) time, O(1) extra space.
+
+fn is_valid_serialization(preorder: ref String) -> bool {
+    let b = preorder.bytes();
+    let mut slots = 1;
+    let mut at_start = true;
+    for c in b {
+        if at_start {
+            if slots == 0 {
+                return false;
+            }
+            if c == 35 {
+                slots -= 1;
+            } else {
+                slots += 1;
+            }
+            at_start = false;
+        }
+        if c == 44 {
+            at_start = true;
+        }
+    }
+    if at_start {
+        // An empty string, or one ending in a comma: an empty token still
+        // takes a slot, as the split-based arms count it.
+        if slots == 0 {
+            return false;
+        }
+        slots += 1;
+    }
+    return slots == 0;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// The preorder serialization of a random tree: each position is a node with
+// probability `fill` percent while `budget` nodes remain.
+fn random_tree(seed: mut ref i64, budget: mut ref i64, fill: i64, out: mut ref Vec[String]) {
+    if budget > 0 and next(seed) % 100 < fill {
+        budget -= 1;
+        out.push((next(seed) % 100).to_string());
+        random_tree(seed, budget, fill, out);
+        random_tree(seed, budget, fill, out);
+    } else {
+        out.push("#");
+    }
+}
+
+fn show(s: String) {
+    println(f"\"{s}\" -> {is_valid_serialization(s)}");
+}
+
+fn main() {
+    show("9,3,4,#,#,1,#,#,2,#,6,#,#");
+    show("1,#");
+    show("9,#,#,1");
+    show("#");
+    show("#,#");
+    show("1");
+    show("1,#,#");
+    show("1,#,#,#");
+    show("#,1,#,#");
+    show("100,99,#,#,0,#,#");
+    show("1,2,3,#,#,#,#");
+    show("1,2,3,#,#,#");
+    let mut seed = 331;
+    for round in 0..6 {
+        let mut budget = 3 + round * 4;
+        let mut parts: Vec[String] = Vec.new();
+        random_tree(mut seed, mut budget, 75, mut parts);
+        let whole = parts.join(",");
+        let tokens = parts.len();
+        // Drop the last token: one slot is left open, so never valid.
+        let mut cut = parts.clone();
+        let _ = cut.pop();
+        let cut_s = cut.join(",");
+        println(f"random {round}: {tokens} tokens -> {is_valid_serialization(whole)}, last dropped -> {is_valid_serialization(cut_s)}");
+    }
+    let mut budget = 5000;
+    let mut parts: Vec[String] = Vec.new();
+    random_tree(mut seed, mut budget, 95, mut parts);
+    let big = parts.join(",");
+    let extra = f"{big},#";
+    println(f"big: {parts.len()} tokens -> {is_valid_serialization(big)}, one more # -> {is_valid_serialization(extra)}");
+}

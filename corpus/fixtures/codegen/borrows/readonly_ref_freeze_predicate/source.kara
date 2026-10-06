@@ -1,0 +1,14 @@
+
+struct Plain { a: i64, b: f64 }
+struct HasAtomic { c: Atomic[i64] }
+struct HasMutex { m: Mutex[i64] }
+shared struct Node { v: i64 }
+struct WrapsShared { node: Node }
+fn r_scalar(x: ref i64) -> i64 { return x; }
+fn r_string(s: ref String) -> i64 { return s.len(); }
+fn r_plain(p: ref Plain) -> i64 { return p.a; }
+fn r_vec(v: ref Vec[i64]) -> i64 { return v.len(); }
+fn r_atomic(h: ref HasAtomic) -> i64 { return 0; }
+fn r_mutex(h: ref HasMutex) -> i64 { return 0; }
+fn r_shared(w: ref WrapsShared) -> i64 { return 0; }
+fn main() { let x: i64 = 7; print(r_scalar(x)); }

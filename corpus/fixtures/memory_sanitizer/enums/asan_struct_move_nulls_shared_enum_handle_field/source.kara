@@ -1,0 +1,9 @@
+
+shared enum Node { Leaf(i64) }
+struct Holder { node: Node }
+fn main() {
+    let mut v: Vec[Holder] = Vec.new();
+    let h = Holder { node: Node.Leaf(3) };
+    v.push(h);
+    match v[0].node { Leaf(x) => println(x) }
+}

@@ -1,0 +1,93 @@
+// Benchmark mirror of LeetCode #318 — build-once + punch.
+//
+// Build a corpus of WORDS words once (each a run of letters drawn from a
+// narrow, per-word window of the alphabet, so collisions are the rule and
+// disjoint pairs are worth finding), then run PASSES passes. Each pass
+// rewrites exactly ONE word and re-answers the whole corpus.
+//
+// The measured quantity is deliberately not the bare global maximum. A single
+// max over 6000 words saturates: the best disjoint pair of two longest words
+// almost always survives one word being rewritten, so the answer never moves
+// and the punch measures nothing. Instead each pass computes, for EVERY word,
+// the best partner it can pair with — the same pair scan, with the result
+// scattered across the corpus rather than collapsed into one register. That
+// is sensitive to any single rewrite, and it keeps the inner loop honest: it
+// stores, so no backend can turn the scan into a pure reduction.
+//
+// The corpus is stored flat — a WORDS x LMAX letter grid plus a length array —
+// so that every language mirror measures the pair scan and not its own string
+// representation.
+
+const WORDS: i64 = 6000;
+const LMAX: i64 = 16;
+const WINDOW: i64 = 7;
+const PASSES: i64 = 15;
+const MASK: i64 = 1073741823;
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// Rewrite word `w`: a length in 1..=LMAX and that many letters drawn from a
+// window of WINDOW consecutive letters starting at a random base.
+fn write_word(letters: mut ref Vec[i64], lens: mut ref Vec[i64], w: i64,
+              seed: mut ref i64) {
+    let len = next(seed) % LMAX + 1;
+    let base = next(seed) % (26 - WINDOW + 1);
+    lens[w] = len;
+    for k in 0..len {
+        letters[w * LMAX + k] = base + next(seed) % WINDOW;
+    }
+}
+
+fn build_masks(letters: ref Vec[i64], lens: ref Vec[i64], masks: mut ref Vec[i64]) {
+    for w in 0..WORDS {
+        let mut m = 0;
+        for k in 0..lens[w] {
+            m = m | (1 << letters[w * LMAX + k]);
+        }
+        masks[w] = m;
+    }
+}
+
+fn main() {
+    let mut seed = 318318;
+    let mut letters: Vec[i64] = Vec.new();
+    for _ in 0..(WORDS * LMAX) { letters.push(0); }
+    let mut lens: Vec[i64] = Vec.new();
+    let mut masks: Vec[i64] = Vec.new();
+    let mut best: Vec[i64] = Vec.new();
+    for _ in 0..WORDS { lens.push(0); masks.push(0); best.push(0); }
+
+    for w in 0..WORDS { write_word(mut letters, mut lens, w, mut seed); }
+
+    let mut sink = 0;
+    for p in 0..PASSES {
+        write_word(mut letters, mut lens, p * 977 % WORDS, mut seed);
+        build_masks(letters, lens, mut masks);
+
+        for i in 0..WORDS { best[i] = 0; }
+        for i in 0..WORDS {
+            let mi = masks[i];
+            let li = lens[i];
+            for j in (i + 1)..WORDS {
+                if mi & masks[j] == 0 {
+                    let q = li * lens[j];
+                    if q > best[i] { best[i] = q; }
+                    if q > best[j] { best[j] = q; }
+                }
+            }
+        }
+
+        let mut total = 0;
+        let mut top = 0;
+        for i in 0..WORDS {
+            total += best[i];
+            if best[i] > top { top = best[i]; }
+        }
+        sink = (sink * 31 + total + top) % MASK;
+    }
+
+    print("checksum " + sink.to_string() + "\n");
+}

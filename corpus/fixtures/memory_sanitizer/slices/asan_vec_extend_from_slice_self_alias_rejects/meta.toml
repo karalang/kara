@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/slices.rs::asan_vec_extend_from_slice_self_alias_rejects"
+dedup_of = []
+expect = "error:E_CROSS_BORROW_CONFLICT"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

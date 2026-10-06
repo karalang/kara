@@ -1,0 +1,8 @@
+
+fn main() {
+    let base = 100;
+    let c: OnceLock[i64] = OnceLock.new();
+    println(c.get_or_init(|| base + 5));
+    println(c.get_or_init(|| base + 999));
+    println(c.is_set());
+}

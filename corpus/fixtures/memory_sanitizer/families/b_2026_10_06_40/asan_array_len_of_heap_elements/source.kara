@@ -1,0 +1,6 @@
+fn main() {
+    let s: Array[String, 2] = [f"string-longer-than-the-inline-limit-{1}", f"short{2}"];
+    let v: Array[Vec[i64], 2] = [[1, 2, 3], [4]];
+    println(f"{s.len()} {s.is_empty()} {v.len()} {v.is_empty()}");
+    println(s[0]);
+}

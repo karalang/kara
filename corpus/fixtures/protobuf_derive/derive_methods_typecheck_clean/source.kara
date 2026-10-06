@@ -1,0 +1,10 @@
+
+#[derive(Message)]
+struct Person { name: String, age: i64 }
+
+fn main() {
+    let p = Person { name: "Ada", age: 36 };
+    let bytes = p.encode();
+    let mut q = Person.decode(bytes);
+    q.merge(p.encode());
+}

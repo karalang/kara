@@ -1,0 +1,17 @@
+
+fn mk() -> Vec[i64] { let v: Vec[i64] = [3, 4]; v }
+fn names() -> Vec[String] { let v: Vec[String] = ["ab", "cd"]; v }
+fn nested() -> Vec[Vec[i64]] { let v: Vec[Vec[i64]] = [[1, 2], [3]]; v }
+fn main() {
+    println([9i64, 8i64]);
+    println(mk());
+    println(names());
+    println(["x", "y"]);
+    println(nested());
+    let t: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);
+    println(t.shape());
+    let e: Vec[i64] = [];
+    println(e);
+    let b = [1i64, 2i64];
+    println(b);
+}

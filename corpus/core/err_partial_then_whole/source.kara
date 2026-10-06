@@ -1,0 +1,8 @@
+struct P { a: String, b: String }
+fn show(p: ref P) { println(p.a); }
+fn main() {
+    let p = P { a: "a".to_string(), b: "b".to_string() };
+    let x = p.b;
+    show(p);
+    println(x);
+}

@@ -1,0 +1,97 @@
+// LeetCode 144 — Binary Tree Preorder Traversal.
+//
+// Emit node values in preorder: root, then the left subtree, then the right.
+// A binary tree is acyclic, so `left`/`right` are ordinary STRONG `Option`
+// children (no `weak` needed) — the whole tree is reclaimed by reference
+// counting when the root drops.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// Build a tree from child-index arrays: node i has value `vals[i]`, left child
+// `lc[i]` and right child `rc[i]` (-1 = none). Node 0 is the root. Nodes are
+// held in a Vec for index-wiring; the returned root owns the tree.
+fn build(vals: Vec[i64], lc: Vec[i64], rc: Vec[i64]) -> Option[TreeNode] {
+    let n: i64 = vals.len();
+    if n == 0 {
+        return None;
+    }
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        nodes.push(TreeNode { val: vals[i], left: None, right: None });
+        i = i + 1;
+    }
+    i = 0;
+    while i < n {
+        if lc[i] >= 0 {
+            nodes[i].left = Some(nodes[lc[i]]);
+        }
+        if rc[i] >= 0 {
+            nodes[i].right = Some(nodes[rc[i]]);
+        }
+        i = i + 1;
+    }
+    return Some(nodes[0]);
+}
+
+fn preorder(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    match node {
+        None => {}
+        Some(n) => {
+            out.push(n.val);
+            preorder(n.left, out);
+            preorder(n.right, out);
+        }
+    }
+}
+
+fn run(vals: Vec[i64], lc: Vec[i64], rc: Vec[i64]) {
+    let root: Option[TreeNode] = build(vals, lc, rc);
+    let mut out: Vec[i64] = Vec.new();
+    preorder(root, mut out);
+    let m: i64 = out.len();
+    let mut s: String = "";
+    let mut i: i64 = 0;
+    while i < m {
+        if i > 0 {
+            s = s + " ";
+        }
+        s = s + out[i].to_string();
+        i = i + 1;
+    }
+    println(s);
+}
+
+fn main() {
+    // [1, null, 2, 3]:  1 -> right 2 -> left 3   => preorder 1 2 3
+    let mut v1: Vec[i64] = Vec.new();
+    v1.push(1); v1.push(2); v1.push(3);
+    let mut l1: Vec[i64] = Vec.new();
+    l1.push(0 - 1); l1.push(2); l1.push(0 - 1);
+    let mut r1: Vec[i64] = Vec.new();
+    r1.push(1); r1.push(0 - 1); r1.push(0 - 1);
+    run(v1, l1, r1);
+
+    // empty tree
+    let e1: Vec[i64] = Vec.new();
+    let e2: Vec[i64] = Vec.new();
+    let e3: Vec[i64] = Vec.new();
+    run(e1, e2, e3);
+
+    // full tree:      1
+    //               /   \
+    //              2     3
+    //             / \   /
+    //            4   5 6
+    let mut v3: Vec[i64] = Vec.new();
+    v3.push(1); v3.push(2); v3.push(3); v3.push(4); v3.push(5); v3.push(6);
+    let mut l3: Vec[i64] = Vec.new();
+    l3.push(1); l3.push(3); l3.push(5); l3.push(0 - 1); l3.push(0 - 1); l3.push(0 - 1);
+    let mut r3: Vec[i64] = Vec.new();
+    r3.push(2); r3.push(4); r3.push(0 - 1); r3.push(0 - 1); r3.push(0 - 1); r3.push(0 - 1);
+    run(v3, l3, r3);
+}

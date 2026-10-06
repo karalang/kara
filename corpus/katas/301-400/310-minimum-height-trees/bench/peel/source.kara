@@ -1,0 +1,141 @@
+// Benchmark — LeetCode 310, Minimum Height Trees.
+//
+// Build-once + punch, per BENCHMARKS.md: FOUR random trees of 60,000 nodes each
+// are built once, with their adjacency in a flat CSR-style layout (an offsets
+// array plus a neighbours array) so the five mirrors index identically. The
+// timed work is PASSES rounds of leaf-peeling.
+//
+// WHICH TREE EACH PASS PEELS DEPENDS ON THE RUNNING CHECKSUM, and that is
+// load-bearing rather than decorative. Peeling is a pure function of its tree,
+// so PASSES identical peels of one unchanging tree are exactly the shape an
+// optimiser may hoist and run once. Selecting the tree from the previous pass's
+// answer creates a serial dependency, so every pass must actually run.
+//
+// FLAT CSR RATHER THAN Vec[Vec[i64]] is a deliberate benchmark choice, not the
+// kata's: the ★ arm uses nested adjacency because that is what a reader writes.
+// Here all five languages must index the same way, and C has no natural nested
+// form. #308 measured what that costs kāra — nested beat flat by 1.59x there —
+// so the same caveat applies and is recorded in the README.
+//
+// THE SINK IS A MASK, NOT A MODULO — the lesson from #303.
+
+fn main() {
+    let n = 60000;
+    let trees = 4;
+    let passes = 950;
+
+    // ---- build the trees once, as CSR
+    let mut all_off: Vec[i64] = Vec.new();
+    let mut all_nbr: Vec[i64] = Vec.new();
+    let mut state = 20310;
+    let mut t = 0;
+    while t < trees {
+        // parent[i] within a window below i — window varies per tree, so the
+        // four shapes range from near-path to bushy.
+        let window = 1 + t * 3;
+        let mut deg: Vec[i64] = Vec.new();
+        for i in 0..n { deg.push(0); }
+        let mut pa: Vec[i64] = Vec.new();
+        pa.push(0);
+        let mut i = 1;
+        while i < n {
+            let mut w = window;
+            if w > i { w = i; }
+            state = (state * 1103515245 + 12345) % 2147483648;
+            let p = i - 1 - state % w;
+            pa.push(p);
+            deg[i] += 1;
+            deg[p] += 1;
+            i = i + 1;
+        }
+        // offsets
+        let base = all_off.len();
+        let mut running = all_nbr.len();
+        for k in 0..n {
+            all_off.push(running);
+            running += deg[k];
+        }
+        all_off.push(running);
+        // fill
+        let mut cursor: Vec[i64] = Vec.new();
+        for k in 0..n { cursor.push(all_off[base + k]); }
+        for k in 0..(running - all_nbr.len()) { all_nbr.push(0); }
+        i = 1;
+        while i < n {
+            let p = pa[i];
+            all_nbr[cursor[i]] = p;
+            cursor[i] += 1;
+            all_nbr[cursor[p]] = i;
+            cursor[p] += 1;
+            i = i + 1;
+        }
+        t = t + 1;
+    }
+
+    // ---- the timed work
+    let mut checksum = 0;
+    let mut degree: Vec[i64] = Vec.new();
+    let mut alive: Vec[i64] = Vec.new();
+    let mut layer: Vec[i64] = Vec.new();
+    let mut next: Vec[i64] = Vec.new();
+    for i in 0..n { degree.push(0); alive.push(0); layer.push(0); next.push(0); }
+
+    let mut p = 0;
+    while p < passes {
+        // Serial dependency: which tree this pass peels depends on the last answer.
+        let which = (p + checksum) % trees;
+        let base = which * (n + 1);
+
+        let mut lcount = 0;
+        for i in 0..n {
+            let d = all_off[base + i + 1] - all_off[base + i];
+            degree[i] = d;
+            alive[i] = 1;
+            if d == 1 {
+                layer[lcount] = i;
+                lcount += 1;
+            }
+        }
+
+        let mut remaining = n;
+        while remaining > 2 {
+            remaining = remaining - lcount;
+            let mut ncount = 0;
+            let mut k = 0;
+            while k < lcount {
+                let v = layer[k];
+                alive[v] = 0;
+                let mut j = all_off[base + v];
+                while j < all_off[base + v + 1] {
+                    let w = all_nbr[j];
+                    if alive[w] == 1 {
+                        degree[w] = degree[w] - 1;
+                        if degree[w] == 1 {
+                            next[ncount] = w;
+                            ncount += 1;
+                        }
+                    }
+                    j = j + 1;
+                }
+                k = k + 1;
+            }
+            let mut c = 0;
+            while c < ncount {
+                layer[c] = next[c];
+                c = c + 1;
+            }
+            lcount = ncount;
+        }
+
+        let mut acc = 0;
+        for i in 0..n {
+            if alive[i] == 1 {
+                acc += i;
+            }
+        }
+        checksum = (checksum + acc) & 0x3FFFFFFF;
+        p = p + 1;
+    }
+
+    println(f"checksum {checksum}");
+}

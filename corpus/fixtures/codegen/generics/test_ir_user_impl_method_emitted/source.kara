@@ -1,0 +1,9 @@
+
+struct Point { x: i64, y: i64 }
+impl PartialEq for Point {
+    fn eq(ref self, other: ref Point) -> bool { self.x == other.x and self.y == other.y }
+}
+impl Eq for Point {
+    fn eq(self, other: Point) -> bool { self.x == other.x and self.y == other.y }
+}
+fn main() {}

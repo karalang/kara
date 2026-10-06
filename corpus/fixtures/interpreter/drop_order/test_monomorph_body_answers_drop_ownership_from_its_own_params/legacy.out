@@ -1,0 +1,29 @@
+collide
+  b60/t60/1
+dR60/t60/1
+collide end
+fresh
+  b61/t61/1
+dR61/t61/1
+fresh end
+strfield
+  b62/t62/1
+dR62/t62/1
+strfield end
+nongen
+  b63/t63/1
+dR63/t63/1
+nongen end
+marker
+  b64/t64
+dR64/t64/1
+  z9
+marker end
+nodrop
+  b1/2
+nodrop end
+genparam
+  in
+dR65/t65/1
+genparam end
+done

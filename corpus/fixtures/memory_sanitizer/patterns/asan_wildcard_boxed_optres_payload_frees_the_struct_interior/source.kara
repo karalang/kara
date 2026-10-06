@@ -1,0 +1,35 @@
+
+struct Full { name: String, buf: Vec[i64] }
+fn mk(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Full { name: "payload-string-data", buf: b };
+}
+fn opt(i: i64) -> Option[Full] { return Option.Some(mk(i)); }
+fn res(i: i64) -> Result[i64, Full] { return Result.Err(mk(i)); }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Wildcard payload, Option — binds nothing, so the box must free the
+        // interior.
+        match opt(i) {
+            Option.Some(_) => { n = n + 1i64; }
+            Option.None => { n = n + 100i64; }
+        }
+        // Wildcard payload on Result's Err side — the variant decides which
+        // generic arg the payload type comes from.
+        match res(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(_) => { n = n + 1i64; }
+        }
+        // CONTROL: a whole binding, where the box already owned the interior.
+        match opt(i) {
+            Option.Some(r) => { n = n + r.buf.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        i = i + 1;
+    }
+    println(n);
+}

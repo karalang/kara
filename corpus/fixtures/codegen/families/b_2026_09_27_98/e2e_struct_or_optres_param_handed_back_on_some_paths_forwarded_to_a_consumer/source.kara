@@ -1,0 +1,32 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
+fn eat(s: S) { println("x") }
+fn eat2(o: Option[S]) { println("x") }
+fn eatr(o: Result[S, i64]) { println("x") }
+fn eat3(o: Option[S]) { match o { Option.Some(s) => println(f"m{s.id}"), Option.None => println("n") } }
+fn pk(s: S, k: bool) -> S { if k { return s } eat(s); return mks(0) }
+fn pa(s: S, k: bool) -> S { if k { return s } eat(s); println("after"); return mks(0) }
+fn pw(s: S, k: bool) -> Option[S] { if k { return Option.Some(s) } eat(s); return Option.None }
+fn po(h: Option[S], k: bool) -> Option[S] { if k { return h } eat2(h); return Option.None }
+fn pr(h: Result[S, i64], k: bool) -> Result[S, i64] { if k { return h } eatr(h); return Result.Err(0) }
+fn pm(h: Option[S], k: bool) -> Option[S] { if k { return h } eat3(h); return Option.None }
+fn pv(s: S, k: bool) -> S { if k { eat(s); return mks(0) } return s }
+fn pe(s: S, k: bool) -> S { if k { return s } else { eat(s); return mks(0) } }
+fn main() {
+    let a1 = mks(1); let r1 = pk(a1, false); println(f"r{r1.id}");
+    let r2 = pk(mks(2), true); println(f"r{r2.id}");
+    let r3 = pa(mks(3), false); println(f"r{r3.id}");
+    let w4 = pw(mks(4), false); println(f"w{w4.is_some()}");
+    let w5 = pw(mks(5), true); println(f"w{w5.is_some()}");
+    let o6 = po(Option.Some(mks(6)), false); println(f"o{o6.is_some()}");
+    let o7 = po(Option.Some(mks(7)), true); println(f"o{o7.is_some()}");
+    let e8 = pr(Result.Ok(mks(8)), false); println(f"e{e8.is_ok()}");
+    let e9 = pr(Result.Ok(mks(9)), true); println(f"e{e9.is_ok()}");
+    let m10 = pm(Option.Some(mks(10)), false); println(f"m{m10.is_some()}");
+    let v11 = pv(mks(11), true); println(f"v{v11.id}");
+    let v12 = pe(mks(12), false); println(f"v{v12.id}");
+    let mut i = 13;
+    while i < 16 { let r = pk(mks(i), i == 14); println(f"l{r.id}"); i = i + 1; }
+    println("end")
+}

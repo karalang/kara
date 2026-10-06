@@ -1,0 +1,14 @@
+struct W1 { v: i64, s: String }
+impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
+fn mk(n: i64) -> W1 { return W1 { v: n, s: f"ssssssssssssssssssssssssssssss{n}" } }
+fn a() { let o = Some(mk(1)); let t = match o { Some(w) => ((w, 1), 2), None => ((mk(0), 0), 0) }; println(f"a {t.0.0.v} {t.1}") }
+fn b() { let o = Some(mk(2)); let t = match o { Some(w) => ((w, 1), 2), None => ((mk(0), 0), 0) }; println(f"b {t.1}") }
+fn c(o: Option[W1]) { let t = match o { Some(w) => ((w, 1), 2), None => ((mk(0), 0), 0) }; println(f"c {t.1}") }
+fn d() { let r: Result[W1, W1] = Ok(mk(4)); let t = match r { Ok(w) => ((w, 1), 2), Err(w) => ((w, 3), 4) }; println(f"d {t.1}") }
+fn e() { let o = Some(mk(5)); let t = match o { Some(w) => (2, (w, 1)), None => (0, (mk(0), 0)) }; println(f"e {t.0}") }
+fn g() { let o = Some(mk(6)); let t = match o { Some(w) => (((w, 1), 2), 3), None => (((mk(0), 0), 0), 0) }; println(f"g {t.1}") }
+fn h() { let o = Some(mk(7)); let t = if let Some(w) = o { ((w, 1), 2) } else { ((mk(0), 0), 0) }; println(f"h {t.1}") }
+fn main() {
+  a(); b(); c(Some(mk(3))); d(); e(); g(); h()
+  println("end")
+}

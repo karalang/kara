@@ -1,0 +1,78 @@
+// Benchmark workload — Word Search (LeetCode #79).
+// The kata's engine is the 4-neighbour, visited-marking DFS backtracking. To measure
+// that engine rather than board/word allocation, the bench enumerates every
+// self-avoiding walk (up to `depth` steps) from every start cell of a fixed all-'A'
+// board and folds each visited cell into a threaded accumulator — the same in-place
+// mark-and-restore backtracking as word_search.kara (a matched letter is replaced by
+// "any unvisited cell, up to depth", so every branch is taken and the work is
+// uniform and heavy). No per-node allocation; the DFS recursion is the measured work.
+// The 5×5 board is walked K=12 times, the acc seeded with the iteration index so
+// nothing hoists. See ../README.md § Benchmarks.
+
+fn walk(board: mut ref Vec[Vec[u8]], r: i64, c: i64, depth: i64, rows: i64, cols: i64,
+        acc: i64) -> i64 {
+    if r < 0 or r >= rows or c < 0 or c >= cols {
+        return acc;
+    }
+    if board[r][c] == 0u8 {
+        return acc;
+    }
+    let mut a = (acc * 131 + (r * cols + c) + 1) % 1000000007;
+    if depth == 0 {
+        return a;
+    }
+    let saved = board[r][c];
+    board[r][c] = 0u8;
+    a = walk(board, r + 1, c, depth - 1, rows, cols, a);
+    a = walk(board, r - 1, c, depth - 1, rows, cols, a);
+    a = walk(board, r, c + 1, depth - 1, rows, cols, a);
+    a = walk(board, r, c - 1, depth - 1, rows, cols, a);
+    board[r][c] = saved;
+    a
+}
+
+fn search_all(board: mut ref Vec[Vec[u8]], depth: i64, rows: i64, cols: i64,
+        seed: i64) -> i64 {
+    let mut a = seed;
+    let mut r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            a = walk(board, r, c, depth, rows, cols, a);
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    a
+}
+
+fn main() {
+    let rows = 5;
+    let cols = 5;
+    let depth = 25;
+    let total = 12;
+    let modulus = 1000000007;
+
+    // All-'A' board, built once.
+    let mut board: Vec[Vec[u8]] = Vec.new();
+    let mut r = 0;
+    while r < rows {
+        let mut row: Vec[u8] = Vec.new();
+        let mut c = 0;
+        while c < cols {
+            row.push(65u8);
+            c = c + 1;
+        }
+        board.push(row);
+        r = r + 1;
+    }
+
+    let mut sum = 0;
+    let mut iter = 0;
+    while iter < total {
+        let rr = search_all(mut board, depth, rows, cols, iter);
+        sum = (sum + rr) % modulus;
+        iter = iter + 1;
+    }
+    println(f"{sum}");
+}

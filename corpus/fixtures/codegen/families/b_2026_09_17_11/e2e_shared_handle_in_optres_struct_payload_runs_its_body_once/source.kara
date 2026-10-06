@@ -1,0 +1,16 @@
+shared struct ShIn { s: String }
+impl Drop for ShIn { fn drop(mut ref self) { println(f"dI{self.s}") } }
+struct ShP { i: ShIn, n: i64 }
+struct ShOut { i: ShIn }
+fn mk(n: i64) -> ShP { return ShP { i: ShIn { s: f"{n}" }, n: n }; }
+fn f(w: Option[ShP]) -> i64 { return 7; }
+fn fo(w: Option[ShOut]) -> i64 { return 8; }
+fn fr(w: Result[ShP, i64]) -> i64 { return 9; }
+fn main() {
+    println(f"a{f(Some(mk(1)))}");
+    let o = Some(mk(2)); println(f"b{f(o)}");
+    println(f"c{fo(Some(ShOut { i: ShIn { s: f"3" } }))}");
+    println(f"d{fr(Ok(mk(4)))}");
+    let r: Result[ShP, i64] = Ok(mk(5)); println("e");
+    println("end");
+}

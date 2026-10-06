@@ -1,0 +1,53 @@
+
+struct Res { id: i64, name: String }
+struct W { r: Res }
+fn mko(i: i64) -> Option[Res] { return Option.Some(Res { id: i, name: "payload-string-data" }); }
+fn eat(r: Res) -> i64 { return r.name.len(); }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // moved into a struct literal
+        match mko(i) {
+            Option.Some(r) => { let w = W { r: r }; n = n + w.r.name.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // escapes as the match's tail value
+        let o2: Option[Res] = Option.Some(Res { id: i, name: "payload-string-data" });
+        let r2 = match o2 {
+            Option.Some(r) => r,
+            Option.None => Res { id: 0, name: "z" },
+        };
+        n = n + r2.name.len();
+        // rebound by a plain let
+        let o3: Option[Res] = Option.Some(Res { id: i, name: "payload-string-data" });
+        match o3 {
+            Option.Some(r) => { let x = r; n = n + x.name.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // pushed into a container
+        let o4: Option[Res] = Option.Some(Res { id: i, name: "payload-string-data" });
+        let mut v: Vec[Res] = Vec.new();
+        match o4 {
+            Option.Some(r) => { v.push(r); }
+            Option.None => { n = n + 100i64; }
+        }
+        n = n + v[0].name.len();
+        // CONTROL: by-value fn arg — an entry copy, so the box keeps the
+        // interior. Neutralizing here leaked it.
+        let o5: Option[Res] = Option.Some(Res { id: i, name: "payload-string-data" });
+        match o5 {
+            Option.Some(r) => { n = n + eat(r); }
+            Option.None => { n = n + 100i64; }
+        }
+        // CONTROL: not moved.
+        let o6: Option[Res] = Option.Some(Res { id: i, name: "payload-string-data" });
+        match o6 {
+            Option.Some(r) => { n = n + r.name.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        i = i + 1;
+    }
+    println(n);
+}

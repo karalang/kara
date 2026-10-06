@@ -1,0 +1,51 @@
+
+fn main() {
+    let a = (1, 2);
+    let b = (1, 3);
+    println(f"{a < b}");
+    println(f"{b < a}");
+    println(f"{a <= a}");
+    println(f"{a >= a}");
+    println(f"{a > b}");
+    println(f"{a == b}");
+    println(f"{a != b}");
+    println(f"{a == a}");
+
+    let sa = ("b", 1);
+    let sb = ("b", 2);
+    let sc = ("c", 0);
+    println(f"{sa < sb}");
+    println(f"{sb < sc}");
+    println(f"{sc < sa}");
+    println(f"{sa == sa}");
+
+    let na = (1, (2, 3));
+    let nb = (1, (2, 4));
+    println(f"{na < nb}");
+    println(f"{na == nb}");
+
+    let t3 = (1, 2, 3);
+    let u3 = (1, 2, 4);
+    println(f"{t3 < u3}");
+    println(f"{t3 == u3}");
+    println(f"{t3 == t3}");
+    println(f"{t3 != u3}");
+
+    let n3a = ((1, 2, 3), 4);
+    let n3b = ((1, 2, 5), 4);
+    println(f"{n3a == n3b}");
+    println(f"{n3a == n3a}");
+
+    let f3a = (1, 1.5, 2);
+    let f3b = (1, 2.5, 2);
+    println(f"{f3a == f3b}");
+
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    v.push((3, 1));
+    v.push((1, 9));
+    v.push((2, 5));
+    v.sort();
+    for e in v {
+        println(f"{e.0}:{e.1}");
+    }
+}

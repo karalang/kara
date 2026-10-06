@@ -1,0 +1,85 @@
+// Benchmark workload for LeetCode #229 — Majority Element II.
+//
+// Build-once + punch: a large array of small values (1..3) is generated once
+// from a deterministic 32-bit LCG, then the full two-candidate Boyer-Moore vote
+// PLUS its verification pass is run over a sliding window of width `WIN` at every
+// start offset. Each window is a complete independent instance of the kata: a
+// first pass votes for up to two candidates (loop-carried counts, a five-way
+// data-dependent branch) and a second pass counts real occurrences to confirm
+// each clears the floor(WIN/3) threshold. The carried counts and unpredictable
+// branch make the kernel non-vectorizable. Sink = sum of every confirmed
+// majority element across all windows.
+
+fn window_majority_sum(nums: ref Vec[i64], s: i64, win: i64) -> i64 {
+    let mut cand1 = 0;
+    let mut cand2 = 0;
+    let mut count1 = 0;
+    let mut count2 = 0;
+
+    let mut k = s;
+    let end = s + win;
+    while k < end {
+        let x = nums[k];
+        if count1 > 0 and x == cand1 {
+            count1 = count1 + 1;
+        } else if count2 > 0 and x == cand2 {
+            count2 = count2 + 1;
+        } else if count1 == 0 {
+            cand1 = x;
+            count1 = 1;
+        } else if count2 == 0 {
+            cand2 = x;
+            count2 = 1;
+        } else {
+            count1 = count1 - 1;
+            count2 = count2 - 1;
+        }
+        k = k + 1;
+    }
+
+    let mut real1 = 0;
+    let mut real2 = 0;
+    let mut j = s;
+    while j < end {
+        let x = nums[j];
+        if count1 > 0 and x == cand1 {
+            real1 = real1 + 1;
+        } else if count2 > 0 and x == cand2 {
+            real2 = real2 + 1;
+        }
+        j = j + 1;
+    }
+
+    let threshold = win / 3;
+    let mut total = 0;
+    if count1 > 0 and real1 > threshold {
+        total = total + cand1;
+    }
+    if count2 > 0 and real2 > threshold {
+        total = total + cand2;
+    }
+    return total;
+}
+
+fn main() {
+    let n = 3000000;
+    let win = 16;
+
+    let mut nums: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut c = 0;
+    while c < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        nums.push((state % 3) + 1);
+        c = c + 1;
+    }
+
+    let mut sink = 0;
+    let mut s = 0;
+    let last = n - win;
+    while s <= last {
+        sink = sink + window_majority_sum(nums, s, win);
+        s = s + 1;
+    }
+    println(sink);
+}

@@ -1,0 +1,38 @@
+
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, s: String }
+fn mk(n: i64, i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str((n + i).to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn idres(r: Result[Wide, i64]) -> Result[Wide, i64] { r }
+fn iderr(r: Result[i64, Wide]) -> Result[i64, Wide] { r }
+fn idmix(r: Result[Wide, String]) -> Result[Wide, String] { r }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        // boxed Ok payload, arm BINDS it — the headline shape
+        let r: Result[Wide, i64] = Result.Ok(Wide { a: 1, b: 2, c: 3, d: 4, e: 5, s: mk(n, i) });
+        let rbk = idres(r);
+        match rbk { Result.Ok(x) => { if x.s.contains("payload") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        // the same on the Err side
+        let e: Result[i64, Wide] = Result.Err(Wide { a: 1, b: 2, c: 3, d: 4, e: 5, s: mk(n, i) });
+        let ebk = iderr(e);
+        match ebk { Result.Err(x) => { if x.s.contains("payload") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        // boxed Ok + INLINE-heap Err: the per-side gate must keep the Err drop
+        let m: Result[Wide, String] = if i % 2 == 0 {
+            Result.Ok(Wide { a: 1, b: 2, c: 3, d: 4, e: 5, s: mk(n, i) })
+        } else { Result.Err(mk(n, i)) };
+        let mbk = idmix(m);
+        match mbk {
+            Result.Ok(x) => { if x.s.contains("payload") { acc = acc + 1; } }
+            Result.Err(t) => { if t.contains("payload") { acc = acc + 1; } }
+        }
+        i = i + 1;
+    }
+    println(acc);
+}

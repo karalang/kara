@@ -1,0 +1,10 @@
+struct Q179 { tag: String }
+impl Drop for Q179 { fn drop(mut ref self) { } }
+fn takesOpt[T](x: Option[T]) -> i64 {
+    match x { Some(_) => { println("s"); 1 } None => { println("n"); 0 } }
+}
+fn main() {
+    let a: Array[Q179, 2] = [Q179 { tag: f"b179-aaaaaaaa0" }, Q179 { tag: f"b179-bbbbbbbb1" }];
+    let c = takesOpt(Some(a));
+    println(f"c{c}");
+}

@@ -1,0 +1,18 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct K { n: i64 }
+struct V { s: String }
+impl Drop for K { fn drop(mut ref self) { bump(self.n) } }
+impl Drop for V { fn drop(mut ref self) { bump(0) } }
+let mut FIRED: i64 = 0;
+fn bump(n: i64) { FIRED = FIRED + 1; }
+fn main() {
+    let mut m: Map[K, V] = Map.new();
+    let mut i = 0;
+    while i < 200 {
+        m.insert(K { n: i }, V { s: f"val-{i}-padding-padding" });
+        m.remove(K { n: i });
+        i = i + 1;
+    }
+    println(f"fired={FIRED} len={m.len()}");
+}

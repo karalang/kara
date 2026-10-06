@@ -1,0 +1,120 @@
+// LeetCode #93: Restore IP Addresses — backtracking over the four segments.
+//
+// Given a string of digits, return every valid IP address that can be formed by
+// inserting three dots. A segment is valid iff it is 1–3 digits, has no leading zero
+// (unless it is exactly "0"), and its value is in 0..=255. So a valid address is four
+// such segments that together consume the whole string.
+//
+// The DFS places one segment at a time: from position `start`, try each length 1, 2, 3
+// (stopping when it runs off the end), validate the candidate, and recurse for the next
+// part at `start + len`. When four parts have been placed AND the string is fully
+// consumed (`start == n`), the accumulated `path` is a complete address. The dots are
+// woven in as the path is built — `f"{path}.{seg}"` for every part after the first.
+// Segments are read straight off a `Vec[u8]` of the digit bytes (value folded and the
+// segment string built in the same pass), no substring copies.
+
+fn backtrack(s: ref Vec[u8], n: i64, start: i64, part: i64, path: String,
+        out: mut ref Vec[String]) {
+    if part == 4 {
+        if start == n {
+            out.push(path);
+        }
+        return;
+    }
+    let mut len = 1;
+    while len <= 3 {
+        if start + len > n {
+            break;
+        }
+        // Fold the segment value and build its string in one pass.
+        let mut val = 0;
+        let mut seg: String = "";
+        let mut i = 0;
+        while i < len {
+            let d = (s[start + i] as i64) - 48;
+            val = val * 10 + d;
+            seg.push_str(f"{d}");
+            i = i + 1;
+        }
+        // Valid: no leading zero (unless single digit) and value <= 255.
+        let valid = (len == 1 or s[start] != 48u8) and val <= 255;
+        if valid {
+            let newpath = if part == 0 {
+                seg
+            } else {
+                f"{path}.{seg}"
+            };
+            backtrack(s, n, start + len, part + 1, newpath, out);
+        }
+        len = len + 1;
+    }
+}
+
+fn to_bytes(str: ref String) -> Vec[u8] {
+    let b = str.bytes();
+    let mut v: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        v.push(b[i]);
+        i = i + 1;
+    }
+    v
+}
+
+fn restore(str: ref String) -> Vec[String] {
+    let s = to_bytes(str);
+    let n = s.len();
+    let mut out: Vec[String] = Vec.new();
+    backtrack(s, n, 0, 0, "", mut out);
+    out
+}
+
+fn report(str: String, acc: mut ref i64) {
+    let ips = restore(str);
+    let count = ips.len();
+    println(f"\"{str}\": {count}");
+    let mut i = 0;
+    while i < count {
+        println(ips[i]);
+        i = i + 1;
+    }
+    // Fold count + each IP's bytes into a running hash.
+    let mut a = (acc * 131 + (count + 1)) % 1000000007;
+    i = 0;
+    while i < count {
+        let bytes = ips[i].bytes();
+        let mut j = 0;
+        while j < bytes.len() {
+            a = (a * 131 + (bytes[j] as i64)) % 1000000007;
+            j = j + 1;
+        }
+        a = (a * 131 + 7) % 1000000007;      // separator marker
+        i = i + 1;
+    }
+    acc = a;
+}
+
+fn main() {
+    let mut acc = 0;
+
+    // LeetCode examples.
+    report("25525511135", mut acc);   // 255.255.11.135 / 255.255.111.35
+    report("0000", mut acc);          // 0.0.0.0
+    report("101023", mut acc);        // 5 addresses
+
+    // Singleton and full-255.
+    report("1111", mut acc);          // 1.1.1.1
+    report("255255255255", mut acc);  // 255.255.255.255
+
+    // Leading-zero pruning.
+    report("010010", mut acc);        // 0.10.0.10 / 0.100.1.0
+
+    // Too short and too long — no valid addresses.
+    report("1", mut acc);             // 0
+    report("1234567890123", mut acc); // 0 (13 digits)
+
+    // Empty.
+    report("", mut acc);              // 0
+
+    println(f"sink: {acc}");
+}

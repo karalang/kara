@@ -1,0 +1,17 @@
+struct R2 { s: String, t: String, u: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"d:{self.s.len()}") } }
+fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
+fn ignore(x: Option[R2]) { println("  ig"); }
+fn matchit(x: Option[R2]) { match x { Option.Some(r) => { println(f"  m:{r.s}"); } Option.None => { println("  mn"); } } }
+fn giveback(x: Option[R2]) -> Option[R2] { println("  gb"); return x; }
+fn resig(x: Result[R2, i64]) { println("  rig"); }
+fn main() {
+    println("A named->ignore");   { let a = Option.Some(mkr(1)); ignore(a); }
+    println("B named->matchit");  { let b = Option.Some(mkr(2)); matchit(b); }
+    println("C named->giveback"); { let c = Option.Some(mkr(3)); let r = giveback(c); }
+    println("D temp->ignore");    ignore(Option.Some(mkr(4)));
+    println("E temp->matchit");   matchit(Option.Some(mkr(5)));
+    println("F temp->giveback");  { let r = giveback(Option.Some(mkr(6))); }
+    println("G temp->resig");     resig(Result.Ok(mkr(7)));
+    println("end");
+}

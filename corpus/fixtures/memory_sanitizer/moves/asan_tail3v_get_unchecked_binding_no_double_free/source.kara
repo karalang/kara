@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut v: Vec[String] = Vec.new();
+        v.push(f"unchecked payload padded beyond thirty-six bytes {i}");
+        unsafe {
+            let s = v.get_unchecked(0);
+            println(s.len());
+        }
+        println(v.len());
+        i = i + 1;
+    };
+}

@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_e2e_par_branch_defer_fires_on_cooperative_cancel"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["nondeterministic", "par"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "output differs between two legacy runs (a bound port, scheduling or timing)"

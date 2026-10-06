@@ -1,0 +1,5 @@
+fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn main() {
+    let a: Array[i64, 2] = [1, 2];
+    show(Some(a));
+}

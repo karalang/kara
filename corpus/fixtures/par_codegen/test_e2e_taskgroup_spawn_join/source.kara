@@ -1,0 +1,10 @@
+
+fn worker(n: i64) -> i64 { n * 2 }
+fn main() {
+    let mut tg = TaskGroup.new();
+    let h1: TaskHandle[i64] = tg.spawn(|| worker(10));
+    let h2: TaskHandle[i64] = tg.spawn(|| worker(20));
+    let r1: i64 = h1.join();
+    let r2: i64 = h2.join();
+    println(r1 + r2);
+}

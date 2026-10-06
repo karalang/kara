@@ -1,0 +1,9 @@
+
+struct W { s: String }
+fn f() -> Result[W, i64] { Ok(W { s: "boom".to_string() }) }
+fn main() {
+    match f() {
+        Ok(w) => println(w.s),
+        Err(e) => println(e.to_string()),
+    }
+}

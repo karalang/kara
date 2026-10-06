@@ -1,0 +1,15 @@
+
+struct Rec { id: i64, name: String }
+fn boom(v: mut ref Vec[i64]) -> Result[i64, Rec] {
+    v.push(1i64);
+    Err(Rec { id: 2i64, name: "leakme".to_string() })
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut sink: Vec[i64] = Vec.new();
+    while i < 40i64 {
+        match boom(mut sink) { Ok(_) => {}, Err(_) => {}, }
+        i = i + 1;
+    }
+    println(sink.len().to_string());
+}

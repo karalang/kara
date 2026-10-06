@@ -1,0 +1,13 @@
+
+        fn main() {
+            let mut results: Vec[i64] = Vec.new();
+            let mut total: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            #[par_order_free]
+            while k < 100i64 {
+                results.push(k);
+                total = total + k;
+                k = k + 1i64;
+            }
+        }
+        

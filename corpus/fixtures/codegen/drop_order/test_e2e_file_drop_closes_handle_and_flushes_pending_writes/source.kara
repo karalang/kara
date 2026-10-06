@@ -1,0 +1,14 @@
+
+fn main() with writes(FileSystem) {{
+    match File.create("{path}") {{
+        Ok(f) => {{
+            let mut data: Vec[u8] = Vec.new();
+            data.push(65u8); data.push(10u8);
+            match f.write(data) {{
+                Ok(_) => println("wrote"),
+                Err(_) => println("err"),
+            }}
+        }}
+        Err(_) => println("create-err"),
+    }}
+}}

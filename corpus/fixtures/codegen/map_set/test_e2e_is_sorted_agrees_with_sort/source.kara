@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut v: Vec[u64] = [9223372036854775809u64, 3u64, 18446744073709551615u64, 1u64];
+    println(v.is_sorted());
+    v.sort();
+    println(v.is_sorted());
+    println(v[0]);
+    println(v[3]);
+
+    let mut w: Vec[String] = ["pear", "apple", "fig"];
+    println(w.is_sorted());
+    w.sort();
+    println(w.is_sorted());
+    println(w[0]);
+}

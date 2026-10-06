@@ -1,0 +1,87 @@
+// LeetCode 276 bench kernel — BRUTE-FORCE ENUMERATION, not the DP.
+//
+// WHY THE DP IS NOT THE WORKLOAD. The two-state solver is O(n) and `n` cannot
+// exceed 89 before the answer leaves i64 — about ninety iterations of two adds
+// and two multiplies. There is nothing there to time; any measurement would be
+// loop overhead and process startup. Benching it would have meant inventing a
+// modular variant, which is a different problem wearing this kata's name.
+//
+// The kata already contains a real workload. `paint_fence_brute.kara` walks all
+// `k^n` paintings and rejects three-in-a-row: O(n·k^n), branch-heavy, array-
+// indexed, and entirely data-dependent. At n=13, k=4 that is 67 million
+// paintings and ~800 million comparisons. That is worth measuring, and it is the
+// program the kata already ships rather than something built to be benched.
+//
+// THE SINK IS THE ANSWER, which is the useful property here. Enumeration and the
+// DP compute the same number by unrelated means, so the bench verifies itself:
+// the printed total must equal `num_ways(13, 4)`, and a lane that vectorized
+// away half the search would say so immediately. No separate oracle needed.
+//
+// PARALLEL LANE. The enumeration splits on the first two posts: fix `c[0]` and
+// `c[1]`, odometer only positions 2..n-1, and the k² = 16 prefixes are wholly
+// independent — each branch owns its own array and reads nothing shared. The
+// three-in-a-row rule does NOT couple them, because each branch checks its whole
+// n-length array including its fixed prefix; a painting is examined by exactly
+// the one branch that owns its first two posts.
+//
+// `paint_enum_seq.kara` is this file without the attribute. That seq/par pair is
+// the only Kāra-to-Kāra comparison drawn — a row against a mirror that never
+// opted into parallelism conflates compiler quality with the comparator's
+// choice.
+//
+// SIXTEEN BRANCHES against 18 cores is a deliberate under-fill. The split is
+// k² and k is fixed by the workload, so the alternatives are k=4 → 16 or a
+// three-post split at k³ = 64 (four waves of 16, same imbalance, more overhead).
+// 16 leaves two cores idle and is still the best available factoring.
+
+fn count_prefix(n: i64, k: i64, p0: i64, p1: i64) -> i64 {
+    let mut c: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < n {
+        c.push(0);
+        z = z + 1;
+    }
+    c[0] = p0;
+    c[1] = p1;
+    let mut count = 0;
+    let mut more = true;
+    while more {
+        let mut ok = true;
+        let mut i = 2;
+        while i < n {
+            if c[i] == c[i - 1] and c[i - 1] == c[i - 2] {
+                ok = false;
+            }
+            i = i + 1;
+        }
+        if ok { count = count + 1; }
+
+        // odometer over the SUFFIX only — positions 0 and 1 are this branch's
+        let mut p = n - 1;
+        while p >= 2 and c[p] == k - 1 {
+            c[p] = 0;
+            p = p - 1;
+        }
+        if p < 2 { more = false; } else { c[p] = c[p] + 1; }
+    }
+    return count;
+}
+
+fn main() {
+    let n = 13;
+    let k = 4;
+
+    let mut parts: Vec[i64] = Vec.new();
+    #[par_order_free]
+    for pre in 0..(k * k) {
+        parts.push(count_prefix(n, k, pre / k, pre % k));
+    }
+
+    let mut total = 0;
+    let mut i = 0;
+    while i < parts.len() {
+        total = total + parts[i];
+        i = i + 1;
+    }
+    println(total);
+}

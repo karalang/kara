@@ -1,0 +1,10 @@
+series 3800
+oracle-checked 2000
+P1 arm disagreements 0
+P2 negative-profit failures 0
+P3 shift-invariance failures 0
+P4 scale-response failures 0
+P5 upper-bound violations 0
+P6 lower-bound violations 0
+P7 brute-force disagreements 0
+DIFFERENTIAL OK

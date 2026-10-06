@@ -1,0 +1,9 @@
+struct R { id: i64, v: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}v{self.v}") } }
+struct Q { r: R, s: R }
+fn mkr(k: i64) -> R { return R { id: k, v: k * 10 } }
+fn mkq() -> Option[Q] { return Option.Some(Q { r: mkr(5), s: mkr(6) }) }
+fn mkn() -> Option[Q] { return Option.None }
+fn take(o: Option[Q]) { match o { Option.Some(t) => { let x = t.r; println(f"  r:{x.v}s:{t.s.v}") } Option.None => { println("  n") } } }
+fn take2(o: Option[Q]) { match o { Option.Some(t) => { let x = t.s; println(f"  s:{x.v}") } Option.None => { println("  n") } } }
+fn main() { take2(mkq()); println("end") }

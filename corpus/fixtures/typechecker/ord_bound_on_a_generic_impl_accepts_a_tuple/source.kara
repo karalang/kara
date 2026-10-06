@@ -1,0 +1,29 @@
+
+struct Holder[=T] { v: T }
+impl[T: Ord] Holder[T] {
+    fn tag(ref self) -> i64 { 7 }
+}
+struct Hashed[=T] { v: T }
+impl[T: Hash] Hashed[T] {
+    fn tag(ref self) -> i64 { 8 }
+}
+struct Cloned[=T] { v: T }
+impl[T: Clone] Cloned[T] {
+    fn tag(ref self) -> i64 { 9 }
+}
+fn free[T: Ord](a: T) -> i64 { 9 }
+fn main() {
+    let h = Holder { v: (1, 2) };
+    println(h.tag());
+    let n = Holder { v: (1, (2, 3)) };
+    println(n.tag());
+    let s = Holder { v: ("a", 1) };
+    println(s.tag());
+    let a: Holder[Array[i64, 2]] = Holder { v: Array[1, 2] };
+    println(a.tag());
+    let u: Holder[()] = Holder { v: () };
+    println(u.tag());
+    println(Hashed { v: (1, 2) }.tag());
+    println(Cloned { v: (1, 2) }.tag());
+    println(free((1, 2)));
+}

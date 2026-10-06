@@ -1,0 +1,27 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct DuoR { pair: (Res, i64), tag: i64 }
+struct Duo[T] { pair: (T, i64), tag: i64 }
+struct MapHold { m: Map[i64, Res], tag: i64 }
+fn main() {
+    println("a");
+    {
+        let d = DuoR { pair: (Res { id: 1, name: f"aa{1}" }, 5), tag: 7 };
+        println(d.tag);
+    }
+    println("b");
+    {
+        let g: Duo[Res] = Duo { pair: (Res { id: 2, name: f"bb{2}" }, 6), tag: 8 };
+        println(g.tag);
+    }
+    println("c");
+    {
+        let mut h = MapHold { m: Map.new(), tag: 9 };
+        h.m.insert(1i64, Res { id: 3, name: f"cc{3}" });
+        println(h.tag);
+    }
+    println("end");
+}

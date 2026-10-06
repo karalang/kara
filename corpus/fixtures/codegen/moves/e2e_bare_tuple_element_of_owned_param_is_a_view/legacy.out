@@ -1,0 +1,25 @@
+param
+  b1
+dR1
+param end
+norebind
+  b2
+dR2
+norebind end
+proj
+  b3
+dR3
+proj end
+norebind_proj
+  b4
+dR4
+norebind_proj end
+consumed
+  sank5
+dR5
+consumed end
+local
+  b6
+dR6
+local end
+done

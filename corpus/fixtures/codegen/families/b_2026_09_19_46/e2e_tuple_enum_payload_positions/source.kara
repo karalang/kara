@@ -1,0 +1,26 @@
+struct S1 { v: i64, s: String }
+impl Drop for S1 { fn drop(mut ref self) { println(f"  dS{self.v}") } }
+enum Ht { P((S1, S1)), Q }
+enum Hm { P((S1, i64)), Q }
+enum Hw { P((S1, S1, S1)), Q }
+enum G[T] { X(T), Y }
+struct Wt { h: Ht }
+fn eat(h: Ht) -> i64 { 1 }
+fn eatg(g: G[(S1, S1)]) -> i64 { 1 }
+fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
+fn main() {
+    println("let"); { let h = Ht.P((s(1), s(2))); println("  x") }
+    println("disc"); { let _ = Ht.P((s(3), s(4))); println("  x") }
+    println("stmt"); { Ht.P((s(5), s(6))); println("  x") }
+    println("move"); { let h = Ht.P((s(7), s(8))); let h2 = h; println("  x") }
+    println("arg"); { let n = eat(Ht.P((s(9), s(10)))); println(f"  {n}") }
+    println("field"); { let w = Wt { h: Ht.P((s(11), s(12))) }; println("  x") }
+    println("arm"); { let h = Ht.P((s(13), s(14))); match h { Ht.P(t) => println("  in"), Ht.Q => {} } }
+    println("armelem"); { let h = Ht.P((s(15), s(16))); match h { Ht.P((a, b)) => println(f"  in {a.v}"), Ht.Q => {} } }
+    println("mixed"); { let h = Hm.P((s(17), 5)); println("  x") }
+    println("wide"); { let h = Hw.P((s(18), s(19), s(20))); println("  x") }
+    println("glet"); { let g = G.X((s(21), s(22))); println("  x") }
+    println("gdisc"); { let _ = G.X((s(23), s(24))); println("  x") }
+    println("garg"); { let n = eatg(G.X((s(25), s(26)))); println(f"  {n}") }
+    println("end")
+}

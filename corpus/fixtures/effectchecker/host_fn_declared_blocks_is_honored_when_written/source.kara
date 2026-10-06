@@ -1,0 +1,8 @@
+
+host fn host_sleep(ms: i64) with blocks;
+
+pub fn nap() {
+    host_sleep(10);
+}
+
+fn main() {}

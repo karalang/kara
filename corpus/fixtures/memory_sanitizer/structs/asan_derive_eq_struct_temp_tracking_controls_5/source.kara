@@ -1,0 +1,21 @@
+
+#[derive(Eq)]
+struct B { items: Vec[String] }
+fn mk(s: ref String) -> B {
+    let mut v: Vec[String] = Vec.new();
+    v.push(s.substring(0, 4));
+    v.push(s.substring(4, 8));
+    B { items: v }
+}
+fn f(a: ref String, other: ref B) -> i64 {
+    let _ = mk(a) == other;
+    other.items.len()
+}
+fn main() {
+    let x = "abcdefgh";
+    let mut w: Vec[String] = Vec.new();
+    w.push("abcd");
+    w.push("efgh");
+    let o = B { items: w };
+    println(f"{f(x, o)}");
+}

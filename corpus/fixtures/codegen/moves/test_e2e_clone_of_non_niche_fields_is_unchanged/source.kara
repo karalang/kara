@@ -1,0 +1,12 @@
+
+shared struct Node { val: i64 }
+struct Holder { o: Option[Node] }
+struct S { v: Vec[i64], t: String, oi: Option[i64] }
+fn main() {
+    let s = S { v: [1, 2, 3], t: "hello", oi: Some(7) };
+    println(f"{s.v.clone().len()}");
+    println(f"{s.t.clone().len()}");
+    println(f"{match s.oi.clone() { None => -1, Some(x) => x }}");
+    let h = Holder { o: Some(Node { val: 9 }) };
+    println(f"{match h.o.clone() { None => -1, Some(n) => n.val }}");
+}

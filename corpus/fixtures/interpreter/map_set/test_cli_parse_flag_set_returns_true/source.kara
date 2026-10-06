@@ -1,0 +1,12 @@
+struct FakeEnv {}
+         impl FakeEnv { fn args(self) -> Vec[String] { ["prog", "--verbose"] } }
+         fn main() {
+             with_provider[Env](FakeEnv {}, || {
+                 let p = Parser.new("greet")
+                     .flag("--verbose", short: 'v', help: "");
+                 match p.parse() {
+                     Ok(args) => println(args.get_flag("--verbose")),
+                     Err(e) => println(e.message),
+                 }
+             });
+         }

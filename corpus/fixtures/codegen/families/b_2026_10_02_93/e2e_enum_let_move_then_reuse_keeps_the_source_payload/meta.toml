@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_02_93.rs::e2e_enum_let_move_then_reuse_keeps_the_source_payload"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_02_93.rs::asan_enum_let_move_then_reuse_keeps_the_source_payload"]
+expect = "stdout"
+exit = 0
+tags = ["shared", "uses-moved"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

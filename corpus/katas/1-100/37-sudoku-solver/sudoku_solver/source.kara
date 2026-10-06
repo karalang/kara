@@ -1,0 +1,213 @@
+// LeetCode #37: Sudoku Solver — bitmask backtracking, three digit-mask arrays (★).
+//
+// Given a partially filled 9×9 board (0 marks an empty cell, 1–9 a placed digit),
+// FILL every empty cell so the completed board obeys the three Sudoku rules: no digit
+// repeats within any row, any column, or any of the nine 3×3 sub-boxes. The LeetCode
+// input is guaranteed to have exactly one completion. #37 is the dual of #36: where
+// [#36](../36-valid-sudoku/) *validates* a board, #37 *completes* one — the example
+// puzzle below solves to precisely the board #36's example 1 validated.
+//
+// The search is backtracking: walk the cells in order, and at the first empty one try
+// each legal digit, recurse, and undo on failure. The crux is making "legal digit"
+// O(1). With nine distinct digits, a unit's seen-set fits in one integer used as a
+// BITMASK: bit d (1 << d) means "digit d is present in this unit". Carry three arrays
+// of nine such masks — rows / cols / boxes — so a cell (r, c)'s legal digits are
+// exactly those whose bit is CLEAR in rows[r] | cols[c] | boxes[b], where the box is
+// (r/3)*3 + c/3. Placing digit d sets its bit in all three masks; undoing CLEARS it
+// (here with XOR — the bit was just set, so XOR toggles it back off). No per-placement
+// re-scan of the grid: the masks are the incremental witness of what each unit holds.
+//
+//   - At cell position `pos` (row pos/9, column pos%9): if filled, advance to pos+1.
+//   - Else, for each digit 1..9 whose bit is clear in all three masks: place it, set
+//     the three bits, recurse on pos+1; if that succeeds, done; else clear the cell,
+//     XOR the three bits back off, and try the next digit.
+//   - pos == 81 means every cell is filled — a complete, valid solution.
+//
+// The board is passed as `mut ref Vec[Vec[i64]]` and solved IN PLACE; the masks thread
+// through the recursion the same way. Linear cell order + ascending digit order make
+// the found solution deterministic (and, on a unique-solution board, THE solution).
+
+fn box_index(r: i64, c: i64) -> i64 {
+    (r / 3) * 3 + c / 3
+}
+
+fn go(
+    board: mut ref Vec[Vec[i64]],
+    rows: mut ref Vec[i64],
+    cols: mut ref Vec[i64],
+    boxes: mut ref Vec[i64],
+    pos: i64,
+) -> bool {
+    if pos == 81 {
+        return true;
+    }
+    let r = pos / 9;
+    let c = pos % 9;
+    if board[r][c] != 0 {
+        return go(board, rows, cols, boxes, pos + 1);
+    }
+    let b = box_index(r, c);
+    let used = rows[r] | cols[c] | boxes[b];
+    let mut d = 1;
+    while d <= 9 {
+        let bit = 1 << d;
+        if (used & bit) == 0 {
+            board[r][c] = d;
+            rows[r] = rows[r] | bit;
+            cols[c] = cols[c] | bit;
+            boxes[b] = boxes[b] | bit;
+            if go(board, rows, cols, boxes, pos + 1) {
+                return true;
+            }
+            board[r][c] = 0;            // undo the placement
+            rows[r] = rows[r] ^ bit;       // clear the bit (XOR toggles it off)
+            cols[c] = cols[c] ^ bit;
+            boxes[b] = boxes[b] ^ bit;
+        }
+        d = d + 1;
+    }
+    false
+}
+
+fn solve(board: mut ref Vec[Vec[i64]]) -> bool {
+    // Seed the three mask arrays from the givens.
+    let mut rows: Vec[i64] = Vec.new();
+    let mut cols: Vec[i64] = Vec.new();
+    let mut boxes: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 9 {
+        rows.push(0);
+        cols.push(0);
+        boxes.push(0);
+        i = i + 1;
+    }
+    let mut r = 0;
+    while r < 9 {
+        let mut c = 0;
+        while c < 9 {
+            let d = board[r][c];
+            if d != 0 {
+                let bit = 1 << d;
+                let b = box_index(r, c);
+                rows[r] = rows[r] | bit;
+                cols[c] = cols[c] | bit;
+                boxes[b] = boxes[b] | bit;
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    go(board, mut rows, mut cols, mut boxes, 0)
+}
+
+// Render a board as nine slash-separated rows of nine digits — the oracle's format.
+fn render(board: ref Vec[Vec[i64]]) -> String {
+    let mut out = "";
+    let mut r = 0;
+    while r < 9 {
+        if r != 0 {
+            out = f"{out}/";
+        }
+        let mut c = 0;
+        while c < 9 {
+            out = f"{out}{board[r][c]}";
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    out
+}
+
+fn report(name: String, board: Vec[Vec[i64]]) {
+    let mut b = board;
+    if solve(mut b) {
+        let rendered = render(b);
+        println(f"{name} -> {rendered}");
+    } else {
+        println(f"{name} -> no solution");
+    }
+}
+
+// LeetCode #37 example 1 — solves to the exact board #36's example 1 validates.
+fn board_example() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([5, 3, 0, 0, 7, 0, 0, 0, 0]);
+    b.push([6, 0, 0, 1, 9, 5, 0, 0, 0]);
+    b.push([0, 9, 8, 0, 0, 0, 0, 6, 0]);
+    b.push([8, 0, 0, 0, 6, 0, 0, 0, 3]);
+    b.push([4, 0, 0, 8, 0, 3, 0, 0, 1]);
+    b.push([7, 0, 0, 0, 2, 0, 0, 0, 6]);
+    b.push([0, 6, 0, 0, 0, 0, 2, 8, 0]);
+    b.push([0, 0, 0, 4, 1, 9, 0, 0, 5]);
+    b.push([0, 0, 0, 0, 8, 0, 0, 7, 9]);
+    b
+}
+
+// "AI Escargot" (Arto Inkala, 2006) — a classic backtracking-heavy unique puzzle.
+fn board_escargot() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([1, 0, 0, 0, 0, 7, 0, 9, 0]);
+    b.push([0, 3, 0, 0, 2, 0, 0, 0, 8]);
+    b.push([0, 0, 9, 6, 0, 0, 5, 0, 0]);
+    b.push([0, 0, 5, 3, 0, 0, 9, 0, 0]);
+    b.push([0, 1, 0, 0, 8, 0, 0, 0, 2]);
+    b.push([6, 0, 0, 0, 0, 4, 0, 0, 0]);
+    b.push([3, 0, 0, 0, 0, 0, 0, 1, 0]);
+    b.push([0, 4, 0, 0, 0, 0, 0, 0, 7]);
+    b.push([0, 0, 7, 0, 0, 0, 3, 0, 0]);
+    b
+}
+
+// Arto Inkala's 2012 "world's hardest sudoku" — unique, maximal backtracking.
+fn board_inkala() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([8, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 3, 6, 0, 0, 0, 0, 0]);
+    b.push([0, 7, 0, 0, 9, 0, 2, 0, 0]);
+    b.push([0, 5, 0, 0, 0, 7, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 4, 5, 7, 0, 0]);
+    b.push([0, 0, 0, 1, 0, 0, 0, 3, 0]);
+    b.push([0, 0, 1, 0, 0, 0, 0, 6, 8]);
+    b.push([0, 0, 8, 5, 0, 0, 0, 1, 0]);
+    b.push([0, 9, 0, 0, 0, 0, 4, 0, 0]);
+    b
+}
+
+// Already complete (0 empties) — solve returns it unchanged.
+fn board_solved() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([5, 3, 4, 6, 7, 8, 9, 1, 2]);
+    b.push([6, 7, 2, 1, 9, 5, 3, 4, 8]);
+    b.push([1, 9, 8, 3, 4, 2, 5, 6, 7]);
+    b.push([8, 5, 9, 7, 6, 1, 4, 2, 3]);
+    b.push([4, 2, 6, 8, 5, 3, 7, 9, 1]);
+    b.push([7, 1, 3, 9, 2, 4, 8, 5, 6]);
+    b.push([9, 6, 1, 5, 3, 7, 2, 8, 4]);
+    b.push([2, 8, 7, 4, 1, 9, 6, 3, 5]);
+    b.push([3, 4, 5, 2, 8, 6, 1, 7, 9]);
+    b
+}
+
+// Valid SO FAR but with no completion: cell (0,0)'s row already holds {1..6} and its
+// box already holds {7,8,9}, so no digit fits there — the search must fail.
+fn board_unsolvable() -> Vec[Vec[i64]] {
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([0, 0, 0, 1, 2, 3, 4, 5, 6]);
+    b.push([0, 7, 8, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 9, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b.push([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    b
+}
+
+fn main() {
+    report("example  (LeetCode 37)", board_example());     // -> #36's solved board
+    report("escargot (AI Escargot) ", board_escargot());   // backtracking-heavy
+    report("inkala   (hardest 2012)", board_inkala());     // world's hardest
+    report("solved   (0 empties)   ", board_solved());     // identity
+    report("unsolvable (no fill)   ", board_unsolvable()); // no solution
+}

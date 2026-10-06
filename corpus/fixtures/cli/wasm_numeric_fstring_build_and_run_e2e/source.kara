@@ -1,0 +1,9 @@
+
+fn main() {
+    let x = 42;
+    let y = -7;
+    let f = 2.5;
+    println(f"i {x} n {y} f {f}");
+    let n = 100;
+    println(n.to_string());
+}

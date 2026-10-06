@@ -1,0 +1,15 @@
+
+shared struct SBag { mut items: Vec[String], base: i64 }
+impl SBag {
+    fn total(ref self) -> i64 {
+        let mut t = self.base;
+        for s in self.items.iter() { t = t + s.len(); };
+        return t;
+    }
+}
+fn main() {
+    let b = SBag { items: Vec.new(), base: 10_i64 };
+    b.items.push("shared field string padded beyond thirty-six bytes okay");
+    b.items.push("another shared field string beyond thirty-six bytes ok");
+    println(b.total());
+}

@@ -1,0 +1,7 @@
+
+type Even = i64 where self % 2 == 0;
+fn main() {
+    let e = 3 as Even;
+    println(e);
+    println(42);
+}

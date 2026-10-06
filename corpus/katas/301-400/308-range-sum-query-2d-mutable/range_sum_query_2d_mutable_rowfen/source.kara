@@ -1,0 +1,165 @@
+// LeetCode 308 — arm B: one 1D Fenwick tree PER ROW.
+//
+// Each row carries its own independent Fenwick tree over its w columns. A write
+// touches exactly one row's tree; a query walks the rows it spans and asks each
+// for a 1D range:
+//
+//     sum_region(r1,c1,r2,c2) = SUM over r in r1..r2 of
+//                               ( prefix(r, c2+1) - prefix(r, c1) )
+//
+// O(log w) per write, O(h · log w) per query — worse than the ★ arm's
+// O(log h · log w), which is why it is not ★.
+//
+// WHAT IT CANNOT GET WRONG. There is no two-dimensional inclusion-exclusion
+// here at all: this arm ADDS disjoint row-slices where the ★ arm SUBTRACTS
+// overlapping origin-rectangles. The four-term sign juggling that arm A could
+// get wrong — and could get wrong consistently, since the same four terms
+// appear in every query — has no counterpart in this code. Nor does the nested
+// climb: this arm's lowbit walks are one-dimensional, so the `h`-versus-`w`
+// bound confusion and the inner-reset hoist that arm A risks cannot occur.
+//
+// It shares exactly one thing with arm A — the lowbit idiom itself — which is
+// what makes the pair informative: if BOTH disagree with the non-Fenwick arms,
+// suspect the bit trick; if only one does, suspect its dimensional structure.
+
+struct RowFenwick {
+    tree: Vec[i64],
+    data: Vec[i64],
+    h: i64,
+    w: i64,
+}
+
+impl RowFenwick {
+    fn new(m: ref Vec[Vec[i64]]) -> RowFenwick {
+        let h = m.len();
+        let mut w = 0;
+        if h > 0 { w = m[0].len(); }
+        let mut tree: Vec[i64] = Vec.new();
+        for i in 0..(h * (w + 1)) {
+            tree.push(0);
+        }
+        let mut data: Vec[i64] = Vec.new();
+        for i in 0..(h * w) {
+            data.push(0);
+        }
+        let mut st = RowFenwick { tree: tree, data: data, h: h, w: w };
+        for r in 0..h {
+            for c in 0..w {
+                st.update(r, c, m[r][c]);
+            }
+        }
+        return st;
+    }
+
+    fn update(mut ref self, r: i64, c: i64, val: i64) {
+        let delta = val - self.data[r * self.w + c];
+        self.data[r * self.w + c] = val;
+        let base = r * (self.w + 1);
+        let mut y = c + 1;
+        while y <= self.w {
+            self.tree[base + y] += delta;
+            y += y & -y;
+        }
+    }
+
+    // Sum of row r's columns [0, c).
+    fn row_prefix(ref self, r: i64, c: i64) -> i64 {
+        let base = r * (self.w + 1);
+        let mut total = 0;
+        let mut y = c;
+        while y > 0 {
+            total += self.tree[base + y];
+            y -= y & -y;
+        }
+        return total;
+    }
+
+    fn sum_region(ref self, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+        let mut total = 0;
+        let mut r = r1;
+        while r <= r2 {
+            total += self.row_prefix(r, c2 + 1) - self.row_prefix(r, c1);
+            r = r + 1;
+        }
+        return total;
+    }
+}
+
+fn new_structure(m: ref Vec[Vec[i64]]) -> RowFenwick {
+    return RowFenwick.new(m);
+}
+
+fn matrix_of(flat: Slice[i64], w: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < flat.len() {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < w {
+            row.push(flat[i + c]);
+            c = c + 1;
+        }
+        m.push(row);
+        i = i + w;
+    }
+    return m;
+}
+
+// `ops` is a flat list of (kind, a, b, c, d) 5-tuples:
+//   kind 0 = update(a, b, c)        — write value c at (a, b); d ignored
+//   kind 1 = sum_region(a, b, c, d) — the rectangle (a,b)..(c,d)
+fn report(flat: Slice[i64], w: i64, ops: Slice[i64]) {
+    let m = matrix_of(flat, w);
+    let h = m.len();
+    let mut st = new_structure(m);
+    let mut line = String.new();
+    line.push_str(f"{h}x{w} ->");
+    let mut k = 0;
+    while k + 4 < ops.len() {
+        let kind = ops[k];
+        let a = ops[k + 1];
+        let b = ops[k + 2];
+        let c = ops[k + 3];
+        let d = ops[k + 4];
+        if kind == 0 {
+            st.update(a, b, c);
+            line.push_str(f" u({a},{b},{c})");
+        } else {
+            line.push_str(f" {st.sum_region(a, b, c, d)}");
+        }
+        k = k + 5;
+    }
+    println(line);
+}
+
+fn main() {
+    // The matrix from the LeetCode statement.
+    report([3, 0, 1, 4, 2,
+            5, 6, 3, 2, 1,
+            1, 2, 0, 1, 5,
+            4, 1, 0, 1, 7,
+            1, 0, 3, 0, 5], 5,
+           [1, 2, 1, 4, 3,   0, 3, 2, 2, 0,   1, 2, 1, 4, 3,
+            1, 0, 0, 4, 4,   1, 1, 1, 2, 2]);
+    // A single cell, written and re-read.
+    report([42], 1, [1, 0, 0, 0, 0,  0, 0, 0, -5, 0,  1, 0, 0, 0, 0]);
+    // One row and one column of the same values.
+    report([1, 2, 3, 4], 4, [1, 0, 0, 0, 3,  0, 0, 2, 10, 0,  1, 0, 0, 0, 3,  1, 0, 2, 0, 2]);
+    report([1, 2, 3, 4], 1, [1, 0, 0, 3, 0,  0, 2, 0, 10, 0,  1, 0, 0, 3, 0,  1, 2, 0, 2, 0]);
+    // Writing the value already present must change nothing.
+    report([4, 4, 4, 4], 2, [1, 0, 0, 1, 1,  0, 1, 1, 4, 0,  1, 0, 0, 1, 1,  1, 1, 1, 1, 1]);
+    // All negative, then a write that flips a sign.
+    report([-1, -2, -3,
+            -4, -5, -6,
+            -7, -8, -9], 3,
+           [1, 0, 0, 2, 2,  1, 1, 1, 2, 2,  0, 0, 0, 100, 0,  1, 0, 0, 2, 2,  1, 0, 0, 0, 0]);
+    // Every cell of a 2x3 written in turn, reading the whole matrix each time.
+    report([0, 0, 0,
+            0, 0, 0], 3,
+           [0, 0, 0, 1, 0,  1, 0, 0, 1, 2,  0, 1, 2, 5, 0,  1, 0, 0, 1, 2,
+            0, 0, 2, 3, 0,  1, 0, 0, 1, 2,  1, 0, 1, 1, 2]);
+    // Large magnitudes that cancel.
+    report([100000, -100000,
+            -100000, 100000], 2,
+           [1, 0, 0, 1, 1,  0, 0, 1, 100000, 0,  1, 0, 0, 1, 1,  1, 0, 0, 0, 1]);
+}

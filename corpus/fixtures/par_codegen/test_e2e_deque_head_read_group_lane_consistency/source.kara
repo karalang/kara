@@ -1,0 +1,24 @@
+
+fn main() {
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let mut i = 0;
+    while i < 100 {
+        q.push_back(i);
+        i = i + 1;
+    }
+    let mut drained = 0;
+    while drained < 50 {
+        match q.pop_front() {
+            Some(x) => {
+                drained = drained + 1;
+                if x > 1000 { println(x); }
+            }
+            None => {}
+        }
+    }
+    let a = q.len();
+    let b = q.len();
+    println(a);
+    println(b);
+    println(drained);
+}

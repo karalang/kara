@@ -1,0 +1,86 @@
+// LeetCode #53: Maximum Subarray — prefix sum minus a running minimum, O(n) / O(1).
+//
+// Same answer as the ★ file ([`kadane`](kadane.kara)); the axis that changes is the mental
+// model. Let `P[k] = nums[0] + … + nums[k-1]` be the prefix sums, with `P[0] = 0`. The sum
+// of the subarray `nums[i..j]` (inclusive) is exactly `P[j+1] − P[i]`. So for a fixed right
+// end `j+1`, the LARGEST subarray sum ending there is
+//
+//     P[j+1] − min( P[0], P[1], …, P[j] )
+//
+// — subtract the smallest prefix seen strictly BEFORE this point. Sweep once, holding the
+// running prefix `p` and the running minimum `min_pre` of all EARLIER prefixes, and take the
+// best `p − min_pre` over the whole array. The "strictly before" ordering is what keeps the
+// subarray non-empty: we score `p − min_pre` using the previous minimum FIRST, and only then
+// fold `p` into `min_pre` for later ends.
+//
+// `min_pre` starts at 0 = `P[0]`, the empty prefix before the array begins. Even so, an
+// all-negative array is handled correctly because `best` is seeded with `nums[0]`, and the
+// first candidate `p − min_pre` at index 0 equals `nums[0]` too, so nothing spurious wins.
+//
+// This is the same O(n) single pass as Kadane with no allocation — just derived from prefix
+// sums instead of the ending-here recurrence. The third sibling
+// ([`divide_conquer`](divide_conquer.kara)) reaches the identical answer recursively.
+//
+// LeetCode bounds: 1 ≤ n ≤ 10⁵, −10⁴ ≤ nums[i] ≤ 10⁴, so every prefix fits in i64.
+
+fn max_i64(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn max_subarray(nums: Slice[i64], n: i64) -> i64 {
+    let mut best = nums[0];            // seed keeps the subarray non-empty (see header)
+    let mut p = 0;                  // running prefix sum P[k]
+    let mut min_pre = 0;            // min prefix strictly before the current end (P[0]=0)
+    let mut i = 0;
+    while i < n {
+        p = p + nums[i];
+        best = max_i64(best, p - min_pre);   // score against the earlier minimum first
+        if p < min_pre {
+            min_pre = p;                     // only now can this prefix serve a later end
+        }
+        i = i + 1;
+    }
+    best
+}
+
+// ---- test harness (shared verbatim by all three solvers) ------------------
+
+fn report(nums: Slice[i64], n: i64, s: mut ref String) {
+    let ans = max_subarray(nums, n);
+    println(f"{ans}");
+    s.push(' ');
+    s.push_str(f"{ans}");
+}
+
+fn main() {
+    // One answer per case, then a `sums:` fold that all solvers and the oracle print
+    // identically for a byte-for-byte diff.
+    let mut s: String = "sums:";
+
+    let a1: Array[i64, 9] = [-2, 1, -3, 4, -1, 2, 1, -5, 4];
+    report(a1, 9, mut s);            // 6  — the subarray [4,-1,2,1]
+    let a2: Array[i64, 1] = [1];
+    report(a2, 1, mut s);            // 1
+    let a3: Array[i64, 5] = [5, 4, -1, 7, 8];
+    report(a3, 5, mut s);            // 23 — the whole array
+    let a4: Array[i64, 1] = [-1];
+    report(a4, 1, mut s);            // -1 — single negative element
+    let a5: Array[i64, 2] = [-2, -1];
+    report(a5, 2, mut s);            // -1 — least-negative single element
+    let a6: Array[i64, 4] = [-3, -2, -5, -1];
+    report(a6, 4, mut s);            // -1 — all negative
+    let a7: Array[i64, 5] = [8, -19, 5, -4, 20];
+    report(a7, 5, mut s);           // 21 — the subarray [5,-4,20]
+    let a8: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(a8, 5, mut s);           // 15 — all positive
+    let a9: Array[i64, 4] = [3, -2, 5, -1];
+    report(a9, 4, mut s);           // 6  — the subarray [3,-2,5]
+    let a10: Array[i64, 5] = [-5, -4, -3, -2, -1];
+    report(a10, 5, mut s);          // -1 — all negative, ascending
+    let a11: Array[i64, 1] = [0];
+    report(a11, 1, mut s);          // 0
+    let a12: Array[i64, 3] = [-1, 0, -2];
+    report(a12, 3, mut s);          // 0  — best subarray is the lone zero
+
+    println(s);
+}

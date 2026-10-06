@@ -1,0 +1,10 @@
+
+#[derive(Eq, PartialEq)]
+shared struct Tag { id: i64, name: String }
+fn main() {
+    let a = Tag { id: 1, name: "shared-struct-eq-asan-payload-0001" };
+    let b = Tag { id: 1, name: "shared-struct-eq-asan-payload-0001" };
+    let c = Tag { id: 2, name: "shared-struct-eq-asan-payload-XXXX" };
+    if a == b { println("eq"); }
+    if a != c { println("ne"); }
+}

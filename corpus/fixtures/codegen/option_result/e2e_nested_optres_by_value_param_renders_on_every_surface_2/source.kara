@@ -1,0 +1,7 @@
+
+fn show(x: Result[Option[Vec[i64]], String]) { println(f"{x}"); }
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    show(Ok(Some(v)));
+    println("done");
+}

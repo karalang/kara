@@ -1,0 +1,9 @@
+
+struct Point { x: i64, y: i64 }
+fn main() {
+    let p = Point { x: 7, y: 11 };
+    let f = || p.x;
+    let after_call = f();
+    println(after_call);
+    println(p.y);
+}

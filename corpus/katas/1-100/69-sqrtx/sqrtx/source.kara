@@ -1,0 +1,85 @@
+// LeetCode #69: Sqrt(x) — integer square root by binary search (★), O(log x).
+//
+// Return floor(sqrt(x)) for a non-negative integer x, WITHOUT any floating point
+// or a built-in `sqrt` — the answer is the largest `r` with `r*r <= x`. That
+// predicate is monotone (once `r*r` exceeds `x` it stays exceeded), so binary
+// search on `r` finds the boundary in O(log x):
+//
+//   invariant: ans holds the best `r` proven to satisfy r*r <= x so far
+//   mid*mid <= x  ->  mid works; record it and search higher (lo = mid + 1)
+//   mid*mid >  x  ->  too big; search lower (hi = mid - 1)
+//
+// The one real hazard is OVERFLOW in the `mid*mid` test. LeetCode allows x up to
+// 2^31 - 1 (2_147_483_647), so mid ranges up to ~x and mid*mid would overflow a
+// 32-bit int — but in i64 the largest product on the search path,
+// `mid*mid` with mid <= x <= 2.1e9, stays under 4.6e18 < i64::MAX (9.2e18). Kāra
+// checks integer overflow by default, so a 32-bit formulation would *trap* here
+// rather than silently wrap (the C/Java trap-free-by-wrapping trap); computing in
+// i64 keeps the honest `mid*mid <= x` comparison without a division-based dodge.
+//
+// Alternatives live in the sibling files: Newton's method
+// ([`sqrtx_newton.kara`](sqrtx_newton.kara)) converges in far fewer iterations,
+// and a bit-by-bit method ([`sqrtx_bits.kara`](sqrtx_bits.kara)) avoids the
+// squaring entirely. Binary search is the ★ because it is the most direct read
+// of "largest r with r*r <= x" and the template every monotone-predicate search
+// in the corpus shares (katas [#35](../35-search-insert-position/),
+// [#34](../34-find-first-and-last-position/)).
+
+fn my_sqrt(x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = x;
+    let mut ans = 0;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;      // no lo+hi overflow
+        if mid * mid <= x {
+            ans = mid;                        // mid works; reach for a bigger root
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;                  // mid too large
+        }
+    }
+    ans
+}
+
+// ---- test harness (shared verbatim by all three solvers + the Python mirror) --
+
+fn report(x: i64, s: mut ref String) {
+    let r = my_sqrt(x);
+    println(f"sqrt({x}) = {r}");
+    s.push(' ');
+    s.push_str(f"{r}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report(0, mut s);            // 0
+    report(1, mut s);            // 1
+    report(2, mut s);            // 1
+    report(3, mut s);            // 1
+    report(4, mut s);            // 2  — perfect square
+    report(5, mut s);            // 2
+    report(8, mut s);            // 2  — LeetCode example (8 -> 2)
+    report(9, mut s);            // 3
+    report(10, mut s);           // 3
+    report(15, mut s);           // 3
+    report(16, mut s);           // 4
+    report(17, mut s);           // 4
+    report(24, mut s);           // 4
+    report(25, mut s);           // 5
+    report(26, mut s);           // 5
+    report(35, mut s);           // 5
+    report(36, mut s);           // 6
+    report(48, mut s);           // 6
+    report(49, mut s);           // 7
+    report(99, mut s);           // 9
+    report(100, mut s);          // 10
+    report(101, mut s);          // 10
+    report(2147395600, mut s);   // 46340 — 46340^2 exactly
+    report(2147483647, mut s);   // 46340 — i32 max, just below 46341^2
+    report(1000000000, mut s);   // 31622
+    report(46340, mut s);        // 215
+    report(46341, mut s);        // 215
+
+    println(s);
+}

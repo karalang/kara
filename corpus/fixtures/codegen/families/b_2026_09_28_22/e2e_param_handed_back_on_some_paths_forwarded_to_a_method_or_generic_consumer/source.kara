@@ -1,0 +1,36 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
+fn geat[T](t: T) { println("gx") }
+fn geo[T](o: Option[T]) { println("go") }
+fn gkeep[T](t: T, v: mut ref Vec[T]) { v.push(t) }
+struct K { k: i64 }
+impl K {
+    fn eat(ref self, s: S) { println("mx") }
+    fn eato(ref self, o: Option[S]) { println("mo") }
+    fn aeat(s: S) { println("ax") }
+    fn back(ref self, s: S) -> S { return s }
+}
+struct V { v: Vec[S] }
+impl V { fn put(mut ref self, s: S) { self.v.push(s) } }
+enum E { A(i64), B }
+impl E { fn eat(ref self, s: S) { println("ex") } }
+fn pm(s: S, k: bool, q: K) -> S { if k { return s } q.eat(s); return mks(0) }
+fn pa(s: S, k: bool) -> S { if k { return s } K.aeat(s); return mks(0) }
+fn pg(s: S, k: bool) -> S { if k { return s } geat(s); return mks(0) }
+fn po(h: Option[S], k: bool, q: K) -> Option[S] { if k { return h } q.eato(h); return Option.None }
+fn pgo(h: Option[S], k: bool) -> Option[S] { if k { return h } geo(h); return Option.None }
+fn pe(s: S, k: bool, e: E) -> S { if k { return s } e.eat(s); return mks(0) }
+fn pl(s: S, k: bool, q: K) -> S { let m = s; if k { return m } q.eat(m); return mks(0) }
+fn main() {
+    let a1 = pm(mks(1), false, K { k: 1 }); println(f"a{a1.id}");
+    let a2 = pm(mks(2), true, K { k: 1 }); println(f"a{a2.id}");
+    let b3 = pa(mks(3), false); println(f"b{b3.id}");
+    let c4 = pg(mks(4), false); println(f"c{c4.id}");
+    let c5 = pg(mks(5), true); println(f"c{c5.id}");
+    let o6 = po(Option.Some(mks(6)), false, K { k: 1 }); println(f"o{o6.is_some()}");
+    let o7 = pgo(Option.Some(mks(7)), false); println(f"o{o7.is_some()}");
+    let e8 = pe(mks(8), false, E.A(1)); println(f"e{e8.id}");
+    let l9 = pl(mks(9), false, K { k: 1 }); println(f"l{l9.id}");
+    println("end")
+}

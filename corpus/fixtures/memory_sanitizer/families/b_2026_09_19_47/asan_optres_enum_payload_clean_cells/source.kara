@@ -1,0 +1,12 @@
+struct S1 { v: i64, s: String }
+impl Drop for S1 { fn drop(mut ref self) { println(f"  dS{self.v}") } }
+enum Ho { P(Option[S1]), Q }
+enum G[T] { X(T), Y }
+fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
+fn main() {
+    println("gvec"); { let mut w: Vec[S1] = []; w.push(s(2)); let o: Option[Vec[S1]] = Option.Some(w); let g = G.X(o); println("  x") }
+    println("dnone"); { let h = Ho.P(Option.None); println("  x") }
+    println("rebind"); { let h = Ho.P(Option.Some(s(3))); match h { Ho.P(o) => { let u = o; println("  in") } Ho.Q => {} } }
+    println("grebind"); { let g = G.X(Option.Some(s(11))); match g { G.X(o) => { let u = o; println("  in") } G.Y => {} } }
+    println("end")
+}

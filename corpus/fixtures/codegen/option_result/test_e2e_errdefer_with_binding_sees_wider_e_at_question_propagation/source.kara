@@ -1,0 +1,13 @@
+
+fn boom() -> Result[i64, String] { Err("kaboom") }
+fn caller() -> Result[i64, String] {
+    errdefer(e) { println(e); }
+    let _ = boom()?;
+    Ok(0_i64)
+}
+fn main() {
+    match caller() {
+        Ok(_) => println("ok"),
+        Err(_) => println("caller-err"),
+    }
+}

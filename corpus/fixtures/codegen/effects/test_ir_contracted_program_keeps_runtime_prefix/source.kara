@@ -1,0 +1,7 @@
+
+fn pos(x: i64) -> i64 requires x > 0 { x }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    println(v[0] + pos(1));
+}

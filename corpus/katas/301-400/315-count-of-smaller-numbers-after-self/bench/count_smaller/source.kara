@@ -1,0 +1,86 @@
+// Benchmark lane for LeetCode 315 — Count of Smaller Numbers After Self.
+//
+// build-once + punch (see ../../../../BENCHMARKS.md): generate the LEN-element
+// array ONCE, then punch PASSES complete answers through it. Each pass first
+// SWAPS two elements at positions drawn from the running checksum, so no pass
+// is a repeat of the last and none can be hoisted; the swap is undone after
+// the pass so the array does not drift.
+//
+// The arm mirrored is the Fenwick tree over compressed ranks (★): a sort +
+// dedup for the ranks, then one binary search, one prefix query and one point
+// update per element, right to left. The per-pass allocations — the rank
+// table, the tree, the answer — are part of the algorithm and every mirror
+// makes the same ones.
+//
+// The sink is the masked running fold of each pass's total count, carried
+// ACROSS passes so they are serialised.
+
+const LEN: i64 = 200000;
+const PASSES: i64 = 24;
+const MASK: i64 = 1073741823;
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn lower_bound(sorted: ref Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < x { lo = mid + 1; } else { hi = mid; }
+    }
+    return lo;
+}
+
+fn count_smaller(nums: ref Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut ranks = nums.clone();
+    ranks.sort();
+    ranks.dedup();
+    let m = ranks.len();
+    let mut tree: Vec[i64] = Vec.new();
+    for i in 0..(m + 1) { tree.push(0); }
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..n { counts.push(0); }
+    let mut i = n - 1;
+    while i >= 0 {
+        let r = lower_bound(ranks, nums[i]);
+        let mut total = 0;
+        let mut x = r;
+        while x > 0 {
+            total = total + tree[x];
+            x -= x & -x;
+        }
+        counts[i] = total;
+        x = r + 1;
+        while x <= m {
+            tree[x] = tree[x] + 1;
+            x += x & -x;
+        }
+        i = i - 1;
+    }
+    return counts;
+}
+
+fn main() {
+    let mut seed = 315;
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..LEN {
+        seed = lcg(seed);
+        nums.push(seed % 200001 - 100000);
+    }
+
+    let mut checksum = 0;
+    for pass in 0..PASSES {
+        let i = checksum % LEN;
+        let j = (checksum * 7 + 13) % LEN;
+        nums.swap(i, j);
+        let counts = count_smaller(nums);
+        let mut total = 0;
+        for k in 0..LEN { total = total + counts[k]; }
+        checksum = (checksum * 31 + total) & MASK;
+        nums.swap(i, j);
+    }
+    println("checksum " + checksum.to_string());
+}

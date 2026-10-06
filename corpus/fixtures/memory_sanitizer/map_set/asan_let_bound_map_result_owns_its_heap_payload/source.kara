@@ -1,0 +1,31 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        // Payload BYTES read — red at both opt levels.
+        let s: Option[String] = Some(f"hello");
+        let same = s.map(|x| x);
+        match same { Some(x) => { if x == "hello" { total = total + 5i64; } } None => {} }
+        let u: Option[String] = Some(f"hello");
+        let up = u.map(|x: String| x.to_uppercase());
+        match up { Some(x) => { if x == "HELLO" { total = total + 5i64; } } None => {} }
+        let v: Option[Vec[i64]] = Some(vec![1i64, 2i64, 3i64]);
+        let vm = v.map(|xs| xs);
+        match vm { Some(xs) => { total = total + xs[0]; } None => {} }
+        let r: Result[String, String] = Ok(f"okv");
+        let rm = r.map(|x| x);
+        match rm { Ok(x) => { if x == "okv" { total = total + 3i64; } } Err(_) => {} }
+        // Tag-only read and the two discard forms — `-O0`-only, because the
+        // optimizer deletes a copy whose bytes are never loaded.
+        let n: Option[String] = Some(f"hello");
+        let unused = n.map(|x| x);
+        match unused { Some(_) => { total = total + 1i64; } None => {} }
+        let d: Option[String] = Some(f"hello");
+        d.map(|x| x);
+        let e: Option[String] = Some(f"hello");
+        let _ = e.map(|x| x);
+        i = i + 1;
+    }
+    println(total.to_string());
+}

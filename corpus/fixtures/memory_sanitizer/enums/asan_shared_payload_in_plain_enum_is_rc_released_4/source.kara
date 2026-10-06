@@ -1,0 +1,6 @@
+shared struct Big { a: i64, b: i64, c: i64 }
+enum Et { A(Big), B }
+fn main() {
+    let z = Et.A(Big { a: 1, b: 2, c: 3 });
+    match z { Et.A(g) => { println(f"a:{g.a} b:{g.b} c:{g.c}") } Et.B => { println("b") } }
+}

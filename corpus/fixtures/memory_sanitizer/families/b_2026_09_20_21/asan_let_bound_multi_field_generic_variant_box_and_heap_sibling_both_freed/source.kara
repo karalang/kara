@@ -1,0 +1,24 @@
+
+enum Gh[T] { Y(T, String), N }
+enum Ghs[T] { Y(String, T), N }
+enum Gt[T] { Y(T, T), N }
+enum Gv[T] { Y(T, Vec[String]), N }
+fn mkI(i: i64) -> Array[i64, 4] { return [i, i + 1, i + 2, i + 3]; }
+fn mkv(s: String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(s); return v; }
+fn fh(g: Gh[Array[i64, 4]]) -> i64 { match g { Gh.Y(x, s) => { return x[0] + s.len(); } Gh.N => { return 0; } } }
+fn fhs(g: Ghs[Array[i64, 4]]) -> i64 { match g { Ghs.Y(s, x) => { return x[0] + s.len(); } Ghs.N => { return 0; } } }
+fn ft(g: Gt[Array[i64, 4]]) -> i64 { match g { Gt.Y(x, y) => { return x[0] + y[1]; } Gt.N => { return 0; } } }
+fn fv(g: Gv[Array[i64, 4]]) -> i64 { match g { Gv.Y(x, v) => { return x[0] + v.len(); } Gv.N => { return 0; } } }
+fn main() {
+    let mut i = 1;
+    while i < 3 {
+        { let q: Gh[Array[i64, 4]] = Gh.Y(mkI(i), f"sib-{i}-padpadpad"); println(f"h:{fh(q)}"); }
+        { let q: Ghs[Array[i64, 4]] = Ghs.Y(f"sib-{i}-padpadpad", mkI(i)); println(f"s:{fhs(q)}"); }
+        { let q: Gt[Array[i64, 4]] = Gt.Y(mkI(i), mkI(i + 10)); println(f"t:{ft(q)}"); }
+        { let q: Gv[Array[i64, 4]] = Gv.Y(mkI(i), mkv(f"v-{i}-padpadpad")); println(f"v:{fv(q)}"); }
+        { let q: Gh[Array[i64, 4]] = Gh.Y(mkI(i), f"loc-{i}-padpadpad");
+          match q { Gh.Y(x, s) => { println(f"L:{x[0] + s.len()}"); } Gh.N => { println("n"); } } }
+        i = i + 1;
+    }
+    println("end");
+}

@@ -1,0 +1,10 @@
+
+#[derive(Default)]
+enum Mode { Running(i64), #[default] Idle }
+fn main() {
+    let m = Mode.default();
+    match m {
+        Mode.Idle => { println("idle"); }
+        Mode.Running(n) => { println(n); }
+    }
+}

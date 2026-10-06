@@ -1,0 +1,53 @@
+// Benchmark workload for LeetCode #228 — Summary Ranges.
+//
+// Build-once + punch: a large strictly-increasing array is generated once from a
+// deterministic 32-bit LCG (each step advances by 1..3, so consecutive runs and
+// gaps both occur), then the range scan is run `PASSES` times. To keep the
+// benchmark honest the scan does not build the "a->b" strings (formatting would
+// dominate and allocate); it computes the same numeric summary — the number of
+// ranges plus the sum of every range's two endpoints — which requires the exact
+// same linear pass with its loop-carried `start` and data-dependent break test
+// (`i == n or nums[i] != nums[i-1] + 1`). That carried scalar + conditional
+// makes the scan non-vectorizable. Sink = accumulated (ranges + endpoint sum).
+
+fn summary_metric(nums: ref Vec[i64], n: i64) -> i64 {
+    let mut i = 1;
+    let mut start = nums[0];
+    let mut ranges = 0;
+    let mut esum = 0;
+    while i <= n {
+        // Short-circuit `or` keeps nums[i] from being read when i == n.
+        if i == n or nums[i] != nums[i - 1] + 1 {
+            let end = nums[i - 1];
+            ranges = ranges + 1;
+            esum = esum + start + end;
+            if i < n { start = nums[i]; }
+        }
+        i = i + 1;
+    }
+    return ranges + esum;
+}
+
+fn main() {
+    let n = 1000000;
+    let passes = 250;
+
+    let mut nums: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut v = 0;
+    let mut c = 0;
+    while c < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        v = v + 1 + (state % 3);
+        nums.push(v);
+        c = c + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        sink = sink + summary_metric(nums, n);
+        p = p + 1;
+    }
+    println(sink);
+}

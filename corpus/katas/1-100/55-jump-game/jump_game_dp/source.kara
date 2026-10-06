@@ -1,0 +1,90 @@
+// LeetCode #55: Jump Game — bottom-up reachability DP, O(n) space.
+//
+// The greedy ★ ([`jump_game.kara`](jump_game.kara)) and the backward scan
+// ([`backward`](jump_game_backward.kara)) both fold reachability into a single scalar. This file
+// drops that shortcut and makes the relation literal: `reach[j]` = can index `j` be stood on?
+// The answer is `reach[n-1]`.
+//
+//   - `reach[0] = true` (we start there); every other cell starts `false`.
+//   - sweep left to right: from each REACHABLE `i`, mark every `j` in `(i, i+nums[i]]` reachable.
+//
+// A cell is finalized before it is used as a source — the sweep goes left to right and the graph
+// only ever points forward — so one pass with inner marking suffices, no re-sweeping. That is
+// O(n²) time worst case (a long reach marks many cells) against the greedy/backward O(n), the
+// price for not collapsing the relation. It allocates one `Vec[bool]` of length n — O(n) space,
+// the allocating contrast to the two scalar-only solvers, the same table-vs-scan trade as
+// [#45](../45-jump-game-ii/). n ≤ 10⁴ and nums[i] ≤ 10⁵, so every index stays inside i64.
+
+fn can_jump(nums: Slice[i64], n: i64) -> bool {
+    let mut reach: Vec[bool] = Vec.new();
+    reach.push(true); // index 0 is where we start
+    let mut t = 1;
+    while t < n {
+        reach.push(false);
+        t = t + 1;
+    }
+
+    let mut i = 0;
+    while i < n {
+        if reach[i] {
+            let bound = i + nums[i];
+            let mut j = i + 1;
+            // Mark every index this reachable cell can jump to (clamped to the array end).
+            while j <= bound and j < n {
+                reach[j] = true;
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+
+    reach[n - 1]
+}
+
+// ---- test harness (shared verbatim by all three solvers) ------------------
+
+fn report(nums: Slice[i64], n: i64) {
+    if can_jump(nums, n) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    let a1: Array[i64, 5] = [2, 3, 1, 1, 4];
+    report(a1, 5); // true
+
+    let a2: Array[i64, 5] = [3, 2, 1, 0, 4];
+    report(a2, 5); // false
+
+    let a3: Array[i64, 1] = [0];
+    report(a3, 1); // true
+
+    let a4: Array[i64, 2] = [0, 1];
+    report(a4, 2); // false
+
+    let a5: Array[i64, 2] = [1, 0];
+    report(a5, 2); // true
+
+    let a6: Array[i64, 3] = [2, 0, 0];
+    report(a6, 3); // true
+
+    let a7: Array[i64, 4] = [1, 1, 1, 1];
+    report(a7, 4); // true
+
+    let a8: Array[i64, 4] = [1, 0, 1, 0];
+    report(a8, 4); // false
+
+    let a9: Array[i64, 5] = [5, 0, 0, 0, 0];
+    report(a9, 5); // true
+
+    let a10: Array[i64, 4] = [2, 5, 0, 0];
+    report(a10, 4); // true
+
+    let a11: Array[i64, 3] = [1, 2, 3];
+    report(a11, 3); // true
+
+    let a12: Array[i64, 4] = [1, 1, 0, 1];
+    report(a12, 4); // false
+}

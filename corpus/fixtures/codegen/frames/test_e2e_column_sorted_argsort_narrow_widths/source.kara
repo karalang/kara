@@ -1,0 +1,20 @@
+
+fn main() {
+    let mut ci: Column[i32] = Column.with_capacity(4);
+    ci.push(5); ci.push(1); ci.push_null(); ci.push(3);
+    let cs: Vec[i32] = ci.sorted();
+    println(f"{cs.len()} {cs[0]} {cs[1]} {cs[2]}");
+    let ca: Vec[i64] = ci.argsort();
+    println(f"{ca[0]} {ca[1]} {ca[2]}");
+    let cu: Column[u32] = Column.from_vec([30, 10, 20]);
+    let us: Vec[u32] = cu.sorted();
+    println(f"{us[0]} {us[1]} {us[2]}");
+    let ua: Vec[i64] = cu.argsort();
+    println(f"{ua[0]} {ua[1]} {ua[2]}");
+    let mut cf: Column[f32] = Column.with_capacity(4);
+    cf.push(2.5); cf.push_null(); cf.push(1.5); cf.push(0.5);
+    let fs: Vec[f32] = cf.sorted();
+    println(f"{fs[0]} {fs[1]} {fs[2]}");
+    let fa: Vec[i64] = cf.argsort();
+    println(f"{fa[0]} {fa[1]} {fa[2]}");
+}

@@ -1,0 +1,23 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    message Loc { string city = 1; int64 zip = 2; }
+    message Event {
+        int64 id = 1;
+        oneof body {
+            Loc place = 2;
+            string note = 3;
+        }
+    }
+";
+
+fn main() {
+    let e = Event { id: 5, body: EventBody.Place(Loc { city: "Rome", zip: 1 }) };
+    let back = Event.decode(e.encode());
+    println(back.id);
+    println(match back.body {
+        EventBody.Place(l) => f"{l.city}/{l.zip}",
+        EventBody.Note(s) => f"note {s}",
+        EventBody.NotSet => "notset",
+    });
+}

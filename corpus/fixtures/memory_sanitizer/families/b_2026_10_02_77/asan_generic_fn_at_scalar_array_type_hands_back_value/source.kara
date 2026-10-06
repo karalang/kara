@@ -1,0 +1,9 @@
+fn pick[T](a: Option[T], d: T) -> T { match a { Some(x) => x, None => d } }
+fn main() {
+    let s = f"heap-string-longer-than-sso-{1}";
+    let a: Option[Array[i64, 2]] = None;
+    let r = pick(a, Array[3, 4]);
+    let e: Option[Array[Array[i64, 2], 2]] = Some(Array[Array[7, 8], Array[9, 10]]);
+    let g = pick(e, Array[Array[0, 0], Array[0, 0]]);
+    println(f"{s} {r[0]}{r[1]} {g[0][1]}{g[1][0]}");
+}

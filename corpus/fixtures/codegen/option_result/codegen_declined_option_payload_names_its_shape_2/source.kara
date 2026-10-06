@@ -1,0 +1,4 @@
+#[derive(Display)]
+struct P { x: i64 }
+fn mk() -> P { return P { x: 1 } }
+fn main() { println(f"{mk()}"); }

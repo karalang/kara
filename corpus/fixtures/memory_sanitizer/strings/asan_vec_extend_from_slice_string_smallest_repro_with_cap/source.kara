@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut a: String = String.new();
+    a.push_str("hi");
+    let mut b: String = String.new();
+    b.push_str("ho");
+    let mut src: Vec[String] = Vec.with_capacity(4);
+    src.push(a);
+    src.push(b);
+    let mut dst: Vec[String] = Vec.with_capacity(4);
+    dst.extend_from_slice(src);
+    println(dst[0]);
+}

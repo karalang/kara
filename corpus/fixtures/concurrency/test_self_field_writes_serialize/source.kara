@@ -1,0 +1,11 @@
+
+        struct S { pos: i64, start: i64 }
+        impl S {
+            fn step(mut ref self) -> i64 {
+                self.start = self.pos;
+                self.pos = self.start + 1;
+                self.pos
+            }
+        }
+        fn main() { let mut s = S { pos: 0, start: 0 }; let n = s.step(); }
+        

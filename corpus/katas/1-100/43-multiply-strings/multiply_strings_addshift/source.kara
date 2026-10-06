@@ -1,0 +1,142 @@
+// LeetCode #43: Multiply Strings — add-and-shift variant.
+//
+// The other way to multiply by hand: take `a` times each single digit of `b`,
+// shift the partial left by its column, and **add** the partials together. This
+// style builds multiplication directly on top of #415's column add — `add` is
+// the subroutine, called once per digit of `b`:
+//
+//   product = Σ_j  (a · b[j]) · 10^j
+//
+// where `a · b[j]` is a single-digit×bignum pass (one carry chain) and the
+// `·10^j` shift is just `j` trailing zeros. The lexer surface is the same
+// digit-char→value / base-10 carry / digit-glyph render as the grid form, but
+// arranged as **repeated addition** — the partials accumulate into one running
+// total `acc`, exercising the column-add path #415 hardened, m times over.
+
+// Single-digit × bignum, with `shift` trailing zeros: returns `a · d · 10^shift`
+// as a decimal string. Digit values buffered least-significant first, then
+// rendered MSB-first through the digit table.
+fn mul_one(a: ref String, d: i64, shift: i64) -> String {
+    let digits: String = "0123456789";
+
+    if d == 0 {
+        return "0";
+    }
+
+    let ab = a.bytes();
+    let mut buf: Vec[i64] = Vec.new();
+
+    // The `· 10^shift` factor: `shift` zero digits in the low columns.
+    let mut s = 0;
+    while s < shift {
+        buf.push(0);
+        s = s + 1;
+    }
+
+    // One carry chain: each digit of `a` times `d`.
+    let mut i = ab.len() - 1;
+    let mut carry = 0;
+    while i >= 0 {
+        let prod = (ab[i] - b'0') as i64 * d + carry;
+        buf.push(prod % 10);
+        carry = prod / 10;
+        i = i - 1;
+    }
+    while carry > 0 {
+        buf.push(carry % 10);
+        carry = carry / 10;
+    }
+
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        let v = buf[k];
+        out.push_str(digits[v..v + 1]);
+        k = k - 1;
+    }
+    out
+}
+
+// Column add (the #415 core), reused verbatim as the accumulation step.
+fn add_strings(a: ref String, b: ref String) -> String {
+    let digits: String = "0123456789";
+
+    let ab = a.bytes();
+    let bb = b.bytes();
+
+    let mut i = ab.len() - 1;
+    let mut j = bb.len() - 1;
+    let mut carry = 0;
+
+    let mut buf: Vec[i64] = Vec.new();
+    while i >= 0 or j >= 0 or carry > 0 {
+        let mut sum = carry;
+        if i >= 0 {
+            sum = sum + ((ab[i] - b'0') as i64);
+            i = i - 1;
+        }
+        if j >= 0 {
+            sum = sum + ((bb[j] - b'0') as i64);
+            j = j - 1;
+        }
+        buf.push(sum % 10);
+        carry = sum / 10;
+    }
+
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        let v = buf[k];
+        out.push_str(digits[v..v + 1]);
+        k = k - 1;
+    }
+    out
+}
+
+fn multiply(a: ref String, b: ref String) -> String {
+    let bb = b.bytes();
+
+    // Accumulate `a · b[j] · 10^j` over the digits of `b`, low to high.
+    let mut acc: String = "0";
+    let mut shift = 0;
+    let mut j = bb.len() - 1;
+    while j >= 0 {
+        let d = (bb[j] - b'0') as i64;
+        let part = mul_one(a, d, shift);
+        acc = add_strings(acc, part);
+        shift = shift + 1;
+        j = j - 1;
+    }
+
+    // Strip any leading zeros the running total accumulated ("0" + "0" = "00").
+    let acb = acc.bytes();
+    let mut p = 0;
+    while p < acb.len() - 1 and acb[p] == b'0' {
+        p = p + 1;
+    }
+    acc[p..acb.len()]
+}
+
+fn report(a: ref String, b: ref String) {
+    println(f"\"{a}\" * \"{b}\" -> \"{multiply(a, b)}\"");
+}
+
+fn main() {
+    report("2", "3");                       // 6
+    report("123", "456");                   // 56088
+    report("0", "0");                       // 0
+    report("0", "52");                      // 0
+    report("99", "0");                      // 0
+    report("9", "9");                       // 81
+    report("99", "99");                     // 9801
+    report("999", "999");                   // 998001
+    report("9999", "9999");                 // 99980001
+    report("123", "7");                     // 861
+    report("6", "123456");                  // 740736
+    report("25", "4");                      // 100
+    report("10", "10");                     // 100
+    report("100", "1000");                  // 100000
+    report("123456789", "987654321");       // 121932631112635269
+    report("99999999999999999999", "99999999999999999999");
+    report("12345678901234567890", "98765432109876543210");
+}

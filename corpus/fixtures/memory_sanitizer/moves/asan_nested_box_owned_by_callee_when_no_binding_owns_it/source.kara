@@ -1,0 +1,63 @@
+
+fn cls(r: Result[Option[Option[i64]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(x))) => x,
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn clsstr(r: Result[Option[Option[String]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(s))) => if s.len() > 0 { 1 } else { 0 },
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn nobox(r: Result[Option[i64], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(x)) => x,
+        Result.Ok(Option.None) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn idr(r: Result[Option[Option[i64]], i64]) -> Result[Option[Option[i64]], i64] { r }
+fn fwd(r: Result[Option[Option[i64]], i64]) -> i64 { cls(r) }
+fn mk(x: i64) -> Result[Option[Option[i64]], i64] {
+    let b: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(x)));
+    b
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        acc = acc + cls(Result.Ok(Option.Some(Option.Some(n + i)))) - n;
+
+        let mut v: Vec[Result[Option[Option[i64]], i64]] = [];
+        v.push(Result.Ok(Option.Some(Option.Some(n + i))));
+        acc = acc + cls(v[0]) - n;
+
+        acc = acc + cls(mk(n + i)) - n;
+
+        let b: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        acc = acc + cls(idr(b)) - n;
+
+        let c: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        acc = acc + cls(idr(idr(c))) - n;
+
+        let d: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        let e1 = idr(d);
+        acc = acc + cls(e1) - n;
+
+        let g: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        acc = acc + fwd(g) - n;
+
+        acc = acc + clsstr(Result.Ok(Option.Some(Option.Some(f"p{n + i}"))));
+
+        acc = acc + nobox(Result.Ok(Option.Some(n + i))) - n;
+
+        i = i + 1;
+    }
+    println(acc);
+}

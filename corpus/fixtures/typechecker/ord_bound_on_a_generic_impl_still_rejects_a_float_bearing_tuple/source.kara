@@ -1,0 +1,9 @@
+
+struct Holder[=T] { v: T }
+impl[T: Ord] Holder[T] {
+    fn tag(ref self) -> i64 { 7 }
+}
+fn main() {
+    let h = Holder { v: (1, 1.5) };
+    println(h.tag());
+}

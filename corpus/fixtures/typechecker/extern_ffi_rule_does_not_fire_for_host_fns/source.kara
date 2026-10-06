@@ -1,0 +1,4 @@
+#[derive(Copy, Clone)]
+struct Point { x: f64, y: f64 }
+host fn bad_ref(p: ref Point) with reads(Clock);
+fn main() {}

@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let name = "kara";
+        let s1 = f"[{i:08b}]";
+        let s2 = f"[{name:*^12}]";
+        let s3 = f"[{i:^10}]";
+        let longer = "this-string-is-wider-than-the-width";
+        let s4 = f"[{longer:^5}]";
+        total = total + s1.len() + s2.len() + s3.len() + s4.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

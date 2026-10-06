@@ -1,0 +1,13 @@
+
+fn mk() -> Vec[String] { ["alphabetalphabet", "gammagammagamma"] }
+fn main() {
+    let mut k = 0;
+    while k < 20 {
+        println([9, 8]);
+        println(f"{[7, 6]}");
+        println(mk());
+        println(f"{mk()}");
+        k = k + 1;
+    }
+    println("done");
+}

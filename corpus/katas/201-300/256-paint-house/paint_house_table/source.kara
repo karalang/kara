@@ -1,0 +1,72 @@
+// LeetCode 256 — Paint House, full DP table.
+//
+// The same recurrence with nothing folded away: a `Vec[(i64, i64, i64)]` row per
+// house, each holding the best total to reach that house in each colour. The ★
+// file keeps only the last row because nothing older is ever read; this one
+// keeps them all.
+//
+// Worth having despite being strictly worse on space, for two reasons. It is the
+// form the recurrence is usually DERIVED in, so it is the one to check the
+// rolling version against — the rolling version's correctness is exactly the
+// claim "row i-1 is all you need", and having both makes that claim testable
+// rather than assumed. And it is the form that can RECONSTRUCT the colouring: the
+// table retains enough to walk backwards and recover which colour each house
+// took, which the three scalars have thrown away.
+//
+// O(n) time, O(n) space.
+
+fn min2(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+fn min_cost(costs: Slice[(i64, i64, i64)]) -> i64 {
+    let n = costs.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut dp: Vec[(i64, i64, i64)] = Vec.new();
+    dp.push(costs[0]);
+
+    let mut i = 1;
+    while i < n {
+        let prev = dp[i - 1];
+        dp.push((
+            costs[i].0 + min2(prev.1, prev.2),
+            costs[i].1 + min2(prev.0, prev.2),
+            costs[i].2 + min2(prev.0, prev.1),
+        ));
+        i = i + 1;
+    }
+    let last = dp[n - 1];
+    return min2(last.0, min2(last.1, last.2));
+}
+
+fn report(costs: Slice[(i64, i64, i64)], label: ref String) {
+    println(f"{label} -> {min_cost(costs)}");
+}
+
+fn main() {
+    let a: Array[(i64, i64, i64), 3] = [(17, 2, 17), (16, 16, 5), (14, 3, 19)];
+    report(a, "[[17,2,17],[16,16,5],[14,3,19]]");
+    let b: Array[(i64, i64, i64), 0] = [];
+    report(b, "[]");
+    let c: Array[(i64, i64, i64), 1] = [(7, 6, 2)];
+    report(c, "[[7,6,2]]");
+    let d: Array[(i64, i64, i64), 2] = [(1, 2, 3), (1, 2, 3)];
+    report(d, "[[1,2,3],[1,2,3]]");
+    let e: Array[(i64, i64, i64), 4] = [(5, 5, 5), (5, 5, 5), (5, 5, 5), (5, 5, 5)];
+    report(e, "[[5,5,5] x4]");
+    let f: Array[(i64, i64, i64), 3] = [(1, 100, 100), (1, 100, 100), (1, 100, 100)];
+    report(f, "[[1,100,100] x3]");
+    let g: Array[(i64, i64, i64), 2] = [(0, 0, 0), (0, 0, 0)];
+    report(g, "[[0,0,0] x2]");
+    let h: Array[(i64, i64, i64), 6] = [(1, 9, 9), (9, 1, 9), (1, 9, 9), (9, 1, 9), (1, 9, 9), (9, 1, 9)];
+    report(h, "[alternating x6]");
+    let i: Array[(i64, i64, i64), 3] = [(1000000000, 2000000000, 3000000000),
+                                        (3000000000, 1000000000, 2000000000),
+                                        (2000000000, 3000000000, 1000000000)];
+    report(i, "[[1e9-scale] x3]");
+}

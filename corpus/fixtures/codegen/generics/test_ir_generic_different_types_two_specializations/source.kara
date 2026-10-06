@@ -1,0 +1,7 @@
+
+fn square[T](x: T) -> T { x * x }
+fn main() {
+    let a = square(3);
+    let b = square(2.0);
+    println(a);
+}

@@ -1,0 +1,99 @@
+// LeetCode 211 — Design Add and Search Words Data Structure.
+//
+// A dictionary with `add_word(word)` and `search(word)`, where a search string
+// may contain the wildcard `.` that matches ANY single character. Everything
+// else is an ordinary trie lookup.
+//
+// The store is the same index-pool trie as #208 (all nodes in one
+// `Vec[TrieNode]`, children keyed by `Map[char, i64]`, `is_end` marking a word
+// end). Adding a word is the plain walk-and-create insert. Search becomes a
+// recursive DFS because of the wildcard: at a literal character we follow the
+// single matching edge, but at a `.` we must try EVERY child and succeed if any
+// branch matches the remaining suffix — classic backtracking over the trie.
+
+struct TrieNode {
+    children: Map[char, i64],   // next char -> child node index
+    mut is_end: bool,
+}
+
+fn new_node() -> TrieNode {
+    return TrieNode { children: Map.new(), is_end: false };
+}
+
+fn child_of(nodes: ref Vec[TrieNode], idx: i64, c: char) -> i64 {
+    match nodes[idx].children.get(c) {
+        Some(v) => v,
+        None => -1,
+    }
+}
+
+fn add_word(nodes: mut ref Vec[TrieNode], word: String) {
+    let cs: Vec[char] = word.chars().collect();
+    let n = cs.len();
+    let mut cur = 0;
+    let mut i = 0;
+    while i < n {
+        let c = cs[i];
+        let child = child_of(nodes, cur, c);
+        if child == -1 {
+            let new_idx = nodes.len();
+            nodes.push(new_node());
+            let _ = nodes[cur].children.insert(c, new_idx);
+            cur = new_idx;
+        } else {
+            cur = child;
+        }
+        i = i + 1;
+    }
+    nodes[cur].is_end = true;
+}
+
+// Match cs[pos..] starting from trie node `idx`. A '.' at pos tries every child.
+fn dfs(nodes: ref Vec[TrieNode], idx: i64, cs: ref Vec[char], pos: i64) -> bool {
+    if pos == cs.len() {
+        return nodes[idx].is_end;
+    }
+    let c = cs[pos];
+    if c == '.' {
+        for (_, child) in nodes[idx].children {
+            if dfs(nodes, child, cs, pos + 1) { return true; }
+        }
+        return false;
+    }
+    let child = child_of(nodes, idx, c);
+    if child == -1 { return false; }
+    return dfs(nodes, child, cs, pos + 1);
+}
+
+fn search(nodes: ref Vec[TrieNode], word: String) -> bool {
+    let cs: Vec[char] = word.chars().collect();
+    return dfs(nodes, 0, cs, 0);
+}
+
+fn show(b: bool) {
+    if b { println("true"); } else { println("false"); }
+}
+
+fn main() {
+    let mut dict: Vec[TrieNode] = Vec.new();
+    dict.push(new_node());              // root at index 0
+
+    add_word(mut dict, "bad");
+    add_word(mut dict, "dad");
+    add_word(mut dict, "mad");
+
+    show(search(dict, "pad"));          // false — never added
+    show(search(dict, "bad"));          // true  — exact
+    show(search(dict, ".ad"));          // true  — bad / dad / mad
+    show(search(dict, "b.."));          // true  — bad
+    show(search(dict, "..."));          // true  — any 3-letter word
+    show(search(dict, "...."));         // false — no 4-letter word
+    show(search(dict, "b.d"));          // true  — bad
+    show(search(dict, ".a."));          // true
+    show(search(dict, ".."));           // false — no 2-letter word
+
+    add_word(mut dict, "a");
+    show(search(dict, "a"));            // true
+    show(search(dict, "."));            // true  — matches "a"
+    show(search(dict, ".."));           // false — still no 2-letter word
+}

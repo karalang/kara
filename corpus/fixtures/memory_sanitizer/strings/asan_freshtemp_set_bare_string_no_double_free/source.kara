@@ -1,0 +1,19 @@
+
+fn make_set() -> Set[String] {
+    let mut s: Set[String] = Set.new();
+    s.insert("first set element padded out beyond thirty-six byte");
+    s.insert("second set element padded out beyond thirty-six byt");
+    return s;
+}
+
+fn main() {
+    let mut pass = 0;
+    while pass < 3 {
+        let mut total = 0_i64;
+        for x in make_set() {
+            total = total + x.len();
+        };
+        println(total);
+        pass = pass + 1;
+    };
+}

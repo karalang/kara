@@ -1,0 +1,9 @@
+
+fn main() {
+    let mut outer: Vec[Vec[Vec[i64]]] = Vec.new();
+    let mut a: Vec[Vec[i64]] = Vec.new();
+    let inner: Vec[i64] = Vec.new();
+    a.push(inner);
+    outer.push(a);
+    outer[0][0].push(7);
+}

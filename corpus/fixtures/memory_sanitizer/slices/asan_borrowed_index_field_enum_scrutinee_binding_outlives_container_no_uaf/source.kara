@@ -1,0 +1,31 @@
+
+enum Tk { Id(String), Num(i64) }
+struct Sp { tok: Tk, off: i64 }
+struct P { toks: Vec[Sp], pos: i64 }
+impl P {
+    fn name_now(ref self) -> String {
+        match self.toks[self.pos].tok {
+            Id(s) => s,
+            Num(n) => n.to_string(),
+        }
+    }
+}
+fn mk() -> Vec[Sp] {
+    let mut w: Vec[Sp] = Vec.new();
+    w.push(Sp { tok: Tk.Id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()), off: 5 });
+    w
+}
+fn grab() -> String {
+    let p = P { toks: mk(), pos: 0 };
+    p.name_now()
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 50 {
+        let n = grab();
+        total = total + n.len();
+        i = i + 1;
+    }
+    println(total);
+}

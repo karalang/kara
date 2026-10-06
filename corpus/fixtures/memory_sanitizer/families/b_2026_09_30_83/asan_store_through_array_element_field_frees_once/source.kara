@@ -1,0 +1,21 @@
+struct P { s: String, n: i64 }
+struct B { a: Array[P, 2], k: i64 }
+fn mk(p: String, k: i64) -> String {
+    f"{p}-heap-string-longer-than-sso-{k}"
+}
+fn rd(s: ref String) -> i64 { if s.contains("-heap-") { s.len() } else { 0 } }
+fn fill(a: mut ref Array[P, 2]) { a[0].s = mk("p", 4); }
+fn main() {
+    let mut a: Array[P, 2] = [P { s: mk("a", 1), n: 1 }, P { s: mk("b", 1), n: 2 }];
+    a[1].s = mk("c", 1);
+    println(f"{rd(a[0].s)} {rd(a[1].s)} {a[1].s}");
+    let mut b = B { a: [P { s: mk("d", 2), n: 1 }, P { s: mk("e", 2), n: 2 }], k: 3 };
+    b.a[0].s = mk("f", 2);
+    println(f"{rd(b.a[0].s)} {b.a[0].s} {b.k}");
+    let mut t: (Array[P, 2], i64) = ([P { s: mk("g", 3), n: 1 }, P { s: mk("h", 3), n: 2 }], 5);
+    t.0[1].s = mk("i", 3);
+    println(f"{rd(t.0[1].s)} {t.0[1].s} {t.1}");
+    let mut c: Array[P, 2] = [P { s: mk("j", 4), n: 1 }, P { s: mk("k", 4), n: 2 }];
+    fill(mut c);
+    println(f"{c[0].s} {rd(c[1].s)}");
+}

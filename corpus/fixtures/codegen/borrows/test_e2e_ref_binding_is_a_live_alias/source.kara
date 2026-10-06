@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(4);
+    v.push(5);
+    let r = ref v[1];
+    println(f"{r}");
+    v.swap(0, 1);
+    println(f"{r}");
+}

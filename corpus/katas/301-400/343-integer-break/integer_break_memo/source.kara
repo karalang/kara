@@ -1,0 +1,64 @@
+// LeetCode #343: Integer Break — top-down recursion with a memo.
+//
+// Given an integer n (2 <= n <= 58), break it into the sum of at least two
+// positive integers and return the largest product of those integers.
+//
+//   n = 2   ->  1     (1 + 1)
+//   n = 10  ->  36    (3 + 3 + 4)
+//
+// value(i) is the most a total of i is worth as a part of a larger break:
+// either i itself, kept whole, or the best product of breaking it, j times
+// value(i - j). The answer for n is the best product of breaking n, which
+// must split at least once, so it never takes the "kept whole" option at the
+// top. The memo holds value(i) once computed, so each total is solved once.
+//
+// O(n^2) time, O(n) space.
+
+fn value(i: i64, memo: mut ref Vec[Option[i64]]) -> i64 {
+    if let Some(v) = memo[i] {
+        return v;
+    }
+    let mut v = i;
+    for j in 1..i {
+        let p = j * value(i - j, memo);
+        if p > v {
+            v = p;
+        }
+    }
+    memo[i] = Some(v);
+    return v;
+}
+
+fn integer_break(n: i64) -> i64 {
+    let mut memo: Vec[Option[i64]] = Vec.filled(n + 1, None);
+    let mut best = 0;
+    for j in 1..n {
+        let p = j * value(n - j, mut memo);
+        if p > best {
+            best = p;
+        }
+    }
+    return best;
+}
+
+fn main() {
+    // The examples from the problem statement.
+    println(f"2 -> {integer_break(2)}");
+    println(f"10 -> {integer_break(10)}");
+
+    // Every n the problem allows, one line each, and their sum.
+    let mut sum = 0;
+    for n in 2..59 {
+        let p = integer_break(n);
+        println(f"{n} -> {p}");
+        sum += p;
+    }
+    println(f"sum over 2..58: {sum}");
+
+    // Past the problem's bound. Every candidate a step compares is the
+    // product of a real break, so none exceeds the answer, and nothing
+    // overflows before the answer itself does: 119 is the largest n whose
+    // answer, 2 * 3^39, fits in an i64.
+    println(f"100 -> {integer_break(100)}");
+    println(f"119 -> {integer_break(119)}");
+}

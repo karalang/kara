@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_10_02_65.rs::asan_tensor_temp_to_generic_callee_freed_once"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:tensor"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

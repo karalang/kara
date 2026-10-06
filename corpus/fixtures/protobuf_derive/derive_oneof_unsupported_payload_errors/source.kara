@@ -1,0 +1,7 @@
+
+#[derive(Message)]
+struct E { body: Choice }
+
+enum Choice { NotSet, M(Map[String, i64]) }
+
+fn main() {}

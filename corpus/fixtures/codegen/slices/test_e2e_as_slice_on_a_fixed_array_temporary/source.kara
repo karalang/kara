@@ -1,0 +1,32 @@
+
+fn mk() -> Array[u8, 3] { return [7u8, 8u8, 9u8]; }
+
+fn total(b: ref Slice[u8]) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < b.len() { s = s + b[i] as i64; i = i + 1; }
+    s
+}
+
+fn main() {
+    let e: u16 = 258u16;
+
+    // The row's own repro, beside its bound twin.
+    println(e.to_ne_bytes().as_slice().len());
+    let bound = e.to_ne_bytes();
+    println(bound.as_slice().len());
+
+    // A user fn returning a fixed array — the element type arrives by
+    // signature lookup rather than from `to_ne_bytes`'s fixed `u8`.
+    println(mk().as_slice().len());
+    let m = mk();
+    println(m.as_slice().len());
+
+    // The view must carry the right BASE, not just the right length: a
+    // header built off the wrong place would still say 3 here.
+    println(total(mk().as_slice()));
+    println(total(m.as_slice()));
+
+    // A byte-string literal, the third receiver shape -25 sweeps.
+    println(b"abc".as_slice().len());
+}

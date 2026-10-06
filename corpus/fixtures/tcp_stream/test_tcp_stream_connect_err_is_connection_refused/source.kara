@@ -1,0 +1,11 @@
+
+            fn main() {
+                match TcpStream.connect("127.0.0.1:1") {
+                    Result.Ok(_) => { println("ok"); }
+                    Result.Err(TcpError.ConnectionRefused) => { println("refused"); }
+                    Result.Err(TcpError.AddrInUse) => { println("addrinuse"); }
+                    Result.Err(TcpError.PermissionDenied) => { println("perm"); }
+                    Result.Err(_) => { println("other"); }
+                }
+            }
+        

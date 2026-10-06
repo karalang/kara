@@ -1,0 +1,14 @@
+struct D { s: String }
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"p{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn main() {
+  let n = seed();
+  println("named_field"); let b = payload(); let _ = if n >= 0 { D { s: b } };
+  println("stmt_in_arm"); let c = payload(); if n >= 0 { let q = D { s: c }; println(f"  q={q.s.len()}"); }
+  println("mint_field"); let _ = if n >= 0 { R { id: 2, s: payload() } };
+  println("bare_stmt_named"); let d = payload(); if n >= 0 { D { s: d } };
+  println("not_taken"); let e = payload(); let _ = if n > 900 { D { s: e } };
+  println("end");
+}

@@ -1,0 +1,19 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    match v.pop() {
+        Some(x) => println(x),
+        None => println(0),
+    }
+    println(v.len());
+    match v.pop() {
+        Some(x) => println(x),
+        None => println(0),
+    }
+    match v.pop() {
+        Some(_) => println(99),
+        None => println(0),
+    }
+}

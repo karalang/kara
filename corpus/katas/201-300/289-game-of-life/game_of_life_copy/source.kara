@@ -1,0 +1,136 @@
+// LeetCode 289 — Game of Life, with a SECOND BOARD.
+//
+// The honest baseline, and the version most people write first. Conway's rules
+// read the old generation and write the new one, so the simplest way to keep
+// those apart is to keep two boards: read `board`, write `next`, then hand
+// `next` back.
+//
+// WHAT IT COSTS is the whole point of the ★ file. This allocates a second
+// m x n board every step — O(mn) extra memory that the in-place version does
+// not need, because the in-place version noticed the problem already owns 62
+// unused bits per cell. On a 512x512 board that is a megabyte per generation,
+// allocated and freed, for information that fits in a bit already present.
+//
+// WHAT IT BUYS is that the code says exactly what the rules say. There is no
+// encoding to decode, no `& 1` whose absence would be a silent wrong answer,
+// and a reader who knows Conway can check this file line by line against the
+// four rules. When the board is small or the step runs once, that is the better
+// trade, and pretending otherwise would be dishonest about why the trick exists.
+
+// Live neighbours of (r, c) in the OLD generation — bit 0 of each neighbour.
+fn live_neighbours(board: ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
+    let rows = board.len();
+    let cols = board[0].len();
+    let mut n = 0;
+    let mut dr = -1;
+    while dr <= 1 {
+        let mut dc = -1;
+        while dc <= 1 {
+            if not (dr == 0 and dc == 0) {
+                let rr = r + dr;
+                let cc = c + dc;
+                if rr >= 0 and rr < rows and cc >= 0 and cc < cols {
+                    // A plain read: `board` is never written during the sweep,
+                    // so there is no encoding to see through.
+                    n = n + board[rr][cc];
+                }
+            }
+            dc = dc + 1;
+        }
+        dr = dr + 1;
+    }
+    return n;
+}
+
+fn step(board: mut ref Vec[Vec[i64]]) {
+    let rows = board.len();
+    let cols = board[0].len();
+
+    // The second board. Every read below is of `board` (old), every write is
+    // to `next` (new), so simultaneity is kept by having two places to be.
+    let mut next: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r < rows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < cols {
+            let n = live_neighbours(board, r, c);
+            let alive = board[r][c] == 1;
+            let lives = if alive { n == 2 or n == 3 } else { n == 3 };
+            if lives { row.push(1); } else { row.push(0); }
+            c = c + 1;
+        }
+        next.push(row);
+        r = r + 1;
+    }
+
+    // Hand it back. The problem asks for an in-place update of the argument,
+    // so the copy has to be written through even though we built it fresh.
+    r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            board[r][c] = next[r][c];
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+}
+
+fn render(board: ref Vec[Vec[i64]]) -> String {
+    let mut s = String.new();
+    let rows = board.len();
+    let mut r = 0;
+    while r < rows {
+        let cols = board[r].len();
+        let mut c = 0;
+        while c < cols {
+            if board[r][c] == 1 { s.push('#'); } else { s.push('.'); }
+            c = c + 1;
+        }
+        s.push('\n');
+        r = r + 1;
+    }
+    return s;
+}
+
+fn report(label: String, board: mut ref Vec[Vec[i64]], steps: i64) {
+    println(f"{label}:");
+    let mut k = 0;
+    while k < steps {
+        step(board);
+        k = k + 1;
+    }
+    print(render(board));
+    println("");
+}
+
+fn main() {
+    // The LeetCode example.
+    let mut b: Vec[Vec[i64]] = [[0, 1, 0], [0, 0, 1], [1, 1, 1], [0, 0, 0]];
+    report("example after 1 step", mut b, 1);
+
+    // Blinker — a period-2 oscillator. Two steps must return the original.
+    let mut blinker: Vec[Vec[i64]] = [[0, 0, 0], [1, 1, 1], [0, 0, 0]];
+    report("blinker after 1 step", mut blinker, 1);
+    report("blinker after 2 steps (back to start)", mut blinker, 1);
+
+    // Block — a still life. It must not move at all.
+    let mut block: Vec[Vec[i64]] = [[1, 1], [1, 1]];
+    report("block after 3 steps (still life)", mut block, 3);
+
+    // Glider — translates one cell diagonally every 4 steps.
+    let mut glider: Vec[Vec[i64]] = [
+        [0, 1, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+    ];
+    report("glider after 4 steps (shifted 1,1)", mut glider, 4);
+
+    // A lone live cell dies; an empty board stays empty.
+    let mut lonely: Vec[Vec[i64]] = [[0, 0, 0], [0, 1, 0], [0, 0, 0]];
+    report("lone cell dies", mut lonely, 1);
+}

@@ -1,0 +1,9 @@
+
+fn main() {
+    let s = "0123";
+    for c in s.chars() {
+        let n: i32 = c as i32;
+        let d: i32 = n - 48i32;
+        println(d);
+    }
+}

@@ -1,0 +1,12 @@
+
+shared struct N { mut v: i64, mut ns: Map[i64, weak N] }
+fn build2() -> N {
+    let a: N = N { v: 1i64, ns: Map.new() };
+    let b: N = N { v: 2i64, ns: Map.new() };
+    a.ns.insert(1i64, b);
+    b.ns.insert(1i64, a);
+    match a.ns.get(1i64) { Some(x) => { println(x.v); } None => { println(0 - 1); } }
+    match a.ns.get(1i64) { Some(y) => { println(y.v); } None => { println(0 - 2); } }
+    return a;
+}
+fn main() { println(build2().v); }

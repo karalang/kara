@@ -1,0 +1,6 @@
+
+fn main() {
+    let a = Vector[i64, 4](1, 2, 3, 4);
+    let r = a.reverse();
+    println(r[0]); println(r[1]); println(r[2]); println(r[3]);
+}

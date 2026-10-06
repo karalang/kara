@@ -1,0 +1,8 @@
+
+enum E { V((i64, i64)) }
+fn main() {
+    let e = V((7, 35));
+    match e {
+        V((a, b)) => println(a + b),
+    }
+}

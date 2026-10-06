@@ -1,0 +1,16 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct Kk { a: String, b: String }
+struct Mk { p: String }
+impl Mk { fn mks(ref self, n: i64) -> Kk {
+    return Kk { a: f"aaaaaaaaaaaaaaaa-{n}", b: f"bbbbbbbbbbbb-{n}" };
+} }
+fn main() {
+    let mut m: Map[Kk, i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.mks(0i64), 0i64);
+    match m.get(g.mks(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}

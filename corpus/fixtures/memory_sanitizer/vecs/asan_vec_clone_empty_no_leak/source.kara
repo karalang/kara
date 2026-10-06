@@ -1,0 +1,6 @@
+
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    let w: Vec[i64] = v.clone();
+    println(w.len());
+}

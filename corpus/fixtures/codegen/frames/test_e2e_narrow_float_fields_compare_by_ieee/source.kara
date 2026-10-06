@@ -1,0 +1,30 @@
+
+#[derive(PartialEq)]
+shared struct S32 { x: f32 }
+#[derive(PartialEq)]
+shared struct S16 { x: f16 }
+#[derive(PartialEq)]
+shared struct Sb16 { x: bf16 }
+fn nan32(z: f32) -> f32 { return z / z; }
+fn negzero32(z: f32) -> f32 { return -z; }
+fn main() {
+    let p: f32 = 0.0;
+    let n = negzero32(p);
+    let q = nan32(p);
+    let a = S32 { x: p };
+    let b = S32 { x: n };
+    let q1 = S32 { x: q };
+    let q2 = S32 { x: q };
+    println(f"f32-negzero={a == b}");
+    println(f"f32-nan={q1 == q2}");
+    let h1 = S16 { x: 1.5f16 };
+    let h2 = S16 { x: 1.5f16 };
+    let h3 = S16 { x: 2.5f16 };
+    println(f"f16-eq={h1 == h2}");
+    println(f"f16-ne={h1 == h3}");
+    let g1 = Sb16 { x: 1.5bf16 };
+    let g2 = Sb16 { x: 1.5bf16 };
+    let g3 = Sb16 { x: 2.5bf16 };
+    println(f"bf16-eq={g1 == g2}");
+    println(f"bf16-ne={g1 == g3}");
+}

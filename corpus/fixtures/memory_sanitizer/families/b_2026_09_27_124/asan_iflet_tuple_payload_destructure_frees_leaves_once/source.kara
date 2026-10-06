@@ -1,0 +1,37 @@
+fn eats(s: String) { println(f"es{s}"); }
+fn mko() -> Option[(String, String)] { return Some((f"x{1}", f"y{2}")); }
+fn prm(o: Option[(String, String)]) { if let Some((a, b)) = o { println(f"p{a}") } }
+fn main() {
+    let o1: Option[(String, String)] = Some((f"a{1}", f"b{2}"));
+    if let Some((a, b)) = o1 { eats(a); }
+    println("--");
+    let o2: Option[(String, String)] = Some((f"c{1}", f"d{2}"));
+    if let Some((a, b)) = o2 { let k = b; println(f"k{k}"); }
+    println("--");
+    let o3: Option[(String, String)] = Some((f"e{1}", f"f{2}"));
+    let mut v: Vec[String] = [];
+    if let Some((a, b)) = o3 { v.push(a); v.push(b); }
+    println(f"v{v.len()}");
+    println("--");
+    if let Some((a, b)) = mko() { println(f"t{a}{b}"); }
+    println("--");
+    prm(Some((f"g{1}", f"h{2}")));
+    let o4: Option[(String, String)] = Some((f"i{1}", f"j{2}"));
+    prm(o4);
+    println("--");
+    let mut o5: Option[(String, String)] = Some((f"k{1}", f"l{2}"));
+    while let Some((a, b)) = o5 { println(f"w{a}"); o5 = None; }
+    println("--");
+    let mut o6: Option[(String, String)] = Some((f"m{1}", f"n{2}"));
+    while let Some((a, b)) = o6 { eats(b); o6 = None; }
+    println("--");
+    let o8: Result[(String, i64), i64] = Ok((f"q{1}", 5));
+    if let Ok((a, n)) = o8 { println(f"r{a}{n}"); }
+    let o9: Result[(String, i64), i64] = Ok((f"s{1}", 6));
+    if let Ok((a, n)) = o9 { eats(a); }
+    for i in 0..3 {
+        let oo: Option[(String, String)] = Some((f"z{i}", f"zz{i}"));
+        if let Some((a, b)) = oo { println(f"l{a}"); }
+    }
+    println("end");
+}

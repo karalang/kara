@@ -1,0 +1,7 @@
+
+fn f(a: f32, b: f32, c: f32, d: f32) -> f32 {
+    let v: Vector[f32, 4] = Vector[f32, 4](a, b, c, d);
+    let r = v.sqrt();
+    r[0]
+}
+fn main() { println(f(4.0f32, 9.0f32, 16.0f32, 25.0f32)); }

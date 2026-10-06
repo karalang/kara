@@ -1,0 +1,92 @@
+// LeetCode 138 — Copy List with Random Pointer.
+//
+// Each node has a `next` (owns the chain) and a `random` pointer that may
+// target ANY node or null. The `random` edge is modeled as a `weak Node`:
+// it does not contribute to the strong count, so the graph — which is cyclic
+// through `random` — is reclaimed cleanly (plain RC would leak the cycles).
+// A `weak` field READS as `Option[Node]` (the upgrade) and is STORED by
+// assigning a strong handle (the downgrade).
+
+shared struct Node {
+    val: i64,
+    id: i64,
+    mut next: Option[Node],
+    mut random: weak Node,
+}
+
+// Build the original list from parallel arrays: `vals[i]` is node i's value,
+// `rnd[i]` is the id its `random` targets (or -1 for null). Nodes are held in
+// a Vec so `random` back/forward edges resolve by id.
+fn build(vals: Vec[i64], rnd: Vec[i64]) -> Vec[Node] {
+    let n: i64 = vals.len();
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        nodes.push(Node { val: vals[i], id: i, next: None, random: None });
+        i = i + 1;
+    }
+    i = 0;
+    while i < n {
+        if i + 1 < n {
+            nodes[i].next = Some(nodes[i + 1]);
+        }
+        if rnd[i] >= 0 {
+            nodes[i].random = nodes[rnd[i]];
+        }
+        i = i + 1;
+    }
+    return nodes;
+}
+
+// Deep-copy: clone every node, then re-wire `next` (strong) and `random`
+// (weak, resolved through the read-upgrade) against the FRESH copies.
+fn deep_copy(orig: Vec[Node]) -> Vec[Node] {
+    let n: i64 = orig.len();
+    let mut copies: Vec[Node] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        copies.push(Node { val: orig[i].val, id: orig[i].id, next: None, random: None });
+        i = i + 1;
+    }
+    i = 0;
+    while i < n {
+        if i + 1 < n {
+            copies[i].next = Some(copies[i + 1]);
+        }
+        match orig[i].random {
+            Some(r) => { copies[i].random = copies[r.id]; }
+            None => {}
+        }
+        i = i + 1;
+    }
+    return copies;
+}
+
+fn main() {
+    let mut vals: Vec[i64] = Vec.new();
+    vals.push(7);
+    vals.push(13);
+    vals.push(11);
+    vals.push(10);
+    vals.push(1);
+    let mut rnd: Vec[i64] = Vec.new();
+    rnd.push(0 - 1);
+    rnd.push(0);
+    rnd.push(4);
+    rnd.push(2);
+    rnd.push(0);
+
+    let orig: Vec[Node] = build(vals, rnd);
+    let copies: Vec[Node] = deep_copy(orig);
+
+    let n: i64 = copies.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let rv: i64 = match copies[i].random {
+            Some(r) => r.val,
+            None => 0 - 1,
+        };
+        println(copies[i].val.to_string() + "|" + rv.to_string());
+        i = i + 1;
+    }
+}

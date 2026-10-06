@@ -1,0 +1,13 @@
+
+fn gsum[T](s: Slice[T]) -> T { s[0] }
+fn main() {
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 50i64 {
+        let vs: Vec[String] = ["a sufficiently long slice element payload", "second sufficiently long element payload"];
+        let e = gsum(vs);
+        acc = acc + e.len();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}

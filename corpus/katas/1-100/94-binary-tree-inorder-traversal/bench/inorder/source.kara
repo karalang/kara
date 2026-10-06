@@ -1,0 +1,73 @@
+// Benchmark workload — Binary Tree Inorder Traversal (LeetCode #94), the ★ recursion.
+//
+// A traversal is O(n), and traversing a FIXED tree K times would be hoisted (a
+// loop-invariant tree gives a constant fold). So this is a build-then-traverse
+// workload: each of K = 320_000 iterations BUILDS a fresh 63-node balanced tree
+// (a `shared struct TreeNode` tree, RC-allocated) and runs the kata ★'s recursive
+// left-node-right inorder over it, folding each visited value into a rolling hash IN
+// VISIT ORDER — so the sink is order-sensitive and the traversal order itself is
+// verified (a wrong order changes the number). Folding during the walk (a threaded
+// `mut ref i64`) instead of collecting a `Vec[i64]` keeps this a pure traversal bench,
+// not an allocation bench — the only allocation is `build`'s per-iteration tree, which
+// every mirror also pays.
+//
+// This deliberately stresses the RC / Option / recursion surface end to end — the
+// per-node RC allocation and drop of `build`, plus the `match`-driven recursive
+// traversal over `Option[TreeNode]` children. It is allocation-inclusive by design
+// (building trees is what tree code does), the closest analogue being the tree kata
+// [#98](../98-validate-binary-search-tree/) and the linked-list siblings.
+//
+// Non-hoistable: `build` takes a per-iteration `shift = k % 1000`, so a different tree
+// is constructed every time; the loop-carried sink folds each node value, so neither
+// `build` nor the traversal can be optimised away. The hash is a loop-carried
+// dependency, NOT a reduction karac's auto-par pass can split — single-threaded by
+// construction (verified equal to KARAC_AUTO_PAR=0). Seq-only kata. See ../README.md.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// Balanced tree over shift+lo .. shift+hi (sorted-array-to-BST): midpoint is the root.
+fn build(lo: i64, hi: i64, shift: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = lo + (hi - lo) / 2;
+    Some(TreeNode {
+        val: shift + mid,
+        left: build(lo, mid - 1, shift),
+        right: build(mid + 1, hi, shift),
+    })
+}
+
+// Recursive inorder, folding each value into `acc` in visit order (left, node, right).
+fn inorder_fold(node: Option[TreeNode], acc: mut ref i64) {
+    match node {
+        None => {}
+        Some(n) => {
+            inorder_fold(n.left, acc);
+            acc = (acc * 131 + (n.val + 1)) % 1000000007;
+            inorder_fold(n.right, acc);
+        }
+    }
+}
+
+fn main() {
+    let total = 320000;
+    let modulus = 1000000007;
+    let size = 63;
+
+    let mut sum = 0;
+    let mut k = 0;
+    while k < total {
+        let shift = k % 1000;
+        let root = build(0, size - 1, shift);
+        let mut acc = 0;
+        inorder_fold(root, mut acc);
+        sum = (sum * 131 + acc) % modulus;
+        k = k + 1;
+    }
+    println(f"{sum}");
+}

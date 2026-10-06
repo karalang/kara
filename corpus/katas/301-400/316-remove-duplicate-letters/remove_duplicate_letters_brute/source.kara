@@ -1,0 +1,75 @@
+// LeetCode #316: Remove Duplicate Letters — the definition, by enumeration.
+//
+// Every subsequence of s is a bitmask over its positions. Keep the ones that
+// contain each distinct letter exactly once, and take the lexicographically
+// smallest. O(2^n * n): the complete oracle for small n, and nothing else —
+// no greedy insight, no stack, no "the answer is a permutation" shortcut
+// beyond checking the letter tallies.
+
+fn remove_duplicate_letters(s: ref String) -> String {
+    let bs = s.bytes();
+    let n = bs.len();
+
+    let mut present: Vec[bool] = Vec.new();
+    for k in 0..26 { present.push(false); }
+    for i in 0..n { present[(bs[i] - b'a') as i64] = true; }
+    let mut k = 0;
+    for c in 0..26 { if present[c] { k = k + 1; } }
+
+    let mut best = String.new();
+    let mut have_best = false;
+    let limit = 1 << n;
+    let mut mask = 0;
+    while mask < limit {
+        let mut seen: Vec[bool] = Vec.new();
+        for c in 0..26 { seen.push(false); }
+        let mut cand = String.new();
+        let mut ok = true;
+        let mut taken = 0;
+        for i in 0..n {
+            if (mask & (1 << i)) != 0 {
+                let ci = (bs[i] - b'a') as i64;
+                if seen[ci] { ok = false; break; }
+                seen[ci] = true;
+                cand.push(bs[i] as char);
+                taken = taken + 1;
+            }
+        }
+        if ok and taken == k {
+            if not have_best or cand < best {
+                best = cand;
+                have_best = true;
+            }
+        }
+        mask = mask + 1;
+    }
+    return best;
+}
+
+// ------------------------------------------------------------- demo ---
+
+fn main() {
+    let mut cases: Vec[String] = Vec.new();
+    cases.push("bcabc");
+    cases.push("cbacdcbc");
+    cases.push("a");
+    cases.push("aaaa");
+    cases.push("abcabc");
+    cases.push("cba");
+    cases.push("bbcaac");
+    cases.push("leetcode");
+    cases.push("zyxzyxzyx");
+    cases.push("ecbacba");
+    cases.push("bcac");
+
+    let mut acc = 0;
+    for c in 0..cases.len() {
+        let r = remove_duplicate_letters(cases[c]);
+        let rb = r.bytes();
+        for j in 0..rb.len() {
+            acc = (acc * 131 + (rb[j] as i64)) % 1000000007;
+        }
+        println(f"case {c}: {cases[c]} -> {r}");
+    }
+    println(f"sink: {acc}");
+}

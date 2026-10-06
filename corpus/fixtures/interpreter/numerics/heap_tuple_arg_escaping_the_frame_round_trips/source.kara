@@ -1,0 +1,4 @@
+
+struct Bag[T] { xs: Vec[T] }
+fn passthru[T](p: (Bag[T], i64)) -> (Bag[T], i64) { p }
+fn main() { let (b, n) = passthru((Bag { xs: ["x", "y"] }, 7)); println(f"{n} {b.xs.len()} {b.xs[0]}"); }

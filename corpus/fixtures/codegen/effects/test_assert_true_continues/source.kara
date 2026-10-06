@@ -1,0 +1,5 @@
+
+fn main() {
+    assert(true)
+    println(7)
+}

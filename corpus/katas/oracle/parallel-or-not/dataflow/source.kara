@@ -1,0 +1,83 @@
+// dataflow — the OTHER reason two statements can't parallelize.
+//
+// `main.kara` showed statements pulled apart by a shared *resource*
+// (a hidden effect conflict). This file shows the second axis: a
+// shared *value*. The concurrency graph the compiler builds is the
+// union of both — a dataflow-dependency graph AND an effect-conflict
+// graph. A pair serializes if EITHER one says so.
+//
+// Here all three stages write fully disjoint resources (Db, Cache,
+// Log), so on effects alone all three would group. The only thing
+// that changes the answer is whether one statement *reads a value
+// another produced*.
+//
+//   pub fn handle() {
+//       let r = stage_a();   // 0: defines r, writes Db
+//       stage_b(r);          // 1: reads r,   writes Cache
+//       stage_c();           // 2:            writes Log
+//   }
+//
+//   $ karac query concurrency dataflow.kara.handle
+//   {... "parallel_groups":[{"statements":[1,2], ...}]}
+//
+// Statement 0 is excluded even though its `Db` write conflicts with
+// nothing. The only reason is the read-after-write: statement 1 uses
+// `r`, which statement 0 produced. Delete that data dependency —
+// pass a constant to `stage_b` instead of `r`, leaving every effect
+// byte-identical — and the group becomes [0,1,2] (see `handle_indep`
+// below). Effects unchanged; only the value dependency moved; the
+// answer moved with it.
+
+pub trait Store { fn touch(mut ref self, n: i64) -> i64; }
+
+pub effect resource Db: Store;
+pub effect resource Cache: Store;
+pub effect resource Log: Store;
+
+pub struct Mem { acc: i64 }
+impl Mem { pub fn new() -> Mem { Mem { acc: 0 } } }
+impl Store for Mem {
+    fn touch(mut ref self, n: i64) -> i64 {
+        let mut i = 0;
+        while i < n { self.acc = self.acc + 1; i = i + 1; }
+        self.acc
+    }
+}
+
+const WORK: i64 = 1000;
+
+fn stage_a() -> i64 with writes(Db)    { Db.touch(WORK) }
+fn stage_b(x: i64)  with writes(Cache) { Cache.touch(WORK + x); }
+fn stage_c()        with writes(Log)   { Log.touch(WORK); }
+
+// Data-dependent: stmt 1 reads `r` from stmt 0. Effects are disjoint;
+// the value dependency is the only thing keeping 0 out of a group.
+pub fn handle()
+    with writes(Db) writes(Cache) writes(Log)
+{
+    let r = stage_a();   // 0
+    stage_b(r);          // 1  reads r
+    stage_c();           // 2
+}
+
+// Identical effects, dependency removed: stmt 1 ignores `r`.
+// Now all three group.
+pub fn handle_indep()
+    with writes(Db) writes(Cache) writes(Log)
+{
+    let r = stage_a();   // 0
+    stage_b(0);          // 1  no read of r
+    stage_c();           // 2
+}
+
+fn main() {
+    let mut a = Mem.new();
+    let mut b = Mem.new();
+    let mut c = Mem.new();
+    with_provider[Db](a, || {
+        with_provider[Cache](b, || {
+            with_provider[Log](c, || { handle(); });
+        });
+    });
+    println("done");
+}

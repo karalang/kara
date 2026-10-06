@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_01_25.rs::e2e_discarded_literal_of_param_view_runs_body_once_in_caller"
+dedup_of = ["tests/interpreter/families/b_2026_10_01_25.rs::interp_discarded_literal_of_param_view_runs_body_once_in_caller", "tests/memory_sanitizer/families/b_2026_10_01_25.rs::asan_discarded_literal_of_param_view_freed_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

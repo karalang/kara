@@ -1,0 +1,87 @@
+// Benchmark lane for LeetCode #300 — Longest Increasing Subsequence.
+//
+// Build 3,000 arrays of 512 elements once, then make 24 patience-sorting passes
+// over the whole set. `build-once + punch` (BENCHMARKS.md): a generator inside
+// the timed loop would vectorize in C and Rust and not in Kara, and the lane
+// would measure that difference instead of this one.
+//
+// WHAT THIS ACTUALLY STRESSES. Patience sorting is a binary search per element,
+// so the inner loop is branch-heavy and its access pattern into `tails` is
+// data-dependent — the branch predictor cannot learn it, and neither can a
+// vectorizer. That makes it a genuinely different shape from #299's flat tally
+// (predictable, tiny, fully unrollable) and worth having next to it.
+//
+// THE `tails` BUFFER IS ALLOCATED ONCE, outside every loop, and reused across
+// all 72,000 array-scans by resetting a logical length. `Array[i64, 512]` is
+// the honest type — 512 because that is the array length, known at compile time
+// and never resized — and it matches C's `long tails[512]` and Rust's
+// `[0i64; 512]` exactly. #299 in this corpus is the cautionary tale: its first
+// draft built a `Vec` per iteration against stack arrays in the mirrors and
+// reported a 2.73x penalty that was mirror asymmetry, not a language result.
+//
+// SPREAD is chosen so the answer is interesting. Fully random over a wide range
+// gives LIS ~ 2*sqrt(n) ~ 45 out of 512; the values here are drawn from a range
+// of 4096, which keeps ties rare enough that the strict comparison is exercised
+// without collapsing the answer toward 1.
+
+let N_ARRAYS = 3000;
+let LEN = 512;
+let PASSES = 24;
+let SPREAD = 4096;
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn main() {
+    // ---- build once -----------------------------------------------------
+    let total = N_ARRAYS * LEN;
+    let mut data: Vec[i64] = Vec.filled(total, 0);
+
+    let mut state = 20300;
+    let mut i = 0;
+    while i < total {
+        state = lcg(state);
+        data[i] = (state / 65536) % SPREAD;
+        i = i + 1;
+    }
+
+    // ---- punch ----------------------------------------------------------
+    let mut tails: Array[i64, 512] = Array[0; 512];
+    let mut checksum = 0;
+
+    let mut pass = 0;
+    while pass < PASSES {
+        let mut a = 0;
+        while a < N_ARRAYS {
+            let base = a * LEN;
+            let mut n_tails = 0;
+
+            let mut k = 0;
+            while k < LEN {
+                let x = data[base + k];
+
+                let mut lo = 0;
+                let mut hi = n_tails;
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    if tails[mid] < x { lo = mid + 1; } else { hi = mid; }
+                }
+
+                if lo == n_tails {
+                    tails[n_tails] = x;
+                    n_tails = n_tails + 1;
+                } else {
+                    tails[lo] = x;
+                }
+                k = k + 1;
+            }
+
+            checksum = (checksum * 31 + n_tails) % 1000000007;
+            a = a + 1;
+        }
+        pass = pass + 1;
+    }
+
+    println(f"arrays {N_ARRAYS} len {LEN} passes {PASSES} checksum {checksum}");
+}

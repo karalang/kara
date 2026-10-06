@@ -1,0 +1,12 @@
+
+shared struct Box { mut name: String }
+fn main() {
+    let mut i = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let b = Box { name: "n" + "!" };
+        last = b.name;
+        i = i + 1;
+    }
+    println(last);
+}

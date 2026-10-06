@@ -1,0 +1,17 @@
+
+#[gpu]
+fn weight(x: i32) -> i32 {
+    let w: i32 = match x {
+        0 => 4,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    w.wrapping_mul(10)
+}
+
+fn main() {
+    let mut v: Vec[i32] = Vec.new();
+    v.push(0);
+    let out = gpu.dispatch(weight, v);
+    println(out[0]);
+}

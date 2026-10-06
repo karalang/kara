@@ -1,0 +1,9 @@
+
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let a = (make(10i64), "an independently long heap string payload here");
+    let s = a;
+    println(f"{(a.0)(1i64) + (s.0)(2i64)}");
+    println(s.1);
+    println(a.1);
+}

@@ -1,0 +1,49 @@
+// Benchmark workload for LeetCode #217 — Contains Duplicate.
+//
+// The kata scans an array once through a hash set, returning true the first time
+// a value repeats. The bench builds ONE big PRNG array, then slides a fixed-width
+// window across it and runs contains_duplicate on every window, counting how many
+// windows contain a duplicate. Each window drives a fresh hash-set membership
+// test whose early-exit is a data-dependent branch (does not vectorize); the load
+// is dominated by hash probing, which is the point — this kata measures the set.
+// Sink = number of windows that contain a duplicate.
+
+fn window_has_dup(base: ref Vec[i64], w: i64, width: i64) -> bool {
+    let mut seen: Set[i64] = Set.new();
+    let mut t = 0;
+    while t < width {
+        let x = base[w + t];
+        if seen.contains(x) {
+            return true;
+        }
+        seen.insert(x);
+        t = t + 1;
+    }
+    return false;
+}
+
+fn main() {
+    let big = 240000;
+    let width = 800;
+    let m = 2000000;
+
+    let mut base: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut c = 0;
+    while c < big {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        base.push(state % m);
+        c = c + 1;
+    }
+
+    let windows = big - width;
+    let mut sink = 0;
+    let mut w = 0;
+    while w < windows {
+        if window_has_dup(base, w, width) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+    println(sink);
+}

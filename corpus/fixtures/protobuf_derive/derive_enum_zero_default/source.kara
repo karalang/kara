@@ -1,0 +1,10 @@
+
+enum Status { Pending, Active, Closed }
+
+#[derive(Message)]
+struct Task { status: Status }
+
+fn main() {
+    let d = Task.decode(Vec.new());
+    println(match d.status { Status.Pending => "p", _ => "?" });
+}

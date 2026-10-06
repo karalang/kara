@@ -1,0 +1,15 @@
+
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 2_i64);
+    return m;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        let _ = { make_map() };
+        i = i + 1;
+    }
+    println(i);
+}

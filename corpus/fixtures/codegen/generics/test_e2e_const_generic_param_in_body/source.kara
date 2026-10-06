@@ -1,0 +1,6 @@
+
+fn f[const N: i64](x: i64) -> i64 { x + N }
+fn main() {
+    println(f[3](10));
+    println(f[7](10));
+}

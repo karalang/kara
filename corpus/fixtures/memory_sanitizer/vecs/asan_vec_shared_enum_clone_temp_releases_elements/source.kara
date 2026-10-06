@@ -1,0 +1,11 @@
+
+shared enum Shape { Circle(i64), Rect(i64, i64) }
+fn agg(ss: Vec[Shape]) -> i64 { return ss.len(); }
+fn main() {
+    let mut ss: Vec[Shape] = Vec.new();
+    ss.push(Shape.Circle(3i64));
+    ss.push(Shape.Rect(4i64, 5i64));
+    ss.push(Shape.Circle(6i64));
+    println(agg(ss.clone()));
+    println(ss.clone().len());
+}

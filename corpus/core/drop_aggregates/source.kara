@@ -1,0 +1,11 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+struct P { a: R, b: R, c: R }
+enum E { Two(R, R), One(R) }
+fn main() {
+    let v: Vec[R] = [R { id: 1 }, R { id: 2 }, R { id: 3 }];
+    let t = (R { id: 4 }, R { id: 5 }, R { id: 6 });
+    let p = P { a: R { id: 7 }, b: R { id: 8 }, c: R { id: 9 } };
+    let e = E.Two(R { id: 10 }, R { id: 11 });
+    println("end");
+}

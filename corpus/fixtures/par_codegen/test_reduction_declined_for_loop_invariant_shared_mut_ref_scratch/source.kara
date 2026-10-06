@@ -1,0 +1,32 @@
+
+fn kern(base: ref Vec[i64], w: i64, width: i64, a: mut ref Vec[i64], b: mut ref Vec[i64]) -> i64 {
+    let m = 2i64 * width;
+    let mut i = 0i64;
+    while i < m { a[i] = base[w + (i % width)]; i = i + 1i64; }
+    let mut len = 0i64;
+    let mut j = 1i64;
+    b[0] = 0i64;
+    while j < m {
+        if a[j] == a[len] { len = len + 1i64; b[j] = len; j = j + 1i64; }
+        else if len > 0i64 { len = b[len - 1i64]; }
+        else { b[j] = 0i64; j = j + 1i64; }
+    }
+    return b[m - 1i64];
+}
+fn main() {
+    let width = 40i64;
+    let n = 4000i64;
+    let mut base: Vec[i64] = Vec.new();
+    let mut seed = 12345i64;
+    let mut k = 0i64;
+    while k < n + width { seed = (seed * 1103515245i64 + 12345i64) % 2147483648i64; base.push(seed % 97i64); k = k + 1i64; }
+    let m = 2i64 * width;
+    let mut a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    let mut t = 0i64;
+    while t < m { a.push(0i64); b.push(0i64); t = t + 1i64; }
+    let mut sink = 0i64;
+    let mut w = 0i64;
+    while w < n { sink = sink + kern(base, w, width, mut a, mut b); w = w + 1i64; }
+    println(sink);
+}

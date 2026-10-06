@@ -1,0 +1,5 @@
+
+fn main() {
+    let s = f"hello, world";
+    println(s);
+}

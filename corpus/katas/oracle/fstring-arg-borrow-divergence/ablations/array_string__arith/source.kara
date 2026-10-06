@@ -1,0 +1,7 @@
+fn f(s: Slice[String]) -> i64 { s.len() }
+
+fn main() {
+    let o: Array[String, 2] = ["x", "y"];
+    let t = f(o) + f(o);
+    println(f"{t}");
+}

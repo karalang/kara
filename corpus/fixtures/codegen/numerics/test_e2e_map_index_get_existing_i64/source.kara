@@ -1,0 +1,6 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(7_i64, 42_i64);
+    println(m[7_i64]);
+}

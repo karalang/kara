@@ -1,0 +1,16 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn make() -> (R, R, R) {
+    (R { id: 1 }, R { id: 11 }, R { id: 21 })
+}
+fn main() {
+    match make() {
+        (_, p, _) => {
+            println("arm");
+        },
+        _ => {
+            println("other");
+        },
+    }
+    println("end");
+}

@@ -1,0 +1,32 @@
+
+fn scan(names: ref Vec[String], name: ref String) -> i64 {
+    let mut i = 0;
+    loop {
+        if i >= names.len() { return -1; }
+        if names[i] == name { return i; }
+        i = i + 1;
+    }
+}
+fn addall(v: mut ref Vec[i64], n: i64) {
+    let mut i = 0;
+    loop { if i >= v.len() { return; } v[i] = v[i] + n; i = i + 1; }
+}
+struct T { names: Vec[String], xs: Vec[i64] }
+impl T {
+    fn find(ref self, q: ref String) -> i64 { scan(self.names, q) }
+    fn bump(mut ref self, n: i64) { addall(mut self.xs, n) }
+}
+fn main() {
+    let mut r: i64 = 0;
+    while r < 3 {
+        let mut t = T { names: Vec.new(), xs: Vec.new() };
+        t.names.push(f"row-{r}-alpha");
+        t.names.push(f"row-{r}-bravo");
+        t.xs.push(r); t.xs.push(r + 1);
+        let q = f"row-{r}-bravo";
+        println(f"{t.find(q)}");
+        t.bump(10);
+        println(f"{t.xs[0]}");
+        r = r + 1;
+    }
+}

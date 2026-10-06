@@ -1,0 +1,24 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"name-{i}-padding" }; }
+struct S3 { a: R, b: R }
+fn mks() -> S3 { return S3 { a: mk(51), b: mk(52) }; }
+
+fn temp_literal() -> i64 { match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => { return a.id; } } }
+fn temp_call() -> i64 { match mks() { S3 { a, .. } => { return a.id; } } }
+fn temp_all() -> i64 { match S3 { a: mk(47), b: mk(48) } { S3 { a, b } => { return a.id + b.id; } } }
+fn temp_none() -> i64 { match S3 { a: mk(49), b: mk(50) } { S3 { .. } => { return 1; } } }
+
+fn main() {
+    println(f"L:{temp_literal()}");
+    println(f"C:{temp_call()}");
+    println(f"A:{temp_all()}");
+    println(f"N:{temp_none()}");
+    let mut i = 0;
+    while i < 3 {
+        println(f"W:{temp_none()}");
+        i = i + 1;
+    }
+    println("done");
+}

@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut errs: i64 = 0;
+    while i < 6 {
+        let o: Option[i64] = if i % 2 == 0 { Some(i * 10) } else { None };
+        let r: Result[i64, String] = o.ok_or(f"absent-{i}-padded-well-past-inline-width");
+        match r {
+            Ok(v) => println(v),
+            Err(e) => { errs = errs + e.len(); },
+        }
+        i = i + 1;
+    }
+    println(errs);
+}

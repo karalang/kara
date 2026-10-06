@@ -1,0 +1,15 @@
+
+fn show(x: bf16) -> f64 {
+    println(x);
+    let y = x + 0.5bf16;
+    let n = -y;
+    if n < 0.0bf16 {
+        println(y * 2.0bf16);
+    }
+    println(n);
+    x as f64
+}
+
+fn main() {
+    println(show(1.25bf16));
+}

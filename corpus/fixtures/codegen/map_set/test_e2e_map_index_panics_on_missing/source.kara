@@ -1,0 +1,7 @@
+
+fn main() {
+    let m: Map[i64, i64] = Map.new();
+    let x = m[42_i64];
+    println(x);
+    println(99_i64);
+}

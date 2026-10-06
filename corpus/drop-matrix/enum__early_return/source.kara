@@ -1,0 +1,15 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+enum E { Two(R, R), One(R) }
+fn f(c: bool) {
+    let x = E.Two(R { id: 1 }, R { id: 11 });
+    if c {
+        let y = E.Two(R { id: 2 }, R { id: 12 });
+        return;
+    }
+    println("not taken");
+}
+fn main() {
+    f(true);
+    println("after");
+}

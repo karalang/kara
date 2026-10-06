@@ -1,0 +1,6 @@
+
+fn main() {
+    let x: i64 = 1 + 2;
+    let y: i64 = 3 + 4;
+    let _ = x + y;
+}

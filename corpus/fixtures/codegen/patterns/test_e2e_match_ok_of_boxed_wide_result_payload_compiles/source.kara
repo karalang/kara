@@ -1,0 +1,18 @@
+
+struct Err1 { message: String }
+struct Out { v1: Vec[String], v2: Vec[String], v3: Vec[String], tag: i64 }
+struct Src { name: String }
+
+impl Src {
+    fn go(ref self) -> Result[Out, Err1] {
+        return Ok(Out { v1: [], v2: [], v3: [], tag: 7 });
+    }
+}
+
+fn main() {
+    let s = Src { name: "d" };
+    match s.go() {
+        Ok(a) => { println(a.tag); }
+        Err(e) => { println(e.message); }
+    }
+}

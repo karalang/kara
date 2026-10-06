@@ -1,0 +1,16 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut s: Set[Item] = Set.new();
+    s.insert(Item { id: 1i64, name: f"a-padding-padding-padding" });
+    let mut j = 0i64;
+    let mut gone = 0i64;
+    while j < 5i64 {
+        if s.remove(Item { id: j, name: f"r-{j}-padding-padding-padding" }) {
+            gone = gone + 1i64;
+        }
+        j = j + 1i64;
+    }
+    println(f"{gone}{s.len()}");
+}

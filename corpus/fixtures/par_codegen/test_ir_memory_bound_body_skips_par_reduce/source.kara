@@ -1,0 +1,16 @@
+
+fn find_min(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut m = nums[0];
+    for i in 1i64..n {
+        let x = nums[i];
+        if x < m {
+            m = x;
+        }
+    }
+    m
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.filled(10i64, 5i64);
+    println(find_min(v.as_slice()));
+}

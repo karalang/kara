@@ -1,0 +1,90 @@
+// LeetCode #70: Climbing Stairs — 2×2 matrix exponentiation, O(log n).
+//
+// The same `ways(n) = ways(n-1) + ways(n-2)` as the ★
+// ([`climbing_stairs.kara`](climbing_stairs.kara)), but reached by fast matrix
+// power instead of an O(n) scan. The Fibonacci recurrence is a linear map, and
+// one step is a single 2×2 matrix:
+//
+//     [ ways(i)   ]   [ 1  1 ] [ ways(i-1) ]                [ 1  1 ]
+//     [ ways(i-1) ] = [ 1  0 ] [ ways(i-2) ] ,  so   Mⁿ ,   M = [ 1  0 ]
+//
+// has `(Mⁿ)[0][0] = fib(n+1) = ways(n)`. Raising `M` to the n-th power by
+// repeated squaring — square the base every step, fold it into the result on
+// each set bit of `n` — costs O(log n) matrix multiplies rather than O(n)
+// additions. For n ≤ 45 that is a handful of steps; the point is the *method*
+// (the same exponentiation-by-squaring as kata [#50](../50-powx-n/)'s `pow`,
+// here over matrices instead of scalars), a genuinely different route that must
+// still agree with the two DP forms.
+//
+// The 2×2 matrices are carried as four scalars `(a, b, c, d) = [[a, b], [c, d]]`
+// — no `Vec` needed — and the bit walk of the exponent uses `n % 2` / `n / 2`
+// (the low bit and the shift). Every entry stays tiny: the largest matrix reached
+// for n ≤ 45 is about `M⁶⁴`, whose entries are `fib(65) ≈ 1.7·10¹³`, and the
+// largest product in a multiply is well under i64::MAX — so Kāra's default
+// overflow checks never trip.
+
+fn climb(n: i64) -> i64 {
+    // result = identity, base = [[1,1],[1,0]]
+    let mut ra = 1;
+    let mut rb = 0;
+    let mut rc = 0;
+    let mut rd = 1;
+    let mut ma = 1;
+    let mut mb = 1;
+    let mut mc = 1;
+    let mut md = 0;
+
+    let mut p = n;
+    while p > 0 {
+        if p % 2 == 1 {
+            // result = result * base
+            let na = ra * ma + rb * mc;
+            let nb = ra * mb + rb * md;
+            let nc = rc * ma + rd * mc;
+            let nd = rc * mb + rd * md;
+            ra = na;
+            rb = nb;
+            rc = nc;
+            rd = nd;
+        }
+        // base = base * base
+        let sa = ma * ma + mb * mc;
+        let sb = ma * mb + mb * md;
+        let sc = mc * ma + md * mc;
+        let sd = mc * mb + md * md;
+        ma = sa;
+        mb = sb;
+        mc = sc;
+        md = sd;
+        p = p / 2;
+    }
+
+    ra                          // (Mⁿ)[0][0] = ways(n)
+}
+
+// ---- test harness (shared verbatim with climbing_stairs.kara) ----------------
+
+fn report(n: i64, s: mut ref String) {
+    let ways = climb(n);
+    println(f"climb({n}) = {ways}");
+    s.push(' ');
+    s.push_str(f"{ways}");
+}
+
+fn main() {
+    let mut s: String = "sums:";
+
+    report(1, mut s);            // 1
+    report(2, mut s);            // 2
+    report(3, mut s);            // 3
+    report(4, mut s);            // 5
+    report(5, mut s);            // 8
+    report(6, mut s);            // 13
+    report(10, mut s);          // 89
+    report(15, mut s);          // 987
+    report(20, mut s);          // 10946
+    report(30, mut s);          // 1346269
+    report(45, mut s);          // 1836311903
+
+    println(s);
+}

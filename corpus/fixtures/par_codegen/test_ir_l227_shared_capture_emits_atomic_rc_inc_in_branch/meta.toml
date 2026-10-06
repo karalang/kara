@@ -1,0 +1,13 @@
+source = "tests/par_codegen.rs::test_ir_l227_shared_capture_emits_atomic_rc_inc_in_branch"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

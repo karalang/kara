@@ -1,0 +1,110 @@
+// LeetCode #47: Permutations II — immutable-snapshot DFS over a shrinking remaining-multiset.
+//
+// Same problem and the same lexicographic-by-value output as the ★ file
+// ([`permutations_ii.kara`](permutations_ii.kara)) and the `_counted` file, but the most purely
+// FUNCTIONAL of the three: nothing is ever mutated and undone. Where the ★ file threads one mutable
+// `path` plus a `used` marker (push/pop + flag flip/unflip) and `_counted` threads mutable
+// counters, this style carries BOTH the chosen prefix AND the still-available elements as OWNED
+// `Vec[i64]` SNAPSHOTS, and each descent builds fresh children with no bookkeeping to reverse.
+//
+// The state is `(remaining, path)`, both owned and both moved into the recursive call:
+//
+//   - `remaining` is the multiset of not-yet-placed elements, kept SORTED. The leaf is
+//     `remaining.len() == 0` (everything placed), where the `path` snapshot already IS the answer
+//     and is moved straight into the output.
+//   - to place element `i`, build a fresh `rest` = `remaining` with index `i` removed (which stays
+//     sorted, since deleting one element from a sorted Vec preserves order) and a fresh
+//     `next` = `path.clone()` + `remaining[i]`, then recurse on `(rest, next)`. The parent keeps
+//     its own untouched `remaining`/`path`, so "undo" is implicit — exactly the immutable-snapshot
+//     shape of #46's [`_snapshot`](../46-permutations/permutations_snapshot.kara) and #40's, here
+//     carrying the available multiset by value instead of relying on a `used` marker.
+//
+// Duplicate suppression falls out of the sorted `remaining`: at each level skip a candidate equal
+// to its predecessor (`i > 0 and remaining[i] == remaining[i-1]`) — an UNCONDITIONAL adjacent skip,
+// no `used[i-1]` guard, because `remaining` already excludes everything consumed deeper on the
+// branch, so the predecessor can only ever be a same-level sibling. That is the same dedup the ★
+// file does, simplified by the fact that "available" is now an explicit shrinking list rather than
+// an index marker. All three #47 solvers emit the identical permutation listing for every case.
+//
+// LeetCode bounds: 1 ≤ n ≤ 8, -10 ≤ nums[i] ≤ 10. i64 throughout for corpus uniformity.
+
+fn backtrack(remaining: Vec[i64], path: Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    let n = remaining.len();
+    if n == 0 {
+        // Nothing left to place — this snapshot is a complete permutation.
+        out.push(path);
+        return;
+    }
+    let mut i = 0;
+    while i < n {
+        // Sorted remaining ⇒ unconditional adjacent-duplicate skip: the predecessor is
+        // always a same-level sibling (consumed elements are gone from `remaining`).
+        if i > 0 and remaining[i] == remaining[i - 1] {
+            i = i + 1;
+            continue;
+        }
+        let v = remaining[i];
+        // Fresh child available-set = remaining minus index i (stays sorted).
+        let mut rest: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < n {
+            if j != i {
+                rest.push(remaining[j]);
+            }
+            j = j + 1;
+        }
+        // Fresh child path = parent's snapshot + this choice; recurse by move.
+        let mut next = path.clone();
+        next.push(v);
+        backtrack(rest, next, out);
+        i = i + 1;
+    }
+}
+
+fn permute_unique(nums: Slice[i64]) -> Vec[Vec[i64]] {
+    let mut xs: Vec[i64] = Vec.from_slice(nums);
+    xs.sort_by(|a, b| a.cmp(b));
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let seed: Vec[i64] = Vec.new();
+    backtrack(xs, seed, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(perm: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = perm.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{perm[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn report(nums: Slice[i64]) {
+    let perms = permute_unique(nums);
+    let count = perms.len();
+    let input: Vec[i64] = Vec.from_slice(nums);
+    println(f"{show(input)} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(show(perms[i]));
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    report([1, 1, 2]);
+    report([1, 2, 3]);
+    report([2, 2, 1, 1]);
+    report([3, 3, 0, 3]);
+    report([1]);
+    report([5, 5, 5]);
+}

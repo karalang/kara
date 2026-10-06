@@ -1,0 +1,70 @@
+// LeetCode 281 — the definition, materialized.
+//
+// The zigzag order has a closed description that mentions no iterator at all:
+//
+//     for r = 0, 1, 2, ...:
+//         for each list i in order:
+//             if list i has an element at index r, emit it
+//
+// That is the whole specification. Round r takes the r-th element of every list
+// long enough to have one, in list order — which is exactly what alternating
+// produces, and it needs no cursors, no turn pointer, no queue, and no notion of
+// "exhausted".
+//
+// WHICH IS PRECISELY WHY IT IS THE ORACLE. Both other solvers are ITERATORS:
+// they carry state between calls and their bugs are state bugs — a turn that
+// fails to wrap, a cursor bumped twice, a queue entry pushed back when it should
+// not be. They share that failure mode because they share the shape. This one
+// has no state between elements at all; it computes the answer as a function of
+// the input. A state bug and a transcription of the definition have no way to
+// agree.
+//
+// It is also the only version that makes the k=2 case visibly a special case of
+// the general one, which is the follow-up the problem is really asking about.
+
+fn drain(lists: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut longest = 0;
+    let mut i = 0;
+    while i < lists.len() {
+        if lists[i].len() > longest { longest = lists[i].len(); }
+        i = i + 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut r = 0;
+    while r < longest {
+        let mut j = 0;
+        while j < lists.len() {
+            if r < lists[j].len() { out.push(lists[j][r]); }
+            j = j + 1;
+        }
+        r = r + 1;
+    }
+    return out;
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + f"{v[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    let c1: Vec[Vec[i64]] = [[1, 2], [3, 4, 5, 6]];
+    let c2: Vec[Vec[i64]] = [[1], [], [2, 3]];
+    let c3: Vec[Vec[i64]] = [[1, 2, 3], [4], [5, 6]];
+    let c4: Vec[Vec[i64]] = [[], []];
+    let c5: Vec[Vec[i64]] = [[7]];
+    let c6: Vec[Vec[i64]] = [[], [1, 2], []];
+
+    println(f"{show(drain(c1))}");
+    println(f"{show(drain(c2))}");
+    println(f"{show(drain(c3))}");
+    println(f"{show(drain(c4))}");
+    println(f"{show(drain(c5))}");
+    println(f"{show(drain(c6))}");
+}

@@ -1,0 +1,97 @@
+// LeetCode #354: Russian Doll Envelopes -- the patience-sort arm written with
+// an `Envelope` type that carries its own nesting order.
+//
+// `Envelope`'s `Ord` puts narrower envelopes first and, at equal width, the
+// TALLER one first. Sorting with that order makes the answer the longest run
+// of strictly increasing heights, found with a generic lower bound over the
+// run tails.
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+struct Envelope {
+    width: i64,
+    height: i64,
+}
+
+impl PartialOrd for Envelope {
+    fn partial_cmp(ref self, other: ref Envelope) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Envelope {
+    fn cmp(ref self, other: ref Envelope) -> Ordering {
+        if self.width != other.width {
+            self.width.cmp(other.width)
+        } else {
+            other.height.cmp(self.height)
+        }
+    }
+}
+
+// The first index whose item is not less than `x`, or `items.len()`.
+fn lower_bound[T: Ord](items: ref Vec[T], x: ref T) -> i64 {
+    let mut lo = 0;
+    let mut hi = items.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if items[mid].cmp(x) == Ordering.Less {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn max_envelopes(envelopes: ref Vec[(i64, i64)]) -> i64 {
+    let mut order: Vec[Envelope] = Vec.new();
+    for (w, h) in envelopes.iter() {
+        order.push(Envelope { width: w, height: h });
+    }
+    // `order.sort()` is the natural call, but it ignores this `Ord` and sorts
+    // by the fields (kara B-2026-10-06-109); call the impl explicitly until
+    // that is fixed, then go back to `order.sort()`.
+    order.sort_by(|a, b| a.cmp(b));
+    let mut tails: Vec[i64] = Vec.new();
+    for e in order.iter() {
+        let at = lower_bound(tails, e.height);
+        if at == tails.len() {
+            tails.push(e.height);
+        } else {
+            tails[at] = e.height;
+        }
+    }
+    tails.len()
+}
+
+fn show(label: String, envelopes: Vec[(i64, i64)]) {
+    println(f"{label}: {max_envelopes(envelopes)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("example 1", vec![(5, 4), (6, 4), (6, 7), (2, 3)]);
+    show("example 2", vec![(1, 1), (1, 1), (1, 1)]);
+    // Edge cases.
+    show("one envelope", vec![(7, 7)]);
+    show("same width, rising heights", vec![(3, 1), (3, 2), (3, 3), (3, 4)]);
+    show("same height, rising widths", vec![(1, 5), (2, 5), (3, 5)]);
+    show("a clean chain", vec![(1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]);
+    show("a chain given backwards", vec![(5, 5), (4, 4), (3, 3), (2, 2), (1, 1)]);
+    show("wide but short", vec![(10, 1), (1, 10), (2, 2), (3, 3)]);
+    show("ties break the chain", vec![(1, 2), (2, 3), (2, 4), (3, 5), (3, 4), (4, 6)]);
+
+    // A long run: 3,000 envelopes from a linear congruential generator, with
+    // widths and heights in 1..=1500 so that ties are common. The O(n^2) arm
+    // has to finish it under the interpreter, which caps the size.
+    let mut seed: i64 = 12345;
+    let mut big: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..3000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let w = seed % 1500 + 1;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let h = seed % 1500 + 1;
+        big.push((w, h));
+    }
+    println(f"3000 random envelopes: {max_envelopes(big)}");
+}

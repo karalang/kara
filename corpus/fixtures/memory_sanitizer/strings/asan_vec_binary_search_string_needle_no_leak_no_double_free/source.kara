@@ -1,0 +1,19 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let v: Vec[String] = vec![
+            "alpha_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bravo_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "delta_dddddddddddddddddddddddddddddddd",
+        ];
+        let key: String = "bravo_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        match v.binary_search(key.to_string()) {
+            Some(idx) => { total = total + idx; }
+            None => { total = total + 100; }
+        }
+        i = i + 1;
+    }
+    println(f"{total}");
+}

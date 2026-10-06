@@ -1,0 +1,59 @@
+// Benchmark harness for LeetCode #120 — bottom-up rolling min-path DP (the ★).
+// See ../README.md § Benchmarks. Build ONE triangle of N rows ONCE, then PUNCH the O(N^2) min-path
+// DP K times with a DATA-DEPENDENT seed (seed = acc % 97, perturbing the base row NON-uniformly so
+// the result can't be hoisted). One rolling `Vec[i64]` per rep, read-only nested indexing
+// `tri[i][k]` feeding an in-place min-collapse. Dominated by the O(N^2) `dp[k] = tri[i][k] +
+// min(dp[k], dp[k+1])` updates — the rolling-1D min-DP regime.
+
+fn min_path(tri: ref Vec[Vec[i64]], seed: i64) -> i64 {
+    let n = tri.len();
+    let mut dp: Vec[i64] = Vec.filled(n, 0);
+    // Seed dp with the base row + a non-uniform, seed-dependent perturbation
+    // (defeats hoisting: the winning path shifts with `seed`).
+    let mut j = 0;
+    while j < n {
+        dp[j] = tri[n - 1][j] + ((seed + j) % 7);
+        j = j + 1;
+    }
+    // Roll upward, collapsing each row into dp in place.
+    let mut i = n - 2;
+    while i >= 0 {
+        let mut k = 0;
+        while k <= i {
+            let a = dp[k];
+            let b = dp[k + 1];
+            let m = if a < b { a } else { b };
+            dp[k] = tri[i][k] + m;
+            k = k + 1;
+        }
+        i = i - 1;
+    }
+    dp[0]
+}
+
+fn main() {
+    // Build the triangle ONCE (N rows, deterministic values).
+    let nrows = 200;
+    let mut tri: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < nrows {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j <= i {
+            row.push((i * 31 + j * 17) % 100);
+            j = j + 1;
+        }
+        tri.push(row);
+        i = i + 1;
+    }
+    // Punch: run the min-path DP K times with a data-dependent seed.
+    let mut acc = 0;
+    let mut rep = 0;
+    while rep < 20000 {
+        let seed = acc % 97;
+        let mp = min_path(tri, seed);
+        acc = (acc * 131 + mp) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}");
+}

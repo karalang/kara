@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_89.rs::e2e_caller_retained_struct_param_nested_struct_leaf_freed_once"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_09_29_89.rs::asan_caller_retained_struct_param_nested_struct_leaf_freed_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,13 @@
+source = "tests/codegen/concurrency.rs::test_e2e_question_trace_includes_source_filename_when_threaded"
+dedup_of = ["tests/codegen/mod.rs::TRACE_FORMAT_SRC", "tests/codegen/option_result.rs::test_e2e_question_trace_single_frame_on_err", "tests/codegen/rc_shared.rs::test_release_strips_error_trace_instrumentation"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

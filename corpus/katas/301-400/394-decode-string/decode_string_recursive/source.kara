@@ -1,0 +1,91 @@
+// LeetCode #394: Decode String — recursive-descent variant.
+//
+// Where `decode_string.kara` drives an explicit `Vec[String]` / `Vec[i64]`
+// stack, this version lets the call stack hold the nesting: `decode_at(s,
+// start)` decodes from `start` until it hits the `]` that closes its level (or
+// end of input), returning `(decoded, pos_of_close)`. A `k[` opens a level by
+// recursing on the inside; the parent appends the returned segment `k` times
+// and resumes just past the `]`.
+//
+// Exercises a different surface from the iterative style — recursion depth +
+// multi-value `(String, i64)` return / destructure — over the same byte scan
+// and zero-copy letter-run slice append.
+
+fn is_letter(b: u8) -> bool {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+    b != b'[' and b != b']' and not (b >= d0 and b <= d9)
+}
+
+fn decode_at(s: ref String, start: i64) -> (String, i64) {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    let mut result: String = "";
+    let mut k = 0;
+    let mut i = start;
+    while i < n and bytes[i] != b']' {
+        let b = bytes[i];
+        if b >= d0 and b <= d9 {
+            k = k * 10 + ((b - d0) as i64);
+            i = i + 1;
+        } else if b == b'[' {
+            // Decode the inside (starts just after '['); `after` lands on the
+            // matching ']'. Append the segment `k` times, then skip the ']'.
+            let (inner, after) = decode_at(s, i + 1);
+            // `inner` is tuple-destructured; `inner.repeat(k)` currently hits a
+            // pre-existing codegen gap (String methods on tuple-bound vars don't
+            // dispatch — same for `.substring()`), so this style appends by loop.
+            // The iterative style, whose `cur` is a tracked `String` local, uses
+            // `String.repeat`. (Gap tracked in karac bugs.md.)
+            let mut r = 0;
+            while r < k {
+                result.push_str(inner);
+                r = r + 1;
+            }
+            k = 0;
+            i = after + 1;
+        } else {
+            let mut j = i;
+            while j < n and is_letter(bytes[j]) {
+                j = j + 1;
+            }
+            result.push_str(s[i..j]);
+            i = j;
+        }
+    }
+    (result, i)
+}
+
+fn decode_string(s: ref String) -> String {
+    let (out, _) = decode_at(s, 0);
+    out
+}
+
+fn report(s: ref String) {
+    println(f"\"{s}\" -> \"{decode_string(s)}\"");
+}
+
+fn main() {
+    report("3[a]2[bc]");        // aaabcbc
+    report("3[a2[c]]");         // accaccacc
+    report("2[abc]3[cd]ef");    // abcabccdcdcdef
+    report("abc3[cd]xyz");      // abccdcdcdxyz
+
+    report("1[a]");             // a
+    report("10[a]");            // aaaaaaaaaa
+    report("12[ab]");           // ababababababababababababab
+
+    report("2[2[2[a]]]");       // aaaaaaaa
+    report("3[z3[y]]");         // zyyyzyyyzyyy
+    report("2[a3[b]c]");        // abbbcabbbc
+
+    report("abcdef");           // abcdef
+    report("2[a]bc3[d]");       // aabcddd
+    report("x2[y]z");           // xyyz
+
+    report("2[ab3[cd]]ef");     // abcdcdcdabcdcdcdef
+}

@@ -1,0 +1,10 @@
+fn dup[T: Clone](x: ref T) -> T { return x.clone(); }
+fn main() {
+    let a: Option[String] = Some("aa".to_string());
+    let b: Option[i64] = Some(7);
+    let n: Option[String] = None;
+    let a2 = dup(a);
+    let b2 = dup(b);
+    let n2 = dup(n);
+    println(f"a:{a2.unwrap()} {b2.unwrap()} {n2.is_none()} {a.is_some()}");
+}

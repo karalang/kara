@@ -1,0 +1,24 @@
+
+fn main() {
+    let v: Vec[i64] = [10, 20, 30, 40];
+    println(v.sum());
+    println(v.product());
+    println(v.max().unwrap_or(0));
+    println(v.min().unwrap_or(0));
+    let e: Vec[i64] = [];
+    println(e.sum());
+    println(e.max().unwrap_or(-1));
+    let s: Vec[String] = ["alpha-heap-sized-string-payload", "beta", "gamma"];
+    println(s.join("-").len());
+    println(s.concat().len());
+    let tricky: Vec[String] = ["", "x"];
+    println(tricky.join("|"));
+    let none: Vec[String] = [];
+    println(none.join(",").len());
+    let fs: Vec[f64] = [1.5, 2.5, 0.5];
+    let fw: Vec[F64] = fs.iter().map(F64.from).collect();
+    let fmax: F64 = fw.max().unwrap_or(F64.from(0.0));
+    let fmin: F64 = fw.min().unwrap_or(F64.from(0.0));
+    println(fmax.value);
+    println(fmin.value);
+}

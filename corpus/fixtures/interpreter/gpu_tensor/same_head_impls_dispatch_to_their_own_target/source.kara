@@ -1,0 +1,21 @@
+
+struct Box[T] { v: T }
+trait Zero { fn describe(ref self) -> String; }
+impl Zero for Vec[i64] { fn describe(ref self) -> String { return f"VEC-I64"; } }
+impl Zero for Vec[String] { fn describe(ref self) -> String { return f"VEC-STR"; } }
+impl Zero for Box[i64] { fn describe(ref self) -> String { return f"BOX-I64"; } }
+impl Zero for Box[String] { fn describe(ref self) -> String { return f"BOX-STR"; } }
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    let mut b: Vec[String] = Vec.new();
+    b.push("x");
+    println(a.describe());
+    println(a.len());
+    println(b.describe());
+    println(a.describe());
+    let p: Box[i64] = Box { v: 1 };
+    let q: Box[String] = Box { v: "s" };
+    println(p.describe());
+    println(q.describe());
+}

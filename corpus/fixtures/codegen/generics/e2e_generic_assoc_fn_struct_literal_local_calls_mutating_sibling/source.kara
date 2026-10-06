@@ -1,0 +1,31 @@
+
+struct Bag[T] { xs: Vec[T] }
+impl[T: Ord] Bag[T] {
+    fn swap2(mut ref self, i: i64, j: i64) {
+        self.xs.swap(i, j);
+    }
+    fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
+    fn build(v: Vec[T]) -> Bag[T] { let mut b = Bag { xs: v }; b.arrange(); b }
+    fn take(mut ref self) -> Option[T] { self.xs.pop() }
+}
+struct PlainBag { xs: Vec[String] }
+impl PlainBag {
+    fn swap2(mut ref self, i: i64, j: i64) {
+        self.xs.swap(i, j);
+    }
+    fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
+    fn build(v: Vec[String]) -> PlainBag { let mut b = PlainBag { xs: v }; b.arrange(); b }
+}
+fn main() {
+    // (a) heap-carrying T — segfaulted pre-fix. Assert CONTENTS, not the count.
+    let mut a = Bag.build(["x", "y", "z"]);
+    match a.take() { Some(v) => { println(v); } None => {} }
+    println(a.xs.len());
+    println(a.xs[0]);
+    // (b) scalar control: correct pre-fix, because the base layout IS i64.
+    let mut b = Bag.build([1, 2, 3]);
+    match b.take() { Some(v) => { println(v); } None => {} }
+    // (c) NON-generic control at the same heap element type.
+    let c = PlainBag.build(["p", "q"]);
+    println(c.xs[0]);
+}

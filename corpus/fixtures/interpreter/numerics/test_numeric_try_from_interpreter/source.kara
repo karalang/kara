@@ -1,0 +1,12 @@
+fn main() {
+            match i8.try_from(100) { Ok(v) => println(v), Err(e) => println(e) }
+            match i8.try_from(300) { Ok(v) => println(v), Err(e) => println(e) }
+            match u8.try_from(-1) { Ok(v) => println(v), Err(e) => println(e) }
+            match i64.try_from(42) { Ok(v) => println(v), Err(e) => println(e) }
+            let big: i64 = 3000000000;
+            match u32.try_from(big) { Ok(v) => println(v), Err(e) => println(e) }
+            match i32.try_from(big) { Ok(v) => println(v), Err(e) => println(e) }
+            let n: i32 = 70000;
+            let r: Result[i16, String] = n.try_into();
+            match r { Ok(v) => println(v), Err(e) => println(e) }
+        }

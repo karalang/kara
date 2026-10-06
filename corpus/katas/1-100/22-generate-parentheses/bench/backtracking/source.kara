@@ -1,0 +1,56 @@
+// Bench mirror of ../backtracking.kara — LeetCode #22 Generate
+// Parentheses, recursive backtracking with owned-snapshot string concat.
+//
+// Workload: K iterations; each generates the FULL combination set for
+// n = 10 (Catalan(10) = 16,796 strings of length 20) into a fresh
+// Vec[String], then folds the byte-length of every emitted string into
+// the sink. Per iteration that is ~58k recursion nodes, each allocating
+// a fresh String via f-string concat (the snapshot backtracking shape),
+// plus 16,796 leaf pushes into the result Vec — a pure allocator/
+// string-build stress with no arithmetic kernel and no sort.
+//
+// Sink: total bytes = K · Catalan(10) · 2n = K · 16796 · 20. All
+// compiled mirrors must print the same number before timing.
+//
+// n = 10 exceeds LeetCode's n ≤ 8 spec bound — bench-only scaling, same
+// move as kata #20's depth=1000 (the demo stays spec-faithful; the
+// bench needs enough work per iter to swamp process startup).
+
+fn backtrack(cur: String, open: i64, close: i64, n: i64, out: mut ref Vec[String]) {
+    if close == n {
+        out.push(cur);
+        return;
+    }
+    if open < n {
+        backtrack(f"{cur}(", open + 1, close, n, out);
+    }
+    if close < open {
+        backtrack(f"{cur})", open, close + 1, n, out);
+    }
+}
+
+fn generate_parenthesis(n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    backtrack("", 0, 0, n, mut out);
+    out
+}
+
+fn main() {
+    let n = 10;
+    let iters = 150;
+    let mut total = 0;
+    let mut k = 0;
+    while k < iters {
+        let combos = generate_parenthesis(n);
+        let count = combos.len();
+        let mut bytes = 0;
+        let mut j = 0;
+        while j < count {
+            bytes = bytes + combos[j].len();
+            j = j + 1;
+        }
+        total = total + bytes;
+        k = k + 1;
+    }
+    println(total); // 150 * 16796 * 20 = 50,388,000
+}

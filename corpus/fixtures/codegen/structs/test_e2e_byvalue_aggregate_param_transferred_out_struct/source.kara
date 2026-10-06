@@ -1,0 +1,9 @@
+
+struct Inner { s: String }
+struct Wrap { t: Inner }
+fn wrap(t: Inner) -> Wrap { Wrap { t: t } }
+fn main() {
+    let x = Inner { s: "hi".to_string() };
+    let w = wrap(x);
+    println(w.t.s);
+}

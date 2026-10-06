@@ -1,0 +1,18 @@
+
+#[derive(Hash, Eq, PartialEq)]
+enum Tag { Named { s: String }, Anon }
+fn main() {
+    let mut m: Map[Tag, i64] = Map.new();
+    m.insert(Tag.Named { s: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut hits = 0i64;
+    while j < 5i64 {
+        let probe = Tag.Named { s: f"b-{j}-padding-padding-padding" };
+        match m.get(probe) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{hits}{m.len()}");
+}

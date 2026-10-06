@@ -1,0 +1,25 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct T4 { n: i64 }
+impl T4 {
+    fn pick(ref self, ra: R, k: bool) -> R { if k { return R { id: 98, name: f"z{self.n}" }; } ra }
+}
+fn pickf(rb: R, k: bool) -> R { if k { return R { id: 98, name: f"yy" }; } rb }
+fn main() {
+    let base: i64 = env.args().len();
+    let t = T4 { n: 1 };
+    let a1 = R { id: base, name: f"a{base}" };
+    let x = t.pick(a1, true);
+    println(f"{x.id}");
+    let b1 = R { id: base, name: f"b{base}" };
+    let y = t.pick(b1, false);
+    println(f"{y.id}");
+    let c1 = R { id: base, name: f"c{base}" };
+    let z = pickf(c1, true);
+    println(f"{z.id}");
+    let d1 = R { id: base, name: f"d{base}" };
+    let w = pickf(d1, false);
+    println(f"{w.id}");
+    println("end");
+}

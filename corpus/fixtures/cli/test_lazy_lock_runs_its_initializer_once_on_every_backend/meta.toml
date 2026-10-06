@@ -1,0 +1,13 @@
+source = "tests/cli.rs::test_lazy_lock_runs_its_initializer_once_on_every_backend"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

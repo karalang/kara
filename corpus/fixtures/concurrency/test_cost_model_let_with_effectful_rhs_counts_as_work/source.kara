@@ -1,0 +1,10 @@
+
+        effect resource R1;
+        effect resource R2;
+        fn compute1() -> i64 writes(R1) { 0 }
+        fn compute2() -> i64 writes(R2) { 0 }
+        fn main() {
+            let x = compute1();
+            let y = compute2();
+        }
+        

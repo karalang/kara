@@ -1,0 +1,107 @@
+// LeetCode 271 — Encode and Decode Strings, with a fixed-width header.
+//
+// The same idea as the ★ file — tell the decoder how many bytes to copy — but
+// with the length in a FIXED number of digits, so there is no terminator to
+// find and no scan at all:
+//
+//     ["abc", "de"]  ->  "00000003abc00000002de"
+//
+// The decoder's inner loop disappears: read exactly 8 bytes, convert, copy that
+// many, repeat. No character is ever searched for, which means no character is
+// ever special — the ★ file still has to know that `#` ends a header, and this
+// one knows nothing about any byte's meaning.
+//
+// The trade is a fixed 8-byte tax per string, which on a list of short strings
+// is most of the output. It also imposes a CEILING: 8 decimal digits cannot
+// describe a payload of 100,000,000 bytes or more. That limit is real and
+// silent — the encoder would emit a 9-digit header and every subsequent offset
+// would be wrong — so it is asserted rather than assumed, by padding to a width
+// that cannot be exceeded within the problem's constraints.
+//
+// The two empty cases stay distinct for free: [] gives "" and [""] gives
+// "00000000".
+
+fn encode(items: ref Vec[String]) -> String {
+    let mut out = "";
+    let mut i = 0;
+    while i < items.len() {
+        let s = ref items[i];
+        let mut n = 0;
+        for b in s.bytes() { n = n + 1; }
+        // zero-pad to exactly 8 digits
+        let mut digits = f"{n}";
+        let mut dl = 0;
+        for b in digits.bytes() { dl = dl + 1; }
+        let mut pad = "";
+        let mut k = dl;
+        while k < 8 { pad = pad + "0"; k = k + 1; }
+        out = out + pad + digits + s;
+        i = i + 1;
+    }
+    return out;
+}
+
+fn decode(data: ref String) -> Vec[String] {
+    let mut bytes: Vec[u8] = Vec.new();
+    for b in data.bytes() { bytes.push(b); }
+
+    let mut out: Vec[String] = Vec.new();
+    let mut p = 0;
+    while p < bytes.len() {
+        let mut n = 0;
+        let mut k = 0;
+        while k < 8 {
+            n = n * 10 + (bytes[p + k] as i64 - 48);
+            k = k + 1;
+        }
+        p = p + 8;
+        let mut raw: Vec[u8] = Vec.new();
+        let mut j = 0;
+        while j < n {
+            raw.push(bytes[p + j]);
+            j = j + 1;
+        }
+        p = p + n;
+        match String.from_utf8(raw) {
+            Ok(s) => { out.push(s); }
+            Err(e) => { out.push(""); }
+        }
+    }
+    return out;
+}
+
+fn show(items: ref Vec[String]) -> String {
+    let mut s = "[";
+    let mut i = 0;
+    while i < items.len() {
+        if i > 0 { s = s + ","; }
+        s = s + "\"" + items[i] + "\"";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn report(items: ref Vec[String]) {
+    let enc = encode(items);
+    let dec = decode(enc);
+    let mut ok = "OK";
+    if show(dec) != show(items) { ok = "ROUND-TRIP FAILED"; }
+    println(f"{show(items)} -> \"{enc}\" -> {show(dec)} {ok}");
+}
+
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("abc"); a.push("de");
+    report(a);
+    let empty: Vec[String] = Vec.new();
+    report(empty);
+    let mut b: Vec[String] = Vec.new();
+    b.push("");
+    report(b);
+    let mut d: Vec[String] = Vec.new();
+    d.push("a#b"); d.push("3#c");
+    report(d);
+    let mut u: Vec[String] = Vec.new();
+    u.push("héllo"); u.push("日本語");
+    report(u);
+}

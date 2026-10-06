@@ -1,0 +1,13 @@
+source = "tests/tcp_stream.rs::test_tcp_stream_write_all_round_trip"
+dedup_of = []
+expect = "error:E0002"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

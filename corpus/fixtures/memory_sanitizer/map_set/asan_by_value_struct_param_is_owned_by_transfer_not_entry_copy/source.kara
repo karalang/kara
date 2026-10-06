@@ -1,0 +1,30 @@
+
+struct Res { id: i64, buf: Vec[i64] }
+
+fn mk(n: i64) -> Res {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 32 { v.push(i + n); i = i + 1; }
+    return Res { id: n, buf: v };
+}
+
+fn eat(r: Res) -> i64 { return r.buf[1]; }
+fn hand(r: Res) -> Res { return r; }
+fn inner(r: Res) -> i64 { return r.buf[2]; }
+fn outer(r: Res) -> i64 { return inner(r); }
+
+fn main() {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 40 {
+        let a = mk(k);
+        total = total + eat(a);
+        let b = mk(k);
+        let hb = hand(b);
+        total = total + hb.buf[1];
+        let c = mk(k);
+        total = total + outer(c);
+        k = k + 1;
+    }
+    println(f"total={total}");
+}

@@ -1,0 +1,78 @@
+// Benchmark harness for LeetCode #134 — Gas Station.
+//
+// Build-once + punch (BENCHMARKS.md): eight gas/cost array pairs are built
+// once, then each punch runs the greedy single pass over one of them.
+//
+// The parameters are `ref Vec[i64]` rather than the kata's by-value
+// `Vec[i64]`: taking them by value would copy 200 000 elements per call, which
+// no mirror does and which would swamp the O(n) scan being measured.
+//
+// Half the pairs are feasible (total gas >= total cost, so a unique start
+// exists) and half are not. Both walk the entire array — the algorithm has no
+// early exit — but they differ in how often the `tank < 0` restart fires, which
+// is the only branch in the loop.
+
+fn can_complete(gas: ref Vec[i64], cost: ref Vec[i64]) -> i64 {
+    let n = gas.len();
+    let mut total = 0;
+    let mut tank = 0;
+    let mut start = 0;
+    let mut i = 0;
+    while i < n {
+        let d = gas[i] - cost[i];
+        total = total + d;
+        tank = tank + d;
+        if tank < 0 {
+            start = i + 1;
+            tank = 0;
+        }
+        i = i + 1;
+    }
+    if total >= 0 {
+        start
+    } else {
+        -1
+    }
+}
+
+fn lcg(seed: i64, n: i64, cap: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = seed;
+    let mut k = 0;
+    while k < n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        out.push((x / 65536) % cap);
+        k = k + 1;
+    }
+    out
+}
+
+fn main() {
+    let np = 8;
+    let n = 200000;
+    let iters = 1200;
+
+    let mut gases: Vec[Vec[i64]] = Vec.new();
+    let mut costs: Vec[Vec[i64]] = Vec.new();
+    let mut j = 0;
+    while j < np {
+        gases.push(lcg(j + 1, n, 100));
+        // Even j: costs drawn from a smaller range, so total gas exceeds total
+        // cost and the trip is feasible. Odd j: a larger range, so it is not.
+        if j % 2 == 0 {
+            costs.push(lcg(j + 100, n, 90));
+        } else {
+            costs.push(lcg(j + 100, n, 110));
+        }
+        j = j + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 3) % np;
+        sink = (sink + can_complete(gases[idx], costs[idx])) % 1000000007;
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

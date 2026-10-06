@@ -1,0 +1,22 @@
+shared struct H { id: i64 }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+struct W { t: (Option[H], i64) }
+struct Wo { o: Option[H] }
+fn ct(t: (Option[H], i64)) { println(f"t{t.0.unwrap().id} {t.1}") }
+fn ct2(t: (Option[H], i64)) { println(f"t{t.1}") }
+fn cr(t: ref (Option[H], i64)) { println(f"r{t.0.unwrap().id}") }
+fn mk(i: i64) -> (Option[H], i64) { (Some(H { id: i }), i) }
+fn give(t: (Option[H], i64)) -> Option[H] { t.0 }
+fn cx(t: (Option[H], i64)) -> i64 { let x = t.0; x.unwrap().id }
+fn tko(o: Option[H]) { println(f"k{o.unwrap().id}") }
+fn mkh() -> Option[H] { let p = mk(1); p.0 }
+enum Et { A((Option[H], i64)), B }
+fn main() {
+    { ct((Some(H { id: 1 }), 2)); println("a"); }
+    { ct2((Some(H { id: 2 }), 2)); println("b"); }
+    { mk(3); println("c"); }
+    { let p = mk(4); let f = || p.1; println(f"d{f()}"); }
+    { let mut p = mk(5); p.0 = Some(H { id: 6 }); println(f"e{p.1}"); }
+    { let w = W { t: mk(7) }; println(f"f{w.t.0.unwrap().id}"); println(f"f{w.t.1}"); }
+    println("end")
+}

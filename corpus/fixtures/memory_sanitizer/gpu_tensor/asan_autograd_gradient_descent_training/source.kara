@@ -1,0 +1,24 @@
+
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let target: Tensor[f32, [?]] = Tensor.from([3.0, 5.0, 7.0]);
+    let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
+    // B-2026-08-14-14: annotated at the tensors' element type. Unannotated the
+    // literal is f64, and `grad * lr` below narrowed it silently into an f32
+    // element-wise op. 0.75 is exact in both widths, so no printed value moves.
+    let lr: f32 = 0.75;
+    let mut step = 0;
+    while step < 12 {
+        let tape = TensorTape.new();
+        let wv = TensorVar.leaf(tape, w);
+        let tv = TensorVar.leaf(tape, target);
+        let loss = wv.mse(tv);
+        loss.backward();
+        let grad: Tensor[f32, [?]] = wv.grad();
+        let step_dir: Tensor[f32, [?]] = grad * lr;
+        w = w - step_dir;
+        step = step + 1;
+    }
+    let w0 = w[0];
+    println(f"{w0.round()}");
+}

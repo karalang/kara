@@ -1,0 +1,13 @@
+source = "tests/codegen/gpu_tensor.rs::test_e2e_bound_generic_dispatch_over_user_type"
+dedup_of = ["tests/interpreter/gpu_tensor.rs::bound_generic_dispatch_over_user_type"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

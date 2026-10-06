@@ -1,0 +1,14 @@
+
+fn first_multiple_of_3(limit: i64) -> i64 {
+    let mut result = 0;
+    let mut i = 1;
+    while i <= limit {
+        if i % 3 == 0 {
+            result = i;
+            break;
+        }
+        i = i + 1;
+    }
+    result
+}
+fn main() { println(first_multiple_of_3(100)); }

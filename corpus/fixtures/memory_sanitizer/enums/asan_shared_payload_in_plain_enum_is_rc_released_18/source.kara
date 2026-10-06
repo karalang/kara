@@ -1,0 +1,3 @@
+shared struct Sh { n: i64 }
+enum Box2[T] { V(T), N }
+fn main() { let z: Box2[Sh] = Box2.V(Sh { n: 3 }); println("ok"); }

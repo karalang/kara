@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(1_i64);
+    s.insert(2_i64);
+    s.insert(3_i64);
+    println(s.len());
+    s.clear();
+    println(s.len());
+    println(s.is_empty());
+    s.insert(99_i64);
+    println(s.contains(99_i64));
+    println(s.len());
+}

@@ -1,0 +1,113 @@
+// Benchmark workload — one-pass scan + parallel (start, end) stacks
+// for LeetCode #71 simplify-path.
+//
+// N = 8 distinct inputs cycled by `k % N`, chosen to exercise every
+// disposition the inner state machine can take:
+//
+//   1. "/home/"                              — short, 1 component, trailing slash
+//   2. "/home/user/Documents/../Pictures"    — medium, single ".." backtrack
+//   3. "/.../a/../b/c/../d/./"               — multi-dot name + interleaved pops
+//   4. "/a/b/c/../.."                        — heavy tail backtrack
+//   5. "/a//b////c/d//././/.."               — heavy slash + dot churn
+//   6. "/abc_123"                            — simple, underscore alphabet
+//   7. "/a/b/../c/../../d"                   — pop-past-root + new push
+//   8. "/...hidden"                          — multi-dot file name
+//
+// Sink = sum of simplified-output i64 lengths, K_ITERS = 1_000_000 iters.
+// Per-cycle (8 inputs) the simplified outputs are
+//   "/home" "/home/user/Pictures" "/.../b/d" "/a" "/a/b/c"
+//   "/abc_123" "/d" "/...hidden"
+// with lengths 5+19+8+2+6+8+2+10 = 60 per cycle.
+// 1_000_000 / 8 cycles × 60 = **7_500_000** at the default parameters.
+//
+// K = 1M chosen so the kara codegen lane comes in around 100–200 ms
+// (per-call work is heavy — Vec[char] snapshot + parallel-stack churn
+// + f-string append per output byte) and the python lane stays under
+// a few seconds. All five compiled impls print the same sink before
+// timing.
+
+fn simplify(s: ref String) -> String {
+    let mut cs: Vec[char] = Vec.new();
+    for c in s.chars() {
+        cs.push(c);
+    }
+    let n = cs.len();
+
+    let dot:   char = '.';
+    let slash: char = '/';
+
+    let mut starts: Vec[i64] = Vec.new();
+    let mut ends:   Vec[i64] = Vec.new();
+
+    let mut i = 0;
+    while i < n {
+        while i < n and cs[i] == slash {
+            i = i + 1;
+        }
+        if i >= n {
+            break;
+        }
+        let mut j = i;
+        while j < n and cs[j] != slash {
+            j = j + 1;
+        }
+        let len = j - i;
+
+        let is_dot    = len == 1 and cs[i] == dot;
+        let is_dotdot = len == 2 and cs[i] == dot and cs[i + 1] == dot;
+
+        if is_dot {
+        } else if is_dotdot {
+            let _ = starts.pop();
+            let _ = ends.pop();
+        } else {
+            starts.push(i);
+            ends.push(j);
+        }
+        i = j;
+    }
+
+    if starts.is_empty() {
+        return "/";
+    }
+
+    let mut out: String = "";
+    let mut k = 0;
+    while k < starts.len() {
+        out.push_str("/");
+        let a = starts[k];
+        let b = ends[k];
+        let mut p = a;
+        while p < b {
+            out.push(cs[p]);
+            p = p + 1;
+        }
+        k = k + 1;
+    }
+    out
+}
+
+fn main() {
+    let n: i64 = 8;
+    let k_iters: i64 = 1000000;
+
+    let mut inputs: Vec[String] = Vec.new();
+    inputs.push("/home/");
+    inputs.push("/home/user/Documents/../Pictures");
+    inputs.push("/.../a/../b/c/../d/./");
+    inputs.push("/a/b/c/../..");
+    inputs.push("/a//b////c/d//././/..");
+    inputs.push("/abc_123");
+    inputs.push("/a/b/../c/../../d");
+    inputs.push("/...hidden");
+
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % n;
+        let r: String = simplify(inputs[idx]);
+        sum = sum + r.len();
+        k = k + 1;
+    }
+    println(sum);
+}

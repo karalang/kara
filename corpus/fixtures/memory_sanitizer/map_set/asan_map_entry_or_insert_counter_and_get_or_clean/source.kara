@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let words = [
+        "alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "beta-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ];
+    for w in words {
+        *m.entry(w.to_string()).or_insert(0_i64) += 1;
+    }
+    println(m.get_or("alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 0_i64));
+    println(m.get_or("beta-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(), 0_i64));
+}

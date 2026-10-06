@@ -1,0 +1,18 @@
+struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mks(i: i64) -> String { return f"heap-string-longer-than-sso-{i}" }
+fn strs(a: Array[String, 2], c: bool) -> Array[String, 2] { if c { a } else { [mks(8), mks(9)] } }
+fn early(a: Array[String, 2], c: bool) -> Array[String, 2] { if c { return a } [mks(8), mks(9)] }
+fn vecs(a: Array[Vec[i64], 2], c: bool) -> Array[Vec[i64], 2] { if c { a } else { [vec![8, 8], Vec[9; 4]] } }
+fn rs(a: Array[R, 2], c: bool) -> Array[R, 2] { if c { a } else { [R { id: 8, v: vec![8] }, R { id: 9, v: vec![9, 9] }] } }
+fn main() {
+    for c in [true, false] {
+        println(f"c={c}");
+        { let y = strs([mks(1), mks(2)], c); println(f"  s{y[1].len()}"); }
+        { let y = early([mks(1), mks(2)], c); println(f"  e{y[0].len()}"); }
+        { let a: Array[String, 2] = [mks(1), mks(2)]; strs(a, c); println("  discarded"); }
+        { let y = vecs([vec![1, 2, 3], vec![4]], c); println(f"  v{y[0].len()} {y[1].len()}"); }
+        { let y = rs([R { id: 1, v: vec![1] }, R { id: 2, v: vec![2] }], c); println(f"  r{y[0].id}"); }
+    }
+    println("end")
+}

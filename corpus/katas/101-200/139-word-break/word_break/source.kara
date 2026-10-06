@@ -1,0 +1,66 @@
+// LeetCode 139 — Word Break.
+//
+// Can `s` be segmented into a sequence of dictionary words? Classic DP over
+// prefixes: `dp[i]` is true when `s[0..i]` splits cleanly. `dp[0]` is the empty
+// prefix (true); `dp[i]` holds if some `j < i` has `dp[j]` AND the substring
+// `s[j..i]` is a dictionary word. Answer is `dp[n]`.
+
+fn word_break(s: String, dict: Set[String]) -> bool {
+    let n: i64 = s.len();
+    let mut dp: Vec[bool] = Vec.new();
+    let mut i: i64 = 0;
+    while i <= n {
+        dp.push(false);
+        i = i + 1;
+    }
+    dp[0] = true;
+
+    i = 1;
+    while i <= n {
+        let mut j: i64 = 0;
+        while j < i {
+            if dp[j] {
+                let piece: String = s.substring(j, i);
+                if dict.contains(piece) {
+                    dp[i] = true;
+                }
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return dp[n];
+}
+
+fn yes_no(b: bool) -> String {
+    if b {
+        return "true";
+    }
+    return "false";
+}
+
+fn main() {
+    let mut d1: Set[String] = Set.new();
+    d1.insert("leet");
+    d1.insert("code");
+    println(yes_no(word_break("leetcode", d1)));
+
+    let mut d2: Set[String] = Set.new();
+    d2.insert("apple");
+    d2.insert("pen");
+    println(yes_no(word_break("applepenapple", d2)));
+
+    let mut d3: Set[String] = Set.new();
+    d3.insert("cats");
+    d3.insert("dog");
+    d3.insert("sand");
+    d3.insert("and");
+    d3.insert("cat");
+    println(yes_no(word_break("catsandog", d3)));
+
+    let mut d4: Set[String] = Set.new();
+    d4.insert("a");
+    d4.insert("aa");
+    d4.insert("aaa");
+    println(yes_no(word_break("aaaaaaaa", d4)));
+}

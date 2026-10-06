@@ -1,0 +1,13 @@
+source = "tests/codegen/drop_order.rs::codegen_generic_multi_field_enum_array_payload_runs_element_bodies"
+dedup_of = ["tests/interpreter/drop_order.rs::interp_generic_multi_field_enum_array_payload_runs_element_bodies"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

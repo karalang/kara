@@ -1,0 +1,13 @@
+source = "tests/interpreter/iter_range.rs::test_rate_limiter_grants_initial_burst_then_limits"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

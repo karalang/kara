@@ -1,0 +1,156 @@
+// Benchmark harness for LeetCode #244 — Shortest Word Distance II.
+//
+// Build-once + punch (BENCHMARKS.md), and here the shape is the kata's own
+// point: the 20,000-word list AND its position index are built ONCE, then each
+// punch runs a query — two hash lookups plus a two-pointer merge — for a
+// different (word1, word2) vocabulary pair.
+//
+// WHAT THIS MEASURES, and why it is not #243 again. #243's bench is a linear
+// String-equality scan with no map in it, and lands in a five-way dead heat.
+// This one moves the work into the map: per punch, two `Map[String, i64]`
+// lookups (so String HASHING, not String equality) and a merge over two ~78-
+// entry i64 lists. Same problem family, same string type, map moved from
+// incidental to central — which is the path where the corpus has repeatedly
+// found Kāra behind (#126, #127).
+//
+// CONSTRUCTION IS THE INDEX-POOL PHRASING (`Map[String, i64]` word -> slot plus
+// a side `Vec[Vec[i64]]`), not the direct `Map[String, Vec[i64]]` the primary
+// kata file uses.
+//
+// The ORIGINAL reason no longer holds and is recorded here so nobody re-derives
+// it: this comment used to say the direct phrasing was QUADRATIC because "Kāra
+// has no in-place map-value mutation". That was false — `entry(k).or_insert(..)`
+// returns a `mut ref V` into the map's own slot, so the direct build is O(n),
+// and the primary kata file now uses it (kara B-2026-08-03-9, reframed). Either
+// phrasing would be an honest comparison against the four mirrors today.
+//
+// The bench stays on the index-pool spine so its published numbers remain
+// comparable with the runs already in `bench-results.json`. Re-basing it on the
+// direct phrasing is a separate change that must re-measure all five languages
+// together, not a one-line edit here.
+//
+// Three choices carried over from #243 keep the read honest:
+//
+//   * Every word is 9 bytes sharing the 5-byte prefix "delta", so hashing walks
+//     the whole key and no lookup can discriminate on length or first byte.
+//   * Every one of the 20,000 slots holds its OWN copy of its word, so no
+//     language can shortcut on operands sharing a data pointer.
+//   * The query has no early exit — the merge runs to the end of one list.
+//
+// Sink: a rolling polynomial hash of the 200,000 distances. Loop-carried, so
+// the punch loop is not a reduction the auto-par pass can split; this kata is
+// sequential by construction and directly comparable per-core.
+
+struct WordDistance {
+    slot: Map[String, i64],
+    lists: Vec[Vec[i64]],
+    size: i64,
+}
+
+fn new_word_distance(words: ref Vec[String]) -> WordDistance {
+    let mut slot: Map[String, i64] = Map.new();
+    let mut lists: Vec[Vec[i64]] = Vec.new();
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        let w = words[i].clone();
+        match slot.get(w) {
+            Some(s) => { lists[s].push(i); }
+            None => {
+                let mut fresh: Vec[i64] = Vec.new();
+                fresh.push(i);
+                let _ = slot.insert(w, lists.len());
+                lists.push(fresh);
+            }
+        }
+        i = i + 1;
+    }
+    return WordDistance { slot: slot, lists: lists, size: n };
+}
+
+fn shortest(wd: ref WordDistance, word1: ref String, word2: ref String) -> i64 {
+    match wd.slot.get(word1) {
+        None => { return wd.size; }
+        Some(s1) => {
+            match wd.slot.get(word2) {
+                None => { return wd.size; }
+                Some(s2) => {
+                    let p1 = ref wd.lists[s1];
+                    let p2 = ref wd.lists[s2];
+                    let mut best = wd.size;
+                    let mut a = 0;
+                    let mut b = 0;
+                    while a < p1.len() and b < p2.len() {
+                        best = min(best, (p1[a] - p2[b]).abs());
+                        if p1[a] < p2[b] {
+                            a = a + 1;
+                        } else {
+                            b = b + 1;
+                        }
+                    }
+                    return best;
+                }
+            }
+        }
+    }
+}
+
+// Overflow-free 31-bit LCG: 1103515245 * state + 12345 (mod 2^31). The low bits
+// of an LCG are weak, so every draw below uses bits 16..23 (`/ 65536 % 256`).
+fn lcg(state: i64) -> i64 {
+    (state * 1103515245 + 12345) & 2147483647
+}
+
+fn main() {
+    let vocab_n = 256;
+    let n = 20000;
+    let iters = 200000;
+
+    // 256 distinct 9-byte words: "delta" + 4 letters over a 4-letter alphabet.
+    let mut alpha: Vec[String] = Vec.new();
+    alpha.push("a"); alpha.push("b"); alpha.push("c"); alpha.push("d");
+
+    let mut vocab: Vec[String] = Vec.new();
+    let mut v = 0;
+    while v < vocab_n {
+        let mut w: String = "delta";
+        w.push_str(alpha[(v / 64) % 4]);
+        w.push_str(alpha[(v / 16) % 4]);
+        w.push_str(alpha[(v / 4) % 4]);
+        w.push_str(alpha[v % 4]);
+        vocab.push(w);
+        v = v + 1;
+    }
+
+    // The list: each slot gets its own copy.
+    let mut list: Vec[String] = Vec.new();
+    let mut state = 1;
+    let mut i = 0;
+    while i < n {
+        state = lcg(state);
+        list.push(vocab[(state / 65536) % vocab_n].clone());
+        i = i + 1;
+    }
+
+    // Built ONCE — this is the whole difference from #243.
+    let wd = new_word_distance(list);
+
+    // Each vocabulary word lands in ~78 of the 20,000 slots, so both query
+    // words are present with certainty and the distances genuinely vary.
+    let mut acc = 0;
+    let mut qstate = 7;
+    let mut k = 0;
+    while k < iters {
+        qstate = lcg(qstate);
+        let a = (qstate / 65536) % vocab_n;
+        qstate = lcg(qstate);
+        let mut b = (qstate / 65536) % vocab_n;
+        if b == a {
+            b = (b + 1) % vocab_n;
+        }
+        let d = shortest(wd, vocab[a], vocab[b]);
+        acc = (acc * 131 + d) % 1000000007;
+        k = k + 1;
+    }
+    println(f"{acc}");
+}

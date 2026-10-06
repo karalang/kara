@@ -1,0 +1,9 @@
+
+        effect resource Chan;
+        fn send1() sends(Chan) { }
+        fn send2() sends(Chan) { }
+        fn main() {
+            send1();
+            send2();
+        }
+        

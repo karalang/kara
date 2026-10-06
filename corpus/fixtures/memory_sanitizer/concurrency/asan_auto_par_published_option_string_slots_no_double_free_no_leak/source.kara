@@ -1,0 +1,11 @@
+
+fn first_word(s: String) -> Option[String] {
+    let words = s.split(" ");
+    if words.len() > 0 { Some(words[0]) } else { None }
+}
+fn main() {
+    let a = first_word("aaaaaaaaaaaaaaaaaaaaaaaaaaaaa bb");
+    let b = first_word("ccccccccccccccccccccccccccccc dd");
+    println(a.unwrap_or("x").len());
+    println(b.unwrap_or("y").len());
+}

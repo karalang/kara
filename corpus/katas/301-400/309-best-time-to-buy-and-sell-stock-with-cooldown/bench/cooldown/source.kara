@@ -1,0 +1,67 @@
+// Benchmark — LeetCode 309, Best Time to Buy and Sell Stock with Cooldown.
+//
+// Build-once + punch, per BENCHMARKS.md: a 200,000-day price series is generated
+// ONCE, before the timed loop. The timed work is PASSES sweeps of the
+// three-state DP over it (380M day-steps).
+//
+// EACH PASS PERTURBS ONE PRICE FROM THE RUNNING CHECKSUM, and that is not
+// decoration — it is what stops the measurement being vacuous. The DP is a pure
+// function of the price array, so PASSES identical calls over an unchanging
+// input are exactly the shape an optimiser is entitled to hoist out of the
+// loop and run once. Making pass p's input depend on pass p-1's output creates
+// a real serial dependency, so every pass must actually run. It is also the
+// realistic shape: prices arrive and the answer is recomputed.
+//
+// The DP itself is arm ★ verbatim — three scalars, snapshotted each day, with
+// the cooldown living in `rest = max(rest, prev_sold)`.
+//
+// THE SINK IS A MASK, NOT A MODULO — the lesson from #303, whose first draft
+// spent roughly 75% of its runtime in two 64-bit divisions.
+
+fn main() {
+    let n = 200000;
+    let passes = 1900;
+
+    let mut prices: Vec[i64] = Vec.new();
+    let mut state = 20309;
+    for i in 0..n {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        prices.push(state % 2001 - 1000);
+    }
+
+    let mut checksum = 0;
+    let mut p = 0;
+    while p < passes {
+        // Serial dependency: this pass's input depends on the last pass's answer.
+        let slot = p % n;
+        prices[slot] = prices[slot] + (checksum & 1);
+
+        let mut hold = -prices[0];
+        let mut sold = 0;
+        let mut rest = 0;
+        let mut i = 1;
+        while i < n {
+            let prev_hold = hold;
+            let prev_sold = sold;
+            let prev_rest = rest;
+            hold = prev_hold;
+            if prev_rest - prices[i] > hold {
+                hold = prev_rest - prices[i];
+            }
+            sold = prev_hold + prices[i];
+            rest = prev_rest;
+            if prev_sold > rest {
+                rest = prev_sold;
+            }
+            i = i + 1;
+        }
+        let mut best = rest;
+        if sold > best {
+            best = sold;
+        }
+        checksum = (checksum + best) & 0x3FFFFFFF;
+        p = p + 1;
+    }
+
+    println(f"checksum {checksum}");
+}

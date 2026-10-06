@@ -1,0 +1,32 @@
+
+shared struct Node {
+    val: i64,
+    mut left: Option[Node],
+    mut back: Option[Node],
+}
+fn detach(q: Option[Node]) -> i64 {
+    match q {
+        None => 0,
+        Some(m) => {
+            m.left = None;
+            1
+        },
+    }
+}
+fn walk(p: Option[Node]) -> i64 {
+    match p {
+        None => 0,
+        Some(n) => detach(n.back) + n.val,
+    }
+}
+fn make() -> Node {
+    let parent = Node { val: 10, left: None, back: None };
+    let child = Node { val: 7, left: None, back: Some(parent) };
+    parent.left = Some(child);
+    parent
+}
+fn main() {
+    let parent = make();
+    let total = walk(parent.left);
+    println(total);
+}

@@ -1,0 +1,1 @@
+fn main() { let mut xs: Vec[i64] = Vec.new(); xs.push(1i64); xs.sort_by(|a| a); }

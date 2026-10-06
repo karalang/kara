@@ -1,0 +1,22 @@
+
+shared struct S { v: i64 }
+struct Holder { a: Array[S, 2] }
+
+fn take(a: Array[S, 2]) -> i64 { return a[0].v; }
+fn give(n: i64) -> Array[S, 2] { return [S { v: n }, S { v: n + 1 }]; }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let a: Array[S, 2] = [S { v: n }, S { v: n + 1 }];
+    println(a[0].v);
+    let b: Array[S, 2] = [S { v: n }, S { v: n + 1 }];
+    let c = b;
+    println(c[1].v);
+    let d: Array[S, 2] = [S { v: n }, S { v: n + 1 }];
+    println(take(d));
+    let e = give(n);
+    println(e[0].v);
+    let f: Array[S, 2] = [S { v: n }, S { v: n + 1 }];
+    let h = Holder { a: f };
+    println(h.a[0].v);
+}

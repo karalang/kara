@@ -1,0 +1,13 @@
+source = "tests/codegen/arrays.rs::e2e_discarded_array_return_runs_its_element_bodies"
+dedup_of = ["tests/interpreter/arrays.rs::test_discarded_array_return_runs_its_element_bodies", "tests/memory_sanitizer/arrays.rs::asan_discarded_array_return_runs_its_element_bodies"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

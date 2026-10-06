@@ -1,0 +1,9 @@
+
+        effect resource Db;
+        fn read_db() reads(Db) { }
+        fn send_db() sends(Db) { }
+        fn main() {
+            read_db();
+            send_db();
+        }
+        

@@ -1,0 +1,10 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    for x in v.iter()
+        .flat_map(|n| { println(f"outer:{n}"); let inner = [n * 10, n * 100]; inner.iter() })
+        .take(2)
+    {
+        println(f"y:{x}");
+    }
+}

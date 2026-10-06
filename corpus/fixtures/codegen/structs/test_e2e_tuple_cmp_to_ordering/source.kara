@@ -1,0 +1,42 @@
+
+#[derive(Ord, Eq)]
+struct P { a: i64, b: i64 }
+
+struct Rev { v: i64 }
+impl PartialEq for Rev { fn eq(ref self, other: ref Rev) -> bool { self.v == other.v } }
+impl Eq for Rev {}
+impl PartialOrd for Rev { fn partial_cmp(ref self, other: ref Rev) -> Option[Ordering] { Some(other.v.cmp(self.v)) } }
+impl Ord for Rev { fn cmp(ref self, other: ref Rev) -> Ordering { other.v.cmp(self.v) } }
+
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    println(f"01 {tag((1, 2).cmp((1, 3)))}");
+    println(f"02 {tag((1, 2).cmp((1, 2)))}");
+    println(f"03 {tag((1, 2).cmp((0, 9)))}");
+    let a = ("b", 1);
+    let b = ("b", 2);
+    let c = ("c", 0);
+    println(f"04 {tag(a.cmp(b))} {tag(b.cmp(c))} {tag(c.cmp(a))}");
+    println(f"05 {tag((1, 2, 3).cmp((1, 2, 4)))} {tag((1, 2, 3).cmp((1, 2, 3)))}");
+    println(f"06 {tag((1, (2, 3)).cmp((1, (2, 4))))} {tag(((1, 2, 3), 4).cmp(((1, 2, 5), 4)))}");
+    println(f"07 {tag((true, 'z').cmp((true, 'a')))} {tag((false, 'a').cmp((true, 'a')))}");
+    match (5, 1).cmp((5, 1)) {
+        Ordering.Less => { println("08 Less"); }
+        Ordering.Equal => { println("08 Equal"); }
+        Ordering.Greater => { println("08 Greater"); }
+    }
+    let mut v = [(2, 1), (1, 5), (1, 2), (0, 9)];
+    v.sort_by(|x, y| x.cmp(y));
+    for e in v { println(f"09 {e.0}:{e.1}"); }
+    let p1 = P { a: 1, b: 2 };
+    let p2 = P { a: 1, b: 3 };
+    println(f"10 {tag(p1.cmp(p2))} {tag("abc".cmp("abd"))} {tag(7.cmp(3))} {tag('a'.cmp('b'))}");
+    let r1 = Rev { v: 1 };
+    let r2 = Rev { v: 2 };
+    println(f"11 {tag(r1.cmp(r2))}");
+}

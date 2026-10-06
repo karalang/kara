@@ -1,0 +1,13 @@
+source = "tests/codegen/drop_order.rs::test_ir_shared_struct_user_drop_synth_fn_calls_body"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

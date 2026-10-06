@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("hi");
+    v.push("bye");
+    println(v);
+}

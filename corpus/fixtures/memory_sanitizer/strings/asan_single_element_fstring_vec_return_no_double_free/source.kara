@@ -1,0 +1,12 @@
+
+fn build(i: i64) -> Vec[String] {
+    return Vec[f"result-payload-element-number-{i}-aaaaaaaaaaaaaaaaaaaa"];
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 50i64 {
+        let r: Vec[String] = build(i);
+        println(r[0]);
+        i = i + 1;
+    }
+}

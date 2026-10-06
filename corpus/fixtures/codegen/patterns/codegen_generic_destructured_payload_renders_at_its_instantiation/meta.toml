@@ -1,0 +1,13 @@
+source = "tests/codegen/patterns.rs::codegen_generic_destructured_payload_renders_at_its_instantiation"
+dedup_of = ["tests/interpreter/patterns.rs::test_generic_destructured_payload_renders_at_its_instantiation"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

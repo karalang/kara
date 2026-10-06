@@ -1,0 +1,56 @@
+
+shared enum Sh { S((String, i64)), N }
+shared enum St { S { a: (String, i64) }, N }
+shared enum Sc { S((i64, i64)), N }
+par enum Pr { S((String, i64)), N }
+
+fn mkA(t: String) -> (String, i64) { return (f"A-{t}-a", 7); }
+fn mkB(t: String) -> (String, i64) { return (f"B-{t}-aa", 7); }
+fn mkC(t: String) -> (String, i64) { return (f"C-{t}-aaa", 7); }
+fn mkD(t: String) -> (String, i64) { return (f"D-{t}-aaaa", 7); }
+fn mkE(t: String) -> (String, i64) { return (f"E-{t}-aaaaa", 7); }
+fn mkF(t: String) -> (String, i64) { return (f"F-{t}-aaaaaa", 7); }
+fn mkG(t: String) -> (String, i64) { return (f"G-{t}-aaaaaaa", 7); }
+fn mkH(t: String) -> (String, i64) { return (f"H-{t}-aaaaaaaa", 7); }
+fn mkI(t: String) -> (String, i64) { return (f"I-{t}-aaaaaaaaa", 7); }
+fn mkK(t: String) -> (String, i64) { return (f"K-{t}-aaaaaaaaaa", 7); }
+fn mkL(t: String) -> (String, i64) { return (f"L-{t}-aaaaaaaaaaa", 7); }
+fn mkM(t: String) -> (String, i64) { return (f"M-{t}-aaaaaaaaaaaa", 7); }
+fn mkN(t: String) -> (String, i64) { return (f"N-{t}-aaaaaaaaaaaaa", 7); }
+fn mkQ(t: String) -> (String, i64) { return (f"Q-{t}-aaaaaaaaaaaaaaa", 7); }
+fn mkP(t: String) -> (String, i64) { return (f"P-{t}-aaaaaaaaaaaaaa", 7); }
+fn mkR(t: String) -> (String, i64) { return (f"R-{t}-aaaaaaaaaaaaaaaa", 7); }
+struct HolderR { h: Sh }
+
+fn mkD2() -> Sh { let a = mkD("n"); return Sh.S(a); }
+fn takeout(s: Sh) -> (String, i64) { match s { Sh.S(x) => { return x; } Sh.N => { return mkI("z"); } } }
+fn takef(t: (String, i64)) { println(f"K:{t.0}"); }
+fn peek(s: Sh) -> i64 { match s { Sh.S(y) => { return y.1; } Sh.N => { return -1; } } }
+
+fn main() {
+    { let s = Sh.S(mkA("t")); match s { Sh.S(x) => { println(f"A:{x.0}"); } Sh.N => { println("e"); } } }
+    let b = mkB("n");
+    { let s = Sh.S(b); match s { Sh.S(x) => { println(f"B:{x.0}"); } Sh.N => { println("e"); } } }
+    let mut keep = Sh.N;
+    { let c = mkC("n"); keep = Sh.S(c); }
+    match keep { Sh.S(x) => { println(f"C:{x.0}"); } Sh.N => { println("e"); } }
+    { let s = mkD2(); match s { Sh.S(x) => { println(f"D:{x.0}"); } Sh.N => { println("e"); } } }
+    let mut i = 0;
+    while i < 3 {
+        { let s = Sh.S(mkE("t")); match s { Sh.S(x) => { println(f"E:{x.0}"); } Sh.N => { println("e"); } } }
+        i = i + 1;
+    }
+    { let mut v: Vec[Sh] = Vec.new(); v.push(Sh.S(mkF("1"))); v.push(Sh.S(mkF("2"))); println(f"F:{v.len()}"); }
+    { let s = Sh.S(mkG("t")); println("G:built"); }
+    { let s = Sh.S(mkH("t")); match s { Sh.S(x) => { let u = x; println(f"H:{u.0}"); } Sh.N => { println("e"); } } }
+    { let t = takeout(Sh.S(mkI("t"))); println(f"I:{t.0}"); }
+    { let s = Sc.S((3, 4)); match s { Sc.S(x) => { println(f"J:{x.0}/{x.1}"); } Sc.N => { println("e"); } } }
+    { let s = Sh.S(mkK("t")); match s { Sh.S(x) => { takef(x); } Sh.N => { println("e"); } } }
+    { let l1 = Sh.S(mkL("t")); match l1 { Sh.S(x) => { let u = x; println(f"L:{u.0}"); } Sh.N => { println("e"); } } }
+    { let q = Sh.S(mkQ("t")); println(f"Q:{peek(q)}"); }
+    { let s = St.S { a: mkM("t") }; match s { St.S { a } => { println(f"M:{a.0}"); } St.N => { println("e"); } } }
+    { let s = Sh.S(mkN("t")); match s { Sh.S(x) if x.1 > 3 => { println(f"N:{x.0}"); } Sh.S(y) => { println(f"N2:{y.0}"); } Sh.N => { println("e"); } } }
+    { let s = Pr.S(mkP("t")); match s { Pr.S(x) => { println(f"P:{x.0}"); } Pr.N => { println("e"); } } }
+    { let w = HolderR { h: Sh.S(mkR("t")) }; match w.h { Sh.S(x) => { println(f"R:{x.0}"); } Sh.N => { println("e"); } } }
+    println("done");
+}

@@ -1,0 +1,9 @@
+tree 0: target 4 has_path=true
+tree 1: target 1000000000 has_path=false
+tree 2: target 125 has_path=true
+tree 3: target 1000000000 has_path=false
+tree 4: target 328 has_path=true
+tree 5: target 1000000000 has_path=false
+tree 6: target 489 has_path=true
+tree 7: target 1000000000 has_path=false
+sink: 605633940

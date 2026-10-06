@@ -1,0 +1,9 @@
+encoded Person in 18 bytes
+name=Ada age=36 active=true score=99.5
+team=Compilers size=4 city=London zip=NW1
+members=[Ada, Grace, Alan] seats=[11, 12, 13, 14] ratings=[4.5, 5, 3.5]
+history.len=2
+pro
+kudos.Grace=5 kudos.size=2
+mail Cambridge CB2
+ping host=localhost count=7

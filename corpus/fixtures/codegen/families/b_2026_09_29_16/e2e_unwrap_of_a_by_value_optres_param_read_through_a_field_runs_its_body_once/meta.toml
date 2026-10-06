@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_29_16.rs::e2e_unwrap_of_a_by_value_optres_param_read_through_a_field_runs_its_body_once"
+dedup_of = ["tests/interpreter/families/b_2026_09_29_16.rs::interp_unwrap_of_a_by_value_optres_param_read_through_a_field_runs_its_body_once", "tests/memory_sanitizer/families/b_2026_09_29_16.rs::asan_unwrap_of_a_by_value_optres_param_read_through_a_field_runs_its_body_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

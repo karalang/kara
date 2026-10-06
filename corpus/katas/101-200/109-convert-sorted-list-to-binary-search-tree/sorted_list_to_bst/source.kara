@@ -1,0 +1,89 @@
+// LeetCode #109: Convert Sorted Linked List to Binary Search Tree — walk to array, then
+// middle-pick (★).
+//
+// A sorted linked list holds the same values in the same order as a sorted array, so the
+// simplest route is to walk the list once into a `Vec[i64]` and then build a height-balanced
+// BST by the middle-pick divide-and-conquer of kata [#108](../108-convert-sorted-array-to-binary-search-tree/):
+// the middle element is the root, the left half its left subtree, the right half its right.
+// O(n) time, O(n) extra space for the array. The list-conversion sibling of #108 — same tree,
+// reached from a linked list instead of an array. Node types: a `shared struct ListNode` (the
+// input list) and a `shared struct TreeNode` (the output BST), both RC.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn build_from_arr(arr: ref Vec[i64], lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: arr[mid], left: None, right: None };
+    node.left = build_from_arr(arr, lo, mid - 1);
+    node.right = build_from_arr(arr, mid + 1, hi);
+    Some(node)
+}
+
+fn sorted_list_to_bst(head: Option[ListNode]) -> Option[TreeNode] {
+    // Walk the list once, collecting values in order.
+    let mut arr: Vec[i64] = Vec.new();
+    let mut cur = head;
+    let mut going = true;
+    while going {
+        match cur {
+            None => { going = false; }
+            Some(n) => {
+                arr.push(n.val);
+                cur = n.next;
+            }
+        }
+    }
+    let n = arr.len();
+    build_from_arr(arr, 0, n - 1)
+}
+
+// Fold the tree's preorder serialization into a rolling hash (order- and shape-sensitive).
+fn ser(node: Option[TreeNode], acc: mut ref i64) {
+    match node {
+        None => { acc = (acc * 131 + 1) % 1000000007; }
+        Some(n) => {
+            acc = (acc * 131 + (n.val + 2)) % 1000000007;
+            ser(n.left, acc);
+            ser(n.right, acc);
+        }
+    }
+}
+
+// Build a sorted linked list holding `1+off .. len+off` (ascending).
+fn build_list(len: i64, off: i64) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = len - 1;
+    while i >= 0 {
+        head = Some(ListNode { val: off + 1 + i, next: head });
+        i = i - 1;
+    }
+    head
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        let len = 8 + t;
+        let head = build_list(len, t);
+        let root = sorted_list_to_bst(head);
+        let mut s = 0;
+        ser(root, mut s);
+        acc = (acc * 1000003 + s) % 1000000007;
+        println(f"list {t}: len {len} sig {s}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

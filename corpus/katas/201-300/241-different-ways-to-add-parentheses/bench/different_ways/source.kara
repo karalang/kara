@@ -1,0 +1,114 @@
+// Benchmark harness for LeetCode #241 — Different Ways to Add Parentheses.
+//
+// Build-once + punch (BENCHMARKS.md): the token vectors are built once, then
+// each punch runs the full divide-and-conquer over one of them.
+//
+// The recursion is Catalan-exponential and deliberately UNMEMOIZED, matching
+// the kata: an expression with 9 operators yields 4862 parenthesizations, and
+// every operator split recomputes both sub-spans from scratch. That is the
+// work being measured.
+//
+// Sink is the sum of every value produced, which is order-independent — so the
+// five languages agree regardless of the order their recursion pushes results,
+// and no sort is needed in the hot path.
+
+fn tokenize(expr: Slice[u8]) -> Vec[i64] {
+    let mut tok: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let n = expr.len();
+    while i < n {
+        let b = expr[i] as i64;
+        if b == 43 or b == 45 or b == 42 {
+            tok.push(b);
+            i = i + 1;
+        } else {
+            let mut v = 0;
+            while i < n {
+                let d = expr[i] as i64;
+                if d >= 48 and d <= 57 {
+                    v = v * 10 + (d - 48);
+                    i = i + 1;
+                } else {
+                    break;
+                }
+            }
+            tok.push(v);
+        }
+    }
+    return tok;
+}
+
+fn ways(tok: ref Vec[i64], lo: i64, hi: i64) -> Vec[i64] {
+    let mut res: Vec[i64] = Vec.new();
+    if lo == hi {
+        res.push(tok[lo]);
+        return res;
+    }
+    let mut k = lo + 1;
+    while k < hi {
+        let op = tok[k];
+        let left = ways(tok, lo, k - 1);
+        let right = ways(tok, k + 1, hi);
+        let mut a = 0;
+        while a < left.len() {
+            let mut b = 0;
+            while b < right.len() {
+                let l = left[a];
+                let r = right[b];
+                if op == 43 {
+                    res.push(l + r);
+                } else if op == 45 {
+                    res.push(l - r);
+                } else {
+                    res.push(l * r);
+                }
+                b = b + 1;
+            }
+            a = a + 1;
+        }
+        k = k + 2;
+    }
+    return res;
+}
+
+fn main() {
+    let np = 6;
+    let nops = 11;
+    let iters = 30;
+
+    // Operator cycle varies per expression, so the six token vectors are
+    // genuinely different work rather than six copies of one shape.
+    let mut ops: Vec[String] = Vec.new();
+    ops.push("+"); ops.push("-"); ops.push("*");
+
+    let mut toks: Vec[Vec[i64]] = Vec.new();
+    let mut j = 0;
+    while j < np {
+        let mut e = String.new();
+        let mut t = 0;
+        while t <= nops {
+            e = e + f"{(t % 9) + 1}";
+            if t < nops {
+                e = e + ops[(t + j) % 3];
+            }
+            t = t + 1;
+        }
+        toks.push(tokenize(e.bytes()));
+        j = j + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 5) % np;
+        let tk = ref toks[idx];
+        let vals = ways(tk, 0, tk.len() - 1);
+        let mut v = 0;
+        while v < vals.len() {
+            sink = sink + vals[v];
+            v = v + 1;
+        }
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

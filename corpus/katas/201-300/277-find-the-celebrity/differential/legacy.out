@@ -1,0 +1,9 @@
+cases 4765
+of which EVERY relation on n<=4 4165
+cases that actually contain a celebrity 571
+worst question count: scan 24, stack 24 (bound at n=9 is 24)
+brute force exceeded the bound by up to 15 questions
+bound violations by the elimination solvers 0
+digest 77630549
+the two elimination solvers disagreeing with EACH OTHER 0
+either of them disagreeing with the DEFINITION 0

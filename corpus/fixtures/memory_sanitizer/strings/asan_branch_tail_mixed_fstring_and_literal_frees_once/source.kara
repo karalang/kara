@@ -1,0 +1,26 @@
+
+fn mk(n: i64) -> String { return f"v{n}"; }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let c = n > 0;
+
+    let a1 = if c { f"i{n}" } else { "lit" }.contains("i");
+    let a2 = if not c { "lit" } else { f"i{n}" }.contains("i");
+    let a3 = match n { 0 => "lit", _ => f"m{n}" }.contains("m");
+    println(f"a1={a1} a2={a2} a3={a3}");
+
+    let a4 = if c { if c { f"p{n}" } else { "q" } } else { "lit" }.contains("p");
+    println(f"a4={a4}");
+
+    let loc1 = mk(3);
+    let c1 = if c { loc1 } else { "lit" }.contains("v");
+    println(f"c1={c1} loc1={loc1}");
+
+    let loc2 = mk(4);
+    let c2 = if not c { "lit" } else { loc2 }.contains("v");
+    println(f"c2={c2} loc2={loc2}");
+
+    let c3 = if c { "lit1" } else { "lit2" }.contains("lit");
+    println(f"c3={c3}");
+}

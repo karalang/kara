@@ -1,0 +1,142 @@
+// LeetCode #116: Populating Next Right Pointers in Each Node — O(1) extra space (★).
+//
+// The tree is PERFECT (every internal node has two children, all leaves on one level). Populate
+// each node's `next` to point to the node immediately to its right on the same level; the rightmost
+// node of each level gets `None`. The constant-space trick leans on the perfect-tree shape: once a
+// level's `next` chain is wired, it threads that level left-to-right to wire the level BELOW —
+// `node.left.next = node.right`, and `node.right.next = node.next.left` when a right neighbour
+// exists. No queue, no recursion: the established `next` pointers ARE the level's traversal.
+//
+// Node type extends the tree katas' `shared struct` (#112–#114) with a third mutable handle,
+// `next`, written in place as the levels are stitched.
+
+shared struct Node {
+    val: i64,
+    mut left: Option[Node],
+    mut right: Option[Node],
+    mut next: Option[Node],
+}
+
+fn connect(root: Option[Node]) {
+    // `leftmost` walks straight down the left edge — the head of each level.
+    let mut leftmost = root;
+    let mut going = true;
+    while going {
+        match leftmost {
+            None => {
+                going = false;
+            }
+            Some(lm) => {
+                match lm.left {
+                    None => {
+                        // Leaf level: nothing below to wire.
+                        going = false;
+                    }
+                    Some(_) => {
+                        // Thread the current level via its (already-set) `next` chain, wiring the
+                        // children level as we go.
+                        let mut head = leftmost;
+                        let mut inner = true;
+                        while inner {
+                            match head {
+                                None => {
+                                    inner = false;
+                                }
+                                Some(h) => {
+                                    match h.left {
+                                        None => {}
+                                        Some(hl) => {
+                                            hl.next = h.right;
+                                        }
+                                    }
+                                    match h.right {
+                                        None => {}
+                                        Some(hr) => {
+                                            match h.next {
+                                                None => {}
+                                                Some(hn) => {
+                                                    hr.next = hn.left;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    head = h.next;
+                                }
+                            }
+                        }
+                        leftmost = lm.left;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A perfect binary tree by heap indexing: node `idx` (1-based) has children `2*idx` / `2*idx+1`,
+// value `idx + base`. `max_idx = 2^depth - 1` is the last node of a depth-`depth` perfect tree.
+fn build_perfect(idx: i64, max_idx: i64, base: i64) -> Option[Node] {
+    if idx > max_idx {
+        return None;
+    }
+    let node = Node { val: idx + base, left: None, right: None, next: None };
+    node.left = build_perfect(2 * idx, max_idx, base);
+    node.right = build_perfect(2 * idx + 1, max_idx, base);
+    Some(node)
+}
+
+// Fold the tree LEVEL BY LEVEL following the `next` chain (which `connect` set): for each level,
+// start at its leftmost node and walk right via `next`, folding values; a level separator between
+// levels. This reads the pointers `connect` wrote, so a wrong wiring shows in the sink.
+fn level_hash(root: Option[Node]) -> i64 {
+    let mut h = 1;
+    let mut leftmost = root;
+    let mut going = true;
+    while going {
+        match leftmost {
+            None => {
+                going = false;
+            }
+            Some(lm) => {
+                let mut cur = leftmost;
+                let mut inner = true;
+                while inner {
+                    match cur {
+                        None => {
+                            inner = false;
+                        }
+                        Some(c) => {
+                            h = (h * 131 + c.val + 1) % 1000000007;
+                            cur = c.next;
+                        }
+                    }
+                }
+                h = (h * 31 + 7) % 1000000007;
+                leftmost = lm.left;
+            }
+        }
+    }
+    h
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        // Depths 2..9 cycle; base is data-dependent so nothing hoists.
+        let depth = 2 + (t % 8);
+        let mut max_idx = 1;
+        let mut d = 0;
+        while d < depth {
+            max_idx = max_idx * 2;
+            d = d + 1;
+        }
+        max_idx = max_idx - 1;
+        let root = build_perfect(1, max_idx, t * 100);
+        connect(root);
+        let h = level_hash(root);
+        acc = (acc * 131 + h) % 1000000007;
+        println(f"tree {t}: level_hash={h}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

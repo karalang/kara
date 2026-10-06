@@ -1,0 +1,72 @@
+// Benchmark workload — expand-around-center O(n²) Longest Palindromic
+// Substring.
+//
+// Input is N = 5000 copies of the single character 'a' — the worst-case
+// shape for expand-around-center: every one of the 2n − 1 centers expands
+// all the way to the boundary (the whole string is one palindrome), and no
+// chars[lo] != chars[hi] check ever short-circuits the inner loop. Total
+// character comparisons per call are exactly the closed-form sum
+// `Σ min(i, n-1-i) + Σ min(i, n-2-i)` ≈ n²/2 ≈ 12_500_000.
+//
+// K = 100 outer iterations. Sink = K × (best_start + best_length) = K × (0 + n)
+// = 500_000, so both array fields participate in I/O and can't be elided.
+//
+// Built via `karac build`; pairs with bench/expand_around_center.py and
+// bench/expand_around_center.rs for the codegen-vs-Python-vs-Rust harness in
+// bench.sh. The `String.new() + push_str` workload builder mirrors the kata
+// #3 bench and runs under `karac run` too — String.new was interpreter-wired
+// in karac a3acedaf (2026-06-05); before that this file was codegen-only,
+// which is why the main-file kata (../expand_around_center.kara) was written
+// with string literals instead.
+
+fn expand(chars: ref Vec[char], lo0: i64, hi0: i64) -> Array[i64, 2] {
+    let mut lo = lo0;
+    let mut hi = hi0;
+    let n = chars.len();
+    while lo >= 0 and hi < n and chars[lo] == chars[hi] {
+        lo = lo - 1;
+        hi = hi + 1;
+    }
+    [lo + 1, hi - lo - 1]
+}
+
+fn longest_palindrome(s: ref String) -> Array[i64, 2] {
+    let mut chars: Vec[char] = Vec.new();
+    for c in s.chars() {
+        chars.push(c);
+    }
+    let n = chars.len();
+    let mut best_start = 0;
+    let mut best_len = 0;
+    let mut i = 0;
+    while i < n {
+        let odd = expand(chars, i, i);
+        if odd[1] > best_len {
+            best_start = odd[0];
+            best_len = odd[1];
+        }
+        let even = expand(chars, i, i + 1);
+        if even[1] > best_len {
+            best_start = even[0];
+            best_len = even[1];
+        }
+        i = i + 1;
+    }
+    [best_start, best_len]
+}
+
+fn main() {
+    let mut data: String = String.new();
+    let mut i = 0;
+    while i < 5000 {
+        data.push_str("a");
+        i = i + 1;
+    }
+
+    let mut sum = 0;
+    for _ in 0..100 {
+        let r = longest_palindrome(data);
+        sum = sum + r[0] + r[1];
+    }
+    println(sum);
+}

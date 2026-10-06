@@ -1,0 +1,26 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
+fn pass(r: R) -> R { return r; }
+fn mk(n: i64) -> R { return R { id: n, name: f"e{n}" } }
+fn main() {
+    let mut a = mk(1);
+    let t: bool = true;
+    a = if t { pass(a) } else { a };
+    println(f"A use {a.id} {a.name}");
+
+    let mut b = mk(2);
+    let f: bool = false;
+    b = if f { pass(b) } else { b };
+    println(f"B use {b.id} {b.name}");
+
+    let mut c = mk(3);
+    let mut i: i64 = 0;
+    while i < 20 { c = if i % 2 == 0 { pass(c) } else { c }; i = i + 1; }
+    println(f"C use {c.id} {c.name}");
+
+    let mut d = mk(4);
+    d = if t { pass(d) } else { mk(9) };
+    println(f"D use {d.id} {d.name}");
+    println("end");
+}

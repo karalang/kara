@@ -1,0 +1,9 @@
+fn main() {
+            let s: String = "hello world";
+            println(s.substring(0, 5));
+            println(s.substring(6, 11));
+            println(s.substring(3, 3));
+            println(s.substring(8, 2));
+            println(s.substring(2, 100));
+            println(s.substring(-2, 4));
+        }

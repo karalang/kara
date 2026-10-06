@@ -1,0 +1,19 @@
+
+enum Opt[T] { Yes(T), No }
+fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < base + 39i64 {
+        let a: String = get(Opt.Yes(f"yes{i}"), f"fb");
+        if a.starts_with("yes") { total = total + 1i64; }
+        total = total + a.len();
+        let o: Opt[String] = Opt.Yes(f"bound{i}");
+        let b: String = match o { Opt.Yes(v) => v, Opt.No => f"fb" };
+        if b.starts_with("bound") { total = total + 1i64; }
+        total = total + b.len();
+        i = i + 1;
+    }
+    println(total);
+}

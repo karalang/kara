@@ -1,0 +1,7 @@
+remove:
+drop 1 rr1
+0
+swapremove:
+drop 2 ss2
+0
+end

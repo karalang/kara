@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let _ = m.insert(1, 42);
+    let _ = m.insert(2, 100);
+    let x = m.get(1).unwrap();
+    let y = m.get(2).unwrap();
+    println(x);
+    println(y);
+}

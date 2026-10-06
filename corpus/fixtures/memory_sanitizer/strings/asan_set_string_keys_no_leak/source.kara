@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut s: Set[String] = Set.new();
+    let mut a = String.new();
+    a.push_str("apple");
+    s.insert(a);
+    let mut b = String.new();
+    b.push_str("banana");
+    s.insert(b);
+    let mut c = String.new();
+    c.push_str("cherry");
+    s.insert(c);
+    println(s.len());
+}

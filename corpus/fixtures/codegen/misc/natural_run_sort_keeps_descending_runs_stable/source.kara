@@ -1,0 +1,24 @@
+
+fn main() {
+    // Short strictly-descending run ending at a TIE: 5,4,3,3,2,1.
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    v.push((5i64, 0i64)); v.push((4i64, 1i64)); v.push((3i64, 2i64));
+    v.push((3i64, 3i64)); v.push((2i64, 4i64)); v.push((1i64, 5i64));
+    v.sort_by(|x, y| x.0.cmp(y.0));
+    let mut i: i64 = 0i64;
+    while i < v.len() {
+        println(v[i].0 * 10i64 + v[i].1);
+        i = i + 1i64;
+    }
+    // Descending run LONGER than RUN=32, also ending at a tie.
+    let mut w: Vec[(i64, i64)] = Vec.new();
+    let mut j: i64 = 0i64;
+    while j < 40i64 {
+        w.push((100i64 - j, j));
+        j = j + 1i64;
+    }
+    w.push((61i64, 40i64));
+    w.sort_by(|x, y| x.0.cmp(y.0));
+    println(w[0i64].1);
+    println(w[1i64].1);
+}

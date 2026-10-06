@@ -1,0 +1,16 @@
+
+trait Combo[T] { fn twice(ref self) -> T; fn quad(ref self) -> T; }
+impl Combo[i64] for Tensor[i64, [4]] {
+    fn twice(ref self) -> i64 { self.sum() + self.sum() }
+    fn quad(ref self) -> i64 { self.twice() + self.twice() }
+}
+trait Spread[T] { fn spread(ref self) -> T; }
+impl Spread[f64] for Tensor[f64, [3]] {
+    fn spread(ref self) -> f64 { self.max() - self.min() }
+}
+fn main() {
+    let ti: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let tf: Tensor[f64, [3]] = Tensor.from([1.5, 4.0, 2.5]);
+    println(f"{ti.quad()}");
+    println(f"{tf.spread()}");
+}

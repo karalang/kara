@@ -1,0 +1,11 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct K { s: String }
+impl Drop for K { fn drop(mut ref self) { println(f"dropK {self.s}") } }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let k = K { s: "kk" };
+    m.insert(k, 1);
+    println("--after-insert--")
+    println(f"len={m.len()}")
+}

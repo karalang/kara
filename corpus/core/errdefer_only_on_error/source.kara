@@ -1,0 +1,11 @@
+fn f(fail: bool) -> Result[i64, String] {
+    errdefer { println("rollback"); }
+    defer { println("defer"); }
+    if fail { return Err("x".to_string()); }
+    Ok(1)
+}
+fn main() {
+    let _ = f(false);
+    println("--");
+    let _ = f(true);
+}

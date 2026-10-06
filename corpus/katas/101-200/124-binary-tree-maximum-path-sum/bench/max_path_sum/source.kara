@@ -1,0 +1,80 @@
+// LeetCode #124 — benchmark harness (build-once + punch).
+//
+// Build a FOREST of T balanced mixed-sign trees once, then run the post-order
+// clamp-DP over the whole forest K times, folding a sum-of-results sink. The
+// per-tree pointer chase over RC `Option[TreeNode]` nodes is the measured work.
+// Single-threaded: the recursion is a data-dependent pointer chase and the
+// K-loop folds a serial sink, so there is no auto-par-eligible reduction shape.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn max_gain(node: Option[TreeNode], best: mut ref i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let lg = max_gain(n.left, best);
+            let rg = max_gain(n.right, best);
+            let left_gain = if lg > 0 { lg } else { 0 };
+            let right_gain = if rg > 0 { rg } else { 0 };
+            let through = n.val + left_gain + right_gain;
+            if through > best {
+                best = through;
+            }
+            let branch = if left_gain > right_gain { left_gain } else { right_gain };
+            n.val + branch
+        }
+    }
+}
+
+fn max_path_sum(root: Option[TreeNode]) -> i64 {
+    let mut best = -1000000000;
+    let _ = max_gain(root, mut best);
+    best
+}
+
+fn node_value(i: i64, seed: i64) -> i64 {
+    ((i * 37 + seed * 13) % 41) - 20
+}
+
+fn build_balanced(lo: i64, hi: i64, seed: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: node_value(mid, seed), left: None, right: None };
+    node.left = build_balanced(lo, mid - 1, seed);
+    node.right = build_balanced(mid + 1, hi, seed);
+    Some(node)
+}
+
+fn main() {
+    let tree_count = 2048;
+    let node_count = 511;
+    let reps = 60;
+
+    // Build the forest ONCE.
+    let mut forest: Vec[Option[TreeNode]] = Vec.new();
+    let mut t = 0;
+    while t < tree_count {
+        forest.push(build_balanced(0, node_count - 1, t + 1));
+        t = t + 1;
+    }
+
+    // Punch: K passes over the whole forest, folding a serial sink.
+    let mut sink = 0;
+    let mut k = 0;
+    while k < reps {
+        let mut i = 0;
+        while i < tree_count {
+            sink = sink + max_path_sum(forest[i].clone());
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+
+    println(sink.to_string());
+}

@@ -1,0 +1,19 @@
+
+fn main() with reads(FileSystem) writes(FileSystem) {{
+    let mut hs: Vec[File] = Vec.new();
+    let mut buf: Array[u8, 4] = [0u8; 4];
+    match File.open("{path}") {{
+        Ok(f) => {{
+            hs.push(f);
+            match hs[0].read(mut buf) {{
+                Ok(_) => println(f"first {{buf[0]}}"),
+                Err(_) => println("first-failed"),
+            }}
+        }}
+        Err(_) => println("open-failed"),
+    }}
+    match hs[0].read(mut buf) {{
+        Ok(_) => println(f"second {{buf[0]}}"),
+        Err(_) => println("second-failed"),
+    }}
+}}

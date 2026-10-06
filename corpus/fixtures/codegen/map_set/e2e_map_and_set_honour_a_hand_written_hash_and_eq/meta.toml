@@ -1,0 +1,13 @@
+source = "tests/codegen/map_set.rs::e2e_map_and_set_honour_a_hand_written_hash_and_eq"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

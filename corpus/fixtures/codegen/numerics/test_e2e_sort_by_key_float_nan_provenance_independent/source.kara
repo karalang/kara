@@ -1,0 +1,15 @@
+
+fn zero() -> f64 { return 0.0; }
+fn main() {
+    let z = zero();
+    let rt = z / z;
+    let ct = 0.0 / 0.0;
+    let mut a: Vec[f64] = Vec.new();
+    a.push(1.0); a.push(rt); a.push(-1.0);
+    a.sort_by_key(|x| x);
+    let mut b: Vec[f64] = Vec.new();
+    b.push(1.0); b.push(ct); b.push(-1.0);
+    b.sort_by_key(|x| x);
+    for x in a.iter() { println(x); }
+    for x in b.iter() { println(x); }
+}

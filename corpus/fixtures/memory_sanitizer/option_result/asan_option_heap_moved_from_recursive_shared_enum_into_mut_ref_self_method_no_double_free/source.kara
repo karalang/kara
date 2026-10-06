@@ -1,0 +1,41 @@
+
+shared enum Expr { Cont(ContNode), Wrap(WrapNode) }
+struct ContNode { label: Option[String] }
+struct WrapNode { inner: Expr }
+struct R { labels: Vec[String], hits: i64 }
+impl R {
+  fn in_scope(ref self, name: ref String) -> bool {
+    let mut i = 0;
+    loop {
+      if i >= self.labels.len() { return false; }
+      if self.labels[i] == name { return true; }
+      i = i + 1;
+    }
+  }
+  fn label_ref(mut ref self, label: Option[String]) {
+    match label {
+      Some(l) => { if not self.in_scope(l) { self.hits = self.hits + 1; } }
+      None => {}
+    }
+  }
+  fn walk(mut ref self, e: Expr) {
+    match e {
+      Cont(n) => { let ContNode { label } = n; self.label_ref(label); }
+      Wrap(n) => { let WrapNode { inner } = n; self.walk(inner); }
+    }
+  }
+}
+fn main() {
+  let mut round: i64 = 0;
+  while round < 50 {
+    let mut r = R { labels: Vec.new(), hits: 0 };
+    let e1 = Expr.Cont(ContNode { label: Some("continue-label-payload-xxxxxxxxxxxxxxxxxxxx".to_string()) });
+    r.walk(e1);
+    let e2 = Expr.Cont(ContNode { label: None });
+    r.walk(e2);
+    let e3 = Expr.Wrap(WrapNode { inner: Expr.Cont(ContNode { label: Some("nested-label-payload-yyyyyyyyyyyyyyyyyyyy".to_string()) }) });
+    r.walk(e3);
+    println(r.hits.to_string());
+    round = round + 1;
+  }
+}

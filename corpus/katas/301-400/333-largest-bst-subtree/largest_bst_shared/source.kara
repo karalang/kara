@@ -1,0 +1,170 @@
+// LeetCode #333: Largest BST Subtree — post-order over a linked tree.
+//
+// Same spec and same post-order as `largest_bst.kara`, over the tree as
+// LeetCode hands it over: linked `shared struct TreeNode`s with optional
+// children. Each call returns a tuple, `(size, lo, hi)`, where size 0 is the
+// empty tree and -1 a subtree that is not a BST.
+//
+// The harness builds the same index pool as the other arms and links it into
+// `TreeNode`s before solving.
+//
+// O(n) time, O(height) stack.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn visit(node: Option[TreeNode], best: mut ref i64) -> (i64, i64, i64) {
+    match node {
+        None => (0, 0, 0),
+        Some(n) => {
+            let (ls, llo, lhi) = visit(n.left, best);
+            let (rs, rlo, rhi) = visit(n.right, best);
+            if ls < 0 or rs < 0 or (ls > 0 and lhi >= n.val) or (rs > 0 and rlo <= n.val) {
+                return (-1, 0, 0);
+            }
+            let size = ls + 1 + rs;
+            if size > best {
+                best = size;
+            }
+            let lo = if ls > 0 { llo } else { n.val };
+            let hi = if rs > 0 { rhi } else { n.val };
+            (size, lo, hi)
+        }
+    }
+}
+
+fn link(nodes: ref Vec[Node], i: i64) -> Option[TreeNode] {
+    if i == -1 {
+        return None;
+    }
+    return Some(TreeNode { val: nodes[i].val, left: link(nodes, nodes[i].left), right: link(nodes, nodes[i].right) });
+}
+
+fn largest_bst_subtree(nodes: ref Vec[Node]) -> i64 {
+    let root = if nodes.len() == 0 { None } else { link(nodes, 0) };
+    let mut best = 0;
+    let _ = visit(root, mut best);
+    return best;
+}
+
+const NULL: i64 = -1000000007;
+
+// The index pool from a level-order array; the root is index 0.
+fn build(vals: Slice[i64]) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    if vals.len() == 0 or vals[0] == NULL {
+        return nodes;
+    }
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < vals.len() {
+        let cur = queue[head];
+        head += 1;
+        if vals[i] != NULL {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let id = nodes.len() - 1;
+            nodes[cur].left = id;
+            queue.push(id);
+        }
+        i += 1;
+        if i < vals.len() and vals[i] != NULL {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let id = nodes.len() - 1;
+            nodes[cur].right = id;
+            queue.push(id);
+        }
+        i += 1;
+    }
+    return nodes;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// Plain BST insertion into the pool. An equal value goes right, which a strict
+// BST does not allow, so duplicates break the subtrees they land in.
+fn insert(nodes: mut ref Vec[Node], v: i64) {
+    nodes.push(Node { val: v, left: -1, right: -1 });
+    let id = nodes.len() - 1;
+    let mut cur = 0;
+    while cur != id {
+        if v < nodes[cur].val {
+            if nodes[cur].left == -1 {
+                nodes[cur].left = id;
+            }
+            cur = nodes[cur].left;
+        } else {
+            if nodes[cur].right == -1 {
+                nodes[cur].right = id;
+            }
+            cur = nodes[cur].right;
+        }
+    }
+}
+
+// A random BST of `n` values below `range`, then `damage` nodes given a random
+// value, which breaks the BST around them.
+fn random_tree(seed: mut ref i64, n: i64, range: i64, damage: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    for _ in 0..n {
+        let v = (next(seed) * 32768 + next(seed)) % range;
+        insert(mut nodes, v);
+    }
+    for _ in 0..damage {
+        let at = next(seed) % n;
+        nodes[at].val = (next(seed) * 32768 + next(seed)) % range;
+    }
+    return nodes;
+}
+
+fn show(vals: Vec[i64]) {
+    let nodes = build(vals.as_slice());
+    let mut parts: Vec[String] = Vec.new();
+    for v in vals {
+        if v == NULL {
+            parts.push("null");
+        } else {
+            parts.push(v.to_string());
+        }
+    }
+    let shown = parts.join(",");
+    println(f"[{shown}] -> {largest_bst_subtree(nodes)}");
+}
+
+fn main() {
+    show(vec![10, 5, 15, 1, 8, NULL, 7]);
+    show(vec![4, 2, 7, 2, 3, 5, NULL, 2, NULL, NULL, NULL, NULL, NULL, 1]);
+    show(vec![]);
+    show(vec![1]);
+    show(vec![2, 2, 2]);
+    show(vec![2, 1, 3]);
+    show(vec![1, 2, 3]);
+    show(vec![3, 2, NULL, 1]);
+    show(vec![1, NULL, 2, NULL, 3]);
+    show(vec![10, 5, 15, 1, 12, NULL, 20]);
+    show(vec![5, 3, 8, 1, 4, 7, 9, NULL, NULL, NULL, NULL, 6]);
+    show(vec![-9223372036854775808, NULL, 9223372036854775807]);
+    let mut seed = 333;
+    for round in 0..6 {
+        let n = 5 + round * 7;
+        let nodes = random_tree(mut seed, n, 4 * n, round % 3);
+        println(f"random {round}: {n} nodes -> {largest_bst_subtree(nodes)}");
+    }
+    let big = random_tree(mut seed, 20000, 1000000000, 0);
+    let damaged = random_tree(mut seed, 20000, 1000000000, 40);
+    println(f"big: {big.len()} nodes -> {largest_bst_subtree(big)}, 40 damaged -> {largest_bst_subtree(damaged)}");
+}

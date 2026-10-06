@@ -1,0 +1,10 @@
+
+fn main() {
+    let c = true;
+    let mut s: String;
+    if c { s = f"hi{1}"; } else { s = f"no{2}"; }
+    s = f"replaced{3}";
+    s = s + "!";
+    println(s);
+    println(s.len());
+}

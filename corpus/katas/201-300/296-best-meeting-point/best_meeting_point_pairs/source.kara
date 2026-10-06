@@ -1,0 +1,127 @@
+// LeetCode 296 — Best Meeting Point, without ever choosing a meeting point.
+//
+// The median arm answers "where should everyone meet?" and then adds up the
+// walking. This one never asks that question. It observes that the total is
+// FORCED by the homes alone, and reads it straight off the sorted coordinates.
+//
+// THE PAIRING ARGUMENT. Take the leftmost home and the rightmost home on one
+// axis, at `a[lo]` and `a[hi]`. Wherever the meeting point p ends up, if it
+// lies between them the two of them together walk
+//
+//     (p - a[lo]) + (a[hi] - p)  =  a[hi] - a[lo]
+//
+// — the p cancels. Their joint cost does not depend on p at all, only on the
+// span between them. And if p were OUTSIDE that interval the pair would walk
+// strictly more, so an optimal p is between them. Peel that pair off, and the
+// same argument applies to the next pair inward. So
+//
+//     minimum total = sum of the spans of the nested pairs
+//                   = (a[n-1] - a[0]) + (a[n-2] - a[1]) + ...
+//
+// which is a two-pointer walk inward from both ends. An odd number of homes
+// leaves one in the middle contributing zero, which is exactly the median.
+//
+// WHY BOTH ARMS ARE HERE. This is a genuinely different argument for the same
+// number — a counting argument about pairs, rather than an optimisation
+// argument about a minimiser — and it is expressed in code that shares no line
+// with the median version. The median arm can be wrong by picking `n / 2` on an
+// even-length list where the convention matters, or by an off-by-one in the
+// deviation loop; neither mistake has an analogue here, because this arm has no
+// median and no deviation loop. A differential between them therefore tests the
+// ANSWER rather than one implementation of one derivation.
+//
+// It also needs no `abs`: walking inward from a sorted list's ends, `a[hi]` is
+// never less than `a[lo]`, so every term is non-negative by construction.
+
+struct Grid {
+    data: Vec[u8],
+    w: i64,
+    h: i64,
+}
+
+fn at(g: ref Grid, r: i64, c: i64) -> u8 {
+    return g.data[r * g.w + c];
+}
+
+fn row_coords(g: ref Grid) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut r = 0;
+    while r < g.h {
+        let mut c = 0;
+        while c < g.w {
+            if at(g, r, c) == 1u8 { out.push(r); }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return out;
+}
+
+fn col_coords(g: ref Grid) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < g.w {
+        let mut r = 0;
+        while r < g.h {
+            if at(g, r, c) == 1u8 { out.push(c); }
+            r = r + 1;
+        }
+        c = c + 1;
+    }
+    return out;
+}
+
+// Sum of the nested pair spans. No median, no absolute value, no minimiser.
+fn span_sum(xs: ref Vec[i64]) -> i64 {
+    let mut total = 0;
+    let mut lo = 0;
+    let mut hi = xs.len() - 1;
+    while lo < hi {
+        total = total + (xs[hi] - xs[lo]);
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    return total;
+}
+
+fn min_total_distance(g: ref Grid) -> i64 {
+    let rows = row_coords(g);
+    if rows.len() == 0 { return 0; }
+    let cols = col_coords(g);
+    return span_sum(rows) + span_sum(cols);
+}
+
+fn parse(rows: Vec[String]) -> Grid {
+    let h = rows.len();
+    let mut w = 0;
+    if h > 0 { w = rows[0].bytes().len(); }
+    let mut data: Vec[u8] = Vec.new();
+    let mut r = 0;
+    while r < h {
+        let b = rows[r].bytes();
+        let mut c = 0;
+        while c < w {
+            if b[c] == b'1' { data.push(1u8); } else { data.push(0u8); }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return Grid { data: data, w: w, h: h };
+}
+
+fn report(label: String, rows: Vec[String]) {
+    println(f"{label} -> {min_total_distance(parse(rows))}");
+}
+
+fn main() {
+    report("cross      ", ["10001", "00000", "00100"]);
+    report("single     ", ["0100"]);
+    report("pair-row   ", ["1001"]);
+    report("pair-col   ", ["1", "0", "0", "1"]);
+    report("all-ones   ", ["111", "111", "111"]);
+    report("diagonal   ", ["100", "010", "001"]);
+    report("corners    ", ["101", "000", "101"]);
+    report("empty      ", ["000", "000"]);
+    report("column     ", ["1", "1", "1", "1", "1"]);
+    report("sparse-wide", ["1000000001"]);
+}

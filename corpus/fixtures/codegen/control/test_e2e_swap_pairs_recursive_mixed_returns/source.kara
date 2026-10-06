@@ -1,0 +1,42 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    for i in 2..n + 1 {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+fn swap_pairs(head: Option[ListNode]) -> Option[ListNode] {
+    if let Some(first) = head {
+        if let Some(second) = first.next {
+            first.next = swap_pairs(second.next);
+            second.next = Some(first);
+            Some(second)
+        } else {
+            head
+        }
+    } else {
+        None
+    }
+}
+fn main() {
+    let mut cur = swap_pairs(build(6));
+    let mut sum = 0;
+    let mut acc = 0;
+    loop {
+        match cur {
+            Some(node) => {
+                acc = acc * 10 + node.val;
+                sum = sum + node.val;
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+    println(acc);
+    println(sum);
+}

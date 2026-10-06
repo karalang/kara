@@ -1,0 +1,120 @@
+// Benchmark workload for LeetCode #146 — LRU Cache.
+//
+// Build-once + punch: a fixed-capacity LRU cache is driven by a long synthetic
+// tape of get/put operations generated on the fly by the shared LCG. The cache
+// is the classic design — a key->slot MAP plus a doubly-linked recency list held
+// in an INDEX POOL (0 = head sentinel, 1 = tail sentinel, real nodes at 2..).
+// Every touched node is spliced to the front; an over-capacity put evicts the
+// node before the tail and REUSES its slot, so the pool stays bounded. Because
+// the key range (4096) far exceeds the capacity (1024), evictions fire
+// constantly and the get/put branch is genuinely data-dependent — no vectorizing
+// a pointer-splicing recency list. Sink = accumulated get() results (val on hit,
+// -1 on miss), each offset by +1 so the running total stays non-negative.
+//
+// Map choice per language (honest cross-language mirror): Kāra `Map[i64,i64]`,
+// Rust `HashMap`, Go `map`, Python `dict`; C hand-rolls an open-addressing
+// table with the runtime map's growth and tombstone semantics. All five run
+// the identical DLL + eviction.
+
+fn main() {
+    let cap = 1024;
+    let key_range = 4096;
+    let ops = 32000000;
+
+    // Index-pool DLL as four parallel Vecs (SoA). Slots 0/1 are the sentinels.
+    let pool = cap + 2;
+    let mut nkey: Vec[i64] = Vec.new();
+    let mut nval: Vec[i64] = Vec.new();
+    let mut nprev: Vec[i64] = Vec.new();
+    let mut nnext: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < pool {
+        nkey.push(0 - 1);
+        nval.push(0);
+        nprev.push(0 - 1);
+        nnext.push(0 - 1);
+        z = z + 1;
+    }
+    nnext[0] = 1;   // empty list: head <-> tail
+    nprev[1] = 0;
+
+    let mut map: Map[i64, i64] = Map.new();
+    let mut size = 0;
+    let mut sink = 0;
+    let mut state = 12345;
+
+    let mut t = 0;
+    while t < ops {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let h1 = state / 65536;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let h2 = state / 65536;
+        let key = h2 % key_range;
+
+        if h1 % 2 == 0 {
+            // get(key)
+            let idx = map.get_or(key, 0 - 1);
+            let mut r = 0 - 1;
+            if idx >= 0 {
+                // move_front(idx): unlink, then push at head.
+                let pi = nprev[idx];
+                let ni = nnext[idx];
+                nnext[pi] = ni;
+                nprev[ni] = pi;
+                let first = nnext[0];
+                nprev[idx] = 0;
+                nnext[idx] = first;
+                nprev[first] = idx;
+                nnext[0] = idx;
+                r = nval[idx];
+            }
+            sink = sink + r + 1;
+        } else {
+            // put(key, v)
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let v = state / 65536;
+            let existing = map.get_or(key, 0 - 1);
+            if existing >= 0 {
+                nval[existing] = v;
+                let pi = nprev[existing];
+                let ni = nnext[existing];
+                nnext[pi] = ni;
+                nprev[ni] = pi;
+                let first = nnext[0];
+                nprev[existing] = 0;
+                nnext[existing] = first;
+                nprev[first] = existing;
+                nnext[0] = existing;
+            } else {
+                let mut idx = 0;
+                if size < cap {
+                    idx = 2 + size;
+                    size = size + 1;
+                } else {
+                    // Evict the LRU node (just before the tail sentinel), reuse slot.
+                    let lru = nprev[1];
+                    let pl = nprev[lru];
+                    let nl = nnext[lru];
+                    nnext[pl] = nl;
+                    nprev[nl] = pl;
+                    let evicted = map.remove(nkey[lru]);
+                    match evicted {
+                        Some(x) => {}
+                        None => {}
+                    }
+                    idx = lru;
+                }
+                nkey[idx] = key;
+                nval[idx] = v;
+                map.insert(key, idx);
+                let first = nnext[0];
+                nprev[idx] = 0;
+                nnext[idx] = first;
+                nprev[first] = idx;
+                nnext[0] = idx;
+            }
+        }
+        t = t + 1;
+    }
+    println(sink);
+}

@@ -1,0 +1,17 @@
+
+fn sum_inclusive(v: ref Vec[i64]) -> i64 {
+    let n = v.len();
+    let last = n - 1;
+    let mut acc = 0i64;
+    for i in 0..=last {
+        acc = acc + v[i];
+    }
+    acc
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    println(sum_inclusive(v));
+}

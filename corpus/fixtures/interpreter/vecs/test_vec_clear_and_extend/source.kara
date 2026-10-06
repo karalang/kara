@@ -1,0 +1,27 @@
+
+        fn main() {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(1);
+            v.push(2);
+            v.push(3);
+            v.clear();
+            println(v.len());
+            v.push(9);
+            let mut w: Vec[i64] = Vec.new();
+            w.push(7);
+            w.push(8);
+            v.extend(w);
+            println(v.len());
+            println(v[0]);
+            println(v[1]);
+            println(v[2]);
+
+            let mut s: Vec[String] = Vec.new();
+            s.push("alpha");
+            s.push("beta");
+            s.clear();
+            println(s.len());
+            s.push("gamma");
+            println(s[0]);
+        }
+    

@@ -1,0 +1,12 @@
+
+trait FromI64 {
+    fn from_i64(n: i64) -> Self;
+}
+struct Wrap { v: i64 }
+impl FromI64 for Wrap {
+    fn from_i64(n: i64) -> Wrap { Wrap { v: n + 1 } }
+}
+fn main() {
+    let w: Wrap = from_i64(41);
+    println(w.v);
+}

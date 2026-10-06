@@ -1,0 +1,12 @@
+
+effect resource UserDb;
+effect resource Orders;
+
+fn fetch_profile(uid: i64) -> i64 reads(UserDb) { uid }
+fn fetch_orders(uid: i64) -> i64 reads(Orders) { uid }
+
+fn main() {
+    let p = fetch_profile(1);
+    let o = fetch_orders(2);
+    println((p + o).to_string());
+}

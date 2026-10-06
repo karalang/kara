@@ -1,0 +1,7 @@
+
+#[derive(Display)]
+struct IoError { code: i64 }
+fn main() -> Result[(), IoError] {
+    println("before");
+    return Err(IoError { code: 42 });
+}

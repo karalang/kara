@@ -1,0 +1,14 @@
+
+struct Heap[T] { xs: Vec[T] }
+impl[T] Heap[T] {
+    fn take(self) -> i64 { let mut h = self; h.xs.pop(); h.xs.len() }
+}
+fn main() {
+    let hv = Heap { xs: [[1], [2], [3]] };
+    println(f"vec={hv.take()}");
+    let mut v: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 3 { v.push(f"element-number-{i}-with-padding-to-exceed-sso"); i = i + 1; }
+    let hs = Heap { xs: v };
+    println(f"str={hs.take()}");
+}

@@ -1,0 +1,23 @@
+
+struct W[=T] { v: Vec[T] }
+
+impl[T] W[T] {
+    fn add(mut ref self, x: T) { self.v.push(x); }
+}
+
+fn pick[T](a: T, b: T) -> T { return a; }
+
+fn main() {
+    let mut w: W[(i64, i64)] = W { v: Vec.new() };
+    w.add((1, 2));
+    let mut s: W[(String, i64)] = W { v: Vec.new() };
+    s.add(("a", 1));
+    println(f"{w.v.len()} {s.v.len()}");
+
+    let x = pick((1, 2), (3, 4));
+    println(f"{x.0}:{x.1}");
+    let y = pick((1.5, 2.5), (3.5, 4.5));
+    println(f"{y.0}:{y.1}");
+    let z = pick(("a", 1), ("b", 2));
+    println(f"{z.0}:{z.1}");
+}

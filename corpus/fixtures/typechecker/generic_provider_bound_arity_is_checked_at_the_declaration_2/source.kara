@@ -1,0 +1,5 @@
+
+        trait Pair[A, B] { fn mk(ref self, a: A, b: B) -> A; }
+        effect resource P: Pair[i64];
+        fn main() { }
+        

@@ -1,0 +1,82 @@
+// LeetCode #345: Reverse Vowels of a String — the two-index walk over bytes.
+//
+// Given a string s, reverse only its vowels and return the result. The vowels
+// are a, e, i, o and u, in lower and upper case, and may appear more than
+// once. Every other character keeps its place.
+//
+//   "IceCreAm"  ->  "AceCreIm"
+//   "leetcode"  ->  "leotcede"
+//
+// The ★ arm on the string's UTF-8 bytes instead of its characters. Every
+// vowel is one ASCII byte, and no byte of a multi-byte character is below
+// 0x80, so no byte inside a non-ASCII character can be taken for a vowel and
+// the swaps only ever move whole one-byte characters. The result is valid
+// UTF-8 whatever the input, and `String.from_utf8` says so.
+//
+// O(n) time, O(n) space for the byte copy.
+
+fn is_vowel(b: u8) -> bool {
+    return match b {
+        b'a' | b'e' | b'i' | b'o' | b'u' | b'A' | b'E' | b'I' | b'O' | b'U' => true,
+        _ => false,
+    };
+}
+
+fn reverse_vowels(s: ref String) -> String {
+    let mut bs: Vec[u8] = s.bytes().to_vec();
+    let mut i = 0;
+    let mut j = bs.len() - 1;
+    while i < j {
+        while i < j and not is_vowel(bs[i]) {
+            i += 1;
+        }
+        while i < j and not is_vowel(bs[j]) {
+            j -= 1;
+        }
+        if i < j {
+            bs.swap(i, j);
+            i += 1;
+            j -= 1;
+        }
+    }
+    return String.from_utf8(bs).unwrap();
+}
+
+fn report(s: String) {
+    let r = reverse_vowels(s);
+    println(f"\"{s}\" -> \"{r}\"");
+}
+
+fn main() {
+    // The examples from the problem statement.
+    report("IceCreAm");
+    report("leetcode");
+
+    // No vowels, one vowel, only vowels, and the two cases mixed.
+    report("");
+    report("a");
+    report("xyz");
+    report("aeiou");
+    report("aA");
+    report("Euston saw I was not Sue.");
+    report("hello, world!");
+    report("Programming in Kara");
+
+    // Accented letters are not vowels here: the set is the ten ASCII letters.
+    report("Kāra, señor, über alles");
+
+    // Reversing twice is the identity, on a long string.
+    let mut long = String.new();
+    for k in 0..100000 {
+        long.push(((k * 7919) % 26 + 97) as u8 as char);
+    }
+    let once = reverse_vowels(long);
+    let twice = reverse_vowels(once);
+    let mut vowels = 0;
+    for b in long.bytes() {
+        if is_vowel(b) {
+            vowels += 1;
+        }
+    }
+    println(f"100000 letters, {vowels} vowels: changed by one reversal: {once != long}, twice restores: {twice == long}");
+}

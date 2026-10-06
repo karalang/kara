@@ -1,0 +1,7 @@
+
+        #[require_simd]
+        fn total(a: Vector[f32, 4]) -> f32 {
+            a.reduce_sum()
+        }
+        fn main() {}
+    

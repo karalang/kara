@@ -1,0 +1,10 @@
+
+struct Q { a: i64, b: i32 }
+fn main() {
+    let mut out: Vec[Q] = Vec.new();
+    #[par_order_free]
+    for k in 0i64..1000i64 {
+        out.push(Q { a: k, b: 7i32 });
+    }
+    println(out.len());
+}

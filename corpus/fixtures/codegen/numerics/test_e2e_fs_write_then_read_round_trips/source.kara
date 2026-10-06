@@ -1,0 +1,10 @@
+
+fn main() with writes(FileSystem) reads(FileSystem) {{
+    match FileSystem.write("{path}", "hello-fs-write") {{
+        Ok(_) => match FileSystem.read_to_string("{path}") {{
+            Ok(s) => println(s),
+            Err(_) => println("read-err"),
+        }},
+        Err(_) => println("write-err"),
+    }}
+}}

@@ -1,0 +1,63 @@
+opt
+  r1
+  d1
+  d2
+bare
+  arm
+  d3
+  d4
+res
+  arm
+  d5
+  d6
+user
+  r8
+  d7
+  d8
+vec
+  arm
+  d9
+  d10
+iflet
+  r12
+  d11
+  d12
+letelse
+  r13
+  d13
+  d14
+named
+  arm
+  d15
+  d16
+named_user
+  mid
+  d17
+  d18
+named_mixed
+  d90
+  d91
+  mid
+  d19
+  d20
+named_rebind
+  mid
+  d21
+  d22
+struct
+  r23
+  d23
+  d24
+tuple
+  r5
+  d25
+  d26
+m_seeded
+  arm
+  d27
+  d28
+m_named
+  mid
+  d29
+  d30
+end

@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = [10, 20];
+    for (i, x) in v.iter().enumerate().cycle().take(4) {
+        println(f"{i}:{x}");
+    }
+}

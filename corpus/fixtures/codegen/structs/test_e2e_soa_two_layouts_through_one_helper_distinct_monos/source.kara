@@ -1,0 +1,24 @@
+
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+layout coll: Vec[E] { group c1 { x } group c2 { y } }
+fn process(data: Vec[E]) -> f64 {
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < data.len() {
+        s = s + data[i].x + data[i].y;
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 1.0, y: 2.0 });
+    grid.push(E { x: 3.0, y: 4.0 });
+    grid.push(E { x: 5.0, y: 6.0 });
+    let mut coll: Vec[E] = Vec.new();
+    coll.push(E { x: 1.0, y: 1.0 });
+    coll.push(E { x: 2.0, y: 2.0 });
+    println(process(grid));
+    println(process(coll));
+}

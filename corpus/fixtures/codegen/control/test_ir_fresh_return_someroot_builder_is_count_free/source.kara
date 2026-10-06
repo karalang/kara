@@ -1,0 +1,18 @@
+
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(n: i64) -> Option[ListNode] {
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    let mut i = 2;
+    while i <= n {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1;
+    }
+    Some(head)
+}
+fn main() {
+    let out = build(5);
+    if out.is_some() { println(out.unwrap().val); }
+}

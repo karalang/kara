@@ -1,0 +1,10 @@
+fn main() {
+                let outer = Span.root("o", 1);
+                let inner = Span.root("i", 2);
+                with_span(outer, || {
+                    Log.info("a");
+                    with_span(inner, || { Log.info("b") });
+                    Log.info("c");
+                });
+                Log.info("d");
+            }

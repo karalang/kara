@@ -1,0 +1,7 @@
+
+struct Bare { id: i64 }
+fn main() {
+    let mut m: Map[Bare, i64] = Map.new();
+    m.insert(Bare { id: 1 }, 10);
+    println(m.len());
+}

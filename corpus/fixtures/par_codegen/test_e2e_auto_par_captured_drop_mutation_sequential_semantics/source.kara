@@ -1,0 +1,26 @@
+
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+enum Box2 { Full(Res), Empty }
+fn main() {
+    println("D: enum payload moved into arm binding");
+    let b = Box2.Full(Res { id: 4 });
+    match b {
+        Box2.Full(r) => { println(f"arm sees {r.id}"); }
+        Box2.Empty => {}
+    }
+    println("E: overwrite via assignment");
+    let mut x = Res { id: 5 };
+    x = Res { id: 6 };
+    println("after overwrite");
+    println("F: displaced map value");
+    let mut m: Map[i64, Res] = Map.new();
+    let _ = m.insert(1, Res { id: 7 });
+    let _ = m.insert(1, Res { id: 8 });
+    println("after displace");
+    println("end");
+}

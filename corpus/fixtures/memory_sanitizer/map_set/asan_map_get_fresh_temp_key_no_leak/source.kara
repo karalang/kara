@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let base = "clone-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    m.insert(base.clone(), 4_i64);
+    match m.get(base.clone()) { Some(x) => println(x), None => println(-1_i64) }
+}

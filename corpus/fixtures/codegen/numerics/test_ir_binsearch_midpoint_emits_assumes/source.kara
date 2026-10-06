@@ -1,0 +1,15 @@
+
+fn lower_bound(nums: ref Vec[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0i64;
+    let mut hi = len;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2i64;
+        if nums[mid] < target { lo = mid + 1i64; } else { hi = mid; }
+    }
+    lo
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1i64); v.push(3i64); v.push(5i64);
+    println(f"{lower_bound(v, 3i64, 3i64)}");
+}

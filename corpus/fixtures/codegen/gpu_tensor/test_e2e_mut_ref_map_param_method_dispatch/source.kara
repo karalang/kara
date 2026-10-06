@@ -1,0 +1,17 @@
+
+shared struct Node { val: i64 }
+fn helper(node: Node, visited: mut ref Map[i64, Node]) -> Node {
+    match visited.get(node.val) {
+        Some(x) => x,
+        None => {
+            let _ = visited.insert(node.val, node);
+            node
+        }
+    }
+}
+fn main() {
+    let mut m: Map[i64, Node] = Map.new();
+    let n = Node { val: 42 };
+    let r = helper(n, mut m);
+    println(r.val);
+}

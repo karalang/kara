@@ -1,0 +1,10 @@
+
+#[derive(Message)]
+struct D { m: Map[String, i64] }
+
+fn main() {
+    let d = D { m: Map.new() };
+    println(d.encode().len());
+    let back = D.decode(d.encode());
+    println(back.m.len());
+}

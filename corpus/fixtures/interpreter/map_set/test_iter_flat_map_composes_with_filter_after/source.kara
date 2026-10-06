@@ -1,0 +1,11 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    let xs: Vec[i64] = v.iter()
+        .flat_map(|n| { let inner = [n, n * 10]; inner.iter() })
+        .filter(|x| x > 5)
+        .collect();
+    for x in xs {
+        println(x);
+    }
+}

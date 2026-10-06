@@ -1,0 +1,21 @@
+
+fn classify(line: String) -> i64 {
+    let parts = line.split(' ');
+    if parts.len() >= 2 {
+        let path = parts[1].clone();
+        if path.starts_with("/api") { return 1; }
+        if path.starts_with("/static") { return 2; }
+    }
+    return 0;
+}
+fn main() {
+    let r1: Array[u8, 18] = [71u8,69,84,32,47,97,112,105,47,120,32,72,84,84,80,47,49,49];
+    let v1: Vec[u8] = Vec.from_slice(r1[0..18]);
+    match String.from_utf8(v1) { Ok(l) => println(classify(l)), Err(_) => println(0) }
+    let r2: Array[u8, 18] = [71u8,69,84,32,47,115,116,97,116,105,99,47,121,32,72,84,84,80];
+    let v2: Vec[u8] = Vec.from_slice(r2[0..18]);
+    match String.from_utf8(v2) { Ok(l) => println(classify(l)), Err(_) => println(0) }
+    let r3: Array[u8, 10] = [71u8,69,84,32,47,32,72,84,84,80];
+    let v3: Vec[u8] = Vec.from_slice(r3[0..10]);
+    match String.from_utf8(v3) { Ok(l) => println(classify(l)), Err(_) => println(0) }
+}

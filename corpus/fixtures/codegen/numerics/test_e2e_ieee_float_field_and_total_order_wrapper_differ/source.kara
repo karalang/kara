@@ -1,0 +1,30 @@
+
+#[derive(PartialEq)]
+shared struct Sf { x: f64 }
+fn nan64(z: f64) -> f64 { return z / z; }
+fn negzero(z: f64) -> f64 { return -z; }
+fn main() {
+    let p = 0.0;
+    let n = negzero(p);
+    let q = nan64(p);
+
+    let a = Sf { x: p };
+    let b = Sf { x: n };
+    let q1 = Sf { x: q };
+    let q2 = Sf { x: q };
+    println(f"plain-negzero-eq={a == b}");
+    println(f"plain-nan-eq={q1 == q2}");
+
+    let wp: F64 = F64 { value: p };
+    let wn: F64 = F64 { value: n };
+    let wq1: F64 = F64 { value: q };
+    let wq2: F64 = F64 { value: q };
+    println(f"wrapper-negzero-eq={wp == wn}");
+    println(f"wrapper-nan-eq={wq1 == wq2}");
+
+    let mut m: Map[F64, i64] = Map.new();
+    let _ = m.insert(wq1, 1);
+    let _ = m.insert(wq2, 2);
+    println(f"wrapper-key-collides={m.len()}");
+    match m.get(wq2) { Some(x) => println(f"wrapper-key-get={x}"), None => println(f"wrapper-key-get=miss") }
+}

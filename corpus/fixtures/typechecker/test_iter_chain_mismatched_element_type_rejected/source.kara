@@ -1,0 +1,5 @@
+fn main() {
+             let v: Vec[i64] = Vec.new();
+             let w: Vec[String] = Vec.new();
+             let _it = v.iter().chain(w.iter());
+         }

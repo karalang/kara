@@ -1,0 +1,23 @@
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut v: Vec[String] = Vec.new();
+    let mut b: String = String.new();
+    b.push_str("elem-");
+    b.push_str(n.to_string());
+    b.push_str("-padding-to-force-heap");
+    v.push(b);
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 200 {
+        match v.first() {
+            Some(s) => {
+                if ("p:".to_string() + s).starts_with("p:elem") { acc = acc + 1; }
+                if ("q:".to_string() + s).contains("elem") { acc = acc + 1; }
+            }
+            None => { }
+        }
+        i = i + 1;
+    }
+    println(acc);
+}

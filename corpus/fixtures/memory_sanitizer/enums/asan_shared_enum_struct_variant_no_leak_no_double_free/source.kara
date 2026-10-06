@@ -1,0 +1,18 @@
+
+shared enum Msg { Empty, Text { body: String, code: i64 } }
+fn render(m: Msg) -> i64 {
+    match m {
+        Text { body, code } => body.len() + code,
+        Empty => 0,
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        let m: Msg = Msg.Text { body: f"line-{i}", code: i };
+        total = total + render(m);
+        i = i + 1;
+    }
+    println(total);
+}

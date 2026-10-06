@@ -1,0 +1,2 @@
+enum Ho[T] { Full(T), Empty }
+fn main() { let g = Ho[i64].Full; println("end") }

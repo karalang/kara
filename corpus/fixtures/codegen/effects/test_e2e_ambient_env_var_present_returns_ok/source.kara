@@ -1,0 +1,8 @@
+
+fn main() writes(Env) reads(Env) {
+    env.set("KARAC_E2E_VAR_PRESENT", "hello-var");
+    match env.var("KARAC_E2E_VAR_PRESENT") {
+        Ok(v) => { println(v); }
+        Err(_) => { println("missing"); }
+    }
+}

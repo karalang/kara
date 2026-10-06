@@ -1,0 +1,33 @@
+// LeetCode 190 — Reverse Bits.
+//
+// Reverse the bits of a 32-bit unsigned integer. Shift the answer left one bit at
+// a time while peeling the input's low bit off the right — after 32 steps the
+// input's bit 0 has migrated to the answer's bit 31, and so on, a full mirror.
+// Values are held in i64 (Kāra's integer), masked to 32 bits of behaviour; the
+// intermediate `result << 1` peaks at 2³² which is comfortably inside i64, so the
+// checked-arithmetic shifts never overflow.
+
+fn reverse_bits(n: i64) -> i64 {
+    let mut result = 0;
+    let mut x = n;
+    let mut i = 0;
+    while i < 32 {
+        result = (result << 1) | (x & 1);
+        x = x >> 1;
+        i = i + 1;
+    }
+    return result;
+}
+
+fn report(n: i64) {
+    println(reverse_bits(n));
+}
+
+fn main() {
+    report(43261596);   // 00000010100101000001111010011100 -> 964176192
+    report(4294967293); // 11111111111111111111111111111101 -> 3221225471
+    report(0);          // 0
+    report(1);          // 2147483648  (bit 0 -> bit 31)
+    report(2147483648); // 1           (bit 31 -> bit 0)
+    report(4294967295); // all ones -> 4294967295
+}

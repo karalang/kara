@@ -1,0 +1,72 @@
+// LeetCode 179 — Largest Number.
+//
+// Arrange a list of non-negative integers so their concatenation is the LARGEST
+// possible number, returned as a string. The whole problem is the comparator: to
+// decide whether `a` should precede `b`, don't compare the numbers — compare the
+// two concatenations `a·b` and `b·a` as strings. `"3"·"30" = "330"` beats
+// `"30"·"3" = "303"`, so 3 comes first. Since `a·b` and `b·a` are the same length,
+// lexicographic string order equals numeric order, and this pairwise rule is a
+// valid total order. Sort descending under it, join, and collapse the all-zeros
+// case ("00" → "0").
+
+// Insertion sort descending by the concatenation comparator: keep `a` before `b`
+// while `a·b ≥ b·a`.
+fn sort_desc(strs: mut ref Vec[String]) {
+    let n = strs.len();
+    let mut i = 1;
+    while i < n {
+        let mut j = i;
+        while j > 0 and strs[j - 1] + strs[j] < strs[j] + strs[j - 1] {
+            let tmp: String = strs[j - 1].clone();
+            strs[j - 1] = strs[j].clone();
+            strs[j] = tmp;
+            j = j - 1;
+        }
+        i = i + 1;
+    }
+}
+
+fn largest_number(nums: Slice[i64]) -> String {
+    let mut strs: Vec[String] = Vec.new();
+    for x in nums {
+        strs.push(f"{x}");
+    }
+    sort_desc(mut strs);
+
+    // If the largest chunk is "0", every value is 0 → the number is just "0".
+    if strs.len() > 0 and strs[0] == "0" {
+        return "0";
+    }
+    let mut out: String = "";
+    let n = strs.len();
+    let mut i = 0;
+    while i < n {
+        out.push_str(strs[i]);
+        i = i + 1;
+    }
+    return out;
+}
+
+fn report(nums: Slice[i64]) {
+    println(largest_number(nums));
+}
+
+fn main() {
+    let a: Array[i64, 2] = [10, 2];
+    report(a);                             // 210
+
+    let b: Array[i64, 5] = [3, 30, 34, 5, 9];
+    report(b);                             // 9534330
+
+    let c: Array[i64, 1] = [1];
+    report(c);                             // 1
+
+    let d: Array[i64, 2] = [0, 0];
+    report(d);                             // 0
+
+    let e: Array[i64, 4] = [999999998, 999999997, 999999999, 1];
+    report(e);                             // 9999999999999999989999999971
+
+    let f: Array[i64, 3] = [34323, 3432, 3];
+    report(f);                             // 3432343233
+}

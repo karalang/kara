@@ -1,0 +1,7 @@
+
+shared struct Scell { mut n: i64 }
+impl Scell {
+    pub fn inc(mut ref self) { self.n = self.n + 10; }
+    pub fn get(ref self) -> i64 { self.n }
+}
+fn main() { let a = Scell { n: 1 }; let b = a; a.inc(); println(b.get()); }

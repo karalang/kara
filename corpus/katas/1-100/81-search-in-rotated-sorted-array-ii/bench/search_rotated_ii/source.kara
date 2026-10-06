@@ -1,0 +1,80 @@
+// Benchmark workload — Search in Rotated Sorted Array II (LeetCode #81).
+// The kata's engine is the branchy duplicate-aware rotated binary search (the ★). A
+// single search is O(log n), so the bench is a build-once + punch: one rotated sorted
+// array with duplicates (each value 0..M appears twice, M=1000, rotated) is built
+// once, then searched K=17,000,000 times for targets sweeping present and absent
+// values (target = iter % (M+50)), folding each boolean outcome through a rolling
+// polynomial hash. The loop-carried hash serialises the punch loop (no auto-par
+// split) and keeps each search's result observable so nothing hoists. The measured
+// work is the search's comparison/branch loop over cached reads. See ../README.md.
+
+fn search(nums: ref Vec[i64], len: i64, target: i64) -> bool {
+    let mut lo = 0;
+    let mut hi = len - 1;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] == target {
+            return true;
+        }
+        if nums[lo] == nums[mid] and nums[mid] == nums[hi] {
+            lo = lo + 1;
+            hi = hi - 1;
+        } else if nums[lo] <= nums[mid] {
+            if nums[lo] <= target and target < nums[mid] {
+                hi = mid - 1;
+            } else {
+                lo = mid + 1;
+            }
+        } else {
+            if nums[mid] < target and target <= nums[hi] {
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+    }
+    false
+}
+
+fn build(m: i64, dup: i64, rot: i64) -> Vec[i64] {
+    let mut base: Vec[i64] = Vec.new();
+    let mut v = 0;
+    while v < m {
+        let mut d = 0;
+        while d < dup {
+            base.push(v);
+            d = d + 1;
+        }
+        v = v + 1;
+    }
+    let n = base.len();
+    let mut arr: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        arr.push(base[(i + rot) % n]);
+        i = i + 1;
+    }
+    arr
+}
+
+fn main() {
+    let m = 1000;
+    let dup = 2;
+    let total = 17000000;
+    let modulus = 1000000007;
+
+    let arr = build(m, dup, (m * dup) / 3);
+    let n = arr.len();
+    let span = m + 50;
+
+    let mut sum = 0;
+    let mut iter = 0;
+    while iter < total {
+        let target = iter % span;
+        let found = search(arr, n, target);
+        let bit = if found { 1 } else { 0 };
+        sum = (sum * 131 + bit + 1) % modulus;
+        iter = iter + 1;
+    }
+    println(f"{sum}");
+}

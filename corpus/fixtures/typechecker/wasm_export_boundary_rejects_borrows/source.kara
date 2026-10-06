@@ -1,0 +1,8 @@
+
+#[derive(Copy, Clone)]
+pub struct Point { x: f64, y: f64 }
+
+#[target(wasm_browser)]
+pub fn bad(p: ref Point) {}
+
+fn main() {}

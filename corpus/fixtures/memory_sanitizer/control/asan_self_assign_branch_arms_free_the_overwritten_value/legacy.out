@@ -1,0 +1,17 @@
+bif 1
+drop 1
+bmatch 2
+drop 2
+bmix 3
+drop 3
+bmix2 40
+drop 40
+bnest 5
+drop 5
+bil 6
+drop 6
+belif 70
+drop 70
+dropE
+ben done
+bnod 9

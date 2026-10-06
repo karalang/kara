@@ -1,0 +1,103 @@
+// LeetCode 284 — the definition: drain the iterator and index the result.
+//
+// Pull everything at construction into a `Vec`, then answer `peek`, `next` and
+// `has_next` by looking at a cursor. There is no lookahead problem left to
+// solve — the whole difficulty of this kata is that `next()` is destructive and
+// cannot be undone, and this version pays that off once, up front.
+//
+// IT VIOLATES THE PROBLEM'S SPIRIT AND THAT IS THE POINT. It uses O(n) space
+// where the wrapper is meant to use O(1), and it consumes the entire underlying
+// iterator before the caller asks for one element — fatal if the iterator is
+// infinite or effectful. It is not competing.
+//
+// WHAT IT IS FOR is that both real wrappers share a state machine — a slot, a
+// full/empty flag, and a rule about which of the two `has_next` should consult —
+// and every bug in this problem is a bug in that state machine. They are the
+// same KIND of thing, so a misreading of the protocol is shared between them.
+// This version has no slot and no flag: the cursor either points at an element
+// or past the end. A state-machine bug and an index bound have no way to agree.
+//
+// The differential drives all three through the same random sequences of
+// interleaved `peek`/`next`/`has_next` and compares every response, which is
+// what "agreeing" has to mean for a stateful object.
+
+struct Source {
+    data: Vec[i64],
+    mut pos: i64,
+    mut pulls: i64,
+}
+
+fn src_has_next(s: ref Source) -> bool {
+    return s.pos < s.data.len();
+}
+
+fn src_next(s: mut ref Source) -> i64 {
+    let v = s.data[s.pos];
+    s.pos = s.pos + 1;
+    s.pulls = s.pulls + 1;
+    return v;
+}
+
+struct Peeking {
+    mut src: Source,
+    mut all: Vec[i64],
+    mut pos: i64,
+}
+
+fn make_peeking(data: Vec[i64]) -> Peeking {
+    let mut s = Source { data: data, pos: 0, pulls: 0 };
+    let mut all: Vec[i64] = Vec.new();
+    while src_has_next(s) {
+        all.push(src_next(mut s));
+    }
+    return Peeking { src: s, all: all, pos: 0 };
+}
+
+fn peek(p: ref Peeking) -> i64 {
+    return p.all[p.pos];
+}
+
+fn has_next(p: ref Peeking) -> bool {
+    return p.pos < p.all.len();
+}
+
+fn next(p: mut ref Peeking) -> i64 {
+    let v = p.all[p.pos];
+    p.pos = p.pos + 1;
+    return v;
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + f"{v[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    // drain, peeking before every next
+    let mut p = make_peeking([1, 2, 3]);
+    let mut out: Vec[i64] = Vec.new();
+    while has_next(p) {
+        out.push(peek(p));
+        out.push(next(mut p));
+    }
+    println(f"peek+next drain of [1,2,3] -> {show(out)} ({p.src.pulls} pulls)");
+
+    // peek must not advance: three peeks then a next
+    let mut q = make_peeking([7, 8]);
+    println(f"peek thrice: {peek(q)} {peek(q)} {peek(q)} then next: {next(mut q)}");
+
+    // the empty case
+    let e = make_peeking([]);
+    println(f"empty: has_next={has_next(e)}");
+
+    // a single element — the case a forwarding has_next drops
+    let mut one = make_peeking([42]);
+    let first = next(mut one);
+    println(f"single: got {first}, has_next now {has_next(one)}");
+}

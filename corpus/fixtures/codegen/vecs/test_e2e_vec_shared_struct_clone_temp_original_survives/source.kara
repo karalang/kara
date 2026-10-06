@@ -1,0 +1,17 @@
+
+shared struct Node { label: String }
+fn agg(ns: Vec[Node]) -> i64 { return ns.len(); }
+fn main() {
+    let mut ns: Vec[Node] = Vec.new();
+    ns.push(Node { label: "alpha" });
+    ns.push(Node { label: "beta" });
+    ns.push(Node { label: "gamma" });
+    let mut k = 0;
+    let mut t = 0;
+    while k < 5 { t = t + agg(ns.clone()); k = k + 1; }
+    println(t);
+    println(ns.clone().len());
+    println(ns[0].label);
+    println(ns[2].label);
+    println(ns.len());
+}

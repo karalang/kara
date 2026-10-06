@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let mut v: Vec[String] = Vec[
+            "chunks-heap-collect-alpha-aaaaaaaaaaaaaaaaaa".to_string(),
+            "chunks-heap-collect-bravo-bbbbbbbbbbbbbbbbbb".to_string(),
+            "chunks-heap-collect-charlie-cccccccccccccccc".to_string(),
+            "chunks-heap-collect-delta-dddddddddddddddddd".to_string(),
+            "chunks-heap-collect-echo-eeeeeeeeeeeeeeeeeeee".to_string()
+        ];
+        let cs: Vec[Vec[String]] = v.iter().chunks(2i64).collect();
+        println(f"{cs.len()} {cs[0i64].len()} {cs[2i64].len()} {cs[0i64][0i64]} {cs[2i64][0i64]} {v.len()}");
+        round = round + 1i64;
+    }
+}

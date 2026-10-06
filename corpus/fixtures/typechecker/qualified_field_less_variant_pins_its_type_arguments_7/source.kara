@@ -1,0 +1,3 @@
+enum Ho[T] { Full(T), Empty }
+fn takeit(x: Ho[i64]) { match x { Full(r) => { println(f"f:{r}") } Empty => { println("e") } } }
+fn main() { takeit(Ho[String].Empty); }

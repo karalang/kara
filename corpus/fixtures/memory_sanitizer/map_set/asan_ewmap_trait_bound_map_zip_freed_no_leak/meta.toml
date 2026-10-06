@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/map_set.rs::asan_ewmap_trait_bound_map_zip_freed_no_leak"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["closure", "deferred:dataframe", "deferred:tensor"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

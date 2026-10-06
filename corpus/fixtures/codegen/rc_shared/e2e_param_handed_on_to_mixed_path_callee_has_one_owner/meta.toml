@@ -1,0 +1,13 @@
+source = "tests/codegen/rc_shared.rs::e2e_param_handed_on_to_mixed_path_callee_has_one_owner"
+dedup_of = ["tests/memory_sanitizer/rc_shared.rs::asan_param_handed_on_to_mixed_path_callee_has_one_owner"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

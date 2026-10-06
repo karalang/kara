@@ -1,0 +1,429 @@
+// Differential for LeetCode #337 (House Robber III).
+//
+// The four arms, copied verbatim apart from their names, against:
+//
+//   * an exhaustive oracle: every tree shape with at most 5 houses, with
+//     every assignment of money from {0, 1, 3} (11,497 trees), answered by
+//     trying every set of houses and keeping the sets that rob no parent
+//     together with its child, and
+//   * eight properties on those trees and on 300 random trees of up to 12
+//     houses holding 0 to 20.
+//
+//   P1  the four arms agree
+//   P2  the answer equals the brute-force oracle
+//   P3  the answer is at least the richest house and at most the total
+//   P4  mirroring the tree keeps the answer
+//   P5  doubling every house's money doubles the answer
+//   P6  the answer is at least the money on the even depths, and at least
+//       the money on the odd depths, since each is a set of houses with no
+//       parent and child together
+//   P7  a new root holding nothing above the tree keeps the answer
+//   P8  a new root holding more than the whole tree answers that root plus
+//       the answers for the old root's two subtrees
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+// ---- house_robber_iii.kara ----
+
+fn visit_star(nodes: ref Vec[Node], node: i64) -> (i64, i64) {
+    if node == -1 {
+        return (0, 0);
+    }
+    let (lr, ls) = visit_star(nodes, nodes[node].left);
+    let (rr, rs) = visit_star(nodes, nodes[node].right);
+    let robbed = nodes[node].val + ls + rs;
+    let skipped = lr.max(ls) + rr.max(rs);
+    return (robbed, skipped);
+}
+
+fn rob_star(nodes: ref Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    let (r, s) = visit_star(nodes, 0);
+    return r.max(s);
+}
+
+// ---- house_robber_iii_shared.kara ----
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn visit_shared(node: Option[TreeNode]) -> (i64, i64) {
+    match node {
+        None => (0, 0),
+        Some(n) => {
+            let (lr, ls) = visit_shared(n.left);
+            let (rr, rs) = visit_shared(n.right);
+            (n.val + ls + rs, lr.max(ls) + rr.max(rs))
+        }
+    }
+}
+
+fn link(nodes: ref Vec[Node], i: i64) -> Option[TreeNode] {
+    if i == -1 {
+        return None;
+    }
+    return Some(TreeNode { val: nodes[i].val, left: link(nodes, nodes[i].left), right: link(nodes, nodes[i].right) });
+}
+
+fn rob_shared(nodes: ref Vec[Node]) -> i64 {
+    let root = if nodes.len() == 0 { None } else { link(nodes, 0) };
+    let (r, s) = visit_shared(root);
+    return r.max(s);
+}
+
+// ---- house_robber_iii_memo.kara ----
+
+fn best_memo(nodes: ref Vec[Node], node: i64, memo: mut ref Map[i64, i64]) -> i64 {
+    if node == -1 {
+        return 0;
+    }
+    if let Some(known) = memo.get(node) {
+        return known;
+    }
+    let left = nodes[node].left;
+    let right = nodes[node].right;
+    let mut robbed = nodes[node].val;
+    if left != -1 {
+        robbed += best_memo(nodes, nodes[left].left, memo) + best_memo(nodes, nodes[left].right, memo);
+    }
+    if right != -1 {
+        robbed += best_memo(nodes, nodes[right].left, memo) + best_memo(nodes, nodes[right].right, memo);
+    }
+    let skipped = best_memo(nodes, left, memo) + best_memo(nodes, right, memo);
+    let answer = robbed.max(skipped);
+    memo.insert(node, answer);
+    return answer;
+}
+
+fn rob_memo(nodes: ref Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    let mut memo: Map[i64, i64] = Map.new();
+    return best_memo(nodes, 0, mut memo);
+}
+
+// ---- house_robber_iii_iter.kara ----
+
+fn rob_iter(nodes: ref Vec[Node]) -> i64 {
+    let n = nodes.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut order: Vec[i64] = Vec.with_capacity(n);
+    order.push(0);
+    let mut head = 0;
+    while head < order.len() {
+        let cur = order[head];
+        head += 1;
+        if nodes[cur].left != -1 {
+            order.push(nodes[cur].left);
+        }
+        if nodes[cur].right != -1 {
+            order.push(nodes[cur].right);
+        }
+    }
+    let mut robbed: Vec[i64] = vec![0; n];
+    let mut skipped: Vec[i64] = vec![0; n];
+    for k in (0..n).rev() {
+        let cur = order[k];
+        let mut r = nodes[cur].val;
+        let mut s = 0;
+        for child in [nodes[cur].left, nodes[cur].right] {
+            if child != -1 {
+                r += skipped[child];
+                s += robbed[child].max(skipped[child]);
+            }
+        }
+        robbed[cur] = r;
+        skipped[cur] = s;
+    }
+    return robbed[0].max(skipped[0]);
+}
+
+// ---- the oracle ----
+
+// Every set of houses, as a bit mask over the pool, kept when no house in it
+// has a child in it.
+fn oracle(nodes: ref Vec[Node]) -> i64 {
+    let n = nodes.len();
+    let mut best = 0;
+    for mask in 0..(1 << n) {
+        let mut ok = true;
+        let mut total = 0;
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                total += nodes[i].val;
+                let l = nodes[i].left;
+                let r = nodes[i].right;
+                if (l != -1 and (mask >> l) & 1 == 1) or (r != -1 and (mask >> r) & 1 == 1) {
+                    ok = false;
+                }
+            }
+        }
+        if ok and total > best {
+            best = total;
+        }
+    }
+    return best;
+}
+
+// ---- tree helpers ----
+
+// Every shape with `n` houses, each a pool rooted at index 0, holding 0.
+fn shapes(n: i64) -> Vec[Vec[Node]] {
+    let mut out: Vec[Vec[Node]] = Vec.new();
+    if n == 0 {
+        out.push(Vec.new());
+        return out;
+    }
+    for k in 0..n {
+        let lefts = shapes(k);
+        let rights = shapes(n - 1 - k);
+        for l in lefts.iter() {
+            for r in rights.iter() {
+                let mut t: Vec[Node] = Vec.new();
+                t.push(Node { val: 0, left: -1, right: -1 });
+                for x in l.iter() {
+                    t.push(Node { val: 0, left: shift(x.left, 1), right: shift(x.right, 1) });
+                }
+                let off = 1 + l.len();
+                for x in r.iter() {
+                    t.push(Node { val: 0, left: shift(x.left, off), right: shift(x.right, off) });
+                }
+                if l.len() > 0 {
+                    t[0].left = 1;
+                }
+                if r.len() > 0 {
+                    t[0].right = off;
+                }
+                out.push(t);
+            }
+        }
+    }
+    return out;
+}
+
+fn shift(i: i64, by: i64) -> i64 {
+    if i == -1 {
+        return -1;
+    }
+    return i + by;
+}
+
+fn copy(nodes: ref Vec[Node]) -> Vec[Node] {
+    let mut t: Vec[Node] = Vec.new();
+    for x in nodes.iter() {
+        t.push(Node { val: x.val, left: x.left, right: x.right });
+    }
+    return t;
+}
+
+fn mirror(nodes: ref Vec[Node]) -> Vec[Node] {
+    let mut t: Vec[Node] = Vec.new();
+    for x in nodes.iter() {
+        t.push(Node { val: x.val, left: x.right, right: x.left });
+    }
+    return t;
+}
+
+fn doubled(nodes: ref Vec[Node]) -> Vec[Node] {
+    let mut t = copy(nodes);
+    for i in 0..t.len() {
+        t[i].val = t[i].val * 2;
+    }
+    return t;
+}
+
+// The tree under a new root holding `v`, which becomes index 0.
+fn under(nodes: ref Vec[Node], v: i64) -> Vec[Node] {
+    let mut t: Vec[Node] = Vec.new();
+    let first = if nodes.len() == 0 { -1 } else { 1 };
+    t.push(Node { val: v, left: first, right: -1 });
+    for x in nodes.iter() {
+        t.push(Node { val: x.val, left: shift(x.left, 1), right: shift(x.right, 1) });
+    }
+    return t;
+}
+
+// The subtree at `at`, renumbered so it is rooted at index 0.
+fn subtree(nodes: ref Vec[Node], at: i64) -> Vec[Node] {
+    let mut t: Vec[Node] = Vec.new();
+    if at == -1 {
+        return t;
+    }
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    t.push(Node { val: nodes[at].val, left: -1, right: -1 });
+    stack.push((at, 0));
+    while let Some((src, dst)) = stack.pop() {
+        let l = nodes[src].left;
+        if l != -1 {
+            t.push(Node { val: nodes[l].val, left: -1, right: -1 });
+            let id = t.len() - 1;
+            t[dst].left = id;
+            stack.push((l, id));
+        }
+        let r = nodes[src].right;
+        if r != -1 {
+            t.push(Node { val: nodes[r].val, left: -1, right: -1 });
+            let id = t.len() - 1;
+            t[dst].right = id;
+            stack.push((r, id));
+        }
+    }
+    return t;
+}
+
+// The money on the even depths and on the odd depths.
+fn level_sums(nodes: ref Vec[Node]) -> (i64, i64) {
+    if nodes.len() == 0 {
+        return (0, 0);
+    }
+    let mut even = 0;
+    let mut odd = 0;
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    stack.push((0, 0));
+    while let Some((i, d)) = stack.pop() {
+        if d % 2 == 0 {
+            even += nodes[i].val;
+        } else {
+            odd += nodes[i].val;
+        }
+        if nodes[i].left != -1 {
+            stack.push((nodes[i].left, d + 1));
+        }
+        if nodes[i].right != -1 {
+            stack.push((nodes[i].right, d + 1));
+        }
+    }
+    return (even, odd);
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn random_tree(seed: mut ref i64, n: i64, most: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    for i in 0..n {
+        nodes.push(Node { val: next(seed) % (most + 1), left: -1, right: -1 });
+        if i == 0 {
+            continue;
+        }
+        let mut cur = 0;
+        while true {
+            if next(seed) % 2 == 0 {
+                if nodes[cur].left == -1 {
+                    nodes[cur].left = i;
+                    break;
+                }
+                cur = nodes[cur].left;
+            } else {
+                if nodes[cur].right == -1 {
+                    nodes[cur].right = i;
+                    break;
+                }
+                cur = nodes[cur].right;
+            }
+        }
+    }
+    return nodes;
+}
+
+fn fail(failures: mut ref i64, what: String, nodes: ref Vec[Node]) {
+    failures += 1;
+    if failures <= 10 {
+        let mut parts: Vec[String] = Vec.new();
+        for x in nodes.iter() {
+            parts.push(f"{x.val}/{x.left}/{x.right}");
+        }
+        let shown = parts.join(" ");
+        println(f"FAIL {what}: {shown}");
+    }
+}
+
+fn check(nodes: ref Vec[Node], use_oracle: bool, failures: mut ref i64) -> i64 {
+    let a = rob_star(nodes);
+    if rob_shared(nodes) != a or rob_memo(nodes) != a or rob_iter(nodes) != a {
+        fail(failures, "P1 arms disagree", nodes);
+    }
+    if use_oracle and oracle(nodes) != a {
+        fail(failures, "P2 oracle", nodes);
+    }
+    let mut most = 0;
+    let mut total = 0;
+    for x in nodes.iter() {
+        most = most.max(x.val);
+        total += x.val;
+    }
+    if a < most or a > total {
+        fail(failures, "P3 bounds", nodes);
+    }
+    if rob_star(mirror(nodes)) != a {
+        fail(failures, "P4 mirror", nodes);
+    }
+    if rob_star(doubled(nodes)) != 2 * a {
+        fail(failures, "P5 doubled", nodes);
+    }
+    let (even, odd) = level_sums(nodes);
+    if a < even or a < odd {
+        fail(failures, "P6 levels", nodes);
+    }
+    if rob_star(under(nodes, 0)) != a {
+        fail(failures, "P7 empty root", nodes);
+    }
+    if nodes.len() > 0 {
+        let big = total + 1;
+        let want = big + rob_star(subtree(nodes, nodes[0].left)) + rob_star(subtree(nodes, nodes[0].right));
+        if rob_star(under(nodes, big)) != want {
+            fail(failures, "P8 rich root", nodes);
+        }
+    }
+    return a;
+}
+
+fn main() {
+    let mut failures = 0;
+    let mut trees = 0;
+    let mut sum = 0;
+    let money = [0, 1, 3];
+    for n in 0..6 {
+        for shape in shapes(n).iter() {
+            let mut code = 0;
+            let mut count = 1;
+            for _ in 0..n {
+                count *= 3;
+            }
+            while code < count {
+                let mut t = copy(shape);
+                let mut c = code;
+                for i in 0..n {
+                    t[i].val = money[c % 3];
+                    c /= 3;
+                }
+                sum += check(t, true, mut failures);
+                trees += 1;
+                code += 1;
+            }
+        }
+    }
+    println(f"{trees} exhaustive trees (answers sum to {sum})");
+    let mut seed = 337;
+    let mut rsum = 0;
+    for _ in 0..300 {
+        let n = 1 + next(mut seed) % 12;
+        let t = random_tree(mut seed, n, 20);
+        rsum += check(t, true, mut failures);
+    }
+    println(f"300 random trees (answers sum to {rsum}), {failures} failures");
+}

@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_28_10.rs::e2e_temp_result_arg_forwarded_whole_to_a_retaining_consumer"
+dedup_of = ["tests/interpreter/families/b_2026_09_28_10.rs::interp_temp_result_arg_forwarded_whole_to_a_retaining_consumer", "tests/memory_sanitizer/families/b_2026_09_28_10.rs::asan_temp_result_arg_forwarded_whole_to_a_retaining_consumer"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

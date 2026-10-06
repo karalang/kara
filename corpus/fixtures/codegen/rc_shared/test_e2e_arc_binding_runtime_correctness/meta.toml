@@ -1,0 +1,13 @@
+source = "tests/codegen/rc_shared.rs::test_e2e_arc_binding_runtime_correctness"
+dedup_of = ["tests/memory_sanitizer/concurrency.rs::asan_par_block_arc_promoted_no_double_free"]
+expect = "error:E_CONCURRENT_SHARED_STRUCT"
+exit = 1
+tags = ["par", "shared"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

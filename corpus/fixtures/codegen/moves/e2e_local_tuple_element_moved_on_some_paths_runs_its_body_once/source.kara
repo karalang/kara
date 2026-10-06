@@ -1,0 +1,72 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn ret_some(k: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    if k { return t.0; }
+    return R { id: 1 };
+}
+fn ret_each(k: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    if k { return t.0; } else { return t.1; }
+}
+fn ret_scalar_sibling(k: bool) -> R {
+    let t = (R { id: 5 }, 3);
+    if k { return t.0; }
+    return R { id: 1 };
+}
+fn let_some(k: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    if k { let x = t.0; println(f"  x{x.id}"); }
+    return R { id: 1 };
+}
+fn ret_always() -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    return t.0;
+}
+fn tail_always() -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    t.0
+}
+fn ret_by_arm(k: i64) -> R {
+    let t = (R { id: 5 }, 3, R { id: 7 }, R { id: 9 });
+    match k {
+        0 => { return t.0; }
+        1 => { return t.2; }
+        2 => { return t.3; }
+        _ => {}
+    }
+    R { id: 1 }
+}
+fn ret_nested(k: bool, m: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    {
+        if k { if m { return t.0; } }
+    }
+    println("  after");
+    R { id: 1 }
+}
+fn main() {
+    println("ret-some-true"); { let g = ret_some(true); println(f"  got:{g.id}") }
+    println("ret-some-false"); { let g = ret_some(false); println(f"  got:{g.id}") }
+    println("ret-each-true"); { let g = ret_each(true); println(f"  got:{g.id}") }
+    println("ret-each-false"); { let g = ret_each(false); println(f"  got:{g.id}") }
+    println("scalar-sibling-true"); { let g = ret_scalar_sibling(true); println(f"  got:{g.id}") }
+    println("scalar-sibling-false"); { let g = ret_scalar_sibling(false); println(f"  got:{g.id}") }
+    println("let-some-true"); { let g = let_some(true); println(f"  got:{g.id}") }
+    println("let-some-false"); { let g = let_some(false); println(f"  got:{g.id}") }
+    println("ret-always"); { let g = ret_always(); println(f"  got:{g.id}") }
+    println("tail-always"); { let g = tail_always(); println(f"  got:{g.id}") }
+    let mut k = 0;
+    while k < 4 { println(f"arm-{k}"); { let g = ret_by_arm(k); println(f"  got:{g.id}") } k = k + 1; }
+    println("nested-tt"); { let g = ret_nested(true, true); println(f"  got:{g.id}") }
+    println("nested-tf"); { let g = ret_nested(true, false); println(f"  got:{g.id}") }
+    println("loop");
+    let mut i = 0;
+    while i < 3 {
+        let t = (R { id: 10 + i }, R { id: 20 + i });
+        if i == 1 { let x = t.0; println(f"  took:{x.id}"); }
+        println(f"  end{i}");
+        i = i + 1;
+    }
+    println("end")
+}

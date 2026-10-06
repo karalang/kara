@@ -1,0 +1,95 @@
+// LeetCode #74: Search a 2D Matrix — flattened binary search (★), O(log(m·n)).
+//
+// The matrix is sorted TWICE over: each row ascends left-to-right, and the first
+// element of every row exceeds the last element of the row above. That is exactly
+// the statement that reading the matrix row-major yields a single ascending
+// sequence of `m·n` values. So the whole grid is one virtual sorted array and a
+// single binary search over indices `0 .. m·n-1` finds the target in O(log(m·n));
+// index `mid` maps back to a cell by `(mid / cols, mid % cols)`.
+//
+//   lo, hi = 0, m·n - 1
+//   mid    -> m[mid / cols][mid % cols]
+//     == target  ->  found
+//     <  target  ->  lo = mid + 1     (target is later in row-major order)
+//     >  target  ->  hi = mid - 1
+//
+// This is the 2-D lift of the plain binary search in kata
+// [#704](../../101-200/) / the lower-bound scans of katas [#35](../35-search-insert-position/)
+// and [#69](../69-sqrtx/): the same `lo`/`hi`/`mid` loop, with the one twist that
+// `mid` indexes a *flattened* grid via `/` and `%`. The
+// [`_two_phase`](search_a_2d_matrix_two_phase.kara) sibling instead does two
+// searches (row then column), and [`_staircase`](search_a_2d_matrix_staircase.kara)
+// walks from the top-right in O(m+n); all three agree on every query.
+//
+// LeetCode bounds: 1 ≤ m, n ≤ 100, -10⁴ ≤ v, target ≤ 10⁴ — every value fits in i64.
+
+fn search_matrix(m: ref Vec[Vec[i64]], target: i64) -> bool {
+    let rows = m.len();
+    if rows == 0 {
+        return false;
+    }
+    let cols = m[0].len();
+    if cols == 0 {
+        return false;
+    }
+
+    let mut lo = 0;
+    let mut hi = rows * cols - 1;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;          // overflow-safe midpoint
+        let v = m[mid / cols][mid % cols];        // flatten index -> (row, col)
+        if v == target {
+            return true;
+        } else if v < target {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    false
+}
+
+// ---- test harness (shared verbatim by all three solvers + the Python mirror) ----
+
+fn report(m: ref Vec[Vec[i64]], target: i64, s: mut ref String) {
+    let found = search_matrix(m, target);
+    println(f"search({target}) = {found}");
+    s.push(' ');
+    if found {
+        s.push('1');
+    } else {
+        s.push('0');
+    }
+}
+
+fn main() {
+    let mut s: String = "res:";
+
+    // LeetCode example matrix — 3×4, fully sorted row-major.
+    let a = [[1, 3, 5, 7], [10, 11, 16, 20], [23, 30, 34, 60]];
+    report(a, 3, mut s);      // true  — example 1
+    report(a, 13, mut s);     // false — example 2 (falls in a row's gap)
+    report(a, 1, mut s);      // true  — first cell
+    report(a, 60, mut s);     // true  — last cell
+    report(a, 0, mut s);      // false — below the minimum
+    report(a, 100, mut s);    // false — above the maximum
+    report(a, 16, mut s);     // true  — interior, second row
+    report(a, 22, mut s);     // false — between rows 2 and 3
+
+    // 1×1 — the lone cell, hit and miss.
+    let b = [[5]];
+    report(b, 5, mut s);      // true
+    report(b, 4, mut s);      // false
+
+    // Single row — degenerates to a plain binary search.
+    let c = [[1, 2, 3, 4, 5]];
+    report(c, 4, mut s);      // true
+    report(c, 6, mut s);      // false
+
+    // Single column — every "row" has one cell.
+    let d = [[1], [3], [5], [7]];
+    report(d, 5, mut s);      // true
+    report(d, 6, mut s);      // false
+
+    println(s);
+}

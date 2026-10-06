@@ -1,0 +1,4 @@
+
+#[derive(Display)]
+struct H { u: Vec[i64] }
+fn main() { let h = H { u: [1, 2] }; println(f"{h}") }

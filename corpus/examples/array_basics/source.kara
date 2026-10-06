@@ -1,0 +1,38 @@
+fn sum(a: Array[i64, 4]) -> i64 {
+    let mut total = 0;
+    for x in a {
+        total = total + x;
+    }
+    total
+}
+
+fn max(a: Array[i64, 4]) -> i64 {
+    let mut best = a[0];
+    let mut i = 1;
+    while i < 4 {
+        if a[i] > best {
+            best = a[i];
+        }
+        i = i + 1;
+    }
+    best
+}
+
+fn main() {
+    let data = Array[10, 40, 20, 30];
+
+    println(sum(data));
+    println(max(data));
+
+    let mut scores = Array[0, 0, 0, 0];
+    scores[0] = 100;
+    scores[1] = 85;
+    scores[2] = 92;
+    scores[3] = 78;
+
+    for s in scores {
+        println(s);
+    }
+
+    println(sum(scores));
+}

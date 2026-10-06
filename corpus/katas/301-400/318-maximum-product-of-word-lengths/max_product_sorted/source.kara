@@ -1,0 +1,66 @@
+// LeetCode #318 — sort by length, then let the product bound cut the scan.
+//
+// The two mask arms visit all n(n-1)/2 pairs unconditionally: the answer is a
+// maximum, and there is no reason to look at a pair before you have looked at
+// the rest. Sorting the words longest-first supplies that reason. Walk the
+// pairs in descending-length order and the products along each inner row are
+// non-increasing, so the moment `lens[i] * lens[j] <= best` no later `j` in
+// that row can beat `best` — break out of the row, not just skip the pair.
+//
+// The break is what makes this a different failure surface rather than a
+// reordering of the ★ arm. It is a claim about the whole remaining row, made
+// from one product, and it is only sound because the row is sorted. Get the
+// sort direction backwards and the arm silently returns a too-small answer on
+// exactly the inputs where the pruning fires — which is why the differential
+// runs it against the unsorted arms on thousands of cases rather than on the
+// LeetCode examples, where the first pair usually is the answer.
+//
+// The outer loop keeps its own bound: once `lens[i] * lens[i]` cannot beat
+// `best`, no pair starting at `i` or later can either, because every later
+// length is smaller still.
+
+fn word_mask(w: ref String) -> i64 {
+    let bs = w.bytes();
+    let mut m = 0;
+    for i in 0..bs.len() {
+        m = m | (1 << ((bs[i] - b'a') as i64));
+    }
+    return m;
+}
+
+fn max_product(words: ref Vec[String]) -> i64 {
+    let mut entries: Vec[(i64, i64)] = Vec.new();
+    for i in 0..words.len() {
+        entries.push((words[i].len() as i64, word_mask(words[i])));
+    }
+    entries.sort_by(|a, b| b.0.cmp(a.0));
+
+    let n = entries.len();
+    let mut best = 0;
+    for i in 0..n {
+        let (li, mi) = entries[i];
+        if li * li <= best { break; }
+        for j in (i + 1)..n {
+            let (lj, mj) = entries[j];
+            if li * lj <= best { break; }
+            if mi & mj == 0 { best = li * lj; }
+        }
+    }
+    return best;
+}
+
+fn main() {
+    let cases: Vec[Vec[String]] = [
+        ["abcw", "baz", "foo", "bar", "xtfn", "abcdef"],
+        ["a", "ab", "abc", "d", "cd", "bcd", "abcd"],
+        ["a", "aa", "aaa", "aaaa"],
+        // The pruning trap: the two longest words collide, and the answer
+        // lives further down the sorted row.
+        ["abcdefgh", "abcdefgz", "ij", "kl"],
+        ["qwer", "tyui", "opas", "dfgh"],
+    ];
+    for k in 0..cases.len() {
+        print("case " + (k + 1).to_string() + " -> "
+              + max_product(cases[k].clone()).to_string() + "\n");
+    }
+}

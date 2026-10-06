@@ -1,0 +1,6 @@
+
+        fn main() {
+            let v: Vec[i64] = Vec.filled(0, 99);
+            println(v.len());
+        }
+    

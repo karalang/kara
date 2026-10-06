@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_28_56.rs::e2e_param_borrowed_on_the_path_that_keeps_it_runs_its_body_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

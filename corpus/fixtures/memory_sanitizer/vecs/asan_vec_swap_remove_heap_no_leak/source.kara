@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let mut s: Vec[String] = Vec.new();
+        s.push(f"a-{i}-padding-padding");
+        s.push(f"b-{i}-padding-padding");
+        s.push(f"c-{i}-padding-padding");
+        let removed = s.swap_remove(0);
+        println(removed);
+        println(s.len());
+        println(s[0]);
+        let mut t: Vec[String] = Vec.new();
+        t.push(f"t-{i}-padding-padding");
+        println(t.len());
+        i = i + 1;
+    }
+}

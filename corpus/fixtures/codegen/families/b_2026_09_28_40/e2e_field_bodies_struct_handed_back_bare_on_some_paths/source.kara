@@ -1,0 +1,25 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
+struct X { w: W, t: D }
+fn maybew(x: W, c: bool) -> Option[W] { if c { return Some(x); } None }
+fn eatw(x: W) { println("ew") }
+fn backw(x: W) -> W { return x }
+struct Q { z: i64 }
+impl Q {
+    fn mw(ref self, x: W, c: bool) -> Option[W] { if c { return Some(x); } None }
+    fn bw(ref self, x: W, c: bool) -> W { if c { return x; } mkw(0) }
+}
+struct F { d: D, n: i64 }
+fn mkf(i: i64) -> F { F { d: mkd(i), n: i } }
+fn pf(f: F, k: bool) -> F { if k { return f } println("n"); return mkf(0) }
+fn mixw(x: W, c: bool) -> Option[W] { if c { return Some(x); } eatw(x); None }
+fn barew(x: W, c: bool) -> W { if c { return x; } mkw(0) }
+fn main() {
+    let a = mkw(1); let o = barew(a, true); println("mid"); let b = mkw(2); let p = barew(b, false); println("mid");
+    let q = barew(mkw(3), false); println("mid"); let y = X { w: mkw(4), t: mkd(5) }; let r = barew(y.w, true); println("mid");
+    let f1 = pf(mkf(6), false); println("mid"); let f2 = mkf(7); let f3 = pf(f2, false); println("mid"); let f4 = pf(mkf(8), true); println("mid");
+    println("end")
+}

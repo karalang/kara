@@ -1,0 +1,13 @@
+
+shared struct Inner { v: i64 }
+struct Outer { inner: Inner }
+
+fn pick(o: Outer) -> Inner {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break o.inner }
+    }
+}
+
+fn main() { let o = Outer { inner: Inner { v: 5 } }; println(pick(o).v); }

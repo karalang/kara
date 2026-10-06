@@ -1,0 +1,46 @@
+// Benchmark harness for LeetCode #119 — in-place single-row Pascal (the ★).
+// See ../README.md § Benchmarks. Each rep computes the rowIndex-th row for a DATA-DEPENDENT rowIndex
+// (row_index = 30 + acc%20, so 30..49 — seeded by the running hash so get_row() can't be hoisted),
+// building one `Vec[i64]` of length rowIndex+1 and updating it IN PLACE right-to-left, then folds
+// every entry. K = 440000 reps — the in-place index-assignment regime: a single small Vec per rep
+// (no nested allocation), dominated by the O(k^2) in-place `row[j] = row[j] + row[j-1]` updates.
+
+fn get_row(row_index: i64) -> Vec[i64] {
+    // Bulk-fill of 1s — matches the Rust mirror's `vec![1i64; n]` for an
+    // apples-to-apples fill (see README § Benchmarks; a push loop would race a
+    // scalar fill against Rust's tuned bulk-fill and dominate the measurement).
+    let mut row: Vec[i64] = Vec.filled(row_index + 1, 1);
+    let mut i = 2;
+    while i <= row_index {
+        let mut k = i - 1;
+        while k >= 1 {
+            row[k] = row[k] + row[k - 1];
+            k = k - 1;
+        }
+        i = i + 1;
+    }
+    row
+}
+
+fn row_hash(row: ref Vec[i64]) -> i64 {
+    let mut h = 1;
+    let mut j = 0;
+    while j < row.len() {
+        h = (h * 131 + row[j]) % 1000000007;
+        j = j + 1;
+    }
+    (h * 31 + row.len() + 7) % 1000000007
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut rep = 0;
+    while rep < 440000 {
+        let row_index = 30 + (acc % 20);
+        let row = get_row(row_index);
+        let h = row_hash(row);
+        acc = (acc * 131 + h) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}");
+}

@@ -1,0 +1,15 @@
+
+        struct Cursor { pos: i64 }
+        impl Cursor {
+            fn step(mut ref self) -> i64 {
+                self.pos = self.pos + 1;
+                self.pos
+            }
+            fn run(mut ref self) -> i64 {
+                let a = self.step();
+                let b = self.step();
+                a + b
+            }
+        }
+        fn main() {}
+        

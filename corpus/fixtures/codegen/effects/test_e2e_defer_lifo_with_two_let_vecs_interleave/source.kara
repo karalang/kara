@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    defer { println(f"vlen={v.len()}"); }
+    let mut w: Vec[i64] = Vec.new();
+    w.push(10_i64);
+    w.push(20_i64);
+    defer { println(f"wlen={w.len()}"); }
+    println("body");
+}

@@ -1,0 +1,18 @@
+
+fn pick_str() -> String {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break f"x{i}" }
+    }
+}
+
+fn pick_vec() -> Vec[i64] {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break [1, 2, i] }
+    }
+}
+
+fn main() { println(pick_str()); println(pick_vec()[2]); }

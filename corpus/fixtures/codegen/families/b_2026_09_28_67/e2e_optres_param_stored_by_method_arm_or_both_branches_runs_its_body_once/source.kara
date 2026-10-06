@@ -1,0 +1,29 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+struct H { xs: Vec[Option[S]] }
+impl H { fn put(mut ref self, t: Option[S], c: bool) { if c { self.xs.push(t) } } }
+fn cm(t: Option[S], v: mut ref Vec[Option[S]], k: i64) { match k { 1 => v.push(t), 2 => { println("two") } _ => {} } }
+fn c2(t: Option[S], v: mut ref Vec[Option[S]], w: mut ref Vec[Option[S]], c: bool) { if c { v.push(t) } else { w.push(t) } }
+fn cpl(t: Option[S], c: bool) { let mut l: Vec[Option[S]] = Vec.new(); if c { l.push(t) } println(f"l{l.len()}") }
+
+fn main() {
+    let mut h = H { xs: Vec.new() };
+    h.put(Option.Some(mks(1)), false);
+    h.put(Option.Some(mks(2)), true);
+    let a = Option.Some(mks(3));
+    h.put(a, false);
+    println(f"h{h.xs.len()}");
+    let mut u: Vec[Option[S]] = Vec.new();
+    let mut i = 0;
+    while i < 3 { cm(Option.Some(mks(10 + i)), mut u, i); i = i + 1; }
+    cm(Option.None, mut u, 2);
+    let mut p: Vec[Option[S]] = Vec.new();
+    let mut q: Vec[Option[S]] = Vec.new();
+    c2(Option.Some(mks(20)), mut p, mut q, false);
+    c2(Option.Some(mks(21)), mut p, mut q, true);
+    println(f"n{u.len()} {p.len()} {q.len()}");
+    cpl(Option.Some(mks(30)), false);
+    cpl(Option.Some(mks(31)), true);
+    println("end")
+}

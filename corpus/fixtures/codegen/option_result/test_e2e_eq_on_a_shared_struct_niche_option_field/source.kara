@@ -1,0 +1,33 @@
+
+#[derive(Hash, Eq, PartialEq)]
+shared struct Node { v: i64, next: Option[Node] }
+#[derive(Hash, Eq, PartialEq)]
+shared struct Padded { v: i64, next: Option[Padded], p1: i64, p2: i64 }
+fn chain(n: i64) -> Node {
+    if n == 0 { return Node { v: 0, next: None }; }
+    return Node { v: n, next: Some(chain(n - 1)) };
+}
+fn main() {
+    let a = Node { v: 1, next: None };
+    let b = Node { v: 1, next: None };
+    println(f"none-none={a == b}");
+
+    let leaf = Node { v: 2, next: None };
+    let c = Node { v: 1, next: Some(leaf) };
+    let leaf2 = Node { v: 2, next: None };
+    let d = Node { v: 1, next: Some(leaf2) };
+    println(f"some-some={c == d}");
+    println(f"some-none={c == a}");
+
+    let x = chain(4);
+    let y = chain(4);
+    let z = chain(3);
+    println(f"deep={x == y}");
+    println(f"deep-ne={x == z}");
+
+    let p = Padded { v: 1, next: None, p1: 7, p2: 8 };
+    let q = Padded { v: 1, next: None, p1: 7, p2: 8 };
+    let r = Padded { v: 1, next: None, p1: 7, p2: 9 };
+    println(f"padded={p == q}");
+    println(f"padded-ne={p == r}");
+}

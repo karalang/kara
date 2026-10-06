@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_04_32.rs::e2e_shared_enum_vec_of_shared_bearing_structs_is_copied_per_arm"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_04_32.rs::asan_shared_enum_vec_of_shared_bearing_structs_is_copied_per_arm"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

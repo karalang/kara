@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_17_23.rs::e2e_generic_tuple_option_param_runs_heap_payload_body_once"
+dedup_of = ["tests/interpreter/families/b_2026_09_17_23.rs::test_generic_tuple_option_param_runs_heap_payload_body_once", "tests/memory_sanitizer/families/b_2026_09_17_23.rs::asan_generic_tuple_option_param_frees_heap_payload_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

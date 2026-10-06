@@ -1,0 +1,13 @@
+
+enum E { V((String, i64)) }
+fn main() {
+    let mut s = String.new();
+    s.push_str("payload");
+    let e = V((s, 7));
+    match e {
+        V((t, n)) => {
+            println(t.len());
+            println(n);
+        }
+    }
+}

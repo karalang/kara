@@ -1,0 +1,39 @@
+// Benchmark workload for LeetCode #201 — Bitwise AND of Numbers Range.
+//
+// One range-AND is O(log n); the bench turns it into a scalar bit-shift kernel by
+// applying it to a long stream of PRNG-chosen [lo, hi] pairs and summing the
+// results. `range_and` shifts both bounds right until they agree, then shifts the
+// shared prefix back — a data-dependent while loop (its trip count depends on how
+// many high bits `lo` and `hi` share), so it does NOT vectorize (variable-length
+// loop, unpredictable exit). The 31-bit LCG is overflow-safe in i64 and its state
+// is loop-carried, so the optimizer cannot precompute the stream. Sink = the sum.
+
+fn range_and(left: i64, right: i64) -> i64 {
+    let mut lo = left;
+    let mut hi = right;
+    let mut shift = 0;
+    while lo < hi {
+        lo = lo >> 1;
+        hi = hi >> 1;
+        shift = shift + 1;
+    }
+    return lo << shift;
+}
+
+fn main() {
+    let iters = 20000000;
+    let mut state = 12345;
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let x = state;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let y = state;
+        let lo = if x < y { x } else { y };
+        let hi = if x < y { y } else { x };
+        sink = sink + range_and(lo, hi);
+        it = it + 1;
+    }
+    println(sink);
+}

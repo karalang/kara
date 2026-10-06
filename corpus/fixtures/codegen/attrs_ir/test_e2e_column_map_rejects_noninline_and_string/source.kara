@@ -1,0 +1,7 @@
+
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3]);
+    let g = |x: i64| x * 2;
+    let d = c.map(g);
+    println(f"{d.sum()}");
+}

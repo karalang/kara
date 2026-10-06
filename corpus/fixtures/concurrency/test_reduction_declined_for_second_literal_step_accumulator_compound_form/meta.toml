@@ -1,0 +1,13 @@
+source = "tests/concurrency.rs::test_reduction_declined_for_second_literal_step_accumulator_compound_form"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

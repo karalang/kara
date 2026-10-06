@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_17_13.rs::e2e_colliding_concrete_impls_over_generic_enum_free_once"
+dedup_of = ["tests/interpreter/families/b_2026_09_17_13.rs::test_colliding_concrete_impls_over_generic_enum_free_once", "tests/memory_sanitizer/families/b_2026_09_17_13.rs::asan_colliding_concrete_impls_over_generic_enum_free_once"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,18 @@
+
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 100_i64);
+    m.insert(2_i64, 200_i64);
+    return m;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let ks: Vec[i64] = make_map().keys();
+        println(ks.len());
+        let mut s = 0;
+        for v in make_map().values() { s = s + v; }
+        println(s);
+        i = i + 1;
+    };
+}

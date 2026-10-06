@@ -1,0 +1,17 @@
+
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let wins: Vec[Vec[i64]] = v.iter().windows(3).collect();
+    println(wins.len());
+    for w in wins {
+        let mut s = "[";
+        let mut first = true;
+        for x in w {
+            if not first { s = s + ","; }
+            s = s + f"{x}";
+            first = false;
+        }
+        s = s + "]";
+        println(s);
+    }
+}

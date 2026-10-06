@@ -1,0 +1,32 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+struct Ho2 { a: R, b: Option[R] }
+struct HoS { a: R, b: Option[String] }
+
+fn mk(id: i64) -> R { return R { id: id, tag: f"t{id}" } }
+fn mkho(n: i64) -> Ho2 { return Ho2 { a: mk(n), b: Option.Some(mk(n + 100)) } }
+
+fn loc()  { let h = Ho2 { a: mk(1), b: Option.Some(mk(101)) }; let Ho2 { a, b } = h; println(f"  rd{a.id}") }
+fn lit()  { let Ho2 { a, b } = Ho2 { a: mk(2), b: Option.Some(mk(102)) }; println(f"  rd{a.id}") }
+fn call() { let Ho2 { a, b } = mkho(3); println(f"  rd{a.id}") }
+fn ctl()  { let h = Ho2 { a: mk(4), b: Option.Some(mk(104)) }; println(f"  rd{h.a.id}") }
+fn param(h: Ho2) { let Ho2 { a, b } = h; println(f"  rd{a.id}") }
+fn used() { let h = Ho2 { a: mk(6), b: Option.Some(mk(106)) }; let Ho2 { a, b } = h;
+            match b { Option.Some(x) => println(f"  got{x.id}"), Option.None => println("  none") }
+            println(f"  rd{a.id}") }
+fn none() { let h = Ho2 { a: mk(7), b: Option.None }; let Ho2 { a, b } = h; println(f"  rd{a.id}") }
+fn ostr() { let h = HoS { a: mk(8), b: Option.Some(f"s8") }; let HoS { a, b } = h; println(f"  rd{a.id}/{b.unwrap_or(f"-")}") }
+fn ren()  { let h = Ho2 { a: mk(10), b: Option.Some(mk(110)) }; let Ho2 { a: p, b: q } = h; println(f"  rd{p.id}") }
+
+fn main() {
+    println("loc");   loc()
+    println("lit");   lit()
+    println("call");  call()
+    println("ctl");   ctl()
+    println("param"); param(mkho(5))
+    println("used");  used()
+    println("none");  none()
+    println("ostr");  ostr()
+    println("ren");   ren()
+    println("done")
+}

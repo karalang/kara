@@ -1,0 +1,7 @@
+
+distinct type Small = u8 where self <= 100;
+fn make(x: u8) -> Small { Small(x) }
+fn main() {
+    let s = make(200);
+    println("built");
+}

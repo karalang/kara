@@ -1,0 +1,13 @@
+source = "tests/codegen/rc_shared.rs::e2e_shared_field_moved_out_of_a_value_block_survives_the_frame_drain"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

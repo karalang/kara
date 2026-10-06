@@ -1,0 +1,81 @@
+// Benchmark lane for LeetCode 313 — Super Ugly Number.
+//
+// build-once + punch (see ../../../../BENCHMARKS.md): allocate the sequence
+// array and the per-stream pointers ONCE, then punch PASSES complete
+// generations of the first TERMS super ugly numbers through them.
+//
+// EACH PASS SWAPS ONE PRIME, at an index and to a value both derived from the
+// running checksum. The generation is a pure function of (n, primes), so
+// PASSES identical generations are exactly what an optimiser is entitled to
+// hoist and run once; perturbing an input the sink depends on makes every pass
+// a different computation and keeps the work in the loop. The swap is drawn
+// from a pool of primes, so every pass runs on a legitimate prime list rather
+// than on an arbitrary integer list that happens to type-check.
+//
+// NO RE-ZEROING IS NEEDED between passes and that is a property of the
+// algorithm, not a shortcut: every one of the TERMS slots is WRITTEN by the pass
+// that reads it (slot 0 to 1, the rest to the merge minimum) before any read
+// of it can occur, and the pointers are reset explicitly. So a single
+// allocation is correct for every pass in all five languages, which keeps the
+// measured work in the O(TERMS * k) merge rather than in the allocator.
+//
+// The sink is a masked running total — `& 1073741823` rather than a modulo, so
+// the reduction cannot be strength-reduced into a division — and it is carried
+// ACROSS passes, which serialises them: pass p + 1 cannot begin until pass p's
+// answer is folded in, so nothing can be reordered or run in parallel.
+
+const TERMS: i64 = 100000;
+const PASSES: i64 = 30;
+const MASK: i64 = 1073741823;
+
+fn main() {
+    // K = 40 primes. Dense enough that the 100000th term stays well inside
+    // i64, and wide enough that the per-step scan is the dominant cost.
+    let mut primes: Vec[i64] = Vec.new();
+    for p in [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53,
+              59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113,
+              127, 131, 137, 139, 149, 151, 157, 163, 167, 173] {
+        primes.push(p);
+    }
+    let k = primes.len();
+
+    // The swap pool: primes NOT in the base list, so a swap always changes it.
+    let mut pool: Vec[i64] = Vec.new();
+    for p in [179, 181, 191, 193, 197, 199, 211, 223] { pool.push(p); }
+
+    // Allocated once, refilled by every pass.
+    let mut ugly: Vec[i64] = Vec.new();
+    for i in 0..TERMS { ugly.push(0); }
+    let mut idx: Vec[i64] = Vec.new();
+    for i in 0..k { idx.push(0); }
+
+    let mut checksum = 0;
+    for pass in 0..PASSES {
+        // Perturb one prime from the running checksum, then restore it after
+        // the pass so the base list does not drift.
+        let slot = checksum % k;
+        let keep = primes[slot];
+        primes[slot] = pool[checksum % pool.len()];
+
+        for i in 0..k { idx[i] = 0; }
+        ugly[0] = 1;
+        let mut m = 1;
+        while m < TERMS {
+            let mut best = primes[0] * ugly[idx[0]];
+            for i in 1..k {
+                let c = primes[i] * ugly[idx[i]];
+                if c < best { best = c; }
+            }
+            for i in 0..k {
+                if primes[i] * ugly[idx[i]] == best { idx[i] = idx[i] + 1; }
+            }
+            ugly[m] = best;
+            m = m + 1;
+        }
+
+        checksum = (checksum + ugly[TERMS - 1]) & MASK;
+        primes[slot] = keep;
+    }
+
+    println("checksum " + checksum.to_string());
+}

@@ -1,0 +1,42 @@
+
+effect resource R0;
+effect resource R1;
+effect resource R2;
+effect resource R3;
+
+fn make_v0() -> Vec[i64] reads(R0) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    v.push(30_i64);
+    v
+}
+fn make_v1() -> Vec[i64] reads(R1) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(11_i64);
+    v.push(21_i64);
+    v.push(31_i64);
+    v
+}
+fn make_v2() -> Vec[i64] reads(R2) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(12_i64);
+    v.push(22_i64);
+    v.push(32_i64);
+    v
+}
+fn make_v3() -> Vec[i64] reads(R3) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(13_i64);
+    v.push(23_i64);
+    v.push(33_i64);
+    v
+}
+
+fn main() {
+    let v0 = make_v0();
+    let v1 = make_v1();
+    let v2 = make_v2();
+    let v3 = make_v3();
+    println(v0.len() + v1.len() + v2.len() + v3.len());
+}

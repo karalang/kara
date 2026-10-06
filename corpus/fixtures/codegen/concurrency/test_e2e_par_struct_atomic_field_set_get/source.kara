@@ -1,0 +1,12 @@
+
+par struct Counter { count: Atomic[i64] }
+impl Counter {
+    fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
+    fn set(ref self, v: i64) { self.count.store(v, MemoryOrdering.SeqCst) }
+}
+fn main() {
+    let c = Counter { count: Atomic.new(10) };
+    println(c.get());
+    c.set(42);
+    println(c.get());
+}

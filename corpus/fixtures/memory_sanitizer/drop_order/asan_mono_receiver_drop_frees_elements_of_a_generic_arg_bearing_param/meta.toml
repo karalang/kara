@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/drop_order.rs::asan_mono_receiver_drop_frees_elements_of_a_generic_arg_bearing_param"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

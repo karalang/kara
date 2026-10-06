@@ -1,0 +1,24 @@
+
+fn band_sum(data: ref Vec[i64], lo: i64, hi: i64) -> i64 {
+    let mut acc = 0;
+    let mut i = lo;
+    while i < hi { acc = acc + data[i]; i = i + 1; }
+    acc
+}
+fn main() with panics {
+    let mut data: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 100 { data.push(i); i = i + 1; }
+    let mut pool: TaskGroup = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[i64]] = Vec.new();
+    let mut k = 0;
+    while k < 4 {
+        let lo = k * 25;
+        let hi = lo + 25;
+        handles.push(pool.spawn(|| band_sum(data, lo, hi)));
+        k = k + 1;
+    }
+    let mut total = 0;
+    for h in handles { total = total + h.join(); }
+    if total == 4950 { println("total 4950"); } else { println("WRONG"); }
+}

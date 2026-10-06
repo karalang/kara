@@ -1,0 +1,28 @@
+
+enum Tk { A, Id(String), Num(i64) }
+struct Sp { tok: Tk, off: i64 }
+struct P { toks: Vec[Sp], pos: i64 }
+impl P {
+    fn off_now(ref self) -> i64 { self.toks[self.pos].off }
+    fn kind_now(ref self) -> i64 {
+        match self.toks[self.pos].tok { Id(_) => 1, Num(_) => 2, A => 3 }
+    }
+    fn take(mut ref self) -> String {
+        match self.toks[self.pos].tok {
+            Id(s) => { self.pos = self.pos + 1; s }
+            Num(n) => { self.pos = self.pos + 1; n.to_string() }
+            A => { self.pos = self.pos + 1; "a".to_string() }
+        }
+    }
+}
+fn main() {
+    let mut w: Vec[Sp] = Vec.new();
+    w.push(Sp { tok: Tk.Id("hello".to_string()), off: 5 });
+    w.push(Sp { tok: Tk.Id("world".to_string()), off: 9 });
+    let mut p = P { toks: w, pos: 0 };
+    println(p.off_now().to_string());
+    println(p.kind_now().to_string());
+    println(p.take());
+    println(p.off_now().to_string());
+    println(p.take());
+}

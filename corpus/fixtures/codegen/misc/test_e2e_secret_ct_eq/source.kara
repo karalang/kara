@@ -1,0 +1,11 @@
+
+import std.secret.{Secret};
+fn main() {
+    let a = Secret.new("s3cr3t-token-01");
+    let b = Secret.new("s3cr3t-token-01");
+    let c = Secret.new("s3cr3t-token-99");
+    let d = Secret.new("short");
+    println(a.ct_eq(b));
+    println(a.ct_eq(c));
+    println(a.ct_eq(d));
+}

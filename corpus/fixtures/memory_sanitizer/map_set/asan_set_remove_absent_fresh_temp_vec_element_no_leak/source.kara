@@ -1,0 +1,24 @@
+
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(701i64);
+    v.push(702i64);
+    v.push(703i64);
+    v.push(704i64);
+    v.push(705i64);
+    v.push(706i64);
+    v
+}
+
+fn main() {
+    let mut s: Set[Vec[i64]] = Set.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1i64);
+    s.insert(a);
+    if s.remove(make_vec()) {
+        println("removed");
+    } else {
+        println("absent");
+    }
+    println(s.len());
+}

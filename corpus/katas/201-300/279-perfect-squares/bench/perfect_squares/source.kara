@@ -1,0 +1,45 @@
+// Benchmark harness for LeetCode #279 — Perfect Squares.
+//
+// There is nothing to build once: the DP table IS the work, rebuilt from
+// scratch on every punch. So this is a punch loop over a VARYING n — the kata's
+// `num_squares` is pure, and a constant argument would let any of the five
+// compilers hoist the call straight out of the loop.
+//
+// Each call is O(n * sqrt(n)): a fresh Vec grown to n+1, and for every amount i
+// an inner scan over all squares j*j <= i, reading dp[i - j*j] at a stride that
+// widens as j grows. That makes it a nested-loop DP with a non-sequential (but
+// cache-resident) read pattern — a different shape from the corpus's flat
+// array kernels.
+
+fn num_squares(n: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    dp.push(0);
+    let mut i = 1;
+    while i <= n {
+        let mut best = i;
+        let mut j = 1;
+        while j * j <= i {
+            let cand = dp[i - j * j] + 1;
+            if cand < best {
+                best = cand;
+            }
+            j = j + 1;
+        }
+        dp.push(best);
+        i = i + 1;
+    }
+    return dp[n];
+}
+
+fn main() {
+    let iters = 100;
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let n = 25000 + (it * 37) % 5001;
+        sink = (sink * 31 + num_squares(n)) % 1000000007;
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

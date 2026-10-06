@@ -1,0 +1,30 @@
+fn mk(n: i64) -> Vec[i64] { return [n, n + 1] }
+fn vl(x: Vec[i64]) -> i64 { return x[0] + x.len() }
+fn ms(n: i64) -> String { return f"ssssssssssssssssssssssssssssss{n}" }
+fn vs(x: Vec[String]) -> i64 { return x.len() }
+fn run(c: bool) {
+    let n = 7;
+    let a = vl(if c { [1] } else { [2, 3] });
+    let b = vl(match c { true => [4], false => [n, 5] });
+    let d = vl(if c { let t = mk(10); t } else { mk(20) });
+    let f = |x: Vec[i64]| x[0];
+    let e = f(if c { [30] } else { Vec[31, 32] });
+    let g = vl(if c { [1; 4] } else { [-2] });
+    let h = (if c { [n * 2] } else { [8, 9] }).len();
+    let mut s = 0;
+    for x in (if c { [1] } else { [2, 3] }) { s = s + x; }
+    let u = vs(if c { ["x".to_string()] } else { ["a".to_string(), ms(2)] });
+    let v = vs(match c { true => [ms(4)], false => [] });
+    println(f"{a} {b} {d} {e} {g} {h} {s} {u} {v}");
+}
+fn main() {
+    run(true);
+    run(false);
+    let mut i = 0;
+    let mut t = 0;
+    while i < 3 {
+        t = t + vl(if i % 2 == 0 { [i] } else { let q = mk(i); q });
+        i = i + 1;
+    }
+    println(f"t{t}");
+}

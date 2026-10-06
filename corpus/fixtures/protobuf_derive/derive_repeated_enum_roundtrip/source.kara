@@ -1,0 +1,14 @@
+
+enum Color { Red, Green, Blue }
+
+#[derive(Message)]
+struct Pal { colors: Vec[Color] }
+
+fn main() {
+    let p = Pal { colors: [Color.Red, Color.Blue, Color.Green, Color.Red] };
+    let back = Pal.decode(p.encode());
+    println(back.colors.len());
+    println(match back.colors[1] { Color.Blue => "blue", _ => "?" });
+    println(match back.colors[2] { Color.Green => "green", _ => "?" });
+    println(match back.colors[3] { Color.Red => "red", _ => "?" });
+}

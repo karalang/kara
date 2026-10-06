@@ -1,0 +1,31 @@
+
+#[derive(Ord, Eq)]
+enum E { A, B }
+
+enum Color { Red, Green }
+enum Fruit { Red, Apple }
+
+impl Color {
+    fn to_fruit(self) -> Fruit {
+        match self { Red => return Fruit.Apple, Green => return Fruit.Red, }
+    }
+}
+
+fn fruit_tag(f: Fruit) -> i64 {
+    match f { Red => return 0, Apple => return 1, }
+}
+
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    println(f"01 {tag(E.A.cmp(E.B))} {tag(E.B.cmp(E.A))} {tag(E.A.cmp(E.A))}");
+    let a = E.A;
+    let b = E.B;
+    println(f"02 {tag(a.cmp(b))} {tag(b.cmp(a))} {tag(a.cmp(a))}");
+    println(f"03 {tag(a.cmp(E.B))} {tag(b.cmp(E.A))}");
+    println(f"04 {fruit_tag(Color.Red.to_fruit())} {fruit_tag(Color.Green.to_fruit())}");
+}

@@ -1,0 +1,8 @@
+
+fn main() {
+    println("a");
+    Stdout.println("b");
+    print("c");
+    Stdout.print("d");
+    Stdout.println("e");
+}

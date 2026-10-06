@@ -1,0 +1,84 @@
+// Benchmark workload for LeetCode #322 — the ★ arm's bottom-up table.
+//
+// PASSES passes. Each draws COINS distinct denominations up to TOP and a
+// target between AMOUNT / 2 and AMOUNT from an LCG, then fills the
+// fewest-coins table for every amount up to the target: one pass over the
+// amounts, trying every coin at each. The answer and a stride-9973 sample of
+// the table are folded into a rolling hash, so every cell stays observable.
+//
+// The table is allocated once, at full size, and every pass overwrites the
+// prefix it uses, so there is no refill loop for an optimizer to erase or
+// vectorise. Each cell is written once, from a running minimum.
+
+const AMOUNT: i64 = 1000000;
+const COINS: i64 = 20;
+const TOP: i64 = 3000;
+const PASSES: i64 = 24;
+const STRIDE: i64 = 9973;
+const MODULUS: i64 = 1073741789;
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// A draw in 0..bound from two LCG steps (one step only reaches 32767).
+fn draw(seed: mut ref i64, bound: i64) -> i64 {
+    let hi = next(seed);
+    let lo = next(seed);
+    return (hi * 32768 + lo) % bound;
+}
+
+// Fewest coins summing to `amount`, or -1. Fills best[0..=amount].
+fn fewest(coins: ref Vec[i64], amount: i64, best: mut ref Vec[i64]) -> i64 {
+    let unreachable = amount + 1;
+    best[0] = 0;
+    for a in 1..amount + 1 {
+        let mut b = unreachable;
+        for i in 0..coins.len() {
+            let c = coins[i];
+            if c <= a and best[a - c] + 1 < b {
+                b = best[a - c] + 1;
+            }
+        }
+        best[a] = b;
+    }
+    if best[amount] == unreachable {
+        return -1;
+    }
+    return best[amount];
+}
+
+fn main() {
+    let mut seed = 322;
+    let mut sink = 0;
+    let mut reached = 0;
+    let mut best: Vec[i64] = Vec.filled(AMOUNT + 1, 0);
+
+    for p in 0..PASSES {
+        // Two passes in three draw coins on a grid of 2 or 3, and about half
+        // of those targets are off the grid, so the -1 path is timed too.
+        let g = 1 + p % 3;
+        let mut coins: Vec[i64] = Vec.new();
+        while coins.len() < COINS {
+            let c = g * (draw(mut seed, TOP / g) + 1);
+            if not coins.contains(c) {
+                coins.push(c);
+            }
+        }
+        let amount = AMOUNT / 2 + draw(mut seed, AMOUNT / 2 + 1);
+        let ans = fewest(coins, amount, mut best);
+        if ans >= 0 {
+            reached = reached + 1;
+        }
+        let mut probe = 0;
+        let mut a = 0;
+        while a <= amount {
+            probe = (probe * 31 + best[a]) % MODULUS;
+            a = a + STRIDE;
+        }
+        sink = (sink * 131 + ans + 1 + probe) % MODULUS;
+    }
+
+    println(f"sink {sink} reached {reached}");
+}

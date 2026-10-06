@@ -1,0 +1,73 @@
+// LeetCode 266 — Palindrome Permutation. (Premium.)
+//
+// Given a string, decide whether ANY permutation of it is a palindrome.
+//
+// A palindrome pairs off: position i must match position n-1-i. So every
+// character has to appear an even number of times, with one exception — an
+// odd-length palindrome has a lone middle character with no partner. Hence:
+//
+//     permutable  <=>  AT MOST ONE character occurs an odd number of times
+//
+// AT MOST ONE, not exactly one. That distinction is the whole problem. It is
+// tempting to write `odd == 1` — a palindrome does have a middle character,
+// after all — but only an odd-LENGTH one does. "aabb" has zero odd counts and
+// permutes to "abba"; `odd == 1` rejects it.
+//
+// The two readings agree on every odd-length string and disagree on every
+// even-length one, which is a clean 50/50 split of any random test set, so this
+// is not a bug that hides. It is a bug that gets written and then caught
+// immediately — unless the only examples on hand happen to be odd-length, which
+// is exactly what the LeetCode samples ("code", "aab", "carerac") do NOT
+// protect against, since two of the three are even.
+//
+// The empty string permutes to the empty palindrome: zero odd counts, true.
+
+fn can_permute_palindrome(s: ref String) -> bool {
+    // One slot per byte value. The problem says lowercase letters, but counting
+    // bytes costs the same and makes no assumption about the alphabet.
+    let mut counts: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 256 {
+        counts.push(0);
+        i = i + 1;
+    }
+    for b in s.bytes() {
+        counts[b] = counts[b] + 1;
+    }
+
+    let mut odd = 0;
+    let mut c = 0;
+    while c < 256 {
+        if counts[c] % 2 == 1 {
+            odd = odd + 1;
+        }
+        c = c + 1;
+    }
+    return odd <= 1;
+}
+
+fn report(s: ref String) {
+    if can_permute_palindrome(s) {
+        println(f"\"{s}\" -> true");
+    } else {
+        println(f"\"{s}\" -> false");
+    }
+}
+
+fn main() {
+    report("code");        // false — c,o,d,e all odd
+    report("aab");         // true  — aba
+    report("carerac");     // true  — racecar
+    report("");            // true  — the empty palindrome
+    report("a");           // true
+    report("aa");          // true
+    report("ab");          // false
+    // ★ even length, ZERO odd counts — the case `odd == 1` rejects
+    report("aabb");        // true — abba
+    report("aabbcc");      // true
+    report("aaabbb");      // false — two odd counts (a:3, b:3)
+    report("aaabbbb");     // true  — one odd count (a:3)
+    report("zzzzzzzz");    // true
+    report("abcabcabc");   // false — three odd counts
+    report("abcabcabcd");  // false — four odd counts
+}

@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(10_i64);
+    s.insert(20_i64);
+    s.insert(30_i64);
+    let mut sum: i64 = 0;
+    for x in s {
+        sum = sum + x;
+    }
+    println(sum);
+}

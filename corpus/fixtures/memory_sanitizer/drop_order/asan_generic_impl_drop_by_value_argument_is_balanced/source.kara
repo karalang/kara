@@ -1,0 +1,25 @@
+
+struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}") } }
+struct Pl { v: String, tag: String }
+impl Drop for Pl { fn drop(mut ref self) { println(f"dP{self.tag.len()}") } }
+fn take(b: Box3[String]) { println(f"  t{b.v.len()}") }
+fn takei(b: Box3[i64]) { println(f"  ti{b.v}") }
+fn takep(b: Pl) { println(f"  tp{b.v.len()}") }
+fn make() -> Box3[String] { return Box3 { v: f"mmmmmmmm", tag: f"rrrrrrr" }; }
+fn c_param() { let b: Box3[String] = Box3 { v: f"pppppppp", tag: f"qqqqqq" }; take(b); println("  after") }
+fn c_parami() { let b: Box3[i64] = Box3 { v: 5, tag: f"iiiii" }; takei(b) }
+fn c_ret()   { let r = make(); println(f"  r{r.v.len()}") }
+fn c_temp()  { take(Box3 { v: f"tttttttt", tag: f"sssss" }) }
+fn c_plain() { let b = Pl { v: f"pppppppp", tag: f"qqqqqq" }; takep(b) }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        println("param");  c_param();
+        println("parami"); c_parami();
+        println("ret");    c_ret();
+        println("temp");   c_temp();
+        println("plain");  c_plain();
+        i = i + 1;
+    }
+}

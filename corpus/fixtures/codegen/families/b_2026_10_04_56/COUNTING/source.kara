@@ -1,0 +1,30 @@
+
+fn main() {
+    let text = "abracadabra alakazam";
+    let mut counts: Map[char, i64] = Map.new();
+    for c in text.chars() {
+        counts.insert(c, counts.get(c).unwrap_or(0) + 1);
+    }
+    let mut lines: Vec[String] = Vec.new();
+    for (c, n) in counts {
+        lines.push(f"{c}={n}");
+    }
+    lines.sort();
+    for l in lines {
+        println(l);
+    }
+    let mut sq: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < 3000 {
+        let k = (i * 7919) % 1000;
+        sq.insert(k, sq.get(k).unwrap_or(0) + i);
+        i += 1;
+    }
+    let mut total = 0;
+    let mut j = 0;
+    while j < 1000 {
+        total = (total * 31 + sq.get(j).unwrap_or(-1)) % 1000000007;
+        j += 1;
+    }
+    println(f"{sq.len()} {total}");
+}

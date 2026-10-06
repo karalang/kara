@@ -1,0 +1,22 @@
+
+enum J { N, S(String), Pair(i64, String) }
+fn get(k: i64) -> Result[J, String] {
+    if k == 0i64 { Result.Ok(J.S(f"str-{k}-padding-padding")) }
+    else { Result.Ok(J.Pair(k, f"pair-{k}-padding-padding")) }
+}
+fn take(k: i64) -> Result[String, String] {
+    let v = get(k)?;
+    match v {
+        N => { Result.Ok(f"n") }
+        S(s) => { Result.Ok(s) }
+        Pair(a, s) => { Result.Ok(f"{a}:{s}") }
+    }
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        match take(0i64) { Ok(r) => println(r), Err(_) => println("e") }
+        match take(1i64) { Ok(r) => println(r), Err(_) => println("e") }
+        i = i + 1;
+    }
+}

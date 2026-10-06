@@ -1,0 +1,27 @@
+
+fn main() {
+    let e: PriorityQueue[i64] = PriorityQueue.new();
+    match e.peek() { Some(v) => { println(v); } None => { println("none"); } }
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    q.push(5); q.push(1); q.push(4); q.push(9);
+    match q.peek() { Some(v) => { println(v); } None => {} }
+    match q.peek() { Some(v) => { println(v); } None => {} }
+    println(q.len());
+    match q.pop() { Some(v) => { println(v); } None => {} }
+    match q.peek() { Some(v) => { println(v); } None => {} }
+    println(q.len());
+    let mut m: PriorityQueue[i64] = PriorityQueue.max_first();
+    m.push(5); m.push(1); m.push(4); m.push(9);
+    match m.peek() { Some(v) => { println(v); } None => {} }
+    let h = PriorityQueue.from([9, 7, 8, 1, 3]);
+    match h.peek() { Some(v) => { println(v); } None => {} }
+    let hm = PriorityQueue.max_first_from([9, 7, 8, 1, 3]);
+    match hm.peek() { Some(v) => { println(v); } None => {} }
+    let mut s: PriorityQueue[String] = PriorityQueue.new();
+    s.push("pear"); s.push("apple"); s.push("fig");
+    match s.peek() { Some(v) => { println(v); } None => {} }
+    match s.peek() { Some(v) => { println(v); } None => {} }
+    println(s.len());
+    match s.pop() { Some(v) => { println(v); } None => {} }
+    match s.peek() { Some(v) => { println(v); } None => {} }
+}

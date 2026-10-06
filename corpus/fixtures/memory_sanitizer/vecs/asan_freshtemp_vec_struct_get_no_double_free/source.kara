@@ -1,0 +1,21 @@
+
+struct Rec { name: String, n: i64 }
+
+fn make_recs() -> Vec[Rec] {
+    let mut v: Vec[Rec] = Vec.new();
+    v.push(Rec { name: "first record name field padded beyond thirty-six bytes", n: 10_i64 });
+    v.push(Rec { name: "second record name field padded beyond thirty-six byte", n: 20_i64 });
+    v.push(Rec { name: "third record name field padded beyond thirty-six bytess", n: 30_i64 });
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        match make_recs().get(i) {
+            Some(r) => println(r.n),
+            None => println(0_i64),
+        };
+        i = i + 1;
+    };
+}

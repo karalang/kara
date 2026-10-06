@@ -1,0 +1,152 @@
+// LeetCode #133: Clone Graph — BFS / iterative O(N + M).
+//
+// Same idea as the DFS variant but uses an explicit queue. Clone the root
+// up front and seed the visited map with it; for every node we pop, walk
+// its neighbors, clone any unseen ones (queuing them for later expansion),
+// and append the existing-or-fresh clone to the current node's clone's
+// neighbor list. Visited is keyed by val (LeetCode guarantees vals are
+// unique 1..n).
+
+shared struct Node {
+    val: i64,
+    mut neighbors: Vec[Node],
+}
+
+fn clone_graph(root: Option[Node]) -> Option[Node] {
+    match root {
+        None => None,
+        Some(start) => {
+            let mut visited: Map[i64, Node] = Map.new();
+            let mut queue: VecDeque[Node] = VecDeque.new();
+
+            let root_clone = Node { val: start.val, neighbors: Vec.new() };
+            let _ = visited.insert(start.val, root_clone);
+            queue.push_back(start);
+
+            loop {
+                if let Some(curr) = queue.pop_front() {
+                    // One fetch per popped node — `curr_clone` is an RC
+                    // alias into the map, so pushes through it are
+                    // visible to every other handle. (Pre-refcount-fix
+                    // this was re-fetched per neighbor to dodge a
+                    // shared-struct aliasing hang.)
+                    let curr_clone = visited.get(curr.val).unwrap();
+                    for nb in curr.neighbors.iter() {
+                        if let None = visited.get(nb.val) {
+                            let fresh = Node { val: nb.val, neighbors: Vec.new() };
+                            let _ = visited.insert(nb.val, fresh);
+                            queue.push_back(nb);
+                        }
+                        let nb_clone = visited.get(nb.val).unwrap();
+                        curr_clone.neighbors.push(nb_clone);
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            // `root_clone` is still a live alias to the map's entry —
+            // return it directly instead of a final `visited.get`.
+            Some(root_clone)
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn row(arr: Slice[i64]) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let n = arr.len();
+    for i in 0..n {
+        v.push(arr[i]);
+    }
+    v
+}
+
+fn build_graph(adj: ref Vec[Vec[i64]]) -> Option[Node] {
+    let n = adj.len();
+    if n == 0 {
+        return None;
+    }
+    let mut nodes: Vec[Node] = Vec.new();
+    for i in 0..n {
+        nodes.push(Node { val: (i as i64) + 1, neighbors: Vec.new() });
+    }
+    for i in 0..n {
+        let m = adj[i].len();
+        for j in 0..m {
+            let v = adj[i][j];
+            nodes[i].neighbors.push(nodes[(v - 1) as u64]);
+        }
+    }
+    Some(nodes[0])
+}
+
+fn print_graph(root: Option[Node]) {
+    match root {
+        None => println("(empty)"),
+        Some(start) => bfs_print(start),
+    }
+}
+
+fn bfs_print(start: Node) {
+    let mut queue: VecDeque[Node] = VecDeque.new();
+    let mut visited: Map[i64, bool] = Map.new();
+    queue.push_back(start);
+    let _ = visited.insert(start.val, true);
+    loop {
+        if let Some(curr) = queue.pop_front() {
+            let mut nvals: Vec[i64] = Vec.new();
+            for nb in curr.neighbors.iter() {
+                nvals.push(nb.val);
+                if let None = visited.get(nb.val) {
+                    let _ = visited.insert(nb.val, true);
+                    queue.push_back(nb);
+                }
+            }
+            println(f"{curr.val}: {nvals}");
+        } else {
+            break;
+        }
+    }
+}
+
+fn report(adj: ref Vec[Vec[i64]]) {
+    let original = build_graph(adj);
+    let cloned = clone_graph(original);
+    print_graph(cloned);
+    println("---");
+}
+
+fn main() {
+    // Case 1: 4-cycle (LeetCode default example)
+    let mut a1: Vec[Vec[i64]] = Vec.new();
+    a1.push(row([2, 4]));
+    a1.push(row([1, 3]));
+    a1.push(row([2, 4]));
+    a1.push(row([1, 3]));
+    report(a1);
+
+    // Case 2: single node, no neighbors
+    let mut a2: Vec[Vec[i64]] = Vec.new();
+    a2.push(row([]));
+    report(a2);
+
+    // Case 3: empty graph
+    let a3: Vec[Vec[i64]] = Vec.new();
+    report(a3);
+
+    // Case 4: two nodes mutually connected
+    let mut a4: Vec[Vec[i64]] = Vec.new();
+    a4.push(row([2]));
+    a4.push(row([1]));
+    report(a4);
+
+    // Case 5: path 1-2-3-4
+    let mut a5: Vec[Vec[i64]] = Vec.new();
+    a5.push(row([2]));
+    a5.push(row([1, 3]));
+    a5.push(row([2, 4]));
+    a5.push(row([3]));
+    report(a5);
+}

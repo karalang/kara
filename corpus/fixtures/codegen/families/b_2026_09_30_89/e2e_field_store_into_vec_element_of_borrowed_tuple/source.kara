@@ -1,0 +1,13 @@
+struct P { n: i64, s: String }
+struct H { t: (Vec[P], i64) }
+impl H { fn set(mut ref self) { self.t.0[1].n = 40; self.t.0[0].s = f"h{9}"; } }
+fn g() -> i64 { println("g"); return 1 }
+fn f(a: mut ref (Vec[P], i64)) { a.0[0].n = 9; a.0[g()].s = f"t{3}"; a.0[1].n += 4; }
+fn main() {
+    let mut a: (Vec[P], i64) = ([P { n: 5, s: f"x{1}" }, P { n: 6, s: f"y{2}" }], 7);
+    f(mut a);
+    println(f"a:{a.0[0].n} {a.0[1].n} {a.0[1].s}");
+    let mut h = H { t: ([P { n: 1, s: f"u{1}" }, P { n: 2, s: f"v{2}" }], 3) };
+    h.set();
+    println(f"b:{h.t.0[1].n} {h.t.0[0].s}");
+}

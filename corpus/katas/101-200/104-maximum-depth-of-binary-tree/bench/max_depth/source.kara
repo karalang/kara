@@ -1,0 +1,52 @@
+// Benchmark workload for LeetCode #104 — build 8 BSTs once, then K reps of recursive
+// max_depth on a DATA-DEPENDENT-selected tree (idx = acc%8, seeded by the running hash so
+// nothing hoists), folding each depth into a rolling hash. Unlike the alloc-heavy tree
+// siblings, this is a READ-ONLY per-node traversal — each rep only matches Option[shared] and
+// reads a field per node, no allocation — so it is the most-exposed RC/traversal regime (cf.
+// kata #100). Kara passes Option[shared] by value, rc-inc/dec'ing every visited node; C/Go use
+// raw pointers, Rust a Box walked by &-borrow. The recursive max(lh, rh) has two independent
+// recursive calls; auto-par's granularity cutoff (B-2026-07-15-4, fixed) leaves the 15-node
+// subtree walks sequential, so the default build stays single-threaded (byte-equal to ap0).
+shared struct TreeNode { val: i64, mut left: Option[TreeNode], mut right: Option[TreeNode] }
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    match root {
+        None => Some(TreeNode { val: v, left: None, right: None }),
+        Some(n) => { if v < n.val { n.left = insert(n.left, v); } else { n.right = insert(n.right, v); } Some(n) }
+    }
+}
+fn max_depth(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let lh = max_depth(n.left);
+            let rh = max_depth(n.right);
+            if lh > rh { 1 + lh } else { 1 + rh }
+        }
+    }
+}
+fn build(nums: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None; let mut i = 0;
+    while i < nums.len() { root = insert(root, nums[i]); i = i + 1; }
+    root
+}
+fn main() {
+    let base = [16,8,24,4,12,20,28,2,6,10,14,18,22,26,30];
+    let mut pool: Vec[Option[TreeNode]] = Vec.new();
+    let mut t = 0;
+    while t < 8 {
+        let mut nums: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < base.len() { nums.push(base[(k + t) % base.len()]); k = k + 1; }
+        pool.push(build(nums));
+        t = t + 1;
+    }
+    let mut acc = 1;
+    let mut rep = 0;
+    while rep < 4000000 {
+        let idx = acc % 8;
+        let d = max_depth(pool[idx].clone());
+        acc = (acc * 131 + d + 1) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

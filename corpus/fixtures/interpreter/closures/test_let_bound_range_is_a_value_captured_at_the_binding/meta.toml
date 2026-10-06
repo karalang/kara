@@ -1,0 +1,13 @@
+source = "tests/interpreter/closures.rs::test_let_bound_range_is_a_value_captured_at_the_binding"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,113 @@
+// LeetCode #124: Binary Tree Maximum Path Sum — Hard.
+//
+// A *path* is any sequence of nodes where consecutive nodes are connected by an
+// edge; it visits each node at most once and need NOT pass through the root.
+// Return the maximum path sum over every such path. Node values may be negative,
+// so a subtree can drag a path down — the trick is to CLAMP each child's upward
+// contribution at zero (never extend into a subtree that only subtracts).
+//
+// One post-order pass. For a node, let `gain(c) = max(0, downward best of child c)`
+// — the most a child can add if the path CONTINUES upward through this node (a
+// path going up can use at most ONE side, so a child that would subtract is
+// dropped by the clamp). Two quantities per node:
+//   • through = val + gain(left) + gain(right)   — best path that BENDS at this
+//     node (uses both sides); a candidate for the global answer but cannot be
+//     extended to the parent.
+//   • up      = val + max(gain(left), gain(right)) — best path that continues
+//     UPWARD through this node (at most one side); this is what we return.
+// The global maximum is the max `through` over all nodes, threaded through the
+// recursion in a `mut ref i64` accumulator. O(n) time, O(h) stack.
+//
+// Node type mirrors #104/#112/#113 — a `shared struct TreeNode` (RC).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// Post-order: return the best UPWARD gain rooted at `node` (clamped at 0 by the
+// caller), and relax `best` with the best path that bends here (both sides).
+fn max_gain(node: Option[TreeNode], best: mut ref i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let lg = max_gain(n.left, best);
+            let rg = max_gain(n.right, best);
+            let left_gain = if lg > 0 { lg } else { 0 };
+            let right_gain = if rg > 0 { rg } else { 0 };
+            let through = n.val + left_gain + right_gain;
+            if through > best {
+                best = through;
+            }
+            let branch = if left_gain > right_gain { left_gain } else { right_gain };
+            n.val + branch
+        }
+    }
+}
+
+fn max_path_sum(root: Option[TreeNode]) -> i64 {
+    // Every tree here is non-empty, so the first `through` relax seeds a real value.
+    // Start below the LeetCode value floor (nodes ∈ [-1000, 1000], ≤ 3·10⁴ nodes,
+    // so the min achievable path sum is ≥ -3·10⁷).
+    let mut best = -1000000000;
+    let _ = max_gain(root, mut best);
+    best
+}
+
+// ── Deterministic tree construction ─────────────────────────────────────────
+// Build a balanced tree over indices [lo, hi]; each node's value is a mixed-sign
+// function of its index and the case seed, so the negative-gain clamp actually
+// bites (a subtree that only subtracts must be dropped).
+fn node_value(i: i64, seed: i64) -> i64 {
+    // Range roughly [-20, 20]; deterministic, sign-varied.
+    ((i * 37 + seed * 13) % 41) - 20
+}
+
+fn build_balanced(lo: i64, hi: i64, seed: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: node_value(mid, seed), left: None, right: None };
+    node.left = build_balanced(lo, mid - 1, seed);
+    node.right = build_balanced(mid + 1, hi, seed);
+    Some(node)
+}
+
+// A tiny explicit-node helper for the canonical LeetCode examples.
+fn leaf(v: i64) -> Option[TreeNode] {
+    Some(TreeNode { val: v, left: None, right: None })
+}
+
+fn main() {
+    let mut sink = 0;
+
+    // Canonical LeetCode examples (known answers).
+    // Example 1: [1,2,3] -> 6.
+    let e1 = TreeNode { val: 1, left: leaf(2), right: leaf(3) };
+    sink = sink + max_path_sum(Some(e1));                        // 6
+
+    // Example 2: [-10, 9, 20, null, null, 15, 7] -> 42 (15 + 20 + 7).
+    let e2_right = TreeNode { val: 20, left: leaf(15), right: leaf(7) };
+    let e2 = TreeNode { val: -10, left: leaf(9), right: Some(e2_right) };
+    sink = sink + max_path_sum(Some(e2));                        // 42
+
+    // Single negative node -> the node itself.
+    sink = sink + max_path_sum(leaf(-3));                     // -3
+
+    // A tree that is all-negative: the answer is the largest (least negative) node.
+    let neg = TreeNode { val: -5, left: leaf(-8), right: leaf(-2) };
+    sink = sink + max_path_sum(Some(neg));                       // -2
+
+    // Generated balanced trees of increasing size, mixed-sign values.
+    let mut t = 0;
+    while t < 8 {
+        let n = 9 + t * 3;
+        let root = build_balanced(0, n - 1, t + 1);
+        sink = sink + max_path_sum(root);
+        t = t + 1;
+    }
+
+    println(sink.to_string());
+}

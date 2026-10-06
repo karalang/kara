@@ -1,0 +1,19 @@
+struct Bx[T] { v: T, n: i64 }
+impl Bx[String] {
+    fn get(self) -> String { return self.v; }
+    fn peek(ref self) -> i64 { self.n }
+    fn bump(mut ref self) { self.n = self.n + 1; }
+    fn setv(mut ref self, s: String) { self.v = s; }
+    fn show(ref self) { println(f"show {self.v} {self.n}") }
+    fn me(self) -> Self { self }
+}
+fn main() {
+    let mut b = Bx { v: "first-heap-string-xx".to_string(), n: 3 };
+    b.bump();
+    b.setv("second-heap-string-x".to_string());
+    b.show();
+    println(f"{b.peek()}");
+    let c = b.me();
+    c.show();
+    println(c.get());
+}

@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.reserve(-100);
+    let mut s: String = String.new();
+    s.push_str("k");
+    s.reserve(-100);
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 1);
+    m.reserve(-100);
+    let mut t: Set[i64] = Set.new();
+    t.insert(1);
+    t.reserve(-100);
+    println(f"{v.len()} [{s}] {m.len()} {t.len()}");
+}

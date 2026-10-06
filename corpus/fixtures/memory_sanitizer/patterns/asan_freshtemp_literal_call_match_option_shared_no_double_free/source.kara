@@ -1,0 +1,17 @@
+
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn make() -> Option[Node] {
+    Some(Node { val: 7, left: None, right: None })
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        match make() {
+            None => {}
+            Some(n) => { t = t + n.val; }
+        }
+        i = i + 1;
+    }
+    println(f"{t}");
+}

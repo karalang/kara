@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_30_19.rs::e2e_arm_binding_shadowing_a_live_local_leaves_it_its_body"
+dedup_of = ["tests/interpreter/families/b_2026_09_30_19.rs::interp_arm_binding_shadowing_a_live_local_leaves_it_its_body", "tests/memory_sanitizer/families/b_2026_09_30_19.rs::asan_arm_binding_shadowing_a_live_local_leaves_it_its_body"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,13 @@
+gLocal
+  in
+dR80/t80/1
+gTemp
+  in
+dR81/t81/1
+nLocal
+  in
+dR82/t82/1
+nTemp
+  in
+dR83/t83/1
+done

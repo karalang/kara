@@ -1,0 +1,13 @@
+
+fn kind(c: char) -> i64 {
+    match c {
+        '0'..='9' => 1,
+        'a'..='z' => 2,
+        _ => 0,
+    }
+}
+fn main() {
+    println(kind('5'));   // digit → 1
+    println(kind('q'));   // lower → 2
+    println(kind('M'));   // neither → 0
+}

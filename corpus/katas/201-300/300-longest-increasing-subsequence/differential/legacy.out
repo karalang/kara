@@ -1,0 +1,8 @@
+cases 6750
+P1 three-arm disagreements 0
+P2 range violations 0
+P3 degenerate-shape failures 0
+P4 reverse-negate asymmetries 0
+P5 invalid witnesses 0
+P6 append-maximum failures 0
+DIFFERENTIAL OK

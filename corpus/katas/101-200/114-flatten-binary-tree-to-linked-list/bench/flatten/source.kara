@@ -1,0 +1,58 @@
+// Benchmark workload for LeetCode #114 — flatten is destructive (it rewires the tree into a
+// right-spine in place), so each rep builds a fresh 63-node balanced tree over a DATA-DEPENDENT
+// value range (base = acc%100, seeded by the running hash so nothing hoists), flattens it with the
+// O(1)-space Morris rewiring, and folds the resulting spine hash. Measures shared-node ALLOCATION
+// (63 RC nodes built) + in-place pointer REWIRING per rep — the mutate regime (cf. #226 invert),
+// distinct from the read-only (#112) and collect (#113) walks. C/Go use raw pointers, Rust a Box
+// tree walked by &mut; Kara mutates `mut left`/`mut right` on `shared` nodes. Default `karac build`
+// is byte-equal to KARAC_AUTO_PAR=0.
+shared struct TreeNode { val: i64, mut left: Option[TreeNode], mut right: Option[TreeNode] }
+fn flatten(root: Option[TreeNode]) {
+    let mut curr = root;
+    let mut going = true;
+    while going {
+        match curr {
+            None => { going = false; }
+            Some(c) => {
+                match c.left {
+                    None => {}
+                    Some(l) => {
+                        let mut prev = l;
+                        let mut inner = true;
+                        while inner { match prev.right { None => { inner = false; } Some(r) => { prev = r; } } }
+                        prev.right = c.right;
+                        c.right = c.left;
+                        c.left = None;
+                    }
+                }
+                curr = c.right;
+            }
+        }
+    }
+}
+fn build_balanced(lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi { return None; }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: mid, left: None, right: None };
+    node.left = build_balanced(lo, mid - 1);
+    node.right = build_balanced(mid + 1, hi);
+    Some(node)
+}
+fn spine_hash(root: Option[TreeNode]) -> i64 {
+    let mut h = 1; let mut cur = root; let mut going = true;
+    while going { match cur { None => { going = false; } Some(n) => { h = (h * 131 + n.val + 1000) % 1000000007; cur = n.right; } } }
+    h
+}
+fn main() {
+    let mut acc = 1;
+    let mut rep = 0;
+    while rep < 200000 {
+        let base = acc % 100;
+        let root = build_balanced(base, base + 62);
+        flatten(root);
+        let h = spine_hash(root);
+        acc = (acc * 1000003 + h + 1) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

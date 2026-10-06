@@ -1,0 +1,13 @@
+source = "tests/codegen/strings.rs::e2e_spec_128_bit_holes_on_the_runtime_formatter_path"
+dedup_of = ["tests/interpreter/strings.rs::test_interp_spec_128_bit_runtime_formatter_holes"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

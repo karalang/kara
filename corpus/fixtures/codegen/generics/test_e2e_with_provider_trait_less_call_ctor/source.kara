@@ -1,0 +1,10 @@
+
+effect resource AuditLog;
+struct FakeLog { n: i64 }
+impl FakeLog { fn count(self) -> i64 { self.n } }
+fn make_log() -> FakeLog { FakeLog { n: 9 } }
+fn tally() -> i64 reads(AuditLog) { AuditLog.count() }
+fn main() reads(AuditLog) {
+    let p = make_log();
+    with_provider[AuditLog](p, || { println(tally()); });
+}

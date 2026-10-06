@@ -1,0 +1,30 @@
+
+struct K { key: i64, ord: i64 }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut seed: i64 = 12345;
+    let mut i: i64 = 0;
+    while i < 5000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        v.push(seed % 8);
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.cmp(b));
+    let mut inv: i64 = 0;
+    let mut sum: i64 = 0;
+    let mut j: i64 = 1;
+    while j < v.len() { if v[j] < v[j - 1] { inv = inv + 1; } j = j + 1; }
+    let mut t: i64 = 0;
+    while t < v.len() { sum = sum + v[t] * (t % 7); t = t + 1; }
+    println(f"{inv}");
+    println(f"{sum}");
+
+    let mut w: Vec[K] = Vec.new();
+    let mut m: i64 = 0;
+    while m < 5000 { w.push(K { key: 7, ord: m }); m = m + 1; }
+    w.sort_by(|a, b| a.key.cmp(b.key));
+    let mut bad: i64 = 0;
+    let mut q: i64 = 0;
+    while q < w.len() { if w[q].ord != q { bad = bad + 1; } q = q + 1; }
+    println(f"{bad}");
+}

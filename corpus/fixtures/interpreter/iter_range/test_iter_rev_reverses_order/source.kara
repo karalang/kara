@@ -1,0 +1,14 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    for x in v.iter().rev() { println(x); }
+    let a: Vec[i64] = v.iter().rev().collect();
+    println(a.get(0));
+    let b: Vec[i64] = v.iter().map(|x| x * 10).rev().collect();
+    println(b.get(0));
+    let c: Vec[i64] = v.iter().rev().map(|x| x * 10).collect();
+    println(c.get(0));
+    println(v.iter().rev().fold(0, |acc, x| acc * 10 + x));
+    let d: Vec[i64] = v.iter().rev().filter(|x| x % 2 == 0).collect();
+    println(d.get(0));
+}

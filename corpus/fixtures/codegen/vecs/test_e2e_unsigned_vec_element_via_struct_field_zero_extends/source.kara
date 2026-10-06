@@ -1,0 +1,13 @@
+
+struct H16 { px: Vec[u16] }
+struct H8  { px: Vec[u8] }
+struct H32 { px: Vec[u32] }
+fn main() {
+    let mut a: Vec[u16] = Vec.new(); a.push(45517u16);
+    let mut b: Vec[u8]  = Vec.new(); b.push(200u8);
+    let mut c: Vec[u32] = Vec.new(); c.push(3000000000u32);
+    let h16 = H16 { px: a };
+    let h8  = H8  { px: b };
+    let h32 = H32 { px: c };
+    println(f"{h16.px[0] as f64} {h16.px[0] as i64} {h8.px[0] as i64} {h32.px[0] as i64}");
+}

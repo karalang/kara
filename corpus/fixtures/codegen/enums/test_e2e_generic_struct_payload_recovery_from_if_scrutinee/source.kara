@@ -1,0 +1,18 @@
+
+struct Wrap[T] { val: T }
+fn ret_binding(x: i64) -> Wrap[String] {
+    match (if x > 0i64 { Ok(x) } else { Err(Wrap { val: "kept".to_string() }) }) {
+        Ok(_) => { Wrap { val: "ok".to_string() } }
+        Err(e) => { e }
+    }
+}
+fn read_field(x: i64) -> i64 {
+    match (if x > 0i64 { Ok(x) } else { Err(Wrap { val: "hello".to_string() }) }) {
+        Ok(n) => { n }
+        Err(e) => { e.val.len() }
+    }
+}
+fn main() {
+    println(ret_binding(-1i64).val);
+    println(read_field(-1i64).to_string());
+}

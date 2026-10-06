@@ -1,0 +1,25 @@
+
+fn build(n: i64) -> i64 {
+    let mut rows: Vec[Vec[char]] = Vec.new();
+    let mut r = 0i64;
+    while r < 4 {
+        let row: Vec[char] = Vec.new();
+        rows.push(row);
+        r = r + 1;
+    }
+    let mut i = 0i64;
+    while i < n {
+        rows[i % 4].push('A');
+        i = i + 1;
+    }
+    rows[0].len()
+}
+fn main() {
+    let mut sum = 0i64;
+    let mut k = 0i64;
+    while k < 10 {
+        sum = sum + build(100);
+        k = k + 1;
+    }
+    println(sum);
+}

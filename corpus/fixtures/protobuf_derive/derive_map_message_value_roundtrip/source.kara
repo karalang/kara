@@ -1,0 +1,15 @@
+
+#[derive(Message)]
+struct Inner { v: i64 }
+
+#[derive(Message)]
+struct Doc { parts: Map[String, Inner] }
+
+fn main() {
+    let mut parts: Map[String, Inner] = Map.new();
+    parts.insert("x", Inner { v: 99 });
+    let d = Doc { parts: parts };
+    let back = Doc.decode(d.encode());
+    println(back.parts.len());
+    println(match back.parts.get("x") { Option.Some(p) => p.v, Option.None => -1 });
+}

@@ -1,0 +1,20 @@
+
+shared struct Sh { s: String }
+enum Ta { A(Array[String, 2]), B }
+enum Tsh { A(Sh), B }
+struct P { id: i64, s: String }
+enum Tp { A(P), B }
+fn mka(n: i64) -> Ta { Ta.A([f"a-{n}", f"b-{n}"]) }
+fn mksh(n: i64) -> Tsh { Tsh.A(Sh { s: f"sh-{n}" }) }
+fn mkp(n: i64) -> Tp { Tp.A(P { id: n, s: f"p-{n}" }) }
+fn givea(e: Ta) -> Ta { e }
+fn givesh(e: Tsh) -> Tsh { e }
+fn givep(e: Tp) -> Tp { e }
+fn keepp(v: mut ref Vec[Tp], e: Tp) { v.push(e); }
+fn main() {
+    let a = givea(mka(1)); match a { Ta.A(xs) => println(f"a:{xs[1]}"), Ta.B => println("b") }
+    let s = givesh(mksh(2)); match s { Tsh.A(x) => println(f"s:{x.s}"), Tsh.B => println("b") }
+    let p = givep(mkp(3)); match p { Tp.A(x) => println(f"p:{x.s}"), Tp.B => println("b") }
+    let mut v: Vec[Tp] = []; keepp(mut v, mkp(4)); println(f"v:{v.len()}");
+    println("end");
+}

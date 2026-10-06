@@ -1,0 +1,22 @@
+
+fn build() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 5 {
+        let mut s = String.new();
+        s.push_str("string_element_whole_move_heap_payload_pi_");
+        s.push_str(i.to_string());
+        v.push(s);
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let words = build();
+    let mut n: i64 = 0;
+    for s in words {
+        let x = s;
+        n = n + x.len();
+    }
+    println(n);
+}

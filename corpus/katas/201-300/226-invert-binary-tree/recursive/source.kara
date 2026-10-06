@@ -1,0 +1,92 @@
+// LeetCode #226: Invert Binary Tree — recursive DFS.
+//
+// Mirror every node by swapping its two subtrees, recursively. The post-order
+// swap (recurse on both sides first, swap pointers last) and the pre-order
+// swap (swap pointers, then recurse) are both correct because the two
+// recursive calls touch disjoint subtrees and order doesn't change which
+// nodes get swapped. We use the post-order shape so that each call returns
+// the same node it received, making the function a drop-in `Option[TreeNode]
+// -> Option[TreeNode]`.
+//
+// O(n) time, O(h) auxiliary stack space for height h.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn invert(root: Option[TreeNode]) -> Option[TreeNode] {
+    match root {
+        None => None,
+        Some(node) => {
+            let new_left = invert(node.right);
+            let new_right = invert(node.left);
+            node.left = new_left;
+            node.right = new_right;
+            Some(node)
+        }
+    }
+}
+
+// Level-order traversal. Skips None children so the printed sequence is
+// `[node.val for node in bfs(root)]`. Unambiguous as a tree identity on
+// the (near-)full trees this kata uses for test input.
+fn report(root: Option[TreeNode]) {
+    let inverted = invert(root);
+    match inverted {
+        None => {},
+        Some(node) => {
+            let mut queue = VecDeque.new();
+            queue.push_back(node);
+            loop {
+                match queue.pop_front() {
+                    None => { break; },
+                    Some(current) => {
+                        println(current.val);
+                        if let Some(left) = current.left {
+                            queue.push_back(left);
+                        }
+                        if let Some(right) = current.right {
+                            queue.push_back(right);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    // Case 1: [4,2,7,1,3,6,9] → inverted [4,7,2,9,6,3,1]
+    //         4                            4
+    //        / \                          / \
+    //       2   7        →               7   2
+    //      / \ / \                      / \ / \
+    //     1  3 6  9                    9  6 3  1
+    let tree1 = Some(TreeNode {
+        val: 4,
+        left: Some(TreeNode {
+            val: 2,
+            left: Some(TreeNode { val: 1, left: None, right: None }),
+            right: Some(TreeNode { val: 3, left: None, right: None }),
+        }),
+        right: Some(TreeNode {
+            val: 7,
+            left: Some(TreeNode { val: 6, left: None, right: None }),
+            right: Some(TreeNode { val: 9, left: None, right: None }),
+        }),
+    });
+    report(tree1);
+
+    // Case 2: [2,1,3] → [2,3,1]
+    let tree2 = Some(TreeNode {
+        val: 2,
+        left: Some(TreeNode { val: 1, left: None, right: None }),
+        right: Some(TreeNode { val: 3, left: None, right: None }),
+    });
+    report(tree2);
+
+    // Case 3: empty tree → empty (nothing printed)
+    report(None);
+}

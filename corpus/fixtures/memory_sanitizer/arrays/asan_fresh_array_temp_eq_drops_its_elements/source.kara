@@ -1,0 +1,22 @@
+
+fn mk(n: i64) -> Array[String, 2] { return Array[f"item{n}", f"item{n + 1}"]; }
+fn mkv(n: i64) -> Array[Vec[i64], 2] {
+    let mut x: Vec[i64] = Vec.new();
+    x.push(n);
+    let mut y: Vec[i64] = Vec.new();
+    y.push(n + 1);
+    return Array[x, y];
+}
+
+fn main() {
+    println(f"{mk(2) == mk(2)}");
+    println(f"{mk(2) != mk(4)}");
+    println(f"{mkv(1) == mkv(1)}");
+    println(f"{Array["aa", "bb"] == Array["aa", "bb"]}");
+    println(f"{Array["item5", "item6"] == mk(5)}");
+    let p = mk(7);
+    let q = mk(7);
+    println(f"{p == q}");
+    println(p[0]);
+    println(q[1]);
+}

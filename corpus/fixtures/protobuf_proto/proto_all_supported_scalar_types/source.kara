@@ -1,0 +1,27 @@
+
+#[proto_schema]
+const SCHEMA: String = "
+    message Wide {
+        int32 a = 1;
+        int64 b = 2;
+        uint32 c = 3;
+        uint64 d = 4;
+        bool e = 5;
+        string f = 6;
+        bytes g = 7;
+    }
+";
+
+fn main() {
+    let mut raw = Vec.new();
+    raw.push(9u8);
+    let w = Wide { a: 0 - 7, b: 5000000000, c: 42u32, d: 18000000000u64, e: true, f: "hi", g: raw };
+    let r = Wide.decode(w.encode());
+    println(r.a);
+    println(r.b);
+    println(r.c);
+    println(r.d);
+    println(r.e);
+    println(r.f);
+    println(r.g.len());
+}

@@ -1,0 +1,9 @@
+fn f(s: Slice[String]) {
+    println(f"{s.len()}");
+}
+
+fn main() {
+    let o: Array[String, 2] = ["x", "y"];
+    f(o);
+    f(o);
+}

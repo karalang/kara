@@ -1,0 +1,89 @@
+// LeetCode #334: Increasing Triplet Subsequence — patience tails, for any
+// length.
+//
+// Same spec as `increasing_triplet.kara`, as the general question "is there
+// a strictly increasing subsequence of length k?" with k = 3. `tails[m]` is the
+// smallest value that ends an increasing subsequence of length m + 1 seen so
+// far, which keeps `tails` strictly increasing. Each value replaces the first
+// tail it does not exceed, or extends `tails` when it exceeds them all. The
+// answer is whether `tails` reaches length k. With k this small a linear scan
+// of `tails` beats a binary search.
+//
+// O(n * k) time, O(k) space.
+
+fn has_increasing(nums: ref Vec[i64], k: i64) -> bool {
+    let mut tails: Vec[i64] = Vec.new();
+    for x in nums {
+        let mut m = 0;
+        while m < tails.len() and tails[m] < x {
+            m += 1;
+        }
+        if m == tails.len() {
+            tails.push(x);
+            if tails.len() >= k {
+                return true;
+            }
+        } else {
+            tails[m] = x;
+        }
+    }
+    return false;
+}
+
+fn increasing_triplet(nums: ref Vec[i64]) -> bool {
+    return has_increasing(nums, 3);
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn show(nums: Vec[i64]) {
+    let mut parts: Vec[String] = Vec.new();
+    for x in nums.iter() {
+        parts.push(x.to_string());
+    }
+    let shown = parts.join(", ");
+    println(f"[{shown}] -> {increasing_triplet(nums)}");
+}
+
+fn main() {
+    show(vec![1, 2, 3, 4, 5]);
+    show(vec![5, 4, 3, 2, 1]);
+    show(vec![2, 1, 5, 0, 4, 6]);
+    show(vec![]);
+    show(vec![1]);
+    show(vec![1, 2]);
+    show(vec![1, 1, 1]);
+    show(vec![1, 2, 2, 2]);
+    show(vec![2, 1, 5, 0, 3]);
+    show(vec![5, 1, 6, 0, 7]);
+    show(vec![20, 100, 10, 12, 5, 13]);
+    show(vec![1, 5, 0, 4, 1, 3]);
+    show(vec![-9223372036854775808, 0, 9223372036854775807]);
+    show(vec![9223372036854775807, 9223372036854775807, 9223372036854775807]);
+    let mut seed = 334;
+    for round in 0..8 {
+        let n = 3 + round * 3;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next(mut seed) % (2 + round));
+        }
+        show(nums);
+    }
+    // A long decreasing run of pairs never has a triplet; one more value
+    // above the last pair's top finishes one.
+    let mut pairs: Vec[i64] = Vec.new();
+    let mut top = 2000000;
+    for _ in 0..50000 {
+        pairs.push(top - 1);
+        pairs.push(top);
+        top -= 2;
+    }
+    let count = pairs.len();
+    let no = increasing_triplet(pairs);
+    pairs.push(top + 3);
+    let yes = increasing_triplet(pairs);
+    println(f"pairs: {count} values -> {no}, one more -> {yes}");
+}

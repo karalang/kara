@@ -1,0 +1,11 @@
+
+fn helper[T](v: ref Vec[T]) -> i64 where T: Ord { v.len() }
+fn mono_outer(v: ref Vec[i64]) -> i64
+    ensures(result) result > 100
+{
+    helper(v)
+}
+fn main() {
+    let a: Vec[i64] = [1, 2, 3];
+    println(mono_outer(a));
+}

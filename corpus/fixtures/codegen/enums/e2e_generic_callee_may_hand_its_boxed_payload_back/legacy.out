@@ -1,0 +1,32 @@
+handback
+  10
+keptinside
+  none
+allpaths
+  10
+diesinside
+  none
+discarded
+  out
+unread
+  out
+userdrop
+  dR7
+  out
+i64
+  5
+twoargs
+  10
+vecpayload
+  2
+arrpayload
+  arr
+matchtail
+  11
+chain
+  11
+blocktail
+  out
+mono
+  11
+end

@@ -1,0 +1,10 @@
+
+fn main() {
+    println("before-if");
+    if true {
+        println("in-if");
+        defer { println("a"); }
+        println("after-defer");
+    }
+    println("after-if");
+}

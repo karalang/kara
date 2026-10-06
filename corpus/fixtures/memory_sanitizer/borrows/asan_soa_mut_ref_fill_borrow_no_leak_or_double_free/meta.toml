@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/borrows.rs::asan_soa_mut_ref_fill_borrow_no_leak_or_double_free"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:layout"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

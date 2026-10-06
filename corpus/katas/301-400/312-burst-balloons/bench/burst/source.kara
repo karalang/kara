@@ -1,0 +1,69 @@
+// Benchmark workload for LeetCode #312 — Burst Balloons.
+//
+// BUILD ONCE, THEN PUNCH. One 300-balloon row and one 302x302 DP table are
+// allocated up front; each pass then runs a complete interval DP over that
+// table. The table needs no re-zeroing between passes: every cell with
+// j - i >= 2 is written by the pass that reads it, and the j - i < 2 band is
+// the base case that must stay 0 forever, so a single zeroing at allocation
+// is correct for every pass. That keeps the measured work in the O(w^3) inner
+// loop rather than in allocation.
+//
+// NO PASS CAN BE HOISTED. Each pass perturbs one balloon at an index derived
+// from the RUNNING CHECKSUM, so pass k+1's input depends on pass k's output.
+// The optimiser cannot compute one solve and reuse it, and cannot reorder the
+// passes.
+//
+// THE SINK IS MASKED, NOT MODULO. `& 0x3FFFFFFF` is bit-identical in all five
+// languages; `%` is not, because Python floors and C/Rust/Go truncate. Balloon
+// values stay in 1..50 so the DP total stays far inside i64 — kāra checks
+// overflow by default and a benchmark that trips the check measures the check.
+
+fn solve(a: ref Vec[i64], w: i64, dp: mut ref Vec[i64]) -> i64 {
+    for len in 2..w {
+        for i in 0..(w - len) {
+            let j = i + len;
+            let ai = a[i];
+            let aj = a[j];
+            let base = i * w;
+            let mut best = 0;
+            for k in (i + 1)..j {
+                let coins = dp[base + k] + dp[k * w + j] + ai * a[k] * aj;
+                if coins > best { best = coins; }
+            }
+            dp[base + j] = best;
+        }
+    }
+    return dp[w - 1];
+}
+
+fn main() {
+    let n = 300;
+    let w = n + 2;
+    let passes = 88;
+
+    // The row, with sentinel 1s at both ends.
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    let mut state = 987654321;
+    for i in 0..n {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        a.push(1 + state % 50);
+    }
+    a.push(1);
+
+    // The table, zeroed exactly once.
+    let mut dp: Vec[i64] = Vec.new();
+    for i in 0..(w * w) { dp.push(0); }
+
+    let mut checksum = 0;
+    for pass in 0..passes {
+        // Perturb one balloon from the running checksum: pass k+1's input
+        // depends on pass k's output, so no solve can be hoisted.
+        let idx = 1 + checksum % n;
+        a[idx] = 1 + (a[idx] + checksum) % 50;
+        let total = solve(a, w, mut dp);
+        checksum = (checksum + total) & 1073741823;
+    }
+
+    println("checksum " + checksum.to_string());
+}

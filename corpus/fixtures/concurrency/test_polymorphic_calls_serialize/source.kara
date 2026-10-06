@@ -1,0 +1,8 @@
+
+        effect resource Db;
+        pub fn poly() with _ { }
+        fn main() {
+            let x = poly();
+            let y = poly();
+        }
+        

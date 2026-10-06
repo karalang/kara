@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        let _ = m.try_insert(i, f"val-{i}-padding-padding-padding");
+        i = i + 1;
+    }
+    let mut j: i64 = 0i64;
+    while j < 4i64 {
+        match m.try_insert(j, f"new-{j}-padding-padding-padding") {
+            Ok(o) => match o { Some(v) => println(v), None => println("none") },
+            Err(_) => println("oom"),
+        }
+        j = j + 1i64;
+    }
+    match m.get(2i64) { Some(v) => println(v), None => println("none") }
+}

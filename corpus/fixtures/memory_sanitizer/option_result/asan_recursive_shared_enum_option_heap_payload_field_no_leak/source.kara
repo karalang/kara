@@ -1,0 +1,15 @@
+
+shared enum Expr { Cont(ContNode), Wrap(WrapNode) }
+struct ContNode { label: Option[String], tags: Option[Vec[String]] }
+struct WrapNode { inner: Expr }
+fn main() {
+  let mut round = 0;
+  while round < 50 {
+    let a = Expr.Cont(ContNode { label: Some("label-payload-xxxxxxxxxxxxxxxxxxxx".to_string()), tags: None });
+    let b = Expr.Cont(ContNode { label: None, tags: None });
+    let c = Expr.Wrap(WrapNode { inner: Expr.Cont(ContNode { label: Some("nested-payload-yyyyyyyyyyyyyyyy".to_string()), tags: None }) });
+    let d = Expr.Cont(ContNode { label: None, tags: Some(Vec["tag-aaaaaaaaaaaaaaaaaa".to_string(), "tag-bbbbbbbbbbbbbbbbbb".to_string()]) });
+    println(round.to_string());
+    round = round + 1;
+  }
+}

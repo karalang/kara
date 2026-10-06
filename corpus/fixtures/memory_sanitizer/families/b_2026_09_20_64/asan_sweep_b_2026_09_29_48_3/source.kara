@@ -1,0 +1,7 @@
+shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mk(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+struct W { u: S2 }
+fn f(q0: W) -> i64 { let mut q = q0; let x = q.u; q.u = mk(8); return 1 }
+fn main() { println(f"x{f(W { u: mk(9) })}"); println("end") }

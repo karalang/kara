@@ -1,0 +1,16 @@
+
+        effect resource R;
+        fn eat(s: String) -> i64 writes(R) { s.len() }
+        fn work(n: i64) -> i64 {
+            let mut t = 0;
+            let mut i = 0;
+            while i < n { t = t + i; i = i + 1; }
+            t
+        }
+        fn main() {
+            let s: String = "kara-language-compiler" + "-with-heap-payload";
+            let a = eat(s);
+            let b = work(50000);
+            println(a + b);
+        }
+        

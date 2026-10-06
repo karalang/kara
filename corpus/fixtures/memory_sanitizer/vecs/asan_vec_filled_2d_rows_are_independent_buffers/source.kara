@@ -1,0 +1,18 @@
+
+fn main() {
+    let rows = 4i64;
+    let cols = 5i64;
+    let mut dp: Vec[Vec[i64]] = Vec.filled(rows, Vec.filled(cols, 0i64));
+    let mut i = 0i64;
+    while i < rows {
+        let mut j = 0i64;
+        while j < cols {
+            dp[i][j] = i * 10i64 + j;
+            j = j + 1i64;
+        }
+        i = i + 1;
+    }
+    println(dp[0][0]);
+    println(dp[3][4]);
+    println(dp[2][3]);
+}

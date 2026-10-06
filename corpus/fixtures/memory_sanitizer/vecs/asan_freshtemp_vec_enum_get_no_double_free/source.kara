@@ -1,0 +1,24 @@
+
+enum Tok { Word { s: String }, Num { n: i64 } }
+
+fn make_toks() -> Vec[Tok] {
+    let mut v: Vec[Tok] = Vec.new();
+    v.push(Tok.Word { s: "first token payload string padded beyond thirty-six b" });
+    v.push(Tok.Num { n: 20_i64 });
+    v.push(Tok.Word { s: "third token payload string padded beyond thirty-six b" });
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        match make_toks().get(i) {
+            Some(t) => match t {
+                Word { s } => println(s.len()),
+                Num { n } => println(n),
+            },
+            None => println(0_i64),
+        };
+        i = i + 1;
+    };
+}

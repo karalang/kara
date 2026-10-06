@@ -1,0 +1,14 @@
+
+enum Tok { Word(String), Num(i64) }
+fn build() -> Vec[Vec[Tok]] {
+    let mut outer: Vec[Vec[Tok]] = Vec.new();
+    let mut a: Vec[Tok] = Vec.new();
+    a.push(Tok.Word("a token payload string padded beyond thirty-six bytes"));
+    outer.push(a);
+    return outer;
+}
+
+fn main() {
+    let vv = build();
+    println(vv.len());
+}

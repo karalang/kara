@@ -1,0 +1,18 @@
+
+#[derive(Message)]
+struct Inner { score: i64 }
+
+#[derive(Message)]
+struct Outer { child: Inner }
+
+fn main() {
+    let o = Outer { child: Inner { score: 5 } };
+    let mut reader = ProtoReader.new(o.encode());
+    let (field, wire) = reader.read_tag();
+    println(field);
+    println(wire);
+    let blob = reader.read_len_delim();
+    println(reader.at_end());
+    let inner = Inner.decode(blob);
+    println(inner.score);
+}

@@ -1,0 +1,6 @@
+fn main() {
+            let s: String = "aZ9_ f";
+            for b in s.bytes() {
+                println(f"{b.is_ascii_digit()} {b.is_ascii_alphabetic()} {b.is_ascii_hexdigit()}");
+            }
+        }

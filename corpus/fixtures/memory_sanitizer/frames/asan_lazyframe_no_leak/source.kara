@@ -1,0 +1,26 @@
+
+import std.lazy.{col, lit};
+fn main() {
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("age", Column.from_vec([30i64, 15i64, 41i64, 8i64]));
+    df.insert("name", Column.from_vec(["ada_padding_aaaaaaaaaaaaaaaaa", "bob", "eve_padding_ccccccccccccccccc", "kid"]));
+    df.insert("score", Column.from_vec([9.5, 3.5, 7.0, 1.0]));
+    let nn: Vec[Option[i64]] = vec![Some(30i64), None, Some(41i64), Some(8i64)];
+    df.insert("opt", Column.from_iter_nullable(nn));
+    // Bound-and-reused expr: one production, two borrowing uses.
+    let c = LazyExpr.col("age");
+    let plan = df.lazy()
+        .filter(c.gt(10).and_(c.lt(40)).or_(col("score").ge(lit(7.0))))
+        .select(vec!["name", "opt"])
+        .limit(3);
+    println(plan.explain());
+    let out = plan.collect();
+    println(out.height());
+    let names: Column[String] = out.column("name");
+    match names[0] { Some(v) => println(v), None => println("null") }
+    let opt: Column[i64] = out.column("opt");
+    match opt[1] { Some(v) => println(v), None => println("null") }
+    // Arithmetic + not_ temps, collected into a second frame.
+    let out2 = df.lazy().filter(col("age").add(1).gt(11).not_()).collect();
+    println(out2.height());
+}

@@ -1,0 +1,89 @@
+// STATUS: FIXED in kara by c7c1a67 (B-2026-09-04-16, closed 2026-09-04). The
+// root cause was codegen's `sorted_collection_vars` -- a set of BARE BINDING
+// NAMES -- surviving a function boundary, so the trigger was the twin reusing
+// the name `cols`, NOT its structural identity, and no rehash was required
+// (a one-element Map rendered `SortedMap{..}`). Post-fix both files below
+// behave IDENTICALLY: random, seed-dependent, and AOT == JIT. Kept as the
+// regression's provenance; the compiler-side gate is
+// `e2e_sorted_marker_does_not_leak_across_functions` in kara/tests/codegen.rs.
+//
+// REPRO for kara B-2026-09-04-16 (RANDOM/control half).
+//
+// map_keys_sorts.kara with the `SortedMap` twin (`solve_a`) DELETED. The plain
+// `Map`'s `.keys()` now iterates in per-process-random order under codegen, as
+// specified:
+//
+//   for s in 1 2 3; do KARAC_HASH_SEED=$s karac run map_keys_random.kara; done  # all differ
+//
+// The only difference from map_keys_sorts.kara is the absence of the SortedMap
+// function, so that presence is the whole trigger.
+
+shared struct TreeNode { val: i64, mut left: Option[TreeNode], mut right: Option[TreeNode] }
+fn node(v: i64, l: Option[TreeNode], r: Option[TreeNode]) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    return node(v, None, None);
+}
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn grow(n: i64, seed: mut ref i64, counter: mut ref i64, labelled: bool) -> Option[TreeNode] {
+    if n <= 0 {
+        return None;
+    }
+    seed = lcg(seed);
+    // Distinct values are a PERMUTATION of the preorder numbering (37 is
+    // coprime to 97), so value order says nothing about position -- a tie
+    // broken by value instead of position would otherwise be equivalent here.
+    let v = if labelled { counter = counter + 1; (counter * 37) % 97 - 50 } else { seed % 3 };
+    seed = lcg(seed);
+    let left_n = if n <= 1 { 0 } else { seed % n };
+    let right_n = n - 1 - left_n;
+    let l = grow(left_n, seed, counter, labelled);
+    let r = grow(right_n, seed, counter, labelled);
+    return node(v, l, r);
+}
+
+
+fn solve_d(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut cols: Map[i64, Vec[i64]] = Map.new();
+    let mut q: VecDeque[(TreeNode, i64)] = VecDeque.new();
+    match root {
+        None => {}
+        Some(n) => { q.push_back((n, 0)); }
+    }
+    while q.len() > 0 {
+        match q.pop_front() {
+            None => {}
+            Some(item) => {
+                let (n, c) = item;
+                cols.entry(c).or_insert(Vec.new()).push(n.val);
+                match n.left {
+                    None => {}
+                    Some(l) => { q.push_back((l, c - 1)); }
+                }
+                match n.right {
+                    None => {}
+                    Some(r) => { q.push_back((r, c + 1)); }
+                }
+            }
+        }
+    }
+    let mut keys: Vec[i64] = cols.keys();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..keys.len() {
+        out.push(cols[keys[i]].clone());
+    }
+    return out;
+}
+
+fn kstr(r: Vec[Vec[i64]]) -> String { let mut s = "".to_string(); for i in 0..r.len() { s = s + "|"; for j in 0..r[i].len() { let v = r[i][j]; s = s + v.to_string() + ","; } } return s; }
+fn main() {
+    let mut seed = 20260904; let mut counter = 0;
+    let t = grow(25, mut seed, mut counter, true);
+    println(kstr(solve_d(t.clone())));
+}

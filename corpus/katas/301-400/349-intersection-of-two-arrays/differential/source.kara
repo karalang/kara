@@ -1,0 +1,236 @@
+// Differential and property check for LeetCode #349.
+//
+// Five intersections, plus an oracle that asks every candidate value whether
+// both arrays hold it:
+//
+//   by_set            a Set, walked by the second array   (intersection.kara)
+//   by_sorted_set     SortedSet.intersection              (intersection_sorted_set.kara)
+//   by_two_pointers   sort both, merge                    (intersection_two_pointers.kara)
+//   by_binary_search  sort both, binary-search the second (intersection_binary_search.kara)
+//   by_bitmap         a presence table over 0..=1000      (intersection_bitmap.kara)
+//   by_oracle         for v in 0..=1000, keep v when a linear scan finds it in both
+//
+// Inputs: every pair of lengths 0..24 x 0..24, with values drawn from 0..=hi
+// for hi in 0, 3, 12 and 1000, so the arrays range from all-equal to almost
+// disjoint, and once more from {0, 250, 500, 750, 1000}, so the two ends of
+// the value range are common.
+//
+// Properties:
+//   P1  all five equal the oracle exactly
+//   P2  the intersection of a and b equals the intersection of b and a
+//   P3  the answer is strictly ascending, and each value is in both arrays
+//   P4  the intersection of a with itself is a's distinct values, ascending
+//   P5  the intersection with an empty array is empty
+
+const MAX_VALUE: i64 = 1000;
+
+fn by_set(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut seen: Set[i64] = Set.new();
+    for x in a {
+        seen.insert(x);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for y in b {
+        if seen.remove(y) {
+            out.push(y);
+        }
+    }
+    out.sort();
+    return out;
+}
+
+fn by_sorted_set(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut sa: SortedSet[i64] = SortedSet.new();
+    for x in a {
+        sa.insert(x);
+    }
+    let mut sb: SortedSet[i64] = SortedSet.new();
+    for y in b {
+        sb.insert(y);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for v in sa.intersection(sb) {
+        out.push(v);
+    }
+    return out;
+}
+
+fn by_two_pointers(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut x = a.clone();
+    let mut y = b.clone();
+    x.sort();
+    y.sort();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < x.len() and j < y.len() {
+        if x[i] < y[j] {
+            i += 1;
+        } else if x[i] > y[j] {
+            j += 1;
+        } else {
+            if out.is_empty() or out[out.len() - 1] != x[i] {
+                out.push(x[i]);
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    return out;
+}
+
+fn holds(sorted: ref Vec[i64], v: i64) -> bool {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if sorted[mid] < v {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo < sorted.len() and sorted[lo] == v;
+}
+
+fn by_binary_search(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut x = a.clone();
+    let mut y = b.clone();
+    x.sort();
+    y.sort();
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0..x.len() {
+        if k > 0 and x[k] == x[k - 1] {
+            continue;
+        }
+        if holds(y, x[k]) {
+            out.push(x[k]);
+        }
+    }
+    return out;
+}
+
+fn by_bitmap(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut in_a: Vec[bool] = Vec.new();
+    let mut in_b: Vec[bool] = Vec.new();
+    for _ in 0..MAX_VALUE + 1 {
+        in_a.push(false);
+        in_b.push(false);
+    }
+    for x in a {
+        in_a[x] = true;
+    }
+    for y in b {
+        in_b[y] = true;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for v in 0..MAX_VALUE + 1 {
+        if in_a[v] and in_b[v] {
+            out.push(v);
+        }
+    }
+    return out;
+}
+
+fn has(xs: ref Vec[i64], v: i64) -> bool {
+    for x in xs {
+        if x == v {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn by_oracle(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for v in 0..MAX_VALUE + 1 {
+        if has(a, v) and has(b, v) {
+            out.push(v);
+        }
+    }
+    return out;
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for k in 0..a.len() {
+        if a[k] != b[k] {
+            return false;
+        }
+    }
+    return true;
+}
+
+// `n` values, each a multiple of `step` from 0 up to `hi * step`.
+fn fill(n: i64, hi: i64, step: i64, seed: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = seed * 2654435761 % 4294967296 + 1;
+    for _ in 0..n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        out.push(x / 16 % (hi + 1) * step);
+    }
+    return out;
+}
+
+fn main() {
+    // (hi, step): values 0..=hi, scaled by step. The last pair draws only
+    // 0, 250, 500, 750 and 1000, so both ends of the range turn up often.
+    let draws = [(0, 1), (3, 1), (12, 1), (1000, 1), (4, 250)];
+    let empty: Vec[i64] = Vec.new();
+    let mut failures = 0;
+    let mut cases = 0;
+    let mut found = 0;
+    let mut checksum = 0;
+    for (hi, step) in draws {
+        for n in 0..24 {
+            for m in 0..24 {
+                cases += 1;
+                let a = fill(n, hi, step, hi * 10000 + n * 100 + m);
+                let b = fill(m, hi, step, hi * 10000 + m * 100 + n + 50);
+                let want = by_oracle(a, b);
+                if not same(by_set(a, b), want) or not same(by_sorted_set(a, b), want)
+                    or not same(by_two_pointers(a, b), want) or not same(by_binary_search(a, b), want)
+                    or not same(by_bitmap(a, b), want) {
+                    println(f"P1 FAIL hi={hi} n={n} m={m}");
+                    failures += 1;
+                }
+                if not same(by_set(b, a), want) {
+                    println(f"P2 FAIL hi={hi} n={n} m={m}");
+                    failures += 1;
+                }
+                let got = by_set(a, b);
+                for k in 0..got.len() {
+                    if (k > 0 and got[k - 1] >= got[k]) or not has(a, got[k]) or not has(b, got[k]) {
+                        println(f"P3 FAIL hi={hi} n={n} m={m} k={k}");
+                        failures += 1;
+                    }
+                }
+                let mut uniq: Vec[i64] = Vec.new();
+                for v in 0..MAX_VALUE + 1 {
+                    if has(a, v) {
+                        uniq.push(v);
+                    }
+                }
+                if not same(by_set(a, a), uniq) {
+                    println(f"P4 FAIL hi={hi} n={n} m={m}");
+                    failures += 1;
+                }
+                if by_set(a, empty).len() != 0 or by_set(empty, a).len() != 0 {
+                    println(f"P5 FAIL hi={hi} n={n} m={m}");
+                    failures += 1;
+                }
+                found += want.len();
+                for v in want {
+                    checksum = (checksum * 31 + v + 1) % 1000000007;
+                }
+            }
+        }
+    }
+    println(f"{cases} cases: {found} values in all, checksum {checksum}");
+    println(f"failures {failures}");
+    if failures == 0 {
+        println("all properties hold");
+    }
+}

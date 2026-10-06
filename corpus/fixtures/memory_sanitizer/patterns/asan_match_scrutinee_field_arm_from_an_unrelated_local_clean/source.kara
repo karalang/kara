@@ -1,0 +1,22 @@
+
+struct City { name: String, zip: i64 }
+struct Address { city: Option[City], tag: String }
+
+fn mkaddr(i: i64) -> Address {
+    return Address { city: Some(City { name: f"c{i}", zip: i }), tag: f"t{i}" };
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 200 {
+        let other = mkaddr(i);
+        match (match i % 2 { 0 => { other.city } _ => { None } }) {
+            Some(v) => { total = total + (v.name.len() as i64); }
+            None => { total = total + 1; }
+        }
+        total = total + (other.tag.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}

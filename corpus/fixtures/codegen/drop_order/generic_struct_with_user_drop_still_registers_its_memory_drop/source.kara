@@ -1,0 +1,5 @@
+
+struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println("dB") } }
+fn main() { let b: Box3[String] = Box3 { v: f"vvvvvvvv", tag: f"tttttttt" };
+            println(f"v{b.v.len()}") }

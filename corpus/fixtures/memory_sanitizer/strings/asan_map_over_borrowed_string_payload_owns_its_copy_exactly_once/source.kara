@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 8 {
+        let v: Vec[String] = vec![f"hi{i}", f"yo{i}"];
+        match v.first().map(|s| s) { Some(w) => { println(w); } None => { println("-"); } }
+        // The source element must still own its own buffer afterwards.
+        println(v[0]);
+        i = i + 1;
+    }
+    println("end");
+}

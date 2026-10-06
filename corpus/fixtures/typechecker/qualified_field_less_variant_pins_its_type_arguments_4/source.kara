@@ -1,0 +1,3 @@
+enum Pair[A, B] { L(A), R(B), N }
+fn takeit(x: Pair[i64, String]) { match x { L(a) => { println(f"l:{a}") } R(b) => { println(f"r:{b}") } N => { println("n") } } }
+fn main() { takeit(Pair[i64, String].N); }

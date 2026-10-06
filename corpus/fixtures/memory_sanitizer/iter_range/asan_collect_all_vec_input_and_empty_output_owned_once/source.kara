@@ -1,0 +1,20 @@
+
+fn work(n: i64) -> Result[i64, String] {
+    if n > 0 { Result.Ok(n * 10) } else { Result.Err(f"neg:{n}") }
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| work(base), || work(0 - base), || work(base + 2)];
+    let results: Vec[Result[i64, String]] = collect_all_vec(fs);
+    let mut acc = 0;
+    for r in results {
+        match r {
+            Result.Ok(v) => { acc = acc + v; }
+            Result.Err(e) => { if e.starts_with("neg") { acc = acc + 1; } }
+        }
+    }
+    let empty: Vec[Fn() -> Result[i64, String]] = Vec.new();
+    let none: Vec[Result[i64, String]] = collect_all_vec(empty);
+    acc = acc + none.len();
+    println(acc);
+}

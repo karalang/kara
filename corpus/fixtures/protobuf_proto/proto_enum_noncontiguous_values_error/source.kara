@@ -1,0 +1,4 @@
+
+#[proto_schema]
+const SCHEMA: String = "enum E { A = 0; B = 2; }";
+fn main() {}

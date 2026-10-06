@@ -1,0 +1,69 @@
+// LeetCode 280 — sort, then swap adjacent pairs.
+//
+// Sort ascending, then swap positions (1,2), (3,4), (5,6), ... Each swap lifts a
+// larger element into an odd slot and drops a smaller one into the even slot
+// after it, which is exactly the wiggle pattern.
+//
+// O(n log n) against the ★ solver's O(n), so it is strictly worse for this
+// problem — and it is here precisely because it is the answer most people reach
+// first, and because it arrives at a DIFFERENT valid arrangement. On
+// [3,5,2,1,6,4] the greedy gives [3,5,1,6,2,4] and this gives [1,3,2,5,4,6].
+// Both are correct. A harness that compared them as strings would fail a correct
+// solver, which is the trap this kata is built around.
+//
+// It is also the easier one to reason about — after sorting, every element in an
+// odd position is >= both neighbours by construction — so it serves as the
+// intuition check on the greedy's subtler local argument.
+
+fn wiggle_sort(nums: mut ref Vec[i64]) {
+    // insertion sort — the point is the pairing that follows, not the sort
+    let mut a = 1;
+    while a < nums.len() {
+        let mut b = a;
+        while b > 0 and nums[b - 1] > nums[b] {
+            let t = nums[b - 1];
+            nums[b - 1] = nums[b];
+            nums[b] = t;
+            b = b - 1;
+        }
+        a = a + 1;
+    }
+    let mut i = 1;
+    while i + 1 < nums.len() {
+        let t = nums[i];
+        nums[i] = nums[i + 1];
+        nums[i + 1] = t;
+        i = i + 2;
+    }
+}
+
+fn show(v: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + f"{v[i]}";
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn main() {
+    let cases: Vec[Vec[i64]] = [
+        [3, 5, 2, 1, 6, 4],
+        [1, 2, 3],
+        [6, 6, 5, 6, 3, 8],
+        [1],
+        [2, 1],
+        [1, 1, 1, 1],
+        [5, 4, 3, 2, 1],
+    ];
+    let mut c = 0;
+    while c < cases.len() {
+        let mut v = cases[c].clone();
+        let before = show(v);
+        wiggle_sort(mut v);
+        println(f"{before} -> {show(v)}");
+        c = c + 1;
+    }
+}

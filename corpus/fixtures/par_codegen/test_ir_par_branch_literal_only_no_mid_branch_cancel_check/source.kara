@@ -1,0 +1,8 @@
+
+fn main() {
+    par {
+        let _ = 1_i64;
+        let _ = 2_i64;
+        let _ = 3_i64;
+    }
+}

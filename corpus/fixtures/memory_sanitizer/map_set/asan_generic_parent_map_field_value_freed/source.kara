@@ -1,0 +1,15 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Store[T] { m: Map[i64, T], tag: i64 }
+fn main() {
+    println("a");
+    {
+        let mut s: Store[Res] = Store { m: Map.new(), tag: 1 };
+        s.m.insert(1i64, Res { id: 8, name: f"mm{8}" });
+        println(f"n {s.m.len()}");
+    }
+    println("end");
+}

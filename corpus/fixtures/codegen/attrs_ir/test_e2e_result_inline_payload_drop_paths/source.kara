@@ -1,0 +1,15 @@
+
+fn ok_s(n: i64) -> Result[String, i64] { Ok(f"ok{n}") }
+fn err_s(bad: bool) -> Result[i64, String] {
+    if bad { Err(f"e{9}") } else { Ok(1i64) }
+}
+fn main() {
+    let unused = ok_s(1);        // freed at scope exit, never read
+    let _e = err_s(true);        // Err-side heap freed at scope exit
+    let bound = ok_s(3);
+    match bound {                 // arm binds payload → source free suppressed
+        Ok(s) => { println(s); }
+        Err(_n) => { println("err"); }
+    };
+    println("end");
+}

@@ -1,0 +1,6 @@
+
+        trait Healthy { fn ok(ref self) -> bool; }
+        trait Channel[T] { fn send(ref self, v: T); }
+        effect resource Bus: Healthy + Channel;
+        fn main() { }
+        

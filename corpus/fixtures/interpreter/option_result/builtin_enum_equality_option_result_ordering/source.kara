@@ -1,0 +1,10 @@
+
+fn main() {
+    println(f"{Some(1) == Some(1)}");
+    println(f"{Some(1) == Some(2)}");
+    let a: Result[i64, i64] = Ok(3);
+    let b: Result[i64, i64] = Ok(3);
+    println(f"{a == b}");
+    println(f"{3.cmp(5) == Ordering.Less}");
+    println(f"{3.cmp(5) == Ordering.Greater}");
+}

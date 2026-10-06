@@ -1,0 +1,16 @@
+
+fn set_to(n: mut ref i64, v: i64) -> i64 { *n = v; v }
+fn mutate(opt: mut ref Option[i64]) -> i64 {
+    match opt {
+        Option.Some(n) => set_to(n, 42),
+        Option.None => 0,
+    }
+}
+fn main() {
+    let mut opt = Option.Some(7);
+    let _ = mutate(mut opt);
+    match opt {
+        Option.Some(v) => println(v),
+        Option.None => println(-1),
+    }
+}

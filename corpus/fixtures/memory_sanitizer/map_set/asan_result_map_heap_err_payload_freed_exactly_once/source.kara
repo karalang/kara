@@ -1,0 +1,20 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let a: Result[String, String] = Err(f"boom");
+        let ra = a.map(|x| x);
+        match ra { Ok(x) => { total = total + x.len(); } Err(e) => { if e == "boom" { total = total + 4i64; } } }
+        let b: Result[String, String] = Err(f"bang");
+        match b.map(|x: String| x.to_uppercase()) { Ok(x) => { total = total + x.len(); } Err(e) => { if e == "bang" { total = total + 4i64; } } }
+        let c: Result[String, Vec[i64]] = Err(vec![7i64, 8i64]);
+        let rc = c.map(|x| x);
+        match rc { Ok(x) => { total = total + x.len(); } Err(e) => { total = total + e[1]; } }
+        let ok: Result[String, String] = Ok(f"fine");
+        let ro = ok.map(|x| x);
+        match ro { Ok(x) => { if x == "fine" { total = total + 4i64; } } Err(_) => {} }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

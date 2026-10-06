@@ -1,0 +1,13 @@
+source = "tests/interpreter/families/b_2026_10_04_69.rs::interp_payload_to_method_on_local_receiver_runs_its_body_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

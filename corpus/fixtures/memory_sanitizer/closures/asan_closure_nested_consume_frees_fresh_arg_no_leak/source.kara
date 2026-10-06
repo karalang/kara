@@ -1,0 +1,13 @@
+
+fn wrap(s: String) -> String { "[" + s + "]" }
+fn main() {
+    let f = |s: String| wrap(wrap(s));
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 30i64 {
+        let r = f(String.from("payload-string"));
+        total = total + r.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

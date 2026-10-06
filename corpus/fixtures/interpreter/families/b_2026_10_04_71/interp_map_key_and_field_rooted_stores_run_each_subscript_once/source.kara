@@ -1,0 +1,18 @@
+struct H { xs: Vec[Vec[i64]], t: (i64, Vec[i64]) }
+fn idx(k: i64) -> i64 { println(f"idx{k}"); return k }
+fn key(k: String) -> String { println(f"key{k}"); return k }
+fn main() {
+    let mut mv: Vec[Map[String, i64]] = [Map.new()];
+    mv[idx(0)][key("a")] = 1;
+    mv[idx(0)][key("a")] = 2;
+    let mut m: Map[String, i64] = Map.new();
+    m[key("b")] = 3;
+    let a = mv[0]["a"];
+    println(f"{mv[0].len()} {a} {m.len()}");
+    let mut h = H { xs: [[1, 2], [3, 4]], t: (0, [5, 6]) };
+    h.xs[idx(1)][idx(0)] = 9;
+    h.t.1[idx(1)] = 8;
+    let mut hs: Vec[H] = [H { xs: [[1]], t: (0, [5]) }];
+    hs[idx(0)].xs[idx(0)][idx(0)] = 7;
+    println(f"{h.xs[1][0]} {h.t.1[1]} {hs[0].xs[0][0]}");
+}

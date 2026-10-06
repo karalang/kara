@@ -1,0 +1,145 @@
+// Differential for LeetCode 292 — the three arms must agree, over the range
+// each can actually reach.
+//
+// THE RANGES ARE NOT THE SAME, and saying so is the point of this file rather
+// than a footnote to it. LeetCode allows n up to 2^31 - 1:
+//
+//   nim_game.kara       one modulo    — the whole range
+//   nim_game_dp.kara    O(n) time+mem — a table, so bounded by memory
+//   nim_game_memo.kara  O(n) depth    — recursion, so bounded by the STACK,
+//                                       and measured at 100,000 OK /
+//                                       200,000 SIGSEGV on this container
+//                                       (B-2026-08-20-34: that segfault is
+//                                       silent, which is its own bug)
+//
+// So a differential that ran all three to n = 2^31-1 would not be thorough, it
+// would be a crash. What it can honestly do is check all three where all three
+// work, check the two cheap ones further out, and then state plainly which part
+// of the constraint range has NO cross-check at all. The closed form is
+// unverified above the DP's reach — by argument, not by test — and pretending
+// otherwise by testing n <= 1000 and implying the rest is the exact dishonesty
+// the repo's rules call out.
+
+fn closed_form(n: i64) -> bool {
+    return (n % 4) != 0;
+}
+
+fn dp(n: i64) -> bool {
+    if n <= 0 { return false; }
+    let mut win: Vec[bool] = Vec.new();
+    win.push(false);
+    let mut i = 1;
+    while i <= n {
+        let mut w = false;
+        let mut take = 1;
+        while take <= 3 {
+            if i - take >= 0 {
+                if not win[i - take] { w = true; }
+            }
+            take = take + 1;
+        }
+        win.push(w);
+        i = i + 1;
+    }
+    return win[n];
+}
+
+fn solve(n: i64, memo: mut ref Vec[i64]) -> bool {
+    if n <= 0 { return false; }
+    if memo[n] != 0 { return memo[n] == 1; }
+    let mut w = false;
+    let mut take = 1;
+    while take <= 3 {
+        if n - take >= 0 {
+            if not solve(n - take, memo) { w = true; }
+        }
+        take = take + 1;
+    }
+    if w { memo[n] = 1; } else { memo[n] = 2; }
+    return w;
+}
+
+fn memo_rec(n: i64) -> bool {
+    if n <= 0 { return false; }
+    let mut memo: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i <= n { memo.push(0); i = i + 1; }
+    return solve(n, mut memo);
+}
+
+fn main() {
+    // --- band 1: all three arms, every n ---------------------------------
+    // Small enough that the recursion is nowhere near its ceiling, AND small
+    // enough that the TREE-WALK INTERPRETER can run this file. That second
+    // constraint is what fixes the number. Both computational arms are O(n) and
+    // are called once per n, so band 1 is quadratic in `band1`: measured under
+    // `--interp`, 200 -> 11 s, 400 -> 29 s, 800 -> 120 s, and 4000 did not
+    // finish in an hour. A differential the interpreter cannot run is a
+    // differential that can never catch an INTERPRETER-ONLY bug -- kata #289
+    // found exactly one that way (B-2026-08-20-32, a shallow nested clone) --
+    // so the band is sized to keep all four surfaces checkable rather than to
+    // maximise a number the compiled legs alone would see.
+    let band1 = 800;
+    let mut three_way = 0;
+    let mut mismatch_dp = 0;
+    let mut mismatch_memo = 0;
+    let mut n = 0;
+    while n <= band1 {
+        let c = closed_form(n);
+        // n = 0 is outside LeetCode's range and the two computational arms
+        // define it as "already lost"; the closed form says 0 % 4 == 0 ->
+        // false, so all three agree there too, which is worth checking rather
+        // than skipping.
+        if dp(n) != c { mismatch_dp = mismatch_dp + 1; }
+        if memo_rec(n) != c { mismatch_memo = mismatch_memo + 1; }
+        three_way = three_way + 1;
+        n = n + 1;
+    }
+    println(f"band 1 (all three arms, n = 0..{band1}): {three_way} cases");
+    println(f"  closed form vs dp:   {mismatch_dp} mismatches");
+    println(f"  closed form vs memo: {mismatch_memo} mismatches");
+
+    // --- band 2: closed form vs DP only, further out ----------------------
+    // The DP is a loop and a Vec[bool], so it goes much further than the
+    // recursion. Sampled rather than exhaustive: every n would be O(n^2) here
+    // because each dp() call rebuilds its table from scratch.
+    let mut band2_cases = 0;
+    let mut band2_mismatch = 0;
+    let probes: Vec[i64] = [
+        9999, 10000, 10001, 10002,
+        49997, 49998, 49999, 50000,
+        99997, 99998, 99999, 100000,
+    ];
+    let mut i = 0;
+    while i < probes.len() {
+        let p = probes[i];
+        if dp(p) != closed_form(p) { band2_mismatch = band2_mismatch + 1; }
+        band2_cases = band2_cases + 1;
+        i = i + 1;
+    }
+    println(f"band 2 (closed form vs dp, sampled to 100000): {band2_cases} cases, {band2_mismatch} mismatches");
+
+    // --- band 3: the closed form alone ------------------------------------
+    // Above the DP's reach there is no second implementation to disagree with,
+    // so this band checks the PROPERTY the induction proves rather than an
+    // oracle: losing positions are exactly the multiples of 4. That is a real
+    // check on the arithmetic (a wrong modulus or an overflow would break it)
+    // but it is NOT an independent confirmation of the answer, and the count
+    // is reported separately so nobody reads it as one.
+    let mut band3_cases = 0;
+    let mut band3_bad = 0;
+    let big: Vec[i64] = [
+        1073741824, 1073741825, 1073741826, 1073741827,
+        2147483644, 2147483645, 2147483646, 2147483647,
+    ];
+    i = 0;
+    while i < big.len() {
+        let b = big[i];
+        let expect_lose = (b % 4) == 0;
+        if closed_form(b) == expect_lose { band3_bad = band3_bad + 1; }
+        band3_cases = band3_cases + 1;
+        i = i + 1;
+    }
+    println(f"band 3 (closed form alone, property-checked near 2^31): {band3_cases} cases, {band3_bad} bad");
+    println("  NOTE: band 3 has no independent oracle -- the DP cannot reach here.");
+}

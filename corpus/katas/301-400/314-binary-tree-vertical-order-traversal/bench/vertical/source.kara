@@ -1,0 +1,112 @@
+// Benchmark lane for LeetCode 314 — Binary Tree Vertical Order Traversal.
+//
+// build-once + punch (see ../../../../BENCHMARKS.md): grow POOL random trees
+// of NODES nodes ONCE, then punch PASSES vertical-order traversals through
+// them. Each pass runs on the tree the running checksum selects, so no pass
+// can be hoisted or reordered, and folds every column's length and every
+// value into the checksum, so no part of the result is dead.
+//
+// THE ARM MIRRORED IS THE OFFSET ONE (vertical_order_offset.kara): an extent
+// pass for the leftmost and rightmost column, then a level-frontier BFS that
+// appends into a Vec indexed by (column - leftmost). It is the one arm that
+// is the same algorithm in every language — the ★ arm's SortedMap has no C
+// equivalent, so mirroring it would benchmark five B-tree implementations.
+//
+// WHAT IS MEASURED is the traversal, not the build: the trees are RC nodes in
+// Kāra, malloc'd nodes in C, Boxes in Rust, GC pointers in Go, and the punch
+// never allocates a node — it allocates the frontier vectors and the result
+// (one Vec per column), which is the allocation churn a real vertical order
+// pays.
+//
+// The sink is a masked running total, carried ACROSS passes so they are
+// serialised.
+
+const POOL: i64 = 8;
+const NODES: i64 = 50000;
+const PASSES: i64 = 240;
+const MASK: i64 = 1073741823;
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn grow(n: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if n <= 0 { return None; }
+    seed = lcg(seed);
+    let v = seed % 1000 - 500;
+    seed = lcg(seed);
+    let left_n = if n <= 1 { 0 } else { seed % n };
+    let right_n = n - 1 - left_n;
+    let l = grow(left_n, seed);
+    let r = grow(right_n, seed);
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn extent(t: Option[TreeNode], col: i64, lo: mut ref i64, hi: mut ref i64) {
+    match t {
+        None => {}
+        Some(n) => {
+            if col < lo { lo = col; }
+            if col > hi { hi = col; }
+            extent(n.left, col - 1, lo, hi);
+            extent(n.right, col + 1, lo, hi);
+        }
+    }
+}
+
+fn vertical_order(root: Option[TreeNode]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut current: Vec[(TreeNode, i64)] = Vec.new();
+    match root {
+        None => { return out; }
+        Some(n) => { current.push((n, 0)); }
+    }
+    let mut lo = 0;
+    let mut hi = 0;
+    extent(root, 0, mut lo, mut hi);
+    for i in lo..(hi + 1) { out.push(Vec.new()); }
+    while current.len() > 0 {
+        let mut next: Vec[(TreeNode, i64)] = Vec.new();
+        for (n, c) in current {
+            out[c - lo].push(n.val);
+            match n.left {
+                None => {}
+                Some(l) => { next.push((l, c - 1)); }
+            }
+            match n.right {
+                None => {}
+                Some(r) => { next.push((r, c + 1)); }
+            }
+        }
+        current = next;
+    }
+    return out;
+}
+
+fn main() {
+    let mut seed = 314159;
+    let mut pool: Vec[Option[TreeNode]] = Vec.new();
+    for i in 0..POOL {
+        pool.push(grow(NODES, mut seed));
+    }
+
+    let mut checksum = 0;
+    for pass in 0..PASSES {
+        let which = checksum % POOL;
+        let cols = vertical_order(pool[which].clone());
+        checksum = (checksum + cols.len()) & MASK;
+        for i in 0..cols.len() {
+            checksum = (checksum * 31 + cols[i].len()) & MASK;
+            for j in 0..cols[i].len() {
+                checksum = (checksum + cols[i][j] + 500) & MASK;
+            }
+        }
+    }
+    println("checksum " + checksum.to_string());
+}

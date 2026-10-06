@@ -1,0 +1,34 @@
+
+fn pad(t: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-byte");
+    s.push_str(f"{t}");
+    return s;
+}
+struct H { id: i64, xs: Vec[i64], tag: String, name: String }
+fn mk(id: i64) -> H {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(id);
+    v.push(id);
+    return H { id: id, xs: v, tag: pad(id), name: pad(id) };
+}
+struct W { t: (H, i64) }
+fn take(t: (H, i64)) {
+    match t { (r, k) => { let n = r.name; println(f"p{n.len()}:{r.tag.len()}:{r.xs.len()}:{k}"); } }
+}
+fn nested(t: ((H, i64), i64)) {
+    match t { ((r, j), k) => { let n = r.name; println(f"q{n.len()}:{r.tag.len()}:{r.xs.len()}:{j}:{k}"); } }
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        take((mk(1), 0));
+        let t = (mk(2), 5);
+        match t { (r, k) => { let n = r.name; println(f"l{n.len()}:{r.tag.len()}:{r.xs.len()}:{k}"); } }
+        let w = W { t: (mk(3), 9) };
+        match w.t { (r, k) => { let n = r.name; println(f"w{n.len()}:{r.tag.len()}:{r.xs.len()}:{k}"); } }
+        nested(((mk(4), 7), 8));
+        i = i + 1;
+    }
+    println("done");
+}

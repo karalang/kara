@@ -1,0 +1,3 @@
+shared struct Sh { n: i64 }
+enum Et { A(Sh), B }
+fn main() { let z = Et.A(Sh { n: 3 }); println("ok"); }

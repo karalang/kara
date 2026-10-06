@@ -1,0 +1,5 @@
+seed (0,2) -> area 6
+seed (0,0) -> area 1
+seed (1,1) -> area 4
+seed (1,1) -> area 1
+seed (0,1) -> area 3

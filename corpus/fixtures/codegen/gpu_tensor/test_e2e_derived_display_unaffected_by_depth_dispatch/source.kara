@@ -1,0 +1,9 @@
+
+#[derive(Display)]
+struct Plain { n: i64 }
+fn main() {
+    let p = Plain { n: 5 };
+    println(f"top={p}")
+    let v = [Plain { n: 5 }];
+    println(f"vec={v}")
+}

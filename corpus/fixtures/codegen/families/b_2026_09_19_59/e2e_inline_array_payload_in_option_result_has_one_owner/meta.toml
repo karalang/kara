@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_19_59.rs::e2e_inline_array_payload_in_option_result_has_one_owner"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_09_19_59.rs::asan_inline_array_payload_in_option_result_frees_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

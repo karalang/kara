@@ -1,0 +1,19 @@
+struct S1 { v: i64, s: String }
+impl Drop for S1 { fn drop(mut ref self) { println(f"  dS{self.v}") } }
+enum Ho { P(Option[S1]), Q }
+enum Hq { P(Option[Vec[S1]]), Q }
+enum G[T] { X(T), Y }
+fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
+fn tako(o: Option[S1]) -> i64 { 1 }
+fn main() {
+    println("read"); { let h = Ho.P(Option.Some(s(1))); match h { Ho.P(o) => { println(f"  in {o.is_some()}") } Ho.Q => {} } }
+    println("unused"); { let h = Ho.P(Option.Some(s(2))); match h { Ho.P(_) => { println("  in") } Ho.Q => {} } }
+    println("rebind"); { let h = Ho.P(Option.Some(s(3))); match h { Ho.P(o) => { let u = o; println("  in") } Ho.Q => {} } }
+    println("nested"); { let h = Ho.P(Option.Some(s(5))); match h { Ho.P(Option.Some(r)) => { println(f"  r{r.v}") } Ho.P(Option.None) => {} Ho.Q => {} } }
+    println("nestedmv"); { let h = Ho.P(Option.Some(s(6))); match h { Ho.P(Option.Some(r)) => { let u = r; println(f"  r{u.v}") } Ho.P(Option.None) => {} Ho.Q => {} } }
+    println("iflet"); { let h = Ho.P(Option.Some(s(7))); if let Ho.P(o) = h { println("  in") } }
+    println("vread"); { let mut w: Vec[S1] = []; w.push(s(8)); let h = Hq.P(Option.Some(w)); match h { Hq.P(o) => { println("  in") } Hq.Q => {} } }
+    println("gread"); { let g = G.X(Option.Some(s(9))); match g { G.X(o) => { println("  in") } G.Y => {} } }
+    println("grebind"); { let g = G.X(Option.Some(s(11))); match g { G.X(o) => { let u = o; println("  in") } G.Y => {} } }
+    println("end")
+}

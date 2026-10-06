@@ -1,0 +1,7 @@
+
+fn main() {
+    // Safety: no paired cross-thread accesses in this single-threaded demo.
+    unsafe { fence(MemoryOrdering.SeqCst); }
+    compiler_fence(MemoryOrdering.Acquire);
+    println(1);
+}

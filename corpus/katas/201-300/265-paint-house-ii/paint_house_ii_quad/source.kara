@@ -1,0 +1,96 @@
+// LeetCode 265 — Paint House II, the definition.
+//
+// For every colour of every house, scan the whole previous row and take the
+// cheapest entry whose colour differs. That is O(n·k²), and it is the statement
+// of the problem rather than an insight about it: no claim is made about where
+// the best previous colour is, so nothing can be got wrong about where it is.
+//
+// This is the reference the other two answer to. Both of them replace the inner
+// scan with an argument — "it is the row minimum, unless this colour IS the row
+// minimum" for the ★ form, and "it is the better of the two sides" for the
+// prefix/suffix form — and both arguments can be subtly wrong in ways that still
+// produce a plausible, finite, slightly-too-large total.
+
+fn min_cost(costs: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let n = costs.len();
+    if n == 0 {
+        return 0;
+    }
+    let inf = 1000000000000;
+
+    let mut prev: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < k {
+        prev.push(costs[0][c]);
+        c = c + 1;
+    }
+
+    let mut i = 1;
+    while i < n {
+        let mut cur: Vec[i64] = Vec.new();
+        let mut t = 0;
+        while t < k {
+            let mut best = inf;
+            let mut j = 0;
+            while j < k {
+                if j != t and prev[j] < best {
+                    best = prev[j];
+                }
+                j = j + 1;
+            }
+            cur.push(costs[i][t] + best);
+            t = t + 1;
+        }
+        prev = cur;
+        i = i + 1;
+    }
+
+    let mut answer = inf;
+    let mut q = 0;
+    while q < k {
+        if prev[q] < answer { answer = prev[q]; }
+        q = q + 1;
+    }
+    if answer >= inf {
+        return -1;
+    }
+    return answer;
+}
+
+fn report(label: ref String, costs: ref Vec[Vec[i64]], k: i64) {
+    println(f"{label} -> {min_cost(costs, k)}");
+}
+
+fn main() {
+    let empty: Vec[Vec[i64]] = Vec.new();
+    report("[] k=3", empty, 3);
+    let mut a: Vec[Vec[i64]] = Vec.new();
+    a.push([1, 5, 3]);
+    a.push([2, 9, 4]);
+    report("[[1,5,3],[2,9,4]] k=3", a, 3);
+    let mut b: Vec[Vec[i64]] = Vec.new();
+    b.push([7, 6, 2]);
+    report("[[7,6,2]] k=3", b, 3);
+    let mut c: Vec[Vec[i64]] = Vec.new();
+    c.push([4]);
+    report("[[4]] k=1", c, 1);
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    d.push([4]);
+    d.push([9]);
+    report("[[4],[9]] k=1", d, 1);
+    let mut e: Vec[Vec[i64]] = Vec.new();
+    e.push([1, 100]);
+    e.push([1, 100]);
+    e.push([1, 100]);
+    report("[[1,100]x3] k=2", e, 2);
+    let mut f: Vec[Vec[i64]] = Vec.new();
+    f.push([3, 3, 5]);
+    f.push([1, 50, 50]);
+    report("[[3,3,5],[1,50,50]] k=3", f, 3);
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    g.push([8, 1, 6, 7, 9]);
+    g.push([2, 9, 3, 4, 1]);
+    g.push([5, 5, 5, 5, 5]);
+    g.push([9, 2, 8, 1, 7]);
+    report("5 colours, 4 houses", g, 5);
+}

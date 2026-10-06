@@ -1,0 +1,56 @@
+s/bind
+  r
+  dSaaaaaaaa0
+  dSaaaaaaaa1
+s/wild
+  w
+  dSbbbbbbbb0
+  dSbbbbbbbb1
+s/read
+  r:cccccccc0
+  dScccccccc0
+  dScccccccc1
+s/iflet
+  r
+  dSdddddddd0
+  dSdddddddd1
+s/letelse
+  r
+  dSeeeeeeee0
+  dSeeeeeeee1
+s/whilelet
+  r
+  dSmmmmmmmm0
+  dSmmmmmmmm1
+s/res
+  r
+  dSpppppppp0
+  dSpppppppp1
+s/three
+  r
+  dSffffffff0
+  dSffffffff1
+  dSffffffff2
+b/chain
+  r
+  dShhhhhhhh0
+  dShhhhhhhh1
+b/noheap
+  r
+  dN2
+  dN3
+b/str
+  r:gggggggg0
+b/local
+  r
+  dSllllllll0
+  dSllllllll1
+b/fresh
+  r
+  dSkkkkkkkk0
+  dSkkkkkkkk1
+b/ctl
+  r
+  dSjjjjjjjj0
+  dSjjjjjjjj1
+end

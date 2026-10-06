@@ -1,0 +1,16 @@
+
+struct Bag { tag: i64, items: Vec[i64] }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Bag] = OnceLock.new();
+        let mut v: Vec[i64] = Vec.new();
+        v.push(10i64);
+        v.push(20i64);
+        match cell.set(Bag { tag: 3i64, items: v }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.get() { Some(b) => { total = total + b.tag + b.items.len(); }, None => {}, }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

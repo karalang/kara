@@ -1,0 +1,25 @@
+struct R { id: i64, tag: String }
+enum G[T] { X(T), Y }
+impl G[R] {
+    fn wg[U](self, u: U) -> i64 { match self { G.X(_) => { return 2; } G.Y => { return 0; } } }
+    fn pick[U](ref self, u: U, d: U) -> U { match self { G.X(_) => { return u; } G.Y => { return d; } } }
+    fn tag2[U: Display](ref self, u: U) -> String { match self { G.X(_) => { return f"x:{u}"; } G.Y => { return f"y:{u}"; } } }
+}
+enum H[T] { A(T), B }
+impl[T] H[T] { fn hw[U](self, u: U) -> U { match self { H.A(_) => { return u; } H.B => { return u; } } } }
+fn main() {
+    let b: G[R] = G.X(R { id: 2, tag: f"b{1}" });
+    let p1 = b.pick(f"s{1}", f"d{2}"); let p2 = b.pick(3, 4);
+    println(f"p {p1} {p2}");
+    let t1 = b.tag2(5); let t2 = b.tag2(f"w{6}");
+    println(f"t {t1} {t2}");
+    let y: G[R] = G.Y;
+    let p3 = y.pick(1, 9);
+    println(f"y {p3}");
+    let y2: G[R] = G.Y;
+    let w1 = y.wg(7); let w2 = y2.wg(f"q{1}");
+    println(f"w {w1} {w2}");
+    let h2: H[i64] = H.A(1);
+    let h3 = h2.hw(f"z{2}");
+    println(f"h {h3}");
+}

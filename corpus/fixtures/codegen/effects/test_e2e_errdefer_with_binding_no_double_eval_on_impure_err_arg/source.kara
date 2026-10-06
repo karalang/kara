@@ -1,0 +1,15 @@
+
+fn make_err() -> i64 {
+    println("called");
+    7_i64
+}
+fn body() -> Result[i64, i64] {
+    errdefer(e) { println(e); }
+    return Err(make_err());
+}
+fn main() {
+    match body() {
+        Ok(_) => println("ok"),
+        Err(_) => println("caller-err"),
+    }
+}

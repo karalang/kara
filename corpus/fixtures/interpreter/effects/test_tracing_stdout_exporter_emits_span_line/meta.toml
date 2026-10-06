@@ -1,0 +1,13 @@
+source = "tests/interpreter/effects.rs::test_tracing_stdout_exporter_emits_span_line"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

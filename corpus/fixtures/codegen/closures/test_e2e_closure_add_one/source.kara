@@ -1,0 +1,5 @@
+
+fn main() {
+    let inc = |x: i64| x + 1;
+    println(inc(7));
+}

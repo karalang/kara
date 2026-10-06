@@ -1,0 +1,21 @@
+
+        fn main() {
+            let mut frontier: VecDeque[i64] = VecDeque.new();
+            frontier.push_back(1);
+            let mut count = 0;
+            loop {
+                let next = frontier.pop_front();
+                match next {
+                    Some(node) => {
+                        count = count + 1;
+                        if node < 3 {
+                            frontier.push_back(node + 1);
+                            frontier.push_back(node + 2);
+                        }
+                    },
+                    None => { break; },
+                }
+            }
+            println(count);
+        }
+    

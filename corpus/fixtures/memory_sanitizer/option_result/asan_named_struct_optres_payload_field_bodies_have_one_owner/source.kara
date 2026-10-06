@@ -1,0 +1,19 @@
+
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Q { r: R, s: R }
+
+fn mkr(k: i64) -> R { return R { id: k, tag: f"tag-{k}-padded-out-well-past-any-inline-capacity", xs: [k, k, k] } }
+
+fn peek(o: Option[Q]) -> i64 { match o { Option.Some(t) => { return t.r.id + 100; } Option.None => { return 0; } } }
+fn take(o: Option[Q]) -> i64 { match o { Option.Some(t) => { let x = t.r; return x.tag.len(); } Option.None => { return 0; } } }
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        { let g = peek(Option.Some(Q { r: mkr(n * 2), s: mkr(n * 2 + 1) })); println(f"p{g}"); }
+        { let a = Option.Some(Q { r: mkr(n * 2), s: mkr(n * 2 + 1) }); let g = take(a); println(f"t{g}"); }
+        n = n + 1;
+    }
+    println("end");
+}

@@ -1,0 +1,14 @@
+
+#[target(wasm_wasi)]
+pub fn checked_div(a: i32, b: i32) -> Option[i32] {
+    if b == 0 { return Option.None; }
+    return Option.Some(a / b);
+}
+
+#[target(wasm_wasi)]
+pub fn safe_sqrt(x: f64) -> Result[f64, i32] {
+    if x < 0.0 { return Result.Err(1); }
+    return Result.Ok(x);
+}
+
+fn main() {}

@@ -1,0 +1,15 @@
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Item { score: i64, name: String }
+
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    v.push(Item { score: 10i64, name: "z" });
+    v.push(Item { score: 10i64, name: "a" });
+    v.push(Item { score: 5i64, name: "m" });
+    v.sort_by_key(|i| i);
+    for it in v.iter() {
+        println(it.score);
+        println(it.name);
+    }
+}

@@ -1,0 +1,9 @@
+
+par struct Data { x: i64 }
+fn read(d: Data) -> i64 { d.x }
+fn main() {
+    let a = Data { x: 100 };
+    let b = a;
+    println(read(a));
+    println(b.x);
+}

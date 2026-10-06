@@ -1,0 +1,54 @@
+// Benchmark workload for LeetCode #330 — the greedy arm
+// (patching_array.kara), timed as written.
+//
+// Build once, then punch (BENCHMARKS.md). LEN values in [50, 1050] are drawn
+// and sorted once; their sum is `total`. Each of PUNCHES punches draws an n
+// in [1, 2 * total] and counts the patches the greedy needs for [1, n]. The
+// smallest value is at least 50, so every answer starts with the patches
+// 1, 2, 4, ..., 32, and an n past `total` adds patches at the end.
+//
+// Each answer is folded into a rolling hash, which is the sink.
+
+const LEN: i64 = 100000;
+const PUNCHES: i64 = 1500;
+const MODULUS: i64 = 1073741789;
+
+fn min_patches(nums: ref Vec[i64], n: i64) -> i64 {
+    let mut miss = 1;
+    let mut i = 0;
+    let mut patches = 0;
+    while miss <= n {
+        if i < nums.len() and nums[i] <= miss {
+            miss += nums[i];
+            i += 1;
+        } else {
+            miss += miss;
+            patches += 1;
+        }
+    }
+    return patches;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn main() {
+    let mut seed = 330;
+    let mut nums: Vec[i64] = Vec.new();
+    let mut total = 0;
+    for _ in 0..LEN {
+        let v = next(mut seed) % 1001 + 50;
+        nums.push(v);
+        total += v;
+    }
+    nums.sort();
+    let mut sink = 0;
+    for _ in 0..PUNCHES {
+        let n = (next(mut seed) * 32768 + next(mut seed)) % (2 * total) + 1;
+        let answer = min_patches(nums, n);
+        sink = (sink * 1000003 + answer * 64 + n % 64) % MODULUS;
+    }
+    println(f"{sink}");
+}

@@ -1,0 +1,5 @@
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"dN{self.id}") } }
+fn mkn(i: i64) -> N { return N { id: i } }
+fn f(o: Option[(N, i64)]) -> i64 { if let Some((_, b)) = o { return b } return 0 }
+fn main() { println(f"n{f(Option.Some((mkn(1), 9)))}") }

@@ -1,0 +1,96 @@
+// LeetCode #128: Longest Consecutive Sequence — O(n) via a hash set.
+//
+// Length of the longest run of consecutive integers in an unsorted array. Put
+// every value in a `Set[i64]`; a value STARTS a run iff `value - 1` is absent,
+// so from each start walk `value+1, value+2, …` while present and count. Each
+// value is visited by the inner walk at most once across all starts, so the
+// whole scan is O(n) despite the nested loop.
+
+fn longest_consecutive(nums: Vec[i64]) -> i64 {
+    let mut s: Set[i64] = Set.new();
+    let mut i = 0;
+    while i < nums.len() {
+        s.insert(nums[i]);
+        i = i + 1;
+    }
+    let mut best = 0;
+    i = 0;
+    while i < nums.len() {
+        let v = nums[i];
+        // Only launch a walk from a genuine run start.
+        if not s.contains(v - 1) {
+            let mut length = 1;
+            let mut cur = v;
+            while s.contains(cur + 1) {
+                cur = cur + 1;
+                length = length + 1;
+            }
+            if length > best {
+                best = length;
+            }
+        }
+        i = i + 1;
+    }
+    best
+}
+
+// Deterministic LCG in [0, mod) — mirrors the Python reference exactly.
+fn lcg(seed: i64, n: i64, cap: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = seed;
+    let mut k = 0;
+    while k < n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        out.push(x % cap);
+        k = k + 1;
+    }
+    out
+}
+
+fn main() {
+    let m = 1000000007;
+    let mut sink = 0;
+
+    let mut a: Vec[i64] = Vec.new();
+    a.push(100); a.push(4); a.push(200); a.push(1); a.push(3); a.push(2);
+    let n1 = longest_consecutive(a);
+    println(f"len=6: {n1}");
+    sink = (sink * 1000003 + n1) % m;
+
+    let mut b: Vec[i64] = Vec.new();
+    b.push(0); b.push(3); b.push(7); b.push(2); b.push(5);
+    b.push(8); b.push(4); b.push(6); b.push(0); b.push(1);
+    let n2 = longest_consecutive(b);
+    println(f"len=10: {n2}");
+    sink = (sink * 1000003 + n2) % m;
+
+    let empty: Vec[i64] = Vec.new();
+    let n3 = longest_consecutive(empty);
+    println(f"len=0: {n3}");
+    sink = (sink * 1000003 + n3) % m;
+
+    let mut d: Vec[i64] = Vec.new();
+    d.push(1); d.push(2); d.push(0); d.push(1);
+    let n4 = longest_consecutive(d);
+    println(f"len=4: {n4}");
+    sink = (sink * 1000003 + n4) % m;
+
+    let mut e: Vec[i64] = Vec.new();
+    e.push(9); e.push(1); e.push(4); e.push(7); e.push(3); e.push(-1);
+    e.push(0); e.push(5); e.push(8); e.push(-1); e.push(6);
+    let n5 = longest_consecutive(e);
+    println(f"len=11: {n5}");
+    sink = (sink * 1000003 + n5) % m;
+
+    let f = lcg(1, 500, 200);
+    let n6 = longest_consecutive(f);
+    println(f"len=500: {n6}");
+    sink = (sink * 1000003 + n6) % m;
+
+    let g = lcg(42, 800, 1000);
+    let n7 = longest_consecutive(g);
+    println(f"len=800: {n7}");
+    sink = (sink * 1000003 + n7) % m;
+
+    println(f"sink: {sink}");
+}

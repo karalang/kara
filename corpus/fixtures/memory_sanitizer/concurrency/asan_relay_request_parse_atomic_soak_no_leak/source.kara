@@ -1,0 +1,38 @@
+
+par struct Counters {
+    n: Atomic[i64],
+}
+fn request_path(bytes: Vec[u8]) -> String {
+    match String.from_utf8(bytes) {
+        Result.Ok(line) => {
+            let parts = line.split(' ');
+            if parts.len() >= 2 {
+                return parts[1].clone();
+            }
+            return "/";
+        }
+        Result.Err(_) => {
+            return "/";
+        }
+    }
+}
+fn main() {
+    // 48 'A' (0x41, valid UTF-8); spaces at 3 and 44 split it into
+    // ["AAA", <40-byte middle>, "AAA"] — parts[1] is the >= 36-byte
+    // leak-candidate the LSan short-string blind spot needs.
+    let mut buf: Array[u8, 48] = [65u8; 48];
+    buf[3] = 32u8;
+    buf[44] = 32u8;
+    let counters = Counters { n: Atomic.new(0) };
+    let mut i: i64 = 0;
+    loop {
+        if i >= 4000 { break; }
+        let bytes: Vec[u8] = Vec.from_slice(buf[0..48]);
+        let path = request_path(bytes);
+        if path.len() >= 40 {
+            let _ = counters.n.fetch_add(1, MemoryOrdering.Relaxed);
+        }
+        i = i + 1;
+    }
+    println(counters.n.load(MemoryOrdering.Relaxed));
+}

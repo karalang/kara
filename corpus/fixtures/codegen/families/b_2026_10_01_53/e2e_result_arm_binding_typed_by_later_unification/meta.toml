@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_10_01_53.rs::e2e_result_arm_binding_typed_by_later_unification"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_10_01_53.rs::asan_result_arm_binding_typed_by_later_unification"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

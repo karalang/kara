@@ -1,0 +1,64 @@
+
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H2 { f: R, g: R }
+struct H3 { f: R, g: R, k: R }
+
+#[allow(partial_move_of_drop_enum)]
+fn sibs(b: E) -> i64 {
+    let mut h: H2 = H2 { f: R { id: 30, tag: f"t30" }, g: R { id: 31, tag: f"t31" } };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    println("s");
+    return h.f.id + h.g.id
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn sib_refreshed(b: E) -> i64 {
+    let mut h: H2 = H2 { f: R { id: 30, tag: f"t30" }, g: R { id: 31, tag: f"t31" } };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    h.g = R { id: 9, tag: f"t9" };
+    println("s");
+    return h.f.id + h.g.id
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn two_views(b: E, c: E) -> i64 {
+    let mut h: H3 = H3 { f: R { id: 30, tag: f"t30" }, g: R { id: 31, tag: f"t31" }, k: R { id: 32, tag: f"t32" } };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    match c { E.A(r2) => { h.g = r2; } E.B => { } }
+    println("s");
+    return h.f.id + h.g.id + h.k.id
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn rearm_with_sibling_viewed(b: E, c: E) -> i64 {
+    let mut h: H3 = H3 { f: R { id: 40, tag: f"t40" }, g: R { id: 41, tag: f"t41" }, k: R { id: 42, tag: f"t42" } };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    match c { E.A(r2) => { h.g = r2; } E.B => { } }
+    h.f = R { id: 7, tag: f"t7" };
+    println("s");
+    return h.f.id + h.g.id + h.k.id
+}
+
+fn fresh_only() -> i64 {
+    let mut h: H2 = H2 { f: R { id: 50, tag: f"t50" }, g: R { id: 51, tag: f"t51" } };
+    h.f = R { id: 52, tag: f"t52" };
+    println("p");
+    return h.f.id + h.g.id
+}
+
+fn main() {
+    println(f"a{sibs(E.A(R { id: 8, tag: f"t8" }))}");
+    println("-");
+    println(f"b{sib_refreshed(E.A(R { id: 8, tag: f"t8" }))}");
+    println("-");
+    println(f"c{two_views(E.A(R { id: 18, tag: f"t18" }), E.B)}");
+    println("-");
+    println(f"d{two_views(E.B, E.B)}");
+    println("-");
+    println(f"e{rearm_with_sibling_viewed(E.B, E.A(R { id: 6, tag: f"t6" }))}");
+    println("-");
+    println(f"f{fresh_only()}");
+}

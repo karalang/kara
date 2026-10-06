@@ -1,0 +1,73 @@
+// Benchmark workload for LeetCode #334 — the threshold arm
+// (increasing_triplet.kara), timed as written.
+//
+// Build once, then punch (BENCHMARKS.md). One array of NODES values is built
+// once as a run of decreasing pairs, `t - 1, t`, each pair below the one
+// before it, which has no increasing triplet. Each of PUNCHES punches picks
+// the first slot of a random pair. Half the punches raise it above the
+// previous pair's top, which finishes a triplet exactly there; the other half
+// leave the array alone, so the solve scans all of it. Then the slot is put
+// back.
+//
+// Each answer and its position are folded into a rolling hash, which is the
+// sink.
+
+const VALUES: i64 = 1000000;
+const PUNCHES: i64 = 100;
+const MODULUS: i64 = 1073741789;
+
+fn increasing_triplet(nums: ref Vec[i64]) -> bool {
+    let mut first: Option[i64] = None;
+    let mut second: Option[i64] = None;
+    for x in nums {
+        match second {
+            Some(s) if x > s => {
+                return true;
+            }
+            _ => {}
+        }
+        match first {
+            Some(f) if x > f => {
+                second = Some(x);
+            }
+            _ => {
+                first = Some(x);
+            }
+        }
+    }
+    return false;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn wide(seed: mut ref i64) -> i64 {
+    let hi = next(seed);
+    return hi * 32768 + next(seed);
+}
+
+fn main() {
+    let mut nums: Vec[i64] = Vec.new();
+    let mut top = 2 * VALUES;
+    for _ in 0..(VALUES / 2) {
+        nums.push(top - 1);
+        nums.push(top);
+        top -= 2;
+    }
+    let mut seed = 334;
+    let mut sink = 0;
+    for p in 0..PUNCHES {
+        // The first slot of a pair that has a pair before it.
+        let at = 2 + 2 * (wide(mut seed) % (VALUES / 2 - 1));
+        let old = nums[at];
+        if p % 2 == 0 {
+            nums[at] = nums[at - 1] + 1;
+        }
+        let answer = if increasing_triplet(nums) { 1 } else { 0 };
+        nums[at] = old;
+        sink = (sink * 1000003 + answer * 2000003 + at) % MODULUS;
+    }
+    println(f"{sink}");
+}

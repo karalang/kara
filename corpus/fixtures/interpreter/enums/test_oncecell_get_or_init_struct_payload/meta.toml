@@ -1,0 +1,13 @@
+source = "tests/interpreter/enums.rs::test_oncecell_get_or_init_struct_payload"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

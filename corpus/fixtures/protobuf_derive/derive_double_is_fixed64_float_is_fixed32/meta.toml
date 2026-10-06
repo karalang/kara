@@ -1,0 +1,13 @@
+source = "tests/protobuf_derive.rs::derive_double_is_fixed64_float_is_fixed32"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

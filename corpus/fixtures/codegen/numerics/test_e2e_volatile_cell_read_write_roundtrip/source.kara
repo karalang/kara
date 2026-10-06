@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut reg: VolatileCell[i32] = VolatileCell.new(7);
+    println(reg.read());
+    reg.write(42);
+    println(reg.read());
+    reg.write(0x1F);
+    println(reg.read());
+    let mut flag: VolatileCell[u8] = VolatileCell.new(0);
+    flag.write(1);
+    println(flag.read());
+}

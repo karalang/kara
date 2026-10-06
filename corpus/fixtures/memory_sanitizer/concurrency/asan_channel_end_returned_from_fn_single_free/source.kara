@@ -1,0 +1,13 @@
+
+fn mk() -> Receiver[i64] {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    let keep = tx.clone();
+    keep.send(7);
+    tx.send(9);
+    rx
+}
+fn main() {
+    let r = mk();
+    println(r.recv());
+    println(r.recv());
+}

@@ -1,0 +1,20 @@
+struct Q { s: String, n: i64 }
+fn ok1(a: Vec[i64]) -> Vec[i64] { match Result.Ok(a) { Ok(v) => v, Err(e) => e } }
+fn ok2(s: String) -> String { match Result.Ok(s) { Ok(v) => v, Err(e) => e } }
+fn er1(s: String) -> String { match Result.Err(s) { Ok(v) => v, Err(e) => e } }
+fn ok3(q: Q) -> Q { match Result.Ok(q) { Ok(v) => v, Err(e) => e } }
+fn ok4(a: f64) -> f64 { match Result.Ok(a) { Ok(v) => v, Err(e) => e } }
+fn ok5(s: String) -> i64 { let r = match Result.Ok(s) { Ok(v) => v, Err(e) => e }; return r.len(); }
+fn ok6(s: String) -> String { let r: String = match Result.Ok(s) { Ok(v) => v, Err(e) => e }; return r; }
+fn ok7(n: i64) -> i64 { match Result.Ok(n) { Ok(v) => v, Err(_) => 0 } }
+fn ok8(s: String) -> String { match Option.Some(s) { Some(v) => v, None => "none".to_string() } }
+fn main() {
+    let z = ok1([1, 2]);
+    println(f"a:{z.len()} {z[1]}");
+    println(f"b:{ok2(f"heap-{3}-string-long-enough-for-heap")}");
+    println(f"c:{er1(f"err-{4}")}");
+    let q = ok3(Q { s: f"q{5}", n: 6 });
+    println(f"d:{q.s} {q.n}");
+    println(f"e:{ok4(2.5)}");
+    println(f"f:{ok5(f"ab{1}")} {ok6(f"cd{2}")} {ok7(3)} {ok8(f"ef{4}")}");
+}

@@ -1,0 +1,24 @@
+
+fn make(seed: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 8 {
+        v.push(seed + i);
+        i = i + 1;
+    }
+    return v;
+}
+fn sum(xs: Vec[i64]) -> i64 {
+    let mut t = 0;
+    let mut i = 0;
+    while i < 8 {
+        t = t + xs[i];
+        i = i + 1;
+    }
+    return t;
+}
+fn main() {
+    let a = make(100);
+    let b = make(200);
+    println(sum(a) + sum(b));
+}

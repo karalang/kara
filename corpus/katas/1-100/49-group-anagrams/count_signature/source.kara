@@ -1,0 +1,99 @@
+// LeetCode #49: Group Anagrams — 26-bucket count-signature key.
+//
+// The O(N·K) contrast to the sorted-string key of
+// [`sorted_key.kara`](sorted_key.kara). Two words are anagrams iff they use
+// each letter the same number of times — so a word's *letter-count vector* is
+// as good a fingerprint as its sorted form, and it costs one O(K) pass instead
+// of an O(K log K) sort. The vector is serialised into a delimited String
+// ("1#0#0#0#1#…#" for "eat" — one 'a', one 'e', one 't') so it can key the
+// same `Map[String, i64]`.
+//
+// Everything below `anagram_key` is IDENTICAL to `sorted_key.kara`: the
+// index-map grouping (`Map[key -> group index]` + `Vec[Vec[String]]`), the
+// first-appearance output order, and the report scaffold. Only the key
+// function differs — which is the whole point. Because the two keys induce the
+// same partition and the grouping preserves the same order, both solvers emit
+// byte-identical output, on every backend, matching the Python oracle.
+//
+// Input is LeetCode's lowercase a–z, so 26 buckets indexed by `byte - b'a'`
+// suffice. A word with any non-lowercase byte would index out of range — that
+// is the problem precondition, not the kata's concern.
+
+fn anagram_key(word: ref String) -> String {
+    // 26 zero counts, one per lowercase letter.
+    let mut counts: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < 26 {
+        counts.push(0);
+        z = z + 1;
+    }
+    // Tally each byte into its letter bucket.
+    for b in word.bytes() {
+        let idx = (b as i64) - (b'a' as i64);
+        counts[idx] = counts[idx] + 1;
+    }
+    // Serialise "c0#c1#…#c25#" — the '#' delimiters keep multi-digit counts
+    // unambiguous (so 1,11 and 11,1 don't collide).
+    let mut key: String = "";
+    let mut i = 0;
+    while i < 26 {
+        key.push_str(f"{counts[i]}#");
+        i = i + 1;
+    }
+    key
+}
+
+fn group_anagrams(words: Vec[String]) -> Vec[Vec[String]] {
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    let mut index_of: Map[String, i64] = Map.new();
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        let word = words[i].clone();
+        let key = anagram_key(word);
+        match index_of.get(key) {
+            Some(gi) => groups[gi].push(word),
+            None => {
+                index_of.insert(anagram_key(word), groups.len());
+                let mut g: Vec[String] = Vec.new();
+                g.push(word);
+                groups.push(g);
+            }
+        }
+        i = i + 1;
+    }
+    groups
+}
+
+fn join_words(words: ref Vec[String]) -> String {
+    let mut out: String = "";
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(words[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn report(words: Vec[String]) {
+    let groups = group_anagrams(words);
+    let g = groups.len();
+    println(f"{g} groups");
+    let mut j = 0;
+    while j < g {
+        println(join_words(groups[j]));
+        j = j + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    report(["eat", "tea", "tan", "ate", "nat", "bat"]);   // expect: 3 groups
+    report([""]);                                         // expect: 1 group
+    report(["a"]);                                        // expect: 1 group
+    report(["abc", "bca", "cab", "xyz", "zzz"]);          // expect: 3 groups
+}

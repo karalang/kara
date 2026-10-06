@@ -1,0 +1,8 @@
+
+fn main() {
+    let pivot: i64 = 5i64;
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(10); v.push(4); v.push(9);
+    v.sort_by(|a, b| ((a - pivot) * (a - pivot)).cmp((b - pivot) * (b - pivot)));
+    for x in v.iter() { println(x); }
+}

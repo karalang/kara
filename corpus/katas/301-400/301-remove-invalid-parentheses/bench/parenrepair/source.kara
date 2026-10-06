@@ -1,0 +1,137 @@
+// Benchmark lane for LeetCode #301 — the unique-by-construction repair.
+//
+// WHY THIS ARM AND NOT THE CANONICAL ONE. The ★ solution deduplicates with a
+// hash set, and a hash set is the single data structure whose implementation
+// differs most between these five languages — Go's map, Python's set, Rust's
+// SipHash-by-default HashMap, and whatever hand-rolled table a C mirror would
+// have to grow. Benchmarking it would mostly measure five hash tables. The
+// `..._unique.kara` arm needs no set at all, so all five mirrors run the same
+// recursion over the same bytes, and the number means something.
+//
+// SHAPE. Build 2,000 random 24-byte strings over '(' ')' 'a' once, then punch
+// 128 repair passes through them (BENCHMARKS.md § build-once + punch). The
+// recursion is data-dependent — where it branches is decided by where the
+// paren counter first goes negative — so there is nothing here for a
+// vectorizer to take, the same reason #300's patience sort is honest.
+//
+// NO ALLOCATION IN THE TIMED LOOP. Every mirror works in one preallocated
+// scratch buffer of MAXDEPTH × SLOT bytes, indexed by recursion depth: level
+// d reads at d × SLOT and writes its child at (d + 1) × SLOT. That is what C
+// would do with `unsigned char scratch[32][32]`, so the flat-index spelling is
+// the one that keeps all five mirrors symmetric — the lesson #299 and #300
+// both learned by getting it wrong first.
+//
+// The sink folds each repaired string into a rolling mod-p hash rather than
+// collecting it, so the measurement is the search, not the collection.
+
+fn repair(
+    scratch: mut ref Vec[u8],
+    depth: i64,
+    len: i64,
+    last_i: i64,
+    last_j: i64,
+    open: u8,
+    close: u8,
+    results: mut ref i64,
+    checksum: mut ref i64,
+) {
+    let base = depth * 32;
+    let child = base + 32;
+
+    let mut count = 0;
+    let mut i = last_i;
+    while i < len {
+        let c = scratch[base + i];
+        if c == open {
+            count = count + 1;
+        } else if c == close {
+            count = count - 1;
+        }
+        if count < 0 {
+            let mut j = last_j;
+            while j <= i {
+                if scratch[base + j] == close and (j == last_j or scratch[base + j - 1] != close) {
+                    let mut w = 0;
+                    let mut k = 0;
+                    while k < len {
+                        if k != j {
+                            scratch[child + w] = scratch[base + k];
+                            w = w + 1;
+                        }
+                        k = k + 1;
+                    }
+                    repair(scratch, depth + 1, len - 1, i, j, open, close, results, checksum);
+                }
+                j = j + 1;
+            }
+            return;
+        }
+        i = i + 1;
+    }
+
+    let mut r = 0;
+    while r < len {
+        scratch[child + r] = scratch[base + len - 1 - r];
+        r = r + 1;
+    }
+
+    if open == b'(' {
+        repair(scratch, depth + 1, len, 0, 0, b')', b'(', results, checksum);
+    } else {
+        let mut h = 0;
+        let mut t = 0;
+        while t < len {
+            h = (h * 31 + (scratch[child + t] as i64)) % 1000000007;
+            t = t + 1;
+        }
+        results = results + 1;
+        checksum = (checksum + h) % 1000000007;
+    }
+}
+
+fn main() {
+    let ncases = 2000;
+    let slen = 24;
+    let passes = 64;
+
+    // Build once.
+    let mut corpus: Vec[u8] = Vec.new();
+    let mut state = 12345;
+    let mut n = 0;
+    while n < ncases * slen {
+        state = (state * 1103515245 + 12345) & 0x7fffffff;
+        let r = (state / 65536) % 3;
+        if r == 0 {
+            corpus.push(b'(');
+        } else if r == 1 {
+            corpus.push(b')');
+        } else {
+            corpus.push(b'a');
+        }
+        n = n + 1;
+    }
+
+    let mut scratch: Vec[u8] = Vec.filled(32 * 32, 0);
+    let mut results = 0;
+    let mut checksum = 0;
+
+    // Punch.
+    let mut p = 0;
+    while p < passes {
+        let mut ci = 0;
+        while ci < ncases {
+            let src = ci * slen;
+            let mut k = 0;
+            while k < slen {
+                scratch[k] = corpus[src + k];
+                k = k + 1;
+            }
+            repair(mut scratch, 0, slen, 0, 0, b'(', b')', mut results, mut checksum);
+            ci = ci + 1;
+        }
+        p = p + 1;
+    }
+
+    println(f"results {results}");
+    println(f"checksum {checksum}");
+}

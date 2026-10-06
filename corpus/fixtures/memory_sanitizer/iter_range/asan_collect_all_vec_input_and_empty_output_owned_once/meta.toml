@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/iter_range.rs::asan_collect_all_vec_input_and_empty_output_owned_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

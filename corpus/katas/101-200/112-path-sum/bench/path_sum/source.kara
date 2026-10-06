@@ -1,0 +1,46 @@
+// Benchmark workload for LeetCode #112 — build 8 balanced 31-node trees once (distinct value
+// ranges), then K reps of has_path_sum against an UNACHIEVABLE target (1e9, far above any
+// 31-node path sum) on a DATA-DEPENDENT-selected tree (idx = acc%8, seeded by the running hash
+// so nothing hoists), folding each verdict into a rolling hash. With no path found, the OR
+// recursion explores the WHOLE tree — a FULL read-only per-node traversal (match Option[shared]
+// + a field read + a subtract per node, no allocation) — the exposed RC/traversal regime (cf.
+// #104, #110, #111). Kara passes Option[shared] by value (retain/release elided on this
+// non-escaping walk); C/Go use raw pointers, Rust a Box walked by &-borrow. The two recursive
+// calls are independent but auto-par's granularity cutoff (B-2026-07-15-4, fixed) leaves the
+// 31-node walks sequential (default byte-equal to KARAC_AUTO_PAR=0).
+shared struct TreeNode { val: i64, mut left: Option[TreeNode], mut right: Option[TreeNode] }
+fn has_path_sum(node: Option[TreeNode], target: i64) -> bool {
+    match node {
+        None => false,
+        Some(n) => {
+            let rem = target - n.val;
+            let left_none = match n.left { None => true, Some(_) => false };
+            let right_none = match n.right { None => true, Some(_) => false };
+            if left_none and right_none { rem == 0 }
+            else { has_path_sum(n.left, rem) or has_path_sum(n.right, rem) }
+        }
+    }
+}
+fn build_balanced(lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi { return None; }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: mid, left: None, right: None };
+    node.left = build_balanced(lo, mid - 1);
+    node.right = build_balanced(mid + 1, hi);
+    Some(node)
+}
+fn main() {
+    let mut pool: Vec[Option[TreeNode]] = Vec.new();
+    let mut t = 0;
+    while t < 8 { pool.push(build_balanced(t * 100, t * 100 + 30)); t = t + 1; }
+    let mut acc = 1;
+    let mut rep = 0;
+    while rep < 6000000 {
+        let idx = acc % 8;
+        let hit = has_path_sum(pool[idx].clone(), 1000000000);
+        let bit = if hit { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

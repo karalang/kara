@@ -1,0 +1,12 @@
+
+struct Item { id: i64, name: String }
+impl Drop for Item { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+struct Bag { xs: Vec[Item] }
+impl Bag { fn add(mut ref self, x: Item) { self.xs.push(x); } }
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.add(Item { id: 7, name: f"nn{7}" });
+    println("built");
+    while b.xs.len() > 0 { match b.xs.pop() { Some(e) => { println(f"pop {e.id}"); } None => {} } }
+    println("end");
+}

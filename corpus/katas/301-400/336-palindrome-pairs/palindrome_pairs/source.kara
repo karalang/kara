@@ -1,0 +1,145 @@
+// LeetCode #336: Palindrome Pairs — a map of reversed words.
+//
+// Given a list of distinct words, return every pair of indices (i, j),
+// i != j, such that words[i] + words[j] is a palindrome.
+//
+//   ["abcd", "dcba", "lls", "s", "sssll"]  ->  (0, 1) (1, 0) (2, 4) (3, 2)
+//   ["bat", "tab", "cat"]                  ->  (0, 1) (1, 0)
+//   ["a", ""]                              ->  (0, 1) (1, 0)
+//
+// Split each word w at every position into a prefix and a suffix.
+//
+//   If the suffix is a palindrome and some word is the reverse of the
+//   prefix, that word goes after w: w + it = prefix + suffix + reverse(prefix).
+//   If the prefix is a palindrome and some word is the reverse of the
+//   suffix, that word goes before w.
+//
+// A map from each reversed word to its index answers "is there a word that
+// is the reverse of this piece" with one lookup, using the piece as a slice
+// of w. The empty prefix is tried only on the first rule, so a pair of
+// words that are each other's reverse is not reported twice.
+//
+// O(n · L^2) time for n words of length at most L.
+
+fn is_palindrome(b: Slice[u8], lo: i64, hi: i64) -> bool {
+    let mut i = lo;
+    let mut j = hi - 1;
+    while i < j {
+        if b[i] != b[j] {
+            return false;
+        }
+        i += 1;
+        j -= 1;
+    }
+    return true;
+}
+
+fn reversed(s: ref String) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let mut r = String.new();
+    let mut i = chars.len();
+    while i > 0 {
+        i -= 1;
+        r.push(chars[i]);
+    }
+    return r;
+}
+
+fn palindrome_pairs(words: ref Vec[String]) -> Vec[(i64, i64)] {
+    let mut index: Map[String, i64] = Map.new();
+    for i in 0..words.len() {
+        index.insert(reversed(words[i]), i);
+    }
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..words.len() {
+        let w = ref words[i];
+        let b = w.bytes();
+        let len = w.len();
+        for k in 0..len + 1 {
+            if is_palindrome(b, k, len) {
+                match index.get(w[0..k]) {
+                    Some(j) if j != i => pairs.push((i, j)),
+                    _ => {}
+                }
+            }
+            if k > 0 and is_palindrome(b, 0, k) {
+                match index.get(w[k..len]) {
+                    Some(j) if j != i => pairs.push((j, i)),
+                    _ => {}
+                }
+            }
+        }
+    }
+    pairs.sort();
+    return pairs;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn show(words: Vec[String]) {
+    let pairs = palindrome_pairs(words);
+    let mut quoted: Vec[String] = Vec.new();
+    for w in words.iter() {
+        quoted.push(f"\"{w}\"");
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for p in pairs.iter() {
+        let (i, j) = p;
+        parts.push(f"({i}, {j})");
+    }
+    let shown = quoted.join(", ");
+    let found = parts.join(" ");
+    println(f"[{shown}] -> {found}");
+}
+
+// `count` distinct random words over the first `letters` letters, of length
+// `lo` to `hi`. The order is the order of first appearance.
+fn random_words(seed: mut ref i64, count: i64, letters: i64, lo: i64, hi: i64) -> Vec[String] {
+    let alphabet = "abcdefghijklmnopqrstuvwxyz".bytes();
+    let mut seen: Set[String] = Set.new();
+    let mut out: Vec[String] = Vec.new();
+    while out.len() < count {
+        let len = lo + next(seed) % (hi - lo + 1);
+        let mut w = String.new();
+        for _ in 0..len {
+            w.push(alphabet[next(seed) % letters] as char);
+        }
+        if not seen.contains(w) {
+            seen.insert(w.clone());
+            out.push(w);
+        }
+    }
+    return out;
+}
+
+fn main() {
+    show(vec!["abcd", "dcba", "lls", "s", "sssll"]);
+    show(vec!["bat", "tab", "cat"]);
+    show(vec!["a", ""]);
+    show(vec![]);
+    show(vec![""]);
+    show(vec!["a", "b", "c"]);
+    show(vec!["", "a", "aa", "aba"]);
+    show(vec!["abc", "cba", "ab", "ba"]);
+    show(vec!["race", "car", "ecar"]);
+    show(vec!["ab", "a", "ba", "b"]);
+    show(vec!["aab", "baa", "aaa", "b"]);
+    show(vec!["xyzzyx", "xyz", "zyx", "zzyx"]);
+    let mut seed = 336;
+    for round in 0..6 {
+        show(random_words(mut seed, 4 + round, 2 + round % 2, 0, 4));
+    }
+    // 1,000 words over {a, b} of 1 to 12 letters: too many pairs to print,
+    // so print the count and a hash of the sorted pairs.
+    let big = random_words(mut seed, 1000, 2, 1, 12);
+    let pairs = palindrome_pairs(big);
+    let mut hash = 0;
+    for p in pairs.iter() {
+        let (i, j) = p;
+        hash = (hash * 1000003 + i * 4099 + j) % 1073741789;
+    }
+    println(f"big: {big.len()} words -> {pairs.len()} pairs, hash {hash}");
+}

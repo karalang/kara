@@ -1,0 +1,119 @@
+// LeetCode #116 — BFS level-order variant (O(n) space).
+//
+// The textbook approach: a breadth-first sweep, one level at a time. Collect the current level's
+// nodes into a queue; for each level, link each node's `next` to the following node in that level
+// (the last gets `None`), then enqueue the children for the next level. Distinct mechanism from the
+// O(1)-space `connect.kara` (which reuses the level-above `next` chain), but it must land on the
+// IDENTICAL wiring — same `next` pointers, hence the same `level_hash`.
+
+shared struct Node {
+    val: i64,
+    mut left: Option[Node],
+    mut right: Option[Node],
+    mut next: Option[Node],
+}
+
+fn connect(root: Option[Node]) {
+    let mut level: Vec[Node] = Vec.new();
+    match root {
+        None => {}
+        Some(r) => {
+            level.push(r);
+        }
+    }
+    let mut going = true;
+    while going {
+        if level.len() == 0 {
+            going = false;
+        } else {
+            let mut next_level: Vec[Node] = Vec.new();
+            let mut i = 0;
+            let n = level.len();
+            while i < n {
+                let node = level[i];
+                if i + 1 < n {
+                    node.next = Some(level[i + 1]);
+                } else {
+                    node.next = None;
+                }
+                match node.left {
+                    None => {}
+                    Some(l) => {
+                        next_level.push(l);
+                    }
+                }
+                match node.right {
+                    None => {}
+                    Some(r) => {
+                        next_level.push(r);
+                    }
+                }
+                i = i + 1;
+            }
+            level = next_level;
+        }
+    }
+}
+
+fn build_perfect(idx: i64, max_idx: i64, base: i64) -> Option[Node] {
+    if idx > max_idx {
+        return None;
+    }
+    let node = Node { val: idx + base, left: None, right: None, next: None };
+    node.left = build_perfect(2 * idx, max_idx, base);
+    node.right = build_perfect(2 * idx + 1, max_idx, base);
+    Some(node)
+}
+
+fn level_hash(root: Option[Node]) -> i64 {
+    let mut h = 1;
+    let mut leftmost = root;
+    let mut going = true;
+    while going {
+        match leftmost {
+            None => {
+                going = false;
+            }
+            Some(lm) => {
+                let mut cur = leftmost;
+                let mut inner = true;
+                while inner {
+                    match cur {
+                        None => {
+                            inner = false;
+                        }
+                        Some(c) => {
+                            h = (h * 131 + c.val + 1) % 1000000007;
+                            cur = c.next;
+                        }
+                    }
+                }
+                h = (h * 31 + 7) % 1000000007;
+                leftmost = lm.left;
+            }
+        }
+    }
+    h
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut t = 0;
+    while t < 8 {
+        let depth = 2 + (t % 8);
+        let mut max_idx = 1;
+        let mut d = 0;
+        while d < depth {
+            max_idx = max_idx * 2;
+            d = d + 1;
+        }
+        max_idx = max_idx - 1;
+        let root = build_perfect(1, max_idx, t * 100);
+        connect(root);
+        let h = level_hash(root);
+        acc = (acc * 131 + h) % 1000000007;
+        println(f"tree {t}: level_hash={h}");
+        t = t + 1;
+    }
+    println(f"sink: {acc}");
+}

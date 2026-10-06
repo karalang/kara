@@ -1,0 +1,6 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    let b: bool = v.iter().map(|x| x * 10).any(|y| y > 25);
+    println(b);
+}

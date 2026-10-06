@@ -1,0 +1,230 @@
+// LeetCode 280 — differential harness.
+//
+// Three solvers: the O(n) local-fix greedy, sort-then-swap-pairs, and a
+// brute-force permutation search.
+//
+// THE ANSWER IS NOT UNIQUE, so output cannot be compared as strings — on
+// [3,5,2,1,6,4] the greedy gives [3,5,1,6,2,4] and the sorted version gives
+// [1,3,2,5,4,6], and both are correct. Validity is checked instead, and it is
+// TWO conditions:
+//
+//   1. THE WIGGLE PROPERTY — v[i] >= v[i-1] at odd i, <= at even i.
+//   2. THE SAME MULTISET as the input.
+//
+// The second is the one that gets forgotten, and forgetting it makes the first
+// nearly worthless: `[0]` wiggles, `[1,2]` wiggles, and a solver that dropped
+// half the array or duplicated its smallest element would sail through a
+// property-only check. A validator for a REORDERING problem has to verify that a
+// reordering is what happened.
+//
+// PLUS A BOUND THAT SURVIVES NON-UNIQUENESS. The brute force returns the
+// LEXICOGRAPHICALLY SMALLEST valid arrangement, so every other correct solver's
+// output must be lex >= it. That is sharper than "all three are valid": it is a
+// single ordering fact each solver must respect, and it catches an answer that
+// is valid but not of the right multiset without needing to say so separately.
+//
+// EXHAUSTIVE OVER SHORT ARRAYS, drawn from a TINY value alphabet so that
+// duplicates and ties are common rather than rare. Ties are where the non-strict
+// comparisons matter — an all-equal array already wiggles, and a solver using
+// `<` where it should use `<=` is correct on distinct values and wrong the
+// moment two entries match.
+
+fn wiggles(v: ref Vec[i64]) -> bool {
+    let mut i = 1;
+    while i < v.len() {
+        if i % 2 == 1 {
+            if v[i] < v[i - 1] { return false; }
+        } else {
+            if v[i] > v[i - 1] { return false; }
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn greedy(nums: mut ref Vec[i64]) {
+    let mut i = 1;
+    while i < nums.len() {
+        let odd = i % 2 == 1;
+        if odd {
+            if nums[i] < nums[i - 1] {
+                let t = nums[i];
+                nums[i] = nums[i - 1];
+                nums[i - 1] = t;
+            }
+        } else {
+            if nums[i] > nums[i - 1] {
+                let t = nums[i];
+                nums[i] = nums[i - 1];
+                nums[i - 1] = t;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn sorted_pairs(nums: mut ref Vec[i64]) {
+    // insertion sort — the point is the pairing that follows, not the sort
+    let mut a = 1;
+    while a < nums.len() {
+        let mut b = a;
+        while b > 0 and nums[b - 1] > nums[b] {
+            let t = nums[b - 1];
+            nums[b - 1] = nums[b];
+            nums[b] = t;
+            b = b - 1;
+        }
+        a = a + 1;
+    }
+    let mut i = 1;
+    while i + 1 < nums.len() {
+        let t = nums[i];
+        nums[i] = nums[i + 1];
+        nums[i + 1] = t;
+        i = i + 2;
+    }
+}
+
+fn brute(nums: mut ref Vec[i64]) {
+    // sort first so the permutation walk starts at the lex-smallest ordering
+    let mut a = 1;
+    while a < nums.len() {
+        let mut b = a;
+        while b > 0 and nums[b - 1] > nums[b] {
+            let t = nums[b - 1];
+            nums[b - 1] = nums[b];
+            nums[b] = t;
+            b = b - 1;
+        }
+        a = a + 1;
+    }
+    let mut more = true;
+    while more {
+        if wiggles(nums) { return; }
+        // next permutation, in place
+        let mut p = nums.len() - 2;
+        while p >= 0 and nums[p] >= nums[p + 1] { p = p - 1; }
+        if p < 0 {
+            more = false;
+        } else {
+            let mut s = nums.len() - 1;
+            while nums[s] <= nums[p] { s = s - 1; }
+            let t = nums[p];
+            nums[p] = nums[s];
+            nums[s] = t;
+            let mut lo = p + 1;
+            let mut hi = nums.len() - 1;
+            while lo < hi {
+                let t2 = nums[lo];
+                nums[lo] = nums[hi];
+                nums[hi] = t2;
+                lo = lo + 1;
+                hi = hi - 1;
+            }
+        }
+    }
+}
+
+
+fn same_multiset(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut x: Vec[i64] = Vec.new();
+    let mut y: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < a.len() { x.push(a[i]); y.push(b[i]); i = i + 1; }
+    let mut p = 1;
+    while p < x.len() {
+        let mut q = p;
+        while q > 0 and x[q - 1] > x[q] { let t = x[q - 1]; x[q - 1] = x[q]; x[q] = t; q = q - 1; }
+        p = p + 1;
+    }
+    let mut r = 1;
+    while r < y.len() {
+        let mut q = r;
+        while q > 0 and y[q - 1] > y[q] { let t = y[q - 1]; y[q - 1] = y[q]; y[q] = t; q = q - 1; }
+        r = r + 1;
+    }
+    let mut k = 0;
+    while k < x.len() { if x[k] != y[k] { return false; } k = k + 1; }
+    return true;
+}
+
+// lexicographic compare: -1, 0, or 1
+fn lex_cmp(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let mut i = 0;
+    while i < a.len() and i < b.len() {
+        if a[i] < b[i] { return -1; }
+        if a[i] > b[i] { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    let mut cases = 0;
+    let mut greedy_invalid = 0;
+    let mut sorted_invalid = 0;
+    let mut brute_invalid = 0;
+    let mut greedy_below_lex_min = 0;
+    let mut sorted_below_lex_min = 0;
+    let mut greedy_differed_from_brute = 0;
+    let mut sorted_equalled_brute = 0;
+    let mut with_duplicates = 0;
+    let mut digest = 0;
+
+    let mut seed = 20260818;
+    let mut n = 1;
+    while n <= 7 {
+        let mut t = 0;
+        while t < 240 {
+            let alpha = 2 + (t % 4);         // tiny alphabet -> ties common
+            let mut base: Vec[i64] = Vec.new();
+            let mut i = 0;
+            while i < n {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                base.push((seed / 13) % alpha);
+                i = i + 1;
+            }
+            let mut dup = false;
+            let mut a1 = 0;
+            while a1 < base.len() {
+                let mut a2 = a1 + 1;
+                while a2 < base.len() {
+                    if base[a1] == base[a2] { dup = true; }
+                    a2 = a2 + 1;
+                }
+                a1 = a1 + 1;
+            }
+            if dup { with_duplicates = with_duplicates + 1; }
+
+            let mut g = base.clone();
+            let mut s = base;
+            let mut b = base;
+            greedy(mut g);
+            sorted_pairs(mut s);
+            brute(mut b);
+
+            if not wiggles(g) or not same_multiset(base, g) { greedy_invalid = greedy_invalid + 1; }
+            if not wiggles(s) or not same_multiset(base, s) { sorted_invalid = sorted_invalid + 1; }
+            if not wiggles(b) or not same_multiset(base, b) { brute_invalid = brute_invalid + 1; }
+
+            if lex_cmp(g, b) < 0 { greedy_below_lex_min = greedy_below_lex_min + 1; }
+            if lex_cmp(s, b) < 0 { sorted_below_lex_min = sorted_below_lex_min + 1; }
+            if lex_cmp(g, b) != 0 { greedy_differed_from_brute = greedy_differed_from_brute + 1; }
+            if lex_cmp(s, b) == 0 { sorted_equalled_brute = sorted_equalled_brute + 1; }
+
+            let mut k = 0;
+            while k < b.len() { digest = (digest * 131 + b[k] + 1) % 1000000007; k = k + 1; }
+            cases = cases + 1;
+            t = t + 1;
+        }
+        n = n + 1;
+    }
+
+    println(f"cases {cases}, of which contain a duplicate {with_duplicates}");
+    println(f"greedy answers differing from the lex-smallest {greedy_differed_from_brute}");
+    println(f"sort-then-pair answers EQUAL to the lex-smallest {sorted_equalled_brute}");
+    println(f"answers lexicographically BELOW the brute-force minimum: greedy {greedy_below_lex_min}, sorted {sorted_below_lex_min}");
+    println(f"digest {digest}");
+    println(f"invalid (wiggle or multiset): greedy {greedy_invalid}, sorted {sorted_invalid}, brute {brute_invalid}");
+}

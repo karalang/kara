@@ -1,0 +1,121 @@
+// Benchmark — LeetCode 308, Range Sum Query 2D (Mutable).
+//
+// Build-once + punch, per BENCHMARKS.md: a 256x256 2D Fenwick tree and a
+// 100,000-operation script (half writes, half rectangle reads) are built ONCE,
+// before the timed loop. The timed work is PASSES sweeps over that script.
+//
+// A DELIBERATELY NON-SQUARE GRID WOULD BE MORE FAITHFUL TO THE KATA, and this
+// lane still uses a square one — because the mirrors must all agree bit for bit
+// and a square grid keeps the index arithmetic identical in five languages
+// without a stride subtlety in any of them. The h-versus-w transposition that
+// non-square shapes catch is a CORRECTNESS question, and it is the
+// differential's job (25 shapes, 20 of them non-square); the benchmark's job is
+// throughput on one representative shape.
+//
+// As in #307 nothing is rebuilt per pass: a Fenwick tree is mutable and stays
+// valid across passes, so each pass starts from the state the previous one
+// left. Deterministic, identical in every mirror, and no per-pass allocation
+// folded into the measurement.
+//
+// THE SINK IS A MASK, NOT A MODULO — the lesson from #303, whose first draft
+// spent roughly 75% of its runtime in two 64-bit divisions.
+
+fn main() {
+    let n = 256;
+    let stride = n + 1;
+    let ops = 100000;
+    let passes = 54;
+
+    let mut tree: Vec[i64] = Vec.new();
+    for i in 0..((n + 1) * stride) {
+        tree.push(0);
+    }
+    let mut data: Vec[i64] = Vec.new();
+    for i in 0..(n * n) {
+        data.push(0);
+    }
+
+    // ---- the operation script, generated once
+    let mut kind: Vec[i64] = Vec.new();
+    let mut o1: Vec[i64] = Vec.new();
+    let mut o2: Vec[i64] = Vec.new();
+    let mut o3: Vec[i64] = Vec.new();
+    let mut o4: Vec[i64] = Vec.new();
+    let mut state = 20308;
+    for k in 0..ops {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let t = state % 2;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let a = state % n;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let b = state % n;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let c = state % n;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let d = state % n;
+        kind.push(t);
+        if t == 0 {
+            o1.push(a); o2.push(b); o3.push(c % 2001 - 1000); o4.push(0);
+        } else {
+            if a <= c { o1.push(a); o3.push(c); } else { o1.push(c); o3.push(a); }
+            if b <= d { o2.push(b); o4.push(d); } else { o2.push(d); o4.push(b); }
+        }
+    }
+
+    // ---- the timed work
+    let mut checksum = 0;
+    let mut p = 0;
+    while p < passes {
+        let mut k = 0;
+        while k < ops {
+            if kind[k] == 0 {
+                let r = o1[k];
+                let c = o2[k];
+                let delta = o3[k] - data[r * n + c];
+                data[r * n + c] = o3[k];
+                let mut x = r + 1;
+                while x <= n {
+                    let mut y = c + 1;
+                    while y <= n {
+                        tree[x * stride + y] += delta;
+                        y += y & -y;
+                    }
+                    x += x & -x;
+                }
+            } else {
+                // inclusion-exclusion over four 2D prefixes
+                let r1 = o1[k];
+                let c1 = o2[k];
+                let r2 = o3[k] + 1;
+                let c2 = o4[k] + 1;
+                let mut total = 0;
+                let mut qi = 0;
+                while qi < 4 {
+                    let mut px = r2;
+                    let mut py = c2;
+                    let mut sign = 1;
+                    if qi == 1 { px = r1; sign = -1; }
+                    if qi == 2 { py = c1; sign = -1; }
+                    if qi == 3 { px = r1; py = c1; }
+                    let mut sub = 0;
+                    let mut x = px;
+                    while x > 0 {
+                        let mut y = py;
+                        while y > 0 {
+                            sub += tree[x * stride + y];
+                            y -= y & -y;
+                        }
+                        x -= x & -x;
+                    }
+                    total += sign * sub;
+                    qi = qi + 1;
+                }
+                checksum = (checksum + total) & 0x3FFFFFFF;
+            }
+            k = k + 1;
+        }
+        p = p + 1;
+    }
+
+    println(f"checksum {checksum}");
+}

@@ -1,0 +1,11 @@
+
+fn main() {
+    let lt = Ordering.Less;
+    let gt = Ordering.Greater;
+    let eq = Ordering.Equal;
+    if lt.is_lt() { println(1); } else { println(0); }
+    if gt.is_lt() { println(1); } else { println(0); }
+    if gt.is_gt() { println(1); } else { println(0); }
+    if eq.is_eq() { println(1); } else { println(0); }
+    if eq.is_le() { println(1); } else { println(0); }
+}

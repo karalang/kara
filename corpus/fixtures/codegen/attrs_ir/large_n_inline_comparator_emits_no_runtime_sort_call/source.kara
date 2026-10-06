@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5000 {
+        v.push((i * 37 + 11) % 5000);
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.cmp(b));
+    println(v[0]);
+}

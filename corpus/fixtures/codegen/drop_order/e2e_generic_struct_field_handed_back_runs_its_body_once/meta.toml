@@ -1,0 +1,13 @@
+source = "tests/codegen/drop_order.rs::e2e_generic_struct_field_handed_back_runs_its_body_once"
+dedup_of = ["tests/interpreter/drop_order.rs::interp_generic_struct_field_handed_back_runs_its_body_once", "tests/memory_sanitizer/drop_order.rs::asan_generic_struct_field_handed_back_runs_its_body_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

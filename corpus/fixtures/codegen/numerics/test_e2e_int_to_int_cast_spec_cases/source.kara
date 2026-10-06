@@ -1,0 +1,11 @@
+
+fn main() {
+    println(0x1FFi32 as u8);   // narrow: low 8 bits -> 255
+    println(-1i32 as u8);      // narrow: 0xFF -> 255
+    println(300i32 as i8);     // narrow: 300 & 0xFF = 0x2C -> 44
+    println(-1i8 as u8);       // same width reinterpret -> 255
+    let a: i8 = -5;
+    println(a as i64);         // signed widen (sext) -> -5
+    let u: u8 = 200;
+    println(u as i64);         // unsigned widen (zext) -> 200
+}

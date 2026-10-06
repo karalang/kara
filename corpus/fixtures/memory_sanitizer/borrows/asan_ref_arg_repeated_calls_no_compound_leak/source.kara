@@ -1,0 +1,18 @@
+
+fn make() -> String {
+    let a = "hi ";
+    let b = "there";
+    return a + b;
+}
+
+fn show_len(s: ref String) {
+    println(s.len());
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        show_len(make());
+        i = i + 1;
+    }
+}

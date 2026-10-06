@@ -1,0 +1,37 @@
+// LeetCode #1: Two Sum — brute-force O(n²)
+//
+// For each pair (i, j) with i < j, check if nums[i] + nums[j] == target.
+// Returns the two indices in an `Array[i64, 2]`, or `[-1, -1]` if no pair
+// is found. (LeetCode guarantees one exists; the sentinel is defensive.)
+//
+// Once `Option[T]` is wired through the interpreter, the return type
+// should become `Option[(i64, i64)]`.
+
+fn two_sum(nums: Slice[i64], target: i64) -> Array[i64, 2] {
+    let n = nums.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if nums[i] + nums[j] == target {
+                return [i, j];
+            }
+        }
+    }
+    [-1, -1]
+}
+
+fn report(nums: Slice[i64], target: i64) {
+    let result = two_sum(nums, target);
+    println(result[0]);
+    println(result[1]);
+}
+
+fn main() {
+    let nums1: Array[i64, 4] = [2, 7, 11, 15];
+    report(nums1, 9);   // expect: 0, 1
+
+    let nums2: Array[i64, 3] = [3, 2, 4];
+    report(nums2, 6);   // expect: 1, 2
+
+    let nums3: Array[i64, 2] = [3, 3];
+    report(nums3, 6);   // expect: 0, 1
+}

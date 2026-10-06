@@ -1,0 +1,7 @@
+route.len=6
+  [0]=SFO
+  [1]=ATL
+  [2]=SFO
+  [3]=JFK
+  [4]=ATL
+  [5]=JFK

@@ -1,0 +1,80 @@
+// LeetCode #326: Power of Three — divide the largest 32-bit power of three.
+//
+// 3 is prime, so the divisors of 3^19 = 1162261467 are exactly 3^0 .. 3^19,
+// and 3^19 is the largest power of three that fits in a 32-bit int. So a
+// positive n is a power of three exactly when it divides 1162261467. No loop:
+// one remainder.
+//
+// The trick needs the prime: 2^30 would work the same way for powers of two,
+// but 6^k could not be tested by dividing 6^big, since 2 and 3 divide it too.
+//
+// O(1) time and space.
+
+const MAX_POWER: i64 = 1162261467;
+
+fn is_power_of_three(n: i64) -> bool {
+    return n > 0 and MAX_POWER % n == 0;
+}
+
+fn report(n: i64) {
+    println(f"{n} -> {is_power_of_three(n)}");
+}
+
+const I32_MIN: i64 = -2147483648;
+const I32_MAX: i64 = 2147483647;
+
+fn main() {
+    // The examples from the problem statement.
+    report(27);
+    report(0);
+    report(-1);
+
+    // More single values: the smallest powers, and near misses.
+    report(1);
+    report(3);
+    report(9);
+    report(45);
+    report(-3);
+    report(-27);
+    report(2);
+
+    // 243 = 3^5: the value that sinks the natural-log shortcut, which
+    // computes ln(243) / ln(3) = 4.999999999999999.
+    report(243);
+
+    // The largest power of three that fits in 32 bits, its neighbours, and
+    // both ends of the range.
+    report(1162261467);
+    report(1162261466);
+    report(1162261468);
+    report(I32_MAX);
+    report(I32_MIN);
+
+    // Every power of three up to 3^19, and the values one either side.
+    let mut p = 1;
+    let mut hits = 0;
+    let mut misses = 0;
+    for _ in 0..20 {
+        if is_power_of_three(p) {
+            hits += 1;
+        }
+        if is_power_of_three(p - 1) or is_power_of_three(p + 1) {
+            if p > 3 {
+                misses += 1;
+            }
+        }
+        p *= 3;
+    }
+    println(f"powers 3^0..3^19: {hits} of 20 accepted, {misses} neighbours above 3 accepted");
+
+    // A sweep: every n in [-1000, 1000000].
+    let mut count = 0;
+    let mut sum = 0;
+    for n in -1000..1000001 {
+        if is_power_of_three(n) {
+            count += 1;
+            sum += n;
+        }
+    }
+    println(f"[-1000, 1000000]: {count} powers, sum {sum}");
+}

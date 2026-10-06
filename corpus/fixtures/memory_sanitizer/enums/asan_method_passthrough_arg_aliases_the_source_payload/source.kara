@@ -1,0 +1,39 @@
+
+struct Bx { n: i64 }
+impl Bx {
+    fn take(ref self, o: Option[String]) -> Option[String] { o }
+    fn take_mut(mut ref self, o: Option[String]) -> Option[String] { self.n = self.n + 1; o }
+    fn take_res(ref self, o: Result[String, i64]) -> Result[String, i64] { o }
+    fn second(ref self, a: Option[String], b: Option[String]) -> Option[String] { b }
+    fn first(ref self, a: Option[String], b: Option[String]) -> Option[String] { a }
+    fn fresh(ref self, o: Option[String]) -> Option[String] { Option.Some(f"fresh-{self.n}") }
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let b = Bx { n: base };
+    let s1 = Option.Some(f"a{base}");
+    let o1 = b.take(s1);
+    match o1 { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } }
+    let mut c = Bx { n: base };
+    let s2 = Option.Some(f"b{base}");
+    let o2 = c.take_mut(s2);
+    match o2 { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } }
+    let s3: Result[String, i64] = Result.Ok(f"c{base}");
+    let o3 = b.take_res(s3);
+    match o3 { Result.Ok(v) => { println(f"got {v}"); } Result.Err(e) => { println(f"err {e}"); } }
+    let p = Option.Some(f"d{base}");
+    let q = Option.Some(f"e{base}");
+    let o4 = b.second(p, q);
+    match o4 { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } }
+    let r1 = Option.Some(f"f{base}");
+    let r2 = Option.Some(f"g{base}");
+    let o5 = b.first(r1, r2);
+    match o5 { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } }
+    // CONTROL — the method does NOT hand the argument back, so the result owns
+    // a freshly produced payload and the source owns its own. No alias, and the
+    // fix must not record one.
+    let s4 = Option.Some(f"h{base}");
+    let o6 = b.fresh(s4);
+    match o6 { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } }
+    println("end");
+}

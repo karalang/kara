@@ -1,0 +1,28 @@
+
+struct Box { items: Vec[i64] }
+struct Rec { name: String, id: i64 }
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 100 {
+        // loop reassign — the old value must be reclaimed each iteration
+        let mut cur: Box = Box { items: [i] };
+        let next: Box = Box { items: [i, i + 1, i + 2] };
+        cur = next;
+        total = total + cur.items.len();
+        // move-out then reassign 3-way swap
+        let mut a: Box = Box { items: [1, 2, 3] };
+        let mut b: Box = Box { items: [4, 5] };
+        let tmp: Box = a;
+        a = b;
+        b = tmp;
+        total = total + a.items.len() + b.items.len();
+        // String-field struct reassign
+        let mut r: Rec = Rec { name: "first-long-enough-to-heap-alloc", id: 1 };
+        let r2: Rec = Rec { name: "second-replacement-heap-string", id: 2 };
+        r = r2;
+        total = total + r.name.len();
+        i = i + 1;
+    }
+    println(total);
+}

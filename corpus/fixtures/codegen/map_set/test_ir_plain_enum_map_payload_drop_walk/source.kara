@@ -1,0 +1,8 @@
+
+enum V { Table(Map[String, i64]) }
+fn main() {
+    let mut mp: Map[String, i64] = Map.new();
+    let _ = mp.insert("a", 1);
+    let _t = V.Table(mp);
+    println(1);
+}

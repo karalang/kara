@@ -1,0 +1,9 @@
+let mut NAMES: Array[String, 2] = ["a", "bb"];
+let mut COUNTS: Array[i64, 2] = [1, 2];
+fn main() {
+    NAMES[0] = f"z{1}";
+    NAMES[0] = f"w{2}";
+    NAMES[1] = f"v{3}";
+    COUNTS[1] = 9;
+    println(f"{NAMES[0]} {NAMES[1]} {COUNTS[1]}");
+}

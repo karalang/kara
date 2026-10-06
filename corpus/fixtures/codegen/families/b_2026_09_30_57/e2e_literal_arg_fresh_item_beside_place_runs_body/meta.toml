@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_30_57.rs::e2e_literal_arg_fresh_item_beside_place_runs_body"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_09_30_57.rs::asan_literal_arg_fresh_item_beside_place_frees_it"]
+expect = "stdout"
+exit = 0
+tags = ["closure", "drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

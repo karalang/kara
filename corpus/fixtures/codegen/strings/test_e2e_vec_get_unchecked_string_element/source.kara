@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha");
+    v.push("beta");
+    unsafe {
+        println(v.get_unchecked(0));
+        println(v.get_unchecked(1));
+    }
+}

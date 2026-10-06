@@ -1,0 +1,124 @@
+// Benchmark workload — 8-state DFA over `s.bytes()` for LeetCode #65.
+//
+// N = 8 distinct inputs cycled by `k % N`, chosen to exercise every
+// transition path through the DFA so no single arm dominates the
+// branch predictor's history:
+//
+//   1. "0"               — single-digit accept (state 0→2; 1 byte)
+//   2. "-.9"             — sign + bare-dot + fractional (0→1→3→5)
+//   3. "53.5e93"         — digits + dot + fractional + exp + digits (0→2→4→5→6→8)
+//   4. "+6e-1"           — sign + digit + exp + sign + digit (0→1→2→6→7→8)
+//   5. "abc"             — early reject at state 0 (OTHER from start)
+//   6. "1e"              — accept-prefix then EOF in non-accepting state 6
+//   7. "99e2.5"          — mid-stream reject at the dot inside exponent
+//   8. "-123.456e789"    — longest valid: sign + decimal + exponent (12 bytes)
+//
+// Sink = sum of (is_number(inputs[k % N]) widened to i64; true → 1,
+// false → 0). With 5 accepts and 3 rejects per 8-input cycle,
+// K = 10_000_000 iters / 8 = 1_250_000 cycles × 5 = 6_250_000 sink.
+//
+// K = 10M chosen to match kata 8's bench so wall-clock numbers across
+// the two parser katas are directly comparable. Per-call work is one
+// pass over a 1–12 byte string with a `categorize` call per byte and
+// a state-machine dispatch — bounded by branch-predictor warmth and
+// the L1-resident `inputs` Vec[String] (24-byte stride per element).
+//
+// Built via `karac build`; pairs with bench/valid.{rs,c,py} for the
+// codegen-vs-rust-vs-c-vs-python harness in bench.sh.
+
+fn categorize(b: u8) -> i32 {
+    if b >= b'0' and b <= b'9' {
+        return 0i32;
+    }
+    if b == b'+' or b == b'-' {
+        return 1i32;
+    }
+    if b == b'.' {
+        return 2i32;
+    }
+    if b == b'e' or b == b'E' {
+        return 3i32;
+    }
+    4i32
+}
+
+fn is_number(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    let mut state: i32 = 0i32;
+    let mut i = 0;
+    while i < n {
+        let cat: i32 = categorize(bytes[i]);
+
+        if state == 0i32 {
+            if      cat == 0i32 { state = 2i32; }
+            else if cat == 1i32 { state = 1i32; }
+            else if cat == 2i32 { state = 3i32; }
+            else { return false; }
+        } else if state == 1i32 {
+            if      cat == 0i32 { state = 2i32; }
+            else if cat == 2i32 { state = 3i32; }
+            else { return false; }
+        } else if state == 2i32 {
+            if      cat == 0i32 { state = 2i32; }
+            else if cat == 2i32 { state = 4i32; }
+            else if cat == 3i32 { state = 6i32; }
+            else { return false; }
+        } else if state == 3i32 {
+            if      cat == 0i32 { state = 5i32; }
+            else { return false; }
+        } else if state == 4i32 {
+            if      cat == 0i32 { state = 5i32; }
+            else if cat == 3i32 { state = 6i32; }
+            else { return false; }
+        } else if state == 5i32 {
+            if      cat == 0i32 { state = 5i32; }
+            else if cat == 3i32 { state = 6i32; }
+            else { return false; }
+        } else if state == 6i32 {
+            if      cat == 0i32 { state = 8i32; }
+            else if cat == 1i32 { state = 7i32; }
+            else { return false; }
+        } else if state == 7i32 {
+            if      cat == 0i32 { state = 8i32; }
+            else { return false; }
+        } else if state == 8i32 {
+            if      cat == 0i32 { state = 8i32; }
+            else { return false; }
+        } else {
+            return false;
+        }
+
+        i = i + 1;
+    }
+
+    state == 2i32 or state == 4i32 or state == 5i32 or state == 8i32
+}
+
+fn main() {
+    let n: i64 = 8;
+    let k_iters: i64 = 10000000;
+
+    let mut inputs: Vec[String] = Vec.new();
+    inputs.push("0");
+    inputs.push("-.9");
+    inputs.push("53.5e93");
+    inputs.push("+6e-1");
+    inputs.push("abc");
+    inputs.push("1e");
+    inputs.push("99e2.5");
+    inputs.push("-123.456e789");
+
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % n;
+        let r: bool = is_number(inputs[idx]);
+        if r {
+            sum = sum + 1;
+        }
+        k = k + 1;
+    }
+    println(sum);
+}

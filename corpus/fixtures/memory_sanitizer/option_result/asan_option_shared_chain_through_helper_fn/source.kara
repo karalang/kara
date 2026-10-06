@@ -1,0 +1,39 @@
+
+shared struct Node {
+    val: i64,
+    mut next: Option[Node],
+}
+
+fn from_arr(arr: Vec[i64]) -> Option[Node] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = Node { val: arr[0], next: None };
+    let mut tail = head;
+    let mut i = 1u64;
+    // `as u64`: comparing u64 with i64 is a type error (B-2026-10-03-33).
+    while i < n as u64 {
+        let node = Node { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+        i = i + 1u64;
+    }
+    Some(head)
+}
+
+fn first_val(list: Option[Node]) -> i64 {
+    match list {
+        Some(n) => n.val,
+        None => -1i64,
+    }
+}
+
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(10);
+    a.push(20);
+    a.push(30);
+    let list = from_arr(a);
+    println(first_val(list));
+}

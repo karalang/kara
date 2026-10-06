@@ -1,0 +1,369 @@
+// Differential and property check for LeetCode #351.
+//
+// Four counts of the unlock patterns, and an oracle:
+//
+//   by_table      skip table, search from 1, 2 and 5, weighted 4, 4, 1  (unlock_patterns.kara)
+//   by_geometry   the key passed over worked out from positions         (unlock_patterns_geometry.kara)
+//   by_dp         dynamic programming over (keys used, last key)        (unlock_patterns_bitmask_dp.kara)
+//   by_stack      the search with an explicit stack and a bitmask        (unlock_patterns_stack.kara)
+//   oracle        a search from every key that allows a move when every
+//                 grid point strictly inside the segment is a visited
+//                 key, found with a gcd; it records the counts by start
+//                 key and length
+//
+// Properties:
+//   P1  all four arms equal the oracle on every length 1..=9 on its own
+//   P2  every arm's count for (m, n) is the sum of the oracle's lengths
+//       m..=n, for every m <= n with n <= 6, and for (1, 9) and (4, 9)
+//   P3  every arm gives 0 when m > n, all 36 such pairs
+//   P4  the oracle's counts are the same from all four corners, and from
+//       all four edges, at every length
+//   P5  the oracle counts as many 9-key patterns as 8-key ones: the last
+//       key left can always be reached, since any key a line to it passes
+//       over is already in the pattern
+//   P6  the oracle's 2-key count is the number of ordered pairs of keys
+//       whose line passes over no key, counted directly: 56
+
+// ---- by_table
+
+fn table_skip() -> Vec[i64] {
+    let mut skip: Vec[i64] = Vec.filled(100, 0);
+    let pairs = [(1, 3, 2), (4, 6, 5), (7, 9, 8), (1, 7, 4), (2, 8, 5), (3, 9, 6), (1, 9, 5), (3, 7, 5)];
+    for (a, b, mid) in pairs {
+        skip[a * 10 + b] = mid;
+        skip[b * 10 + a] = mid;
+    }
+    return skip;
+}
+
+fn table_count_from(key: i64, len: i64, m: i64, n: i64, visited: mut ref Vec[bool], skip: ref Vec[i64]) -> i64 {
+    let mut total = 0;
+    if len >= m {
+        total += 1;
+    }
+    if len == n {
+        return total;
+    }
+    visited[key] = true;
+    for next in 1..10 {
+        let mid = skip[key * 10 + next];
+        if not visited[next] and (mid == 0 or visited[mid]) {
+            total += table_count_from(next, len + 1, m, n, visited, skip);
+        }
+    }
+    visited[key] = false;
+    return total;
+}
+
+fn by_table(m: i64, n: i64) -> i64 {
+    if m > n {
+        return 0;
+    }
+    let skip = table_skip();
+    let mut visited: Vec[bool] = Vec.filled(10, false);
+    let corner = table_count_from(1, 1, m, n, mut visited, skip);
+    let edge = table_count_from(2, 1, m, n, mut visited, skip);
+    let center = table_count_from(5, 1, m, n, mut visited, skip);
+    return 4 * corner + 4 * edge + center;
+}
+
+// ---- by_geometry
+
+fn geometry_passed_over(a: i64, b: i64) -> i64 {
+    let rows = (a - 1) / 3 + (b - 1) / 3;
+    let cols = (a - 1) % 3 + (b - 1) % 3;
+    if rows % 2 != 0 or cols % 2 != 0 {
+        return 0;
+    }
+    return rows / 2 * 3 + cols / 2 + 1;
+}
+
+fn geometry_extend(key: i64, len: i64, m: i64, n: i64, visited: mut ref Vec[bool]) -> i64 {
+    let mut total = 0;
+    if len >= m {
+        total += 1;
+    }
+    if len == n {
+        return total;
+    }
+    visited[key] = true;
+    for next in 1..10 {
+        if visited[next] {
+            continue;
+        }
+        let mid = geometry_passed_over(key, next);
+        if mid == 0 or visited[mid] {
+            total += geometry_extend(next, len + 1, m, n, visited);
+        }
+    }
+    visited[key] = false;
+    return total;
+}
+
+fn by_geometry(m: i64, n: i64) -> i64 {
+    if m > n {
+        return 0;
+    }
+    let mut visited: Vec[bool] = Vec.filled(10, false);
+    let mut total = 0;
+    for start in 1..10 {
+        total += geometry_extend(start, 1, m, n, mut visited);
+    }
+    return total;
+}
+
+// ---- by_dp
+
+fn dp_by_length() -> Vec[i64] {
+    let over = table_skip();
+    let mut ways: Vec[i64] = Vec.filled(512 * 9, 0);
+    for key in 1..10 {
+        ways[(1 << (key - 1)) * 9 + key - 1] = 1;
+    }
+    let mut by_length: Vec[i64] = Vec.filled(10, 0);
+    for mask in 1..512 {
+        for last in 1..10 {
+            let w = ways[mask * 9 + last - 1];
+            if w == 0 {
+                continue;
+            }
+            by_length[mask.count_ones()] += w;
+            for next in 1..10 {
+                let bit = 1 << (next - 1);
+                if mask & bit != 0 {
+                    continue;
+                }
+                let mid = over[last * 10 + next];
+                if mid == 0 or mask & (1 << (mid - 1)) != 0 {
+                    ways[(mask | bit) * 9 + next - 1] += w;
+                }
+            }
+        }
+    }
+    return by_length;
+}
+
+fn by_dp(m: i64, n: i64) -> i64 {
+    let by_length = dp_by_length();
+    let mut total = 0;
+    for k in m..n + 1 {
+        total += by_length[k];
+    }
+    return total;
+}
+
+// ---- by_stack
+
+fn by_stack(m: i64, n: i64) -> i64 {
+    if m > n {
+        return 0;
+    }
+    let over = table_skip();
+    let mut path: Vec[i64] = Vec.filled(10, 0);
+    let mut tried: Vec[i64] = Vec.filled(10, 0);
+    let mut total = 0;
+    for start in 1..10 {
+        path[1] = start;
+        tried[1] = 0;
+        let mut used = 1 << (start - 1);
+        let mut depth = 1;
+        if m <= 1 {
+            total += 1;
+        }
+        while depth > 0 {
+            let key = path[depth];
+            let mut next = tried[depth] + 1;
+            let mut found = 0;
+            if depth < n {
+                while next <= 9 {
+                    let mid = over[key * 10 + next];
+                    if used & (1 << (next - 1)) == 0 and (mid == 0 or used & (1 << (mid - 1)) != 0) {
+                        found = next;
+                        break;
+                    }
+                    next += 1;
+                }
+            }
+            if found == 0 {
+                used = used & ~(1 << (key - 1));
+                depth -= 1;
+            } else {
+                tried[depth] = found;
+                depth += 1;
+                path[depth] = found;
+                tried[depth] = 0;
+                used = used | (1 << (found - 1));
+                if depth >= m {
+                    total += 1;
+                }
+            }
+        }
+    }
+    return total;
+}
+
+// ---- oracle
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        return a;
+    }
+    return gcd(b, a % b);
+}
+
+// Whether the move from a to b is allowed: every grid point strictly
+// between them that is a key must already be visited. On a 3x3 grid every
+// grid point is a key.
+fn oracle_allows(a: i64, b: i64, visited: ref Vec[bool]) -> bool {
+    let ra = (a - 1) / 3;
+    let ca = (a - 1) % 3;
+    let dr = (b - 1) / 3 - ra;
+    let dc = (b - 1) % 3 - ca;
+    let g = gcd(dr.abs(), dc.abs());
+    for i in 1..g {
+        let key = (ra + i * dr / g) * 3 + (ca + i * dc / g) + 1;
+        if not visited[key] {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn oracle_walk(start: i64, key: i64, len: i64, visited: mut ref Vec[bool], counts: mut ref Vec[i64]) {
+    counts[start * 10 + len] += 1;
+    visited[key] = true;
+    for next in 1..10 {
+        if not visited[next] and oracle_allows(key, next, visited) {
+            oracle_walk(start, next, len + 1, visited, counts);
+        }
+    }
+    visited[key] = false;
+}
+
+// counts[start * 10 + len]: patterns of `len` keys that begin at `start`.
+fn oracle_counts() -> Vec[i64] {
+    let mut counts: Vec[i64] = Vec.filled(100, 0);
+    let mut visited: Vec[bool] = Vec.filled(10, false);
+    for start in 1..10 {
+        oracle_walk(start, start, 1, mut visited, mut counts);
+    }
+    return counts;
+}
+
+fn arm(which: i64, m: i64, n: i64) -> i64 {
+    if which == 0 {
+        return by_table(m, n);
+    } else if which == 1 {
+        return by_geometry(m, n);
+    } else if which == 2 {
+        return by_dp(m, n);
+    }
+    return by_stack(m, n);
+}
+
+fn main() {
+    let names = ["table", "geometry", "dp", "stack"];
+    let counts = oracle_counts();
+    let mut by_length: Vec[i64] = Vec.filled(10, 0);
+    for start in 1..10 {
+        for len in 1..10 {
+            by_length[len] += counts[start * 10 + len];
+        }
+    }
+    let mut failures = 0;
+    let mut checks = 0;
+
+    // P1
+    for which in 0..4 {
+        for k in 1..10 {
+            checks += 1;
+            if arm(which, k, k) != by_length[k] {
+                println(f"P1 FAIL {names[which]} length {k}");
+                failures += 1;
+            }
+        }
+    }
+
+    // P2
+    for which in 0..4 {
+        for m in 1..10 {
+            for n in m..10 {
+                if n > 6 and not (n == 9 and (m == 1 or m == 4)) {
+                    continue;
+                }
+                let mut want = 0;
+                for k in m..n + 1 {
+                    want += by_length[k];
+                }
+                checks += 1;
+                if arm(which, m, n) != want {
+                    println(f"P2 FAIL {names[which]} m={m} n={n}");
+                    failures += 1;
+                }
+            }
+        }
+    }
+
+    // P3
+    for which in 0..4 {
+        for m in 1..10 {
+            for n in 1..m {
+                checks += 1;
+                if arm(which, m, n) != 0 {
+                    println(f"P3 FAIL {names[which]} m={m} n={n}");
+                    failures += 1;
+                }
+            }
+        }
+    }
+
+    // P4
+    for len in 1..10 {
+        for (a, b) in [(1, 3), (1, 7), (1, 9), (2, 4), (2, 6), (2, 8)] {
+            checks += 1;
+            if counts[a * 10 + len] != counts[b * 10 + len] {
+                println(f"P4 FAIL {a} vs {b} length {len}");
+                failures += 1;
+            }
+        }
+    }
+
+    // P5
+    checks += 1;
+    if by_length[9] != by_length[8] {
+        println("P5 FAIL");
+        failures += 1;
+    }
+
+    // P6
+    let mut pairs = 0;
+    for a in 1..10 {
+        for b in 1..10 {
+            let (ra, ca, rb, cb) = ((a - 1) / 3, (a - 1) % 3, (b - 1) / 3, (b - 1) % 3);
+            let far = (ra - rb).abs() == 2 or (ca - cb).abs() == 2;
+            let straight = ra == rb or ca == cb or (ra - rb).abs() == (ca - cb).abs();
+            if a != b and not (far and straight) {
+                pairs += 1;
+            }
+        }
+    }
+    checks += 1;
+    if by_length[2] != pairs or pairs != 56 {
+        println(f"P6 FAIL {by_length[2]} vs {pairs}");
+        failures += 1;
+    }
+
+    let mut total = 0;
+    let mut checksum = 0;
+    for len in 1..10 {
+        total += by_length[len];
+        for start in 1..10 {
+            checksum = (checksum * 31 + counts[start * 10 + len]) % 1000000007;
+        }
+    }
+    println(f"{checks} checks: {total} patterns in all, checksum {checksum}");
+    println(f"failures {failures}");
+    if failures == 0 {
+        println("all properties hold");
+    }
+}

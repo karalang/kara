@@ -1,0 +1,34 @@
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+struct Ho { xs: Option[Vec[D]] }
+struct Hm { xs: Map[i64, Vec[D]] }
+struct Hs { xs: SortedMap[i64, Vec[D]] }
+struct Hr { r: Result[Vec[D], i64] }
+struct Hoo { o: Option[Option[Vec[D]]] }
+struct Hvv { xs: Option[Vec[Vec[D]]] }
+struct Hb { xs: Option[Vec[D]] }
+impl Drop for Hb { fn drop(mut ref self) { println("dHb") } }
+fn mkd(n: i64) -> D { return D { id: n, s: f"heap-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{n}" }; }
+fn eat(h: Ho) -> i64 { return 1; }
+fn round() {
+    { let h = Ho { xs: Some([mkd(1), mkd(2)]) }; println(f"c1 {h.xs.is_some()}") }
+    { let mut m: Map[i64, Vec[D]] = Map.new(); m.insert(1, [mkd(3)]); let h = Hm { xs: m }; println(f"c2 {h.xs.len()}") }
+    { let mut m: SortedMap[i64, Vec[D]] = SortedMap.new(); m.insert(1, [mkd(4)]); m.insert(2, [mkd(5)]); let h = Hs { xs: m }; println(f"c3 {h.xs.len()}") }
+    { let h = Hr { r: Ok([mkd(6)]) }; println(f"c4 {h.r.is_ok()}") }
+    { let h = Hoo { o: Some(Some([mkd(7)])) }; println(f"c5 {h.o.is_some()}") }
+    { let h = Hvv { xs: Some([[mkd(8)], [mkd(9)]]) }; println(f"c6 {h.xs.is_some()}") }
+    { let h = Hb { xs: Some([mkd(11)]) }; println(f"c8 {h.xs.is_some()}") }
+    { let h = Ho { xs: Some([mkd(12)]) }; let n = eat(h); println(f"c9 {n}") }
+    { let v: Vec[Ho] = [Ho { xs: Some([mkd(13)]) }, Ho { xs: None }, Ho { xs: Some([mkd(14)]) }]; println(f"c10 {v.len()}") }
+    { let o: Option[Ho] = Some(Ho { xs: Some([mkd(15)]) }); println(f"c11 {o.is_some()}") }
+    { let mut m: Map[i64, Ho] = Map.new(); m.insert(1, Ho { xs: Some([mkd(16)]) }); println(f"c12 {m.len()}") }
+    { let t = (Ho { xs: Some([mkd(17)]) }, 5); println(f"c13 {t.1}") }
+    { let v: Vec[Hr] = [Hr { r: Ok([mkd(18)]) }, Hr { r: Err(4) }]; println(f"c14 {v.len()}") }
+    { let v: Vec[Hoo] = [Hoo { o: Some(Some([mkd(19)])) }]; println(f"c15 {v.len()}") }
+    { let h = Ho { xs: None }; println(f"c16 {h.xs.is_some()}") }
+    println("end")
+}
+fn main() {
+    round()
+    round()
+}

@@ -1,0 +1,31 @@
+
+fn main() {
+    // 01 — a plain unsigned vec, no high-bit element.
+    let a: Vec[u64] = [1u64, 2u64, 3u64];
+    let ra = a.binary_search(2u64);
+    match ra { Some(i) => println(f"01 {i}"), None => println("01 absent"), }
+
+    // 02-03 — the same vec with u64.MAX, which `sort` puts LAST and the
+    // signed compare treats as -1. Both lookups used to answer `absent`.
+    let b: Vec[u64] = [1u64, 2u64, 18446744073709551615u64];
+    let srt = b.is_sorted();
+    let rb = b.binary_search(2u64);
+    match rb { Some(i) => println(f"02 {srt} {i}"), None => println(f"02 {srt} absent"), }
+    let rc = b.binary_search(18446744073709551615u64);
+    match rc { Some(i) => println(f"03 {i}"), None => println("03 absent"), }
+
+    // 04 — signed elements must stay signed.
+    let d: Vec[i64] = [0 - 5, 0 - 1, 3];
+    let rd = d.binary_search(0 - 5);
+    match rd { Some(i) => println(f"04 {i}"), None => println("04 absent"), }
+
+    // 05 — duplicate keys: the index must match std's branchless variant.
+    let e: Vec[i64] = [1, 2, 2, 2, 3];
+    let re = e.binary_search(2);
+    match re { Some(i) => println(f"05 {i}"), None => println("05 absent"), }
+
+    // 06 — absent element still answers None.
+    let f: Vec[u64] = [1u64, 9u64];
+    let rf = f.binary_search(5u64);
+    match rf { Some(i) => println(f"06 {i}"), None => println("06 absent"), }
+}

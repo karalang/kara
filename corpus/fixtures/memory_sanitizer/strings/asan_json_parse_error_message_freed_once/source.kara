@@ -1,0 +1,39 @@
+
+fn describe(e: JsonError) -> i64 { return e.message.len() + (e.line as i64); }
+
+fn propagate(text: String) -> Result[i64, JsonError] {
+    let j = Json.parse(text)?;
+    return Result.Ok(1i64);
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 100i64 {
+        // 1. Bare scope exit — the message is read and then dropped.
+        match Json.parse("{bad") {
+            Result.Ok(j) => { n = n + 100000; }
+            Result.Err(e) => { n = n + (e.line as i64); }
+        }
+        // 2. Passed BY VALUE into a callee that reads the String field.
+        match Json.parse("[1,") {
+            Result.Ok(j) => { n = n + 100000; }
+            Result.Err(e) => { n = n + describe(e); }
+        }
+        // 3. Field read in the caller AND then handed over by value.
+        match Json.parse("nope") {
+            Result.Ok(j) => { n = n + 100000; }
+            Result.Err(e) => {
+                let pre = e.message.len();
+                n = n + pre + describe(e);
+            }
+        }
+        // 4. `?`-propagated across a frame boundary, then destructured.
+        match propagate("{\"a\":") {
+            Result.Ok(v) => { n = n + 100000; }
+            Result.Err(e) => { n = n + (e.column as i64); }
+        }
+        i = i + 1;
+    }
+    println(n > 0i64);
+}

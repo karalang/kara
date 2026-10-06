@@ -1,0 +1,27 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn okeep(t: Option[S], v: mut ref Vec[Option[S]]) { v.push(t) }
+fn cp(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t) } }
+fn cf(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { okeep(t, v) } }
+fn cfc(t: Option[S], v: mut ref Vec[Option[S]], c: bool, d: bool) { if c { cp(t, v, d) } }
+fn rk(t: Option[R], v: mut ref Vec[Option[R]]) { v.push(t) }
+fn crk(t: Option[R], v: mut ref Vec[Option[R]], c: bool) { if c { rk(t, v) } else { println("no") } }
+fn main() {
+    let mut u: Vec[Option[S]] = Vec.new();
+    cf(Option.Some(mks(1)), mut u, false);
+    cf(Option.Some(mks(2)), mut u, true);
+    let a = Option.Some(mks(3));
+    cf(a, mut u, false);
+    cfc(Option.Some(mks(4)), mut u, false, true);
+    cfc(Option.Some(mks(5)), mut u, true, false);
+    cfc(Option.Some(mks(6)), mut u, true, true);
+    println(f"n{u.len()}");
+    let mut w: Vec[Option[R]] = Vec.new();
+    crk(Some(R { id: 7 }), mut w, false);
+    crk(Some(R { id: 8 }), mut w, true);
+    println(f"m{w.len()}");
+    println("end")
+}

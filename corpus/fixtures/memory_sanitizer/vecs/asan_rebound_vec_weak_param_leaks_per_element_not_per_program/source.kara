@@ -1,0 +1,22 @@
+
+shared struct N { v: i64 }
+
+fn at(xs: ref Vec[weak N], i: i64) -> i64 {
+    match xs[i] { Some(x) => { x.v } None => { 0 - 1 } }
+}
+
+fn probe(xs: Vec[weak N]) -> i64 {
+    let work = xs;
+    at(work, 0) + at(work, 1) + at(work, 2)
+}
+
+fn main() {
+    let a: N = N { v: 7 };
+    let b: N = N { v: 11 };
+    let c: N = N { v: 13 };
+    let mut w: Vec[weak N] = Vec.new();
+    w.push(a);
+    w.push(b);
+    w.push(c);
+    println(probe(w));
+}

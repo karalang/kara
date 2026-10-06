@@ -1,0 +1,26 @@
+
+#[derive(Hash, Eq)]
+enum Color { Red, Green, Blue }
+
+fn main() {
+    let mut m: Map[Color, i64] = Map.new();
+    m.insert(Color.Red,   100_i64);
+    m.insert(Color.Green, 200_i64);
+    m.insert(Color.Blue,  300_i64);
+    println(m.len());
+    let v1 = m.get(Color.Red);
+    match v1 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+    let v2 = m.get(Color.Green);
+    match v2 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+    let v3 = m.get(Color.Blue);
+    match v3 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+}

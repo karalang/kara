@@ -1,0 +1,18 @@
+
+struct Inner { s: String }
+enum Node { Leaf, Wrap(Inner) }
+fn build() -> Vec[Node] {
+    let mut v: Vec[Node] = Vec.new();
+    let mut i = 0;
+    while i < 5 { v.push(Node.Wrap(Inner { s: "forloop_enum_nested_struct_payload_iota_field_yy".to_string() })); i = i + 1; }
+    v
+}
+fn main() {
+    let items = build();
+    let mut n: i64 = 0;
+    for a in items {
+        let x = a;
+        match x { Node.Wrap(inner) => { n = n + inner.s.len(); } Node.Leaf => {} }
+    }
+    println(n);
+}

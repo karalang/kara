@@ -1,0 +1,68 @@
+// LeetCode 291 — Word Pattern II.
+//
+// Backtracking search for a BIJECTION between pattern letters and non-empty
+// substrings of `s`. Two structures move together and must be undone together:
+// `map` (letter -> substring) and `used` (the substrings already claimed,
+// which is what makes the mapping injective rather than merely functional).
+
+fn matches(
+    p: ref String,
+    pi: i64,
+    s: ref String,
+    si: i64,
+    map: mut ref Map[String, String],
+    used: mut ref Set[String],
+) -> bool {
+    let pb = p.bytes();
+    let sb = s.bytes();
+    if pi >= pb.len() { return si >= sb.len(); }
+    if si >= sb.len() { return false; }
+
+    let key = p[pi..pi + 1];
+    match map.get(key) {
+        Some(bound) => {
+            let blen = bound.len();
+            if si + blen > sb.len() { return false; }
+            if s[si..si + blen] != bound { return false; }
+            matches(p, pi + 1, s, si + blen, map, used)
+        }
+        None => {
+            let mut end = si + 1;
+            while end <= sb.len() {
+                let cand = s[si..end];
+                if not used.contains(cand) {
+                    // `insert` takes ownership of both halves, so each
+                    // structure gets its own copy and the undo path re-derives
+                    // the keys from the source slices.
+                    let _ = map.insert(key.clone(), cand.clone());
+                    used.insert(cand.clone());
+                    if matches(p, pi + 1, s, end, map, used) { return true; }
+                    let _ = map.remove(key.clone());
+                    used.remove(cand);
+                }
+                end = end + 1;
+            }
+            false
+        }
+    }
+}
+
+fn word_pattern_match(p: ref String, s: ref String) -> bool {
+    let mut map: Map[String, String] = Map.new();
+    let mut used: Set[String] = Set.new();
+    matches(p, 0, s, 0, mut map, mut used)
+}
+
+fn report(p: ref String, s: ref String) {
+    println(f"{p} / {s} -> {word_pattern_match(p, s)}");
+}
+
+fn main() {
+    report("abab", "redblueredblue");
+    report("aaaa", "asdasdasdasd");
+    report("aabb", "xyzabcxzyabc");
+    report("ab", "aa");
+    report("a", "a");
+    report("abc", "xy");
+    report("aba", "xyzxyzxyz");
+}

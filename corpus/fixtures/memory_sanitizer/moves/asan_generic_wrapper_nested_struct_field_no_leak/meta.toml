@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/moves.rs::asan_generic_wrapper_nested_struct_field_no_leak"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

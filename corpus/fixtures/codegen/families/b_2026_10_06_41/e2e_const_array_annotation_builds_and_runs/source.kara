@@ -1,0 +1,14 @@
+const NUMS: Array[i64, 3] = [10, 20, 30];
+const LINES: Array[(i64, i64, i64), 2] = [(1, 3, 2), (4, 6, 5)];
+fn main() {
+    let a = NUMS;
+    let mut s = 0;
+    for x in a {
+        s += x;
+    }
+    println(f"{a[1]} {a.len()} {s}");
+    let b = LINES;
+    for (x, y, mid) in b {
+        println(f"{x}-{y} over {mid}");
+    }
+}

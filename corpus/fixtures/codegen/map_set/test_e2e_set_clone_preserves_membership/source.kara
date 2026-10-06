@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(5_i64);
+    let t: Set[i64] = s.clone();
+    println(t.contains(5_i64));
+    println(t.contains(99_i64));
+}

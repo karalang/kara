@@ -1,0 +1,7 @@
+fn main() {
+         let s = Span.root("s", 7);
+         with_span(s, || {
+             let tracer = StdoutExporter {};
+             tracer.export_event(LogEvent.info("x").in_span(99));
+         });
+     }

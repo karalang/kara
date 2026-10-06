@@ -1,0 +1,30 @@
+struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"  dH{self.id}") } }
+struct R { id: i64 }
+
+fn second(o: Option[(H, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
+fn first(o: Option[(i64, H)]) -> i64 { match o { Option.Some((b, _)) => { return b; } Option.None => { return 77; } } }
+fn named(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 77; } } }
+fn twoOfThree(o: Option[(H, i64, i64)]) -> i64 { match o { Option.Some((_, b, c)) => { return b + c; } Option.None => { return 77; } } }
+fn allWild(o: Option[(H, i64)]) -> i64 { match o { Option.Some((_, _)) => { return 55; } Option.None => { return 77; } } }
+fn twoWild(o: Option[(H, H, i64)]) -> i64 { match o { Option.Some((_, _, c)) => { return c; } Option.None => { return 77; } } }
+fn strWild(o: Option[(String, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
+fn narrow(o: Option[(R, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
+fn okSide(r: Result[(H, i64), i64]) -> i64 { match r { Result.Ok((_, b)) => { return b; } Result.Err(e) => { return e; } } }
+fn errSide(r: Result[i64, (H, i64)]) -> i64 { match r { Result.Ok(v) => { return v; } Result.Err((_, b)) => { return b; } } }
+
+fn main() {
+    println("second");  { let g = second(Option.Some((H { id: 1, s: "aaaaaaaaaaaa" }, 9))); println(f"  n{g}") }
+    println("second2"); { let g = second(Option.Some((H { id: 2, s: "aaaaaaaaaaaa" }, 4242))); println(f"  n{g}") }
+    println("first");   { let g = first(Option.Some((9, H { id: 3, s: "aaaaaaaaaaaa" }))); println(f"  n{g}") }
+    println("named");   { let g = named(Option.Some((H { id: 4, s: "aaaaaaaaaaaa" }, 9))); println(f"  n{g}") }
+    println("twoof3");  { let g = twoOfThree(Option.Some((H { id: 5, s: "aaaaaaaaaaaa" }, 9, 100))); println(f"  n{g}") }
+    println("allwild"); { let g = allWild(Option.Some((H { id: 6, s: "aaaaaaaaaaaa" }, 9))); println(f"  n{g}") }
+    println("twowild"); { let g = twoWild(Option.Some((H { id: 7, s: "aaaaaaaaaaaa" }, H { id: 8, s: "aaaaaaaaaaaa" }, 66))); println(f"  n{g}") }
+    println("strwild"); { let g = strWild(Option.Some(("wwwwwwwwwwwwww", 88))); println(f"  n{g}") }
+    println("narrow");  { let g = narrow(Option.Some((R { id: 9 }, 44))); println(f"  n{g}") }
+    println("okside");  { let g = okSide(Result.Ok((H { id: 10, s: "aaaaaaaaaaaa" }, 11))); println(f"  n{g}") }
+    println("errside"); { let g = errSide(Result.Err((H { id: 11, s: "aaaaaaaaaaaa" }, 22))); println(f"  n{g}") }
+    println("nonearm"); { let g = second(Option.None); println(f"  n{g}") }
+    println("end")
+}

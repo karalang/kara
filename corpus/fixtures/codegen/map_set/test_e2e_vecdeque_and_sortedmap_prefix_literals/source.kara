@@ -1,0 +1,18 @@
+
+fn main() {
+    let m = SortedMap["c": 3, "a": 1, "b": 2];
+    for (k, v) in m { print(k); print(v); }
+    println(m);
+    let ann: SortedMap[String, i64] = SortedMap["z": 26, "y": 25];
+    for (k, v) in ann { print(k); }
+    let empty: SortedMap[String, i64] = SortedMap[];
+    println(empty.len());
+    let d = VecDeque[1, 2, 3];
+    println(d.len());
+    let mut dq = VecDeque[4, 5];
+    dq.push_front(3);
+    for x in dq { print(x); }
+    println("");
+    let ed: VecDeque[i64] = VecDeque[];
+    println(ed.len());
+}

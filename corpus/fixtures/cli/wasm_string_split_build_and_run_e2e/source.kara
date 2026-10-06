@@ -1,0 +1,10 @@
+
+fn main() {
+    // Interior empty piece (",,") plus a single-char and multi-char piece.
+    let s: String = "a,bb,,ccc";
+    let parts: Vec[String] = s.split(",");
+    println(parts.len());
+    for p in parts {
+        println(p);
+    }
+}

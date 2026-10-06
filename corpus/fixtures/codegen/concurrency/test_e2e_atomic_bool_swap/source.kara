@@ -1,0 +1,11 @@
+
+par struct Latch { flag: Atomic[bool] }
+impl Latch {
+    fn take(ref self) -> bool { self.flag.swap(true, MemoryOrdering.SeqCst) }
+    fn get(ref self) -> bool { self.flag.load(MemoryOrdering.SeqCst) }
+}
+fn main() {
+    let l = Latch { flag: Atomic.new(false) };
+    if l.take() { println(1); } else { println(0); }   // old false -> 0
+    if l.get() { println(1); } else { println(0); }    // now true  -> 1
+}

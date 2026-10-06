@@ -1,0 +1,69 @@
+// Benchmark workload for LeetCode #223 — Rectangle Area.
+//
+// One kata call is a handful of ALU ops, so the bench turns it into a throughput
+// kernel: a deterministic 32-bit LCG (overflow-safe in i64) generates PAIRS
+// rectangle pairs on the fly — each rectangle as a bottom-left corner plus a
+// non-negative width/height, so corners are already ordered with no swap — and
+// the union area is computed by inclusion-exclusion for every pair. The running
+// `sink` is folded with a modulus each step, so the accumulator carries a true
+// loop-carried dependency (the mod cannot be vectorized away) and the per-pair
+// min/max/clamp0 form a nest of data-dependent branches. Sink = the accumulated
+// (mod) sum of union areas.
+
+fn min_i64(a: i64, b: i64) -> i64 {
+    if a < b { return a; }
+    return b;
+}
+
+fn max_i64(a: i64, b: i64) -> i64 {
+    if a > b { return a; }
+    return b;
+}
+
+fn clamp0(x: i64) -> i64 {
+    if x > 0 { return x; }
+    return 0;
+}
+
+fn compute_area(
+    ax1: i64, ay1: i64, ax2: i64, ay2: i64,
+    bx1: i64, by1: i64, bx2: i64, by2: i64,
+) -> i64 {
+    let area_a = (ax2 - ax1) * (ay2 - ay1);
+    let area_b = (bx2 - bx1) * (by2 - by1);
+    let overlap_w = clamp0(min_i64(ax2, bx2) - max_i64(ax1, bx1));
+    let overlap_h = clamp0(min_i64(ay2, by2) - max_i64(ay1, by1));
+    let overlap = overlap_w * overlap_h;
+    return area_a + area_b - overlap;
+}
+
+fn main() {
+    let pairs = 20000000;
+    let mask = 16383;                 // coords in 0..2*mask, widths in 0..mask
+    let modulus = 1000000007;
+    let mut state = 12345;
+    let mut sink = 0;
+    let mut p = 0;
+    while p < pairs {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let ax1 = state & mask;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let ax2 = ax1 + (state & mask);
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let ay1 = state & mask;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let ay2 = ay1 + (state & mask);
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let bx1 = state & mask;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let bx2 = bx1 + (state & mask);
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let by1 = state & mask;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let by2 = by1 + (state & mask);
+        let area = compute_area(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2);
+        sink = (sink + area) % modulus;
+        p = p + 1;
+    }
+    println(sink);
+}

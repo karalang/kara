@@ -1,0 +1,27 @@
+
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoOpt { a: R, b: Option[R] }
+struct HoPln { a: R, b: R }
+struct WrapR { inner: HoRes }
+struct WrapO { inner: HoOpt }
+struct WrapP { inner: HoPln }
+struct Outer { h: WrapR }
+fn c_res()  { let w = WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
+fn c_opt()  { let w = WrapO { inner: HoOpt { a: mk(2), b: Option.Some(mk(102)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}") }
+fn c_pln()  { let w = WrapP { inner: HoPln { a: mk(3), b: mk(103) } };            let HoPln { a, b } = w.inner; println(f"  rd{a.id}") }
+fn c_two()  { let g = Outer { h: WrapR { inner: HoRes { a: mk(4), b: Result.Ok(mk(104)) } } }; let HoRes { a, b } = g.h.inner; println(f"  rd{a.id}") }
+fn c_live() { let w = WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}"); println(f"  w{w.inner.a.id}") }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        println("res"); c_res();
+        println("opt"); c_opt();
+        println("pln"); c_pln();
+        println("two"); c_two();
+        println("live"); c_live();
+        i = i + 1;
+    }
+}

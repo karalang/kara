@@ -1,0 +1,93 @@
+// LeetCode 302 — Smallest Rectangle Enclosing Black Pixels, BY FULL SCAN.
+//
+// Look at every pixel; remember the smallest and largest row and column where a
+// black one appeared. The rectangle is whatever those four numbers say it is.
+//
+// This is the definition transcribed, and it is the differential's reference
+// for a reason worth stating: it is the ONLY arm here that does not use the
+// connectivity precondition at all. The ★ binary search needs the row and
+// column projections to be hole-free, and the flood fill needs every black
+// pixel to be reachable from the seed. This arm needs neither — it is correct
+// on ANY binary image, connected or not, which is exactly what makes it the
+// oracle that can catch the other two when the precondition is withdrawn.
+//
+// IT IS ALSO NOT OBVIOUSLY THE SLOW ONE. O(m*n) reads every pixel exactly once,
+// sequentially, with no branching on the data beyond the compare — the shape an
+// optimizer vectorises and a prefetcher loves. The binary search touches far
+// fewer pixels in the asymptotic limit but reads them in scattered whole-row
+// probes. Which wins depends on the density and the frame size, and `bench/`
+// measures it rather than assuming the O() ordering settles it.
+//
+// The seed pixel is accepted and ignored, so the signature matches the other
+// arms and the differential can call all three through one shape.
+
+struct Image {
+    data: Vec[u8],
+    w: i64,
+    h: i64,
+}
+
+fn at(img: ref Image, r: i64, c: i64) -> u8 {
+    return img.data[r * img.w + c];
+}
+
+fn min_area(img: ref Image, x: i64, y: i64) -> i64 {
+    let mut top = img.h;
+    let mut bottom = -1;
+    let mut left = img.w;
+    let mut right = -1;
+
+    let mut r = 0;
+    while r < img.h {
+        let mut c = 0;
+        while c < img.w {
+            if at(img, r, c) == 1u8 {
+                if r < top { top = r; }
+                if r > bottom { bottom = r; }
+                if c < left { left = c; }
+                if c > right { right = c; }
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+
+    if bottom < 0 {
+        return 0;
+    }
+    return (bottom - top + 1) * (right - left + 1);
+}
+
+fn image_of(rows: Vec[String]) -> Image {
+    let h = rows.len();
+    let w = if h > 0 { rows[0].len() } else { 0 };
+    let mut data: Vec[u8] = Vec.new();
+    let mut r = 0;
+    while r < h {
+        let bytes = rows[r].bytes();
+        let mut c = 0;
+        while c < w {
+            if bytes[c] == 49u8 {
+                data.push(1u8);
+            } else {
+                data.push(0u8);
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return Image { data: data, w: w, h: h };
+}
+
+fn report(rows: Vec[String], x: i64, y: i64) {
+    let img = image_of(rows);
+    println(f"seed ({x},{y}) -> area {min_area(img, x, y)}");
+}
+
+fn main() {
+    report(["0010", "0110", "0100"], 0, 2);
+    report(["1"], 0, 0);
+    report(["11", "11"], 1, 1);
+    report(["0000", "0100", "0000"], 1, 1);
+    report(["111"], 0, 1);
+}

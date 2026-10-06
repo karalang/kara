@@ -1,0 +1,100 @@
+// Benchmark — LeetCode 311, Sparse Matrix Multiplication.
+//
+// Build-once + punch, per BENCHMARKS.md: two 320x320 matrices at ~4% density
+// are generated ONCE in flat row-major layout, and the timed work is PASSES
+// multiplications with the zero test in place.
+//
+// THIS LANE MEASURES THE ONLY THING A CORRECTNESS TEST CANNOT SEE. Removing the
+// kata's entire optimisation — the `if a[i][k] != 0` guard — leaves every
+// answer byte-identical; the differential's seven properties and all four arms
+// still agree. Measured on this workload, keeping it is worth 10.7x. So for
+// this kata the benchmark is not a report on the implementation, it IS the test
+// of the thing being implemented, and that is unusual enough to be the reason
+// the lane exists.
+//
+// EACH PASS PERTURBS ONE ENTRY OF A FROM THE RUNNING CHECKSUM. The product is a
+// pure function of its operands, so PASSES identical multiplications of
+// unchanging inputs are exactly what an optimiser may hoist and run once; a
+// serial dependency forces every pass to happen.
+//
+// FLAT ROW-MAJOR rather than the nested Vec[Vec[i64]] the kata's arms use,
+// because five languages must index identically and C has no natural nested
+// form. #308 measured that choice costing kara 1.59x on a different workload;
+// the caveat is recorded in the README rather than left implicit.
+//
+// THE SINK IS A MASK, NOT A MODULO — the lesson from #303.
+
+fn main() {
+    let n = 320;
+    let passes = 620;
+
+    let mut a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    let mut state = 20311;
+    for i in 0..(n * n) {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        if state % 100 < 4 {
+            state = (state * 1103515245 + 12345) % 2147483648;
+            a.push(state % 9 - 4);
+        } else {
+            a.push(0);
+        }
+        state = (state * 1103515245 + 12345) % 2147483648;
+        if state % 100 < 4 {
+            state = (state * 1103515245 + 12345) % 2147483648;
+            b.push(state % 9 - 4);
+        } else {
+            b.push(0);
+        }
+    }
+
+    let mut c: Vec[i64] = Vec.new();
+    for i in 0..(n * n) {
+        c.push(0);
+    }
+
+    let mut checksum = 0;
+    let mut p = 0;
+    while p < passes {
+        // Serial dependency: this pass's A depends on the last pass's answer.
+        let slot = (p * 7919) % (n * n);
+        a[slot] = a[slot] + (checksum & 1);
+
+        let mut i = 0;
+        while i < n * n {
+            c[i] = 0;
+            i = i + 1;
+        }
+
+        let mut r = 0;
+        while r < n {
+            let arow = r * n;
+            let mut k = 0;
+            while k < n {
+                let av = a[arow + k];
+                // One zero in A skips an entire row of B.
+                if av != 0 {
+                    let brow = k * n;
+                    let mut j = 0;
+                    while j < n {
+                        c[arow + j] += av * b[brow + j];
+                        j = j + 1;
+                    }
+                }
+                k = k + 1;
+            }
+            r = r + 1;
+        }
+
+        let mut acc = 0;
+        let mut t = 0;
+        while t < n * n {
+            acc = (acc + c[t]) & 0x3FFFFFFF;
+            t = t + 1;
+        }
+        checksum = (checksum + acc) & 0x3FFFFFFF;
+        p = p + 1;
+    }
+
+    println(f"checksum {checksum}");
+}

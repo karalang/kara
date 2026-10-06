@@ -1,0 +1,41 @@
+
+shared struct Inner { tag: String }
+shared struct Ik { k: i64 }
+struct Sd { h: Inner }
+impl Drop for Sd { fn drop(mut ref self) { println("dSd") } }
+struct Sq { h: Inner }
+struct Sk { h: Ik }
+struct Sn { k: i64 }
+
+enum One { A(Array[Sd, 1]), N }
+enum Bare { A(Array[Sq, 1]), N }
+enum Direct { A(Array[Inner, 1]), N }
+enum Flat { A(Array[Ik, 1]), N }
+enum Wide { A(Array[Sd, 2]), N }
+enum Plain { A(Sd), N }
+enum Scalar { A(Array[Sn, 1]), N }
+
+fn eat(g: One) -> i64 { match g { One.A(x) => { return 7; } One.N => { return 0; } } }
+
+fn a_bind() { let g: One = One.A([Sd { h: Inner { tag: "q" } }]); println("a"); }
+fn b_nobody() { let g: Bare = Bare.A([Sq { h: Inner { tag: "q" } }]); println("b"); }
+fn c_shared_elem() { let g: Direct = Direct.A([Inner { tag: "q" }]); println("c"); }
+fn d_heapfree() { let g: Flat = Flat.A([Ik { k: 5 }]); println("d"); }
+fn e_byvalue() { let g: One = One.A([Sd { h: Inner { tag: "q" } }]); println(f"e:{eat(g)}"); }
+fn f_match() { let g: One = One.A([Sd { h: Inner { tag: "q" } }]); match g { One.A(x) => { println("f"); } One.N => { println("fn"); } } }
+fn g_wide() { let g: Wide = Wide.A([Sd { h: Inner { tag: "q" } }, Sd { h: Inner { tag: "r" } }]); println("g"); }
+fn h_direct() { let g: Plain = Plain.A(Sd { h: Inner { tag: "q" } }); println("h"); }
+fn i_scalar() { let g: Scalar = Scalar.A([Sn { k: 5 }]); println("i"); }
+
+fn main() {
+    a_bind();
+    b_nobody();
+    c_shared_elem();
+    d_heapfree();
+    e_byvalue();
+    f_match();
+    g_wide();
+    h_direct();
+    i_scalar();
+    println("end");
+}

@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push(f"banana payload padded beyond thirty-six bytes {1}");
+    a.push(f"apple payload padded beyond thirty-six bytes {1}");
+    let mut b: Vec[String] = Vec.new();
+    b.push(f"apple payload padded beyond thirty-six bytes {1}");
+    let mut c: Vec[String] = Vec.new();
+    outer.push(a);
+    outer.push(b);
+    outer.push(c);
+    for row in outer {
+        println(row.len());
+    }
+}

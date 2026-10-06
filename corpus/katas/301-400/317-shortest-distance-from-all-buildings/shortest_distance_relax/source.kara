@@ -1,0 +1,91 @@
+// LeetCode #317: Shortest Distance from All Buildings — the definitional
+// oracle: shortest paths by relaxation to a fixpoint, no queue anywhere.
+//
+// The shortest-path distance from a building is the unique function `d` with
+// d(source) = 0 and, for every reachable empty cell, d(cell) = 1 + min over its
+// passable neighbours. This arm computes it the way the definition reads:
+// start every empty cell at infinity and sweep the whole grid, lowering each
+// cell to 1 + its smallest neighbour, until a sweep changes nothing. That is
+// Bellman–Ford on the grid graph — O(R·C · diameter) per building, absurd for a
+// real grid and exactly right for an oracle: it knows nothing about frontiers,
+// waves, first arrivals or visited marks, which is every place a BFS can be
+// wrong.
+//
+// Sum the per-building tables where every entry is finite; -1 if there is no
+// such empty cell.
+
+const INF: i64 = 1000000000;
+
+fn relax_table(grid: ref Vec[i64], rows: i64, cols: i64, src: i64) -> Vec[i64] {
+    let n = rows * cols;
+    let mut d: Vec[i64] = Vec.new();
+    for i in 0..n { d.push(INF); }
+    d[src] = 0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for cell in 0..n {
+            if grid[cell] != 0 { continue; }
+            let r = cell / cols;
+            let c = cell % cols;
+            let mut best = d[cell];
+            if r > 0 and grid[cell - cols] != 2 and d[cell - cols] + 1 < best { best = d[cell - cols] + 1; }
+            if r < rows - 1 and grid[cell + cols] != 2 and d[cell + cols] + 1 < best { best = d[cell + cols] + 1; }
+            if c > 0 and grid[cell - 1] != 2 and d[cell - 1] + 1 < best { best = d[cell - 1] + 1; }
+            if c < cols - 1 and grid[cell + 1] != 2 and d[cell + 1] + 1 < best { best = d[cell + 1] + 1; }
+            if best < d[cell] {
+                d[cell] = best;
+                changed = true;
+            }
+        }
+    }
+    // Neither a non-source building nor an obstacle can act as a waypoint: the
+    // sweep only ever reads a neighbour's `d`, and any cell with grid != 0 is
+    // never relaxed, so its `d` stays INF and `INF + 1 < best` is false. The
+    // `!= 2` guards above therefore add nothing — the mutation harness proved
+    // it (README, E13) — and are kept because the rule reads better stated.
+    return d;
+}
+
+fn shortest_distance(grid: ref Vec[i64], rows: i64, cols: i64) -> i64 {
+    let n = rows * cols;
+    let mut sum: Vec[i64] = Vec.new();
+    let mut ok: Vec[bool] = Vec.new();
+    for i in 0..n { sum.push(0); ok.push(grid[i] == 0); }
+    for src in 0..n {
+        if grid[src] != 1 { continue; }
+        let d = relax_table(grid, rows, cols, src);
+        for i in 0..n {
+            if d[i] >= INF { ok[i] = false; } else { sum[i] += d[i]; }
+        }
+    }
+    let mut best = -1;
+    for i in 0..n {
+        if ok[i] and (best < 0 or sum[i] < best) { best = sum[i]; }
+    }
+    return best;
+}
+
+fn main() {
+    let mut acc = 0;
+    let mut grids: Vec[Vec[i64]] = Vec.new();
+    let mut dims: Vec[(i64, i64)] = Vec.new();
+    grids.push([1, 0, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]); dims.push((3, 5));
+    grids.push([1, 0]); dims.push((1, 2));
+    grids.push([1]); dims.push((1, 1));
+    grids.push([1, 2, 0]); dims.push((1, 3));
+    grids.push([1, 0, 0, 0, 1]); dims.push((1, 5));
+    grids.push([1, 0, 1, 0, 0, 0, 1, 0, 1]); dims.push((3, 3));
+    grids.push([1, 0, 2, 0, 2, 0, 2, 0, 1]); dims.push((3, 3));
+    grids.push([0, 0, 0, 0, 1, 0, 0, 0, 0]); dims.push((3, 3));
+    grids.push([1, 0, 0, 2, 1, 0, 2, 0, 2, 0, 0, 0, 0, 0, 0]); dims.push((3, 5));
+    grids.push([2, 2, 2]); dims.push((1, 3));
+    grids.push([0, 1, 0, 0, 0, 0, 1, 0, 0, 2, 0, 1]); dims.push((3, 4));
+    for t in 0..grids.len() {
+        let (rows, cols) = dims[t];
+        let ans = shortest_distance(grids[t], rows, cols);
+        acc = (acc * 131 + ans + 2) % 1000000007;
+        println(f"case {t}: {ans}");
+    }
+    println(f"sink: {acc}");
+}

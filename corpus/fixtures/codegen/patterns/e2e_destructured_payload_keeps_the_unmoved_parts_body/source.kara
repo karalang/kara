@@ -1,0 +1,34 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+
+struct Sink { n: i64 }
+impl Sink {
+    fn eat(ref self, o: Option[(R, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
+}
+
+fn scalarOut(o: Option[(R, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
+fn dropOut(o: Option[(R, R)]) -> R { match o { Option.Some((a, b)) => { return a; } Option.None => { return R { id: 0 }; } } }
+fn resultOut(o: Result[(R, i64), i64]) -> i64 { match o { Result.Ok((a, b)) => { return b; } Result.Err(e) => { return 0; } } }
+fn wildKept(o: Option[(R, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 0; } } }
+fn middleOut(o: Option[(R, R, R)]) -> R { match o { Option.Some((a, b, c)) => { return b; } Option.None => { return R { id: 0 }; } } }
+fn bothOut(o: Option[(R, R)]) -> (R, R) { match o { Option.Some((a, b)) => { return (a, b); } Option.None => { return (R { id: 0 }, R { id: 0 }); } } }
+fn readOnly(o: Option[(R, R)]) -> i64 { match o { Option.Some((a, b)) => { return a.id + b.id; } Option.None => { return 0; } } }
+fn wholeOut(o: Option[(R, i64)]) -> (R, i64) { match o { Option.Some(t) => { return t; } Option.None => { return (R { id: 0 }, 0); } } }
+fn condOut(o: Option[(R, R)], k: bool) -> R { match o { Option.Some((a, b)) => { if k { return a; } return b; } Option.None => { return R { id: 0 }; } } }
+fn genOut[T](o: Option[(R, T)], d: T) -> T { match o { Option.Some((a, b)) => { return b; } Option.None => { return d; } } }
+
+fn main() {
+    println("scalarout");  { let got: i64 = scalarOut(Option.Some((R { id: 5 }, 9))); println(f"  got:{got}") }
+    println("dropout");    { let got = dropOut(Option.Some((R { id: 6 }, R { id: 7 }))); println(f"  got:{got.id}") }
+    println("resultout");  { let got: i64 = resultOut(Result.Ok((R { id: 8 }, 9))); println(f"  got:{got}") }
+    println("wildkept");   { let got: i64 = wildKept(Option.Some((R { id: 10 }, 9))); println(f"  got:{got}") }
+    println("middleout");  { let got = middleOut(Option.Some((R { id: 11 }, R { id: 12 }, R { id: 13 }))); println(f"  got:{got.id}") }
+    println("bothout");    { let got = bothOut(Option.Some((R { id: 14 }, R { id: 15 }))); println(f"  got:{got.0.id}") }
+    println("readonly");   { let got: i64 = readOnly(Option.Some((R { id: 16 }, R { id: 17 }))); println(f"  got:{got}") }
+    println("wholeout");   { let got = wholeOut(Option.Some((R { id: 18 }, 9))); println(f"  got:{got.1}") }
+    println("condfalse");  { let got = condOut(Option.Some((R { id: 19 }, R { id: 20 })), false); println(f"  got:{got.id}") }
+    println("genout");     { let got: i64 = genOut(Option.Some((R { id: 21 }, 9)), 0); println(f"  got:{got}") }
+    println("method");     { let s = Sink { n: 1 }; let got: i64 = s.eat(Option.Some((R { id: 22 }, 9))); println(f"  got:{got}") }
+    println("unused");     { dropOut(Option.Some((R { id: 23 }, R { id: 24 }))); println("  x") }
+    println("end")
+}

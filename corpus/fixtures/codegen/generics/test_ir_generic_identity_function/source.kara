@@ -1,0 +1,6 @@
+
+fn identity[T](x: T) -> T { x }
+fn main() {
+    let a = identity(42);
+    println(a);
+}

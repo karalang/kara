@@ -1,0 +1,43 @@
+
+fn main() {
+    // 1 — the reported shape, both spellings (argument position and `let`).
+    let cs: Vec[char] = "xy".chars().collect();
+    let mut acc: String = f"";
+    acc.push_str(cs[0].to_string());
+    println(f"{acc.len()}:{acc}");
+    let s: String = cs[1].to_string();
+    println(f"{s.len()}:{s}");
+    println(f"[{cs[0].to_string()}]");
+
+    // 2 — Array, every element type (all three were hard errors).
+    let ac: Array[char, 2] = ['p', 'q'];
+    println(ac[0].to_string());
+    let ai: Array[i64, 2] = [7i64, 8i64];
+    println(ai[0].to_string());
+    let astr: Array[String, 2] = ["abc", "de"];
+    println(astr[0].len());
+
+    // 3 — VecDeque, the `to_string` gap and the methods that always worked.
+    let mut dc: VecDeque[char] = VecDeque.new();
+    dc.push_back('z');
+    println(dc[0].to_string());
+    let mut di: VecDeque[i64] = VecDeque.new();
+    di.push_back(-7i64);
+    println(di[0].to_string());
+    println(di[0].abs());
+
+    // Boundary rows — each already correct, each a way to over-reach.
+    let c: char = cs[0];
+    println(c.to_string());
+    println('w'.to_string());
+    println(f"[{cs[0]}]");
+    if cs[0] == 'x' { println("eq"); } else { println("ne"); }
+    let vs: Vec[String] = vec!["abc"];
+    println(vs[0].len());
+    let mut m: Map[i64, char] = Map.new();
+    let _ = m.insert(1i64, 'k');
+    match m.get(1i64) { Some(mc) => println(mc.to_string()), None => println("-") }
+    let mut fc: String = f"";
+    for ch in cs { fc.push_str(ch.to_string()); }
+    println(fc);
+}

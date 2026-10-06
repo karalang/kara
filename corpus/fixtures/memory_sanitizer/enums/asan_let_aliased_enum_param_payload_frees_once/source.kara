@@ -1,0 +1,55 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+enum Box2 { Full(Res), Empty }
+struct Taker { tag: i64 }
+fn take_alias(b: Box2) -> Res {
+    match b {
+        Box2.Full(r) => { let k: Res = r; return k; }
+        Box2.Empty => { return Res { id: 0, name: f"z" }; }
+    }
+}
+fn take_direct(b: Box2) -> Res {
+    match b {
+        Box2.Full(r) => { return r; }
+        Box2.Empty => { return Res { id: 0, name: f"z" }; }
+    }
+}
+fn take_keep(b: Box2) -> i64 {
+    match b {
+        Box2.Full(r) => { let k: Res = r; return k.id; }
+        Box2.Empty => { return 0i64; }
+    }
+}
+impl Taker {
+    fn take(ref self, b: Box2) -> Res {
+        match b {
+            Box2.Full(r) => { let k: Res = r; return k; }
+            Box2.Empty => { return Res { id: 0, name: f"z" }; }
+        }
+    }
+}
+fn main() {
+    let t: Taker = Taker { tag: 1i64 };
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        // 1. The row's shape — free function, payload aliased by a `let`.
+        let a: Box2 = Box2.Full(Res { id: i, name: f"al{i}" });
+        let ra: Res = take_alias(a);
+        println(ra.name);
+        // 2. Same through an impl method, which reaches a different arg loop.
+        let b: Box2 = Box2.Full(Res { id: i, name: f"me{i}" });
+        let rb: Res = t.take(b);
+        println(rb.name);
+        // 3. CONTROL — direct `return r;`, already clean; must not become a leak.
+        let c: Box2 = Box2.Full(Res { id: i, name: f"di{i}" });
+        let rc: Res = take_direct(c);
+        println(rc.name);
+        // 4. CONTROL — the alias never leaves the callee, so it owns the free.
+        let d: Box2 = Box2.Full(Res { id: i, name: f"kp{i}" });
+        let v: i64 = take_keep(d);
+        println(f"kp {v}");
+        i = i + 1;
+    }
+    println("end");
+}

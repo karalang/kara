@@ -1,0 +1,13 @@
+source = "tests/codegen/concurrency.rs::test_list_par_blocks_outside_par_block_returns_empty"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

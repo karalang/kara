@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::e2e_generic_call_keeps_the_callers_payload_ownership"
+dedup_of = ["tests/interpreter/enums.rs::test_generic_call_keeps_the_callers_payload_ownership"]
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

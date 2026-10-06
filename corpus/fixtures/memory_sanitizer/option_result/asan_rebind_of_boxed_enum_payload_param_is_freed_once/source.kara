@@ -1,0 +1,39 @@
+
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct W { r: R, s: String, t: String }
+fn mw(i: i64) -> W { W { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}", t: f"another-long-heap-string-{i}" } }
+enum K { A(W), B }
+fn opt(a: Option[K]) -> i64 { let c = a; println("in"); 1 }
+fn res_ok(a: Result[K, i64]) -> i64 { let c = a; println("in"); 2 }
+fn opt_match(a: Option[K]) -> i64 { let c = a; match c { Some(K.A(w)) => println(f"m{w.r.id}"), Some(K.B) => println("b"), None => println("n") } 3 }
+fn chain(a: Option[K]) -> i64 { let b = a; let c = b; println("in"); 4 }
+fn res_err_match(a: Result[i64, K]) -> i64 { let c = a; match c { Ok(v) => println(f"o{v}"), Err(K.A(w)) => println(f"m{w.r.id}"), Err(K.B) => println("b") } 5 }
+fn unmutated(a: Option[K]) -> i64 { let mut c = a; println("in"); 6 }
+fn main() {
+    let a: Option[K] = Some(K.A(mw(1)));
+    println(f"k{opt(a)}");
+    println(f"k{opt(Some(K.A(mw(2))))}");
+    println(f"k{opt(Some(K.B))}");
+    let b: Result[K, i64] = Ok(K.A(mw(3)));
+    println(f"k{res_ok(b)}");
+    println(f"k{res_ok(Ok(K.A(mw(4))))}");
+    println(f"k{res_ok(Err(7))}");
+    let c: Option[K] = Some(K.A(mw(5)));
+    println(f"k{opt_match(c)}");
+    println(f"k{opt_match(Some(K.A(mw(6))))}");
+    println(f"k{opt_match(Some(K.B))}");
+    println(f"k{opt_match(None)}");
+    let d: Option[K] = Some(K.A(mw(7)));
+    println(f"k{chain(d)}");
+    println(f"k{chain(Some(K.A(mw(8))))}");
+    let e: Result[i64, K] = Err(K.A(mw(9)));
+    println(f"k{res_err_match(e)}");
+    println(f"k{res_err_match(Err(K.A(mw(10))))}");
+    println(f"k{res_err_match(Ok(60))}");
+    println(f"k{res_err_match(Err(K.B))}");
+    let f: Option[K] = Some(K.A(mw(11)));
+    println(f"k{unmutated(f)}");
+    println(f"k{unmutated(Some(K.A(mw(12))))}");
+    println("end")
+}

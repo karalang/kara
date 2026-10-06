@@ -1,0 +1,17 @@
+
+shared struct Node {
+    val: i64,
+    mut neighbors: Vec[Node],
+}
+fn main() {
+    let n1 = Node { val: 1, neighbors: Vec.new() };
+    let n2 = Node { val: 2, neighbors: Vec.new() };
+    let n3 = Node { val: 3, neighbors: Vec.new() };
+    n1.neighbors.push(n2);
+    n1.neighbors.push(n3);
+    let mut sum: i64 = 0;
+    for nb in n1.neighbors.iter() {
+        sum = sum + nb.val;
+    }
+    println(sum);
+}

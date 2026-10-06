@@ -1,0 +1,322 @@
+// Differential for #354: the four arms against an oracle that shares no code
+// with them -- no sorting at all, just the longest chain in the "fits inside"
+// relation, by memoised recursion over every pair. Random envelope sets of 0
+// to 12 envelopes, with sides drawn from 1..=3, 1..=6 or 1..=20 so that equal
+// widths, equal heights and duplicates are all common.
+//
+//   P1  every arm returns the oracle's answer
+//   P2  the answer is 0 for no envelopes, else between 1 and the number of
+//       distinct widths and of distinct heights
+//   P3  reversing or rotating the input does not change the answer
+//   P4  swapping every envelope's width and height does not change the answer
+//   P5  adding one envelope raises the answer by 0 or 1, never lowers it
+//
+// The arms are copied from the kata's four files, renamed.
+
+fn by_patience(envelopes: ref Vec[(i64, i64)]) -> i64 {
+    let mut order = envelopes.clone();
+    order.sort_by(|a, b| if a.0 != b.0 { a.0.cmp(b.0) } else { b.1.cmp(a.1) });
+    let mut tails: Vec[i64] = Vec.new();
+    for (_, h) in order.iter() {
+        let mut lo = 0;
+        let mut hi = tails.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if tails[mid] < h {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo == tails.len() {
+            tails.push(h);
+        } else {
+            tails[lo] = h;
+        }
+    }
+    tails.len()
+}
+
+fn by_dp(envelopes: ref Vec[(i64, i64)]) -> i64 {
+    let mut order = envelopes.clone();
+    order.sort();
+    let n = order.len();
+    let mut best: Vec[i64] = vec![1; n];
+    let mut answer = 0;
+    for i in 0..n {
+        let (wi, hi) = order[i];
+        for j in 0..i {
+            let (wj, hj) = order[j];
+            if wj < wi and hj < hi and best[j] + 1 > best[i] {
+                best[i] = best[j] + 1;
+            }
+        }
+        answer = answer.max(best[i]);
+    }
+    answer
+}
+
+struct MaxFenwick {
+    tree: Vec[i64],
+}
+
+impl MaxFenwick {
+    fn new(size: i64) -> MaxFenwick {
+        MaxFenwick { tree: vec![0; size + 1] }
+    }
+
+    // The largest value stored at ranks 1..=i.
+    fn prefix_max(ref self, i: i64) -> i64 {
+        let mut i = i;
+        let mut best = 0;
+        while i > 0 {
+            best = best.max(self.tree[i]);
+            i -= i & -i;
+        }
+        best
+    }
+
+    fn raise(mut ref self, i: i64, value: i64) {
+        let mut i = i;
+        while i < self.tree.len() {
+            if self.tree[i] < value {
+                self.tree[i] = value;
+            }
+            i += i & -i;
+        }
+    }
+}
+
+fn by_fenwick(envelopes: ref Vec[(i64, i64)]) -> i64 {
+    let mut heights: Vec[i64] = envelopes.iter().map(|e| e.1).collect();
+    heights.sort();
+    heights.dedup();
+    let mut rank: Map[i64, i64] = Map.new();
+    for (i, h) in heights.iter().enumerate() {
+        rank.insert(h, i + 1);
+    }
+
+    let mut order = envelopes.clone();
+    order.sort();
+    let mut tree = MaxFenwick.new(heights.len());
+    let mut answer = 0;
+    let mut start = 0;
+    while start < order.len() {
+        let mut end = start;
+        while end < order.len() and order[end].0 == order[start].0 {
+            end += 1;
+        }
+        let mut found: Vec[(i64, i64)] = Vec.new();
+        for k in start..end {
+            let r = rank[order[k].1];
+            found.push((r, tree.prefix_max(r - 1) + 1));
+        }
+        for (r, len) in found {
+            tree.raise(r, len);
+            answer = answer.max(len);
+        }
+        start = end;
+    }
+    answer
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+struct Envelope {
+    width: i64,
+    height: i64,
+}
+
+impl PartialOrd for Envelope {
+    fn partial_cmp(ref self, other: ref Envelope) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Envelope {
+    fn cmp(ref self, other: ref Envelope) -> Ordering {
+        if self.width != other.width {
+            self.width.cmp(other.width)
+        } else {
+            other.height.cmp(self.height)
+        }
+    }
+}
+
+// The first index whose item is not less than `x`, or `items.len()`.
+fn lower_bound[T: Ord](items: ref Vec[T], x: ref T) -> i64 {
+    let mut lo = 0;
+    let mut hi = items.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if items[mid].cmp(x) == Ordering.Less {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn by_typed(envelopes: ref Vec[(i64, i64)]) -> i64 {
+    let mut order: Vec[Envelope] = Vec.new();
+    for (w, h) in envelopes.iter() {
+        order.push(Envelope { width: w, height: h });
+    }
+    // `order.sort()` is the natural call, but it ignores this `Ord` and sorts
+    // by the fields (kara B-2026-10-06-109); call the impl explicitly until
+    // that is fixed, then go back to `order.sort()`.
+    order.sort_by(|a, b| a.cmp(b));
+    let mut tails: Vec[i64] = Vec.new();
+    for e in order.iter() {
+        let at = lower_bound(tails, e.height);
+        if at == tails.len() {
+            tails.push(e.height);
+        } else {
+            tails[at] = e.height;
+        }
+    }
+    tails.len()
+}
+
+// The oracle: chain[i] is the longest chain whose outermost envelope is i.
+fn chain_from(envs: ref Vec[(i64, i64)], i: i64, memo: mut ref Vec[i64]) -> i64 {
+    if memo[i] > 0 {
+        return memo[i];
+    }
+    let (wi, hi) = envs[i];
+    let mut best = 1;
+    for j in 0..envs.len() {
+        let (wj, hj) = envs[j];
+        if wj < wi and hj < hi {
+            let inner = chain_from(envs, j, memo);
+            if inner + 1 > best {
+                best = inner + 1;
+            }
+        }
+    }
+    memo[i] = best;
+    best
+}
+
+fn oracle(envs: ref Vec[(i64, i64)]) -> i64 {
+    let mut memo: Vec[i64] = vec![0; envs.len()];
+    let mut best = 0;
+    for i in 0..envs.len() {
+        let c = chain_from(envs, i, mut memo);
+        if c > best {
+            best = c;
+        }
+    }
+    best
+}
+
+fn count_distinct(values: Vec[i64]) -> i64 {
+    let mut seen: Set[i64] = Set.new();
+    for v in values {
+        seen.insert(v);
+    }
+    seen.len()
+}
+
+fn main() {
+    let mut seed: i64 = 354;
+    let mut fails: Vec[i64] = vec![0; 5];
+    let mut checks = 0;
+    let mut checksum: i64 = 0;
+    let mut histogram: Vec[i64] = vec![0; 13];
+    for case in 0..3000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = seed % 13;
+        // `[3, 6, 20][case % 3]` is the natural spelling, but `karac build` cannot
+        // index a collection literal yet (kara B-2026-10-06-110); index a
+        // binding until that is fixed.
+        let sides = [3, 6, 20];
+        let side = sides[case % 3];
+        let mut envs: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let w = seed % side + 1;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let h = seed % side + 1;
+            envs.push((w, h));
+        }
+        let want = oracle(envs);
+        histogram[want] += 1;
+        checksum = (checksum * 31 + want + case) % 1000000007;
+
+        // P1
+        let got = [by_patience(envs), by_dp(envs), by_fenwick(envs), by_typed(envs)];
+        for a in 0..4 {
+            checks += 1;
+            if got[a] != want {
+                fails[0] += 1;
+                println(f"P1 case {case} arm {a}: got {got[a]}, oracle {want}");
+            }
+        }
+
+        // P2
+        checks += 1;
+        if n == 0 {
+            if want != 0 {
+                fails[1] += 1;
+            }
+        } else {
+            let ws = count_distinct(envs.iter().map(|e| e.0).collect());
+            let hs = count_distinct(envs.iter().map(|e| e.1).collect());
+            if want < 1 or want > ws or want > hs {
+                fails[1] += 1;
+                println(f"P2 case {case}: {want} outside 1..={ws.min(hs)}");
+            }
+        }
+
+        // P3
+        let mut reversed = envs.clone();
+        reversed.reverse();
+        let mut rotated: Vec[(i64, i64)] = Vec.new();
+        for i in 0..n {
+            rotated.push(envs[(i + 1) % n]);
+        }
+        checks += 2;
+        if by_patience(reversed) != want {
+            fails[2] += 1;
+        }
+        if by_fenwick(rotated) != want {
+            fails[2] += 1;
+        }
+
+        // P4
+        let swapped: Vec[(i64, i64)] = envs.iter().map(|e| (e.1, e.0)).collect();
+        checks += 1;
+        if by_dp(swapped) != want or oracle(swapped) != want {
+            fails[3] += 1;
+            println(f"P4 case {case}: swapped sides changed the answer");
+        }
+
+        // P5
+        let mut prefix: Vec[(i64, i64)] = Vec.new();
+        let mut before = 0;
+        for e in envs.iter() {
+            prefix.push(e);
+            let after = by_typed(prefix);
+            checks += 1;
+            if after < before or after > before + 1 {
+                fails[4] += 1;
+                println(f"P5 case {case}: {before} -> {after} after adding one envelope");
+            }
+            before = after;
+        }
+    }
+    println(f"{checks} checks, checksum {checksum}");
+    let mut line = "answers:".to_string();
+    for k in 0..13 {
+        if histogram[k] > 0 {
+            line.push_str(f" {k}x{histogram[k]}");
+        }
+    }
+    println(line);
+    for p in 0..5 {
+        println(f"P{p + 1}: {fails[p]} failures");
+    }
+    let total = fails[0] + fails[1] + fails[2] + fails[3] + fails[4];
+    println(f"failures {total}");
+}

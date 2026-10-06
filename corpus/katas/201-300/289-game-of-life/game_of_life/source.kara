@@ -1,0 +1,147 @@
+// LeetCode 289 — Game of Life.
+//
+// One step of Conway's rules on an m x n board of 0 (dead) and 1 (live):
+//
+//   live with < 2 live neighbours  -> dies      (underpopulation)
+//   live with 2 or 3               -> lives
+//   live with > 3                  -> dies      (overpopulation)
+//   dead with exactly 3            -> becomes live (reproduction)
+//
+// EVERY CELL UPDATES SIMULTANEOUSLY, and that is the whole difficulty. The
+// rules read each cell's neighbourhood in the OLD generation, so a naive
+// in-place loop that writes cell (0,0) before reading (0,1) has already
+// corrupted the input for its own next read. The obvious fix is a second board
+// — `game_of_life_copy.kara` does exactly that, and is the honest baseline.
+//
+// THE IN-PLACE TRICK IS TO STOP THINKING OF A CELL AS A BIT. The problem says
+// the board holds 0 and 1, which uses one bit of an `i64` and leaves 62 idle.
+// So each cell carries BOTH generations at once:
+//
+//     bit 0  the old state — never overwritten during the sweep
+//     bit 1  the new state — written during the sweep, read only after
+//
+// A neighbour count reads bit 0 (`v & 1`), so it always sees the old
+// generation no matter how many neighbours have already been visited. The
+// second pass shifts bit 1 down and the board is the next generation. Two
+// passes, no second board, and the simultaneity is preserved by CONSTRUCTION
+// rather than by ordering the writes carefully.
+//
+// The encoding survives because 1 and 2 are different numbers — writing the
+// new state into bit 1 cannot disturb bit 0. That is the same move as #73's
+// first-row/first-column markers: find storage the problem already owns but is
+// not using.
+
+// Live neighbours of (r, c) in the OLD generation — bit 0 of each neighbour.
+fn live_neighbours(board: ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
+    let rows = board.len();
+    let cols = board[0].len();
+    let mut n = 0;
+    let mut dr = -1;
+    while dr <= 1 {
+        let mut dc = -1;
+        while dc <= 1 {
+            if not (dr == 0 and dc == 0) {
+                let rr = r + dr;
+                let cc = c + dc;
+                if rr >= 0 and rr < rows and cc >= 0 and cc < cols {
+                    // `& 1` is what makes the sweep order irrelevant: bit 0 is
+                    // the old generation and nothing in this pass writes it.
+                    n = n + (board[rr][cc] & 1);
+                }
+            }
+            dc = dc + 1;
+        }
+        dr = dr + 1;
+    }
+    return n;
+}
+
+fn step(board: mut ref Vec[Vec[i64]]) {
+    let rows = board.len();
+    let cols = board[0].len();
+
+    // Pass 1 — write the new state into bit 1, leaving bit 0 intact.
+    let mut r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            let n = live_neighbours(board, r, c);
+            let alive = (board[r][c] & 1) == 1;
+            let lives = if alive { n == 2 or n == 3 } else { n == 3 };
+            if lives {
+                board[r][c] = board[r][c] | 2;
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+
+    // Pass 2 — the new generation is bit 1; shift it down.
+    r = 0;
+    while r < rows {
+        let mut c = 0;
+        while c < cols {
+            board[r][c] = board[r][c] >> 1;
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+}
+
+fn render(board: ref Vec[Vec[i64]]) -> String {
+    let mut s = String.new();
+    let rows = board.len();
+    let mut r = 0;
+    while r < rows {
+        let cols = board[r].len();
+        let mut c = 0;
+        while c < cols {
+            if board[r][c] == 1 { s.push('#'); } else { s.push('.'); }
+            c = c + 1;
+        }
+        s.push('\n');
+        r = r + 1;
+    }
+    return s;
+}
+
+fn report(label: String, board: mut ref Vec[Vec[i64]], steps: i64) {
+    println(f"{label}:");
+    let mut k = 0;
+    while k < steps {
+        step(board);
+        k = k + 1;
+    }
+    print(render(board));
+    println("");
+}
+
+fn main() {
+    // The LeetCode example.
+    let mut b: Vec[Vec[i64]] = [[0, 1, 0], [0, 0, 1], [1, 1, 1], [0, 0, 0]];
+    report("example after 1 step", mut b, 1);
+
+    // Blinker — a period-2 oscillator. Two steps must return the original.
+    let mut blinker: Vec[Vec[i64]] = [[0, 0, 0], [1, 1, 1], [0, 0, 0]];
+    report("blinker after 1 step", mut blinker, 1);
+    report("blinker after 2 steps (back to start)", mut blinker, 1);
+
+    // Block — a still life. It must not move at all.
+    let mut block: Vec[Vec[i64]] = [[1, 1], [1, 1]];
+    report("block after 3 steps (still life)", mut block, 3);
+
+    // Glider — translates one cell diagonally every 4 steps.
+    let mut glider: Vec[Vec[i64]] = [
+        [0, 1, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+    ];
+    report("glider after 4 steps (shifted 1,1)", mut glider, 4);
+
+    // A lone live cell dies; an empty board stays empty.
+    let mut lonely: Vec[Vec[i64]] = [[0, 0, 0], [0, 1, 0], [0, 0, 0]];
+    report("lone cell dies", mut lonely, 1);
+}

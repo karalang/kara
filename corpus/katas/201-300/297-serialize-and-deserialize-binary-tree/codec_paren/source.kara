@@ -1,0 +1,167 @@
+// LeetCode 297 — Serialize and Deserialize, BY NESTED PARENTHESES.
+//
+// A third encoding that carries the shape in DELIMITERS rather than in null
+// markers, so it has no sentinel at all:
+//
+//         1              "1(2)(3(4)(5))"
+//        / \
+//       2   3            preorder     1,2,#,#,3,4,#,#,5,#,#
+//          / \           level order  1,2,3,#,#,4,5
+//         4   5
+//
+// THE ONE ASYMMETRY THAT MAKES IT TRICKY. A node writes `(left)(right)`, and an
+// absent child writes nothing — so a node with only a RIGHT child cannot simply
+// omit the left one, or `1()(2)` collapses to `1(2)` and the child moves sides
+// on the way back. The empty pair must be written when something follows it,
+// and may be dropped only when nothing does:
+//
+//     left only    1(2)
+//     right only   1()(2)      the empty pair is LOAD-BEARING
+//     both         1(2)(3)
+//     neither      1
+//
+// That is the whole difficulty of this encoding, it has no analogue in either
+// other arm, and it is precisely the case a hand-written parser gets wrong
+// while passing every balanced example. The differential generates trees with
+// right-only spines deliberately.
+//
+// PARSING IS RECURSIVE DESCENT OVER DEPTH, NOT A CURSOR OVER TOKENS. There is
+// no token list: the reader scans characters, reads an integer, then for each
+// child scans to the MATCHING close paren by counting depth and recurses on the
+// interior. So where the ★ arm's correctness rests on a shared cursor advancing
+// in traversal order, this one's rests on brace matching — an entirely
+// different way to be wrong, which is what earns it a place in the differential.
+//
+// NEGATIVE VALUES AGAIN. `-` leads an integer here and `(` / `)` delimit, so
+// the scanner must accept a leading `-` before digits. A parser that reads
+// "digits only" silently truncates `-2` to a value it never gets to and desyncs
+// the whole remainder.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: None, right: None });
+}
+
+fn node(v: i64, l: Option[TreeNode], r: Option[TreeNode]) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn ser_paren(t: Option[TreeNode]) -> String {
+    match t {
+        None => {
+            return "";
+        }
+        Some(n) => {
+            let mut s = n.val.to_string();
+            let has_left = match n.left { Some(_) => true, None => false };
+            let has_right = match n.right { Some(_) => true, None => false };
+            // The empty left pair is emitted only when a right child follows it.
+            if has_left or has_right {
+                s.push_str("(");
+                s.push_str(ser_paren(n.left));
+                s.push_str(")");
+            }
+            if has_right {
+                s.push_str("(");
+                s.push_str(ser_paren(n.right));
+                s.push_str(")");
+            }
+            return s;
+        }
+    }
+}
+
+// Index of the `)` matching the `(` at `open`, by depth counting.
+fn match_paren(b: ref Slice[u8], open: i64) -> i64 {
+    let mut depth = 0;
+    let mut i = open;
+    while i < b.len() {
+        if b[i] == 40u8 {
+            depth = depth + 1;
+        }
+        if b[i] == 41u8 {
+            depth = depth - 1;
+            if depth == 0 {
+                return i;
+            }
+        }
+        i = i + 1;
+    }
+    return b.len();
+}
+
+fn de_paren_range(b: ref Slice[u8], lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo >= hi {
+        return None;
+    }
+    // Read the integer: an optional leading `-`, then digits.
+    let mut i = lo;
+    if b[i] == 45u8 {
+        i = i + 1;
+    }
+    while i < hi and b[i] >= 48u8 and b[i] <= 57u8 {
+        i = i + 1;
+    }
+    let mut digits = String.new();
+    let mut k = lo;
+    while k < i {
+        digits.push(b[k] as char);
+        k = k + 1;
+    }
+    let v = match i64.parse(digits) { Some(x) => x, None => 0 };
+
+    let mut l: Option[TreeNode] = None;
+    let mut r: Option[TreeNode] = None;
+    if i < hi and b[i] == 40u8 {
+        let close = match_paren(b, i);
+        l = de_paren_range(b, i + 1, close);
+        i = close + 1;
+        if i < hi and b[i] == 40u8 {
+            let close2 = match_paren(b, i);
+            r = de_paren_range(b, i + 1, close2);
+        }
+    }
+    return node(v, l, r);
+}
+
+fn de_paren(s: ref String) -> Option[TreeNode] {
+    let b: Slice[u8] = s.bytes();
+    return de_paren_range(b, 0, b.len());
+}
+
+fn fingerprint_into(t: Option[TreeNode], out: mut ref Vec[String]) {
+    match t {
+        None => { out.push("#"); }
+        Some(n) => {
+            out.push(n.val.to_string());
+            fingerprint_into(n.left, out);
+            fingerprint_into(n.right, out);
+        }
+    }
+}
+
+fn fingerprint(t: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    fingerprint_into(t, mut parts);
+    return parts.join(",");
+}
+
+fn report(t: Option[TreeNode]) {
+    let s = ser_paren(t);
+    let round = fingerprint(de_paren(s));
+    println(f"{s}  |  tree {round}");
+}
+
+fn main() {
+    report(node(1, leaf(2), node(3, leaf(4), leaf(5))));
+    report(None);
+    report(leaf(7));
+    report(node(-1, leaf(-2), None));
+    report(node(5, node(5, leaf(5), None), leaf(5)));
+    report(node(1, None, leaf(2)));          // right-only: the empty pair matters
+}

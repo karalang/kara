@@ -1,0 +1,21 @@
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
+fn gkeep[T](t: T, v: mut ref Vec[T]) { v.push(t) }
+fn gfw[T](t: T, v: mut ref Vec[T]) { gkeep(t, v) }
+fn okeep(t: Option[S], v: mut ref Vec[Option[S]]) { v.push(t) }
+fn ofw(t: Option[S], v: mut ref Vec[Option[S]]) { okeep(t, v) }
+fn f6(h: Option[S], v: mut ref Vec[Option[S]]) { okeep(h, v); println("after") }
+fn f7(h: Option[S], v: mut ref Vec[Option[S]]) { gkeep(h, v); println("after") }
+fn main() {
+    let mut u: Vec[Option[S]] = Vec.new();
+    ofw(Option.Some(mks(1)), mut u);
+    let b = Option.Some(mks(2));
+    ofw(b, mut u);
+    f6(Option.Some(mks(3)), mut u);
+    f7(Option.Some(mks(4)), mut u);
+    let e = Option.Some(mks(5));
+    f7(e, mut u);
+    println(f"n{u.len()}");
+    println("end")
+}

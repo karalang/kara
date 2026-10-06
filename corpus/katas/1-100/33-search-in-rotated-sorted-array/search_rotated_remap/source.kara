@@ -1,0 +1,108 @@
+// LeetCode #33: Search in Rotated Sorted Array — find-pivot, then index remap.
+//
+// A variant of the two-phase approach (search_rotated_pivot.kara) that avoids the
+// segment-selection branch entirely. Once the rotation amount `rot` is known (the
+// index of the minimum), the array behaves like a plain ascending array viewed
+// through a rotated lens: logical position `m` of the un-rotated array maps to the
+// physical index `(m + rot) % len`. So run ONE ordinary binary search over the
+// logical range [0, len-1], and read each probe through the remap:
+//
+//     real = (mid + rot) % len
+//     nums[real]  is the value at logical position mid
+//
+// Because the logical view is fully sorted ascending, the comparison logic is the
+// textbook three-way branch — no "which half is sorted", no "which segment holds
+// the target". The rotation is absorbed once, into the index arithmetic, and the
+// search itself never knows the array was rotated. On a hit, return the PHYSICAL
+// index `real` (what the caller indexes), not the logical `mid`.
+//
+// This is the cleanest separation of concerns of the three styles: phase 1 finds
+// the rotation, phase 2 is a verbatim sorted-array binary search plus a modulo on
+// each probe. The cost is one `%` per step versus the one-pass form's branch — a
+// nice contrast in where the rotation's complexity gets paid.
+
+fn find_pivot(nums: Slice[i64], len: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = len - 1;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] > nums[hi] {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn search(nums: Slice[i64], len: i64, target: i64) -> i64 {
+    if len == 0 {
+        return -1;
+    }
+    let rot = find_pivot(nums, len);
+    let mut lo = 0;
+    let mut hi = len - 1;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        let real = (mid + rot) % len;
+        let v = nums[real];
+        if v == target {
+            return real;
+        } else if v < target {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    -1
+}
+
+fn fmt(nums: Slice[i64], len: i64) -> String {
+    let mut s: String = "[";
+    for i in 0..len {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(nums: Slice[i64], len: i64, target: i64) {
+    println(f"{fmt(nums, len)} target={target} -> {search(nums, len, target)}");
+}
+
+fn main() {
+    // Same case battery as search_rotated.kara — identical output.
+    let a1: Array[i64, 7] = [4, 5, 6, 7, 0, 1, 2];
+    report(a1, 7, 0);                // 4
+    report(a1, 7, 3);                // -1
+    let a2: Array[i64, 1] = [1];
+    report(a2, 1, 0);                // -1
+    report(a2, 1, 1);                // 0
+    let a3: Array[i64, 7] = [6, 7, 0, 1, 2, 4, 5];
+    report(a3, 7, 6);               // 0
+    report(a3, 7, 7);               // 1
+    report(a3, 7, 0);               // 2
+    report(a3, 7, 2);               // 4
+    report(a3, 7, 5);               // 6
+    report(a3, 7, 3);               // -1
+    let a4: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(a4, 5, 4);               // 3
+    report(a4, 5, 1);               // 0
+    report(a4, 5, 5);               // 4
+    report(a4, 5, 6);               // -1
+    let a5: Array[i64, 2] = [3, 1];
+    report(a5, 2, 1);               // 1
+    report(a5, 2, 3);               // 0
+    report(a5, 2, 2);               // -1
+    let a6: Array[i64, 4] = [2, 3, 4, 1];
+    report(a6, 4, 1);               // 3
+    report(a6, 4, 2);               // 0
+    let a7: Array[i64, 0] = [];
+    report(a7, 0, 5);              // -1
+    let a8: Array[i64, 5] = [3, 4, -2, -1, 2];
+    report(a8, 5, -2);            // 2
+    report(a8, 5, 3);             // 0
+}

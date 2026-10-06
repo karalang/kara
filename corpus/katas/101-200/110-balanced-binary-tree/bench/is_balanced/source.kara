@@ -1,0 +1,50 @@
+// Benchmark workload for LeetCode #110 — build 8 balanced 31-node trees once (distinct value
+// ranges), then K reps of the bottom-up single-pass is_balanced on a DATA-DEPENDENT-selected
+// tree (idx = acc%8, seeded by the running hash so nothing hoists), folding each verdict into a
+// rolling hash. The trees are balanced, so `check` runs the FULL post-order (no early -1),
+// making this a READ-ONLY per-node traversal — each rep matches Option[shared] and reads a
+// field per node, no allocation — the exposed RC/traversal regime (cf. #104). Kara passes
+// Option[shared] by value, rc-inc/dec'ing every visited node; C/Go use raw pointers, Rust a Box
+// walked by &-borrow. The check recursion's left/right calls are independent but the `lh == -1`
+// short-circuit serializes them; auto-par's granularity cutoff (B-2026-07-15-4, fixed) leaves
+// the 31-node walks sequential either way (default byte-equal to KARAC_AUTO_PAR=0).
+shared struct TreeNode { val: i64, mut left: Option[TreeNode], mut right: Option[TreeNode] }
+fn check(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let lh = check(n.left);
+            if lh == -1 { return -1; }
+            let rh = check(n.right);
+            if rh == -1 { return -1; }
+            let diff = lh - rh;
+            let absdiff = if diff < 0 { -diff } else { diff };
+            if absdiff > 1 { return -1; }
+            if lh > rh { 1 + lh } else { 1 + rh }
+        }
+    }
+}
+fn is_balanced(root: Option[TreeNode]) -> bool { check(root) != -1 }
+fn build_balanced(lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi { return None; }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: mid, left: None, right: None };
+    node.left = build_balanced(lo, mid - 1);
+    node.right = build_balanced(mid + 1, hi);
+    Some(node)
+}
+fn main() {
+    let mut pool: Vec[Option[TreeNode]] = Vec.new();
+    let mut t = 0;
+    while t < 8 { pool.push(build_balanced(t * 100, t * 100 + 30)); t = t + 1; }
+    let mut acc = 1;
+    let mut rep = 0;
+    while rep < 3000000 {
+        let idx = acc % 8;
+        let bal = is_balanced(pool[idx].clone());
+        let bit = if bal { 1 } else { 0 };
+        acc = (acc * 131 + bit + 1) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

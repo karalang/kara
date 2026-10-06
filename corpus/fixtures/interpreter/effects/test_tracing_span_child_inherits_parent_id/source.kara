@@ -1,0 +1,7 @@
+fn main() {
+         let parent = Span.root("outer", 1);
+         let child = parent.child("inner", 2);
+         println(child.name);
+         println(child.span_id);
+         println(child.parent_id);
+     }

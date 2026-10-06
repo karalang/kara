@@ -1,0 +1,12 @@
+
+struct Person { name: String, note: String, age: i64 }
+
+fn make() -> Person {
+    return Person { name: "ada".to_string(), note: "first".to_string(), age: 36 };
+}
+
+fn main() {
+    // `name` escapes to the print; `note` is never read by anyone.
+    println({ let p = make(); p }.name);
+    println({ let p = make(); p }.age);
+}

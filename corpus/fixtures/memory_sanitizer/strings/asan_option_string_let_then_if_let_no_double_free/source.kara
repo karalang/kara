@@ -1,0 +1,10 @@
+
+fn mk(n: i64) -> Option[String] { Some(f"v-{n}-runtime-heap-payload") }
+fn main() {
+    let x = mk(7);
+    if let Some(s) = x {
+        println(s);
+    } else {
+        println("none");
+    }
+}

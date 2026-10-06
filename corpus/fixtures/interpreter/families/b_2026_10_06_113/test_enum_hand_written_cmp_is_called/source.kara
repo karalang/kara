@@ -1,0 +1,23 @@
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Size { Small, Large }
+impl PartialOrd for Size {
+    fn partial_cmp(ref self, other: ref Size) -> Option[Ordering] { Some(self.cmp(other)) }
+}
+impl Ord for Size {
+    fn cmp(ref self, other: ref Size) -> Ordering {
+        match (self, other) {
+            (Size.Small, Size.Large) => Ordering.Greater,
+            (Size.Large, Size.Small) => Ordering.Less,
+            _ => Ordering.Equal,
+        }
+    }
+}
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+enum Plain { A, B }
+fn smaller[T: Ord](a: T, b: T) -> bool { a.cmp(b) == Ordering.Less }
+fn main() {
+    println(f"{Size.Small.cmp(Size.Large) == Ordering.Greater}");
+    println(f"{Size.Small < Size.Large} {Size.Small > Size.Large} {Size.Large <= Size.Small}");
+    println(f"{smaller(Size.Large, Size.Small)}");
+    println(f"{Plain.A < Plain.B} {Plain.A.cmp(Plain.B) == Ordering.Less}");
+}

@@ -1,0 +1,16 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+fn d2(x: R, y: R) { let mut v = Vec[x]; v = Vec[y]; println(f"in{v.len()}") }
+fn d4(x: R, y: R) { let mut v = Vec[x]; let w = Vec[y]; v = w; println(f"in{v.len()}") }
+fn d5(x: R, y: R, c: bool) { let mut v = Vec[x]; if c { v = Vec[y]; } println(f"in{v.len()}") }
+fn d6(x: R, y: R) { let mut v = Vec[x]; v = Vec[y]; v = Vec[mk(8)]; println(f"in{v.len()}") }
+fn f8(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; } return v }
+fn main() {
+  println("-d2"); d2(mk(5), mk(6)); println("k")
+  println("-d4"); d4(mk(8), mk(9)); println("k")
+  println("-d5"); d5(mk(1), mk(2), true); println("k")
+  println("-d5f"); d5(mk(3), mk(4), false); println("k")
+  println("-d6"); d6(mk(10), mk(11)); println("k")
+  println("-ht"); let a = f8(mk(12), true); println(f"k{a.len()}")
+}

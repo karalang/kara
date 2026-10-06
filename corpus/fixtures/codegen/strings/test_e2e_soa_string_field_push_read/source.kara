@@ -1,0 +1,13 @@
+
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn main() with panics {
+    let mut cells: Vec[Cell] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        cells.push(Cell { id: i, name: f"soa-element-heap-owning-string-payload-{i}" });
+        i = i + 1;
+    }
+    println(cells[1].name);
+    println(cells[2].id);
+}

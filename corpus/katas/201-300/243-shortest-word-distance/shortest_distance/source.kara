@@ -1,0 +1,75 @@
+// LeetCode 243 — Shortest Word Distance.
+//
+// Given a word list and two DIFFERENT words, return the smallest |i - j| over
+// positions i holding word1 and j holding word2.
+//
+// The whole problem is noticing that you never need to remember more than ONE
+// position per word. Scanning left to right, when the walk lands on word1 at
+// index i the only word2 that can improve the answer is the MOST RECENT one —
+// every earlier word2 is strictly farther from i, and every later word2 gets
+// its own turn when the scan reaches it and looks back at this word1. So two
+// last-seen indices suffice: one pass, O(n) time, O(1) space, and no candidate
+// pair is ever skipped.
+//
+// `best` starts at n rather than at a sentinel. The list has n slots, so no two
+// distinct positions can be n or more apart — n is a genuine upper bound, and
+// it doubles as the "one of the words never appeared" answer without needing a
+// separate found flag. (LeetCode guarantees both words are present; the kata
+// still reports that case rather than trapping on it.)
+
+fn shortest_distance(words: ref Slice[String], word1: ref String, word2: ref String) -> i64 {
+    let n = words.len();
+    let mut last1 = -1;
+    let mut last2 = -1;
+    let mut best = n;
+    let mut i = 0;
+    while i < n {
+        // word1 != word2 is a precondition, so these arms are exclusive and
+        // `else if` costs one comparison less per slot than two `if`s.
+        if words[i] == word1 {
+            last1 = i;
+            if last2 >= 0 {
+                best = min(best, last1 - last2);
+            }
+        } else if words[i] == word2 {
+            last2 = i;
+            if last1 >= 0 {
+                best = min(best, last2 - last1);
+            }
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn report(words: ref Slice[String], word1: ref String, word2: ref String) {
+    println(f"{word1} <-> {word2} : {shortest_distance(words, word1, word2)}");
+}
+
+fn main() {
+    let d1: Array[String, 5] = ["practice", "makes", "perfect", "coding", "makes"];
+    report(d1, "coding", "practice");   // 3
+    report(d1, "makes", "coding");      // 1  (the SECOND "makes" is the close one)
+
+    // The nearest pair is neither the first nor the last occurrence of either
+    // word — this is the case a "first occurrence only" solution gets wrong.
+    let d2: Array[String, 7] = ["a", "b", "x", "x", "x", "a", "b"];
+    report(d2, "a", "b");               // 1
+    report(d2, "b", "a");               // 1  (symmetric)
+
+    let d3: Array[String, 2] = ["a", "b"];
+    report(d3, "a", "b");               // 1
+
+    // Alternating: every adjacent pair is a candidate, best is 1 and is found
+    // on the very first pair, but the scan still visits every slot.
+    let d4: Array[String, 6] = ["p", "q", "p", "q", "p", "q"];
+    report(d4, "p", "q");               // 1
+
+    // The close pair sits at the far end, so `best` improves twice: 4 then 1.
+    let d5: Array[String, 6] = ["m", "z", "z", "z", "n", "m"];
+    report(d5, "m", "n");               // 1
+
+    // Neither word occurs / only one occurs → n, the upper bound.
+    let d6: Array[String, 3] = ["one", "two", "three"];
+    report(d6, "two", "four");          // 3
+}

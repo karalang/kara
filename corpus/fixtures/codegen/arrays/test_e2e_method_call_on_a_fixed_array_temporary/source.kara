@@ -1,0 +1,46 @@
+
+trait Head { fn head_or(self, d: i64) -> i64; }
+impl Head for Array[i64, 3] {
+    fn head_or(self, d: i64) -> i64 { return 111; }
+}
+fn mk() -> Array[i64, 3] { return [4, 5, 6]; }
+fn hi() -> Array[u8, 2] { return [128u8, 1u8]; }
+
+fn main() {
+    let e: u16 = 258u16;
+
+    // The whole read surface on a TEMPORARY, each beside its bound twin.
+    let b = e.to_ne_bytes();
+    println(e.to_ne_bytes().len());
+    println(b.len());
+    println(e.to_ne_bytes().is_empty());
+    println(b.is_empty());
+    println(e.to_ne_bytes().first().unwrap());
+    println(b.first().unwrap());
+    println(e.to_ne_bytes().last().unwrap());
+    println(b.last().unwrap());
+    println(e.to_ne_bytes().get(0).unwrap());
+    println(b.get(0).unwrap());
+    println(e.to_ne_bytes().contains(1u8));
+    println(b.contains(1u8));
+
+    // A user fn declared `-> Array[T, N]`: the element type comes from the
+    // signature, and `[128, 1]` is unsorted only if it is read as `u8`.
+    println(mk().len());
+    println(mk().last().unwrap());
+    println(hi().is_sorted());
+    let h = hi();
+    println(h.is_sorted());
+
+    // A byte-string literal receiver.
+    println(b"abc".len());
+    println(b"abc".is_sorted());
+    println(b"cba".is_sorted());
+
+    // A method a USER impl declared on the `Array` head, called on a
+    // temporary — admitted for the same reason the builtin names are: this
+    // routes the call to the path its bound twin already takes.
+    println(mk().head_or(-1));
+    let m = mk();
+    println(m.head_or(-1));
+}

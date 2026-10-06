@@ -1,0 +1,31 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("vecclear:");
+    {
+        let mut v: Vec[Res] = Vec.new();
+        v.push(Res { id: 1, name: f"a{1}" });
+        v.push(Res { id: 2, name: f"b{2}" });
+        v.clear();
+        println(v.len());
+    }
+    println("mapclear:");
+    {
+        let mut m: Map[i64, Res] = Map.new();
+        m.insert(5, Res { id: 3, name: f"c{3}" });
+        m.clear();
+        println(m.len());
+    }
+    println("reuse:");
+    {
+        let mut w: Vec[Res] = Vec.new();
+        w.push(Res { id: 4, name: f"d{4}" });
+        w.clear();
+        w.push(Res { id: 5, name: f"e{5}" });
+        println(w.len());
+    }
+    println("end");
+}

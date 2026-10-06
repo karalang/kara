@@ -1,0 +1,15 @@
+
+#[derive(Message)]
+struct Sparse {
+    #[karac::field(5)] name: String,
+    #[karac::field(17)] id: i64,
+}
+
+fn main() {
+    let mut buf = Vec.new();
+    buf.extend_from_slice(ProtoBuf.encode_tag(17, 0));
+    buf.extend_from_slice(ProtoBuf.encode_varint(42u64));
+    let back = Sparse.decode(buf);
+    println(back.id);
+    println(back.name.len());
+}

@@ -1,0 +1,10 @@
+
+fn main() {
+    let v = [1, 2, 3, 4];
+    let wins: Vec[Vec[i64]] = v.iter().map(|x| x * 10).windows(2).collect();
+    for w in wins {
+        let a = w[0];
+        let b = w[1];
+        println(f"{a},{b}");
+    }
+}

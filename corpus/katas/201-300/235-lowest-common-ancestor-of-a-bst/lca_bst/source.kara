@@ -1,0 +1,84 @@
+// LeetCode 235 — Lowest Common Ancestor of a Binary Search Tree.
+//
+// Given a BST and two present values `p` and `q`, return the value of their
+// lowest common ancestor: the deepest node that has both as descendants (a node
+// is a descendant of itself). The BST ordering makes this a single root-to-split
+// walk — no parent pointers, no second pass:
+//
+//   - both p and q strictly LESS than the current node  → LCA is in the left  subtree
+//   - both p and q strictly GREATER                      → LCA is in the right subtree
+//   - otherwise the paths to p and q diverge here (or one equals this node), so
+//     the current node IS the split point → it is the LCA.
+//
+// O(h) time, O(1) extra space. The tree is an index pool (`Vec[Node]`, i64
+// left/right, -1 = null), built by BST insertion from a value list.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn insert(nodes: mut ref Vec[Node], root: i64, v: i64) -> i64 {
+    if root == -1 {
+        let idx = nodes.len();
+        nodes.push(Node { val: v, left: -1, right: -1 });
+        return idx;
+    }
+    if v < nodes[root].val {
+        let l = insert(nodes, nodes[root].left, v);
+        nodes[root].left = l;
+    } else {
+        let r = insert(nodes, nodes[root].right, v);
+        nodes[root].right = r;
+    }
+    return root;
+}
+
+fn build(vals: Slice[i64]) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut root = -1;
+    let mut i = 0;
+    while i < vals.len() {
+        root = insert(mut nodes, root, vals[i]);
+        i = i + 1;
+    }
+    return nodes;
+}
+
+fn lca(nodes: ref Vec[Node], root: i64, p: i64, q: i64) -> i64 {
+    let mut cur = root;
+    while cur != -1 {
+        let v = nodes[cur].val;
+        if p < v and q < v {
+            cur = nodes[cur].left;
+        } else if p > v and q > v {
+            cur = nodes[cur].right;
+        } else {
+            return v;
+        }
+    }
+    return -1;               // p or q not present (not exercised by valid inputs)
+}
+
+fn report(vals: Slice[i64], p: i64, q: i64) {
+    let nodes = build(vals);
+    let root = if nodes.len() > 0 { 0 } else { -1 };
+    println(lca(nodes, root, p, q));
+}
+
+fn main() {
+    // Classic BST: 6 root, then the canonical LeetCode example shape.
+    let a: Array[i64, 9] = [6, 2, 8, 0, 4, 7, 9, 3, 5];
+    report(a, 2, 8);                          // 6  (split at root)
+    report(a, 2, 4);                          // 2  (ancestor is p itself)
+    report(a, 3, 5);                          // 4
+    report(a, 0, 5);                          // 2
+    report(a, 7, 9);                          // 8
+
+    // Left-leaning chain 5>4>3>2>1: LCA of the two deepest is the shallower.
+    let b: Array[i64, 5] = [5, 4, 3, 2, 1];
+    report(b, 1, 2);                          // 2
+    report(b, 1, 5);                          // 5
+    report(b, 3, 4);                          // 4
+}

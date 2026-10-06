@@ -1,0 +1,56 @@
+// LeetCode #318 — the literal reading, with no bitmask anywhere.
+//
+// This is the arm that does exactly what the statement says: for each pair,
+// ask whether they share a letter by marking one word's letters in a 26-slot
+// presence table and scanning the other against it. It is the SLOW arm, and
+// that is the point — it is the oracle the two bitmask arms are checked
+// against, and it shares no machinery with them. No `1 <<`, no `&`, no
+// `word_mask`. A sign error in the mask shift, an off-by-one in the alphabet
+// base, an `&` written where `|` was meant — none of those can hide here,
+// because none of them exist here.
+//
+// The presence table is rebuilt per pair rather than cached per word, which
+// makes the arm O(n^2 * L) and keeps it honest: nothing is precomputed, so
+// nothing precomputed can be stale.
+
+fn shares_letter(a: ref String, b: ref String) -> bool {
+    let ab = a.bytes();
+    let bb = b.bytes();
+    let mut present: Vec[bool] = Vec.new();
+    for k in 0..26 { present.push(false); }
+    for i in 0..ab.len() {
+        present[(ab[i] - b'a') as i64] = true;
+    }
+    for j in 0..bb.len() {
+        if present[(bb[j] - b'a') as i64] { return true; }
+    }
+    return false;
+}
+
+fn max_product(words: ref Vec[String]) -> i64 {
+    let n = words.len();
+    let mut best = 0;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if not shares_letter(words[i], words[j]) {
+                let p = (words[i].len() * words[j].len()) as i64;
+                if p > best { best = p; }
+            }
+        }
+    }
+    return best;
+}
+
+fn main() {
+    let cases: Vec[Vec[String]] = [
+        ["abcw", "baz", "foo", "bar", "xtfn", "abcdef"],
+        ["a", "ab", "abc", "d", "cd", "bcd", "abcd"],
+        ["a", "aa", "aaa", "aaaa"],
+        ["abc", "def"],
+        ["zzzzz", "abcdefghijklmnopqrstuvwxy"],
+    ];
+    for k in 0..cases.len() {
+        print("case " + (k + 1).to_string() + " -> "
+              + max_product(cases[k].clone()).to_string() + "\n");
+    }
+}

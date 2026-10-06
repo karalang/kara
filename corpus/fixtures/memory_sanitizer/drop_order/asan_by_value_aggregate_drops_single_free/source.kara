@@ -1,0 +1,28 @@
+
+struct S { k: i64, name: String }
+struct Inner { name: String }
+struct Outer { id: i64, inner: Inner }
+fn show_tup(p: (i64, String)) { if p.0 > 99999 { println(p.1); } }
+fn fwd(p: (i64, String)) { show_tup(p); }
+fn show_s(s: S) { if s.k > 99999 { println(s.name); } }
+fn show_o(o: Outer) { if o.id > 99999 { println(o.inner.name); } }
+fn mk(n: i64) -> (i64, String) { (n, f"r-{n}") }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        let t = (i, f"let-{i}");
+        show_tup(t);
+        let u = (i, f"mv-{i}");
+        let w = u;
+        if w.0 > 99999 { println(w.1); }
+        let r = mk(i);
+        if r.0 > 99999 { println(r.1); }
+        fwd((i, f"fwd-{i}"));
+        show_tup((i, f"lit-{i}"));
+        show_s(S { k: i, name: f"slit-{i}" });
+        let o = Outer { id: i, inner: Inner { name: f"nest-{i}" } };
+        show_o(o);
+        i = i + 1;
+    }
+    println("done");
+}

@@ -1,0 +1,119 @@
+// LeetCode 284 bench kernel — the eager wrapper driven through a fixed
+// operation mix, many times.
+//
+// WHAT TO MEASURE IS THE WRAPPER, NOT THE SOURCE. A drain that only calls
+// `next()` measures the underlying iterator and nothing else — the wrapper's
+// slot bookkeeping is two field accesses per element and would vanish into the
+// cost of walking a Vec. So the mix is peek-heavy: roughly two peeks per next,
+// which is the pattern the wrapper exists to support and where its extra state
+// actually costs something.
+//
+// THE OPERATION MIX IS DETERMINISTIC, not random, so every lane executes the
+// identical sequence. A randomly-driven bench would need the RNG mirrored
+// exactly across four languages just to be comparable, and any drift there shows
+// up as a performance difference that is really a workload difference.
+//
+// BUILD ONCE, PUNCH MANY TIMES: the source data is built once and each round
+// constructs a fresh wrapper over it. Construction is inside the timed region
+// because it is one of the two things being compared — the eager wrapper's
+// lookahead pull happens there.
+//
+// THE SINK IS POSITION-WEIGHTED over every value the wrapper returns, plus the
+// pull count. A wrapper that skipped an element, or peeked when it should have
+// advanced, changes it immediately; a plain sum would not, since the wrapper
+// only ever hands back the same elements in the same order.
+//
+// NO PARALLEL LANE. A wrapper is a sequential state machine — every operation
+// depends on what the previous one left in the slot. The rounds could be fanned
+// out, but they drive the identical sequence over identical data and would
+// measure the harness. Kata 282 is where the fan-out was genuinely available.
+
+struct Source {
+    data: Vec[i64],
+    mut pos: i64,
+    mut pulls: i64,
+}
+
+fn src_has_next(s: ref Source) -> bool {
+    return s.pos < s.data.len();
+}
+
+fn src_next(s: mut ref Source) -> i64 {
+    let v = s.data[s.pos];
+    s.pos = s.pos + 1;
+    s.pulls = s.pulls + 1;
+    return v;
+}
+
+struct Peeking {
+    mut src: Source,
+    mut slot: i64,
+    mut full: bool,
+}
+
+fn make_peeking(data: ref Vec[i64]) -> Peeking {
+    let mut buf: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < data.len() { buf.push(data[i]); i = i + 1; }
+    let mut s = Source { data: buf, pos: 0, pulls: 0 };
+    let mut full = false;
+    let mut slot = 0;
+    if src_has_next(s) {
+        slot = src_next(mut s);
+        full = true;
+    }
+    return Peeking { src: s, slot: slot, full: full };
+}
+
+fn peek(p: ref Peeking) -> i64 {
+    return p.slot;
+}
+
+fn has_next(p: ref Peeking) -> bool {
+    return p.full;
+}
+
+fn next(p: mut ref Peeking) -> i64 {
+    let v = p.slot;
+    if src_has_next(p.src) {
+        p.slot = src_next(p.src);
+    } else {
+        p.full = false;
+    }
+    return v;
+}
+
+fn main() {
+    let n = 200000;
+    let rounds = 320;
+
+    let mut data: Vec[i64] = Vec.new();
+    let mut seed = 20260823;
+    let mut i = 0;
+    while i < n {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        data.push(seed % 100003);
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut total_pulls = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut p = make_peeking(data);
+        let mut h = 0;
+        let mut pos = 1;
+        while has_next(p) {
+            // two peeks per next — the pattern the wrapper exists for
+            h = (h * 31 + peek(p) * pos) % 1000000007;
+            h = (h * 31 + peek(p)) % 1000000007;
+            let v = next(mut p);
+            h = (h * 31 + v) % 1000000007;
+            pos = pos + 1;
+        }
+        total_pulls = total_pulls + p.src.pulls;
+        sink = (sink + h) % 1000000007;
+        r = r + 1;
+    }
+    println(f"{sink} {total_pulls}");
+}

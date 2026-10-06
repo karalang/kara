@@ -1,0 +1,79 @@
+// LeetCode #316: Remove Duplicate Letters — suffix availability as a bitmask.
+//
+// The answer is the smallest permutation of the distinct letters that is a
+// subsequence of s. Build it one letter at a time: with `need` the set of
+// letters still to place (a 26-bit mask) and `start` the first index still
+// usable, the next letter is the SMALLEST c in `need` for which some position
+// p >= start holds c AND still has every needed letter at or after it —
+// `suf[p]`, the mask of letters occurring in s[p..], must cover `need`. Take
+// the leftmost such p: it leaves the largest suffix for the rest.
+//
+// No deletion, no stack, no recursion: one suffix-mask table and a scan per
+// output letter. O(26 * n) per placed letter, at most 26 letters — O(26^2 n)
+// worst case, linear in practice.
+
+fn remove_duplicate_letters(s: ref String) -> String {
+    let bs = s.bytes();
+    let n = bs.len();
+
+    // suf[i] = mask of letters present in bs[i..]; suf[n] = 0.
+    let mut suf: Vec[i64] = Vec.new();
+    for i in 0..(n + 1) { suf.push(0); }
+    let mut i = n - 1;
+    while i >= 0 {
+        suf[i] = suf[i + 1] | (1 << ((bs[i] - b'a') as i64));
+        i = i - 1;
+    }
+
+    let mut out = String.new();
+    let mut need = suf[0];
+    let mut start = 0;
+    while need != 0 {
+        let mut placed = false;
+        for c in 0..26 {
+            if placed { break; }
+            if (need & (1 << c)) == 0 { continue; }
+            let want = (c as u8) + b'a';
+            let mut p = start;
+            while p < n {
+                if bs[p] == want and (suf[p] & need) == need {
+                    out.push(want as char);
+                    need = need & ~(1 << c);
+                    start = p + 1;
+                    placed = true;
+                    break;
+                }
+                p = p + 1;
+            }
+        }
+    }
+    return out;
+}
+
+// ------------------------------------------------------------- demo ---
+
+fn main() {
+    let mut cases: Vec[String] = Vec.new();
+    cases.push("bcabc");
+    cases.push("cbacdcbc");
+    cases.push("a");
+    cases.push("aaaa");
+    cases.push("abcabc");
+    cases.push("cba");
+    cases.push("bbcaac");
+    cases.push("leetcode");
+    cases.push("zyxzyxzyx");
+    cases.push("ecbacba");
+    cases.push("bcac");
+
+    let mut acc = 0;
+    for c in 0..cases.len() {
+        let r = remove_duplicate_letters(cases[c]);
+        let rb = r.bytes();
+        for j in 0..rb.len() {
+            acc = (acc * 131 + (rb[j] as i64)) % 1000000007;
+        }
+        println(f"case {c}: {cases[c]} -> {r}");
+    }
+    println(f"sink: {acc}");
+}

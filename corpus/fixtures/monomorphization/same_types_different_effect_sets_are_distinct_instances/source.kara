@@ -1,0 +1,10 @@
+
+effect resource Log;
+effect resource Db;
+pub fn write_log() with writes(Log) {}
+pub fn read_db() with reads(Db) {}
+pub fn run[T, with E](x: T, cb: Fn(T) -> () with E) with E { cb(x) }
+pub fn main() with writes(Log) reads(Db) {
+    run(7i64, |y| write_log());
+    run(9i64, |z| read_db())
+}

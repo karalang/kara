@@ -1,0 +1,19 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct G[T] { v: T, n: i64 }
+fn mk(k: i64) -> R { R { id: k, s: f"a-heap-string-longer-than-sso-{k}" } }
+fn ms(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
+fn c1() -> i64 { let o = Option.Some(G { v: ms(1), n: 1 }); 1 }
+fn c2() -> i64 { let o = Option.Some(G { v: ms(2), n: 2 }); match o { Option.Some(g) => g.v.len() + g.n, Option.None => 0 } }
+fn c3() -> i64 { let o = Option.Some(G { v: ms(3), n: 3 }); match o { Option.Some(G { v, n }) => v.len() + n, Option.None => 0 } }
+fn c4() -> i64 { let o = Option.Some(G { v: ms(4), n: 4 }); match o { Option.Some(G { n, .. }) => n, Option.None => 0 } }
+fn c5() -> i64 { let o = Option.Some(G { v: ms(5), n: 5 }); match o { Option.Some(_) => 5, Option.None => 0 } }
+fn d1() -> i64 { let o = Option.Some(G { v: mk(1), n: 1 }); 1 }
+fn d2() -> i64 { let o = Option.Some(G { v: mk(2), n: 2 }); match o { Option.Some(g) => g.v.id + g.n, Option.None => 0 } }
+fn d3() -> i64 { let o = Option.Some(G { v: mk(3), n: 3 }); match o { Option.Some(G { v, n }) => v.id + n, Option.None => 0 } }
+fn d4() -> i64 { let o = Option.Some(G { v: mk(4), n: 4 }); match o { Option.Some(G { n, .. }) => n, Option.None => 0 } }
+fn main() {
+    println(c1()); println(c2()); println(c3()); println(c4()); println(c5())
+    println(d1()); println(d2()); println(d3()); println(d4())
+    println("end")
+}

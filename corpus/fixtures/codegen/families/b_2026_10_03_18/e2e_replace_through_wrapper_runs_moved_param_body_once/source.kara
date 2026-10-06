@@ -1,0 +1,22 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn rep(d: mut ref R, v: R) -> R { return replace(d, v) }
+fn repc(d: mut ref R, v: R, c: bool) -> i64 {
+    if c { let o = replace(d, v); return o.id }
+    return 0
+}
+fn put(d: mut ref R, v: R) { let o = replace(d, v); println(o.id); }
+fn main() {
+    let mut r = mk(1);
+    let old = rep(mut r, mk(2));
+    println(old.id);
+    println(r.id);
+    let k1 = repc(mut r, mk(3), true);
+    println(k1);
+    let k2 = repc(mut r, mk(4), false);
+    println(k2);
+    put(mut r, mk(5));
+    println(r.id);
+    println("end");
+}

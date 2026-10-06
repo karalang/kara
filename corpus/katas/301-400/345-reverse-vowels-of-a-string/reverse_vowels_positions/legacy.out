@@ -1,0 +1,12 @@
+"IceCreAm" -> "AceCreIm"
+"leetcode" -> "leotcede"
+"" -> ""
+"a" -> "a"
+"xyz" -> "xyz"
+"aeiou" -> "uoiea"
+"aA" -> "Aa"
+"Euston saw I was not Sue." -> "euston saw I was not SuE."
+"hello, world!" -> "hollo, werld!"
+"Programming in Kara" -> "Pragramming in Karo"
+"Kāra, señor, über alles" -> "Kāre, sañer, übor ellas"
+100000 letters, 19232 vowels: changed by one reversal: true, twice restores: true

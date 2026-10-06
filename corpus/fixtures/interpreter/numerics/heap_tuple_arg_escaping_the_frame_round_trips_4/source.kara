@@ -1,0 +1,5 @@
+
+struct Bag { xs: Vec[String] }
+fn mk(v: Vec[String]) -> (Bag, i64) { (Bag { xs: v }, 3) }
+fn use2(p: (Bag, i64)) -> i64 { let (b, n) = p; b.xs.len() + n }
+fn main() { println(f"{use2(mk(["x"])) + use2(mk(["y", "z"]))}"); }

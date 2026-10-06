@@ -1,0 +1,19 @@
+
+fn main() {
+    let kn: i64 = 7i64;
+    let sig: Vec[i64] = Vec.filled(1100i64, 3i64);
+    let kern: Vec[i64] = Vec.filled(7i64, 2i64);
+    let gain: Vec[i64] = Vec.filled(1000i64, 1i64);
+    let mut total: i64 = 0i64;
+    for x in 0i64..1000i64 {
+        let g = gain[x];
+        let mut acc: i64 = 0i64;
+        let mut j: i64 = 0i64;
+        while j < kn {
+            acc = acc + sig[x + j] * kern[j];
+            j = j + 1i64;
+        }
+        total = total + acc * g;
+    }
+    println(total);
+}

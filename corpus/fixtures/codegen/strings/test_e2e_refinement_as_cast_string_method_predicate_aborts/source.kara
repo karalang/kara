@@ -1,0 +1,6 @@
+
+type NonEmpty = String where self.len() > 0;
+fn main() {
+    let s = "" as NonEmpty;
+    println(s);
+}

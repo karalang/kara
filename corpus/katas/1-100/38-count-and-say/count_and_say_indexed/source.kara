@@ -1,0 +1,49 @@
+// LeetCode #38: Count and Say — indexed two-pointer run grouping.
+//
+// Same iterative unfolding as the ★ file, but the run-length encode is expressed with
+// explicit indices rather than a streaming state machine. Materialize the term as a
+// `Vec[char]` for O(1) random access (the idiomatic Kāra pattern when a loop needs
+// `s[i]` and `s[j]` — `s.chars().collect()`), then group runs with two pointers: a left
+// pointer `i` sits at a run's first character; a right pointer `j` walks forward while
+// `chars[j] == chars[i]`; the run length is `j - i`. Emit "<j-i><chars[i]>" and jump `i`
+// to `j`. It is the random-access reading of exactly the encoding the ★ state machine
+// streams — the run boundaries made visible as index spans.
+//
+//   - `say` collects the chars once (O(n)), then each `chars[k]` is O(1).
+//   - The inner `while j < n and chars[j] == chars[i]` measures one run; `j - i` is its
+//     length, appended as decimal text, then the run's digit `char`.
+
+fn say(s: ref String) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut out: String = "";
+    let mut i = 0;
+    while i < n {
+        let mut j = i;
+        while j < n and chars[j] == chars[i] {
+            j = j + 1;
+        }
+        out.push_str(f"{j - i}");
+        out.push(chars[i]);
+        i = j;
+    }
+    out
+}
+
+fn count_and_say(n: i64) -> String {
+    let mut s: String = "1";
+    let mut k = 1;
+    while k < n {
+        s = say(s);
+        k = k + 1;
+    }
+    s
+}
+
+fn main() {
+    let mut n = 1;
+    while n <= 12 {
+        println(f"{n}: {count_and_say(n)}");
+        n = n + 1;
+    }
+}

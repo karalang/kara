@@ -1,0 +1,15 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "destructure-map-payload-alpha-aaaaaaaaaaaaaaaa".to_string(),
+            "destructure-map-payload-bravo-bbbbbbbbbbbbbbbb".to_string(),
+            "destructure-map-payload-charlie-cccccccccccccc".to_string()
+        ];
+        let kept: Vec[String] = w.iter().enumerate().map(|(i, s)| s).collect();
+        let k1: String = kept[1i64].clone();
+        println(f"{kept.len()} {w.len()} {k1}");
+        round = round + 1i64;
+    }
+}

@@ -1,0 +1,63 @@
+// Benchmark workload — two-pointer in-place O(n) Remove Element.
+//
+// N = 2_000_000, K = 10 outer iterations.
+//
+// Input: each element is either `val` (= 0, removed) or a distinct kept
+// value `i + 1`, chosen by the classic glibc LCG (a = 1103515245,
+// c = 12345, m = 2^31). Roughly half the elements equal `val` in an
+// unpredictable pattern, so the keep/skip branch in the compaction loop is
+// the worst case for the branch predictor — a period-2 alternation would be
+// trivially predicted. All intermediates fit i64.
+//
+// Each outer iteration refills `workspace` from the pristine `original`
+// before compacting (the compaction mutates in place; without a refill,
+// later iterations would be near-no-ops). Refill is O(N) and is part of the
+// measured time — same overhead in every implementation.
+//
+// Sink: sum of k + workspace[k - 1] across K iterations (kept count plus
+// last kept value) — participates in I/O so the compaction can't be elided.
+
+fn remove_element(nums: mut Slice[i64], len: i64, val: i64) -> i64 {
+    let mut k = 0;
+    for i in 0..len {
+        if nums[i] != val {
+            nums[k] = nums[i];
+            k = k + 1;
+        }
+    }
+    k
+}
+
+fn main() {
+    let n = 2000000;
+    let val = 0;
+
+    // ~50% of elements == val (removed), the rest a distinct kept value.
+    let mut original: Vec[i64] = Vec.filled(n, 0);
+    let mut state = 1;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        if (state / 65536) % 2 == 1 {
+            original[i] = i + 1;
+        } else {
+            original[i] = 0;
+        }
+        i = i + 1;
+    }
+
+    let mut workspace: Vec[i64] = Vec.filled(n, 0);
+
+    let mut sum = 0;
+    for _ in 0..10 {
+        // Refill from the pristine copy — the compaction mutates in place.
+        let mut p = 0;
+        while p < n {
+            workspace[p] = original[p];
+            p = p + 1;
+        }
+        let k = remove_element(mut workspace, n, val);
+        sum = sum + k + workspace[k - 1];
+    }
+    println(sum);
+}

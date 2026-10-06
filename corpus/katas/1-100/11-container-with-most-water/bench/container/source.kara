@@ -1,0 +1,79 @@
+// Benchmark workload — two-pointer Container With Most Water (LeetCode #11).
+//
+// N = 8 height arrays of width W = 16, cycled by `k % N`, K = 10_000_000
+// outer iters. All eight arrays are packed back-to-back in one flat
+// Vec[i64] of size N*W = 128 and the matcher takes (heights, lo, hi)
+// bounds — same pattern as kata #4's middle_pair_off, because Kara's
+// Slice[i64] has no in-place range-slice syntax today and even if it did,
+// re-creating slice headers per iter would be wasteful when an index pair
+// captures the same window for free.
+//
+// Heights are drawn from a deterministic LCG modulo 50, so the per-array
+// max area varies (no single-shape dominance for the branch predictor).
+// At W=16 the two-pointer crawls between 1 and 15 steps per call; total
+// per-iter work is on the order of ~16 simple ops, so K=10M lands the seq
+// run in the 100-200 ms range — same target as kata #10's regex bench.
+//
+// The accumulator is i64; per-iter result is the i64 max area (already in
+// the accumulator's type), so the reduction shape `sum = sum + max_area`
+// matches the slice-1 auto-par-on-reduction allow-list (associative +
+// commutative +) and karac emits a karac_par_reduce dispatch in the
+// default build. The sink doubles as the silent-drift gate — three impls
+// printing different numbers means one of them is wrong.
+
+fn max_area_off(heights: Slice[i64], lo: i64, hi: i64) -> i64 {
+    let mut l: i64 = lo;
+    let mut r: i64 = hi;
+    let mut best: i64 = 0;
+    while l < r {
+        let h_l: i64 = heights[l];
+        let h_r: i64 = heights[r];
+        let h: i64 = if h_l < h_r { h_l } else { h_r };
+        let area: i64 = h * (r - l);
+        if area > best {
+            best = area;
+        }
+        if h_l < h_r {
+            l = l + 1;
+        } else {
+            r = r - 1;
+        }
+    }
+    best
+}
+
+fn main() {
+    let n: i64 = 8;
+    let w: i64 = 16;
+    let total: i64 = n * w;
+    let k_iters: i64 = 10000000;
+
+    // Deterministic LCG fill, same constants as kata #9's bench so the
+    // input distribution is reproducible. Modulo 50 caps heights at 49,
+    // small enough that the per-pair area never overflows i64 even at
+    // worst-case w*49 = 784 (well under i32::MAX, let alone i64).
+    let mut heights: Vec[i64] = Vec.filled(total, 0);
+    let mut i: i64 = 0;
+    while i < total {
+        let raw: i64 = i * 2654435769 + 305419896;
+        let v: i64 = (raw % 50 + 50) % 50;
+        heights[i] = v;
+        i = i + 1;
+    }
+
+    // Reduction shape: `sum = sum + expr` per iter so the auto-par
+    // analyzer recognizes it (slice-1 allow-list: associative +
+    // commutative +). The expr here is the max_area return value
+    // directly — no widening hop needed since the function already
+    // returns i64.
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let idx: i64 = k % n;
+        let lo: i64 = idx * w;
+        let hi: i64 = lo + w - 1;
+        sum = sum + max_area_off(heights.as_slice(), lo, hi);
+        k = k + 1;
+    }
+    println(sum);
+}

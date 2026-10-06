@@ -1,0 +1,10 @@
+
+fn make_vv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a");
+    return v;
+}
+
+fn main() {
+    make_vv();
+}

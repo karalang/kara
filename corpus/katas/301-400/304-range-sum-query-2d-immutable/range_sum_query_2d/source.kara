@@ -1,0 +1,134 @@
+// LeetCode 304 — Range Sum Query 2D, Immutable
+//
+// Build once over a matrix, then answer any rectangle sum in O(1).
+//
+// THE ARM: a 2D prefix table read by INCLUSION-EXCLUSION. pre[r][c] holds the
+// sum of every cell strictly above and strictly left of (r, c) — the rectangle
+// anchored at the origin. Four of those origin-rectangles combine into any
+// rectangle at all:
+//
+//     sum(r1..r2, c1..c2) = pre[r2+1][c2+1]   the big block, origin to corner
+//                         - pre[r1  ][c2+1]   minus the strip above it
+//                         - pre[r2+1][c1  ]   minus the strip left of it
+//                         + pre[r1  ][c1  ]   plus the corner, subtracted twice
+//
+// The final `+` is the whole idea: the top-left corner block lies inside BOTH
+// strips, so subtracting each strip removes it twice and it has to be paid
+// back once. That one sign is the characteristic bug of this arm, and it is
+// why the differential carries an arm that cannot commit it.
+//
+// The build has the same shape one dimension down: each cell folds in the two
+// neighbouring origin-rectangles, removes their shared overlap, and adds its
+// own value.
+//
+// The table is (h+1) x (w+1) with a zero row and a zero column, so a query
+// touching row 0 or column 0 reads a real zero rather than branching. That is
+// the same border trick the 1D kata (#303) uses, and it costs one row and one
+// column to delete every edge case.
+
+struct NumMatrix { pre: Vec[Vec[i64]] }
+
+fn new_num_matrix(m: ref Vec[Vec[i64]]) -> NumMatrix {
+    let h = m.len();
+    let mut w = 0;
+    if h > 0 { w = m[0].len(); }
+
+    // (h+1) x (w+1), zero-filled: the border row and column are the base case.
+    let mut pre: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r <= h {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c <= w {
+            row.push(0);
+            c = c + 1;
+        }
+        pre.push(row);
+        r = r + 1;
+    }
+
+    r = 0;
+    while r < h {
+        let mut c = 0;
+        while c < w {
+            // above + left - overlap + self
+            pre[r + 1][c + 1] = pre[r][c + 1] + pre[r + 1][c] - pre[r][c] + m[r][c];
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+
+    return NumMatrix { pre: pre };
+}
+
+impl NumMatrix {
+    fn sum_region(ref self, r1: i64, c1: i64, r2: i64, c2: i64) -> i64 {
+        return self.pre[r2 + 1][c2 + 1]
+             - self.pre[r1][c2 + 1]
+             - self.pre[r2 + 1][c1]
+             + self.pre[r1][c1];
+    }
+}
+
+fn matrix_of(flat: Slice[i64], w: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < flat.len() {
+        let mut row: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < w {
+            row.push(flat[i + c]);
+            c = c + 1;
+        }
+        m.push(row);
+        i = i + w;
+    }
+    return m;
+}
+
+// `qs` is a flat list of (r1, c1, r2, c2) quadruples.
+fn report(flat: Slice[i64], w: i64, qs: Slice[i64]) {
+    let m = matrix_of(flat, w);
+    let h = m.len();
+    let nm = new_num_matrix(m);
+    let mut line = String.new();
+    line.push_str(f"{h}x{w} ->");
+    let mut q = 0;
+    while q + 3 < qs.len() {
+        let r1 = qs[q];
+        let c1 = qs[q + 1];
+        let r2 = qs[q + 2];
+        let c2 = qs[q + 3];
+        line.push_str(f" [{r1},{c1},{r2},{c2}]={nm.sum_region(r1, c1, r2, c2)}");
+        q = q + 4;
+    }
+    println(line);
+}
+
+fn main() {
+    // The matrix from the LeetCode statement.
+    report([3, 0, 1, 4, 2,
+            5, 6, 3, 2, 1,
+            1, 2, 0, 1, 5,
+            4, 1, 0, 1, 7,
+            1, 0, 3, 0, 5], 5,
+           [2, 1, 4, 3,  1, 1, 2, 2,  1, 2, 2, 4,  0, 0, 4, 4,  0, 0, 0, 0]);
+    // A single cell.
+    report([7], 1, [0, 0, 0, 0]);
+    // One row, and the same values as one column.
+    report([1, 2, 3, 4, 5], 5, [0, 0, 0, 4,  0, 1, 0, 3,  0, 2, 0, 2]);
+    report([1, 2, 3, 4, 5], 1, [0, 0, 4, 0,  1, 0, 3, 0,  2, 0, 2, 0]);
+    // All negative — sign errors are invisible on non-negative data.
+    report([0 - 1, 0 - 2, 0 - 3,
+            0 - 4, 0 - 5, 0 - 6,
+            0 - 7, 0 - 8, 0 - 9], 3,
+           [0, 0, 2, 2,  1, 1, 2, 2,  0, 0, 0, 0,  2, 2, 2, 2]);
+    // Every answer zero.
+    report([0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0], 4, [0, 0, 2, 3,  1, 1, 1, 2]);
+    // Large magnitudes that cancel.
+    report([100000, 0 - 100000, 100000,
+            0 - 100000, 100000, 0 - 100000], 3,
+           [0, 0, 1, 2,  0, 0, 0, 2,  1, 0, 1, 2]);
+}

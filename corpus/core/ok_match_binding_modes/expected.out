@@ -1,0 +1,9 @@
+show1
+d1
+after move-mode match
+show2
+after ref-mode match
+eat3
+d3
+end
+d2

@@ -1,0 +1,8 @@
+
+fn main() {
+    let n = -42i64;
+    let s = n.to_string();
+    println(s);
+    println(n.to_string());
+    println(n.to_string() + "!");
+}

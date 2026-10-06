@@ -1,0 +1,18 @@
+
+enum Msg { Text(String), Empty }
+impl Msg {
+    fn size(self) -> i64 {
+        match self {
+            Msg.Text(s) => return s.len(),
+            Msg.Empty => return 0_i64,
+        };
+    }
+}
+fn make() -> Msg { Msg.Text("a message payload string padded beyond thirty-six bytes") }
+fn main() {
+    let mut p = 0;
+    while p < 3 {
+        println(make().size());
+        p = p + 1;
+    };
+}

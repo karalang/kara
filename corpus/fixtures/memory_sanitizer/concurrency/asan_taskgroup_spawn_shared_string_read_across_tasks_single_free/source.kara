@@ -1,0 +1,17 @@
+
+fn match_addr(addr: ref String) -> i64 {
+    if addr == "relay-upstream-host-127.0.0.1-port-9000-ok" { 1 } else { 0 }
+}
+fn main() with panics {
+    let addr: String = "relay-upstream-host-127.0.0.1-port-9000-ok";
+    let mut pool: TaskGroup = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[i64]] = Vec.new();
+    let mut k = 0;
+    while k < 3 {
+        handles.push(pool.spawn(|| match_addr(addr)));
+        k = k + 1;
+    }
+    let mut hits = 0;
+    for h in handles { hits = hits + h.join(); }
+    if hits == 3 { println("hits 3"); } else { println("WRONG"); }
+}

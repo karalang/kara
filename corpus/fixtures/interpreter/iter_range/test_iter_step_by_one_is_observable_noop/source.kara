@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = [1, 2, 3];
+    for x in v.iter().step_by(1) {
+        println(x);
+    }
+}

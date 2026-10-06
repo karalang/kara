@@ -1,0 +1,104 @@
+// LeetCode 267 — Palindrome Permutation II, the definition.
+//
+// Enumerate every distinct arrangement of the WHOLE string and keep the ones
+// that read the same both ways. That is O(n!) against the ★ file's O((n/2)!),
+// and it is the reference precisely because it asserts nothing: no halving
+// argument, no claim about which characters may sit in the middle, no
+// deduplication reasoning.
+//
+// Next-permutation is what makes it a fair reference rather than a slow one
+// with its own bug. Walked from the SORTED string it visits each distinct
+// arrangement of a multiset exactly once, so duplicates never arise and no
+// `seen` set is needed — a recursive permutation generator over indices would
+// emit "abba" twice for "aabb" (once per ordering of the two 'a's) and would
+// need dedup bolted on, which is exactly the kind of machinery a reference
+// should not have.
+
+fn is_pal(a: ref Vec[i64]) -> bool {
+    let n = a.len();
+    let mut i = 0;
+    let mut j = n - 1;
+    while i < j {
+        if a[i] != a[j] { return false; }
+        i = i + 1;
+        j = j - 1;
+    }
+    return true;
+}
+
+fn next_perm(a: mut ref Vec[i64]) -> bool {
+    let n = a.len();
+    if n < 2 { return false; }
+    let mut i = n - 2;
+    while i >= 0 and a[i] >= a[i + 1] {
+        i = i - 1;
+    }
+    if i < 0 { return false; }
+    let mut j = n - 1;
+    while a[j] <= a[i] {
+        j = j - 1;
+    }
+    let t = a[i]; a[i] = a[j]; a[j] = t;
+    let mut lo = i + 1;
+    let mut hi = n - 1;
+    while lo < hi {
+        let u = a[lo]; a[lo] = a[hi]; a[hi] = u;
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    return true;
+}
+
+fn render(a: ref Vec[i64]) -> String {
+    let mut s = "";
+    let mut i = 0;
+    while i < a.len() {
+        s = s + f"{a[i] as u8 as char}";
+        i = i + 1;
+    }
+    return s;
+}
+
+fn generate(s: ref String) -> Vec[String] {
+    let mut a: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        a.push(b as i64);
+    }
+    a.sort();
+
+    let mut out: Vec[String] = Vec.new();
+    if a.len() == 0 {
+        out.push("");
+        return out;
+    }
+    if is_pal(a) { out.push(render(a)); }
+    while next_perm(mut a) {
+        if is_pal(a) { out.push(render(a)); }
+    }
+    return out;
+}
+
+fn report(s: ref String) {
+    let res = generate(s);
+    let mut line = "";
+    let mut i = 0;
+    while i < res.len() {
+        if i > 0 { line = line + ","; }
+        line = line + res[i];
+        i = i + 1;
+    }
+    println(f"\"{s}\" ({res.len()}) [{line}]");
+}
+
+fn main() {
+    report("aabb");
+    report("abc");
+    report("aabbc");
+    report("");
+    report("a");
+    report("aa");
+    report("aaa");
+    report("aabbcc");
+    report("aaaabb");
+    report("carerac");
+}

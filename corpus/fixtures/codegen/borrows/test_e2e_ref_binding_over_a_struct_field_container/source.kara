@@ -1,0 +1,12 @@
+
+struct Item { id: i64, tag: String }
+struct Bag { xs: Vec[Item] }
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.xs.push(Item { id: 7, tag: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string() });
+    b.xs.push(Item { id: 9, tag: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string() });
+    let r = ref b.xs[0];
+    println(f"read {r.id}");
+    b.xs.swap(0, 1);
+    println(f"after swap {r.id}");
+}

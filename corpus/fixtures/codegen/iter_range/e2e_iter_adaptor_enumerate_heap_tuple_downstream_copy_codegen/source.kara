@@ -1,0 +1,13 @@
+
+fn main() {
+    let v: Vec[String] = Vec["alpha".to_string(), "bravo".to_string()];
+    // non-terminal identity map, then filter with a DIFFERENT param name
+    let a: Vec[(i64, String)] = v.iter().enumerate().map(|p| p).filter(|q| q.0 >= 0i64).collect();
+    println(f"{a.len()} {a[0i64].0} {a[1i64].0}");
+    // filter then inspect (differing param), terminal collect
+    let b: Vec[(i64, String)] = v.iter().enumerate().filter(|p| p.0 >= 0i64).collect();
+    println(f"{b.len()} {b[1i64].0}");
+    // re-tuple map body
+    let c: Vec[(i64, String)] = v.iter().enumerate().map(|p| (p.0, p.1)).filter(|q| q.0 < 9i64).collect();
+    println(f"{c.len()} {c[0i64].0} {c[1i64].0}");
+}

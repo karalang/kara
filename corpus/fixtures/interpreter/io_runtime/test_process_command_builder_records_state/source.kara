@@ -1,0 +1,6 @@
+fn main() {
+         let cmd = Command.new("ls").arg("-la").arg("/tmp").env("PATH", "/usr/bin");
+         println(cmd.program);
+         println(cmd.cmd_args.len());
+         println(cmd.cmd_env.len());
+     }

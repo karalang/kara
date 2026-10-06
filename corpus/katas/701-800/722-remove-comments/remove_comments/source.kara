@@ -1,0 +1,167 @@
+// LeetCode #722: Remove Comments — a two-state character DFA over a
+// `Vec[String]` of source lines, accumulating surviving text into a
+// `String` buffer with `push(char)`. O(total chars) time.
+//
+// This is the closest corpus analog to the self-hosted lexer's comment
+// slice (lexer slice B): the same maximal-munch two-char lookahead
+// (`/`+`/`, `/`+`*`, `*`+`/`), the same in-comment mode flag, and — because
+// a block comment joins code before `/*` with code after a later `*/` — the
+// same cross-line state carry that exercises L3 (newline / line advance).
+//
+//   not in block:  "//"  -> rest of line is a comment, stop scanning it
+//                  "/*"  -> enter block-comment mode, skip both chars
+//                  else  -> push the char to the output buffer
+//   in block:      "*/"  -> leave block-comment mode, skip both chars
+//                  else  -> ignore the char (consumed by the comment)
+//
+// The buffer flushes to the result only when a line ends OUTSIDE a block
+// comment; while inside one the implicit newline is consumed, so code on
+// either side of a multi-line block fuses into a single output line.
+//
+// LeetCode guarantees no quote characters, so there is no string-literal
+// state here (the lexer's real slice B is additionally string-aware; this
+// kata covers the comment DFA + cross-line carry, not quote handling).
+// Input is ASCII C++ source, so a `Vec[char]` snapshot per line gives the
+// cheap two-char lookahead the scan needs without a UTF-8 round-trip.
+
+fn remove_comments(source: ref Vec[String]) -> Vec[String] {
+    let slash: char = '/';
+    let star:  char = '*';
+
+    let mut result: Vec[String] = Vec.new();
+    let mut buffer: String = "";
+    let mut in_block = false;
+
+    let nlines = source.len();
+    let mut li = 0;
+    while li < nlines {
+        // Snapshot the line so `cs[i + 1]` lookahead is O(1).
+        let mut cs: Vec[char] = Vec.new();
+        for c in source[li].chars() {
+            cs.push(c);
+        }
+        let n = cs.len();
+
+        let mut i = 0;
+        while i < n {
+            if not in_block {
+                if i + 1 < n and cs[i] == slash and cs[i + 1] == slash {
+                    // Line comment — the rest of this line is dead.
+                    break;
+                } else if i + 1 < n and cs[i] == slash and cs[i + 1] == star {
+                    in_block = true;
+                    i = i + 2;
+                } else {
+                    buffer.push(cs[i]);
+                    i = i + 1;
+                }
+            } else {
+                if i + 1 < n and cs[i] == star and cs[i + 1] == slash {
+                    in_block = false;
+                    i = i + 2;
+                } else {
+                    i = i + 1;
+                }
+            }
+        }
+
+        // End of line. Only a line that finished outside a block comment
+        // becomes an output line; an empty buffer (line was all comment /
+        // whitespace-free) is dropped.
+        if not in_block and not buffer.is_empty() {
+            result.push(buffer);
+            buffer = "";
+        }
+        li = li + 1;
+    }
+    result
+}
+
+// Render a result as `["a", "b"]` (or `[]`) so the line diffs 1:1 against
+// the Python oracle's output.
+fn report(name: ref String, source: ref Vec[String]) {
+    let out = remove_comments(source);
+    let mut line: String = "";
+    line.push_str(name);
+    line.push_str(" -> [");
+    let mut k = 0;
+    let m = out.len();
+    while k < m {
+        if k > 0 {
+            line.push_str(", ");
+        }
+        line.push_str("\"");
+        line.push_str(out[k]);
+        line.push_str("\"");
+        k = k + 1;
+    }
+    line.push_str("]");
+    println(line);
+}
+
+fn main() {
+    // LeetCode canonical example 1.
+    let ex1: Vec[String] = [
+        "/*Test program */", "int main()", "{ ",
+        "  // variable declaration ", "int a, b, c;",
+        "/* This is a test", "   multiline  ", "   comment for ",
+        "   testing */", "a = b + c;", "}",
+    ];
+    report("ex1", ex1);             // ["int main()", "{ ", "  ", "int a, b, c;", "a = b + c;", "}"]
+
+    // LeetCode canonical example 2 — block joins across three lines.
+    let ex2: Vec[String] = ["a/*comment", "line", "more_comment*/b"];
+    report("ex2", ex2);             // ["ab"]
+
+    // Block opens and closes mid-line, joining the surrounding code.
+    let inline: Vec[String] = ["a/*c*/b"];
+    report("inline", inline);       // ["ab"]
+
+    // Empty block comment.
+    let empty_block: Vec[String] = ["/**/"];
+    report("empty-block", empty_block); // []
+
+    // Whole line is a line comment -> dropped.
+    let line_only: Vec[String] = ["// nothing here"];
+    report("line-only", line_only); // []
+
+    // Line comment after code.
+    let trailing_line: Vec[String] = ["int x = 1; // set x"];
+    report("trailing-line", trailing_line); // ["int x = 1; "]
+
+    // `*/` outside a block is literal text, not a marker.
+    let stray_close: Vec[String] = ["a*/b"];
+    report("stray-close", stray_close); // ["a*/b"]
+
+    // `//` inside a block comment is ignored.
+    let slashes_in_block: Vec[String] = ["/* // not a line comment */code"];
+    report("slashes-in-block", slashes_in_block); // ["code"]
+
+    // `/*` inside a line comment is ignored.
+    let open_in_line: Vec[String] = ["x // /* still a line comment"];
+    report("open-in-line", open_in_line); // ["x "]
+
+    // Two block comments on one line.
+    let two_blocks: Vec[String] = ["a/*1*/b/*2*/c"];
+    report("two-blocks", two_blocks); // ["abc"]
+
+    // Block spanning a line that is otherwise empty.
+    let span_empty: Vec[String] = ["start/*", "", "*/end"];
+    report("span-empty", span_empty); // ["startend"]
+
+    // Star and slash that are NOT markers.
+    let lone_symbols: Vec[String] = ["a / b * c"];
+    report("lone-symbols", lone_symbols); // ["a / b * c"]
+
+    // A block that consumes a trailing `//` then real code resumes.
+    let block_then_code: Vec[String] = ["pre/*x", "y*/post//tail"];
+    report("block-then-code", block_then_code); // ["prepost"]
+
+    // Adjacent markers: open immediately after a close.
+    let adjacent: Vec[String] = ["a/*x*//*y*/b"];
+    report("adjacent", adjacent);   // ["ab"]
+
+    // Nothing but blank / whitespace lines.
+    let blanks: Vec[String] = ["", "   ", ""];
+    report("blanks", blanks);       // ["   "]
+}

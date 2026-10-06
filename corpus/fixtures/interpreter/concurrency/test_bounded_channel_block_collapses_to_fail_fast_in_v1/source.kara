@@ -1,0 +1,7 @@
+fn main() {
+         let ch = BoundedChannel.new(1, OnFull.Block);
+         match ch.send(1) { Ok(_) => println("ok"), Err(_) => println("full") }
+         match ch.send(2) { Ok(_) => println("ok"), Err(_) => println("full") }
+         match ch.recv() { Some(v) => println(v), None => println("none") }
+         match ch.send(3) { Ok(_) => println("ok"), Err(_) => println("full") }
+     }

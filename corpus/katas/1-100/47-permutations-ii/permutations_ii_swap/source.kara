@@ -1,0 +1,118 @@
+// LeetCode #47: Permutations II — in-place swap DFS with a per-level seen-Set (no sort).
+//
+// The fourth canonical factoring, and the one the other three route around: instead of carrying a
+// separate `path`, permute the array IN PLACE. At depth `start`, fix each distinct still-available
+// element into position `start` by SWAPPING it there, recurse on `start+1`, then swap back — the
+// classic Heap's-algorithm-shaped permutation walk. Two Kāra features make this the natural way to
+// write it, both of which earlier #47 solvers avoided:
+//
+//   - **Parallel assignment** for the swap: `nums[start], nums[i] = nums[i], nums[start];` — both
+//     right-hand reads happen before either write, so it is a true two-slot swap with no manual
+//     temporary. (Used again below to swap whole rows while canonicalizing the output.)
+//   - **`Set[i64]`** for duplicate suppression: this DFS does not sort, so the adjacent-skip of the
+//     ★ file does not apply. Instead each level keeps a `seen` Set of the values already fixed into
+//     position `start`; an element is skipped when its value is already in `seen`. That is the
+//     textbook "per-level seen set" dedup — different mechanism, same effect as sorting + adjacent
+//     skip, and it needs a real hash set rather than a linear rescan.
+//
+// Because the array is never sorted, the in-place walk emits permutations in swap order, NOT the
+// lexicographic-by-value order of the other three solvers. To stay line-for-line diffable against
+// the oracle and its siblings, `permute_unique` canonicalizes: it collects every permutation, then
+// insertion-sorts the rows lexicographically (the row swap itself a parallel assignment on heap
+// `Vec[i64]` elements). The resulting listing is identical to [`permutations_ii.kara`](permutations_ii.kara),
+// [`_counted`](permutations_ii_counted.kara), and [`_snapshot`](permutations_ii_snapshot.kara).
+//
+// LeetCode bounds: 1 ≤ n ≤ 8, -10 ≤ nums[i] ≤ 10. i64 throughout for corpus uniformity.
+
+fn dfs(nums: mut ref Vec[i64], start: i64, out: mut ref Vec[Vec[i64]]) {
+    let n = nums.len();
+    if start == n {
+        out.push(nums.clone());
+        return;
+    }
+    // Per-level seen set: each distinct value may be fixed into `start` at most once.
+    let mut seen: Set[i64] = Set.new();
+    let mut i = start;
+    while i < n {
+        if not seen.contains(nums[i]) {
+            seen.insert(nums[i]);
+            // Swap `i` into position `start` (parallel assignment — true swap, no temp).
+            nums[start], nums[i] = nums[i], nums[start];
+            dfs(nums, start + 1, out);
+            // Swap back — restore the array for the next sibling.
+            nums[start], nums[i] = nums[i], nums[start];
+        }
+        i = i + 1;
+    }
+}
+
+fn lex_less(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    let n = a.len();
+    let mut i = 0;
+    while i < n {
+        if a[i] != b[i] {
+            return a[i] < b[i];
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn permute_unique(nums: Slice[i64]) -> Vec[Vec[i64]] {
+    let mut xs: Vec[i64] = Vec.from_slice(nums);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    dfs(mut xs, 0, mut out);
+
+    // Canonicalize to lexicographic-by-value order (swap order is arbitrary).
+    // Insertion sort; the row swap is itself a parallel assignment on heap rows.
+    let m = out.len();
+    let mut a = 1;
+    while a < m {
+        let mut b = a;
+        while b > 0 and lex_less(out[b], out[b - 1]) {
+            out.swap(b, b - 1);
+            b = b - 1;
+        }
+        a = a + 1;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(perm: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = perm.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{perm[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn report(nums: Slice[i64]) {
+    let perms = permute_unique(nums);
+    let count = perms.len();
+    let input: Vec[i64] = Vec.from_slice(nums);
+    println(f"{show(input)} -> {count}");
+    let mut i = 0;
+    while i < count {
+        println(show(perms[i]));
+        i = i + 1;
+    }
+    println("---");
+}
+
+fn main() {
+    report([1, 1, 2]);
+    report([1, 2, 3]);
+    report([2, 2, 1, 1]);
+    report([3, 3, 0, 3]);
+    report([1]);
+    report([5, 5, 5]);
+}

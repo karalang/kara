@@ -1,0 +1,6 @@
+
+unsafe extern "C" {
+    fn c_takes_ptr(p: *const u8, n: i64) -> i64;
+}
+
+fn main() {}

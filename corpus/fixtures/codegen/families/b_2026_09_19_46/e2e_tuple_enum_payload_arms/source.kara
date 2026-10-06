@@ -1,0 +1,12 @@
+struct S1 { v: i64, s: String }
+impl Drop for S1 { fn drop(mut ref self) { println(f"  dS{self.v}") } }
+enum Ht { P((S1, S1)), Q }
+enum Hr { P(S1), Q }
+fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
+fn main() {
+    println("tupkeep"); { let h = Ht.P((s(5), s(6))); match h { Ht.P(t) => { println(f"  n{t.0.v}") } Ht.Q => {} } }
+    println("tupunused"); { let h = Ht.P((s(1), s(2))); match h { Ht.P(t) => { println("  in") } Ht.Q => {} } }
+    println("rkeep"); { let h = Hr.P(s(3)); match h { Hr.P(t) => { println(f"  n{t.v}") } Hr.Q => {} } }
+    println("runused"); { let h = Hr.P(s(4)); match h { Hr.P(t) => { println("  in") } Hr.Q => {} } }
+    println("end")
+}

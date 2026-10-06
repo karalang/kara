@@ -1,0 +1,128 @@
+// LeetCode #329: Longest Increasing Path in a Matrix — DFS with a memo.
+//
+// Given an m x n integer matrix, return the length of the longest strictly
+// increasing path. From each cell you may move up, down, left or right, never
+// diagonally and never outside the matrix.
+//
+//   [[9, 9, 4], [6, 6, 8], [2, 1, 1]]  ->  4     (1, 2, 6, 9)
+//   [[3, 4, 5], [3, 2, 6], [2, 2, 1]]  ->  4     (3, 4, 5, 6)
+//   [[1]]                              ->  1
+//
+// The longest path starting at a cell is one more than the longest path
+// starting at the best of its larger neighbours, and "strictly larger" can
+// never cycle, so a depth-first search that remembers each cell's answer
+// visits every cell once.
+//
+// O(mn) time, O(mn) space for the memo and the recursion.
+
+fn longest_from(matrix: ref Vec[Vec[i64]], memo: mut ref Vec[Vec[i64]], r: i64, c: i64) -> i64 {
+    if memo[r][c] > 0 {
+        return memo[r][c];
+    }
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let here = matrix[r][c];
+    let mut best = 1;
+    for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let nr = r + dr;
+        let nc = c + dc;
+        if nr >= 0 and nr < rows and nc >= 0 and nc < cols and matrix[nr][nc] > here {
+            let len = 1 + longest_from(matrix, memo, nr, nc);
+            if len > best {
+                best = len;
+            }
+        }
+    }
+    memo[r][c] = best;
+    return best;
+}
+
+fn longest_increasing_path(matrix: ref Vec[Vec[i64]]) -> i64 {
+    if matrix.len() == 0 or matrix[0].len() == 0 {
+        return 0;
+    }
+    let mut memo: Vec[Vec[i64]] = Vec.new();
+    for row in matrix {
+        let mut zeros: Vec[i64] = Vec.new();
+        for _ in 0..row.len() {
+            zeros.push(0);
+        }
+        memo.push(zeros);
+    }
+    let mut best = 0;
+    for r in 0..matrix.len() {
+        for c in 0..matrix[0].len() {
+            let len = longest_from(matrix, mut memo, r, c);
+            if len > best {
+                best = len;
+            }
+        }
+    }
+    return best;
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn random_matrix(rows: i64, cols: i64, range: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..cols {
+            row.push(next(seed) % range);
+        }
+        m.push(row);
+    }
+    return m;
+}
+
+fn report(matrix: Vec[Vec[i64]]) {
+    println(f"{matrix} -> {longest_increasing_path(matrix)}");
+}
+
+fn main() {
+    // The examples from the problem statement.
+    report([[9, 9, 4], [6, 6, 8], [2, 1, 1]]);
+    report([[3, 4, 5], [3, 2, 6], [2, 2, 1]]);
+    report([[1]]);
+
+    // Edge cases: a row, a column, all equal, a strict staircase, extremes.
+    report([[1, 2, 3, 4, 5]]);
+    report([[5], [4], [3], [2], [1]]);
+    report([[7, 7], [7, 7]]);
+    report([[1, 2, 3], [6, 5, 4], [7, 8, 9]]);
+    report([[-9223372036854775808, 9223372036854775807]]);
+
+    // A snake through a 100 x 100 grid: the path visits every cell, so the
+    // answer is 10000, and the search recurses that deep.
+    let n = 100;
+    let mut snake: Vec[Vec[i64]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            if r % 2 == 0 {
+                row.push(r * n + c);
+            } else {
+                row.push(r * n + (n - 1 - c));
+            }
+        }
+        snake.push(row);
+    }
+    println(f"snake {n}x{n} -> {longest_increasing_path(snake)}");
+
+    // Random matrices, small ones printed whole, larger ones by answer only.
+    let mut seed = 329;
+    for _ in 0..3 {
+        let rows = next(mut seed) % 4 + 1;
+        let cols = next(mut seed) % 4 + 1;
+        report(random_matrix(rows, cols, 10, mut seed));
+    }
+    for (rows, cols, range) in [(50, 50, 10), (50, 50, 1000), (200, 300, 100000), (300, 200, 5)] {
+        let m = random_matrix(rows, cols, range, mut seed);
+        println(f"{rows}x{cols} in [0, {range}) -> {longest_increasing_path(m)}");
+    }
+}

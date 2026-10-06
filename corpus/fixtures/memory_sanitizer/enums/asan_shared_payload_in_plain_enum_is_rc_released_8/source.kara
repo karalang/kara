@@ -1,0 +1,4 @@
+shared struct Sh { n: i64 }
+struct Wrap { e: Sh }
+enum Et { A(Wrap), B }
+fn main() { let z = Et.A(Wrap { e: Sh { n: 3 } }); println("ok"); }

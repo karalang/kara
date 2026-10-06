@@ -1,0 +1,105 @@
+// Benchmark workload for LeetCode #336 — the reversed-word map arm
+// (palindrome_pairs.kara), timed as written.
+//
+// Build once, then punch (BENCHMARKS.md). WORDS distinct words over {a, b, c},
+// 1 to 10 letters long, are built once. Each of PUNCHES punches appends a 'd'
+// to one random word, which no other word contains, so the list stays
+// distinct and that word loses most of its pairs; the whole list is solved,
+// and the 'd' is removed again.
+//
+// Each solve's pair count and pairs are folded into a rolling hash, which is
+// the sink.
+
+const WORDS: i64 = 20000;
+const PUNCHES: i64 = 50;
+const MODULUS: i64 = 1073741789;
+
+fn is_palindrome(b: Slice[u8], lo: i64, hi: i64) -> bool {
+    let mut i = lo;
+    let mut j = hi - 1;
+    while i < j {
+        if b[i] != b[j] {
+            return false;
+        }
+        i += 1;
+        j -= 1;
+    }
+    return true;
+}
+
+fn reversed(s: ref String) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let mut r = String.new();
+    let mut i = chars.len();
+    while i > 0 {
+        i -= 1;
+        r.push(chars[i]);
+    }
+    return r;
+}
+
+fn palindrome_pairs(words: ref Vec[String]) -> Vec[(i64, i64)] {
+    let mut index: Map[String, i64] = Map.new();
+    for i in 0..words.len() {
+        index.insert(reversed(words[i]), i);
+    }
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..words.len() {
+        let w = ref words[i];
+        let b = w.bytes();
+        let len = w.len();
+        for k in 0..len + 1 {
+            if is_palindrome(b, k, len) {
+                match index.get(w[0..k]) {
+                    Some(j) if j != i => pairs.push((i, j)),
+                    _ => {}
+                }
+            }
+            if k > 0 and is_palindrome(b, 0, k) {
+                match index.get(w[k..len]) {
+                    Some(j) if j != i => pairs.push((j, i)),
+                    _ => {}
+                }
+            }
+        }
+    }
+    pairs.sort();
+    return pairs;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn main() {
+    let alphabet = "abc".bytes();
+    let mut seed = 336;
+    let mut seen: Set[String] = Set.new();
+    let mut words: Vec[String] = Vec.new();
+    while words.len() < WORDS {
+        let len = 1 + next(mut seed) % 10;
+        let mut w = String.new();
+        for _ in 0..len {
+            w.push(alphabet[next(mut seed) % 3] as char);
+        }
+        if not seen.contains(w) {
+            seen.insert(w.clone());
+            words.push(w);
+        }
+    }
+    let mut sink = 0;
+    for _ in 0..PUNCHES {
+        let at = next(mut seed) % WORDS;
+        let old = words[at].clone();
+        words[at].push('d');
+        let pairs = palindrome_pairs(words);
+        words[at] = old;
+        sink = (sink * 1000003 + pairs.len()) % MODULUS;
+        for p in pairs.iter() {
+            let (i, j) = p;
+            sink = (sink * 31 + i * 7 + j) % MODULUS;
+        }
+    }
+    println(f"{sink}");
+}

@@ -1,0 +1,6 @@
+
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(42_i64);
+    println(s);
+}

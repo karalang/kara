@@ -1,0 +1,13 @@
+source = "tests/interpreter/iter_range.rs::test_iter_scan_short_circuit_does_not_re_fire"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["closure"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

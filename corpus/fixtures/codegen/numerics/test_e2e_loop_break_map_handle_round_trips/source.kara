@@ -1,0 +1,12 @@
+
+fn pick() -> Map[String, i64] {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        let mut m: Map[String, i64] = Map.new();
+        m.insert(f"k{i}", i * 7);
+        if i == 3 { break m }
+    }
+}
+
+fn main() { let m = pick(); println(m.get(f"k3").unwrap()); }

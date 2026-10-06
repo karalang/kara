@@ -1,0 +1,53 @@
+struct Wide { a: String, b: String, c: i64, d: i64 }
+fn idopt(o: Option[String]) -> Option[String] { o }
+fn idres(r: Result[String, i64]) -> Result[String, i64] { r }
+fn idbox(o: Option[Wide]) -> Option[Wide] { o }
+fn peek(o: Option[String]) -> i64 {
+    match o { Option.Some(s) => s.len(), Option.None => 0 }
+}
+fn peekr(r: Result[String, i64]) -> i64 {
+    match r { Result.Ok(s) => s.len(), Result.Err(e) => e }
+}
+fn peekb(o: Option[Wide]) -> i64 {
+    match o { Option.Some(w) => w.a.len() + w.c, Option.None => 0 }
+}
+fn mk(n: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str(n.to_string());
+    s.push_str("-padding-to-force-a-real-heap-buffer");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        // (a) the reported shape — bound passthrough, then CONSUMED.
+        let d: Option[String] = Option.Some(mk(n + i));
+        let x = idopt(d);
+        acc = acc + peek(x);
+        // (b) the inline Result sibling.
+        let r: Result[String, i64] = Result.Ok(mk(n + i));
+        let rx = idres(r);
+        acc = acc + peekr(rx);
+        // (c) the heap-BOXED sibling.
+        let bw: Option[Wide] = Option.Some(Wide { a: mk(n + i), b: mk(n + i), c: 1, d: 2 });
+        let bx = idbox(bw);
+        acc = acc + peekb(bx);
+        // CONTROL (B-2026-08-06-27): bound, then MATCHED.
+        let d2: Option[String] = Option.Some(mk(n + i));
+        let y = idopt(d2);
+        acc = acc + match y { Option.Some(s) => s.len(), Option.None => 0 };
+        // CONTROL (B-2026-08-06-28): DISCARDED passthrough.
+        let d3: Option[String] = Option.Some(mk(n + i));
+        idopt(d3);
+        // CONTROL: a directly-armed binding consumed — always worked.
+        let d4: Option[String] = Option.Some(mk(n + i));
+        acc = acc + peek(d4);
+        // CONTROL: a FRESH temp has no named source and must still be freed.
+        idopt(Option.Some(mk(n + i)));
+        i = i + 1;
+    }
+    println(acc);
+}

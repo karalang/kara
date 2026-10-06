@@ -1,0 +1,7 @@
+
+fn main() {{
+    let x: {ty} = 2.0 as f32 as {ty};
+    let y: {ty} = 3.0 as f32 as {ty};
+    println(f"tan={{x.tan()}} atan={{x.atan()}} sinh={{x.sinh()}}");
+    println(f"hypot={{x.hypot(y)}} atan2={{x.atan2(y)}}");
+}}

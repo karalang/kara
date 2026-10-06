@@ -1,0 +1,76 @@
+// LeetCode 161 — One Edit Distance. (Premium.)
+//
+// Return true iff strings `s` and `t` are EXACTLY one edit apart, where an edit
+// is a single insert, delete, or replace of one character. (Zero edits — the
+// strings being identical — is false.)
+//
+// One linear scan. Let `s` be the shorter (swap if not). If the lengths differ
+// by more than 1, no single edit bridges them. Walk both in lockstep to the
+// first mismatch:
+//   - none found -> they agree on all of the shorter's length; it's one edit
+//     iff the longer has exactly one extra trailing char.
+//   - found at i, equal lengths -> a REPLACE: the remaining tails must match.
+//   - found at i, lengths differ by one -> an INSERT: s[i..] must equal t[i+1..]
+//     (skip the extra char in the longer string, then the tails must match).
+
+fn tails_equal(a: ref Vec[char], b: ref Vec[char], ai: i64, bi: i64) -> bool {
+    let na = a.len();
+    let nb = b.len();
+    let mut i = ai;
+    let mut j = bi;
+    while i < na and j < nb {
+        if a[i] != b[j] { return false; }
+        i = i + 1;
+        j = j + 1;
+    }
+    return i == na and j == nb;
+}
+
+fn is_one_edit(s: String, t: String) -> bool {
+    let mut a: Vec[char] = s.chars().collect();
+    let mut b: Vec[char] = t.chars().collect();
+    // Ensure `a` is the shorter (or equal) string.
+    if a.len() > b.len() {
+        let tmp: Vec[char] = a;
+        a = b;
+        b = tmp;
+    }
+    let m = a.len();
+    let n = b.len();
+    if n - m > 1 { return false; }
+    let mut i = 0;
+    while i < m {
+        if a[i] != b[i] {
+            if m == n {
+                // replace: tails after i must match
+                return tails_equal(a, b, i + 1, i + 1);
+            }
+            // insert: skip the extra char in the longer string
+            return tails_equal(a, b, i, i + 1);
+        }
+        i = i + 1;
+    }
+    // No mismatch across the shorter length: one edit iff exactly one char longer.
+    return n - m == 1;
+}
+
+fn report(s: String, t: String) {
+    if is_one_edit(s, t) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    report("ab", "acb");    // true  (insert 'c')
+    report("cab", "ad");    // false
+    report("1203", "1213"); // true  (replace '0' -> '1')
+    report("", "");         // false (identical, zero edits)
+    report("", "a");        // true  (insert)
+    report("a", "");        // true  (delete)
+    report("abc", "abc");   // false (identical)
+    report("abc", "abcd");  // true  (append)
+    report("abc", "abcde"); // false (two inserts)
+    report("teacher", "teachers"); // true
+}

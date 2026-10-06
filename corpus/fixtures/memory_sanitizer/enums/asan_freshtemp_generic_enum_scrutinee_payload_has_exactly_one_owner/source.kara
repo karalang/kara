@@ -1,0 +1,24 @@
+
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"payload-{i}" }; }
+enum Slot[T] { S(T), N }
+enum Ev { V(Vec[R]), N }
+
+fn main() {
+    let a: Array[R, 2] = [mkr(1), mkr(2)];
+    match Slot.S(a) { Slot.S(v) => { println(f"av{v[0].id}") } Slot.N => { println("no") } }
+
+    let b: Array[R, 2] = [mkr(3), mkr(4)];
+    match Slot.S(b) { Slot.S(_) => { println("ad") } Slot.N => { println("no") } }
+
+    let c: Vec[R] = [mkr(5), mkr(6)];
+    match Slot.S(c) { Slot.S(v) => { println(f"vv{v[0].id}") } Slot.N => { println("no") } }
+
+    let d: Vec[R] = [mkr(7), mkr(8)];
+    match Ev.V(d) { Ev.V(v) => { println(f"ev{v[0].id}") } Ev.N => { println("no") } }
+
+    let e: Array[R, 2] = [mkr(9), mkr(10)];
+    let _ = Slot.S(e);
+    println("end");
+}

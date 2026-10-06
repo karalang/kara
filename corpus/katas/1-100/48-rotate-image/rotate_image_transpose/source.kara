@@ -1,0 +1,90 @@
+// LeetCode #48: Rotate Image — transpose, then reverse each row, in place.
+//
+// The second canonical factoring of a 90°-clockwise rotation: two in-place passes over the matrix.
+//
+//   1. TRANSPOSE across the main diagonal — swap m[i][j] with m[j][i] for every j > i. After this
+//      pass m[i][j] holds the original m[j][i] (rows and columns are exchanged).
+//   2. REVERSE EACH ROW left-to-right — a two-pointer swap from both ends toward the middle.
+//
+// Transpose-then-row-reverse equals a clockwise quarter-turn: the transpose maps old[i][j] to
+// position (j, i), and reversing row j then maps column i to column n-1-i, landing old[i][j] at
+// (j, n-1-i) — exactly the clockwise map this kata's oracle defines. Both passes are swaps, so the
+// whole thing is O(1) extra space, like the ★ ring rotation — it just spends two structured passes
+// instead of one four-way cell cycle.
+//
+// Both swaps are written as Kāra PARALLEL ASSIGNMENTS (`a, b = b, a`) — the same construct kata
+// [#47](../47-permutations-ii/) introduced — over nested `Vec[Vec[i64]]` index targets: the
+// transpose swaps `m[i][j], m[j][i]` and the row-reverse swaps `m[r][a], m[r][b]`. Agrees with the
+// ★ file and the other two siblings on every case.
+//
+// LeetCode bounds: 1 ≤ n ≤ 20, -1000 ≤ matrix[i][j] ≤ 1000 — i64 throughout for corpus uniformity.
+
+fn rotate(m: mut ref Vec[Vec[i64]]) {
+    let n = m.len();
+    // Pass 1 — transpose across the main diagonal (swap the upper triangle into the lower).
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n {
+            m[i][j], m[j][i] = m[j][i], m[i][j];
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    // Pass 2 — reverse each row (two-pointer swap toward the middle).
+    let mut r = 0;
+    while r < n {
+        let mut a = 0;
+        let mut b = n - 1;
+        while a < b {
+            m[r][a], m[r][b] = m[r][b], m[r][a];
+            a = a + 1;
+            b = b - 1;
+        }
+        r = r + 1;
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn print_grid(m: ref Vec[Vec[i64]]) {
+    let n = m.len();
+    let mut i = 0;
+    while i < n {
+        let row = ref m[i];
+        let mut s: String = "[";
+        let mut j = 0;
+        let w = row.len();
+        while j < w {
+            if j > 0 {
+                s.push_str(", ");
+            }
+            s.push_str(f"{row[j]}");
+            j = j + 1;
+        }
+        s.push(']');
+        println(s);
+        i = i + 1;
+    }
+}
+
+fn report(grid: Vec[Vec[i64]]) {
+    let mut m = grid;
+    print_grid(m);
+    println("->");
+    rotate(mut m);
+    print_grid(m);
+    println("---");
+}
+
+fn main() {
+    report([[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+    report([[5, 1, 9, 11], [2, 4, 8, 10], [13, 3, 6, 7], [15, 14, 12, 16]]);
+    report([[1]]);
+    report([[1, 2], [3, 4]]);
+    report([[-1, 2, -3, 4, -5],
+            [6, -7, 8, -9, 10],
+            [-11, 12, -13, 14, -15],
+            [16, -17, 18, -19, 20],
+            [-21, 22, -23, 24, -25]]);
+}

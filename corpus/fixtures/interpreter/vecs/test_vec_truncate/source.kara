@@ -1,0 +1,28 @@
+
+        fn main() {
+            let mut a: Vec[i64] = Vec.new();
+            a.push(1);
+            a.push(2);
+            a.push(3);
+            a.push(4);
+            a.truncate(2);
+            println(a.len());
+            println(a[0]);
+            println(a[1]);
+            a.truncate(5);
+            println(a.len());
+            a.truncate(0);
+            println(a.len());
+
+            let mut s: Vec[String] = Vec.new();
+            s.push("aa");
+            s.push("bb");
+            s.push("cc");
+            s.truncate(1);
+            println(s.len());
+            println(s[0]);
+            s.push("dd");
+            println(s.len());
+            println(s[1]);
+        }
+    

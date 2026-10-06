@@ -1,0 +1,102 @@
+// LeetCode #415 bench harness — Kāra, two-pointer column add + digit-table render.
+//
+// The headline ★ style: byte-scan column add (`carry + a[i] + b[j]`), buffer the
+// decimal digits LSB-first, then render each through the const `DIGITS` table as
+// a one-byte zero-copy slice appended via `push_str` — the lexer's base-10
+// *render* arm (the inverse nibble map of digit parsing, shared with #405/#168).
+//
+// This is a SEQUENTIAL string-building benchmark — the lexer's real shape:
+// concatenate the sum-string of TOTAL distinct additions into one growing output
+// buffer, then checksum its bytes. Persisting the output is what makes the
+// measurement honest: a per-result byte-sum would let an optimizing comparator
+// (rustc/clang/go) elide the heap String and fold the work to arithmetic, but a
+// buffer that is built up and then observed cannot be elided. The build carries a
+// loop-borne dependency on `out`, so it does not auto-parallelize — this is a
+// single-lane (seq) bench by construction.
+
+// Decimal render of a non-negative value through the digit-table slice — the
+// same one-byte zero-copy `DIGITS[d..d+1]` + push_str the answer render uses.
+fn digits_of(n: i64) -> String {
+    let digits: String = "0123456789";
+    if n == 0 {
+        return "0";
+    }
+    let mut v = n;
+    let mut buf: Vec[i64] = Vec.new();
+    while v > 0 {
+        buf.push(v % 10);
+        v = v / 10;
+    }
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        let d = buf[k];
+        out.push_str(digits[d..d + 1]);
+        k = k - 1;
+    }
+    out
+}
+
+fn add_strings(a: ref String, b: ref String) -> String {
+    let digits: String = "0123456789";
+
+    let ab = a.bytes();
+    let bb = b.bytes();
+
+    let mut i = ab.len() - 1;
+    let mut j = bb.len() - 1;
+    let mut carry = 0;
+
+    // Decimal digit values, least-significant first.
+    let mut buf: Vec[i64] = Vec.new();
+    while i >= 0 or j >= 0 or carry > 0 {
+        let mut sum = carry;
+        if i >= 0 {
+            sum = sum + ((ab[i] - b'0') as i64);
+            i = i - 1;
+        }
+        if j >= 0 {
+            sum = sum + ((bb[j] - b'0') as i64);
+            j = j - 1;
+        }
+        buf.push(sum % 10);
+        carry = sum / 10;
+    }
+
+    // Reverse into the MSB-first answer, rendering each value through the digit
+    // table: a one-byte zero-copy slice `DIGITS[d..d+1]` appended via push_str.
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        let d = buf[k];
+        out.push_str(digits[d..d + 1]);
+        k = k - 1;
+    }
+    out
+}
+
+fn main() {
+    let total = 500000;
+    // A fixed 38-digit operand (π's digits); each addition carries through it.
+    let a: String = "31415926535897932384626433832795028841";
+
+    // Build: concatenate every sum-string into one buffer (sequential).
+    let mut out: String = "";
+    let mut k = 0;
+    while k < total {
+        let v = (k * 2654435761) & 0xffffffff;
+        let b = digits_of(v);
+        out.push_str(add_strings(a, b));
+        k = k + 1;
+    }
+
+    // Observe: byte-checksum of the whole output (defeats render elision).
+    let bytes = out.bytes();
+    let mut sum = 0;
+    let mut j = 0;
+    while j < bytes.len() {
+        sum = sum + (bytes[j] as i64);
+        j = j + 1;
+    }
+    println(f"{sum}");
+}

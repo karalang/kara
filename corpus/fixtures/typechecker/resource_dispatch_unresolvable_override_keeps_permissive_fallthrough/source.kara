@@ -1,0 +1,10 @@
+
+effect resource Store;
+fn probe() -> i64 reads(Store) {
+    let got = Store.lookup(1);
+    let n: i64 = got;
+    n
+}
+fn main() reads(Store) {
+    probe();
+}

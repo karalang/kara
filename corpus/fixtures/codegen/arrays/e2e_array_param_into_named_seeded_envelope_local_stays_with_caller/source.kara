@@ -1,0 +1,35 @@
+struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+fn s_bind(a: Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn s_wild(a: Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(_) => { println("  w"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn s_read(a: Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println(f"  r:{v[0].tag}"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn s_iflet(a: Array[S, 2]) -> i64 { let o = Option.Some(a); if let Option.Some(v) = o { println("  r"); return 1 } else { return 0 } }
+fn s_letelse(a: Array[S, 2]) -> i64 { let o = Option.Some(a); let Option.Some(v) = o else { return 0 }; println("  r"); return 1 }
+fn s_whilelet(a: Array[S, 2]) -> i64 { let mut o = Option.Some(a); while let Option.Some(v) = o { println("  r"); o = Option.None; } return 1 }
+fn s_res(a: Array[S, 2]) -> i64 { let o: Result[Array[S, 2], i64] = Result.Ok(a); match o { Result.Ok(v) => { println("  r"); return 1 }, Result.Err(e) => { println("  n"); return 0 } } }
+fn s_three(a: Array[S, 3]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_chain(a: Array[S, 2]) -> i64 { let o = Option.Some(a); let o2 = o; match o2 { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_noheap(a: Array[N, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_str(a: Array[String, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println(f"  r:{v[0]}"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_freshtemp(a: Array[S, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_ctl(a: Array[S, 2]) -> i64 { println("  r"); return 1 }
+fn main() {
+    println("s/bind");     { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = s_bind(a); }
+    println("s/wild");     { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let z = s_wild(a); }
+    println("s/read");     { let a: Array[S, 2] = [S { tag: f"cccccccc0" }, S { tag: f"cccccccc1" }]; let z = s_read(a); }
+    println("s/iflet");    { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; let z = s_iflet(a); }
+    println("s/letelse");  { let a: Array[S, 2] = [S { tag: f"eeeeeeee0" }, S { tag: f"eeeeeeee1" }]; let z = s_letelse(a); }
+    println("s/whilelet"); { let a: Array[S, 2] = [S { tag: f"mmmmmmmm0" }, S { tag: f"mmmmmmmm1" }]; let z = s_whilelet(a); }
+    println("s/res");      { let a: Array[S, 2] = [S { tag: f"pppppppp0" }, S { tag: f"pppppppp1" }]; let z = s_res(a); }
+    println("s/three");    { let a: Array[S, 3] = [S { tag: f"ffffffff0" }, S { tag: f"ffffffff1" }, S { tag: f"ffffffff2" }]; let z = s_three(a); }
+    println("b/chain");    { let a: Array[S, 2] = [S { tag: f"hhhhhhhh0" }, S { tag: f"hhhhhhhh1" }]; let z = b_chain(a); }
+    println("b/noheap");   { let a: Array[N, 2] = [N { id: 2 }, N { id: 3 }]; let z = b_noheap(a); }
+    println("b/str");      { let a: Array[String, 2] = [f"gggggggg0", f"gggggggg1"]; let z = b_str(a); }
+    println("b/local");    { let z = b_local(); }
+    println("b/fresh");    { let a: Array[S, 2] = [S { tag: f"kkkkkkkk0" }, S { tag: f"kkkkkkkk1" }]; let z = b_freshtemp(a); }
+    println("b/ctl");      { let a: Array[S, 2] = [S { tag: f"jjjjjjjj0" }, S { tag: f"jjjjjjjj1" }]; let z = b_ctl(a); }
+    println("end")
+}

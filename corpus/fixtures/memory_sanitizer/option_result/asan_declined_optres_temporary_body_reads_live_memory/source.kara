@@ -1,0 +1,23 @@
+
+fn pad(t: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+    s.push_str(f"{t}");
+    return s;
+}
+struct W { s: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.s.len()}"); } }
+fn mkerr() -> Result[W, W] { return Err(W { s: pad(7) }); }
+fn viaelse() -> i64 {
+    let Ok(w) = mkerr() else { return 0 };
+    return w.s.len();
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        if let Ok(w) = mkerr() { println(f"a{w.s.len()}"); }
+        println(f"e{viaelse()}");
+        i = i + 1;
+    }
+    println("done");
+}

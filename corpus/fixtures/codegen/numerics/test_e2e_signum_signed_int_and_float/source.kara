@@ -1,0 +1,14 @@
+
+fn main() {
+    println((42i64).signum());
+    println((-42i64).signum());
+    println((0i64).signum());
+    println((0i32 - 7i32).signum());
+    println((3.5f64).signum());
+    println((-3.5f64).signum());
+    println((0.0f64).signum());
+    let z: f64 = 0.0 * (0.0 - 1.0);
+    println(z.signum());
+    let n: f64 = (0.0 - 1.0).sqrt();
+    println(n.signum());
+}

@@ -1,0 +1,30 @@
+
+struct R { id: i64, tag: String, xs: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}-{self.xs.len()}") } }
+
+fn mk(n: i64) -> R {
+    let mut v: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 8 { v.push(f"payloadpayload-{n}-{i}"); i = i + 1; }
+    return R { id: n, tag: f"tag-payloadpayload-{n}", xs: v }
+}
+
+fn basic(h: R) -> i64 { let mut a: R = mk(1); a = h; return a.id }
+fn rearm(h: R) -> i64 { let mut a: R = mk(2); a = h; a = mk(5); return a.id }
+fn chain(h: R) -> i64 { let mut a: R = mk(3); a = h; let mut b: R = mk(4); b = a; return b.id }
+fn viewlet(h: R) -> i64 { let a = h; let mut b: R = mk(6); b = a; return b.id }
+fn cond(h: R, c: bool) -> i64 { let mut a: R = mk(7); if c { a = h; } return a.id }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        println(f"A{basic(mk(40))}");
+        println(f"B{rearm(mk(41))}");
+        println(f"C{chain(mk(42))}");
+        println(f"D{viewlet(mk(43))}");
+        println(f"E{cond(mk(44), true)}");
+        println(f"F{cond(mk(45), false)}");
+        i = i + 1;
+    }
+    println("done");
+}

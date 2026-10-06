@@ -1,0 +1,24 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn id(x: i64) -> i64 { x }
+fn p1() -> i64 { mkw(1).b + 0 }
+fn p2() -> i64 { id(mkw(2).b) }
+fn p3(k: i64) -> i64 { match k { 0 => mkw(3).b, _ => 1 } }
+fn p4() -> i64 { let d = mkd(40); mkw(4).b + d.id }
+fn p5() -> i64 { mkw(5).r.id * 2 }
+fn p6(n: i64) -> i64 { if n == 5 { 0 } else { mkw(n).b + p6(n - 1) } }
+struct M { k: i64 }
+impl M { fn m1(ref self) -> i64 { mkw(8).b + self.k } }
+fn main() {
+    println(f"a{p1()}");
+    println(f"b{p2()}");
+    println(f"c{p3(0)}");
+    println(f"d{p4()}");
+    println(f"e{p5()}");
+    println(f"f{p6(7)}");
+    let m = M { k: 1 }; println(f"g{m.m1()}");
+    println("end")
+}

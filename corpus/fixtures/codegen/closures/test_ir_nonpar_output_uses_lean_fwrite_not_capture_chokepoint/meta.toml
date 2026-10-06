@@ -1,0 +1,13 @@
+source = "tests/codegen/closures.rs::test_ir_nonpar_output_uses_lean_fwrite_not_capture_chokepoint"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

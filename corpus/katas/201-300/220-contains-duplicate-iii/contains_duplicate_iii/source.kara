@@ -1,0 +1,93 @@
+// LeetCode 220 — Contains Duplicate III.
+//
+// Return true if there exist two DISTINCT indices i, j with |i - j| <= k
+// (indexDiff) and |nums[i] - nums[j]| <= t (valueDiff).
+//
+// Bucketing sliding window. Partition the number line into buckets of width
+// t+1, so any two numbers in the SAME bucket differ by at most t. Slide a window
+// of the last k indices, keeping one representative per occupied bucket in a
+// `Map[i64, i64]` (bucket id -> value). For each new value x:
+//   - if x's bucket is already occupied -> two values within t, done;
+//   - otherwise check the two ADJACENT buckets, where a value within t could sit
+//     across a boundary, and compare directly.
+// After recording x, evict the value that just fell out of the window. Bucket
+// ids use floor division so negative numbers bucket correctly. O(n) time.
+
+fn abs_i64(x: i64) -> i64 {
+    if x < 0 { return -x; }
+    return x;
+}
+
+// Floor-divide x by w (w > 0). Kāra's `/` truncates toward zero, so shift
+// negatives to get a true floor.
+fn bucket_of(x: i64, w: i64) -> i64 {
+    if x >= 0 { return x / w; }
+    return (x + 1) / w - 1;
+}
+
+fn near_value(m: ref Map[i64, i64], b: i64, x: i64, t: i64) -> bool {
+    match m.get(b) {
+        Some(v) => {
+            if abs_i64(x - v) <= t { return true; }
+        }
+        None => {}
+    }
+    return false;
+}
+
+fn contains_nearby_almost_duplicate(nums: Slice[i64], k: i64, t: i64) -> bool {
+    if k <= 0 { return false; }
+    let w = t + 1;                      // bucket width; t >= 0 so w >= 1
+    let mut buckets: Map[i64, i64] = Map.new();
+    let n = nums.len();
+    let mut i = 0;
+    while i < n {
+        let x = nums[i];
+        let b = bucket_of(x, w);
+        // same bucket -> guaranteed within t; adjacent buckets -> check.
+        if near_value(buckets, b, x, t) { return true; }
+        if near_value(buckets, b - 1, x, t) { return true; }
+        if near_value(buckets, b + 1, x, t) { return true; }
+        let _ = buckets.insert(b, x);
+        if i >= k {
+            let old = nums[i - k];
+            let _ = buckets.remove(bucket_of(old, w));
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn report(nums: Slice[i64], k: i64, t: i64) {
+    if contains_nearby_almost_duplicate(nums, k, t) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 3, 1];
+    report(a, 3, 0);                          // true — equal 1s, gap 3
+
+    let b: Array[i64, 6] = [1, 5, 9, 1, 5, 9];
+    report(b, 2, 3);                          // false
+
+    let c: Array[i64, 4] = [1, 2, 3, 1];
+    report(c, 3, 0);                          // true
+
+    let d: Array[i64, 3] = [8, 2, 4];
+    report(d, 2, 1);                          // false — 2 & 4 differ by 2 > 1
+
+    let e: Array[i64, 2] = [-1, -1];
+    report(e, 1, 0);                          // true
+
+    let f: Array[i64, 2] = [1, 2];
+    report(f, 0, 3);                          // false — k = 0
+
+    let g: Array[i64, 5] = [7, 1, 3, 9, 5];
+    report(g, 3, 2);                          // true — 7 & 9 (gap 3, diff 2)
+
+    let h: Array[i64, 4] = [-3, 3, 0, 10];
+    report(h, 3, 3);                          // true — -3 & 0 (diff 3)
+}

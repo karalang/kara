@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut c: Column[i64] = Column.new();
+    c.push(10);
+    c.push_null();
+    c.push(20);
+    let d = c.map(|x| x * 2);
+    println(f"{d.sum()}");
+    println(f"{d.valid_count()}");
+    println(f"{d.len()}");
+}

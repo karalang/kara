@@ -1,0 +1,11 @@
+
+fn mka(t: String) -> Array[String, 2] {
+    return [f"{t}-aaaaaaaaaaaaaaaaaaaa", f"{t}-bbbbbbbbbbbbbbbbbbbb"];
+}
+
+fn main() {
+    let a = mka("arr");
+    let n: Array[Array[String, 2], 1] = [a];
+    println(a[0]);
+    println(n[0][1]);
+}

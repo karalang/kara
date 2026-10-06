@@ -1,0 +1,6 @@
+
+distinct type Big = u32 where self <= 4294967295;
+fn main() {
+    let b = Big(4000000000);
+    println("built");
+}

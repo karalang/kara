@@ -1,0 +1,16 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn take(b: Option[Res]) -> Res {
+    match b {
+        Some(r) => { let k: Res = r; return k; }
+        None => { return Res { id: 0, name: f"z" }; }
+    }
+}
+fn main() {
+    let b: Option[Res] = Some(Res { id: 7, name: f"e7" });
+    let r: Res = take(b);
+    println(f"got {r.id}");
+}

@@ -1,0 +1,53 @@
+// LeetCode 204 — Count Primes.
+// https://leetcode.com/problems/count-primes/
+//
+// Given an integer `n`, return the number of prime numbers strictly less
+// than `n`. The natural decomposition is `is_prime(k)` + a loop that
+// either counts or collects matching k's; this kata's solve exposes both
+// — `count_primes(n)` is the LC contract; `list_primes_under(n)` is the
+// helper the parallel bench uses (Phase 3 collect-style lowering).
+
+// Trial division up to sqrt(n). Early-exit on divisibility by 2 so the
+// inner loop only checks odd factors.
+fn is_prime(n: i64) -> bool {
+    if n < 2 { return false; }
+    if n == 2 { return true; }
+    if (n % 2) == 0 { return false; }
+    let mut i: i64 = 3;
+    while (i * i) <= n {
+        if (n % i) == 0 { return false; }
+        i = i + 2;
+    }
+    return true;
+}
+
+// Returns every prime in `[0, n)` in ascending order. Used by both
+// `count_primes(n)` (which discards the values and keeps the count)
+// and the `bench/count.kara` workload (which exercises the parallel
+// collect-style codegen via `#[par_order_free]`).
+fn list_primes_under(n: i64) -> Vec[i64] {
+    let mut primes: Vec[i64] = Vec.new();
+    let mut k: i64 = 0;
+    while k < n {
+        if is_prime(k) {
+            primes.push(k);
+        }
+        k = k + 1;
+    }
+    return primes;
+}
+
+// LeetCode 204's contract: count of primes strictly less than `n`.
+fn count_primes(n: i64) -> i64 {
+    return list_primes_under(n).len();
+}
+
+fn main() {
+    // Verify against LeetCode 204's worked examples + a few extra
+    // anchor points from OEIS A000720 (π(n), the prime-counting fn).
+    println(count_primes(10));      //   4   (LC example)
+    println(count_primes(100));     //  25
+    println(count_primes(1000));    // 168
+    println(count_primes(10000));   // 1229
+    println(count_primes(100000));  // 9592
+}

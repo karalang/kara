@@ -1,0 +1,12 @@
+
+fn f(n: i64) -> i64 {
+    match n {
+        (1 | 2) => 10,
+        _ => 20,
+    }
+}
+fn main() {
+    println(f(1));
+    println(f(2));
+    println(f(3));
+}

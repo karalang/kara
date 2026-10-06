@@ -1,0 +1,31 @@
+
+struct G[T] { v: T }
+struct P { v: i64 }
+enum Slot[T] { S(T), N }
+
+struct D { id: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+struct Gd[T] { d: T }
+
+fn main() {
+    let a: Vec[G[i64]] = [G { v: 1 }, G { v: 2 }];
+    match Slot.S(a) { Slot.S(v) => { println(f"a:{v.len()}:{v[1].v}") } Slot.N => { println("no") } }
+
+    let b: Vec[P] = [P { v: 3 }, P { v: 4 }];
+    match Slot.S(b) { Slot.S(v) => { println(f"b:{v.len()}:{v[1].v}") } Slot.N => { println("no") } }
+
+    let c: Vec[G[i64]] = [G { v: 5 }, G { v: 6 }];
+    let s: Slot[Vec[G[i64]]] = Slot.S(c);
+    match s { Slot.S(v) => { println(f"c:{v.len()}:{v[0].v}") } Slot.N => { println("no") } }
+
+    let d: Vec[G[String]] = [G { v: "ab" }, G { v: "cd" }];
+    match Option.Some(d) { Option.Some(v) => { println(f"d:{v.len()}:{v[1].v}") } Option.None => { println("no") } }
+
+    let e: Vec[G[i64]] = [G { v: 7 }, G { v: 8 }];
+    if let Slot.S(v) = Slot.S(e) { println(f"e:{v.len()}:{v[0].v}") }
+
+    let f: Vec[Gd[D]] = [Gd { d: D { id: 1 } }, Gd { d: D { id: 2 } }];
+    match Slot.S(f) { Slot.S(v) => { println(f"f:{v.len()}") } Slot.N => { println("no") } }
+
+    println("end");
+}

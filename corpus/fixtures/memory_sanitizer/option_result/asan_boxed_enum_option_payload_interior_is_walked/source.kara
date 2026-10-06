@@ -1,0 +1,25 @@
+
+struct R2 { id: i64, name: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"d{self.name.contains("row")}") } }
+enum K { A(R2), B }
+
+fn take(o: Option[K]) -> i64 { 1 }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    while i < 8 {
+        // A — plain `let`, the shape the row reports.
+        let a: Option[K] = Option.Some(K.A(R2 { id: n + i, name: "row-" + (n + i).to_string() }));
+        // B — wildcard `match`: non-consuming, so the let-site action still fires.
+        let b: Option[K] = Option.Some(K.A(R2 { id: n + i, name: "row-" + (n + i).to_string() }));
+        match b { Option.Some(_) => {} Option.None => {} }
+        // C — by-value call: the arg-site move must leave exactly one owner.
+        let c: Option[K] = Option.Some(K.A(R2 { id: n + i, name: "row-" + (n + i).to_string() }));
+        let _ = take(c);
+        // D — rebind move: the destination owns the box, the source disarms.
+        let d: Option[K] = Option.Some(K.A(R2 { id: n + i, name: "row-" + (n + i).to_string() }));
+        let e = d;
+        i = i + 1;
+    }
+}

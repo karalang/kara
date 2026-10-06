@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/families/b_2026_09_27_82.rs::asan_two_hop_field_as_an_arm_tail_value_is_freed_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

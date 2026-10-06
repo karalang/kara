@@ -1,0 +1,18 @@
+
+par struct Flags { bits: Atomic[i64] }
+impl Flags {
+    fn set_or(ref self, m: i64) -> i64 { self.bits.fetch_or(m, MemoryOrdering.SeqCst) }
+    fn clear_and(ref self, m: i64) -> i64 { self.bits.fetch_and(m, MemoryOrdering.SeqCst) }
+    fn toggle(ref self, m: i64) -> i64 { self.bits.fetch_xor(m, MemoryOrdering.SeqCst) }
+    fn exchange(ref self, v: i64) -> i64 { self.bits.swap(v, MemoryOrdering.SeqCst) }
+    fn get(ref self) -> i64 { self.bits.load(MemoryOrdering.SeqCst) }
+}
+fn main() {
+    let f = Flags { bits: Atomic.new(0) };
+    println(f.set_or(5));    // old 0  -> 5
+    println(f.set_or(2));    // old 5  -> 7
+    println(f.clear_and(6)); // old 7  -> 6   (7 & 6)
+    println(f.toggle(2));    // old 6  -> 4   (6 ^ 2)
+    println(f.exchange(99)); // old 4  -> 99
+    println(f.get());        // 99
+}

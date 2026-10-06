@@ -1,0 +1,13 @@
+source = "tests/codegen/drop_order.rs::e2e_generic_own_drop_struct_temp_arg_across_monomorphs_and_field_counts"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,19 @@
+
+trait Default {
+    fn default() -> Self;
+}
+
+struct Slot { v: i64 }
+
+impl Default for Slot {
+    fn default() -> Slot { Slot { v: 13 } }
+}
+
+fn make[T]() -> T where T: Default {
+    default()
+}
+
+fn main() {
+    let s: Slot = make();
+    println(s.v);
+}

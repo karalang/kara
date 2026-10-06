@@ -1,0 +1,73 @@
+// Benchmark harness for LeetCode #274 — H-Index.
+//
+// Build-once + punch (BENCHMARKS.md): four 20,000-element citation arrays are
+// built once, then punched in rotation. Each punch runs the kata's `h_index`
+// unchanged — copy into a fresh Vec, sort ascending, scan — so the measurement
+// is dominated by each language's STDLIB SORT on identical data, with an
+// allocation and a linear scan around it.
+//
+// The four arrays hold different value distributions so the sort sees more than
+// one input shape: two uniform over different ranges, one heavily duplicated
+// (many equal keys), one already nearly sorted.
+
+fn h_index(cit: ref Vec[i64]) -> i64 {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < cit.len() {
+        v.push(cit[i]);
+        i = i + 1;
+    }
+    v.sort();
+    let n = v.len();
+    let mut j = 0;
+    while j < n {
+        if v[j] >= n - j {
+            return n - j;
+        }
+        j = j + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    let np = 4;
+    let n = 60000;
+    let iters = 600;
+
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut p = 0;
+    while p < np {
+        let mut arr: Vec[i64] = Vec.new();
+        let mut x = p + 1;
+        let mut t = 0;
+        while t < n {
+            x = (x * 1103515245 + 12345) % 2147483648;
+            let r = (x / 65536) % 32768;
+            if p == 0 {
+                arr.push(r % 30000);          // uniform, wide
+            } else {
+                if p == 1 {
+                    arr.push(r % 40);         // uniform, narrow
+                } else {
+                    if p == 2 {
+                        arr.push((r % 7) * 3000); // heavy duplicates
+                    } else {
+                        arr.push(t + (r % 5));       // nearly sorted
+                    }
+                }
+            }
+            t = t + 1;
+        }
+        arrays.push(arr);
+        p = p + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 3) % np;
+        sink = (sink * 31 + h_index(arrays[idx])) % 1000000007;
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

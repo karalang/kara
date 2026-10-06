@@ -1,0 +1,17 @@
+
+fn dot[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
+    let p = a.zip_with(b, |x, y| x * y);
+    p.sum()
+}
+fn cosine_similarity[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
+    let na: f32 = dot(a, a).sqrt();
+    let nb: f32 = dot(b, b).sqrt();
+    dot(a, b) / (na * nb)
+}
+fn main() {
+    let a: Tensor[f32, [3]] = Tensor.from([1.0f32, 0.0f32, 0.0f32]);
+    let b: Tensor[f32, [3]] = Tensor.from([0.0f32, 1.0f32, 0.0f32]);
+    let c: Tensor[f32, [3]] = Tensor.from([1.0f32, 0.0f32, 0.0f32]);
+    println(cosine_similarity(a, b));
+    println(cosine_similarity(a, c));
+}

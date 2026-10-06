@@ -1,0 +1,152 @@
+// Benchmark workload for LeetCode #273 — Integer to English Words.
+//
+// SEQUENTIAL LANE. Build-once + punch: 200,000 integers spanning the whole range
+// are drawn once, then the ★ three-digit chunker spells every one of them 5
+// times — 1,000,000 spellings. The punch loop is a plain `for`; `spell.kara`
+// is the same program with `#[par_order_free]` on it. Both print the
+// same sink, and the seq/par pair is the only Kāra-to-Kāra comparison the bench
+// makes — cross-lane rows (auto-par Kāra against single-threaded Rust) are not
+// meaningful and are not drawn.
+//
+// THE SINK HAD TO BECOME ORDER-INVARIANT for this lane to exist at all, and
+// that is a real change from the earlier seq-only version of this file. A
+// running `sink = sink * 131 + byte` over the concatenation of every spelling
+// depends on the order the spellings arrive in, so it cannot be checked against
+// a result assembled by workers. Each spelling is now hashed on its own —
+// order-dependent WITHIN an item, which is what makes it a strong checksum —
+// and the item hashes are SUMMED, which is order-invariant across items. The
+// count is printed beside it, because a sum alone cannot tell 1,000,000 items
+// from 999,999.
+//
+// WHAT THIS LANE MEASURES: OWNED-STRING CONSTRUCTION. Every existing
+// par lane in this corpus is numeric or byte-scanning; this is the first where
+// each branch ALLOCATES, grows and publishes a `String` per iteration. That is
+// deliberate — B-2026-08-14-28's fix note records that the par-branch join's
+// publish-time suppression scan has one arm per cleanup kind, each added after
+// that kind was found broken, so a branch that produces a heap value nobody has
+// pointed a par lane at before is where the next one lives.
+//
+// The per-item work is otherwise identical to the sequential lane's: three or
+// four `a + b` concatenations of short strings, allocating and copying, with
+// the algorithm PREPENDING so that no mirror can amortize into one growing
+// buffer. See spell_seq.kara for the full parity rationale.
+
+fn small_name(n: i64) -> String {
+    if n == 1 { return "One"; }
+    if n == 2 { return "Two"; }
+    if n == 3 { return "Three"; }
+    if n == 4 { return "Four"; }
+    if n == 5 { return "Five"; }
+    if n == 6 { return "Six"; }
+    if n == 7 { return "Seven"; }
+    if n == 8 { return "Eight"; }
+    if n == 9 { return "Nine"; }
+    if n == 10 { return "Ten"; }
+    if n == 11 { return "Eleven"; }
+    if n == 12 { return "Twelve"; }
+    if n == 13 { return "Thirteen"; }
+    if n == 14 { return "Fourteen"; }
+    if n == 15 { return "Fifteen"; }
+    if n == 16 { return "Sixteen"; }
+    if n == 17 { return "Seventeen"; }
+    if n == 18 { return "Eighteen"; }
+    if n == 19 { return "Nineteen"; }
+    return "";
+}
+
+fn tens_name(t: i64) -> String {
+    if t == 2 { return "Twenty"; }
+    if t == 3 { return "Thirty"; }
+    if t == 4 { return "Forty"; }
+    if t == 5 { return "Fifty"; }
+    if t == 6 { return "Sixty"; }
+    if t == 7 { return "Seventy"; }
+    if t == 8 { return "Eighty"; }
+    if t == 9 { return "Ninety"; }
+    return "";
+}
+
+fn scale_name(s: i64) -> String {
+    if s == 1 { return "Thousand"; }
+    if s == 2 { return "Million"; }
+    if s == 3 { return "Billion"; }
+    return "";
+}
+
+fn group_name(n: i64) -> String {
+    if n == 0 { return ""; }
+    if n < 20 { return small_name(n); }
+    if n < 100 {
+        let t = tens_name(n / 10);
+        let r = n % 10;
+        if r == 0 { return t; }
+        return t + " " + small_name(r);
+    }
+    let h = small_name(n / 100) + " Hundred";
+    let r = group_name(n % 100);
+    if r == "" { return h; }
+    return h + " " + r;
+}
+
+fn number_to_words(n: i64) -> String {
+    if n == 0 { return "Zero"; }
+    let mut out = "";
+    let mut rem = n;
+    let mut scale = 0;
+    while rem > 0 {
+        let part = rem % 1000;
+        if part > 0 {
+            let mut piece = group_name(part);
+            if scale > 0 { piece = piece + " " + scale_name(scale); }
+            if out == "" { out = piece; } else { out = piece + " " + out; }
+        }
+        rem = rem / 1000;
+        scale = scale + 1;
+    }
+    return out;
+}
+
+fn main() {
+    let count = 200000;
+    let rounds = 5;
+
+    let mut nums: Vec[i64] = Vec.new();
+    let mut lo = 2147483647;
+    let mut hi = 0;
+    let mut state = 273273;
+    let mut i = 0;
+    while i < count {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let v = state;
+        if v < lo { lo = v; }
+        if v > hi { hi = v; }
+        nums.push(v);
+        i = i + 1;
+    }
+
+    let total = count * rounds;
+    let mut parts: Vec[i64] = Vec.new();
+    for t in 0..total {
+        let w = number_to_words(nums[t % count]);
+        let b = w.bytes();
+        // Hashed WITHIN the item, so the checksum is strong; the items are
+        // summed below, so the total does not depend on their order.
+        let mut h = 0;
+        let mut p = 0;
+        while p < b.len() {
+            h = (h * 131 + b[p] as i64) % 1000000007;
+            p = p + 1;
+        }
+        parts.push(h);
+    }
+
+    let mut sink = 0;
+    let mut k = 0;
+    while k < parts.len() {
+        sink = (sink + parts[k]) % 1000000007;
+        k = k + 1;
+    }
+
+    println(sink);
+    println(f"spellings {parts.len()} range {lo}..{hi}");
+}

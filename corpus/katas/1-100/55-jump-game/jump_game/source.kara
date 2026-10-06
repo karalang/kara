@@ -1,0 +1,98 @@
+// LeetCode #55: Jump Game — greedy forward max-reach, one pass, O(1) space (★).
+//
+// From index 0, `nums[i]` is the maximum forward jump length from `i`; return WHETHER the last
+// index is reachable. This is the decision sibling of #45 (which counts the FEWEST hops); here
+// we ask only yes/no, and a single scalar answers it.
+//
+// The insight: sweep left to right carrying `farthest` = the rightmost index reachable using
+// any sequence of jumps from indices already visited. At index `i`, if `i` itself lies beyond
+// `farthest` then no chain of jumps ever lands on `i`, so the end is unreachable — bail. Else
+// `i` is reachable, so extend the horizon: `farthest = max(farthest, i + nums[i])`. The moment
+// `farthest` covers the last index we are done. Formally `farthest` is the closure of the reach
+// relation under "reachable index contributes its own reach"; a value of 0 that never grows is
+// exactly the stuck case (a `0`-cell with nothing overshooting it).
+//
+// One left-to-right pass, one i64 scalar, no allocation — the purest of the three lenses. The
+// siblings reach the identical yes/no two other ways: [`backward`](jump_game_backward.kara)
+// scans right-to-left tracking the leftmost "good" index, and [`dp`](jump_game_dp.kara) drops
+// the greedy shortcut for an explicit O(n) reachability table.
+//
+// LeetCode bounds: 1 ≤ n ≤ 10⁴, 0 ≤ nums[i] ≤ 10⁵, so every index and reach fit far inside i64.
+
+fn can_jump(nums: Slice[i64], n: i64) -> bool {
+    let mut farthest = 0; // rightmost index reachable so far
+    let mut i = 0;
+    while i < n {
+        if i > farthest {
+            return false; // this index is beyond every reach — the end is unreachable
+        }
+        if i + nums[i] > farthest {
+            farthest = i + nums[i]; // stand on a reachable index, push the horizon out
+        }
+        if farthest >= n - 1 {
+            return true; // the last index is within reach — done early
+        }
+        i = i + 1;
+    }
+    true // n == 1: already standing on the last index
+}
+
+// ---- test harness (shared verbatim by all three solvers) ------------------
+
+fn report(nums: Slice[i64], n: i64) {
+    if can_jump(nums, n) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    // LeetCode example 1: 0 → idx1 → last.
+    let a1: Array[i64, 5] = [2, 3, 1, 1, 4];
+    report(a1, 5); // true
+
+    // LeetCode example 2: index 3 holds a 0 that nothing overshoots — stuck.
+    let a2: Array[i64, 5] = [3, 2, 1, 0, 4];
+    report(a2, 5); // false
+
+    // Already at the last index — trivially reachable.
+    let a3: Array[i64, 1] = [0];
+    report(a3, 1); // true
+
+    // A leading 0 with more to go — stuck at index 0.
+    let a4: Array[i64, 2] = [0, 1];
+    report(a4, 2); // false
+
+    // A trailing 0 is fine once you have arrived.
+    let a5: Array[i64, 2] = [1, 0];
+    report(a5, 2); // true
+
+    // One 2-jump clears both zeros.
+    let a6: Array[i64, 3] = [2, 0, 0];
+    report(a6, 3); // true
+
+    // All ones — step every index.
+    let a7: Array[i64, 4] = [1, 1, 1, 1];
+    report(a7, 4); // true
+
+    // A 0 at index 1 the leading 1 cannot clear — stuck.
+    let a8: Array[i64, 4] = [1, 0, 1, 0];
+    report(a8, 4); // false
+
+    // One big leap clears the whole array.
+    let a9: Array[i64, 5] = [5, 0, 0, 0, 0];
+    report(a9, 5); // true
+
+    // The reach overshoots the zeros from index 1.
+    let a10: Array[i64, 4] = [2, 5, 0, 0];
+    report(a10, 4); // true
+
+    // Short ascending ramp.
+    let a11: Array[i64, 3] = [1, 2, 3];
+    report(a11, 3); // true
+
+    // farthest stalls at 2, one short of the last index.
+    let a12: Array[i64, 4] = [1, 1, 0, 1];
+    report(a12, 4); // false
+}

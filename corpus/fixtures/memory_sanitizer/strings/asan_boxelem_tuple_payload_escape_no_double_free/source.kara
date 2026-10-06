@@ -1,0 +1,14 @@
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, (String, i64)] = Map.new();
+        m.insert(i, (f"tuple payload padded beyond thirty-six bytes {i}", i));
+        let s = match m.get(i) {
+            Some((a, b)) => a,
+            None => f"none-{i}",
+        };
+        println(s.len());
+        i = i + 1;
+    };
+}

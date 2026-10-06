@@ -1,0 +1,42 @@
+struct P { s: String, n: i64 }
+struct B { a: Array[P, 1] }
+fn mk(p: String, k: i64) -> String {
+    f"{p}-heap-string-longer-than-sso-{k}"
+}
+fn rd(s: ref String) -> i64 { if s.contains("-heap-") { s.len() } else { 0 } }
+fn rdp(p: ref P) -> i64 { rd(p.s) + p.n }
+fn bump(s: mut ref String) { s.push_str("yy"); }
+struct O { v: Vec[String], a: Array[String, 2] }
+impl O {
+    fn first(ref self) -> i64 { rd(self.a[1]) }
+    fn grow(mut ref self) { bump(mut self.a[0]); }
+}
+fn through(a: mut ref Array[String, 2]) { bump(a[1]); }
+fn peek(a: ref Array[String, 2]) -> i64 { rd(a[1]) }
+fn main() {
+    let a: Array[String, 2] = [mk("a", 1), mk("b", 1)];
+    let k = rd(a[1]);
+    println(f"{rd(a[0])} {k}");
+    let e: Array[P, 1] = [P { s: mk("c", 2), n: 4 }];
+    println(f"{rd(e[0].s)} {rdp(e[0])}");
+    let b = B { a: [P { s: mk("d", 3), n: 5 }] };
+    println(f"{rd(b.a[0].s)} {rdp(b.a[0])}");
+    let t: (Array[String, 1], i64) = ([mk("e", 4)], 6);
+    println(f"{rd(t.0[0])} {t.1}");
+    let mut m: Array[String, 1] = [mk("f", 5)];
+    bump(mut m[0]);
+    println(f"{rd(m[0])} {m[0]}");
+    let mut v: Vec[String] = Vec.new();
+    v.push(mk("g", 6));
+    let mut o = O { v: v, a: [mk("h", 7), mk("i", 7)] };
+    bump(mut o.v[0]);
+    o.grow();
+    println(f"{rd(o.v[0])} {o.first()} {o.a[0]}");
+    let mut w: Vec[String] = Vec.new();
+    w.push(mk("j", 8));
+    let u: (Vec[String], i64) = (w, 9);
+    println(f"{rd(u.0[0])} {u.1}");
+    let mut r: Array[String, 2] = [mk("k", 9), mk("l", 9)];
+    through(mut r);
+    println(f"{peek(r)} {r[1]}");
+}

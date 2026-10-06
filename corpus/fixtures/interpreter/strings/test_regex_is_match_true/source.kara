@@ -1,0 +1,4 @@
+fn main() {
+         let r = Regex.compile("[0-9]+").unwrap();
+         println(r.is_match("abc123"));
+     }

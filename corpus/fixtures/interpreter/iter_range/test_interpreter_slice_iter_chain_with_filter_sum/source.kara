@@ -1,0 +1,7 @@
+
+fn main() {
+    let v = Vec[1, 2, 3];
+    let s: Slice[i64] = v.as_slice();
+    let total: i64 = s.iter().filter(|x| x % 2 == 0).fold(0, |a, b| a + b);
+    println(total);
+}

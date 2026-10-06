@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut d: Vec[String] = Vec.new();
+    d.push(f"payload_hhhhhhhhhhhhhhhhhhhh{1}");
+    d.push(f"payload_wwwwwwwwwwwwwwwwwwww{2}");
+    let s = ref d[0];
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < 20i64 {
+        let c: String = s.clone();
+        t = t + c.len() + s.len() + s.substring(0, 3).len();
+        i = i + 1;
+    }
+    println(f"{t}");
+    println(f"{d[1]}");
+}

@@ -1,0 +1,16 @@
+
+effect resource Store;
+struct FakeStore { n: i64 }
+impl FakeStore {
+    fn lookup(self, k: i64) -> Option[i64] { Some(self.n) }
+}
+fn probe() reads(Store) {
+    let got = Store.lookup(1);
+    let n: i64 = got;
+}
+fn main() reads(Store) {
+    let p = FakeStore { n: 5 };
+    with_provider[Store](p, || {
+        probe();
+    });
+}

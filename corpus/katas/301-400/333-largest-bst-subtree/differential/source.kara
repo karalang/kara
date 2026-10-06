@@ -1,0 +1,516 @@
+// Differential for LeetCode #333 (Largest BST Subtree).
+//
+// The four arms, copied verbatim apart from their names, against:
+//
+//   * an exhaustive oracle: every tree shape with at most 5 nodes, with every
+//     assignment of values from {0, 1, 2} (11,497 trees, duplicates included),
+//     answered by brute force: a subtree is a BST exactly when its in-order
+//     walk is strictly increasing, and the oracle tries every subtree, and
+//   * eight properties on 300 random trees (random BSTs, some damaged, some
+//     with duplicate values, some random shapes with random values).
+//
+//   P1  the four arms agree
+//   P2  the answer equals the brute-force oracle (exhaustive and random trees)
+//   P3  a BST of distinct values answers its own size
+//   P4  a non-empty tree answers between 1 and its size
+//   P5  a tree answers at least as much as each child's subtree does
+//   P6  mirroring the tree and negating every value keeps the answer
+//   P7  adding a constant to every value keeps the answer
+//   P8  under a new root larger than every value, the answer becomes size + 1
+//       when the tree was a BST and stays the same when it was not
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+struct Info {
+    bst: bool,
+    size: i64,
+    lo: i64,
+    hi: i64,
+}
+
+fn visit(nodes: ref Vec[Node], node: i64, best: mut ref i64) -> Info {
+    let val = nodes[node].val;
+    let left = nodes[node].left;
+    let right = nodes[node].right;
+    let mut bst = true;
+    let mut size = 1;
+    let mut lo = val;
+    let mut hi = val;
+    if left != -1 {
+        let l = visit(nodes, left, best);
+        if l.bst and l.hi < val {
+            size += l.size;
+            lo = l.lo;
+        } else {
+            bst = false;
+        }
+    }
+    if right != -1 {
+        let r = visit(nodes, right, best);
+        if r.bst and r.lo > val {
+            size += r.size;
+            hi = r.hi;
+        } else {
+            bst = false;
+        }
+    }
+    if bst and size > best {
+        best = size;
+    }
+    return Info { bst: bst, size: size, lo: lo, hi: hi };
+}
+
+fn post(nodes: ref Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    let mut best = 0;
+    let _ = visit(nodes, 0, mut best);
+    return best;
+}
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn visit_linked(node: Option[TreeNode], best: mut ref i64) -> (i64, i64, i64) {
+    match node {
+        None => (0, 0, 0),
+        Some(n) => {
+            let (ls, llo, lhi) = visit_linked(n.left, best);
+            let (rs, rlo, rhi) = visit_linked(n.right, best);
+            if ls < 0 or rs < 0 or (ls > 0 and lhi >= n.val) or (rs > 0 and rlo <= n.val) {
+                return (-1, 0, 0);
+            }
+            let size = ls + 1 + rs;
+            if size > best {
+                best = size;
+            }
+            let lo = if ls > 0 { llo } else { n.val };
+            let hi = if rs > 0 { rhi } else { n.val };
+            (size, lo, hi)
+        }
+    }
+}
+
+fn link(nodes: ref Vec[Node], i: i64) -> Option[TreeNode] {
+    if i == -1 {
+        return None;
+    }
+    return Some(TreeNode { val: nodes[i].val, left: link(nodes, nodes[i].left), right: link(nodes, nodes[i].right) });
+}
+
+fn linked(nodes: ref Vec[Node]) -> i64 {
+    let root = if nodes.len() == 0 { None } else { link(nodes, 0) };
+    let mut best = 0;
+    let _ = visit_linked(root, mut best);
+    return best;
+}
+
+fn within(nodes: ref Vec[Node], node: i64, lo: Option[i64], hi: Option[i64]) -> bool {
+    if node == -1 {
+        return true;
+    }
+    let val = nodes[node].val;
+    if let Some(l) = lo {
+        if val <= l {
+            return false;
+        }
+    }
+    if let Some(h) = hi {
+        if val >= h {
+            return false;
+        }
+    }
+    return within(nodes, nodes[node].left, lo, Some(val)) and within(nodes, nodes[node].right, Some(val), hi);
+}
+
+fn count(nodes: ref Vec[Node], node: i64) -> i64 {
+    if node == -1 {
+        return 0;
+    }
+    return 1 + count(nodes, nodes[node].left) + count(nodes, nodes[node].right);
+}
+
+fn largest_from(nodes: ref Vec[Node], node: i64) -> i64 {
+    if node == -1 {
+        return 0;
+    }
+    if within(nodes, node, None, None) {
+        return count(nodes, node);
+    }
+    let l = largest_from(nodes, nodes[node].left);
+    let r = largest_from(nodes, nodes[node].right);
+    return if l > r { l } else { r };
+}
+
+fn topdown(nodes: ref Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    return largest_from(nodes, 0);
+}
+
+fn iterative(nodes: ref Vec[Node]) -> i64 {
+    let n = nodes.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut order: Vec[i64] = Vec.new();
+    let mut stack: Vec[i64] = vec![0];
+    while let Some(node) = stack.pop() {
+        order.push(node);
+        if nodes[node].left != -1 {
+            stack.push(nodes[node].left);
+        }
+        if nodes[node].right != -1 {
+            stack.push(nodes[node].right);
+        }
+    }
+    let mut bst: Vec[bool] = Vec.filled(n, false);
+    let mut size: Vec[i64] = Vec.filled(n, 0);
+    let mut lo: Vec[i64] = Vec.filled(n, 0);
+    let mut hi: Vec[i64] = Vec.filled(n, 0);
+    let mut best = 0;
+    let mut k = n - 1;
+    while k >= 0 {
+        let node = order[k];
+        let val = nodes[node].val;
+        let left = nodes[node].left;
+        let right = nodes[node].right;
+        let mut ok = true;
+        let mut s = 1;
+        lo[node] = val;
+        hi[node] = val;
+        if left != -1 {
+            if bst[left] and hi[left] < val {
+                s += size[left];
+                lo[node] = lo[left];
+            } else {
+                ok = false;
+            }
+        }
+        if right != -1 {
+            if bst[right] and lo[right] > val {
+                s += size[right];
+                hi[node] = hi[right];
+            } else {
+                ok = false;
+            }
+        }
+        bst[node] = ok;
+        size[node] = s;
+        if ok and s > best {
+            best = s;
+        }
+        k -= 1;
+    }
+    return best;
+}
+
+// P1: every arm's answer, or a failure line when they disagree.
+fn agreed(nodes: ref Vec[Node], what: String, failures: mut ref i64) -> i64 {
+    let a = post(nodes);
+    let b = linked(nodes);
+    let c = topdown(nodes);
+    let d = iterative(nodes);
+    if a != b or a != c or a != d {
+        failures += 1;
+        println(f"P1 {what}: post {a} linked {b} topdown {c} iterative {d}");
+    }
+    return a;
+}
+
+fn check(ok: bool, prop: String, what: ref String, failures: mut ref i64) {
+    if not ok {
+        failures += 1;
+        println(f"{prop} {what}");
+    }
+}
+
+fn inorder(nodes: ref Vec[Node], node: i64, out: mut ref Vec[i64]) {
+    if node == -1 {
+        return;
+    }
+    inorder(nodes, nodes[node].left, out);
+    out.push(nodes[node].val);
+    inorder(nodes, nodes[node].right, out);
+}
+
+// The oracle: try every subtree, and call it a BST when its in-order walk is
+// strictly increasing.
+fn brute(nodes: ref Vec[Node]) -> i64 {
+    let mut best = 0;
+    for i in 0..nodes.len() {
+        let mut walk: Vec[i64] = Vec.new();
+        inorder(nodes, i, mut walk);
+        let mut increasing = true;
+        for k in 1..walk.len() {
+            if walk[k - 1] >= walk[k] {
+                increasing = false;
+            }
+        }
+        if increasing and walk.len() > best {
+            best = walk.len();
+        }
+    }
+    return best;
+}
+
+// The subtree at `node`, copied into its own pool with the root at index 0.
+fn copy_into(nodes: ref Vec[Node], node: i64, out: mut ref Vec[Node]) -> i64 {
+    if node == -1 {
+        return -1;
+    }
+    out.push(Node { val: nodes[node].val, left: -1, right: -1 });
+    let id = out.len() - 1;
+    let l = copy_into(nodes, nodes[node].left, out);
+    let r = copy_into(nodes, nodes[node].right, out);
+    out[id].left = l;
+    out[id].right = r;
+    return id;
+}
+
+fn subtree(nodes: ref Vec[Node], node: i64) -> Vec[Node] {
+    let mut out: Vec[Node] = Vec.new();
+    let _ = copy_into(nodes, node, mut out);
+    return out;
+}
+
+fn mirrored_negated(nodes: ref Vec[Node]) -> Vec[Node] {
+    let mut out: Vec[Node] = Vec.new();
+    for nd in nodes {
+        out.push(Node { val: 0 - nd.val, left: nd.right, right: nd.left });
+    }
+    return out;
+}
+
+fn shifted(nodes: ref Vec[Node], by: i64) -> Vec[Node] {
+    let mut out: Vec[Node] = Vec.new();
+    for nd in nodes {
+        out.push(Node { val: nd.val + by, left: nd.left, right: nd.right });
+    }
+    return out;
+}
+
+// A new root above every value, with the tree as its left subtree. The pool
+// is re-indexed by one so the new root can be index 0.
+fn under_new_root(nodes: ref Vec[Node]) -> Vec[Node] {
+    let mut top = 0;
+    for nd in nodes {
+        if nd.val >= top {
+            top = nd.val + 1;
+        }
+    }
+    let mut out: Vec[Node] = Vec.new();
+    out.push(Node { val: top, left: 1, right: -1 });
+    for nd in nodes {
+        let l = if nd.left == -1 { -1 } else { nd.left + 1 };
+        let r = if nd.right == -1 { -1 } else { nd.right + 1 };
+        out.push(Node { val: nd.val, left: l, right: r });
+    }
+    return out;
+}
+
+fn describe(nodes: ref Vec[Node]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for nd in nodes {
+        parts.push(f"{nd.val}/{nd.left}/{nd.right}");
+    }
+    let joined = parts.join(" ");
+    return f"[{joined}]";
+}
+
+fn properties(nodes: ref Vec[Node], unique_bst: bool, failures: mut ref i64) {
+    let what = describe(nodes);
+    let ans = agreed(nodes, what.clone(), failures);
+    let n = nodes.len();
+    check(ans == brute(nodes), "P2", what, failures);
+    if unique_bst {
+        check(ans == n, "P3", what, failures);
+    }
+    if n > 0 {
+        check(ans >= 1 and ans <= n, "P4", what, failures);
+        let l = nodes[0].left;
+        let r = nodes[0].right;
+        if l != -1 {
+            check(ans >= agreed(subtree(nodes, l), what.clone(), failures), "P5", what, failures);
+        }
+        if r != -1 {
+            check(ans >= agreed(subtree(nodes, r), what.clone(), failures), "P5", what, failures);
+        }
+        check(agreed(mirrored_negated(nodes), what.clone(), failures) == ans, "P6", what, failures);
+        check(agreed(shifted(nodes, 1000), what.clone(), failures) == ans, "P7", what, failures);
+        let grown = agreed(under_new_root(nodes), what.clone(), failures);
+        let expect = if ans == n { n + 1 } else { ans };
+        check(grown == expect, "P8", what, failures);
+    }
+}
+
+// Every shape with `n` nodes, each as a pool in preorder, values unset (0).
+fn shapes(n: i64) -> Vec[Vec[Node]] {
+    let mut all: Vec[Vec[Node]] = Vec.new();
+    if n == 0 {
+        all.push(Vec.new());
+        return all;
+    }
+    for k in 0..n {
+        let lefts = shapes(k);
+        let rights = shapes(n - 1 - k);
+        for lt in lefts.iter() {
+            for rt in rights.iter() {
+                let mut pool: Vec[Node] = Vec.new();
+                pool.push(Node { val: 0, left: -1, right: -1 });
+                if lt.len() > 0 {
+                    pool[0].left = 1;
+                    for nd in lt.iter() {
+                        let l = if nd.left == -1 { -1 } else { nd.left + 1 };
+                        let r = if nd.right == -1 { -1 } else { nd.right + 1 };
+                        pool.push(Node { val: 0, left: l, right: r });
+                    }
+                }
+                if rt.len() > 0 {
+                    let base = pool.len();
+                    pool[0].right = base;
+                    for nd in rt.iter() {
+                        let l = if nd.left == -1 { -1 } else { nd.left + base };
+                        let r = if nd.right == -1 { -1 } else { nd.right + base };
+                        pool.push(Node { val: 0, left: l, right: r });
+                    }
+                }
+                all.push(pool);
+            }
+        }
+    }
+    return all;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn insert(nodes: mut ref Vec[Node], v: i64) {
+    nodes.push(Node { val: v, left: -1, right: -1 });
+    let id = nodes.len() - 1;
+    let mut cur = 0;
+    while cur != id {
+        if v < nodes[cur].val {
+            if nodes[cur].left == -1 {
+                nodes[cur].left = id;
+            }
+            cur = nodes[cur].left;
+        } else {
+            if nodes[cur].right == -1 {
+                nodes[cur].right = id;
+            }
+            cur = nodes[cur].right;
+        }
+    }
+}
+
+// A random shape: each new node hangs off a random free child slot.
+fn random_shape(seed: mut ref i64, n: i64, range: i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    for i in 0..n {
+        nodes.push(Node { val: next(seed) % range, left: -1, right: -1 });
+        if i > 0 {
+            let mut placed = false;
+            while not placed {
+                let at = next(seed) % i;
+                if next(seed) % 2 == 0 {
+                    if nodes[at].left == -1 {
+                        nodes[at].left = i;
+                        placed = true;
+                    }
+                } else {
+                    if nodes[at].right == -1 {
+                        nodes[at].right = i;
+                        placed = true;
+                    }
+                }
+            }
+        }
+    }
+    return nodes;
+}
+
+fn main() {
+    let mut failures = 0;
+    let mut exhaustive = 0;
+    let mut answered_whole = 0;
+    for n in 0..6 {
+        let all = shapes(n);
+        let mut combos = 1;
+        for _ in 0..n {
+            combos *= 3;
+        }
+        for shape in all.iter() {
+            for c in 0..combos {
+                let mut pool: Vec[Node] = Vec.new();
+                let mut rest = c;
+                for nd in shape.iter() {
+                    pool.push(Node { val: rest % 3, left: nd.left, right: nd.right });
+                    rest = rest / 3;
+                }
+                let what = describe(pool);
+                let ans = agreed(pool, what.clone(), mut failures);
+                check(ans == brute(pool), "P2", what, mut failures);
+                if n > 0 and ans == n {
+                    answered_whole += 1;
+                }
+                exhaustive += 1;
+            }
+        }
+    }
+    let mut seed = 333;
+    let mut random_cases = 0;
+    for round in 0..300 {
+        let n = 1 + next(mut seed) % 40;
+        let kind = round % 4;
+        let mut nodes: Vec[Node] = Vec.new();
+        let mut unique = false;
+        if kind == 0 {
+            // A BST of distinct values: insert a shuffled range.
+            let mut vals: Vec[i64] = Vec.new();
+            for i in 0..n {
+                vals.push(i * 3);
+            }
+            for i in 0..n {
+                let j = i + next(mut seed) % (n - i);
+                let t = vals[i];
+                vals[i] = vals[j];
+                vals[j] = t;
+            }
+            for v in vals {
+                insert(mut nodes, v);
+            }
+            unique = true;
+        } else if kind == 1 {
+            // A BST with duplicates likely.
+            for _ in 0..n {
+                insert(mut nodes, next(mut seed) % (n / 2 + 1));
+            }
+        } else if kind == 2 {
+            // A BST of distinct values with a few damaged nodes.
+            for i in 0..n {
+                insert(mut nodes, (i * 7919) % 100003);
+            }
+            for _ in 0..(1 + next(mut seed) % 3) {
+                let at = next(mut seed) % n;
+                nodes[at].val = next(mut seed) % 100003;
+            }
+        } else {
+            nodes = random_shape(mut seed, n, 50);
+        }
+        properties(nodes, unique, mut failures);
+        random_cases += 1;
+    }
+    println(f"{exhaustive} exhaustive trees ({answered_whole} wholly BSTs), {random_cases} random trees, {failures} failures");
+}

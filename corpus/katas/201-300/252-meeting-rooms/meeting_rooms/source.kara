@@ -1,0 +1,87 @@
+// LeetCode 252 — Meeting Rooms. (Premium.)
+//
+// Given meeting intervals, can one person attend them all? Only if no two
+// overlap.
+//
+// Sort by start, then a single adjacent comparison decides it: once the
+// intervals are in start order, a meeting can only ever conflict with the one
+// immediately before it. If `s[i].start < s[i-1].end` there is a clash; if the
+// scan reaches the end without one, every meeting is attendable. O(n log n),
+// dominated by the sort.
+//
+// **Touching is not overlapping.** `[1,5]` and `[5,10]` are both attendable —
+// the meeting ends exactly as the next begins — so the test is strictly `<`,
+// not `<=`. Getting that wrong is the single most likely error here, and
+// `[[1,5],[5,10]]` is in the test set for it.
+//
+// The comparison against the PREVIOUS interval, not against a running maximum
+// end, is what distinguishes this from [#56](../../1-100/56-merge-intervals/):
+// merging needs `max(cur_end, e)` because a nested interval must not shrink the
+// running end, but here a nested interval `[2,3]` inside `[1,10]` already
+// clashes at the adjacent test and returns early.
+
+fn can_attend_all(intervals: Slice[(i64, i64)]) -> bool {
+    let mut s: Vec[(i64, i64)] = Vec.from_slice(intervals);
+    s.sort_by(|a, b| a.0.cmp(b.0));
+    let n = s.len();
+    let mut i = 1;
+    while i < n {
+        // Strictly less: an end that equals the next start is fine.
+        if s[i].0 < s[i - 1].1 {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn report(intervals: Slice[(i64, i64)], label: ref String) {
+    let ok = can_attend_all(intervals);
+    if ok {
+        println(f"{label} -> true");
+    } else {
+        println(f"{label} -> false");
+    }
+}
+
+fn main() {
+    // [[0,30],[5,10],[15,20]] -> false
+    let a: Array[(i64, i64), 3] = [(0, 30), (5, 10), (15, 20)];
+    report(a, "[[0,30],[5,10],[15,20]]");
+
+    // [[7,10],[2,4]] -> true
+    let b: Array[(i64, i64), 2] = [(7, 10), (2, 4)];
+    report(b, "[[7,10],[2,4]]");
+
+    // [] -> true  (nothing to clash)
+    let c: Array[(i64, i64), 0] = [];
+    report(c, "[]");
+
+    // [[1,5]] -> true  (a single meeting)
+    let d: Array[(i64, i64), 1] = [(1, 5)];
+    report(d, "[[1,5]]");
+
+    // [[1,5],[5,10]] -> true  — TOUCHING is not overlapping
+    let e: Array[(i64, i64), 2] = [(1, 5), (5, 10)];
+    report(e, "[[1,5],[5,10]]");
+
+    // [[1,10],[2,3]] -> false — fully NESTED still clashes
+    let f: Array[(i64, i64), 2] = [(1, 10), (2, 3)];
+    report(f, "[[1,10],[2,3]]");
+
+    // [[5,10],[1,5]] -> true — touching, given out of order
+    let g: Array[(i64, i64), 2] = [(5, 10), (1, 5)];
+    report(g, "[[5,10],[1,5]]");
+
+    // [[1,3],[3,5],[5,7],[7,9]] -> true — a whole touching chain
+    let h: Array[(i64, i64), 4] = [(1, 3), (3, 5), (5, 7), (7, 9)];
+    report(h, "[[1,3],[3,5],[5,7],[7,9]]");
+
+    // [[1,2],[1,2]] -> false — identical meetings clash with each other
+    let i: Array[(i64, i64), 2] = [(1, 2), (1, 2)];
+    report(i, "[[1,2],[1,2]]");
+
+    // [[1,4],[2,5],[3,6]] -> false — a staircase of overlaps
+    let j: Array[(i64, i64), 3] = [(1, 4), (2, 5), (3, 6)];
+    report(j, "[[1,4],[2,5],[3,6]]");
+}

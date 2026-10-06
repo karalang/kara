@@ -1,0 +1,16 @@
+
+fn fetch(u: ref String) -> i64 with reads(Network) suspends { return u.len(); }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let a = "aaaaaaaaaaaaaaaaaaaa";
+        let b = "bbbbbbbbbbbbbbbbbbbb";
+        let r = par {
+            let x = fetch(a);
+            let y = fetch(b);
+            x + y
+        };
+        println(r);
+        i = i + 1;
+    }
+}

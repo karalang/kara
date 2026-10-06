@@ -1,0 +1,39 @@
+
+fn main() {
+    let b: u8 = 200u8;
+    let d: u32 = 4000000000u32;
+    let n: i64 = 7;
+
+    let t: (i64, i64) = (b, d);
+    println(f"01 {t.0} {t.1}");
+
+    let un = (b, d);
+    println(f"02 {un.0} {un.1}");
+
+    let nest: ((i64, i64), i64) = ((b, d), n);
+    println(f"03 {nest.0.0} {nest.0.1} {nest.1}");
+
+    let narrow: (u8, u8) = (200u8, 7u8);
+    println(f"04 {narrow.0} {narrow.1}");
+
+    let s: String = "hi";
+    let mixed: (String, i64) = (s, b);
+    println(f"05 {mixed.0} {mixed.1}");
+
+    let f: f64 = 1.5;
+    let fl: (f64, i64) = (f, b);
+    println(f"06 {fl.0} {fl.1}");
+
+    let pair: (i64, i64) = (b, d);
+    let (x, y) = pair;
+    println(f"07 {x} {y}");
+
+    let same: (i64, i64) = (n, n);
+    println(f"08 {same.0} {same.1}");
+
+    let three: (i64, i64, i64) = (b, d, n);
+    println(f"09 {three.0} {three.1} {three.2}");
+
+    let (p, q): (i64, i64) = (b, d);
+    println(f"10 {p} {q}");
+}

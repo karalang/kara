@@ -1,0 +1,26 @@
+
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+enum Box2 { Full(Res), Empty }
+fn main() {
+    println("D: pad section");
+    let b0 = Box2.Full(Res { id: 4 });
+    match b0 {
+        Box2.Full(r) => { println(f"arm sees {r.id}"); }
+        Box2.Empty => {}
+    }
+    println("W: wrapper overwrite");
+    let mut b = Box2.Full(Res { id: 5 });
+    b = Box2.Empty;
+    println("after overwrite");
+    println("F: pad map");
+    let mut m: Map[i64, Res] = Map.new();
+    let _ = m.insert(1, Res { id: 7 });
+    let _ = m.insert(1, Res { id: 8 });
+    println("after displace");
+    println("end");
+}

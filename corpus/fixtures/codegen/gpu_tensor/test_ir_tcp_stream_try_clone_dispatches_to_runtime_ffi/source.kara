@@ -1,0 +1,7 @@
+
+fn main() {
+    let s = TcpStream.connect("127.0.0.1:8080").unwrap();
+    let c = s.try_clone().unwrap();
+    println(s.fd);
+    println(c.fd);
+}

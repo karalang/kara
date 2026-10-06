@@ -1,0 +1,509 @@
+// LeetCode 310 — four arms against each other and against seven properties
+// that follow from the STATEMENT rather than from any implementation.
+//
+//   A  leaf peeling      — strip whole layers of leaves until 1 or 2 remain
+//   B  diameter midpoint — two BFS, reconstruct the longest path, take its middle
+//   C  brute force       — root at every node, measure the height, keep the argmin
+//   D  eccentricity      — ecc(v) = max(dist to each diameter endpoint), argmin
+//
+// WHAT THE ARMS CANNOT SHARE. A's characteristic bug is peeling a node that
+// became a leaf DURING the current round, which shortens one branch faster than
+// another and drifts the answer off-centre; nothing else here has layers. B's is
+// the midpoint PARITY — an odd-length path has one centre, an even-length one
+// has two — and nothing else reconstructs a path. D's is the theorem itself:
+// taking one diameter endpoint instead of both is wrong for every node whose
+// farthest point is the other end.
+//
+// C IS THE ONE THAT ASSUMES NOTHING, and that is why it is here. A, B and D all
+// rest on the same theorem — the answer is the midpoint of the diameter, hence
+// of size 1 or 2 — and merely exploit it differently. If that theorem were
+// misapplied they could be wrong TOGETHER and still agree. C roots the tree at
+// every node and measures, which is what the statement actually asks.
+//
+// P6 IS THE ONE NO ARM COMPUTES. The answer is a property of the tree's SHAPE,
+// not of its labels: permute every label, remap the edges, and the answer must
+// be the image of the original answer under that same permutation. Every arm is
+// label-sensitive in its internals — A seeds from the lowest-numbered leaves, B
+// starts its BFS at node 0, D picks `farthest` by scanning in index order — so a
+// label dependence is exactly the fault four-way agreement is blind to, since
+// all four would inherit it from the input. Nothing in any arm is trying to be
+// isomorphism-invariant; the property asserts it from outside.
+//
+// P5 TIES THE ANSWER TO THE DIAMETER without using any arm's notion of it:
+// min-height = ceil(diameter / 2), where both sides come from C's independent
+// eccentricity vector (min of it, and max of it).
+
+// ------------------------------------------------------------------- arm A
+
+fn solve_a(n: i64, adj: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut roots: Vec[i64] = Vec.new();
+    if n <= 2 {
+        for i in 0..n {
+            roots.push(i);
+        }
+        return roots;
+    }
+
+    let mut degree: Vec[i64] = Vec.new();
+    let mut alive: Vec[i64] = Vec.new();
+    for i in 0..n {
+        degree.push(adj[i].len());
+        alive.push(1);
+    }
+
+    // The current layer of leaves, snapshotted before any removal.
+    let mut layer: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if degree[i] == 1 {
+            layer.push(i);
+        }
+    }
+
+    let mut remaining = n;
+    while remaining > 2 {
+        remaining = remaining - layer.len();
+        let mut next: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < layer.len() {
+            let v = layer[k];
+            alive[v] = 0;
+            let mut j = 0;
+            while j < adj[v].len() {
+                let w = adj[v][j];
+                if alive[w] == 1 {
+                    degree[w] = degree[w] - 1;
+                    // A neighbour that just became a leaf belongs to the NEXT
+                    // layer, never this one.
+                    if degree[w] == 1 {
+                        next.push(w);
+                    }
+                }
+                j = j + 1;
+            }
+            k = k + 1;
+        }
+        layer = next;
+    }
+
+    for i in 0..n {
+        if alive[i] == 1 {
+            roots.push(i);
+        }
+    }
+    return roots;
+}
+
+// ------------------------------------------------------------------- arm B
+
+fn bfs_far(n: i64, adj: ref Vec[Vec[i64]], src: i64) -> Vec[i64] {
+    // Returns the parent array; parent[src] = src, unreachable stays -1.
+    let mut parent: Vec[i64] = Vec.new();
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..n {
+        parent.push(-1);
+    }
+    parent[src] = src;
+    order.push(src);
+    let mut head = 0;
+    while head < order.len() {
+        let v = order[head];
+        head = head + 1;
+        let mut j = 0;
+        while j < adj[v].len() {
+            let w = adj[v][j];
+            if parent[w] == -1 {
+                parent[w] = v;
+                order.push(w);
+            }
+            j = j + 1;
+        }
+    }
+    // The last node dequeued is a farthest one; stash it at the end.
+    parent.push(order[order.len() - 1]);
+    return parent;
+}
+
+fn solve_b(n: i64, adj: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut roots: Vec[i64] = Vec.new();
+    if n <= 2 {
+        for i in 0..n {
+            roots.push(i);
+        }
+        return roots;
+    }
+
+    let first = bfs_far(n, adj, 0);
+    let u = first[n];
+    let second = bfs_far(n, adj, u);
+    let v = second[n];
+
+    // Walk the parent chain from v back to u — that is the diameter path.
+    let mut path: Vec[i64] = Vec.new();
+    let mut cur = v;
+    while cur != u {
+        path.push(cur);
+        cur = second[cur];
+    }
+    path.push(u);
+
+    let len = path.len();
+    if len % 2 == 1 {
+        roots.push(path[(len - 1) / 2]);
+    } else {
+        let a = path[len / 2 - 1];
+        let b = path[len / 2];
+        if a < b {
+            roots.push(a);
+            roots.push(b);
+        } else {
+            roots.push(b);
+            roots.push(a);
+        }
+    }
+    return roots;
+}
+
+// ------------------------------------------------------------------- arm C
+
+fn eccentricity(n: i64, adj: ref Vec[Vec[i64]], src: i64) -> i64 {
+    let mut dist: Vec[i64] = Vec.new();
+    for i in 0..n {
+        dist.push(-1);
+    }
+    let mut order: Vec[i64] = Vec.new();
+    dist[src] = 0;
+    order.push(src);
+    let mut head = 0;
+    let mut best = 0;
+    while head < order.len() {
+        let v = order[head];
+        head = head + 1;
+        if dist[v] > best {
+            best = dist[v];
+        }
+        let mut j = 0;
+        while j < adj[v].len() {
+            let w = adj[v][j];
+            if dist[w] == -1 {
+                dist[w] = dist[v] + 1;
+                order.push(w);
+            }
+            j = j + 1;
+        }
+    }
+    return best;
+}
+
+fn solve_c(n: i64, adj: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut roots: Vec[i64] = Vec.new();
+    if n == 0 {
+        return roots;
+    }
+    let mut best = eccentricity(n, adj, 0);
+    for i in 1..n {
+        let e = eccentricity(n, adj, i);
+        if e < best {
+            best = e;
+        }
+    }
+    for i in 0..n {
+        if eccentricity(n, adj, i) == best {
+            roots.push(i);
+        }
+    }
+    return roots;
+}
+
+// ------------------------------------------------------------------- arm D
+
+fn bfs_dist(n: i64, adj: ref Vec[Vec[i64]], src: i64) -> Vec[i64] {
+    let mut dist: Vec[i64] = Vec.new();
+    for i in 0..n {
+        dist.push(-1);
+    }
+    let mut order: Vec[i64] = Vec.new();
+    dist[src] = 0;
+    order.push(src);
+    let mut head = 0;
+    while head < order.len() {
+        let v = order[head];
+        head = head + 1;
+        let mut j = 0;
+        while j < adj[v].len() {
+            let w = adj[v][j];
+            if dist[w] == -1 {
+                dist[w] = dist[v] + 1;
+                order.push(w);
+            }
+            j = j + 1;
+        }
+    }
+    return dist;
+}
+
+fn farthest(dist: ref Vec[i64]) -> i64 {
+    let mut best = 0;
+    let mut i = 1;
+    while i < dist.len() {
+        if dist[i] > dist[best] {
+            best = i;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn solve_d(n: i64, adj: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut roots: Vec[i64] = Vec.new();
+    if n == 0 {
+        return roots;
+    }
+    let d0 = bfs_dist(n, adj, 0);
+    let u = farthest(d0);
+    let du = bfs_dist(n, adj, u);
+    let w = farthest(du);
+    let dw = bfs_dist(n, adj, w);
+
+    // ecc(v) = max(dist to u, dist to w) — both endpoints, never just one.
+    let mut best = -1;
+    for i in 0..n {
+        let mut e = du[i];
+        if dw[i] > e {
+            e = dw[i];
+        }
+        if best == -1 or e < best {
+            best = e;
+        }
+    }
+    for i in 0..n {
+        let mut e = du[i];
+        if dw[i] > e {
+            e = dw[i];
+        }
+        if e == best {
+            roots.push(i);
+        }
+    }
+    return roots;
+}
+
+// ------------------------------------------------------------------ harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) % 2147483648;
+}
+
+// A random tree: node i attaches to a parent within `spread` slots below it.
+// spread = 1 gives a path; a large spread gives a bushy random tree.
+fn make_tree(n: i64, seed: i64, spread: i64) -> Vec[i64] {
+    let mut edges: Vec[i64] = Vec.new();
+    let mut state = seed;
+    let mut i = 1;
+    while i < n {
+        let mut window = spread;
+        if window > i { window = i; }
+        state = lcg(state);
+        let parent = i - 1 - state % window;
+        edges.push(parent);
+        edges.push(i);
+        i = i + 1;
+    }
+    return edges;
+}
+
+fn adjacency_of(n: i64, edges: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let row: Vec[i64] = Vec.new();
+        adj.push(row);
+    }
+    let mut k = 0;
+    while k + 1 < edges.len() {
+        adj[edges[k]].push(edges[k + 1]);
+        adj[edges[k + 1]].push(edges[k]);
+        k = k + 2;
+    }
+    return adj;
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn permutation(n: i64, seed: i64) -> Vec[i64] {
+    let mut p: Vec[i64] = Vec.new();
+    for i in 0..n { p.push(i); }
+    let mut state = seed;
+    let mut i = n - 1;
+    while i > 0 {
+        state = lcg(state);
+        let j = state % (i + 1);
+        let t = p[i];
+        p[i] = p[j];
+        p[j] = t;
+        i = i - 1;
+    }
+    return p;
+}
+
+fn relabel(edges: ref Vec[i64], p: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < edges.len() {
+        out.push(p[edges[k]]);
+        k = k + 1;
+    }
+    return out;
+}
+
+fn sorted_image(roots: ref Vec[i64], p: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < roots.len() {
+        out.push(p[roots[i]]);
+        i = i + 1;
+    }
+    // at most two elements
+    if out.len() == 2 and out[0] > out[1] {
+        let t = out[0];
+        out[0] = out[1];
+        out[1] = t;
+    }
+    return out;
+}
+
+fn main() {
+    let mut trees = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut p5 = 0;
+    let mut p6 = 0;
+    let mut p7 = 0;
+
+    let mut n = 1;
+    while n <= 40 {
+        let mut spread = 1;
+        while spread <= 6 {
+            let mut round = 0;
+            while round < 20 {
+                let seed = 7919 * (n * 11 + spread) + round * 104729 + 1;
+                let edges = make_tree(n, seed, spread);
+                let adj = adjacency_of(n, edges);
+
+                let ra = solve_a(n, adj);
+
+                // P1 — four arms, one answer.
+                if not same(solve_b(n, adj), ra) { p1 += 1; }
+                if not same(solve_c(n, adj), ra) { p1 += 1; }
+                if not same(solve_d(n, adj), ra) { p1 += 1; }
+
+                // P2 — the centre of a tree is one node or two, never more.
+                if ra.len() < 1 or ra.len() > 2 { p2 += 1; }
+
+                // P3 — when there are two, they are adjacent.
+                if ra.len() == 2 {
+                    let mut touching = false;
+                    let mut j = 0;
+                    while j < adj[ra[0]].len() {
+                        if adj[ra[0]][j] == ra[1] { touching = true; }
+                        j = j + 1;
+                    }
+                    if not touching { p3 += 1; }
+                }
+
+                // ---- C's independent eccentricity vector, for P4 and P5.
+                let mut min_ecc = -1;
+                let mut max_ecc = -1;
+                for v in 0..n {
+                    let e = eccentricity(n, adj, v);
+                    if min_ecc == -1 or e < min_ecc { min_ecc = e; }
+                    if e > max_ecc { max_ecc = e; }
+                }
+
+                // P4 — the answer is exactly the set of eccentricity minimisers.
+                let mut expected: Vec[i64] = Vec.new();
+                for v in 0..n {
+                    if eccentricity(n, adj, v) == min_ecc { expected.push(v); }
+                }
+                if not same(expected, ra) { p4 += 1; }
+
+                // P5 — min height is exactly half the diameter, rounded up.
+                if min_ecc != (max_ecc + 1) / 2 { p5 += 1; }
+
+                // P6 — the answer is a property of SHAPE, not of labels.
+                let mut variant = 1;
+                while variant <= 3 {
+                    let p = permutation(n, seed + variant * 7717);
+                    let redges = relabel(edges, p);
+                    let radj = adjacency_of(n, redges);
+                    if not same(solve_a(n, radj), sorted_image(ra, p)) { p6 += 1; }
+                    variant = variant + 1;
+                }
+
+                trees += 1;
+                round = round + 1;
+            }
+            spread = spread + 1;
+        }
+        n = n + 1;
+    }
+
+    // ---- P7 — shapes whose centre the statement fixes outright.
+    let mut m = 1;
+    while m <= 40 {
+        // a path 0-1-...-(m-1): the centre is the middle one or two
+        let mut pedges: Vec[i64] = Vec.new();
+        let mut i = 1;
+        while i < m {
+            pedges.push(i - 1);
+            pedges.push(i);
+            i = i + 1;
+        }
+        let padj = adjacency_of(m, pedges);
+        let pr = solve_a(m, padj);
+        if m % 2 == 1 {
+            if pr.len() != 1 or pr[0] != (m - 1) / 2 { p7 += 1; }
+        } else {
+            if pr.len() != 2 or pr[0] != m / 2 - 1 or pr[1] != m / 2 { p7 += 1; }
+        }
+        // a star with hub 0: the hub is the only centre (m >= 3)
+        if m >= 3 {
+            let mut sedges: Vec[i64] = Vec.new();
+            let mut k = 1;
+            while k < m {
+                sedges.push(0);
+                sedges.push(k);
+                k = k + 1;
+            }
+            let sadj = adjacency_of(m, sedges);
+            let sr = solve_a(m, sadj);
+            if sr.len() != 1 or sr[0] != 0 { p7 += 1; }
+        }
+        m = m + 1;
+    }
+
+    println(f"trees {trees}");
+    println(f"P1 arm disagreements {p1}");
+    println(f"P2 centre-size failures {p2}");
+    println(f"P3 adjacency failures {p3}");
+    println(f"P4 eccentricity-argmin failures {p4}");
+    println(f"P5 half-diameter failures {p5}");
+    println(f"P6 relabelling failures {p6}");
+    println(f"P7 fixed-shape failures {p7}");
+
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0 and p6 == 0 and p7 == 0 {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

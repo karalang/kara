@@ -1,0 +1,13 @@
+source = "tests/codegen/enums.rs::e2e_generic_callee_hands_its_boxed_payload_back_inside_an_aggregate"
+dedup_of = ["tests/interpreter/enums.rs::test_generic_callee_hands_its_boxed_payload_back_inside_an_aggregate"]
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

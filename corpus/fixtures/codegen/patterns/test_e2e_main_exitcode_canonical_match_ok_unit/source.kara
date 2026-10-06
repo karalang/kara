@@ -1,0 +1,13 @@
+
+fn run(ok: bool) -> Result[(), String] {
+    if ok { Ok(()) } else { Err("boom") }
+}
+fn main() -> ExitCode {
+    match run(false) {
+        Ok(()) => ExitCode.SUCCESS,
+        Err(e) => {
+            eprintln("Error: {e}");
+            ExitCode.from(3)
+        }
+    }
+}

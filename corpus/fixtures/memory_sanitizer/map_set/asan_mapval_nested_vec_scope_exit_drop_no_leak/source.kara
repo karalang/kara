@@ -1,0 +1,18 @@
+
+fn build(n: i64) -> Map[i64, Vec[Vec[String]]] {
+    let mut inner: Vec[String] = Vec.new();
+    inner.push(f"nested payload padded out beyond thirty-six bytes {n}");
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    outer.push(inner);
+    let mut m: Map[i64, Vec[Vec[String]]] = Map.new();
+    m.insert(n, outer);
+    m
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let m = build(i);
+        println(m.len());
+        i = i + 1;
+    };
+}

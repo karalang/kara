@@ -1,0 +1,14 @@
+
+fn make() -> String {
+    let a = "made ";
+    let b = "string";
+    return a + b;
+}
+
+fn show_len(s: ref String) {
+    println(s.len());
+}
+
+fn main() {
+    show_len(make());
+}

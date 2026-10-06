@@ -1,0 +1,36 @@
+
+fn construct(x: f32) -> f32 {
+    let a: Vector[f32, 4] = Vector[f32, 4](x, x, x, x);
+    let b: Vector[f32, 4] = Vector[f32, 4](0.5, 0.25, 0.5, 0.25);
+    let c = a * b;
+    c[0] + c[1] + c[2] + c[3]
+}
+
+fn splat_lit(y: f32) -> f32 {
+    let m: Vector[f32, 4] = Vector[f32, 4].splat(0.5);
+    let a: Vector[f32, 4] = Vector[f32, 4](y, y, y, y);
+    let c = a * m;
+    c[0] + c[3]
+}
+
+fn from_array_replace(y: f32) -> f32 {
+    let m: Vector[f32, 4] = Vector[f32, 4].from_array([0.5, 0.5, 0.25, 0.25]);
+    let r = m.replace(0, 1.5);
+    let a: Vector[f32, 4] = Vector[f32, 4](y, y, y, y);
+    let c = a * r;
+    c[0] + c[1] + c[2] + c[3]
+}
+
+fn int_lanes(x: i32) -> i32 {
+    let a: Vector[i32, 8] = Vector[i32, 8].splat(x);
+    let b: Vector[i32, 8] = Vector[i32, 8](1, 2, 3, 4, 5, 6, 7, 8);
+    let c = a + b;
+    c[0] + c[7]
+}
+
+fn main() {
+    println(construct(2.0));
+    println(splat_lit(4.0));
+    println(from_array_replace(2.0));
+    println(int_lanes(10));
+}

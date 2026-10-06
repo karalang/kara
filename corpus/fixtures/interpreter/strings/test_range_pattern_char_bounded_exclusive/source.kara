@@ -1,0 +1,9 @@
+
+fn main() {
+    let c: char = 'g';
+    let r = match c {
+        'a'..'h' => 1,
+        _ => 0,
+    };
+    println(r);
+}

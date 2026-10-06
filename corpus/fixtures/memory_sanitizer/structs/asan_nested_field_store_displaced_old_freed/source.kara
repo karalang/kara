@@ -1,0 +1,11 @@
+
+struct R2 { id: i64, name: String }
+struct H2 { r: R2 }
+struct O2 { h: H2 }
+fn main() {
+    let mut o = O2 { h: H2 { r: R2 { id: 9, name: f"z{9}" } } };
+    println(f"pre {o.h.r.name}");
+    o.h.r = R2 { id: 5, name: f"y{5}" };
+    println(f"post {o.h.r.name}");
+    println("end");
+}

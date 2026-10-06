@@ -1,0 +1,113 @@
+// Benchmark harness for LeetCode #131 — Palindrome Partitioning.
+//
+// Build-once + punch (BENCHMARKS.md): the case strings are built once, then
+// each punch runs the full backtracking enumeration over one of them.
+//
+// STRING SHAPE IS THE WORKLOAD. An all-'a' string of length n has 2^(n-1)
+// palindromic partitionings, so the enumeration is exponential in n and a
+// couple of characters change the runtime by 4x. The set below mixes:
+//   - all-'a' runs (maximum branching: every substring is a palindrome),
+//   - alternating 'abab...' (moderate branching),
+//   - a no-repeat string (minimum branching: only single characters).
+// Benching only the all-'a' case would measure one extreme of the search tree.
+//
+// Note this kata's `substring` is O(n) — it walks `s.chars()` and filters —
+// rather than a slice. That is the kata's own implementation and is kept
+// verbatim; the mirrors reproduce the same per-piece cost rather than using a
+// cheap native slice, or C/Rust/Go would be measuring a different algorithm.
+
+fn modulus() -> i64 {
+    1000000007
+}
+
+fn is_pal(s: ref String, lo: i64, hi: i64) -> bool {
+    let bytes = s.bytes();
+    let mut l = lo;
+    let mut h = hi;
+    while l < h {
+        if bytes[l] != bytes[h] {
+            return false;
+        }
+        l = l + 1;
+        h = h - 1;
+    }
+    true
+}
+
+fn substring(s: ref String, lo: i64, hi: i64) -> String {
+    let mut out: String = "";
+    let mut i = 0;
+    for ch in s.chars() {
+        if i >= lo and i <= hi {
+            out.push(ch);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn part_hash(path: ref Vec[String]) -> i64 {
+    let m = modulus();
+    let mut h = 0;
+    let mut idx = 0;
+    while idx < path.len() {
+        let piece = ref path[idx];
+        for b in piece.bytes() {
+            h = (h * 131 + ((b as i64) - 96)) % m;
+        }
+        h = (h * 131 + 27) % m;
+        idx = idx + 1;
+    }
+    h
+}
+
+fn backtrack(
+    s: ref String,
+    start: i64,
+    n: i64,
+    path: mut ref Vec[String],
+    count: mut ref i64,
+    digest: mut ref i64,
+) {
+    if start == n {
+        let m = modulus();
+        digest = (digest + part_hash(path)) % m;
+        count = count + 1;
+        return;
+    }
+    let mut end = start;
+    while end < n {
+        if is_pal(s, start, end) {
+            path.push(substring(s, start, end));
+            backtrack(s, end + 1, n, path, count, digest);
+            path.pop();
+        }
+        end = end + 1;
+    }
+}
+
+fn main() {
+    let iters = 150;
+
+    let mut cases: Vec[String] = Vec.new();
+    cases.push("aaaaaaaaaaaaaaaa");
+    cases.push("abababababababab");
+    cases.push("abcdefghijklmnop");
+    cases.push("aabaacaabaacaaba");
+
+    let np = cases.len();
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 3) % np;
+        let s = ref cases[idx];
+        let n = s.bytes().len();
+        let mut path: Vec[String] = Vec.new();
+        let mut count = 0;
+        let mut digest = 0;
+        backtrack(s, 0, n, mut path, mut count, mut digest);
+        sink = (sink + count * 7 + digest) % 1000000007;
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

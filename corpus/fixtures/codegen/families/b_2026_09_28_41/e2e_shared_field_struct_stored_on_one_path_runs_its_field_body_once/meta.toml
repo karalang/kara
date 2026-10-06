@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_28_41.rs::e2e_shared_field_struct_stored_on_one_path_runs_its_field_body_once"
+dedup_of = ["tests/interpreter/families/b_2026_09_28_41.rs::test_shared_field_struct_stored_on_one_path_runs_its_field_body_once", "tests/memory_sanitizer/families/b_2026_09_28_41.rs::asan_shared_field_struct_stored_on_one_path_frees_once"]
+expect = "stdout"
+exit = 0
+tags = ["drop", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

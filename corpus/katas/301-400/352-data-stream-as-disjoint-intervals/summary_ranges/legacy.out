@@ -1,0 +1,18 @@
+add 1: [1, 1]
+add 3: [1, 1] [3, 3]
+add 7: [1, 1] [3, 3] [7, 7]
+add 2: [1, 3] [7, 7]
+add 6: [1, 3] [6, 7]
+nothing added: (empty)
+edges: [0, 6] [9998, 10000]
+after 3000: 1910 intervals covering 2592
+after 6000: 2450 intervals covering 4507
+after 9000: 2409 intervals covering 5949
+after 12000: 2089 intervals covering 7004
+after 15000: 1714 intervals covering 7803
+after 18000: 1355 intervals covering 8366
+after 21000: 1068 intervals covering 8785
+after 24000: 828 intervals covering 9097
+after 27000: 627 intervals covering 9335
+after 30000: 468 intervals covering 9511
+checksum 625174417

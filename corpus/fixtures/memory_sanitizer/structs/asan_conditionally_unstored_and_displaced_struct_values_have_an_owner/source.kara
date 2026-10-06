@@ -1,0 +1,23 @@
+
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
+struct Box2 { mut xs: Vec[R] }
+impl Box2 {
+    fn maybe(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } }
+    fn amaybe(b: mut ref Box2, r: R, k: bool) { if k { b.xs.push(r); } }
+}
+struct Box3 { mut one: R }
+impl Box3 { fn set(mut ref self, r: R) { self.one = r; } }
+fn fcond(b: mut ref Box2, r: R, k: bool) { if k { b.xs.push(r); } }
+
+fn c_cond()  { let mut b = Box2 { xs: Vec.new() }; b.maybe(mk(31), false); println(f"a{b.xs.len()}"); }
+fn c_condf() { let mut b = Box2 { xs: Vec.new() }; fcond(mut b, mk(32), false); println(f"b{b.xs.len()}"); }
+fn c_conda() { let mut b = Box2 { xs: Vec.new() }; Box2.amaybe(mut b, mk(33), false); println(f"c{b.xs.len()}"); }
+fn c_condy() { let mut b = Box2 { xs: Vec.new() }; b.maybe(mk(34), true); println(f"d{b.xs.len()}"); }
+fn c_condn() { let mut b = Box2 { xs: Vec.new() }; let r = mk(35); b.maybe(r, false); println(f"e{b.xs.len()}"); }
+fn c_setm()  { let mut h = Box3 { one: mk(1) }; h.set(mk(36)); println(f"f{h.one.id}"); }
+fn c_setd()  { let mut h = Box3 { one: mk(2) }; h.one = mk(37); println(f"g{h.one.id}"); }
+fn c_elem()  { let mut v: Vec[R] = Vec.new(); v.push(mk(3)); v[0] = mk(38); println(f"h{v[0].id}"); }
+fn main() { c_cond(); c_condf(); c_conda(); c_condy(); c_condn(); c_setm(); c_setd(); c_elem(); println("end"); }

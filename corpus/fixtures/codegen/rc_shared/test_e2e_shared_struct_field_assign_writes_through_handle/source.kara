@@ -1,0 +1,11 @@
+
+shared struct Cell { mut value: i64 }
+struct Holder { cell: Cell }
+fn main() {
+    let c = Cell { value: 10 };
+    let mut h = Holder { cell: c };
+    h.cell.value = 99;
+    println(f"{c.value}");
+    c.value = 7;
+    println(f"{h.cell.value}");
+}

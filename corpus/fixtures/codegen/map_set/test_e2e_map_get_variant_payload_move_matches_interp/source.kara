@@ -1,0 +1,77 @@
+
+enum B { S(String), C }
+enum B2 { S(String, i64), C }
+enum Bv { S(Vec[String]), C }
+struct Wide { a: String, n: i64 }
+enum W { V(Wide), E }
+fn mk(i: i64) -> String { f"payload-{i}-long-enough-to-heap" }
+fn leg_two_field() {
+    let mut m: Map[String, B2] = Map.new();
+    let _ = m.insert("k", B2.S(mk(1), 3));
+    let mut held = String.new(); let mut k = 0;
+    match m.get("k") { None => {} Some(B2.S(w, n)) => { held = w; k = n; } Some(B2.C) => {} }
+    println(f"tf {held} {k} {m.len()}");
+}
+fn leg_struct() {
+    let mut m: Map[String, W] = Map.new();
+    let _ = m.insert("k", W.V(Wide { a: mk(2), n: 7 }));
+    let mut out: Vec[Wide] = [];
+    match m.get("k") { None => {} Some(W.V(x)) => { out.push(x); } Some(W.E) => {} }
+    println(f"st {out.len()} {out[0].a} {out[0].n}");
+}
+fn leg_if_let() {
+    let mut m: Map[String, B] = Map.new();
+    let _ = m.insert("k", B.S(mk(3)));
+    let mut held = String.new();
+    if let Some(B.S(w)) = m.get("k") { held = w; }
+    println(f"il {held}");
+}
+fn leg_sorted() {
+    let mut m: SortedMap[String, B] = SortedMap.new();
+    let _ = m.insert("k", B.S(mk(4)));
+    let mut out: Vec[String] = [];
+    match m.get("k") { None => {} Some(B.S(w)) => { out.push(w); } Some(B.C) => {} }
+    println(f"so {out[0]}");
+}
+fn pick(m: ref Map[String, B]) -> String {
+    match m.get("k") { None => String.new(), Some(B.S(w)) => w, Some(B.C) => String.new() }
+}
+fn leg_return() {
+    let mut m: Map[String, B] = Map.new();
+    let _ = m.insert("k", B.S(mk(5)));
+    let s = pick(m);
+    println(f"rt {s}");
+}
+fn leg_loop_move() {
+    let mut m: Map[String, B] = Map.new();
+    let _ = m.insert("k", B.S(mk(6)));
+    let mut out: Vec[String] = [];
+    let mut i = 0;
+    while i < 3 { match m.get("k") { None => {} Some(B.S(w)) => { out.push(w); } Some(B.C) => {} } i = i + 1; }
+    println(f"lm {out.len()} {out[2]}");
+}
+fn leg_vec_payload() {
+    let mut m: Map[String, Bv] = Map.new();
+    let _ = m.insert("k", Bv.S([mk(7), mk(8)]));
+    let mut held: Vec[String] = [];
+    match m.get("k") { None => {} Some(Bv.S(w)) => { held = w; } Some(Bv.C) => {} }
+    println(f"vp {held.len()} {held[1]}");
+}
+fn leg_read_only() {
+    let mut m: Map[String, B] = Map.new();
+    let _ = m.insert("k", B.S(mk(9)));
+    let mut n = 0; let mut i = 0;
+    while i < 4 { match m.get("k") { None => {} Some(B.S(w)) => { n = n + w.len(); } Some(B.C) => {} } i = i + 1; }
+    println(f"ro {n}");
+}
+fn main() {
+    leg_two_field();
+    leg_struct();
+    leg_if_let();
+    leg_sorted();
+    leg_return();
+    leg_loop_move();
+    leg_vec_payload();
+    leg_read_only();
+    println("done");
+}

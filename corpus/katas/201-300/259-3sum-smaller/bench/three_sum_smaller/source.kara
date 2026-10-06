@@ -1,0 +1,78 @@
+// Benchmark workload for LeetCode #259 — 3Sum Smaller.
+//
+// Build-once + punch. One array of 4,000 values is generated once, then the ★
+// sorted two-pointer count runs over it 26 times.
+//
+// The target is chosen INSIDE the band of achievable triple sums, at roughly the
+// median. That is not cosmetic: with a target below every sum the inner loop
+// only ever decrements `hi` and never counts, and with one above every sum it
+// only ever advances `lo`. Either extreme turns the two-pointer scan into a
+// single monotone sweep with a perfectly predicted branch. A mid-band target
+// makes the choice data-dependent at every step, which is the behaviour worth
+// measuring.
+//
+// The sort is paid once per round (O(n log n)) against the scan's O(n²), so at
+// n = 4,000 the scan dominates by ~2 orders of magnitude — this lane is about
+// the counting, not the sort. #252 and #253 are the sort-dominated lanes.
+//
+// No allocation in the punch loop beyond the per-round copy, and the inner
+// comparison is loop-carried through `lo`/`hi`, so nothing vectorises.
+
+fn main() {
+    let n = 4000;
+    let rounds = 26;
+
+    // ---- build once ------------------------------------------------------
+    let mut base: Vec[i64] = Vec.new();
+    let mut state = 259259;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        base.push((state / 65536) % 2001 - 1000);
+        i = i + 1;
+    }
+    // Sort once here to derive a mid-band target; each round re-sorts its own
+    // copy, so the punch loop still pays the sort.
+    let mut probe: Vec[i64] = Vec.new();
+    let mut p = 0;
+    while p < n {
+        probe.push(base[p]);
+        p = p + 1;
+    }
+    probe.sort();
+    let min_sum = probe[0] + probe[1] + probe[2];
+    let max_sum = probe[n - 1] + probe[n - 2] + probe[n - 3];
+    let target = (min_sum + max_sum) / 2;
+
+    // ---- punch -----------------------------------------------------------
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut s: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < n {
+            s.push(base[c]);
+            c = c + 1;
+        }
+        s.sort();
+
+        let mut count = 0;
+        let mut a = 0;
+        while a + 2 < n {
+            let mut lo = a + 1;
+            let mut hi = n - 1;
+            while lo < hi {
+                if s[a] + s[lo] + s[hi] < target {
+                    count = count + (hi - lo);
+                    lo = lo + 1;
+                } else {
+                    hi = hi - 1;
+                }
+            }
+            a = a + 1;
+        }
+        sink = (sink * 31 + count % 1000000007) % 1000000007;
+        r = r + 1;
+    }
+    println(sink);
+}

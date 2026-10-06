@@ -1,0 +1,60 @@
+bind
+dR32:s32:2
+dR132:s132:2
+  b
+bindsib
+dR148:s148:2
+  rd48
+dR48:s48:2
+slot0
+dR72:s72:2
+  k5
+nested
+dR2:s2:2
+dR102:s102:2
+  n3
+nestpl
+dR6:s6:2
+dR106:s106:2
+  p7
+loopb
+dR64:s64:2
+dR164:s164:2
+dR64:s64:2
+dR164:s164:2
+  l
+consume
+dR52:s52:2
+  c152
+dR152:s152:2
+moved
+dR54:s54:2
+  mtrue
+dR154:s154:2
+ret
+dR56:s56:2
+  rtrue
+dR156:s156:2
+arg
+dR58:s58:2
+  a158
+dR158:s158:2
+field
+dR76:s76:2
+  ftrue
+dR176:s176:2
+instr
+dR60:s60:2
+  s
+none
+dR62:s62:2
+  o
+plainel
+dR9:s9:2
+dR109:s109:2
+  q
+wildcd
+dR31:s31:2
+dR131:s131:2
+  w
+done

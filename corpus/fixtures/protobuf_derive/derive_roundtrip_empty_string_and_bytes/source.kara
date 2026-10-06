@@ -1,0 +1,10 @@
+
+#[derive(Message)]
+struct Blob { tag: String, data: Vec[u8] }
+
+fn main() {
+    let b = Blob { tag: "", data: Vec.new() };
+    let r = Blob.decode(b.encode());
+    println(r.tag.len());
+    println(r.data.len());
+}

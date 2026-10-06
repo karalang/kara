@@ -1,0 +1,17 @@
+
+struct Mk { n: i64 }
+impl Mk {
+    fn sink(ref self, acc: mut ref Vec[Option[String]], x: Option[String]) { acc.push(x); }
+}
+fn mks(n: i64) -> String { return f"payloadpayload{n}"; }
+fn main() {
+    let m = Mk { n: 1 };
+    let mut acc: Vec[Option[String]] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        m.sink(mut acc, Some(mks(i)));
+        println(f"{acc.len()}");
+        i = i + 1;
+    }
+    println("done");
+}

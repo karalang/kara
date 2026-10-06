@@ -1,0 +1,27 @@
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { D { id: n, name: f"n{n}" } }
+struct P { a: D, b: i64 }
+struct W { r: D, s: D }
+struct X { w: W, t: D }
+struct Q { k: i64 }
+impl Q { fn see(self, d: D) -> i64 { d.id } }
+struct K { v: i64 }
+fn show(d: D) -> i64 { d.id }
+fn fstr(c: bool) { let p = P { a: mkd(10), b: 0 }; println(f"s{show(if c { p.a } else { mkd(19) })}"); }
+fn cond(c: bool) { let p = P { a: mkd(20), b: 0 }; if show(if c { p.a } else { mkd(29) }) > 0 { println("pos") } }
+fn wild(c: bool) { let p = P { a: mkd(30), b: 0 }; let _ = show(if c { p.a } else { mkd(39) }); println("w"); }
+fn meth(c: bool) { let p = P { a: mkd(40), b: 0 }; let q = Q { k: 0 }; println(f"s{q.see(if c { p.a } else { mkd(49) })}"); }
+fn mtch(c: bool) { let p = P { a: mkd(50), b: 0 }; println(f"s{show(match c { true => p.a, false => mkd(59) })}"); }
+fn slit(c: bool) { let p = P { a: mkd(60), b: 0 }; let k = K { v: show(if c { p.a } else { mkd(69) }) }; println(f"k{k.v}"); }
+fn deep(c: bool) { let x = X { w: W { r: mkd(70), s: mkd(71) }, t: mkd(72) }; println(f"s{show(if c { x.w.r } else { mkd(79) })}"); }
+fn main() {
+    fstr(false); fstr(true);
+    cond(false); cond(true);
+    wild(false); wild(true);
+    meth(false); meth(true);
+    mtch(false); mtch(true);
+    slit(false); slit(true);
+    deep(false); deep(true);
+    println("end")
+}

@@ -1,0 +1,31 @@
+
+struct Trio { a: i64, b: i64, c: i64 }
+impl Reduce[i64] for Trio {
+    fn sum(ref self) -> i64 { self.a + self.b + self.c }
+    fn min(ref self) -> i64 {
+        let mut m = self.a;
+        if self.b < m { m = self.b; }
+        if self.c < m { m = self.c; }
+        m
+    }
+    fn max(ref self) -> i64 {
+        let mut m = self.a;
+        if self.b > m { m = self.b; }
+        if self.c > m { m = self.c; }
+        m
+    }
+    fn mean(ref self) -> f64 { (self.sum() as f64) / 3.0 }
+}
+struct FDuo { x: f64, y: f64 }
+impl Reduce[f64] for FDuo {
+    fn sum(ref self) -> f64 { self.x + self.y }
+    fn min(ref self) -> f64 { if self.x < self.y { self.x } else { self.y } }
+    fn max(ref self) -> f64 { if self.x > self.y { self.x } else { self.y } }
+    fn mean(ref self) -> f64 { self.sum() / 2.0 }
+}
+fn main() {
+    let t = Trio { a: 5, b: 2, c: 8 };
+    println(f"{t.range()}");
+    let d = FDuo { x: 1.5, y: 9.0 };
+    println(f"{d.range()}");
+}

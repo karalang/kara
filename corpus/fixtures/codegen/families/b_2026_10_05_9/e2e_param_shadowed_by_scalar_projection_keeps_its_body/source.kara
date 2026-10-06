@@ -1,0 +1,30 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mks(i: i64) -> S { S { r: R { id: i }, s: f"ssssssssssssssssssssssssssss{i}" } }
+fn c1(s: S) -> i64 { let s = s.r.id; s }
+fn c5(s: S) -> R { let s = s.r; s }
+fn c6(x: Option[R]) -> i64 { let x = 5; x }
+fn c8(s: S) -> i64 { let s = s.s.len(); s }
+fn c9(s: R) -> i64 { let s = s.id; s }
+struct W { v: i64 } impl W { fn m(self, s: S) -> i64 { let s = s.r.id; s } }
+fn c10(s: S, b: bool) -> i64 { if b { let s = s.r.id; return s; } 0 }
+fn c11(s: S) -> S { let t = s.r.id; println(f"t{t}"); s }
+fn c12(s: S) -> i64 { let s = s.r.id + 1; s }
+fn main() {
+    println(f"k{c1(mks(3))}"); println("_a1")
+    let a = mks(6); println(f"k{c1(a)}"); println("_a2")
+    let a = mks(6); let n = c1(a); println(f"k{n}"); println("_a3")
+    let r = c5(mks(7)); println(f"k{r.id}"); println("_a4")
+    let a = mks(7); let r = c5(a); println(f"k{r.id}"); println("_a5")
+    println(f"k{c6(Some(R { id: 8 }))}"); println("_a6")
+    let o = Some(R { id: 9 }); println(f"k{c6(o)}"); println("_a7")
+    println(f"k{c8(mks(10))}"); println("_a8")
+    let a = R { id: 11 }; println(f"k{c9(a)}"); println("_a9")
+    println(f"k{c9(R { id: 12 })}"); println("_b1")
+    let w = W { v: 1 }; println(f"k{w.m(mks(14))}"); println("_b3")
+    println(f"k{c10(mks(15), true)}"); println("_b4")
+    let r = c11(mks(16)); println(f"k{r.r.id}"); println("_b5")
+    let a = mks(17); println(f"k{c12(a)}"); println("_b6")
+    println("end")
+}

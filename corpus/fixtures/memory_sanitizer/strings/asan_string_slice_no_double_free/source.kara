@@ -1,0 +1,13 @@
+
+fn first_word(s: ref String) -> StringSlice {
+    let sp = s.find(' ');
+    let end = sp.unwrap_or(s.len());
+    s.slice(0, end)
+}
+fn main() {
+    let s = "hello world".to_string();
+    let w = s.slice(0, 5);
+    println(w.to_string());
+    let fw = first_word(s);
+    println(fw.to_string());
+}

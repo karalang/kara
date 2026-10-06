@@ -1,0 +1,143 @@
+// Benchmark workload — substring-with-concatenation, LeetCode #30 (sliding window).
+//
+// One big text `s` of NSLOTS length-4 words is built once from a 16-word
+// vocabulary, each slot chosen by the classic glibc LCG (a = 1103515245,
+// c = 12345, m = 2^31, seeded 1) modulo 16. Then find_substring() is run R
+// times; each run searches for a different 4-word target (a sliding 4-word
+// window over the vocabulary, `start = run % 13`), so no run is a repeat of
+// another (defeats CSE/hoisting) yet every run scans the same `s`. The
+// algorithm is the O(n) sliding window — L=4 residue phases, each a
+// variable-width word-window with a `Map[String, i64]` count table keyed on
+// length-4 String slices of `s`.
+//
+// Sink: running sum of (every matched start index + the match count) across
+// all R runs — printed so the search participates in I/O and cannot be
+// elided. Every mirror builds the identical vocabulary + text from the same
+// LCG and runs the identical search, so all five print the same sink;
+// bench.sh fails loudly on any mismatch.
+
+fn find_substring(s: ref String, words: Slice[String]) -> Vec[i64] {
+    let mut result: Vec[i64] = Vec.new();
+    let k = words.len();
+    if k == 0 {
+        return result;
+    }
+    let wl = words[0].len();
+    let total = wl * k;
+    let n = s.len();
+    if wl == 0 or total > n {
+        return result;
+    }
+
+    let mut need: Map[String, i64] = Map.new();
+    for idx in 0..k {
+        let cur = match need.get(words[idx]) {
+            Some(c) => c,
+            None => 0,
+        };
+        need.insert(words[idx].clone(), cur + 1);
+    }
+
+    // The map keys are written inline as `s[a..b]` slice expressions rather
+    // than bound to a `let piece = s[a..b]`: a slice expression in a map
+    // key position lowers to a borrowed `{ptr,len,cap=0}` view into `s` (no
+    // allocation) for lookups, and the deep-copy-on-fresh-insert path for
+    // `insert` — so this hot loop allocates only once per *distinct* word, not
+    // once per window. Binding the slice first would force an owned copy.
+    for r in 0..wl {
+        let mut seen: Map[String, i64] = Map.new();
+        let mut count = 0;
+        let mut left = r;
+        let mut j = r;
+        while j + wl <= n {
+            let req = match need.get(s[j..j + wl]) {
+                Some(c) => c,
+                None => -1,
+            };
+            if req < 0 {
+                seen.clear();
+                count = 0;
+                left = j + wl;
+            } else {
+                let cur = match seen.get(s[j..j + wl]) {
+                    Some(c) => c,
+                    None => 0,
+                };
+                seen.insert(s[j..j + wl], cur + 1);
+                count = count + 1;
+                while (match seen.get(s[j..j + wl]) {
+                    Some(c) => c,
+                    None => 0,
+                }) > req
+                {
+                    let lc = match seen.get(s[left..left + wl]) {
+                        Some(c) => c,
+                        None => 0,
+                    };
+                    seen.insert(s[left..left + wl], lc - 1);
+                    left = left + wl;
+                    count = count - 1;
+                }
+                if count == k {
+                    result.push(left);
+                    let lc = match seen.get(s[left..left + wl]) {
+                        Some(c) => c,
+                        None => 0,
+                    };
+                    seen.insert(s[left..left + wl], lc - 1);
+                    left = left + wl;
+                    count = count - 1;
+                }
+            }
+            j = j + wl;
+        }
+    }
+    result
+}
+
+fn main() {
+    let nslots = 50000;
+    let runs = 40;
+
+    // 16-word vocabulary: word v = chars[4v .. 4v+4] from a fixed 64-char pool.
+    let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/";
+    let mut vocab: Vec[String] = Vec.new();
+    for v in 0..16 {
+        vocab.push(chars[v * 4..v * 4 + 4]);
+    }
+
+    // Build the text once: NSLOTS slots, each an LCG-chosen vocab word.
+    let mut s = String.new();
+    let mut state = 1;
+    let mut t = 0;
+    while t < nslots {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        // High bits: this LCG's low bits have a short period, so a vocab pick
+        // off `state % 16` is degenerate. Bits 17..20 (`state / 131072 % 16`)
+        // are well-distributed.
+        let v = (state / 131072) % 16;
+        s.push_str(vocab[v]);
+        t = t + 1;
+    }
+
+    // R searches, each for a different 4-word target window of the vocabulary.
+    let mut sink = 0;
+    let mut run = 0;
+    while run < runs {
+        let start = run % 13;
+        let mut words_r: Vec[String] = Vec.new();
+        let mut d = 0;
+        while d < 4 {
+            words_r.push(vocab[start + d].clone());
+            d = d + 1;
+        }
+        let res = find_substring(s, words_r);
+        sink = sink + res.len();
+        for idx in res {
+            sink = sink + idx;
+        }
+        run = run + 1;
+    }
+
+    println(sink);
+}

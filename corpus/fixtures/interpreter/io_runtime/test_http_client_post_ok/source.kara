@@ -1,0 +1,8 @@
+
+fn main() {
+    let c = Client.new();
+    match c.post("http://httpbin.org/post", "hello") {
+        Ok(resp) => println(resp.status()),
+        Err(e) => println(e.message()),
+    }
+}

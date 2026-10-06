@@ -1,0 +1,25 @@
+
+struct A { path: Vec[String] }
+fn f(a: A) -> i64 {
+    let A { path } = a;
+    let mut t = 0;
+    for s in path { if s.len() >= 0 { t = t + 1; } }
+    t
+}
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut p: Vec[String] = Vec.new();
+        p.push("struct_vec_string_destructure_element_payld".to_string());
+        v.push(A { path: p });
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let xs = build();
+    let mut t = 0;
+    for a in xs { t = t + f(a); }
+    println(t);
+}

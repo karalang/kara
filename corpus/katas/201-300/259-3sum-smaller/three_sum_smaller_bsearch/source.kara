@@ -1,0 +1,87 @@
+// LeetCode 259 — 3Sum Smaller, sort + binary search.
+//
+// The middle ground: sort, fix `i` and `j`, then binary-search the largest `k`
+// whose value keeps the sum below the target. O(n² log n) — worse than the ★
+// file's O(n²), better than brute force's O(n³).
+//
+// It is worth carrying because it counts a DIFFERENT way. The two-pointer form
+// adds a whole run of triples at once (`hi - lo`) and never names them; this one
+// finds a boundary index and counts the span up to it (`bound - j`). Both are
+// "count a range in one step", but they locate the range by opposite means — a
+// converging scan versus a bisection — so an off-by-one in either does not
+// mirror an off-by-one in the other.
+//
+// The search is an UPPER BOUND: the first index whose value makes the sum reach
+// the target. Using a lower bound instead would miscount every case where a sum
+// lands exactly ON the target, which matters because the comparison is strict.
+
+fn three_sum_smaller(nums: Slice[i64], target: i64) -> i64 {
+    let mut s: Vec[i64] = Vec.from_slice(nums);
+    s.sort();
+    let n = s.len();
+    let mut count = 0;
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n {
+            let need = target - s[i] - s[j];
+            // First index in (j, n) whose value is >= need; everything strictly
+            // between j and it qualifies.
+            let mut lo = j + 1;
+            let mut hi = n;
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if s[mid] < need {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            count = count + (lo - j - 1);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return count;
+}
+
+fn report(nums: Slice[i64], target: i64, label: ref String) {
+    println(f"{label} t={target} -> {three_sum_smaller(nums, target)}");
+}
+
+fn main() {
+    // [-2,0,1,3], target 2 -> 2  ([-2,0,1] and [-2,0,3])
+    let a: Array[i64, 4] = [-2, 0, 1, 3];
+    report(a, 2, "[-2,0,1,3]");
+
+    // fewer than three elements -> 0
+    let b: Array[i64, 0] = [];
+    report(b, 0, "[]");
+    let c: Array[i64, 2] = [0, 0];
+    report(c, 5, "[0,0]");
+
+    // [0,0,0], target 1 -> 1 (the single triple sums to 0)
+    let d: Array[i64, 3] = [0, 0, 0];
+    report(d, 1, "[0,0,0]");
+
+    // ...and target 0 -> 0 (strictly less than, so 0 < 0 is false)
+    report(d, 0, "[0,0,0]");
+
+    // all negative: every triple qualifies for a positive target
+    let e: Array[i64, 5] = [-5, -4, -3, -2, -1];
+    report(e, 0, "[-5,-4,-3,-2,-1]");
+
+    // duplicates, which the count must not collapse
+    let f: Array[i64, 5] = [1, 1, 1, 1, 1];
+    report(f, 4, "[1,1,1,1,1]");
+
+    // a case where the +1 bug and the correct count diverge sharply
+    let g: Array[i64, 6] = [-10, -5, 0, 1, 2, 3];
+    report(g, 5, "[-10,-5,0,1,2,3]");
+
+    // already sorted vs reverse: sorting makes these identical
+    let h: Array[i64, 5] = [3, 2, 1, 0, -1];
+    report(h, 3, "[3,2,1,0,-1] (reversed)");
+    let i: Array[i64, 5] = [-1, 0, 1, 2, 3];
+    report(i, 3, "[-1,0,1,2,3] (sorted)");
+}

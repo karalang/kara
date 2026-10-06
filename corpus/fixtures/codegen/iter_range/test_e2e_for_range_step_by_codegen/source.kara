@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut sum = 0i64;
+    for j in (2..=10).step_by(2) {
+        sum = sum + j;
+    }
+    println(sum);
+    let mut count = 0i64;
+    for _ in (0..20).step_by(5) {
+        count = count + 1;
+    }
+    println(count);
+}

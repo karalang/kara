@@ -1,0 +1,14 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Duo[T] { pair: (T, i64), tag: i64 }
+fn main() {
+    println("a");
+    {
+        let d: Duo[Res] = Duo { pair: (Res { id: 5, name: f"tt{5}" }, 9), tag: 1 };
+        println(f"tag {d.tag} snd {d.pair.1}");
+    }
+    println("end");
+}

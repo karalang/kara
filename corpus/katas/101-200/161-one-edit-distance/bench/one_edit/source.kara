@@ -1,0 +1,155 @@
+// Benchmark workload for LeetCode #161 — One Edit Distance.
+//
+// Build-once + punch. A deterministic 32-bit LCG (overflow-safe in i64) builds
+// PAIRS string pairs once: each pair is a length-L base string plus a second
+// string that is either exactly one edit away (replace / insert / delete) or
+// two edits away (not one-edit). The pairs are stored flat in i64 char arrays
+// (alphabet 0..25). The kernel then runs `is_one_edit` over all pairs REPS
+// times, punching one character of one pair before each rep so the optimizer
+// cannot hoist the repeated scan. `is_one_edit` is a single lockstep scan that
+// stops at the first mismatch and compares tails — data-dependent early exit,
+// so it does NOT vectorize. Sink = total count of one-edit-apart pairs seen.
+
+fn tails_equal(s: ref Vec[i64], l: ref Vec[i64], ss: i64, se: i64, ls: i64, le: i64) -> bool {
+    let mut a = ss;
+    let mut b = ls;
+    while a < se and b < le {
+        if s[a] != l[b] { return false; }
+        a = a + 1;
+        b = b + 1;
+    }
+    return a == se and b == le;
+}
+
+fn check(s: ref Vec[i64], so: i64, m: i64, l: ref Vec[i64], lo: i64, n: i64) -> bool {
+    // Precondition: m <= n. `s` is the shorter string's buffer.
+    if n - m > 1 { return false; }
+    let mut i = 0;
+    while i < m {
+        if s[so + i] != l[lo + i] {
+            if m == n {
+                // replace: tails after the mismatch must match
+                return tails_equal(s, l, so + i + 1, so + m, lo + i + 1, lo + n);
+            }
+            // insert: skip the extra char in the longer string, tails must match
+            return tails_equal(s, l, so + i, so + m, lo + i + 1, lo + n);
+        }
+        i = i + 1;
+    }
+    // No mismatch across the shorter length: one edit iff exactly one char longer.
+    return n - m == 1;
+}
+
+fn is_one_edit(a: ref Vec[i64], oa: i64, la: i64, b: ref Vec[i64], ob: i64, lb: i64) -> bool {
+    if la <= lb {
+        return check(a, oa, la, b, ob, lb);
+    }
+    return check(b, ob, lb, a, oa, la);
+}
+
+fn main() {
+    let pairs = 4000;
+    let l = 48;
+    let reps = 3000;
+    let stride = l + 2;
+
+    let cap = pairs * stride;
+    let mut buf_a: Vec[i64] = Vec.new();
+    let mut buf_b: Vec[i64] = Vec.new();
+    let mut len_a: Vec[i64] = Vec.new();
+    let mut len_b: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < cap {
+        buf_a.push(0);
+        buf_b.push(0);
+        z = z + 1;
+    }
+    let mut p = 0;
+    while p < pairs {
+        len_a.push(0);
+        len_b.push(0);
+        p = p + 1;
+    }
+
+    let mut state = 12345;
+    let mut pi = 0;
+    while pi < pairs {
+        let oa = pi * stride;
+        let ob = pi * stride;
+        // Base string A of length l.
+        let mut k = 0;
+        while k < l {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            buf_a[oa + k] = state % 26;
+            k = k + 1;
+        }
+        len_a[pi] = l;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let kind = state % 4;
+        if kind == 0 {
+            // replace one char -> one edit
+            let mut j = 0;
+            while j < l { buf_b[ob + j] = buf_a[oa + j]; j = j + 1; }
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let pos = state % l;
+            buf_b[ob + pos] = (buf_a[oa + pos] + 1) % 26;
+            len_b[pi] = l;
+        } else if kind == 1 {
+            // insert one char -> one edit (B is longer by 1)
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let pos = state % (l + 1);
+            let mut j = 0;
+            while j < pos { buf_b[ob + j] = buf_a[oa + j]; j = j + 1; }
+            state = (state * 1103515245 + 12345) & 2147483647;
+            buf_b[ob + pos] = state % 26;
+            let mut t = pos;
+            while t < l { buf_b[ob + t + 1] = buf_a[oa + t]; t = t + 1; }
+            len_b[pi] = l + 1;
+        } else if kind == 2 {
+            // delete one char -> one edit (B is shorter by 1)
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let pos = state % l;
+            let mut w = 0;
+            let mut j = 0;
+            while j < l {
+                if j != pos {
+                    buf_b[ob + w] = buf_a[oa + j];
+                    w = w + 1;
+                }
+                j = j + 1;
+            }
+            len_b[pi] = l - 1;
+        } else {
+            // two replaces -> distance 2 -> NOT one edit
+            let mut j = 0;
+            while j < l { buf_b[ob + j] = buf_a[oa + j]; j = j + 1; }
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let p1 = state % l;
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let p2 = (p1 + 1 + state % (l - 1)) % l;
+            buf_b[ob + p1] = (buf_a[oa + p1] + 1) % 26;
+            buf_b[ob + p2] = (buf_a[oa + p2] + 1) % 26;
+            len_b[pi] = l;
+        }
+        pi = pi + 1;
+    }
+
+    let mut sink = 0;
+    let mut rep = 0;
+    while rep < reps {
+        let idx = rep % pairs;
+        let col = (rep * 7 + 3) % l;
+        let oa = idx * stride;
+        buf_a[oa + col] = (buf_a[oa + col] + 1) % 26;
+        let mut i = 0;
+        while i < pairs {
+            let o = i * stride;
+            if is_one_edit(buf_a, o, len_a[i], buf_b, o, len_b[i]) {
+                sink = sink + 1;
+            }
+            i = i + 1;
+        }
+        rep = rep + 1;
+    }
+    println(sink);
+}

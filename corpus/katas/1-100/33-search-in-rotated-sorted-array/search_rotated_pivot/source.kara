@@ -1,0 +1,120 @@
+// LeetCode #33: Search in Rotated Sorted Array — find-pivot, then binary search.
+//
+// The two-phase decomposition. Instead of folding the rotation into one search
+// (search_rotated.kara), recover the rotation point first, then run an ordinary
+// textbook binary search on the one sorted segment the target can live in.
+//
+//   Phase 1 — find the minimum's index (the rotation pivot) by binary search:
+//     the minimum is the only element smaller than its predecessor. While
+//     nums[mid] > nums[hi] the min is strictly right of mid (lo = mid + 1);
+//     otherwise it is at mid or left (hi = mid). The window converges to it.
+//
+//   Phase 2 — the array splits into two sorted runs at the pivot: [0, pivot-1]
+//     (the larger, original-tail values) and [pivot, len-1] (the smaller head).
+//     A single range test on nums[0] picks which run could hold the target, and
+//     a plain ascending binary search finishes inside it.
+//
+// Two O(log n) passes instead of one — asymptotically identical, and arguably
+// the easier correctness story: phase 2 is the binary search everyone already
+// trusts, with no rotation reasoning. The cost is a second pass and the segment-
+// selection bookkeeping the one-pass form folds away. This style also factors
+// out a reusable plain `bsearch` (the same routine #704 would use directly).
+
+fn find_pivot(nums: Slice[i64], len: i64) -> i64 {
+    // Index of the smallest element = the rotation point (0 if not rotated).
+    let mut lo = 0;
+    let mut hi = len - 1;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] > nums[hi] {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn bsearch(nums: Slice[i64], lo_in: i64, hi_in: i64, target: i64) -> i64 {
+    // Textbook ascending binary search over [lo, hi].
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] == target {
+            return mid;
+        } else if nums[mid] < target {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    -1
+}
+
+fn search(nums: Slice[i64], len: i64, target: i64) -> i64 {
+    if len == 0 {
+        return -1;
+    }
+    let pivot = find_pivot(nums, len);
+    if pivot == 0 {
+        // Not rotated — one sorted run.
+        return bsearch(nums, 0, len - 1, target);
+    }
+    // Two sorted runs; nums[0..pivot-1] holds the larger head values.
+    if target >= nums[0] and target <= nums[pivot - 1] {
+        return bsearch(nums, 0, pivot - 1, target);
+    } else {
+        return bsearch(nums, pivot, len - 1, target);
+    }
+}
+
+fn fmt(nums: Slice[i64], len: i64) -> String {
+    let mut s: String = "[";
+    for i in 0..len {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push_str("]");
+    s
+}
+
+fn report(nums: Slice[i64], len: i64, target: i64) {
+    println(f"{fmt(nums, len)} target={target} -> {search(nums, len, target)}");
+}
+
+fn main() {
+    // Same case battery as search_rotated.kara — identical output.
+    let a1: Array[i64, 7] = [4, 5, 6, 7, 0, 1, 2];
+    report(a1, 7, 0);                // 4
+    report(a1, 7, 3);                // -1
+    let a2: Array[i64, 1] = [1];
+    report(a2, 1, 0);                // -1
+    report(a2, 1, 1);                // 0
+    let a3: Array[i64, 7] = [6, 7, 0, 1, 2, 4, 5];
+    report(a3, 7, 6);               // 0
+    report(a3, 7, 7);               // 1
+    report(a3, 7, 0);               // 2
+    report(a3, 7, 2);               // 4
+    report(a3, 7, 5);               // 6
+    report(a3, 7, 3);               // -1
+    let a4: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(a4, 5, 4);               // 3
+    report(a4, 5, 1);               // 0
+    report(a4, 5, 5);               // 4
+    report(a4, 5, 6);               // -1
+    let a5: Array[i64, 2] = [3, 1];
+    report(a5, 2, 1);               // 1
+    report(a5, 2, 3);               // 0
+    report(a5, 2, 2);               // -1
+    let a6: Array[i64, 4] = [2, 3, 4, 1];
+    report(a6, 4, 1);               // 3
+    report(a6, 4, 2);               // 0
+    let a7: Array[i64, 0] = [];
+    report(a7, 0, 5);              // -1
+    let a8: Array[i64, 5] = [3, 4, -2, -1, 2];
+    report(a8, 5, -2);            // 2
+    report(a8, 5, 3);             // 0
+}

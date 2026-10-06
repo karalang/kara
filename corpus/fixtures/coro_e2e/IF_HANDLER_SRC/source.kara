@@ -1,0 +1,16 @@
+
+        fn serve_if(listener: TcpListener, doit: bool) {
+            if doit {
+                let _stream = listener.accept().unwrap();
+                println(1);
+            } else {
+                println(0);
+            }
+            println(9);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            serve_if(listener, true);
+            println(2);
+        }
+    

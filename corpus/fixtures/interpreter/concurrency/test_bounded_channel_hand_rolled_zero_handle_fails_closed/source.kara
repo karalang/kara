@@ -1,0 +1,5 @@
+fn main() {
+         let fake = BoundedChannel { handle_id: 0 };
+         match fake.send(1) { Ok(_) => println("ok"), Err(_) => println("full") }
+         match fake.recv() { Some(_) => println("some"), None => println("none") }
+     }

@@ -1,0 +1,13 @@
+source = "tests/codegen/families/b_2026_09_19_53.rs::e2e_shared_generic_enum_boxed_payload_one_owner"
+dedup_of = ["tests/memory_sanitizer/families/b_2026_09_19_53.rs::asan_shared_generic_enum_boxed_payload_one_owner"]
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

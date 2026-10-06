@@ -1,0 +1,20 @@
+
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn sumall(data: ref Vec[E]) -> f64 {
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < data.len() {
+        let e = data[i];
+        s = s + e.x + data[i].y;
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 1.0, y: 2.0 });
+    grid.push(E { x: 3.0, y: 4.0 });
+    grid.push(E { x: 5.0, y: 6.0 });
+    println(sumall(grid));
+}

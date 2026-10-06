@@ -1,0 +1,94 @@
+// LeetCode 298 — ITERATIVE, with the recursion made into an explicit stack.
+//
+// Both other arms recurse, so both inherit the machine's call stack and both
+// fail the same way on a degenerate tree: a 100,000-node spine overflows it.
+// This one carries its own frames in a `Vec`, so its depth limit is the heap's.
+//
+// A FRAME IS A TUPLE, and that is the point of this arm as a differential
+// member. The recursive top-down call passes four things — the node, whether it
+// has a parent, the parent's value, and the arriving run length. Made explicit,
+// that is:
+//
+//     Vec[(Option[TreeNode], bool, i64, i64)]
+//
+// so this arm exercises a `shared` handle nested inside a tuple inside a Vec,
+// pushed and popped across a loop. The two recursive arms never build that
+// shape at all; the compiler's ownership accounting for it is a different code
+// path from a plain recursive argument, which is exactly the kind of difference
+// worth having in a differential.
+//
+// PREORDER, NOT POSTORDER. The frame carries everything a node needs before it
+// is examined, so no node ever waits on its children — a node is popped, scored
+// and discarded in one step, and its children are pushed with the run length it
+// just computed. There is no second visit and no "have I seen this?" flag,
+// which is what usually makes an iterative rewrite of a postorder traversal
+// unpleasant. The ★ arm's bottom-up shape WOULD need one; the top-down shape
+// converts for free, and that is why this arm mirrors that one.
+//
+// STACK ORDER IS NOT VISIT ORDER, AND DOES NOT MATTER. Pushing left then right
+// pops right first, so this walks the mirror image of the recursive arm's
+// order. The answer is a maximum over all nodes, which is order-independent —
+// but it is worth being explicit that the agreement between arms here is NOT
+// evidence that they visit in the same order, only that they agree on the
+// maximum.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn node(v: i64, l: Option[TreeNode], r: Option[TreeNode]) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: l, right: r });
+}
+
+fn leaf(v: i64) -> Option[TreeNode] {
+    return Some(TreeNode { val: v, left: None, right: None });
+}
+
+fn longest_consecutive(t: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    let mut stack: Vec[(Option[TreeNode], bool, i64, i64)] = Vec.new();
+    stack.push((t, false, 0, 0));
+
+    while stack.len() > 0 {
+        let frame = stack.pop();
+        match frame {
+            None => { }
+            Some(f) => {
+                let (cur, has_parent, parent_val, arriving) = f;
+                match cur {
+                    None => { }
+                    Some(n) => {
+                        let mut run = 1;
+                        if has_parent and n.val == parent_val + 1 {
+                            run = arriving + 1;
+                        }
+                        if run > best {
+                            best = run;
+                        }
+                        stack.push((n.left, true, n.val, run));
+                        stack.push((n.right, true, n.val, run));
+                    }
+                }
+            }
+        }
+    }
+    return best;
+}
+
+fn report(name: String, t: Option[TreeNode]) {
+    println(f"{name} {longest_consecutive(t)}");
+}
+
+fn main() {
+    report("ascending-right", node(1, None, node(3, leaf(2), node(4, None, leaf(5)))));
+    report("descending", node(2, None, node(3, node(2, leaf(1), None), None)));
+    report("empty", None);
+    report("single", leaf(7));
+    report("left-spine", node(1, node(2, node(3, leaf(4), None), None), None));
+    report("two-branches", node(5, node(6, leaf(7), None), node(6, None, leaf(7))));
+    report("plateau", node(4, node(4, leaf(4), None), None));
+    report("crosses-zero", node(-2, node(-1, node(0, leaf(1), None), None), None));
+    report("root-is-one", node(1, leaf(9), None));
+}

@@ -1,0 +1,118 @@
+// Benchmark workload — Rotate List (LeetCode #61).
+//
+// Seq-only kata (BENCH.md two-lane discipline): the loop body builds a fresh
+// N-node list, rotates it right, reads a sink, and drops the rest. Per-call
+// work is a linear build + a linear measure/walk + an in-place re-link — the
+// same small-per-call alloc/drop shape as kata
+// [#19](../../19-remove-nth-node-from-end-of-list/). A par lane over the K
+// reduction would mostly measure worker-pool dispatch against that tiny body,
+// so this kata stays single-threaded and measures pure codegen quality.
+//
+// Workload. N = 100-node list, values 1..N, rebuilt every iteration (the
+// rotation re-links the chain in place, so each iter needs a fresh list).
+// K = 500_000 iters. Per iter we rotate right by `r = k % (2*N)`, which sweeps
+// 0..2N-1: half the iters have `r >= N`, so the `k % L` reduction inside
+// `rotate_right` genuinely fires (not a no-op) — the modulo path this kata
+// turns on is exercised on every other iteration, while `r` still visits every
+// distinct final rotation, so the branch predictor never settles on one cut.
+//
+// Sink. The head value of the rotated list. Rotating `[1..N]` right by
+// `s = r % N` puts the node at index `N - s` at the front, value `101 - s`
+// (and value 1 when `s == 0`). Summed across K iters this is a fixed constant
+// (25_250_000 at N=100, K=500_000) — the build + reduce + re-link + drop are
+// the measured work; the sink just forces the result to be observed so nothing
+// is dead-code-eliminated. The `if let` guard keeps the accumulation off
+// karac's auto-par-on reduction allow-list (a bare `sum = sum + f(out)` would
+// be eligible), so the default `karac build` stays single-threaded — directly
+// comparable to rustc -O / clang -O3 / go build on a per-core basis, the same
+// discipline as kata 19.
+//
+// `rotate_right` and its result are bound to `let`s before use
+// (`let list = ...; let out = rotate_right(list, r);`), the same shape the
+// kata's `report` uses — a call-result `Option[shared T]` is named locally
+// before it is consumed by the `if let` sink.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn rotate_right(head: Option[ListNode], k: i64) -> Option[ListNode] {
+    let mut len = 0;
+    let mut cur = head;
+    let mut tail = head;
+    loop {
+        match cur {
+            Some(node) => {
+                len = len + 1;
+                tail = Some(node);
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+
+    if len == 0 {
+        return None;
+    }
+    let shift = k % len;
+    if shift == 0 {
+        return head;
+    }
+
+    if let Some(t) = tail {
+        t.next = head;
+    }
+
+    let steps = len - shift - 1;
+    let mut new_tail = head;
+    let mut i = 0;
+    while i < steps {
+        if let Some(node) = new_tail {
+            new_tail = node.next;
+        }
+        i = i + 1;
+    }
+
+    let mut result = head;
+    if let Some(nt) = new_tail {
+        result = nt.next;
+        nt.next = None;
+    }
+    result
+}
+
+// Build a fresh `count`-node list valued 1..count via a tail cursor (same
+// shape as the kata's `from_array`). Returns None for count <= 0.
+fn build_list(count: i64) -> Option[ListNode] {
+    if count <= 0 {
+        return None;
+    }
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    for v in 2..(count + 1) {
+        let node = ListNode { val: v, next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn main() {
+    let n_values: i64 = 100;
+    let span: i64 = 200;       // 2*N — sweep past N to fire the k % L reduction
+    let k_iters: i64 = 500000;
+
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < k_iters {
+        let list = build_list(n_values);
+        let r: i64 = k % span;
+        let out = rotate_right(list, r);
+        if let Some(node) = out {
+            sum = sum + node.val;
+        }
+        k = k + 1;
+    }
+    println(sum);
+}

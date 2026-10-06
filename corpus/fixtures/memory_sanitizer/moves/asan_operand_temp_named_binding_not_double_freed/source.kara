@@ -1,0 +1,15 @@
+
+fn make_s() -> String {
+    let s: String = "a freshly allocated heap operand string over thirty-six bytes";
+    return s;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let s = make_s();
+        let r = s + " [suffix]";
+        println(r);
+        i = i + 1;
+    };
+}

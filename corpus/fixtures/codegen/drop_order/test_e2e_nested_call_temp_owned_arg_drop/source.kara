@@ -1,0 +1,34 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { xs: Vec[Res], tag: i64 }
+fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
+fn mkh() -> Holder {
+    let mut v: Vec[Res] = Vec.new();
+    v.push(Res { id: 7, name: f"g{7}" });
+    Holder { xs: v, tag: 3 }
+}
+fn use_it(h: Holder) -> i64 { h.tag }
+fn main() {
+    println("a");
+    {
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"a{1}" });
+        let n = use_it(mk(xs));
+        println(n);
+    }
+    println("b");
+    {
+        let mut ys: Vec[Res] = Vec.new();
+        ys.push(Res { id: 2, name: f"b{2}" });
+        use_it(mk(ys));
+    }
+    println("c");
+    {
+        let m = use_it(mkh());
+        println(m);
+    }
+    println("end");
+}

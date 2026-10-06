@@ -1,0 +1,35 @@
+
+shared struct Sd { m: i64, note: String }
+impl Drop for Sd { fn drop(mut ref self) { println(f"dSd{self.m}-{self.note.len()}") } }
+
+struct N { id: i64, s: Sd, tag: String }
+
+struct H { id: i64, s: Sd, tag: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}-{self.tag.len()}") } }
+
+struct Inner { s: Sd }
+struct Outer { i: Inner, tag: String }
+
+fn mk(n: i64) -> Sd { return Sd { m: n, note: f"note-payloadpayloadpayload-{n}" } }
+fn tg(n: i64) -> String { return f"tag-payloadpayloadpayload-{n}" }
+
+fn plain(k: i64) -> i64 { let mut n: N = N { id: k, s: mk(10 * k), tag: tg(1) }; n.s = mk(11 * k); return n.tag.len() }
+fn owner_drop(k: i64) -> i64 { let mut h: H = H { id: 2 * k, s: mk(20 * k), tag: tg(2) }; h.s = mk(21 * k); return h.tag.len() }
+fn nested(k: i64) -> i64 { let mut o: Outer = Outer { i: Inner { s: mk(30 * k) }, tag: tg(3) }; o.i.s = mk(31 * k); return o.tag.len() }
+fn aliased(k: i64) -> i64 { let g: Sd = mk(40 * k); let mut n: N = N { id: 4 * k, s: g, tag: tg(4) }; n.s = mk(41 * k); return n.tag.len() + g.note.len() }
+fn twice(k: i64) -> i64 { let mut n: N = N { id: 5 * k, s: mk(50 * k), tag: tg(5) }; n.s = mk(51 * k); n.s = mk(52 * k); return n.tag.len() }
+
+fn main() {
+    let k: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 2 {
+        acc = acc + plain(k);
+        acc = acc + owner_drop(k);
+        acc = acc + nested(k);
+        acc = acc + aliased(k);
+        acc = acc + twice(k);
+        i = i + 1;
+    }
+    println(f"acc{acc}");
+}

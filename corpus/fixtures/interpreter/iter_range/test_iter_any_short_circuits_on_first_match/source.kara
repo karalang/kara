@@ -1,0 +1,9 @@
+
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let b: bool = v.iter().any(|x| {
+        println(x);
+        x > 2
+    });
+    println(b);
+}

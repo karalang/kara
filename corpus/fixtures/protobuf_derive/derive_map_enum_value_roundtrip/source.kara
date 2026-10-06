@@ -1,0 +1,15 @@
+
+enum Color { Red, Green, Blue }
+
+#[derive(Message)]
+struct Doc { tints: Map[String, Color] }
+
+fn main() {
+    let mut tints: Map[String, Color] = Map.new();
+    tints.insert("sky", Color.Blue);
+    tints.insert("grass", Color.Green);
+    let back = Doc.decode(Doc { tints: tints }.encode());
+    println(back.tints.len());
+    println(match back.tints.get("sky") { Option.Some(c) => match c { Color.Blue => "blue", _ => "?" }, Option.None => "none" });
+    println(match back.tints.get("grass") { Option.Some(c) => match c { Color.Green => "green", _ => "?" }, Option.None => "none" });
+}

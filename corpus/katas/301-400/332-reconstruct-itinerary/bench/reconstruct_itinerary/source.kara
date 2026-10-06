@@ -1,0 +1,107 @@
+// Benchmark harness for LeetCode #332 — Hierholzer Eulerian path.
+//
+// Build-once + punch (BENCHMARKS.md): the ticket list is built once as 40
+// cycles through JFK (1000 edges total, so an Eulerian circuit from JFK is
+// guaranteed to exist). Each punch re-runs the whole algorithm — adjacency
+// build, per-airport destination sort, recursive walk, reverse — reading the
+// tickets from a rotated offset.
+//
+// The rotation is what keeps the punch honest: it genuinely changes the order
+// tickets are inserted into the adjacency map, so the call cannot be hoisted
+// or CSE'd, yet because destinations are sorted before the walk the itinerary
+// (and therefore the sink) is identical every iteration. That invariance is
+// also the cross-language check.
+
+fn visit(
+    adj: mut ref Map[String, Vec[String]],
+    cursor: mut ref Map[String, i64],
+    airport: String,
+    route: mut ref Vec[String],
+) {
+    while true {
+        let dests: Vec[String] = match adj.get(airport) { Some(d) => d, None => Vec.new() };
+        let used = match cursor.get(airport) { Some(u) => u, None => 0 };
+        if used >= dests.len() { break; }
+        let _ = cursor.insert(airport, used + 1);
+        visit(adj, cursor, dests[used].clone(), route);
+    }
+    route.push(airport);
+}
+
+fn find_itinerary(froms: ref Vec[String], tos: ref Vec[String], rot: i64) -> Vec[String] {
+    let e = froms.len();
+    let mut adj: Map[String, Vec[String]] = Map.new();
+    let mut i = 0;
+    while i < e {
+        let idx = (i + rot) % e;
+        if not adj.contains_key(froms[idx]) {
+            let empty: Vec[String] = Vec.new();
+            let _ = adj.insert(froms[idx], empty);
+        }
+        adj[froms[idx]].push(tos[idx]);
+        i = i + 1;
+    }
+
+    let keys: Vec[String] = adj.keys();
+    let mut k = 0;
+    while k < keys.len() {
+        adj[keys[k]].sort();
+        k = k + 1;
+    }
+
+    let mut cursor: Map[String, i64] = Map.new();
+    let mut route: Vec[String] = Vec.new();
+    visit(mut adj, mut cursor, "JFK", mut route);
+
+    let mut out: Vec[String] = Vec.new();
+    let mut j = route.len() - 1;
+    while j >= 0 {
+        out.push(route[j]);
+        j = j - 1;
+    }
+    out
+}
+
+fn main() {
+    let m = 40;
+    let l = 24;
+    let iters = 250;
+
+    let mut froms: Vec[String] = Vec.new();
+    let mut tos: Vec[String] = Vec.new();
+    let mut j = 0;
+    while j < m {
+        let mut prev = "JFK";
+        let mut k = 0;
+        while k < l {
+            let cur = f"A{j * l + k}";
+            froms.push(prev);
+            tos.push(cur.clone());
+            prev = cur;
+            k = k + 1;
+        }
+        froms.push(prev);
+        tos.push("JFK");
+        j = j + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let path = find_itinerary(froms, tos, it);
+        let mut i = 0;
+        while i < path.len() {
+            let bs = path[i].bytes();
+            let mut cs = 0;
+            let mut b = 0;
+            while b < bs.len() {
+                cs = cs + (bs[b] as i64);
+                b = b + 1;
+            }
+            sink = sink + (i + 1) * cs;
+            i = i + 1;
+        }
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

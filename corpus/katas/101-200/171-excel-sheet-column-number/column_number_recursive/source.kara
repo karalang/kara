@@ -1,0 +1,67 @@
+// LeetCode #171: Excel Sheet Column Number — recursive-descent variant.
+//
+// `value_to(tb, i)` returns the base-26 value of the prefix `tb[0..=i]`,
+// recursing on the higher-order prefix first and folding the current digit on
+// the way out — the recursive form of the Horner fold:
+//
+//   value_to(tb, i) = 0                                       if i < 0
+//   value_to(tb, i) = value_to(tb, i-1) * 26 + (tb[i]-'A'+1)  otherwise
+//
+// Same bijective base-26 parse (char -> value, the lexer's `from_str_radix`
+// accumulation) as the iterative style, with the call stack carrying the
+// most-significant-first order instead of a left-to-right index walk. The
+// `to_title` round-trip render (the #168 direction) is shared verbatim.
+
+fn value_to(tb: Slice[u8], i: i64) -> i64 {
+    if i < 0 {
+        return 0;
+    }
+    value_to(tb, i - 1) * 26 + ((tb[i] - b'A') as i64) + 1
+}
+
+fn to_number(title: ref String) -> i64 {
+    let tb = title.bytes();
+    value_to(tb, tb.len() - 1)
+}
+
+fn to_title(num: i64) -> String {
+    let letters: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    let mut buf: Vec[i64] = Vec.new();
+    let mut n = num;
+    while n > 0 {
+        n = n - 1;
+        buf.push(n % 26);
+        n = n / 26;
+    }
+
+    let mut out: String = "";
+    let mut k = buf.len() - 1;
+    while k >= 0 {
+        let d = buf[k];
+        out.push_str(letters[d..d + 1]);
+        k = k - 1;
+    }
+    out
+}
+
+fn main() {
+    let titles: Vec[String] = ["A", "B", "Z", "AA", "AB", "AZ", "BA", "ZY",
+        "ZZ", "AAA", "FXSHRXW"];
+
+    let mut i = 0;
+    while i < titles.len() {
+        let t = ref titles[i];
+        println(f"\"{t}\" -> {to_number(t)}");
+        i = i + 1;
+    }
+
+    println("--- round-trip ---");
+    let mut j = 0;
+    while j < titles.len() {
+        let t = ref titles[j];
+        let n = to_number(t);
+        println(f"{n} -> \"{to_title(n)}\"");
+        j = j + 1;
+    }
+}

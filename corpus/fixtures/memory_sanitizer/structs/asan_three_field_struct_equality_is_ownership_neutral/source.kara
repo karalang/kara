@@ -1,0 +1,24 @@
+
+#[derive(PartialEq, Eq)]
+shared struct Node { v: i64 }
+#[derive(PartialEq, Eq)]
+struct Shared3 { h: Node, a: i64, b: i64 }
+#[derive(PartialEq, Eq)]
+struct Str3 { s: String, x: i64, y: i64 }
+
+fn mk(n: i64) -> Str3 {
+    return Str3 { s: f"item{n}", x: n, y: 0 };
+}
+
+fn main() {
+    let p = Shared3 { h: Node { v: 1 }, a: 5, b: 6 };
+    let q = Shared3 { h: Node { v: 1 }, a: 5, b: 9 };
+    println(f"{p == q}");
+    println(f"{p.h.v}");
+
+    let u = mk(1);
+    let v = mk(1);
+    println(f"{u == v}");
+    println(f"{mk(2) == mk(2)}");
+    println(u.s);
+}

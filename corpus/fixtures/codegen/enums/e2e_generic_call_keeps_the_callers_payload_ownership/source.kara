@@ -1,0 +1,22 @@
+struct D { id: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"  dD{self.id}") } }
+struct W { id: i64, s: String }
+impl Drop for W { fn drop(mut ref self) { println(f"  dW{self.id}") } }
+fn idOpt[T](g: Option[T]) -> Option[T] { return g }
+fn idRes[T](g: Result[T, i64]) -> Result[T, i64] { return g }
+fn idOptMono(g: Option[String]) -> Option[String] { return g }
+fn idDMono(g: Option[D]) -> Option[D] { return g }
+
+fn main() {
+    println("inline");   { let a: Option[String] = Option.Some(f"aaaaaaaa-1"); let b = idOpt(a); match b { Option.Some(v) => { println(f"  {v.len()}") } Option.None => { println("  none") } } }
+    println("result");   { let a: Result[String, i64] = Result.Ok(f"bbbbbbbb-2"); let b = idRes(a); match b { Result.Ok(v) => { println(f"  {v.len()}") } Result.Err(e) => { println("  err") } } }
+    println("noarm");    { let a: Option[String] = Option.Some(f"cccccccc-3"); let b = idOpt(a); println("  out") }
+    println("twocalls"); { let a: Option[String] = Option.Some(f"dddddddd-4"); let x = idOpt(a); let c: Option[String] = Option.Some(f"eeeeeeee-5"); let y = idOpt(c); match x { Option.Some(v) => { println(f"  {v.len()}") } Option.None => { println("  none") } } match y { Option.Some(v) => { println(f"  {v.len()}") } Option.None => { println("  none") } } }
+    println("body");     { let a: Option[D] = Option.Some(D { id: 6 }); let b = idOpt(a); match b { Option.Some(v) => { println(f"  got {v.id}") } Option.None => { println("  none") } } }
+    println("bodyboxed");{ let a: Option[W] = Option.Some(W { id: 7, s: f"ssssssss" }); let b = idOpt(a); match b { Option.Some(v) => { println(f"  got {v.id}") } Option.None => { println("  none") } } }
+    println("bodynoarm");{ let a: Option[W] = Option.Some(W { id: 8, s: f"tttttttt" }); let b = idOpt(a); println("  out") }
+    println("monoinline"); { let a: Option[String] = Option.Some(f"ffffffff-9"); let b = idOptMono(a); match b { Option.Some(v) => { println(f"  {v.len()}") } Option.None => { println("  none") } } }
+    println("monobody");   { let a: Option[D] = Option.Some(D { id: 10 }); let b = idDMono(a); match b { Option.Some(v) => { println(f"  got {v.id}") } Option.None => { println("  none") } } }
+    println("nocall");     { let a: Option[D] = Option.Some(D { id: 11 }); match a { Option.Some(v) => { println(f"  got {v.id}") } Option.None => { println("  none") } } }
+    println("end")
+}

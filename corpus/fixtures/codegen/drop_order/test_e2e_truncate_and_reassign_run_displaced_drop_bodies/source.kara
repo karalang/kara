@@ -1,0 +1,32 @@
+
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("truncate:");
+    {
+        let mut v: Vec[Res] = Vec.new();
+        v.push(Res { id: 1, name: f"a{1}" });
+        v.push(Res { id: 2, name: f"b{2}" });
+        v.truncate(1);
+        println(v.len());
+    }
+    println("truncate0:");
+    {
+        let mut u: Vec[Res] = Vec.new();
+        u.push(Res { id: 3, name: f"c{3}" });
+        u.truncate(0);
+        println(u.len());
+    }
+    println("reassign:");
+    {
+        let mut w: Vec[Res] = Vec.new();
+        w.push(Res { id: 4, name: f"d{4}" });
+        let mut z: Vec[Res] = Vec.new();
+        z.push(Res { id: 5, name: f"e{5}" });
+        w = z;
+        println(w.len());
+    }
+    println("end");
+}

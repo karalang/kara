@@ -1,0 +1,269 @@
+// LeetCode 255 — differential harness.
+//
+// Runs all THREE deciders over randomized sequences: the ★ stack, the in-place
+// variant that consumes its input, and the independent divide-and-conquer.
+//
+// The generator is the whole design problem here. A uniform random array is
+// almost never a valid BST preorder — the first out-of-order value rejects it —
+// so a naive generator makes every decider return false within a few elements
+// and tests nothing but the early exit. Cases are drawn in three families:
+//
+//   * VALID (about half) — an actual random BST is built and traversed in
+//     preorder, so the sequence is correct by construction. These are the only
+//     cases that exercise the full scan, and without them the accept path is
+//     dead code.
+//   * PERTURBED — a valid sequence with ONE pair swapped. Most such swaps are
+//     still detectable but only late, which is what stresses the bound logic
+//     rather than the first comparison.
+//   * RANDOM — the uniform draw, kept so the fast-reject path is covered too.
+//
+// The in-place decider DESTROYS its input, so every decider gets its own freshly
+// generated copy from the same seed rather than a shared one. Getting that wrong
+// would make the second and third deciders read scratch data and agree with each
+// other for the wrong reason — a differential that validates nothing.
+
+fn build_valid(seed: i64, n: i64, out: mut ref Vec[i64]) {
+    // Insert n pseudo-random keys into a BST (index pool), then emit preorder.
+    let mut state = seed;
+    let mut val: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let v = (state / 65536) % 1000;
+        // Insert v, skipping duplicates (the problem assumes distinct values).
+        if val.len() == 0 {
+            val.push(v);
+            left.push(-1);
+            right.push(-1);
+        } else {
+            let mut cur = 0;
+            let mut placed = false;
+            while not placed {
+                if v == val[cur] {
+                    placed = true; // duplicate: drop it
+                } else if v < val[cur] {
+                    if left[cur] == -1 {
+                        val.push(v);
+                        left.push(-1);
+                        right.push(-1);
+                        left[cur] = val.len() - 1;
+                        placed = true;
+                    } else {
+                        cur = left[cur];
+                    }
+                } else {
+                    if right[cur] == -1 {
+                        val.push(v);
+                        left.push(-1);
+                        right.push(-1);
+                        right[cur] = val.len() - 1;
+                        placed = true;
+                    } else {
+                        cur = right[cur];
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+
+    // Iterative preorder: visit, push right, descend left.
+    if val.len() == 0 {
+        return;
+    }
+    let mut stack: Vec[i64] = Vec.new();
+    stack.push(0);
+    while stack.len() > 0 {
+        let node = match stack.pop() {
+            Some(x) => x,
+            None => -1,
+        };
+        if node != -1 {
+            out.push(val[node]);
+            if right[node] != -1 {
+                stack.push(right[node]);
+            }
+            if left[node] != -1 {
+                stack.push(left[node]);
+            }
+        }
+    }
+}
+
+fn make_case(seed: i64) -> Vec[i64] {
+    let mut state = seed;
+    let mut out: Vec[i64] = Vec.new();
+
+    state = (state * 1103515245 + 12345) & 2147483647;
+    let n = (state / 65536) % 12;
+    state = (state * 1103515245 + 12345) & 2147483647;
+    let family = (state / 65536) % 4;
+
+    if family <= 1 {
+        build_valid(seed + 7, n, mut out);
+    } else if family == 2 {
+        build_valid(seed + 7, n, mut out);
+        if out.len() >= 2 {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let p = (state / 65536) % out.len();
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let q = (state / 65536) % out.len();
+            let tmp = out[p];
+            out[p] = out[q];
+            out[q] = tmp;
+        }
+    } else {
+        // Uniform draw, but DISTINCT: LeetCode specifies distinct integers, and
+        // a duplicate makes the question ill-posed rather than merely hard. The
+        // three deciders genuinely disagree on `[875, 160, 875, 859]` — the
+        // divide-and-conquer rejects it because its bounds are exclusive, so a
+        // right-subtree value equal to its root is impossible; the two stack
+        // forms accept it because their tests are strict. Neither is wrong; the
+        // input is out of spec. See the README.
+        let mut k = 0;
+        let mut guard = 0;
+        while k < n and guard < 400 {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let v = (state / 65536) % 1000;
+            let mut seen = false;
+            let mut z = 0;
+            while z < out.len() {
+                if out[z] == v {
+                    seen = true;
+                }
+                z = z + 1;
+            }
+            if not seen {
+                out.push(v);
+                k = k + 1;
+            }
+            guard = guard + 1;
+        }
+    }
+    return out;
+}
+
+fn decide_stack(preorder: ref Vec[i64]) -> bool {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut lower = -9223372036854775807 - 1;
+    let mut i = 0;
+    while i < preorder.len() {
+        let x = preorder[i];
+        if x < lower {
+            return false;
+        }
+        while stack.len() > 0 and stack[stack.len() - 1] < x {
+            lower = match stack.pop() {
+                Some(v) => v,
+                None => lower,
+            };
+        }
+        stack.push(x);
+        i = i + 1;
+    }
+    return true;
+}
+
+fn decide_inplace(scratch: mut ref Vec[i64]) -> bool {
+    let mut top = 0;
+    let mut lower = -9223372036854775807 - 1;
+    let mut i = 0;
+    while i < scratch.len() {
+        let x = scratch[i];
+        if x < lower {
+            return false;
+        }
+        while top > 0 and scratch[top - 1] < x {
+            lower = scratch[top - 1];
+            top = top - 1;
+        }
+        scratch[top] = x;
+        top = top + 1;
+        i = i + 1;
+    }
+    return true;
+}
+
+fn check(
+    preorder: ref Vec[i64],
+    lo: i64,
+    hi: i64,
+    has_min: bool,
+    min: i64,
+    has_max: bool,
+    max: i64,
+) -> bool {
+    if lo > hi {
+        return true;
+    }
+    let root = preorder[lo];
+    if has_min and root <= min {
+        return false;
+    }
+    if has_max and root >= max {
+        return false;
+    }
+    let mut split = lo + 1;
+    while split <= hi and preorder[split] < root {
+        split = split + 1;
+    }
+    let left_ok = check(preorder, lo + 1, split - 1, has_min, min, true, root);
+    let right_ok = check(preorder, split, hi, true, root, has_max, max);
+    return left_ok and right_ok;
+}
+
+fn decide_divide(preorder: ref Vec[i64]) -> bool {
+    let n = preorder.len();
+    if n == 0 {
+        return true;
+    }
+    return check(preorder, 0, n - 1, false, 0, false, 0);
+}
+
+fn main() {
+    let cases = 6000;
+    let mut seed = 255255;
+
+    let mut accepted = 0;
+    let mut rejected = 0;
+    let mut mismatches = 0;
+    let mut total_len = 0;
+    let mut digest = 0;
+
+    let mut c = 0;
+    while c < cases {
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+
+        // Each decider gets its OWN copy — the in-place one destroys its input.
+        let a_in = make_case(seed);
+        let mut b_in = make_case(seed);
+        let c_in = make_case(seed);
+
+        let a = decide_stack(a_in);
+        let b = decide_inplace(mut b_in);
+        let d = decide_divide(c_in);
+
+        if a != b or a != d {
+            mismatches = mismatches + 1;
+        }
+        if a {
+            accepted = accepted + 1;
+            digest = (digest * 131 + 1) % 1000000007;
+        } else {
+            rejected = rejected + 1;
+            digest = (digest * 131) % 1000000007;
+        }
+        total_len = total_len + a_in.len();
+        c = c + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"accepted {accepted}");
+    println(f"rejected {rejected}");
+    println(f"total elements {total_len}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

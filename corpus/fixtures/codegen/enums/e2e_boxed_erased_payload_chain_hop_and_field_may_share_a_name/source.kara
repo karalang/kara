@@ -1,0 +1,10 @@
+enum G1[T] { Y(T), N }
+struct In1[T] { g: G1[T] }
+struct Out1[T] { g: In1[T] }
+fn wrapSame[T](g: G1[T], c: bool) -> Out1[T] { if c { return Out1 { g: In1 { g: g } } } return Out1 { g: In1 { g: G1.N } } }
+fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
+fn main() {
+    println("same");  { let g: G1[String] = G1.Y(f"aaaaaaaa-1"); let o = wrapSame(g, true); shw(o.g.g) }
+    println("sameF"); { let g: G1[String] = G1.Y(f"aaaaaaaa-2"); let o = wrapSame(g, false); shw(o.g.g) }
+    println("end")
+}

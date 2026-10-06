@@ -1,0 +1,64 @@
+// LeetCode #125 bench harness — Kāra (filter-then-compare, allocating).
+//
+// The bench uses the ALLOCATING filter variant (not the pure in-place two-
+// pointer): each pass builds a normalized Vec[u8] (alnum bytes, lowercased)
+// then checks it for symmetry. The per-pass allocation is a side effect the
+// optimizer won't hoist — so the ITERS reduction does real work every
+// iteration (a pure two-pointer would be loop-invariant and folded to one
+// pass) — while each pass is independent, so the outer `sum +=` reduction is
+// still embarrassingly parallel (auto-par target). Same rationale as #394's
+// allocating decode. Input filters to `amanaplanacanalpanama`×8 — itself a
+// palindrome — so every pass does the FULL scan. Sink = ITERS.
+
+fn is_alnum(b: u8) -> bool {
+    (b >= b'0' and b <= b'9')
+        or (b >= b'a' and b <= b'z')
+        or (b >= b'A' and b <= b'Z')
+}
+
+fn to_lower(b: u8) -> u8 {
+    if b >= b'A' and b <= b'Z' { b + (b'a' - b'A') } else { b }
+}
+
+fn is_palindrome(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut clean: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let b = bytes[i];
+        if is_alnum(b) {
+            clean.push(to_lower(b));
+        }
+        i = i + 1;
+    }
+    let m = clean.len();
+    let mut lo = 0;
+    let mut hi = m - 1;
+    while lo < hi {
+        if clean[lo] != clean[hi] {
+            return false;
+        }
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    true
+}
+
+fn pass(s: ref String) -> i64 {
+    if is_palindrome(s) { 1 } else { 0 }
+}
+
+fn main() {
+    let base: String = "A man, a plan, a canal: Panama";
+    let input: String = base.repeat(8);
+    let iters = 3000000;
+
+    let mut sum = 0;
+    let mut k = 0;
+    while k < iters {
+        sum = sum + pass(input);
+        k = k + 1;
+    }
+    println(sum);                  // 3000000
+}

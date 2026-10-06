@@ -1,0 +1,14 @@
+struct Tagging { }
+            impl Exporter for Tagging {
+                fn export_span(ref self, span: Span) { }
+                fn export_event(ref self, event: LogEvent) {
+                    println(f"CUSTOM<{event.level}>: {event.message}");
+                }
+            }
+            fn main() {
+                Log.set_exporter(Tagging {});
+                Log.set_min_level("info");
+                Log.debug("dropped");
+                Log.info("hi");
+                Log.error("bye");
+            }

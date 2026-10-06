@@ -1,0 +1,77 @@
+// Benchmark harness for LeetCode #128 — Longest Consecutive Sequence.
+//
+// Build-once + punch (BENCHMARKS.md): eight arrays are generated once from
+// distinct LCG seeds, then each punch runs the full O(n) set pass over one of
+// them. Regenerating the array per iteration would be a vectorizable refill
+// loop that swamps the measurement.
+//
+// The parameter is `ref Vec[i64]` rather than the kata's by-value `Vec[i64]`:
+// every mirror passes the array by reference (Rust `&[i64]`, Go slice, C
+// pointer), so taking it by value here would measure a 20 000-element copy in
+// kāra that no other lane pays.
+//
+// Density is chosen so runs actually form: 20 000 draws over a 25 000-wide
+// range leaves plenty of consecutive neighbours, so the inner walk does real
+// work instead of failing at the first `contains`.
+
+fn longest_consecutive(nums: ref Vec[i64]) -> i64 {
+    let mut s: Set[i64] = Set.new();
+    let mut i = 0;
+    while i < nums.len() {
+        s.insert(nums[i]);
+        i = i + 1;
+    }
+    let mut best = 0;
+    i = 0;
+    while i < nums.len() {
+        let v = nums[i];
+        if not s.contains(v - 1) {
+            let mut length = 1;
+            let mut cur = v;
+            while s.contains(cur + 1) {
+                cur = cur + 1;
+                length = length + 1;
+            }
+            if length > best {
+                best = length;
+            }
+        }
+        i = i + 1;
+    }
+    best
+}
+
+fn lcg(seed: i64, n: i64, cap: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = seed;
+    let mut k = 0;
+    while k < n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        out.push(x % cap);
+        k = k + 1;
+    }
+    out
+}
+
+fn main() {
+    let np = 8;
+    let n = 20000;
+    let cap = 25000;
+    let iters = 150;
+
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut j = 0;
+    while j < np {
+        arrays.push(lcg(j + 1, n, cap));
+        j = j + 1;
+    }
+
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let idx = (it * 3) % np;
+        sink = sink + longest_consecutive(arrays[idx]);
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

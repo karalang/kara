@@ -1,0 +1,37 @@
+// LeetCode 204 — Kara single-threaded bench. Same workload as
+// bench/count.kara but WITHOUT the `#[par_order_free]` attribute, so
+// the analyzer falls through and codegen emits the inline serial
+// push path. Lets us isolate Kara's per-core throughput from the
+// auto-par speedup — apples-to-apples comparison with bench/count.rs
+// (rust single-threaded) and bench/count.c.
+fn is_prime(n: i64) -> bool {
+    if n < 2 { return false; }
+    if n == 2 { return true; }
+    if (n % 2) == 0 { return false; }
+    let mut i: i64 = 3;
+    while (i * i) <= n {
+        if (n % i) == 0 { return false; }
+        i = i + 2;
+    }
+    return true;
+}
+
+fn main() {
+    let n: i64 = 10000000;
+
+    let mut primes: Vec[i64] = Vec.new();
+    for k in 0..n {
+        if is_prime(k) {
+            primes.push(k);
+        }
+    }
+
+    let mut sum: i64 = 0;
+    let mut i: i64 = 0;
+    while i < primes.len() {
+        sum = sum + primes[i];
+        i = i + 1;
+    }
+    println(primes.len());
+    println(sum);
+}

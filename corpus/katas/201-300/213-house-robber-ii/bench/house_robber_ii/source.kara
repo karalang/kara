@@ -1,0 +1,56 @@
+// Benchmark workload for LeetCode #213 — House Robber II.
+//
+// Build-once + punch: one large positive-value array is generated once with a
+// deterministic LCG, then the circular House Robber DP is run over WINDOWS
+// different sub-windows of it (a fresh start offset each time). Each rob() is two
+// linear O(1)-space DP passes whose `cur = max(prev + v, cur)` recurrence is
+// loop-carried (this step depends on the last), so it does NOT vectorize. Sink =
+// sum of the max take over all windows.
+
+fn rob_linear(nums: ref Vec[i64], lo: i64, hi: i64) -> i64 {
+    let mut prev = 0;
+    let mut cur = 0;
+    let mut i = lo;
+    while i < hi {
+        let take = prev + nums[i];
+        let next = if take > cur { take } else { cur };
+        prev = cur;
+        cur = next;
+        i = i + 1;
+    }
+    return cur;
+}
+
+fn rob_window(nums: ref Vec[i64], s: i64, w: i64) -> i64 {
+    if w == 1 { return nums[s]; }
+    let skip_last = rob_linear(nums, s, s + w - 1);
+    let skip_first = rob_linear(nums, s + 1, s + w);
+    if skip_last > skip_first { return skip_last; }
+    return skip_first;
+}
+
+fn main() {
+    let n = 100000;
+    let window = 2000;
+    let windows = 130000;
+
+    let mut nums: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        nums.push(1 + state % 1000);          // 1..1000, all positive
+        i = i + 1;
+    }
+
+    let span = n - window;
+    let mut sink = 0;
+    let mut w = 0;
+    while w < windows {
+        let s = (w * 977) % span;
+        sink = sink + rob_window(nums, s, window);
+        w = w + 1;
+    }
+
+    println(sink);
+}

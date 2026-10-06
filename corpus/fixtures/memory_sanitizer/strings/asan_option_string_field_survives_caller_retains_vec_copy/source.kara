@@ -1,0 +1,52 @@
+
+struct AttrNode { path: Vec[String], string_value: Option[String] }
+struct Bare { string_value: Option[String] }
+struct Node { attributes: Vec[AttrNode] }
+struct BareNode { attributes: Vec[Bare] }
+struct P { pos: i64 }
+impl P {
+    fn wrap(mut ref self, attrs: Vec[AttrNode]) -> Node {
+        self.pos = self.pos + 1;
+        Node { attributes: attrs }
+    }
+}
+fn wrap_bare(attrs: Vec[Bare]) -> BareNode {
+    BareNode { attributes: attrs }
+}
+fn build() -> Vec[AttrNode] {
+    let mut v: Vec[AttrNode] = Vec.new();
+    let mut p: Vec[String] = Vec.new();
+    p.push("path_segment_payload_alpha_x".to_string());
+    v.push(AttrNode { path: p, string_value: Some("option_string_payload_beta_yy".to_string()) });
+    v.push(AttrNode { path: Vec.new(), string_value: None });
+    v
+}
+fn build_bare() -> Vec[Bare] {
+    let mut v: Vec[Bare] = Vec.new();
+    v.push(Bare { string_value: Some("bare_option_payload_gamma_zzz".to_string()) });
+    v
+}
+fn main() {
+    let mut n: i64 = 0;
+    let mut i = 0;
+    while i < 6 {
+        let mut prs = P { pos: 0 };
+        let attrs = build();
+        let node = prs.wrap(attrs);
+        let Node { attributes } = node;
+        for a in attributes {
+            let AttrNode { path, string_value } = a;
+            for seg in path { n = n + seg.len(); }
+            match string_value { Some(s) => { n = n + s.len(); } None => {} }
+        }
+        let battrs = build_bare();
+        let bnode = wrap_bare(battrs);
+        let BareNode { attributes } = bnode;
+        for b in attributes {
+            let Bare { string_value } = b;
+            match string_value { Some(s) => { n = n + s.len(); } None => {} }
+        }
+        i = i + 1;
+    }
+    println(n);
+}

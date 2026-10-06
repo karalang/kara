@@ -1,0 +1,13 @@
+source = "tests/codegen/borrows.rs::test_lowercase_ambient_aliases_resolve_and_typecheck_clean"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

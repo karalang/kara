@@ -1,0 +1,7 @@
+
+fn empty_flag(xs: Slice[i64]) -> bool { xs.is_empty() }
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    let r = empty_flag(a);
+    if r { println(1); } else { println(0); }
+}

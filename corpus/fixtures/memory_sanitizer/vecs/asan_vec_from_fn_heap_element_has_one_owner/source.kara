@@ -1,0 +1,14 @@
+fn main() {
+    let mut round = 0i64;
+    let mut last: String = "";
+    let mut total = 0i64;
+    while round < 30i64 {
+        let interp: Vec[String] = Vec.from_fn(4, |i| f"n{i}");
+        let built: Vec[String] = Vec.from_fn(4, |i| i.to_string());
+        total = total + interp.len() + built.len();
+        last = built[3].clone();
+        round = round + 1i64;
+    }
+    println(last);
+    println(total);
+}

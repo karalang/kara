@@ -1,0 +1,67 @@
+// LeetCode #35 bench harness — Kāra, the half-open lower_bound style (★).
+//
+// The headline ★ style: per query, ONE textbook half-open binary search —
+// search_insert (first index i with nums[i] >= target) — over a sorted array of
+// DISTINCT values. That single index is simultaneously the "found" index (when the
+// target is present) and the "insert" index (when it is absent), so there is no
+// post-search equality branch at all: the loop's terminal `lo` is the whole answer.
+// Pure branchy integer compute, no allocation in the hot loop (each step's
+// direction depends on a comparison the predictor can't pre-resolve), ONE search
+// per query, so TOTAL is sized to land in the same wall-time band as the #31–#34
+// binary-search through-line.
+//
+// Workload: build one fixed strictly-increasing array of length N=4096 once
+// (nums[p] = 2*p — distinct, so found and insert positions never collide), then run
+// the insert query TOTAL times for targets cycling through [0, 2N). Even targets
+// HIT an element exactly, odd targets MISS (insert between two neighbours), and the
+// largest odd target inserts at N (the append case) — all control-flow paths fire.
+// The target varies with the loop index, so no comparator can hoist the pure query
+// out of the loop; fold each index into a checksum (the un-elidable sink). The
+// accumulator carries a loop-borne dependency, so this is a single-lane (seq) bench
+// by construction.
+//
+// Note vs #34: that bench paid an extra `nums[lo]` presence check in `main` after
+// the bound search; #35's answer is `lo` itself, so `main` folds the index with no
+// further array access — a slightly cleaner isolation of the search loop.
+
+fn search_insert(nums: ref Vec[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = len;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] < target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn main() {
+    let n = 4096;
+    let total = 14000000;
+    let modulus = 1000000007;
+
+    // Fixed strictly-increasing array of distinct values: nums[p] = 2*p.
+    let mut nums: Vec[i64] = Vec.new();
+    let mut p = 0;
+    while p < n {
+        nums.push(2 * p);
+        p = p + 1;
+    }
+
+    // Cycle targets through [0, 2N): even -> exact hit, odd -> insert (largest odd
+    // target inserts at N, the append case).
+    let span = 2 * n;
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        let target = k % span;
+        let idx = search_insert(nums, n, target);
+        acc = (acc * 31 + idx) % modulus;
+        k = k + 1;
+    }
+
+    println(f"{acc}");
+}

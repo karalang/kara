@@ -1,0 +1,28 @@
+
+        shared struct Node {
+            val: i64,
+            next: Option[Node],
+        }
+
+        fn fold(head: Option[Node], reps: i64) -> i64 {
+            let mut sum = 0;
+            let mut k = 0;
+            while k < reps {
+                let mut acc = 0;
+                let mut cur = head;
+                while cur.is_some() {
+                    let n = cur.unwrap();
+                    acc = acc + n.val;
+                    cur = n.next;
+                }
+                sum = sum + acc;
+                k = k + 1;
+            }
+            sum
+        }
+
+        fn main() {
+            let list = Some(Node { val: 3, next: None });
+            println(fold(list, 100000));
+        }
+        

@@ -1,0 +1,55 @@
+// LeetCode #123: Best Time to Buy and Sell Stock III — at most TWO transactions, O(n).
+//
+// You may complete at most two buy/sell pairs, holding at most one share at a
+// time. Track four running states across the single pass:
+//   buy1  — best balance after the 1st buy   (started one position)
+//   sell1 — best profit after the 1st sell    (flat, one trade done)
+//   buy2  — best balance after the 2nd buy   (profit-so-far minus this buy)
+//   sell2 — best profit after the 2nd sell    (the answer)
+// Each day, relax all four in order. O(n) time, O(1) space. Distinct from
+// #121/#122: four interdependent max-relaxations per element, a scalar-state DP.
+
+fn max_profit(prices: Slice[i64]) -> i64 {
+    let n = prices.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut buy1 = -prices[0];
+    let mut sell1 = 0;
+    let mut buy2 = -prices[0];
+    let mut sell2 = 0;
+    for i in 1..n {
+        let p = prices[i];
+        if -p > buy1 {
+            buy1 = -p;
+        }
+        if buy1 + p > sell1 {
+            sell1 = buy1 + p;
+        }
+        if sell1 - p > buy2 {
+            buy2 = sell1 - p;
+        }
+        if buy2 + p > sell2 {
+            sell2 = buy2 + p;
+        }
+    }
+    sell2
+}
+
+fn report(prices: Slice[i64]) {
+    println(max_profit(prices));
+}
+
+fn main() {
+    let case1: Array[i64, 8] = [3, 3, 5, 0, 0, 3, 1, 4];
+    report(case1);   // expect: 6  (buy 0 sell 3 = 3, buy 1 sell 4 = 3)
+
+    let case2: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case2);   // expect: 4  (one transaction is enough)
+
+    let case3: Array[i64, 5] = [7, 6, 4, 3, 1];
+    report(case3);   // expect: 0  (prices only fall)
+
+    let case4: Array[i64, 1] = [5];
+    report(case4);   // expect: 0  (single day, no trade)
+}

@@ -1,0 +1,13 @@
+source = "tests/protobuf_proto.rs::proto_oneof_noncontiguous_case_numbers_error"
+dedup_of = []
+expect = "error:E_COMPTIME"
+exit = 1
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""

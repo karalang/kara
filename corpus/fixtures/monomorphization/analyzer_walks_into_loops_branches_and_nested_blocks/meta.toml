@@ -1,0 +1,13 @@
+source = "tests/monomorphization.rs::analyzer_walks_into_loops_branches_and_nested_blocks"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

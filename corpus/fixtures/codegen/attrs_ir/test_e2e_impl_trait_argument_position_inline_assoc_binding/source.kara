@@ -1,0 +1,19 @@
+
+trait Src {
+    type Item;
+    fn get(ref self) -> Self.Item;
+}
+
+struct S { v: i64 }
+
+impl Src for S {
+    type Item = i64;
+    fn get(ref self) -> i64 { self.v }
+}
+
+fn take(s: impl Src[Item = i64]) -> i64 { s.get() }
+
+fn main() {
+    println(take(S { v: 5 }));
+    println(take(S { v: 37 }));
+}

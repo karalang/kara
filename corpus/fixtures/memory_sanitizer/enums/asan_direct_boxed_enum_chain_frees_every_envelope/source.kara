@@ -1,0 +1,68 @@
+
+fn mkstr(n: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("envelope-");
+    s.push_str(n.to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        match a {
+            Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; }
+            _ => { acc = acc - 1; }
+        }
+
+        let b: Option[Option[Option[Option[i64]]]] = Option.Some(Option.Some(Option.Some(Option.Some(n + i))));
+        match b {
+            Option.Some(Option.Some(Option.Some(Option.Some(x)))) => { acc = acc + x - n; }
+            _ => { acc = acc - 1; }
+        }
+
+        let c: Option[Option[Option[String]]] = Option.Some(Option.Some(Option.Some(mkstr(n + i))));
+        match c {
+            Option.Some(Option.Some(Option.Some(s))) => { if s.contains("envelope-") { acc = acc + 1; } }
+            _ => { acc = acc - 1; }
+        }
+
+        let d: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        match d {
+            Option.Some(Option.Some(x)) => { acc = acc + x - n; }
+            _ => { acc = acc - 1; }
+        }
+
+        let e: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        match e {
+            Option.Some(inner) => {
+                match inner {
+                    Option.Some(Option.Some(x)) => { acc = acc + x - n; }
+                    _ => { acc = acc - 1; }
+                }
+            }
+            Option.None => { acc = acc - 1; }
+        }
+
+        let mut f: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        f = Option.Some(Option.Some(Option.Some(n + i)));
+        match f {
+            Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; }
+            _ => { acc = acc - 1; }
+        }
+
+        let g: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.None));
+        match g { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x; } _ => { acc = acc - 1; } }
+
+        let h: Option[Option[Option[i64]]] = Option.Some(Option.None);
+        match h { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x; } _ => { acc = acc - 1; } }
+
+        let j: Option[Option[Option[i64]]] = Option.None;
+        match j { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x; } _ => { acc = acc - 1; } }
+
+        i = i + 1;
+    }
+    println(acc);
+}

@@ -1,0 +1,18 @@
+
+struct H { v: Vec[i64], a: i64, b: i64 }
+fn make(i: i64) -> Option[H] {
+    let mut vv: Vec[i64] = Vec.new();
+    vv.push(i);
+    return Some(H { v: vv, a: 1, b: 2 });
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 5 {
+        match make(i) {
+            Some(h) => println(h.v[0] + h.a),
+            None => println(-1),
+        }
+        i = i + 1;
+    }
+    println(99);
+}

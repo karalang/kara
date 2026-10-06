@@ -1,0 +1,127 @@
+// LeetCode 247 — Strobogrammatic Number II. (Premium.)
+//
+// Return every strobogrammatic number of length n.
+//
+// The move is to build from the MIDDLE OUTWARD rather than left to right. A
+// strobogrammatic number of length k is a legal outer pair wrapped around a
+// strobogrammatic number of length k-2, so the recursion bottoms out twice:
+// k==0 gives [""] (even lengths) and k==1 gives ["0","1","8"] (odd lengths —
+// the three digits that survive rotating in place, which is exactly what may
+// sit at an odd centre). Everything else is one wrap of the level below.
+//
+// The one wrinkle is the leading zero. "0" wrapped in a 0/0 pair gives "000",
+// which is not a number of length 3. So the OUTERMOST layer, and only that
+// layer, refuses the 0/0 pair — which is why `n` is threaded through the
+// recursion alongside `k`: the recursion needs to know whether it is at the
+// outside. Note n==1 is exempt, because "0" alone IS a valid answer; that falls
+// out of the k==1 base case never consulting `n`.
+//
+// Counts go 3, 4, 12, 20, 60, 100, 300 for n=1..7 — each added pair multiplies
+// by 5 at the inner layers and by 4 at the outermost, where 0/0 is barred.
+
+fn build(k: i64, n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if k == 0 {
+        out.push("");
+        return out;
+    }
+    if k == 1 {
+        out.push("0");
+        out.push("1");
+        out.push("8");
+        return out;
+    }
+
+    let mut pair_a: Vec[String] = Vec.new();
+    let mut pair_b: Vec[String] = Vec.new();
+    pair_a.push("0"); pair_b.push("0");
+    pair_a.push("1"); pair_b.push("1");
+    pair_a.push("6"); pair_b.push("9");
+    pair_a.push("8"); pair_b.push("8");
+    pair_a.push("9"); pair_b.push("6");
+
+    let inner = build(k - 2, n);
+    let mut i = 0;
+    while i < inner.len() {
+        let mut p = 0;
+        while p < 5 {
+            // Only the outermost layer bars a leading zero.
+            if pair_a[p] == "0" and k == n {
+                p = p + 1;
+            } else {
+                let mut s: String = pair_a[p].clone();
+                s.push_str(inner[i]);
+                s.push_str(pair_b[p]);
+                out.push(s);
+                p = p + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn strobogrammatic(n: i64) -> Vec[String] {
+    return build(n, n);
+}
+
+fn join_all(items: ref Vec[String]) -> String {
+    let mut out: String = "";
+    let mut i = 0;
+    while i < items.len() {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(items[i]);
+        i = i + 1;
+    }
+    return out;
+}
+
+// The #246 two-pointer predicate, re-run over everything the generator emits.
+// Independent of the construction: it re-derives the property from the string
+// instead of trusting how the string was built, so `valid` disagreeing with
+// `count` would mean the generator emitted something illegal.
+fn rotate_byte(b: u8) -> u8 {
+    if b == 48u8 { return 48u8; }
+    if b == 49u8 { return 49u8; }
+    if b == 56u8 { return 56u8; }
+    if b == 54u8 { return 57u8; }
+    if b == 57u8 { return 54u8; }
+    return 0u8;
+}
+
+fn is_strobogrammatic(num: ref String) -> bool {
+    let bs = num.bytes();
+    let mut lo = 0;
+    let mut hi = bs.len() - 1;
+    while lo <= hi {
+        let r = rotate_byte(bs[lo]);
+        if r == 0u8 or r != bs[hi] {
+            return false;
+        }
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    return true;
+}
+
+fn main() {
+    let mut n = 1;
+    while n < 8 {
+        let got = strobogrammatic(n);
+        let mut valid = 0;
+        let mut v = 0;
+        while v < got.len() {
+            if is_strobogrammatic(got[v]) {
+                valid = valid + 1;
+            }
+            v = v + 1;
+        }
+        println(f"n={n} count={got.len()} valid={valid}");
+        if n <= 3 {
+            println(f"  {join_all(got)}");
+        }
+        n = n + 1;
+    }
+}

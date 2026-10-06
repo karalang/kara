@@ -1,0 +1,39 @@
+// Benchmark workload for LeetCode #233 — Number of Digit One.
+//
+// The kata function is O(log n); one call is trivial. The bench turns it into a
+// division-throughput kernel by summing count_digit_one(i) over i in 0..LIMIT.
+// Each call runs ~log10(i) iterations of VARIABLE-divisor integer div/mod plus a
+// data-dependent 3-way branch (cur 0 / 1 / >=2) — so the loop does NOT vectorize
+// (hardware idiv, unpredictable branch) and does no allocation: a clean scalar
+// division + branch bench. Sink = the accumulated sum.
+
+fn count_digit_one(n: i64) -> i64 {
+    if n < 0 { return 0; }
+    let mut count = 0;
+    let mut pos = 1;
+    while pos <= n {
+        let high = n / (pos * 10);
+        let cur = (n / pos) % 10;
+        let low = n % pos;
+        if cur == 0 {
+            count = count + high * pos;
+        } else if cur == 1 {
+            count = count + high * pos + low + 1;
+        } else {
+            count = count + (high + 1) * pos;
+        }
+        pos = pos * 10;
+    }
+    return count;
+}
+
+fn main() {
+    let limit = 6000000;
+    let mut sink = 0;
+    let mut i = 0;
+    while i < limit {
+        sink = sink + count_digit_one(i);
+        i = i + 1;
+    }
+    println(sink);
+}

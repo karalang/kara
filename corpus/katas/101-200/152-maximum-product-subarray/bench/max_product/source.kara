@@ -1,0 +1,46 @@
+// Benchmark workload — Maximum Product Subarray, O(n) running max/min DP.
+//
+// N=2_000_000 deterministic values in {-2,-1,0,1,2} (an LCG); only ±2 grows the
+// running product magnitude and 0s reset it, so products stay far below i64
+// (longest non-zero run ~65 → ~2^32) — no overflow, so the checked-arithmetic
+// lanes (kāra, rust_ovf) agree with the wrapping ones and Python's bignum. K=10
+// outer iterations amortize startup. The scan is a cross-iteration dependency
+// chain (cur_max/cur_min), so it is seq — it does NOT auto-parallelize.
+
+fn max_i64(a: i64, b: i64) -> i64 { if a > b { return a; } return b; }
+fn min_i64(a: i64, b: i64) -> i64 { if a < b { return a; } return b; }
+
+fn max_product(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 { return 0; }
+    let mut best = nums[0];
+    let mut cur_max = nums[0];
+    let mut cur_min = nums[0];
+    for i in 1..n {
+        let x = nums[i];
+        if x < 0 {
+            let t = cur_max;
+            cur_max = cur_min;
+            cur_min = t;
+        }
+        cur_max = max_i64(x, cur_max * x);
+        cur_min = min_i64(x, cur_min * x);
+        if cur_max > best { best = cur_max; }
+    }
+    return best;
+}
+
+fn main() {
+    let n = 2000000;
+    let mut data: Vec[i64] = Vec.filled(n, 0);
+    let mut state = 12345;
+    for i in 0..n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        data[i] = (state % 5) - 2;
+    }
+    let mut sum = 0;
+    for _ in 0..10 {
+        sum = sum + max_product(data.as_slice());
+    }
+    println(sum.to_string());
+}

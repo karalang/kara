@@ -1,0 +1,86 @@
+ret-some-true
+dR7
+  got:5
+dR5
+ret-some-false
+dR5
+dR7
+  got:1
+dR1
+ret-each-true
+dR7
+  got:5
+dR5
+ret-each-false
+dR5
+  got:7
+dR7
+scalar-sibling-true
+  got:5
+dR5
+scalar-sibling-false
+dR5
+  got:1
+dR1
+let-some-true
+  x5
+dR5
+dR7
+  got:1
+dR1
+let-some-false
+dR5
+dR7
+  got:1
+dR1
+ret-always
+dR7
+  got:5
+dR5
+tail-always
+dR7
+  got:5
+dR5
+arm-0
+dR7
+dR9
+  got:5
+dR5
+arm-1
+dR5
+dR9
+  got:7
+dR7
+arm-2
+dR5
+dR7
+  got:9
+dR9
+arm-3
+dR5
+dR7
+dR9
+  got:1
+dR1
+nested-tt
+dR7
+  got:5
+dR5
+nested-tf
+dR5
+dR7
+  after
+  got:1
+dR1
+loop
+dR10
+dR20
+  end0
+  took:11
+dR11
+dR21
+  end1
+dR12
+dR22
+  end2
+end

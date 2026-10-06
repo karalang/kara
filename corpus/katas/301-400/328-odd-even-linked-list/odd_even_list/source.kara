@@ -1,0 +1,141 @@
+// LeetCode #328: Odd Even Linked List — relink in place with two tails.
+//
+// Given the head of a singly linked list, group the nodes at odd positions
+// (1st, 3rd, 5th, ...) followed by the nodes at even positions, keeping the
+// relative order inside each group, and return the new head. O(1) extra space.
+//
+//   [1, 2, 3, 4, 5]       ->  [1, 3, 5, 2, 4]
+//   [2, 1, 3, 5, 6, 4, 7] ->  [2, 3, 6, 7, 1, 5, 4]
+//
+// Keep two tails, `odd` and `even`, starting at the first two nodes, and
+// remember where the even group starts. Each step unlinks the node after
+// `even` (the next odd one) onto `odd`, then the node after that onto `even`.
+// When `even` or its successor runs out, hang the even group after the last
+// odd node.
+//
+// O(n) time, O(1) extra space.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn odd_even_list(head: Option[ListNode]) -> Option[ListNode] {
+    match head {
+        None => None,
+        Some(first) => {
+            match first.next {
+                None => Some(first),
+                Some(second) => {
+                    let mut odd = first;
+                    let mut even = second;
+                    let mut done = false;
+                    while not done {
+                        match even.next {
+                            None => {
+                                done = true;
+                            }
+                            Some(n) => {
+                                odd.next = Some(n);
+                                odd = n;
+                                even.next = n.next;
+                                match n.next {
+                                    None => {
+                                        done = true;
+                                    }
+                                    Some(m) => {
+                                        even = m;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    odd.next = Some(second);
+                    Some(first)
+                }
+            }
+        }
+    }
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn from_vec(values: ref Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = values.len() - 1;
+    while i >= 0 {
+        head = Some(ListNode { val: values[i], next: head });
+        i -= 1;
+    }
+    return head;
+}
+
+fn to_vec(head: Option[ListNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut cur = head;
+    let mut more = true;
+    while more {
+        match cur {
+            None => {
+                more = false;
+            }
+            Some(n) => {
+                out.push(n.val);
+                cur = n.next;
+            }
+        }
+    }
+    return out;
+}
+
+fn report(values: Vec[i64]) {
+    let got = to_vec(odd_even_list(from_vec(values)));
+    println(f"{values} -> {got}");
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn main() {
+    // The examples from the problem statement.
+    report([1, 2, 3, 4, 5]);
+    report([2, 1, 3, 5, 6, 4, 7]);
+
+    // Edge cases: empty, one, two and three nodes, repeated values.
+    report([]);
+    report([1]);
+    report([1, 2]);
+    report([1, 2, 3]);
+    report([7, 7, 7, 7]);
+    report([-1, 0, -1, 0, -1, 0]);
+
+    // Larger lists, reported by a checksum of the positions: each value is
+    // its 1-based position, so the result must read 1, 3, 5, ..., 2, 4, ...
+    for n in [10, 11, 1000, 1001, 10000] {
+        let mut values: Vec[i64] = Vec.new();
+        for i in 1..n + 1 {
+            values.push(i);
+        }
+        let got = to_vec(odd_even_list(from_vec(values)));
+        let mut sum = 0;
+        let mut k = 1;
+        for v in got {
+            sum = (sum * 31 + v * k) % 1000000007;
+            k += 1;
+        }
+        println(f"n={n}: first {got[0]}, first even {got[(n + 1) / 2]}, last {got[n - 1]}, hash {sum}");
+    }
+
+    // Random values.
+    let mut seed = 328;
+    for _ in 0..3 {
+        let n = next(mut seed) % 9 + 1;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next(mut seed) % 100);
+        }
+        report(values);
+    }
+}

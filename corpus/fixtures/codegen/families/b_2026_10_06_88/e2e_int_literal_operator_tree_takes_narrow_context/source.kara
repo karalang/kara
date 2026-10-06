@@ -1,0 +1,19 @@
+fn main() {
+    let a: u16 = 1 + 2;
+    let b: u8 = 7 & 3;
+    let c: u8 = 255 >> 1;
+    let d: i64 = 3;
+    let bit: u16 = 1 << (d as u16);
+    let big: u64 = 1 << 40;
+    let k: u64 = 5;
+    let sh: u64 = 1 << k;
+    let n: i32 = -(2 * 3);
+    let w: i8 = -128 + 1;
+    let mut masks: Array[u16, 3] = [0; 3];
+    for i in 0..3 {
+        let m: u16 = 1 << (i as u16);
+        masks[i] = masks[i] | m | (1 << 8);
+    }
+    println(f"{a} {b} {c} {bit} {big} {sh} {n} {w}");
+    println(f"{masks[0]} {masks[1]} {masks[2]}");
+}

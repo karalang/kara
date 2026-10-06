@@ -1,0 +1,48 @@
+shared struct Sh { k: i64 }
+struct S3 { h: Sh, id: i64 }
+enum Ho[T] { Full(T), Empty }
+struct H { n: i64 }
+fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn mid3(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
+fn wrap3(v: S3) -> Option[S3] { return Some(v) }
+fn ho3(v: S3) -> Ho[S3] { return Ho.Full(v) }
+fn keep3(o: Option[S3]) -> Option[S3] { return o }
+fn r3(v: S3) -> Result[S3, i64] { return Ok(v) }
+impl H { fn m(ref self, v: S3) -> Option[S3] { return Some(v) } fn a(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None } }
+fn a() { let s = mk3(1); let o = mid3(s, true); let v = o.unwrap(); println(f"a{v.id} {v.h.k}") }
+fn b() { let s = mk3(2); let o = mid3(s, false); println(f"b{o.is_none()}") }
+fn c() { let s = mk3(3); let o = mid3(s, true); println(f"c{o.is_some()}") }
+fn d() { let s = mk3(4); let o = wrap3(s); let v = o.unwrap(); println(f"d{v.id}") }
+fn e() { let s = mk3(5); let o = mid3(s, true); match o { Some(x) => { let y = x; println(f"e{y.id}") }, None => println("en") } }
+fn f() { let s = mk3(6); let o = mid3(s, true); let v = o.unwrap_or(mk3(96)); println(f"f{v.id}") }
+fn g() { let s = mk3(7); let h = ho3(s); match h { Ho.Full(x) => { let y = x; println(f"g{y.id}") }, Ho.Empty => println("ge") } }
+fn h() { let s = mk3(8); let o = mid3(s, true); let p = keep3(o); let v = p.unwrap(); println(f"h{v.id}") }
+fn i() { let s = mk3(9); let r = r3(s); let v = r.unwrap(); println(f"i{v.id}") }
+fn j() { let x = H { n: 1 }; let s = mk3(10); let o = x.m(s); let v = o.unwrap(); println(f"j{v.id}") }
+fn k() { let s = mk3(11); let o = H.a(s, true); let v = o.unwrap(); println(f"k{v.id}") }
+fn l() { let s = mk3(12); let o = H.a(s, false); println(f"l{o.is_none()}") }
+fn m() { let mut i = 0; while i < 3 { let s = mk3(20 + i); let o = mid3(s, i != 1); if o.is_some() { let v = o.unwrap(); println(f"m{v.id}") } i = i + 1; } }
+fn n() { let s = mk3(13); let o = mid3(s, true); let mut vs: Vec[S3] = []; vs.push(o.unwrap()); println(f"n{vs.len()}") }
+fn o() { let s = mk3(14); let o = mid3(s, true); let q = o; let v = q.unwrap(); println(f"o{v.id}") }
+fn p() { let s = mk3(15); let o = wrap3(s); let v = o.expect("x"); println(f"p{v.id}") }
+fn q() { let s = mk3(16); let o = mid3(s, true); if let Some(x) = o { println(f"q{x.id}") } }
+fn main() {
+    a(); println("a.")
+    b(); println("b.")
+    c(); println("c.")
+    d(); println("d.")
+    e(); println("e.")
+    f(); println("f.")
+    g(); println("g.")
+    h(); println("h.")
+    i(); println("i.")
+    j(); println("j.")
+    k(); println("k.")
+    l(); println("l.")
+    m(); println("m.")
+    n(); println("n.")
+    o(); println("o.")
+    p(); println("p.")
+    q(); println("q.")
+    println("end")
+}

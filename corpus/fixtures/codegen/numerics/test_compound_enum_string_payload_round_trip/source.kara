@@ -1,0 +1,8 @@
+
+enum E { V(String) }
+fn main() {
+    let e = V("alice");
+    match e {
+        V(s) => println(s),
+    }
+}

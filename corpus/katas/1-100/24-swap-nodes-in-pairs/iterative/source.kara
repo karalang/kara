@@ -1,0 +1,157 @@
+// LeetCode #24: Swap Nodes in Pairs — iterative O(n), O(1) extra.
+//
+// Given the head of a singly linked list, swap every two adjacent nodes and
+// return the new head. The problem requires swapping the *nodes themselves*,
+// not just their values — so this is a structural re-link, the same node-
+// reuse discipline as kata [#21](../21-merge-two-sorted-lists/)'s splice.
+//
+// Walk a `prev` cursor over the list; at each step the next two nodes (if
+// both exist) are a pair to swap:
+//
+//   prev → first → second → rest      becomes      prev → second → first → rest
+//
+// via three re-link stores, in an order that never strands a node:
+//
+//   1. first.next  = second.next   — `first` adopts the rest of the list.
+//   2. second.next = Some(first)   — `second` points back at `first`.
+//   3. prev.next   = Some(second)  — the pair is grafted in swapped order.
+//
+// then `prev = first` (the back node of the swapped pair) so the next
+// iteration sees the following pair. Store 1 drops `first`'s reference to
+// `second` — between stores 1 and 3 the `second` node is held *only* by the
+// local `if let` binding, which is exactly the transient-last-reference shape
+// that kata 21's destructive cursors stressed; here the node additionally
+// gets re-parented behind the node that used to follow it.
+//
+// The dummy node is the same load-bearing trick as katas
+// [#2](../2-add-two-numbers/), [#19](../19-remove-nth-node-from-end-of-list/)
+// and [#21](../21-merge-two-sorted-lists/): a throwaway node before the head
+// makes the first pair's graft (`prev.next = Some(second)`) uniform with
+// every later pair, so swapping the head needs no special case, and the new
+// head falls out as `dummy.next`.
+//
+// A trailing singleton (odd-length list) is left in place: the inner
+// `if let Some(second)` fails and the loop exits with the suffix untouched.
+//
+// LeetCode bounds the list at 100 nodes and values to [0, 100], so i32 would
+// suffice; values are i64 for uniformity with the rest of the corpus
+// (contrast kata [#18](../18-4sum/), where the 10⁹ bound forces i64).
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn swap_pairs(head: Option[ListNode]) -> Option[ListNode] {
+    // Dummy before the head: the first pair grafts onto `prev.next` like
+    // every other pair, so swapping the head is not a special case.
+    let dummy = ListNode { val: 0, next: head };
+    let mut prev = dummy;
+
+    loop {
+        if let Some(first) = prev.next {
+            if let Some(second) = first.next {
+                // Re-link prev → second → first → rest. Store order matters
+                // for clarity (each node's new target exists before the old
+                // link is dropped); see the header for the reference dance.
+                first.next = second.next;
+                second.next = Some(first);
+                prev.next = Some(second);
+                // `first` is now the back node of the swapped pair — the
+                // anchor in front of the next pair.
+                prev = first;
+            } else {
+                // Trailing singleton (odd length) — stays in place.
+                break;
+            }
+        } else {
+            // Even length — list consumed exactly.
+            break;
+        }
+    }
+
+    dummy.next
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_array(arr: Slice[i64]) -> Option[ListNode] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = ListNode { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = ListNode { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s: String = "[";
+    let mut current = list;
+    let mut first = true;
+    loop {
+        match current {
+            Some(node) => {
+                if first {
+                    first = false;
+                    s = f"{s}{node.val}";
+                } else {
+                    s = f"{s}, {node.val}";
+                }
+                current = node.next;
+            }
+            None => break,
+        }
+    }
+    f"{s}]"
+}
+
+fn report(arr: Slice[i64]) {
+    let head = from_array(arr);
+    let out = swap_pairs(head);
+    println(to_string(out));
+}
+
+fn main() {
+    // LeetCode example 1 — two full pairs → [2, 1, 4, 3].
+    let case1: Array[i64, 4] = [1, 2, 3, 4];
+    report(case1);
+
+    // LeetCode example 2 — empty list → [].
+    let case2: Array[i64, 0] = [];
+    report(case2);
+
+    // LeetCode example 3 — singleton, nothing to swap → [1].
+    let case3: Array[i64, 1] = [1];
+    report(case3);
+
+    // Minimal full pair — the head itself is swapped → [2, 1].
+    let case4: Array[i64, 2] = [1, 2];
+    report(case4);
+
+    // Odd length — trailing singleton stays in place → [2, 1, 3].
+    let case5: Array[i64, 3] = [1, 2, 3];
+    report(case5);
+
+    // Odd, two pairs + tail → [2, 1, 4, 3, 5].
+    let case6: Array[i64, 5] = [1, 2, 3, 4, 5];
+    report(case6);
+
+    // Even, three pairs → [2, 1, 4, 3, 6, 5].
+    let case7: Array[i64, 6] = [1, 2, 3, 4, 5, 6];
+    report(case7);
+
+    // All values equal — the swap is invisible in values but still re-links
+    // every node; output must match the input rendering → [7, 7, 7, 7].
+    let case8: Array[i64, 4] = [7, 7, 7, 7];
+    report(case8);
+
+    // Constraint bounds (values span [0, 100]) → [0, 100, 1, 99].
+    let case9: Array[i64, 4] = [100, 0, 99, 1];
+    report(case9);
+}

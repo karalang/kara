@@ -1,0 +1,157 @@
+// LeetCode #77: Combinations — Gosper's hack, iterative bitmask enumeration.
+//
+// A completely different lens from the two backtracking solvers: no recursion at
+// all. Each combination is a bitmask with exactly `k` bits set — bit `j` set means
+// the number `j + 1` is chosen — and Gosper's hack walks from one such mask to the
+// NEXT-LARGER integer with the same popcount in O(1) bit ops:
+//
+//   c = x & (0 - x)                 // isolate the lowest set bit
+//   r = x + c                       // ripple: carry past that run of ones
+//   x = (((x ^ r) >> 2) / c) | r    // slide the trailing ones back down, low
+//
+// Starting from `(1 << k) - 1` (the lowest `k` bits) and stopping once `x` reaches
+// `1 << n`, this visits every k-of-n mask exactly once. Gosper emits masks in
+// increasing-integer order, which is NOT the backtracking solvers' lexicographic
+// order — so the decoded combinations are SORTED here (a small selection sort with a
+// `Vec[Vec[i64]]` element swap) to line up byte-for-byte with the ★ and the Python
+// mirror. It agrees with both on every case.
+//
+// This is the pure bit-twiddling method (shifts / `&` / `|` / `^` / integer divide),
+// the constant-space, no-call-stack cousin of the DFS — and the same
+// bitmask-as-occupancy-set idea kata [#51](../51-n-queens/) uses for its columns and
+// diagonals.
+//
+// LeetCode bounds: 1 ≤ n ≤ 20 — `1 << n` and every mask fit i64 with room to spare.
+
+fn decode(mask: i64, n: i64) -> Vec[i64] {
+    let mut combo: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < n {
+        if (mask & (1 << j)) != 0 {
+            combo.push(j + 1);
+        }
+        j = j + 1;
+    }
+    combo
+}
+
+// Lexicographic order on two equal-length combinations.
+fn combo_less(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    let m = a.len();
+    let mut i = 0;
+    while i < m {
+        if a[i] < b[i] {
+            return true;
+        }
+        if a[i] > b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn sort_combos(out: mut ref Vec[Vec[i64]]) {
+    let m = out.len();
+    let mut i = 0;
+    while i < m {
+        let mut min_idx = i;
+        let mut j = i + 1;
+        while j < m {
+            if combo_less(out[j], out[min_idx]) {
+                min_idx = j;
+            }
+            j = j + 1;
+        }
+        if min_idx != i {
+            out.swap(i, min_idx);
+        }
+        i = i + 1;
+    }
+}
+
+fn combine(n: i64, k: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if k == 0 {
+        let empty: Vec[i64] = Vec.new();  // the single empty combination
+        out.push(empty);
+        return out;
+    }
+
+    let mut x = (1 << k) - 1;       // lowest mask with k bits set
+    let limit = 1 << n;                // stop once x reaches 2^n
+    while x < limit {
+        out.push(decode(x, n));
+        // Gosper's hack — next integer with the same number of set bits.
+        let c = x & (0 - x);
+        let r = x + c;
+        x = (((x ^ r) >> 2) / c) | r;
+    }
+
+    sort_combos(mut out);
+    out
+}
+
+// ---- test harness (shared verbatim with combinations.kara) ---------------------
+
+fn show(combo: ref Vec[i64]) -> String {
+    let mut s: String = "[";
+    let n = combo.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{combo[i]}");
+        i = i + 1;
+    }
+    s.push(']');
+    s
+}
+
+fn hash_combos(combos: ref Vec[Vec[i64]]) -> i64 {
+    let mut acc = 0;
+    let count = combos.len();
+    let mut c = 0;
+    while c < count {
+        let combo = ref combos[c];
+        let m = combo.len();
+        let mut j = 0;
+        while j < m {
+            acc = (acc * 131 + combo[j]) % 1000000007;
+            j = j + 1;
+        }
+        c = c + 1;
+    }
+    acc
+}
+
+fn report(n: i64, k: i64, acc: mut ref String) {
+    let combos = combine(n, k);
+    let count = combos.len();
+    println(f"combine({n},{k}): {count}");
+    let mut c = 0;
+    while c < count {
+        println(show(combos[c]));
+        c = c + 1;
+    }
+    acc.push(' ');
+    acc.push_str(f"{count}");
+    acc.push(':');
+    acc.push_str(f"{hash_combos(combos)}");
+}
+
+fn main() {
+    let mut acc: String = "sums:";
+
+    report(4, 2, mut acc);
+    report(1, 1, mut acc);
+    report(3, 3, mut acc);
+    report(5, 1, mut acc);
+    report(4, 4, mut acc);
+    report(5, 2, mut acc);
+    report(6, 3, mut acc);
+    report(4, 0, mut acc);
+
+    println(acc);
+}

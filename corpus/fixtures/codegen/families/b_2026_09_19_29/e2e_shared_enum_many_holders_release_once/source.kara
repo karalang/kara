@@ -1,0 +1,35 @@
+struct R2 { s: String, t: String, u: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"  d2:{self.s.len()}") } }
+shared enum SMono { P(R2), Q }
+struct Hs { m: SMono }
+enum H3 { P(SMono), Q }
+fn mkr(n: i64) -> R2 { R2 { s: "abcdefghi", t: "x", u: "y" } }
+fn mk() -> SMono { SMono.P(mkr(1)) }
+fn f(h: Hs) { println("  in"); println("  in2") }
+fn g(s: SMono) { println("  gin") }
+fn keep(h: Hs) -> Hs { println("  k"); h }
+fn fu(h: Hs) { match h.m { SMono.P(r) => println(f"  r{r.t}"), SMono.Q => println("  q") }; println("  in2") }
+fn main() {
+    println("field"); { let s: SMono = mk(); println("  A"); let a: Hs = Hs { m: s }; let b: Hs = Hs { m: s }; println("  ok") }
+    println("three"); { let s: SMono = mk(); let a: Hs = Hs { m: s }; let b: Hs = Hs { m: s }; let c: Hs = Hs { m: s }; println("  ok") }
+    println("tuple"); { let s: SMono = mk(); let a = (s, 1); let b = (s, 2); println(f"  ok{a.1}{b.1}") }
+    println("vec"); { let s: SMono = mk(); let v: Vec[SMono] = [s, s]; println(f"  ok{v.len()}") }
+    println("option"); { let s: SMono = mk(); let a: Option[SMono] = Some(s); let b: Option[SMono] = Some(s); println("  ok") }
+    println("enum"); { let s: SMono = mk(); let a: H3 = H3.P(s); let b: H3 = H3.P(s); println("  ok") }
+    println("staggered"); {
+        let s: SMono = mk();
+        let a: Hs = Hs { m: s };
+        let b: Hs = Hs { m: s };
+        println("  ok");
+        match a.m { SMono.P(r) => println(f"  a{r.t}"), SMono.Q => println("  q") }
+        println("  mid");
+        match b.m { SMono.P(r) => println(f"  b{r.t}"), SMono.Q => println("  q") }
+        println("  end")
+    }
+    println("rebind"); { let s: SMono = mk(); let b = s; println("  ok") }
+    println("returned"); { let s: SMono = mk(); let a: Hs = Hs { m: s }; let b: Hs = keep(a); println("  after"); let c = b; println("  end") }
+    println("callee"); { let s: SMono = mk(); let a: Hs = Hs { m: s }; f(a); println("  after"); g(s); println("  end") }
+    println("calleeuse"); { let s: SMono = mk(); let a: Hs = Hs { m: s }; fu(a); println("  after") }
+    println("inner"); { let s: SMono = mk(); { let a: Hs = Hs { m: s }; println("  inner") }; println("  after") }
+    println("done")
+}

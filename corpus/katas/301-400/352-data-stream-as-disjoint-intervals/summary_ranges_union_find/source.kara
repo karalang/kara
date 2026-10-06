@@ -1,0 +1,125 @@
+// LeetCode #352: Data Stream as Disjoint Intervals — union-find over the
+// values.
+//
+// The values lie in 0..=10000. Each one seen is a node; a run of consecutive
+// values is one set, and its root is the run's last value. Adding v links it
+// to v + 1's set when v + 1 has been seen, and links v - 1's set to it when
+// v - 1 has been seen. Every link points left to right, so find(x) is the
+// end of x's run.
+//
+// get_intervals walks the values from 0, jumping from each run's start to the
+// value after its end, so it touches each interval once plus the gaps.
+//
+// add_num is O(alpha(n)) amortized with path halving; get_intervals is
+// O(range) in the gaps it steps over and O(k) in the runs.
+
+struct SummaryRanges {
+    seen: Vec[bool],
+    parent: Vec[i64],
+}
+
+impl SummaryRanges {
+    fn new() -> SummaryRanges {
+        let mut parent: Vec[i64] = Vec.new();
+        for v in 0..10002 {
+            parent.push(v);
+        }
+        return SummaryRanges { seen: Vec.filled(10002, false), parent: parent };
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        let mut node = x;
+        while self.parent[node] != node {
+            self.parent[node] = self.parent[self.parent[node]];
+            node = self.parent[node];
+        }
+        return node;
+    }
+
+    fn add_num(mut ref self, value: i64) {
+        if self.seen[value] {
+            return;
+        }
+        self.seen[value] = true;
+        if self.seen[value + 1] {
+            self.parent[value] = self.find(value + 1);
+        }
+        if value > 0 and self.seen[value - 1] {
+            let left = self.find(value - 1);
+            self.parent[left] = self.find(value);
+        }
+    }
+
+    fn get_intervals(mut ref self) -> Vec[(i64, i64)] {
+        let mut out: Vec[(i64, i64)] = Vec.new();
+        let mut v = 0;
+        while v <= 10000 {
+            if self.seen[v] {
+                let end = self.find(v);
+                out.push((v, end));
+                v = end + 1;
+            } else {
+                v += 1;
+            }
+        }
+        return out;
+    }
+}
+
+fn show(intervals: ref Vec[(i64, i64)]) -> String {
+    let mut text = "";
+    for (s, e) in intervals {
+        if text.len() > 0 {
+            text = text + " ";
+        }
+        text = text + f"[{s}, {e}]";
+    }
+    if text.len() == 0 {
+        return "(empty)";
+    }
+    return text;
+}
+
+// A pseudo-random stream: a linear congruential generator modulo 2^31,
+// reduced to 0..=limit.
+fn next_value(state: mut ref i64, limit: i64) -> i64 {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return (state >> 8) % (limit + 1);
+}
+
+fn main() {
+    // The example from the problem statement.
+    let mut ranges = SummaryRanges.new();
+    for v in [1, 3, 7, 2, 6] {
+        ranges.add_num(v);
+        println(f"add {v}: {show(ranges.get_intervals())}");
+    }
+
+    // Edge cases: a repeat, a value inside an interval, the ends of the range,
+    // a value that bridges two intervals, and values arriving in descending
+    // order.
+    let mut edge = SummaryRanges.new();
+    println(f"nothing added: {show(edge.get_intervals())}");
+    for v in [5, 5, 0, 10000, 3, 4, 9999, 9998, 2, 1, 6] {
+        edge.add_num(v);
+    }
+    println(f"edges: {show(edge.get_intervals())}");
+
+    // A long stream over 0..=10000 with a report every 3000 values.
+    let mut stream = SummaryRanges.new();
+    let mut state: i64 = 352;
+    let mut checksum = 0;
+    for i in 1..30001 {
+        stream.add_num(next_value(mut state, 10000));
+        if i % 3000 == 0 {
+            let intervals = stream.get_intervals();
+            let mut covered = 0;
+            for (s, e) in intervals {
+                covered += e - s + 1;
+                checksum = (checksum * 31 + s * 7 + e) % 1000000007;
+            }
+            println(f"after {i}: {intervals.len()} intervals covering {covered}");
+        }
+    }
+    println(f"checksum {checksum}");
+}

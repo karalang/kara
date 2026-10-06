@@ -1,0 +1,20 @@
+
+struct Box[T] { v: T }
+impl[T] Box[T] {
+    fn take(self) -> T { self.v }
+    fn peek(ref self) -> i64 { 9 }
+}
+fn main() {
+    let n: i64 = env.args().len();
+    println(Box { v: n + 41 }.take());
+    let b = Box { v: "named-receiver-string".repeat(n) };
+    println(b.take().len());
+
+    let c = Box { v: "named-first-this-time".repeat(n) };
+    println(c.take().len());
+    println(Box { v: n + 6 }.take());
+
+    println(Box { v: n + 1 }.peek());
+    let d = Box { v: "peek-receiver".repeat(n) };
+    println(d.peek());
+}

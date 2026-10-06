@@ -1,0 +1,16 @@
+
+#[derive(Message)]
+struct Person { name: String, age: i64 }
+
+fn main() {
+    let mut buf = Vec.new();
+    buf.extend_from_slice(ProtoBuf.encode_tag(9, 2));
+    buf.extend_from_slice(ProtoBuf.encode_string("ignore-me"));
+    buf.extend_from_slice(ProtoBuf.encode_tag(2, 0));
+    buf.extend_from_slice(ProtoBuf.encode_varint(42u64));
+    buf.extend_from_slice(ProtoBuf.encode_tag(1, 2));
+    buf.extend_from_slice(ProtoBuf.encode_string("Grace"));
+    let p = Person.decode(buf);
+    println(p.name);
+    println(p.age);
+}

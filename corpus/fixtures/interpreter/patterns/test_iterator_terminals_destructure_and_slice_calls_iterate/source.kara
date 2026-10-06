@@ -1,0 +1,16 @@
+
+struct G { nbr: Vec[i64] }
+impl G {
+    fn part(ref self, a: i64, b: i64) -> Slice[i64] { return self.nbr[a..b]; }
+}
+fn main() {
+    let label = vec![0, 0, 2, 1, 4];
+    let v = vec![(1, 2), (5, 3), (4, 6)];
+    println(f"{label.iter().enumerate().filter(|(i, l)| i == l).count()} {label.iter().enumerate().map(|(i, l)| i * l).sum()}");
+    println(f"{v.iter().map(|(a, b)| a * b).sum()} {v.iter().filter(|(a, b)| a < b).count()} {v.iter().position(|(a, b)| a > b)}");
+    let g = G { nbr: vec![5, 6, 7, 8] };
+    let mut s = 0;
+    for w in g.part(1, 3) { s += w; }
+    for (i, w) in g.part(0, 4).iter().enumerate() { s += i * w * 100; }
+    println(f"{s}");
+}

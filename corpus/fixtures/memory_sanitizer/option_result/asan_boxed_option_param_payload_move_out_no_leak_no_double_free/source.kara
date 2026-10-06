@@ -1,0 +1,48 @@
+
+struct H { label: String, k: i64 }
+struct Node { hp: Option[H], k: i64 }
+
+fn take_label(h: Option[H]) -> String {
+    match h {
+        Option.Some(x) => { return x.label; }
+        Option.None => { return "none".to_string(); }
+    }
+}
+
+fn take_all(h: Option[H]) -> H {
+    match h {
+        Option.Some(x) => { return x; }
+        Option.None => { return H { label: "none".to_string(), k: 0 }; }
+    }
+}
+
+fn take_key(h: Option[H]) -> i64 {
+    match h {
+        Option.Some(x) => { return x.k; }
+        Option.None => { return 0; }
+    }
+}
+
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 10 {
+        let a = Node { hp: Option.Some(H { label: "row-" + i.to_string(), k: i }), k: 1 };
+        let s = take_label(a.hp);
+        acc = acc + s.len();
+
+        let b = Node { hp: Option.Some(H { label: "wide-" + i.to_string(), k: i }), k: 2 };
+        let g = take_all(b.hp);
+        acc = acc + g.label.len() + g.k;
+
+        let c = Node { hp: Option.Some(H { label: "read-" + i.to_string(), k: i }), k: 3 };
+        acc = acc + take_key(c.hp);
+
+        let d = Node { hp: Option.None, k: 4 };
+        acc = acc + take_label(d.hp).len();
+        let e = Node { hp: Option.None, k: 5 };
+        acc = acc + take_key(e.hp);
+        i = i + 1;
+    }
+    println(acc);
+}

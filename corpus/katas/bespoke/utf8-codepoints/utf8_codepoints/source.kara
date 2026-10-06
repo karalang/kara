@@ -1,0 +1,129 @@
+// Bespoke kata — UTF-8 codepoint analyzer (byte-indexed manual decoder). ★
+//
+// The highest-fidelity mirror of the self-hosted lexer's L2 surface
+// (kara/selfhost/src/main.kara): it decodes each codepoint FROM THE BYTES by
+// hand, exactly as a real lexer must. Three lexer moves happen here together:
+//
+//   utf8_byte_len(lead)            <- `fn utf8_byte_len` in main.kara, the 1..4
+//                                      lead-byte length classification, by u8
+//                                      range compares (no bitwise dependency).
+//   lead-mask + continuation fold  <- the UTF-8 -> scalar decode: strip the
+//                                      length-prefix bits off the lead, then
+//                                      `cp = (cp << 6) | (cont & 0x3F)` per
+//                                      continuation byte (the `scan_unicode_escape`
+//                                      / `char.try_from` machinery, from bytes).
+//   char.try_from(cp).is_alphabetic/is_numeric
+//                                  <- `non_ascii_at_lead`'s #13 classifier, the
+//                                      Unicode property the lexer's non-ASCII
+//                                      identifier recovery dispatches on.
+//
+// Codepoint count is advanced by ONE per decoded codepoint (the lexer's `column`
+// semantics in `advance_codepoint`), independent of the 1..4 byte width.
+//
+// Dual oracle: the decoded scalar == Python `ord`, the count == `len`, the
+// classes == `str.isalpha`/`isnumeric`. The corpus is built from explicit
+// scalar lists so the source is pure ASCII and byte-identical to the oracle.
+
+// UTF-8 byte length implied by a lead byte (1..4), 1 for an invalid lead.
+// Mirrors `utf8_byte_len` in the self-hosted lexer: u8 range compares only.
+fn utf8_byte_len(lead: u8) -> i64 {
+    if lead < 0x80u8 {
+        1
+    } else if lead >= 0xC0u8 and lead <= 0xDFu8 {
+        2
+    } else if lead >= 0xE0u8 and lead <= 0xEFu8 {
+        3
+    } else if lead >= 0xF0u8 and lead <= 0xF7u8 {
+        4
+    } else {
+        1
+    }
+}
+
+// Classify a decoded scalar via the `char.try_from` round-trip the lexer's
+// `\u{..}` escape path uses: 1 = letter, 2 = number, 0 = other / invalid.
+fn classify(cp: i64) -> i64 {
+    match char.try_from(cp as u32) {
+        Ok(c) => {
+            if c.is_alphabetic() {
+                1
+            } else if c.is_numeric() {
+                2
+            } else {
+                0
+            }
+        }
+        Err(_) => 0,
+    }
+}
+
+// Unicode scalar values -> String (encode side), for building the corpus.
+fn from_cps(cps: Vec[i64]) -> String {
+    let mut s: String = "";
+    for cp in cps {
+        match char.try_from(cp as u32) {
+            Ok(c) => s.push(c),
+            Err(_) => {}
+        }
+    }
+    s
+}
+
+fn report(s: ref String) {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    let mut count = 0;
+    let mut letters = 0;
+    let mut numbers = 0;
+    let mut other = 0;
+    let mut vals: String = "";
+    while i < n {
+        let lead = bytes[i];
+        let len = utf8_byte_len(lead);
+        // Strip the length-prefix bits off the lead byte.
+        let mut cp: i64 = if len == 1 {
+            lead as i64
+        } else if len == 2 {
+            (lead & 0x1Fu8) as i64
+        } else if len == 3 {
+            (lead & 0x0Fu8) as i64
+        } else {
+            (lead & 0x07u8) as i64
+        };
+        // Fold in the 6 low bits of each continuation byte.
+        let mut k = 1;
+        while k < len and i + k < n {
+            let cont = bytes[i + k];
+            cp = (cp << 6) | ((cont & 0x3Fu8) as i64);
+            k = k + 1;
+        }
+        if count > 0 { vals.push_str(" "); }
+        vals.push_str(f"{cp}");
+        let cl = classify(cp);
+        if cl == 1 {
+            letters = letters + 1;
+        } else if cl == 2 {
+            numbers = numbers + 1;
+        } else {
+            other = other + 1;
+        }
+        count = count + 1;
+        i = i + len;
+    }
+    println(f"\"{s}\" B{n} C{count} | {vals} | L{letters} N{numbers} O{other}");
+}
+
+fn main() {
+    report("");
+    report(from_cps([104, 101, 108, 108, 111]));
+    report(from_cps([104, 0xe9, 108, 108, 111]));
+    report(from_cps([0x3a9, 0x3bc, 0x3ad, 0x3b3, 0x3b1]));
+    report(from_cps([0x41f, 0x440, 0x438, 0x432, 0x435, 0x442]));
+    report(from_cps([0x65e5, 0x672c, 0x8a9e]));
+    report(from_cps([99, 97, 102, 0xe9, 0x2615]));
+    report(from_cps([0x1d11e, 0x1f3b5]));
+    report(from_cps([97, 98, 99, 49, 50, 51, 0x3bb, 0x4e2d, 57, 0x1d11e]));
+    report(from_cps([65, 0xb7, 66]));
+    report(from_cps([0x7f, 0x80, 0x7ff, 0x800, 0xffff, 0x10000, 0x10ffff]));
+}

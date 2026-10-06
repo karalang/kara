@@ -1,0 +1,83 @@
+// Benchmark workload — Swap Nodes in Pairs (LeetCode #24), iterative.
+// Builds a fresh N-node list every iteration (the swap consumes/re-links it,
+// so each iter needs fresh input), swaps every adjacent pair in place, and
+// sums the swapped list. K iterations. See ../README.md § Benchmarks.
+//
+// The list is [1, 2, …, N]; the swap re-links every node (N/2 pair re-links,
+// three pointer stores each) but moves no values, so the sum is invariant:
+// N·(N+1)/2 per iteration. The sink is the running total of that per-iter
+// sum, so all four compiled mirrors must agree before timing — and a swap
+// that drops or duplicates a node shows up as a sink mismatch.
+//
+// Seq lane (BENCH.md two-lane discipline): the kara binary is built with
+// KARAC_AUTO_PAR=0 so the K-loop's `total = total + …` reduction stays
+// single-threaded and directly comparable to rustc -O / clang -O3 / go build.
+
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn swap_pairs(head: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut prev = dummy;
+    loop {
+        if let Some(first) = prev.next {
+            if let Some(second) = first.next {
+                first.next = second.next;
+                second.next = Some(first);
+                prev.next = Some(second);
+                prev = first;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    dummy.next
+}
+
+fn build_list(count: i64) -> Option[ListNode] {
+    if count <= 0 {
+        return None;
+    }
+    let head = ListNode { val: 1, next: None };
+    let mut tail = head;
+    for i in 2..count + 1 {
+        let node = ListNode { val: i, next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn sum_list(list: Option[ListNode]) -> i64 {
+    let mut s = 0;
+    let mut c = list;
+    loop {
+        match c {
+            Some(node) => {
+                s = s + node.val;
+                c = node.next;
+            }
+            None => break,
+        }
+    }
+    s
+}
+
+fn main() {
+    let n_values = 100;
+    let k_iters = 500000;
+
+    let mut total = 0;
+    let mut k = 0;
+    while k < k_iters {
+        let list = build_list(n_values);
+        let swapped = swap_pairs(list);
+        total = total + sum_list(swapped);
+        k = k + 1;
+    }
+    println(f"{total}");
+}

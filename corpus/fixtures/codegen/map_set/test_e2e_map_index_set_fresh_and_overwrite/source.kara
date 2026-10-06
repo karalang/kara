@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m[1_i64] = 10_i64;
+    m[2_i64] = 20_i64;
+    println(m[1_i64]);
+    println(m[2_i64]);
+    m[1_i64] = 99_i64;
+    println(m[1_i64]);
+}

@@ -1,0 +1,28 @@
+shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct Q[U] { u: U }
+struct Z[U] { n: i64, s: String, u: U }
+struct T[U] { u: U, id: i64 }
+struct H { xs: Vec[Q[S2]] }
+fn mk(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn hs(i: i64) -> String { return f"heap-{i}-abcdefghijklmnopqrstuvwxyz" }
+fn st(v: mut ref Vec[Q[S2]]) { v[0] = Q { u: mk(22) }; }
+fn main() {
+    { let q = Q { u: Q { u: mk(1) } }; println(f"a{q.u.u.id}") }
+    { let q = Q { u: Q { u: Q { u: mk(2) } } }; println(f"b{q.u.u.u.id}") }
+    { let z = Z { n: 1, s: hs(3), u: Q { u: mk(3) } }; println(f"c{z.u.u.id}") }
+    { let v = [Q { u: Q { u: mk(4) } }]; println(f"d{v.len()}") }
+    { let v = [T { u: Sh { k: 5 }, id: 5 }]; println(f"e{v[0].id}") }
+    { let mut v: Vec[Q[Q[S2]]] = Vec.new(); v.push(Q { u: Q { u: mk(6) } }); println(f"f{v.len()}") }
+    { let v = [Z { n: 7, s: hs(7), u: mk(7) }]; let w = v.clone(); println(f"g{w[0].n}{w[0].u.id}") }
+    { let v = [Q { u: Q { u: mk(8) } }]; let w = v.clone(); println(f"h{w[0].u.u.id}") }
+    { let mut v = [Q { u: mk(9) }]; v[0] = Q { u: mk(10) }; println(f"i{v[0].u.id}") }
+    { let mut v = [Q { u: hs(11) }]; v[0] = Q { u: hs(12) }; println(f"j{v[0].u}") }
+    { let mut v = [T { u: Sh { k: 13 }, id: 13 }]; v[0] = T { u: Sh { k: 14 }, id: 14 }; println(f"k{v[0].id}") }
+    { let mut h = H { xs: [Q { u: mk(15) }] }; h.xs[0] = Q { u: mk(16) }; println(f"l{h.xs[0].u.id}") }
+    { let mut v = [Q { u: mk(21) }]; st(mut v); println(f"m{v[0].u.id}") }
+    { let mut v = [Q { u: Q { u: mk(23) } }]; v[0] = Q { u: Q { u: mk(24) } }; println(f"n{v[0].u.u.id}") }
+    { let mut v = [Q { u: mk(25) }, Q { u: mk(26) }]; let a = v.pop().unwrap(); v[0] = a; println(f"o{v[0].u.id}{v.len()}") }
+    println("end")
+}

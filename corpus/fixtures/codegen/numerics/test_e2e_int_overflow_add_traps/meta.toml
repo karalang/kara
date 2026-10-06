@@ -1,0 +1,13 @@
+source = "tests/codegen/numerics.rs::test_e2e_int_overflow_add_traps"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["panic"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 101
+rules = []
+backends = []
+env = {}
+note = ""

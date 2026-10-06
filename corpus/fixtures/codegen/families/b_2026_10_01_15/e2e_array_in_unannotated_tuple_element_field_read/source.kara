@@ -1,0 +1,10 @@
+struct W { w: i64, k: i64 }
+struct D { id: i64, w: W, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+fn mkd(n: i64) -> D { return D { id: n, w: W { w: n * 10, k: n * 100 }, s: f"sssssssssssssssssssssssssssssssssss{n}" } }
+fn main() {
+    { let a: Array[D, 2] = [mkd(1), mkd(2)]; let t = (a, 7); println(f"t {t.1} {t.0[0].id}") }
+    { let a: Array[D, 2] = [mkd(3), mkd(4)]; let b: Array[D, 2] = [mkd(5), mkd(6)]; let t = (a, b); println(f"t {t.0[0].id} {t.1[1].id}") }
+    { let a: Array[D, 2] = [mkd(7), mkd(8)]; let t = (9, a); println(f"t {t.1[1].w.w} {t.1[0].w.k} {t.1[1].s.len()}") }
+    println("end");
+}

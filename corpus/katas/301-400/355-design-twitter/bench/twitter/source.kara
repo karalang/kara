@@ -1,0 +1,111 @@
+// Bench for LeetCode #355 -- the starred arm: per-user tweet lists merged
+// newest-first through a priority queue. The same algorithm in every language.
+//
+// Build: POSTS tweets by users drawn from a linear congruential generator over
+// USERS users, then FOLLOWS follow operations. Punch: FEEDS news feeds of
+// random users, each folded into the sink, so no feed can be skipped.
+
+const USERS: i64 = 1000;
+const POSTS: i64 = 300000;
+const FOLLOWS: i64 = 100000;
+const FEEDS: i64 = 300000;
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Candidate {
+    time: i64,
+    tweet: i64,
+    author: i64,
+    index: i64,
+}
+
+struct Twitter {
+    clock: i64,
+    tweets: Map[i64, Vec[(i64, i64)]],
+    follows: Map[i64, Set[i64]],
+}
+
+impl Twitter {
+    fn new() -> Twitter {
+        Twitter { clock: 0, tweets: Map.new(), follows: Map.new() }
+    }
+
+    fn post_tweet(mut ref self, user: i64, tweet: i64) {
+        self.clock += 1;
+        // design.md writes this `or_insert_with(Vec.new)`; a builtin
+        // constructor is not accepted as a function value yet (kara
+        // B-2026-10-06-118). Revert once that is fixed.
+        self.tweets.entry(user).or_insert(Vec.new()).push((self.clock, tweet));
+    }
+
+    fn news_feed(ref self, user: i64) -> Vec[i64] {
+        let mut authors: Vec[i64] = vec![user];
+        if let Some(followed) = self.follows.get(user) {
+            for f in followed.iter() {
+                if f != user {
+                    authors.push(f);
+                }
+            }
+        }
+        let mut queue: PriorityQueue[Candidate] = PriorityQueue.max_first();
+        for a in authors {
+            if let Some(list) = self.tweets.get(a) {
+                if list.len() > 0 {
+                    let last = list.len() - 1;
+                    let (time, tweet) = list[last];
+                    queue.push(Candidate { time, tweet, author: a, index: last });
+                }
+            }
+        }
+        let mut feed: Vec[i64] = Vec.new();
+        while feed.len() < 10 {
+            match queue.pop() {
+                Some(c) => {
+                    feed.push(c.tweet);
+                    if c.index > 0 {
+                        let (time, tweet) = self.tweets.get(c.author).unwrap()[c.index - 1];
+                        queue.push(Candidate { time, tweet, author: c.author, index: c.index - 1 });
+                    }
+                }
+                None => break,
+            }
+        }
+        feed
+    }
+
+    fn follow(mut ref self, follower: i64, followee: i64) {
+        self.follows.entry(follower).or_insert(Set.new()).insert(followee);
+    }
+
+    fn unfollow(mut ref self, follower: i64, followee: i64) {
+        // `self.follows.entry(follower).and_modify(|set| { set.remove(followee); })`
+        // is the entry-API spelling; a method on a collection-valued
+        // `and_modify` parameter does not build yet (kara B-2026-10-06-119).
+        // Revert once that is fixed.
+        if self.follows.contains_key(follower) {
+            self.follows[follower].remove(followee);
+        }
+    }
+}
+
+fn main() {
+    let mut t = Twitter.new();
+    let mut seed: i64 = 355;
+    for i in 0..POSTS {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        t.post_tweet(seed % USERS, i);
+    }
+    for _ in 0..FOLLOWS {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let a = seed % USERS;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        t.follow(a, seed % USERS);
+    }
+    let mut sink: i64 = 0;
+    for _ in 0..FEEDS {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        for id in t.news_feed(seed % USERS) {
+            sink = (sink * 31 + id) % 1000000007;
+        }
+    }
+    println(f"{sink}");
+}

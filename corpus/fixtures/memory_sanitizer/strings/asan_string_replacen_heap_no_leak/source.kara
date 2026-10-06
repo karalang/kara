@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let s: String = f"a-{i}-b-{i}-c-{i}-d";
+        // Fresh-owned f-string args exercise the arg-free path.
+        println(s.replacen(f"-{i}-", "|", 2));
+        // Negative count clamps to 0 (replace nothing); receiver untouched.
+        println(s.replacen(f"-{i}-", "|", -1i64));
+        i = i + 1;
+    }
+}

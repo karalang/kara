@@ -1,0 +1,66 @@
+// LeetCode 238 — Product of Array Except Self.
+//
+// Return an array `out` where `out[i]` is the product of every element of `nums`
+// EXCEPT `nums[i]` — without using division, in O(n) time and O(1) extra space
+// (the output array does not count against the space bound).
+//
+// Two sweeps over the output itself:
+//   1. left→right: out[i] holds the product of everything strictly LEFT of i.
+//   2. right→left: multiply out[i] by a running product of everything strictly
+//      RIGHT of i.
+// After both passes out[i] = (∏ left of i) × (∏ right of i) = ∏ except i. This
+// also handles zeros correctly with no special-casing: a single zero zeroes
+// every position but its own; two zeros zero everything.
+
+fn product_except_self(nums: Slice[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = Vec.new();
+
+    // Pass 1 — prefix products. out[i] = product of nums[0..i].
+    let mut prefix = 1;
+    let mut i = 0;
+    while i < n {
+        out.push(prefix);
+        prefix = prefix * nums[i];
+        i = i + 1;
+    }
+
+    // Pass 2 — suffix products, folded in from the right.
+    let mut suffix = 1;
+    let mut j = n - 1;
+    while j >= 0 {
+        out[j] = out[j] * suffix;
+        suffix = suffix * nums[j];
+        j = j - 1;
+    }
+
+    return out;
+}
+
+fn report(nums: Slice[i64]) {
+    let out = product_except_self(nums);
+    let mut line: String = String.new();
+    let mut i = 0;
+    while i < out.len() {
+        if i > 0 {
+            line.push_str(" ");
+        }
+        line.push_str(f"{out[i]}");
+        i = i + 1;
+    }
+    println(line);
+}
+
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 3, 4];
+    report(a);                                      // 24 12 8 6
+
+    let b: Array[i64, 5] = [-1, 1, 0, -3, 3];
+    report(b);                                      // 0 0 9 0 0
+
+    let c: Array[i64, 3] = [2, 3, 4];
+    report(c);                                      // 12 8 6
+
+    let d: Array[i64, 2] = [5, 9];
+    report(d);                                      // 9 5
+}

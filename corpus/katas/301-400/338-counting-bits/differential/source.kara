@@ -1,0 +1,180 @@
+// Differential for LeetCode #338 (Counting Bits).
+//
+// The four arms, copied verbatim apart from their names, against an oracle
+// that tests each of a number's 64 bits in turn, for every n from 0 to 300
+// and for n = 4,096 and 65,536, plus eight properties.
+//
+//   P1  the four arms agree
+//   P2  they equal the oracle
+//   P3  the answer has n + 1 entries, each between 0 and 63
+//   P4  the answer for n is the first n + 1 entries of the answer for any
+//       larger n
+//   P5  doubling a number keeps its count, and doubling it and adding one
+//       adds one
+//   P6  2^k has one bit, 2^k - 1 has k, and the counts below 2^k add up to
+//       k * 2^(k - 1)
+//   P7  a sum has at most as many bits as its two parts together (each carry
+//       turns two 1 bits into one)
+//   P8  i XOR j has the bits of i and of j, minus twice the bits they share
+
+// ---- counting_bits.kara ----
+
+fn count_bits_star(n: i64) -> Vec[i64] {
+    let mut ans: Vec[i64] = vec![0; n + 1];
+    for i in 1..=n {
+        ans[i] = ans[i >> 1] + (i & 1);
+    }
+    return ans;
+}
+
+// ---- counting_bits_lowbit.kara ----
+
+fn count_bits_lowbit(n: i64) -> Vec[i64] {
+    let mut ans: Vec[i64] = vec![0; n + 1];
+    for i in 1..=n {
+        ans[i] = ans[i & (i - 1)] + 1;
+    }
+    return ans;
+}
+
+// ---- counting_bits_builtin.kara ----
+
+fn count_bits_builtin(n: i64) -> Vec[i64] {
+    let mut ans: Vec[i64] = Vec.with_capacity(n + 1);
+    for i in 0..=n {
+        ans.push(i.count_ones() as i64);
+    }
+    return ans;
+}
+
+// ---- counting_bits_kernighan.kara ----
+
+fn ones(i: i64) -> i64 {
+    let mut x = i;
+    let mut c = 0;
+    while x != 0 {
+        x = x & (x - 1);
+        c = c + 1;
+    }
+    return c;
+}
+
+fn count_bits_kernighan(n: i64) -> Vec[i64] {
+    return (0..=n).map(|i| ones(i)).collect();
+}
+
+// ---- the oracle ----
+
+fn oracle(n: i64) -> Vec[i64] {
+    let mut ans: Vec[i64] = Vec.new();
+    for i in 0..=n {
+        let mut c = 0;
+        for b in 0..63 {
+            if (i >> b) & 1 == 1 {
+                c += 1;
+            }
+        }
+        ans.push(c);
+    }
+    return ans;
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn fail(failures: mut ref i64, what: String) {
+    failures += 1;
+    if failures <= 10 {
+        println(f"FAIL {what}");
+    }
+}
+
+fn check(n: i64, big: ref Vec[i64], failures: mut ref i64) -> i64 {
+    let a = count_bits_star(n);
+    if not same(a, count_bits_lowbit(n)) or not same(a, count_bits_builtin(n)) or not same(a, count_bits_kernighan(n)) {
+        fail(failures, f"P1 arms disagree at n = {n}");
+    }
+    if not same(a, oracle(n)) {
+        fail(failures, f"P2 oracle at n = {n}");
+    }
+    if a.len() != n + 1 {
+        fail(failures, f"P3 length at n = {n}");
+    }
+    let mut total = 0;
+    for i in 0..a.len() {
+        if a[i] < 0 or a[i] > 63 {
+            fail(failures, f"P3 range at n = {n}, i = {i}");
+        }
+        if i < big.len() and a[i] != big[i] {
+            fail(failures, f"P4 prefix at n = {n}, i = {i}");
+        }
+        total += a[i];
+    }
+    for i in 0..a.len() {
+        if 2 * i < a.len() and a[2 * i] != a[i] {
+            fail(failures, f"P5 even at n = {n}, i = {i}");
+        }
+        if 2 * i + 1 < a.len() and a[2 * i + 1] != a[i] + 1 {
+            fail(failures, f"P5 odd at n = {n}, i = {i}");
+        }
+    }
+    return total;
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+fn main() {
+    let mut failures = 0;
+    let big = count_bits_star(65536);
+    let mut sum = 0;
+    for n in 0..=300 {
+        sum += check(n, big, mut failures);
+    }
+    sum += check(4096, big, mut failures);
+    sum += check(65536, big, mut failures);
+    println(f"303 values of n checked (counts sum to {sum})");
+    let mut power = 1;
+    for k in 0..=16 {
+        if big[power] != 1 {
+            fail(mut failures, f"P6 power at k = {k}");
+        }
+        if power >= 1 and big[power - 1] != k {
+            fail(mut failures, f"P6 below power at k = {k}");
+        }
+        let mut below = 0;
+        for i in 0..power {
+            below += big[i];
+        }
+        let want = if k == 0 { 0 } else { k * (power / 2) };
+        if below != want {
+            fail(mut failures, f"P6 total below 2^{k}");
+        }
+        if k < 16 {
+            power *= 2;
+        }
+    }
+    let mut seed = 338;
+    for _ in 0..5000 {
+        let i = next(mut seed);
+        let j = next(mut seed);
+        if big[i + j] > big[i] + big[j] {
+            fail(mut failures, f"P7 sum {i} + {j}");
+        }
+        if big[i ^ j] != big[i] + big[j] - 2 * big[i & j] {
+            fail(mut failures, f"P8 xor {i} ^ {j}");
+        }
+    }
+    println(f"5000 random pairs, {failures} failures");
+}

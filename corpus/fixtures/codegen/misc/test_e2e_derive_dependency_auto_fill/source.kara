@@ -1,0 +1,21 @@
+
+#[derive(Copy)]
+struct C { a: i64 }
+
+#[derive(Hash)]
+struct K { a: i64, b: i64 }
+
+fn main() {
+    let x = C { a: 3 };
+    let y = x;
+    println("copy = " + x.a.to_string() + "," + y.a.to_string());
+    let mut m: Map[K, i64] = Map.new();
+    m.insert(K { a: 1, b: 2 }, 10);
+    m.insert(K { a: 1, b: 2 }, 20);
+    m.insert(K { a: 9, b: 9 }, 30);
+    println("len = " + m.len().to_string());
+    match m.get(K { a: 1, b: 2 }) {
+        Some(v) => println("k12 = " + v.to_string()),
+        None => println("k12 missing"),
+    }
+}

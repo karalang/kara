@@ -1,0 +1,338 @@
+// LeetCode 302 — three-arm differential.
+//
+//   A  binary search   projections are contiguous   smallest_rectangle.kara
+//   B  full scan       min/max over every pixel     smallest_rectangle_scan.kara
+//   C  flood fill      walk the component           smallest_rectangle_flood.kara
+//
+// THE THREE ARMS DEPEND ON THE CONNECTIVITY PRECONDITION DIFFERENTLY, and that
+// is the whole reason this differential is worth running rather than being a
+// restatement of one algorithm three times:
+//
+//   A needs the row/column PROJECTIONS to be hole-free, so bisection cannot
+//     step over a black row and conclude the region ended.
+//   C needs every black pixel to be REACHABLE from the seed.
+//   B needs NOTHING. It is correct on any binary image whatsoever.
+//
+// So B is the oracle, and it is an oracle with teeth: it can catch A and C
+// together, and it is the only arm that survives P5.
+//
+//   P1  all three arms agree on every CONNECTED image
+//   P2  the reported rectangle matches B's explicit min/max bounds exactly
+//   P3  A and C are SEED-INDEPENDENT — same answer from any black pixel
+//   P4  transposing the image leaves the area unchanged
+//   P5  on a DISCONNECTED image, A and C go wrong and B stays right —
+//       and they go wrong by UNDERCOUNTING, which is the predicted direction
+//
+// P5 IS NOT A BUG REPORT. It is the hypothesis of the theorem being shown
+// necessary: withdraw connectivity and the two clever arms lose exactly the
+// guarantee they were built on. Asserting the failure is nonzero is the point —
+// a P5 that found zero disagreements would mean the generator never actually
+// produced a disconnected image, i.e. the test was vacuous.
+//
+// BANDS ARE SIZED BY THE TREE-WALK INTERPRETER, the slowest of the four
+// surfaces every kata must agree on. B is O(m*n) per call and the differential
+// calls all three arms on every image from every seed, so the frames stay small
+// and numerous rather than large and few.
+
+struct Image {
+    data: Vec[u8],
+    w: i64,
+    h: i64,
+}
+
+fn at(img: ref Image, r: i64, c: i64) -> u8 {
+    return img.data[r * img.w + c];
+}
+
+// ---------------------------------------------------------------- arm A
+
+fn row_has_black(img: ref Image, r: i64) -> bool {
+    let mut c = 0;
+    while c < img.w {
+        if at(img, r, c) == 1u8 { return true; }
+        c = c + 1;
+    }
+    return false;
+}
+
+fn col_has_black(img: ref Image, c: i64) -> bool {
+    let mut r = 0;
+    while r < img.h {
+        if at(img, r, c) == 1u8 { return true; }
+        r = r + 1;
+    }
+    return false;
+}
+
+fn first_black_row(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if row_has_black(img, mid) { hi = mid; } else { lo = mid + 1; }
+    }
+    return lo;
+}
+
+fn first_white_row(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if row_has_black(img, mid) { lo = mid + 1; } else { hi = mid; }
+    }
+    return lo;
+}
+
+fn first_black_col(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if col_has_black(img, mid) { hi = mid; } else { lo = mid + 1; }
+    }
+    return lo;
+}
+
+fn first_white_col(img: ref Image, lo_in: i64, hi_in: i64) -> i64 {
+    let mut lo = lo_in;
+    let mut hi = hi_in;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if col_has_black(img, mid) { lo = mid + 1; } else { hi = mid; }
+    }
+    return lo;
+}
+
+fn area_bsearch(img: ref Image, x: i64, y: i64) -> i64 {
+    let top = first_black_row(img, 0, x + 1);
+    let bottom = first_white_row(img, x + 1, img.h);
+    let left = first_black_col(img, 0, y + 1);
+    let right = first_white_col(img, y + 1, img.w);
+    return (bottom - top) * (right - left);
+}
+
+// ---------------------------------------------------------------- arm B
+
+fn area_scan(img: ref Image, x: i64, y: i64) -> i64 {
+    let mut top = img.h;
+    let mut bottom = -1;
+    let mut left = img.w;
+    let mut right = -1;
+    let mut r = 0;
+    while r < img.h {
+        let mut c = 0;
+        while c < img.w {
+            if at(img, r, c) == 1u8 {
+                if r < top { top = r; }
+                if r > bottom { bottom = r; }
+                if c < left { left = c; }
+                if c > right { right = c; }
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    if bottom < 0 { return 0; }
+    return (bottom - top + 1) * (right - left + 1);
+}
+
+// ---------------------------------------------------------------- arm C
+
+fn area_flood(img: ref Image, x: i64, y: i64) -> i64 {
+    if img.h == 0 or img.w == 0 { return 0; }
+    if at(img, x, y) != 1u8 { return 0; }
+    let mut seen: Vec[bool] = Vec.filled(img.w * img.h, false);
+    let mut stack: Vec[i64] = Vec.new();
+    stack.push(x * img.w + y);
+    let mut top = x;
+    let mut bottom = x;
+    let mut left = y;
+    let mut right = y;
+    while stack.len() > 0 {
+        let idx = match stack.pop() { Some(v) => v, None => 0 };
+        if seen[idx] { continue; }
+        seen[idx] = true;
+        let r = idx / img.w;
+        let c = idx % img.w;
+        if r < top { top = r; }
+        if r > bottom { bottom = r; }
+        if c < left { left = c; }
+        if c > right { right = c; }
+        if r > 0 and at(img, r - 1, c) == 1u8 and not seen[(r - 1) * img.w + c] {
+            stack.push((r - 1) * img.w + c);
+        }
+        if r + 1 < img.h and at(img, r + 1, c) == 1u8 and not seen[(r + 1) * img.w + c] {
+            stack.push((r + 1) * img.w + c);
+        }
+        if c > 0 and at(img, r, c - 1) == 1u8 and not seen[r * img.w + c - 1] {
+            stack.push(r * img.w + c - 1);
+        }
+        if c + 1 < img.w and at(img, r, c + 1) == 1u8 and not seen[r * img.w + c + 1] {
+            stack.push(r * img.w + c + 1);
+        }
+    }
+    return (bottom - top + 1) * (right - left + 1);
+}
+
+// ---------------------------------------------------------------- harness
+
+fn lcg(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 0x7fffffff;
+}
+
+fn transpose(img: ref Image) -> Image {
+    let mut data: Vec[u8] = Vec.filled(img.w * img.h, 0u8);
+    let mut r = 0;
+    while r < img.h {
+        let mut c = 0;
+        while c < img.w {
+            data[c * img.h + r] = at(img, r, c);
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return Image { data: data, w: img.h, h: img.w };
+}
+
+fn main() {
+    let frames = 1400;
+    let mut state = 20296;
+
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0;
+    let mut images = 0;
+    let mut total_black = 0;
+
+    let mut f = 0;
+    while f < frames {
+        let h = 2 + f % 7;
+        let w = 2 + (f / 7) % 7;
+        let mut data: Vec[u8] = Vec.filled(w * h, 0u8);
+
+        // Grow ONE connected region by a random walk from the middle, so the
+        // precondition holds by construction rather than by hope.
+        let mut r = h / 2;
+        let mut c = w / 2;
+        data[r * w + c] = 1u8;
+        let steps = 1 + f % 11;
+        let mut s = 0;
+        while s < steps {
+            state = lcg(state);
+            let d = state % 4;
+            if d == 0 and r > 0 { r = r - 1; }
+            if d == 1 and r + 1 < h { r = r + 1; }
+            if d == 2 and c > 0 { c = c - 1; }
+            if d == 3 and c + 1 < w { c = c + 1; }
+            data[r * w + c] = 1u8;
+            s = s + 1;
+        }
+        let img = Image { data: data, w: w, h: h };
+        images = images + 1;
+
+        // Collect the black pixels once; they are the seeds P3 sweeps over.
+        let mut seeds: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < w * h {
+            if img.data[i] == 1u8 { seeds.push(i); }
+            i = i + 1;
+        }
+        total_black = total_black + seeds.len();
+
+        let want = area_scan(img, 0, 0);
+
+        // P2 — B's own bounds, recomputed explicitly, must equal B's area.
+        let mut tp = h;
+        let mut bt = -1;
+        let mut lf = w;
+        let mut rt = -1;
+        let mut k = 0;
+        while k < seeds.len() {
+            let rr = seeds[k] / w;
+            let cc = seeds[k] % w;
+            if rr < tp { tp = rr; }
+            if rr > bt { bt = rr; }
+            if cc < lf { lf = cc; }
+            if cc > rt { rt = cc; }
+            k = k + 1;
+        }
+        if (bt - tp + 1) * (rt - lf + 1) != want {
+            p2 = p2 + 1;
+        }
+
+        // P1 + P3 — every arm, from every seed.
+        let mut first_a = -1;
+        let mut first_c = -1;
+        let mut j = 0;
+        while j < seeds.len() {
+            let sx = seeds[j] / w;
+            let sy = seeds[j] % w;
+            let a = area_bsearch(img, sx, sy);
+            let cc2 = area_flood(img, sx, sy);
+            if a != want or cc2 != want {
+                p1 = p1 + 1;
+            }
+            if first_a < 0 { first_a = a; first_c = cc2; }
+            if a != first_a or cc2 != first_c {
+                p3 = p3 + 1;
+            }
+            j = j + 1;
+        }
+
+        // P4 — transposing swaps the axes, so the AREA is invariant.
+        let t = transpose(img);
+        if area_scan(t, 0, 0) != want {
+            p4 = p4 + 1;
+        }
+
+        f = f + 1;
+    }
+
+    // P5 — withdraw the precondition on purpose. Two black cells with a gap
+    // between them: the projections now have a hole and the seed's component
+    // is not the whole ink, so A and C must both undercount while B stays right.
+    let mut p5_a_wrong = 0;
+    let mut p5_c_wrong = 0;
+    let mut p5_b_wrong = 0;
+    let mut p5_overcount = 0;
+    let disconnected = 200;
+    let mut d = 0;
+    while d < disconnected {
+        let h = 5 + d % 4;
+        let w = 5 + (d / 4) % 4;
+        let mut data: Vec[u8] = Vec.filled(w * h, 0u8);
+        data[0] = 1u8;                       // top-left
+        data[(h - 1) * w + (w - 1)] = 1u8;   // bottom-right, deliberately apart
+        let img = Image { data: data, w: w, h: h };
+
+        let truth = h * w;                   // the two corners span the frame
+        let b = area_scan(img, 0, 0);
+        let a = area_bsearch(img, 0, 0);     // seeded at the TOP-LEFT pixel
+        let c = area_flood(img, 0, 0);
+
+        if b != truth { p5_b_wrong = p5_b_wrong + 1; }
+        if a != truth { p5_a_wrong = p5_a_wrong + 1; }
+        if c != truth { p5_c_wrong = p5_c_wrong + 1; }
+        if a > truth or c > truth { p5_overcount = p5_overcount + 1; }
+        d = d + 1;
+    }
+
+    println(f"images {images} black {total_black}");
+    println(f"P1 three-arm disagreements {p1}");
+    println(f"P2 bound/area mismatches {p2}");
+    println(f"P3 seed-dependence failures {p3}");
+    println(f"P4 transpose-invariance failures {p4}");
+    println(f"P5 disconnected: B wrong {p5_b_wrong}, A wrong {p5_a_wrong}, C wrong {p5_c_wrong}, overcounts {p5_overcount}");
+
+    // A and C MUST fail P5 — that is the precondition being necessary. B must
+    // not, and neither clever arm may OVERcount: they lose pixels, never invent
+    // them.
+    let p5_ok = p5_b_wrong == 0 and p5_a_wrong == disconnected and p5_c_wrong == disconnected and p5_overcount == 0;
+    if p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5_ok {
+        println("DIFFERENTIAL OK");
+    } else {
+        println("DIFFERENTIAL FAILED");
+    }
+}

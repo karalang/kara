@@ -1,0 +1,50 @@
+// Benchmark workload for LeetCode #162 — Find Peak Element.
+//
+// Build-once + punch: one large PRNG value array is generated once with a
+// deterministic 32-bit LCG (overflow-safe in i64), then a slope-binary-search
+// peak finder is run over a sliding window PASSES times, each preceded by a
+// single-cell flip so the search cannot be hoisted. The search reads log2(W)
+// cells with a data-dependent, unpredictable 2-way branch (climb toward the
+// peak vs. descend) — so it does NOT vectorize: a clean branch-bound kernel.
+// Sink = sum of the peak indices returned across all passes.
+
+fn find_peak(arr: ref Vec[i64], lo0: i64, hi0: i64) -> i64 {
+    let mut lo = lo0;
+    let mut hi = hi0;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if arr[mid] < arr[mid + 1] {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+fn main() {
+    let n = 4000000;
+    let window = 4096;
+    let passes = 1000000;
+
+    let mut arr: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut c = 0;
+    while c < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        arr.push(state % 1000003);
+        c = c + 1;
+    }
+
+    let span = n - window;
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let base = (p * 4099) % span;
+        arr[base] = (arr[base] + 1) % 1000003; // punch — defeat hoisting
+        let idx = find_peak(arr, base, base + window - 1);
+        sink = sink + idx;
+        p = p + 1;
+    }
+    println(sink);
+}

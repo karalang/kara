@@ -1,0 +1,12 @@
+
+enum Payload { NotSet, Num(i64) }
+
+#[derive(Message)]
+struct Event { body: Payload }
+
+fn main() {
+    let d = Event.decode(Vec.new());
+    println(match d.body { Payload.NotSet => "unset", _ => "?" });
+    // Unset encodes nothing.
+    println(Event { body: Payload.NotSet }.encode().len());
+}

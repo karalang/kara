@@ -1,0 +1,42 @@
+
+fn mk(n: i64) -> Option[Array[String, 1]] {
+    if n < 0 { return None; }
+    return Some(Array[f"row-aaaaaaaaaaaaaaaa-{n}"]);
+}
+fn mkscalar(n: i64) -> Option[Array[i64, 3]] {
+    if n < 0 { return None; }
+    return Some(Array[n, n + 1, n + 2]);
+}
+fn mkvec(n: i64) -> Option[Vec[String]] {
+    if n < 0 { return None; }
+    let mut v: Vec[String] = [];
+    v.push(f"vec-aaaaaaaaaaaaaaaa-{n}");
+    return Some(v);
+}
+fn mkstr(n: i64) -> Option[String] {
+    if n < 0 { return None; }
+    return Some(f"str-aaaaaaaaaaaaaaaa-{n}");
+}
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 4 {
+        let w = mk(j);
+        match w { Some(_) => { println("wild"); } None => { println("none"); } }
+        let r = mk(j);
+        match r { Some(a) => { println(f"read:{a[0]}"); } None => { println("none"); } }
+        let m = mk(j);
+        match m { Some(a) => { let t = a; println(f"moved:{t[0]}"); } None => { println("none"); } }
+        let lo: Option[Array[String, 1]] = Some(Array[f"loc-aaaaaaaaaaaaaaaa-{j}"]);
+        match lo { Some(a) => { println(f"local:{a[0]}"); } None => { println("none"); } }
+        mk(j);
+        let s = mkscalar(j);
+        match s { Some(a) => { println(f"scalar:{a[0]}"); } None => { println("none"); } }
+        let v = mkvec(j);
+        match v { Some(a) => { println(f"vec:{a[0]}"); } None => { println("none"); } }
+        let t = mkstr(j);
+        match t { Some(a) => { println(f"str:{a}"); } None => { println("none"); } }
+        j = j + 1;
+    }
+    println("end");
+}

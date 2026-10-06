@@ -1,0 +1,8 @@
+
+        fn main() {
+            let mut acc: i64 = 0i64;
+            for k in 0..100i64 {
+                acc = acc + k;
+            }
+        }
+        

@@ -1,0 +1,36 @@
+first_bound
+  dR2
+  dR1
+  =1
+second_bound
+  dR4
+  dR3
+  =4
+moved_out
+  dR5
+  dR6
+  =5
+rebound
+  dR7
+  dR8
+  =7
+iflet
+  dR10
+  dR9
+  =9
+both_wild
+  dR12
+  dR11
+  =1
+both_bound
+  dR14
+  dR13
+  =27
+other_variant_live
+  dR22
+  =99
+each_variant_takes
+  dR31
+  dR30
+  =30
+end

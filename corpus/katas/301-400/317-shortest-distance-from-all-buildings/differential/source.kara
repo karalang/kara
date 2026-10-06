@@ -1,0 +1,557 @@
+// LeetCode #317: Shortest Distance from All Buildings — differential + property
+// harness.
+//
+// Four arms: one BFS per building accumulating totals and reach counts (★), one
+// BFS per empty cell with early exit, the in-place shrinking-grid BFS, and the
+// relaxation-to-fixpoint oracle. The oracle is a COMPLETE oracle on every grid
+// the harness generates (it is Bellman–Ford, slow but exact), so P1 settles
+// each case outright; the rest of the table is properties that follow from the
+// statement and know nothing about any arm:
+//
+//   P1   relax oracle == ★
+//   P2   from-empty == ★
+//   P3   pruned == ★
+//   P4   transpose invariance: solve(gridᵀ) == solve(grid) — per arm
+//   P5   flip invariance: left-right and top-bottom mirrors — per arm
+//   P6   Manhattan lower bound: answer == -1 or answer >= the smallest sum of
+//        Manhattan distances from any empty cell to all buildings
+//   P7   walling one empty cell never helps: -1 stays -1; otherwise the new
+//        answer is -1 or >= the old one
+//   P8   clearing one obstacle never hurts: a finite answer stays finite and
+//        does not grow
+//   P9   the witness realises the answer: the ★ arm's argmin cell is empty land
+//        and an independent per-cell BFS from it sums to exactly the answer
+//   P10  local optimality: every empty neighbour of the witness costs >= answer
+//   P11  one building: the answer is 1 if it has an empty neighbour, else -1
+//
+// P4/P5 are isometries of the grid graph, so they bind every arm through
+// symmetry rather than through an oracle: an index mix-up that is invisible on
+// square grids or a neighbour test that is right on three sides shows up here.
+// P7/P8 relate two invocations of the ★ arm on grids that differ in one cell.
+
+const DIM_MAX: i64 = 7;
+const SEEDS: i64 = 3;
+
+// -------------------------------------------------------------- arms ---
+
+// Shared by the ★ arm and the witness: fill `total` / `reach`, return B.
+fn bfs_tables(grid: ref Vec[i64], rows: i64, cols: i64,
+              total: mut ref Vec[i64], reach: mut ref Vec[i64]) -> i64 {
+    let n = rows * cols;
+    let mut buildings = 0;
+    for i in 0..n { if grid[i] == 1 { buildings += 1; } }
+    let mut dist: Vec[i64] = Vec.new();
+    for i in 0..n { dist.push(-1); }
+    for src in 0..n {
+        if grid[src] != 1 { continue; }
+        for i in 0..n { dist[i] = -1; }
+        dist[src] = 0;
+        let mut q: VecDeque[i64] = VecDeque.new();
+        q.push_back(src);
+        loop {
+            match q.pop_front() {
+                None => { break; },
+                Some(cell) => {
+                    let r = cell / cols;
+                    let c = cell % cols;
+                    let d = dist[cell] + 1;
+                    if r > 0 { step(grid, cell - cols, d, mut dist, total, reach, mut q); }
+                    if r < rows - 1 { step(grid, cell + cols, d, mut dist, total, reach, mut q); }
+                    if c > 0 { step(grid, cell - 1, d, mut dist, total, reach, mut q); }
+                    if c < cols - 1 { step(grid, cell + 1, d, mut dist, total, reach, mut q); }
+                }
+            }
+        }
+    }
+    return buildings;
+}
+
+fn step(grid: ref Vec[i64], next: i64, d: i64, dist: mut ref Vec[i64],
+        total: mut ref Vec[i64], reach: mut ref Vec[i64], q: mut ref VecDeque[i64]) {
+    if grid[next] != 0 or dist[next] >= 0 { return; }
+    dist[next] = d;
+    total[next] += d;
+    reach[next] += 1;
+    q.push_back(next);
+}
+
+fn solve_bfs(grid: ref Vec[i64], rows: i64, cols: i64) -> i64 {
+    let n = rows * cols;
+    let mut total: Vec[i64] = Vec.new();
+    let mut reach: Vec[i64] = Vec.new();
+    for i in 0..n { total.push(0); reach.push(0); }
+    let buildings = bfs_tables(grid, rows, cols, mut total, mut reach);
+    let mut best = -1;
+    for i in 0..n {
+        if grid[i] == 0 and reach[i] == buildings {
+            if best < 0 or total[i] < best { best = total[i]; }
+        }
+    }
+    return best;
+}
+
+// The first (row-major) cell attaining the answer, or -1.
+fn witness(grid: ref Vec[i64], rows: i64, cols: i64) -> i64 {
+    let n = rows * cols;
+    let mut total: Vec[i64] = Vec.new();
+    let mut reach: Vec[i64] = Vec.new();
+    for i in 0..n { total.push(0); reach.push(0); }
+    let buildings = bfs_tables(grid, rows, cols, mut total, mut reach);
+    let mut best = -1;
+    let mut at = -1;
+    for i in 0..n {
+        if grid[i] == 0 and reach[i] == buildings {
+            if best < 0 or total[i] < best { best = total[i]; at = i; }
+        }
+    }
+    return at;
+}
+
+fn cost_from(grid: ref Vec[i64], rows: i64, cols: i64, start: i64, buildings: i64) -> i64 {
+    let n = rows * cols;
+    let mut dist: Vec[i64] = Vec.new();
+    for i in 0..n { dist.push(-1); }
+    dist[start] = 0;
+    let mut q: VecDeque[i64] = VecDeque.new();
+    q.push_back(start);
+    let mut found = 0;
+    let mut sum = 0;
+    loop {
+        if found == buildings { break; }
+        match q.pop_front() {
+            None => { break; },
+            Some(cell) => {
+                let r = cell / cols;
+                let c = cell % cols;
+                let d = dist[cell] + 1;
+                let mut side = 0;
+                while side < 4 {
+                    let mut next = -1;
+                    if side == 0 and r > 0 { next = cell - cols; }
+                    if side == 1 and r < rows - 1 { next = cell + cols; }
+                    if side == 2 and c > 0 { next = cell - 1; }
+                    if side == 3 and c < cols - 1 { next = cell + 1; }
+                    side += 1;
+                    if next < 0 or dist[next] >= 0 or grid[next] == 2 { continue; }
+                    dist[next] = d;
+                    if grid[next] == 1 {
+                        found += 1;
+                        sum += d;
+                    } else {
+                        q.push_back(next);
+                    }
+                }
+            }
+        }
+    }
+    if found < buildings { return -1; }
+    return sum;
+}
+
+fn solve_from_empty(grid: ref Vec[i64], rows: i64, cols: i64) -> i64 {
+    let n = rows * cols;
+    let mut buildings = 0;
+    for i in 0..n { if grid[i] == 1 { buildings += 1; } }
+    let mut best = -1;
+    for start in 0..n {
+        if grid[start] != 0 { continue; }
+        let cost = cost_from(grid, rows, cols, start, buildings);
+        if cost >= 0 and (best < 0 or cost < best) { best = cost; }
+    }
+    return best;
+}
+
+fn solve_pruned(grid: ref Vec[i64], rows: i64, cols: i64) -> i64 {
+    let n = rows * cols;
+    let mut g: Vec[i64] = Vec.new();
+    let mut total: Vec[i64] = Vec.new();
+    for i in 0..n { g.push(grid[i]); total.push(0); }
+    let mut walk = 0;
+    for src in 0..n {
+        if grid[src] != 1 { continue; }
+        let mut q: VecDeque[(i64, i64)] = VecDeque.new();
+        q.push_back((src, 0));
+        loop {
+            match q.pop_front() {
+                None => { break; },
+                Some(entry) => {
+                    let (cell, depth) = entry;
+                    let r = cell / cols;
+                    let c = cell % cols;
+                    let mut side = 0;
+                    while side < 4 {
+                        let mut next = -1;
+                        if side == 0 and r > 0 { next = cell - cols; }
+                        if side == 1 and r < rows - 1 { next = cell + cols; }
+                        if side == 2 and c > 0 { next = cell - 1; }
+                        if side == 3 and c < cols - 1 { next = cell + 1; }
+                        side += 1;
+                        if next < 0 or g[next] != walk { continue; }
+                        g[next] = walk - 1;
+                        total[next] += depth + 1;
+                        q.push_back((next, depth + 1));
+                    }
+                }
+            }
+        }
+        walk -= 1;
+    }
+    let mut best = -1;
+    for i in 0..n {
+        if grid[i] == 0 and g[i] == walk {
+            if best < 0 or total[i] < best { best = total[i]; }
+        }
+    }
+    return best;
+}
+
+const INF: i64 = 1000000000;
+
+fn relax_table(grid: ref Vec[i64], rows: i64, cols: i64, src: i64) -> Vec[i64] {
+    let n = rows * cols;
+    let mut d: Vec[i64] = Vec.new();
+    for i in 0..n { d.push(INF); }
+    d[src] = 0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for cell in 0..n {
+            if grid[cell] != 0 { continue; }
+            let r = cell / cols;
+            let c = cell % cols;
+            let mut best = d[cell];
+            if r > 0 and grid[cell - cols] != 2 and d[cell - cols] + 1 < best { best = d[cell - cols] + 1; }
+            if r < rows - 1 and grid[cell + cols] != 2 and d[cell + cols] + 1 < best { best = d[cell + cols] + 1; }
+            if c > 0 and grid[cell - 1] != 2 and d[cell - 1] + 1 < best { best = d[cell - 1] + 1; }
+            if c < cols - 1 and grid[cell + 1] != 2 and d[cell + 1] + 1 < best { best = d[cell + 1] + 1; }
+            if best < d[cell] {
+                d[cell] = best;
+                changed = true;
+            }
+        }
+    }
+    // The `!= 2` guards above are implied by the `grid[cell] != 0` skip: a cell
+    // that is never relaxed keeps INF, so it can never be the smallest
+    // neighbour. The mutation harness proved it (README, E13).
+    return d;
+}
+
+fn solve_relax(grid: ref Vec[i64], rows: i64, cols: i64) -> i64 {
+    let n = rows * cols;
+    let mut sum: Vec[i64] = Vec.new();
+    let mut ok: Vec[bool] = Vec.new();
+    for i in 0..n { sum.push(0); ok.push(grid[i] == 0); }
+    for src in 0..n {
+        if grid[src] != 1 { continue; }
+        let d = relax_table(grid, rows, cols, src);
+        for i in 0..n {
+            if d[i] >= INF { ok[i] = false; } else { sum[i] += d[i]; }
+        }
+    }
+    let mut best = -1;
+    for i in 0..n {
+        if ok[i] and (best < 0 or sum[i] < best) { best = sum[i]; }
+    }
+    return best;
+}
+
+fn solve_arm(arm: i64, grid: ref Vec[i64], rows: i64, cols: i64) -> i64 {
+    if arm == 0 { return solve_bfs(grid, rows, cols); }
+    if arm == 1 { return solve_from_empty(grid, rows, cols); }
+    if arm == 2 { return solve_pruned(grid, rows, cols); }
+    return solve_relax(grid, rows, cols);
+}
+
+// ----------------------------------------------------------- helpers ---
+
+fn transpose(grid: ref Vec[i64], rows: i64, cols: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in 0..cols {
+        for r in 0..rows { out.push(grid[r * cols + c]); }
+    }
+    return out;
+}
+
+fn flip_lr(grid: ref Vec[i64], rows: i64, cols: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols { out.push(grid[r * cols + (cols - 1 - c)]); }
+    }
+    return out;
+}
+
+fn flip_tb(grid: ref Vec[i64], rows: i64, cols: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols { out.push(grid[(rows - 1 - r) * cols + c]); }
+    }
+    return out;
+}
+
+fn iabs(x: i64) -> i64 {
+    if x < 0 { return 0 - x; }
+    return x;
+}
+
+// Smallest sum of Manhattan distances from an empty cell to every building;
+// -1 if there is no empty cell. A lower bound on any walking distance.
+fn manhattan_floor(grid: ref Vec[i64], rows: i64, cols: i64) -> i64 {
+    let n = rows * cols;
+    let mut best = -1;
+    for cell in 0..n {
+        if grid[cell] != 0 { continue; }
+        let r = cell / cols;
+        let c = cell % cols;
+        let mut sum = 0;
+        for b in 0..n {
+            if grid[b] == 1 { sum += iabs(r - b / cols) + iabs(c - b % cols); }
+        }
+        if best < 0 or sum < best { best = sum; }
+    }
+    return best;
+}
+
+fn count_of(grid: ref Vec[i64], v: i64) -> i64 {
+    let mut k = 0;
+    for i in 0..grid.len() { if grid[i] == v { k += 1; } }
+    return k;
+}
+
+// Index of the k-th cell (0-based) holding `v`, or -1.
+fn kth_cell(grid: ref Vec[i64], v: i64, k: i64) -> i64 {
+    let mut seen = 0;
+    for i in 0..grid.len() {
+        if grid[i] == v {
+            if seen == k { return i; }
+            seen += 1;
+        }
+    }
+    return -1;
+}
+
+fn with_cell(grid: ref Vec[i64], at: i64, v: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..grid.len() { out.push(grid[i]); }
+    out[at] = v;
+    return out;
+}
+
+fn has_empty_neighbour(grid: ref Vec[i64], rows: i64, cols: i64, cell: i64) -> bool {
+    let r = cell / cols;
+    let c = cell % cols;
+    if r > 0 and grid[cell - cols] == 0 { return true; }
+    if r < rows - 1 and grid[cell + cols] == 0 { return true; }
+    if c > 0 and grid[cell - 1] == 0 { return true; }
+    if c < cols - 1 and grid[cell + 1] == 0 { return true; }
+    return false;
+}
+
+// --------------------------------------------------------- generator ---
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536;
+}
+
+// rows x cols, obstacles with probability pct/100, then `nb` buildings dropped
+// on distinct random cells (obstacle or not — a building may replace one).
+fn make_grid(rows: i64, cols: i64, pct: i64, nb: i64, seed: mut ref i64) -> Vec[i64] {
+    let n = rows * cols;
+    let mut g: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if next(seed) % 100 < pct { g.push(2); } else { g.push(0); }
+    }
+    let mut placed = 0;
+    let mut tries = 0;
+    while placed < nb and tries < 8 * n {
+        let p = next(seed) % n;
+        tries += 1;
+        if g[p] != 1 { g[p] = 1; placed += 1; }
+    }
+    return g;
+}
+
+// -------------------------------------------------------------- main ---
+
+fn main() {
+    let mut inputs: Vec[Vec[i64]] = Vec.new();
+    let mut shapes: Vec[(i64, i64)] = Vec.new();
+    let mut pcts: Vec[i64] = [0, 15, 30, 50];
+    let mut counts: Vec[i64] = [1, 2, 3, 4];
+
+    for rows in 1..(DIM_MAX + 1) {
+        for cols in 1..(DIM_MAX + 1) {
+            for pi in 0..pcts.len() {
+                for bi in 0..counts.len() {
+                    let nb = counts[bi];
+                    if nb > rows * cols { continue; }
+                    for sd in 0..SEEDS {
+                        let mut seed = rows * 7919 + cols * 104729 + pcts[pi] * 31 + nb * 977 + sd * 65537 + 317;
+                        inputs.push(make_grid(rows, cols, pcts[pi], nb, mut seed));
+                        shapes.push((rows, cols));
+                    }
+                }
+            }
+        }
+    }
+    // Patterned: corridors with buildings at both ends, a walled-in building,
+    // a checkerboard of obstacles, two rooms joined by one door.
+    for len in 2..9 {
+        let mut g: Vec[i64] = Vec.new();
+        for i in 0..len { g.push(0); }
+        g[0] = 1;
+        g[len - 1] = 1;
+        inputs.push(g);
+        shapes.push((1, len));
+    }
+    for k in 3..8 {
+        let mut g: Vec[i64] = Vec.new();
+        for i in 0..(k * k) { g.push(0); }
+        g[(k / 2) * k + k / 2] = 1;
+        for c in 0..k { g[(k / 2 - 1) * k + c] = 2; g[(k / 2 + 1) * k + c] = 2; }
+        g[(k / 2) * k + k / 2 - 1] = 2;
+        g[(k / 2) * k + k / 2 + 1] = 2;
+        g[0] = 1;
+        inputs.push(g);
+        shapes.push((k, k));
+    }
+    for k in 2..8 {
+        let mut g: Vec[i64] = Vec.new();
+        for r in 0..k { for c in 0..k { if (r + c) % 2 == 1 { g.push(2); } else { g.push(0); } } }
+        g[0] = 1;
+        g[k * k - 1] = 1;
+        inputs.push(g);
+        shapes.push((k, k));
+    }
+    for k in 3..8 {
+        let mut g: Vec[i64] = Vec.new();
+        for r in 0..k { for c in 0..k { if c == k / 2 and r != k - 1 { g.push(2); } else { g.push(0); } } }
+        g[0] = 1;
+        g[k - 1] = 1;
+        inputs.push(g);
+        shapes.push((k, k));
+    }
+
+    let mut cases = 0;
+    let mut feasible = 0;
+    let mut single = 0;
+    let mut walled = 0;
+    let mut cleared = 0;
+    let mut neighbours_checked = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4: Vec[i64] = [0, 0, 0, 0];
+    let mut p5: Vec[i64] = [0, 0, 0, 0];
+    let mut p6 = 0;
+    let mut p7 = 0;
+    let mut p8 = 0;
+    let mut p9 = 0;
+    let mut p10 = 0;
+    let mut p11 = 0;
+
+    for t in 0..inputs.len() {
+        let g = inputs[t].clone();
+        let (rows, cols) = shapes[t];
+        let n = rows * cols;
+        cases += 1;
+        let ans = solve_bfs(g, rows, cols);
+        if ans >= 0 { feasible += 1; }
+
+        if solve_relax(g, rows, cols) != ans { p1 += 1; }
+        if solve_from_empty(g, rows, cols) != ans { p2 += 1; }
+        if solve_pruned(g, rows, cols) != ans { p3 += 1; }
+
+        // P4 / P5: isometries, per arm.
+        let gt = transpose(g, rows, cols);
+        let glr = flip_lr(g, rows, cols);
+        let gtb = flip_tb(g, rows, cols);
+        for arm in 0..4 {
+            let ra = solve_arm(arm, g, rows, cols);
+            if solve_arm(arm, gt, cols, rows) != ra { p4[arm] += 1; }
+            if solve_arm(arm, glr, rows, cols) != ra { p5[arm] += 1; }
+            if solve_arm(arm, gtb, rows, cols) != ra { p5[arm] += 1; }
+        }
+
+        // P6: Manhattan floor.
+        if ans >= 0 and ans < manhattan_floor(g, rows, cols) { p6 += 1; }
+
+        // P7: wall one empty cell.
+        let empties = count_of(g, 0);
+        if empties > 0 {
+            let at = kth_cell(g, 0, (t * 7) % empties);
+            let walled_ans = solve_bfs(with_cell(g, at, 2), rows, cols);
+            walled += 1;
+            if ans < 0 {
+                if walled_ans != -1 { p7 += 1; }
+            } else if walled_ans >= 0 and walled_ans < ans {
+                p7 += 1;
+            }
+        }
+
+        // P8: clear one obstacle.
+        let obstacles = count_of(g, 2);
+        if obstacles > 0 {
+            let at = kth_cell(g, 2, (t * 5) % obstacles);
+            let cleared_ans = solve_bfs(with_cell(g, at, 0), rows, cols);
+            cleared += 1;
+            if ans >= 0 and (cleared_ans < 0 or cleared_ans > ans) { p8 += 1; }
+        }
+
+        // P9 / P10: the witness.
+        let buildings = count_of(g, 1);
+        let w = witness(g, rows, cols);
+        if ans >= 0 {
+            if w < 0 or g[w] != 0 or cost_from(g, rows, cols, w, buildings) != ans { p9 += 1; }
+            if w >= 0 {
+                let r = w / cols;
+                let c = w % cols;
+                let mut side = 0;
+                while side < 4 {
+                    let mut nb = -1;
+                    if side == 0 and r > 0 { nb = w - cols; }
+                    if side == 1 and r < rows - 1 { nb = w + cols; }
+                    if side == 2 and c > 0 { nb = w - 1; }
+                    if side == 3 and c < cols - 1 { nb = w + 1; }
+                    side += 1;
+                    if nb < 0 or g[nb] != 0 { continue; }
+                    neighbours_checked += 1;
+                    let cost = cost_from(g, rows, cols, nb, buildings);
+                    if cost >= 0 and cost < ans { p10 += 1; }
+                }
+            }
+        } else if w != -1 {
+            p9 += 1;
+        }
+
+        // P11: one building.
+        if buildings == 1 {
+            single += 1;
+            let b = kth_cell(g, 1, 0);
+            let expect = if has_empty_neighbour(g, rows, cols, b) { 1 } else { -1 };
+            if ans != expect { p11 += 1; }
+        }
+    }
+
+    println(f"cases {cases} feasible {feasible} single-building {single} walled {walled} cleared {cleared} neighbours_checked {neighbours_checked}");
+    println(f"P1 relax-oracle disagreements {p1}");
+    println(f"P2 from-empty disagreements {p2}");
+    println(f"P3 pruned disagreements {p3}");
+    println(f"P4 transpose bfs failures {p4[0]}");
+    println(f"P4 transpose from-empty failures {p4[1]}");
+    println(f"P4 transpose pruned failures {p4[2]}");
+    println(f"P4 transpose relax failures {p4[3]}");
+    println(f"P5 flip bfs failures {p5[0]}");
+    println(f"P5 flip from-empty failures {p5[1]}");
+    println(f"P5 flip pruned failures {p5[2]}");
+    println(f"P5 flip relax failures {p5[3]}");
+    println(f"P6 manhattan-floor failures {p6}");
+    println(f"P7 wall-never-helps failures {p7}");
+    println(f"P8 clear-never-hurts failures {p8}");
+    println(f"P9 witness failures {p9}");
+    println(f"P10 local-optimality failures {p10}");
+    println(f"P11 single-building failures {p11}");
+    let total = p1 + p2 + p3 + p4[0] + p4[1] + p4[2] + p4[3] + p5[0] + p5[1] + p5[2] + p5[3]
+        + p6 + p7 + p8 + p9 + p10 + p11;
+    if total == 0 { println("DIFFERENTIAL OK"); } else { println("DIFFERENTIAL FAILED"); }
+}

@@ -1,0 +1,7 @@
+
+fn f(a: f64) -> f64 {
+    let v: Vector[f64, 2] = Vector[f64, 2](a, a);
+    let e = v.exp();
+    e[0]
+}
+fn main() { println(f(1.0)); }

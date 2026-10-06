@@ -1,0 +1,81 @@
+// Benchmark workload for LeetCode #165 — Compare Version Numbers.
+//
+// Build-once + punch: a pool of PRNG-generated dot-separated version strings is
+// built once (1..4 revisions, each 0..999), then compare_version is run over
+// PASSES PRNG-selected pairs. Each call byte-scans both strings into revision
+// lists and compares element-wise (missing revision = 0) — a parse + branch
+// kernel with per-call allocation that does NOT vectorize. The PRNG picks a
+// different (i, j) pair each pass, so no comparison can be hoisted. Sink = sum
+// of the comparison results (-1/0/1) shifted by +1 to stay non-negative.
+
+fn revisions(v: ref String) -> Vec[i64] {
+    let bytes = v.bytes();
+    let n = bytes.len();
+    let dot: u8 = b'.';
+    let zero: u8 = b'0';
+    let mut revs: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut val: i64 = 0;
+        while i < n and bytes[i] != dot {
+            val = val * 10 + (bytes[i] as i64 - zero as i64);
+            i = i + 1;
+        }
+        revs.push(val);
+        i = i + 1; // skip the '.'
+    }
+    return revs;
+}
+
+fn compare_version(v1: ref String, v2: ref String) -> i64 {
+    let a = revisions(v1);
+    let b = revisions(v2);
+    let na = a.len();
+    let nb = b.len();
+    let m = if na > nb { na } else { nb };
+    let mut i = 0;
+    while i < m {
+        let x = if i < na { a[i] } else { 0 };
+        let y = if i < nb { b[i] } else { 0 };
+        if x < y { return -1; }
+        if x > y { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    let m = 4096;
+    let passes = 10000000;
+
+    let mut pool: Vec[String] = Vec.new();
+    let mut state = 12345;
+    let mut k = 0;
+    while k < m {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let r = 1 + (state % 4);
+        let mut vs: String = "";
+        let mut t = 0;
+        while t < r {
+            state = (state * 1103515245 + 12345) & 2147483647;
+            let rev = state % 1000;
+            if t > 0 { vs.push_str("."); }
+            vs.push_str(f"{rev}");
+            t = t + 1;
+        }
+        pool.push(vs);
+        k = k + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let i = state % m;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let j = state % m;
+        sink = sink + compare_version(pool[i], pool[j]) + 1;
+        p = p + 1;
+    }
+    println(sink);
+}

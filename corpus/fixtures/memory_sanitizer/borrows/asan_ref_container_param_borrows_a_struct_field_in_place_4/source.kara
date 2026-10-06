@@ -1,0 +1,11 @@
+
+struct Bag[=T] { xs: Vec[T] }
+fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }
+impl[T] Bag[T] {
+    fn go(mut ref self) { swap01(mut self.xs); }
+}
+fn main() {
+    let mut a: Bag[String] = Bag { xs: Vec.new() };
+    a.xs.push("aa"); a.xs.push("bb"); a.go();
+    println(f"len={a.xs.len()} [{a.xs[0]}]");
+}

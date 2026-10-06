@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v[5] = 99;
+    println(42);
+}

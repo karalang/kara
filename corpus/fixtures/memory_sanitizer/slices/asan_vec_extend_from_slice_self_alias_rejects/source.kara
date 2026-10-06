@@ -1,0 +1,8 @@
+
+fn main() {
+    let mut v: Vec[i64] = Vec.with_capacity(2);
+    v.push(1);
+    v.push(2);
+    v.extend_from_slice(v.as_slice());
+    println(v.len());
+}

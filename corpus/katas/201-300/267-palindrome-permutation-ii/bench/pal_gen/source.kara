@@ -1,0 +1,116 @@
+// Benchmark workload for LeetCode #267 — Palindrome Permutation II.
+//
+// Build-once + punch. One multiset of 8 character pairs is fixed, and the ★
+// half-backtracking generator is punched through it 44 times. Every round adds
+// one extra copy of a DIFFERENT character, which makes that character the lone
+// middle: the search tree is identical round to round (half length 8, all
+// distinct, so 8! = 40,320 arrangements) but the bytes produced differ, so no
+// round repeats the last and nothing is loop-invariant.
+//
+// WHAT THIS LANE MEASURES: the RECURSIVE SEARCH. 40,320 leaves reached through
+// a tree whose every node scans 128 counter slots to find the few that are
+// non-zero, with a decrement/push descending and a pop/restore returning. A
+// sparse scan inside a recursion is a shape the corpus does not otherwise have.
+//
+// THE 128-SLOT SCAN IS KEPT rather than compacted into a list of live
+// characters. It is what the ★ kata file does and what makes the deduplication
+// free; narrowing it to 26 would measure a different program.
+//
+// EACH LEAF WRITES ITS 17 BYTES INTO ONE HOISTED BUFFER, not into a fresh
+// string. That is a deliberate parity decision, not an optimisation. The first
+// version of this lane had each leaf build a string, and the five mirrors were
+// then doing visibly different work: kāra's `s = s + …` allocates a new string
+// per character (17 per leaf), Rust's `String::push` and Go's `Builder` append
+// in place, and C wrote into a stack array and allocated nothing at all. That
+// measures four allocation strategies, not one algorithm — the same defect a C
+// stack array introduced in #266. A buffer every language reuses removes the
+// string API from the comparison; #257 remains the corpus's string-building
+// lane, and this one is about the search.
+
+fn build(counts: mut ref Vec[i64], half: mut ref Vec[i64], half_len: i64,
+         middle: i64, buf: mut ref Vec[i64], acc: mut ref i64) {
+    if half.len() == half_len {
+        let mut n = 0;
+        let mut i = 0;
+        while i < half_len {
+            buf[n] = half[i];
+            n = n + 1;
+            i = i + 1;
+        }
+        if middle >= 0 {
+            buf[n] = middle;
+            n = n + 1;
+        }
+        let mut j = half_len - 1;
+        while j >= 0 {
+            buf[n] = half[j];
+            n = n + 1;
+            j = j - 1;
+        }
+        let mut k = 0;
+        while k < n {
+            acc = (acc * 31 + buf[k]) % 1000000007;
+            k = k + 1;
+        }
+        return;
+    }
+    let mut c = 0;
+    while c < 128 {
+        if counts[c] > 0 {
+            counts[c] = counts[c] - 1;
+            half.push(c);
+            build(counts, half, half_len, middle, buf, acc);
+            half.pop();
+            counts[c] = counts[c] + 1;
+        }
+        c = c + 1;
+    }
+}
+
+fn main() {
+    let pairs = 8;
+    let rounds = 44;
+
+    // Hoisted once: the per-leaf output buffer.
+    let mut buf: Vec[i64] = Vec.new();
+    let mut b = 0;
+    while b < 64 {
+        buf.push(0);
+        b = b + 1;
+    }
+
+    let mut sink = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut counts: Vec[i64] = Vec.new();
+        let mut z = 0;
+        while z < 128 {
+            counts.push(0);
+            z = z + 1;
+        }
+        let mut p = 0;
+        while p < pairs {
+            counts[97 + p] = 2;
+            p = p + 1;
+        }
+        counts[97 + r % pairs] = counts[97 + r % pairs] + 1;
+
+        let mut middle = -1;
+        let mut half_len = 0;
+        let mut c = 0;
+        while c < 128 {
+            if counts[c] % 2 == 1 { middle = c; }
+            counts[c] = counts[c] / 2;
+            half_len = half_len + counts[c];
+            c = c + 1;
+        }
+
+        let mut acc = 0;
+        let mut half: Vec[i64] = Vec.new();
+        build(mut counts, mut half, half_len, middle, mut buf, mut acc);
+        sink = (sink * 131 + acc) % 1000000007;
+        r = r + 1;
+    }
+
+    println(sink);
+}

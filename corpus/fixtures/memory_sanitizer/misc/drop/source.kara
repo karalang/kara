@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut vs: Vec[i64] = Vec.new();
+    vs.push(1_i64);
+    dbg(vs);
+    let vs2 = dbg(vs);
+    println(f"{vs2.len()}");
+    let hs = "y".to_uppercase();
+    let hs2 = dbg(hs);
+    println(hs2);
+}

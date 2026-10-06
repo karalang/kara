@@ -1,0 +1,13 @@
+
+#[derive(Message)]
+struct Inner { label: String, score: i64 }
+
+#[derive(Message)]
+struct Outer { id: i64, child: Inner }
+
+fn main() {
+    let o = Outer.decode(Vec.new());
+    println(o.id);
+    println(o.child.label == "");
+    println(o.child.score);
+}

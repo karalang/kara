@@ -1,0 +1,9 @@
+struct Cfg { port: i64, name: String }
+         fn main() {
+             let cell: OnceCell[Cfg] = OnceCell.new();
+             let c = cell.get_or_init(|| Cfg { port: 8080, name: "svc" });
+             println(c.port);
+             println(c.name);
+             let c2 = cell.get_or_init(|| Cfg { port: 1, name: "other" });
+             println(c2.port);
+         }

@@ -1,0 +1,16 @@
+
+fn scan(xs: Slice[i64], n: i64) {
+    let mut i = 0i64;
+    while i < n {
+        // SAFETY: i < n <= xs.len() by construction at the call site.
+        println(unsafe { xs.get_unchecked(i) });
+        i = i + 1i64;
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(5);
+    v.push(15);
+    v.push(25);
+    scan(v, 3);
+}

@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut a: Map[i64, i64] = Map.new();
+    let mut b: Map[i64, i64] = Map.new();
+    println(a.len());
+    println(b.len());
+}

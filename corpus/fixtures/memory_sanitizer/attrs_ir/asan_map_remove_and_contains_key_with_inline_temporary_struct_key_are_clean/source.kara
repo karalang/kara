@@ -1,0 +1,20 @@
+
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1i64, name: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut seen = 0i64;
+    while j < 4i64 {
+        if m.contains_key(Item { id: j, name: f"c-{j}-padding-padding-padding" }) {
+            seen = seen + 1i64;
+        }
+        match m.remove(Item { id: j, name: f"d-{j}-padding-padding-padding" }) {
+            Some(v) => { seen = seen + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{seen}{m.len()}");
+}

@@ -1,0 +1,57 @@
+// LeetCode #58: Length of Last Word — single forward scan, O(n) time,
+// O(1) space.
+//
+// The reverse scan in `length_of_last_word.kara` is the tightest form, but a
+// left-to-right pass works too and is the shape you reach for if you can't
+// index from the end (e.g. a streaming character source). Track two counters:
+// `cur` is the length of the word currently being read; `last` is the length
+// of the most recently completed word. On a space, if `cur > 0` a word just
+// ended, so commit it to `last` and reset `cur`; on a non-space, extend `cur`.
+// After the loop, if the string didn't end in a space (`cur > 0`), the final
+// word is `cur` — otherwise `last` already holds it.
+//
+// Same `bytes()` zero-copy `Slice[u8]` view and space = `0x20` comparison as
+// the reverse scan; the only difference is the direction and the two-counter
+// bookkeeping.
+
+fn length_of_last_word(s: ref String) -> i64 {
+    let b = s.bytes();
+    let n = s.len();
+    let mut last = 0;
+    let mut cur = 0;
+    let mut i = 0;
+    while i < n {
+        if b[i] == 32u8 {
+            // A word just ended (unless we're in a run of spaces).
+            if cur > 0 {
+                last = cur;
+            }
+            cur = 0;
+        } else {
+            cur = cur + 1;
+        }
+        i = i + 1;
+    }
+    // String didn't end in a space — the trailing run is the last word.
+    if cur > 0 {
+        last = cur;
+    }
+    last
+}
+
+fn report(s: ref String) {
+    let r = length_of_last_word(s);
+    println(f"{s}: {r}");
+}
+
+fn main() {
+    report("Hello World");                 // expect: 5
+    report("   fly me   to   the moon  "); // expect: 4
+    report("luffy is still joyboy");       // expect: 6
+    report("word");                        // expect: 4
+    report("a");                           // expect: 1
+    report("   lead");                     // expect: 4
+    report("day ");                        // expect: 3
+    report("a   bb   ccc   ");             // expect: 3
+    report("hello a");                     // expect: 1
+}

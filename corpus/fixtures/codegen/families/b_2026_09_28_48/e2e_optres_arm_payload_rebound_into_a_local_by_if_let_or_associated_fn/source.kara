@@ -1,0 +1,23 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+struct Q { r: R }
+fn mq(i: i64) -> Q { Q { r: R { id: i } } }
+
+struct H { v: i64 }
+impl H { fn ga(x: Option[S]) { match x { Some(y) => { let z = y; println(f"a{z.r.id}") }, None => println("n") }; println("post") } }
+fn io(x: Option[S]) { if let Some(y) = x { let z = y; println(f"i{z.r.id}") }; println("post") }
+fn ir(x: Result[S, i64]) { if let Ok(y) = x { let z = y; println(f"r{z.r.id}") }; println("post") }
+fn main() {
+    io(Some(mk(1)));
+    let b = Some(mk(2));
+    io(b);
+    ir(Ok(mk(3)));
+    let c: Result[S, i64] = Ok(mk(4));
+    ir(c);
+    H.ga(Some(mk(5)));
+    let d = Some(mk(6));
+    H.ga(d);
+    println("end")
+}

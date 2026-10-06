@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut n: i64 = 0i64;
+    while n < 3i64 {
+        let mut m: SortedMap[String, String] = SortedMap.new();
+        let _ = m.insert(f"kb-{n}-pad-pad", f"vb-{n}-pad-pad");
+        let _ = m.insert(f"ka-{n}-pad-pad", f"va-{n}-pad-pad");
+        let _ = m.insert(f"kc-{n}-pad-pad", f"vc-{n}-pad-pad");
+        let ks = m.keys();
+        let mut ko: String = "";
+        for k in ks { ko.push_str(k); ko.push_str("|"); }
+        println(ko);
+        let mut fo: String = "";
+        for (k, v) in m { fo.push_str(k); fo.push_str("="); fo.push_str(v); fo.push_str(";"); }
+        println(fo);
+        n = n + 1i64;
+    }
+}

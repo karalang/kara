@@ -1,0 +1,25 @@
+fn pick(m: ref SortedMap[String, i64], at: String) -> String {
+    match m.ceiling(at) {
+        Some((k, v)) => return f"{k}={v}",
+        None => return "none",
+    }
+}
+
+fn main() {
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    m.insert(f"pear-with-a-name-longer-than-inline-{1}", 1);
+    m.insert(f"apple-with-a-name-longer-than-inline-{2}", 2);
+    m.insert(f"fig-with-a-name-longer-than-inline-{3}", 3);
+    println(pick(m, "b"));
+    m.remove(f"fig-with-a-name-longer-than-inline-{3}");
+    println(pick(m, "b"));
+    m.insert(f"banana-with-a-name-longer-than-inline-{4}", 4);
+    println(pick(m, "b"));
+    m.clear();
+    println(pick(m, "b"));
+    m.insert(f"kiwi-with-a-name-longer-than-inline-{5}", 5);
+    match m.max() {
+        Some((k, v)) => println(f"max {k}={v}"),
+        None => println("max none"),
+    }
+}

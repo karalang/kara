@@ -1,0 +1,14 @@
+struct R { name: String, id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
+fn mk(n: i64, s: String) -> R { R { name: s, id: n } }
+fn h5(x: Option[R]) -> i64 { let x = Some(mk(11, f"k")); match x { Some(r) => r.id, None => 0 } }
+fn h6(x: Option[R]) -> i64 { let x = Some(mk(12, f"l")); 1 }
+fn h7(x: Option[R]) -> i64 { let x = Some(mk(13, f"m")); if let Some(r) = x { return r.id } 0 }
+fn h8(x: R) -> i64 { let x = mk(14, f"n"); x.id }
+fn main() {
+    println(f"n{h5(Some(mk(5, f"e")))}")
+    println(f"n{h6(Some(mk(6, f"f")))}")
+    println(f"n{h7(Some(mk(7, f"g")))}")
+    println(f"n{h8(mk(8, f"h"))}")
+    println("end")
+}

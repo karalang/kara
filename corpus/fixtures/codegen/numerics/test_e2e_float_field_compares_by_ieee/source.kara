@@ -1,0 +1,51 @@
+
+#[derive(PartialEq)]
+shared struct Sf { x: f64 }
+#[derive(PartialEq)]
+shared struct Sv { v: Vec[f64] }
+#[derive(PartialEq)]
+struct Pv { v: Vec[f64] }
+#[derive(PartialEq)]
+struct Inner { x: f64 }
+#[derive(PartialEq)]
+shared struct Outer { i: Inner }
+fn nan64(z: f64) -> f64 { return z / z; }
+fn negzero(z: f64) -> f64 { return -z; }
+fn one(x: f64) -> Vec[f64] {
+    let mut v: Vec[f64] = Vec.new();
+    v.push(x);
+    return v;
+}
+fn main() {
+    let p = 0.0;
+    let n = negzero(p);
+    let q = nan64(p);
+
+    println(f"scalar-negzero={p == n}");
+    println(f"scalar-nan={q == q}");
+
+    let sa = Sf { x: p };
+    let sb = Sf { x: n };
+    let sq1 = Sf { x: q };
+    let sq2 = Sf { x: q };
+    println(f"shared-negzero={sa == sb}");
+    println(f"shared-nan={sq1 == sq2}");
+
+    let va = Sv { v: one(p) };
+    let vb = Sv { v: one(n) };
+    let vq1 = Sv { v: one(q) };
+    let vq2 = Sv { v: one(q) };
+    println(f"sharedvec-negzero={va == vb}");
+    println(f"sharedvec-nan={vq1 == vq2}");
+
+    let pa = Pv { v: one(p) };
+    let pb = Pv { v: one(n) };
+    let pq1 = Pv { v: one(q) };
+    let pq2 = Pv { v: one(q) };
+    println(f"plainvec-negzero={pa == pb}");
+    println(f"plainvec-nan={pq1 == pq2}");
+
+    let o1 = Outer { i: Inner { x: p } };
+    let o2 = Outer { i: Inner { x: n } };
+    println(f"nested-negzero={o1 == o2}");
+}

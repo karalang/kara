@@ -1,0 +1,9 @@
+scalar=true
+named=true
+named-ne=false
+nested=true
+nested-ne=false
+enum=true
+enum-ne=false
+dedup=1
+removed=0

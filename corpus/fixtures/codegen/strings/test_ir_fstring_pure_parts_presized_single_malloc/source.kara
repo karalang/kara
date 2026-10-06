@@ -1,0 +1,9 @@
+
+fn extend(cur: String) -> String {
+    f"{cur}("
+}
+
+fn main() {
+    let s = extend("ab");
+    println(s);
+}

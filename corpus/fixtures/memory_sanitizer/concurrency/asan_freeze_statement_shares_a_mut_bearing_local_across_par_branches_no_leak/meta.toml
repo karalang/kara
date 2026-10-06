@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/concurrency.rs::asan_freeze_statement_shares_a_mut_bearing_local_across_par_branches_no_leak"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

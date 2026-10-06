@@ -1,0 +1,13 @@
+source = "tests/memory_sanitizer/concurrency.rs::asan_par_slot_shared_struct_read_only_join_no_use_after_free"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "unknown"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

@@ -1,0 +1,33 @@
+
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct T1 { n: i64 }
+struct Hh { r: R }
+impl T1 {
+    fn take(ref self, ra: R) -> R { return ra; }
+    fn keep(ref self, rb: R) -> R { rb }
+    fn wrap(ref self, rc: R) -> Hh { return Hh { r: rc }; }
+    fn gtake[X](ref self, rd: R, x: X) -> R { return rd; }
+    fn swapout(ref self, re: R) -> R { println(f"saw {re.name}"); return R { id: 99, name: f"z9" }; }
+    fn eat(ref self, rf: R, k: bool) { if k { return; } println(f"kept {rf.name}"); }
+}
+fn take_free(rg: R) -> R { return rg; }
+fn main() {
+    let base: i64 = env.args().len();
+    let t = T1 { n: 1 };
+    let a = t.take(R { id: base, name: f"a{base}" });
+    println(f"{a.id}");
+    let b = t.keep(R { id: base, name: f"b{base}" });
+    println(f"{b.id}");
+    let c = t.wrap(R { id: base, name: f"c{base}" });
+    println(f"{c.r.id}");
+    let d = t.gtake(R { id: base, name: f"d{base}" }, 5);
+    println(f"{d.id}");
+    let e = t.swapout(R { id: base, name: f"e{base}" });
+    println(f"{e.id}");
+    t.eat(R { id: base, name: f"f{base}" }, true);
+    let g = take_free(R { id: base, name: f"g{base}" });
+    println(f"{g.id}");
+    t.take(R { id: base, name: f"h{base}" });
+    println("end");
+}

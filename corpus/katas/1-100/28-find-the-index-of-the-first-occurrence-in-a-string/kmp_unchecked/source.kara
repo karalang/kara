@@ -1,0 +1,101 @@
+// LeetCode #28: Find the Index of the First Occurrence in a String —
+// Knuth-Morris-Pratt (KMP), bounds-check-elided scan (the `get_unchecked`
+// perf variant of kmp.kara). The two reads in the scan loop — `nee[j]` and
+// `lps[j-1]` — are the checks the compiler's source-level / monotone BCE
+// passes can't fold: `j` rewinds via the LPS table, so it's not a monotone
+// induction variable, and proving `j < nn` needs interprocedural table-range
+// analysis. The `j < nn` invariant IS true for every input; the programmer
+// asserts it via `unsafe { ...get_unchecked(...) }`. Measured ~1.33× → ~1.11×
+// of C on the adversarial bench (see README § Unchecked variant). The safe
+// kmp.kara stays the canonical answer; this is the manual escape hatch.
+//
+// Return the index of the first occurrence of `needle` in `haystack`, or -1.
+// An empty needle matches at index 0. O(hn + nn) time, O(nn) extra space for
+// the LPS table — the guaranteed-linear alternative to brute_force.kara's
+// O(hn · nn) worst case.
+//
+// KMP precomputes, for each needle prefix, the length of its longest proper
+// prefix that is also a suffix (the "LPS" / failure function). On a mismatch
+// at needle position j the scan resets j to lps[j - 1] instead of 0, reusing
+// the already-matched overlap so the haystack pointer never backs up. The
+// table is built by the same prefix-matching recurrence applied to the
+// needle against itself.
+//
+// `bytes()` gives a zero-copy Slice[u8] view; LeetCode restricts inputs to
+// lowercase English letters, so byte index == char index.
+
+fn build_lps(pat: Slice[u8], m: i64) -> Vec[i64] {
+    // lps[i] = length of the longest proper prefix of pat[0..=i] that is
+    // also a suffix of it. lps[0] is always 0.
+    let mut lps: Vec[i64] = Vec.filled(m, 0);
+    let mut len = 0;
+    let mut i = 1;
+    while i < m {
+        if pat[i] == pat[len] {
+            len = len + 1;
+            lps[i] = len;
+            i = i + 1;
+        } else if len > 0 {
+            // Fall back to the next-shorter candidate prefix; don't advance i.
+            len = lps[len - 1];
+        } else {
+            lps[i] = 0;
+            i = i + 1;
+        }
+    }
+    lps
+}
+
+fn str_str(haystack: ref String, needle: ref String) -> i64 {
+    let h = haystack.bytes();
+    let nee = needle.bytes();
+    let hn = h.len();
+    let nn = nee.len();
+    if nn == 0 {
+        return 0;
+    }
+    if nn > hn {
+        return -1;
+    }
+    let lps = build_lps(nee, nn);
+    let mut i = 0; // haystack cursor
+    let mut j = 0; // needle cursor
+    while i < hn {
+        // SAFETY: j < nn invariantly — j starts 0, `j == nn` returns, and
+        // every value stored in lps is < nn (so the lps[j-1] rewind below
+        // Safety: j < nn invariantly — j starts 0, `j == nn` returns, and every lps value is < nn.
+        if h[i] == unsafe { nee.get_unchecked(j) } {
+            i = i + 1;
+            j = j + 1;
+            if j == nn {
+                return i - nn;
+            }
+        } else if j > 0 {
+            // Safety: j is in [1, nn-1] here, so j-1 is in [0, nn-2] < nn = lps.len().
+            j = unsafe { lps.get_unchecked(j - 1) };
+        } else {
+            i = i + 1;
+        }
+    }
+    -1
+}
+
+fn report(haystack: ref String, needle: ref String) {
+    let r = str_str(haystack, needle);
+    println(f"{haystack} ~ {needle}: {r}");
+}
+
+fn main() {
+    report("sadbutsad", "sad");        // expect: 0   (also occurs at 6)
+    report("leetcode", "leeto");       // expect: -1
+    report("hello", "ll");             // expect: 2
+    report("a", "a");                  // expect: 0
+    report("", "");                    // expect: 0   (empty needle)
+    report("abc", "");                 // expect: 0   (empty needle)
+    report("aaa", "aaaa");             // expect: -1  (needle longer)
+    report("mississippi", "issip");    // expect: 4
+    report("abababcabab", "ababc");    // expect: 4   (LPS-favorable, backtracks)
+    report("aaaaab", "aab");           // expect: 3
+    report("abc", "abc");              // expect: 0   (whole string)
+    report("abc", "c");                // expect: 2   (last char)
+}

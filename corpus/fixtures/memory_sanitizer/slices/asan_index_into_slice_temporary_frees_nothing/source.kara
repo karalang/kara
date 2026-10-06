@@ -1,0 +1,16 @@
+fn main() {
+    let names: Vec[String] = ["alpha", "beta", "gamma"];
+    let s: String = "hello";
+    let mut i = 0i64;
+    let mut last: String = "";
+    let mut sum = 0i64;
+    while i < 60i64 {
+        let sl = names.as_slice();
+        last = sl[i % 3i64].clone();
+        sum = sum + s.bytes()[i % 5i64] as i64;
+        i = i + 1;
+    }
+    println(last);
+    println(sum);
+    println(names[0]);
+}

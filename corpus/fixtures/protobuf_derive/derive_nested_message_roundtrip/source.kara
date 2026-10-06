@@ -1,0 +1,15 @@
+
+#[derive(Message)]
+struct Inner { label: String, score: i64 }
+
+#[derive(Message)]
+struct Outer { id: i64, child: Inner, tag: String }
+
+fn main() {
+    let o = Outer { id: 7, child: Inner { label: "hi", score: -3 }, tag: "z" };
+    let back = Outer.decode(o.encode());
+    println(back.id);
+    println(back.child.label);
+    println(back.child.score);
+    println(back.tag);
+}

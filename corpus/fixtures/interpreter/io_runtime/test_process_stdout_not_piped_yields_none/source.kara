@@ -1,0 +1,16 @@
+fn main() {
+         let cmd = Command.new("/bin/echo").arg("x").stdout(Stdio.Null);
+         match cmd.spawn() {
+             Ok(child) => {
+                 match child.stdout() {
+                     Some(_) => println("some"),
+                     None => println("none"),
+                 }
+                 match child.wait() {
+                     Ok(_) => {}
+                     Err(_) => println("wait_err"),
+                 }
+             }
+             Err(_) => println("spawn_err"),
+         }
+     }

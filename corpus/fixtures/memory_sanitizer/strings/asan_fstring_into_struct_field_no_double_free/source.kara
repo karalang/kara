@@ -1,0 +1,7 @@
+
+struct P { name: String }
+fn main() {
+    let mut p = P { name: f"aa-padding" };
+    p.name = f"zz-padding";
+    println(p.name);
+}

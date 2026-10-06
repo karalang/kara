@@ -1,0 +1,34 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct Ws { r: R, n: i64 }
+struct Hs { s: S, n: i64 }
+impl Ws {
+    fn opt(self) -> Option[R] { return Some(self.r) }
+    fn tl(self) -> Option[R] { Some(self.r) }
+    fn ok(self) -> Result[R, i64] { Ok(self.r) }
+    fn er(self) -> Result[i64, R] { Err(self.r) }
+    fn nn(self) -> Option[Option[R]] { Some(Some(self.r)) }
+}
+fn optp(w: Ws) -> Option[R] { return Some(w.r) }
+fn opth(w: Hs) -> Option[S] { Some(w.s) }
+fn show(o: Option[R]) { match o { Some(x) => println(f"x{x.id}"), None => println("n") } }
+fn main() {
+    let a = Ws { r: R { id: 1 }, n: 0 };
+    show(a.opt());
+    let b = Ws { r: R { id: 2 }, n: 0 };
+    show(b.tl());
+    let c = Ws { r: R { id: 3 }, n: 0 };
+    match c.ok() { Ok(x) => println(f"x{x.id}"), Err(_) => println("n") }
+    let d = Ws { r: R { id: 4 }, n: 0 };
+    match d.er() { Ok(_) => println("n"), Err(x) => println(f"x{x.id}") }
+    let e = Ws { r: R { id: 5 }, n: 0 };
+    match e.nn() { Some(Some(x)) => println(f"x{x.id}"), _ => println("n") }
+    let f = Ws { r: R { id: 6 }, n: 0 };
+    show(optp(f));
+    let g = Hs { s: S { id: 7, s: "ab".to_string() + "cd" }, n: 0 };
+    let o = opth(g);
+    match o { Some(x) => println(f"x{x.id}"), None => println("n") }
+    println("end")
+}

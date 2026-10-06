@@ -1,0 +1,8 @@
+
+struct Item { id: i64 }
+fn main() {
+    let a = Item { id: 1 };
+    let b = Item { id: 2 };
+    println(f"{a == b}");
+    println(f"{a < b}");
+}

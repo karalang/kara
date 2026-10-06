@@ -1,0 +1,78 @@
+// LeetCode #340: Longest Substring with At Most K Distinct Characters —
+// the last position of each character.
+//
+// Given a string s and an integer k, return the length of the longest
+// substring of s that contains at most k distinct characters.
+//
+//   "eceba", k = 2  ->  3    "ece"
+//   "aa",    k = 1  ->  2    "aa"
+//
+// Keep the index where each character in the window was last seen. When a
+// (k + 1)-th character arrives, the one whose last sighting is earliest must
+// go: drop it and start the window just after that sighting.
+//
+// O(n k) time, O(k) extra space.
+
+fn longest_k_distinct(s: ref String, k: i64) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut last: Map[char, i64] = Map.new();
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..cs.len() {
+        last.insert(cs[right], right);
+        if last.len() > k {
+            let mut oldest = right;
+            for (_, i) in last.iter() {
+                oldest = oldest.min(i);
+            }
+            last.remove(cs[oldest]);
+            left = oldest + 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    return best;
+}
+
+// ---- input --------------------------------------------------------------
+
+// A pseudo-random string of n letters drawn from the first `alpha` of
+// "a".."z" then "A".."Z".
+fn next(state: mut ref i64) -> i64 {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return state >> 8;
+}
+
+fn gen_text(seed: i64, n: i64, alpha: i64) -> String {
+    let letters: Vec[char] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".chars().collect();
+    let mut state = seed;
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push(letters[next(mut state) % alpha]);
+    }
+    return out;
+}
+
+fn show(s: String, k: i64) {
+    println(f"\"{s}\" k={k} -> {longest_k_distinct(s, k)}");
+}
+
+fn summary(seed: i64, n: i64, alpha: i64, k: i64) {
+    let s = gen_text(seed, n, alpha);
+    println(f"seed {seed}, {n} letters from {alpha}, k={k}: {longest_k_distinct(s, k)}");
+}
+
+fn main() {
+    show("eceba", 2);
+    show("aa", 1);
+    show("", 3);
+    show("abc", 0);
+    show("a", 5);
+    show("abaccc", 2);
+    show("aabbcc", 1);
+    show("abcadcacacaca", 3);
+    summary(1, 20, 3, 2);
+    summary(7, 1000, 5, 3);
+    summary(42, 50000, 26, 10);
+    summary(2026, 50000, 4, 3);
+    summary(99, 50000, 52, 40);
+}

@@ -1,0 +1,45 @@
+
+fn pad(t: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-byte");
+    s.push_str(f"{t}");
+    return s;
+}
+fn mkv(n: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(pad(n));
+    v.push(pad(n));
+    return v;
+}
+fn mkvv() -> Vec[Vec[i64]] {
+    let mut o: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    o.push(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(3);
+    o.push(b);
+    return o;
+}
+struct H { id: i64, xs: Vec[String] }
+fn mkh(id: i64) -> H { return H { id: id, xs: mkv(id) }; }
+fn takev(t: (Vec[String], i64)) { println(f"v{t.0.len()}:{t.1}"); }
+fn takevv(t: (Vec[Vec[i64]], i64)) { println(f"n{t.0.len()}:{t.1}"); }
+fn takeh(t: (H, i64)) { println(f"h{t.0.xs.len()}:{t.1}"); }
+fn plain(v: Vec[String]) { println(f"p{v.len()}"); }
+fn handback(t: (Vec[String], i64)) -> Vec[String] { return t.0; }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        takev((mkv(1), 0));
+        takevv((mkvv(), 5));
+        takeh((mkh(2), 9));
+        plain(mkv(3));
+        let t = (mkv(4), 7);
+        println(f"l{t.0.len()}:{t.1}");
+        let r = handback((mkv(5), 8));
+        println(f"b{r.len()}");
+        i = i + 1;
+    }
+    println("done");
+}

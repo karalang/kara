@@ -1,0 +1,15 @@
+struct P { s: String }
+fn mk() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"a{1}", 1);
+    m
+}
+fn eat(t: (Map[String, i64], Vec[i64])) -> i64 { t.1.len() + t.0.len() }
+fn main() {
+    let mut m: Map[i64, P] = Map.new();
+    m.insert(1, P { s: f"k{1}" });
+    let tm = (m, vec![1]);
+    let u = tm;
+    let (a, b) = (mk(), vec![1, 2, 3]);
+    println(f"{u.0.len()} {u.1.len()} {eat((mk(), vec![2]))} {a.len()} {b.len()}");
+}

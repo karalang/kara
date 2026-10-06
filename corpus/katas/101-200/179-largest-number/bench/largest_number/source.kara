@@ -1,0 +1,104 @@
+// Benchmark workload for LeetCode #179 — Largest Number.
+//
+// Build-once + punch: a PRNG array of small non-negative integers (32-bit LCG,
+// overflow-safe in i64) is the fixed base. Each of `PASSES` passes rebuilds the
+// array from the base, perturbs one element (so no two passes are identical and
+// the optimizer cannot hoist), then insertion-sorts it under the Largest-Number
+// comparator: `a` precedes `b` iff the concatenation a·b ≥ b·a. Since |a·b| =
+// |b·a|, the string compare equals the NUMERIC compare `a·10^len(b)+b` vs
+// `b·10^len(a)+a`, which every language computes identically with no huge-string
+// allocation. Sink = sum of per-pass Horner checksums (mod 1e9+7) of the sorted
+// concatenation's digit stream — a numeric fingerprint of the arrangement, not
+// the giant String itself. Insertion sort's data-dependent shifts do not
+// vectorize.
+
+fn num_digits(x: i64) -> i64 {
+    let mut d = 1;
+    let mut t = x;
+    while t >= 10 {
+        d = d + 1;
+        t = t / 10;
+    }
+    return d;
+}
+
+fn pow10(k: i64) -> i64 {
+    let mut r = 1;
+    let mut i = 0;
+    while i < k {
+        r = r * 10;
+        i = i + 1;
+    }
+    return r;
+}
+
+// Numeric concatenation a·b as an integer: a shifted left by len(b) digits, + b.
+fn concat_val(a: i64, b: i64) -> i64 {
+    return a * pow10(num_digits(b)) + b;
+}
+
+// Insertion sort descending by the concatenation comparator: keep `a` before `b`
+// while a·b ≥ b·a (swap while a·b < b·a).
+fn sort_desc(arr: mut ref Vec[i64]) {
+    let n = arr.len();
+    let mut i = 1;
+    while i < n {
+        let mut j = i;
+        while j > 0 and concat_val(arr[j - 1], arr[j]) < concat_val(arr[j], arr[j - 1]) {
+            let tmp = arr[j - 1];
+            arr[j - 1] = arr[j];
+            arr[j] = tmp;
+            j = j - 1;
+        }
+        i = i + 1;
+    }
+}
+
+fn checksum(arr: ref Vec[i64]) -> i64 {
+    let modv = 1000000007;
+    let mut cs = 0;
+    let n = arr.len();
+    let mut i = 0;
+    while i < n {
+        let x = arr[i];
+        let mut p = pow10(num_digits(x) - 1);
+        while p > 0 {
+            let d = (x / p) % 10;
+            cs = (cs * 10 + d) % modv;
+            p = p / 10;
+        }
+        i = i + 1;
+    }
+    return cs;
+}
+
+fn main() {
+    let n = 500;
+    let passes = 400;
+
+    let mut base: Vec[i64] = Vec.new();
+    let mut state = 12345;
+    let mut c = 0;
+    while c < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        base.push(state % 1000);
+        c = c + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        let mut arr: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < n {
+            arr.push(base[k]);
+            k = k + 1;
+        }
+        let idx = p % n;
+        arr[idx] = (arr[idx] + p + 1) % 1000;
+        sort_desc(mut arr);
+        sink = sink + checksum(arr);
+        p = p + 1;
+    }
+    println(sink);
+}

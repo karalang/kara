@@ -1,0 +1,105 @@
+// LeetCode #354: Russian Doll Envelopes -- a Fenwick tree of prefix maxima over
+// the heights, one width at a time.
+//
+// Heights are renumbered 1..=k in sorted order. Walking the envelopes by
+// width, the longest chain ending at (w, h) is one more than the longest
+// chain ending at any narrower envelope with a smaller height -- a prefix
+// maximum over ranks below h. Envelopes of the SAME width must not see each
+// other, so each width group reads all of its answers first and only then
+// writes them into the tree. No height-descending tie-break is needed.
+
+struct MaxFenwick {
+    tree: Vec[i64],
+}
+
+impl MaxFenwick {
+    fn new(size: i64) -> MaxFenwick {
+        MaxFenwick { tree: vec![0; size + 1] }
+    }
+
+    // The largest value stored at ranks 1..=i.
+    fn prefix_max(ref self, i: i64) -> i64 {
+        let mut i = i;
+        let mut best = 0;
+        while i > 0 {
+            best = best.max(self.tree[i]);
+            i -= i & -i;
+        }
+        best
+    }
+
+    fn raise(mut ref self, i: i64, value: i64) {
+        let mut i = i;
+        while i < self.tree.len() {
+            if self.tree[i] < value {
+                self.tree[i] = value;
+            }
+            i += i & -i;
+        }
+    }
+}
+
+fn max_envelopes(envelopes: ref Vec[(i64, i64)]) -> i64 {
+    let mut heights: Vec[i64] = envelopes.iter().map(|e| e.1).collect();
+    heights.sort();
+    heights.dedup();
+    let mut rank: Map[i64, i64] = Map.new();
+    for (i, h) in heights.iter().enumerate() {
+        rank.insert(h, i + 1);
+    }
+
+    let mut order = envelopes.clone();
+    order.sort();
+    let mut tree = MaxFenwick.new(heights.len());
+    let mut answer = 0;
+    let mut start = 0;
+    while start < order.len() {
+        let mut end = start;
+        while end < order.len() and order[end].0 == order[start].0 {
+            end += 1;
+        }
+        let mut found: Vec[(i64, i64)] = Vec.new();
+        for k in start..end {
+            let r = rank[order[k].1];
+            found.push((r, tree.prefix_max(r - 1) + 1));
+        }
+        for (r, len) in found {
+            tree.raise(r, len);
+            answer = answer.max(len);
+        }
+        start = end;
+    }
+    answer
+}
+
+fn show(label: String, envelopes: Vec[(i64, i64)]) {
+    println(f"{label}: {max_envelopes(envelopes)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("example 1", vec![(5, 4), (6, 4), (6, 7), (2, 3)]);
+    show("example 2", vec![(1, 1), (1, 1), (1, 1)]);
+    // Edge cases.
+    show("one envelope", vec![(7, 7)]);
+    show("same width, rising heights", vec![(3, 1), (3, 2), (3, 3), (3, 4)]);
+    show("same height, rising widths", vec![(1, 5), (2, 5), (3, 5)]);
+    show("a clean chain", vec![(1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]);
+    show("a chain given backwards", vec![(5, 5), (4, 4), (3, 3), (2, 2), (1, 1)]);
+    show("wide but short", vec![(10, 1), (1, 10), (2, 2), (3, 3)]);
+    show("ties break the chain", vec![(1, 2), (2, 3), (2, 4), (3, 5), (3, 4), (4, 6)]);
+
+    // A long run: 3,000 envelopes from a linear congruential generator, with
+    // widths and heights in 1..=1500 so that ties are common. The O(n^2) arm
+    // has to finish it under the interpreter, which caps the size.
+    let mut seed: i64 = 12345;
+    let mut big: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..3000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let w = seed % 1500 + 1;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let h = seed % 1500 + 1;
+        big.push((w, h));
+    }
+    println(f"3000 random envelopes: {max_envelopes(big)}");
+}

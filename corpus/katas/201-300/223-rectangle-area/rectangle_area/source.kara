@@ -1,0 +1,57 @@
+// LeetCode 223 — Rectangle Area.
+//
+// Two axis-aligned rectangles are given by their bottom-left and top-right
+// corners: rect A = (ax1, ay1, ax2, ay2), rect B = (bx1, by1, bx2, by2). Return
+// the total area the two cover together.
+//
+// By inclusion-exclusion, area(A ∪ B) = area(A) + area(B) - area(A ∩ B). The
+// intersection is itself a rectangle whose x-span runs from max(ax1, bx1) to
+// min(ax2, bx2) and whose y-span runs from max(ay1, by1) to min(ay2, by2). If
+// either span is non-positive the rectangles don't overlap, so each span is
+// clamped at 0 before multiplying — that makes the disjoint and edge-touching
+// cases fall out with no special handling.
+
+fn min_i64(a: i64, b: i64) -> i64 {
+    if a < b { return a; }
+    return b;
+}
+
+fn max_i64(a: i64, b: i64) -> i64 {
+    if a > b { return a; }
+    return b;
+}
+
+// Clamp a length at 0 (a negative span means no overlap along that axis).
+fn clamp0(x: i64) -> i64 {
+    if x > 0 { return x; }
+    return 0;
+}
+
+fn compute_area(
+    ax1: i64, ay1: i64, ax2: i64, ay2: i64,
+    bx1: i64, by1: i64, bx2: i64, by2: i64,
+) -> i64 {
+    let area_a = (ax2 - ax1) * (ay2 - ay1);
+    let area_b = (bx2 - bx1) * (by2 - by1);
+    let overlap_w = clamp0(min_i64(ax2, bx2) - max_i64(ax1, bx1));
+    let overlap_h = clamp0(min_i64(ay2, by2) - max_i64(ay1, by1));
+    let overlap = overlap_w * overlap_h;
+    return area_a + area_b - overlap;
+}
+
+fn report(
+    ax1: i64, ay1: i64, ax2: i64, ay2: i64,
+    bx1: i64, by1: i64, bx2: i64, by2: i64,
+) {
+    println(compute_area(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2));
+}
+
+fn main() {
+    report(-3, 0, 3, 4, 0, -1, 9, 2);   // 45 — overlap 6
+    report(0, 0, 0, 0, 0, 0, 0, 0);      // 0
+    report(0, 0, 1, 1, 1, 1, 2, 2);      // 2  — touch at a corner
+    report(0, 0, 2, 2, 1, 1, 3, 3);      // 7  — overlap 1
+    report(0, 0, 1, 1, 5, 5, 6, 6);      // 2  — disjoint
+    report(0, 0, 4, 4, 1, 1, 2, 2);      // 16 — B inside A
+    report(-2, -2, 2, 2, -1, -1, 1, 1);  // 16 — B inside A (negative coords)
+}

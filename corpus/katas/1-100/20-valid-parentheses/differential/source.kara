@@ -1,0 +1,67 @@
+// Differential: stack check vs pair-deletion vs a depth counter per kind.
+fn by_stack(s: ref String) -> bool {
+    let mut want: Vec[char] = Vec.new();
+    for c in s.chars() {
+        match c {
+            '(' => want.push(')'),
+            '[' => want.push(']'),
+            '{' => want.push('}'),
+            _ => {
+                if want.pop() != Some(c) {
+                    return false;
+                }
+            }
+        }
+    }
+    want.is_empty()
+}
+
+fn by_deletion(s: String) -> bool {
+    let mut cur = s;
+    loop {
+        let next = cur.replace("()", "").replace("[]", "").replace("{}", "");
+        if next.len() == cur.len() {
+            return next.is_empty();
+        }
+        cur = next;
+    }
+}
+
+fn main() {
+    let alphabet = ['(', ')', '[', ']', '{', '}'];
+    let mut seed: i64 = 777;
+    let mut valid = 0;
+    let mut fails = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..3000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 2 * (seed % 9);
+        let mut s = String.new();
+        let mut opens: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let r = (seed / 8) % 10;
+            if r < 6 and opens.len() < 8 {
+                let k = r % 3;
+                opens.push(k);
+                s.push(alphabet[2 * k]);
+            } else if opens.len() > 0 and r < 9 {
+                let k = opens.pop().unwrap();
+                s.push(alphabet[2 * k + 1]);
+            } else {
+                s.push(alphabet[r % 6]);
+            }
+        }
+        let a = by_stack(s);
+        let b = by_deletion(s.clone());
+        if a != b {
+            fails += 1;
+            println(f"mismatch {t}: {s}");
+        }
+        if a {
+            valid += 1;
+        }
+        checksum = (checksum * 3 + (if a { 1 } else { 0 }) + s.len()) % 1000000007;
+    }
+    println(f"3000 strings, {valid} valid, failures {fails}, checksum {checksum}");
+}

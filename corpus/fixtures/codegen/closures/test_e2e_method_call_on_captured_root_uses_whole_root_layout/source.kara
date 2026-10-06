@@ -1,0 +1,8 @@
+
+struct Point { x: i64, y: i64 }
+impl Point { fn doubled_x(self) -> i64 { self.x + self.x } }
+fn main() {
+    let p = Point { x: 7, y: 11 };
+    let f = || p.doubled_x();
+    println(f());
+}

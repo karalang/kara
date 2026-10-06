@@ -1,0 +1,9 @@
+fn run_cmd(prog: String) -> Result[Child, IoError] with sends(ProcessTable) {
+             Command.new(prog).spawn()
+         }
+         fn main() {
+             match run_cmd("/no/such/path/karac-test-nonexistent") {
+                 Ok(_) => println("ok"),
+                 Err(_) => println("err"),
+             }
+         }

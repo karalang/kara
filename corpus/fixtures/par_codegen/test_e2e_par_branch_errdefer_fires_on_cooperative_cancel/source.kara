@@ -1,0 +1,17 @@
+
+fn fast_err() -> Result[i64, i64] { Err(99_i64) }
+
+fn main() {
+    par {
+        let _ = {
+            errdefer { println("err-fired-on-cancel"); }
+            let mut i = 0_i64;
+            while i < 1000000_i64 {
+                println(i);
+                i = i + 1_i64;
+            }
+            0_i64
+        };
+        let b: Result[i64, i64] = fast_err();
+    }
+}

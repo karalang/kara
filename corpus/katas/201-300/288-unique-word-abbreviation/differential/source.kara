@@ -1,0 +1,292 @@
+// LeetCode 288 — differential over the four indexes.
+//
+// Four representations of the same predicate:
+//
+//   sole     Map[String, Bucket]        the ★ file — Sole(word) | Conflicted
+//   buckets  Map[String, Vec[String]]   every deduped colliding word kept
+//   counts   Map[String,i64] + Set      deduped-count, plus a membership test
+//   brute    the dictionary itself      the predicate, transcribed
+//
+// `brute` is the reference: it has no index to be wrong about, so where the
+// others disagree with it, THEY are wrong.
+//
+// THE GENERATOR IS BUILT AROUND THE DUPLICATE TRAP. Words are drawn from a
+// deliberately tiny alphabet and a tiny length range, so abbreviations collide
+// constantly and the SAME word is drawn into one dictionary many times. That is
+// the case that separates the four: a dictionary is a multiset on input and a
+// set in meaning, so an index that counts occurrences rather than deduped words
+// reads a repeat as a conflict and answers `false` where the truth is `true`.
+// A generator over deduped random words would exercise none of it.
+//
+// Queries are drawn from the same pool as the dictionary AND from a disjoint
+// one, so both halves of the predicate are hit: the word that is in the
+// dictionary (where `Sole`'s identity test matters) and the word that is not
+// (where absence must read as unique).
+
+fn abbrev(w: ref String) -> String {
+    let cs: Vec[char] = w.chars().collect();
+    let n = cs.len();
+    if n <= 2 {
+        return w.clone();
+    }
+    let mut out = String.new();
+    out.push(cs[0]);
+    out.push_str(f"{n - 2}");
+    out.push(cs[n - 1]);
+    return out;
+}
+
+// ---- the four indexes -------------------------------------------------
+
+enum Bucket {
+    Sole(String),
+    Conflicted,
+}
+
+fn build_sole(dict: Slice[String]) -> Map[String, Bucket] {
+    let mut idx: Map[String, Bucket] = Map.new();
+    let mut i = 0;
+    while i < dict.len() {
+        let w = ref dict[i];
+        let a = abbrev(w);
+        match idx.get(a) {
+            None => {
+                let _ = idx.insert(a, Bucket.Sole(w.clone()));
+            }
+            Some(Bucket.Sole(prev)) => {
+                if prev != w {
+                    let _ = idx.insert(a, Bucket.Conflicted);
+                }
+            }
+            Some(Bucket.Conflicted) => {}
+        }
+        i = i + 1;
+    }
+    return idx;
+}
+
+fn unique_sole(idx: ref Map[String, Bucket], word: ref String) -> bool {
+    match idx.get(abbrev(word)) {
+        None => return true,
+        Some(Bucket.Sole(w)) => return w == word,
+        Some(Bucket.Conflicted) => return false,
+    }
+}
+
+fn build_buckets(dict: Slice[String]) -> Map[String, Vec[String]] {
+    let mut idx: Map[String, Vec[String]] = Map.new();
+    let mut i = 0;
+    while i < dict.len() {
+        let w = ref dict[i];
+        let a = abbrev(w);
+        match idx.get(a) {
+            None => {
+                let mut fresh: Vec[String] = Vec.new();
+                fresh.push(w.clone());
+                let _ = idx.insert(a, fresh);
+            }
+            Some(existing) => {
+                if not existing.contains(w) {
+                    let mut grown = existing.clone();
+                    grown.push(w.clone());
+                    let _ = idx.insert(a, grown);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return idx;
+}
+
+fn unique_buckets(idx: ref Map[String, Vec[String]], word: ref String) -> bool {
+    match idx.get(abbrev(word)) {
+        None => return true,
+        Some(bucket) => {
+            if bucket.len() != 1 {
+                return false;
+            }
+            return bucket[0] == word;
+        }
+    }
+}
+
+struct Counts {
+    counts: Map[String, i64],
+    words: Set[String],
+}
+
+fn build_counts(dict: Slice[String]) -> Counts {
+    let mut counts: Map[String, i64] = Map.new();
+    let mut words: Set[String] = Set.new();
+    let mut i = 0;
+    while i < dict.len() {
+        let w = ref dict[i];
+        if not words.contains(w) {
+            let _ = words.insert(w.clone());
+            let a = abbrev(w);
+            match counts.get(a) {
+                None => {
+                    let _ = counts.insert(a, 1);
+                }
+                Some(c) => {
+                    let _ = counts.insert(a, c + 1);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return Counts { counts: counts, words: words };
+}
+
+fn unique_counts(idx: ref Counts, word: ref String) -> bool {
+    let c = match idx.counts.get(abbrev(word)) {
+        Some(v) => v,
+        None => 0,
+    };
+    if c == 0 {
+        return true;
+    }
+    if c >= 2 {
+        return false;
+    }
+    return idx.words.contains(word);
+}
+
+fn unique_brute(dict: Slice[String], word: ref String) -> bool {
+    let a = abbrev(word);
+    let mut i = 0;
+    while i < dict.len() {
+        let d = ref dict[i];
+        if d != word {
+            if abbrev(d) == a {
+                return false;
+            }
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// ---- generator --------------------------------------------------------
+
+// The corpus's 31-bit LCG. The mask is not decoration: Kara traps integer
+// overflow by default, and a 64-bit multiplicative LCG relies on wrapping, so
+// it panics here rather than silently rolling over the way C would.
+fn next_rand(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 2147483647;
+}
+
+// A word over a TINY alphabet, so abbreviations collide and words repeat.
+fn word_of(seed: i64, alphabet: i64, min_len: i64, max_len: i64) -> String {
+    let letters: Vec[char] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    let mut st = next_rand(seed);
+    let span = (max_len - min_len) + 1;
+    let len = min_len + ((st / 65536) % span);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < len {
+        st = next_rand(st);
+        out.push(letters[(st / 65536) % alphabet]);
+        i = i + 1;
+    }
+    return out;
+}
+
+fn main() {
+    let mut seed = 12345;
+    let mut cases = 0;
+    let mut mismatches = 0;
+    // Coverage counters. A differential that reports "0 mismatches" while
+    // never building a dictionary with a REPEAT, or while every answer comes
+    // back the same, has proved nothing — so it reports what it actually hit.
+    let mut dicts = 0;
+    let mut dicts_with_repeat = 0;
+    let mut answered_true = 0;
+    let mut answered_false = 0;
+
+    // Three axes of collision/duplicate density. Word LENGTH is the one that
+    // controls how hard the abbreviation squeezes: a 1-2 char word abbreviates
+    // to itself and can only collide by being equal, while a 5-char word over a
+    // 2-letter alphabet has just 4 possible abbreviations, so collisions are
+    // the common case rather than the rare one. Both regimes matter — the short
+    // one is the only thing that exercises the `n <= 2` branch.
+    let alphabets: Vec[i64] = [2, 3, 5];
+    let dict_sizes: Vec[i64] = [1, 2, 5, 12, 30];
+    let len_lo: Vec[i64] = [1, 3];
+    let len_hi: Vec[i64] = [2, 5];
+
+    let mut li = 0;
+    while li < len_lo.len() {
+    let lo = len_lo[li];
+    let hi = len_hi[li];
+    let mut ai = 0;
+    while ai < alphabets.len() {
+        let alphabet = alphabets[ai];
+        let mut di = 0;
+        while di < dict_sizes.len() {
+            let dsize = dict_sizes[di];
+            let mut trial = 0;
+            while trial < 12 {
+                // Build a dictionary. Small alphabet + short words => the SAME
+                // word lands in it repeatedly, which is the trap under test.
+                let mut dict: Vec[String] = Vec.new();
+                let mut k = 0;
+                while k < dsize {
+                    seed = next_rand(seed);
+                    dict.push(word_of(seed, alphabet, lo, hi));
+                    k = k + 1;
+                }
+
+                // Did this dictionary actually contain a repeated word?
+                dicts = dicts + 1;
+                let deduped = build_counts(dict);
+                if deduped.words.len() < dict.len() {
+                    dicts_with_repeat = dicts_with_repeat + 1;
+                }
+
+                let sole = build_sole(dict);
+                let buckets = build_buckets(dict);
+                let counts = build_counts(dict);
+
+                // Query with words from the dictionary itself and with fresh
+                // ones, so both halves of the predicate get hit.
+                let mut q = 0;
+                while q < 10 {
+                    let word = if (q % 2) == 0 and dict.len() > 0 {
+                        dict[q % dict.len()]
+                    } else {
+                        seed = next_rand(seed);
+                        word_of(seed, alphabet, lo, hi)
+                    };
+
+                    let want = unique_brute(dict, word);
+                    let got_s = unique_sole(sole, word);
+                    let got_b = unique_buckets(buckets, word);
+                    let got_c = unique_counts(counts, word);
+
+                    cases = cases + 1;
+                    if want {
+                        answered_true = answered_true + 1;
+                    } else {
+                        answered_false = answered_false + 1;
+                    }
+                    if got_s != want or got_b != want or got_c != want {
+                        mismatches = mismatches + 1;
+                        println(f"MISMATCH word={word} brute={want} sole={got_s} buckets={got_b} counts={got_c}");
+                    }
+                    q = q + 1;
+                }
+                trial = trial + 1;
+            }
+            di = di + 1;
+        }
+        ai = ai + 1;
+    }
+    li = li + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"mismatches {mismatches}");
+    println(f"dictionaries {dicts}, of which with a repeated word {dicts_with_repeat}");
+    println(f"answers true {answered_true}, false {answered_false}");
+}

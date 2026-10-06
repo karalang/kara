@@ -1,0 +1,38 @@
+shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct P { id: i64 }
+fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn pick[T](v: T, c: bool, w: T) -> T { if c { return v } return w }
+fn stc[T](a: T, c: bool) -> Vec[T] { let mut v: Vec[T] = Vec.new(); if c { v.push(a) } return v }
+fn gcond[T](v: mut ref Vec[T], x: T, k: bool) { if k { v.push(x) } }
+fn mid[T](v: T, c: bool) -> Option[T] { if c { return Some(v) } return None }
+fn passp(a: S3, c: bool) -> S3 { let w = mk(98); return pick(a, c, w) }
+fn passp2(a: S2, c: bool) -> S2 { let w = mk2(98); return pick(a, c, w) }
+fn a_pick2() { let s = mk2(1); let w = mk2(2); let t = pick(s, true, w); println(f"a{t.id}"); let s2 = mk2(3); let w2 = mk2(4); let t2 = pick(s2, false, w2); println(f"a{t2.id}") }
+fn b_pick3() { let s = mk(5); let w = mk(6); let t = pick(s, true, w); let s2 = mk(7); let w2 = mk(8); let t2 = pick(s2, false, w2); println(f"b{t.id} {t2.id}") }
+fn c_disc() { let s = mk2(9); let w = mk2(10); pick(s, true, w); let s2 = mk2(11); let w2 = mk2(12); let _ = pick(s2, false, w2); let s3 = mk(13); let w3 = mk(14); pick(s3, true, w3); let s4 = mk(15); let w4 = mk(16); let _ = pick(s4, false, w4); println("c") }
+fn d_temp() { let t = pick(mk2(17), false, mk2(18)); let u = pick(mk(19), true, mk(20)); println(f"d{t.id} {u.id}") }
+fn e_loop() { for i in 0..3 { let s = mk2(30 + i); let w = mk2(40 + i); let t = pick(s, i == 1, w); println(f"e{t.id}") } for i in 0..3 { let s = mk(50 + i); let w = mk(60 + i); let t = pick(s, i == 1, w); println(f"e{t.id}") } }
+fn f_stc() { let s = mk(21); let v = stc(s, true); let s2 = mk(22); let v2 = stc(s2, false); let s3 = mk(23); stc(s3, true); let v3 = stc(mk(24), true); let v4 = stc(mk(25), false); let s5 = mk2(26); let v5 = stc(s5, true); let s6 = mk2(27); let v6 = stc(s6, false); println(f"f{v.len()} {v2.len()} {v3.len()} {v4.len()} {v5.len()} {v6.len()}") }
+fn g_gcond() { let mut v: Vec[S3] = Vec.new(); let s = mk(28); gcond(mut v, s, true); let s2 = mk(29); gcond(mut v, s2, false); println(f"g{v.len()}") }
+fn h_passp() { let s = mk(70); let t = passp(s, true); let s2 = mk(71); let t2 = passp(s2, false); println(f"h{t.id} {t2.id}"); let s3 = mk2(72); let t3 = passp2(s3, true); println(f"h{t3.id}"); let s4 = mk2(73); let t4 = passp2(s4, false); println(f"h{t4.id}") }
+fn i_control() { let s = R { id: 80, tag: "a" }; let w = R { id: 81, tag: "b" }; let t = pick(s, true, w); let s2 = R { id: 82, tag: "c" }; let w2 = R { id: 83, tag: "d" }; let t2 = pick(s2, false, w2); let p = P { id: 84 }; let q = P { id: 85 }; let t3 = pick(p, true, q); let r = R { id: 86, tag: "e" }; let v = stc(r, true); println(f"i{t.id} {t2.id} {t3.id} {v.len()}") }
+fn j_mid() { let s = mk(90); let o = mid(s, true); let s2 = mk2(91); let o2 = mid(s2, false); println("j") }
+fn main() {
+    a_pick2()
+    b_pick3()
+    c_disc()
+    d_temp()
+    e_loop()
+    f_stc()
+    g_gcond()
+    h_passp()
+    i_control()
+    j_mid()
+    println("end")
+}

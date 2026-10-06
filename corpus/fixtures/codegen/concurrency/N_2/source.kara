@@ -1,0 +1,14 @@
+
+fn busy_sum(n: i64) -> i64 {{
+    let mut sum: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {{
+        sum = sum + i;
+        i = i + 1;
+    }}
+    sum
+}}
+
+fn main() {{
+    println(busy_sum({n}));
+}}

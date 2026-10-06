@@ -1,0 +1,9 @@
+
+            fn worker() {
+                println(42);
+            }
+            fn main() {
+                let mut tg = TaskGroup.new();
+                tg.spawn(|| worker());
+            }
+        

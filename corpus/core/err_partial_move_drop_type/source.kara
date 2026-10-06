@@ -1,0 +1,7 @@
+struct W { a: String }
+impl Drop for W { fn drop(mut ref self) { println("dW"); } }
+fn main() {
+    let w = W { a: "a".to_string() };
+    let x = w.a;
+    println(x);
+}

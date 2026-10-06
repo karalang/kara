@@ -1,0 +1,11 @@
+
+fn main() {
+    let ps: Vec[(i64, i64)] = [(1, 2), (3, 4)];
+    let mut s = 0;
+    for x in ps.iter().map(|(a, b)| a + b) { s = s + x; }
+    let names: Vec[(String, i64)] = [("alpha".to_string() + "-long-enough-to-heap", 1), ("beta".to_string() + "-long-enough-to-heap", 2)];
+    let mut t = 0;
+    for y in names.iter().map(|(n, k)| n.len() + k) { t = t + y; }
+    for z in names.iter().filter(|(n, _)| n.len() > 25).map(|(n, k)| k) { t = t + z * 100; }
+    println(f"{s} {t} {names.len()} {names[1].0}");
+}

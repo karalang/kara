@@ -1,0 +1,6 @@
+
+fn main() {
+    println(cpu.supports("not-a-real-feature-xyz"));
+    let a = cpu.supports("avx2");
+    println(a == a);
+}

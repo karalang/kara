@@ -1,0 +1,14 @@
+
+#[derive(Hash, Eq, PartialEq)]
+shared struct Tiny { next: Option[Tiny] }
+fn main() {
+    let mut i = 0i64;
+    let mut hits = 0i64;
+    while i < 50i64 {
+        let a = Tiny { next: None };
+        let b = Tiny { next: None };
+        if a == b { hits = hits + 1i64; }
+        i = i + 1;
+    }
+    println(f"{hits}");
+}

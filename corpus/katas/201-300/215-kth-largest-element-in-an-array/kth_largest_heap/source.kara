@@ -1,0 +1,70 @@
+// LeetCode 215 — Kth Largest Element in an Array, bounded-heap form.
+//
+// The sibling `kth_largest.kara` quickselects in average O(n). This one keeps a
+// `PriorityQueue[i64]` of the k largest values seen so far and answers from its
+// root: O(n log k) time in O(k) space, and — unlike quickselect — it never
+// reorders the input, so it is the form that survives a streaming source where
+// the array cannot be revisited.
+//
+// THE QUEUE IS SMALLEST-FIRST, which is the whole trick and reads backwards at
+// a glance: to track the k LARGEST you hold them in a MIN-heap, because the
+// value you need to evict is the smallest of the ones you kept. `peek()` is
+// that eviction candidate, and once the queue holds k items the root IS the
+// k-th largest — every value still in the queue is at least as large, and every
+// value ever evicted was smaller.
+//
+// `PriorityQueue.new()` is min-first in Kāra, so this needs no direction
+// argument. Rust's `BinaryHeap` is max-first and would want `Reverse` here;
+// see design.md § PriorityQueue for why Kāra picked the other default.
+
+fn find_kth_largest(nums: Slice[i64], k: i64) -> i64 {
+    // Keep the k largest. The root is the smallest of those, so it is both the
+    // eviction candidate and, once the queue is full, the answer.
+    let mut keep: PriorityQueue[i64] = PriorityQueue.new();
+    let mut i = 0;
+    while i < nums.len() {
+        keep.push(nums[i]);
+        if keep.len() > k {
+            // Over budget by exactly one: drop the smallest kept so far.
+            let _evicted = keep.pop();
+        }
+        i = i + 1;
+    }
+    match keep.peek() {
+        Some(v) => v,
+        // Unreachable for the LeetCode constraint 1 <= k <= nums.len(); an
+        // empty queue means k was 0 or the input was empty.
+        None => 0,
+    }
+}
+
+fn report(nums: Slice[i64], k: i64) {
+    println(find_kth_largest(nums, k));
+}
+
+fn main() {
+    let a: Array[i64, 6] = [3, 2, 1, 5, 6, 4];
+    report(a, 2);                                // 5
+
+    let b: Array[i64, 9] = [3, 2, 3, 1, 2, 4, 5, 5, 6];
+    report(b, 4);                                // 4
+
+    let c: Array[i64, 1] = [1];
+    report(c, 1);                                // 1
+
+    let d: Array[i64, 2] = [2, 1];
+    report(d, 2);                                // 1
+
+    let e: Array[i64, 7] = [7, 6, 5, 4, 3, 2, 1];
+    report(e, 3);                                // 5
+
+    let f: Array[i64, 6] = [1, 2, 3, 4, 5, 6];
+    report(f, 1);                                // 6
+
+    let g: Array[i64, 4] = [5, 5, 5, 5];
+    report(g, 2);                                // 5
+
+    let h: Array[i64, 5] = [-1, -5, 3, 0, 2];
+    report(h, 1);                                // 3
+    report(h, 5);                                // -5
+}

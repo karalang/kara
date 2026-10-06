@@ -1,0 +1,13 @@
+
+struct Counter { items: Vec[String], base: i64 }
+impl Counter {
+    fn total(ref self) -> i64 { return self.base + self.items.len(); }
+}
+fn make_counter() -> Counter {
+    let mut c = Counter { items: Vec.new(), base: 100_i64 };
+    c.items.push("a heap field string padded beyond thirty-six bytes ok");
+    return c;
+}
+fn main() {
+    println(make_counter().total());
+}

@@ -1,0 +1,7 @@
+
+fn main() with writes(FileSystem) {
+    match FileSystem.write("/no_such_dir_karac_l646_s4/x.txt", "data") {
+        Ok(_) => println("unexpected-ok"),
+        Err(_) => println("write-err"),
+    }
+}

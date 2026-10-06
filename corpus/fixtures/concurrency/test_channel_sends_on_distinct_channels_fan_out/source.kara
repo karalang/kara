@@ -1,0 +1,10 @@
+
+        fn push_a(tx: Sender[i64]) -> i64 with sends(tx) { return 1; }
+        fn push_b(out: Sender[i64]) -> i64 with sends(out) { return 2; }
+        fn main() {
+            let c1 = 0;
+            let c2 = 0;
+            let x = push_a(c1);
+            let y = push_b(c2);
+        }
+        

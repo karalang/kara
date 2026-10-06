@@ -1,0 +1,75 @@
+// parallel-or-not — which of these four calls can run concurrently?
+//
+// `handle_request` calls four functions in sequence. Three of them
+// can run in parallel; one cannot. Reading `handle_request` alone,
+// you can't tell which — the answer lives in each callee's *declared
+// effects*, not at the call site. The names give no hint.
+//
+// An LLM reading this file answers by INFERENCE: it builds a mental
+// effect-conflict graph from the source and guesses. That guess is
+// probabilistic — it can be confidently wrong, and it can differ from
+// one run to the next. `karac query concurrency` answers the same
+// question by DEDUCTION from the effect model the compiler already
+// enforced to typecheck the program: sound, total, and identical
+// every time.
+//
+//   $ karac query concurrency src/main.kara.handle_request
+//   {"function":"handle_request","total_statements":4,
+//    "parallel_groups":[{"statements":[0,1,2],
+//      "reason":"independent effects on different resources"}]}
+//
+// Statements 0,1,2 group. Statement 3 (`update_ledger`) is excluded —
+// it `writes(Db)`, and so does statement 0 (`persist_order`). They
+// touch the same resource, so they must stay ordered. Nothing in
+// `handle_request`'s body, and nothing in the two function *names*,
+// reveals that conflict. The compiler knows because it resolved the
+// whole effect graph; a reader has to reconstruct it and hope.
+
+pub trait Store { fn touch(mut ref self, n: i64); }
+
+// Three distinct effect resources. Disjointness across them is what
+// makes calls that write different resources eligible to parallelize.
+pub effect resource Db: Store;
+pub effect resource Cache: Store;
+pub effect resource Log: Store;
+
+pub struct Mem { acc: i64 }
+impl Mem { pub fn new() -> Mem { Mem { acc: 0 } } }
+impl Store for Mem {
+    fn touch(mut ref self, n: i64) {
+        let mut i = 0;
+        while i < n { self.acc = self.acc + 1; i = i + 1; }
+    }
+}
+
+const WORK: i64 = 1000;
+
+// The four stage functions. The *only* thing that decides
+// parallelizability is the declared `writes(R)` on each — and two of
+// them name the same R.
+fn persist_order()  with writes(Db)    { Db.touch(WORK); }
+fn warm_cache()     with writes(Cache) { Cache.touch(WORK); }
+fn emit_audit()     with writes(Log)   { Log.touch(WORK); }
+fn update_ledger()  with writes(Db)    { Db.touch(WORK); }   // shares Db with persist_order
+
+// Four opaque calls. Which run concurrently? Ask the compiler.
+pub fn handle_request()
+    with writes(Db) writes(Cache) writes(Log)
+{
+    persist_order();   // 0  writes(Db)
+    warm_cache();      // 1  writes(Cache)
+    emit_audit();      // 2  writes(Log)
+    update_ledger();   // 3  writes(Db)  <- conflicts with 0
+}
+
+fn main() {
+    let mut a = Mem.new();
+    let mut b = Mem.new();
+    let mut c = Mem.new();
+    with_provider[Db](a, || {
+        with_provider[Cache](b, || {
+            with_provider[Log](c, || { handle_request(); });
+        });
+    });
+    println("done");
+}

@@ -1,0 +1,73 @@
+inline_nomatch:2
+  p=[cccccccccccc-2-1, dddddddddddd-2-1]
+inline_match:1
+struct_elem:2
+dRec:ggggggggggg-4-1
+dRec:hhhhhhhhhhh-4-1
+drop_elem:2
+  p=[[iiiiiiiiiii-5-1], [jjjjjjjjjjj-5-1]]
+vec_elem:1
+  p=[[kkk-6-1, lll-6-1], [mmm-6-1, nnn-6-1]]
+nested_elem:1
+  p=[ooooooooooo-7-1, ppppppppppp-7-1]
+named_local:1
+read_after_move:2 qqqqqqqqqqq-8-1
+call_then_read:2
+still_live:ttttttttttt-9-1
+  p=[uuuuuuuuuuu-10-1, vvvvvvvvvvv-10-1]
+elem_locals:1
+  p=[wwwwwwwwwww-11-1, xxxxxxxxxxx-11-1]
+struct_field:1
+two_params:3
+self_recv:4
+  p=[1, 2]
+scalar_elem:1
+inline_nomatch:2
+  p=[cccccccccccc-2-2, dddddddddddd-2-2]
+inline_match:1
+struct_elem:2
+dRec:ggggggggggg-4-2
+dRec:hhhhhhhhhhh-4-2
+drop_elem:2
+  p=[[iiiiiiiiiii-5-2], [jjjjjjjjjjj-5-2]]
+vec_elem:1
+  p=[[kkk-6-2, lll-6-2], [mmm-6-2, nnn-6-2]]
+nested_elem:1
+  p=[ooooooooooo-7-2, ppppppppppp-7-2]
+named_local:1
+read_after_move:2 qqqqqqqqqqq-8-2
+call_then_read:2
+still_live:ttttttttttt-9-2
+  p=[uuuuuuuuuuu-10-2, vvvvvvvvvvv-10-2]
+elem_locals:1
+  p=[wwwwwwwwwww-11-2, xxxxxxxxxxx-11-2]
+struct_field:1
+two_params:3
+self_recv:4
+  p=[2, 3]
+scalar_elem:1
+inline_nomatch:2
+  p=[cccccccccccc-2-3, dddddddddddd-2-3]
+inline_match:1
+struct_elem:2
+dRec:ggggggggggg-4-3
+dRec:hhhhhhhhhhh-4-3
+drop_elem:2
+  p=[[iiiiiiiiiii-5-3], [jjjjjjjjjjj-5-3]]
+vec_elem:1
+  p=[[kkk-6-3, lll-6-3], [mmm-6-3, nnn-6-3]]
+nested_elem:1
+  p=[ooooooooooo-7-3, ppppppppppp-7-3]
+named_local:1
+read_after_move:2 qqqqqqqqqqq-8-3
+call_then_read:2
+still_live:ttttttttttt-9-3
+  p=[uuuuuuuuuuu-10-3, vvvvvvvvvvv-10-3]
+elem_locals:1
+  p=[wwwwwwwwwww-11-3, xxxxxxxxxxx-11-3]
+struct_field:1
+two_params:3
+self_recv:4
+  p=[3, 4]
+scalar_elem:1
+end

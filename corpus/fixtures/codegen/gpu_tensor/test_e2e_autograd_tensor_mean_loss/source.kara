@@ -1,0 +1,14 @@
+
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let x0: Tensor[f32, [?]] = Tensor.from([2.0, 4.0]);
+    let x = TensorVar.leaf(t, x0);
+    let sq = x.mul(x);
+    let loss = sq.mean();
+    let lv = loss.value();
+    println(f"{lv[0]}");
+    loss.backward();
+    println(x.grad_at(0));
+    println(x.grad_at(1));
+}

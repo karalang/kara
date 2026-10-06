@@ -1,0 +1,50 @@
+// Benchmark workload for LeetCode #108 — build 8 sorted arrays once (15 elements each,
+// distinct values), then K reps of recursive middle-pick sorted_to_bst on a DATA-DEPENDENT-
+// selected array (idx = acc%8, seeded by the running hash so nothing hoists), folding the
+// built tree's shape+value serialization into a rolling hash. Each rep allocates a fresh
+// 15-node balanced tree and drops it, so the workload is ALLOCATION-bound. Kara uses `shared`
+// RC nodes, C `malloc` pointers, Rust Box, Go GC *Node. The `build` recursion's two calls are
+// independent; auto-par's granularity cutoff (B-2026-07-15-4, fixed) leaves the 15-node
+// subtree builds sequential, so the default build stays single-threaded (byte-equal to ap0).
+shared struct TreeNode { val: i64, mut left: Option[TreeNode], mut right: Option[TreeNode] }
+fn build(arr: ref Vec[i64], lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo > hi { return None; }
+    let mid = (lo + hi) / 2;
+    let node = TreeNode { val: arr[mid], left: None, right: None };
+    node.left = build(arr, lo, mid - 1);
+    node.right = build(arr, mid + 1, hi);
+    Some(node)
+}
+fn sorted_to_bst(arr: ref Vec[i64]) -> Option[TreeNode] {
+    let n = arr.len();
+    build(arr, 0, n - 1)
+}
+fn ser(node: Option[TreeNode], acc: mut ref i64) {
+    match node {
+        None => { acc = (acc * 131 + 1) % 1000000007; }
+        Some(n) => { acc = (acc * 131 + (n.val + 2)) % 1000000007; ser(n.left, acc); ser(n.right, acc); }
+    }
+}
+fn main() {
+    // 8 sorted arrays of length 15, distinct value ranges (t*100 .. t*100+14).
+    let mut arrs: Vec[Vec[i64]] = Vec.new();
+    let mut t = 0;
+    while t < 8 {
+        let mut arr: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < 15 { arr.push(t * 100 + i); i = i + 1; }
+        arrs.push(arr);
+        t = t + 1;
+    }
+    let mut acc = 1;
+    let mut rep = 0;
+    while rep < 1200000 {
+        let idx = acc % 8;
+        let root = sorted_to_bst(arrs[idx]);
+        let mut s = 0;
+        ser(root, mut s);
+        acc = (acc * 131 + s) % 1000000007;
+        rep = rep + 1;
+    }
+    println(f"{acc}")
+}

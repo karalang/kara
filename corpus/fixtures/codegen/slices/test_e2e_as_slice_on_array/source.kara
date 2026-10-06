@@ -1,0 +1,11 @@
+
+fn sum(xs: Slice[i64]) -> i64 {
+    let mut acc = 0;
+    for x in xs { acc = acc + x; }
+    acc
+}
+fn main() {
+    let a: Array[i64, 3] = [42, 100, 200];
+    let s = a.as_slice();
+    println(sum(s));
+}

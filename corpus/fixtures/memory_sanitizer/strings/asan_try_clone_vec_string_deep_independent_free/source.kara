@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut src: Vec[String] = Vec.new();
+    src.push(f"alpha{1}");
+    src.push(f"beta{2}");
+    match src.try_clone() {
+        Ok(c) => {
+            println(c.len());
+            println(c[0]);
+            println(c[1]);
+        }
+        Err(_) => println("err"),
+    }
+    src.push(f"gamma{3}");
+    println(src.len());
+}

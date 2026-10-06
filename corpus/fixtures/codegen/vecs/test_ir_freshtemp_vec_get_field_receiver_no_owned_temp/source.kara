@@ -1,0 +1,12 @@
+
+struct Holder { items: Vec[i64] }
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    let h = Holder { items: v };
+    match h.items.get(0) {
+        Some(x) => println(x),
+        None => println(0_i64),
+    };
+}

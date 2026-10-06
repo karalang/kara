@@ -1,0 +1,95 @@
+// LeetCode 150 — Evaluate Reverse Polish Notation.
+//
+// Evaluate an arithmetic expression in Reverse Polish (postfix) notation. A
+// left-to-right scan with an operand STACK: push each number; on an operator pop
+// the top two operands, apply, and push the result. Division truncates toward
+// zero (Kāra's `/`, like C/Rust). The only lexical subtlety is that "-" the
+// operator and "-11" the negative literal share a leading byte — so a token is
+// an operator iff it is exactly ONE byte long and that byte is +, -, *, or /.
+
+fn is_op(t: ref String) -> bool {
+    let b = t.bytes();
+    if b.len() != 1 {
+        return false;
+    }
+    let c = b[0];
+    return c == b'+' or c == b'-' or c == b'*' or c == b'/';
+}
+
+fn parse_int(t: ref String) -> i64 {
+    let b = t.bytes();
+    let n = b.len();
+    let mut i = 0;
+    let mut sign = 1;
+    if n > 0 and b[0] == b'-' {
+        sign = -1;
+        i = 1;
+    }
+    let mut v = 0;
+    while i < n {
+        v = v * 10 + ((b[i] as i64) - (b'0' as i64));
+        i = i + 1;
+    }
+    return v * sign;
+}
+
+fn eval_rpn(tokens: Vec[String]) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    let n = tokens.len();
+    let mut i = 0;
+    while i < n {
+        if is_op(tokens[i]) {
+            let b = stack.pop().unwrap();
+            let a = stack.pop().unwrap();
+            let bytes = tokens[i].bytes();
+            let c = bytes[0];
+            let r = if c == b'+' {
+                a + b
+            } else if c == b'-' {
+                a - b
+            } else if c == b'*' {
+                a * b
+            } else {
+                a / b
+            };
+            stack.push(r);
+        } else {
+            stack.push(parse_int(tokens[i]));
+        }
+        i = i + 1;
+    }
+    return stack.pop().unwrap();
+}
+
+fn run(tokens: Vec[String]) {
+    println(eval_rpn(tokens).to_string());
+}
+
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("2"); a.push("1"); a.push("+"); a.push("3"); a.push("*");
+    run(a);
+
+    let mut b: Vec[String] = Vec.new();
+    b.push("4"); b.push("13"); b.push("5"); b.push("/"); b.push("+");
+    run(b);
+
+    let mut c: Vec[String] = Vec.new();
+    c.push("10"); c.push("6"); c.push("9"); c.push("3"); c.push("+");
+    c.push("-11"); c.push("*"); c.push("/"); c.push("*"); c.push("17");
+    c.push("+"); c.push("5"); c.push("+");
+    run(c);
+
+    // Division truncates toward zero: -7 / 2 = -3, not -4.
+    let mut d: Vec[String] = Vec.new();
+    d.push("-7"); d.push("2"); d.push("/");
+    run(d);
+
+    let mut e: Vec[String] = Vec.new();
+    e.push("4"); e.push("-2"); e.push("/");
+    run(e);
+
+    let mut f: Vec[String] = Vec.new();
+    f.push("3"); f.push("-4"); f.push("*");
+    run(f);
+}

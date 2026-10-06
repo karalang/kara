@@ -1,0 +1,8 @@
+
+fn main() {
+    let a = Vector[i64, 4](1, 5, 3, 8);
+    let b = Vector[i64, 4](4, 2, 3, 6);
+    let lt = a < b;
+    let eq = a == b;
+    println(lt[0]); println(lt[1]); println(eq[2]); println(eq[0]);
+}

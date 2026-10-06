@@ -1,0 +1,30 @@
+
+par struct Gate { v: Atomic[i64] }
+impl Gate {
+    fn is_open(ref self) -> bool { self.v.load(MemoryOrdering.SeqCst) == 1 }
+}
+
+fn fast_err(v: i64) -> Result[i64, i64] { Err(v) }
+
+fn would_err(v: i64) -> Result[i64, i64] {
+    if v < 0 {
+        return Ok(v);
+    }
+    Err(v)
+}
+
+fn main() {
+    let g = Gate { v: Atomic.new(0) };
+    let r: Result[i64, i64] = par {
+        let r1: Result[i64, i64] = {
+            while not g.is_open() { }
+            would_err(11_i64)
+        };
+        let r2: Result[i64, i64] = fast_err(33_i64);
+        Ok(7_i64)
+    };
+    match r {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}

@@ -1,0 +1,32 @@
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 8i64 {
+        let cat = Command.new("cat").stdin(Stdio.Piped).stdout(Stdio.Piped);
+        match cat.spawn() {
+            Ok(child) => {
+                match child.stdin() {
+                    Some(sin) => {
+                        match sin.write("pipe-payload\n") { Ok(u) => {}, Err(e) => {} }
+                        match sin.close() { Ok(u) => {}, Err(e) => {} }
+                    }
+                    None => {}
+                }
+                match child.stdout() {
+                    Some(o) => {
+                        match o.read_to_string() {
+                            Ok(text) => { total = total + text.len(); }
+                            Err(e) => {}
+                        }
+                    }
+                    None => {}
+                }
+                match child.wait() { Ok(st) => {}, Err(e) => {} }
+            }
+            Err(e) => {}
+        }
+        i = i + 1;
+    }
+    println(total.to_string());
+}

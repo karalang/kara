@@ -1,0 +1,19 @@
+
+fn main() {
+    let s = "hello";
+    match s.to_cstring() {
+        Ok(cs) => {
+            println(cs.len());
+            let b = cs.as_bytes();
+            println(b[0]);
+            println(b[4]);
+            if cs.is_empty() { println("empty"); } else { println("non-empty"); }
+        }
+        Err(_) => println("ERR"),
+    }
+    let empty = "";
+    match empty.to_cstring() {
+        Ok(cs) => { println(cs.len()); if cs.is_empty() { println("empty"); } }
+        Err(_) => println("ERR"),
+    }
+}

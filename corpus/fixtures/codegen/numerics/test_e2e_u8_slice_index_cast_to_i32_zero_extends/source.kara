@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut bs: Vec[u8] = Vec.new();
+    bs.push(200u8);
+    let x: i32 = (bs[0] as i32) - (b'0' as i32);
+    println(x);
+}

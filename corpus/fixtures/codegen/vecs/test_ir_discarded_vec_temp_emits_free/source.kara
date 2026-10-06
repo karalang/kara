@@ -1,0 +1,10 @@
+
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return v;
+}
+
+fn main() {
+    make_vec();
+}

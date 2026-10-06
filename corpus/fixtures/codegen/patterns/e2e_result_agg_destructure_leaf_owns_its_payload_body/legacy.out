@@ -1,0 +1,58 @@
+annres
+dR77:s77:2
+  a7
+dR7:s7:2
+unann
+dR11:s11:2
+  u1
+dR1:s1:2
+fresh
+dR33:s33:2
+  h3
+dR3:s3:2
+errside
+dR55:s55:2
+  r5
+dR5:s5:2
+consok
+dR22:s22:2
+  k122
+dR122:s122:2
+conserr
+dR24:s24:2
+  c124
+dR124:s124:2
+moved
+dR26:s26:2
+dR126:s126:2
+  m
+ret
+dR20:s20:2
+dR120:s120:2
+  t
+arg
+dR28:s28:2
+  g128
+dR128:s128:2
+field
+dR30:s30:2
+dR130:s130:2
+  f
+loopr
+dR32:s32:2
+dR132:s132:2
+dR32:s32:2
+dR132:s132:2
+  l
+nested
+dR36:s36:2
+dR136:s136:2
+  n4
+wildres
+dR115:s115:2
+  w15
+dR15:s15:2
+strres
+  s17
+dR17:s17:2
+done

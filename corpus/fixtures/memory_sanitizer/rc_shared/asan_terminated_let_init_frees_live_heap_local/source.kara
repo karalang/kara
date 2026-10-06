@@ -1,0 +1,15 @@
+
+fn t(k: i64) -> i64 {
+    let s = f"payload-{k}";
+    let x = { return s.len(); };
+    0
+}
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        n = n + t(i);
+        i = i + 1;
+    }
+    println(n);
+}

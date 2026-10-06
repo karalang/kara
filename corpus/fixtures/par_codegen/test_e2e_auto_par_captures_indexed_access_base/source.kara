@@ -1,0 +1,20 @@
+
+fn min_jumps(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut visited: Vec[bool] = Vec.new();
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    for _ in 0..n { visited.push(false); }
+    visited[0] = true;
+    let mut sum = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        sum = sum + nums[i];
+        i = i + 1;
+    }
+    let _ = bucket.len();
+    sum
+}
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    println(min_jumps(a));
+}
