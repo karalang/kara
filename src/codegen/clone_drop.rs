@@ -862,17 +862,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
 
-        // Allocate a fresh map. Sizes = sizeof(K), sizeof(V); val_size = 0
-        // for Set's unit-tuple case is fine since llvm_type_for_type_expr
-        // on empty-tuple returns i64 → size 8. For a true zero-size value,
-        // we'd need extra plumbing; the runtime's `.max(1)` already keeps
-        // the allocation valid so 8-byte slots are harmless overhead.
+        // Allocate a fresh map. Sizes = sizeof(K), sizeof(V). A `Set[T]`
+        // clones as `Map[T, ()]`, and its value half must be ZERO bytes like
+        // every other Set constructor's: `llvm_type_for_type_expr` lowers the
+        // unit tuple to i64, and an 8-byte value slot is not harmless --
+        // the Set `remove` lowering hands the runtime a one-byte dummy as
+        // the displaced-value out-slot, and the runtime copies `val_size`
+        // bytes into it, smashing the caller's frame (B-2026-10-06-69).
+        let val_is_unit = matches!(&val_te.kind, TypeKind::Tuple(elems) if elems.is_empty());
         let key_size = key_ty
             .size_of()
             .unwrap_or_else(|| i64_t.const_int(8, false));
-        let val_size = val_ty
-            .size_of()
-            .unwrap_or_else(|| i64_t.const_int(8, false));
+        let val_size = if val_is_unit {
+            i64_t.const_zero()
+        } else {
+            val_ty
+                .size_of()
+                .unwrap_or_else(|| i64_t.const_int(8, false))
+        };
         let new_map_call = self
             .builder
             .build_call(
@@ -895,9 +902,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // Stack allocas for the iterator's key/val out-slots and for the
         // cloned key/val we pass to `karac_map_insert`.
         let key_out = self.create_entry_alloca(clone_fn, "k.out", key_ty);
-        let val_out = self.create_entry_alloca(clone_fn, "v.out", val_ty);
+        // The unit value half has no bytes to read or copy: a one-byte
+        // dummy stands in for both slots, as in the Set lowerings.
+        let val_slot_ty: BasicTypeEnum<'ctx> = if val_is_unit {
+            self.context.i8_type().into()
+        } else {
+            val_ty
+        };
+        let val_out = self.create_entry_alloca(clone_fn, "v.out", val_slot_ty);
         let key_clone_slot = self.create_entry_alloca(clone_fn, "k.clone", key_ty);
-        let val_clone_slot = self.create_entry_alloca(clone_fn, "v.clone", val_ty);
+        let val_clone_slot = self.create_entry_alloca(clone_fn, "v.clone", val_slot_ty);
 
         // Iterator handle.
         let iter_handle = self
@@ -938,9 +952,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(key_clone, &[key_out.into(), key_clone_slot.into()], "")
             .unwrap();
-        self.builder
-            .build_call(val_clone, &[val_out.into(), val_clone_slot.into()], "")
-            .unwrap();
+        if !val_is_unit {
+            self.builder
+                .build_call(val_clone, &[val_out.into(), val_clone_slot.into()], "")
+                .unwrap();
+        }
         self.builder
             .build_call(
                 self.karac_map_insert_fn(),
