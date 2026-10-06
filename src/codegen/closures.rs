@@ -1184,12 +1184,17 @@ impl<'ctx> super::Codegen<'ctx> {
             // Without this an un-annotated String param was invisible to
             // `string_vars`, so an f-string interpolation in the body
             // formatted the `{ptr,len,cap}` value's first word as an i64.
-            let effective_te = cp
+            //
+            // B-2026-10-06-34 — through the enclosing monomorph's substitution:
+            // a `|x: T|` param inside `w[T = String]` registered as bare `T`,
+            // so it never reached the caller-retained set below and `|x: T| x`
+            // handed the caller's buffer back uncopied (a double free).
+            let effective_te: Option<TypeExpr> = cp
                 .ty
                 .as_ref()
-                .or_else(|| inferred_param_tes.get(i).and_then(Option::as_ref));
-            if let Some(te) = effective_te {
-                let te = te.clone();
+                .or_else(|| inferred_param_tes.get(i).and_then(Option::as_ref))
+                .map(|t| self.subst_monomorph_type_params(t));
+            if let Some(te) = effective_te.clone() {
                 // A `ref T` / `mut ref T` closure param's slot holds a POINTER,
                 // exactly like the function-param path in `functions.rs` —
                 // record the borrow so `load_variable` / `get_data_ptr` deref
@@ -1260,7 +1265,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // caller's payload, and a boxed generic enum owns a box of its own
             // for the call.
             if !is_borrow_param {
-                if let Some(te) = effective_te.cloned() {
+                if let Some(te) = effective_te {
                     self.adopt_closure_param_as_loop_binding(&param_name, &te);
                     // Returned whole (`|q| q`), the view is handed back as an
                     // independent deep copy, as a returned capture is.
