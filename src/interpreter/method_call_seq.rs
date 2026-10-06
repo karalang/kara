@@ -1879,9 +1879,10 @@ impl<'a> super::Interpreter<'a> {
                         if target <= guard.len() {
                             guard.truncate(target);
                         } else {
-                            while guard.len() < target {
-                                guard.push(fill.clone());
-                            }
+                            // B-2026-10-06-81 — each new slot gets
+                            // its own copy of `fill`, as with `[v; n]`.
+                            let grow = target - guard.len();
+                            guard.extend(super::eval_expr::repeat_value(fill, grow));
                         }
                     }
                     for e in removed {

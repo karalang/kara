@@ -664,15 +664,22 @@ impl<'a> super::Interpreter<'a> {
             }
 
             // Repeat literal: `[v; n]` / `Vec[v; n]` / `Array[v; n]`. Value
-            // is evaluated once; the resulting `n` clones share the value's
-            // structure (consistent with Rust's `[v; n]` semantics).
+            // is evaluated once and then CLONED into each slot, as Rust's
+            // `vec![v; n]` does.
+            //
+            // B-2026-10-06-81 — a value clone, not a handle copy. A
+            // `Value` derive-clone of a `Vec` / `Map` / `Set` bumps the shared
+            // `Arc`, so `vec![vec![false; m]; n]` built `n` rows over ONE
+            // buffer and `dp[2][1] = true` showed in every row. Reference
+            // types (`shared`, channels) still alias, which is their
+            // semantics; `deep_clone_value` keeps them that way.
             ExprKind::RepeatLiteral { value, count, .. } => {
                 let v = self.eval_expr_inner(value);
                 let n = match self.eval_expr_inner(count) {
                     Value::Int(n) if n >= 0 => n as usize,
                     _ => 0,
                 };
-                Value::array_of(vec![v; n])
+                Value::array_of(repeat_value(v, n))
             }
 
             // Map literal
@@ -3161,6 +3168,20 @@ impl<'a> super::Interpreter<'a> {
 /// double-rounding compromise: rounding to p1 bits then p2 agrees with rounding
 /// straight to p2 when p1 >= 2*p2 + 2, and f64's 53 >= 2*24 + 2 for f32 (which
 /// the narrower two then round from, as they always have).
+/// `n` independent copies of `v` for a repeat literal or `resize` fill
+/// (B-2026-10-06-81): `n - 1` value clones plus `v` itself.
+pub(super) fn repeat_value(v: Value, n: usize) -> Vec<Value> {
+    let mut out = Vec::with_capacity(n);
+    if n == 0 {
+        return out;
+    }
+    for _ in 1..n {
+        out.push(super::exec::deep_clone_value(&v));
+    }
+    out.push(v);
+    out
+}
+
 pub(super) fn carrier_to_f64(i: i128, src_unsigned_width: Option<u32>) -> f64 {
     match src_unsigned_width {
         Some(64) => (i as u64) as f64,
