@@ -15443,10 +15443,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         rhs_tail.kind,
                         ExprKind::StringLit(_) | ExprKind::MultiStringLit(_)
                     );
+                    // B-2026-10-03-14 — a String branch whose tails are fresh
+                    // or the target itself (`s = if c { f"q" } else { s }`).
+                    // The old buffer may be what is stored back, so it is freed
+                    // only when the stored buffer differs at runtime.
+                    let free_unless_stored_back = !rhs_is_fresh_string_branch
+                        && !rhs_is_self_alias
+                        && self.var_types.string_vars.contains(name.as_str())
+                        && val.is_struct_value()
+                        && self.rhs_branch_tails_fresh_string_ex(value, name.as_str(), true);
                     let trigger_eager_free = lhs_is_tracked_vec
                         && !rhs_is_self_alias
                         && (staged_fstr_acc.is_some()
                             || rhs_is_string_literal
+                            || free_unless_stored_back
                             || rhs_is_moved_alias
                             || rhs_is_fresh
                             || rhs_is_fresh_string_branch
@@ -15458,6 +15468,14 @@ impl<'ctx> super::Codegen<'ctx> {
                             || rhs_is_place_tuple_elem_move);
                     if trigger_eager_free {
                         if let Some(slot) = self.variables.get(name).copied() {
+                            // B-2026-10-03-14 — see `free_unless_stored_back`:
+                            // skip the whole displacement when the stored value
+                            // carries the old data pointer.
+                            let stored_back_merge = if free_unless_stored_back {
+                                self.branch_unless_same_buffer(slot.ptr, val)
+                            } else {
+                                None
+                            };
                             // B-2026-08-12-4 — the place-field-move arm is the
                             // one arm whose RHS can alias the slot it is about
                             // to overwrite (`cur = stats[0].region` run twice
@@ -15527,6 +15545,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                         None => 1,
                                     };
                                 self.emit_free_vec_buffer_if_owned(slot.ptr, elem_abi_size);
+                            }
+                            if let Some(merge) = stored_back_merge {
+                                self.builder.build_unconditional_branch(merge).unwrap();
+                                self.builder.position_at_end(merge);
                             }
                         }
                     }
@@ -32178,14 +32200,71 @@ impl<'ctx> super::Codegen<'ctx> {
     /// { f"q" } else { s }` keeps the old buffer it may be about to store
     /// back. `LabeledBlock` is not peeled: a `break`-with-value can deliver a
     /// value no tail names.
+    /// B-2026-10-03-14 — branch to a fresh block when the String about to be
+    /// stored (`new`) carries a different data pointer from the one in `slot`,
+    /// and return the merge block the caller closes once it has freed the old
+    /// buffer there. The builder is left in the "differs" block. `None` when
+    /// `new` is not a struct value, in which case nothing was emitted.
+    pub(super) fn branch_unless_same_buffer(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        new: BasicValueEnum<'ctx>,
+    ) -> Option<inkwell::basic_block::BasicBlock<'ctx>> {
+        let fn_val = self.current_fn?;
+        let BasicValueEnum::StructValue(sv) = new else {
+            return None;
+        };
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let old_pp = self
+            .builder
+            .build_struct_gep(self.vec_struct_type(), slot, 0, "sb.old.pp")
+            .ok()?;
+        let old = self
+            .builder
+            .build_load(ptr_ty, old_pp, "sb.old")
+            .unwrap()
+            .into_pointer_value();
+        let new_ptr = self
+            .builder
+            .build_extract_value(sv, 0, "sb.new")
+            .ok()?
+            .into_pointer_value();
+        let differs = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, old, new_ptr, "sb.differs")
+            .unwrap();
+        let free_bb = self.context.append_basic_block(fn_val, "sb.free");
+        let merge_bb = self.context.append_basic_block(fn_val, "sb.merge");
+        self.builder
+            .build_conditional_branch(differs, free_bb, merge_bb)
+            .unwrap();
+        self.builder.position_at_end(free_bb);
+        Some(merge_bb)
+    }
+
     pub(super) fn rhs_branch_tails_fresh_string(&self, expr: &Expr, target: &str) -> bool {
+        self.rhs_branch_tails_fresh_string_ex(expr, target, false)
+    }
+
+    /// B-2026-10-03-14 — [`Self::rhs_branch_tails_fresh_string`], with
+    /// `allow_self` also accepting a tail that is `target` itself (`s = if c {
+    /// f"q" } else { s }`). Such a branch may store back the very buffer it
+    /// displaces, so its caller cannot free the old value unconditionally; it
+    /// frees it only when the stored buffer differs at runtime.
+    pub(super) fn rhs_branch_tails_fresh_string_ex(
+        &self,
+        expr: &Expr,
+        target: &str,
+        allow_self: bool,
+    ) -> bool {
         let tail_fresh = |e: &Expr| {
             self.rhs_stages_fstr_acc(e)
                 || matches!(e.kind, ExprKind::StringLit(_) | ExprKind::MultiStringLit(_))
                 || matches!(&e.kind, ExprKind::Identifier(n) if n != target
                     && self.var_types.vec_elem_types.contains_key(n.as_str()))
+                || (allow_self && matches!(&e.kind, ExprKind::Identifier(n) if n == target))
                 || self.rhs_yields_fresh_ref(e)
-                || self.rhs_branch_tails_fresh_string(e, target)
+                || self.rhs_branch_tails_fresh_string_ex(e, target, allow_self)
         };
         // A block whose tail names a binding the block itself declares from a
         // fresh value and never reassigns (`v = { let mut z = Vec.new();
