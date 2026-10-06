@@ -15481,6 +15481,38 @@ impl<'ctx> super::Codegen<'ctx> {
         // discipline `field_skip_tree_for_var` enforces for a struct binding,
         // now enforced for a tuple one by `tuple_skip_tree_for_var`.
         let tree = self.tuple_skip_tree_for_var(var_name);
+        // B-2026-10-06-36 — mask the owner's live walk WHERE IT SITS. Retracting
+        // and re-pushing it moved it after a destination registered in the same
+        // statement (`let q = p.0`), so `p`'s remaining bodies ran before `q`'s
+        // at their shared live-range end, the reverse of declaration order.
+        // Only when the live slot's walk is the one action under this name, so
+        // a shadowed generation is never the one rewritten.
+        let walks_for_name = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flat_map(|frame| frame.iter())
+            .filter(|a| {
+                matches!(a, super::state::CleanupAction::UserDrop { binding_name, kind, .. }
+                    if binding_name == var_name && *kind == UserDropKind::ContainerElemBodies)
+            })
+            .count();
+        if walks_for_name == 1
+            && self
+                .armed_container_elem_bodies_on(var_name, slot.ptr)
+                .is_some()
+        {
+            let bodies = self
+                .emit_tuple_elem_user_drop_bodies_fn_tree(tuple_ty, &elem_tes, &tree)
+                .unwrap_or_else(|| self.emit_empty_field_bodies_fn());
+            if self.replace_user_drop_fn_for_var(
+                var_name,
+                UserDropKind::ContainerElemBodies,
+                bodies,
+            ) {
+                return;
+            }
+        }
         self.suppress_container_elem_bodies_for_var(var_name);
         // B-2026-10-04-73 — nothing left to walk still keeps the action, with
         // an empty walker, as the struct twin does (B-2026-09-29-21):

@@ -23271,6 +23271,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Some(tes);
             }
         }
+        // B-2026-10-06-36 — a nested tuple element moved out of a tuple local
+        // (`let q = p.0` over `((R, i64), i64)`). The source's walk already
+        // masks the element, so with no element types here the moved bodies
+        // ran nowhere. Typed off the source's recorded element types.
+        if let ExprKind::TupleIndex { object, index } = &value.kind {
+            if matches!(&object.kind, ExprKind::Identifier(_)) {
+                if let Some(TypeExpr {
+                    kind: TypeKind::Tuple(elems),
+                    ..
+                }) = self.tuple_index_elem_type_expr(object, *index)
+                {
+                    return Some(elems);
+                }
+            }
+        }
         // Bare rebind `let t2 = t;` — the destination inherits the source's
         // recorded element types, so its bodies walk re-registers after the
         // move disarms the source's (parity with the interpreter, whose
