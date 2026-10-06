@@ -1826,8 +1826,23 @@ pub fn whole_param_leaves(program: Option<&Program>, f: &Function, idx: usize) -
 /// every exit" and "could not tell", the direction that keeps the caller's
 /// cleanup.
 pub fn whole_self_always_returned(program: Option<&Program>, f: &Function) -> bool {
+    self_exits(program, f).is_some_and(|ex| ex.iter().all(|e| *e == ExitFate::Returned))
+}
+
+/// B-2026-10-05-121 — does an owned-`self` method keep its receiver on every
+/// exit, never handing it back or storing it (`fn g2(self) { .. }`)? The
+/// receiver twin of `whole_param_leaves(..) == Some(false)`, under the same
+/// flag.
+pub fn whole_self_stays(program: Option<&Program>, f: &Function) -> bool {
+    schedule_enabled()
+        && self_exits(program, f).is_some_and(|ex| ex.iter().all(|e| *e == ExitFate::Stays))
+}
+
+/// Every exit's fate of an owned `self`, or `None` when the walk could not
+/// tell (or the method does not take `self` by value).
+fn self_exits(program: Option<&Program>, f: &Function) -> Option<Vec<ExitFate>> {
     if !matches!(f.self_param, Some(SelfParam::Owned)) {
-        return false;
+        return None;
     }
     let mut w = Walker {
         program,
@@ -1857,10 +1872,7 @@ pub fn whole_self_always_returned(program: Option<&Program>, f: &Function) -> bo
     for (st, y) in outs {
         w.exit(&st, y);
     }
-    !w.overflow
-        && !w.moved
-        && !w.exits.is_empty()
-        && w.exits.iter().all(|e| *e == ExitFate::Returned)
+    (!w.overflow && !w.moved && !w.exits.is_empty()).then_some(w.exits)
 }
 
 /// Slice 4 step 4 — design.md § Drop ordering rule 3 for a binding the block
@@ -1911,10 +1923,12 @@ fn dying_in_callee(
     }
     let declared = block_let_names(b);
     let mut out: Vec<(String, usize)> = Vec::new();
+    let mut tys = LetTys::new();
     for (i, st) in b.stmts.iter().enumerate() {
         let mut found: Vec<String> = Vec::new();
         let mut shadow: Vec<String> = Vec::new();
-        stays_args_stmt(program, st, &mut found, &mut shadow);
+        stays_args_stmt(program, st, &tys, &mut found, &mut shadow);
+        note_let_ty(program, st, &mut tys);
         for n in found {
             if declared.contains(&n) != declared_only
                 || shadow.contains(&n)
@@ -1970,15 +1984,16 @@ fn stmt_binds(st: &Stmt, n: &str) -> bool {
 fn stays_args_stmt(
     program: &Program,
     st: &Stmt,
+    tys: &LetTys,
     found: &mut Vec<String>,
     shadow: &mut Vec<String>,
 ) {
     match &st.kind {
         StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
-            stays_args_expr(program, value, found, shadow)
+            stays_args_expr(program, value, tys, found, shadow)
         }
-        StmtKind::Assign { value, .. } => stays_args_expr(program, value, found, shadow),
-        StmtKind::Expr(e) => stays_args_expr(program, e, found, shadow),
+        StmtKind::Assign { value, .. } => stays_args_expr(program, value, tys, found, shadow),
+        StmtKind::Expr(e) => stays_args_expr(program, e, tys, found, shadow),
         _ => {}
     }
 }
@@ -1986,24 +2001,135 @@ fn stays_args_stmt(
 fn stays_args_block(
     program: &Program,
     b: &Block,
+    tys: &LetTys,
     found: &mut Vec<String>,
     shadow: &mut Vec<String>,
 ) {
-    shadow.extend(block_let_names(b));
+    let lets = block_let_names(b);
+    let mut tys = tys.clone();
+    for n in &lets {
+        tys.remove(n);
+    }
+    shadow.extend(lets);
     for st in &b.stmts {
-        stays_args_stmt(program, st, found, shadow);
+        stays_args_stmt(program, st, &tys, found, shadow);
+        note_let_ty(program, st, &mut tys);
     }
     if let Some(e) = &b.final_expr {
-        stays_args_expr(program, e, found, shadow);
+        stays_args_expr(program, e, &tys, found, shadow);
     }
+}
+
+/// B-2026-10-05-121 — the declared struct type of each `let` binding seen so
+/// far, where the statement names it outright: an annotation, a struct
+/// literal, or a free function's declared return type. Non-generic types
+/// only; anything else leaves the name out, so a method call on it resolves
+/// to nothing and contributes no binding.
+type LetTys = std::collections::HashMap<String, String>;
+
+fn note_let_ty(program: &Program, st: &Stmt, tys: &mut LetTys) {
+    let (pattern, ty, value) = match &st.kind {
+        StmtKind::Let {
+            pattern, ty, value, ..
+        } => (pattern, ty.as_ref(), Some(value)),
+        StmtKind::LetElse { pattern, .. } => {
+            for n in pattern_names(pattern) {
+                tys.remove(&n);
+            }
+            return;
+        }
+        StmtKind::LetUninit { name, .. } => {
+            tys.remove(name);
+            return;
+        }
+        _ => return,
+    };
+    let PatternKind::Binding(n) = &pattern.kind else {
+        for n in pattern_names(pattern) {
+            tys.remove(&n);
+        }
+        return;
+    };
+    let bare = |t: &TypeExpr| match &t.kind {
+        TypeKind::Path(tp) if tp.generic_args.is_none() && tp.segments.len() == 1 => {
+            Some(tp.segments[0].clone())
+        }
+        _ => None,
+    };
+    let named = match (ty, value.map(|v| &v.kind)) {
+        (Some(t), _) => bare(t),
+        (
+            None,
+            Some(ExprKind::StructLiteral {
+                path,
+                generic_args: None,
+                ..
+            }),
+        ) if path.len() == 1 => Some(path[0].clone()),
+        (None, Some(ExprKind::Call { callee, .. })) => match &callee.kind {
+            ExprKind::Identifier(f) => resolve_fn(program, f)
+                .filter(|g| g.generic_params.is_none())
+                .and_then(|g| g.return_type.as_ref())
+                .and_then(bare),
+            _ => None,
+        },
+        _ => None,
+    };
+    match named {
+        Some(t) => {
+            tys.insert(n.clone(), t);
+        }
+        None => {
+            tys.remove(n);
+        }
+    }
+}
+
+/// The user method `recv.method(..)` calls, when `recv` is a binding of a
+/// known non-generic type and exactly one non-generic impl of that type
+/// declares an instance method of that name.
+fn resolve_method<'p>(
+    program: &'p Program,
+    tys: &LetTys,
+    recv: &str,
+    method: &str,
+) -> Option<&'p Function> {
+    let ty = tys.get(recv)?;
+    let mut hits = program.items.iter().filter_map(|item| match item {
+        Item::ImplBlock(b) if b.generic_params.is_none() => {
+            let TypeKind::Path(pth) = &b.target_type.kind else {
+                return None;
+            };
+            if pth.generic_args.is_some() || pth.segments.last() != Some(ty) {
+                return None;
+            }
+            b.items.iter().find_map(|ii| match ii {
+                ImplItem::Method(g)
+                    if g.name == method && g.self_param.is_some() && g.generic_params.is_none() =>
+                {
+                    Some(&**g)
+                }
+                _ => None,
+            })
+        }
+        _ => None,
+    });
+    let first = hits.next()?;
+    hits.next().is_none().then_some(first)
 }
 
 /// Bare identifiers handed by value to a resolved callee whose fate keeps
 /// them on every exit. Closures are not entered; any shape not named here
 /// contributes nothing, so its mentions fail the caller's count check.
-fn stays_args_expr(program: &Program, e: &Expr, found: &mut Vec<String>, shadow: &mut Vec<String>) {
+fn stays_args_expr(
+    program: &Program,
+    e: &Expr,
+    tys: &LetTys,
+    found: &mut Vec<String>,
+    shadow: &mut Vec<String>,
+) {
     let go = |x: &Expr, found: &mut Vec<String>, shadow: &mut Vec<String>| {
-        stays_args_expr(program, x, found, shadow)
+        stays_args_expr(program, x, tys, found, shadow)
     };
     match &e.kind {
         ExprKind::Call { callee, args } => {
@@ -2024,10 +2150,34 @@ fn stays_args_expr(program: &Program, e: &Expr, found: &mut Vec<String>, shadow:
                 }
             }
         }
-        ExprKind::MethodCall { object, args, .. } => {
-            go(object, found, shadow);
-            for a in args {
-                go(&a.value, found, shadow);
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            // B-2026-10-05-121: a resolved user method keeps an owned
+            // receiver (`v.g2()` over `fn g2(self)`) or a by-value argument
+            // (`g.m(o)`) exactly as a free function keeps its argument.
+            let target = match &object.kind {
+                ExprKind::Identifier(r) => resolve_method(program, tys, r, method),
+                _ => None,
+            };
+            match (&object.kind, target) {
+                (ExprKind::Identifier(r), Some(g)) if whole_self_stays(Some(program), g) => {
+                    found.push(r.clone())
+                }
+                _ => go(object, found, shadow),
+            }
+            for (j, a) in args.iter().enumerate() {
+                match (&a.value.kind, target) {
+                    (ExprKind::Identifier(n), Some(g))
+                        if whole_param_leaves(Some(program), g, j) == Some(false) =>
+                    {
+                        found.push(n.clone())
+                    }
+                    _ => go(&a.value, found, shadow),
+                }
             }
         }
         ExprKind::Binary { left, right, .. } => {
@@ -2045,14 +2195,14 @@ fn stays_args_expr(program: &Program, e: &Expr, found: &mut Vec<String>, shadow:
                 go(&f.value, found, shadow);
             }
         }
-        ExprKind::Block(b) => stays_args_block(program, b, found, shadow),
+        ExprKind::Block(b) => stays_args_block(program, b, tys, found, shadow),
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
             go(condition, found, shadow);
-            stays_args_block(program, then_block, found, shadow);
+            stays_args_block(program, then_block, tys, found, shadow);
             if let Some(x) = else_branch {
                 go(x, found, shadow);
             }
