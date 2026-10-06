@@ -6435,6 +6435,28 @@ impl<'a> super::Interpreter<'a> {
     /// Array/Tuple/Map value still classifies `false` through
     /// `value_runs_user_drop`, keeping the dedicated container walkers the
     /// sole firers for direct bindings.
+    /// B-2026-09-27-97 — does any value reachable through tuples, arrays and
+    /// `Option` / `Result` payloads run a user `Drop` body? The deep form of
+    /// [`Self::field_value_carries_user_drop`], which reads a payload one level
+    /// down and so answers false for `Some(Vec[R])`.
+    pub(super) fn value_deeply_carries_user_drop(&self, v: &Value) -> bool {
+        match v {
+            Value::Tuple(items) => items.iter().any(|e| self.value_deeply_carries_user_drop(e)),
+            Value::Array(rc) => rc
+                .read()
+                .map(|g| g.iter().any(|e| self.value_deeply_carries_user_drop(e)))
+                .unwrap_or(false),
+            Value::EnumVariant {
+                enum_name, data, ..
+            } if enum_name == "Option" || enum_name == "Result" => match data {
+                EnumData::Unit => false,
+                EnumData::Tuple(vs) => vs.iter().any(|v| self.value_deeply_carries_user_drop(v)),
+                EnumData::Struct(m) => m.values().any(|v| self.value_deeply_carries_user_drop(v)),
+            },
+            _ => self.value_runs_user_drop(v) || self.field_value_carries_user_drop(v),
+        }
+    }
+
     pub(super) fn field_value_carries_user_drop(&self, v: &Value) -> bool {
         match v {
             Value::Struct { .. } => self.value_runs_user_drop(v),

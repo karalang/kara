@@ -4100,6 +4100,46 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-09-27-97 — a TUPLE, or an `Option` / `Result`
+                    // whose payload reaches a `Drop` value only through a
+                    // container (`Option[Vec[R]]`), which the arms above do not
+                    // cover: the `Option` arm reads the payload one level deep
+                    // and there is no tuple arm. Once the drop schedule names
+                    // the exits (`if c { a } else { None }` through a `let`),
+                    // the caller stands down on every path, so the exit where
+                    // the param died inside ran no body anywhere. The generic
+                    // one-slot walker, BODIES ONLY under the same per-path
+                    // flag, as the arms above. The interpreter's twin is the
+                    // deep arm of `cond_returned_param_drop_names`.
+                    let is_tuple = matches!(&param.ty.kind, TypeKind::Tuple(_));
+                    let is_optres = matches!(&param.ty.kind, TypeKind::Path(p)
+                        if p.segments.len() == 1
+                            && matches!(p.segments[0].as_str(), "Option" | "Result"));
+                    if (is_tuple || is_optres)
+                        && !self
+                            .payload_vars
+                            .cond_handback_optres_params
+                            .contains(&param_name)
+                        && !self.drop_rc.cond_returned_body_params.contains(&param_name)
+                    {
+                        let walker = if is_optres {
+                            self.emit_optres_payload_user_drop_bodies_fn(&param.ty)
+                        } else {
+                            self.emit_slot_bodies_walker_fn(&param.ty)
+                        };
+                        if let Some(bodies) = walker {
+                            self.track_user_drop_var_with_fn(
+                                "",
+                                &param_name,
+                                alloca,
+                                bodies,
+                                crate::codegen::state::UserDropKind::ContainerElemBodies,
+                            );
+                            self.payload_vars
+                                .cond_handback_optres_params
+                                .insert(param_name.clone());
+                        }
+                    }
                 }
                 // B-2026-09-25-10 — the conditional-STORE twin of the array
                 // arm of the conditional-return registration above, outside

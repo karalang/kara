@@ -2970,6 +2970,28 @@ impl<'a> super::Interpreter<'a> {
                 {
                     out.push(name.to_string());
                 }
+                // B-2026-09-27-97 — a TUPLE, or an `Option` / `Result` whose
+                // payload is a CONTAINER of `Drop` values (`Option[Vec[R]]`),
+                // returned on some exits only. The arms above read a payload
+                // one level deep and have no tuple arm, so neither shape had an
+                // owner on the exit where it died inside; the caller stands
+                // down on every path once the drop schedule names the exit
+                // (`if c { a } else { None }` through a `let`), and the body
+                // was lost there. Codegen's twin is the slot-walker fallback in
+                // `compile_function`'s conditional-return registration.
+                Some(v)
+                    if cond_returned
+                        && match &v {
+                            Value::Tuple(_) => true,
+                            Value::EnumVariant { enum_name, .. } => {
+                                enum_name == "Option" || enum_name == "Result"
+                            }
+                            _ => false,
+                        }
+                        && self.value_deeply_carries_user_drop(&v) =>
+                {
+                    out.push(name.to_string());
+                }
                 _ => {}
             }
         }
