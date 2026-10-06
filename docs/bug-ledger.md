@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 720 |
+| miscompile | 721 |
 | run-vs-build | 598 |
-| leak | 592 |
+| leak | 593 |
 | double-free | 427 |
 | codegen-gap | 245 |
 | missing-feature | 219 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2825 |
-| interp | 882 |
+| codegen | 2827 |
+| interp | 884 |
 | typecheck | 344 |
 | other | 114 |
 | ownership | 80 |
@@ -472,7 +472,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-53 | 2026-10-04 | codegen | medium | A DISCARDED FRESH `Option` OF A USER ENUM LEAKS BOTH THE BOX AND THE PAYLOAD'S HEAP COMPILED -- `let _ = mk();`, the bare statement `mk();` and `if mk().is_some() { .. }` over `fn mk() -> Option[Nested]` lose 160 B (32 B box + 128 B inner `Vec`), and over `enum E { A(i64), B(Vec[i64]) }` 64 B; output right everywhere. | — |
 | B-2026-10-04-55 | 2026-10-04 | interp+codegen | medium | AN ASSIGNMENT THROUGH `*` OF A USER FUNCTION'S RETURNED `mut ref` IS DROPPED -- `*bump(mut x) += 5` and `*bump(mut x) = 9` over `fn bump(v: mut ref i64) -> mut ref i64 { return v; }` leave `x` at 1 under `--interp` and `karac run` alike, and `*h.slot() += 5` (a `mut ref self` method returning `mut ref i64`) fails codegen naming an LLVM pointer type; `*m.entry(c).or_insert(0) += 1` is right on both | — |
 | B-2026-10-04-62 | 2026-10-04 | codegen | medium | A NAMED `Vec` LOCAL MOVED INTO A REASSIGNMENT ON ONE PATH ONLY LOSES ITS ELEMENTS' `Drop` BODIES ON THE PATH THAT DID NOT MOVE IT, ON EVERY COMPILED SURFACE -- `fn fo2(c: bool) -> Vec[R] { let mut v = Vec[mk(1)]; let w = Vec[mk(40)]; if c { v = w; } return v }` called with `false` prints `k1 dR1` compiled where `--interp` prints `dR40 k1 dR1` | — |
-| B-2026-10-04-64 | 2026-10-04 | codegen+interp | medium | A `for` LOOP OVER A FRESH `Vec` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `for item in mk() { k += item.n; }` over `fn mk() -> Vec[D]` with `impl Drop for D` prints `k 15` and never `drop 7` / `drop 8` on `--interp`, -O0 or -O2 (valgrind clean, so the memory is freed and only the bodies are skipped); over `Vec[E]` with a `match item { Many(xs) => count(xs), .. }` arm, `--interp` alone runs them (at each arm's end) and the compiled builds still run none | — |
 | B-2026-10-04-78 | 2026-10-04 | codegen | low | MOVING A `for` BINDING OUT TWICE IN ONE ITERATION (`out.push(p); let q = p;`) LEAKS ONE COPY PER ITERATION, over a `Vec` and an `Array` alike -- 4 B in 2 blocks at -O0 for a two-element `Vec[P]` with a one-`String` `P`, where each move alone is clean | — |
 | B-2026-10-04-79 | 2026-10-04 | codegen+runtime | medium | AFTER B-2026-10-04-56 KATA 340'S `Map[char, i64]` BENCH STILL RUNS 1.85x RUST AT EQUAL HASHING (399 ms vs 216): each hash costs 92 instructions against Rust's ~74, the erased `remove` path hashes a key the `get` before it already hashed, and the mono insert costs ~70 instructions a call beyond its hash | — |
 | B-2026-10-04-83 | 2026-10-04 | interp+codegen | medium | FORWARDING A BY-VALUE `Option[Array[R, 2]]` PARAM TO ANOTHER BY-VALUE CALLEE RUNS THE ELEMENT `Drop` BODIES AT DIFFERENT POINTS PER BACKEND -- `fn fw(x: Option[Array[R, 2]]) { ok(x); println("fw"); }` prints `ok dR27 dR28 fw` on every compiled surface and `ok fw dR27 dR28` under `--interp`; the rebind spelling `let h = x; ok(h);` splits the same way | — |
@@ -565,6 +564,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-97 | 2026-10-06 | codegen | medium | A BY-VALUE STRUCT PARAM OR OWNED RECEIVER WHOSE `Option[shared]` FIELD IS MOVED INTO A RETURNED STRUCT LITERAL LEAKS THE HANDLE AND LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE -- `let v = mkw(4); let g = intog(v)` over `fn intog(w: W) -> G { G { n: 1, keep: w.o } }`, `struct W { o: Option[H], n: i64 }` and `struct G { n: i64, keep: Option[H] }` prints `_s2 1 end` at -O0 with 16 B definitely lost (10 allocs / 9 frees) where `--interp` prints `_s2 1 end dH4`; the method `v.into_g()` over `fn into_g(self) -> G { G { n: 1, keep: self.o } }` reads the same | — |
 | B-2026-10-06-98 | 2026-10-06 | codegen | medium | A TRAIT METHOD CALLED THROUGH A GENERIC BOUND IS NOT DISPATCHED WHEN THE TYPE ARGUMENT IS A `shared struct` -- `fn f[G: T](g: ref G) -> String { g.name() }` called with a `shared struct B` stops `karac build` / `karac run` with "no handler for method 'name' on variable 'g' in `f` (method dispatch fell through; this is a codegen bug ...)", for `ref G`, `mut ref G` and by-value `G` alike, while a plain struct, a `shared enum`, and the same call on `ref B` without generics all build | — |
 | B-2026-10-06-99 | 2026-10-06 | codegen | medium | A `.chars()` CHAIN WHOSE RECEIVER IS A FRESH `String` TEMPORARY NEVER FREES THE STRING -- `let v: Vec[char] = mk(3).chars().collect();`, `mk(3).chars().count()`, `for c in mk(3).chars() { .. }`, `.chars().map(..).collect()`, collecting into a `String`, and `"abc".to_string().chars().collect()` each leak the temporary's buffer once per evaluation under `karac build` (-O0 and -O2), while `mk(3).len()`, `mk(3).bytes().to_vec()` and the same chain over a `let`-bound String free it | — |
+| B-2026-10-06-100 | 2026-10-06 | codegen+interp | medium | A `match` WITH A PAYLOAD-MOVING ARM AND A READ-ONLY CONTAINER-PAYLOAD ARM RUNS THE CONTAINER'S ELEMENT `Drop` BODIES TWICE ON `--interp` AND NEVER COMPILED -- `let e = E.Many(vec![D { n: 6 }]); match e { E.One(d) => { eat(d); }, E.Many(xs) => { println(f"many {xs.len()}"); } }` prints `many 1 drop 6 drop 6 end` interpreted and `many 1 end` at -O0 and -O2 (valgrind clean); `many 1 drop 6 end` is due | — |
+| B-2026-10-06-101 | 2026-10-06 | codegen+interp | medium | A `match` over a GENERIC enum local `G[D]` whose `Many(Vec[T])` arm only reads the payload LEAKS each element's `String` compiled (`definitely lost: 58 bytes in 2 blocks` at -O0 for two elements; bodies `d1 d2` run on all surfaces); with a sibling arm that MOVES its payload (`G.One(x) => eat(x)`), every surface instead runs NO element body (`m2 after end`, valgrind clean) | — |
 
 ### Relocated
 
@@ -3774,6 +3775,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-58 | codegen | low | A `for` LOOP OVER AN `Array` HELD IN A TUPLE ELEMENT FAILS THE BUILD -- `for p in a.0 { . | a2e480b43 |
 | B-2026-10-04-59 | codegen | low | A FIELD STORE THROUGH A NESTED INDEX FAILS THE BUILD -- `v[0][0].n = 9` over `Vec[Vec[P]]` stops `karac build` with `assignment to field 'n' through… | e66223d02 |
 | B-2026-10-04-63 | interp+codegen | medium | A PAYLOAD OR FIELD OF A BY-VALUE PARAM HANDED TO A METHOD ON A BORROWED RECEIVER STILL READS AS STORED INTO THAT RECEIVER, SO ITS `Drop` BODY RUNS NO… | a19190a5e |
+| B-2026-10-04-64 | codegen+interp | medium | A `for` LOOP OVER A FRESH `Vec` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `for item in mk() { k += item.n; }` over `fn mk() -> Vec[D]` with `impl… | 8fa6b86a5 |
 | B-2026-10-04-65 | codegen | medium | [FIXED 2026-10-06 ON BOTH BACKENDS; a by-value tuple PARAM source stays open as B-2026-10-06-1] DESTRUCTURING A TUPLE WHOSE ELEMENT IS AN `Option[sha… | ca90d79b2 |
 | B-2026-10-04-66 | interp+codegen | medium | [FIXED 2026-10-05 ON BOTH BACKENDS; a `let mut` rebind of a BY-VALUE tuple param stays silent on both and is B-2026-10-05-123] REASSIGNING A TUPLE LO… | 2b4010b4e |
 | B-2026-10-04-67 | codegen | medium | [SPLIT 2026-10-05: the `shared enum` spelling is fixed here; the PLAIN enum spelling still leaks and loses its bodies and is B-2026-10-05-98] A USER… | 227a30008 |
