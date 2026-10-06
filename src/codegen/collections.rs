@@ -2625,6 +2625,10 @@ impl<'ctx> super::Codegen<'ctx> {
         object: &Expr,
         index: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // B-2026-10-06-43 — `NUMS[1]` on a `const` base.
+        if let Some(value) = self.const_place_operand(object)? {
+            return self.compile_index(&value, index);
+        }
         // `h.peek()[0]` where `peek(ref self) -> ref Array[T, N]`.
         // B-2026-09-15-12 — this fell through every path below and died on
         // "Index operator applied to non-array type": the accessor lowers to
@@ -3867,11 +3871,14 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(&index.kind, ExprKind::Range { .. }) {
             return false;
         }
-        let ExprKind::Identifier(name) = &object.kind else {
+        if !matches!(&object.kind, ExprKind::Identifier(_)) {
             return false;
-        };
-        match self.var_types.var_elem_type_exprs.get(name.as_str()) {
-            Some(elem_te) => !super::vec_method::is_trivially_copyable_te(elem_te),
+        }
+        // Through `vec_index_elem_type_expr`, whose identifier arm is the
+        // `var_elem_type_exprs` lookup this used to make, plus a `const`
+        // container (B-2026-10-06-43).
+        match self.vec_index_elem_type_expr(object) {
+            Some(elem_te) => !super::vec_method::is_trivially_copyable_te(&elem_te),
             None => false,
         }
     }
@@ -3995,7 +4002,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 .var_types
                 .var_elem_type_exprs
                 .get(name.as_str())
-                .cloned(),
+                .cloned()
+                .or_else(|| {
+                    // B-2026-10-06-43 — `out.push(NAMES[1])` over a `const`:
+                    // `compile_index` reads the element out of a materialized
+                    // copy of the const that is dropped at scope exit, so the
+                    // consumer must clone it exactly as it would a local's.
+                    self.const_value_in_place_position(object)?;
+                    let te = self.mod_bindings.const_types.get(name.as_str())?;
+                    vec_inner_type_expr(te).or_else(|| super::helpers::array_inner_type_expr(te))
+                }),
             ExprKind::Index {
                 object: inner,
                 index,

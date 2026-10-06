@@ -25,6 +25,10 @@ pub(crate) struct ModBindings<'ctx> {
     /// Cycles are precluded upstream by the typechecker's const-evaluation
     /// pass (`check_const_decl`).
     pub(crate) consts: HashMap<String, Expr>,
+    /// The declared type of each `consts` entry (`const NAME: T`). Read by
+    /// `const_place_operand` (B-2026-10-06-43) to give a materialized `Vec` or `Array`
+    /// constant its element type.
+    pub(crate) const_types: HashMap<String, crate::ast::TypeExpr>,
     /// Module-level `let` / `let mut` bindings — slice 9 of the
     /// phase-8 module-let work (design.md §1278-1330). Populated by
     /// `declare_module_bindings` before any function body is

@@ -1,0 +1,41 @@
+//! B-2026-10-06-43 -- a `const` of `Array` or `Vec` type used directly as an
+//! index base, a `.len()` receiver or a `for` iterable failed `karac build`,
+//! and so did `.len()` / `for` on a module-level `let` of `Array[T, N]`, and a
+//! method on an ELEMENT of either (`NAMES[1].len()`, `WORDS[1].len()`).
+
+use super::*;
+
+#[test]
+fn e2e_const_and_module_arrays_as_index_receiver_and_iterable() {
+    let src = r#"const NUMS: Vec[i64] = [10, 20, 30];
+const ARR: Array[i64, 3] = [1, 2, 3];
+const LINES: Array[(i64, i64, i64), 2] = [(0, 1, 2), (3, 4, 5)];
+const NAMES: Vec[String] = ["ab".to_string(), "cd".to_string()];
+let MODA: Array[i64, 3] = [7, 8, 9];
+let WORDS: Array[String, 2] = ["a", "bb"];
+fn total() -> i64 { let mut s = 0; for x in NUMS { s += x; } for x in MODA { s += x; } s }
+fn main() {
+    let mut s = 0;
+    for x in NUMS.iter() { s += x; }
+    for x in ARR { s += x; }
+    for (a, b, c) in LINES { s += a + b + c; }
+    let mut k = 0;
+    for nm in NAMES { k += nm.len(); }
+    for w in WORDS { k += w.len(); }
+    let v = NUMS;
+    println(f"{NUMS[1]} {NUMS.len()} {ARR[2]} {ARR.len()} {LINES[1].2} {LINES.len()}");
+    println(f"{s} {k} {total()} {NAMES[1]} {NAMES.len()} {MODA.len()} {MODA.is_empty()}");
+    println(f"{v[2]} {v.len()} {NUMS[0] + NUMS[2]} {WORDS.len()} {WORDS[1]}");
+    let mut e = 0;
+    let mut i = 0;
+    while i < 2 { e += NAMES[1].len() + WORDS[1].len() + NUMS[i]; i += 1; }
+    for c in NAMES { e += c.clone().len(); }
+    println(f"{e} {NAMES[0].to_uppercase()} {WORDS[0].starts_with("a")}");
+}
+"#;
+    let want = "20 3 3 3 5 2\n81 7 84 cd 2 3 false\n30 3 40 2 bb\n42 AB true\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    assert_eq!(run_program(src).as_deref(), Some(want), "AOT");
+}

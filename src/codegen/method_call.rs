@@ -969,6 +969,36 @@ impl<'ctx> super::Codegen<'ctx> {
         // together, never one alone.
         args_close_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // B-2026-10-06-43 — `NUMS.len()` on a `const` receiver: lower the
+        // const's value expression in its place (see
+        // `const_value_in_place_position`).
+        if let Some(value) = self.const_place_operand(object)? {
+            return self.compile_method_call(&value, method, args, call_span, args_close_span);
+        }
+        // ... and `NAMES[1].len()`, an element of one: the indexed-receiver
+        // path needs the container as a NAMED place, so materialize it.
+        if let ExprKind::Index {
+            object: base,
+            index,
+        } = &object.kind
+        {
+            if let Some(value) = self.const_place_operand(base)? {
+                let rebuilt = Expr {
+                    kind: ExprKind::Index {
+                        object: Box::new(value),
+                        index: index.clone(),
+                    },
+                    span: object.span,
+                };
+                return self.compile_method_call(
+                    &rebuilt,
+                    method,
+                    args,
+                    call_span,
+                    args_close_span,
+                );
+            }
+        }
         // B-2026-08-21-53 — TYPE-QUALIFIED ASSOCIATED CALL: `Type[Args].fn(a)`,
         // the spelling design.md § Generics settles on for explicit type
         // selection. The typechecker accepts it; codegen did not recognise the
@@ -6044,6 +6074,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     .module_bindings
                     .contains_key(name.as_str())
             {
+                // B-2026-10-06-43 — a module-level `let X: Array[T, N]`: `len`
+                // and `is_empty` are the type's own `N`, read no element, and
+                // answer exactly as the local-array arm below does. (That arm
+                // is keyed on `self.variables`, which a module binding is never
+                // in, so `X.len()` used to fall through to "no handler".)
+                if let Some(BasicTypeEnum::ArrayType(at)) = self
+                    .mod_bindings
+                    .module_bindings
+                    .get(name.as_str())
+                    .map(|info| info.llvm_ty)
+                {
+                    if method == "len" {
+                        return Ok(self
+                            .context
+                            .i64_type()
+                            .const_int(at.len() as u64, false)
+                            .into());
+                    }
+                    if method == "is_empty" {
+                        return Ok(self
+                            .context
+                            .bool_type()
+                            .const_int(at.is_empty() as u64, false)
+                            .into());
+                    }
+                }
                 if self.var_types.vec_elem_types.contains_key(name.as_str()) {
                     let data_ptr = self.get_data_ptr(name).unwrap();
                     return self.compile_vec_method(name, data_ptr, method, args);

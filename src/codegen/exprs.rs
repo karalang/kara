@@ -41,6 +41,82 @@ impl<'ctx> super::Codegen<'ctx> {
     /// cursor always names the innermost node still in progress; on the way out
     /// of one that FAILED, it is left alone so the innermost failing node is
     /// what reaches the boundary.
+    /// B-2026-10-06-43 — a `const` named where a consumer matches on an
+    /// `Identifier` and looks it up as a BINDING: an index base (`NUMS[1]`), a
+    /// method receiver (`NUMS.len()`) and a `for` iterable (`for x in NUMS`).
+    /// A bare `const` use re-compiles its value expression (the `consts` arm
+    /// of `compile_expr`), so these positions take the value expression in
+    /// the identifier's place, which is what the language means by a
+    /// constant and what `--interp` does. Same precedence as that arm: a
+    /// local, a module binding or a const-generic substitution of the same
+    /// name wins.
+    pub(super) fn const_value_in_place_position(&self, expr: &Expr) -> Option<Expr> {
+        let ExprKind::Identifier(name) = &expr.kind else {
+            return None;
+        };
+        if self.variables.contains_key(name.as_str())
+            || self
+                .mod_bindings
+                .module_bindings
+                .contains_key(name.as_str())
+            || self.mono_state.const_subst.contains_key(name)
+        {
+            return None;
+        }
+        self.mod_bindings.consts.get(name).cloned()
+    }
+
+    /// [`Self::const_value_in_place_position`] for an index base, a method
+    /// receiver and a `for` iterable, which need a PLACE: a `Vec` or `Array`
+    /// constant is bound to a fresh owned local (dropped at scope exit like
+    /// any `let`) and the identifier of that local is returned, because no
+    /// consumer lowers a bare `Vec` literal in that position, and a loop over
+    /// a bare array literal registers no element type on its binding (so
+    /// `for c in CW { c.clone() }` found no `clone` dispatcher). Any other
+    /// constant returns its value expression.
+    pub(super) fn const_place_operand(&mut self, expr: &Expr) -> Result<Option<Expr>, String> {
+        let Some(value) = self.const_value_in_place_position(expr) else {
+            return Ok(None);
+        };
+        let ExprKind::Identifier(name) = &expr.kind else {
+            return Ok(Some(value));
+        };
+        let ty = self.mod_bindings.const_types.get(name).cloned();
+        let is_collection = ty.as_ref().is_some_and(|t| match &t.kind {
+            TypeKind::Path(p) => {
+                matches!(
+                    p.segments.last().map(String::as_str),
+                    Some("Vec" | "VecDeque" | "Array")
+                )
+            }
+            TypeKind::Array { .. } => true,
+            _ => false,
+        });
+        if !is_collection {
+            return Ok(Some(value));
+        }
+        let synth = format!("__const_{name}_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        let span = value.span;
+        let stmt = Stmt {
+            kind: StmtKind::Let {
+                is_mut: false,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(synth.clone()),
+                    span,
+                },
+                ty,
+                value,
+            },
+            span,
+        };
+        self.compile_stmt(&stmt)?;
+        Ok(Some(Expr {
+            kind: ExprKind::Identifier(synth),
+            span: expr.span,
+        }))
+    }
+
     pub(super) fn compile_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
         let saved = self.tracing.diag_span;
         self.tracing.diag_span = Some(expr.span);

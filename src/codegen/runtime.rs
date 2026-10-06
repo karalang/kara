@@ -8809,6 +8809,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &expr.kind else {
             return val;
         };
+        // B-2026-10-06-43 — a `const` is never moved: every use compiles its
+        // value expression afresh, so `val` is already an independent value.
+        // The ownership pass still reports `let v = NUMS; NUMS[0]` as a reuse
+        // after a move, and copying here leaked the fresh literal.
+        if self.const_value_in_place_position(expr).is_some() {
+            return val;
+        }
         let name = name.as_str();
         if !self
             .span_tables

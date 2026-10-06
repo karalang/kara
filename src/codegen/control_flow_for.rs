@@ -152,6 +152,10 @@ impl<'ctx> super::Codegen<'ctx> {
         iterable: &Expr,
         body: &Block,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // B-2026-10-06-43 — `for x in NUMS` over a `const`.
+        if let Some(value) = self.const_place_operand(iterable)? {
+            return self.compile_for(label, pattern, &value, body);
+        }
         // Materialized iterator binding (B-2026-07-11-19): `for x in it` where
         // `it` was bound by a recorded `let it = <v.iter()-chain>` — inline the
         // chain as the iterable (`for x in v.iter()...`) so the existing
@@ -778,6 +782,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             label,
                             pattern,
                             arr_ptr,
+                            at,
+                            body,
+                            Some(name.as_str()),
+                        );
+                    }
+                }
+                // B-2026-10-06-43 — a module-level `let X: Array[T, N]`. The
+                // array arms above read `slot.ty` from the locals table; a
+                // module binding has the same `[N x T]` storage behind its
+                // global, so drive the same by-index loop over that pointer.
+                if !self.variables.contains_key(name.as_str()) {
+                    if let Some((ptr, BasicTypeEnum::ArrayType(at))) = self
+                        .mod_bindings
+                        .module_bindings
+                        .get(name.as_str())
+                        .map(|info| (info.global.as_pointer_value(), info.llvm_ty))
+                    {
+                        return self.compile_for_array_var(
+                            label,
+                            pattern,
+                            ptr,
                             at,
                             body,
                             Some(name.as_str()),

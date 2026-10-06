@@ -658,6 +658,20 @@ impl<'ctx> super::Codegen<'ctx> {
             // slot-type inspection happens — which is what made this look like
             // an `Array`-specific defect rather than a borrow-specific one.
             self.lower_indexed_elem_ptr_array_at(data_ptr, arr_ty, index)?
+        } else if let Some((data_ptr, BasicTypeEnum::ArrayType(arr_ty))) =
+            (!self.variables.contains_key(outer_name.as_str()))
+                .then(|| {
+                    self.mod_bindings
+                        .module_bindings
+                        .get(outer_name.as_str())
+                        .map(|info| (info.global.as_pointer_value(), info.llvm_ty))
+                })
+                .flatten()
+        {
+            // B-2026-10-06-43 — a module-level `let X: Array[T, N]`
+            // (`WORDS[1].len()`): the global holds the `[N x T]` storage a
+            // local array's slot would, as `compile_index` already reads it.
+            self.lower_indexed_elem_ptr_array_at(data_ptr, arr_ty, index)?
         } else {
             // Array shape via slot.ty inspection. v1 supports fixed-size
             // arrays only when the slot's LLVM type is ArrayType.

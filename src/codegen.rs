@@ -7228,6 +7228,7 @@ impl<'ctx> Codegen<'ctx> {
             enum_ctor_moved_payload_slots: HashMap::new(),
             mod_bindings: ModBindings {
                 consts: HashMap::new(),
+                const_types: HashMap::new(),
                 module_bindings: HashMap::new(),
                 map_set_module_inits: Vec::new(),
                 once_module_inits: Vec::new(),
@@ -8759,6 +8760,9 @@ impl<'ctx> Codegen<'ctx> {
                 self.mod_bindings
                     .consts
                     .insert(c.name.clone(), c.value.clone());
+                self.mod_bindings
+                    .const_types
+                    .insert(c.name.clone(), c.ty.clone());
             }
         }
 
