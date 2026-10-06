@@ -12600,11 +12600,19 @@ impl<'a> super::Interpreter<'a> {
                 // B-2026-10-04-68 — a displaced tuple ELEMENT that is, or holds,
                 // a `shared` value, released after the store (see there).
                 let mut displaced_elem_shared: Option<Value> = None;
+                // B-2026-10-05-125 — the displaced value's `shared` members
+                // (a bare handle, an `Option` payload, a field, an element),
+                // released after the store for the same reason as the two
+                // above. The tuple keeps its own walk, which already does this.
+                let mut displaced_whole_shared: Option<Value> = None;
                 if let ExprKind::Identifier(t) = &target.kind {
                     if !self.moved_out_user_drop_bindings.contains(t.as_str())
                         && !crate::deque_head::expr_mentions_name_deep(value, t)
                     {
                         if let Some(old) = self.env.get(t) {
+                            if !matches!(old, Value::Tuple(_)) {
+                                displaced_whole_shared = Some(old.clone());
+                            }
                             match &old {
                                 Value::Struct { name: tn, .. } => {
                                     if self.program.drop_method_keys.contains_key(tn) {
@@ -13229,6 +13237,14 @@ impl<'a> super::Interpreter<'a> {
                 // up and the body ran nowhere (`p.0 = Some(H { id: 2 })` lost
                 // `dH1`), where compiled releases it at the store.
                 if let Some(v) = displaced_elem_shared {
+                    self.run_value_held_shared_user_drops(&v);
+                }
+                // B-2026-10-05-125 — likewise the whole displaced value. Asked
+                // before the store, the binding still held each handle and no
+                // body ran (`h = H { id: 2 }` over `H { id: 1 }` lost `dH1`),
+                // where compiled releases it at the store. A handle aliased
+                // elsewhere keeps a count above this value's and stays alive.
+                if let Some(v) = displaced_whole_shared {
                     self.run_value_held_shared_user_drops(&v);
                 }
                 // The target holds a fresh value now — a stale move-out
