@@ -5314,6 +5314,33 @@ impl<'a> super::Interpreter<'a> {
         if let ExprKind::Call { callee, args } = &value.kind {
             return self.seeded_ctor_param_view_names(pattern, callee, args);
         }
+        // B-2026-10-05-107 — a tuple LITERAL destructured in place (`let (v,
+        // w) = (a, b)`): a leaf over a by-value param is that param under a
+        // new name, as `let w = b` makes it, so the caller runs its body and
+        // the leaf takes no slot. In a method frame too, unlike the
+        // literal-binding masks: the frame now owns the param there itself
+        // (its fate keeps it), so a leaf slot beside it ran the body twice.
+        // Not an `Option` / `Result` leaf, as codegen's twin declines it
+        // (B-2026-10-06-44).
+        if let (ExprKind::Tuple(elems), PatternKind::Tuple(pats)) = (&value.kind, &pattern.kind) {
+            if elems.len() != pats.len() {
+                return Vec::new();
+            }
+            return pats
+                .iter()
+                .zip(elems)
+                .filter_map(|(p, e)| match &p.kind {
+                    PatternKind::Binding(n)
+                        if self.literal_elem_is_param_view(e)
+                            && !matches!(self.env.get(n), Some(Value::EnumVariant { enum_name, .. })
+                                if enum_name == "Option" || enum_name == "Result") =>
+                    {
+                        Some(n.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+        }
         let ExprKind::Identifier(src) = &value.kind else {
             return Vec::new();
         };

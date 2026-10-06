@@ -21087,6 +21087,30 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         for (idx, pat) in pats.iter().enumerate() {
             match &pat.kind {
+                // B-2026-10-05-107 — a leaf over a by-value param moved into
+                // the tuple LITERAL being destructured (`let (v, w) = (a, b)`)
+                // is that param under a new name, as `let w = b` makes it: the
+                // caller runs its body, so the leaf takes the memory alone and
+                // is marked a view. Its body used to run here AND in the caller.
+                // Not an `Option` / `Result` leaf, whose payload walker the
+                // frame registers for the param itself and the literal's move
+                // retracts (B-2026-10-06-44). The interpreter's twin is
+                // `let_destructure_view_leaves`.
+                PatternKind::Binding(name)
+                    if matches!(&source.kind, ExprKind::Tuple(es)
+                        if es.len() == pats.len()
+                            && es.get(idx).is_some_and(|e| self.literal_elem_is_param_view(e)))
+                        && !elem_tes.and_then(|tes| tes.get(idx)).is_some_and(|te| {
+                            matches!(&te.kind, TypeKind::Path(p)
+                                if matches!(p.segments.last().map(String::as_str),
+                                    Some("Option") | Some("Result")))
+                        }) =>
+                {
+                    self.payload_vars.param_view_locals.insert(name.clone());
+                    if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                        self.track_destructure_leaf_cleanup(name, slot.ptr, false);
+                    }
+                }
                 PatternKind::Binding(name) => {
                     // B-2026-08-28-26, fresh-source half — a TUPLE-TYPED leaf.
                     // `track_destructure_leaf_cleanup` dispatches off the

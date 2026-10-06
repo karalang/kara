@@ -529,6 +529,27 @@ impl Walker<'_> {
         match &st.kind {
             StmtKind::Let { pattern, value, .. } => {
                 let param = self.param_name.clone();
+                // B-2026-10-05-107 — `let (v, n) = (p, 1)`, directly or out of
+                // a branch whose every leaf is such a literal: each name takes
+                // ITS element's yield, so `v` holds the whole param rather
+                // than the part the joined tuple's yield would give it.
+                if let PatternKind::Tuple(ps) = &pattern.kind {
+                    if tuple_literal_leaves(value, ps.len()) {
+                        return self
+                            .expr_elems(value, s, ps.len())
+                            .into_iter()
+                            .map(|(mut s, ys)| {
+                                s.moved |= pattern_names(pattern)
+                                    .iter()
+                                    .any(|n| *n != param && s.yield_of(n) != Yield::None);
+                                for (p, y) in ps.iter().zip(ys) {
+                                    bind(&mut s, p, y);
+                                }
+                                s
+                            })
+                            .collect();
+                    }
+                }
                 self.expr(value, s)
                     .into_iter()
                     .map(|(mut s, y)| {
@@ -612,6 +633,119 @@ impl Walker<'_> {
                 })
                 .collect(),
         }
+    }
+
+    /// B-2026-10-05-107 — `e`, every value leaf of which is a tuple literal of
+    /// `n` elements ([`tuple_literal_leaves`]), evaluated ELEMENT BY ELEMENT:
+    /// the live paths, each with what every element carries. The `let (v, k)
+    /// = ..` that consumes it binds each name to its own element's yield, so
+    /// `let (v, n) = (p, 1); v` hands the WHOLE param back where binding the
+    /// tuple's joined yield as a part said it only handed back a piece of it.
+    fn expr_elems(&mut self, e: &Expr, s: PState, n: usize) -> Vec<(PState, Vec<Yield>)> {
+        match &e.kind {
+            ExprKind::Tuple(es) => {
+                let mut states = vec![(s, Vec::new())];
+                for x in es {
+                    let mut next = Vec::new();
+                    for (s, ys) in states {
+                        for (s, y) in self.expr(x, s) {
+                            let mut ys = ys.clone();
+                            ys.push(y);
+                            next.push((s, ys));
+                        }
+                    }
+                    states = self.cap_elems(next);
+                }
+                states
+            }
+            ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Seq(b) => {
+                self.block_elems(b, s, n)
+            }
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch: Some(els),
+                ..
+            } => {
+                let mut out = Vec::new();
+                for (s, _) in self.expr(condition, s) {
+                    out.extend(self.block_elems(then_block, s.clone(), n));
+                    out.extend(self.expr_elems(els, s, n));
+                }
+                self.cap_elems(out)
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                let mut out = Vec::new();
+                for (s, y) in self.expr(scrutinee, s) {
+                    for arm in arms {
+                        let mut a = s.clone();
+                        bind_projected(&mut a, &arm.pattern, y);
+                        let mut guarded = vec![(a, Yield::None)];
+                        if let Some(g) = &arm.guard {
+                            guarded = self.expr(g, guarded.pop().unwrap().0);
+                        }
+                        for (a, _) in guarded {
+                            let names = pattern_names(&arm.pattern);
+                            for (mut st, ys) in self.expr_elems(&arm.body, a, n) {
+                                for nm in &names {
+                                    st.set(nm, s.yield_of(nm));
+                                }
+                                out.push((st, ys));
+                            }
+                        }
+                    }
+                }
+                self.cap_elems(out)
+            }
+            // A diverging leaf (`return ..`): its exit is recorded by the
+            // walk and no path falls through.
+            _ => {
+                for _ in self.expr(e, s) {}
+                Vec::new()
+            }
+        }
+    }
+
+    /// [`Self::block`] with an element-wise tail.
+    fn block_elems(&mut self, b: &Block, s: PState, n: usize) -> Vec<(PState, Vec<Yield>)> {
+        let entry = s.clone();
+        let mut states = vec![s];
+        for st in &b.stmts {
+            let mut next = Vec::new();
+            for s in states {
+                next.extend(self.stmt(st, s));
+            }
+            states = self
+                .cap(next.into_iter().map(|s| (s, Yield::None)).collect())
+                .into_iter()
+                .map(|(s, _)| s)
+                .collect();
+        }
+        let Some(tail) = b.final_expr.as_deref() else {
+            return Vec::new();
+        };
+        let mut outs = Vec::new();
+        for s in states {
+            outs.extend(self.expr_elems(tail, s, n));
+        }
+        let names = block_let_names(b);
+        for (s, _) in outs.iter_mut() {
+            for nm in &names {
+                let y = entry.yield_of(nm);
+                s.set(nm, y);
+            }
+        }
+        self.cap_elems(outs)
+    }
+
+    fn cap_elems(&mut self, mut v: Vec<(PState, Vec<Yield>)>) -> Vec<(PState, Vec<Yield>)> {
+        v.sort();
+        v.dedup();
+        if v.len() > MAX_PATHS {
+            self.overflow = true;
+            v.truncate(1);
+        }
+        v
     }
 
     /// `target = <value carrying y>`.
@@ -1152,6 +1286,35 @@ fn is_scalar_type_name(n: &str) -> bool {
     )
 }
 
+/// B-2026-10-05-107 — is every value leaf of `e` a tuple LITERAL of `n`
+/// elements, or a `return` that leaves no value behind? Through a block's
+/// tail, both arms of an `if` with an `else`, and every arm of a `match`.
+fn tuple_literal_leaves(e: &Expr, n: usize) -> bool {
+    match &e.kind {
+        ExprKind::Tuple(es) => es.len() == n,
+        ExprKind::Return(_) => true,
+        ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Seq(b) => b
+            .final_expr
+            .as_deref()
+            .is_some_and(|t| tuple_literal_leaves(t, n)),
+        ExprKind::If {
+            then_block,
+            else_branch: Some(els),
+            ..
+        } => {
+            then_block
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| tuple_literal_leaves(t, n))
+                && tuple_literal_leaves(els, n)
+        }
+        ExprKind::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|a| tuple_literal_leaves(&a.body, n))
+        }
+        _ => false,
+    }
+}
+
 /// `let <pattern> = <value carrying y>`.
 fn bind(s: &mut PState, pattern: &Pattern, y: Yield) {
     match &pattern.kind {
@@ -1510,12 +1673,27 @@ pub fn schedule_enabled() -> bool {
 /// with the flag on: a lowered `self` receiver and a generic callee (the
 /// per-path conditional machinery mishandles both when the fact says
 /// "returned on some exits" where the legacy predicate said "never").
+///
+/// B-2026-10-05-107 — except a generic callee's param declared as a BARE type
+/// parameter (`a: T`). Its legacy answer missed a hand-back through a local
+/// (`let v = if c { a } else { b }; v`), so the caller ran the returned
+/// value's body as well. Measured 2026-10-06 with every generic param flipped:
+/// the interpreter, codegen and memory_sanitizer suites lost one cell, a
+/// generic ENUM param (`h: Ho[T]`, `let m = h; if k { return m }`) whose
+/// compiled monomorph lost the body on the leg that keeps it. A bare `T`
+/// reaches none of those enum-payload legs.
 fn flip_reaches(f: &Function, idx: usize) -> bool {
-    f.generic_params.is_none()
-        && !f
-            .params
-            .get(idx)
-            .is_some_and(|p| matches!(&p.pattern.kind, PatternKind::Binding(n) if n == "self"))
+    f.generic_params.as_ref().is_none_or(|gp| {
+        f.params.get(idx).is_some_and(|p| {
+            matches!(&p.ty.kind, TypeKind::Path(tp)
+                if tp.generic_args.is_none()
+                    && tp.segments.len() == 1
+                    && gp.params.iter().any(|g| !g.is_const && g.name == tp.segments[0]))
+        })
+    }) && !f
+        .params
+        .get(idx)
+        .is_some_and(|p| matches!(&p.pattern.kind, PatternKind::Binding(n) if n == "self"))
 }
 
 pub fn whole_param_leaves(program: Option<&Program>, f: &Function, idx: usize) -> Option<bool> {
