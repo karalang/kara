@@ -27862,6 +27862,46 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(te) = self.tuple_index_elem_type_expr(object, index) else {
             return;
         };
+        // B-2026-10-05-114 — a nested TUPLE element (`p.0 = mkr(2)` over
+        // `((R, i64), i64)`): run its elements' bodies, as the scope exit's
+        // walk would have on the old value. Bodies only, like every arm here.
+        if let TypeKind::Tuple(elem_tes) = &te.kind {
+            let elem_tes = elem_tes.clone();
+            let base_ptr = self.place_chain_ptr_through_borrow(object);
+            let tuple_ty = self.place_chain_aggregate_llvm_type_through_borrow(object);
+            let (Some(base_ptr), Some(tuple_ty)) = (base_ptr, tuple_ty) else {
+                return;
+            };
+            let Some(inkwell::types::BasicTypeEnum::StructType(elem_agg)) =
+                tuple_ty.get_field_type_at_index(index as u32)
+            else {
+                return;
+            };
+            let Some(walker) = self.emit_tuple_elem_user_drop_bodies_fn(elem_agg, &elem_tes) else {
+                return;
+            };
+            let Ok(elem_ptr) =
+                self.builder
+                    .build_struct_gep(tuple_ty, base_ptr, index as u32, "disptup.old.p")
+            else {
+                return;
+            };
+            let guard = match self
+                .drop_rc
+                .field_view_flags
+                .get(base.as_str())
+                .and_then(|m| m.get(&format!("#{index}")))
+                .copied()
+            {
+                Some(flag) => self.open_guard_on_flag(flag),
+                None => None,
+            };
+            self.builder
+                .build_call(walker, &[elem_ptr.into()], "")
+                .unwrap();
+            self.close_cond_move_guard(guard);
+            return;
+        }
         let TypeKind::Path(p) = &te.kind else {
             return;
         };

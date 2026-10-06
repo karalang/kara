@@ -12929,6 +12929,13 @@ impl<'a> super::Interpreter<'a> {
                                 Some(v @ Value::SharedStruct(_)) => {
                                     displaced_elem_shared = Some(v);
                                 }
+                                // B-2026-10-05-114 — a nested tuple element:
+                                // its elements' bodies now, its `shared`
+                                // members after the store.
+                                Some(v @ Value::Tuple(_)) => {
+                                    self.run_discarded_value_user_drops(v.clone());
+                                    displaced_elem_shared = Some(v);
+                                }
                                 _ => {}
                             }
                         }
