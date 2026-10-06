@@ -903,7 +903,7 @@ impl<'a> super::TypeChecker<'a> {
                 // `Map[]` / `Set[]` / `SortedMap[]` stay refused here: codegen
                 // lowers an empty one only at a direct `let`, so admitting them
                 // would trade this check-time error for a build-time one
-                // (B-2026-10-06-EMPTYMAP).
+                // (B-2026-10-06-76).
                 let elem_is_inferred_ctor = |e: &Expr| -> bool {
                     match &e.kind {
                         ExprKind::Call { callee, args } => {

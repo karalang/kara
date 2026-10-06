@@ -11214,7 +11214,7 @@ fn assert_one_typecheck_error_containing(source: &str, substrings: &[&str]) {
 /// B-2026-10-06-73: an empty `Vec[]` / `vec![]` / `VecDeque[]` in a
 /// tuple slot takes the slot's type, as `Vec.new()` there always did. `Map[]`
 /// and `Set[]` stay refused in that position until codegen can lower them
-/// there (B-2026-10-06-EMPTYMAP).
+/// there (B-2026-10-06-76).
 #[test]
 fn empty_vec_literal_in_a_tuple_slot_takes_the_slot_type() {
     typecheck_ok("fn main() { let t: (Vec[i64], i64) = (vec![], 5); println(f\"{t.1}\"); }");
