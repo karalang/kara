@@ -13453,7 +13453,14 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         let val = self.compile_expr(expr)?;
-        let ptr = self.field_chain_place_ptr(expr).ok_or_else(|| {
+        // B-2026-10-03-19 — `field_chain_place_ptr` bails at a `ref` / `mut ref`
+        // param root by design, so a field place reached THROUGH one
+        // (`replace(h.name, v)` over `h: mut ref H`) needs the borrow-following
+        // resolver the forwarding `mut ref` argument uses.
+        let ptr = self
+            .field_chain_place_ptr(expr)
+            .or_else(|| self.mut_ref_place_arg_ptr(expr));
+        let ptr = ptr.ok_or_else(|| {
             "std.mem swap/replace: unsupported `mut ref` place expression \
              (expected an identifier, struct field, or index place)"
                 .to_string()
@@ -13623,7 +13630,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // compiled, 8070450532247928832 on the JIT, against the
             // interpreter's 6). The suppression callers keep `false` — see
             // `field_chain_place_ptr_ex`.
-            _ => return self.field_chain_place_ptr_ex(expr, true),
+            //
+            // B-2026-10-03-19 — and that walk bails at a borrow root too, so a
+            // nested chain rooted at a `mut ref` param (`w.h.name` over
+            // `w: mut ref W`) recurses through this resolver instead.
+            _ => {
+                return self
+                    .field_chain_place_ptr_ex(expr, true)
+                    .or_else(|| self.mut_ref_place_arg_ptr(expr))
+            }
         };
         let slot = self.variables.get(name)?.ptr;
         if self.borrow_vars.ref_params.contains_key(name) {
