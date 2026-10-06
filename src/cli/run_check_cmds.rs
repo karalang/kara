@@ -1322,7 +1322,7 @@ pub(super) fn cmd_run(
             let fatal: Vec<_> = o
                 .errors
                 .iter()
-                .filter(|e| Pipeline::is_fatal_ownership_kind(&e.kind))
+                .filter(|e| pipeline.is_fatal_ownership_kind(&e.kind))
                 .collect();
             if !fatal.is_empty() {
                 for err in &fatal {
@@ -1413,7 +1413,7 @@ pub(super) fn cmd_run(
         .map(|o| {
             o.errors
                 .iter()
-                .filter(|e| Pipeline::is_fatal_ownership_kind(&e.kind))
+                .filter(|e| pipeline.is_fatal_ownership_kind(&e.kind))
                 .cloned()
                 .collect()
         })
@@ -2235,14 +2235,18 @@ pub(super) fn cmd_check(
 
     match output {
         OutputMode::Jsonl => {
-            let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
+            let mut pipeline = Pipeline::new(filename, &source)
+                .with_lint_overrides(lint_overrides)
+                .strict_core();
             run_pipeline_jsonl(&mut pipeline);
             if pipeline.total_errors() > 0 {
                 process::exit(1);
             }
         }
         _ => {
-            let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
+            let mut pipeline = Pipeline::new(filename, &source)
+                .with_lint_overrides(lint_overrides)
+                .strict_core();
             pipeline.run_all_checks();
 
             // Slice D: concurrency report fires after `run_all_checks` (which
@@ -2332,8 +2336,9 @@ pub(super) fn cmd_check_profiles(
     let mut any_failed = false;
     let mut blocks: Vec<String> = Vec::new();
     for (idx, profile) in profiles.iter().enumerate() {
-        let mut pipeline =
-            Pipeline::new(filename, source).with_lint_overrides(lint_overrides.clone());
+        let mut pipeline = Pipeline::new(filename, source)
+            .with_lint_overrides(lint_overrides.clone())
+            .strict_core();
         pipeline.profile = *profile;
 
         match output {
@@ -2875,8 +2880,9 @@ pub(super) fn cmd_check_targets(
                 "target_start",
                 &format!("\"target\":{}", json_string(target)),
             );
-            let mut pipeline =
-                Pipeline::new(filename, source).with_lint_overrides(lint_overrides.clone());
+            let mut pipeline = Pipeline::new(filename, source)
+                .with_lint_overrides(lint_overrides.clone())
+                .strict_core();
             run_pipeline_jsonl(&mut pipeline);
             let total = pipeline.total_errors();
             if total > 0 {
@@ -2918,8 +2924,9 @@ pub(super) fn cmd_check_targets(
     for target in targets {
         crate::target::set_active_target(target)
             .expect("target names validated at parse/manifest load");
-        let mut pipeline =
-            Pipeline::new(filename, source).with_lint_overrides(lint_overrides.clone());
+        let mut pipeline = Pipeline::new(filename, source)
+            .with_lint_overrides(lint_overrides.clone())
+            .strict_core();
         pipeline.run_all_checks();
         let total = pipeline.total_errors();
         if total > 0 {

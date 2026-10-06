@@ -5105,6 +5105,13 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(scrutinee.kind, ExprKind::Identifier(_)) {
             return;
         }
+        // v2 core §4.6: matching a borrowed place moves nothing; its bindings
+        // are `ref`s into it. So under the strict commands the scrutinee is
+        // not a move out of a borrow and is not reported. Legacy copies the
+        // scrutinee and keeps the warning.
+        if self.cli_lint_overrides.strict_core {
+            return;
+        }
         self.warn_borrow_projection_copy(scrutinee, ty);
     }
 
@@ -5186,6 +5193,23 @@ impl<'a> super::TypeChecker<'a> {
                  projection yet (`ref <place>` is not implemented), so the copy cannot be \
                  avoided today — restructure to read the field in place if the second \
                  `Drop` matters";
+        }
+        // v2 core §3.7 (C3): under the strict commands the site is a move out
+        // of a borrowed place, which is an error. Say that, rather than
+        // describe a copy the core never makes.
+        if self.cli_lint_overrides.strict_core {
+            let what = if matches!(value.kind, ExprKind::Identifier(_)) {
+                "an element out of a `for` loop over a borrowed collection"
+            } else {
+                "a non-`Copy` value out of a borrowed place"
+            };
+            message = format!("cannot move {what}");
+            message += if has_clone {
+                ". Write `.clone()` to take a copy, or keep using it in place"
+            } else {
+                ". This type has no `.clone()`: use it in place, or take it with \
+                 `mem.replace` / `mem.swap` / `Option.take()`"
+            };
         }
         let fix_it = has_clone.then(|| crate::typechecker::FixIt {
             span: Span {

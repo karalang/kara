@@ -2221,7 +2221,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // `error` on a successful build has been handed a false
                 // failure. The sibling `ownership.notes` emitter below already
                 // reports `"note"`, so this was the last disagreeing lane.
-                severity: if crate::ownership::kind_blocks_production(&err.kind) {
+                severity: if pipeline.is_fatal_ownership_kind(&err.kind) {
                     "error"
                 } else {
                     "warning"

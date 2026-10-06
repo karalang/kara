@@ -744,6 +744,11 @@ impl<'a> UseClassifier<'a> {
                     } else {
                         Mode::Consuming
                     };
+                    if is_string_concat && i == 1 {
+                        self.classification
+                            .core_borrowed_spans
+                            .insert(SpanKey::from_span(&arg.value.span));
+                    }
                     self.walk_expr(&arg.value, arg_mode);
                 }
             }

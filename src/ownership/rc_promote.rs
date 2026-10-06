@@ -125,6 +125,96 @@ impl<'a> super::OwnershipChecker<'a> {
         self.notes.extend(notes);
     }
 
+    /// v2 core (`docs/core-semantics.md` §3.2, §3.3, §6.4) — the E0500 error each
+    /// RC-fallback site is under the core rules. The compiler never shares a
+    /// value to make a program legal, so every site that legacy turns into an
+    /// RC is a use of a moved or maybe-moved place: a use after a move on one
+    /// branch, a move in a loop that runs again, a move into a container or a
+    /// closure followed by another use.
+    ///
+    /// Computed for every site, including functions carrying
+    /// `#[allow(rc_fallback)]` (the attribute silences a performance note, and
+    /// under the core there is no fallback left to accept). Returned rather
+    /// than pushed: only the strict commands (`karac check`, `karac fix`)
+    /// report them, so the legacy backends keep compiling these programs as
+    /// the old-behaviour oracle. A `Drop`-bodied value never reaches here: E0514
+    /// already took it out of `rc_values`.
+    pub(crate) fn core_move_errors(&self) -> Vec<OwnershipError> {
+        use crate::ownership::RcTrigger;
+        let mut sites: Vec<&crate::ownership::RcEntry> =
+            self.rc_values.values().flat_map(|m| m.values()).collect();
+        sites.sort_by(|a, b| {
+            a.other_use_span
+                .offset
+                .cmp(&b.other_use_span.offset)
+                .then_with(|| a.binding.cmp(&b.binding))
+        });
+        let mut out = Vec::new();
+        for entry in sites {
+            let binding = super::demangle_binding(&entry.binding);
+            let (line, col) = (entry.consume_span.line, entry.consume_span.column);
+            let message = match entry.trigger {
+                RcTrigger::DirectReuseAfterConsume
+                    if entry.other_use_span.offset <= entry.consume_span.offset =>
+                {
+                    format!(
+                        "value '{binding}' was moved in a previous iteration of the loop \
+                         (moved at line {line}:{col})"
+                    )
+                }
+                RcTrigger::DirectReuseAfterConsume => format!(
+                    "value '{binding}' may have been moved (moved at line {line}:{col} on some \
+                     path), used again here"
+                ),
+                RcTrigger::ContainerStoreWithSubsequentUse => format!(
+                    "value '{binding}' was moved into a container (moved at line {line}:{col}), \
+                     used again here"
+                ),
+                RcTrigger::ClosureCaptureWithOuterUse => format!(
+                    "value '{binding}' was moved into a closure (captured at line {line}:{col}), \
+                     used again here"
+                ),
+            };
+            // A capture site is not an expression `.clone()` can follow; the
+            // clone belongs in a `let` before the closure, which is not a
+            // one-span edit.
+            let capture = entry.trigger == RcTrigger::ClosureCaptureWithOuterUse;
+            let supports_clone = self.moved_type_supports_clone(&entry.consume_span);
+            let replacement = (supports_clone && !capture).then(|| {
+                Box::new(crate::resolver::TextEdit {
+                    offset: entry.consume_span.offset + entry.consume_span.length,
+                    length: 0,
+                    replacement: ".clone()".to_string(),
+                })
+            });
+            let suggestion = if capture && supports_clone {
+                format!(
+                    "clone '{binding}' into a new binding before the closure and capture that, \
+                     or restructure to avoid the reuse"
+                )
+            } else if supports_clone {
+                format!(
+                    "clone '{binding}' at the move site (`{binding}.clone()`), declare the \
+                     callee parameter `ref` if it only reads, or restructure to avoid reuse"
+                )
+            } else {
+                format!(
+                    "declare the callee parameter `ref` if it only reads, or restructure to \
+                     avoid reuse ('{binding}' has no `.clone()`)"
+                )
+            };
+            out.push(OwnershipError {
+                message: crate::binding_rename::display_names(&message),
+                span: entry.other_use_span,
+                kind: OwnershipErrorKind::UseAfterMove,
+                suggestion: Some(crate::binding_rename::display_names(&suggestion)),
+                replacement,
+                consume_span: Some(entry.consume_span),
+            });
+        }
+        out
+    }
+
     /// E0514 (B-2026-09-27-15) — reject RC fallback for a value whose type runs
     /// a user `Drop` body, and take the binding out of `rc_values` so it is
     /// reported once, as this error, rather than also as a performance note.

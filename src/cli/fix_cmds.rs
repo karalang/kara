@@ -106,7 +106,7 @@ pub(super) fn cmd_debug(input: &str, output: OutputMode) {
 /// `karac check` and must be acted on by hand.
 pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     let source = read_source(filename);
-    let mut pipeline = Pipeline::new(filename, &source);
+    let mut pipeline = Pipeline::new(filename, &source).strict_core();
     let mut edits: Vec<crate::resolver::TextEdit> = Vec::new();
     if pipeline.has_parse_errors() {
         // The file doesn't fully parse, but parsing may still have
@@ -441,7 +441,7 @@ pub(super) fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, ato
                 process::exit(1);
             }
         };
-        let mut pipeline = Pipeline::new(&filename, &source);
+        let mut pipeline = Pipeline::new(&filename, &source).strict_core();
         if pipeline.has_parse_errors() {
             for err in &pipeline.parsed.errors {
                 eprintln!(

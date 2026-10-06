@@ -1912,6 +1912,9 @@ pub(super) fn run_multi_file_late_phases(
         profile: crate::manifest::CompileProfile::Default,
         profile_config: crate::manifest::ProfileConfig::default(),
         lint_overrides: crate::lints::CliLintOverrides::default(),
+        // Project mode already fails a build on any ownership error, use after
+        // move included, so it needs no strict mode for C1.
+        strict_core: false,
     };
     pipeline.resolve();
     if pipeline.has_resolve_errors() {

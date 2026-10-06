@@ -418,6 +418,13 @@ pub struct CliLintOverrides {
     /// cascade fall-through. Subordinate to per-name CLI flags and
     /// to source-level `#[allow]` (both win over this).
     pub deny_warnings: bool,
+    /// The v2 core rules are in force (`karac check` / `karac fix`; see
+    /// `Pipeline::strict_core` in `src/cli.rs`). Not a lint level: it rides
+    /// here because this is the one carrier already threaded from the CLI
+    /// into the typechecker. It changes what `borrow_projection_copy` treats
+    /// as a move out of a borrow (a borrowed `match` scrutinee is not one,
+    /// `docs/core-semantics.md` §4.6) and how it words the error.
+    pub strict_core: bool,
 }
 
 impl CliLintOverrides {

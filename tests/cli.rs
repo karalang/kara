@@ -1678,25 +1678,20 @@ fn lint_backed_resolve_warnings_name_their_lint_on_both_lanes() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// B-2026-08-29-64 — an ADVISORY ownership diagnostic must report the same
+/// B-2026-08-29-64 — a use-after-move diagnostic must report the same
 /// severity on both output lanes.
 ///
-/// `UseAfterMove` is deliberately NON-FATAL for production
-/// (`kind_blocks_production`): the text lane prints `warning[ownership]`,
-/// `karac check` says "All checks passed" and exits 0, and `karac build`
-/// produces a working binary, on the documented promise that codegen
-/// defensive-copies the reuse. The JSON lane hardcoded `severity: "error"` for
-/// every entry in `ownership.errors`, so the one advisory kind that rides that
-/// vector reported as a hard error while the command exited 0.
+/// The JSON lane once hardcoded `severity: "error"` while the text lane printed
+/// `warning[ownership]` and exited 0; the Mend loop reads the JSON, so that
+/// lane IS the interface, and the two must agree.
 ///
-/// This is B-2026-08-25-24 one phase over — the same hardcoded-`error` shape,
-/// the same reason it matters: the Mend loop reads the JSON, so that lane IS
-/// the interface, and a diagnostic that claims `error` while exiting 0 tells an
-/// automated fixer the build failed when it did not.
+/// Under the v2 core (`docs/core-semantics.md` §3.2) use after move is an
+/// error, and `karac check` reports it as one on BOTH lanes and exits 1. The
+/// legacy `run` lane still compiles it (its output is the old-behaviour oracle
+/// until the v2 middle end lands), which the last half pins.
 ///
-/// The fatal control is what keeps this honest: an ordinary BLOCKING ownership
-/// error must keep `error[ownership]`, `"severity": "error"` and a nonzero
-/// exit, so the fix cannot have relabelled the whole phase indiscriminately.
+/// The fatal control keeps this honest: an ordinary BLOCKING ownership error
+/// keeps `error[ownership]`, `"severity": "error"` and a nonzero exit.
 #[test]
 fn advisory_ownership_diagnostic_reports_same_severity_on_both_lanes() {
     let tmp = std::env::temp_dir().join(format!(
@@ -1709,7 +1704,7 @@ fn advisory_ownership_diagnostic_reports_same_severity_on_both_lanes() {
     ));
     std::fs::create_dir_all(&tmp).unwrap();
 
-    // ── ADVISORY: use-after-move. Non-fatal by design. ──
+    // ── USE AFTER MOVE: an error under `check`. ──
     let uam = tmp.join("uam.kara");
     std::fs::write(
         &uam,
@@ -1723,19 +1718,19 @@ fn advisory_ownership_diagnostic_reports_same_severity_on_both_lanes() {
     )
     .unwrap();
 
-    // (a) text lane: a warning, and the command SUCCEEDS.
+    // (a) text lane: an error, and the command FAILS.
     let out = karac_bin()
         .args(["check", uam.to_str().unwrap()])
         .output()
         .unwrap();
     let err = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        err.contains("warning[ownership]"),
-        "use-after-move must print as a warning on the text lane, got: {err}"
+        err.contains("error[ownership]"),
+        "use-after-move must print as an error on the text lane, got: {err}"
     );
     assert!(
-        out.status.success(),
-        "an advisory ownership diagnostic must not fail `check`: {err}"
+        !out.status.success(),
+        "use after move must fail `check` under the v2 core: {err}"
     );
 
     // (b) JSON lane: the SAME severity. This is the regression.
@@ -1751,13 +1746,27 @@ fn advisory_ownership_diagnostic_reports_same_severity_on_both_lanes() {
         .and_then(|a| a.iter().find(|d| d["code"] == "E0500"))
         .unwrap_or_else(|| panic!("no E0500 use-after-move diagnostic in JSON: {stdout}"));
     assert_eq!(
-        d["severity"], "warning",
-        "use-after-move exits 0 and prints `warning[ownership]` on the text lane, \
-         so the Mend lane must not call it an error: {stdout}"
+        d["severity"], "error",
+        "the JSON lane must report the same severity as the text lane: {stdout}"
     );
     assert!(
+        !out.status.success(),
+        "the JSON lane must fail `check` too: {stdout}"
+    );
+
+    // (c) the legacy lane still runs it, with the hidden copy.
+    let out = karac_bin()
+        .args(["run", "--interp", uam.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
         out.status.success(),
-        "the JSON lane must exit 0 for an advisory diagnostic too: {stdout}"
+        "`run` keeps compiling use after move until the v2 middle end lands: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "consumed=1 after=1"
     );
 
     // ── CONTROL: a BLOCKING ownership error is untouched on both lanes. ──
@@ -2240,20 +2249,19 @@ fn test_json_suggestion_in_hints() {
     assert!(stdout.contains("\"hints\":[{\"description\":"));
 }
 
-// ── RC-fallback note reaches the default text surface (B-2026-06-13-3) ──
+// ── An RC-fallback site under `karac check` (B-2026-06-13-3, v2 core) ──
 
-/// Regression: the RC-fallback perf note must render in the default
-/// `karac check` *text* output, not only in `--output=json`/LSP.
-/// `render_text_diagnostics` (src/cli.rs) once iterated only `o.errors`
-/// and silently dropped `o.notes`, so `karac build`/`check` in a terminal
-/// said nothing about RC fallback — breaking design.md § Part 4's "the
-/// note fires by default" guarantee (the "RC overhead is visible" pillar).
-/// Trigger shape mirrors `tests/rc_fallback.rs::trigger1`: a value consumed
-/// on one branch and re-consumed after the branch → RC fallback, not error.
 #[test]
-fn test_rc_fallback_note_renders_in_text_and_json() {
+fn test_rc_fallback_site_is_a_maybe_moved_error_under_check() {
+    // v2 core §3.2 / §6.4: legacy turns a use after a move on one branch into
+    // an implicit RC (`perf[rc-fallback]`, N0503). `karac check` reports the
+    // same site as E0500, once, and no longer as a note; `#[allow(rc_fallback)]`
+    // silenced a performance note and does not silence the error.
     let tmp_dir = std::env::temp_dir();
-    let fixture = tmp_dir.join("karac_test_rc_fallback_note.kara");
+    let fixture = tmp_dir.join(format!(
+        "karac_test_rc_fallback_note_{}.kara",
+        std::process::id()
+    ));
     let src = "struct Data { value: i64 }\n\
                fn consume(d: Data) { }\n\
                fn use_d(d: Data) -> i64 { d.value }\n\
@@ -2267,37 +2275,45 @@ fn test_rc_fallback_note_renders_in_text_and_json() {
                }\n";
     std::fs::write(&fixture, src).expect("write fixture");
 
-    // Default text surface — the regression target. RC fallback is a perf
-    // note, not an error, so the check still succeeds.
     let text = karac_bin()
         .args(["check", fixture.to_str().unwrap()])
         .output()
         .unwrap();
-    let text_out = String::from_utf8_lossy(&text.stdout);
-    let text_err = String::from_utf8_lossy(&text.stderr);
-    let combined = format!("{text_out}{text_err}");
-    assert!(
-        combined.contains("perf[rc-fallback]:") && combined.contains("RC fallback inserted for 'd'"),
-        "text output must surface the RC-fallback note; got stdout=[{text_out}] stderr=[{text_err}]"
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&text.stdout),
+        String::from_utf8_lossy(&text.stderr)
     );
     assert!(
-        combined.contains("help: restructure to a single ownership path"),
-        "text output must include the RC-fallback help line; got [{combined}]"
+        combined.contains("error[ownership]")
+            && combined.contains("value 'd' may have been moved (moved at line 5:"),
+        "check must report the RC site as a maybe-moved error; got [{combined}]"
     );
+    assert!(
+        !combined.contains("perf[rc-fallback]"),
+        "the site is reported once, as the error; got [{combined}]"
+    );
+    assert!(!text.status.success(), "check must fail: [{combined}]");
 
-    // JSON surface must still carry it (severity note, code N0503).
     let json = karac_bin()
         .args(["check", fixture.to_str().unwrap(), "--output=json"])
         .output()
         .unwrap();
     let json_out = String::from_utf8_lossy(&json.stdout);
+    let v: serde_json::Value = serde_json::from_str(&json_out)
+        .unwrap_or_else(|e| panic!("check --output=json must emit JSON ({e}): {json_out}"));
+    let diags = v["diagnostics"].as_array().expect("diagnostics array");
     assert!(
-        json_out.contains("\"code\":\"N0503\"") && json_out.contains("\"severity\":\"note\""),
-        "JSON output must still carry the N0503 RC-fallback note; got: {json_out}"
+        diags
+            .iter()
+            .any(|d| d["code"] == "E0500" && d["severity"] == "error"),
+        "JSON must carry the E0500 error; got: {json_out}"
+    );
+    assert!(
+        !diags.iter().any(|d| d["code"] == "N0503"),
+        "JSON must not also carry the N0503 note; got: {json_out}"
     );
 
-    // `#[allow(rc_fallback)]` suppresses the note at every surface
-    // (suppression is applied upstream in `emit_rc_fallback_notes`).
     let allow_src = src.replace(
         "fn process(cond: bool, d: Data) -> i64 {",
         "#[allow(rc_fallback)]\nfn process(cond: bool, d: Data) -> i64 {",
@@ -2307,14 +2323,10 @@ fn test_rc_fallback_note_renders_in_text_and_json() {
         .args(["check", fixture.to_str().unwrap()])
         .output()
         .unwrap();
-    let allowed_combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&allowed.stdout),
-        String::from_utf8_lossy(&allowed.stderr)
-    );
     assert!(
-        !allowed_combined.contains("perf[rc-fallback]:"),
-        "#[allow(rc_fallback)] must suppress the note; got [{allowed_combined}]"
+        !allowed.status.success(),
+        "#[allow(rc_fallback)] must not silence the core error: {}",
+        String::from_utf8_lossy(&allowed.stderr)
     );
 
     let _ = std::fs::remove_file(&fixture);
@@ -31158,16 +31170,6 @@ fn ownership_errors_gate_build_and_check_identically() {
     // printed 2 and 1), so `let` versus `let mut` meant nothing once compiled.
     let cases: &[(&str, &str, bool)] = &[
         (
-            "use-after-move",
-            "fn c(v: Vec[i64]) -> i64 { v.len() }\n\
-             fn main() { let mut v: Vec[i64] = Vec.new(); v.push(1);\n\
-             let a = c(v); let b = c(v); println((a + b).to_string()); }\n",
-            // Advisory: codegen defensive-copies the reuse, and the diagnostic
-            // carries a machine-applicable `.clone()` fix precisely because the
-            // program compiles and runs. Both lanes accept.
-            false,
-        ),
-        (
             "reassign-to-immutable",
             "fn main() { let x = 1; x = 2; println(x.to_string()); }\n",
             true,
@@ -31234,18 +31236,48 @@ fn ownership_errors_gate_build_and_check_identically() {
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    // The one deliberate exception, and it is temporary: use after move is an
+    // error under the v2 core (`docs/core-semantics.md` §3.2), which `check`
+    // enforces now, while `build` keeps the legacy defensive copy so its
+    // output stays the old-behaviour oracle until the v2 middle end lands.
+    let (tmp, path) = ownership_gate_fixture(
+        "use-after-move",
+        "fn c(v: Vec[i64]) -> i64 { v.len() }\n\
+         fn main() { let mut v: Vec[i64] = Vec.new(); v.push(1);\n\
+         let a = c(v); let b = c(v); println((a + b).to_string()); }\n",
+    );
+    let check = karac_bin().arg("check").arg(&path).output().unwrap();
+    let build = karac_bin()
+        .arg("build")
+        .arg(&path)
+        .arg("-o")
+        .arg(tmp.join("g"))
+        .output()
+        .unwrap();
+    assert!(
+        !check.status.success(),
+        "check must reject use after move: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    // Without the llvm feature `build` falls back to `check`, so it rejects too.
+    assert_eq!(
+        build.status.success(),
+        cfg!(feature = "llvm"),
+        "legacy build must still accept use after move (when it can build): {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]
-fn advisory_ownership_diagnostic_renders_as_warning_not_error() {
-    // The rendered severity follows the same fatal/advisory split that decides
-    // the exit code. Before the fix every kind printed `error[ownership]`,
-    // including the advisory `UseAfterMove`, which produced the contradiction
-    // of an `error[...]` line immediately followed by `All checks passed.`
-    // The diagnostic must still be REPORTED — demoting it must not silence it,
-    // or the Mend loop loses the signal (and its `.clone()` auto-fix).
+fn use_after_move_renders_as_error_under_check() {
+    // The rendered severity follows the exit code. Under the v2 core
+    // (`docs/core-semantics.md` §3.2) use after move is an error, so `check`
+    // prints `error[ownership]` and fails, and still offers the `.clone()`
+    // repair the Mend loop applies with `karac fix`.
     let (tmp, path) = ownership_gate_fixture(
-        "warn-label",
+        "err-label-uam",
         "fn c(v: Vec[i64]) -> i64 { v.len() }\n\
          fn main() { let mut v: Vec[i64] = Vec.new(); v.push(1);\n\
          let a = c(v); let b = c(v); println((a + b).to_string()); }\n",
@@ -31253,17 +31285,14 @@ fn advisory_ownership_diagnostic_renders_as_warning_not_error() {
     let out = karac_bin().arg("check").arg(&path).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("warning[ownership]") && stderr.contains("moved here, used again here"),
-        "advisory use-after-move should render as warning[ownership]; got: {stderr}"
+        stderr.contains("error[ownership]") && stderr.contains("moved here, used again here"),
+        "use after move should render as error[ownership]; got: {stderr}"
     );
     assert!(
-        !stderr.contains("error[ownership]"),
-        "advisory use-after-move must not render as an error; got: {stderr}"
+        stderr.contains("`v.clone()`"),
+        "the diagnostic must still offer the clone; got: {stderr}"
     );
-    assert!(
-        out.status.success(),
-        "advisory diagnostic must not fail check"
-    );
+    assert!(!out.status.success(), "use after move must fail check");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

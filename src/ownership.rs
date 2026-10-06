@@ -964,6 +964,20 @@ pub struct OwnershipCheckResult {
     /// Non-blocking notes (e.g. RC fallback perf notes). Distinct from
     /// `errors` so callers can render them separately.
     pub notes: Vec<OwnershipError>,
+    /// v2 core E0500 errors (`docs/core-semantics.md` §3.2–§3.3, §6.4): one
+    /// per site legacy resolves with an implicit RC (a maybe-moved use, a move
+    /// in a loop, a move into a container or closure followed by a use). Kept
+    /// apart from `errors` because only the strict commands report them —
+    /// `karac check` and `karac fix` merge them in, while `build` / `run` keep
+    /// compiling these programs under the legacy rules. See
+    /// [`OwnershipChecker::core_move_errors`].
+    pub core_errors: Vec<OwnershipError>,
+    /// Span keys of consume sites that legacy treats as moves and the v2 core
+    /// does not: every `let _ = <expr>` initializer (`_` never binds and never
+    /// moves, `docs/core-semantics.md` §4.6) and the right operand of `String`
+    /// `+` (borrowed, §3.1). The strict commands drop any E0500 whose consume
+    /// site is one of these; the legacy backends keep their defensive copy.
+    pub core_non_move_sources: HashSet<SpanKey>,
     /// Representation for each binding/parameter: "owned (stack)", "ref (borrow)",
     /// "shared (Rc)", "shared (Arc)". Key: "function_name.binding_name".
     pub representations: HashMap<String, String>,
@@ -1375,6 +1389,9 @@ pub struct OwnershipChecker<'a> {
     /// Function keys where RC notes are suppressed via `#[allow(rc_fallback)]`.
     /// Consulted after Phase 2 when emitting flavor-annotated notes.
     pub(crate) suppressed_rc_fn_keys: HashSet<String>,
+    /// Consume sites that are not moves under the v2 core. See
+    /// [`OwnershipCheckResult::core_non_move_sources`].
+    pub(crate) core_non_move_sources: HashSet<SpanKey>,
     /// Effective `panic_on_alloc_failure` (phase-8-stdlib-floor item 6). `true`
     /// (the default) leaves RC fallback as a perf note; `false` (hard mode)
     /// turns every RC-fallback site into a hard
@@ -1694,6 +1711,7 @@ impl<'a> OwnershipChecker<'a> {
             copy_bounded_type_params: HashSet::new(),
             suppress_rc_notes: false,
             suppressed_rc_fn_keys: HashSet::new(),
+            core_non_move_sources: HashSet::new(),
             panic_on_alloc_failure: true,
             elided_bindings: HashMap::new(),
             elision_blocked: HashMap::new(),
@@ -1864,6 +1882,7 @@ impl<'a> OwnershipChecker<'a> {
             }
         }
 
+        let core_errors = self.core_move_errors();
         OwnershipCheckResult {
             param_modes: self.param_modes,
             use_after_move_consume_sites,
@@ -1878,6 +1897,8 @@ impl<'a> OwnershipChecker<'a> {
             closure_spans: self.closure_spans,
             errors: self.errors,
             notes: self.notes,
+            core_errors,
+            core_non_move_sources: self.core_non_move_sources,
             representations,
             rc_values: self.rc_values,
             arc_values: self.arc_values,
@@ -2560,12 +2581,15 @@ impl<'a> OwnershipChecker<'a> {
         // functions.
         let param_types_for_classifier =
             crate::use_classifier::param_types_for_function(f, self.typecheck_result);
-        self.current_classification = Some(classify_function_body_with(
+        let classification = classify_function_body_with(
             prelude,
             self.typecheck_result,
             &f.body,
             param_types_for_classifier,
-        ));
+        );
+        self.core_non_move_sources
+            .extend(classification.core_borrowed_spans.iter().copied());
+        self.current_classification = Some(classification);
 
         // Walk the body
         self.check_block(&f.body, &mut states, &param_types, &mut param_usage);

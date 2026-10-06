@@ -222,6 +222,12 @@ pub struct Classification {
     /// the CFG builder so the predicate can skip pairing disjoint partial
     /// moves of the same root.
     pub consume_places: FxHashMap<SpanKey, PlacePath>,
+    /// Consume leaves that the v2 core treats as BORROWS: the right operand
+    /// of `String` `+` (`fn add(ref self, other: ref String)`,
+    /// `docs/core-semantics.md` §3.1). Legacy still classifies them as
+    /// consumes, because its backends may move the operand; the strict
+    /// commands drop any E0500 whose consume site is one of these.
+    pub core_borrowed_spans: FxHashSet<SpanKey>,
 }
 
 /// A basic block in the CFG. Statements are not stored — only the use

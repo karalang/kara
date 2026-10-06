@@ -1065,6 +1065,13 @@ struct Pipeline {
     /// [`crate::cli::args`] flags. Threaded into [`Pipeline::typecheck`]
     /// via [`crate::typecheck_with_lint_overrides`].
     lint_overrides: crate::lints::CliLintOverrides,
+    /// v2 core rules (`docs/core-semantics.md`) as errors: use after move
+    /// (§3.2, C1), moving out of a borrowed place (§3.7, C3) and implicit RC
+    /// (§6.4, C7). Set by `karac check` and `karac fix` only. `build` and `run`
+    /// keep the legacy rules for now, so their output stays usable as the
+    /// old-behaviour oracle while the v2 middle end is built (the redesign's
+    /// M0 default, 2026-10-06).
+    strict_core: bool,
 }
 
 impl Pipeline {
@@ -1088,7 +1095,21 @@ impl Pipeline {
             profile: crate::manifest::CompileProfile::Default,
             profile_config: crate::manifest::ProfileConfig::default(),
             lint_overrides: crate::lints::CliLintOverrides::default(),
+            strict_core: false,
         }
+    }
+
+    /// Report the v2 core rules as errors — see `strict_core`. Call after
+    /// [`Self::with_lint_overrides`]: a CLI flag naming `borrow_projection_copy`
+    /// still decides that lint's level, and only an unset one becomes `Deny`.
+    fn strict_core(mut self) -> Self {
+        self.strict_core = true;
+        self.lint_overrides.strict_core = true;
+        self.lint_overrides
+            .levels
+            .entry("borrow_projection_copy".to_string())
+            .or_insert(crate::lints::LintLevel::Deny);
+        self
     }
 
     fn with_lint_overrides(mut self, overrides: crate::lints::CliLintOverrides) -> Self {
@@ -1298,7 +1319,18 @@ impl Pipeline {
             // Re-run name resolution + typecheck over the spliced program so
             // generated items resolve and their side-tables populate.
             let resolved = crate::resolve(&self.parsed.program);
-            let retyped = crate::typecheck(&self.parsed.program, &resolved);
+            // With the same lint levels and profile as the first pass: a plain
+            // `typecheck` here dropped every CLI `-D`/`-A` flag (and the strict
+            // core's `borrow_projection_copy` deny) for any program with a
+            // `#[derive]`.
+            let mut profile_config = self.profile_config.clone();
+            profile_config.profile = self.profile;
+            let retyped = crate::typecheck_with_lint_overrides_and_profile(
+                &self.parsed.program,
+                &resolved,
+                self.lint_overrides.clone(),
+                profile_config,
+            );
             self.resolved = Some(resolved);
             crate::lower(&mut self.parsed.program, &retyped);
             self.typed = Some(retyped);
@@ -1463,11 +1495,29 @@ impl Pipeline {
         // fallback into a hard error (phase-8-stdlib-floor item 6).
         let mut profile_config = self.profile_config.clone();
         profile_config.profile = self.profile;
-        self.ownership = Some(crate::ownershipcheck_with_profile_config(
+        let mut ownership = crate::ownershipcheck_with_profile_config(
             &self.parsed.program,
             self.typed.as_ref().unwrap(),
             profile_config,
-        ));
+        );
+        // v2 core: each implicit-RC site is an E0500 rather than a note, and
+        // reported once, as the error.
+        if self.strict_core {
+            let core = std::mem::take(&mut ownership.core_errors);
+            ownership
+                .notes
+                .retain(|n| n.kind != crate::ownership::OwnershipErrorKind::RcFallbackNote);
+            ownership.errors.extend(core);
+            let non_moves = &ownership.core_non_move_sources;
+            ownership.errors.retain(|e| {
+                e.kind != crate::ownership::OwnershipErrorKind::UseAfterMove
+                    || !e.consume_span.is_some_and(|c| {
+                        non_moves.contains(&crate::resolver::SpanKey::from_span(&c))
+                    })
+            });
+            ownership.errors.sort_by_key(|e| e.span.offset);
+        }
+        self.ownership = Some(ownership);
     }
 
     fn concurrencycheck(&mut self) {
@@ -1663,7 +1713,7 @@ impl Pipeline {
         self.ownership.as_ref().is_some_and(|o| {
             o.errors
                 .iter()
-                .any(|e| Self::is_fatal_ownership_kind(&e.kind))
+                .any(|e| self.is_fatal_ownership_kind(&e.kind))
         })
     }
 
@@ -1673,8 +1723,12 @@ impl Pipeline {
     /// Hoisted into the library as `ownership::kind_blocks_production` for the
     /// same reason as its effect twin (B-2026-08-19-5) — the E2E harnesses had
     /// their own transcribed copy of this list.
-    fn is_fatal_ownership_kind(kind: &crate::ownership::OwnershipErrorKind) -> bool {
-        crate::ownership::kind_blocks_production(kind)
+    ///
+    /// Under [`Self::strict_core`] every ownership error is fatal, `UseAfterMove`
+    /// included: the v2 core makes it an error (`docs/core-semantics.md` §3.2),
+    /// and nothing defensive-copies on the commands that set the flag.
+    fn is_fatal_ownership_kind(&self, kind: &crate::ownership::OwnershipErrorKind) -> bool {
+        self.strict_core || crate::ownership::kind_blocks_production(kind)
     }
 
     fn total_errors(&self) -> usize {
@@ -1719,7 +1773,7 @@ impl Pipeline {
             n += o
                 .errors
                 .iter()
-                .filter(|e| Self::is_fatal_ownership_kind(&e.kind))
+                .filter(|e| self.is_fatal_ownership_kind(&e.kind))
                 .count();
         }
         if let Some(ref esc) = self.provider_escape {
@@ -2172,7 +2226,7 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             // `error[ownership]` — including the advisory `UseAfterMove` that
             // codegen compiles by design — which produced the nonsense pairing
             // of an `error[…]` line immediately followed by `All checks passed.`
-            let label = if Pipeline::is_fatal_ownership_kind(&err.kind) {
+            let label = if pipeline.is_fatal_ownership_kind(&err.kind) {
                 "error[ownership]"
             } else {
                 "warning[ownership]"

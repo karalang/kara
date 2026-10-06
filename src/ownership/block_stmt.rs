@@ -75,6 +75,15 @@ impl<'a> super::OwnershipChecker<'a> {
                 if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. }) {
                     self.check_expr_reading(value, states, param_types, param_usage);
                 } else {
+                    // v2 core §4.6: `_` never binds and never moves, so `let _ =
+                    // x;` leaves `x` intact. Legacy still drops `x` here, so the
+                    // walk below keeps treating it as a move (the build's
+                    // defensive copy depends on it); the strict commands drop
+                    // any E0500 that cites this site.
+                    if matches!(pattern.kind, PatternKind::Wildcard) {
+                        self.core_non_move_sources
+                            .insert(SpanKey::from_span(&value.span));
+                    }
                     self.check_expr_consuming(value, states, param_types, param_usage);
                 }
 
