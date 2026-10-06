@@ -14,6 +14,8 @@
 //! threaded-pass selection is parameter-passed (a `Codegen` setter via
 //! `compile_to_ir_wasm_threaded`), never another process-global.
 
+mod common;
+
 #[cfg(feature = "llvm")]
 mod wasm_codegen_tests {
     use karac::codegen::{compile_to_ir_wasm_threaded, compile_to_ir_with_options};

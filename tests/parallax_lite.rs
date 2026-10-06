@@ -369,7 +369,7 @@ mod parallax_lite_tests {
         let _guard = AUTO_PAR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let src = workload_source();
         // Gate-on baseline: at least one karac_par_run call site.
-        std::env::remove_var("KARAC_AUTO_PAR");
+        std::env::set_var("KARAC_AUTO_PAR", "1");
         let ir_on = ir_for_workload_with(&src);
         assert!(
             ir_on.contains("call void @karac_par_run"),
@@ -379,7 +379,7 @@ mod parallax_lite_tests {
         // Gate-off: zero karac_par_run call sites.
         std::env::set_var("KARAC_AUTO_PAR", "0");
         let ir_off = ir_for_workload_with(&src);
-        std::env::remove_var("KARAC_AUTO_PAR");
+        std::env::set_var("KARAC_AUTO_PAR", "1");
         assert!(
             !ir_off.contains("call void @karac_par_run"),
             "with KARAC_AUTO_PAR=0, workload IR should NOT contain \
@@ -417,11 +417,11 @@ mod parallax_lite_tests {
         let main_added =
             format!("{src}\nfn main() {{\n    process_request();\n    println(\"done\");\n}}\n");
 
-        std::env::remove_var("KARAC_AUTO_PAR");
+        std::env::set_var("KARAC_AUTO_PAR", "1");
         let par_time = compile_and_time(&main_added, "auto_par");
         std::env::set_var("KARAC_AUTO_PAR", "0");
         let seq_time = compile_and_time(&main_added, "sequential");
-        std::env::remove_var("KARAC_AUTO_PAR");
+        std::env::set_var("KARAC_AUTO_PAR", "1");
 
         let (Some(par_secs), Some(seq_secs)) = (par_time, seq_time) else {
             eprintln!("skip: link/exec failed");

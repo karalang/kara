@@ -44,8 +44,15 @@
 //! `KARAC_PROOF_DEBUG=1` (in `index_disjoint.rs`) is its counterpart for the
 //! disjointness proof that runs one phase earlier.
 
-/// Is auto-par codegen enabled at all? `KARAC_AUTO_PAR=0` disables every
-/// auto-par lowering.
+/// Is auto-par codegen enabled at all? It is OFF by default and
+/// `KARAC_AUTO_PAR=1` (any value other than `0`) turns every auto-par lowering
+/// on; `KARAC_AUTO_PAR=0` keeps it off.
+///
+/// The default was ON until the v2 redesign approved on 2026-10-06, which
+/// deletes statement-level auto-parallelism and brings loop parallelism back
+/// only where the new pipeline can prove it safe. Until then the old backend
+/// builds sequentially unless asked, so a program means the same thing under
+/// `karac run`, `--interp` and `karac build` by default.
 ///
 /// Lives here for the same reason the cost gates do: BOTH codegen and the
 /// query must get the same answer. `codegen::driver::read_auto_par_env`
@@ -57,7 +64,7 @@
 /// That is the same defect class B-2026-07-29-29 filed and this module was
 /// built to end; the env gate simply was not part of the extraction.
 pub fn auto_par_enabled() -> bool {
-    !matches!(std::env::var("KARAC_AUTO_PAR"), Ok(v) if v == "0")
+    matches!(std::env::var("KARAC_AUTO_PAR"), Ok(v) if v != "0")
 }
 use crate::ast::narrow_literal_to_i64;
 use crate::ast::{

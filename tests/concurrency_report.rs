@@ -20,6 +20,8 @@
 //! they construct `ConcurrencyAnalysis` and `EffectCheckResult` directly
 //! and don't need the binary surface.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -157,36 +159,42 @@ fn main() {\n\
     let path = dir.join("ap.kara");
     std::fs::write(&path, SRC).unwrap();
 
-    let run = |disabled: bool| -> String {
+    // `None` = the variable unset, i.e. the default, which is OFF since the
+    // 2026-10-06 v2 redesign (C9); `Some("1")` opts in.
+    let run = |setting: Option<&str>| -> String {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_karac"));
         cmd.args(["query", "concurrency", path.to_str().unwrap()]);
-        if disabled {
-            cmd.env("KARAC_AUTO_PAR", "0");
-        } else {
-            cmd.env_remove("KARAC_AUTO_PAR");
-        }
+        match setting {
+            Some(v) => cmd.env("KARAC_AUTO_PAR", v),
+            None => cmd.env_remove("KARAC_AUTO_PAR"),
+        };
         let out = cmd.output().expect("karac query concurrency");
         String::from_utf8_lossy(&out.stdout).to_string()
     };
 
-    let on = run(false);
+    let on = run(Some("1"));
     assert!(
         on.contains("\"fanned_out\":true"),
         "with auto-par ON this loop must report fanned out, else the disabled \
          case below proves nothing; got:\n{on}"
     );
 
-    let off = run(true);
-    assert!(
-        !off.contains("\"fanned_out\":true"),
-        "with KARAC_AUTO_PAR=0 nothing is dispatched, so no loop may report \
-         fanned_out: true; got:\n{off}"
-    );
-    assert!(
-        off.contains("declined_auto_par_disabled"),
-        "the disabled case must name the gate that declined it, not report a \
-         cost-model verdict it never reached; got:\n{off}"
-    );
+    for (label, setting) in [
+        ("KARAC_AUTO_PAR=0", Some("0")),
+        ("KARAC_AUTO_PAR unset", None),
+    ] {
+        let off = run(setting);
+        assert!(
+            !off.contains("\"fanned_out\":true"),
+            "with {label} nothing is dispatched, so no loop may report \
+             fanned_out: true; got:\n{off}"
+        );
+        assert!(
+            off.contains("declined_auto_par_disabled"),
+            "with {label} the report must name the gate that declined it, not \
+             report a cost-model verdict it never reached; got:\n{off}"
+        );
+    }
 }
 
 #[test]
@@ -326,7 +334,7 @@ fn main() { println(f\"{hot()}\"); }\n";
         std::fs::write(&path, src).unwrap();
         let out = Command::new(env!("CARGO_BIN_EXE_karac"))
             .args(["check", "--concurrency-report", path.to_str().unwrap()])
-            .env_remove("KARAC_AUTO_PAR")
+            .env("KARAC_AUTO_PAR", "1")
             .output()
             .expect("karac check --concurrency-report");
         String::from_utf8_lossy(&out.stdout).to_string()

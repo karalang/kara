@@ -2459,9 +2459,8 @@ pub(super) fn read_runtime_debug_metadata_env() -> bool {
 ///
 /// - `Ok("0")` → `false` (gate explicitly off — sequential codegen).
 /// - `Ok(_)`   → `true` (any other value, including empty).
-/// - `Err(_)`  → `true` (dev default — auto-par on by default; the
-///   user-facing `--sequential` CLI flag is a Phase 8.5 Track 2
-///   deliverable when the profile system ships).
+/// - `Err(_)`  → `false` (default OFF since the 2026-10-06 v2 redesign; see
+///   `par_cost::auto_par_enabled`).
 ///
 /// Returns `true` iff auto-par dispatch is enabled. The
 /// `Codegen::auto_par_disabled` field is `!return_value` so the

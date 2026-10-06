@@ -26,6 +26,31 @@ use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
+/// `KARAC_AUTO_PAR` defaults to OFF since the 2026-10-06 v2 redesign (C9:
+/// statement auto-par is deleted, loop auto-par returns later as proven-safe
+/// only). These legacy suites were written against the old default, ON, and
+/// stay frozen until legacy is deleted at M3, so every test binary that
+/// includes this module turns it back on before `main` — for its in-process
+/// compiles and, by inheritance, for every `karac` it spawns. An explicit
+/// setting from outside (`KARAC_AUTO_PAR=0 cargo test`) is left alone, as is
+/// any test that sets or removes the variable itself; a test that pins the
+/// new default removes it from its child's environment
+/// (`concurrency_report.rs`, `test_auto_par_disabled_is_reflected_in_fanned_out`).
+///
+/// A constructor rather than a `[env]` entry in `.cargo/config.toml`, which
+/// would also turn auto-par on for `cargo run`.
+#[used]
+#[cfg_attr(target_os = "linux", link_section = ".init_array")]
+#[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
+static LEGACY_SUITES_RUN_WITH_AUTO_PAR: extern "C" fn() = {
+    extern "C" fn auto_par_on_unless_set() {
+        if std::env::var_os("KARAC_AUTO_PAR").is_none() {
+            std::env::set_var("KARAC_AUTO_PAR", "1");
+        }
+    }
+    auto_par_on_unless_set
+};
+
 /// Spawn `cmd`, capture stdout/stderr, and kill the child if it hasn't
 /// finished within `timeout`. Returns `None` if the spawn itself failed
 /// (so callers can soft-skip), panics if the child was killed for hanging

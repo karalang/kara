@@ -5796,7 +5796,7 @@ fn main() {
             .expect("codegen failed")
         };
         // Gate-on baseline: the reduce lowers to a par_reduce fan-out.
-        std::env::remove_var("KARAC_AUTO_PAR");
+        std::env::set_var("KARAC_AUTO_PAR", "1");
         let ir_on = build(src);
         assert!(
             ir_on.contains("call void @karac_par_reduce"),
@@ -5805,7 +5805,7 @@ fn main() {
         // Gate-off: the SAME reduce must fall back to a sequential loop.
         std::env::set_var("KARAC_AUTO_PAR", "0");
         let ir_off = build(src);
-        std::env::remove_var("KARAC_AUTO_PAR");
+        std::env::set_var("KARAC_AUTO_PAR", "1");
         assert!(
             !ir_off.contains("call void @karac_par_reduce"),
             "with KARAC_AUTO_PAR=0, the reduce must NOT emit karac_par_reduce; got:\n{ir_off}"

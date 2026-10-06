@@ -464,11 +464,11 @@ mod parallax_tests {
         std::env::set_var("KARAC_RUNTIME", &rt);
 
         let src = workload_source();
-        std::env::remove_var("KARAC_AUTO_PAR");
+        std::env::set_var("KARAC_AUTO_PAR", "1");
         let par_time = compile_and_time(&src, "parallax_auto_par");
         std::env::set_var("KARAC_AUTO_PAR", "0");
         let seq_time = compile_and_time(&src, "parallax_sequential");
-        std::env::remove_var("KARAC_AUTO_PAR");
+        std::env::set_var("KARAC_AUTO_PAR", "1");
 
         let (Some(par_secs), Some(seq_secs)) = (par_time, seq_time) else {
             eprintln!("skip: link/exec failed");
