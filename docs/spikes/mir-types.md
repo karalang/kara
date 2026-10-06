@@ -213,11 +213,27 @@ The MIR interpreter is the reference implementation and the oracle the LLVM back
 - `Drop` of a type with a user `Drop` body calls that body, then drops the fields; `String`, `Vec`, `Map` and the other library collections are intrinsic types whose drop the interpreter implements directly;
 - `Retain` and the drop of a `shared` handle change a reference count, and the box is freed when the count reaches zero.
 
+**Events the interpreter records.** Each run can emit a trace of ownership events, one line per event, in program order, for the corpus runner and the backend-differential tests to diff:
+
+| Event | When |
+|---|---|
+| `alloc <id> <ty> <bytes>` | a heap allocation (an `Aggregate` of a `shared` type, a library collection growing, a closure environment) |
+| `free <id>` | that allocation is freed |
+| `move <place>` | a `Move` operand marks its source uninitialized |
+| `init <place>` | an `Assign` initializes a place |
+| `drop <place> <ty>` | a `Drop` terminator runs, before any user body |
+| `drop_body <ty>` | a user `Drop` body is entered |
+| `retain <id> <count>` / `release <id> <count>` | a reference count changes, with the count after the change |
+| `flag <local> <bool>` | a drop flag is set |
+| `abort <reason>` | an `Abort` terminator runs |
+
+The trace is the reference for drop behaviour: a program's printed output shows only the user `Drop` bodies, while the trace also shows every free and every count change, so a difference in plain memory handling between the two backends is visible too. Allocation ids are assigned in allocation order, so traces are deterministic for a single-threaded program. At exit the interpreter reports every allocation still live as a leak.
+
 Because the interpreter checks initialization on every read, any drop elaboration bug that drops a moved place, or never drops a live one, shows up as a reported error on the first program that exercises it, rather than as a wrong line of output.
 
 ## 7. Textual form
 
-Every body prints in a stable textual form, used for golden tests and for `karac dump-mir`:
+Every body prints in a stable textual form, used for golden tests, for `karac dump-mir` and for the corpus runner to diff. The form is part of the contract: locals are numbered `_0`, `_1`, ... in declaration order, blocks `bb0`, `bb1`, ... in creation order, a user local carries its source name as a trailing comment, and nothing in the output depends on hash-map iteration order or on memory addresses. Two builds of the same program print byte-identical MIR.
 
 ```
 fn eat(_1: R) -> () {
@@ -235,7 +251,11 @@ fn eat(_1: R) -> () {
 }
 ```
 
-## 8. Open questions
+## 8. Optimizations and reference counts
+
+Optimization passes on MIR follow core semantics § Optimisation: a user `Drop` body call is never moved, added or removed, and plain memory may be freed earlier than its scope end. A matched `Retain` / release pair on a `shared` handle may be removed when nothing between them can observe the count: no count reaches zero at a different point as a result, and no `Weak.upgrade`, count query or user `Drop` body runs between the two. That keeps the existing RC-elision win for read-only tree walks (`src/rc_elide.rs`) legal on MIR.
+
+## 9. Open questions
 
 1. **Typed HIR interface.** This note assumes `NodeId`, `DefId`, `Symbol` and an interned, monomorphic `Ty` from the typed-HIR work (Threads B and C). The names here are placeholders until that interface lands.
 2. **Library collections.** Are `String` / `Vec` / `Map` / `Set` opaque intrinsic types in MIR (the default here), or ordinary ADTs over raw pointers implemented in Kāra? Intrinsic is simpler for M1. Kāra-level implementations would need raw-pointer places, which this note does not define.
