@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 721 |
-| run-vs-build | 598 |
-| leak | 593 |
+| run-vs-build | 600 |
+| leak | 594 |
 | double-free | 427 |
 | codegen-gap | 245 |
 | missing-feature | 219 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2827 |
-| interp | 884 |
+| codegen | 2828 |
+| interp | 887 |
 | typecheck | 344 |
 | other | 114 |
 | ownership | 80 |
@@ -510,7 +510,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-116 | 2026-10-05 | codegen | medium | A GENERIC STRUCT LITERAL WHOSE FIELD IS AN `Option` OF A HEAP TYPE LEAKS THE PAYLOAD -- `struct G[T] { v: T }; let h = G { v: Some("hs".to_string()) }` loses the string at scope end, compiled; `G { v: "plain".to_string() }` is clean | — |
 | B-2026-10-05-117 | 2026-10-05 | codegen+interp | low | A LOCAL REBOUND FROM A BY-VALUE `Option` PARAM, MATCHED AND THEN REASSIGNED TO A FRESH `Some`, RUNS THE NEW VALUE'S `Drop` BODY AT THE END OF THE CALLEE ON EVERY BACKEND INSTEAD OF AT ITS LIVE-RANGE END -- `let mut h = x; match h { .. } h = Some([mk(7), mk(8)]); println("q5");` prints `q5 dR7 dR8` where a plain local prints the bodies before the next statement | — |
 | B-2026-10-05-119 | 2026-10-05 | interp+codegen | medium | A FRESH `Option`, ENUM OR `Vec` TEMPORARY HOLDING A `shared` VALUE, PASSED BY VALUE, NEVER RUNS THE HANDLE'S `Drop` BODY UNDER `--interp`, AND A TUPLE TEMPORARY NEVER RUNS IT ON ANY BACKEND -- `co(Some(H { id: 9 }))`, `ce(E.A(H { id: 11 }))` and `cv(vec![H { id: 12 }])` print `dH9` / `dH11` / `dH12` before the next statement compiled and never under `--interp`; `ct((H { id: 10 }, 1))` prints no `dH10` anywhere | — |
-| B-2026-10-05-120 | 2026-10-05 | codegen | medium | A FRESH STRUCT TEMPORARY HOLDING A `shared` VALUE THAT THE CALLEE HANDS BACK NEVER RUNS THE HANDLE'S `Drop` BODY AND LEAKS IT COMPILED -- `{ let k = keepw(W { o: Some(H { id: 4 }), n: 8 }); println(f"_4 {k.n}"); }` over `struct W { o: Option[H], n: i64 }` and `fn keepw(w: W) -> W { w }` prints `_4 8 _4b` on every compiled surface (16 B definitely lost at -O0) where `--interp` prints `_4 8 dH4 _4b`; the named spelling `let w7 = W { .. }; let k = keepw(w7)` is right on both | — |
 | B-2026-10-05-112 | 2026-10-05 | interp | medium | `--interp` RUNS A MOVED-OUT STRUCT LOCAL'S `Drop` BODY AGAIN WHEN THE LOCAL IS REASSIGNED, AND NEVER RUNS THE NEW VALUE'S -- `let mut r = R { id: 1 }; let q = r; r = R { id: 2 };` prints `dR1 s21 dR1 end` under `--interp` where every compiled surface prints `s21 dR2 dR1 end` (itself out of declaration order: B-2026-10-06-64) | — |
 | B-2026-10-05-113 | 2026-10-05 | codegen | medium | A TUPLE LOCAL ROUNDTRIPPED THROUGH A BY-VALUE CALLEE (`p = pass(p)`) NEVER RUNS ITS `Drop` BODY COMPILED -- `let mut p = mkr(1); p = pass(p);` over `fn pass(p: (R, i64)) -> (R, i64) { p }` prints `k1 end` where `--interp` prints `k1 dR1 end` | — |
 | B-2026-10-05-123 | 2026-10-05 | interp+codegen | medium | A `let mut` REBIND OF A BY-VALUE TUPLE PARAM THAT IS THEN REASSIGNED RUNS NO DISPLACED `Drop` BODY ON ANY SURFACE -- `fn byv4(p: (R, i64)) -> i64 { let mut q = p; q = mkr(8); q.1 }` called with `mkr(1)` prints `dR8 d8 end` with no `dR1`, and a second store loses `dR8` too | — |
@@ -566,6 +565,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-99 | 2026-10-06 | codegen | medium | A `.chars()` CHAIN WHOSE RECEIVER IS A FRESH `String` TEMPORARY NEVER FREES THE STRING -- `let v: Vec[char] = mk(3).chars().collect();`, `mk(3).chars().count()`, `for c in mk(3).chars() { .. }`, `.chars().map(..).collect()`, collecting into a `String`, and `"abc".to_string().chars().collect()` each leak the temporary's buffer once per evaluation under `karac build` (-O0 and -O2), while `mk(3).len()`, `mk(3).bytes().to_vec()` and the same chain over a `let`-bound String free it | — |
 | B-2026-10-06-100 | 2026-10-06 | codegen+interp | medium | A `match` WITH A PAYLOAD-MOVING ARM AND A READ-ONLY CONTAINER-PAYLOAD ARM RUNS THE CONTAINER'S ELEMENT `Drop` BODIES TWICE ON `--interp` AND NEVER COMPILED -- `let e = E.Many(vec![D { n: 6 }]); match e { E.One(d) => { eat(d); }, E.Many(xs) => { println(f"many {xs.len()}"); } }` prints `many 1 drop 6 drop 6 end` interpreted and `many 1 end` at -O0 and -O2 (valgrind clean); `many 1 drop 6 end` is due | — |
 | B-2026-10-06-101 | 2026-10-06 | codegen+interp | medium | A `match` over a GENERIC enum local `G[D]` whose `Many(Vec[T])` arm only reads the payload LEAKS each element's `String` compiled (`definitely lost: 58 bytes in 2 blocks` at -O0 for two elements; bodies `d1 d2` run on all surfaces); with a sibling arm that MOVES its payload (`G.One(x) => eat(x)`), every surface instead runs NO element body (`m2 after end`, valgrind clean) | — |
+| B-2026-10-06-102 | 2026-10-06 | codegen+interp | medium | A `match` THAT DESTRUCTURES A HANDED-BACK STRUCT WITH AN `Option[shared]` FIELD NEVER RUNS THE HANDLE'S `Drop` BODY ON EITHER BACKEND, AND LEAKS IT COMPILED -- `match keepw(mkw(19)) { W { o, n } => println(f"_18 {n} {o.is_some()}") }` over `fn keepw(w: W) -> W { w }` and `struct W { o: Option[H], n: i64 }` prints `_18 19 true end` on `--interp`, -O0 and -O2 where `dH19` is due when the arm's `o` dies; 16 B definitely lost at -O0 | — |
+| B-2026-10-06-103 | 2026-10-06 | interp | medium | UNDER `--interp`, A FRESH STRUCT TEMP PASSED TO A CONDITIONAL HAND-BACK THAT TAKES ITS FRESH PATH NEVER RUNS ITS `shared` FIELD'S `Drop` BODY -- `let r = twow(W { o: Some(H { id: 8 }), n: 8 }, false)` over `fn twow(w: W, c: bool) -> W { if c { return w; } W { o: Some(H { id: 99 }), n: 99 } }` prints `_8 99 dH99 end` where every compiled surface prints the due `dH8 _8 99 end dH99` | — |
+| B-2026-10-06-104 | 2026-10-06 | interp | medium | UNDER `--interp`, READING A FIELD STRAIGHT OFF A HANDED-BACK STRUCT TEMP NEVER RUNS ITS `shared` FIELD'S `Drop` BODY -- `println(f"_3 {keepw(mkw(3)).n}")`, `let m = keepw(mkw(5)).n` and the forwarded `keepx(X { h: H { id: 4 }, n: 4 }).n` over `fn keepw(w: W) -> W { w }` print no `dH3`, `dH5` or `dH4` under `--interp`, where compiled builds print every one | — |
 
 ### Relocated
 
@@ -3842,6 +3844,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-109 | codegen | high | LOOPING BY VALUE OVER A `Vec.filled(n, s)` TEMPORARY OF STRINGS DOUBLE-FREES COMPILED -- `for s in Vec.filled(2, base.clone()) { r.push(s); }` aborts… | 08c237410 |
 | B-2026-10-05-121 | interp+codegen | medium | REMAINDER OF B-2026-10-04-47: A `shared` VALUE HELD IN A BY-VALUE METHOD ARGUMENT OR A BY-VALUE `self` IS STILL RELEASED AT THE CALLER'S SCOPE EXIT -… | 07ca081f3 |
 | B-2026-10-05-118 | codegen | high | A FRESH STRUCT TEMPORARY WHOSE FIELD IS A PLAIN ENUM HOLDING A `shared` VALUE, PASSED BY VALUE, DECREMENTS THE HANDLE AFTER FREEING IT ON EVERY COMPI… | d12cd317d |
+| B-2026-10-05-120 | codegen | medium | A FRESH STRUCT TEMPORARY HOLDING A `shared` VALUE THAT THE CALLEE HANDS BACK NEVER RUNS THE HANDLE'S `Drop` BODY AND LEAKS IT COMPILED -- `{ let k =… | 2c8ef7099 |
 | B-2026-10-05-110 | codegen | medium | A TUPLE, `Option` OR `Vec` LOCAL MOVED OUT AND THEN REASSIGNED NEVER RUNS THE NEW VALUE'S `Drop` BODY COMPILED -- `let mut p = mkr(1); let q = p; p =… | 9f61be6b9 |
 | B-2026-10-05-111 | codegen | medium | REASSIGNING A `Vec` LOCAL THAT WAS MOVED OUT RUNS THE MOVED VALUE'S ELEMENT `Drop` BODIES AGAIN AT THE STORE AND NEVER RUNS THE NEW ONES COMPILED --… | 9f61be6b9 |
 | B-2026-10-05-114 | interp+codegen | medium | STORING INTO A TUPLE LOCAL'S ELEMENT (`p.0 = mkr(2)`) RUNS NO `Drop` BODY FOR THE DISPLACED ELEMENT ON ANY SURFACE -- `let mut p = (mkr(1), 5); p.0 =… | fb926ac2c |
