@@ -153,11 +153,10 @@ fn member(defs: &ProgramDefs, d: DefId, seg: &str) -> Option<DefId> {
         }
     }
     let cands = defs.methods.get(&d)?.get(seg)?;
-    let inherent_len = defs.table.get(d).path.segments.len() + 1;
     cands
         .iter()
         .copied()
-        .find(|&m| defs.table.get(m).path.segments.len() == inherent_len)
+        .find(|&m| !defs.is_trait_method(m))
         .or_else(|| cands.first().copied())
 }
 
@@ -265,7 +264,7 @@ mod tests {
         };
         want("Shape.Sq", "shapes::Shape::Sq");
         want("Shape.Dot", "shapes::Shape::Dot");
-        want("P.new", "shapes::P::new");
+        want("P.new", "shapes::P::impl#0::new");
         want("P", "shapes::P");
         want("helper", "shapes::helper");
         want("helper2", "helper2");

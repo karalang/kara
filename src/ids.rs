@@ -58,6 +58,7 @@ pub struct DefId(pub u32);
 pub enum DefKind {
     Fn,
     Method,
+    Impl,
     Struct,
     Union,
     Enum,

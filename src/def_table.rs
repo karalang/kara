@@ -11,8 +11,8 @@
 //! * a top-level item: `[..module, name]` (a root-module item is just `[name]`);
 //! * an enum variant: `[..enum, Variant]`;
 //! * a trait's declared method: `[..trait, method]`;
-//! * an inherent method: `[..type, method]`;
-//! * a trait-impl method: `[..type, Trait, method]`;
+//! * an impl block: `[..type, "impl#n"]` or `[..type, "impl Trait#n"]`;
+//! * an impl's method: `[..impl, method]`;
 //! * a baked stdlib item: `["std", <file stem>, name]`.
 //!
 //! An impl whose target is not a definition in this table (a builtin such as
@@ -26,7 +26,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{ExternItem, ImplItem, Item, Program, TraitItem, TypeKind};
+use crate::ast::{ExternItem, GenericParams, ImplItem, Item, Program, TraitItem, TypeKind};
 use crate::def_path::DefPath;
 use crate::ids::{DefId, DefKind, DefTable};
 use crate::module::{self, ModuleId, ProgramTree};
@@ -46,8 +46,45 @@ pub struct ProgramDefs {
     /// Enum → its variants, by name.
     pub variants: HashMap<DefId, HashMap<String, DefId>>,
     /// Type or trait → its methods, by name. A type's trait-impl methods are
-    /// listed here too; [`DefTable::get`] on one tells which trait it is from.
+    /// listed here too; [`ProgramDefs::impls`] on a method's parent tells which
+    /// trait it is from.
     pub methods: HashMap<DefId, HashMap<String, Vec<DefId>>>,
+    /// Every impl block.
+    pub impls: HashMap<DefId, ImplData>,
+    /// A method's impl block, or the trait that declares it.
+    pub parent: HashMap<DefId, DefId>,
+    /// Each generic definition's own type and const parameters, in declaration
+    /// order. A method's impl parameters are on the impl; see
+    /// [`ProgramDefs::generic_params`].
+    pub generics: HashMap<DefId, Vec<String>>,
+}
+
+/// One impl block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImplData {
+    /// The type it is for, when that type is a definition (not a builtin).
+    pub target: Option<DefId>,
+    /// The trait it implements, by its last path segment, when it is a trait impl.
+    pub trait_name: Option<String>,
+    /// That trait's definition, when it resolves.
+    pub trait_def: Option<DefId>,
+}
+
+fn generic_names(g: &Option<GenericParams>) -> Vec<String> {
+    g.as_ref()
+        .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
+        .unwrap_or_default()
+}
+
+fn item_generics(item: &Item) -> Vec<String> {
+    match item {
+        Item::Function(f) => generic_names(&f.generic_params),
+        Item::StructDef(s) => generic_names(&s.generic_params),
+        Item::EnumDef(e) => generic_names(&e.generic_params),
+        Item::TraitDef(t) => generic_names(&t.generic_params),
+        Item::TypeAlias(t) => generic_names(&t.generic_params),
+        _ => Vec::new(),
+    }
 }
 
 fn item_def(item: &Item) -> Vec<(&str, DefKind)> {
@@ -136,6 +173,31 @@ impl ProgramDefs {
             .copied()
     }
 
+    /// Every type and const parameter in scope inside `def`, in the order a
+    /// substitution lists them: for a method, its impl's (or trait's)
+    /// parameters, then its own; otherwise the definition's own.
+    pub fn generic_params(&self, def: DefId) -> Vec<String> {
+        let mut out = self
+            .parent
+            .get(&def)
+            .and_then(|p| self.generics.get(p))
+            .cloned()
+            .unwrap_or_default();
+        out.extend(self.generics.get(&def).cloned().unwrap_or_default());
+        out
+    }
+
+    /// Whether method `m` comes from a trait impl (or a trait declaration).
+    pub fn is_trait_method(&self, m: DefId) -> bool {
+        match self.parent.get(&m) {
+            Some(p) => match self.impls.get(p) {
+                Some(i) => i.trait_name.is_some(),
+                None => true,
+            },
+            None => false,
+        }
+    }
+
     /// The variant `name` of the enum `enum_def`.
     pub fn variant(&self, enum_def: DefId, name: &str) -> Option<DefId> {
         self.variants.get(&enum_def)?.get(name).copied()
@@ -162,6 +224,10 @@ impl ProgramDefs {
             for (name, kind) in item_def(item) {
                 let id = self.table.intern(path_of(prefix, &[name]), kind);
                 out.entry(name.to_string()).or_insert(id);
+                let g = item_generics(item);
+                if !g.is_empty() {
+                    self.generics.insert(id, g);
+                }
                 match item {
                     Item::EnumDef(e) => {
                         for v in &e.variants {
@@ -176,16 +242,21 @@ impl ProgramDefs {
                     }
                     Item::TraitDef(t) => {
                         for m in t.items.iter().filter_map(|ti| match ti {
-                            TraitItem::Method(m) => Some(m.name.as_str()),
+                            TraitItem::Method(m) => Some(m),
                             TraitItem::AssocType(_) => None,
                         }) {
                             let mid = self
                                 .table
-                                .intern(path_of(prefix, &[name, m]), DefKind::Method);
+                                .intern(path_of(prefix, &[name, &m.name]), DefKind::Method);
+                            self.parent.insert(mid, id);
+                            let g = generic_names(&m.generic_params);
+                            if !g.is_empty() {
+                                self.generics.insert(mid, g);
+                            }
                             self.methods
                                 .entry(id)
                                 .or_default()
-                                .entry(m.to_string())
+                                .entry(m.name.clone())
                                 .or_default()
                                 .push(mid);
                         }
@@ -197,8 +268,13 @@ impl ProgramDefs {
         out
     }
 
-    /// Intern the methods of every impl block in `items`. `resolve` names the
-    /// impl's target type the way its module sees it.
+    /// Intern every impl block in `items` and its methods. `resolve` names the
+    /// impl's target type and trait the way its module sees them.
+    ///
+    /// An impl is `[..type, "impl#n"]` (inherent) or `[..type, "impl Trait#n"]`,
+    /// `n` counting that type's impls of that trait in build order, so two
+    /// impls of one generic trait (`From[i32]`, `From[String]`) stay apart; its
+    /// methods hang off it.
     fn add_impls(&mut self, items: &[Item], resolve: impl Fn(&Self, &str) -> Option<DefId>) {
         for item in items {
             let Item::ImplBlock(b) = item else { continue };
@@ -216,16 +292,42 @@ impl ProgramDefs {
                 .trait_name
                 .as_ref()
                 .and_then(|t| t.segments.last().cloned());
+            let label = match &trait_name {
+                Some(t) => format!("impl {t}"),
+                None => "impl".to_string(),
+            };
+            let mut n = 0;
+            let impl_path = loop {
+                let p = path_of(&target_path, &[&format!("{label}#{n}")]);
+                if self.table.lookup(&p).is_none() {
+                    break p;
+                }
+                n += 1;
+            };
+            let impl_id = self.table.intern(impl_path.clone(), DefKind::Impl);
+            let trait_def = trait_name.as_deref().and_then(|t| resolve(self, t));
+            self.impls.insert(
+                impl_id,
+                ImplData {
+                    target,
+                    trait_name: trait_name.clone(),
+                    trait_def,
+                },
+            );
+            let g = generic_names(&b.generic_params);
+            if !g.is_empty() {
+                self.generics.insert(impl_id, g);
+            }
             for ii in &b.items {
                 let ImplItem::Method(f) = ii else { continue };
-                let mut tail: Vec<&str> = Vec::new();
-                if let Some(t) = &trait_name {
-                    tail.push(t);
-                }
-                tail.push(&f.name);
                 let mid = self
                     .table
-                    .intern(path_of(&target_path, &tail), DefKind::Method);
+                    .intern(path_of(&impl_path.segments, &[&f.name]), DefKind::Method);
+                self.parent.insert(mid, impl_id);
+                let g = generic_names(&f.generic_params);
+                if !g.is_empty() {
+                    self.generics.insert(mid, g);
+                }
                 if let Some(t) = target {
                     self.methods
                         .entry(t)
@@ -334,7 +436,7 @@ mod tests {
 
         // Methods hang off their type's path.
         let size = defs.methods[&expr]["size"][0];
-        assert_eq!(path(&defs, size), "ast::Expr::size");
+        assert_eq!(path(&defs, size), "ast::Expr::impl#0::size");
 
         // `ast` does not import `Part`, so it does not see it.
         assert_eq!(defs.lookup(ast, "Part"), None);
@@ -366,5 +468,37 @@ mod tests {
             path(&defs, defs.variant(part, "Expr").unwrap()),
             "token::InterpPart::Expr"
         );
+    }
+
+    #[test]
+    fn impls_get_defs_and_generics_list_impl_then_fn() {
+        let p = crate::parse(
+            "struct W[T] { v: T }\n\
+             trait Conv[S] { fn conv(s: S) -> Self; }\n\
+             impl[T] W[T] { fn map[U](self, u: U) -> U { u } }\n\
+             impl Conv[i64] for W[i64] { fn conv(s: i64) -> W[i64] { W { v: s } } }\n\
+             impl Conv[bool] for W[i64] { fn conv(s: bool) -> W[i64] { W { v: 0 } } }\n\
+             fn main() {}\n",
+        )
+        .program;
+        let defs = ProgramDefs::build_for_program(&p);
+        let w = defs.lookup(0, "W").unwrap();
+        assert_eq!(defs.generic_params(w), vec!["T"]);
+        let map = defs.methods[&w]["map"][0];
+        assert_eq!(path(&defs, map), "W::impl#0::map");
+        assert_eq!(defs.generic_params(map), vec!["T", "U"]);
+        assert!(!defs.is_trait_method(map));
+        let convs = &defs.methods[&w]["conv"];
+        assert_eq!(convs.len(), 2);
+        let rendered: Vec<String> = convs.iter().map(|&c| path(&defs, c)).collect();
+        assert_eq!(
+            rendered,
+            vec!["W::impl Conv#0::conv", "W::impl Conv#1::conv"]
+        );
+        assert!(convs.iter().all(|&c| defs.is_trait_method(c)));
+        let imp = defs.parent[&convs[0]];
+        assert_eq!(defs.table.get(imp).kind, DefKind::Impl);
+        assert_eq!(defs.impls[&imp].target, Some(w));
+        assert_eq!(defs.impls[&imp].trait_def, defs.lookup(0, "Conv"));
     }
 }
