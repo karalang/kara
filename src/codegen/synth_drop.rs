@@ -8394,12 +8394,58 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Option[shared T].
         if let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(te) {
-            let child_heap = inner_info.heap_type;
             if num_words <= 1 {
-                // Niche layout: single nullable ptr word — same as a bare
-                // shared child.
-                self.emit_enum_word_shared_dec(enum_heap, p_arg, word_idx, child_heap, label);
+                // B-2026-10-06-134 — the one-word area holds a pointer to the
+                // heap BOX the constructor made for the `Option` (it is wider
+                // than the area), not a niche handle, and arm bindings read
+                // the `Option` back out of that box. Treating the word as the
+                // handle decremented the box's tag word instead: a `Some`
+                // lost the handle, a `None` lost the box. Release the handle
+                // the box holds, then free the box. The element drop is
+                // resolved BEFORE the GEP: synthesizing it moves the builder.
+                let Some(opt_drop) = self.option_shared_payload_element_drop(te) else {
+                    return true;
+                };
+                let wp = self
+                    .builder
+                    .build_struct_gep(
+                        enum_heap,
+                        p_arg,
+                        word_idx as u32,
+                        &format!("{label}.box.wp"),
+                    )
+                    .unwrap();
+                let w = self
+                    .builder
+                    .build_load(i64_t, wp, &format!("{label}.box.w"))
+                    .unwrap()
+                    .into_int_value();
+                let bp = self
+                    .builder
+                    .build_int_to_ptr(w, ptr_ty, &format!("{label}.box"))
+                    .unwrap();
+                let is_null = self
+                    .builder
+                    .build_is_null(bp, &format!("{label}.box.isnull"))
+                    .unwrap();
+                let do_bb = self
+                    .context
+                    .append_basic_block(drop_fn, &format!("{label}.box.do"));
+                let skip_bb = self
+                    .context
+                    .append_basic_block(drop_fn, &format!("{label}.box.skip"));
+                self.builder
+                    .build_conditional_branch(is_null, skip_bb, do_bb)
+                    .unwrap();
+                self.builder.position_at_end(do_bb);
+                self.builder.build_call(opt_drop, &[bp.into()], "").unwrap();
+                self.builder
+                    .build_call(self.runtime_fns.free_fn, &[bp.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
             } else {
+                let child_heap = inner_info.heap_type;
                 // Full `Option { tag, w0, … }` packed into consecutive payload
                 // words: branch on `tag == Some`, then dec the inner at w0.
                 let tag_ptr = self

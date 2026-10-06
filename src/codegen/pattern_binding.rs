@@ -220,26 +220,26 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// B-2026-10-05-27 — an `Option[shared T]` payload bound whole out of a
-    /// generic `shared enum`'s erased slot (`G.Y(o)` over `G[Option[M]]`) owns
-    /// its own reference: retain the handle at the bind and release it at the
-    /// binding's scope exit, as an `Option[shared]` local does. The release fn
-    /// now releases the handle the box holds (the constructor records the
-    /// interior for exactly this payload type), so a bare view handed on
-    /// (`G.Y(o) => o` returned) would leave the box and the new owner both
-    /// releasing it. The shared-handle sibling (`G[M]`) already retains at its
-    /// bind. Field-gated to the erased slot, which is the only one the
-    /// constructor gives that interior to.
+    /// `shared enum` (`G.Y(o)` over `G[Option[M]]`) owns its own reference:
+    /// retain the handle at the bind and release it at the binding's scope
+    /// exit, as an `Option[shared]` local does. The enum's release releases
+    /// the handle its payload box holds, so a bare view handed on (`G.Y(o) =>
+    /// o` returned) would leave the box and the new owner both releasing it.
+    /// The shared-handle sibling (`G[M]`) already retains at its bind.
+    ///
+    /// B-2026-10-06-134 — for every `shared enum`, not only a generic one's
+    /// erased slot: a non-generic enum's own release now reads through the
+    /// box too. Gated on the one-word area, which is the one that holds a box;
+    /// a wider area holds the `Option` inline and stays a view.
     pub(super) fn retain_shgen_option_shared_binding(
         &mut self,
         sub_pat: &Pattern,
-        enum_name: &str,
-        variant: &str,
-        i: usize,
+        num_words: usize,
     ) {
         let PatternKind::Binding(name) = &sub_pat.kind else {
             return;
         };
-        if !self.shared_genum_field_unclassified(enum_name, variant, i) {
+        if num_words != 1 {
             return;
         }
         let key = (sub_pat.span.offset, sub_pat.span.length);
@@ -2634,12 +2634,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     let bound =
                                         self.reconstruct_payload_value(sub_pat, &field_words)?;
                                     self.bind_pattern_values(sub_pat, bound)?;
-                                    self.retain_shgen_option_shared_binding(
-                                        sub_pat,
-                                        enum_name,
-                                        variant_name,
-                                        i,
-                                    );
+                                    self.retain_shgen_option_shared_binding(sub_pat, num_words);
                                     self.record_deboxed_payload_box(
                                         sub_pat,
                                         &field_words,
