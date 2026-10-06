@@ -8,6 +8,7 @@
 //! interned types land; MIR only needs the queries it exposes.
 
 pub mod build;
+pub mod interp;
 pub mod place_ty;
 pub mod pretty;
 pub mod syntax;

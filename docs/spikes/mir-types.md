@@ -217,7 +217,8 @@ The MIR interpreter is the reference implementation and the oracle the LLVM back
 
 | Event | When |
 |---|---|
-| `alloc <id> <ty> <bytes>` | a heap allocation (an `Aggregate` of a `shared` type, a library collection growing, a closure environment) |
+| `enter <fn>` / `exit <fn>` | a MIR body starts / returns normally (functions the interpreter implements natively, such as `println`, record nothing) |
+| `alloc <id> <ty>` | a heap allocation (an `Aggregate` of a `shared` type, a library collection growing, a closure environment); the byte size joins once layouts exist |
 | `free <id>` | that allocation is freed |
 | `move <place>` | a `Move` operand marks its source uninitialized |
 | `init <place>` | an `Assign` initializes a place |
