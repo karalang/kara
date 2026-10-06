@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 699 |
+| miscompile | 701 |
 | run-vs-build | 592 |
-| leak | 582 |
+| leak | 583 |
 | double-free | 422 |
 | codegen-gap | 229 |
 | missing-feature | 217 |
@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 122 |
 | crash | 112 |
 | soundness | 98 |
-| use-after-free | 82 |
+| use-after-free | 83 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2761 |
-| interp | 858 |
+| codegen | 2765 |
+| interp | 860 |
 | typecheck | 335 |
 | other | 113 |
 | ownership | 80 |
@@ -336,7 +336,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-83 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` ENUM METHOD CALLED ON A STRUCT FIELD RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY SURFACE -- with `struct W { e: E, k: i64 }` and `fn m(self) -> i64 { match self { E.A(s) => s.id, E.B(n) => n } }`, `let w1 = W { e: E.A(mks(1)), k: 0 }; println(f"m {w1.e.m()}")` prints `dS1 m 1 dS1` | — |
 | B-2026-09-29-84 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` ENUM METHOD WHOSE `match` / `if let` DOES NOT BIND THE LIVE VARIANT'S PAYLOAD LOSES THAT PAYLOAD'S `Drop` BODY ON EVERY SURFACE -- with `enum E { A(S), B(i64), C(S) }`, `fn k(self) -> i64 { match self { E.A(s) => s.id, _ => 0 } }` at `let b = E.C(mks(3)); b.k()` prints no `dS3`, and `fn g(self) -> i64 { if let E.A(s) = self { return s.id }; return 0 }` at `E.C(mks(2))` none either | — |
 | B-2026-09-29-91 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` ENUM METHOD THAT MATCHES ON `self` AND HANDS `self` TO A BY-VALUE FREE FUNCTION ON ANOTHER PATH LOSES THE PAYLOAD'S `Drop` BODY ON THAT PATH, ON EVERY SURFACE -- with `fn eat(e: E) -> i64 { match e { E.A(s) => s.id, .. } }`, `fn h1(self, c: bool) -> i64 { if c { return eat(self) }; match self { .. } }` at `let z = E.A(mks(23)); z.h1(true)` prints no `dS23` | — |
-| B-2026-09-29-92 | 2026-09-29 | codegen | medium | A FRESH-TEMP STRUCT WHOSE ENUM FIELD BOXES AN `Array` PAYLOAD STILL DOUBLE-FREES WHEN HANDED ON BY VALUE, AS AN ARGUMENT OR AS AN OWNED-`self` RECEIVER -- `give(Hb { g: Eb.A(mk()) })`, `give(mkh())` and `Hb { g: Eb.A(mk()) }.give()` over `struct Hb { g: Eb }` and `enum Eb { A(Array[String, 2]), B }` abort with `free(): double free detected in tcache 2` at `-O0` and `-O2` (7 valgrind errors at `-O0`) before and after B-2026-09-20-4, whose NAMED spellings are clean | — |
+| B-2026-09-29-92 | 2026-09-29 | codegen | medium | [CORRECTED 2026-10-06: the three ARGUMENT spellings, `give(Hb { .. })`, `give(mkh())` and `outer(Hb { .. })`, are FIXED by B-2026-10-05-118 (d12cd317d); the two temp RECEIVER spellings and `give(w.h)` remain] A FRESH-TEMP STRUCT WHOSE ENUM FIELD BOXES AN `Array` PAYLOAD STILL DOUBLE-FREES WHEN HANDED ON BY VALUE, AS AN ARGUMENT OR AS AN OWNED-`self` RECEIVER -- `give(Hb { g: Eb.A(mk()) })`, `give(mkh())` and `Hb { g: Eb.A(mk()) }.give()` over `struct Hb { g: Eb }` and `enum Eb { A(Array[String, 2]), B }` abort with `free(): double free detected in tcache 2` at `-O0` and `-O2` (7 valgrind errors at `-O0`) before and after B-2026-09-20-4, whose NAMED spellings are clean | — |
 | B-2026-09-29-93 | 2026-09-29 | codegen | low | A CONCRETE STRUCT HOLDING A GENERIC ENUM FIELD WHOSE PAYLOAD IS HEAP-BOXED LEAKS THE PAYLOAD'S OWN HEAP AT SCOPE EXIT, with no call anywhere -- `let h = Hb { g: G.Y(f"aaaaaaaa-1") };` over `struct Hb { g: G[String] }` loses the 10-byte String, `G[Array[String, 2]]` loses both 10-byte elements (20 B in 2 blocks) and `G[Vec[String]]` leaks as well, at `-O0`, while `let g = G.Y([..])` alone is clean | — |
 | B-2026-09-29-96 | 2026-09-29 | interp+codegen | medium | REMAINDER OF B-2026-09-29-75: A BY-VALUE ENUM PARAM HANDED TO AN OWNED-`self` METHOD THAT TAKES ITS PAYLOAD STILL RUNS THE PAYLOAD'S `Drop` BODY TWICE, ON EVERY SURFACE, WHEN THE CALL IS ON SOME PATHS ONLY, THE CALLEE IS GENERIC, THE ENUM HAS ITS OWN `Drop`, OR THE METHOD RETURNS THE ENUM -- `fn p8(t: E, c: bool) -> i64 { if c { return t.m2() }; .. }` at `p8(E.A(mks(7)), true)` prints `dS7 dS7` | — |
 | B-2026-09-29-102 | 2026-09-29 | interp+codegen | medium | A FIELD OF A BY-VALUE STRUCT PARAM MOVED DIRECTLY INTO A STRUCT LITERAL OR `Some` THAT IS BOUND TO A LOCAL RUNS ITS `Drop` BODY TWICE ON EVERY BACKEND, INTERPRETER INCLUDED -- `fn f(q: Wq) -> i64 { let k = Kq { s: q.u }; return k.s.id }` over `struct P { id: i64 }` with a `Drop` prints `dP9 dP9 r9` for `dP9 r9`, with no `shared` value anywhere | — |
@@ -473,7 +473,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-43 | 2026-10-04 | codegen | medium | A FIELD OR INDEX READ STRAIGHT OFF A CLOSURE CALL'S STRUCT OR ARRAY RESULT DOES NOT BUILD -- `let h = |x: R| x; println(f"r{h(mk(47)).id}")` and `let f = |x: Array[R, 1]| x; let r = f([mk(92)]); println(f"r{r[0].id}")` fail with `codegen: cannot resolve field 'id' on this receiver`, while `--interp` prints `r47 dR47` and `r92 dR92` | — |
 | B-2026-10-04-44 | 2026-10-04 | interp+codegen | medium | A DISCARDED CALL THROUGH A CLOSURE THAT RETURNS A FRESH `Drop` VALUE RUNS NO BODY ON ANY SURFACE AND LEAKS IT COMPILED -- `let h = |k: i64| mk(k); h(90); println("r")` prints `r end` everywhere, where the named passthrough `id_r(mk(88));` prints `dR88 r end` | — |
 | B-2026-10-04-45 | 2026-10-04 | codegen | high | A GENERIC `shared enum G[T]` OVER `Map[..]` OWNS ITS MAP PAYLOAD NOWHERE: WITH NO MATCH THE MAP LEAKS, WITH ONE ARM BINDING THE ARM FREES IT, AND WITH TWO THE SECOND READS AND FREES A FREED TABLE (4 INVALID FREES, 15 INVALID READS) -- THE GENERIC RELEASE FN FREES ONLY BOXED PAYLOADS AND A ONE-WORD MAP HANDLE IS INLINE | — |
-| B-2026-10-04-47 | 2026-10-04 | codegen | medium | A `shared` HANDLE HELD IN A FIELD OF A NAMED STRUCT PASSED BY VALUE IS RELEASED AT THE CALLER'S SCOPE END ON EVERY COMPILED SURFACE, WHERE design.md AND `--interp` RELEASE IT AT THE END OF THE CALL -- `let w = W { o: Some(H { id: 6 }), n: 7 }; cw2(w); println("after1")` prints `w7 after1 .. end dH6` at -O0 and -O2 against `--interp`'s `w7 dH6 after1`, and the same for a by-value `self` and for a bare `shared` field | — |
 | B-2026-10-04-48 | 2026-10-04 | interp | medium | `--interp` RUNS THE `Drop` BODY OF A `shared` FIELD LATE OR NOT AT ALL WHEN ITS HOLDER IS HANDED TO A CALLEE THAT TAKES IT OVER -- a fresh `Hs { q: Q2 { id: 1 }, r: mk(2) }` pushed into the callee's own `Vec` prints `d2 in k5` on `--interp` and `d2 in dq1 k5` compiled, and the same call made inside `println(f"k{f(h)}")` prints `dq1` after `k5` on `--interp` only | — |
 | B-2026-10-04-49 | 2026-10-04 | interp+codegen | medium | B-2026-09-27-50'S REASSIGNED `let mut` REBIND OF A STRUCT HOLDING A `shared` FIELD LOSES BODIES ON EVERY SURFACE AND LEAKS COMPILED -- `fn f(a: Hs) -> i64 { let mut c = a; c = Hs { q: Q2 { id: 5 }, r: mk(9) }; println("in"); 5 }` prints `dq1 in k5` compiled (no `d2`, no `d9`, no `dq5`, valgrind 1) and `d2 d9 dq5 in k5` on `--interp` (no `dq1`) | — |
 | B-2026-10-04-51 | 2026-10-04 | interp+codegen | medium | AN INDEX STORE INTO A `let mut` REBIND OF A BY-VALUE `Array` OR `Map` PARAM RUNS THE WRONG BODIES -- `fn f(a: Array[R, 2]) -> i64 { let mut c = a; c[0] = mk(9); println("in"); 5 }` prints `d1 in d1 d2` on every surface (`d1` twice, `d9` never), and on `--interp` the `Map[i64, R]` spelling `c[2] = mk(9)` prints `in d1`, losing `d9`, where the compiled backends print both bodies | — |
@@ -527,6 +526,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-115 | 2026-10-05 | codegen | medium | A TEMPORARY `Option[String]` PASSED TO A GENERIC `ref T` PARAMETER LEAKS ITS PAYLOAD -- `fn peek[T](x: ref T) -> i64 { 1 }` with `peek(mk())` over `fn mk() -> Option[String]` loses the string, while the concrete `fn peek(x: ref Option[String])` and a temporary `String` through the same generic are clean | — |
 | B-2026-10-05-116 | 2026-10-05 | codegen | medium | A GENERIC STRUCT LITERAL WHOSE FIELD IS AN `Option` OF A HEAP TYPE LEAKS THE PAYLOAD -- `struct G[T] { v: T }; let h = G { v: Some("hs".to_string()) }` loses the string at scope end, compiled; `G { v: "plain".to_string() }` is clean | — |
 | B-2026-10-05-117 | 2026-10-05 | codegen+interp | low | A LOCAL REBOUND FROM A BY-VALUE `Option` PARAM, MATCHED AND THEN REASSIGNED TO A FRESH `Some`, RUNS THE NEW VALUE'S `Drop` BODY AT THE END OF THE CALLEE ON EVERY BACKEND INSTEAD OF AT ITS LIVE-RANGE END -- `let mut h = x; match h { .. } h = Some([mk(7), mk(8)]); println("q5");` prints `q5 dR7 dR8` where a plain local prints the bodies before the next statement | — |
+| B-2026-10-05-121 | 2026-10-05 | interp+codegen | medium | REMAINDER OF B-2026-10-04-47: A `shared` VALUE HELD IN A BY-VALUE METHOD ARGUMENT OR A BY-VALUE `self` IS STILL RELEASED AT THE CALLER'S SCOPE EXIT -- `g.mw(w)` over `fn mw(ref self, w: W)` and `v.g2()` over `fn g2(self)` with `W { o: Option[H], n: i64 }` print `dH` at the call under `--interp` and at scope exit compiled; `g.m(o)` over `fn m(ref self, o: Option[H])` releases at scope exit on BOTH | — |
+| B-2026-10-05-119 | 2026-10-05 | interp+codegen | medium | A FRESH `Option`, ENUM OR `Vec` TEMPORARY HOLDING A `shared` VALUE, PASSED BY VALUE, NEVER RUNS THE HANDLE'S `Drop` BODY UNDER `--interp`, AND A TUPLE TEMPORARY NEVER RUNS IT ON ANY BACKEND -- `co(Some(H { id: 9 }))`, `ce(E.A(H { id: 11 }))` and `cv(vec![H { id: 12 }])` print `dH9` / `dH11` / `dH12` before the next statement compiled and never under `--interp`; `ct((H { id: 10 }, 1))` prints no `dH10` anywhere | — |
+| B-2026-10-05-120 | 2026-10-05 | codegen | medium | A FRESH STRUCT TEMPORARY HOLDING A `shared` VALUE THAT THE CALLEE HANDS BACK NEVER RUNS THE HANDLE'S `Drop` BODY AND LEAKS IT COMPILED -- `{ let k = keepw(W { o: Some(H { id: 4 }), n: 8 }); println(f"_4 {k.n}"); }` over `struct W { o: Option[H], n: i64 }` and `fn keepw(w: W) -> W { w }` prints `_4 8 _4b` on every compiled surface (16 B definitely lost at -O0) where `--interp` prints `_4 8 dH4 _4b`; the named spelling `let w7 = W { .. }; let k = keepw(w7)` is right on both | — |
 
 ### Relocated
 
@@ -3718,6 +3720,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-39 | codegen | low | AN INDEX STORE INTO A TUPLE-HELD CONTAINER THROUGH `mut ref self` FAILS THE BUILD -- `self.t.0[0] = s` in `fn set(mut ref self, s: String)` over `str… | 3787f7857 |
 | B-2026-10-04-40 | codegen | medium | A TUPLE HOLDING A NESTED `Array[Array[String, N], M]` LEAKS EVERY INNER STRING AT SCOPE EXIT -- `let t: (Array[Array[String, 2], 2], i64) = ([[..], [… | 64fcfec3e |
 | B-2026-10-04-46 | codegen | high | AN `Option[shared]` TUPLE ELEMENT IS NEVER RELEASED BY THE TUPLE'S DROP, SO `p.0.unwrap().id` READ TWICE IS A USE-AFTER-FREE AND A TUPLE NOBODY UNWRA… | 2f3d44b06 |
+| B-2026-10-04-47 | codegen | medium | A `shared` HANDLE HELD IN A FIELD OF A NAMED STRUCT PASSED BY VALUE IS RELEASED AT THE CALLER'S SCOPE END ON EVERY COMPILED SURFACE, WHERE design.md… | 53ae5ee69 |
 | B-2026-10-04-50 | interp+codegen | medium | A `let mut` REBIND OF A BY-VALUE PARAM REASSIGNED INSIDE A BRANCH RUNS THE DISPLACED BODY TWICE ON `--interp` AND, FOR AN ENUM, LOSES THE NEW VALUE'S… | 8c99931fe |
 | B-2026-10-04-54 | codegen | medium | `.clone()` ON A TUPLE ELEMENT REACHED THROUGH AN INDEX OR A `ref` PARAM FAILS `karac build` -- `v[0].0.clone()` over `Vec[(String, i64)]` and `p.0.cl… | 65a9ccee8 |
 | B-2026-10-04-56 | codegen | medium | A STEADY SMALL `Map[char, i64]` RUNS 2.2x RUST'S `HashMap` AT EQUAL HASHING on kata 340's sliding-window bench (0.47 s vs 0.21 s), and the hash alone… | 4944add14 |
@@ -3783,6 +3786,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-96 | typecheck | medium | A GENERIC STRUCT LITERAL NESTED IN ANOTHER IS REFUSED WITH "cannot infer type parameter" -- `W { inner: Bx { v: 5, n: 0 }, tag: 3 }` over `struct Bx[… | 08ddf5263 |
 | B-2026-10-05-97 | codegen | high | A STRUCT LITERAL WHOSE FIELDS ARE WRITTEN OUT OF DECLARATION ORDER STORES EACH VALUE IN THE WRONG FIELD COMPILED -- `struct F { a: i64, b: i64 }; let… | fb6be1570 |
 | B-2026-10-05-108 | codegen | medium | A `flat_map` WITH A DESTRUCTURING CLOSURE PARAM OR A MAPPED INNER FAILS THE BUILD -- `sm.iter().flat_map(\|(k, n)\| (0..n).map(\|_\| k)).collect()` over… | e1f8650e9 |
+| B-2026-10-05-118 | codegen | high | A FRESH STRUCT TEMPORARY WHOSE FIELD IS A PLAIN ENUM HOLDING A `shared` VALUE, PASSED BY VALUE, DECREMENTS THE HANDLE AFTER FREEING IT ON EVERY COMPI… | d12cd317d |
 
 </details>
 
