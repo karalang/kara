@@ -17,7 +17,10 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::ids::{DefId, NodeId};
+use crate::def_table::ProgramDefs;
+use crate::ids::{DefId, DefKind, NodeId};
+use crate::module::ModuleId;
+use crate::node_res::Res;
 use crate::ty::{LowerError, Ty, TyCtxt, TyList};
 use crate::typechecker::types::Type;
 use crate::typechecker::TypeCheckResult;
@@ -30,6 +33,9 @@ pub enum Callee {
     /// A compiler builtin with no definition (`println`, an intrinsic), by
     /// name.
     Builtin(String),
+    /// A call through a value of function type: a local closure or function
+    /// pointer. Its type is the callee expression's.
+    Value,
 }
 
 /// One call, resolved.
@@ -69,6 +75,92 @@ pub trait HirDefs {
     fn generics(&self, def: DefId) -> Option<Vec<String>>;
 }
 
+/// [`HirDefs`] over the module-qualified definition table and the resolver's
+/// per-node results, for one module.
+pub struct ProgramHirDefs<'a> {
+    defs: &'a ProgramDefs,
+    module: ModuleId,
+    res: &'a FxHashMap<NodeId, Res>,
+    /// Variant → its enum, whose parameters a constructor call instantiates.
+    variant_enum: FxHashMap<DefId, DefId>,
+}
+
+impl<'a> ProgramHirDefs<'a> {
+    pub fn new(defs: &'a ProgramDefs, module: ModuleId, res: &'a FxHashMap<NodeId, Res>) -> Self {
+        let variant_enum = defs
+            .variants
+            .iter()
+            .flat_map(|(&e, vs)| vs.values().map(move |&v| (v, e)))
+            .collect();
+        ProgramHirDefs {
+            defs,
+            module,
+            res,
+            variant_enum,
+        }
+    }
+}
+
+impl HirDefs for ProgramHirDefs<'_> {
+    fn type_def(&self, name: &str) -> Option<DefId> {
+        let d = self.defs.lookup(self.module, name)?;
+        matches!(
+            self.defs.table.get(d).kind,
+            DefKind::Struct
+                | DefKind::Enum
+                | DefKind::Union
+                | DefKind::OpaqueType
+                | DefKind::DistinctType
+                | DefKind::TypeAlias
+        )
+        .then_some(d)
+    }
+
+    fn method_callee(&self, owner: &str, method: &str) -> Option<Callee> {
+        let builtin = || Some(Callee::Builtin(format!("{owner}.{method}")));
+        let Some(owner_def) = self.defs.lookup(self.module, owner) else {
+            // A primitive or compiler-provided type: `i64.abs`, `String.len`.
+            return builtin();
+        };
+        let Some(cands) = self
+            .defs
+            .methods
+            .get(&owner_def)
+            .and_then(|ms| ms.get(method))
+        else {
+            // No source definition: a derived or compiler-provided method.
+            return builtin();
+        };
+        // The inherent method wins, as in method lookup. Otherwise a trait
+        // method is taken only when it is the one candidate: which of several
+        // trait impls a call picks is the type checker's decision, and it does
+        // not yet record it by node, so guessing here would be wrong silently.
+        let inherent: Vec<DefId> = cands
+            .iter()
+            .copied()
+            .filter(|&m| !self.defs.is_trait_method(m))
+            .collect();
+        match (inherent.as_slice(), cands.as_slice()) {
+            ([m], _) | ([], [m]) => Some(Callee::Def(*m)),
+            _ => None,
+        }
+    }
+
+    fn path_callee(&self, callee_expr: NodeId) -> Option<Callee> {
+        match self.res.get(&callee_expr)? {
+            Res::Def(d) => Some(Callee::Def(*d)),
+            Res::Builtin(s) => Some(Callee::Builtin(s.clone())),
+            Res::Local(_) => Some(Callee::Value),
+            Res::Generic(_) | Res::SelfTy | Res::Err => None,
+        }
+    }
+
+    fn generics(&self, def: DefId) -> Option<Vec<String>> {
+        let def = self.variant_enum.get(&def).copied().unwrap_or(def);
+        Some(self.defs.generic_params(def))
+    }
+}
+
 /// The typed HIR tables of one program.
 pub struct TypedHir {
     pub tcx: TyCtxt,
@@ -100,8 +192,12 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
     // signature, in the callee's parameters rather than the caller's. The
     // call's entry in `calls` (callee plus type arguments) is what describes
     // it, so it gets no `node_types` entry of its own.
-    let callee_exprs: rustc_hash::FxHashSet<NodeId> =
-        tc.node_call_callees.values().copied().collect();
+    let callee_exprs: rustc_hash::FxHashSet<NodeId> = tc
+        .node_call_callees
+        .values()
+        .copied()
+        .filter(|&e| defs.path_callee(e) != Some(Callee::Value))
+        .collect();
     for (&id, (ty, frame)) in &tc.node_types {
         if callee_exprs.contains(&id) {
             continue;
@@ -162,7 +258,7 @@ fn place_substs(
 ) -> Result<Vec<Ty>, HirError> {
     let order = match callee {
         Callee::Def(def) => defs.generics(*def),
-        Callee::Builtin(_) => None,
+        Callee::Builtin(_) | Callee::Value => None,
     };
     let Some(order) = order else {
         return match solved {
@@ -383,6 +479,52 @@ fn main() {
             TyKind::Param(p) => assert_eq!(p.index, 0),
             k => panic!("expected mk's T, got {k:?}"),
         }
+    }
+
+    #[test]
+    fn program_defs_resolve_calls_to_module_qualified_defs() {
+        let parsed = crate::parse(SRC);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut program = parsed.program;
+        crate::prepare_for_resolve(&mut program);
+        let r = crate::resolve(&program);
+        let tc = crate::typecheck(&program, &r);
+        assert!(tc.errors.is_empty(), "{:?}", tc.errors);
+        let defs = ProgramDefs::build_for_program(&program);
+        let res = crate::node_res::node_res(&r, &defs, 0, None);
+        let hir = build(&tc, &ProgramHirDefs::new(&defs, 0, &res));
+        assert!(hir.errors.is_empty(), "{:?}", hir.errors);
+
+        let path = |d: DefId| defs.table.get(d).path.render();
+        let show = |t: Ty| hir.tcx.display(t, &|d: DefId| path(d));
+        let call = |i: usize| {
+            let c = &hir.calls[&let_value(&program, "main", i).id];
+            let callee = match &c.callee {
+                Callee::Def(d) => path(*d),
+                other => format!("{other:?}"),
+            };
+            let substs: Vec<String> = hir.tcx.list(c.substs).into_iter().map(show).collect();
+            (callee, substs)
+        };
+        assert_eq!(call(0), ("mk".to_string(), vec!["i64".to_string()]));
+        assert_eq!(
+            call(1),
+            (
+                "Pair::impl#0::put".to_string(),
+                vec!["i64".to_string(), "bool".to_string(), "String".to_string()]
+            )
+        );
+        assert_eq!(
+            call(2),
+            (
+                "Pair::impl#0::first".to_string(),
+                vec!["i64".to_string(), "String".to_string()]
+            )
+        );
+        assert!(hir
+            .calls
+            .values()
+            .any(|c| c.callee == Callee::Builtin("println".into())));
     }
 
     #[test]
