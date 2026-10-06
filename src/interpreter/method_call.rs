@@ -4266,10 +4266,20 @@ impl<'a> super::Interpreter<'a> {
         // FIELD of float type is not reached by that guard, which is the
         // pre-existing looseness of this arm rather than something this widens;
         // `cmp` has answered for those since it was written.
+        // B-2026-10-06-113 — an ENUM receiver with a hand-written `cmp` /
+        // `partial_cmp` is not claimed here. Struct receivers reach their impl
+        // through the early impl hop above, which enum receivers skip, so this
+        // arm used to answer them with the structural order and ignore the
+        // user's body; `a < b` lowers to `a.cmp(b).is_lt()` and inherited the
+        // same wrong answer, while both compiled backends call the impl.
         if matches!(method, "cmp" | "partial_cmp")
             && args.len() == 1
             && match &obj {
-                Value::Struct { .. } | Value::SharedStruct(_) | Value::EnumVariant { .. } => true,
+                Value::Struct { .. } | Value::SharedStruct(_) => true,
+                Value::EnumVariant { enum_name, .. } => !matches!(
+                    self.env.get(&format!("{enum_name}.{method}")),
+                    Some(Value::Function { .. })
+                ),
                 Value::Tuple(_) => Self::value_is_totally_ordered(&obj),
                 _ => false,
             }
