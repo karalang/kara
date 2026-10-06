@@ -12575,6 +12575,9 @@ impl<'a> super::Interpreter<'a> {
                 // walked only AFTER the store: a `shared` element fires at its
                 // last reference, and until the store the binding is one.
                 let mut displaced_tuple: Option<Vec<Value>> = None;
+                // B-2026-10-04-68 — a displaced tuple ELEMENT that is, or holds,
+                // a `shared` value, released after the store (see there).
+                let mut displaced_elem_shared: Option<Value> = None;
                 if let ExprKind::Identifier(t) = &target.kind {
                     if !self.moved_out_user_drop_bindings.contains(t.as_str())
                         && !crate::deque_head::expr_mentions_name_deep(value, t)
@@ -12887,10 +12890,14 @@ impl<'a> super::Interpreter<'a> {
                                     if matches!(&v, Value::EnumVariant { enum_name, .. }
                                         if enum_name == "Option" || enum_name == "Result") =>
                                 {
-                                    self.run_discarded_value_user_drops(v);
+                                    self.run_discarded_value_user_drops(v.clone());
+                                    displaced_elem_shared = Some(v);
                                 }
                                 Some(v @ (Value::Struct { .. } | Value::EnumVariant { .. })) => {
                                     self.fire_displaced_index_elem(v);
+                                }
+                                Some(v @ Value::SharedStruct(_)) => {
+                                    displaced_elem_shared = Some(v);
                                 }
                                 _ => {}
                             }
@@ -13193,6 +13200,14 @@ impl<'a> super::Interpreter<'a> {
                     }
                     self.run_container_items_user_drops(t, items.clone());
                     self.run_value_held_shared_user_drops(&Value::Tuple(items));
+                }
+                // B-2026-10-04-68 — the displaced element's `shared` value, at
+                // its last reference now that the tuple no longer holds it.
+                // Asked before the store, the binding's copy kept the count
+                // up and the body ran nowhere (`p.0 = Some(H { id: 2 })` lost
+                // `dH1`), where compiled releases it at the store.
+                if let Some(v) = displaced_elem_shared {
+                    self.run_value_held_shared_user_drops(&v);
                 }
                 // The target holds a fresh value now — a stale move-out
                 // record from its previous value must not silence it.

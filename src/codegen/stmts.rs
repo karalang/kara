@@ -14612,6 +14612,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     };
                     return self.compile_stmt_inner(&renamed);
                 }
+                // B-2026-10-06-4 — a projection assigned to itself (`p.0 = p.0`,
+                // `w.h = w.h`) moves the value out and straight back: a no-op.
+                // Lowered as a store, the displaced old value was dropped first
+                // and the stored one was that same, now freed, value, so a
+                // `shared` handle, an `Option[shared]` or a `String` element was
+                // read after its free (`dH1 e1 <garbage>` against `--interp`'s
+                // `e1 1 dH1`). A plain place chain only: an `Index` step can
+                // name a different element on each side.
+                if Self::is_self_projection_assign(target, value) {
+                    return Ok(());
+                }
                 // B-2026-09-30-6 — see `DropRc::assigned_names`.
                 if let ExprKind::Identifier(n) = &target.kind {
                     self.drop_rc.assigned_names.insert(n.clone());
@@ -22618,6 +22629,42 @@ impl<'ctx> super::Codegen<'ctx> {
             }),
             span: e.span,
         })
+    }
+
+    /// B-2026-10-06-4 — is `value` the same projection place as `target`,
+    /// spelled through field and tuple-index steps only, at least one deep?
+    fn is_self_projection_assign(target: &Expr, value: &Expr) -> bool {
+        fn same(a: &Expr, b: &Expr) -> bool {
+            match (&a.kind, &b.kind) {
+                (ExprKind::Identifier(x), ExprKind::Identifier(y)) => x == y,
+                (ExprKind::SelfValue, ExprKind::SelfValue) => true,
+                (
+                    ExprKind::FieldAccess {
+                        object: oa,
+                        field: fa,
+                    },
+                    ExprKind::FieldAccess {
+                        object: ob,
+                        field: fb,
+                    },
+                ) => fa == fb && same(oa, ob),
+                (
+                    ExprKind::TupleIndex {
+                        object: oa,
+                        index: ia,
+                    },
+                    ExprKind::TupleIndex {
+                        object: ob,
+                        index: ib,
+                    },
+                ) => ia == ib && same(oa, ob),
+                _ => false,
+            }
+        }
+        matches!(
+            &target.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) && same(target, value)
     }
 
     /// B-2026-10-04-65 — a fresh tuple's element type with the CALL's generic
