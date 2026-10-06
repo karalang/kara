@@ -92,35 +92,35 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 722 |
-| run-vs-build | 600 |
-| leak | 594 |
+| miscompile | 725 |
+| run-vs-build | 602 |
+| leak | 597 |
 | double-free | 427 |
-| codegen-gap | 246 |
-| missing-feature | 219 |
+| codegen-gap | 252 |
+| missing-feature | 221 |
 | other | 171 |
-| diagnostics | 147 |
+| diagnostics | 148 |
 | perf | 146 |
-| false-positive | 129 |
-| crash | 113 |
+| false-positive | 131 |
+| crash | 114 |
 | soundness | 98 |
-| use-after-free | 89 |
+| use-after-free | 90 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2830 |
-| interp | 887 |
-| typecheck | 344 |
+| codegen | 2844 |
+| interp | 890 |
+| typecheck | 347 |
 | other | 114 |
 | ownership | 80 |
 | cli | 74 |
 | autopar | 59 |
+| parser | 56 |
 | runtime | 55 |
-| parser | 55 |
 | effect | 30 |
-| resolver | 29 |
+| resolver | 30 |
 | lexer | 11 |
 ## Current state
 
@@ -565,6 +565,25 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-103 | 2026-10-06 | interp | medium | UNDER `--interp`, A FRESH STRUCT TEMP PASSED TO A CONDITIONAL HAND-BACK THAT TAKES ITS FRESH PATH NEVER RUNS ITS `shared` FIELD'S `Drop` BODY -- `let r = twow(W { o: Some(H { id: 8 }), n: 8 }, false)` over `fn twow(w: W, c: bool) -> W { if c { return w; } W { o: Some(H { id: 99 }), n: 99 } }` prints `_8 99 dH99 end` where every compiled surface prints the due `dH8 _8 99 end dH99` | — |
 | B-2026-10-06-104 | 2026-10-06 | interp | medium | UNDER `--interp`, READING A FIELD STRAIGHT OFF A HANDED-BACK STRUCT TEMP NEVER RUNS ITS `shared` FIELD'S `Drop` BODY -- `println(f"_3 {keepw(mkw(3)).n}")`, `let m = keepw(mkw(5)).n` and the forwarded `keepx(X { h: H { id: 4 }, n: 4 }).n` over `fn keepw(w: W) -> W { w }` print no `dH3`, `dH5` or `dH4` under `--interp`, where compiled builds print every one | — |
 | B-2026-10-06-107 | 2026-10-06 | parser | medium | A METHOD ON AN ELEMENT OF A `const` OR MODULE-LEVEL COLLECTION AT A NON-LITERAL INDEX IS PARSED AS A TYPE-QUALIFIED CALL -- `NAMES[i].len()` fails `no method 'len' on `NAMES[…]`` on `--interp` and `karac build` alike, while `NAMES[1].len()` and a local `names[i].len()` work | — |
+| B-2026-10-06-109 | 2026-10-06 | interp+codegen | high | `Vec.sort()`, `Vec.is_sorted()`, `Vec.binary_search()`, `SortedSet` AND `SortedMap` IGNORE A HAND-WRITTEN `impl Ord` AND ORDER BY THE FIELDS INSTEAD, ON EVERY SURFACE -- a struct whose `cmp` puts width ascending and height DESCENDING sorts as `(1,2)(3,1)(3,2)(3,4)` instead of `(1,2)(3,4)(3,2)(3,1)`, silently, under `--interp`, the JIT and `karac build` alike, while `sort_by(|a, b| a.cmp(b))`, the `<` operator and `PriorityQueue` all call the impl | — |
+| B-2026-10-06-110 | 2026-10-06 | codegen | medium | INDEXING A COLLECTION LITERAL DIRECTLY FAILS `karac build` -- `[3, 6, 20][k]`, `vec![3, 6, 20][k]`, `Vec[3, 6, 20][k]`, a constant index `[3, 6, 20][1]`, and a parenthesised `([3, 6, 20])[k]` all stop with `Index operator applied to non-array type`, and `["a", "bb"][k].len()` with "indexed-receiver method 'len' requires the indexed container to be a named variable", while `--interp` prints the element and indexing a `let`-bound copy builds | — |
+| B-2026-10-06-111 | 2026-10-06 | codegen | low | A REPEAT LITERAL WITH A COUNT OF ZERO LEAKS A ONE-BYTE BUFFER UNDER `karac build` -- `vec![0; n]` with `n == 0`, `vec![0; 0]`, `vec![false; n]` and `vec![(0, 0); n]` each lose 1 byte per evaluation at -O0 and -O2 (`vec![1; n]` at -O0 only), while the same literal with `n == 3` and a clone of an empty `Vec` free everything | — |
+| B-2026-10-06-112 | 2026-10-06 | resolver | medium | A HAND-WRITTEN `impl Clone`, `impl Default` OR `impl Copy` IS REFUSED AT RESOLVE AS AN UNDEFINED TYPE -- `impl Clone for E { fn clone(ref self) -> E { .. } }` stops with "undefined type 'Clone', did you mean 'Clock'?", and `impl Default` / `impl Copy for E {}` with "undefined type", although design.md gives `trait Clone` and `trait Default` as ordinary traits whose impls users write, while `#[derive(Clone)]` and a `T: Clone` bound both work | — |
+| B-2026-10-06-114 | 2026-10-06 | interp | high | UNDER `--interp`, A PLACE ROOTED AT A `Map` ENTRY CHAIN DOES NOT BEHAVE LIKE ITS BOUND SPELLING -- `m.entry(k).or_insert(d).field` panics ("receiver was Value::MapSlotRef not Struct/SharedStruct"), as do `….0` and `…[i]`; `s.entry(k).or_insert(String.from("a")).push_str("b")` and a `mut ref self` method on the slot silently lose the write; and `*c.entry(k).or_insert(noisy()) += 2` runs `noisy()` twice | — |
+| B-2026-10-06-115 | 2026-10-06 | codegen | medium | `karac build` REFUSES FIELD, TUPLE-ELEMENT AND INDEX PLACES ON A `Map` ENTRY-CHAIN RESULT, BOUND OR NOT -- `m.entry(k).or_insert(d).items.push(x)` ("no handler for method 'push' on non-identifier receiver"), `….n += 1` and `….n` reads ("cannot resolve field 'n' on this receiver"), `….0 += 1` ("tuple-element assignment through this receiver shape is not yet lowered"), `…[i]` ("Index operator applied to non-array type"), and the bound `let b = m.entry(k).or_insert(d); b.items.push(x)` / `b.n += 3` / `b.add(4)` the same way | — |
+| B-2026-10-06-116 | 2026-10-06 | codegen | high | SILENT: A `mut ref self` METHOD CALLED ON A `Map` ENTRY CHAIN DOES NOT WRITE THE SLOT UNDER `karac build` -- `m.entry(1).or_insert(Bag { n: 1 }).add(4)` with `fn add(mut ref self, x: i64) { self.n += x }` leaves `m[1].n` at 1, whether the key was absent or present, while `m[1].add(4)` writes | — |
+| B-2026-10-06-117 | 2026-10-06 | codegen | medium | A TYPE'S ASSOCIATED FUNCTION USED AS A VALUE CRASHES OR FAILS `karac build` -- `let f = Bag.new; f().n` panics in `src/codegen/closures.rs:2024` ("Found IntValue … but expected the StructValue variant"), and `m.entry(k).or_insert_with(Bag.new)` fails with "entry chain: inline closure missing fn_type"; the interpreter runs both | — |
+| B-2026-10-06-118 | 2026-10-06 | typecheck | medium | A BUILTIN TYPE'S CONSTRUCTOR CANNOT BE USED AS A FUNCTION VALUE -- `m.entry(k).or_insert_with(Vec.new)`, design.md § Standard Data Structures' own example, is refused with "no associated function 'new' on type 'Vec'", as are `String.new`, `Set.new` and `let f = Vec.new`; a user type's `Bag.new` is accepted | — |
+| B-2026-10-06-119 | 2026-10-06 | codegen | medium | `karac build` REFUSES A METHOD ON A COLLECTION-VALUED `and_modify` PARAMETER -- `m.entry(k).and_modify(|set| { set.remove(x); })` on a `Map[i64, Set[i64]]` fails with "no handler for method 'remove' on variable 'set'", and so do `push` on a `Vec`, `push_str` on a `String`, `insert` on a `Map` / `Set` / `SortedSet` and `len()`; a scalar `*x += 1` builds | — |
+| B-2026-10-06-120 | 2026-10-06 | codegen | high | SILENT: READING A FIELD THROUGH `m[k]` ON A `Map` OR `SortedMap` OF A `shared struct` RETURNS 0 ON EVERY COMPILED SURFACE -- `m.insert(1, Node { time: 7, tag: 3 }); m[1].time` prints 0, `if m[1].time == 7` is false, and `let n = m[1]; n.time` prints 7 | — |
+| B-2026-10-06-121 | 2026-10-06 | codegen | high | AN `Option[shared]` STORED INTO A `Vec` ELEMENT BY INDEX OR INTO A `Map` BY `insert`, OR READ BACK WITH `Map.get`, IS NOT RETAINED, SO THE NODE IS FREED WHILE STILL LINKED -- `cs[0] = a.next` over `Vec[Option[Node]]` and `m.insert(1, a.next)` each give 2 invalid accesses at -O0, and a linked-list walk that advances `cursors[i] = node.next` corrupts the heap ("malloc(): unaligned tcache chunk detected") | — |
+| B-2026-10-06-122 | 2026-10-06 | codegen | medium | `o.clone().unwrap()` ON AN `Option` OF A `shared struct` LEAKS ONE REFERENCE COMPILED -- `let n = o.clone().unwrap()` over `Option[Node]` loses the 16 B node at -O0, where `let c = o.clone(); let n = c.unwrap()` is clean and an `Option[String]` or `Option[Vec[i64]]` is clean either way | — |
+| B-2026-10-06-123 | 2026-10-06 | codegen | medium | `m.get(k)` ON A `Map` OR `SortedMap` WHOSE VALUE IS A `shared struct` LEAKS ONE REFERENCE PER CALL COMPILED, BOUND OR MATCHED -- `let n = m.get(1)`, `match m.get(1) { .. }` and `if let Some(n) = m.get(1)` each lose the 16 B node at -O0; `Vec.get` and `m[k]` are clean | — |
+| B-2026-10-06-124 | 2026-10-06 | typecheck | medium | AN UNSOLVED COLLECTION TYPE IS NOT PINNED BY THE DECLARED SLOT IT FLOWS INTO -- `total(Vec.new())` against `fn total(xs: ref Vec[i64])` is refused with "expected 'ref Vec[i64]', found 'Vec[?T0]'" (also `Map.new()`, `Set.new()`, `vec![]`, `Vec.with_capacity(n)`, and a `mut ref` parameter), and `let e = Vec.new();` handed to an owned parameter, a struct field, a return or an annotated `let` is refused the same way; only a `push` could pin the element | — |
+| B-2026-10-06-125 | 2026-10-06 | codegen | low | `Vec.with_capacity(n)` AS A CALL ARGUMENT DOES NOT BUILD -- `owned(Vec.with_capacity(4))` against `fn owned(xs: Vec[i64])` fails `karac build` and LLJIT with "Vec.with_capacity: element type unknown -- requires a `let v: Vec[T] = ...` annotation", although the parameter names the type and the interpreter runs it | — |
+| B-2026-10-06-126 | 2026-10-06 | parser | low | RUST'S TURBOFISH ON A METHOD CALL IS REPORTED AS A MISSING SEMICOLON OR PAREN -- `(1..4).sum::[i64]()` and `it.collect::<Vec<i64>>()` fail with "Expected Semicolon, found ColonColon" (or "Expected RightParen, found ColonColon" inside an argument), naming neither the turbofish nor the annotation that replaces it, and `karac fix` has nothing to apply | — |
+| B-2026-10-06-127 | 2026-10-06 | codegen | medium | `fold` WHOSE CLOSURE DESTRUCTURES A TUPLE ACCUMULATOR DOES NOT BUILD -- `(1..=n).fold((0, 1), |(s, p), k| (s + k, p * k))` and the same over `v.iter()` fail `karac build` and LLJIT with "no handler for method 'fold' on non-identifier receiver ... this is a codegen bug"; `|acc, k| (acc.0 + k, acc.1 * k)` builds, as does destructuring the ELEMENT (`|acc, (a, b)|`) | — |
+| B-2026-10-06-128 | 2026-10-06 | codegen | medium | A TERMINAL `sum` OR `fold` ON A RANGE HELD IN A BINDING DOES NOT BUILD -- `let r = 1..=n; let e: i64 = r.sum();` and `r.fold(0, |a, k| a + k)` fail `karac build` and LLJIT with "no handler for method 'sum' on variable 'r'", while `(1..=n).sum()`, `r.map(..).collect()` and `for k in r` all build | — |
 
 ### Relocated
 
@@ -3870,6 +3889,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-88 | typecheck | medium | AN OPERATOR EXPRESSION OF BARE INTEGER LITERALS IGNORES A NARROW TYPE CONTEXT -- `let x: u16 = 1 + 2;`, `let m: u8 = 7 & 3;`, `let x: u64 = 1 << 40;`… | d276a8129 |
 | B-2026-10-06-105 | codegen | medium | A TUPLE, `Vec` OR `Option` LOCAL MOVED OUT WHOLE AND THEN STORED INTO ON ONLY SOME PATHS RUNS THE MOVED VALUE'S `Drop` BODY A SECOND TIME COMPILED ON… | d55446b99 |
 | B-2026-10-06-106 | codegen | low | AN INDEX STORE INTO A MODULE-LEVEL `let mut` ARRAY FAILS THE BUILD -- `COUNTS[1] = 40` over `let mut COUNTS: Array[i64, 3]` stops `karac build` with… | d37c176d0 |
+| B-2026-10-06-108 | typecheck | medium | A DERIVED SUPERTRAIT DOES NOT SATISFY A HAND-WRITTEN TRAIT IMPL -- `#[derive(PartialEq, Eq)]` on a struct beside a hand-written `impl PartialOrd` / `… | 4c67adb10 |
+| B-2026-10-06-113 | interp | high | `--interp` IGNORES AN ENUM'S HAND-WRITTEN `impl Ord` FOR `.cmp()` AND FOR `<` `>` `<=` `>=` -- an enum ordering `Large` before `Small` prints `Small… | 8eaf5220e |
 
 </details>
 
