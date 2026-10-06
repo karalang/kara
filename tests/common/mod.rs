@@ -38,10 +38,14 @@ use std::time::Duration;
 /// (`concurrency_report.rs`, `test_auto_par_disabled_is_reflected_in_fanned_out`).
 ///
 /// A constructor rather than a `[env]` entry in `.cargo/config.toml`, which
-/// would also turn auto-par on for `cargo run`.
+/// would also turn auto-par on for `cargo run`. Each platform runs a different
+/// section before `main`, and one left out runs nothing: without the Windows
+/// line, `Test (windows-latest)` went red on 1de29e940 because its `karac`
+/// children saw the new default.
 #[used]
 #[cfg_attr(target_os = "linux", link_section = ".init_array")]
 #[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
+#[cfg_attr(windows, link_section = ".CRT$XCU")]
 static LEGACY_SUITES_RUN_WITH_AUTO_PAR: extern "C" fn() = {
     extern "C" fn auto_par_on_unless_set() {
         if std::env::var_os("KARAC_AUTO_PAR").is_none() {
