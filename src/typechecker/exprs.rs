@@ -885,17 +885,33 @@ impl<'a> super::TypeChecker<'a> {
         // compatibility check so a genuine mismatch elsewhere reports.
         if let (ExprKind::Tuple(elems), Type::Tuple(exp_elems)) = (&expr.kind, expected) {
             if !elems.is_empty() && elems.len() == exp_elems.len() {
+                // B-2026-10-06-73 — an EMPTY `Vec[]` / `vec![]` /
+                // `VecDeque[]` is the literal spelling of the same constructor
+                // and has no element type to synthesise either, so `(vec![], 5)`
+                // against `(Vec[i64], i64)` was refused with
+                // E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION while `(Vec.new(), 5)`
+                // was accepted. The direct position (`let v: Vec[i64] =
+                // vec![]`) and an enum payload (`Some(vec![])`) already reach
+                // the check-mode arm below; this is the tuple-element position.
+                // `Map[]` / `Set[]` / `SortedMap[]` stay refused here: codegen
+                // lowers an empty one only at a direct `let`, so admitting them
+                // would trade this check-time error for a build-time one
+                // (B-2026-10-06-EMPTYMAP).
                 let elem_is_inferred_ctor = |e: &Expr| -> bool {
-                    matches!(
-                        &e.kind,
-                        ExprKind::Call { callee, args }
-                            if args.is_empty()
+                    match &e.kind {
+                        ExprKind::Call { callee, args } => {
+                            args.is_empty()
                                 && matches!(
                                     &callee.kind,
                                     ExprKind::Path { segments, .. }
                                         if segments.len() == 2 && segments[1] == "new"
                                 )
-                    )
+                        }
+                        ExprKind::PrefixCollectionLiteral { type_name, items } => {
+                            items.is_empty() && matches!(type_name.as_str(), "Vec" | "VecDeque")
+                        }
+                        _ => false,
+                    }
                 };
                 // B-2026-09-10-38 — an element that cannot SYNTHESISE the
                 // expected type either, one shape over.
