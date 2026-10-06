@@ -9,6 +9,7 @@
 
 pub mod build;
 pub mod interp;
+pub mod parse;
 pub mod place_ty;
 pub mod pretty;
 pub mod syntax;
@@ -16,6 +17,7 @@ pub mod ty;
 pub mod validate;
 
 pub use build::BodyBuilder;
+pub use parse::{parse_module, pretty_module, MirModule};
 pub use pretty::pretty_body;
 pub use syntax::*;
 pub use ty::{AdtDef, AdtId, IntTy, Ty, TyInterner, TyKind, VariantDef};
