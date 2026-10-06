@@ -2437,6 +2437,7 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: Option<&str>,
         value: &Expr,
         count: &Expr,
+        elem_target: Option<BasicTypeEnum<'ctx>>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if matches!(type_name, Some("Vec")) {
             // `Vec[v; n]` ≡ `Vec.filled(n, v)`. Compile `v` then `n` to preserve
@@ -2462,6 +2463,10 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
         let val = self.compile_expr(value)?;
+        let val = match elem_target {
+            Some(target) => self.coerce_literal_elem_to_type(val, target),
+            None => val,
+        };
         let elem_ty = val.get_type();
         let arr_ty = elem_ty.array_type(n);
 

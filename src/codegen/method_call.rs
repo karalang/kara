@@ -8441,7 +8441,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         compiled_args.push(temp.into());
                         continue;
                     }
-                    let val = self.compile_expr(&a.value)?;
+                    // B-2026-10-06-90 — the method twin of the free-fn
+                    // argument's aggregate staging (`call_dispatch.rs`): an
+                    // array or repeat literal under an `Array[u8, N]` param
+                    // packs at the param's element width, not at `i64`.
+                    let param_te = self
+                        .callee_param_ast(&qualified, pidx)
+                        .and_then(|(f, ai)| f.params.get(ai))
+                        .map(|p| p.ty.clone());
+                    let saved_agg_te =
+                        self.stage_declared_aggregate_te(Some(&a.value), param_te.as_ref());
+                    let val = self.compile_expr(&a.value);
+                    self.restore_declared_aggregate_te(saved_agg_te);
+                    let val = val?;
                     // `Option[shared T]` arg-share discipline — mirrors
                     // the free-fn call path in `compile_call`: a tracked
                     // Identifier binding gets a tag+null-guarded inner

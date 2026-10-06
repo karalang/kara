@@ -2067,7 +2067,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         let n = self.compile_expr(count)?.into_int_value();
                         self.build_vec_filled(n, val, Some(elem_te))
                     }
-                    None => self.compile_repeat_literal(type_name.as_deref(), value, count),
+                    None => {
+                        // B-2026-10-06-90 — the `Array` twin: a bare `[v; n]`
+                        // under an `Array[u16, N]` slot (a struct field, a
+                        // call argument, a return) takes its element width
+                        // from the slot, staged by
+                        // `stage_declared_aggregate_te` exactly as for the
+                        // element-list form, instead of from `v` (`0` would
+                        // be `i64`).
+                        let elem_target = if type_name.is_none() {
+                            self.var_types
+                                .pending_let_elem_type
+                                .filter(|t| t.is_int_type() || t.is_float_type())
+                        } else {
+                            None
+                        };
+                        self.compile_repeat_literal(type_name.as_deref(), value, count, elem_target)
+                    }
                 }
             }
             ExprKind::Tuple(elems) => self.compile_tuple(elems),

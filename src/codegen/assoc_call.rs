@@ -3052,7 +3052,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.uam_enum_arg_precopied =
                             Some((a.value.span.offset, a.value.span.length));
                     }
-                    let val = self.compile_expr(&a.value)?;
+                    // B-2026-10-06-90 — the associated-fn twin of the free-fn
+                    // argument's aggregate staging: an array or repeat literal
+                    // under an `Array[u8, N]` param packs at its element width.
+                    let param_te = self
+                        .callee_param_ast(&qualified, i)
+                        .and_then(|(f, ai)| f.params.get(ai))
+                        .map(|p| p.ty.clone());
+                    let saved_agg_te =
+                        self.stage_declared_aggregate_te(Some(&a.value), param_te.as_ref());
+                    let val = self.compile_expr(&a.value);
+                    self.restore_declared_aggregate_te(saved_agg_te);
+                    let val = val?;
                     // B-2026-09-14-27 — an owned `Array` argument the ownership
                     // pass flagged as read again after this move gets an
                     // independent copy, so the retraction below can stand the

@@ -4770,7 +4770,12 @@ impl<'ctx> super::Codegen<'ctx> {
             crate::ast::ExprKind::Tuple(_) if matches!(te.kind, TypeKind::Tuple(_)) => {
                 self.var_types.pending_let_tuple_te = Some(te.clone());
             }
-            crate::ast::ExprKind::ArrayLiteral(_) => {
+            // B-2026-10-06-90 — and a bare repeat literal `[v; n]`, which
+            // `compile_repeat_literal` coerces through the same hint.
+            crate::ast::ExprKind::ArrayLiteral(_)
+            | crate::ast::ExprKind::RepeatLiteral {
+                type_name: None, ..
+            } => {
                 // Scalars only. `literal_pending_elem_hint` filters to
                 // int/float anyway, and a heap element already carries the
                 // layout its consumers expect.
