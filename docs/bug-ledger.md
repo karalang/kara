@@ -96,12 +96,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 600 |
 | leak | 594 |
 | double-free | 427 |
-| codegen-gap | 245 |
+| codegen-gap | 246 |
 | missing-feature | 219 |
 | other | 171 |
 | diagnostics | 147 |
 | perf | 146 |
-| false-positive | 128 |
+| false-positive | 129 |
 | crash | 113 |
 | soundness | 98 |
 | use-after-free | 89 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2829 |
+| codegen | 2830 |
 | interp | 887 |
 | typecheck | 344 |
 | other | 114 |
@@ -118,7 +118,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 74 |
 | autopar | 59 |
 | runtime | 55 |
-| parser | 54 |
+| parser | 55 |
 | effect | 30 |
 | resolver | 29 |
 | lexer | 11 |
@@ -523,13 +523,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-37 | 2026-10-06 | interp+codegen | low | A DEEP TUPLE-ELEMENT STORE (`p.0.0 = R { id: 9 }`) RUNS NO `Drop` BODY FOR THE DISPLACED VALUE ON ANY SURFACE -- `let mut p = (mkr(1), 5); p.0.0 = R { id: 9 }; println(f"j{p.1} {p.0.1}")` prints `j5 1 dR9 end` everywhere, with no `dR1` | — |
 | B-2026-10-06-38 | 2026-10-06 | interp+codegen | low | A `shared` HANDLE ALIASED INTO A LATER BINDING AND THEN REASSIGNED AWAY DROPS IN THE WRONG ORDER AT SCOPE EXIT UNDER `--interp` -- `let mut o = Some(H { id: 1 }); let g = o; o = Some(H { id: 2 }); println(f"o{g.is_some()}")` prints `otrue dH1 dH2` compiled and `otrue dH2 dH1` interpreted | — |
 | B-2026-10-06-39 | 2026-10-06 | interp | low | A STORE THROUGH A `mut ref Option[H]` PARAM (`H` `shared`) RUNS NO `Drop` BODY FOR THE CALLER'S DISPLACED HANDLE UNDER `--interp` -- `fn setm(x: mut ref Option[H]) { x = Some(H { id: 9 }); }` then `let mut o = Some(H { id: 1 }); setm(mut o)` prints `o9 dH9 end` interpreted against compiled `dH1 o9 dH9 end` | — |
-| B-2026-10-06-43 | 2026-10-06 | codegen | medium | A `const` OF `Array` OR `Vec` TYPE USED DIRECTLY AS AN INDEX BASE, A `.len()` RECEIVER OR A `for` ITERABLE FAILS `karac build`, AND A MODULE-LEVEL `let` OF `Array[T, N]` FAILS THE SAME WAY FOR `.len()` AND `for`; `--interp` RUNS EVERY CASE, AND BINDING THE CONSTANT TO A LOCAL FIRST BUILDS | — |
 | B-2026-10-06-44 | 2026-10-06 | codegen+interp | high | AN `Option` PARAM DESTRUCTURED OUT OF A TUPLE LITERAL AND NOT RETURNED RUNS ITS PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND NOT AT ALL COMPILED -- `fn f(a: Option[R], b: Option[R]) -> Option[R] { let (v, w) = (a, b); v }`, `f(Some(mk(1)), Some(mk(2)))` prints `drop2 drop2 xtrue drop1 end` interpreted and `xtrue drop1 end` at -O0 (on 8e8bb56b2 the compiled binary SEGFAULTS) | — |
 | B-2026-10-06-45 | 2026-10-06 | codegen+interp | high | A LOCAL THAT WRAPS TWO BY-VALUE PARAMS IN A TUPLE, THEN DESTRUCTURED, RUNS THE RETURNED LEAF'S `Drop` BODY TWICE ON EVERY SURFACE -- `fn sel(a: R, b: R, c: bool) -> R { let t = (a, b); println("in"); let (v, w) = t; v }`, `sel(mk(80), mk(81), true)` prints `in drop81 drop80 g80 drop80 end` | — |
 | B-2026-10-06-46 | 2026-10-06 | codegen | medium | `shared` PARAMS DESTRUCTURED OUT OF A TUPLE LITERAL RUN NO `Drop` BODY AND LEAK BOTH OBJECTS COMPILED -- `fn f(a: H, b: H) -> H { let (v, w) = (a, b); v }` over `shared struct H { id: i64 }` with a printing `Drop`, `f(H { id: 1 }, H { id: 2 })` prints `x1 end` at -O0 with 2 x 16 B definitely lost, where `--interp` prints `dH2 x1 dH1 end` | — |
 | B-2026-10-06-47 | 2026-10-06 | codegen | medium | TUPLE-TYPED PARAMS DESTRUCTURED OUT OF A TUPLE LITERAL LEAK ONE STRING BUFFER COMPILED -- `fn f(a: (R, i64), b: (R, i64)) -> (R, i64) { let (v, w) = (a, b); v }`, `f((mk(1), 1), (mk(2), 2))` loses 29 B in 1 block at -O0 under valgrind while printing the right `drop2 x1 drop1 end` | — |
 | B-2026-10-06-48 | 2026-10-06 | codegen | low | LATENT, BLOCKS WIDENING THE PARAM FATE TO GENERIC ENUM PARAMS: WITH THE FATE ANSWERING FOR `gn[T](h: Ho[T], k: bool) -> Ho[T] { let m = h; if k { return m } println("gd"); return Ho.Empty }`, THE COMPILED MONOMORPH LOSES THE PAYLOAD'S `Drop` BODY ON THE LEG THAT KEEPS THE VALUE -- `gn(Ho.Full(mks(13)), false)` prints `gd` with no `dS13` compiled (`--interp` keeps it); today's legacy answer is right | — |
-| B-2026-10-06-61 | 2026-10-06 | codegen | low | A METHOD ON A MAP VALUE REACHED THROUGH A TUPLE ELEMENT FAILS THE BUILD -- `t.0[k].push(x)` over `t: (Map[String, Vec[String]], i64)` stops `karac build` with `indexed-receiver method 'push' requires the indexed container to be a named variable in v1` while `--interp` prints the right length; annotated or not | — |
 | B-2026-10-06-49 | 2026-10-06 | codegen | medium | A TEMPORARY `Option[(R, i64)]` ARGUMENT THAT DIES INSIDE THE CALLEE LEAKS ITS TUPLE BOX AT -O0 -- `ft(Some((mk(7), 1)), false)` over `fn ft(a: Option[(R, i64)], c: bool) -> Option[(R, i64)] { let r: Option[(R, i64)] = if c { a } else { None }; println("mid"); r }` prints the due `mid d7 p end` on every surface but leaks `69 (40 direct, 29 indirect)` bytes at -O0; -O2 and a NAMED argument are clean | — |
 | B-2026-10-06-50 | 2026-10-06 | codegen | medium | A NESTED-TUPLE PARAM `((R, i64), R)` HANDED BACK THROUGH A `let` HOLDER ON SOME EXITS LEAKS EVERY `R`'S STRING UNDER THE DEFAULT PARAM SCHEDULE, AT -O0 AND -O2 -- `fn tn(a: ((R, i64), R), c: bool) -> ((R, i64), R) { let k = if c { a } else { ((mk(91), 0), mk(92)) }; println("in"); k }` called with c=false then c=true prints the due `in d13 d14 d91 d92 h in d15 d16 i end` but leaks 120 B in 4 blocks (each R's 30 B String); `KARAC_DROP_SCHEDULE=0` does not leak but runs `d15 d16` twice | — |
 | B-2026-10-06-64 | 2026-10-06 | codegen | low | A STRUCT LOCAL MOVED OUT AND THEN REASSIGNED DROPS ITS NEW VALUE BEFORE THE LATER-DECLARED BINDING THAT TOOK THE OLD ONE COMPILED -- `let mut r = R { id: 1 }; let q = r; r = R { id: 2 };` prints `s21 dR2 dR1` compiled, against reverse declaration order (`q` then `r`: `dR1 dR2`), which the tuple spelling `let q = p; p = mkr(2)` already gives on both surfaces | — |
@@ -566,6 +564,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-102 | 2026-10-06 | codegen+interp | medium | A `match` THAT DESTRUCTURES A HANDED-BACK STRUCT WITH AN `Option[shared]` FIELD NEVER RUNS THE HANDLE'S `Drop` BODY ON EITHER BACKEND, AND LEAKS IT COMPILED -- `match keepw(mkw(19)) { W { o, n } => println(f"_18 {n} {o.is_some()}") }` over `fn keepw(w: W) -> W { w }` and `struct W { o: Option[H], n: i64 }` prints `_18 19 true end` on `--interp`, -O0 and -O2 where `dH19` is due when the arm's `o` dies; 16 B definitely lost at -O0 | — |
 | B-2026-10-06-103 | 2026-10-06 | interp | medium | UNDER `--interp`, A FRESH STRUCT TEMP PASSED TO A CONDITIONAL HAND-BACK THAT TAKES ITS FRESH PATH NEVER RUNS ITS `shared` FIELD'S `Drop` BODY -- `let r = twow(W { o: Some(H { id: 8 }), n: 8 }, false)` over `fn twow(w: W, c: bool) -> W { if c { return w; } W { o: Some(H { id: 99 }), n: 99 } }` prints `_8 99 dH99 end` where every compiled surface prints the due `dH8 _8 99 end dH99` | — |
 | B-2026-10-06-104 | 2026-10-06 | interp | medium | UNDER `--interp`, READING A FIELD STRAIGHT OFF A HANDED-BACK STRUCT TEMP NEVER RUNS ITS `shared` FIELD'S `Drop` BODY -- `println(f"_3 {keepw(mkw(3)).n}")`, `let m = keepw(mkw(5)).n` and the forwarded `keepx(X { h: H { id: 4 }, n: 4 }).n` over `fn keepw(w: W) -> W { w }` print no `dH3`, `dH5` or `dH4` under `--interp`, where compiled builds print every one | — |
+| B-2026-10-06-107 | 2026-10-06 | parser | medium | A METHOD ON AN ELEMENT OF A `const` OR MODULE-LEVEL COLLECTION AT A NON-LITERAL INDEX IS PARSED AS A TYPE-QUALIFIED CALL -- `NAMES[i].len()` fails `no method 'len' on `NAMES[…]`` on `--interp` and `karac build` alike, while `NAMES[1].len()` and a local `names[i].len()` work | — |
 
 ### Relocated
 
@@ -3857,7 +3856,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-41 | typecheck | medium | `const NAME: Array[T, N] = [..]` IS REFUSED ON EVERY SURFACE WITH "expected 'Array[i64, 3]', found 'Vec[i64]'", WHILE THE SAME ANNOTATION ON A LOCAL… | da1850607 |
 | B-2026-10-06-42 | typecheck+codegen | high | A MODULE-LEVEL `let V: Vec[i64] = [1, 2, 3]` TYPECHECKS AND IS THEN MISCOMPILED: UNDER `karac build` `V[2]` PANICS 'vec index out of bounds' AND `for… | 242cc2ec8 |
 | B-2026-10-06-40 | typecheck+codegen | medium | `.len()` AND `.is_empty()` ON A FIXED `Array` WHOSE ELEMENTS ARE NOT SCALAR (TUPLES, `String`, `Option`, `Vec`) ARE REFUSED WITH "no method 'len' on… | e4461e129 |
+| B-2026-10-06-43 | codegen | medium | A `const` OF `Array` OR `Vec` TYPE USED DIRECTLY AS AN INDEX BASE, A `.len()` RECEIVER OR A `for` ITERABLE FAILS `karac build`, AND A MODULE-LEVEL `l… | 73093b0d9 |
 | B-2026-10-06-60 | codegen | high | A `for` LOOP OVER A TUPLE'S `Map` ELEMENT FREES THE MAP TWICE COMPILED -- `let t = (m, 3); for (k, v) in t.0 { . | 602213b39 |
+| B-2026-10-06-61 | codegen | low | A METHOD ON A MAP VALUE REACHED THROUGH A TUPLE ELEMENT FAILS THE BUILD -- `t.0[k].push(x)` over `t: (Map[String, Vec[String]], i64)` stops `karac bu… | 89817ba8a |
 | B-2026-10-06-62 | codegen | low | A STORE INSIDE A LOOP INTO A TUPLE LOCAL THAT WAS MOVED OUT WHOLE LOSES THE `Drop` BODY OF THE VALUE THE SECOND ITERATION DISPLACES COMPILED -- `let… | d55446b99 |
 | B-2026-10-06-63 | codegen | high | A `Vec` LOCAL MOVED OUT INSIDE AN `if` AND THEN REASSIGNED READS THE MOVED BUFFER AFTER ITS NEW OWNER FREED IT COMPILED -- `let mut v = [R { id: 1 }]… | d9a3098e4 |
 | B-2026-10-06-65 | runtime+codegen | high | COMPILED `SortedMap` `floor` / `ceiling` / `min` / `max` GATHER AND SORT EVERY KEY ON EVERY CALL (O(n log n) PER QUERY, PLUS A MALLOC), SO KATA 352's… | 57401755a |
@@ -3868,6 +3869,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-82 | interp | medium | `--interp` BUILDS A NON-EMPTY `Set[...]` PREFIX LITERAL AS A `Vec` -- `Set[1, 1, 2].len()` prints 3, and `out.insert(5)` on a set made by `Set[1, 2]`… | 6bba0d11b |
 | B-2026-10-06-88 | typecheck | medium | AN OPERATOR EXPRESSION OF BARE INTEGER LITERALS IGNORES A NARROW TYPE CONTEXT -- `let x: u16 = 1 + 2;`, `let m: u8 = 7 & 3;`, `let x: u64 = 1 << 40;`… | d276a8129 |
 | B-2026-10-06-105 | codegen | medium | A TUPLE, `Vec` OR `Option` LOCAL MOVED OUT WHOLE AND THEN STORED INTO ON ONLY SOME PATHS RUNS THE MOVED VALUE'S `Drop` BODY A SECOND TIME COMPILED ON… | d55446b99 |
+| B-2026-10-06-106 | codegen | low | AN INDEX STORE INTO A MODULE-LEVEL `let mut` ARRAY FAILS THE BUILD -- `COUNTS[1] = 40` over `let mut COUNTS: Array[i64, 3]` stops `karac build` with… | d37c176d0 |
 
 </details>
 
