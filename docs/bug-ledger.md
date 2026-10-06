@@ -94,9 +94,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 720 |
 | run-vs-build | 598 |
-| leak | 591 |
+| leak | 592 |
 | double-free | 427 |
-| codegen-gap | 244 |
+| codegen-gap | 245 |
 | missing-feature | 219 |
 | other | 171 |
 | diagnostics | 147 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2823 |
+| codegen | 2825 |
 | interp | 882 |
 | typecheck | 344 |
 | other | 114 |
@@ -543,7 +543,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-71 | 2026-10-06 | codegen | high | A BY-VALUE STRUCT PARAM WITH A `shared` FIELD HANDED BACK THROUGH ITS OWN OWNED-`self` METHOD MAKES 2 INVALID ACCESSES ON EVERY COMPILED SURFACE -- `let b = g(x)` over `fn g(x: X) -> X { x.me() }`, `fn me(self) -> X { self }` and `struct X { h: H, n: i64 }` with `H` a `shared struct` with a printing `Drop` prints the right `_10 end dH10` with ERROR SUMMARY 2 errors at -O0; `--interp` prints the same and is clean | — |
 | B-2026-10-06-72 | 2026-10-06 | codegen+interp | medium | A TEMP STRUCT RECEIVER OF AN OWNED-`self` METHOD THAT RETURNS A FRESH STRUCT NEVER RUNS ITS `Drop` BODIES, ON EVERY SURFACE -- `let b = S { r: mk(5) }.fresh(); println("_")` over `fn fresh(self) -> S { println("fr"); return S { r: mk(99) } }` prints `fr dS99 dR99 _ end` on `--interp`, -O0 and -O2 where `fr dS5 dR5 dS99 dR99 _ end` is due; memory balanced | — |
 | B-2026-10-06-73 | 2026-10-06 | typecheck | low | AN EMPTY `Vec[]` / `vec![]` LITERAL IN A TUPLE SLOT IS REFUSED EVEN WHEN THE SLOT'S TYPE IS KNOWN -- `let t: (Vec[i64], i64) = (vec![], 5);` and `fn mk() -> (Vec[String], i64) { return (vec![], 3); }` fail with E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION, while `(Vec.new(), 5)` in the same slot is accepted | — |
-| B-2026-10-06-74 | 2026-10-06 | typecheck | low | `find` / `filter` / `position` / `take_while` / `skip_while` PREDICATES RECEIVE THE ITEM BY VALUE, BUT design.md SAYS `ref Self.Item` -- `(i + 1..n).find(|j| nums[i] + nums[*j] == target)` is refused with `unary '*' requires 'ref T' ... found 'i64'` on every surface | — |
+| B-2026-10-06-74 | 2026-10-06 | typecheck | low | WIDER THAN PREDICATES (kata 353): `.iter()` ITEMS -- in a `for` loop, in `any`, and in `find` / `filter` / `position` / `take_while` / `skip_while` predicates -- ARE TYPED BY VALUE FOR COPY ELEMENTS, BUT design.md SAYS `ref T` / `ref Self.Item` -- `(i + 1..n).find(|j| nums[i] + nums[*j] == target)` is refused with `unary '*' requires 'ref T' ... found 'i64'` on every surface | — |
 | B-2026-10-06-75 | 2026-10-06 | codegen | low | `Iterator.find()` / `find_map()` LOUD-DEFER UNDER `karac build` WHEN THE ELEMENT OR PAYLOAD IS A TUPLE OF SCALARS OR A UNIT-ONLY ENUM -- `(0..10).find_map(|i| if i * i > 20 { Some((i, i * i)) } else { None })` and `vec![(1, 2), (3, 4)].iter().find(|p| p.0 > 2)` are refused with `only for a SCALAR payload`, while `position` and `filter().collect()` over the same tuples compile | — |
 | B-2026-10-06-76 | 2026-10-06 | codegen | low | `karac build` HAS NO LOWERING FOR A NON-EMPTY `Set[...]` LITERAL ANYWHERE, OR FOR AN EMPTY `Map[]` / `Set[]` OUTSIDE A DIRECT ANNOTATED `let` -- `let s = Set[1, 1, 2];`, `Some(Map[])` against `Option[Map[i64, i64]]`, `vec![Set[]]` and a tail-position `Map[]` all typecheck and then die with `no handler for expression kind PrefixCollectionLiteral` | — |
 | B-2026-10-06-77 | 2026-10-06 | codegen | medium | A `let` BOUND TO AN `if` OR `match` THAT PICKS ONE OF TWO `ref` PARAMS LOSES ITS TYPE IN CODEGEN -- `let longer = if a.len() > b.len() { a } else { b };` over `a, b: ref Vec[i64]` then `longer.len()` fails `no handler for method 'len' on variable 'longer'`, and `for d in longer` fails `not an iterable this backend can lower` | — |
@@ -567,6 +567,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-95 | 2026-10-06 | codegen | low | A METHOD ON AN UNANNOTATED TUPLE'S `Set` ELEMENT FAILS THE BUILD -- `let t = (m, s, 3); t.1.len()` over `s: Set[String]` stops `karac build` with `no handler for method 'len' on this tuple-element receiver` while `--interp` prints the right length; the tuple's `Map` element in the same program builds | — |
 | B-2026-10-06-96 | 2026-10-06 | codegen | medium | A BINDING RE-DECLARED UNDER THE SAME NAME LATER IN ITS BLOCK KEEPS ITS `shared` RELEASE AT SCOPE EXIT ON EVERY COMPILED SURFACE WHEN A BY-VALUE CALL KEEPS IT -- `let v = mkw(23); eatw(v); let v = mkw(24); eatw(v); println("_s1")` over `fn eatw(w: W) { println("e") }` and `struct W { o: Option[H], n: i64 }` prints `e e dH24 _s1 end dH23` at -O0 and on the JIT where `--interp` prints the due `e dH23 e dH24 _s1 end`; the method spelling `v.g2()` reads the same | — |
 | B-2026-10-06-97 | 2026-10-06 | codegen | medium | A BY-VALUE STRUCT PARAM OR OWNED RECEIVER WHOSE `Option[shared]` FIELD IS MOVED INTO A RETURNED STRUCT LITERAL LEAKS THE HANDLE AND LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE -- `let v = mkw(4); let g = intog(v)` over `fn intog(w: W) -> G { G { n: 1, keep: w.o } }`, `struct W { o: Option[H], n: i64 }` and `struct G { n: i64, keep: Option[H] }` prints `_s2 1 end` at -O0 with 16 B definitely lost (10 allocs / 9 frees) where `--interp` prints `_s2 1 end dH4`; the method `v.into_g()` over `fn into_g(self) -> G { G { n: 1, keep: self.o } }` reads the same | — |
+| B-2026-10-06-98 | 2026-10-06 | codegen | medium | A TRAIT METHOD CALLED THROUGH A GENERIC BOUND IS NOT DISPATCHED WHEN THE TYPE ARGUMENT IS A `shared struct` -- `fn f[G: T](g: ref G) -> String { g.name() }` called with a `shared struct B` stops `karac build` / `karac run` with "no handler for method 'name' on variable 'g' in `f` (method dispatch fell through; this is a codegen bug ...)", for `ref G`, `mut ref G` and by-value `G` alike, while a plain struct, a `shared enum`, and the same call on `ref B` without generics all build | — |
+| B-2026-10-06-99 | 2026-10-06 | codegen | medium | A `.chars()` CHAIN WHOSE RECEIVER IS A FRESH `String` TEMPORARY NEVER FREES THE STRING -- `let v: Vec[char] = mk(3).chars().collect();`, `mk(3).chars().count()`, `for c in mk(3).chars() { .. }`, `.chars().map(..).collect()`, collecting into a `String`, and `"abc".to_string().chars().collect()` each leak the temporary's buffer once per evaluation under `karac build` (-O0 and -O2), while `mk(3).len()`, `mk(3).bytes().to_vec()` and the same chain over a `let`-bound String free it | — |
 
 ### Relocated
 
