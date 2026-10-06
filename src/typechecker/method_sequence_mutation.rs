@@ -334,10 +334,18 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             };
             if let Some(elem) = array_elem {
-                if matches!(
+                // B-2026-10-06-40: `len` / `is_empty` never touch an
+                // element -- the answer is the type's own `N` -- so they hold
+                // for EVERY element type, not only the scalar ones the rest of
+                // this surface is gated on. `Array[(i64, i64), 2].len()` was
+                // refused with "no method 'len' on type 'Array'" while the same
+                // call on `Array[i64, 2]` typechecked; codegen answers both
+                // from the LLVM array length.
+                let scalar = matches!(
                     elem,
                     Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
-                ) {
+                );
+                if scalar || matches!(method, "len" | "is_empty") {
                     let option_elem = Type::Named {
                         name: "Option".to_string(),
                         args: vec![elem.clone()],

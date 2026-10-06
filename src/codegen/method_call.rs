@@ -6070,6 +6070,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             .const_int(at.len() as u64, false)
                             .into());
                     }
+                    // B-2026-10-06-40: like `len`, `is_empty` is the
+                    // type's own `N` and reads no element, so it answers for
+                    // every element type. The scalar-gated read surface below
+                    // still handles it for scalar arrays; this covers the rest.
+                    if method == "is_empty" {
+                        return Ok(self
+                            .context
+                            .bool_type()
+                            .const_int(at.is_empty() as u64, false)
+                            .into());
+                    }
                     // `as_ptr()` / `as_mut_ptr()` — the element-0 address of
                     // the owned array's storage, handed out as the raw
                     // pointer `*const T` / `*mut T` (raw pointers lower to a
@@ -6130,6 +6141,15 @@ impl<'ctx> super::Codegen<'ctx> {
                             .context
                             .i64_type()
                             .const_int(at.len() as u64, false)
+                            .into());
+                    }
+                    // B-2026-10-06-40: the owned arm's `is_empty`, for a
+                    // `ref Array` of any element type.
+                    if method == "is_empty" {
+                        return Ok(self
+                            .context
+                            .bool_type()
+                            .const_int(at.is_empty() as u64, false)
                             .into());
                     }
                     // `as_ptr()` / `as_mut_ptr()` on a `ref Array` — the ref

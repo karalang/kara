@@ -52771,3 +52771,30 @@ fn nested_generic_struct_literal_binds_from_values() {
         "got {errors:?}"
     );
 }
+
+/// B-2026-10-06-40: `len` and `is_empty` read no element, so a fixed
+/// array answers them whatever its element type. They were gated with the
+/// rest of the scalar-only read surface, and `Array[(i64, i64), 2].len()`
+/// was refused while `Array[i64, 2].len()` typechecked. The element-reading
+/// methods stay scalar-only.
+#[test]
+fn array_len_and_is_empty_hold_for_every_element_type() {
+    typecheck_ok(
+        "fn count(xs: ref Array[(i64, i64), 2]) -> i64 { if xs.is_empty() { return 0; } xs.len() }\n\
+         fn main() {\n\
+             let b: Array[(i64, i64), 2] = [(1, 2), (3, 4)];\n\
+             let s: Array[String, 3] = [\"a\", \"bb\", \"ccc\"];\n\
+             let o: Array[Option[i64], 2] = [Some(1), None];\n\
+             println(f\"{b.len()} {s.is_empty()} {o.len()} {count(b)}\");\n\
+         }",
+    );
+    let errors = typecheck_errors(
+        "fn main() { let s: Array[String, 2] = [\"a\", \"b\"]; let f = s.first(); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+        "an element-reading method on a String array stays refused: {errors:?}"
+    );
+}
