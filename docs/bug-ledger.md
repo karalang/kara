@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 710 |
-| run-vs-build | 594 |
+| run-vs-build | 595 |
 | leak | 584 |
 | double-free | 422 |
 | codegen-gap | 229 |
@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 122 |
 | crash | 112 |
 | soundness | 98 |
-| use-after-free | 83 |
+| use-after-free | 84 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2774 |
-| interp | 868 |
+| codegen | 2775 |
+| interp | 869 |
 | typecheck | 335 |
 | other | 113 |
 | ownership | 80 |
@@ -481,7 +481,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-55 | 2026-10-04 | interp+codegen | medium | AN ASSIGNMENT THROUGH `*` OF A USER FUNCTION'S RETURNED `mut ref` IS DROPPED -- `*bump(mut x) += 5` and `*bump(mut x) = 9` over `fn bump(v: mut ref i64) -> mut ref i64 { return v; }` leave `x` at 1 under `--interp` and `karac run` alike, and `*h.slot() += 5` (a `mut ref self` method returning `mut ref i64`) fails codegen naming an LLVM pointer type; `*m.entry(c).or_insert(0) += 1` is right on both | — |
 | B-2026-10-04-62 | 2026-10-04 | codegen | medium | A NAMED `Vec` LOCAL MOVED INTO A REASSIGNMENT ON ONE PATH ONLY LOSES ITS ELEMENTS' `Drop` BODIES ON THE PATH THAT DID NOT MOVE IT, ON EVERY COMPILED SURFACE -- `fn fo2(c: bool) -> Vec[R] { let mut v = Vec[mk(1)]; let w = Vec[mk(40)]; if c { v = w; } return v }` called with `false` prints `k1 dR1` compiled where `--interp` prints `dR40 k1 dR1` | — |
 | B-2026-10-04-64 | 2026-10-04 | codegen+interp | medium | A `for` LOOP OVER A FRESH `Vec` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `for item in mk() { k += item.n; }` over `fn mk() -> Vec[D]` with `impl Drop for D` prints `k 15` and never `drop 7` / `drop 8` on `--interp`, -O0 or -O2 (valgrind clean, so the memory is freed and only the bodies are skipped); over `Vec[E]` with a `match item { Many(xs) => count(xs), .. }` arm, `--interp` alone runs them (at each arm's end) and the compiled builds still run none | — |
-| B-2026-10-04-68 | 2026-10-04 | interp | low | `--interp` LOSES THE `Drop` BODY OF AN `Option[shared]` HANDLE IN A TUPLE CAPTURED BY A CLOSURE, AND OF ONE DISPLACED BY A TUPLE-ELEMENT STORE -- `fn cap(i: i64) { let p = mk(i); let f = || p.1; println(f"c{f()}") }` then `cap(1)` prints `c1 end` interpreted against compiled `c1 dH1 end` | — |
 | B-2026-10-04-78 | 2026-10-04 | codegen | low | MOVING A `for` BINDING OUT TWICE IN ONE ITERATION (`out.push(p); let q = p;`) LEAKS ONE COPY PER ITERATION, over a `Vec` and an `Array` alike -- 4 B in 2 blocks at -O0 for a two-element `Vec[P]` with a one-`String` `P`, where each move alone is clean | — |
 | B-2026-10-04-79 | 2026-10-04 | codegen+runtime | medium | AFTER B-2026-10-04-56 KATA 340'S `Map[char, i64]` BENCH STILL RUNS 1.85x RUST AT EQUAL HASHING (399 ms vs 216): each hash costs 92 instructions against Rust's ~74, the erased `remove` path hashes a key the `get` before it already hashed, and the mono insert costs ~70 instructions a call beyond its hash | — |
 | B-2026-10-04-83 | 2026-10-04 | interp+codegen | medium | FORWARDING A BY-VALUE `Option[Array[R, 2]]` PARAM TO ANOTHER BY-VALUE CALLEE RUNS THE ELEMENT `Drop` BODIES AT DIFFERENT POINTS PER BACKEND -- `fn fw(x: Option[Array[R, 2]]) { ok(x); println("fw"); }` prints `ok dR27 dR28 fw` on every compiled surface and `ok fw dR27 dR28` under `--interp`; the rebind spelling `let h = x; ok(h);` splits the same way | — |
@@ -539,6 +538,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-1 | 2026-10-06 | interp+codegen | medium | A BY-VALUE TUPLE PARAM HOLDING A BARE `shared` ELEMENT LEAKS THE BOX COMPILED AND RUNS ITS `Drop` BODY ON NO SURFACE WHEN THE CALLEE DESTRUCTURES IT OR MOVES IT INTO A TUPLE LITERAL -- `fn fp(p: (H, i64)) -> i64 { let (a, b) = p; a.id + b }` called as `fp(mks(1))` prints `f2 end` everywhere and loses 16 B compiled | — |
 | B-2026-10-06-2 | 2026-10-06 | interp+codegen | medium | DESTRUCTURING A BY-VALUE `(Option[H], i64)` PARAM WITH `H` `shared` RUNS NO `Drop` BODY UNDER `--interp`, WHILE COMPILED RUNS IT AFTER THE CALLER HAS USED THE RESULT -- `fn fpo(p: (Option[H], i64)) -> i64 { let (a, b) = p; b }` then `println(f"f{fpo(mk(1))}")` prints `f1 dH1 end` compiled and `f1 end` interpreted | — |
 | B-2026-10-06-3 | 2026-10-06 | interp+codegen | low | AN `Option[shared]` LOCAL MOVED BY `let mut c = a` AND THEN REASSIGNED RUNS THE DISPLACED BODY ONLY AT SCOPE EXIT, IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `let a = Some(mkh(1)); let mut c = a; c = Some(mkh(2)); println("x1")` prints `x1 dH2 dH1 end` compiled and `x1 dH1 dH2 end` interpreted | — |
+| B-2026-10-06-5 | 2026-10-06 | interp | low | `--interp` LOSES THE `Drop` BODY OF A `shared` VALUE CAPTURED BY A CLOSURE, BARE, IN AN `Option` OR IN A TUPLE -- `fn cap(i: i64) { let p = mk(i); let f = || p.1; println(f"c{f()}") }` then `cap(1)` prints `c1 end` interpreted against compiled `c1 dH1 end` (B-2026-10-04-68's closure half) | — |
 
 ### Relocated
 
@@ -3743,6 +3743,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-65 | codegen | medium | [FIXED 2026-10-06 ON BOTH BACKENDS; a by-value tuple PARAM source stays open as B-2026-10-06-1] DESTRUCTURING A TUPLE WHOSE ELEMENT IS AN `Option[sha… | ca90d79b2 |
 | B-2026-10-04-66 | interp+codegen | medium | [FIXED 2026-10-05 ON BOTH BACKENDS; a `let mut` rebind of a BY-VALUE tuple param stays silent on both and is B-2026-10-05-123] REASSIGNING A TUPLE LO… | 2b4010b4e |
 | B-2026-10-04-67 | codegen | medium | [SPLIT 2026-10-05: the `shared enum` spelling is fixed here; the PLAIN enum spelling still leaks and loses its bodies and is B-2026-10-05-98] A USER… | 227a30008 |
+| B-2026-10-04-68 | interp | low | [ELEMENT-STORE HALF FIXED 2026-10-06 ON BOTH BACKENDS; the closure-capture half stays open as B-2026-10-06-5] `--interp` LOSES THE `Drop` BODY OF AN… | 096260fee |
 | B-2026-10-04-69 | codegen | medium | A PAYLOAD OF A BY-VALUE `Option`/`Result` PARAM HANDED TO A METHOD ON A LOCAL RECEIVER RUNS ITS `Drop` BODY NOWHERE COMPILED -- `fn lo(o: Option[S])… | ec60c375c |
 | B-2026-10-04-70 | codegen | low | A FIELD STORE THROUGH A `Map` VALUE, A `Map` HELD IN A `Vec`, OR A CONTAINER HELD IN AN INDEXED TUPLE STILL FAILS THE BUILD -- `m[1].n = 9` over `Map… | ebae224a9 |
 | B-2026-10-04-71 | interp | medium | `--interp` EVALUATES A NESTED INDEX STORE'S SUBSCRIPTS MORE THAN ONCE -- `w[idx(0)][idx(0)] = 5` calls `idx` four times and `u[idx(0)][idx(0)].n = 5`… | 9cef17320 |
@@ -3799,6 +3800,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-97 | codegen | high | A STRUCT LITERAL WHOSE FIELDS ARE WRITTEN OUT OF DECLARATION ORDER STORES EACH VALUE IN THE WRONG FIELD COMPILED -- `struct F { a: i64, b: i64 }; let… | fb6be1570 |
 | B-2026-10-05-108 | codegen | medium | A `flat_map` WITH A DESTRUCTURING CLOSURE PARAM OR A MAPPED INNER FAILS THE BUILD -- `sm.iter().flat_map(\|(k, n)\| (0..n).map(\|_\| k)).collect()` over… | e1f8650e9 |
 | B-2026-10-05-118 | codegen | high | A FRESH STRUCT TEMPORARY WHOSE FIELD IS A PLAIN ENUM HOLDING A `shared` VALUE, PASSED BY VALUE, DECREMENTS THE HANDLE AFTER FREEING IT ON EVERY COMPI… | d12cd317d |
+| B-2026-10-06-4 | codegen | high | [FIXED 2026-10-06] ASSIGNING A FIELD OR TUPLE ELEMENT TO ITSELF READS FREED MEMORY COMPILED -- `let mut p = mks(1); p.0 = p.0; println(f"{p.0.id}")`… | 096260fee |
 
 </details>
 
