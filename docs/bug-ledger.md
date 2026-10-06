@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 714 |
+| miscompile | 716 |
 | run-vs-build | 597 |
-| leak | 584 |
+| leak | 586 |
 | double-free | 424 |
-| codegen-gap | 231 |
+| codegen-gap | 232 |
 | missing-feature | 217 |
 | other | 168 |
 | diagnostics | 147 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2787 |
-| interp | 874 |
+| codegen | 2792 |
+| interp | 876 |
 | typecheck | 338 |
 | other | 113 |
 | ownership | 80 |
@@ -516,7 +516,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-104 | 2026-10-05 | interp+codegen | medium | A NAMED generic-struct argument passed by value inside an expression (`println(f"r{fp(o)}")`, `o: P[R, i64]`) runs its field's Drop body at CALL RETURN when compiled (`dR6 r7`) but at STATEMENT END under --interp (`r7 dR6`); the temporary spelling agrees on both (`dR8 r9`) and a non-generic struct agrees on statement end (`r3 dR2`) | — |
 | B-2026-10-05-105 | 2026-10-05 | codegen+interp | medium | AN `Option` LEAF OF A TUPLE DESTRUCTURED FROM A `match` (`let (o, n) = match 1 { 1 => (Some(mk(40)), 1), _ => (None, 2) };`) RUNS NO PAYLOAD `Drop` BODY ON ANY BACKEND AND LEAKS THE BOX COMPILED (62 B), while the tuple-literal RHS `let (o, n) = (Some(mk(40)), 1)` prints `drop40 o1 end` everywhere | — |
 | B-2026-10-05-106 | 2026-10-05 | codegen | medium | A BLOCK-LOCAL STRUCT MOVED INTO A BLOCK-TAIL TUPLE THAT IS DESTRUCTURED (`let (a, b) = { let z = mk(70); (z, mk(71)) };`) RUNS `z`'S `Drop` BODY AT THE BLOCK'S END COMPILED, BEFORE `a` IS READ, AND LEAKS BOTH LEAVES -- `drop70 blk 70 71 end` against --interp's `blk 70 71 drop71 drop70 end`, 60 B lost | — |
-| B-2026-10-05-107 | 2026-10-05 | codegen+interp | high | A GENERIC FN THAT DESTRUCTURES `if c { (a, 1) } else { (b, 2) }` OVER ITS TWO BY-VALUE `T` PARAMS AND RETURNS THE LEAF RUNS THE RETURNED VALUE'S `Drop` BODY TWICE ON EVERY BACKEND -- `fn gsel[T](a: T, b: T, c: bool) -> T { let (v, n) = if c { (a, 1) } else { (b, 2) }; v }`, `gsel(mk(80), mk(81), true)` prints `drop81 drop80 g80 drop80 end` | — |
 | B-2026-10-05-109 | 2026-10-05 | codegen | high | LOOPING BY VALUE OVER A `Vec.filled(n, s)` TEMPORARY OF STRINGS DOUBLE-FREES COMPILED -- `for s in Vec.filled(2, base.clone()) { r.push(s); }` aborts with "double free detected in tcache 2" under `karac build` and `karac run`, prints `[x7, x7]` under `--interp`; the same Vec bound to a `let` first is clean | — |
 | B-2026-10-05-115 | 2026-10-05 | codegen | medium | A TEMPORARY `Option[String]` PASSED TO A GENERIC `ref T` PARAMETER LEAKS ITS PAYLOAD -- `fn peek[T](x: ref T) -> i64 { 1 }` with `peek(mk())` over `fn mk() -> Option[String]` loses the string, while the concrete `fn peek(x: ref Option[String])` and a temporary `String` through the same generic are clean | — |
 | B-2026-10-05-116 | 2026-10-05 | codegen | medium | A GENERIC STRUCT LITERAL WHOSE FIELD IS AN `Option` OF A HEAP TYPE LEAKS THE PAYLOAD -- `struct G[T] { v: T }; let h = G { v: Some("hs".to_string()) }` loses the string at scope end, compiled; `G { v: "plain".to_string() }` is clean | — |
@@ -544,6 +543,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-38 | 2026-10-06 | interp+codegen | low | A `shared` HANDLE ALIASED INTO A LATER BINDING AND THEN REASSIGNED AWAY DROPS IN THE WRONG ORDER AT SCOPE EXIT UNDER `--interp` -- `let mut o = Some(H { id: 1 }); let g = o; o = Some(H { id: 2 }); println(f"o{g.is_some()}")` prints `otrue dH1 dH2` compiled and `otrue dH2 dH1` interpreted | — |
 | B-2026-10-06-39 | 2026-10-06 | interp | low | A STORE THROUGH A `mut ref Option[H]` PARAM (`H` `shared`) RUNS NO `Drop` BODY FOR THE CALLER'S DISPLACED HANDLE UNDER `--interp` -- `fn setm(x: mut ref Option[H]) { x = Some(H { id: 9 }); }` then `let mut o = Some(H { id: 1 }); setm(mut o)` prints `o9 dH9 end` interpreted against compiled `dH1 o9 dH9 end` | — |
 | B-2026-10-06-43 | 2026-10-06 | codegen | medium | A `const` OF `Array` OR `Vec` TYPE USED DIRECTLY AS AN INDEX BASE, A `.len()` RECEIVER OR A `for` ITERABLE FAILS `karac build`, AND A MODULE-LEVEL `let` OF `Array[T, N]` FAILS THE SAME WAY FOR `.len()` AND `for`; `--interp` RUNS EVERY CASE, AND BINDING THE CONSTANT TO A LOCAL FIRST BUILDS | — |
+| B-2026-10-06-44 | 2026-10-06 | codegen+interp | high | AN `Option` PARAM DESTRUCTURED OUT OF A TUPLE LITERAL AND NOT RETURNED RUNS ITS PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND NOT AT ALL COMPILED -- `fn f(a: Option[R], b: Option[R]) -> Option[R] { let (v, w) = (a, b); v }`, `f(Some(mk(1)), Some(mk(2)))` prints `drop2 drop2 xtrue drop1 end` interpreted and `xtrue drop1 end` at -O0 (on 8e8bb56b2 the compiled binary SEGFAULTS) | — |
+| B-2026-10-06-45 | 2026-10-06 | codegen+interp | high | A LOCAL THAT WRAPS TWO BY-VALUE PARAMS IN A TUPLE, THEN DESTRUCTURED, RUNS THE RETURNED LEAF'S `Drop` BODY TWICE ON EVERY SURFACE -- `fn sel(a: R, b: R, c: bool) -> R { let t = (a, b); println("in"); let (v, w) = t; v }`, `sel(mk(80), mk(81), true)` prints `in drop81 drop80 g80 drop80 end` | — |
+| B-2026-10-06-46 | 2026-10-06 | codegen | medium | `shared` PARAMS DESTRUCTURED OUT OF A TUPLE LITERAL RUN NO `Drop` BODY AND LEAK BOTH OBJECTS COMPILED -- `fn f(a: H, b: H) -> H { let (v, w) = (a, b); v }` over `shared struct H { id: i64 }` with a printing `Drop`, `f(H { id: 1 }, H { id: 2 })` prints `x1 end` at -O0 with 2 x 16 B definitely lost, where `--interp` prints `dH2 x1 dH1 end` | — |
+| B-2026-10-06-47 | 2026-10-06 | codegen | medium | TUPLE-TYPED PARAMS DESTRUCTURED OUT OF A TUPLE LITERAL LEAK ONE STRING BUFFER COMPILED -- `fn f(a: (R, i64), b: (R, i64)) -> (R, i64) { let (v, w) = (a, b); v }`, `f((mk(1), 1), (mk(2), 2))` loses 29 B in 1 block at -O0 under valgrind while printing the right `drop2 x1 drop1 end` | — |
+| B-2026-10-06-48 | 2026-10-06 | codegen | low | LATENT, BLOCKS WIDENING THE PARAM FATE TO GENERIC ENUM PARAMS: WITH THE FATE ANSWERING FOR `gn[T](h: Ho[T], k: bool) -> Ho[T] { let m = h; if k { return m } println("gd"); return Ho.Empty }`, THE COMPILED MONOMORPH LOSES THE PAYLOAD'S `Drop` BODY ON THE LEG THAT KEEPS THE VALUE -- `gn(Ho.Full(mks(13)), false)` prints `gd` with no `dS13` compiled (`--interp` keeps it); today's legacy answer is right | — |
 
 ### Relocated
 
@@ -3805,6 +3809,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-95 | codegen | medium | A `for` LOOP OVER AN UNNAMED SortedSet OR SortedMap FAILS THE BUILD -- `for v in a.intersection(b)` over two SortedSets, `for v in make_sorted_set()`… | a37653ccc |
 | B-2026-10-05-96 | typecheck | medium | A GENERIC STRUCT LITERAL NESTED IN ANOTHER IS REFUSED WITH "cannot infer type parameter" -- `W { inner: Bx { v: 5, n: 0 }, tag: 3 }` over `struct Bx[… | 08ddf5263 |
 | B-2026-10-05-97 | codegen | high | A STRUCT LITERAL WHOSE FIELDS ARE WRITTEN OUT OF DECLARATION ORDER STORES EACH VALUE IN THE WRONG FIELD COMPILED -- `struct F { a: i64, b: i64 }; let… | fb6be1570 |
+| B-2026-10-05-107 | codegen+interp | high | A GENERIC FN THAT DESTRUCTURES `if c { (a, 1) } else { (b, 2) }` OVER ITS TWO BY-VALUE `T` PARAMS AND RETURNS THE LEAF RUNS THE RETURNED VALUE'S `Dro… | a360d0f79 |
 | B-2026-10-05-108 | codegen | medium | A `flat_map` WITH A DESTRUCTURING CLOSURE PARAM OR A MAPPED INNER FAILS THE BUILD -- `sm.iter().flat_map(\|(k, n)\| (0..n).map(\|_\| k)).collect()` over… | e1f8650e9 |
 | B-2026-10-05-118 | codegen | high | A FRESH STRUCT TEMPORARY WHOSE FIELD IS A PLAIN ENUM HOLDING A `shared` VALUE, PASSED BY VALUE, DECREMENTS THE HANDLE AFTER FREEING IT ON EVERY COMPI… | d12cd317d |
 | B-2026-10-05-114 | interp+codegen | medium | STORING INTO A TUPLE LOCAL'S ELEMENT (`p.0 = mkr(2)`) RUNS NO `Drop` BODY FOR THE DISPLACED ELEMENT ON ANY SURFACE -- `let mut p = (mkr(1), 5); p.0 =… | fb926ac2c |
