@@ -111,6 +111,7 @@
 - `for x in c.into_iter()`.
 
 Whether an argument moves is decided only by the callee's declared parameter mode.
+An operator is a call to the method its operand type's impl provides, so the same rule applies: the operands' modes are those declared by the impl method the operator resolves to (§4.7). `String`'s `+` is `fn add(ref self, other: ref String)` (`design.md` § Collection Core Methods), so `a + b` on `String` moves neither operand. Comparison operators borrow both. On `Copy` types the question does not arise.
 
 **3.2 Use after move (C1).** Using a place that is moved, or maybe-moved, on any path reaching the use is error **E0500**. "Using" means reading it, borrowing it, moving it, or calling a method on it.
 
@@ -186,6 +187,11 @@ Pins: `drop_callee_owns`, `drop_callee_returns`.
 - **`for x in c`** borrows `c` through `Iterable`; `x` is the iterator's item, `ref T` for the standard collections. **`for x in c.into_iter()`** moves `c` and each item.
 
 Pins: `ok_match_binding_modes`, `drop_match_scrutinee`, `drop_underscore`.
+
+**4.7 An impl's modes may be weaker than its trait's.** An impl method may declare any parameter, the receiver included, with the same mode as the trait method or a weaker one, in the order owned → `mut ref` → `ref` (and `mut Slice[T]` → `Slice[T]`). It may never declare a stronger one.
+- A call whose impl is known where it is checked (a concrete type, including an operator on one) uses the impl's modes.
+- A call through a generic bound is checked against the trait's modes, so an argument the trait takes by value is moved there. When the instance's impl borrows it instead, the moved value becomes a temporary of the call and drops at the end of the enclosing statement (§7.4).
+- So `trait Add { fn add(self, rhs: Self) -> Self; }` and `String`'s `fn add(ref self, other: ref String)` conform. `a + b` on two `String` locals moves neither (§3.1). Inside `fn sum[T: Add](a: T, b: T) -> T { a + b }`, both move.
 
 ---
 
@@ -314,7 +320,7 @@ Pins: `drop_defer`, `drop_callee_owns`, `drop_shadowing`.
 |---|---|
 | expression statement `e;` | at the `;` |
 | `let` initializer | at the `;` (after the bindings take what they move) |
-| argument passed to a `ref` / `mut ref` parameter, borrowed receiver, operator operand or index operand | at the end of the enclosing statement |
+| argument passed to a `ref` / `mut ref` parameter or borrowed receiver, including an operator operand or index operand passed that way | at the end of the enclosing statement |
 | argument passed **by value** | it is not a caller temporary: it moves into the callee, which drops it (§4.2) |
 | `if` / `while` condition | after the condition is evaluated, before the branch |
 | `match` guard | at the end of the guard |

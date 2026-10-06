@@ -1,19 +1,17 @@
-// Tangle — cross-edge graph (RC-fallback structure).
+// Tangle — cross-edge graph (a declared `shared` node).
 //
-// Unlike `parent_tree.kara`, the nodes here are a PLAIN `struct` — not
-// `shared`. Nothing in the source declares reference semantics. But the graph
-// has a *cross-edge*: one node is reachable from two parents (a diamond). That
-// single node cannot be linearly owned — it is moved into one parent's edge
-// list and then used again to link the second parent. The compiler can't prove
-// that aliasing safe, so it **escalates the node to RC on its own**.
+// The graph has a *cross-edge*: one node is reachable from two parents (a
+// diamond). That single node cannot be linearly owned — it is stored into one
+// parent's edge list and then used again to link the second parent — so the
+// node type is declared `shared`, and storing a handle twice counts it twice.
 //
-// The whole point of Tangle: that escalation is not silent. `karac query
-// ownership .../cross_graph.kara.build_diamond` reports the escalated binding in
-// `rc_values` with the trigger — "container store with subsequent use" — and the
-// line. The honest-conservatism story, made concrete: you wrote no `shared`, no
-// `Rc`, no lifetime; the compiler took the one RC it needed and told you where.
+// This file used to keep `GraphNode` a plain `struct` and let the compiler
+// escalate `d` to RC on its own (RC fallback). The v2 core removes that
+// (`docs/core-semantics.md` §6.4): the compiler never shares a value to make a
+// program legal, and `karac check` reports the second use of a plain `d` as a
+// use after move. Sharing is something the source says, as it does here.
 
-struct GraphNode {
+shared struct GraphNode {
     val: i64,
     mut edges: Vec[GraphNode],
 }
@@ -40,8 +38,8 @@ fn build_diamond() -> GraphNode {
     let mut c = GraphNode { val: 3, edges: Vec.new() };
     let d = GraphNode { val: 4, edges: Vec.new() };
 
-    b.add_edge(d);   // d moved into b.edges     (container store)
-    c.add_edge(d);   // d used again here        -> RC fallback on `d`
+    b.add_edge(d);   // a handle to d stored in b.edges
+    c.add_edge(d);   // a second handle, in c.edges: both reach the same d
     a.add_edge(b);
     a.add_edge(c);
     a

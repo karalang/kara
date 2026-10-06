@@ -23,7 +23,7 @@ model is most likely to get wrong). The *organic at-scale* leg is **Chronicle**
 | Structure | File | Proves | Ownership signal |
 |---|---|---|---|
 | Parent-pointer tree | `src/parent_tree.kara` | up/down cycle without `Rc<RefCell>`+`Weak` | `representation:"shared (Rc)"` (declared RC) |
-| Cross-edge graph (diamond) | `src/cross_graph.kara` | shared descendant the checker can't linearize | `rc_values` + trigger line (RC fallback) |
+| Cross-edge graph (diamond) | `src/cross_graph.kara` | shared descendant reachable from two parents | `representation:"shared (Rc)"` (declared RC; it was RC fallback until the v2 core removed that) |
 | Doubly-linked list | `src/doubly_linked.kara` | both-way links + neighbor-relink splice, no `Weak` | `representation:"shared (Rc)"` (declared RC) |
 | Undo/redo over shared state | `src/undo_redo.kara` | shared **mutable** state, undo writes back through the shared handle | `representation:"shared (Rc)"` (declared RC) |
 | Tree-walking interpreter (shared scope) | `src/interp.kara` | recursive `shared enum` AST + shared mutable scope threaded through `eval` | `representation:"shared (Rc)"` (declared RC) |
@@ -188,28 +188,26 @@ There are **two distinct RC signals**, and Tangle is designed to show both:
   ```
 
 - **`rc_values`** (with the trigger) — an *owned* (non-`shared`) value the
-  compiler was **forced to escalate to RC** because it couldn't prove the
-  aliasing safe (RC fallback). This is leg #2's real payload — "exactly where it
-  escalated, with the trigger line." The cross-edge graph exercises it: the
-  diamond's shared node `d` is stored into one parent's edge list, then used
-  again to link the second parent, which the checker can't linearize.
+  legacy compiler **escalated to RC** because it couldn't prove the aliasing
+  safe (RC fallback). The v2 core removes that fallback
+  (`docs/core-semantics.md` §6.4): `karac check` now reports each such site as
+  a use-after-move error with both lines, and `karac fix` inserts `.clone()`
+  where a copy is what was meant. Shared ownership has to be written as
+  `shared`. The cross-edge graph used to exercise the fallback (the diamond's
+  node `d` stored into one parent's edge list, then used again to link the
+  second); its node is now a `shared struct`, so `build_diamond` reports
+  `rc_values:[]` and both parents hold the same `d`.
 
-  ```jsonc
-  // karac query ownership .../cross_graph.kara.build_diamond
-  {"function":"build_diamond","parameters":[],
-   "rc_values":[{"binding":"d","kind":"Rc",
-                 "trigger":"container_store_with_subsequent_use",
-                 "consume_line":43,"other_use_line":44}],
-   "closures":[]}
+  ```text
+  // the same program with `GraphNode` as a plain `struct`, under `karac check`
+  error[ownership]: cross_graph.kara:42:16: value 'd' was moved into a container
+  (moved at line 41:16), used again here
   ```
 
-  The node is plain `struct` — nothing in the source says `shared`, `Rc`, or
-  `'a`. The compiler took the one RC it needed and pointed at both lines: where
-  `d` was stored (43) and where it was used again (44).
-
 So: the parent-pointer tree proves "the cyclic shape works, and its RC is
-declared and visible"; the owned-aliasing structures will prove "and where the
-compiler *infers* RC, it tells you, with the line."
+declared and visible"; the owned-aliasing structures prove that RC is never
+inferred: where the source does not say `shared`, an aliasing use is an error
+that names both lines.
 
 ## Status
 

@@ -324,7 +324,7 @@ impl ProtoReader {
 // fragment.
 
 // True when `tn` is a proto3 scalar this derive can codegen for.
-comptime fn proto_supported(tn: String) -> bool {
+comptime fn proto_supported(tn: ref String) -> bool {
     tn == "String" or tn == "Vec[u8]" or tn == "bool" or tn == "u64" or tn == "i64"
         or tn == "i32" or tn == "u32"
 }
@@ -333,14 +333,14 @@ comptime fn proto_supported(tn: String) -> bool {
 // distinct from [`proto_supported`] because floats are fixed-width (not varint)
 // and so take a separate encode/decode path; the two together are the full set
 // of scalar value types usable in `repeated` / `map` value / `oneof` positions.
-comptime fn proto_is_float(tn: String) -> bool {
+comptime fn proto_is_float(tn: ref String) -> bool {
     tn == "f64" or tn == "f32"
 }
 
 // The zero value a decoded field starts from before any wire bytes overwrite
 // it (proto3 fields default to zero). Carries an explicit suffix so the
 // generated `let mut` binding infers the field's exact width.
-comptime fn proto_default(tn: String) -> String {
+comptime fn proto_default(tn: ref String) -> String {
     if tn == "String" {
         "\"\""
     } else if tn == "Vec[u8]" {
@@ -364,7 +364,7 @@ comptime fn proto_default(tn: String) -> String {
 
 // The expression that reads one value of type `tn` from `reader` (a
 // `ProtoReader`), already cast to the field's declared type.
-comptime fn proto_read_expr(tn: String) -> String {
+comptime fn proto_read_expr(tn: ref String) -> String {
     if tn == "String" {
         "reader.read_string()"
     } else if tn == "Vec[u8]" {
@@ -389,7 +389,7 @@ comptime fn proto_read_expr(tn: String) -> String {
 // The statement(s) that append field `fname` (number `idx`, type `tn`) to the
 // `out` buffer: its tag followed by the wire-encoded value. Strings and bytes
 // are length-delimited and written without consuming `self` (encode is pure).
-comptime fn proto_encode_field(idx: i64, fname: String, tn: String) -> String {
+comptime fn proto_encode_field(idx: i64, fname: ref String, tn: ref String) -> String {
     let tag = f"{idx}";
     if tn == "String" {
         "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
@@ -435,7 +435,7 @@ comptime fn proto_encode_field(idx: i64, fname: String, tn: String) -> String {
 // the nested encoding, then those bytes. `self.fname.encode()` returns an owned
 // `Vec[u8]`; bind it to a per-field temp (`m<idx>`, a fresh identifier) so the
 // length and the payload read the same encoding without re-encoding.
-comptime fn proto_encode_nested(idx: i64, fname: String) -> String {
+comptime fn proto_encode_nested(idx: i64, fname: ref String) -> String {
     let tag = f"{idx}";
     "let m" + tag + " = self." + fname + ".encode(); out.extend_from_slice(ProtoBuf.encode_tag("
         + tag + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(m" + tag
@@ -453,7 +453,7 @@ comptime fn proto_encode_nested(idx: i64, fname: String) -> String {
 
 // The `Vec[u8]` expression encoding one packed numeric element `x` of type `etn`
 // as a varint (the same signed/unsigned rules the scalar path uses).
-comptime fn proto_encode_elem_varint(x: String, etn: String) -> String {
+comptime fn proto_encode_elem_varint(x: ref String, etn: ref String) -> String {
     if etn == "bool" {
         "ProtoBuf.encode_varint(if " + x + " { 1u64 } else { 0u64 })"
     } else if etn == "u64" {
@@ -469,7 +469,7 @@ comptime fn proto_encode_elem_varint(x: String, etn: String) -> String {
 
 // The expression reading one packed numeric element of type `etn` from the
 // reader named `rn` (the outer `reader`, or a `sub` reader over a packed blob).
-comptime fn proto_read_elem(rn: String, etn: String) -> String {
+comptime fn proto_read_elem(rn: ref String, etn: ref String) -> String {
     if etn == "bool" {
         rn + ".read_varint() != 0u64"
     } else if etn == "u64" {
@@ -488,11 +488,11 @@ comptime fn proto_read_elem(rn: String, etn: String) -> String {
 // nothing for an empty vector (proto3 omits empty packed fields).
 comptime fn proto_encode_repeated(
     idx: i64,
-    fname: String,
-    etn: String,
+    fname: ref String,
+    etn: ref String,
     is_msg: bool,
     is_enum: bool,
-    evnames: Vec[String],
+    evnames: ref Vec[String],
 ) -> String {
     let tag = f"{idx}";
     let elem = "self." + fname + "[i" + tag + "]";
@@ -547,11 +547,11 @@ comptime fn proto_encode_repeated(
 // accept the packed form (wire type 2, loop a sub-reader) or a lone unpacked
 // element; `String` / `bytes` / messages push one length-delimited value.
 comptime fn proto_decode_repeated(
-    target: String,
-    etn: String,
+    target: ref String,
+    etn: ref String,
     is_msg: bool,
     is_enum: bool,
-    evnames: Vec[String],
+    evnames: ref Vec[String],
 ) -> String {
     if is_enum {
         // Accept packed (wire 2, a blob of index varints) or a lone unpacked
@@ -593,7 +593,7 @@ comptime fn proto_decode_repeated(
 // Append the scalar `expr` of type `tn` to `buf` as field `fnum` — the scalar
 // encode logic, parameterized by buffer name and value expression so it serves
 // both map keys (field 1) and map values (field 2).
-comptime fn proto_encode_scalar_one(buf: String, fnum: i64, expr: String, tn: String) -> String {
+comptime fn proto_encode_scalar_one(buf: ref String, fnum: i64, expr: ref String, tn: ref String) -> String {
     let tag = f"{fnum}";
     if tn == "String" {
         buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 2)); " + buf
@@ -629,7 +629,7 @@ comptime fn proto_encode_scalar_one(buf: String, fnum: i64, expr: String, tn: St
 
 // The expression reading one scalar of type `tn` from reader `rn` (cast to the
 // declared type), for map keys/values read from an entry sub-reader.
-comptime fn proto_read_scalar_one(rn: String, tn: String) -> String {
+comptime fn proto_read_scalar_one(rn: ref String, tn: ref String) -> String {
     if tn == "String" {
         rn + ".read_string()"
     } else if tn == "Vec[u8]" {
@@ -664,12 +664,12 @@ comptime fn proto_read_scalar_one(rn: String, tn: String) -> String {
 // place, which B-2026-08-31-2's rule rejects, and the intermediate state it
 // created was a `Map` field the callee owned while the caller still did.
 comptime fn proto_map_decode(
-    target: String,
-    tag: String,
-    kdflt: String,
-    vdflt: String,
-    kread: String,
-    vread: String,
+    target: ref String,
+    tag: ref String,
+    kdflt: ref String,
+    vdflt: ref String,
+    kread: ref String,
+    vread: ref String,
 ) -> String {
     let prefix = "let mut sub" + tag + " = ProtoReader.new(reader.read_len_delim()); let mut mk"
         + tag + " = " + kdflt + "; let mut mv" + tag + " = " + vdflt + "; while not sub" + tag
@@ -688,7 +688,7 @@ comptime fn proto_map_decode(
 
 // Extract the `<wire>` from a field's `#[karac::proto(<wire>)]` attribute, or
 // "" if the field has none. `attrs` entries render as `"karac::proto(sint64)"`.
-comptime fn proto_wire_override(attrs: Vec[String]) -> String {
+comptime fn proto_wire_override(attrs: ref Vec[String]) -> String {
     let mut found = "";
     let mut i = 0;
     while i < attrs.len() {
@@ -703,7 +703,7 @@ comptime fn proto_wire_override(attrs: Vec[String]) -> String {
 
 // Encode statement for a wire-override field (`self.fname`, number `idx`):
 // ZigZag varint for `sint*`, little-endian fixed64/fixed32 for `*fixed*`.
-comptime fn proto_encode_override(idx: i64, fname: String, wire: String) -> String {
+comptime fn proto_encode_override(idx: i64, fname: ref String, wire: ref String) -> String {
     let tag = f"{idx}";
     if wire == "sint64" or wire == "sint32" {
         "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
@@ -725,7 +725,7 @@ comptime fn proto_encode_override(idx: i64, fname: String, wire: String) -> Stri
 }
 
 // The expression reading a wire-override value back, cast to the field's type.
-comptime fn proto_read_override(wire: String) -> String {
+comptime fn proto_read_override(wire: ref String) -> String {
     if wire == "sint64" {
         "ProtoBuf.zigzag_decode(reader.read_varint())"
     } else if wire == "sint32" {
@@ -742,7 +742,7 @@ comptime fn proto_read_override(wire: String) -> String {
 }
 
 // True for the six recognized wire-format override names.
-comptime fn proto_wire_is_known(wire: String) -> bool {
+comptime fn proto_wire_is_known(wire: ref String) -> bool {
     wire == "sint32" or wire == "sint64" or wire == "fixed32" or wire == "fixed64"
         or wire == "sfixed32" or wire == "sfixed64"
 }
@@ -758,7 +758,7 @@ comptime fn proto_wire_is_known(wire: String) -> bool {
 // The explicit proto number from a `#[karac::field(N)]` attribute, or 0 (= use
 // the positional index) if the field carries none. Entries render as
 // `"karac::field(5)"`.
-comptime fn proto_field_number_override(attrs: Vec[String]) -> i64 {
+comptime fn proto_field_number_override(attrs: ref Vec[String]) -> i64 {
     let mut found = 0;
     let mut i = 0;
     while i < attrs.len() {
@@ -780,7 +780,7 @@ comptime fn proto_field_number_override(attrs: Vec[String]) -> i64 {
 // oneof payloads all share one definition of the mapping.
 
 // The `match` expression mapping an enum value `expr` to its `u64` wire index.
-comptime fn proto_enum_to_index(expr: String, en: String, vnames: Vec[String]) -> String {
+comptime fn proto_enum_to_index(expr: ref String, en: ref String, vnames: ref Vec[String]) -> String {
     let mut m = "match " + expr + " { ";
     let mut k = 0;
     while k < vnames.len() {
@@ -793,7 +793,7 @@ comptime fn proto_enum_to_index(expr: String, en: String, vnames: Vec[String]) -
 // The parenthesized `if`-chain mapping a wire index `idx` (a bound local, read
 // once by the caller) back to a variant of `en`. Variant 0 is both the proto3
 // default and the unknown-value fallback.
-comptime fn proto_index_to_enum(idx: String, en: String, vnames: Vec[String]) -> String {
+comptime fn proto_index_to_enum(idx: ref String, en: ref String, vnames: ref Vec[String]) -> String {
     let mut chain = "(";
     let mut k = 0;
     while k < vnames.len() {
@@ -1220,7 +1220,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // The delimiters are spelled as code points because `char as u8` is rejected at
 // parse (design.md § `as` casts — it truncates a scalar value), so a byte
 // comparison cannot borrow a char literal's readability.
-comptime fn proto_tokenize(src: String) -> Vec[String] {
+comptime fn proto_tokenize(src: ref String) -> Vec[String] {
     let mut tokens = Vec.new();
     let n = src.len();
     let b: Slice[u8] = src.bytes();
@@ -1307,7 +1307,7 @@ comptime fn proto_atoi(s: ref String) -> i64 {
 // collect the names. Run before field parsing so a field may reference a type
 // declared later in the schema (forward references), and so a field of a
 // declared type is told apart from a genuine unsupported scalar.
-comptime fn proto_collect_messages(toks: Vec[String], n: i64) -> Vec[String] {
+comptime fn proto_collect_messages(toks: ref Vec[String], n: i64) -> Vec[String] {
     let mut names = Vec.new();
     let mut i = 0;
     while i < n {
@@ -1344,7 +1344,7 @@ comptime fn proto_pascal_case(s: ref String) -> String {
 // Order enum variants by their proto value into a `V0, V1, ...` body,
 // validating contiguous `0..count` (proto3 enums start at 0; the derive uses
 // declaration order as the wire number, so order must match the values).
-comptime fn proto_order_enum_variants(name: String, vals: Vec[i64], vnames: Vec[String]) -> String {
+comptime fn proto_order_enum_variants(name: ref String, vals: ref Vec[i64], vnames: ref Vec[String]) -> String {
     let count = vals.len();
     let mut body = "";
     let mut k = 0;
@@ -1375,7 +1375,7 @@ comptime fn proto_order_enum_variants(name: String, vals: Vec[i64], vnames: Vec[
 }
 
 // True when `name` is one of the schema's declared message types.
-comptime fn proto_is_message(name: String, msgs: Vec[String]) -> bool {
+comptime fn proto_is_message(name: ref String, msgs: ref Vec[String]) -> bool {
     let mut i = 0;
     let mut found = false;
     while i < msgs.len() {
@@ -1390,19 +1390,19 @@ comptime fn proto_is_message(name: String, msgs: Vec[String]) -> bool {
 // Resolve a proto field type to its Kāra type: a scalar via [`proto_map_type`],
 // or a nested message (mapped to its own struct name — the derive encodes it as
 // a length-delimited sub-message), or "" if neither.
-comptime fn proto_resolve_type(ptype: String, msgs: Vec[String]) -> String {
+comptime fn proto_resolve_type(ptype: ref String, msgs: ref Vec[String]) -> String {
     let scalar = proto_map_type(ptype);
     if scalar != "" {
         scalar
     } else if proto_is_message(ptype, msgs) {
-        ptype
+        ptype.clone()
     } else {
         ""
     }
 }
 
 // Map a proto3 scalar type name to its Kāra type, or "" if unsupported.
-comptime fn proto_map_type(t: String) -> String {
+comptime fn proto_map_type(t: ref String) -> String {
     if t == "string" {
         "String"
     } else if t == "bytes" {
@@ -1429,10 +1429,10 @@ comptime fn proto_map_type(t: String) -> String {
 // The wire-override name for a proto type that has a non-default encoding but
 // the same Kāra base type as a plain `int*`/`uint*`, or "" for an ordinary
 // type. Emitted as a `#[karac::proto(<wire>)]` attribute on the field.
-comptime fn proto_wire_for(t: String) -> String {
+comptime fn proto_wire_for(t: ref String) -> String {
     if t == "sint32" or t == "sint64" or t == "fixed32" or t == "fixed64" or t == "sfixed32"
         or t == "sfixed64" {
-        t
+        t.clone()
     } else {
         ""
     }
@@ -1440,7 +1440,7 @@ comptime fn proto_wire_for(t: String) -> String {
 
 // The Kāra base type a wire-override proto type lowers to (sint*/sfixed* are
 // signed, fixed* unsigned).
-comptime fn proto_wire_base(t: String) -> String {
+comptime fn proto_wire_base(t: ref String) -> String {
     if t == "sint32" or t == "sfixed32" {
         "i32"
     } else if t == "sint64" or t == "sfixed64" {
@@ -1454,7 +1454,7 @@ comptime fn proto_wire_base(t: String) -> String {
 
 // True when `fnums` is exactly the gapless set {1, 2, …, count} — the case the
 // positional derive tagging handles without per-field overrides.
-comptime fn proto_is_contiguous(fnums: Vec[i64]) -> bool {
+comptime fn proto_is_contiguous(fnums: ref Vec[i64]) -> bool {
     let count = fnums.len();
     let mut k = 1;
     let mut ok = true;
@@ -1479,7 +1479,7 @@ comptime fn proto_is_contiguous(fnums: Vec[i64]) -> bool {
 // `1..N` run: each field keeps declaration order but carries an explicit
 // `#[karac::field(N)]` so the derive tags it by its schema number rather than
 // its position. Validates the numbers are positive and distinct.
-comptime fn proto_explicit_fields(name: String, fnums: Vec[i64], fdecls: Vec[String]) -> String {
+comptime fn proto_explicit_fields(name: ref String, fnums: ref Vec[i64], fdecls: ref Vec[String]) -> String {
     let count = fnums.len();
     let mut body = "";
     let mut k = 0;
@@ -1511,7 +1511,7 @@ comptime fn proto_explicit_fields(name: String, fnums: Vec[i64], fdecls: Vec[Str
 // Order the collected fields by proto field number into a `name: Type, ...`
 // struct body, validating that the numbers form a contiguous `1..N` (so the
 // slice-2 derive's declaration-order tagging matches the schema's numbers).
-comptime fn proto_order_fields(name: String, fnums: Vec[i64], fdecls: Vec[String]) -> String {
+comptime fn proto_order_fields(name: ref String, fnums: ref Vec[i64], fdecls: ref Vec[String]) -> String {
     let count = fnums.len();
     let mut body = "";
     let mut k = 1;
@@ -1546,11 +1546,11 @@ comptime fn proto_order_fields(name: String, fnums: Vec[i64], fdecls: Vec[String
 // message's first free field number, so the derive's declaration-order tagging
 // of the enum's payload variants matches the schema's numbers).
 comptime fn proto_order_oneof(
-    ename: String,
+    ename: ref String,
     base: i64,
-    onums: Vec[i64],
-    onames: Vec[String],
-    otypes: Vec[String],
+    onums: ref Vec[i64],
+    onames: ref Vec[String],
+    otypes: ref Vec[String],
 ) -> String {
     let count = onums.len();
     let mut body = "NotSet";
@@ -1581,7 +1581,7 @@ comptime fn proto_order_oneof(
 
 // Parse a whole proto3 schema into the `Vec[Item]` of `#[derive(Message)]`
 // structs it declares. The entry point the `#[proto_schema]` expansion calls.
-comptime fn proto_parse_schema(src: String) -> Vec[Item] {
+comptime fn proto_parse_schema(src: ref String) -> Vec[Item] {
     let toks = proto_tokenize(src);
     let n = toks.len();
     let msgs = proto_collect_messages(toks, n);

@@ -563,7 +563,7 @@ impl Parser {
     // to declare a version.
     fn version_line(ref self) -> String {
         if self.version_text == "" {
-            self.program_name
+            self.program_name.clone()
         } else {
             self.program_name + " " + self.version_text
         }
