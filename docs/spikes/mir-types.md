@@ -1,6 +1,6 @@
 # MIR types (M1)
 
-**Status:** DRAFT, 2026-10-06. Owner: the Shared drop schedule thread (MIR types in M1, then drop elaboration and the borrow checker). Part of the redesign approved on 2026-10-06 (`review/REDESIGN_PROPOSAL_2026-10-06.md` in the project folder). The semantics MIR must implement are in `docs/core-semantics.md`, § Drops, moves and scopes. This note fixes the data types and the invariants each MIR phase guarantees, so that the builder (typed HIR to MIR), drop elaboration, the borrow checker, the MIR interpreter and MIR to LLVM can be written against one definition.
+**Status:** DRAFT, 2026-10-06. Owner: the Shared drop schedule thread (MIR types in M1, then drop elaboration and the borrow checker). Part of the redesign approved on 2026-10-06 (`review/REDESIGN_PROPOSAL_2026-10-06.md` in the project folder). The semantics MIR must implement are in `docs/core-semantics.md` (approved 2026-10-06); §7 (Destruction) is the drop elaboration spec. This note fixes the data types and the invariants each MIR phase guarantees, so that the builder (typed HIR to MIR), drop elaboration, the borrow checker, the MIR interpreter and MIR to LLVM can be written against one definition.
 
 ## 1. Where MIR sits
 
@@ -253,7 +253,7 @@ fn eat(_1: R) -> () {
 
 ## 8. Optimizations and reference counts
 
-Optimization passes on MIR follow core semantics § Optimisation: a user `Drop` body call is never moved, added or removed, and plain memory may be freed earlier than its scope end. A matched `Retain` / release pair on a `shared` handle may be removed when nothing between them can observe the count: no count reaches zero at a different point as a result, and no `Weak.upgrade`, count query or user `Drop` body runs between the two. That keeps the existing RC-elision win for read-only tree walks (`src/rc_elide.rs`) legal on MIR.
+Optimization passes on MIR follow `docs/core-semantics.md` §7.10: a user `Drop` body call is never moved, added or removed; a plain memory free may run earlier, after the value's last use; and a matched `Retain` / release pair on a `shared` handle may be removed only if no count reaches zero at a different point as a result. That keeps the existing RC-elision win for read-only tree walks (`src/rc_elide.rs`) legal on MIR.
 
 ## 9. Open questions
 
