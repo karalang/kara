@@ -16062,10 +16062,44 @@ impl<'ctx> super::Codegen<'ctx> {
         // under the syntactic verdict and is clean under this one.
         let tes = self.arm_binding_scalar_tes(pattern);
         let copy_read = |e: &Expr| Self::arm_binding_scalar_copy_read(&tes, e);
-        Some(
-            binds
-                .iter()
-                .all(|v| super::consume_class::binding_only_borrowed_with(v, body, &copy_read)),
+        Some(binds.iter().all(|v| {
+            let legacy = super::consume_class::binding_only_borrowed_with(v, body, &copy_read);
+            self.audit_arm_reads_only(
+                "cg_arm_reads_only",
+                pattern,
+                v,
+                crate::param_fate::ArmBody::Expr(body),
+                legacy,
+            )
+        }))
+    }
+
+    /// Slice 4 step 4 — log this legacy reads-only answer for arm binding `v`
+    /// against the arm fate under `KARAC_DROP_SCHEDULE=audit`; returns
+    /// `legacy` unchanged.
+    fn audit_arm_reads_only(
+        &self,
+        site: &str,
+        pattern: &Pattern,
+        v: &str,
+        body: crate::param_fate::ArmBody<'_>,
+        legacy: bool,
+    ) -> bool {
+        if !crate::param_fate::audit::armed() && !crate::param_fate::arms_enabled() {
+            return legacy;
+        }
+        let prog = self.program_snapshot.as_deref();
+        let ty = prog
+            .and_then(|p| crate::param_fate::payload_binding_ty(p, pattern, v))
+            .cloned();
+        crate::param_fate::audit::check_arm(
+            site,
+            prog,
+            pattern,
+            &[(v.to_string(), ty)],
+            None,
+            body,
+            legacy,
         )
     }
 
@@ -16096,11 +16130,17 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let tes = self.arm_binding_scalar_tes(pattern);
         let copy_read = |e: &Expr| Self::arm_binding_scalar_copy_read(&tes, e);
-        Some(
-            binds.iter().all(|v| {
-                super::consume_class::binding_only_borrowed_block_with(v, body, &copy_read)
-            }),
-        )
+        Some(binds.iter().all(|v| {
+            let legacy =
+                super::consume_class::binding_only_borrowed_block_with(v, body, &copy_read);
+            self.audit_arm_reads_only(
+                "cg_let_reads_only",
+                pattern,
+                v,
+                crate::param_fate::ArmBody::Block(body),
+                legacy,
+            )
+        }))
     }
 
     /// [`Self::suppress_destructured_enum_payload_cleanup_at`] with an optional

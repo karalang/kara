@@ -2825,8 +2825,16 @@ impl<'a> super::Interpreter<'a> {
         guard: Option<&Expr>,
     ) -> bool {
         self.payload_bindings_all(enum_name, pattern, |n| {
-            crate::binding_use::binding_only_read_through(n, body)
-                && guard.is_none_or(|g| crate::binding_use::binding_only_read_through(n, g))
+            let legacy = crate::binding_use::binding_only_read_through(n, body)
+                && guard.is_none_or(|g| crate::binding_use::binding_only_read_through(n, g));
+            self.audit_arm_reads_only(
+                "in_arm_reads_only",
+                pattern,
+                n,
+                guard,
+                crate::param_fate::ArmBody::Expr(body),
+                legacy,
+            )
         })
     }
 
@@ -2842,8 +2850,43 @@ impl<'a> super::Interpreter<'a> {
         block: &Block,
     ) -> bool {
         self.payload_bindings_all(enum_name, pattern, |n| {
-            crate::binding_use::binding_only_read_through_block(n, block)
+            let legacy = crate::binding_use::binding_only_read_through_block(n, block);
+            self.audit_arm_reads_only(
+                "in_let_reads_only",
+                pattern,
+                n,
+                None,
+                crate::param_fate::ArmBody::Block(block),
+                legacy,
+            )
         })
+    }
+
+    /// Slice 4 step 4 — log this legacy reads-only answer for arm binding `n`
+    /// against the arm fate under `KARAC_DROP_SCHEDULE=audit`; returns
+    /// `legacy` unchanged.
+    fn audit_arm_reads_only(
+        &self,
+        site: &str,
+        pattern: &Pattern,
+        n: &str,
+        guard: Option<&Expr>,
+        body: crate::param_fate::ArmBody<'_>,
+        legacy: bool,
+    ) -> bool {
+        if !crate::param_fate::audit::armed() && !crate::param_fate::arms_enabled() {
+            return legacy;
+        }
+        let ty = crate::param_fate::payload_binding_ty(self.program, pattern, n).cloned();
+        crate::param_fate::audit::check_arm(
+            site,
+            Some(self.program),
+            pattern,
+            &[(n.to_string(), ty)],
+            guard,
+            body,
+            legacy,
+        )
     }
 
     /// Shared core of the two above: the enum owns a `Drop` body, the pattern

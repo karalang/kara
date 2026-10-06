@@ -294,6 +294,9 @@ fn param_fate_depth_uncached(
         overflow: false,
         moved: false,
         param_ty: Some(p.ty.clone()),
+        track: false,
+        exit_states: Vec::new(),
+        name_tys: Default::default(),
     };
     let mut s = PState::default();
     s.whole.insert(name.clone());
@@ -383,6 +386,15 @@ struct PState {
     /// callee (discarded, or held by a local container). The exit still
     /// classifies, but whole-value consumers must not act on it alone.
     moved: bool,
+    /// Step 4 (arm bindings) only: the value was handed somewhere by value —
+    /// bound to a local, assigned, or passed to a callee's by-value
+    /// parameter. Never set while following a parameter, so a param fate's
+    /// path set is unchanged.
+    consumed: bool,
+    /// Step 4 only: names a pattern inside the followed arm bound. They die
+    /// with the arm or the function, so holding the value there is not an
+    /// enclosing local holding it.
+    inner: BTreeSet<String>,
 }
 
 impl PState {
@@ -426,6 +438,14 @@ struct Walker<'p> {
     moved: bool,
     /// The parameter's declared type, for [`Walker::scalar_param_projection`].
     param_ty: Option<TypeExpr>,
+    /// Step 4: following an ARM binding rather than a parameter — record
+    /// [`PState::consumed`] and every exit's state.
+    track: bool,
+    /// With `track`, each `return`'s state and what it carries.
+    exit_states: Vec<(PState, Yield)>,
+    /// With `track`, the declared types of names a nested pattern bound out
+    /// of a non-generic user enum, so a scalar field read off one is a read.
+    name_tys: std::collections::HashMap<String, TypeExpr>,
 }
 
 fn dedup(mut v: Outs) -> Outs {
@@ -436,6 +456,9 @@ fn dedup(mut v: Outs) -> Outs {
 
 impl Walker<'_> {
     fn exit(&mut self, s: &PState, y: Yield) {
+        if self.track {
+            self.exit_states.push((s.clone(), y));
+        }
         self.moved |= s.moved || y == Yield::Part;
         let fate = if s.unknown {
             ExitFate::Unknown
@@ -453,23 +476,49 @@ impl Walker<'_> {
     /// Is `e` a field chain rooted at the parameter itself (`r.id`,
     /// `w.r.id`) whose type is scalar?
     fn scalar_param_projection(&self, e: &Expr, s: &PState) -> bool {
-        let (Some(program), Some(ty)) = (self.program, self.param_ty.as_ref()) else {
+        let Some(program) = self.program else {
             return false;
         };
-        let mut fields = Vec::new();
+        // A field name, or (step 4 only) a tuple index.
+        let mut fields: Vec<Result<&str, u64>> = Vec::new();
         let mut cur = e;
-        while let ExprKind::FieldAccess { object, field } = &cur.kind {
-            fields.push(field.as_str());
-            cur = object;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    fields.push(Ok(field.as_str()));
+                    cur = object;
+                }
+                ExprKind::TupleIndex { object, index } if self.track => {
+                    fields.push(Err(*index));
+                    cur = object;
+                }
+                _ => break,
+            }
         }
-        if !matches!(&cur.kind, ExprKind::Identifier(n)
-            if *n == self.param_name && s.whole.contains(n))
-        {
+        if fields.is_empty() {
             return false;
         }
+        let ty = match &cur.kind {
+            ExprKind::Identifier(n) if *n == self.param_name && s.whole.contains(n) => {
+                self.param_ty.as_ref()
+            }
+            // Step 4: a name a nested pattern bound a part into.
+            ExprKind::Identifier(n) if self.track && s.part.contains(n) => self.name_tys.get(n),
+            _ => None,
+        };
+        let Some(ty) = ty else {
+            return false;
+        };
         let mut t = ty;
         for f in fields.iter().rev() {
-            match field_ty(program, t, f) {
+            let next = match f {
+                Ok(f) => field_ty(program, t, f),
+                Err(i) => match &t.kind {
+                    TypeKind::Tuple(ts) => ts.get(*i as usize),
+                    _ => None,
+                },
+            };
+            match next {
                 Some(next) => t = next,
                 None => return false,
             }
@@ -543,7 +592,8 @@ impl Walker<'_> {
                                     .iter()
                                     .any(|n| *n != param && s.yield_of(n) != Yield::None);
                                 for (p, y) in ps.iter().zip(ys) {
-                                    bind(&mut s, p, y);
+                                    s.consumed |= self.track && y != Yield::None;
+                                    bind(&mut s, p, y, self.track);
                                 }
                                 s
                             })
@@ -560,7 +610,8 @@ impl Walker<'_> {
                         s.moved |= pattern_names(pattern)
                             .iter()
                             .any(|n| *n != param && s.yield_of(n) != Yield::None);
-                        bind(&mut s, pattern, y);
+                        s.consumed |= self.track && y != Yield::None;
+                        bind(&mut s, pattern, y, self.track);
                         s
                     })
                     .collect()
@@ -583,7 +634,8 @@ impl Walker<'_> {
                     // states are dropped.
                     let _ = self.block(else_block, s.clone());
                     let mut s = s;
-                    bind(&mut s, pattern, y);
+                    s.consumed |= self.track && y != Yield::None;
+                    bind(&mut s, pattern, y, self.track);
                     out.push(s);
                 }
                 out
@@ -679,7 +731,7 @@ impl Walker<'_> {
                 for (s, y) in self.expr(scrutinee, s) {
                     for arm in arms {
                         let mut a = s.clone();
-                        bind_projected(&mut a, &arm.pattern, y);
+                        bind_projected(&mut a, &arm.pattern, y, self.track);
                         let mut guarded = vec![(a, Yield::None)];
                         if let Some(g) = &arm.guard {
                             guarded = self.expr(g, guarded.pop().unwrap().0);
@@ -751,6 +803,7 @@ impl Walker<'_> {
     /// `target = <value carrying y>`.
     fn assign(&mut self, target: &Expr, mut s: PState, y: Yield) -> PState {
         s.moved |= y == Yield::Part;
+        s.consumed |= self.track && y != Yield::None;
         match &target.kind {
             ExprKind::Identifier(n) => {
                 if self.borrows.contains(n) {
@@ -809,7 +862,9 @@ impl Walker<'_> {
             // B-2026-10-05-7 — a SCALAR field read straight off the parameter
             // (`r.id`, `w.r.id`) copies a word and carries nothing of it, so
             // `fn eat(r: R) -> i64 { r.id }` keeps `r` on every exit.
-            ExprKind::FieldAccess { .. } if self.scalar_param_projection(e, &s) => {
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+                if self.scalar_param_projection(e, &s) =>
+            {
                 vec![(s, Yield::None)]
             }
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => self
@@ -928,7 +983,7 @@ impl Walker<'_> {
                 let mut out = Vec::new();
                 for (s, y) in self.expr(value, s) {
                     let mut hit = s.clone();
-                    bind_projected(&mut hit, pattern, y);
+                    bind_projected(&mut hit, pattern, y, self.track);
                     out.extend(self.block(then_block, hit));
                     match else_branch {
                         Some(e) => out.extend(self.expr(e, s)),
@@ -942,7 +997,21 @@ impl Walker<'_> {
                 for (s, y) in self.expr(scrutinee, s) {
                     for arm in arms {
                         let mut a = s.clone();
-                        bind_projected(&mut a, &arm.pattern, y);
+                        if self.track {
+                            if let Some(p) = self.program {
+                                for n in pattern_names(&arm.pattern) {
+                                    match payload_binding_ty(p, &arm.pattern, &n) {
+                                        Some(t) => {
+                                            self.name_tys.insert(n, t.clone());
+                                        }
+                                        None => {
+                                            self.name_tys.remove(&n);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        bind_projected(&mut a, &arm.pattern, y, self.track);
                         let mut guarded = vec![(a, Yield::None)];
                         if let Some(g) = &arm.guard {
                             guarded = self.expr(g, guarded.pop().unwrap().0);
@@ -984,7 +1053,7 @@ impl Walker<'_> {
                 for (s, y) in self.expr(value, s) {
                     out.push((s.clone(), Yield::None));
                     let mut hit = s;
-                    bind_projected(&mut hit, pattern, y);
+                    bind_projected(&mut hit, pattern, y, self.track);
                     out.extend(
                         self.block(body, hit)
                             .into_iter()
@@ -1003,7 +1072,7 @@ impl Walker<'_> {
                 for (s, y) in self.expr(iterable, s) {
                     out.push((s.clone(), Yield::None));
                     let mut hit = s;
-                    bind_projected(&mut hit, pattern, y);
+                    bind_projected(&mut hit, pattern, y, self.track);
                     out.extend(
                         self.block(body, hit)
                             .into_iter()
@@ -1167,12 +1236,19 @@ impl Walker<'_> {
                 if *y == Yield::None {
                     continue;
                 }
+                // Step 4: a print-family builtin or a desugared comparison
+                // only reads its operands.
+                if self.track && target.is_none() && key.as_deref().is_some_and(is_lending_builtin)
+                {
+                    continue;
+                }
                 match target {
                     Some(g) if self.depth < MAX_CALL_DEPTH => {
                         if g.params.get(i).is_some_and(|p| is_borrow_ty(&p.ty)) {
                             continue; // lent, not handed over
                         }
                         s.moved |= *y == Yield::Part;
+                        s.consumed |= self.track;
                         match param_fate_depth(self.program, g, i, self.depth + 1) {
                             Some(fate) if fate.is_exact() => {
                                 s.moved |= !fate.whole_only;
@@ -1250,6 +1326,7 @@ impl Walker<'_> {
                 // A user method taking `self` by value consumes the holder in
                 // ITS frame: the parameter's body is no longer this caller's.
                 if oy != Yield::None
+                    && !self.track
                     && self
                         .program
                         .is_some_and(|p| user_method_takes_owned_self(p, method))
@@ -1261,6 +1338,23 @@ impl Walker<'_> {
         }
         outs
     }
+}
+
+/// Step 4: builtins whose arguments are only read — the print family and the
+/// desugared comparison operators (`String.eq(a, b)`).
+fn is_lending_builtin(key: &str) -> bool {
+    let last = key.rsplit('.').next().unwrap_or(key);
+    matches!(
+        key,
+        "println"
+            | "print"
+            | "eprintln"
+            | "eprint"
+            | "assert"
+            | "assert_eq"
+            | "assert_ne"
+            | "debug_assert"
+    ) || (key.contains('.') && matches!(last, "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "cmp"))
 }
 
 fn is_scalar_type_name(n: &str) -> bool {
@@ -1315,24 +1409,34 @@ fn tuple_literal_leaves(e: &Expr, n: usize) -> bool {
     }
 }
 
-/// `let <pattern> = <value carrying y>`.
-fn bind(s: &mut PState, pattern: &Pattern, y: Yield) {
+/// `let <pattern> = <value carrying y>`. `track`: following an arm binding.
+fn bind(s: &mut PState, pattern: &Pattern, y: Yield, track: bool) {
     match &pattern.kind {
         PatternKind::Binding(n) => {
             s.moved |= y == Yield::Part;
+            if track {
+                s.inner.insert(n.clone());
+            }
             s.set(n, y)
         }
         PatternKind::Wildcard => s.moved |= y != Yield::None,
-        _ => bind_projected(s, pattern, y),
+        _ => bind_projected(s, pattern, y, track),
     }
 }
 
-/// Names bound inside a destructuring pattern each hold a PART.
-fn bind_projected(s: &mut PState, pattern: &Pattern, y: Yield) {
+/// Names bound inside a destructuring pattern each hold a PART. Following an
+/// arm binding (`track`), destructuring it is not by itself a move: what the
+/// parts then do is followed through their own names.
+fn bind_projected(s: &mut PState, pattern: &Pattern, y: Yield, track: bool) {
     let part = if y == Yield::None { y } else { Yield::Part };
     let names = pattern_names(pattern);
-    s.moved |= part != Yield::None && !names.is_empty();
+    if !track {
+        s.moved |= part != Yield::None && !names.is_empty();
+    }
     for n in names {
+        if track {
+            s.inner.insert(n.clone());
+        }
         s.set(&n, part);
     }
 }
@@ -1963,6 +2067,252 @@ pub fn whole_param_never_returned(program: Option<&Program>, f: &Function, idx: 
 /// write a file called `1`). Each distinct disagreement is appended once per
 /// process as one tab-separated line:
 /// `predicate  fn  param-index  legacy  fact  exits  exact  fn-source`.
+/// Slice 4 step 4 — what became of a `match` / `if let` arm's payload binding
+/// on one way out of the arm.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ArmExit {
+    /// Still owned by the binding and only read: nothing left it.
+    Stays,
+    /// Handed somewhere by value inside the arm — a local, a callee's
+    /// by-value parameter, a discard — so the arm, not the scrutinee, owns it.
+    Consumed,
+    /// The arm's value carries it, whole or in part.
+    Value,
+    /// An enclosing local now holds it.
+    Held,
+    /// Stored into an outliving place.
+    Stored,
+    /// A `return` inside the arm carries it out of the function.
+    Returned,
+    /// The walk could not follow it on this path.
+    Unknown,
+}
+
+/// The fate of one arm binding: one entry per way out of the arm (its end and
+/// every `return` inside it), duplicates removed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArmFate {
+    pub exits: Vec<ArmExit>,
+    /// The binding's declared type was known to the walk. Without it a
+    /// scalar field read (`t.id`) cannot be told from a partial move, so an
+    /// arm VALUE or `return` that carries a projection of it is not evidence.
+    pub typed: bool,
+}
+
+impl ArmFate {
+    pub fn is_exact(&self) -> bool {
+        !self.exits.contains(&ArmExit::Unknown)
+    }
+    /// Is the binding only READ on every way out — the question both
+    /// backends' legacy reads-only predicates ask? `None` when inexact.
+    pub fn reads_only(&self) -> Option<bool> {
+        if !self.typed
+            && self
+                .exits
+                .iter()
+                .any(|e| matches!(e, ArmExit::Value | ArmExit::Returned))
+        {
+            return None;
+        }
+        self.is_exact()
+            .then(|| self.exits.iter().all(|e| *e == ArmExit::Stays))
+    }
+    /// `s` stays, `c` consumed, `V` value, `H` held, `S` stored, `R` returned,
+    /// `?` unknown.
+    pub fn render(&self) -> String {
+        self.exits
+            .iter()
+            .map(|e| match e {
+                ArmExit::Stays => 's',
+                ArmExit::Consumed => 'c',
+                ArmExit::Value => 'V',
+                ArmExit::Held => 'H',
+                ArmExit::Stored => 'S',
+                ArmExit::Returned => 'R',
+                ArmExit::Unknown => '?',
+            })
+            .collect()
+    }
+}
+
+/// An arm body: a `match` arm's expression, or an `if let` / `while let`
+/// block.
+#[derive(Clone, Copy)]
+pub enum ArmBody<'a> {
+    Expr(&'a Expr),
+    Block(&'a Block),
+}
+
+/// The fate of arm binding `name`, walked through the arm's `guard` and
+/// `body` with the same [`Walker`] the parameter fate uses. `binding_ty`, when
+/// known, lets a scalar field read (`x.id`) count as a read rather than a
+/// partial move; [`payload_binding_ty`] supplies it for a non-generic user
+/// enum's payload.
+pub fn arm_binding_fate(
+    program: Option<&Program>,
+    binding_ty: Option<&TypeExpr>,
+    guard: Option<&Expr>,
+    body: ArmBody<'_>,
+    name: &str,
+) -> ArmFate {
+    let mut w = Walker {
+        program,
+        self_name: String::new(),
+        param_name: name.to_string(),
+        depth: 0,
+        borrows: BTreeSet::new(),
+        exits: Vec::new(),
+        overflow: false,
+        moved: false,
+        param_ty: binding_ty.cloned(),
+        track: true,
+        exit_states: Vec::new(),
+        name_tys: Default::default(),
+    };
+    let mut s = PState::default();
+    s.whole.insert(name.to_string());
+    let mut starts = vec![s];
+    if let Some(g) = guard {
+        starts = w
+            .expr(g, starts.pop().unwrap())
+            .into_iter()
+            .map(|(s, _)| s)
+            .collect();
+    }
+    let mut ends: Outs = Vec::new();
+    for s in starts {
+        ends.extend(match body {
+            ArmBody::Expr(e) => w.expr(e, s),
+            ArmBody::Block(b) => w.block(b, s),
+        });
+    }
+    let classify = |s: &PState, y: Yield, at_end: bool| -> ArmExit {
+        if s.unknown {
+            ArmExit::Unknown
+        } else if y != Yield::None {
+            if at_end {
+                ArmExit::Value
+            } else {
+                ArmExit::Returned
+            }
+        } else if s.stored {
+            ArmExit::Stored
+        } else if s
+            .whole
+            .iter()
+            .chain(&s.part)
+            .any(|n| n != name && !s.inner.contains(n))
+        {
+            ArmExit::Held
+        } else if s.moved || s.consumed || s.yield_of(name) != Yield::Whole {
+            ArmExit::Consumed
+        } else {
+            ArmExit::Stays
+        }
+    };
+    let mut exits: Vec<ArmExit> = if w.overflow {
+        vec![ArmExit::Unknown]
+    } else {
+        ends.iter()
+            .map(|(s, y)| classify(s, *y, true))
+            .chain(w.exit_states.iter().map(|(s, y)| classify(s, *y, false)))
+            .collect()
+    };
+    if exits.is_empty() {
+        exits.push(ArmExit::Stays);
+    }
+    let mut seen = Vec::new();
+    exits.retain(|e| {
+        if seen.contains(e) {
+            false
+        } else {
+            seen.push(*e);
+            true
+        }
+    });
+    ArmFate {
+        exits,
+        typed: binding_ty.is_some(),
+    }
+}
+
+/// Step 4: does `pattern` destructure a variant of a `shared` / `par` enum?
+/// Handing such a payload on by value COPIES it — the husk keeps its own —
+/// so the arm fate's "consumed" says nothing about who runs the husk's
+/// drops, and the flip declines.
+pub fn pattern_enum_is_rc_backed(program: &Program, pattern: &Pattern) -> bool {
+    let path = match &pattern.kind {
+        PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => path,
+        _ => return false,
+    };
+    let Some(en) = path.first() else {
+        return false;
+    };
+    program
+        .items
+        .iter()
+        .any(|it| matches!(it, Item::EnumDef(e) if &e.name == en && (e.is_shared || e.is_par)))
+}
+
+/// The declared type of payload binding `name` in `pattern`, when the pattern
+/// destructures a variant of a NON-GENERIC user enum directly (`E.V(a, b)`,
+/// `E.V { f }`). `None` otherwise — a generic or built-in enum's payload type
+/// needs the scrutinee's instantiation, which this module does not see.
+pub fn payload_binding_ty<'p>(
+    program: &'p Program,
+    pattern: &Pattern,
+    name: &str,
+) -> Option<&'p TypeExpr> {
+    let (path, sub): (&Vec<String>, Vec<(Option<&str>, &Pattern)>) = match &pattern.kind {
+        PatternKind::TupleVariant { path, patterns } => {
+            (path, patterns.iter().map(|p| (None, p)).collect())
+        }
+        PatternKind::Struct { path, fields, .. } => (
+            path,
+            fields
+                .iter()
+                .filter_map(|f| f.pattern.as_ref().map(|p| (Some(f.name.as_str()), p)))
+                .collect(),
+        ),
+        _ => return None,
+    };
+    let [en, vn] = path.as_slice() else {
+        return None;
+    };
+    let ed = program.items.iter().find_map(|it| match it {
+        Item::EnumDef(e) if &e.name == en && e.generic_params.is_none() => Some(e),
+        _ => None,
+    })?;
+    let v = ed.variants.iter().find(|v| &v.name == vn)?;
+    match (&v.kind, &pattern.kind) {
+        (VariantKind::Tuple(tys), PatternKind::TupleVariant { .. }) => sub
+            .iter()
+            .position(|(_, p)| matches!(&p.kind, PatternKind::Binding(n) if n == name))
+            .and_then(|i| tys.get(i)),
+        (VariantKind::Struct(fs), PatternKind::Struct { fields, .. }) => {
+            let fname = fields.iter().find_map(|f| match &f.pattern {
+                None if f.name == name => Some(f.name.as_str()),
+                Some(p) if matches!(&p.kind, PatternKind::Binding(n) if n == name) => {
+                    Some(f.name.as_str())
+                }
+                _ => None,
+            })?;
+            fs.iter().find(|f| f.name == fname).map(|f| &f.ty)
+        }
+        _ => None,
+    }
+}
+
+/// Slice 4 step 4: `KARAC_DROP_SCHEDULE_ARMS=1` lets the arm fate answer the
+/// reads-only question at every match-arm / `if let` site (default OFF while
+/// it is measured; it also requires the schedule itself to be on).
+pub fn arms_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        schedule_enabled() && std::env::var("KARAC_DROP_SCHEDULE_ARMS").ok().as_deref() == Some("1")
+    })
+}
+
 pub mod audit {
     use super::*;
     use std::collections::HashSet;
@@ -1998,6 +2348,89 @@ pub mod audit {
     /// Whether auditing is armed (cheap after the first call).
     pub fn armed() -> bool {
         sink().is_some()
+    }
+
+    /// Step 4: record a legacy arm reads-only answer against the arm fate.
+    /// `site` names the consumer; `binds` are the bindings the legacy
+    /// predicate considered. Returns `legacy` unchanged.
+    pub fn check_arm(
+        site: &str,
+        program: Option<&Program>,
+        pattern: &Pattern,
+        binds: &[(String, Option<TypeExpr>)],
+        guard: Option<&Expr>,
+        body: ArmBody<'_>,
+        legacy: bool,
+    ) -> bool {
+        if binds.is_empty() {
+            return legacy;
+        }
+        // Step 4, behind its own switch while it is measured: an EXACT arm
+        // fate answers in place of the legacy predicate at every site.
+        if super::arms_enabled() && !program.is_some_and(|p| pattern_enum_is_rc_backed(p, pattern))
+        {
+            let fact = binds
+                .iter()
+                .map(|(n, t)| arm_binding_fate(program, t.as_ref(), guard, body, n).reads_only())
+                .try_fold(true, |acc, r| r.map(|b| acc && b));
+            return fact.unwrap_or(legacy);
+        }
+        let Some(sink) = sink() else {
+            return legacy;
+        };
+        let fates: Vec<(String, ArmFate)> = binds
+            .iter()
+            .map(|(n, t)| {
+                (
+                    n.clone(),
+                    arm_binding_fate(program, t.as_ref(), guard, body, n),
+                )
+            })
+            .collect();
+        let fact = fates
+            .iter()
+            .map(|(_, f)| f.reads_only())
+            .try_fold(true, |acc, r| r.map(|b| acc && b));
+        if fact == Some(legacy) {
+            return legacy;
+        }
+        let text = match body {
+            ArmBody::Expr(e) => crate::formatter::render_expr(e),
+            ArmBody::Block(b) => crate::formatter::render_expr(&Expr {
+                kind: ExprKind::Block(b.clone()),
+                span: b.span,
+            }),
+        }
+        .replace('\n', " ");
+        let rendered: Vec<String> = fates
+            .iter()
+            .map(|(n, f)| {
+                format!(
+                    "{n}:{}{}",
+                    f.render(),
+                    if binds.iter().any(|(m, t)| m == n && t.is_some()) {
+                        ""
+                    } else {
+                        "~"
+                    }
+                )
+            })
+            .collect();
+        let line = format!(
+            "{site}\t{legacy}\t{}\t{}\t{text}\n",
+            match fact {
+                Some(b) => b.to_string(),
+                None => "inexact".to_string(),
+            },
+            rendered.join(",")
+        );
+        if let Ok(mut g) = sink.lock() {
+            let key = format!("{site}/{text}");
+            if g.1.insert(key) {
+                let _ = g.0.write_all(line.as_bytes());
+            }
+        }
+        legacy
     }
 
     /// Record `predicate`'s `legacy` answer for `f`'s param `idx` against
@@ -2078,6 +2511,70 @@ mod tests {
     }
 
     const PRE: &str = "struct R { id: i64 }\nstruct H { r: R }\n";
+
+    /// The fate of binding `b` in the first arm of the first `match` that is
+    /// `main`'s final expression.
+    fn arm_fate_of(src: &str, b: &str) -> ArmFate {
+        let prog = crate::parse(src).program;
+        let main = prog
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Item::Function(f) if f.name == "main" => Some(f.clone()),
+                _ => None,
+            })
+            .expect("main");
+        let Some(ExprKind::Match { arms, .. }) = main.body.final_expr.as_deref().map(|e| &e.kind)
+        else {
+            panic!("main's tail is not a match")
+        };
+        let ty = payload_binding_ty(&prog, &arms[0].pattern, b).cloned();
+        arm_binding_fate(
+            Some(&prog),
+            ty.as_ref(),
+            arms[0].guard.as_ref(),
+            ArmBody::Expr(&arms[0].body),
+            b,
+        )
+    }
+
+    const ARM_PRE: &str = "struct R { id: i64, s: String }\nenum E { A(R), B }\nfn eat(r: R) { }\nfn look(r: ref R) -> i64 { r.id }\n";
+
+    #[test]
+    fn arm_binding_read_through_print_and_scalar_field_stays() {
+        for body in [
+            "println(f\"{x.id}\")",
+            "{ println(x.s); println(x.id) }",
+            "look(x)",
+            "{ match o2 { E.A(y) => println(y.id), E.B => {} }; println(x.id) }",
+        ] {
+            let src = format!("{ARM_PRE}fn main() {{ let o = E.A(R {{ id: 1, s: \"a\" }}); let o2 = E.B; match o {{ E.A(x) => {body}, E.B => {{}} }} }}");
+            let f = arm_fate_of(&src, "x");
+            assert_eq!(f.reads_only(), Some(true), "{body}: {}", f.render());
+        }
+    }
+
+    #[test]
+    fn arm_binding_handed_on_is_not_read_only() {
+        for (body, want) in [
+            ("eat(x)", "c"),
+            ("{ let y = x; println(y.id) }", "c"),
+            ("Some(x)", "V"),
+            ("{ return Some(x) }", "R"),
+        ] {
+            let src = format!("{ARM_PRE}fn main() -> Option[R] {{ let o = E.A(R {{ id: 1, s: \"a\" }}); match o {{ E.A(x) => {body}, E.B => None }} }}");
+            let f = arm_fate_of(&src, "x");
+            assert_eq!(f.reads_only(), Some(false), "{body}: {}", f.render());
+            assert!(f.render().contains(want), "{body}: {}", f.render());
+        }
+    }
+
+    #[test]
+    fn arm_binding_destructured_by_a_nested_match_and_read_stays() {
+        let src = format!("{ARM_PRE}enum W {{ P(E), Q }}\nfn main() -> i64 {{ let w = W.P(E.B); match w {{ W.P(e) => {{ match e {{ E.A(r) => {{ return r.id; }}, E.B => {{ return 0; }} }} }}, W.Q => 1 }} }}");
+        let f = arm_fate_of(&src, "e");
+        assert_eq!(f.reads_only(), Some(true), "{}", f.render());
+    }
 
     #[test]
     fn desugared_scalar_operator_on_a_field_moves_nothing() {
