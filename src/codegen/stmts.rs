@@ -12036,7 +12036,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             })
                             .or(rebound_carrier)
                             .filter(|n| self.drop_rc.cond_returned_body_params.contains(n));
-                        if let (Some(src), Some(te)) = (cond_carrier.as_ref(), opt_te.as_ref()) {
+                        // B-2026-10-06-129 — inside a monomorph the wrap's
+                        // recorded type is the GENERIC one (`Option[T]`), whose
+                        // bare `T` no bodies walker recognises, so the carrier
+                        // registered nothing and the exit that does not hand
+                        // `o` back ran no body. Resolve it the way the
+                        // prologue resolves the param's own type.
+                        let cond_te = opt_te
+                            .as_ref()
+                            .filter(|_| cond_carrier.is_some())
+                            .map(|te| self.subst_monomorph_type_params(te));
+                        if let (Some(src), Some(te)) = (cond_carrier.as_ref(), cond_te.as_ref()) {
                             let owned = self.drop_rc.cond_returned_owned_params.contains(src);
                             // The memory half first, so the LIFO drain runs the
                             // bodies before it frees what they read.

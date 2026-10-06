@@ -11000,6 +11000,97 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-10-06-129 — `te` with the live variant's payload argument
+    /// resolved to the value's type when that argument is a bare name no
+    /// struct, enum or union declares: a type parameter of the enclosing
+    /// generic function, which the interpreter runs without monomorphizing.
+    /// [`Self::optres_te_at_value_type`] is the param-side twin, which can
+    /// ask the callee's own generic list; a `let` has no such list in hand.
+    fn optres_te_at_bare_type_param(&self, te: &TypeExpr, v: &Value) -> TypeExpr {
+        let mut out = te.clone();
+        let Value::EnumVariant { variant, data, .. } = v else {
+            return out;
+        };
+        let pos = match variant.as_str() {
+            "Some" | "Ok" => 0usize,
+            "Err" => 1usize,
+            _ => return out,
+        };
+        let EnumData::Tuple(items) = data else {
+            return out;
+        };
+        let Some(inner) = items.first() else {
+            return out;
+        };
+        let TypeKind::Path(p) = &mut out.kind else {
+            return out;
+        };
+        if !matches!(
+            p.segments.last().map(String::as_str),
+            Some("Option" | "Result")
+        ) {
+            return out;
+        }
+        let Some(crate::ast::GenericArg::Type(arg)) =
+            p.generic_args.as_mut().and_then(|a| a.get_mut(pos))
+        else {
+            return out;
+        };
+        // A nest of envelopes (`let o = Some(Some(s))`): resolve the leaf.
+        if matches!(inner, Value::EnumVariant { .. })
+            && matches!(&arg.kind, TypeKind::Path(ap)
+                if matches!(ap.segments.last().map(String::as_str), Some("Option" | "Result")))
+        {
+            *arg = self.optres_te_at_bare_type_param(arg, inner);
+            return out;
+        }
+        // A `Vec` of structs (`T` bound to `Vec[P]`): name it by its first
+        // element, which is all the payload walker reads.
+        let elem = match inner {
+            Value::Array(a) => match a.read().ok().and_then(|g| g.first().cloned()) {
+                Some(Value::Struct { name, .. }) => Some(name),
+                _ => return out,
+            },
+            _ => None,
+        };
+        let concrete = match (inner, &elem) {
+            (_, Some(_)) => "Vec".to_string(),
+            (Value::Struct { name, .. }, None) => name.clone(),
+            (Value::EnumVariant { enum_name, .. }, None) => enum_name.clone(),
+            _ => return out,
+        };
+        let elem_te = elem.map(|n| {
+            let mut e = arg.clone();
+            if let TypeKind::Path(ep) = &mut e.kind {
+                ep.segments = vec![n];
+                ep.generic_args = None;
+            }
+            e
+        });
+        let TypeKind::Path(ap) = &mut arg.kind else {
+            return out;
+        };
+        let declared = |n: &str| {
+            self.program.items.iter().any(|it| match it {
+                Item::StructDef(d) => d.name == n,
+                Item::EnumDef(d) => d.name == n,
+                Item::UnionDef(d) => d.name == n,
+                _ => false,
+            })
+        };
+        if ap.generic_args.is_none()
+            && ap.segments.len() == 1
+            && ap.segments[0] != concrete
+            && !declared(&ap.segments[0])
+        {
+            ap.segments[0] = concrete;
+            if let Some(e) = elem_te {
+                ap.generic_args = Some(vec![crate::ast::GenericArg::Type(e)]);
+            }
+        }
+        out
+    }
+
     fn record_optres_payload_te(&mut self, name: &str, ty: &Option<TypeExpr>, value: &Expr) {
         // Borrow-returning accessors are EXCLUDED — `v.get(i)` / `.first()` /
         // `.last()` yield an Option whose payload aliases the container's
@@ -11037,6 +11128,15 @@ impl<'a> super::Interpreter<'a> {
                 ExprKind::Identifier(n) => self.optres_payload_bodies_tes.get(n).cloned(),
                 _ => None,
             });
+        // B-2026-10-06-129 — inside a GENERIC function the chain yields the
+        // declared `Option[T]`, whose bare `T` runs no body by name, so `let o
+        // = Some(s)` over a `s: T` recorded nothing and the exit where `o`
+        // dies ran no body. Read the live payload's type off the value the
+        // `let` just bound, as `optres_te_at_value_type` does for a param.
+        let te = te.map(|te| match self.env.get(name) {
+            Some(v) => self.optres_te_at_bare_type_param(&te, &v),
+            None => te,
+        });
         let qualifies = te.as_ref().is_some_and(|te| {
             let TypeKind::Path(p) = &te.kind else {
                 return false;
