@@ -780,7 +780,9 @@ impl<'a> super::Interpreter<'a> {
 
             // Tuple index
             ExprKind::TupleIndex { object, index } => {
+                // B-2026-10-06-114 — `m.entry(k).or_insert(d).0`.
                 let obj = self.eval_expr_inner(object);
+                let obj = self.deref_slot_ref(obj);
                 let obj_variant = obj.variant_name();
                 match obj {
                     Value::Tuple(vals) => vals.get(*index as usize).cloned().unwrap_or_else(|| {
@@ -865,6 +867,7 @@ impl<'a> super::Interpreter<'a> {
                 } = &index.kind
                 {
                     let obj = self.eval_expr_inner(object);
+                    let obj = self.deref_slot_ref(obj);
                     // Evaluate optional bounds; absent start defaults to 0,
                     // absent end is resolved after we know the array length.
                     let start_i = if let Some(s) = start {
@@ -1034,7 +1037,9 @@ impl<'a> super::Interpreter<'a> {
                         mutable: false,
                     };
                 }
+                // B-2026-10-06-114 — `m.entry(k).or_insert(d)[i]`.
                 let obj = self.eval_expr_inner(object);
+                let obj = self.deref_slot_ref(obj);
                 let idx = self.eval_expr_inner(index);
                 // B-2026-08-18-37 — the INNER subscript of a nested index can fault
                 // (`m[missing_key][0]`). `record_runtime_error` returns

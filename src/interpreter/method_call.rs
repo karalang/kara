@@ -2893,6 +2893,21 @@ impl<'a> super::Interpreter<'a> {
         // runs. See `int_width_at` below.
         args_close_span: &Span,
     ) -> Value {
+        // B-2026-10-06-114 — a receiver rooted at an entry chain
+        // (`m.entry(k).or_insert(d).push_str(s)`, `….items.push(x)`, a
+        // `mut ref self` method on the slot) runs as its bound spelling, so a
+        // by-value receiver's write-back lands in the map slot instead of
+        // nowhere.
+        if Self::place_has_slot_root(object) {
+            let mut temps = Vec::new();
+            let object = self.materialize_slot_root(object, &mut temps);
+            if self.pending_cf.is_some() {
+                return Value::Unit;
+            }
+            return self.with_place_temps(&temps, |this| {
+                this.eval_method_call(&object, method, args, span, args_close_span)
+            });
+        }
         // Comptime stdlib modules (substrate 3): `ast.expr(s)` and
         // `compiler.error(msg)` parse as method calls on the lowercase module
         // identifier. Intercept before the receiver is evaluated as a value

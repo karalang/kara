@@ -11912,6 +11912,71 @@ impl<'a> super::Interpreter<'a> {
         self.drop_user_drop_fields_of_value(&payload);
     }
 
+    /// `a op= b` as `a = a op b` (design.md § Compound assignment). Out of
+    /// line so an entry-chain target can run it with its root bound
+    /// (B-2026-10-06-114).
+    #[allow(clippy::result_large_err)]
+    fn exec_compound_assign(
+        &mut self,
+        stmt: &Stmt,
+        target: &Expr,
+        op: &CompoundOp,
+        value: &Expr,
+    ) -> Result<(), ControlFlow> {
+        let current = self.eval_expr_inner(target);
+        // Same poison discipline as `Assign` (B-2026-07-31-15): a
+        // faulted operand must propagate, not feed `eval_binary`
+        // (whose variant match would hit an internal unreachable on
+        // the poison Unit) and then overwrite the target.
+        if let Some(cf) = self.pending_cf.take() {
+            return Err(cf);
+        }
+        let rhs = self.eval_expr_inner(value);
+        if let Some(cf) = self.pending_cf.take() {
+            return Err(cf);
+        }
+        let bin_op = match op {
+            CompoundOp::Add => BinOp::Add,
+            CompoundOp::Sub => BinOp::Sub,
+            CompoundOp::Mul => BinOp::Mul,
+            CompoundOp::Div => BinOp::Div,
+            CompoundOp::Mod => BinOp::Mod,
+            CompoundOp::BitAnd => BinOp::BitAnd,
+            CompoundOp::BitOr => BinOp::BitOr,
+            CompoundOp::BitXor => BinOp::BitXor,
+            CompoundOp::Shl => BinOp::Shl,
+            CompoundOp::Shr => BinOp::Shr,
+        };
+        // Q4 literal promotion (B-2026-07-04-12): `x += 1` with
+        // `x: f64` — the `1` promotes to `f64` under check + codegen, so
+        // the interpreter must too, or `run` errors on `(Float, Int)`.
+        let (current, rhs) =
+            self.promote_int_literal_for_float_peer(&bin_op, target, value, current, rhs);
+        // Unsigned-64 compound assignment (`x >>= n`, `x /= n`, `x %= n`
+        // on `u64` / `usize`): the target's span carries the u64 type, so
+        // thread it as the hint (`stmt.span`'s recorded type may be Unit).
+        // B-2026-07-04-8.
+        let unsigned_hint = self.span_unsigned_int_width(&target.span);
+        let result = self.eval_binary(&bin_op, current, rhs, &stmt.span, unsigned_hint);
+        // Route through `assign_to_place` so compound assignment works
+        // on field / index / nested targets (`o.count += 1`,
+        // `v[i].x += 1`), not just bare bindings. Previously only the
+        // `Identifier` target was handled — field/index compound
+        // assigns were silently dropped.
+        // B-2026-10-04-71 — `a op= b` is `a = a op b` (design.md §
+        // Compound assignment), so the place's subscripts run once for
+        // the read above and once more for this store, after the
+        // right-hand side, as compiled code runs them. The store walk
+        // itself must not add more.
+        if !self.store_to_place(target, result, None)? {
+            unreachable!(
+                "unsupported compound-assignment target at {}:{}; should be caught by parser/typechecker",
+                stmt.span.line, stmt.span.column
+            );
+        }
+        Ok(())
+    }
+
     #[allow(clippy::result_large_err)]
     fn eval_stmt_cf(&mut self, stmt: &Stmt) -> EvalResult {
         match &stmt.kind {
@@ -13469,56 +13534,21 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             StmtKind::CompoundAssign { target, op, value } => {
-                let current = self.eval_expr_inner(target);
-                // Same poison discipline as `Assign` (B-2026-07-31-15): a
-                // faulted operand must propagate, not feed `eval_binary`
-                // (whose variant match would hit an internal unreachable on
-                // the poison Unit) and then overwrite the target.
-                if let Some(cf) = self.pending_cf.take() {
-                    return Err(cf);
-                }
-                let rhs = self.eval_expr_inner(value);
-                if let Some(cf) = self.pending_cf.take() {
-                    return Err(cf);
-                }
-                let bin_op = match op {
-                    CompoundOp::Add => BinOp::Add,
-                    CompoundOp::Sub => BinOp::Sub,
-                    CompoundOp::Mul => BinOp::Mul,
-                    CompoundOp::Div => BinOp::Div,
-                    CompoundOp::Mod => BinOp::Mod,
-                    CompoundOp::BitAnd => BinOp::BitAnd,
-                    CompoundOp::BitOr => BinOp::BitOr,
-                    CompoundOp::BitXor => BinOp::BitXor,
-                    CompoundOp::Shl => BinOp::Shl,
-                    CompoundOp::Shr => BinOp::Shr,
-                };
-                // Q4 literal promotion (B-2026-07-04-12): `x += 1` with
-                // `x: f64` — the `1` promotes to `f64` under check + codegen, so
-                // the interpreter must too, or `run` errors on `(Float, Int)`.
-                let (current, rhs) =
-                    self.promote_int_literal_for_float_peer(&bin_op, target, value, current, rhs);
-                // Unsigned-64 compound assignment (`x >>= n`, `x /= n`, `x %= n`
-                // on `u64` / `usize`): the target's span carries the u64 type, so
-                // thread it as the hint (`stmt.span`'s recorded type may be Unit).
-                // B-2026-07-04-8.
-                let unsigned_hint = self.span_unsigned_int_width(&target.span);
-                let result = self.eval_binary(&bin_op, current, rhs, &stmt.span, unsigned_hint);
-                // Route through `assign_to_place` so compound assignment works
-                // on field / index / nested targets (`o.count += 1`,
-                // `v[i].x += 1`), not just bare bindings. Previously only the
-                // `Identifier` target was handled — field/index compound
-                // assigns were silently dropped.
-                // B-2026-10-04-71 — `a op= b` is `a = a op b` (design.md §
-                // Compound assignment), so the place's subscripts run once for
-                // the read above and once more for this store, after the
-                // right-hand side, as compiled code runs them. The store walk
-                // itself must not add more.
-                if !self.store_to_place(target, result, None)? {
-                    unreachable!(
-                        "unsupported compound-assignment target at {}:{}; should be caught by parser/typechecker",
-                        stmt.span.line, stmt.span.column
-                    );
+                // B-2026-10-06-114 — a target rooted at an entry chain
+                // (`*m.entry(k).or_insert(d) += 1`, `….n += 1`) evaluates the
+                // chain ONCE for both the read and the store, as compiled code
+                // does: running it twice ran a side-effecting default twice.
+                if Self::place_has_slot_root(target) {
+                    let mut temps = Vec::new();
+                    let target = self.materialize_slot_root(target, &mut temps);
+                    if let Some(cf) = self.pending_cf.take() {
+                        return Err(cf);
+                    }
+                    self.with_place_temps(&temps, |this| {
+                        this.exec_compound_assign(stmt, &target, op, value)
+                    })?;
+                } else {
+                    self.exec_compound_assign(stmt, target, op, value)?;
                 }
             }
             StmtKind::Expr(expr) => {

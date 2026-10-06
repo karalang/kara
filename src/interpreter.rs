@@ -3205,6 +3205,9 @@ impl<'a> Interpreter<'a> {
     /// Read a field from a struct value. Out of line from `eval_expr_inner`
     /// to keep the recursive evaluator's stack frame small.
     fn read_field(&mut self, obj: Value, field: &str, span: &Span) -> Value {
+        // B-2026-10-06-114 — `m.entry(k).or_insert(d).field` reaches here with
+        // the chain's raw `mut ref V`.
+        let obj = self.deref_slot_ref(obj);
         let obj_variant = obj.variant_name();
         match obj {
             // B-2026-07-22-11: the total-order float wrappers construct as
@@ -3726,6 +3729,16 @@ impl<'a> Interpreter<'a> {
         val: Value,
         src_unsigned: Option<u32>,
     ) -> Result<bool, ControlFlow> {
+        if Self::place_has_slot_root(place) {
+            let mut temps = Vec::new();
+            let place = self.materialize_slot_root(place, &mut temps);
+            if let Some(cf) = self.pending_cf.take() {
+                return Err(cf);
+            }
+            return self.with_place_temps(&temps, |this| {
+                this.store_to_place(&place, val, src_unsigned)
+            });
+        }
         if !Self::place_has_effectful_subscript(place) {
             return Ok(self.assign_to_place(place, val, src_unsigned));
         }
@@ -3737,6 +3750,96 @@ impl<'a> Interpreter<'a> {
         Ok(self.with_place_temps(&temps, |this| {
             this.assign_to_place(&place, val, src_unsigned)
         }))
+    }
+
+    /// B-2026-10-06-114 — the step of a `Map` entry chain that hands back a
+    /// `mut ref V` into the live slot: `m.entry(k).or_insert(d)` and
+    /// `m.entry(k).or_insert_with(f)` evaluate to a `Value::MapSlotRef`.
+    fn is_slot_ref_chain(e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::MethodCall { method, .. }
+            if method == "or_insert" || method == "or_insert_with")
+    }
+
+    /// B-2026-10-06-114 — is `place` rooted at an entry chain's slot ref
+    /// (`m.entry(k).or_insert(d).field`, `….0`, `…[i]`, `*…`, or the chain
+    /// itself as a method receiver)?
+    ///
+    /// The bound spelling `let r = m.entry(k).or_insert(d); r.n += 1` always
+    /// worked, because `Env::get` reads through a `MapSlotRef` binding and
+    /// `Env::set` writes through it. Written as one chain, the same place
+    /// failed three ways: a field read panicked on the raw `MapSlotRef`, a
+    /// write-back to a by-value receiver (`….push_str(s)`, a `mut ref self`
+    /// method) had no place to land and was dropped, and `*… += 1` evaluated
+    /// the chain, and so its default argument, twice.
+    pub(crate) fn place_has_slot_root(place: &Expr) -> bool {
+        if Self::is_slot_ref_chain(place) {
+            return true;
+        }
+        match &place.kind {
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. }
+            | ExprKind::Index { object, .. } => Self::place_has_slot_root(object),
+            ExprKind::Unary {
+                op: crate::ast::UnaryOp::Deref,
+                operand,
+            } => Self::place_has_slot_root(operand),
+            _ => false,
+        }
+    }
+
+    /// B-2026-10-06-114 — `place` with its entry-chain root evaluated once and
+    /// bound to a hidden local, which turns the chain into its bound spelling.
+    /// Run the rewritten place under [`Self::with_place_temps`]. A faulted root
+    /// leaves `pending_cf` set for the caller to propagate.
+    pub(crate) fn materialize_slot_root(
+        &mut self,
+        place: &Expr,
+        temps: &mut Vec<(String, Value)>,
+    ) -> Expr {
+        let kind = if Self::is_slot_ref_chain(place) {
+            let v = self.eval_expr_inner(place);
+            // NUL cannot appear in a source identifier, so the hidden local
+            // never shadows a user binding.
+            let name = format!("\0slot_root{}", temps.len());
+            temps.push((name.clone(), v));
+            ExprKind::Identifier(name)
+        } else {
+            match &place.kind {
+                ExprKind::FieldAccess { object, field } => ExprKind::FieldAccess {
+                    object: Box::new(self.materialize_slot_root(object, temps)),
+                    field: field.clone(),
+                },
+                ExprKind::TupleIndex { object, index } => ExprKind::TupleIndex {
+                    object: Box::new(self.materialize_slot_root(object, temps)),
+                    index: *index,
+                },
+                ExprKind::Index { object, index } => ExprKind::Index {
+                    object: Box::new(self.materialize_slot_root(object, temps)),
+                    index: index.clone(),
+                },
+                ExprKind::Unary {
+                    op: crate::ast::UnaryOp::Deref,
+                    operand,
+                } => ExprKind::Unary {
+                    op: crate::ast::UnaryOp::Deref,
+                    operand: Box::new(self.materialize_slot_root(operand, temps)),
+                },
+                _ => return place.clone(),
+            }
+        };
+        Expr {
+            kind,
+            span: place.span,
+        }
+    }
+
+    /// The value a `MapSlotRef` names, or `v` unchanged. For READ positions
+    /// that receive an entry chain's result raw (B-2026-10-06-114).
+    pub(crate) fn deref_slot_ref(&self, v: Value) -> Value {
+        match &v {
+            Value::MapSlotRef { map_var, key } => self.env.read_map_slot(map_var, key),
+            _ => v,
+        }
     }
 
     /// B-2026-10-04-71 — run `f` with the hidden subscript locals of a
