@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 711 |
-| run-vs-build | 595 |
+| miscompile | 713 |
+| run-vs-build | 597 |
 | leak | 584 |
 | double-free | 424 |
 | codegen-gap | 230 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2781 |
-| interp | 871 |
+| codegen | 2784 |
+| interp | 874 |
 | typecheck | 335 |
 | other | 113 |
 | ownership | 80 |
@@ -528,10 +528,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-111 | 2026-10-05 | codegen | medium | REASSIGNING A `Vec` LOCAL THAT WAS MOVED OUT RUNS THE MOVED VALUE'S ELEMENT `Drop` BODIES AGAIN AT THE STORE AND NEVER RUNS THE NEW ONES COMPILED -- `let mut v = [R { id: 1 }]; let q = v; v = [R { id: 2 }];` prints `dR1 u11 dR1 end` where `--interp` prints `u11 dR1 dR2 end` | — |
 | B-2026-10-05-112 | 2026-10-05 | interp | medium | `--interp` RUNS A MOVED-OUT STRUCT LOCAL'S `Drop` BODY AGAIN WHEN THE LOCAL IS REASSIGNED, AND NEVER RUNS THE NEW VALUE'S -- `let mut r = R { id: 1 }; let q = r; r = R { id: 2 };` prints `dR1 s21 dR1 end` under `--interp` where every compiled surface prints `s21 dR2 dR1 end` | — |
 | B-2026-10-05-113 | 2026-10-05 | codegen | medium | A TUPLE LOCAL ROUNDTRIPPED THROUGH A BY-VALUE CALLEE (`p = pass(p)`) NEVER RUNS ITS `Drop` BODY COMPILED -- `let mut p = mkr(1); p = pass(p);` over `fn pass(p: (R, i64)) -> (R, i64) { p }` prints `k1 end` where `--interp` prints `k1 dR1 end` | — |
-| B-2026-10-05-114 | 2026-10-05 | interp+codegen | medium | STORING INTO A TUPLE LOCAL'S ELEMENT (`p.0 = mkr(2)`) RUNS NO `Drop` BODY FOR THE DISPLACED ELEMENT ON ANY SURFACE -- `let mut p = (mkr(1), 5); p.0 = mkr(2); p = (mkr(3), 6);` prints `dR2 j6 dR3 end` everywhere, with no `dR1` | — |
 | B-2026-10-05-123 | 2026-10-05 | interp+codegen | medium | A `let mut` REBIND OF A BY-VALUE TUPLE PARAM THAT IS THEN REASSIGNED RUNS NO DISPLACED `Drop` BODY ON ANY SURFACE -- `fn byv4(p: (R, i64)) -> i64 { let mut q = p; q = mkr(8); q.1 }` called with `mkr(1)` prints `dR8 d8 end` with no `dR1`, and a second store loses `dR8` too | — |
 | B-2026-10-05-124 | 2026-10-05 | codegen | medium | AFTER ONE BLOCK CONDITIONALLY MOVES A TUPLE LOCAL OUT, A LATER BLOCK'S SAME-NAMED LOCAL LOSES ITS `Drop` BODIES COMPILED -- `{ let mut p = mkr(14); if c { let q = p; } p = mkr(15) }` followed by `{ let mut p = mkr(16); if d { let q = p; } p = mkr(17) }` at `c = true, d = false` prints no `dR16` and no `dR17` | — |
-| B-2026-10-05-125 | 2026-10-05 | interp | medium | `--interp` RUNS NO `Drop` BODY FOR A BARE `shared` OR `Option[shared]` LOCAL DISPLACED BY A REASSIGNMENT -- `let mut h = H { id: 1 }; h = H { id: 2 };` prints `h2 dH2 end` under `--interp` where every compiled surface prints `dH1 h2 dH2 end`, and `o = Some(H { id: 4 })` over `Some(H { id: 3 })` likewise loses `dH3` | — |
 | B-2026-10-05-122 | 2026-10-05 | interp | medium | `--interp` RUNS A BY-VALUE GENERIC PARAM'S `Drop` BODY TWICE WHEN A `let mut` TUPLE BUILT FROM ONE PARAM IS REASSIGNED TO A TUPLE OF ANOTHER -- `fn gn[T](a: T, b: T) -> i64 { let mut p = (a, 1); p = (b, 2); p.1 }` called with `R { id: 1 }, R { id: 2 }` prints `dR2 dR2 dR1 b2` under `--interp` where compiled prints `dR2 dR1 b2` | — |
 | B-2026-10-06-1 | 2026-10-06 | interp+codegen | medium | A BY-VALUE TUPLE PARAM HOLDING A BARE `shared` ELEMENT LEAKS THE BOX COMPILED AND RUNS ITS `Drop` BODY ON NO SURFACE WHEN THE CALLEE DESTRUCTURES IT OR MOVES IT INTO A TUPLE LITERAL -- `fn fp(p: (H, i64)) -> i64 { let (a, b) = p; a.id + b }` called as `fp(mks(1))` prints `f2 end` everywhere and loses 16 B compiled | — |
 | B-2026-10-06-2 | 2026-10-06 | interp+codegen | medium | DESTRUCTURING A BY-VALUE `(Option[H], i64)` PARAM WITH `H` `shared` RUNS NO `Drop` BODY UNDER `--interp`, WHILE COMPILED RUNS IT AFTER THE CALLER HAS USED THE RESULT -- `fn fpo(p: (Option[H], i64)) -> i64 { let (a, b) = p; b }` then `println(f"f{fpo(mk(1))}")` prints `f1 dH1 end` compiled and `f1 end` interpreted | — |
@@ -541,6 +539,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-31 | 2026-10-06 | codegen | high | A CLOSURE THAT RETURNS ITS BY-VALUE `Array` PARAM RUNS EACH ELEMENT'S `Drop` BODY TWICE AND FREES IT TWICE WHEN THE RESULT BINDING IS TYPED -- `let f = |x: Array[R, 1]| x; let r: Array[R, 1] = f([mk(92)])` prints `dR92 r92 dR92 end` at -O0/-O2 and aborts with `free(): double free` under the JIT, where `--interp` prints `r92 dR92 end`; the UNTYPED spelling `let r = f([mk(92)]); r[0].id` does not build (`cannot resolve field 'id'`), the remainder of B-2026-10-04-43, and should be retried once this is fixed | — |
 | B-2026-10-06-32 | 2026-10-06 | codegen | high | A `shared struct` HANDLE PASSED BY VALUE THROUGH AN IDENTITY CLOSURE IS READ AND WRITTEN AFTER IT IS FREED -- `let s = mks(9); let j = |q: S| q; let u = j(s); println(f"d:{u.t}")` prints the right `d:t9 end` but valgrind reports an invalid 8-byte read and write into the freed 40-byte `S` block at -O0; the same handle through a user fn `fn js(q: S) -> S { return q; }` is clean | — |
 | B-2026-10-06-35 | 2026-10-06 | interp+codegen | high | A BY-VALUE `Drop` PARAM HANDED TO A CLOSURE THAT GIVES IT BACK RUNS ITS BODY TWICE ON EVERY SURFACE -- `fn keep(v: R) -> R { let k = |x: R| x; return k(v); }` then `let r = keep(R { id: 5 }); println(f"e:{r.id}")` prints `dR5 e:5 dR5 end` under `--interp`, at -O0, -O2 and under the JIT, where `dR5` must run once; the same with the closure building `Br { a: x, b: 4 }` prints `dR5 dR5 e:4 end` | — |
+| B-2026-10-06-36 | 2026-10-06 | codegen | medium | MOVING A NESTED TUPLE ELEMENT OUT OF A TUPLE LOCAL (`let q = p.0` over `((R, i64), i64)`) LOSES ITS `Drop` BODIES COMPILED -- `let p = (mkr(1), 5); let q = p.0; println(f"j{p.1} {q.1}")` prints `j5 1 end` compiled against `j5 1 dR1 end` interpreted | — |
+| B-2026-10-06-37 | 2026-10-06 | interp+codegen | low | A DEEP TUPLE-ELEMENT STORE (`p.0.0 = R { id: 9 }`) RUNS NO `Drop` BODY FOR THE DISPLACED VALUE ON ANY SURFACE -- `let mut p = (mkr(1), 5); p.0.0 = R { id: 9 }; println(f"j{p.1} {p.0.1}")` prints `j5 1 dR9 end` everywhere, with no `dR1` | — |
+| B-2026-10-06-38 | 2026-10-06 | interp+codegen | low | A `shared` HANDLE ALIASED INTO A LATER BINDING AND THEN REASSIGNED AWAY DROPS IN THE WRONG ORDER AT SCOPE EXIT UNDER `--interp` -- `let mut o = Some(H { id: 1 }); let g = o; o = Some(H { id: 2 }); println(f"o{g.is_some()}")` prints `otrue dH1 dH2` compiled and `otrue dH2 dH1` interpreted | — |
+| B-2026-10-06-39 | 2026-10-06 | interp | low | A STORE THROUGH A `mut ref Option[H]` PARAM (`H` `shared`) RUNS NO `Drop` BODY FOR THE CALLER'S DISPLACED HANDLE UNDER `--interp` -- `fn setm(x: mut ref Option[H]) { x = Some(H { id: 9 }); }` then `let mut o = Some(H { id: 1 }); setm(mut o)` prints `o9 dH9 end` interpreted against compiled `dH1 o9 dH9 end` | — |
 
 ### Relocated
 
@@ -3804,6 +3806,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-97 | codegen | high | A STRUCT LITERAL WHOSE FIELDS ARE WRITTEN OUT OF DECLARATION ORDER STORES EACH VALUE IN THE WRONG FIELD COMPILED -- `struct F { a: i64, b: i64 }; let… | fb6be1570 |
 | B-2026-10-05-108 | codegen | medium | A `flat_map` WITH A DESTRUCTURING CLOSURE PARAM OR A MAPPED INNER FAILS THE BUILD -- `sm.iter().flat_map(\|(k, n)\| (0..n).map(\|_\| k)).collect()` over… | e1f8650e9 |
 | B-2026-10-05-118 | codegen | high | A FRESH STRUCT TEMPORARY WHOSE FIELD IS A PLAIN ENUM HOLDING A `shared` VALUE, PASSED BY VALUE, DECREMENTS THE HANDLE AFTER FREEING IT ON EVERY COMPI… | d12cd317d |
+| B-2026-10-05-114 | interp+codegen | medium | STORING INTO A TUPLE LOCAL'S ELEMENT (`p.0 = mkr(2)`) RUNS NO `Drop` BODY FOR THE DISPLACED ELEMENT ON ANY SURFACE -- `let mut p = (mkr(1), 5); p.0 =… | fb926ac2c |
+| B-2026-10-05-125 | interp | medium | `--interp` RUNS NO `Drop` BODY FOR A BARE `shared` OR `Option[shared]` LOCAL DISPLACED BY A REASSIGNMENT -- `let mut h = H { id: 1 }; h = H { id: 2 }… | b56dfda9a |
 | B-2026-10-06-4 | codegen | high | [FIXED 2026-10-06] ASSIGNING A FIELD OR TUPLE ELEMENT TO ITSELF READS FREED MEMORY COMPILED -- `let mut p = mks(1); p.0 = p.0; println(f"{p.0.id}")`… | 096260fee |
 | B-2026-10-06-33 | codegen | medium | A CLOSURE INSIDE A GENERIC FN THAT BUILDS A GENERIC STRUCT OVER THE FN'S `T` FAILS MODULE VERIFICATION WHEN `T` IS NOT `i64` -- `fn wrapit[T](v: T) -… | 4efb2013b |
 | B-2026-10-06-34 | codegen | high | A GENERIC FN THAT HANDS ITS BY-VALUE `T` PARAM TO A CLOSURE WHICH RETURNS IT FREES THE ARGUMENT TWICE WHEN `T` IS HEAP-BACKED -- `fn w[T](v: T) -> i6… | 8dbb4d2da |
