@@ -52913,3 +52913,47 @@ fn int_literal_operator_tree_takes_a_narrow_type_context() {
         "an i64 operand into u16 should still be refused"
     );
 }
+
+#[test]
+fn derived_supertrait_satisfies_a_hand_written_ord_impl() {
+    // B-2026-10-06-108: the supertrait check looked only at `impl` blocks, so
+    // `#[derive(PartialEq, Eq)]` beside a hand-written `impl PartialOrd` /
+    // `impl Ord` was refused as "requires impl PartialEq".
+    typecheck_ok(
+        "#[derive(PartialEq, Eq)]\n\
+         struct P { a: i64, b: i64 }\n\
+         impl PartialOrd for P {\n\
+             fn partial_cmp(ref self, other: ref P) -> Option[Ordering] { Some(self.cmp(other)) }\n\
+         }\n\
+         impl Ord for P {\n\
+             fn cmp(ref self, other: ref P) -> Ordering { other.b.cmp(self.b) }\n\
+         }\n\
+         fn main() { println(f\"{P { a: 1, b: 2 }.cmp(P { a: 1, b: 3 }) == Ordering.Greater}\"); }",
+    );
+    typecheck_ok(
+        "#[derive(PartialEq, Eq)]\n\
+         enum K { A, B }\n\
+         impl PartialOrd for K {\n\
+             fn partial_cmp(ref self, other: ref K) -> Option[Ordering] { Some(Ordering.Equal) }\n\
+         }\n\
+         fn main() {}",
+    );
+    // A supertrait that is neither implemented nor derived is still refused.
+    let errors = typecheck_errors(
+        "#[derive(PartialEq)]\n\
+         struct Q { a: i64 }\n\
+         impl PartialOrd for Q {\n\
+             fn partial_cmp(ref self, other: ref Q) -> Option[Ordering] { Some(self.a.cmp(other.a)) }\n\
+         }\n\
+         impl Ord for Q {\n\
+             fn cmp(ref self, other: ref Q) -> Ordering { self.a.cmp(other.a) }\n\
+         }\n\
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("impl Ord for Q requires impl Eq for Q")),
+        "Ord without Eq should still be refused; got {errors:#?}"
+    );
+}

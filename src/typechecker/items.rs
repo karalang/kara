@@ -3269,11 +3269,30 @@ impl<'a> super::TypeChecker<'a> {
                 // matching specialized supertrait OR a generic-on-name
                 // supertrait. Tightening is out of scope until a real
                 // specialized-with-supertrait case appears.
+                // A `#[derive(..)]` on the target counts: it generates the
+                // impl at the type's definition (design.md § Derivable
+                // Traits), so `#[derive(PartialEq, Eq)]` plus a hand-written
+                // `impl PartialOrd` / `impl Ord` is a complete set.
                 for supertrait in &trait_info.supertraits {
+                    let derived = |set: &HashSet<String>| set.contains(supertrait.as_str());
                     let has_impl = self.env.impls.iter().any(|info| {
                         info.trait_name.as_deref() == Some(supertrait.as_str())
                             && info.target_type == type_name
-                    });
+                    }) || self
+                        .env
+                        .structs
+                        .get(&type_name)
+                        .is_some_and(|info| derived(&info.derived_traits))
+                        || self
+                            .env
+                            .enums
+                            .get(&type_name)
+                            .is_some_and(|info| derived(&info.derived_traits))
+                        || self
+                            .env
+                            .distinct_types
+                            .get(&type_name)
+                            .is_some_and(|set| set.contains(supertrait.as_str()));
                     if !has_impl {
                         self.type_error(
                             format!(
