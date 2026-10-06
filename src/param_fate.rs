@@ -1818,6 +1818,51 @@ pub fn whole_param_leaves(program: Option<&Program>, f: &Function, idx: usize) -
     }
 }
 
+/// B-2026-10-06-6 — does an owned-`self` method hand its receiver back WHOLE
+/// on every exit (`fn me(self) -> X { self }`, `let m = self; m`)?
+///
+/// The receiver twin of `fn_always_returns_param`, which cannot ask it: `self`
+/// is not in `f.params`. Exact answers only, so `false` covers both "not on
+/// every exit" and "could not tell", the direction that keeps the caller's
+/// cleanup.
+pub fn whole_self_always_returned(program: Option<&Program>, f: &Function) -> bool {
+    if !matches!(f.self_param, Some(SelfParam::Owned)) {
+        return false;
+    }
+    let mut w = Walker {
+        program,
+        self_name: f.name.clone(),
+        param_name: "self".to_string(),
+        depth: 0,
+        borrows: f
+            .params
+            .iter()
+            .filter(|q| is_borrow_ty(&q.ty))
+            .filter_map(|q| match &q.pattern.kind {
+                PatternKind::Binding(n) => Some(n.clone()),
+                _ => None,
+            })
+            .collect(),
+        exits: Vec::new(),
+        overflow: false,
+        moved: false,
+        param_ty: None,
+        track: false,
+        exit_states: Vec::new(),
+        name_tys: Default::default(),
+    };
+    let mut s = PState::default();
+    s.whole.insert("self".to_string());
+    let outs = w.block(&f.body, s);
+    for (st, y) in outs {
+        w.exit(&st, y);
+    }
+    !w.overflow
+        && !w.moved
+        && !w.exits.is_empty()
+        && w.exits.iter().all(|e| *e == ExitFate::Returned)
+}
+
 /// Slice 4 step 4 — design.md § Drop ordering rule 3 for a binding the block
 /// does NOT declare: a `match` arm's or `if let`'s payload binding, or an
 /// enclosing block's local used inside a nested block.

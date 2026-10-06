@@ -3262,6 +3262,79 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_user_drop_for_var(&var);
     }
 
+    /// B-2026-10-06-6 — the receiver leg of B-2026-09-25-31's stand-down: a
+    /// NAMED struct receiver the callee FORWARDS (a `shared` field declines
+    /// copy support) and hands back whole on every exit (`fn me(self) -> X {
+    /// self }`). The result is this binding's own object, so body and memory
+    /// both leave with it. `let b = x.me();` over `struct X { h: H }` with `H`
+    /// shared released `h` through `b` and again through `x`: one invalid read
+    /// and one invalid write on the freed RC block, where the argument spelling
+    /// `me(x)` was clean.
+    ///
+    /// The BODY stands down here, through the same per-path-aware helper the
+    /// argument legs use. The MEMORY does not: the caller hands back the
+    /// receiver's slot and type, and the call site neutralizes that slot
+    /// (`zero_struct_move_caps`) AFTER the call. Retracting the slot's cleanup
+    /// instead, as the argument legs do, is static, so it left the value with
+    /// no owner on a path that never made the call (`if c { let b = x.me(); }`)
+    /// and took the cleanup away from the value a reassignment stores back
+    /// (`x = x.me();`): 16 B lost and `dH` missing on both, measured, and the
+    /// same two spellings of the free-function `me(x)` lose it the same way.
+    pub(super) fn move_forwarded_self_receiver_handed_back(
+        &mut self,
+        object: &Expr,
+        receiver_type: &str,
+        method: &str,
+    ) -> Option<(PointerValue<'ctx>, String)> {
+        let ExprKind::Identifier(var) = &object.kind else {
+            return None;
+        };
+        let type_name = self.var_types.var_type_names.get(var.as_str()).cloned()?;
+        if !self
+            .type_decls
+            .struct_types
+            .contains_key(type_name.as_str())
+            || self
+                .type_decls
+                .shared_types
+                .contains_key(type_name.as_str())
+            || self
+                .type_decls
+                .struct_generic_params
+                .get(type_name.as_str())
+                .is_some_and(|g| !g.is_empty())
+        {
+            return None;
+        }
+        let handed_back = self
+            .find_impl_method_ast(receiver_type, method)
+            .is_some_and(|f| {
+                crate::param_fate::whole_self_always_returned(self.program_snapshot.as_deref(), f)
+            });
+        if !handed_back {
+            return None;
+        }
+        let var = var.clone();
+        if !self.arg_var_is_forwarded_not_copied(&var) {
+            // B-2026-09-27-11 — ENTRY-COPIED (copy-supported): the result is
+            // the callee's copy and this slot still owns the original's
+            // memory, so only the BODIES move, as for a named argument handed
+            // back (`suppress_moved_arg_bodies_keeping_memory`). `let b =
+            // a.ret_self()` ran `dS1 dR1` twice over `struct S { r: R }`, and
+            // `dR6` twice over a `Drop`-less `struct P { r: R }`.
+            // `a = a.ret_self();` stores the result back into this binding,
+            // which then owns it: nothing to stand down.
+            if self.drop_rc.assign_ident_target.as_deref() != Some(var.as_str()) {
+                self.suppress_user_drop_body_keeping_memory(&var);
+                self.suppress_moved_struct_field_bodies(&var);
+            }
+            return None;
+        }
+        let slot = self.variables.get(var.as_str())?.ptr;
+        self.suppress_forwarded_arg_user_drop(&var);
+        Some((slot, type_name))
+    }
+
     /// B-2026-09-20-4 — a WHOLE struct handed on by value to a callee that
     /// ENTRY-COPIES it still shares every enum field the copy cannot
     /// duplicate: a heap-boxed payload, or one owned by transfer

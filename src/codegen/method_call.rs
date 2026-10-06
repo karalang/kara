@@ -7660,6 +7660,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // drop, which the `SelfParam::Owned` test above already
                 // decides — `a.peek()` over `ref self` is the cell that pins
                 // it.
+                // B-2026-10-06-6 — a forwarded receiver handed back whole: its
+                // slot, neutralized once the call has returned (below).
+                let mut handback_receiver_zero = None;
                 if matches!(
                     self.impl_method_self_and_borrow_return(&receiver_type, method),
                     Some((crate::ast::SelfParam::Owned, _))
@@ -7676,6 +7679,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // reaches `move_declined_copy_struct_arg_for`; a receiver
                     // is not an argument, so it never did.
                     self.move_owned_self_struct_receiver(object);
+                    // B-2026-10-06-6 — and a forwarded one handed back whole.
+                    handback_receiver_zero = self.move_forwarded_self_receiver_handed_back(
+                        object,
+                        &receiver_type,
+                        method,
+                    );
                 }
                 if let ExprKind::Identifier(recv_name) = &object.kind {
                     if matches!(
@@ -9010,6 +9019,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_call(fn_val, &compiled_args, "usermethod")
                     .unwrap();
+                // B-2026-10-06-6 — the result now holds the receiver's object,
+                // so the receiver's slot gives its handles up, on this path only.
+                if let Some((slot, type_name)) = handback_receiver_zero {
+                    self.zero_struct_move_caps(slot, &type_name);
+                }
                 let basic_val = call_site.try_as_basic_value();
                 return if basic_val.is_instruction() {
                     // Void-return placeholder: callee returns unit, so fill the

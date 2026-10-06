@@ -2010,6 +2010,21 @@ impl<'a> super::Interpreter<'a> {
         // Option/Result leg; codegen twin: `suppress_user_drop_for_var` at
         // the ctor arg loop).
         if self.moved_out_user_drop_bindings.contains(name) {
+            // B-2026-10-06-6 — and give up the slot's `shared` handles: the
+            // binding is at its endpoint and its value lives on in the owner it
+            // moved to, whose last-reference test counts this slot's clone as
+            // a second holder. Kept, it blocked that test for good: `let b =
+            // x.me()` (and `dme(x)`) over `struct D { h: H }` with `impl Drop
+            // for D` ran `dD6` and never `H`'s body. When the owner died first
+            // (it lived in a branch this binding outlives), the release it
+            // skipped is this slot's: the count test fires only a handle no
+            // one else holds, so it cannot run a body the owner still has.
+            if matches!(self.env.slot_ref(name), Some(Value::Struct { .. })) {
+                if let Some(v) = self.env.get(name) {
+                    self.env.remove_local(name);
+                    self.run_value_held_shared_user_drops(&v);
+                }
+            }
             return;
         }
         // B-2026-09-29-77 — a receiver adopted for the paths that never reach
@@ -13963,10 +13978,15 @@ impl<'a> super::Interpreter<'a> {
                                 let tn = name.clone();
                                 if self.user_method_returns_owned_type(method, &tn) {
                                     if self.program.drop_method_keys.contains_key(&tn) {
-                                        self.run_user_drop_body_on_value(&tn, discarded);
+                                        self.run_user_drop_body_on_value(&tn, discarded.clone());
                                     } else if self.value_runs_user_drop(&discarded) {
                                         self.drop_user_drop_fields_of_value(&discarded);
                                     }
+                                    // B-2026-10-06-6 — and a `shared` field's own
+                                    // body at the last reference, as the free-fn
+                                    // discard does (B-2026-09-28-51):
+                                    // `X { h: H { .. }, n: 2 }.me();` ran no `dH2`.
+                                    self.run_value_held_shared_user_drops(&discarded);
                                 }
                             }
                             // B-2026-08-01-2 — the enum sibling: a user

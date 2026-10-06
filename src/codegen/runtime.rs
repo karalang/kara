@@ -18071,6 +18071,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.cond_store_field_bodies_move_to_mono_callee(callee, i, tn)
                 })
         });
+        if !every_path {
+            return;
+        }
+        self.suppress_moved_struct_field_bodies(name);
+    }
+
+    /// The field-bodies half of [`Self::suppress_moved_arg_bodies_keeping_memory`],
+    /// for a value certain to leave on every path of the callee. Shared with
+    /// the owned-`self` receiver leg (B-2026-10-06-6), which has no argument
+    /// index to ask the callee predicates with.
+    pub(super) fn suppress_moved_struct_field_bodies(&mut self, name: &str) {
         let innermost = self
             .drop_rc
             .scope_cleanup_actions
@@ -18082,9 +18093,6 @@ impl<'ctx> super::Codegen<'ctx> {
                         && *kind == crate::codegen::state::UserDropKind::StructFieldBodies)
                 })
             });
-        if !every_path {
-            return;
-        }
         if innermost {
             self.suppress_struct_field_bodies_for_var(name);
             return;

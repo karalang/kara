@@ -663,7 +663,29 @@ impl<'a> super::Interpreter<'a> {
                                 // that do NOT rebind, so the stand-down no
                                 // longer loses a body there. Codegen's twin
                                 // widens the same call-site condition.
-                                if self
+                                // B-2026-10-06-6 — a STRUCT receiver the method
+                                // hands back whole on every exit (`fn me(self) ->
+                                // X { self }`): the result is the same object, so
+                                // the binding gives up its own body and its field
+                                // walks, as a named argument handed back does
+                                // (`record_returned_arg_user_drop_move`). Asked
+                                // before the rebind arm below, whose blanket mark
+                                // also silences a `shared` field's release that
+                                // the result's count test then never reaches:
+                                // `x.reb()` over `let m = self; m` lost `dH2`.
+                                let hands_self_back = matches!(obj, Value::Struct { .. })
+                                    && self.find_impl_method_ast(&type_name, method).is_some_and(
+                                        |f| {
+                                            crate::param_fate::whole_self_always_returned(
+                                                Some(self.program),
+                                                f,
+                                            )
+                                        },
+                                    );
+                                if hands_self_back {
+                                    self.record_returned_arg_user_drop_move(recv_name);
+                                    self.record_container_move_source_name(recv_name);
+                                } else if self
                                     .find_impl_method_ast(&type_name, method)
                                     .is_some_and(|f| {
                                         crate::ast::fn_rebinds_self_whole(f)
@@ -1485,7 +1507,17 @@ impl<'a> super::Interpreter<'a> {
         // compiled one printed it right after the call. The count test fires
         // only a handle nothing else holds, so a part the method handed back
         // is left with its new owner.
+        // B-2026-10-06-6 — not when the method hands the receiver back whole:
+        // the result holds the same handles and is their owner, released where
+        // it dies (or at the discard, `run_discarded_value_user_drops`).
+        let hands_self_back = matches!(self_param, Some(crate::ast::SelfParam::Owned))
+            && self
+                .find_impl_method_ast(type_name, method)
+                .is_some_and(|f| {
+                    crate::param_fate::whole_self_always_returned(Some(self.program), f)
+                });
         if fresh
+            && !hands_self_back
             && matches!(self_param, Some(crate::ast::SelfParam::Owned))
             && matches!(obj, Value::Struct { .. })
             && !self.program.drop_method_keys.contains_key(type_name)
