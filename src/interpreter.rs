@@ -4136,8 +4136,8 @@ impl<'a> Interpreter<'a> {
                     self.write_back_receiver(object, Value::Map(entries));
                     return;
                 }
-                Some(Value::SortedMap(mut m)) => {
-                    m.insert(OrdValue(idx_val), val);
+                Some(Value::SortedMap(m)) => {
+                    m.write().unwrap().insert(OrdValue(idx_val), val);
                     self.write_back_receiver(object, Value::SortedMap(m));
                     return;
                 }

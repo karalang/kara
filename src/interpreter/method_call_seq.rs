@@ -111,8 +111,8 @@ impl<'a> super::Interpreter<'a> {
                     Value::CStr(b) => Value::Int((b.len() as i64).into()),
                     Value::CString(b) => Value::Int((b.len() as i64).into()),
                     Value::Map(m) => Value::Int((m.read().unwrap().len() as i64).into()),
-                    Value::SortedSet(s) => Value::Int((s.len() as i64).into()),
-                    Value::SortedMap(m) => Value::Int((m.len() as i64).into()),
+                    Value::SortedSet(s) => Value::Int((s.read().unwrap().len() as i64).into()),
+                    Value::SortedMap(m) => Value::Int((m.read().unwrap().len() as i64).into()),
                     Value::Set(s) => Value::Int((s.read().unwrap().len() as i64).into()),
                     // Note: Map also handled via Map.len() match above
                     _ => unreachable!(
@@ -896,7 +896,7 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Bool(s.is_empty()));
                 }
                 if let Value::SortedSet(ref s) = obj {
-                    return Some(Value::Bool(s.is_empty()));
+                    return Some(Value::Bool(s.read().unwrap().is_empty()));
                 }
                 if let Value::Set(ref s) = obj {
                     return Some(Value::Bool(s.read().unwrap().is_empty()));
@@ -905,7 +905,7 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Bool(m.read().unwrap().is_empty()));
                 }
                 if let Value::SortedMap(ref m) = obj {
-                    return Some(Value::Bool(m.is_empty()));
+                    return Some(Value::Bool(m.read().unwrap().is_empty()));
                 }
                 if let Value::CStr(ref b) = obj {
                     return Some(Value::Bool(b.is_empty()));
@@ -1157,7 +1157,7 @@ impl<'a> super::Interpreter<'a> {
                 }
                 if let Value::SortedMap(ref m) = obj {
                     let (key, owes) = self.eval_lookup_key_arg(args);
-                    let out = match m.get(&OrdValue(key.clone())) {
+                    let out = match m.read().unwrap().get(&OrdValue(key.clone())) {
                         Some(v) => found_map_value_to_option(v),
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
@@ -1248,7 +1248,8 @@ impl<'a> super::Interpreter<'a> {
                 }
                 if let Value::SortedSet(ref s) = obj {
                     let (needle, owes) = self.eval_lookup_key_arg(args);
-                    let out = Value::Bool(s.contains_key(&OrdValue(needle.clone())));
+                    let out =
+                        Value::Bool(s.read().unwrap().contains_key(&OrdValue(needle.clone())));
                     self.run_owed_lookup_key_user_drops(needle, owes);
                     return Some(out);
                 }
@@ -1268,7 +1269,7 @@ impl<'a> super::Interpreter<'a> {
                 }
                 if let Value::SortedMap(ref m) = obj {
                     let (key, owes) = self.eval_lookup_key_arg(args);
-                    let out = Value::Bool(m.contains_key(&OrdValue(key.clone())));
+                    let out = Value::Bool(m.read().unwrap().contains_key(&OrdValue(key.clone())));
                     self.run_owed_lookup_key_user_drops(key, owes);
                     return Some(out);
                 }

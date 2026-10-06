@@ -697,13 +697,19 @@ pub enum Value {
     /// SortedSet[T: Ord] — B-tree–backed ordered set keyed by OrdValue.
     /// BTreeMap provides O(log n) insert/remove/contains with iteration in
     /// ascending key order. The () value makes it a set (not a map).
-    SortedSet(BTreeMap<OrdValue, ()>),
+    ///
+    /// `Arc<RwLock<..>>` like `Set` / `Map` (B-2026-10-06-66): an
+    /// inline tree made every read of the binding, and so every method call
+    /// on it, a deep copy. Value semantics come from `deep_clone_value` at
+    /// binding sites, as they do for `Set` and `Map`.
+    SortedSet(Arc<RwLock<BTreeMap<OrdValue, ()>>>),
     /// SortedMap[K: Ord, V] — B-tree–backed ordered map (B3). The key→value
     /// sibling of `SortedSet`: keys are `OrdValue` (sorted via `value_compare`)
     /// and each maps to an arbitrary `Value`. Iteration / `keys` / `values` /
     /// `entries` yield in ascending key order, and the ordered queries
     /// (`min` / `max` / `range` / `floor` / `ceiling`) ride the B-tree cursor.
-    SortedMap(BTreeMap<OrdValue, Value>),
+    /// Shared storage for the same reason as `SortedSet` above.
+    SortedMap(Arc<RwLock<BTreeMap<OrdValue, Value>>>),
     /// Set[T: Hash + Eq] — hash set backed by a Vec for interpreter simplicity.
     /// O(n) lookup is fine for testing; the typechecker enforces Hash + Eq.
     /// B-2026-08-21-8 — `Arc<RwLock<SetData>>`, the `Map` sibling. Same
@@ -1490,6 +1496,20 @@ impl PartialEq for OrdValue {
         self.0 == other.0
     }
 }
+
+/// The tree behind a shared sorted container, BY VALUE: moved out when this is
+/// the last handle to it, copied otherwise, so a consumer that used to own an
+/// inline tree (`into_keys`, `into_iter`) neither empties storage another
+/// handle still reads nor pays a copy it did not used to. B-2026-10-06-66.
+#[allow(clippy::mutable_key_type)]
+pub(crate) fn sorted_tree_into<V: Clone>(
+    a: Arc<RwLock<BTreeMap<OrdValue, V>>>,
+) -> BTreeMap<OrdValue, V> {
+    match Arc::try_unwrap(a) {
+        Ok(lock) => lock.into_inner().unwrap(),
+        Err(a) => a.read().unwrap().clone(),
+    }
+}
 impl Eq for OrdValue {}
 impl PartialOrd for OrdValue {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -1664,9 +1684,17 @@ impl PartialEq for Value {
                 a.len() == b.len() && a.iter().all(|(k, v)| b.get(k) == Some(v))
             }
             (Value::SortedSet(a), Value::SortedSet(b)) => {
+                if Arc::ptr_eq(a, b) {
+                    return true;
+                }
+                let (a, b) = (a.read().unwrap(), b.read().unwrap());
                 a.len() == b.len() && a.keys().zip(b.keys()).all(|(x, y)| x == y)
             }
             (Value::SortedMap(a), Value::SortedMap(b)) => {
+                if Arc::ptr_eq(a, b) {
+                    return true;
+                }
+                let (a, b) = (a.read().unwrap(), b.read().unwrap());
                 a.len() == b.len()
                     && a.iter()
                         .zip(b.iter())
@@ -2203,6 +2231,7 @@ impl std::fmt::Display for Value {
             Value::TaskGroup => write!(f, "TaskGroup"),
             Value::TaskHandle(v) => write!(f, "TaskHandle({})", v),
             Value::SortedSet(set) => {
+                let set = set.read().unwrap();
                 write!(f, "SortedSet{{")?;
                 for (i, k) in set.keys().enumerate() {
                     if i > 0 {
@@ -2213,6 +2242,7 @@ impl std::fmt::Display for Value {
                 write!(f, "}}")
             }
             Value::SortedMap(map) => {
+                let map = map.read().unwrap();
                 write!(f, "SortedMap{{")?;
                 for (i, (k, v)) in map.iter().enumerate() {
                     if i > 0 {
@@ -2400,7 +2430,19 @@ impl Value {
         for (k, v) in entries {
             m.insert(OrdValue(k), v);
         }
-        Value::SortedMap(m)
+        Value::sorted_map_from(m)
+    }
+
+    /// Wrap a tree as a `SortedMap` value (shared storage, B-2026-10-06-66).
+    #[allow(clippy::mutable_key_type)]
+    pub fn sorted_map_from(m: BTreeMap<OrdValue, Value>) -> Value {
+        Value::SortedMap(Arc::new(RwLock::new(m)))
+    }
+
+    /// Wrap a tree as a `SortedSet` value (shared storage, B-2026-10-06-66).
+    #[allow(clippy::mutable_key_type)]
+    pub fn sorted_set_from(m: BTreeMap<OrdValue, ()>) -> Value {
+        Value::SortedSet(Arc::new(RwLock::new(m)))
     }
 
     /// Build a `Set` from insertion-ordered items, keeping the first
@@ -2595,11 +2637,18 @@ impl Value {
                 }
             },
             Value::SortedSet(set) => {
-                let inner: Vec<String> = set.keys().map(|k| k.0.debug_fmt()).collect();
+                let inner: Vec<String> = set
+                    .read()
+                    .unwrap()
+                    .keys()
+                    .map(|k| k.0.debug_fmt())
+                    .collect();
                 format!("SortedSet{{{}}}", inner.join(", "))
             }
             Value::SortedMap(map) => {
                 let inner: Vec<String> = map
+                    .read()
+                    .unwrap()
                     .iter()
                     .map(|(k, v)| format!("{}: {}", k.0.debug_fmt(), v.debug_fmt()))
                     .collect();

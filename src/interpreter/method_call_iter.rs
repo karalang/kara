@@ -111,7 +111,7 @@ impl<'a> super::Interpreter<'a> {
                 // Hash order, not insertion order — the `for x in set` twin
                 // in `eval_expr` (B-2026-08-21-6).
                 Value::Set(s) => s.read().unwrap().iter_observable().cloned().collect(),
-                Value::SortedSet(s) => s.keys().map(|k| k.0.clone()).collect(),
+                Value::SortedSet(s) => s.read().unwrap().keys().map(|k| k.0.clone()).collect(),
                 Value::Map(m) => m
                     .read()
                     .unwrap()
@@ -119,6 +119,8 @@ impl<'a> super::Interpreter<'a> {
                     .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
                     .collect(),
                 Value::SortedMap(m) => m
+                    .read()
+                    .unwrap()
                     .iter()
                     .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()]))
                     .collect(),

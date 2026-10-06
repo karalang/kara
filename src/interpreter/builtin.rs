@@ -480,7 +480,7 @@ impl<'a> super::Interpreter<'a> {
                 format!("Set{{{}}}", parts.join(", "))
             }
             Value::SortedSet(set) => {
-                let items: Vec<Value> = set.keys().map(|k| k.0.clone()).collect();
+                let items: Vec<Value> = set.read().unwrap().keys().map(|k| k.0.clone()).collect();
                 let et = Self::display_element_type(ty).cloned();
                 let mut parts: Vec<String> = Vec::new();
                 for x in &items {
@@ -489,8 +489,12 @@ impl<'a> super::Interpreter<'a> {
                 format!("SortedSet{{{}}}", parts.join(", "))
             }
             Value::SortedMap(map) => {
-                let entries: Vec<(Value, Value)> =
-                    map.iter().map(|(k, v)| (k.0.clone(), v.clone())).collect();
+                let entries: Vec<(Value, Value)> = map
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.0.clone(), v.clone()))
+                    .collect();
                 let (kt, vt) = match ty {
                     Some(Type::Named { name, args })
                         if (name == "Map" || name == "SortedMap") && args.len() == 2 =>

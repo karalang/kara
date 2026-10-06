@@ -808,10 +808,10 @@ impl<'a> super::Interpreter<'a> {
                     return Value::array_of(elements);
                 }
                 "SortedSet.new" => {
-                    return Value::SortedSet(BTreeMap::new());
+                    return Value::sorted_set_from(BTreeMap::new());
                 }
                 "SortedMap.new" => {
-                    return Value::SortedMap(BTreeMap::new());
+                    return Value::sorted_map_from(BTreeMap::new());
                 }
                 "Set.new" => {
                     return self.new_hash_container(Value::empty_set());
@@ -7625,7 +7625,9 @@ impl<'a> super::Interpreter<'a> {
             // hand back the same `MapSlotRef` shape (its get/set choke points are
             // taught to resolve a SortedMap slot by key). Mirrors the Map arm.
             Some(Value::SortedMap(m)) => {
-                m.entry(super::value::OrdValue(key.clone()))
+                m.write()
+                    .unwrap()
+                    .entry(super::value::OrdValue(key.clone()))
                     .or_insert(default);
                 Value::MapSlotRef {
                     map_var: name,

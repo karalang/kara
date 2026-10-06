@@ -487,8 +487,10 @@ pub(crate) fn deep_clone_value(v: &Value) -> Value {
                 .map(|(k, val)| (deep_clone_value(k), deep_clone_value(val)))
                 .collect(),
         ),
-        Value::SortedMap(entries) => Value::SortedMap(
+        Value::SortedMap(entries) => Value::sorted_map_from(
             entries
+                .read()
+                .unwrap()
                 .iter()
                 .map(|(k, val)| {
                     (
@@ -496,6 +498,17 @@ pub(crate) fn deep_clone_value(v: &Value) -> Value {
                         deep_clone_value(val),
                     )
                 })
+                .collect(),
+        ),
+        // B-2026-10-06-66 — SortedSet storage is a shared
+        // `Arc<RwLock<..>>` now (like Set), so a value copy needs fresh
+        // storage; the derive would alias it.
+        Value::SortedSet(items) => Value::sorted_set_from(
+            items
+                .read()
+                .unwrap()
+                .keys()
+                .map(|k| (super::value::OrdValue(deep_clone_value(&k.0)), ()))
                 .collect(),
         ),
         Value::Tuple(items) => Value::Tuple(items.iter().map(deep_clone_value).collect()),
@@ -528,11 +541,11 @@ pub(crate) fn deep_clone_value(v: &Value) -> Value {
             },
             rc: rc.clone(),
         },
-        // Primitives, String, SortedSet (primitive-keyed), and the
-        // reference-semantics types (SharedStruct, Sender, Receiver,
-        // SharedCell, Atomic) all clone correctly under the derive.
-        // (SortedMap is materialized explicitly above so collection *values*
-        // get fresh storage rather than an aliased Arc bump.)
+        // Primitives, String, and the reference-semantics types
+        // (SharedStruct, Sender, Receiver, SharedCell, Atomic) all clone
+        // correctly under the derive. (SortedMap / SortedSet are
+        // materialized explicitly above so collection *values* get fresh
+        // storage rather than an aliased Arc bump.)
         _ => v.clone(),
     }
 }
@@ -1423,6 +1436,8 @@ impl Env {
             // SortedMap slot (BTreeMap keyed by `OrdValue`) — the entry
             // chain's `MapSlotRef` resolves through here for a SortedMap too.
             Some(Value::SortedMap(m)) => m
+                .read()
+                .unwrap()
                 .get(&super::value::OrdValue(key.clone()))
                 .cloned()
                 .unwrap_or(Value::Unit),
@@ -1440,7 +1455,9 @@ impl Env {
             }
             // SortedMap sibling: insert-or-overwrite by `OrdValue` key.
             Some(Value::SortedMap(m)) => {
-                m.insert(super::value::OrdValue(key.clone()), val);
+                m.write()
+                    .unwrap()
+                    .insert(super::value::OrdValue(key.clone()), val);
             }
             _ => {}
         }

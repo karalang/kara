@@ -1123,8 +1123,9 @@ impl<'a> super::Interpreter<'a> {
                     };
                 }
                 if let Value::SortedMap(m) = &obj {
-                    return match m.get(&OrdValue(idx.clone())) {
-                        Some(v) => v.clone(),
+                    let found = m.read().unwrap().get(&OrdValue(idx.clone())).cloned();
+                    return match found {
+                        Some(v) => v,
                         None => self.record_runtime_error(
                             format!("key not found in map: {}", idx),
                             &expr.span,
@@ -2956,9 +2957,12 @@ impl<'a> super::Interpreter<'a> {
                 } => storage.read().unwrap()[start..start + len].to_vec(),
                 Value::Tuple(v) => v,
                 // SortedSet iterates in ascending key order
-                Value::SortedSet(s) => s.into_keys().map(|k| k.0).collect(),
+                Value::SortedSet(s) => super::value::sorted_tree_into(s)
+                    .into_keys()
+                    .map(|k| k.0)
+                    .collect(),
                 // SortedMap iterates as (key, value) tuples in ascending key order
-                Value::SortedMap(m) => m
+                Value::SortedMap(m) => super::value::sorted_tree_into(m)
                     .into_iter()
                     .map(|(k, v)| Value::Tuple(vec![k.0, v]))
                     .collect(),

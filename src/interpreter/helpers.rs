@@ -324,6 +324,7 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
         }
         // Two SortedSets: lexicographic over their ascending key sequences
         (Value::SortedSet(a), Value::SortedSet(b)) => {
+            let (a, b) = (a.read().unwrap(), b.read().unwrap());
             let ak: Vec<_> = a.keys().collect();
             let bk: Vec<_> = b.keys().collect();
             ak.iter()
@@ -339,23 +340,25 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
                 .unwrap_or_else(|| ak.len().cmp(&bk.len()))
         }
         // Two SortedMaps: lexicographic over their ascending (key, value) pairs
-        (Value::SortedMap(a), Value::SortedMap(b)) => a
-            .iter()
-            .zip(b.iter())
-            .find_map(|((ak, av), (bk, bv))| {
-                let k_ord = value_compare(&ak.0, &bk.0);
-                if k_ord != Ordering::Equal {
-                    Some(k_ord)
-                } else {
-                    let v_ord = value_compare(av, bv);
-                    if v_ord != Ordering::Equal {
-                        Some(v_ord)
+        (Value::SortedMap(a), Value::SortedMap(b)) => {
+            let (a, b) = (a.read().unwrap(), b.read().unwrap());
+            a.iter()
+                .zip(b.iter())
+                .find_map(|((ak, av), (bk, bv))| {
+                    let k_ord = value_compare(&ak.0, &bk.0);
+                    if k_ord != Ordering::Equal {
+                        Some(k_ord)
                     } else {
-                        None
+                        let v_ord = value_compare(av, bv);
+                        if v_ord != Ordering::Equal {
+                            Some(v_ord)
+                        } else {
+                            None
+                        }
                     }
-                }
-            })
-            .unwrap_or_else(|| a.len().cmp(&b.len())),
+                })
+                .unwrap_or_else(|| a.len().cmp(&b.len()))
+        }
         // Two Structs: order by type name, then by fields in derived-`Ord`
         // DECLARATION order (B-2026-07-03-12), recovered from the per-thread
         // `type_order` registry; when the registry is absent (or the type is

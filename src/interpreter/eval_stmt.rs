@@ -6435,7 +6435,11 @@ impl<'a> super::Interpreter<'a> {
                     .iter()
                     .any(|(_, val)| self.value_reaches_vec_elem_user_drop(val))
             }
+            // Read under the guard: a sorted container never holds its own
+            // storage, so the walk takes only other locks.
             Value::SortedMap(entries) => entries
+                .read()
+                .unwrap()
                 .values()
                 .any(|val| self.value_reaches_vec_elem_user_drop(val)),
             Value::Array(rc) => rc
@@ -6501,12 +6505,20 @@ impl<'a> super::Interpreter<'a> {
                     .iter()
                     .any(|(_, val)| self.value_runs_user_drop(val))
             }
-            Value::SortedMap(entries) => entries.values().any(|val| self.value_runs_user_drop(val)),
+            Value::SortedMap(entries) => entries
+                .read()
+                .unwrap()
+                .values()
+                .any(|val| self.value_runs_user_drop(val)),
             Value::Set(items) => {
                 let items = items.read().unwrap().clone();
                 items.iter().any(|e| self.value_runs_user_drop(e))
             }
-            Value::SortedSet(items) => items.keys().any(|k| self.value_runs_user_drop(&k.0)),
+            Value::SortedSet(items) => items
+                .read()
+                .unwrap()
+                .keys()
+                .any(|k| self.value_runs_user_drop(&k.0)),
             // B-2026-08-03-1 — an Option/Result PAYLOAD is Drop-relevant
             // content like any other one-level container's. Built-in enums
             // only: a user enum's payload bodies ride their own declared-type
@@ -7150,6 +7162,7 @@ impl<'a> super::Interpreter<'a> {
                 .map(|(k, v)| if key_half { k.clone() } else { v.clone() })
                 .collect(),
             Value::SortedMap(entries) => {
+                let entries = entries.read().unwrap();
                 if key_half {
                     entries.keys().map(|k| k.0.clone()).collect()
                 } else {
@@ -7161,7 +7174,9 @@ impl<'a> super::Interpreter<'a> {
             Value::Set(items) if !key_half => {
                 items.read().unwrap().iter_observable().cloned().collect()
             }
-            Value::SortedSet(items) if !key_half => items.keys().map(|k| k.0.clone()).collect(),
+            Value::SortedSet(items) if !key_half => {
+                items.read().unwrap().keys().map(|k| k.0.clone()).collect()
+            }
             Value::Set(_) | Value::SortedSet(_) => return,
             _ => return,
         };
@@ -11320,6 +11335,8 @@ impl<'a> super::Interpreter<'a> {
                 .map(|(k, v)| if key_half { k.clone() } else { v.clone() })
                 .collect(),
             Some(Value::SortedMap(entries)) => {
+                #[allow(clippy::mutable_key_type)]
+                let entries = super::value::sorted_tree_into(entries);
                 if key_half {
                     entries.into_keys().map(|k| k.0).collect()
                 } else {
@@ -11332,7 +11349,10 @@ impl<'a> super::Interpreter<'a> {
             Some(Value::Set(items)) if !key_half => {
                 items.read().unwrap().iter_observable().cloned().collect()
             }
-            Some(Value::SortedSet(items)) if !key_half => items.into_keys().map(|k| k.0).collect(),
+            Some(Value::SortedSet(items)) if !key_half => super::value::sorted_tree_into(items)
+                .into_keys()
+                .map(|k| k.0)
+                .collect(),
             Some(Value::Set(_)) | Some(Value::SortedSet(_)) => return true,
             _ => return false,
         };

@@ -35,7 +35,7 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_set_method(
         &mut self,
         method: &str,
-        object: &Expr,
+        _object: &Expr,
         obj: &Value,
         args: &[CallArg],
         _span: &Span,
@@ -76,9 +76,12 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Unit);
                 }
                 if let Value::SortedMap(ref entries) = obj {
-                    let removed_k: Vec<Value> = entries.keys().map(|k| k.0.clone()).collect();
-                    let removed_v: Vec<Value> = entries.values().cloned().collect();
-                    self.write_back_receiver(object, Value::SortedMap(BTreeMap::new()));
+                    // Take the shared tree's contents, so an aliased or
+                    // field-reached map is cleared too rather than rebound.
+                    #[allow(clippy::mutable_key_type)]
+                    let taken = std::mem::take(&mut *entries.write().unwrap());
+                    let (removed_k, removed_v): (Vec<Value>, Vec<Value>) =
+                        taken.into_iter().map(|(k, v)| (k.0, v)).unzip();
                     for k in removed_k {
                         self.run_discarded_value_user_drops(k);
                     }
@@ -121,12 +124,16 @@ impl<'a> super::Interpreter<'a> {
             }
             "min" => {
                 if let Value::SortedSet(ref set) = obj {
-                    return Some(option_of(set.keys().next().map(|k| k.0.clone())));
+                    return Some(option_of(
+                        set.read().unwrap().keys().next().map(|k| k.0.clone()),
+                    ));
                 }
                 if let Value::SortedMap(ref map) = obj {
                     // SortedMap.min() -> Option[(K, V)] — first entry in key order.
                     return Some(option_of(
-                        map.iter()
+                        map.read()
+                            .unwrap()
+                            .iter()
                             .next()
                             .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()])),
                     ));
@@ -134,12 +141,16 @@ impl<'a> super::Interpreter<'a> {
             }
             "max" => {
                 if let Value::SortedSet(ref set) = obj {
-                    return Some(option_of(set.keys().next_back().map(|k| k.0.clone())));
+                    return Some(option_of(
+                        set.read().unwrap().keys().next_back().map(|k| k.0.clone()),
+                    ));
                 }
                 if let Value::SortedMap(ref map) = obj {
                     // SortedMap.max() -> Option[(K, V)] — last entry in key order.
                     return Some(option_of(
-                        map.iter()
+                        map.read()
+                            .unwrap()
+                            .iter()
                             .next_back()
                             .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()])),
                     ));
@@ -162,7 +173,9 @@ impl<'a> super::Interpreter<'a> {
                     let items: Vec<Value> = if lo > hi {
                         Vec::new()
                     } else {
-                        map.range(lo..=hi)
+                        map.read()
+                            .unwrap()
+                            .range(lo..=hi)
                             .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()]))
                             .collect()
                     };
@@ -178,7 +191,9 @@ impl<'a> super::Interpreter<'a> {
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
                     return Some(option_of(
-                        map.range(..=OrdValue(key))
+                        map.read()
+                            .unwrap()
+                            .range(..=OrdValue(key))
                             .next_back()
                             .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()])),
                     ));
@@ -193,7 +208,9 @@ impl<'a> super::Interpreter<'a> {
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
                     return Some(option_of(
-                        map.range(OrdValue(key)..)
+                        map.read()
+                            .unwrap()
+                            .range(OrdValue(key)..)
                             .next()
                             .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()])),
                     ));
@@ -206,11 +223,11 @@ impl<'a> super::Interpreter<'a> {
                     .unwrap_or(Value::Unit);
                 if let (Value::SortedSet(ref a_set), Value::SortedSet(ref b_set)) = (obj, &other) {
                     #[allow(clippy::mutable_key_type)]
-                    let mut result = a_set.clone();
-                    for k in b_set.keys() {
+                    let mut result = a_set.read().unwrap().clone();
+                    for k in b_set.read().unwrap().keys() {
                         result.insert(k.clone(), ());
                     }
-                    return Some(Value::SortedSet(result));
+                    return Some(Value::sorted_set_from(result));
                 }
                 if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (obj, &other) {
                     let mut result = a_set.read().unwrap().clone();
@@ -228,13 +245,16 @@ impl<'a> super::Interpreter<'a> {
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
                 if let (Value::SortedSet(ref a_set), Value::SortedSet(ref b_set)) = (obj, &other) {
+                    let b_set = b_set.read().unwrap();
                     #[allow(clippy::mutable_key_type)]
                     let result: BTreeMap<OrdValue, ()> = a_set
+                        .read()
+                        .unwrap()
                         .iter()
                         .filter(|(k, _)| b_set.contains_key(*k))
                         .map(|(k, v)| (k.clone(), *v))
                         .collect();
-                    return Some(Value::SortedSet(result));
+                    return Some(Value::sorted_set_from(result));
                 }
                 if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (obj, &other) {
                     let b_set = b_set.read().unwrap();
@@ -254,13 +274,16 @@ impl<'a> super::Interpreter<'a> {
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
                 if let (Value::SortedSet(ref a_set), Value::SortedSet(ref b_set)) = (obj, &other) {
+                    let b_set = b_set.read().unwrap();
                     #[allow(clippy::mutable_key_type)]
                     let result: BTreeMap<OrdValue, ()> = a_set
+                        .read()
+                        .unwrap()
                         .iter()
                         .filter(|(k, _)| !b_set.contains_key(*k))
                         .map(|(k, v)| (k.clone(), *v))
                         .collect();
-                    return Some(Value::SortedSet(result));
+                    return Some(Value::sorted_set_from(result));
                 }
                 if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (obj, &other) {
                     let b_set = b_set.read().unwrap();
