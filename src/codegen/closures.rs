@@ -1399,9 +1399,17 @@ impl<'ctx> super::Codegen<'ctx> {
             // (`|| f"…"`, or a block tail `f"…"`, or one moved into
             // `Result.Err(f"…")`), zero its accumulator `cap` so the
             // drained free is a runtime no-op.
+            // B-2026-10-06-32 — a tail naming a heap-struct capture or param is
+            // handed back as a deep CLONE (`deepcopy_captured_heap_agg_tail`
+            // below), so the source keeps its own cleanup: zeroing it as a
+            // move-out as well left the closure's per-call copy of a boxed
+            // payload with no owner (`|q: Ho[String]| { q }` lost 24 B).
+            let tail_is_cloned = Self::tail_names_heap_capture(body, &heap_struct_captures);
             let returned_tail: Option<&Expr> = match &body.kind {
                 ExprKind::Block(block) | ExprKind::Seq(block) => {
-                    self.suppress_cleanup_for_tail_return(block);
+                    if !tail_is_cloned {
+                        self.suppress_cleanup_for_tail_return(block);
+                    }
                     block.final_expr.as_deref()
                 }
                 _ => {
@@ -1409,7 +1417,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     // tail exactly as a block body's final expression is, so a
                     // projection off a fresh temp (`|n| mkw(n).b`) consumes it
                     // and runs the remainder's bodies, as `{ mkw(n).b }` does.
-                    self.consume_freshtemp_field_move(body);
+                    // B-2026-10-06-32 — and so is every other tail-return
+                    // transfer, not only that one: `|q: S| q` over a `shared`
+                    // param handed the caller's handle back with no `rc_inc`,
+                    // so the result and the argument both released it, where
+                    // `|q: S| { q }` was clean. Same walk as the block body's.
+                    if !tail_is_cloned {
+                        self.suppress_cleanup_for_tail_return(&Block {
+                            stmts: Vec::new(),
+                            final_expr: Some(Box::new(body.clone())),
+                            span: body.span,
+                        });
+                    }
                     Some(body)
                 }
             };
@@ -1870,6 +1889,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// mirrors). Recurses through block/unsafe tails to the leaf identifier, like
     /// `deepcopy_owned_param_branch_tail`. No-op unless the tail leaf is a
     /// tracked heap-struct capture.
+    /// B-2026-10-06-32 — whether `tail` (through block final expressions) is
+    /// the name `deepcopy_captured_heap_agg_tail` will clone.
+    fn tail_names_heap_capture(tail: &Expr, captures: &HashMap<String, String>) -> bool {
+        match &tail.kind {
+            ExprKind::Identifier(n) => captures.contains_key(n),
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => b
+                .final_expr
+                .as_deref()
+                .is_some_and(|inner| Self::tail_names_heap_capture(inner, captures)),
+            _ => false,
+        }
+    }
+
     fn deepcopy_captured_heap_agg_tail(
         &mut self,
         tail: &Expr,
