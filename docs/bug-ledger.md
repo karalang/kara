@@ -92,16 +92,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 718 |
+| miscompile | 720 |
 | run-vs-build | 598 |
-| leak | 588 |
-| double-free | 425 |
-| codegen-gap | 232 |
-| missing-feature | 218 |
+| leak | 589 |
+| double-free | 427 |
+| codegen-gap | 243 |
+| missing-feature | 219 |
 | other | 170 |
 | diagnostics | 147 |
 | perf | 146 |
-| false-positive | 124 |
+| false-positive | 128 |
 | crash | 113 |
 | soundness | 98 |
 | use-after-free | 89 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2805 |
-| interp | 880 |
-| typecheck | 339 |
+| codegen | 2819 |
+| interp | 882 |
+| typecheck | 344 |
 | other | 114 |
 | ownership | 80 |
 | cli | 74 |
@@ -547,6 +547,27 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-70 | 2026-10-06 | codegen+interp | high | AN OWNED-`self` METHOD THAT HANDS ITS STRUCT RECEIVER BACK ON ONLY SOME PATHS STILL RUNS ITS `Drop` BODIES TWICE ON EVERY SURFACE WHEN THE HAND-BACK PATH IS TAKEN, AND MAKES 2 INVALID ACCESSES COMPILED WHEN THE STRUCT HOLDS A `shared` FIELD -- `let b = a.maybe(true)` over `fn maybe(self, c: bool) -> S { if c { return self } println("mb"); return S { r: mk(98) } }` prints `dS4 dR4 dS4 dR4 _ end` on `--interp`, -O0 and -O2 where `dS4 dR4` is due once; `x.pick(true)` over `struct X { h: H, n: i64 }` (`H` a `shared struct` with a printing `Drop`) and `fn pick(self, c: bool) -> X { if c { return self; } mkx(9) }` prints the right `_3 end dH3` with 2 valgrind errors at -O0 | — |
 | B-2026-10-06-71 | 2026-10-06 | codegen | high | A BY-VALUE STRUCT PARAM WITH A `shared` FIELD HANDED BACK THROUGH ITS OWN OWNED-`self` METHOD MAKES 2 INVALID ACCESSES ON EVERY COMPILED SURFACE -- `let b = g(x)` over `fn g(x: X) -> X { x.me() }`, `fn me(self) -> X { self }` and `struct X { h: H, n: i64 }` with `H` a `shared struct` with a printing `Drop` prints the right `_10 end dH10` with ERROR SUMMARY 2 errors at -O0; `--interp` prints the same and is clean | — |
 | B-2026-10-06-72 | 2026-10-06 | codegen+interp | medium | A TEMP STRUCT RECEIVER OF AN OWNED-`self` METHOD THAT RETURNS A FRESH STRUCT NEVER RUNS ITS `Drop` BODIES, ON EVERY SURFACE -- `let b = S { r: mk(5) }.fresh(); println("_")` over `fn fresh(self) -> S { println("fr"); return S { r: mk(99) } }` prints `fr dS99 dR99 _ end` on `--interp`, -O0 and -O2 where `fr dS5 dR5 dS99 dR99 _ end` is due; memory balanced | — |
+| B-2026-10-06-73 | 2026-10-06 | typecheck | low | AN EMPTY `Vec[]` / `vec![]` LITERAL IN A TUPLE SLOT IS REFUSED EVEN WHEN THE SLOT'S TYPE IS KNOWN -- `let t: (Vec[i64], i64) = (vec![], 5);` and `fn mk() -> (Vec[String], i64) { return (vec![], 3); }` fail with E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION, while `(Vec.new(), 5)` in the same slot is accepted | — |
+| B-2026-10-06-74 | 2026-10-06 | typecheck | low | `find` / `filter` / `position` / `take_while` / `skip_while` PREDICATES RECEIVE THE ITEM BY VALUE, BUT design.md SAYS `ref Self.Item` -- `(i + 1..n).find(|j| nums[i] + nums[*j] == target)` is refused with `unary '*' requires 'ref T' ... found 'i64'` on every surface | — |
+| B-2026-10-06-75 | 2026-10-06 | codegen | low | `Iterator.find()` / `find_map()` LOUD-DEFER UNDER `karac build` WHEN THE ELEMENT OR PAYLOAD IS A TUPLE OF SCALARS OR A UNIT-ONLY ENUM -- `(0..10).find_map(|i| if i * i > 20 { Some((i, i * i)) } else { None })` and `vec![(1, 2), (3, 4)].iter().find(|p| p.0 > 2)` are refused with `only for a SCALAR payload`, while `position` and `filter().collect()` over the same tuples compile | — |
+| B-2026-10-06-76 | 2026-10-06 | codegen | low | `karac build` HAS NO LOWERING FOR A NON-EMPTY `Set[...]` LITERAL ANYWHERE, OR FOR AN EMPTY `Map[]` / `Set[]` OUTSIDE A DIRECT ANNOTATED `let` -- `let s = Set[1, 1, 2];`, `Some(Map[])` against `Option[Map[i64, i64]]`, `vec![Set[]]` and a tail-position `Map[]` all typecheck and then die with `no handler for expression kind PrefixCollectionLiteral` | — |
+| B-2026-10-06-77 | 2026-10-06 | codegen | medium | A `let` BOUND TO AN `if` OR `match` THAT PICKS ONE OF TWO `ref` PARAMS LOSES ITS TYPE IN CODEGEN -- `let longer = if a.len() > b.len() { a } else { b };` over `a, b: ref Vec[i64]` then `longer.len()` fails `no handler for method 'len' on variable 'longer'`, and `for d in longer` fails `not an iterable this backend can lower` | — |
+| B-2026-10-06-78 | 2026-10-06 | codegen | medium | A `match` ON A TUPLE LITERAL THAT MOVES `shared` OR HEAP-FIELDED STRUCT LOCALS LEAKS EVERY ELEMENT COMPILED -- `let a = Node { v: 1 }; let b = Node { v: 2 }; match (a, b) { (x, y) => x.v + y.v }` (`Node` a `shared struct`) leaves both nodes at refcount 1, and a recursive add-two-numbers over a `shared enum` list leaks 1280 bytes in 40 blocks | — |
+| B-2026-10-06-79 | 2026-10-06 | codegen | low | `s[a..b].to_string()` / `.clone()` ON A `ref String` PARAM STILL FAILS `karac build` -- `fn d(s: ref String) -> String { s[1..3].to_string() }` stops with `indexed-receiver method 'to_string' on 's' -- element TypeExpr unknown`, while the same call on an owned `String` local builds (B-2026-07-22-6) and `s[1..3].len()` on the param builds (B-2026-08-18-22) | — |
+| B-2026-10-06-80 | 2026-10-06 | codegen | medium | `for (i, c) in s.chars().enumerate()` -- AND ANY `enumerate()` WHOSE CHAIN STARTS AT A METHOD CALL, LIKE `s.bytes().iter().enumerate()` -- FAILS `karac build` WITH A HINT THAT TELLS YOU TO WRITE WHAT YOU WROTE: `enumerate IS supported with a 2-tuple pattern -- write for (i, x) in ... instead of for p in ...`; binding the receiver to a name first builds | — |
+| B-2026-10-06-81 | 2026-10-06 | interp | high | `--interp` BUILDS EVERY SLOT OF A REPEAT LITERAL OVER ONE SHARED BUFFER -- `let mut dp = vec![vec![false; 2]; 3]; dp[2][1] = true;` makes `dp[0][1]` and `dp[1][1]` true as well, so a bottom-up DP table prints the wrong answer; `Vec.resize(n, row)`, `[v; n]` into an `Array`, and struct / `Map` / tuple elements alias the same way | — |
+| B-2026-10-06-82 | 2026-10-06 | interp | medium | `--interp` BUILDS A NON-EMPTY `Set[...]` PREFIX LITERAL AS A `Vec` -- `Set[1, 1, 2].len()` prints 3, and `out.insert(5)` on a set made by `Set[1, 2]` runs `Vec.insert(index)` and dies `index 5 out of bounds (len 2)`; a condition built on that `insert` panics `condition was Value::Unit not Bool` | — |
+| B-2026-10-06-83 | 2026-10-06 | codegen | high | A REPEAT LITERAL OF A NAMED `Vec` LOCAL DOUBLE-FREES COMPILED -- `let row = vec![0; 2]; let mut g = vec![row; 3];` aborts with `free(): double free detected in tcache 2` at scope exit, because `row` is still freed after its buffer became one of `g`'s slots | — |
+| B-2026-10-06-84 | 2026-10-06 | codegen | high | A NAMED `Set` OR `Map` PASSED BY VALUE AND HANDED BACK BY THE CALLEE IS FREED TWICE COMPILED -- `fn grow(states: Set[i64]) -> Set[i64] { states }` then `let c = grow(s); println(f"{c.len()}")` segfaults (exit 139) before printing; `Vec` in the same shape is clean | — |
+| B-2026-10-06-85 | 2026-10-06 | codegen | low | `s.chars().rev()` IS REFUSED BY `karac build` -- `for c in s.chars().rev() { .. }` and `let r: String = s.chars().rev().collect();` stop with "`Iterator.rev()` is not yet supported ... for this chain shape", while collecting the chars into a `Vec[char]` first and looping `v.iter().rev()` builds | — |
+| B-2026-10-06-86 | 2026-10-06 | typecheck | low | A VALUE ENUM CANNOT CARRY EVEN A UNIT-ONLY ENUM AS A PAYLOAD -- `enum Kind { Round, Square, Curly }` plus `enum Tok { Open(Kind), Close(Kind) }` is refused with E_ENUM_NESTED_ENUM_PAYLOAD ("v1 only supports up to one level of enum nesting"), although `Kind` is a bare tag and design.md states no such limit | — |
+| B-2026-10-06-87 | 2026-10-06 | codegen | medium | `.cmp()` ON AN INDEXED TUPLE ELEMENT HAS NO CODEGEN DISPATCH, SO A `PriorityQueue` OF TUPLES CANNOT BE BUILT -- `PriorityQueue[(i64, i64)]` with `push` / `pop` fails `karac build` with `no handler for method 'cmp' on variable '__indexed_elem_3' in PriorityQueue.outranks`, and `v[0].cmp(v[1])` over `Vec[(i64, i64)]` fails the same way in user code | — |
+| B-2026-10-06-88 | 2026-10-06 | typecheck | medium | AN OPERATOR EXPRESSION OF BARE INTEGER LITERALS IGNORES A NARROW TYPE CONTEXT -- `let x: u16 = 1 + 2;`, `let m: u8 = 7 & 3;`, `let x: u64 = 1 << 40;` and the bit-mask staple `let bit: u16 = 1 << (d as u16);` are all refused as an `i64` -> narrow implicit coercion, while `let x: u16 = 3;` is accepted | — |
+| B-2026-10-06-89 | 2026-10-06 | codegen | low | `.iter()` ON AN INDEXED ELEMENT OF A STRUCT FIELD FAILS `karac build` -- `g.rows[1].iter().sum()` over `rows: Vec[Vec[i64]]` and `s.board[r].iter().map(..)` over `board: Array[Array[i64, 9], 9]` stop with `indexed-receiver .iter() requires the outer container to be a named variable in v1` | — |
+| B-2026-10-06-90 | 2026-10-06 | codegen | medium | A REPEAT LITERAL INTO A NARROW `Array` SLOT FAILS LLVM MODULE VERIFICATION -- `M { b, rows: [0; 3] }` over `struct M { b: i64, rows: Array[u16, 3] }` emits `insertvalue ... [3 x i64]` into a `[3 x i16]` field, and `f([9; 2])` against `fn f(a: Array[u8, 2])` passes a `[2 x i64]`; a single-field struct and an annotated `let` both build | — |
+| B-2026-10-06-91 | 2026-10-06 | codegen | low | `.iter().rev()` ON A STRUCT FIELD IS REFUSED BY `karac build` -- `for d in self.limbs.iter().rev()` (and `b.limbs.iter().rev()` on a local struct, and `.rev().map(..).collect()`) stop with "`Iterator.rev()` is not yet supported ... for this chain shape", while the same chain on a local `Vec` or a `ref Vec` param builds, and `.iter()` / `.map` / `.enumerate` on the same field build | — |
+| B-2026-10-06-92 | 2026-10-06 | typecheck | medium | `Vec[T: Ord]` IS NOT `Ord` TO THE TYPECHECKER, though design.md declares `impl[T: Ord] Ord for Vec[T]` -- `SortedMap[Vec[i64], V]` / `SortedSet[Vec[i64]]` keys, `a < b` over two `Vec[i64]`, and `v.iter().max()` over a `Vec[Vec[i64]]` are all refused, while `v.sort()` on the same `Vec[Vec[i64]]` is accepted and runs, and `Array` / tuple keys and comparisons work | — |
+| B-2026-10-06-93 | 2026-10-06 | codegen | low | `SortedMap` / `SortedSet` WITH A TUPLE, `Array` OR UNIT-ENUM KEY IS REFUSED BY `karac build` -- `SortedMap[(i64, i64), V]`, `SortedSet[(String, i64)]`, `SortedMap[Array[i64, 26], V]` and `SortedMap[K, V]` over a `#[derive(Ord)]` unit-only enum all stop with "`SortedSet`/`SortedMap` with element/key type ... is not yet supported under `karac build`", while `--interp` runs all four | — |
 
 ### Relocated
 
