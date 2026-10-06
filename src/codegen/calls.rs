@@ -757,7 +757,15 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Identifier(synth.clone()),
             span: inner.span,
         };
+        // B-2026-10-06-87 — a TUPLE element (`v[0].cmp(v[1])`, and the generic
+        // `self.xs[i] < self.xs[j]` inside `PriorityQueue.outranks` at
+        // `T = (i64, i64)`) hands the tuple `cmp` dispatch its type here.
+        let saved_tuple_recv = self.var_types.indexed_tuple_receiver_te.take();
+        if matches!(&elem_te.kind, TypeKind::Tuple(e) if !e.is_empty()) {
+            self.var_types.indexed_tuple_receiver_te = Some((synth.clone(), elem_te.clone()));
+        }
         let result = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
+        self.var_types.indexed_tuple_receiver_te = saved_tuple_recv;
 
         // SCATTER THE MATERIALISED ELEMENT BACK when the method took
         // `mut ref self` (B-2026-08-27-22). The AoS path hands the method the

@@ -121,6 +121,13 @@ pub(crate) struct VarTypes<'ctx> {
     /// the body would then run on one backend and not the other. Cleared per
     /// function alongside `enum_inst_var_types`.
     pub(crate) tuple_var_elem_tes: HashMap<String, Vec<TypeExpr>>,
+    /// B-2026-10-06-87 — the tuple element type of the synthetic receiver
+    /// `compile_indexed_receiver_method` materialises for `v[i].m()`, keyed
+    /// by the synthetic name. The tuple `cmp` dispatch reads a receiver's
+    /// static type from the span-keyed operand table, whose entry for an
+    /// indexed receiver's span is the CONTAINER's type, so it needs this to
+    /// see the element. Set and cleared around that one dispatch.
+    pub(crate) indexed_tuple_receiver_te: Option<(String, TypeExpr)>,
     /// Element `TypeExpr`s of a MATCH-ARM payload binding that binds a whole
     /// TUPLE (`match o { Some(t) => … }` over an `Option[(A, B)]`), recorded
     /// from the typechecker's own record for that binding and substituted

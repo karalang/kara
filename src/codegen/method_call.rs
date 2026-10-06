@@ -5803,8 +5803,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // same predicate is what keeps the two spellings accepting the
                 // same set — and matches the interpreter's
                 // `value_is_totally_ordered` twin.
-                if let Some(te) = self
-                    .seq_eq_operand_te(object)
+                let indexed_tuple_te =
+                    match (&object.kind, &self.var_types.indexed_tuple_receiver_te) {
+                        (ExprKind::Identifier(n), Some((synth, te))) if n == synth => {
+                            Some(te.clone())
+                        }
+                        _ => None,
+                    };
+                if let Some(te) = indexed_tuple_te
+                    .or_else(|| self.seq_eq_operand_te(object))
                     .map(|te| self.subst_monomorph_type_params(&te))
                 {
                     if matches!(&te.kind, crate::ast::TypeKind::Tuple(elems) if !elems.is_empty())
