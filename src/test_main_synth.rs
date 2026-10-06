@@ -315,6 +315,7 @@ fn synth_main_function(body: Block) -> Function {
         params: Vec::new(),
         self_param: None,
         self_is_frozen: false,
+        self_span: None,
         return_type: None,
         effects: None,
         requires: Vec::new(),

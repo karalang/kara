@@ -400,7 +400,7 @@ impl super::Parser {
         // Cleared before the receiver parse so a previous function's `frozen
         // self` can never leak into this one, and taken immediately after.
         self.frozen_self_consumed = false;
-        let (self_param, _self_span, params) = self.parse_fn_params()?;
+        let (self_param, self_span, params) = self.parse_fn_params()?;
         let self_is_frozen = std::mem::take(&mut self.frozen_self_consumed);
         self.fn_context_stack.pop();
         self.expect(&Token::RightParen)?;
@@ -453,6 +453,7 @@ impl super::Parser {
             params,
             self_param,
             self_is_frozen,
+            self_span,
             return_type,
             effects,
             requires,

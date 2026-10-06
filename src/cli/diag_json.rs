@@ -1812,6 +1812,9 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::MainSignature => "E0286",
                 // B-2026-10-04-61 — an assignment target that is not a place.
                 crate::typechecker::TypeErrorKind::AssignTargetNotPlace => "E0287",
+                // core-semantics.md §4.7 — an impl method's mode is stronger
+                // than its trait's.
+                crate::typechecker::TypeErrorKind::ImplModeStrongerThanTrait => "E0288",
                 // `s[i]` (scalar index) on a `String` — UTF-8 is
                 // variable-width, so `[]` is rejected in favour of
                 // `s.char_at(i)` / `s.bytes()[i]` (design.md § Character type).

@@ -1173,6 +1173,12 @@ pub enum TypeErrorKind {
     /// operator expression -- so there is nothing to write into.
     /// `E_ASSIGN_TARGET_NOT_PLACE` (B-2026-10-04-61).
     AssignTargetNotPlace,
+    /// An impl method declares a parameter, or its receiver, with a STRONGER
+    /// mode than the trait method it implements: owned where the trait
+    /// borrows, or `mut ref` where it takes `ref`. An impl may be weaker,
+    /// never stronger (`docs/core-semantics.md` §4.7). Reported by `karac
+    /// check` only while the v2 core is staged. `E0288`.
+    ImplModeStrongerThanTrait,
     /// A `#[gpu]`-annotated function uses a type that is not GPU-compatible
     /// — a heap-allocated type (`String`, `Vec[T]`, `Map`/`Set`, …), an
     /// RC/`shared` reference type (`shared struct`, `Rc[T]`, `Arc[T]`,
@@ -1358,6 +1364,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::MainErrNotDisplay
         | TypeErrorKind::MainSignature
         | TypeErrorKind::AssignTargetNotPlace
+        | TypeErrorKind::ImplModeStrongerThanTrait
         | TypeErrorKind::CrossTaskUnsafeCapture
         | TypeErrorKind::LazyLockRuntimeCapture
         | TypeErrorKind::GpuNotSafe

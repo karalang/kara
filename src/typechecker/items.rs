@@ -21,7 +21,7 @@ use super::inference::{find_unbound_const_param, find_unbound_type_param};
 use super::types::{
     type_display, type_is_fully_concrete, IntSize, ScrutineeMode, Type, UIntSize, VariantTypeInfo,
 };
-use super::{ConstEvalError, LocalTypeScope, TypeErrorKind};
+use super::{ConstEvalError, FixIt, LocalTypeScope, TypeErrorKind};
 use crate::ast::narrow_literal_to_i64;
 
 impl<'a> super::TypeChecker<'a> {
@@ -403,6 +403,7 @@ impl<'a> super::TypeChecker<'a> {
                         self_param: method.self_param.clone(),
                         // Trait methods carry no `frozen` receiver (stage 2.7 is impl-only).
                         self_is_frozen: false,
+                        self_span: None,
                         return_type: method.return_type.clone(),
                         effects: method.effects.clone(),
                         requires: method.requires.clone(),
@@ -3040,6 +3041,138 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// `docs/core-semantics.md` §4.7: an impl method may declare a parameter,
+    /// its receiver included, with the trait method's mode or a weaker one
+    /// (owned → `mut ref` → `ref`, and `mut Slice[T]` → `Slice[T]`), never a
+    /// stronger one. A stronger impl would consume or mutate what a caller
+    /// going through the trait only lent it. Reported under `karac check`
+    /// (`strict_core`) while the v2 core is staged; the fix rewrites the impl
+    /// to the trait's mode.
+    fn check_impl_modes_not_stronger(&mut self, imp: &ImplBlock, trait_name: &str) {
+        // Strength rank: lower is stronger.
+        fn param_rank(ty: &TypeExpr) -> (u8, &'static str) {
+            match &ty.kind {
+                TypeKind::Ref(_) => (2, "ref"),
+                TypeKind::MutRef(_) => (1, "mut ref"),
+                TypeKind::MutSlice(_) => (1, "mut Slice"),
+                TypeKind::Path(p) if p.segments.last().is_some_and(|s| s == "Slice") => {
+                    (2, "Slice")
+                }
+                _ => (0, "owned"),
+            }
+        }
+        fn self_rank(sp: &SelfParam) -> (u8, &'static str) {
+            match sp {
+                SelfParam::Owned => (0, "self"),
+                SelfParam::MutRef => (1, "mut ref self"),
+                SelfParam::Ref => (2, "ref self"),
+            }
+        }
+        // The prefix that spells a mode, for the fix.
+        fn mode_prefix(mode: &str) -> Option<&'static str> {
+            match mode {
+                "ref" => Some("ref "),
+                "mut ref" => Some("mut ref "),
+                "owned" => Some(""),
+                _ => None,
+            }
+        }
+        let type_name = match &imp.target_type.kind {
+            TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+            _ => String::new(),
+        };
+        let mut found = Vec::new();
+        for item in &imp.items {
+            let ImplItem::Method(method) = item else {
+                continue;
+            };
+            let Some(tm) = self.find_trait_method(trait_name, &method.name) else {
+                continue;
+            };
+            if let (Some(t), Some(i)) = (&tm.self_param, &method.self_param) {
+                let (tr, tw) = self_rank(t);
+                let (ir, iw) = self_rank(i);
+                if ir < tr {
+                    let span = method.self_span.unwrap_or(method.span);
+                    let fix = method.self_span.map(|span| FixIt {
+                        span,
+                        replacement: tw.to_string(),
+                    });
+                    found.push((
+                        format!(
+                            "impl method '{type_name}.{name}' takes its receiver as `{iw}`, but \
+                             '{trait_name}.{name}' declares `{tw}`: an impl's mode may be \
+                             weaker than the trait's, never stronger (core-semantics.md \
+                             §4.7). Declare `{tw}`",
+                            name = method.name,
+                        ),
+                        span,
+                        fix,
+                    ));
+                }
+            }
+            for (tp, ip) in tm.params.iter().zip(&method.params) {
+                let (tr, tw) = param_rank(&tp.ty);
+                let (ir, iw) = param_rank(&ip.ty);
+                if ir >= tr {
+                    continue;
+                }
+                let pname = ip.name().unwrap_or("_").to_string();
+                // Rewrite only the mode prefix: the span from the impl type's
+                // start up to its inner type, or an insertion when the impl
+                // parameter is owned.
+                let fix = match (&ip.ty.kind, mode_prefix(tw)) {
+                    (TypeKind::MutRef(inner), Some(prefix)) => Some(FixIt {
+                        span: Span {
+                            length: inner.span.offset.saturating_sub(ip.ty.span.offset),
+                            ..ip.ty.span
+                        },
+                        replacement: prefix.to_string(),
+                    }),
+                    (TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_), _) => None,
+                    (_, Some(prefix)) => Some(FixIt {
+                        span: Span {
+                            length: 0,
+                            ..ip.ty.span
+                        },
+                        replacement: prefix.to_string(),
+                    }),
+                    (_, None) => None,
+                };
+                let show = |m: &str| {
+                    if m == "owned" {
+                        "by value".to_string()
+                    } else {
+                        format!("as `{m}`")
+                    }
+                };
+                found.push((
+                    format!(
+                        "impl method '{type_name}.{name}' takes '{pname}' {}, but \
+                         '{trait_name}.{name}' takes it {}: an impl's mode may be weaker \
+                         than the trait's, never stronger (core-semantics.md §4.7)",
+                        show(iw),
+                        show(tw),
+                        name = method.name,
+                    ),
+                    ip.ty.span,
+                    fix,
+                ));
+            }
+        }
+        for (message, span, fix) in found {
+            match fix {
+                Some(fix) => self.type_error_with_fix_it(
+                    message,
+                    span,
+                    TypeErrorKind::ImplModeStrongerThanTrait,
+                    fix,
+                ),
+                None => self.type_error(message, span, TypeErrorKind::ImplModeStrongerThanTrait),
+            }
+        }
+    }
+
     fn check_impl_block(&mut self, imp: &ImplBlock) {
         // Variance markers are legal only on stdlib struct/enum
         // declarations (design.md § Variance) — never on impl blocks.
@@ -3239,6 +3372,9 @@ impl<'a> super::TypeChecker<'a> {
                     imp.span,
                     TypeErrorKind::TypeMismatch,
                 );
+            }
+            if self.cli_lint_overrides.strict_core {
+                self.check_impl_modes_not_stronger(imp, &trait_name);
             }
             if let Some(trait_info) = self.env.traits.get(&trait_name).cloned() {
                 let provided: HashSet<String> = imp

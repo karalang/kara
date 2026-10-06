@@ -209,6 +209,10 @@ pub struct Function {
     /// consult this flag. False for every other receiver form and for every
     /// free function.
     pub self_is_frozen: bool,
+    /// The receiver's span (`self`, `ref self`, `mut ref self`), when there
+    /// is one. Lets a diagnostic about the receiver's mode point at it and
+    /// carry a fix that rewrites it.
+    pub self_span: Option<Span>,
     pub return_type: Option<TypeExpr>,
     pub effects: Option<EffectList>,
     pub requires: Vec<Expr>,
@@ -8570,6 +8574,7 @@ pub fn closure_as_function(params: &[super::ClosureParam], body: &Expr) -> Funct
             .collect(),
         self_param: None,
         self_is_frozen: false,
+        self_span: None,
         return_type: None,
         effects: None,
         requires: Vec::new(),
