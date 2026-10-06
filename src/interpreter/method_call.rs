@@ -1337,6 +1337,12 @@ impl<'a> super::Interpreter<'a> {
                 // codegen's `__urecv_drop_tmp` registration drains
                 // (statement end). Owned-`self` consumed the value and
                 // borrow-returning methods alias it — both stay silent.
+                // B-2026-09-29-92 — the receiver's clone in `arg_vals` has
+                // done its job (it was bound to `self`, now popped), and kept
+                // alive it inflates the count the hook's shared release reads.
+                if arg_vals.len() > args.len() {
+                    arg_vals[0] = Value::Unit;
+                }
                 self.run_fresh_recv_temp_drop(object, method, &type_name, obj);
                 // B-2026-09-03-7 — and the ARG sibling of that receiver hook,
                 // which this path was missing entirely. Without it a method's
@@ -1471,6 +1477,21 @@ impl<'a> super::Interpreter<'a> {
         // codegen's receiver-temp drain runs it. A whole rebind of `self` stands
         // every body down there too, and a type with its own `Drop` cannot be
         // partially moved, so both are left out.
+        // B-2026-09-29-92 — a `shared` value a fresh STRUCT receiver holds,
+        // released where the callee's frame dropped `self`. The walks below
+        // leave shared fields to their refcount, and a temp has no binding
+        // whose death releases them, so `K { e: E.A(H { .. }) }.take()` and
+        // `mkk(4).take()` ran `H`'s body on no surface here while every
+        // compiled one printed it right after the call. The count test fires
+        // only a handle nothing else holds, so a part the method handed back
+        // is left with its new owner.
+        if fresh
+            && matches!(self_param, Some(crate::ast::SelfParam::Owned))
+            && matches!(obj, Value::Struct { .. })
+            && !self.program.drop_method_keys.contains_key(type_name)
+        {
+            self.run_value_held_shared_user_drops(obj);
+        }
         if fresh
             && matches!(self_param, Some(crate::ast::SelfParam::Owned))
             && matches!(obj, Value::Struct { .. })

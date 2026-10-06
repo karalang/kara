@@ -3314,7 +3314,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// with `struct K { e: E }` and `enum E { A(H), B }` released `a.k.e`'s
     /// `shared` handle in both frames once the callee entry-copied (a fresh
     /// temp at another call site is enough to make it do so).
-    fn zero_uncopied_enum_fields_under(
+    pub(super) fn zero_uncopied_enum_fields_under(
         &mut self,
         place: &Expr,
         struct_name: &str,

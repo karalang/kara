@@ -10335,7 +10335,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
     }
 
-    fn zero_uncopied_enum_payloads_at(
+    pub(super) fn zero_uncopied_enum_payloads_at(
         &mut self,
         base_ptr: PointerValue<'ctx>,
         agg_ty: inkwell::types::StructType<'ctx>,
@@ -17847,6 +17847,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.zero_transfer_owned_enum_field_arg(arg);
         // B-2026-09-20-14 — the TUPLE-ELEMENT spelling (`takeg(t.0)`).
         self.zero_transfer_owned_boxed_enum_tuple_elem_arg(arg);
+        // B-2026-09-29-92 — a whole STRUCT FIELD handed on (`give(w.h)`) is
+        // entry-copied like a named binding and leaves the same payloads
+        // shared, so its holder must stand down for them as well.
+        self.zero_uncopied_enum_fields_of_struct_field_arg(arg);
         // B-2026-09-20-4 — `self` too: `fn fwd(self) { eat(self) }` hands
         // the receiver on exactly as a named binding would.
         let var = match &arg.kind {
@@ -18361,6 +18365,35 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `zero_nested_struct_field_move_cap` walks under and for the same
     /// reason: a `shared` hop is an RC handle rather than an inline struct, so
     /// a GEP through it would walk a pointer as a struct.
+    /// B-2026-09-29-92 — the struct-FIELD spelling of
+    /// [`Self::zero_uncopied_enum_fields_of_struct_arg`]: `give(w.h)` over
+    /// `struct Wr { h: Hb }` hands `w.h` to a callee that entry-copies it, and
+    /// the copy leaves `Hb`'s boxed or `shared` enum payloads shared with
+    /// `w`, whose drop then released them a second time (7 valgrind errors
+    /// and a `free(): double free` abort at `-O0`). The field's own payloads
+    /// are zeroed in `w` after the statement, through the same per-field
+    /// queue the named spelling uses. A field the callee takes by TRANSFER,
+    /// or one whose type is not a concrete copy-supported struct, is left
+    /// alone.
+    fn zero_uncopied_enum_fields_of_struct_field_arg(&mut self, arg: &Expr) {
+        let ExprKind::FieldAccess { object, field } = &arg.kind else {
+            return;
+        };
+        let Some((_, inst_fte)) = self.chained_field_inst_te(object, field) else {
+            return;
+        };
+        let Some(UncopiedFieldShape::Struct(sname)) = self.uncopied_field_shape(&inst_fte) else {
+            return;
+        };
+        if !self.aggregate_param_copy_supported_struct(&sname, &mut Vec::new())
+            || self.struct_param_owned_by_transfer(&sname, false)
+            || !self.struct_has_uncopied_enum_payload(&sname, &mut Vec::new())
+        {
+            return;
+        }
+        self.zero_uncopied_enum_fields_under(arg, &sname, &mut Vec::new());
+    }
+
     fn chained_field_inst_te(&self, object: &Expr, field: &str) -> Option<(String, TypeExpr)> {
         let mut hops: Vec<&str> = Vec::new();
         let mut cur = object;

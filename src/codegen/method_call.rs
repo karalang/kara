@@ -12033,6 +12033,38 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let result = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
 
+        // B-2026-09-29-92 — an owned-`self` method ENTRY-COPIES a copy-supported
+        // struct receiver, and the copy leaves its boxed / `shared` enum
+        // payloads shared with this temp, whose statement-end drop then
+        // released them a second time (`Hb { g: Eb.A(mk()) }.mine()`: 7
+        // valgrind errors and a double-free abort at `-O0`). The receiver has
+        // been read by now, so the temp's copies of those payloads are zeroed
+        // here, ahead of that drop. The named-receiver zero queued by the
+        // re-entry lands only at statement end, after the drop.
+        if result.is_ok()
+            && is_plain_struct
+            && matches!(
+                self.impl_method_self_and_borrow_return(&type_name, method),
+                Some((crate::ast::SelfParam::Owned, _))
+            )
+            && self
+                .type_decls
+                .struct_generic_params
+                .get(type_name.as_str())
+                .is_none_or(|g| g.is_empty())
+            && self.aggregate_param_copy_supported_struct(&type_name, &mut Vec::new())
+            && !self.struct_param_owned_by_transfer(&type_name, false)
+            && self.struct_has_uncopied_enum_payload(&type_name, &mut Vec::new())
+            && self
+                .builder
+                .get_insert_block()
+                .is_some_and(|b| b.get_terminator().is_none())
+        {
+            if let BasicTypeEnum::StructType(sty) = val.get_type() {
+                self.zero_uncopied_enum_payloads_at(slot, sty, &type_name, &mut Vec::new());
+            }
+        }
+
         // Drop the dispatch-only registrations (the queued drop, if any,
         // references the alloca, not the name, so it stays armed).
         self.variables.remove(&synth);
