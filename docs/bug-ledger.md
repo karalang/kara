@@ -98,20 +98,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 425 |
 | codegen-gap | 232 |
 | missing-feature | 218 |
-| other | 169 |
+| other | 170 |
 | diagnostics | 147 |
 | perf | 146 |
 | false-positive | 124 |
 | crash | 113 |
 | soundness | 98 |
-| use-after-free | 87 |
+| use-after-free | 89 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2802 |
-| interp | 878 |
+| codegen | 2805 |
+| interp | 880 |
 | typecheck | 339 |
 | other | 114 |
 | ownership | 80 |
@@ -226,7 +226,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-59 | 2026-09-26 | codegen+interp | medium | AN `Option[Vec[D]]` HELD BY A GENERIC STRUCT, AN ARRAY ELEMENT OR AN ENUM PAYLOAD LEAKS ONE ELEMENT'S BUFFER AT `-O0` -- `G[T] { xs: Option[Vec[T]] }` at `T = D`, `Array[H, 2]` of `H { xs: Option[Vec[D]] }`, and `enum E { A(Option[Vec[D]]), B }` each lose 32 bytes in 1 block plus 36 indirectly; the enum payload also runs its element's `Drop` body on NEITHER backend | — |
 | B-2026-09-26-52 | 2026-09-26 | interp | medium | THE INTERPRETER LOSES BOTH FIELD BODIES OF A NAMED `Drop`-LESS STRUCT HANDED TO A CALLEE THAT KEEPS IT ON ONLY SOME PATHS, ON THE PATH WHERE IT DIES INSIDE -- `let o = maybew(w, false)` prints `ofalse end` under `--interp` where JIT, `-O2` seq and `-O2` par all print the due `dD107n107 dD7n7 ofalse end`; `gcsw(mut v, w, false)` loses them the same way | — |
 | B-2026-09-27-10 | 2026-09-27 | codegen+interp | low | A CHAINED OWNED-`self` CALL WHOSE RECEIVER IS ANOTHER METHOD'S RESULT RUNS NO `Drop` BODY FOR THAT RESULT, on every surface -- `E.A(mk(14)).ret_self().none()` prints `n5` where `dE dR14 n5` is due, and a struct chain `S { r: mk(2) }.ret_self().none()` prints nothing where `dS2 dR2` is due; memory balanced | — |
-| B-2026-09-27-11 | 2026-09-27 | codegen+interp | medium | A NAMED STRUCT RECEIVER HANDED BACK WHOLE BY AN OWNED-`self` METHOD RUNS EVERY `Drop` BODY TWICE, on all four surfaces, own `Drop` or not -- `let b = a.ret_self()` over `struct S { r: R }` with `impl Drop for S` prints `dS1 dR1 dS1 dR1`, and over a plain `struct P { r: R }` prints `dR6 dR6`; a temp receiver whose method returns a fresh value loses its bodies; memory balanced | — |
 | B-2026-09-27-12 | 2026-09-27 | interp | medium | THE INTERPRETER MIS-OWNS A CONDITIONALLY-RETURNED BY-VALUE PARAM OF AN ENUM WITH ITS OWN `Drop`: `mb(a, false)` over `fn mb(e: E, c: bool) -> E { if c { return e } return E.B }` loses the payload body (`mb-new dE dE` against the compiled `mb-new dE dR2 dE`) and `mb(a, true)` runs the shell twice (`dE dR3 dE` against `dE dR3`); the always-returning `ide(q)` doubles the shell the same way | — |
 | B-2026-09-27-13 | 2026-09-27 | codegen | medium | A METHOD-CALL RESULT PASSED STRAIGHT INTO A BY-VALUE PARAM THAT HANDS IT BACK LEAKS 52 B IN 2 BLOCKS AT `-O0` -- `let b: E = f(a.ret_self())` and `f(E.A(mk(7)).ret_self())` over `fn f(e: E) -> E { return e }` (15 allocs, 13 frees) while the free-function nesting `f(g(E.A(mk(6))))` is clean; output correct on every surface | — |
 | B-2026-09-27-4 | 2026-09-27 | interp+codegen | medium | A BY-VALUE TUPLE PARAMETER WHOSE ELEMENT IS RETURNED ON ONLY SOME PATHS (`fn eat(o: (R, R), k: bool) -> R { if k { return o.0; } .. }`) LOSES THAT ELEMENT'S Drop BODY ON THE PATH THAT DOES NOT RETURN IT, ON EVERY BACKEND | — |
@@ -524,7 +523,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-2 | 2026-10-06 | interp+codegen | medium | DESTRUCTURING A BY-VALUE `(Option[H], i64)` PARAM WITH `H` `shared` RUNS NO `Drop` BODY UNDER `--interp`, WHILE COMPILED RUNS IT AFTER THE CALLER HAS USED THE RESULT -- `fn fpo(p: (Option[H], i64)) -> i64 { let (a, b) = p; b }` then `println(f"f{fpo(mk(1))}")` prints `f1 dH1 end` compiled and `f1 end` interpreted | — |
 | B-2026-10-06-3 | 2026-10-06 | interp+codegen | low | AN `Option[shared]` LOCAL MOVED BY `let mut c = a` AND THEN REASSIGNED RUNS THE DISPLACED BODY ONLY AT SCOPE EXIT, IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `let a = Some(mkh(1)); let mut c = a; c = Some(mkh(2)); println("x1")` prints `x1 dH2 dH1 end` compiled and `x1 dH1 dH2 end` interpreted | — |
 | B-2026-10-06-5 | 2026-10-06 | interp | low | `--interp` LOSES THE `Drop` BODY OF A `shared` VALUE CAPTURED BY A CLOSURE, BARE, IN AN `Option` OR IN A TUPLE -- `fn cap(i: i64) { let p = mk(i); let f = || p.1; println(f"c{f()}") }` then `cap(1)` prints `c1 end` interpreted against compiled `c1 dH1 end` (B-2026-10-04-68's closure half) | — |
-| B-2026-10-06-6 | 2026-10-06 | codegen+interp | high | AN OWNED-`self` METHOD THAT RETURNS `self` ON A STRUCT WITH A DIRECT `shared` FIELD READS AND WRITES THE FREED HANDLE ON EVERY COMPILED SPELLING, AND UNDER `--interp` A DISCARDED TEMP RECEIVER NEVER RUNS ITS `Drop` BODY -- `let b = X { h: H { id: 2 }, n: 2 }.me();` over `struct X { h: H, n: i64 }`, `impl X { fn me(self) -> X { self } }` and a `shared struct H` with a printing `Drop` prints the right `_2 end dH2` at -O0 with 1 invalid read and 1 invalid write of size 8 under valgrind, as do the named `let x = X { .. }; let b = x.me();` and the call-result `mkx(2).me()`; the discarded `X { .. }.me();` prints `dH2 _2` compiled and `_2 end` (no `dH2`) under `--interp` | — |
 | B-2026-10-06-31 | 2026-10-06 | codegen | high | A CLOSURE THAT RETURNS ITS BY-VALUE `Array` PARAM RUNS EACH ELEMENT'S `Drop` BODY TWICE AND FREES IT TWICE WHEN THE RESULT BINDING IS TYPED -- `let f = |x: Array[R, 1]| x; let r: Array[R, 1] = f([mk(92)])` prints `dR92 r92 dR92 end` at -O0/-O2 and aborts with `free(): double free` under the JIT, where `--interp` prints `r92 dR92 end`; the UNTYPED spelling `let r = f([mk(92)]); r[0].id` does not build (`cannot resolve field 'id'`), the remainder of B-2026-10-04-43, and should be retried once this is fixed | — |
 | B-2026-10-06-32 | 2026-10-06 | codegen | high | A `shared struct` HANDLE PASSED BY VALUE THROUGH AN IDENTITY CLOSURE IS READ AND WRITTEN AFTER IT IS FREED -- `let s = mks(9); let j = |q: S| q; let u = j(s); println(f"d:{u.t}")` prints the right `d:t9 end` but valgrind reports an invalid 8-byte read and write into the freed 40-byte `S` block at -O0; the same handle through a user fn `fn js(q: S) -> S { return q; }` is clean | — |
 | B-2026-10-06-35 | 2026-10-06 | interp+codegen | high | A BY-VALUE `Drop` PARAM HANDED TO A CLOSURE THAT GIVES IT BACK RUNS ITS BODY TWICE ON EVERY SURFACE -- `fn keep(v: R) -> R { let k = |x: R| x; return k(v); }` then `let r = keep(R { id: 5 }); println(f"e:{r.id}")` prints `dR5 e:5 dR5 end` under `--interp`, at -O0, -O2 and under the JIT, where `dR5` must run once; the same with the closure building `Br { a: x, b: 4 }` prints `dR5 dR5 e:4 end` | — |
@@ -546,6 +544,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-67 | 2026-10-06 | typecheck+interp+codegen | low | `SortedSet.range(from, to)` IS IN design.md's `SortedSet` METHOD TABLE BUT IS REJECTED WITH "no method 'range' on type 'SortedSet'" ON EVERY SURFACE; `SortedMap.range` EXISTS | — |
 | B-2026-10-06-68 | 2026-10-06 | other | low | design.md's `SortedMap` TABLE DISAGREES WITH THE IMPLEMENTATION: IT SAYS `range(from, to)` IS HALF-OPEN `[from, to)` AND RETURNS AN ITERATOR, BUT BOTH BACKENDS RETURN A `Vec` OF THE INCLUSIVE `[from, to]`; AND `floor`, `ceiling`, `min`, `max`, `get_or`, `entries`, `merge` AND `entry` ARE IMPLEMENTED BUT NOT IN THE TABLE | — |
 | B-2026-10-06-69 | 2026-10-06 | codegen | high | A `Set` (or `SortedSet`) COPIED BY THE GENERIC MAP CLONE HELPER GETS AN 8-BYTE VALUE SLOT, AND A LATER `remove` ON IT WRITES 8 BYTES INTO A 1-BYTE STACK SLOT: THE RETURN ADDRESS IS SMASHED AND THE COMPILED PROGRAM SEGFAULTS (THE INTERPRETER IS CORRECT) | — |
+| B-2026-10-06-70 | 2026-10-06 | codegen+interp | high | AN OWNED-`self` METHOD THAT HANDS ITS STRUCT RECEIVER BACK ON ONLY SOME PATHS STILL RUNS ITS `Drop` BODIES TWICE ON EVERY SURFACE WHEN THE HAND-BACK PATH IS TAKEN, AND MAKES 2 INVALID ACCESSES COMPILED WHEN THE STRUCT HOLDS A `shared` FIELD -- `let b = a.maybe(true)` over `fn maybe(self, c: bool) -> S { if c { return self } println("mb"); return S { r: mk(98) } }` prints `dS4 dR4 dS4 dR4 _ end` on `--interp`, -O0 and -O2 where `dS4 dR4` is due once; `x.pick(true)` over `struct X { h: H, n: i64 }` (`H` a `shared struct` with a printing `Drop`) and `fn pick(self, c: bool) -> X { if c { return self; } mkx(9) }` prints the right `_3 end dH3` with 2 valgrind errors at -O0 | — |
+| B-2026-10-06-71 | 2026-10-06 | codegen | high | A BY-VALUE STRUCT PARAM WITH A `shared` FIELD HANDED BACK THROUGH ITS OWN OWNED-`self` METHOD MAKES 2 INVALID ACCESSES ON EVERY COMPILED SURFACE -- `let b = g(x)` over `fn g(x: X) -> X { x.me() }`, `fn me(self) -> X { self }` and `struct X { h: H, n: i64 }` with `H` a `shared struct` with a printing `Drop` prints the right `_10 end dH10` with ERROR SUMMARY 2 errors at -O0; `--interp` prints the same and is clean | — |
+| B-2026-10-06-72 | 2026-10-06 | codegen+interp | medium | A TEMP STRUCT RECEIVER OF AN OWNED-`self` METHOD THAT RETURNS A FRESH STRUCT NEVER RUNS ITS `Drop` BODIES, ON EVERY SURFACE -- `let b = S { r: mk(5) }.fresh(); println("_")` over `fn fresh(self) -> S { println("fr"); return S { r: mk(99) } }` prints `fr dS99 dR99 _ end` on `--interp`, -O0 and -O2 where `fr dS5 dR5 dS99 dR99 _ end` is due; memory balanced | — |
 
 ### Relocated
 
@@ -3394,6 +3395,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-61 | other | medium | AN E2E FIXTURE THAT PANICS IN `link_or_skip` LEAVES ITS LINKED BINARY AND OBJECT IN `/tmp`, SO ONE STALE ARTIFACT UNDER `KARAC_REQUIRE_RUNTIME_ARCHIV… | bd3aed5db |
 | B-2026-09-26-63 | interp+codegen | medium | FOUR SPELLINGS OF A NAMED LOCAL'S `Drop` FIELD HANDED TO A KEEPING CALLEE STILL RUN THE FIELD'S BODY TWICE ON ALL FOUR SURFACES AFTER B-2026-09-26-47… | 2ab2f27ba |
 | B-2026-09-27-1 | codegen | high | A GENERIC METHOD THAT HANDS A `shared`-FIELD STRUCT BACK ON ONLY SOME PATHS IS STILL USED AFTER FREE ON EVERY COMPILED SURFACE, with or without a `Dr… | a32a5254f |
+| B-2026-09-27-11 | codegen+interp | medium | A NAMED STRUCT RECEIVER HANDED BACK WHOLE BY AN OWNED-`self` METHOD RUNS EVERY `Drop` BODY TWICE, on all four surfaces, own `Drop` or not -- `let b =… | e944091d4 |
 | B-2026-09-27-2 | interp+codegen | high | MOVING AN ELEMENT OUT OF A LOCAL TUPLE BY `return t.0` OR A TAIL `t.0` RUNS ITS Drop BODY TWICE IN THE INTERPRETER, AND A CONDITIONAL MOVE (`if k { r… | e39f58c |
 | B-2026-09-27-3 | interp+codegen | high | A PROJECTION MOVED OUT IN A VALUE POSITION OTHER THAN `let x = p.f` / `return` / a function tail RUNS ITS Drop BODY TWICE ON EVERY BACKEND -- `let x… | bd5b43d |
 | B-2026-09-27-14 | interp+codegen | medium | TWO SPELLINGS OF B-2026-09-27-3 ITS FIX LEAVES AS THEY WERE: a STRUCT field at the tail of an `if` passed as a CALL ARGUMENT (`show(if k { p.a } else… | e06d859 |
@@ -3823,6 +3825,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-114 | interp+codegen | medium | STORING INTO A TUPLE LOCAL'S ELEMENT (`p.0 = mkr(2)`) RUNS NO `Drop` BODY FOR THE DISPLACED ELEMENT ON ANY SURFACE -- `let mut p = (mkr(1), 5); p.0 =… | fb926ac2c |
 | B-2026-10-05-125 | interp | medium | `--interp` RUNS NO `Drop` BODY FOR A BARE `shared` OR `Option[shared]` LOCAL DISPLACED BY A REASSIGNMENT -- `let mut h = H { id: 1 }; h = H { id: 2 }… | b56dfda9a |
 | B-2026-10-06-4 | codegen | high | [FIXED 2026-10-06] ASSIGNING A FIELD OR TUPLE ELEMENT TO ITSELF READS FREED MEMORY COMPILED -- `let mut p = mks(1); p.0 = p.0; println(f"{p.0.id}")`… | 096260fee |
+| B-2026-10-06-6 | codegen+interp | high | AN OWNED-`self` METHOD THAT RETURNS `self` ON A STRUCT WITH A DIRECT `shared` FIELD READS AND WRITES THE FREED HANDLE ON EVERY COMPILED SPELLING, AND… | e944091d4 |
 | B-2026-10-06-33 | codegen | medium | A CLOSURE INSIDE A GENERIC FN THAT BUILDS A GENERIC STRUCT OVER THE FN'S `T` FAILS MODULE VERIFICATION WHEN `T` IS NOT `i64` -- `fn wrapit[T](v: T) -… | 4efb2013b |
 | B-2026-10-06-34 | codegen | high | A GENERIC FN THAT HANDS ITS BY-VALUE `T` PARAM TO A CLOSURE WHICH RETURNS IT FREES THE ARGUMENT TWICE WHEN `T` IS HEAP-BACKED -- `fn w[T](v: T) -> i6… | 8dbb4d2da |
 | B-2026-10-06-36 | codegen | medium | MOVING A NESTED TUPLE ELEMENT OUT OF A TUPLE LOCAL (`let q = p.0` over `((R, i64), i64)`) LOSES ITS `Drop` BODIES COMPILED -- `let p = (mkr(1), 5); l… | eca98263e |
