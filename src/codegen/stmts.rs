@@ -22347,7 +22347,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// header whose ELEMENT type is `te`, with the label the `let`-site gives
     /// it. Same selector as that site: a named struct / user value enum takes
     /// the per-name walker, anything else the te-driven recursive one.
-    fn vec_elem_bodies_walker_for_te(
+    pub(super) fn vec_elem_bodies_walker_for_te(
         &mut self,
         te: &TypeExpr,
     ) -> Option<(String, inkwell::values::FunctionValue<'ctx>)> {

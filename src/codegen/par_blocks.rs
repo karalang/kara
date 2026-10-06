@@ -1872,6 +1872,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_deque_head_slots = std::mem::take(&mut self.mapset.deque_head_slots);
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
+        // B-2026-10-04-64 — the conditional-move flags are entry-block allocas
+        // of the function that minted them, keyed by NAME. A branch body is a
+        // fresh function, so reusing an outer (or sibling branch's) flag for a
+        // same-named binding is a cross-function use: a `for item in mk()`
+        // loop in each of two auto-par branches failed module verification.
+        let saved_cond_move_flags = std::mem::take(&mut self.drop_rc.cond_move_drop_flags);
+        let saved_cond_move_flag_slots =
+            std::mem::take(&mut self.drop_rc.cond_move_drop_flag_slots);
+        let saved_loop_decl_anchors = std::mem::take(&mut self.drop_rc.loop_decl_rearm_anchors);
         // Branch body needs its own root cleanup frame so the
         // `track_vec_var` / `track_map_var` / `track_rc_var` calls
         // emitted while compiling the branch's stmts have a frame to
@@ -2822,6 +2831,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // Restore outer state.
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;
+        self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
+        self.drop_rc.cond_move_drop_flag_slots = saved_cond_move_flag_slots;
+        self.drop_rc.loop_decl_rearm_anchors = saved_loop_decl_anchors;
         self.fn_ctx.loop_stack = saved_loop_stack;
         self.var_types.var_type_names = saved_var_types;
         self.variables = saved_vars;

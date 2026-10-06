@@ -1688,6 +1688,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.for_loop_owned_agg_vars.clear();
         self.borrow_vars.generic_enum_loop_views.clear();
         self.borrow_vars.pending_for_loop_box_owners.clear();
+        self.borrow_vars.pending_for_loop_elem_owners.clear();
+        self.borrow_vars.fresh_vec_elem_owner = None;
+        self.borrow_vars.for_loop_elem_owner_names.clear();
         self.borrow_vars.for_loop_elem_struct_views.clear();
         self.borrow_vars.elem_borrow_roots.clear();
         self.borrow_vars.borrowed_agg_payload_struct_vars.clear();

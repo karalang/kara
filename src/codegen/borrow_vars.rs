@@ -128,6 +128,27 @@ pub(crate) struct BorrowVars<'ctx> {
     /// `compile_loop_body_with_cleanup` once the body's scope frame exists,
     /// which gives each such binding a box of its own for the iteration.
     pub(crate) pending_for_loop_box_owners: Vec<(String, crate::ast::TypeExpr)>,
+    /// B-2026-10-04-64 — a `for` loop over a FRESH `Vec` whose elements run
+    /// a user `Drop` body: the synthetic slot `try_compile_for_vec_value`
+    /// materialized and the element type. Taken by `compile_for_vec_var` when
+    /// it iterates exactly that slot, which then gives each element's body to
+    /// the loop binding for its iteration and the unvisited tail's to the
+    /// loop's exit.
+    pub(crate) fresh_vec_elem_owner: Option<(String, crate::ast::TypeExpr)>,
+    /// B-2026-10-04-64 — the loop binding that owns its element's bodies this
+    /// iteration, with the one-element header the walker reads and the walker
+    /// itself. Drained by `compile_loop_body_with_cleanup` into the body frame.
+    /// B-2026-10-04-64 — the loop bindings that own their element's bodies
+    /// in a loop being compiled now. A move of one nested in the body (`if c
+    /// { v.push(item) }`) clears its per-iteration flag rather than retracting
+    /// the walk on every path.
+    pub(crate) for_loop_elem_owner_names: HashSet<String>,
+    pub(crate) pending_for_loop_elem_owners: Vec<(
+        String,
+        inkwell::values::PointerValue<'ctx>,
+        inkwell::values::FunctionValue<'ctx>,
+        String,
+    )>,
     /// Every non-shared STRUCT `for`-loop element binding, copy-supported or
     /// not (B-2026-09-24-26). A superset of the struct half of
     /// `for_loop_owned_agg_vars`, which is gated on recursive copy-support

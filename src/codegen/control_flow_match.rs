@@ -886,6 +886,20 @@ impl<'ctx> super::Codegen<'ctx> {
             // this frame and emitted cleanup for its actions).
             self.drop_rc.scope_cleanup_actions.push(Vec::new());
 
+            // B-2026-10-04-64 — a `for` binding that owns its element's bodies
+            // for the iteration, matched by an arm that MOVES a payload out:
+            // the arm's binding comes from the clone above and carries its
+            // body away, so the element's walk stands down on this path.
+            if did_clone_loop_elem {
+                if let ExprKind::Identifier(n) = &scrutinee.kind {
+                    if self.borrow_vars.for_loop_elem_owner_names.contains(n)
+                        && self.arm_payload_escapes(arm)
+                    {
+                        self.suppress_container_elem_bodies_for_var(n);
+                    }
+                }
+            }
+
             // B-2026-07-13-6: an arm's PATTERN bindings (`Some(v)`) and body
             // `let`s are ARM-scoped. Checkpoint the name env here so they revert
             // at end-of-arm — otherwise a payload/body binding that SHADOWS an
@@ -8855,7 +8869,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// No arm moves any of its pattern's leaf bindings out of the arm body or
     /// guard (the escape guard shared by the read-only borrow classifications).
     fn no_arm_payload_escapes(&self, arms: &[MatchArm]) -> bool {
-        for arm in arms {
+        !arms.iter().any(|arm| self.arm_payload_escapes(arm))
+    }
+
+    /// One arm's half of [`Self::no_arm_payload_escapes`]: does a payload
+    /// binding of THIS arm leave it?
+    fn arm_payload_escapes(&self, arm: &MatchArm) -> bool {
+        {
             let mut names: Vec<String> = Vec::new();
             collect_pattern_bindings(&arm.pattern, &mut names);
             // Not a binding at all — nothing to escape. Clearing rather than
@@ -8874,16 +8894,16 @@ impl<'ctx> super::Codegen<'ctx> {
             names.retain(|n| !scalars.contains(n));
             for name in &names {
                 if self.borrow_binding_escapes(&arm.body, name) {
-                    return false;
+                    return true;
                 }
                 if let Some(guard) = &arm.guard {
                     if self.borrow_binding_escapes(guard, name) {
-                        return false;
+                        return true;
                     }
                 }
             }
         }
-        true
+        false
     }
 
     /// Walk a place expression (`a.b.c`, `a[i].b`, `a.0`) down to its root

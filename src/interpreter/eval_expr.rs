@@ -2899,6 +2899,11 @@ impl<'a> super::Interpreter<'a> {
         } else {
             None
         };
+        // B-2026-10-04-64 — the loop OWNS its items when it moved them out of
+        // a container nobody else holds (a fresh `mk()` call result). Each
+        // item then dies with its iteration, and the items a `break` /
+        // `return` leaves unyielded die at the loop's exit.
+        let mut owned_items = false;
         let items = if let Some(its) = iter_mut_items {
             its
         } else {
@@ -2946,7 +2951,10 @@ impl<'a> super::Interpreter<'a> {
             }
             match iter_val {
                 Value::Array(rc) => match Arc::try_unwrap(rc) {
-                    Ok(cell) => cell.into_inner().unwrap(),
+                    Ok(cell) => {
+                        owned_items = true;
+                        cell.into_inner().unwrap()
+                    }
                     Err(rc) => rc.read().unwrap().clone(),
                 },
                 Value::Slice {
@@ -3054,11 +3062,41 @@ impl<'a> super::Interpreter<'a> {
                 _ => vec![iter_val],
             }
         };
-        for item in items {
+        let owned_items = owned_items && view_names.is_empty();
+        let mut items = items.into_iter();
+        while let Some(item) = items.next() {
             self.env.push_scope();
             self.mark_loop_borrowed_elem_names(view_names);
             self.bind_pattern(pattern, item);
-            match self.eval_block_inner(body) {
+            if owned_items {
+                // Adopted by the body block as ordinary `Drop` slots, so the
+                // NLL fire and every move-suppression hook apply. Each
+                // iteration binds a FRESH value under the same name, so the
+                // last iteration's move marks must not silence it.
+                for n in pattern.binding_names() {
+                    self.rearm_container_bodies_for_name(&n);
+                    if self.pattern_binding_owes_drop_body(&n) {
+                        self.pending_arm_drop_bindings.push(n);
+                    }
+                }
+            }
+            let result = self.eval_block_inner(body);
+            // Leaving the loop early (`break`, `return`, `?`, a `continue` to
+            // an outer label): the items never yielded are dropped here, in
+            // order. A `continue` of this loop keeps them.
+            let leaves = match &result {
+                Ok(_) => false,
+                Err(ControlFlow::Continue { label: cl }) => {
+                    !(cl.is_none() || cl.as_deref() == label.as_deref())
+                }
+                Err(_) => true,
+            };
+            if owned_items && leaves {
+                for rest in items.by_ref() {
+                    self.run_discarded_value_user_drops(rest);
+                }
+            }
+            match result {
                 Ok(_) => {}
                 Err(ControlFlow::Break {
                     label: ref bl,

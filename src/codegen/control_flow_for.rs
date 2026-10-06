@@ -1513,7 +1513,26 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Identifier(synth.clone()),
             span: iterable.span,
         };
+        // B-2026-10-04-64 — the loop takes each element by value, so a
+        // Drop-bodied element's body belongs to the loop binding for its
+        // iteration (and to the loop's exit for the elements a `break`
+        // leaves behind), not to nobody. Memory stays with the buffer drop
+        // above; only the BODIES move. `compile_for_vec_var` takes this when
+        // it iterates exactly this slot.
+        let saved_owner = self.borrow_vars.fresh_vec_elem_owner.take();
+        if owns {
+            if let Some(et) = self
+                .var_types
+                .var_elem_type_exprs
+                .get(synth.as_str())
+                .cloned()
+                .filter(|et| self.elem_te_runs_user_drop(et))
+            {
+                self.borrow_vars.fresh_vec_elem_owner = Some((synth.clone(), et));
+            }
+        }
         let result = self.compile_for(label, pattern, &synth_expr, body);
+        self.borrow_vars.fresh_vec_elem_owner = saved_owner;
         // Drop synth registries (the queued cleanup references the alloca,
         // not the name, so it stays armed).
         self.variables.remove(&synth);
@@ -1874,6 +1893,38 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
         for (name, te) in std::mem::take(&mut self.borrow_vars.pending_for_loop_box_owners) {
             self.own_for_loop_boxed_enum_binding(&name, &te);
+        }
+        // B-2026-10-04-64 — the loop binding owns its element's bodies for
+        // this iteration. Registered in the body frame, so they run at the
+        // iteration's end (or on `continue`), and named, so a move of the
+        // binding retracts them exactly as it would a `let`'s. The re-arm
+        // anchor makes a conditional move's flag start `true` again on each
+        // iteration.
+        for (name, hdr, walker, label) in
+            std::mem::take(&mut self.borrow_vars.pending_for_loop_elem_owners)
+        {
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+                frame.push(super::state::CleanupAction::UserDrop {
+                    binding_name: name.clone(),
+                    binding_ptr: hdr,
+                    drop_fn: walker,
+                    type_name: label,
+                    kind: super::state::UserDropKind::ContainerElemBodies,
+                });
+            }
+            // A flag an EARLIER loop over the same name minted is re-armed
+            // here directly; a flag minted later finds the anchor.
+            if let Some(flag) = self.drop_rc.cond_move_drop_flags.get(&name).copied() {
+                let bool_t = self.context.bool_type();
+                self.builder
+                    .build_store(flag, bool_t.const_int(1, false))
+                    .unwrap();
+            }
+            if let Some(blk) = self.builder.get_insert_block() {
+                self.drop_rc
+                    .loop_decl_rearm_anchors
+                    .insert(name, (blk, blk.get_last_instruction()));
+            }
         }
         self.compile_block(body)?;
         if self
@@ -2485,6 +2536,47 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
 
+        // B-2026-10-04-64 — a fresh `Vec` whose elements run a user `Drop`
+        // body (see `try_compile_for_vec_value`). `tail` is a header over the
+        // elements not yet visited, advanced at the top of every iteration;
+        // its walk sits in a frame of its own, outside the loop's, so it runs
+        // once at the loop's exit (a `break` leaves the unvisited ones there)
+        // and on a `return` out of the body.
+        let elem_owner = match (&self.borrow_vars.fresh_vec_elem_owner, &pattern.kind) {
+            (Some((s, te)), PatternKind::Binding(_)) if s == var_name && !reverse => {
+                Some(te.clone())
+            }
+            _ => None,
+        };
+        if elem_owner.is_some() {
+            self.borrow_vars.fresh_vec_elem_owner = None;
+        }
+        let elem_walk = elem_owner
+            .and_then(|te| self.vec_elem_bodies_walker_for_te(&te))
+            .map(|(label, walker)| {
+                let tail = self.create_entry_alloca(fn_val, "for.tail", vec_ty.into());
+                let one_hdr = self.create_entry_alloca(fn_val, "for.elem.hdr", vec_ty.into());
+                let init: [(u32, BasicValueEnum<'ctx>); 3] =
+                    [(0, data.into()), (1, len.into()), (2, len.into())];
+                for (i, v) in init {
+                    let p = self
+                        .builder
+                        .build_struct_gep(vec_ty, tail, i, "for.tail.f")
+                        .unwrap();
+                    self.builder.build_store(p, v).unwrap();
+                }
+                self.drop_rc.scope_cleanup_actions.push(vec![
+                    super::state::CleanupAction::UserDrop {
+                        binding_name: var_name.to_string(),
+                        binding_ptr: tail,
+                        drop_fn: walker,
+                        type_name: String::new(),
+                        kind: super::state::UserDropKind::OwnWrapper,
+                    },
+                ]);
+                (label, walker, tail, one_hdr)
+            });
+
         let counter = self.create_entry_alloca(fn_val, "for.i", i64_t.into());
         self.builder
             .build_store(counter, i64_t.const_int(0, false))
@@ -2551,6 +2643,55 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.bind_pattern(pattern, elem_val)?;
         self.register_for_loop_bindings(pattern, var_name);
+        let mut added_owner_name: Option<String> = None;
+        if let (Some((label, walker, tail, one_hdr)), PatternKind::Binding(name)) =
+            (&elem_walk, &pattern.kind)
+        {
+            let one = i64_t.const_int(1, false);
+            let next = self
+                .builder
+                .build_int_add(idx, one, "for.tail.next")
+                .unwrap();
+            let rest = unsafe {
+                self.builder
+                    .build_gep(elem_ty, data, &[next], "for.tail.data")
+                    .unwrap()
+            };
+            let rest_len = self
+                .builder
+                .build_int_sub(len, next, "for.tail.len")
+                .unwrap();
+            let mut stores: Vec<(PointerValue<'ctx>, u32, BasicValueEnum<'ctx>)> =
+                vec![(*tail, 0, rest.into()), (*tail, 1, rest_len.into())];
+            let slot = self.variables.get(name.as_str()).map(|v| v.ptr);
+            if let Some(slot) = slot {
+                stores.push((*one_hdr, 0, slot.into()));
+                stores.push((*one_hdr, 1, one.into()));
+                stores.push((*one_hdr, 2, one.into()));
+            }
+            for (hdr, i, v) in stores {
+                let p = self
+                    .builder
+                    .build_struct_gep(vec_ty, hdr, i, "for.hdr.f")
+                    .unwrap();
+                self.builder.build_store(p, v).unwrap();
+            }
+            if slot.is_some() {
+                if self
+                    .borrow_vars
+                    .for_loop_elem_owner_names
+                    .insert(name.clone())
+                {
+                    added_owner_name = Some(name.clone());
+                }
+                self.borrow_vars.pending_for_loop_elem_owners.push((
+                    name.clone(),
+                    *one_hdr,
+                    *walker,
+                    label.clone(),
+                ));
+            }
+        }
         self.bind_enumerate_index(cur)?;
         self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
@@ -2575,6 +2716,12 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
+        if elem_walk.is_some() {
+            self.drain_top_frame_with_emit();
+        }
+        if let Some(n) = added_owner_name {
+            self.borrow_vars.for_loop_elem_owner_names.remove(&n);
+        }
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 

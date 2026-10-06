@@ -2348,13 +2348,15 @@ pub fn payload_binding_ty<'p>(
     }
 }
 
-/// Slice 4 step 4: `KARAC_DROP_SCHEDULE_ARMS=1` lets the arm fate answer the
-/// reads-only question at every match-arm / `if let` site (default OFF while
-/// it is measured; it also requires the schedule itself to be on).
+/// Slice 4 step 4: the arm fate answers the reads-only question at every
+/// match-arm / `if let` site. Default ON since the `for`-loop element owner
+/// landed (B-2026-10-04-64), which was the one shape it turned into a lost
+/// body; `KARAC_DROP_SCHEDULE_ARMS=0` restores the legacy predicates. It
+/// also requires the schedule itself to be on.
 pub fn arms_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        schedule_enabled() && std::env::var("KARAC_DROP_SCHEDULE_ARMS").ok().as_deref() == Some("1")
+        schedule_enabled() && std::env::var("KARAC_DROP_SCHEDULE_ARMS").ok().as_deref() != Some("0")
     })
 }
 

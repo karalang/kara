@@ -19232,6 +19232,22 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.retract_tracked_generation_only(name, true) {
             return;
         }
+        // B-2026-10-04-64 — a `for` binding that owns its element's bodies for
+        // the iteration: the move may sit on one path of the body, so clear
+        // the binding's per-iteration flag (re-armed at the top of each
+        // iteration) instead of retracting the walk everywhere.
+        if self.borrow_vars.for_loop_elem_owner_names.contains(name) {
+            if let Some(flag) = self.cond_move_drop_flag_for(name) {
+                let bool_t = self.context.bool_type();
+                if self
+                    .builder
+                    .build_store(flag, bool_t.const_int(0, false))
+                    .is_ok()
+                {
+                    return;
+                }
+            }
+        }
         // B-2026-09-23-23 — the LIVE generation only, when it can be told
         // apart. Matching by name alone also retracted a SHADOWED generation's
         // walk, so `let x = [..]; let x = [..]; return Some(x)` ran the older
