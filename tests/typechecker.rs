@@ -52957,3 +52957,43 @@ fn derived_supertrait_satisfies_a_hand_written_ord_impl() {
         "Ord without Eq should still be refused; got {errors:#?}"
     );
 }
+
+#[test]
+fn unsolved_collection_is_pinned_by_the_declared_slot_it_flows_into() {
+    // B-2026-10-06-124: `Vec.new()` handed straight to a `ref Vec[i64]`
+    // parameter, and an unpinned `let e = Vec.new();` handed to any declared
+    // slot, were refused as "expected 'Vec[i64]', found 'Vec[?T0]'"; only a
+    // `push` could pin the element.
+    typecheck_ok(
+        "struct Holder { xs: Vec[i64] }\n\
+         fn total(xs: ref Vec[i64]) -> i64 { xs.len() }\n\
+         fn count_m(m: ref Map[i64, String]) -> i64 { m.len() }\n\
+         fn grow(xs: mut ref Vec[i64]) -> i64 { xs.push(4); xs.len() }\n\
+         fn owned_len(xs: Vec[i64]) -> i64 { xs.len() }\n\
+         fn give() -> Vec[i64] { let e = Vec.new(); e }\n\
+         fn main() {\n\
+             let a = total(Vec.new()) + count_m(Map.new()) + grow(mut Vec.new());\n\
+             let e = Vec.new();\n\
+             let b = owned_len(e);\n\
+             let g = Vec.new();\n\
+             let h = Holder { xs: g };\n\
+             let k = Vec.new();\n\
+             let typed: Vec[i64] = k;\n\
+             println(f\"{a} {b} {h.xs.len()} {give().len()} {typed.len()}\");\n\
+         }",
+    );
+    // Once a slot has pinned the element, a conflicting use is still refused.
+    let errors = typecheck_errors(
+        "fn total(xs: ref Vec[i64]) -> i64 { xs.len() }\n\
+         fn main() {\n\
+             let mut e = Vec.new();\n\
+             let n = total(e);\n\
+             e.push(\"x\");\n\
+             println(f\"{n}\");\n\
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "a String push after an i64 pin must be refused"
+    );
+}

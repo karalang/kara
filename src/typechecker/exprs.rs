@@ -570,6 +570,16 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The owned type a `ref T` / `mut ref T` slot borrows, or the slot
+    /// itself. A constructor or empty literal handed to a borrowed parameter
+    /// builds that owned `T`.
+    fn peel_borrow(expected: &Type) -> &Type {
+        match expected {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         let ty = self.check_expr_inner(expr, expected);
         self.deny_for_element_drop_copy_in_literal(expr);
@@ -1002,6 +1012,10 @@ impl<'a> super::TypeChecker<'a> {
                 if let ExprKind::Path { segments, .. } = &callee.kind {
                     if segments.len() == 2 && segments[1] == "new" {
                         let collection = segments[0].as_str();
+                        // B-2026-10-06-124 — a borrowed slot names the
+                        // constructed type too (`total(Vec.new())` against
+                        // `ref Vec[i64]`); the value itself is owned.
+                        let expected = Self::peel_borrow(expected);
                         let matches_expected = match (collection, expected) {
                             ("Vec", Type::Named { name, .. }) => name == "Vec",
                             ("VecDeque", Type::Named { name, .. }) => name == "VecDeque",
@@ -1060,6 +1074,7 @@ impl<'a> super::TypeChecker<'a> {
                 if let ExprKind::Path { segments, .. } = &callee.kind {
                     if segments.len() == 2 && segments[1] == "with_capacity" {
                         let collection = segments[0].as_str();
+                        let expected = Self::peel_borrow(expected);
                         let matches_expected = match (collection, expected) {
                             ("Vec", Type::Named { name, .. }) => name == "Vec",
                             ("VecDeque", Type::Named { name, .. }) => name == "VecDeque",
@@ -1227,6 +1242,10 @@ impl<'a> super::TypeChecker<'a> {
         // type to infer.
         if let ExprKind::PrefixCollectionLiteral { type_name, items } = &expr.kind {
             if items.is_empty() {
+                // B-2026-10-06-124 — a borrowed slot (`ref Vec[i64]` /
+                // `mut ref Vec[i64]` parameter) names the literal's type as
+                // well as an owned one does; the literal itself is owned.
+                let expected = Self::peel_borrow(expected);
                 let matches_expected = match (type_name.as_str(), expected) {
                     ("Vec", Type::Named { name, .. }) => name == "Vec",
                     ("Set", Type::Named { name, .. }) => name == "Set",

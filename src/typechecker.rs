@@ -5130,6 +5130,33 @@ impl<'a> TypeChecker<'a> {
         if self.solve_freshened_scrutinee_var(found, expected) {
             return true;
         }
+        // B-2026-10-06-124 — a value whose type still carries an
+        // unsolved variable (`let e = Vec.new();` before anything pins it,
+        // or `Vec.new()` handed straight to a `ref Vec[i64]` parameter) is
+        // pinned by the declared slot it flows into, as a `push` pins it.
+        // Unify on copies so a failed attempt leaves nothing half-bound,
+        // then re-check the resolved type.
+        if exprs::contains_type_var(found)
+            && !exprs::contains_type_var(expected)
+            && !types::contains_type_param(expected)
+        {
+            let mut subs = self.env.substitutions.clone();
+            let mut const_subs = self.env.const_substitutions.clone();
+            if inference::unify_types(expected, found, &mut subs, &mut const_subs) {
+                self.env.substitutions = subs;
+                self.env.const_substitutions = const_subs;
+                let resolved = inference::resolve_type_vars(
+                    found,
+                    &self.env.substitutions,
+                    &std::collections::HashMap::new(),
+                    &self.env.const_substitutions,
+                    &std::collections::HashMap::new(),
+                );
+                if resolved != *found {
+                    return self.check_assignable(expected, &resolved, span);
+                }
+            }
+        }
         // B-2026-08-20-13 — a FLOAT never flows implicitly into an INTEGER
         // slot. `types_compatible` treats any int/uint/float pair as
         // compatible and says so explicitly ("bidirectional for compatibility
