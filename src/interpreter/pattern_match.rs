@@ -114,7 +114,23 @@ impl<'a> super::Interpreter<'a> {
             scrutinee,
             Value::EnumVariant { enum_name, .. } if enum_name == "Option" || enum_name == "Result"
         );
-        if !optres_scrutinee {
+        // B-2026-10-06-100 — Slice 4 step 4: a NAMED LOCAL user-enum
+        // scrutinee decides per TAKEN arm too, now that codegen does. Its
+        // moving arm clears the local's walk per path
+        // (`mask_enum_payload_bodies_on_this_path`) and a reading sibling binds
+        // views of the local (the per-arm view decision in the arm loop), so a
+        // whole-match disarm here took the walk away on the reading arm's path
+        // as well, while that arm's stash ran the body: `match e { E.One(d) =>
+        // eat(d), E.Many(xs) => println(xs.len()) }` over `E.Many` ran each
+        // element's body twice.
+        let per_arm_enum_local = !optres_scrutinee
+            && crate::param_fate::arms_enabled()
+            && arms.len() > 1
+            // A guarded match keeps the whole-match answer, as codegen does:
+            // there an arm's mask runs before its guard is tested.
+            && arms.iter().all(|a| a.guard.is_none())
+            && self.scrutinee_is_owned_enum_local_place(scrutinee_place, scrutinee);
+        if !optres_scrutinee && !per_arm_enum_local {
             self.disarm_moved_out_enum_payload(scrutinee_place, scrutinee, arms);
         }
         for arm in arms {
@@ -147,7 +163,7 @@ impl<'a> super::Interpreter<'a> {
                 // this per path and still decide it identically. The user-enum
                 // scan stays above the loop, matching the retraction codegen
                 // still makes statically there.
-                if optres_scrutinee {
+                if optres_scrutinee || per_arm_enum_local {
                     self.disarm_moved_out_enum_payload(
                         scrutinee_place,
                         scrutinee,
@@ -350,7 +366,7 @@ impl<'a> super::Interpreter<'a> {
                                 // which is the lockstep this pair has always
                                 // needed: taken-arm-only for `Option`/`Result`,
                                 // whole-match for a user enum.
-                                if optres_scrutinee {
+                                if optres_scrutinee || per_arm_enum_local {
                                     std::slice::from_ref(arm)
                                 } else {
                                     arms
@@ -2550,6 +2566,39 @@ impl<'a> super::Interpreter<'a> {
     /// `scrut_te` is the scrutinee's recorded `Option`/`Result` type when it is
     /// a named place with one (B-2026-09-30-91), so a destructure of a generic
     /// struct payload is read at its instantiation.
+    /// B-2026-10-06-100 — is the scrutinee a NAMED LOCAL holding a value user
+    /// enum (not `self`, not an owned parameter, not a projection)? That is
+    /// the shape whose payload walk codegen now retracts per path, so the
+    /// shape this backend decides per taken arm.
+    fn scrutinee_is_owned_enum_local_place(
+        &self,
+        scrutinee_place: Option<&Expr>,
+        scrutinee: &Value,
+    ) -> bool {
+        let Some(Expr {
+            kind: ExprKind::Identifier(n),
+            ..
+        }) = scrutinee_place
+        else {
+            return false;
+        };
+        let Value::EnumVariant { enum_name, .. } = scrutinee else {
+            return false;
+        };
+        // A GENERIC enum keeps the whole-match answer on both backends: its
+        // erased drop does not free a `Vec[T]` payload's element heap, so the
+        // view a reading arm would get leaks what the owning binding freed.
+        if matches!(enum_name.as_str(), "Option" | "Result")
+            || !self.enum_generic_param_names(enum_name).is_empty()
+        {
+            return false;
+        }
+        !self
+            .owned_param_names_stack
+            .last()
+            .is_some_and(|params| params.contains(n.as_str()))
+    }
+
     fn match_disarms_payload_walk(
         &self,
         enum_name: &str,

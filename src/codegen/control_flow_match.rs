@@ -886,6 +886,37 @@ impl<'ctx> super::Codegen<'ctx> {
             // this frame and emitted cleanup for its actions).
             self.drop_rc.scope_cleanup_actions.push(Vec::new());
 
+            // B-2026-10-06-100 — Slice 4 step 4: whether an arm's payload
+            // bindings are VIEWS of a named owned enum local is a question about
+            // THIS arm, not the match. The whole-match classifier answers no as
+            // soon as any arm moves a payload out, so a sibling arm that only
+            // reads its `Vec` payload bound an OWNER: it took the buffer from
+            // the local, freed it at the arm's end and ran no element body,
+            // while the local's walk found nothing left to run. Asked of the
+            // single arm, the reading arm keeps the view the all-reading match
+            // gives it; the moving arm still owns, and its per-path mask clears
+            // the local's walk only on its own path.
+            let saved_arm_view_borrow = self.pattern_state.pattern_binding_is_borrow;
+            if !saved_arm_view_borrow
+                && crate::param_fate::arms_enabled()
+                && arms.len() > 1
+                // A guarded arm binds and runs its per-path mask BEFORE its
+                // guard is tested, so a guard that fails leaves the local's bit
+                // cleared on the path a later arm takes; such a match keeps the
+                // whole-match answer on both backends.
+                && arms.iter().all(|a| a.guard.is_none())
+                && self.scrutinee_is_readonly_owned_enum_local(scrutinee, std::slice::from_ref(arm))
+                // A generic enum keeps the whole-match answer (the interpreter's
+                // `scrutinee_is_owned_enum_local_place` declines it too): its
+                // erased drop frees no `Vec[T]` payload's element heap, so a
+                // view leaks what the owning binding freed.
+                && self
+                    .owned_enum_local_that_frees_its_own_payload(scrutinee)
+                    .is_some_and(|en| self.enum_generic_param_names(&en).is_empty())
+            {
+                self.pattern_state.pattern_binding_is_borrow = true;
+            }
+
             // B-2026-10-04-64 — a `for` binding that owns its element's bodies
             // for the iteration, matched by an arm that MOVES a payload out:
             // the arm's binding comes from the clone above and carries its
@@ -1606,6 +1637,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_value_enum_nested_shared_move_out(scrut, &arm.pattern);
                 self.register_freshtemp_shared_genum_array_alias(scrutinee, scrut, &arm.pattern);
             }
+            self.pattern_state.pattern_binding_is_borrow = saved_arm_view_borrow;
             if let Some((slot, (_, walker))) = freshtemp_optres_arm {
                 self.pattern_state.pattern_binding_is_borrow = saved_borrow_for_optres_view;
                 self.select_freshtemp_optres_struct_arm_walker(slot, walker);
