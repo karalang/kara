@@ -577,6 +577,7 @@ fn run(interp: &mut Interpreter<'static>, builder: &str, bytes: &[u8]) -> Option
 
 fn ident(name: &str) -> Expr {
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Identifier(name.to_string()),
         span: SYNTH_SPAN,
     }

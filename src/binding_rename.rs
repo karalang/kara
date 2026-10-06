@@ -60,6 +60,7 @@ pub(crate) fn rename_pattern_binding(p: &mut Pattern, from: &str, to: &str) {
                     // so the field keeps its name and the binding changes.
                     None if f.name == from => {
                         f.pattern = Some(Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Binding(to.to_string()),
                             span: f.span,
                         });

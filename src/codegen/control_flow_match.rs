@@ -1188,6 +1188,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             if whole_rebind {
                 let rebind = Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Let {
                         is_mut: false,
                         pattern: arm.pattern.clone(),
@@ -1317,6 +1318,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // source a consuming arm over its hand-back takes from.
                     if let Some(src) = &passthrough_consuming_inline_src {
                         let src_expr = Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Identifier(src.clone()),
                             span: scrutinee.span,
                         };
@@ -4387,6 +4389,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         StmtKind::Expr(e) => self.mentions_besides_overwrites(Child::Expr(e), name),
                         _ => {
                             let one = Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Block(crate::ast::Block {
                                     stmts: vec![st.clone()],
                                     final_expr: None,
@@ -4431,6 +4434,7 @@ impl<'ctx> super::Codegen<'ctx> {
         overwritten: &mut bool,
     ) -> bool {
         let as_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(one.clone()),
             span: one.span,
         };
@@ -4626,6 +4630,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
         } else {
             let as_expr = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Block(block.clone()),
                 span: block.span,
             };
@@ -10065,6 +10070,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                                 .find(|f| &f.name == n)
                                                 .and_then(|f| f.pattern.clone())
                                                 .unwrap_or(Pattern {
+                                                    id: crate::ids::NodeId::DUMMY,
                                                     kind: PatternKind::Wildcard,
                                                     span: pattern.span,
                                                 })
@@ -10233,6 +10239,7 @@ impl<'ctx> super::Codegen<'ctx> {
             RangeBound::Literal(lit) => Ok(self.range_bound_const(lit)),
             RangeBound::Path { segments, span } => {
                 let expr = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: if segments.len() == 1 {
                         ExprKind::Identifier(segments[0].clone())
                     } else {

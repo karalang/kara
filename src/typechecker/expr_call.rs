@@ -65,6 +65,7 @@ impl<'a> super::TypeChecker<'a> {
             // dispatch via a synthetic Identifier callee so existing
             // error reporting fires.
             let synthetic = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(name.to_string()),
                 span: *span,
             };
@@ -997,11 +998,13 @@ impl<'a> super::TypeChecker<'a> {
         {
             if segments.len() >= 2 && self.path_first_segment_is_value_binding(&segments[0]) {
                 let mut synth_object = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: callee.span,
                     kind: ExprKind::Identifier(segments[0].clone()),
                 };
                 for field in &segments[1..segments.len() - 1] {
                     synth_object = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: callee.span,
                         kind: ExprKind::FieldAccess {
                             object: Box::new(synth_object),
@@ -1075,6 +1078,7 @@ impl<'a> super::TypeChecker<'a> {
                 });
                 if is_unit_variant {
                     let synth_object = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: callee.span,
                         kind: ExprKind::Path {
                             segments: vec![segments[0].clone(), segments[1].clone()],
@@ -1767,6 +1771,7 @@ impl<'a> super::TypeChecker<'a> {
                 && args.len() == 1
             {
                 let synthetic = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: *span,
                     kind: ExprKind::MethodCall {
                         object: Box::new(args[0].value.clone()),
@@ -2199,6 +2204,7 @@ impl<'a> super::TypeChecker<'a> {
                         })
                         .collect();
                     Some(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: callee.span,
                         kind: ExprKind::Closure {
                             params: filled,

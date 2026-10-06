@@ -2438,6 +2438,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let tmp = format!("__srt_{}", uid);
                 let ident = |n: &str| Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(n.to_string()),
                     span: sp,
                 };
@@ -2450,6 +2451,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let clone_call = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::MethodCall {
                         object: Box::new(ident(var_name)),
                         method: "clone".to_string(),
@@ -2460,9 +2462,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let let_tmp = Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Let {
                         is_mut: true,
                         pattern: Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Binding(tmp.clone()),
                             span: sp,
                         },
@@ -2472,7 +2476,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let sort_call = Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::MethodCall {
                             object: Box::new(ident(&tmp)),
                             method: "sort".to_string(),
@@ -2485,6 +2491,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let block = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Block(Block {
                         stmts: vec![let_tmp, sort_call],
                         final_expr: Some(Box::new(ident(&tmp))),
@@ -2572,6 +2579,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let tmp = format!("__srtb_{}_{}", inner, uid);
                 let ident = |n: &str| Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(n.to_string()),
                     span: sp,
                 };
@@ -2584,6 +2592,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let clone_call = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::MethodCall {
                         object: Box::new(ident(var_name)),
                         method: "clone".to_string(),
@@ -2594,9 +2603,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let let_tmp = Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Let {
                         is_mut: true,
                         pattern: Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Binding(tmp.clone()),
                             span: sp,
                         },
@@ -2606,7 +2617,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let sort_call = Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::MethodCall {
                             object: Box::new(ident(&tmp)),
                             method: inner.to_string(),
@@ -2619,6 +2632,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let block = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Block(Block {
                         stmts: vec![let_tmp, sort_call],
                         final_expr: Some(Box::new(ident(&tmp))),

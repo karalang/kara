@@ -2710,6 +2710,7 @@ impl<'a> Interpreter<'a> {
             let mut patterns: Vec<Pattern> = Vec::new();
             if method.self_param.is_some() {
                 patterns.push(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     span: method.span,
                     kind: PatternKind::Binding("self".to_string()),
                 });
@@ -3693,6 +3694,7 @@ impl<'a> Interpreter<'a> {
                         }
                     };
                     Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind,
                         span: index.span,
                     }
@@ -3713,6 +3715,7 @@ impl<'a> Interpreter<'a> {
             _ => return place.clone(),
         };
         Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind,
             span: place.span,
         }
@@ -3828,6 +3831,7 @@ impl<'a> Interpreter<'a> {
             }
         };
         Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind,
             span: place.span,
         }
@@ -3910,9 +3914,11 @@ impl<'a> Interpreter<'a> {
                 match self.eval_expr_inner(index) {
                     Value::Int(i) => {
                         materialized = Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Index {
                                 object: container.clone(),
                                 index: Box::new(Expr {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: ExprKind::Integer(narrow_to_i64(i).into(), None),
                                     span: index.span,
                                 }),

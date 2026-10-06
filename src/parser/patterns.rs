@@ -45,6 +45,7 @@ impl super::Parser {
                 alternatives.push(self.parse_single_pattern()?);
             }
             return Some(Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::Or(alternatives),
                 span: self.span_from(&start),
             });
@@ -60,6 +61,7 @@ impl super::Parser {
             Token::Underscore => {
                 self.advance();
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Wildcard,
                     span: self.span_from(&start),
                 })
@@ -88,6 +90,7 @@ impl super::Parser {
                 self.check_ident_class(&name, IdentClass::Value, "binding", name_span);
                 let sub_pattern = self.parse_single_pattern()?;
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::AtBinding {
                         name,
                         pattern: Box::new(sub_pattern),
@@ -102,6 +105,7 @@ impl super::Parser {
                 self.advance();
                 let end = self.parse_range_bound()?;
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::RangePattern {
                         start: None,
                         end: Some(end),
@@ -114,6 +118,7 @@ impl super::Parser {
                 self.advance();
                 let end = self.parse_range_bound()?;
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::RangePattern {
                         start: None,
                         end: Some(end),
@@ -125,6 +130,7 @@ impl super::Parser {
             Token::True => {
                 self.advance();
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Literal(LiteralPattern::Bool(true)),
                     span: self.span_from(&start),
                 })
@@ -132,6 +138,7 @@ impl super::Parser {
             Token::False => {
                 self.advance();
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Literal(LiteralPattern::Bool(false)),
                     span: self.span_from(&start),
                 })
@@ -152,6 +159,7 @@ impl super::Parser {
                 match self.parse_negated_literal()? {
                     LiteralPattern::Integer(v, sfx) => self.finish_integer_pattern(v, sfx, start),
                     lit => Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Literal(lit),
                         span: self.span_from(&start),
                     }),
@@ -181,6 +189,7 @@ impl super::Parser {
                 if self.eat(&Token::DotDotEq) {
                     let end = self.parse_range_bound()?;
                     return Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::RangePattern {
                             start: Some(RangeBound::Literal(lit)),
                             end: Some(end),
@@ -196,6 +205,7 @@ impl super::Parser {
                         None
                     };
                     return Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::RangePattern {
                             start: Some(RangeBound::Literal(lit)),
                             end,
@@ -205,6 +215,7 @@ impl super::Parser {
                     });
                 }
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Literal(lit),
                     span: self.span_from(&start),
                 })
@@ -212,6 +223,7 @@ impl super::Parser {
             &Token::Float(n, sfx) => {
                 self.advance();
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Literal(LiteralPattern::Float(n, sfx)),
                     span: self.span_from(&start),
                 })
@@ -220,6 +232,7 @@ impl super::Parser {
                 let s = s.clone();
                 self.advance();
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Literal(LiteralPattern::String(s)),
                     span: self.span_from(&start),
                 })
@@ -231,6 +244,7 @@ impl super::Parser {
                 if self.eat(&Token::DotDotEq) {
                     let end = self.parse_range_bound()?;
                     return Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::RangePattern {
                             start: Some(RangeBound::Literal(lit)),
                             end: Some(end),
@@ -248,6 +262,7 @@ impl super::Parser {
                         None
                     };
                     return Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::RangePattern {
                             start: Some(RangeBound::Literal(lit)),
                             end,
@@ -257,6 +272,7 @@ impl super::Parser {
                     });
                 }
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Literal(lit),
                     span: self.span_from(&start),
                 })
@@ -292,6 +308,7 @@ impl super::Parser {
                     return patterns.into_iter().next();
                 }
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Tuple(patterns),
                     span: self.span_from(&start),
                 })
@@ -343,6 +360,7 @@ impl super::Parser {
                 }
                 self.expect(&Token::RightBracket)?;
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Slice {
                         prefix,
                         rest,
@@ -360,6 +378,7 @@ impl super::Parser {
                     self.check_ident_class(&name, IdentClass::Value, "binding", name_span);
                     let sub_pattern = self.parse_single_pattern()?;
                     return Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::AtBinding {
                             name,
                             pattern: Box::new(sub_pattern),
@@ -387,6 +406,7 @@ impl super::Parser {
                         None
                     };
                     return Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::RangePattern {
                             start: Some(start_bound),
                             end,
@@ -402,6 +422,7 @@ impl super::Parser {
                     let (fields, has_rest) = self.parse_struct_pattern_fields()?;
                     self.expect(&Token::RightBrace)?;
                     Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Struct {
                             path: vec![name],
                             fields,
@@ -422,6 +443,7 @@ impl super::Parser {
                     }
                     self.expect(&Token::RightParen)?;
                     Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::TupleVariant {
                             path: vec![name],
                             patterns,
@@ -453,6 +475,7 @@ impl super::Parser {
                             None
                         };
                         return Some(Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::RangePattern {
                                 start: Some(start_bound),
                                 end,
@@ -467,6 +490,7 @@ impl super::Parser {
                         let (fields, has_rest) = self.parse_struct_pattern_fields()?;
                         self.expect(&Token::RightBrace)?;
                         Some(Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Struct {
                                 path,
                                 fields,
@@ -485,12 +509,14 @@ impl super::Parser {
                         }
                         self.expect(&Token::RightParen)?;
                         Some(Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::TupleVariant { path, patterns },
                             span: self.span_from(&start),
                         })
                     } else {
                         // Just a binding with a qualified name (unit variant)
                         Some(Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Binding(path.join(".")),
                             span: self.span_from(&start),
                         })
@@ -500,6 +526,7 @@ impl super::Parser {
                     // in a match arm). The resolver distinguishes the two cases; skip the
                     // naming check here to avoid false positives on valid variant patterns.
                     Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(name),
                         span: self.span_from(&start),
                     })
@@ -663,6 +690,7 @@ impl super::Parser {
         if self.eat(&Token::DotDotEq) {
             let end = self.parse_range_bound()?;
             return Some(Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::RangePattern {
                     start: Some(RangeBound::Literal(lit)),
                     end: Some(end),
@@ -680,6 +708,7 @@ impl super::Parser {
                 None
             };
             return Some(Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::RangePattern {
                     start: Some(RangeBound::Literal(lit)),
                     end,
@@ -689,6 +718,7 @@ impl super::Parser {
             });
         }
         Some(Pattern {
+            id: crate::ids::NodeId::DUMMY,
             kind: PatternKind::Literal(lit),
             span: self.span_from(&start),
         })

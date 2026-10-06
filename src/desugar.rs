@@ -296,6 +296,7 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
     for (i, feat) in features.iter().enumerate() {
         let feat_call = variant_call(&format!("{base}${feat}"));
         let unsafe_call = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Unsafe(mv_block(feat_call, sp)),
             span: sp,
         };
@@ -308,6 +309,7 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
         // already are. No-op for the non-generic case (there `cpu` resolves to the
         // namespace and is never tracked).
         acc = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::If {
                 condition: Box::new(mv_cpu_supports(feat, mv_distinct_span(&sp, i))),
                 then_block: mv_block(unsafe_call, sp),
@@ -336,6 +338,7 @@ fn mv_distinct_span(base: &Span, i: usize) -> Span {
 
 fn mv_ident(name: &str, span: Span) -> Expr {
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Identifier(name.to_string()),
         span,
     }
@@ -343,6 +346,7 @@ fn mv_ident(name: &str, span: Span) -> Expr {
 
 fn mv_call(name: &str, args: &[CallArg], span: Span) -> Expr {
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Call {
             callee: Box::new(mv_ident(name, span)),
             args: args.to_vec(),
@@ -357,8 +361,10 @@ fn mv_call(name: &str, args: &[CallArg], span: Span) -> Expr {
 /// implicitly as the call's object; only the non-self params are forwarded.
 fn mv_self_method_call(method: &str, args: &[CallArg], span: Span) -> Expr {
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::MethodCall {
             object: Box::new(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::SelfValue,
                 span,
             }),
@@ -381,6 +387,7 @@ fn mv_block(tail: Expr, span: Span) -> Block {
 
 fn mv_cpu_supports(feat: &str, span: Span) -> Expr {
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::MethodCall {
             object: Box::new(mv_ident("cpu", span)),
             method: "supports".to_string(),
@@ -390,6 +397,7 @@ fn mv_cpu_supports(feat: &str, span: Span) -> Expr {
                 mut_marker: false,
                 mut_marker_span: None,
                 value: Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::StringLit(feat.to_string()),
                     span,
                 },
@@ -416,6 +424,7 @@ fn mv_allow_undocumented_unsafe_attr(span: Span) -> Attribute {
         args: vec![AttrArg {
             name: None,
             value: Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier("undocumented_unsafe".to_string()),
                 span,
             }),
@@ -433,6 +442,7 @@ fn mv_target_feature_attr(feat: &str, span: Span) -> Attribute {
         args: vec![AttrArg {
             name: Some("enable".to_string()),
             value: Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::StringLit(feat.to_string()),
                 span,
             }),
@@ -1314,6 +1324,7 @@ fn default_field_expr(
         "String" => ExprKind::StringLit(String::new()),
         other if defaultable.contains(other) => ExprKind::Call {
             callee: Box::new(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Path {
                     segments: vec![other.to_string(), "default".to_string()],
                     generic_args: None,
@@ -1324,7 +1335,11 @@ fn default_field_expr(
         },
         _ => return None,
     };
-    Some(Expr { kind, span })
+    Some(Expr {
+        id: crate::ids::NodeId::DUMMY,
+        kind,
+        span,
+    })
 }
 
 /// `Name { f1: <d1>, ... }` literal for a derive-Default struct, or
@@ -1344,6 +1359,7 @@ fn struct_default_body(
         });
     }
     Some(Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::StructLiteral {
             path: vec![s.name.clone()],
             fields,
@@ -1377,6 +1393,7 @@ fn enum_default_body(e: &EnumDef) -> Option<Expr> {
         return None;
     }
     Some(Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Path {
             segments: vec![e.name.clone(), variant.name.clone()],
             generic_args: None,
@@ -1920,6 +1937,7 @@ fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
             }
             let span = stmt.span;
             let placeholder = StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Error,
                 span,
             });
@@ -1955,10 +1973,12 @@ fn expand_multi_assign(targets: Vec<Expr>, values: Vec<Expr>, span: Span) -> Stm
         let vspan = value.span;
         temp_names.push(name.clone());
         stmts.push(Stmt {
+            id: crate::ids::NodeId::DUMMY,
             span: vspan,
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(name),
                     span: vspan,
                 },
@@ -1970,10 +1990,12 @@ fn expand_multi_assign(targets: Vec<Expr>, values: Vec<Expr>, span: Span) -> Stm
     for (target, name) in targets.into_iter().zip(temp_names) {
         let tspan = target.span;
         stmts.push(Stmt {
+            id: crate::ids::NodeId::DUMMY,
             span: tspan,
             kind: StmtKind::Assign {
                 target,
                 value: Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(name),
                     span: tspan,
                 },
@@ -1981,6 +2003,7 @@ fn expand_multi_assign(targets: Vec<Expr>, values: Vec<Expr>, span: Span) -> Stm
         });
     }
     StmtKind::Expr(Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Block(Block {
             stmts,
             final_expr: None,
@@ -2431,6 +2454,7 @@ fn lower_param_unwrap(
     let s6 = collect_synth_span(&base, 6);
 
     let placeholder = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Error,
         span: base,
     };
@@ -2450,6 +2474,7 @@ fn lower_param_unwrap(
     // zero-length span, so it cannot share a side-table key with the
     // scrutinee, which keeps the receiver's real span.
     let failing = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::MethodCall {
             object: Box::new(collect_ident(&rest, s1)),
             method,
@@ -2462,9 +2487,11 @@ fn lower_param_unwrap(
     let arms = vec![
         MatchArm {
             pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::TupleVariant {
                     path: variant.iter().map(|s| s.to_string()).collect(),
                     patterns: vec![Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(payload.clone()),
                         span: s3,
                     }],
@@ -2477,6 +2504,7 @@ fn lower_param_unwrap(
         },
         MatchArm {
             pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::Binding(rest),
                 span: s5,
             },
@@ -2489,6 +2517,7 @@ fn lower_param_unwrap(
     // is its RECEIVER's, so reusing it would record the payload type at the
     // scrutinee's key.
     *expr = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Match {
             scrutinee: object,
             arms,
@@ -2710,6 +2739,7 @@ fn collect_synth_span(base: &Span, i: usize) -> Span {
 
 fn collect_ident(name: &str, span: Span) -> Expr {
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Identifier(name.to_string()),
         span,
     }
@@ -2728,6 +2758,7 @@ fn collect_arg(value: Expr) -> CallArg {
 
 fn collect_method_call(object: Expr, method: &str, args: Vec<CallArg>, span: Span) -> Expr {
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::MethodCall {
             object: Box::new(object),
             method: method.to_string(),
@@ -2892,15 +2923,18 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
     // `let __src = <the original collect call>;` — untouched, so the chain keeps
     // its own spans and its `Vec[E]` typing.
     let placeholder = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Error,
         span: value.span,
     };
     let original = std::mem::replace(value, placeholder);
     let src_stmt = Stmt {
+        id: crate::ids::NodeId::DUMMY,
         span: s1,
         kind: StmtKind::Let {
             is_mut: false,
             pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::Binding(src_name.clone()),
                 span: s1,
             },
@@ -2912,6 +2946,7 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
     // `let mut __dst: T = <ctor>;`
     let ctor = match target {
         CollectTarget::Str => Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::StringLit(String::new()),
             span: s2,
         },
@@ -2922,8 +2957,10 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
                 _ => "Map",
             };
             Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Call {
                     callee: Box::new(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Path {
                             segments: vec![coll.to_string(), "new".to_string()],
                             generic_args: None,
@@ -2937,10 +2974,12 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
         }
     };
     let dst_stmt = Stmt {
+        id: crate::ids::NodeId::DUMMY,
         span: s3,
         kind: StmtKind::Let {
             is_mut: true,
             pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::Binding(dst_name.clone()),
                 span: s3,
             },
@@ -2976,6 +3015,7 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
         CollectTarget::Map => {
             // The element is the `(K, V)` pair every `Map` FromIterator takes.
             let k = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::TupleIndex {
                     object: Box::new(collect_ident(&it_name, s4)),
                     index: 0,
@@ -2983,6 +3023,7 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
                 span: s4,
             };
             let v = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::TupleIndex {
                     object: Box::new(collect_ident(&it_name, s5)),
                     index: 1,
@@ -2999,17 +3040,21 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
     };
 
     let for_stmt = Stmt {
+        id: crate::ids::NodeId::DUMMY,
         span: s8,
         kind: StmtKind::Expr(Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::For {
                 label: None,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(it_name),
                     span: s4,
                 },
                 iterable: Box::new(collect_ident(&src_name, s1)),
                 body: Block {
                     stmts: vec![Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         span: s7,
                         kind: StmtKind::Expr(append),
                     }],
@@ -3023,6 +3068,7 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
     };
 
     *value = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Block(Block {
             stmts: vec![src_stmt, dst_stmt, for_stmt],
             // `s9`, NOT `s6` — the block's tail must not share a span with the

@@ -1618,11 +1618,13 @@ impl<'a> Lowerer<'a> {
                         let inner = std::mem::replace(
                             &mut a.value,
                             Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Tuple(Vec::new()),
                                 span,
                             },
                         );
                         a.value = Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Closure {
                                 params: Vec::new(),
                                 capture_mode: None,
@@ -1689,11 +1691,13 @@ impl<'a> Lowerer<'a> {
                         let inner = std::mem::replace(
                             &mut **object,
                             Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Tuple(Vec::new()),
                                 span: recv_span,
                             },
                         );
                         **object = Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::MethodCall {
                                 object: Box::new(inner),
                                 method: "iter".to_string(),
@@ -2047,9 +2051,11 @@ impl<'a> Lowerer<'a> {
         let binding = format!("__karac_msc_{}_{}", scrut_span.offset, scrut_span.length);
 
         let let_stmt = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(binding.clone()),
                     span: scrut_span,
                 },
@@ -2059,8 +2065,10 @@ impl<'a> Lowerer<'a> {
             span: scrut_span,
         };
         let inner_match = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Match {
                 scrutinee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(binding),
                     span: scrut_span,
                 }),
@@ -2170,6 +2178,7 @@ impl<'a> Lowerer<'a> {
         // Deterministic, collision-free fresh name from the call site span.
         let recv = format!("__karac_elm_{}_{}", span.offset, span.length);
         let enum_lit = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Path {
                 segments: vec![segments[0].clone(), segments[1].clone()],
                 generic_args: None,
@@ -2191,9 +2200,11 @@ impl<'a> Lowerer<'a> {
             span: callee.span,
         };
         let let_stmt = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(recv.clone()),
                     span: callee.span,
                 },
@@ -2203,8 +2214,10 @@ impl<'a> Lowerer<'a> {
             span: *span,
         };
         let mcall = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(recv),
                     span: callee.span,
                 }),
@@ -2262,11 +2275,13 @@ impl<'a> Lowerer<'a> {
         // spans the typechecker flagged reach here, so Type-rooted paths
         // (`Dir.North.code()`, `Vec.new()`) are never rewritten.
         let mut object = Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: callee.span,
             kind: ExprKind::Identifier(segments[0].clone()),
         };
         for field in &segments[1..segments.len() - 1] {
             object = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: callee.span,
                 kind: ExprKind::FieldAccess {
                     object: Box::new(object),
@@ -2348,6 +2363,7 @@ impl<'a> Lowerer<'a> {
             .get(&SpanKey::from_span(span))?
             .clone();
         let new_callee = Box::new(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: callee.span,
             kind: ExprKind::Path {
                 segments: vec![target, name],
@@ -2503,6 +2519,7 @@ impl<'a> Lowerer<'a> {
             if let Type::TypeParam(param) = &lhs_ty {
                 if let Some(cmp_method) = self.type_param_comparator(param) {
                     let cmp_call = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: left.span,
                         kind: ExprKind::MethodCall {
                             object: Box::new(left.clone()),
@@ -2537,6 +2554,7 @@ impl<'a> Lowerer<'a> {
         // stdlib impl table, so they dispatch directly.
         if matches!(op, BinOp::NotEq) && matches!(lhs_ty, Type::Named { .. } | Type::Shared(_)) {
             let eq_call = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: left.span,
                 kind: call_path(
                     vec![target, "eq".to_string()],
@@ -2558,6 +2576,7 @@ impl<'a> Lowerer<'a> {
         if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq) {
             if let Some(cmp_method) = ordering_dispatch_comparator(lhs_ty, &target, self.tc) {
                 let cmp_call = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: left.span,
                     kind: call_path(vec![target, cmp_method], vec![left.clone(), right.clone()]),
                 };
@@ -2629,6 +2648,7 @@ impl<'a> Lowerer<'a> {
 fn call_ident(name: &str, arg: Expr) -> ExprKind {
     ExprKind::Call {
         callee: Box::new(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: arg.span,
             kind: ExprKind::Identifier(name.to_string()),
         }),
@@ -2650,6 +2670,7 @@ fn call_path(segments: Vec<String>, args: Vec<Expr>) -> ExprKind {
         length: 0,
     });
     let callee = Box::new(Expr {
+        id: crate::ids::NodeId::DUMMY,
         span,
         kind: ExprKind::Path {
             segments,
@@ -2945,6 +2966,7 @@ fn collapse_block(block: &mut Block, counts: &HashMap<String, usize>) {
         let rhs = std::mem::replace(
             value,
             Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Error,
                 span: value.span,
             },

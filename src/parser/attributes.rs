@@ -214,6 +214,7 @@ impl super::Parser {
                     (
                         None,
                         Some(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             span: self.span_from(&kw_start),
                             kind: ExprKind::Identifier("transparent".to_string()),
                         }),

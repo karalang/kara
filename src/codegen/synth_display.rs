@@ -2522,6 +2522,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.is_prelude_total_float_wrapper(type_name) {
             return Ok(vec![P::Expr(
                 Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::FieldAccess {
                         object: Box::new(base.clone()),
                         field: "value".to_string(),
@@ -2553,6 +2554,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             }
             let field_expr = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::FieldAccess {
                     object: Box::new(base.clone()),
                     field: fname.clone(),
@@ -2666,6 +2668,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let parts = self.build_struct_display_parts(base, type_name)?;
         let lit = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::InterpolatedStringLit(parts),
             span: base.span,
         };

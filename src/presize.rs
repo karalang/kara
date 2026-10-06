@@ -234,10 +234,12 @@ fn analyze_while(condition: &Expr, body: &Block, v: &str, bound_between: &[Strin
 fn add_const(e: &Expr, k: i64) -> Expr {
     let span = e.span;
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Binary {
             op: BinOp::Add,
             left: Box::new(e.clone()),
             right: Box::new(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Integer(k.into(), None),
                 span,
             }),
@@ -325,6 +327,7 @@ fn iterable_len_bound(iterable: &Expr) -> Option<Expr> {
     }
     let span = object.span;
     Some(Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::MethodCall {
             object: object.clone(),
             method: "len".to_string(),
@@ -606,6 +609,7 @@ fn rewrite_to_with_capacity(stmt: &mut Stmt, coll: Coll, bound: Expr) {
     };
     let span = value.span;
     let callee = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Path {
             segments: vec![coll.type_name().to_string(), "with_capacity".to_string()],
             generic_args: None,
@@ -620,6 +624,7 @@ fn rewrite_to_with_capacity(stmt: &mut Stmt, coll: Coll, bound: Expr) {
         span,
     };
     *value = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Call {
             callee: Box::new(callee),
             args: vec![arg],

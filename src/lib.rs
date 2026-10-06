@@ -81,6 +81,7 @@ pub mod lowering;
 pub mod manifest;
 pub mod missing_must_use_lint;
 pub mod missing_track_caller_lint;
+pub mod node_ids;
 pub mod presize;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pubgrub_solve;
@@ -289,7 +290,9 @@ pub fn desugar_program(program: &mut Program) -> Vec<crate::comptime::ComptimeEr
     // in-process test/runtime cores ignore them (the generated types still
     // splice on the happy path), mirroring how the post-resolve comptime fold
     // pass's diagnostics are handled.
-    crate::comptime::expand_proto_schemas(program)
+    let diags = crate::comptime::expand_proto_schemas(program);
+    crate::node_ids::assign_node_ids(program);
+    diags
 }
 
 /// Type-check a parsed and resolved program.
@@ -394,6 +397,7 @@ pub fn typecheck_with_profile_config(
 /// effectcheck / ownership / interpret / codegen.
 pub fn lower(program: &mut Program, tc: &TypeCheckResult) {
     crate::lowering::lower_program(program, tc);
+    crate::node_ids::assign_node_ids(program);
 }
 
 /// Evaluate every `comptime { ... }` block at compile time and splice the
@@ -406,7 +410,9 @@ pub fn comptime_eval(
     program: &mut Program,
     tc: &TypeCheckResult,
 ) -> Vec<crate::comptime::ComptimeError> {
-    crate::comptime::evaluate(program, tc)
+    let diags = crate::comptime::evaluate(program, tc);
+    crate::node_ids::assign_node_ids(program);
+    diags
 }
 
 /// Check effects in a parsed program (default policy: `Declared`).

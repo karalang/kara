@@ -767,6 +767,7 @@ impl Folder<'_> {
         // plain block expression (the interpreter has no separate comptime
         // entry point — same eval path the defensive `Comptime` arm uses).
         let wrapped = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(block),
             span,
         };
@@ -924,8 +925,10 @@ impl Folder<'_> {
         // parameter. Synthesized directly rather than parsed — no string round
         // trip, and the span is the derive site from the start.
         let call = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(fn_name.to_string()),
                     span: *site,
                 }),
@@ -934,6 +937,7 @@ impl Folder<'_> {
                     mut_marker: false,
                     mut_marker_span: None,
                     value: Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Identifier(type_name.to_string()),
                         span: *site,
                     },
@@ -952,8 +956,10 @@ impl Folder<'_> {
     /// the call argument. Protobuf slice 3.
     fn eval_schema_const(&mut self, value: &Expr, site: &Span) -> Option<Vec<Item>> {
         let call = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier("proto_parse_schema".to_string()),
                     span: *site,
                 }),
@@ -1206,7 +1212,11 @@ fn value_to_expr(value: &Value, ty: Option<&Type>, span: &Span) -> Result<Expr, 
             ))
         }
     };
-    Ok(Expr { kind, span: *span })
+    Ok(Expr {
+        id: crate::ids::NodeId::DUMMY,
+        kind,
+        span: *span,
+    })
 }
 
 /// A short tag for the runtime `Value` variant, for diagnostic text.

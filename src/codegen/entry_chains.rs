@@ -126,6 +126,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     generic_args: Some(vec![
                         GenericArg::Type(elem_te),
                         GenericArg::Const(crate::ast::Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: crate::ast::ExprKind::Integer(i128::from(n), None),
                             span: span_zero,
                         }),
@@ -254,6 +255,7 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         self.register_var_from_type_expr(&synth, &elem_te);
         let synth_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.clone()),
             span: object.span,
         };

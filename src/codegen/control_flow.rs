@@ -73,6 +73,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.if_let_rebinds_named_struct_whole(pattern, value) {
             let block = crate::ast::whole_rebind_block(pattern, value, then_block);
             let expr = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Block(block),
                 span: then_block.span,
             };
@@ -553,6 +554,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if optres_bindings_owned {
             if let Some(src) = self.call_passthrough_armed_inline_source(value) {
                 let src_expr = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(src),
                     span: value.span,
                 };
@@ -2794,6 +2796,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // cannot miss, so it is the plain `let x = g`. See `compile_if_let`.
         if self.if_let_rebinds_named_struct_whole(pattern, value) {
             let rebind = Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Let {
                     is_mut: false,
                     pattern: pattern.clone(),

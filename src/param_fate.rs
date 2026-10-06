@@ -2594,6 +2594,7 @@ pub mod audit {
         let text = match body {
             ArmBody::Expr(e) => crate::formatter::render_expr(e),
             ArmBody::Block(b) => crate::formatter::render_expr(&Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Block(b.clone()),
                 span: b.span,
             }),

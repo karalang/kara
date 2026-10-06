@@ -178,6 +178,7 @@ impl<'a> super::TypeChecker<'a> {
                             length: 1,
                         };
                         let synth = Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Binding("__fm_payload".to_string()),
                             span: bind_span,
                         };
@@ -635,6 +636,7 @@ impl<'a> super::TypeChecker<'a> {
                             length: 1,
                         };
                         let synth = Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Binding("__fmm_payload".to_string()),
                             span: bind_span,
                         };

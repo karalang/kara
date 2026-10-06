@@ -22,6 +22,7 @@ pub struct Block {
 pub fn whole_rebind_block(pattern: &Pattern, value: &Expr, then_block: &Block) -> Block {
     let mut stmts = Vec::with_capacity(then_block.stmts.len() + 1);
     stmts.push(Stmt {
+        id: crate::ids::NodeId::DUMMY,
         kind: StmtKind::Let {
             is_mut: false,
             pattern: pattern.clone(),
@@ -44,6 +45,9 @@ pub fn whole_rebind_block(pattern: &Pattern, value: &Expr, then_block: &Block) -
 pub struct Stmt {
     pub kind: StmtKind,
     pub span: Span,
+    /// Distinct per node once `crate::node_ids::assign_node_ids` has run;
+    /// `NodeId::DUMMY` before that, and on nodes built later.
+    pub id: crate::ids::NodeId,
 }
 
 #[derive(Debug, Clone)]

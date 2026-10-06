@@ -518,6 +518,7 @@ pub(super) fn make_generic_impl_method_function(imp: &ImplBlock, method: &Functi
         let self_param = Param {
             span,
             pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::Binding("self".to_string()),
                 span,
             },

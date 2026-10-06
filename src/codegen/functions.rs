@@ -5718,10 +5718,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // and we `ret` immediately below, so that registration never fires —
         // the manual free here is the sole, correct release.
         let id_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.to_string()),
             span: MAIN_ERR_SYNTH_SPAN,
         };
         let lit = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::InterpolatedStringLit(vec![
                 P::Text("Error: ".to_string()),
                 P::Expr(Box::new(id_expr), None),

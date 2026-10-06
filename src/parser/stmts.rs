@@ -56,6 +56,7 @@ impl super::Parser {
                         if self.eat(&Token::Semicolon) {
                             // Expression statement
                             stmts.push(Stmt {
+                                id: crate::ids::NodeId::DUMMY,
                                 span: expr.span,
                                 kind: StmtKind::Expr(expr),
                             });
@@ -65,6 +66,7 @@ impl super::Parser {
                                 // Block-like expressions (while, for, loop, etc.)
                                 // are statements that don't need semicolons
                                 stmts.push(Stmt {
+                                    id: crate::ids::NodeId::DUMMY,
                                     span: expr.span,
                                     kind: StmtKind::Expr(expr),
                                 });
@@ -82,6 +84,7 @@ impl super::Parser {
                             self.expect(&Token::Semicolon)?;
                             let span = expr.span;
                             stmts.push(Stmt {
+                                id: crate::ids::NodeId::DUMMY,
                                 span,
                                 kind: StmtKind::Assign {
                                     target: expr,
@@ -94,6 +97,7 @@ impl super::Parser {
                             self.expect(&Token::Semicolon)?;
                             let span = expr.span;
                             stmts.push(Stmt {
+                                id: crate::ids::NodeId::DUMMY,
                                 span,
                                 kind: StmtKind::CompoundAssign {
                                     target: expr,
@@ -105,12 +109,14 @@ impl super::Parser {
                             // Block-like expressions (if, while, for, loop, match, unsafe)
                             // don't need semicolons when used as statements
                             stmts.push(Stmt {
+                                id: crate::ids::NodeId::DUMMY,
                                 span: expr.span,
                                 kind: StmtKind::Expr(expr),
                             });
                         } else {
                             // Expression without semicolon and not at end
                             stmts.push(Stmt {
+                                id: crate::ids::NodeId::DUMMY,
                                 span: expr.span,
                                 kind: StmtKind::Expr(expr),
                             });
@@ -146,6 +152,7 @@ impl super::Parser {
         let expr = self.parse_expression_stmt()?;
         if self.eat(&Token::Semicolon) {
             return Some(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 span: expr.span,
                 kind: StmtKind::Expr(expr),
             });
@@ -158,6 +165,7 @@ impl super::Parser {
             self.expect(&Token::Semicolon)?;
             let span = expr.span;
             return Some(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 span,
                 kind: StmtKind::Assign {
                     target: expr,
@@ -170,6 +178,7 @@ impl super::Parser {
             self.expect(&Token::Semicolon)?;
             let span = expr.span;
             return Some(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 span,
                 kind: StmtKind::CompoundAssign {
                     target: expr,
@@ -181,6 +190,7 @@ impl super::Parser {
         // Block-like expression (`if`/`while`/`match`/...) or a trailing
         // expression without a semicolon — both are statements here.
         Some(Stmt {
+            id: crate::ids::NodeId::DUMMY,
             span: expr.span,
             kind: StmtKind::Expr(expr),
         })
@@ -226,6 +236,7 @@ impl super::Parser {
         let body = self.parse_block()?;
 
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(&start),
             kind: ExprKind::Providers { bindings, body },
         })
@@ -295,6 +306,7 @@ impl super::Parser {
         self.expect(&Token::RightParen)?;
 
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(&start),
             kind: ExprKind::OffsetOf { ty, field_path },
         })
@@ -480,6 +492,7 @@ impl super::Parser {
                     let span = expr.span;
                     Block {
                         stmts: vec![Stmt {
+                            id: crate::ids::NodeId::DUMMY,
                             span,
                             kind: StmtKind::Expr(expr),
                         }],
@@ -488,6 +501,7 @@ impl super::Parser {
                     }
                 };
                 Some(Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: StmtKind::Defer { body },
                 })
@@ -513,6 +527,7 @@ impl super::Parser {
                     let span = expr.span;
                     Block {
                         stmts: vec![Stmt {
+                            id: crate::ids::NodeId::DUMMY,
                             span,
                             kind: StmtKind::Expr(expr),
                         }],
@@ -521,6 +536,7 @@ impl super::Parser {
                     }
                 };
                 Some(Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: StmtKind::ErrDefer { binding, body },
                 })
@@ -557,6 +573,7 @@ impl super::Parser {
                     let span = expr.span;
                     self.expect(&Token::Semicolon)?;
                     Some(Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         span,
                         kind: StmtKind::Assign {
                             target: expr,
@@ -569,6 +586,7 @@ impl super::Parser {
                     let span = expr.span;
                     self.expect(&Token::Semicolon)?;
                     Some(Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         span,
                         kind: StmtKind::CompoundAssign {
                             target: expr,
@@ -579,6 +597,7 @@ impl super::Parser {
                 } else {
                     self.expect(&Token::Semicolon)?;
                     Some(Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         span: expr.span,
                         kind: StmtKind::Expr(expr),
                     })
@@ -683,6 +702,7 @@ impl super::Parser {
             return None;
         }
         Some(Stmt {
+            id: crate::ids::NodeId::DUMMY,
             span,
             kind: StmtKind::MultiAssign { targets, values },
         })
@@ -729,6 +749,7 @@ impl super::Parser {
                 }
             };
             return Some(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: StmtKind::LetUninit {
                     is_mut,
@@ -788,6 +809,7 @@ impl super::Parser {
             // two tests.
             self.eat(&Token::Semicolon);
             return Some(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: StmtKind::LetElse {
                     pattern,
@@ -801,6 +823,7 @@ impl super::Parser {
         self.expect(&Token::Semicolon)?;
 
         Some(Stmt {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(&start),
             kind: StmtKind::Let {
                 is_mut,

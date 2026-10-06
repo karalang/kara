@@ -11,6 +11,9 @@ use super::Expr;
 pub struct Pattern {
     pub kind: PatternKind,
     pub span: Span,
+    /// Distinct per node once `crate::node_ids::assign_node_ids` has run;
+    /// `NodeId::DUMMY` before that, and on nodes built later.
+    pub id: crate::ids::NodeId,
 }
 
 impl Pattern {

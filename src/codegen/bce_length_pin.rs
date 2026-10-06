@@ -3443,18 +3443,21 @@ mod tests {
         use crate::token::Span;
         fn id(n: &str) -> Expr {
             Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(n.to_string()),
                 span: Span::default(),
             }
         }
         fn int(k: i64) -> Expr {
             Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Integer(k.into(), None),
                 span: Span::default(),
             }
         }
         // Two structurally-identical `cols + 1` at different spans normalise equal.
         let a = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Binary {
                 op: BinOp::Add,
                 left: Box::new(id("cols")),
@@ -3466,6 +3469,7 @@ mod tests {
             },
         };
         let b = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Binary {
                 op: BinOp::Add,
                 left: Box::new(id("cols")),

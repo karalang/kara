@@ -935,6 +935,7 @@ impl<'a> super::TypeChecker<'a> {
                     .is_some_and(|e| e.variants.iter().any(|(v, _)| v == method));
                 if is_builtin_container_head(&type_name) || is_user_enum_variant_ctor {
                     let delegated_callee = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Path {
                             segments: vec![type_name.clone(), method.to_string()],
                             generic_args: None,

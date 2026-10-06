@@ -511,6 +511,7 @@ impl<'a> super::Interpreter<'a> {
                 && args.len() == 1
             {
                 let collect_call = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: *span,
                     kind: ExprKind::MethodCall {
                         object: Box::new(args[0].value.clone()),
@@ -4696,6 +4697,7 @@ impl<'a> super::Interpreter<'a> {
         {
             let value = if named_moved {
                 Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Block(crate::ast::Block {
                         stmts: Vec::new(),
                         final_expr: Some(Box::new(inner.clone())),

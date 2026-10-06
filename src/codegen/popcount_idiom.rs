@@ -647,10 +647,12 @@ fn main() {
         use crate::token::Span;
         let sp = Span::default();
         let id = |n: &str| E {
+            id: crate::ids::NodeId::DUMMY,
             kind: EK::Identifier(n.into()),
             span: sp,
         };
         let int = |v: i64| E {
+            id: crate::ids::NodeId::DUMMY,
             kind: EK::Integer(v.into(), None),
             span: sp,
         };
@@ -662,8 +664,10 @@ fn main() {
             value: v,
         };
         let call = |m: &str, a: E, b: E| E {
+            id: crate::ids::NodeId::DUMMY,
             kind: EK::Call {
                 callee: Box::new(E {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: EK::Path {
                         segments: vec!["Ops".into(), m.into()],
                         generic_args: None,
@@ -678,6 +682,7 @@ fn main() {
         let body = Block {
             stmts: vec![
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Assign {
                         target: id("x"),
                         value: call("bitand", id("x"), call("sub", id("x"), int(1))),
@@ -685,6 +690,7 @@ fn main() {
                     span: sp,
                 },
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Assign {
                         target: id("c"),
                         value: call("add", id("c"), int(1)),

@@ -3171,6 +3171,7 @@ pub fn param_shadowed_before_use(f: &Function, n: &str) -> bool {
         return false;
     };
     let before = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Block(Block {
             stmts: f.body.stmts[..k].to_vec(),
             final_expr: None,

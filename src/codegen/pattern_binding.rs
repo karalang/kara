@@ -270,6 +270,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.null_init_slot_in_entry_block(slot.ptr);
         self.track_rc_option_var(name, slot.ptr, option_ty, heap_type);
         let ident = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.clone()),
             span: sub_pat.span,
         };
@@ -2814,6 +2815,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 );
                             } else {
                                 let synthetic = Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: PatternKind::Binding(field_pat.name.clone()),
                                     span: field_pat.span,
                                 };
@@ -2875,6 +2877,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.bind_pattern_values(sub_pat, field_val)
                         } else {
                             let synthetic = Pattern {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: PatternKind::Binding(field_pat.name.clone()),
                                 span: field_pat.span,
                             };
@@ -2921,6 +2924,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.pattern_state.pattern_binding_is_borrow = true;
                 }
                 let synthetic = Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(name.clone()),
                     span: pattern.span,
                 };

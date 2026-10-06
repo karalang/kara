@@ -12607,6 +12607,7 @@ impl<'a> super::Interpreter<'a> {
                 // `if let` leg.
                 if self.if_let_rebinds_named_struct_whole(pattern, value) {
                     let rebind = Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: StmtKind::Let {
                             is_mut: false,
                             pattern: pattern.clone(),

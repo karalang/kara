@@ -1486,6 +1486,7 @@ impl<'a> super::Interpreter<'a> {
         self.env.push_scope();
         self.env.define(RECV.to_string(), payload);
         let recv_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: expr.span,
             kind: ExprKind::Identifier(RECV.to_string()),
         };

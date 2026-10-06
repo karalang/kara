@@ -170,6 +170,7 @@ impl super::Parser {
                     // source text it covers.
                     let end = q_span.offset + q_span.length;
                     lhs = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: Span {
                             line: lhs.span.line,
                             column: lhs.span.column,
@@ -216,6 +217,7 @@ impl super::Parser {
                         length: end.saturating_sub(lhs.span.offset),
                     };
                     lhs = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span,
                         kind: ExprKind::OptionalChain {
                             object: Box::new(lhs),
@@ -237,6 +239,7 @@ impl super::Parser {
                     // `x as i64 as u8` gives its two nodes distinct keys.
                     let cast_span = self.span_from(&lhs.span);
                     lhs = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: cast_span,
                         kind: ExprKind::Cast {
                             expr: Box::new(lhs),
@@ -261,6 +264,7 @@ impl super::Parser {
                             // span-keyed table.
                             let end = idx_span.offset + idx_span.length;
                             lhs = Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 span: Span {
                                     line: lhs.span.line,
                                     column: lhs.span.column,
@@ -317,6 +321,7 @@ impl super::Parser {
                                 // B-2026-08-18-24 — MEASUREMENT SCAFFOLD.
                                 let end = args_close_span.offset + args_close_span.length;
                                 lhs = Expr {
+                                    id: crate::ids::NodeId::DUMMY,
                                     span: Span {
                                         line: lhs.span.line,
                                         column: lhs.span.column,
@@ -339,6 +344,7 @@ impl super::Parser {
                                 let name_span = self.tokens[self.pos - 1].span;
                                 let end = name_span.offset + name_span.length;
                                 lhs = Expr {
+                                    id: crate::ids::NodeId::DUMMY,
                                     span: Span {
                                         line: lhs.span.line,
                                         column: lhs.span.column,
@@ -371,6 +377,7 @@ impl super::Parser {
                     // `mk()(z)` collapse onto `f` / `mk`.
                     let call_span = self.span_from(&lhs.span);
                     lhs = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: call_span,
                         kind: ExprKind::Call {
                             callee: Box::new(lhs),
@@ -415,6 +422,7 @@ impl super::Parser {
                         // generic-args head.
                         let path_span = self.span_from(&lhs.span);
                         lhs = Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             span: path_span,
                             kind: ExprKind::Path {
                                 segments,
@@ -441,6 +449,7 @@ impl super::Parser {
                             elems.push(self.parse_expression()?);
                         }
                         Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             span: self.span_from(&index_start),
                             kind: ExprKind::Tuple(elems),
                         }
@@ -458,6 +467,7 @@ impl super::Parser {
                     // wins.
                     let end = close_span.offset + close_span.length;
                     lhs = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: Span {
                             line: lhs.span.line,
                             column: lhs.span.column,
@@ -487,6 +497,7 @@ impl super::Parser {
                 // its two nodes distinct keys.
                 let pipe_span = self.span_from(&lhs.span);
                 lhs = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: pipe_span,
                     kind: ExprKind::Pipe {
                         left: Box::new(lhs),
@@ -519,6 +530,7 @@ impl super::Parser {
                 // here the workaround is no longer load-bearing.
                 let end = rhs.span.offset + rhs.span.length;
                 lhs = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: Span {
                         line: lhs.span.line,
                         column: lhs.span.column,
@@ -563,6 +575,7 @@ impl super::Parser {
                 // rather than copying `lhs.span`.
                 let range_span = self.span_from(&lhs.span);
                 lhs = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: range_span,
                     kind: ExprKind::Range {
                         start: Some(Box::new(lhs)),
@@ -666,6 +679,7 @@ impl super::Parser {
                 length: (rhs.span.offset + rhs.span.length).saturating_sub(lhs.span.offset),
             };
             lhs = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span,
                 kind: ExprKind::Binary {
                     op,
@@ -697,6 +711,7 @@ impl super::Parser {
                     if m == ((i64::MAX as u64) + 1).into() {
                         self.advance();
                         return Some(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             span: self.span_from(&start),
                             kind: ExprKind::Integer(i64::MIN.into(), sfx),
                         });
@@ -711,6 +726,7 @@ impl super::Parser {
                     if m == (1u128 << 127) && matches!(sfx, Some(crate::token::IntSuffix::I128)) {
                         self.advance();
                         return Some(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             span: self.span_from(&start),
                             kind: ExprKind::Integer(i128::MIN, sfx),
                         });
@@ -718,6 +734,7 @@ impl super::Parser {
                 }
                 let operand = self.parse_expr_bp(24)?; // Unary has high precedence
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Unary {
                         op: UnaryOp::Neg,
@@ -729,6 +746,7 @@ impl super::Parser {
                 self.advance();
                 let operand = self.parse_expr_bp(24)?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Unary {
                         op: UnaryOp::Not,
@@ -778,6 +796,7 @@ impl super::Parser {
                     self.advance();
                     let operand = self.parse_expr_bp(24)?;
                     return Some(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: self.span_from(&start),
                         kind: ExprKind::Unary {
                             op: UnaryOp::Not,
@@ -807,6 +826,7 @@ impl super::Parser {
                 );
                 let operand = self.parse_expr_bp(24)?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Unary {
                         op: UnaryOp::Not,
@@ -818,6 +838,7 @@ impl super::Parser {
                 self.advance();
                 let operand = self.parse_expr_bp(24)?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Unary {
                         op: UnaryOp::BitNot,
@@ -829,6 +850,7 @@ impl super::Parser {
                 self.advance();
                 let operand = self.parse_expr_bp(24)?; // same precedence as other unary ops
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Unary {
                         op: UnaryOp::Deref,
@@ -850,6 +872,7 @@ impl super::Parser {
                 self.advance();
                 let operand = self.parse_expr_bp(24)?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Unary {
                         op: UnaryOp::Ref,
@@ -865,6 +888,7 @@ impl super::Parser {
                 self.advance();
                 let end = self.parse_expr_bp(6)?; // range_bp + 1
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Range {
                         start: None,
@@ -890,6 +914,7 @@ impl super::Parser {
                     None
                 };
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Range {
                         start: None,
@@ -903,6 +928,7 @@ impl super::Parser {
             &Token::Integer(n, sfx) => {
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Integer(n, sfx),
                 })
@@ -944,6 +970,7 @@ impl super::Parser {
                 ) {
                     if let Ok(v) = i128::try_from(m) {
                         return Some(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             span: self.span_from(&start),
                             kind: ExprKind::Integer(v, sfx),
                         });
@@ -958,6 +985,7 @@ impl super::Parser {
                     // the bits back at width 128 (B-2026-08-19-23).
                     if matches!(sfx, Some(crate::token::IntSuffix::U128)) {
                         return Some(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             span: self.span_from(&start),
                             kind: ExprKind::Integer(m as i128, sfx),
                         });
@@ -977,6 +1005,7 @@ impl super::Parser {
                         | Some(crate::token::IntSuffix::Usize)
                 ) {
                     return Some(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: self.span_from(&start),
                         kind: ExprKind::Integer((m as i64).into(), sfx),
                     });
@@ -1009,6 +1038,7 @@ impl super::Parser {
             &Token::Float(n, sfx) => {
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Float(n, sfx),
                 })
@@ -1016,6 +1046,7 @@ impl super::Parser {
             &Token::CharLiteral(c) => {
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::CharLit(c),
                 })
@@ -1023,6 +1054,7 @@ impl super::Parser {
             &Token::ByteLiteral(b) => {
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::ByteLit(b),
                 })
@@ -1035,6 +1067,7 @@ impl super::Parser {
                 self.advance();
                 let span = self.span_from(&start);
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span,
                     kind: ExprKind::ByteStringLit(bytes),
                 })
@@ -1043,6 +1076,7 @@ impl super::Parser {
                 let s = s.clone();
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::StringLit(s),
                 })
@@ -1051,6 +1085,7 @@ impl super::Parser {
                 let s = s.clone();
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::MultiStringLit(s),
                 })
@@ -1067,6 +1102,7 @@ impl super::Parser {
                 let bytes = bytes.clone();
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::CStringLit { bytes, source_len },
                 })
@@ -1266,6 +1302,7 @@ impl super::Parser {
                     }
                 }
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::InterpolatedStringLit(parsed_parts),
                 })
@@ -1273,6 +1310,7 @@ impl super::Parser {
             Token::True => {
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Bool(true),
                 })
@@ -1280,6 +1318,7 @@ impl super::Parser {
             Token::False => {
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Bool(false),
                 })
@@ -1289,6 +1328,7 @@ impl super::Parser {
             Token::SelfValue => {
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::SelfValue,
                 })
@@ -1296,6 +1336,7 @@ impl super::Parser {
             Token::SelfType => {
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::SelfType,
                 })
@@ -1305,6 +1346,7 @@ impl super::Parser {
             Token::LeftBrace => {
                 let block = self.parse_block()?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: block.span,
                     kind: ExprKind::Block(block),
                 })
@@ -1319,6 +1361,7 @@ impl super::Parser {
                 self.advance(); // consume `comptime`
                 let block = self.expect_keyword_block("comptime")?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Comptime(block),
                 })
@@ -1393,6 +1436,7 @@ impl super::Parser {
                         self.advance(); // consume `loop`
                         let body = self.parse_block()?;
                         Some(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             span: self.span_from(&attr_start),
                             kind: ExprKind::Loop {
                                 label: None,
@@ -1434,6 +1478,7 @@ impl super::Parser {
                 self.advance();
                 let body = self.expect_keyword_block("loop")?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Loop {
                         label: None,
@@ -1455,6 +1500,7 @@ impl super::Parser {
                     None
                 };
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Return(value),
                 })
@@ -1466,6 +1512,7 @@ impl super::Parser {
                 // break label [expr] | break [expr]
                 let (label, value) = self.parse_break_args();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Break { label, value },
                 })
@@ -1477,6 +1524,7 @@ impl super::Parser {
                 // continue label | continue
                 let (label, label_span) = self.parse_continue_label();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Continue { label, label_span },
                 })
@@ -1487,6 +1535,7 @@ impl super::Parser {
                 self.advance();
                 let block = self.expect_keyword_block("unsafe")?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Unsafe(block),
                 })
@@ -1500,6 +1549,7 @@ impl super::Parser {
                 self.advance();
                 let block = self.expect_keyword_block("try")?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Try(block),
                 })
@@ -1510,6 +1560,7 @@ impl super::Parser {
                 self.advance();
                 let block = self.expect_keyword_block("seq")?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Seq(block),
                 })
@@ -1520,6 +1571,7 @@ impl super::Parser {
                 self.advance();
                 let block = self.expect_keyword_block("par")?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Par(block),
                 })
@@ -1538,12 +1590,14 @@ impl super::Parser {
                 let mut place = if self.check(&Token::SelfValue) {
                     self.advance();
                     Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: self.span_from(&place_start),
                         kind: ExprKind::SelfValue,
                     }
                 } else {
                     let name = self.expect_identifier()?;
                     Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: self.span_from(&place_start),
                         kind: ExprKind::Identifier(name),
                     }
@@ -1552,6 +1606,7 @@ impl super::Parser {
                     self.advance();
                     let field = self.expect_identifier()?;
                     place = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: self.span_from(&place_start),
                         kind: ExprKind::FieldAccess {
                             object: Box::new(place),
@@ -1566,6 +1621,7 @@ impl super::Parser {
                 };
                 let body = self.parse_block()?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Lock {
                         mutex: Box::new(place),
@@ -1585,6 +1641,7 @@ impl super::Parser {
             Token::Underscore => {
                 self.advance();
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::PipePlaceholder,
                 })
@@ -1678,6 +1735,7 @@ impl super::Parser {
                 } else {
                     let block = self.parse_block()?;
                     Some(Box::new(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: block.span,
                         kind: ExprKind::Block(block),
                     }))
@@ -1686,6 +1744,7 @@ impl super::Parser {
                 None
             };
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: ExprKind::IfLet {
                     pattern,
@@ -1704,6 +1763,7 @@ impl super::Parser {
             } else {
                 let block = self.parse_block()?;
                 Some(Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: block.span,
                     kind: ExprKind::Block(block),
                 }))
@@ -1712,6 +1772,7 @@ impl super::Parser {
             None
         };
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(&start),
             kind: ExprKind::If {
                 condition: Box::new(condition),
@@ -1744,6 +1805,7 @@ impl super::Parser {
             let body = if body_is_block {
                 let block = self.parse_block()?;
                 Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: block.span,
                     kind: ExprKind::Block(block),
                 }
@@ -1768,6 +1830,7 @@ impl super::Parser {
         self.expect(&Token::RightBrace)?;
 
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(&start),
             kind: ExprKind::Match {
                 scrutinee: Box::new(scrutinee),
@@ -1807,6 +1870,7 @@ impl super::Parser {
                 self.loop_labels.pop();
             }
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: ExprKind::WhileLet {
                     label,
@@ -1824,6 +1888,7 @@ impl super::Parser {
             self.loop_labels.pop();
         }
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(&start),
             kind: ExprKind::While {
                 label,
@@ -1860,6 +1925,7 @@ impl super::Parser {
             self.loop_labels.pop();
         }
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(&start),
             kind: ExprKind::For {
                 label,
@@ -1957,6 +2023,7 @@ impl super::Parser {
         let body = if self.check(&Token::LeftBrace) {
             let block = self.parse_block()?;
             Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: block.span,
                 kind: ExprKind::Block(block),
             }
@@ -1965,6 +2032,7 @@ impl super::Parser {
         };
 
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(&start),
             kind: ExprKind::Closure {
                 params,
@@ -1983,6 +2051,7 @@ impl super::Parser {
         if self.check(&Token::RightParen) {
             self.advance();
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: ExprKind::Tuple(Vec::new()),
             });
@@ -2001,6 +2070,7 @@ impl super::Parser {
             }
             self.expect(&Token::RightParen)?;
             Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: ExprKind::Tuple(elements),
             })
@@ -2019,6 +2089,7 @@ impl super::Parser {
         if self.check(&Token::RightBracket) {
             self.advance();
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: ExprKind::ArrayLiteral(Vec::new()),
             });
@@ -2041,6 +2112,7 @@ impl super::Parser {
             }
             self.expect(&Token::RightBracket)?;
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: ExprKind::MapLiteral {
                     type_name: None,
@@ -2054,6 +2126,7 @@ impl super::Parser {
             let count = self.parse_expression()?;
             self.expect(&Token::RightBracket)?;
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: ExprKind::RepeatLiteral {
                     type_name: None,
@@ -2073,6 +2146,7 @@ impl super::Parser {
         }
         self.expect(&Token::RightBracket)?;
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(&start),
             kind: ExprKind::ArrayLiteral(elements),
         })
@@ -2133,6 +2207,7 @@ impl super::Parser {
                     let body = self.parse_block()?;
                     self.loop_labels.pop();
                     return Some(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: self.span_from(&start),
                         kind: ExprKind::Loop {
                             label: Some(name),
@@ -2151,6 +2226,7 @@ impl super::Parser {
                     let body = self.parse_block()?;
                     self.loop_labels.pop();
                     return Some(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         span: self.span_from(&start),
                         kind: ExprKind::LabeledBlock {
                             label: name,
@@ -2200,9 +2276,11 @@ impl super::Parser {
                 let args = self.parse_arg_list()?;
                 self.expect(&Token::RightParen)?;
                 return Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
                     kind: ExprKind::Call {
                         callee: Box::new(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             span: self.span_from(&start),
                             kind: ExprKind::Path {
                                 segments: path,
@@ -2215,6 +2293,7 @@ impl super::Parser {
             }
 
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: ExprKind::Path {
                     segments: path,
@@ -2251,6 +2330,7 @@ impl super::Parser {
             // slice 1b — call-site const-arg binding).
             let args = self.parse_generic_type_args()?;
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: ExprKind::Path {
                     segments: vec![name],
@@ -2273,6 +2353,7 @@ impl super::Parser {
             self.expect(&Token::Dot)?;
             let variant = self.expect_identifier()?;
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(&start),
                 kind: ExprKind::Path {
                     segments: vec![name, variant],
@@ -2330,6 +2411,7 @@ impl super::Parser {
         }
 
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(&start),
             kind: ExprKind::Identifier(name),
         })
@@ -2349,6 +2431,7 @@ impl super::Parser {
         if self.check(&Token::RightBracket) {
             self.advance();
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(start),
                 kind: ExprKind::PrefixCollectionLiteral {
                     type_name: name,
@@ -2363,6 +2446,7 @@ impl super::Parser {
             let count = self.parse_expression()?;
             self.expect(&Token::RightBracket)?;
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(start),
                 kind: ExprKind::RepeatLiteral {
                     type_name: Some(name),
@@ -2391,6 +2475,7 @@ impl super::Parser {
             }
             self.expect(&Token::RightBracket)?;
             return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: self.span_from(start),
                 kind: ExprKind::MapLiteral {
                     type_name: Some(name),
@@ -2407,6 +2492,7 @@ impl super::Parser {
         }
         self.expect(&Token::RightBracket)?;
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(start),
             kind: ExprKind::PrefixCollectionLiteral {
                 type_name: name,
@@ -2852,6 +2938,7 @@ impl super::Parser {
                 let span = self.span_from(&fs);
                 fields.push(FieldInit {
                     value: Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Identifier(name.clone()),
                         span,
                     },
@@ -2866,6 +2953,7 @@ impl super::Parser {
         }
         self.expect(&Token::RightBrace)?;
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: self.span_from(start),
             kind: ExprKind::StructLiteral {
                 path,
@@ -3101,6 +3189,7 @@ impl super::Parser {
 
         let Some(value) = self.parse_expression() else {
             return Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: target_span,
                 kind: ExprKind::Error,
             };
@@ -3154,9 +3243,14 @@ impl super::Parser {
             },
         };
         Expr {
+            id: crate::ids::NodeId::DUMMY,
             span,
             kind: ExprKind::Block(Block {
-                stmts: vec![Stmt { span, kind }],
+                stmts: vec![Stmt {
+                    id: crate::ids::NodeId::DUMMY,
+                    span,
+                    kind,
+                }],
                 final_expr: None,
                 span,
             }),

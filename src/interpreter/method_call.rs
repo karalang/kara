@@ -3603,6 +3603,7 @@ impl<'a> super::Interpreter<'a> {
                 && self.env.get(&segments[0]).is_none()
             {
                 let callee = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Path {
                         segments: vec![segments[0].clone(), method.to_string()],
                         generic_args: None,

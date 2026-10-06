@@ -221,8 +221,10 @@ fn build_skeleton(module_program: &Program) -> Program {
     use crate::ast::{Block, ExprKind, ImplItem, Item, Stmt, StmtKind};
     fn stub(body_span: Span) -> Block {
         let call = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier("unreachable".to_string()),
                     span: body_span,
                 }),
@@ -232,6 +234,7 @@ fn build_skeleton(module_program: &Program) -> Program {
         };
         Block {
             stmts: vec![Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Expr(call),
                 span: body_span,
             }],

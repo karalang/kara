@@ -3679,6 +3679,7 @@ impl<'a> super::TypeChecker<'a> {
         self.local_scope.push();
         self.local_scope.insert(RECV.to_string(), payload.clone());
         let recv_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: object.span,
             kind: ExprKind::Identifier(RECV.to_string()),
         };

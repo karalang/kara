@@ -158,8 +158,10 @@ fn rewrite_struct_literal(e: &mut Expr, structs: &StructFields) {
         fields.push(FieldInit {
             name: fname.clone(),
             value: Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::FieldAccess {
                     object: Box::new(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: base.kind.clone(),
                         span,
                     }),

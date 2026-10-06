@@ -136,8 +136,10 @@ fn is_main_function(item: &Item) -> bool {
 fn synth_provider_ctor_marker() -> Stmt {
     let zero = Span::default();
     let call = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Call {
             callee: Box::new(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier("println".to_string()),
                 span: zero,
             }),
@@ -146,6 +148,7 @@ fn synth_provider_ctor_marker() -> Stmt {
                 mut_marker: false,
                 mut_marker_span: None,
                 value: Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::StringLit(PROVIDER_CTOR_MARKER.to_string()),
                     span: zero,
                 },
@@ -155,6 +158,7 @@ fn synth_provider_ctor_marker() -> Stmt {
         span: zero,
     };
     Stmt {
+        id: crate::ids::NodeId::DUMMY,
         kind: StmtKind::Expr(call),
         span: zero,
     }
@@ -164,10 +168,12 @@ fn synth_provider_ctor_marker() -> Stmt {
 fn synth_call_expr(test_fn_name: &str) -> Expr {
     let zero = Span::default();
     let callee = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Identifier(test_fn_name.to_string()),
         span: zero,
     };
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Call {
             callee: Box::new(callee),
             args: Vec::new(),
@@ -186,6 +192,7 @@ fn synth_call_expr(test_fn_name: &str) -> Expr {
 fn synth_with_provider_call(resource: &str, provider: Expr, inner: Expr) -> Expr {
     let zero = Span::default();
     let closure = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Closure {
             params: Vec::new(),
             capture_mode: None,
@@ -195,12 +202,15 @@ fn synth_with_provider_call(resource: &str, provider: Expr, inner: Expr) -> Expr
         span: zero,
     };
     let callee = Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Index {
             object: Box::new(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier("with_provider".to_string()),
                 span: zero,
             }),
             index: Box::new(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(resource.to_string()),
                 span: zero,
             }),
@@ -208,6 +218,7 @@ fn synth_with_provider_call(resource: &str, provider: Expr, inner: Expr) -> Expr
         span: zero,
     };
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Call {
             callee: Box::new(callee),
             args: vec![
@@ -236,6 +247,7 @@ fn synth_with_provider_call(resource: &str, provider: Expr, inner: Expr) -> Expr
 fn synth_identifier_expr(name: &str) -> Expr {
     let zero = Span::default();
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: ExprKind::Identifier(name.to_string()),
         span: zero,
     }
@@ -247,9 +259,11 @@ fn synth_identifier_expr(name: &str) -> Expr {
 fn synth_let_binding(name: &str, init: Expr) -> Stmt {
     let zero = Span::default();
     Stmt {
+        id: crate::ids::NodeId::DUMMY,
         kind: StmtKind::Let {
             is_mut: false,
             pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::Binding(name.to_string()),
                 span: zero,
             },
@@ -271,6 +285,7 @@ fn synth_let_binding(name: &str, init: Expr) -> Stmt {
 fn synth_block_with_lets_and_final_call(mut let_stmts: Vec<Stmt>, final_call: Expr) -> Block {
     let zero = Span::default();
     let_stmts.push(Stmt {
+        id: crate::ids::NodeId::DUMMY,
         kind: StmtKind::Expr(final_call),
         span: zero,
     });

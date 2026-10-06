@@ -57,6 +57,7 @@ fn allow_attr(name: &str) -> Attribute {
     // (`allow(name = X)`) or positional-identifier (`allow(X)`) args;
     // build the positional form here.
     let value_expr = Expr {
+        id: karac::ids::NodeId::DUMMY,
         kind: ExprKind::Identifier(name.to_string()),
         span: syn_span(),
     };

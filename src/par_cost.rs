@@ -1424,6 +1424,7 @@ pub(crate) fn extract_loop_shape_explained(
                 ExprKind::Integer(0, _) => None,
                 ExprKind::Integer(_, _) => Some(init_expr),
                 _ => Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(loop_var.clone()),
                     span: init_expr.span,
                 }),

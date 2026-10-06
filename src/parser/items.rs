@@ -1581,6 +1581,7 @@ impl super::Parser {
             let doc_comment = self.take_pending_doc();
             let ty_span = ty.span;
             let pattern = Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::Wildcard,
                 span: ty_span,
             };
@@ -1719,6 +1720,7 @@ impl super::Parser {
             Token::Underscore => {
                 self.advance();
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Wildcard,
                     span: self.span_from(&start),
                 })
@@ -1735,6 +1737,7 @@ impl super::Parser {
                 }
                 self.expect(&Token::RightParen)?;
                 Some(Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Tuple(patterns),
                     span: self.span_from(&start),
                 })
@@ -1765,6 +1768,7 @@ impl super::Parser {
                     }
                     self.expect(&Token::RightBrace)?;
                     Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Struct {
                             path: vec![name],
                             fields,
@@ -1784,6 +1788,7 @@ impl super::Parser {
                         self.check_ident_class(&name, IdentClass::Value, "parameter", name_span);
                     }
                     Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(name),
                         span: self.span_from(&start),
                     })

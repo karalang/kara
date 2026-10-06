@@ -24,6 +24,7 @@ use crate::ast::{
     FieldPattern, Function, ImplBlock, ImplItem, Item, MatchArm, Param, ParsedInterpolationPart,
     Pattern, PatternKind, ProviderBinding, Stmt, StmtKind, TypeExpr,
 };
+use crate::ids::NodeId;
 use crate::token::Span;
 
 /// Recursively visit every `Span` reachable from `item`, calling
@@ -861,8 +862,38 @@ pub fn shift_expr_spans(e: &mut Expr, hole_offset: usize, hole_line: usize, hole
     });
 }
 
+/// What the mutable walkers below call back with: every span, and every
+/// expression, pattern and statement [`NodeId`]. A plain
+/// `FnMut(&mut Span)` closure is a span-only visitor.
+pub trait MutVisitor {
+    fn span(&mut self, span: &mut Span);
+    fn node_id(&mut self, _id: &mut NodeId) {}
+}
+
+struct SpanOnly<F>(F);
+
+impl<F: FnMut(&mut Span)> MutVisitor for SpanOnly<F> {
+    fn span(&mut self, span: &mut Span) {
+        (self.0)(span)
+    }
+}
+
 pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut e.span);
+    walk_expr_mut(e, &mut SpanOnly(visit));
+}
+
+pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) {
+    walk_item_mut(item, &mut SpanOnly(visit));
+}
+
+/// Visit every span and every expression, pattern and statement id in `item`.
+pub fn walk_item_mut_with(item: &mut Item, visit: &mut impl MutVisitor) {
+    walk_item_mut(item, visit);
+}
+
+fn walk_expr_mut(e: &mut Expr, visit: &mut impl MutVisitor) {
+    visit.span(&mut e.span);
+    visit.node_id(&mut e.id);
     match &mut e.kind {
         ExprKind::Integer(_, _)
         | ExprKind::Float(_, _)
@@ -883,18 +914,18 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
                 if let ParsedInterpolationPart::Expr(inner, _) = p {
-                    visit_expr_spans_mut(inner, visit);
+                    walk_expr_mut(inner, visit);
                 }
             }
         }
         ExprKind::Binary { left, right, .. } => {
-            visit_expr_spans_mut(left, visit);
-            visit_expr_spans_mut(right, visit);
+            walk_expr_mut(left, visit);
+            walk_expr_mut(right, visit);
         }
-        ExprKind::Unary { operand, .. } => visit_expr_spans_mut(operand, visit),
-        ExprKind::Question(inner) => visit_expr_spans_mut(inner, visit),
+        ExprKind::Unary { operand, .. } => walk_expr_mut(operand, visit),
+        ExprKind::Question(inner) => walk_expr_mut(inner, visit),
         ExprKind::OptionalChain { object, args, .. } => {
-            visit_expr_spans_mut(object, visit);
+            walk_expr_mut(object, visit);
             if let Some(a) = args {
                 for arg in a {
                     visit_call_arg_spans_mut(arg, visit);
@@ -902,11 +933,11 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
             }
         }
         ExprKind::NilCoalesce { left, right } => {
-            visit_expr_spans_mut(left, visit);
-            visit_expr_spans_mut(right, visit);
+            walk_expr_mut(left, visit);
+            walk_expr_mut(right, visit);
         }
         ExprKind::Call { callee, args } => {
-            visit_expr_spans_mut(callee, visit);
+            walk_expr_mut(callee, visit);
             for a in args {
                 visit_call_arg_spans_mut(a, visit);
             }
@@ -917,18 +948,18 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
             args_close_span,
             ..
         } => {
-            visit_expr_spans_mut(object, visit);
+            walk_expr_mut(object, visit);
             for a in args {
                 visit_call_arg_spans_mut(a, visit);
             }
             // See `visit_expr` — this is the arm B-2026-10-03-47 was filed for.
-            visit(args_close_span);
+            visit.span(args_close_span);
         }
-        ExprKind::FieldAccess { object, .. } => visit_expr_spans_mut(object, visit),
-        ExprKind::TupleIndex { object, .. } => visit_expr_spans_mut(object, visit),
+        ExprKind::FieldAccess { object, .. } => walk_expr_mut(object, visit),
+        ExprKind::TupleIndex { object, .. } => walk_expr_mut(object, visit),
         ExprKind::Index { object, index } => {
-            visit_expr_spans_mut(object, visit);
-            visit_expr_spans_mut(index, visit);
+            walk_expr_mut(object, visit);
+            walk_expr_mut(index, visit);
         }
         ExprKind::Block(b) | ExprKind::Comptime(b) => visit_block_spans_mut(b, visit),
         ExprKind::If {
@@ -936,10 +967,10 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
             then_block,
             else_branch,
         } => {
-            visit_expr_spans_mut(condition, visit);
+            walk_expr_mut(condition, visit);
             visit_block_spans_mut(then_block, visit);
             if let Some(e) = else_branch {
-                visit_expr_spans_mut(e, visit);
+                walk_expr_mut(e, visit);
             }
         }
         ExprKind::IfLet {
@@ -949,14 +980,14 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
             else_branch,
         } => {
             visit_pattern_spans_mut(pattern, visit);
-            visit_expr_spans_mut(value, visit);
+            walk_expr_mut(value, visit);
             visit_block_spans_mut(then_block, visit);
             if let Some(e) = else_branch {
-                visit_expr_spans_mut(e, visit);
+                walk_expr_mut(e, visit);
             }
         }
         ExprKind::Match { scrutinee, arms } => {
-            visit_expr_spans_mut(scrutinee, visit);
+            walk_expr_mut(scrutinee, visit);
             for arm in arms {
                 visit_match_arm_spans_mut(arm, visit);
             }
@@ -964,7 +995,7 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
         ExprKind::While {
             condition, body, ..
         } => {
-            visit_expr_spans_mut(condition, visit);
+            walk_expr_mut(condition, visit);
             visit_block_spans_mut(body, visit);
         }
         ExprKind::WhileLet {
@@ -974,7 +1005,7 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
             ..
         } => {
             visit_pattern_spans_mut(pattern, visit);
-            visit_expr_spans_mut(value, visit);
+            walk_expr_mut(value, visit);
             visit_block_spans_mut(body, visit);
         }
         ExprKind::For {
@@ -984,14 +1015,14 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
             ..
         } => {
             visit_pattern_spans_mut(pattern, visit);
-            visit_expr_spans_mut(iterable, visit);
+            walk_expr_mut(iterable, visit);
             visit_block_spans_mut(body, visit);
         }
         ExprKind::Loop { body, .. } => visit_block_spans_mut(body, visit),
         ExprKind::LabeledBlock {
             label_span, body, ..
         } => {
-            visit(label_span);
+            visit.span(label_span);
             visit_block_spans_mut(body, visit);
         }
         ExprKind::Closure {
@@ -1001,41 +1032,41 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
             ..
         } => {
             if let Some(ps) = prefix_span {
-                visit(ps);
+                visit.span(ps);
             }
             for cp in params {
                 visit_closure_param_spans_mut(cp, visit);
             }
-            visit_expr_spans_mut(body, visit);
+            walk_expr_mut(body, visit);
         }
         ExprKind::Return(opt) => {
             if let Some(inner) = opt {
-                visit_expr_spans_mut(inner, visit);
+                walk_expr_mut(inner, visit);
             }
         }
         ExprKind::Break { value, .. } => {
             if let Some(v) = value {
-                visit_expr_spans_mut(v, visit);
+                walk_expr_mut(v, visit);
             }
         }
         ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => {
             for x in exprs {
-                visit_expr_spans_mut(x, visit);
+                walk_expr_mut(x, visit);
             }
         }
         ExprKind::PrefixCollectionLiteral { items, .. } => {
             for x in items {
-                visit_expr_spans_mut(x, visit);
+                walk_expr_mut(x, visit);
             }
         }
         ExprKind::RepeatLiteral { value, count, .. } => {
-            visit_expr_spans_mut(value, visit);
-            visit_expr_spans_mut(count, visit);
+            walk_expr_mut(value, visit);
+            walk_expr_mut(count, visit);
         }
         ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
-                visit_expr_spans_mut(k, visit);
-                visit_expr_spans_mut(v, visit);
+                walk_expr_mut(k, visit);
+                walk_expr_mut(v, visit);
             }
         }
         ExprKind::StructLiteral { fields, spread, .. } => {
@@ -1043,26 +1074,26 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
                 visit_field_init_spans_mut(f, visit);
             }
             if let Some(sp) = spread {
-                visit_expr_spans_mut(sp, visit);
+                walk_expr_mut(sp, visit);
             }
         }
         ExprKind::Pipe { left, right } => {
-            visit_expr_spans_mut(left, visit);
-            visit_expr_spans_mut(right, visit);
+            walk_expr_mut(left, visit);
+            walk_expr_mut(right, visit);
         }
         ExprKind::Cast { expr, ty } => {
-            visit_expr_spans_mut(expr, visit);
-            visit(&mut ty.span);
+            walk_expr_mut(expr, visit);
+            visit.span(&mut ty.span);
         }
         ExprKind::OffsetOf { ty, field_path: _ } => {
-            visit(&mut ty.span);
+            visit.span(&mut ty.span);
         }
         ExprKind::Range { start, end, .. } => {
             if let Some(s) = start {
-                visit_expr_spans_mut(s, visit);
+                walk_expr_mut(s, visit);
             }
             if let Some(e) = end {
-                visit_expr_spans_mut(e, visit);
+                walk_expr_mut(e, visit);
             }
         }
         ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) | ExprKind::Par(b) => {
@@ -1071,39 +1102,40 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
         ExprKind::Lock { body, .. } => visit_block_spans_mut(body, visit),
         ExprKind::Providers { bindings, body } => {
             for pb in bindings {
-                visit(&mut pb.resource_span);
-                visit_expr_spans_mut(&mut pb.value, visit);
+                visit.span(&mut pb.resource_span);
+                walk_expr_mut(&mut pb.value, visit);
             }
             visit_block_spans_mut(body, visit);
         }
     }
 }
 
-fn visit_block_spans_mut(b: &mut Block, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut b.span);
+fn visit_block_spans_mut(b: &mut Block, visit: &mut impl MutVisitor) {
+    visit.span(&mut b.span);
     for s in &mut b.stmts {
         visit_stmt_spans_mut(s, visit);
     }
     if let Some(fe) = &mut b.final_expr {
-        visit_expr_spans_mut(fe, visit);
+        walk_expr_mut(fe, visit);
     }
 }
 
-fn visit_stmt_spans_mut(s: &mut Stmt, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut s.span);
+fn visit_stmt_spans_mut(s: &mut Stmt, visit: &mut impl MutVisitor) {
+    visit.span(&mut s.span);
+    visit.node_id(&mut s.id);
     match &mut s.kind {
         StmtKind::Let {
             pattern, ty, value, ..
         } => {
             visit_pattern_spans_mut(pattern, visit);
             if let Some(t) = ty {
-                visit(&mut t.span);
+                visit.span(&mut t.span);
             }
-            visit_expr_spans_mut(value, visit);
+            walk_expr_mut(value, visit);
         }
         StmtKind::LetUninit { name_span, ty, .. } => {
-            visit(name_span);
-            visit(&mut ty.span);
+            visit.span(name_span);
+            visit.span(&mut ty.span);
         }
         StmtKind::LetElse {
             pattern,
@@ -1114,66 +1146,67 @@ fn visit_stmt_spans_mut(s: &mut Stmt, visit: &mut impl FnMut(&mut Span)) {
         } => {
             visit_pattern_spans_mut(pattern, visit);
             if let Some(t) = ty {
-                visit(&mut t.span);
+                visit.span(&mut t.span);
             }
-            visit_expr_spans_mut(value, visit);
+            walk_expr_mut(value, visit);
             visit_block_spans_mut(else_block, visit);
         }
         StmtKind::Defer { body } => visit_block_spans_mut(body, visit),
         StmtKind::ErrDefer { body, .. } => visit_block_spans_mut(body, visit),
         StmtKind::Assign { target, value } => {
-            visit_expr_spans_mut(target, visit);
-            visit_expr_spans_mut(value, visit);
+            walk_expr_mut(target, visit);
+            walk_expr_mut(value, visit);
         }
         StmtKind::MultiAssign { targets, values } => {
             for t in targets {
-                visit_expr_spans_mut(t, visit);
+                walk_expr_mut(t, visit);
             }
             for v in values {
-                visit_expr_spans_mut(v, visit);
+                walk_expr_mut(v, visit);
             }
         }
         StmtKind::CompoundAssign { target, value, .. } => {
-            visit_expr_spans_mut(target, visit);
-            visit_expr_spans_mut(value, visit);
+            walk_expr_mut(target, visit);
+            walk_expr_mut(value, visit);
         }
-        StmtKind::Expr(e) => visit_expr_spans_mut(e, visit),
+        StmtKind::Expr(e) => walk_expr_mut(e, visit),
     }
 }
 
-fn visit_call_arg_spans_mut(a: &mut CallArg, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut a.span);
+fn visit_call_arg_spans_mut(a: &mut CallArg, visit: &mut impl MutVisitor) {
+    visit.span(&mut a.span);
     // See `visit_call_arg` — this is the arm B-2026-08-11-35 was filed for.
     if let Some(m) = &mut a.mut_marker_span {
-        visit(m);
+        visit.span(m);
     }
-    visit_expr_spans_mut(&mut a.value, visit);
+    walk_expr_mut(&mut a.value, visit);
 }
 
-fn visit_match_arm_spans_mut(a: &mut MatchArm, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut a.span);
+fn visit_match_arm_spans_mut(a: &mut MatchArm, visit: &mut impl MutVisitor) {
+    visit.span(&mut a.span);
     visit_pattern_spans_mut(&mut a.pattern, visit);
     if let Some(g) = &mut a.guard {
-        visit_expr_spans_mut(g, visit);
+        walk_expr_mut(g, visit);
     }
-    visit_expr_spans_mut(&mut a.body, visit);
+    walk_expr_mut(&mut a.body, visit);
 }
 
-fn visit_closure_param_spans_mut(cp: &mut ClosureParam, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut cp.span);
+fn visit_closure_param_spans_mut(cp: &mut ClosureParam, visit: &mut impl MutVisitor) {
+    visit.span(&mut cp.span);
     visit_pattern_spans_mut(&mut cp.pattern, visit);
     if let Some(t) = &mut cp.ty {
-        visit(&mut t.span);
+        visit.span(&mut t.span);
     }
 }
 
-fn visit_field_init_spans_mut(f: &mut FieldInit, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut f.span);
-    visit_expr_spans_mut(&mut f.value, visit);
+fn visit_field_init_spans_mut(f: &mut FieldInit, visit: &mut impl MutVisitor) {
+    visit.span(&mut f.span);
+    walk_expr_mut(&mut f.value, visit);
 }
 
-fn visit_pattern_spans_mut(p: &mut Pattern, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut p.span);
+fn visit_pattern_spans_mut(p: &mut Pattern, visit: &mut impl MutVisitor) {
+    visit.span(&mut p.span);
+    visit.node_id(&mut p.id);
     match &mut p.kind {
         PatternKind::Wildcard
         | PatternKind::Binding(_)
@@ -1182,7 +1215,7 @@ fn visit_pattern_spans_mut(p: &mut Pattern, visit: &mut impl FnMut(&mut Span)) {
         PatternKind::AtBinding { pattern, .. } => visit_pattern_spans_mut(pattern, visit),
         PatternKind::Struct { fields, .. } => {
             for fp in fields {
-                visit(&mut fp.span);
+                visit.span(&mut fp.span);
                 if let Some(inner) = &mut fp.pattern {
                     visit_pattern_spans_mut(inner, visit);
                 }
@@ -1230,11 +1263,11 @@ fn visit_pattern_spans_mut(p: &mut Pattern, visit: &mut impl FnMut(&mut Span)) {
 // still collide. Mirror `visit_item_spans` arm-for-arm and recurse types
 // fully; reuse the existing `visit_*_spans_mut` expression/statement/
 // pattern walkers (kept in lockstep with the AST by the f-string rebase).
-pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) {
+fn walk_item_mut(item: &mut Item, visit: &mut impl MutVisitor) {
     match item {
         Item::Function(f) => visit_function_mut(f, visit),
         Item::StructDef(s) => {
-            visit(&mut s.span);
+            visit.span(&mut s.span);
             visit_generics_mut(
                 s.generic_params.as_mut(),
                 &mut [],
@@ -1243,30 +1276,30 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
             );
             // See the read-only arm: these three feed the `par struct`
             // migration's edits and must move with the rest.
-            visit(&mut s.struct_keyword_span);
+            visit.span(&mut s.struct_keyword_span);
             if let Some(k) = &mut s.kind_keyword_span {
-                visit(k);
+                visit.span(k);
             }
             for field in &mut s.fields {
-                visit(&mut field.span);
+                visit.span(&mut field.span);
                 if let Some(m) = &mut field.mut_keyword_span {
-                    visit(m);
+                    visit.span(m);
                 }
                 visit_type_spans_mut(&mut field.ty, visit);
             }
             for inv in s.invariants.iter_mut().chain(s.impl_invariants.iter_mut()) {
-                visit_expr_spans_mut(inv, visit);
+                walk_expr_mut(inv, visit);
             }
         }
         Item::UnionDef(u) => {
-            visit(&mut u.span);
+            visit.span(&mut u.span);
             for field in &mut u.fields {
-                visit(&mut field.span);
+                visit.span(&mut field.span);
                 visit_type_spans_mut(&mut field.ty, visit);
             }
         }
         Item::EnumDef(e) => {
-            visit(&mut e.span);
+            visit.span(&mut e.span);
             visit_generics_mut(
                 e.generic_params.as_mut(),
                 &mut [],
@@ -1274,7 +1307,7 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
                 visit,
             );
             for v in &mut e.variants {
-                visit(&mut v.span);
+                visit.span(&mut v.span);
                 match &mut v.kind {
                     crate::ast::VariantKind::Unit => {}
                     crate::ast::VariantKind::Tuple(tys) => {
@@ -1284,7 +1317,7 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
                     }
                     crate::ast::VariantKind::Struct(fields) => {
                         for f in fields {
-                            visit(&mut f.span);
+                            visit.span(&mut f.span);
                             visit_type_spans_mut(&mut f.ty, visit);
                         }
                     }
@@ -1292,7 +1325,7 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
             }
         }
         Item::TraitDef(t) => {
-            visit(&mut t.span);
+            visit.span(&mut t.span);
             visit_generics_mut(
                 t.generic_params.as_mut(),
                 &mut t.supertraits,
@@ -1302,7 +1335,7 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
             for ti in &mut t.items {
                 match ti {
                     crate::ast::TraitItem::Method(m) => {
-                        visit(&mut m.span);
+                        visit.span(&mut m.span);
                         visit_generics_mut(
                             m.generic_params.as_mut(),
                             &mut [],
@@ -1311,7 +1344,7 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
                         );
                         // See the read-only arm.
                         if let Some(sp) = &mut m.self_span {
-                            visit(sp);
+                            visit.span(sp);
                         }
                         for p in &mut m.params {
                             visit_param_mut(p, visit);
@@ -1320,7 +1353,7 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
                             visit_type_spans_mut(rt, visit);
                         }
                         for req in &mut m.requires {
-                            visit_expr_spans_mut(req, visit);
+                            walk_expr_mut(req, visit);
                         }
                         for ens in &mut m.ensures {
                             visit_ensures_mut(ens, visit);
@@ -1330,7 +1363,7 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
                         }
                     }
                     crate::ast::TraitItem::AssocType(a) => {
-                        visit(&mut a.span);
+                        visit.span(&mut a.span);
                         visit_generics_mut(
                             a.generic_params.as_mut(),
                             &mut a.bounds,
@@ -1342,7 +1375,7 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
             }
         }
         Item::TraitAlias(a) => {
-            visit(&mut a.span);
+            visit.span(&mut a.span);
             visit_generics_mut(
                 a.generic_params.as_mut(),
                 &mut a.bounds,
@@ -1351,7 +1384,7 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
             );
         }
         Item::MarkerTrait(m) => {
-            visit(&mut m.span);
+            visit.span(&mut m.span);
             visit_generics_mut(
                 m.generic_params.as_mut(),
                 &mut m.supertraits,
@@ -1361,14 +1394,14 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
         }
         Item::ImplBlock(b) => visit_impl_block_mut(b, visit),
         Item::EffectResource(r) => {
-            visit(&mut r.span);
+            visit.span(&mut r.span);
             if let Some(k) = &mut r.key_param {
-                visit(&mut k.span);
-                visit(&mut k.name_span);
+                visit.span(&mut k.span);
+                visit.span(&mut k.name_span);
                 visit_type_spans_mut(&mut k.ty, visit);
             }
             for bound in r.provider_bounds.iter_mut() {
-                visit(&mut bound.name_span);
+                visit.span(&mut bound.name_span);
                 if let Some(args) = &mut bound.args {
                     for a in args.iter_mut() {
                         visit_generic_arg_mut(a, visit);
@@ -1376,32 +1409,32 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
                 }
             }
         }
-        Item::EffectGroup(g) => visit(&mut g.span),
-        Item::EffectVerbDecl(v) => visit(&mut v.span),
-        Item::LayoutDef(l) => visit(&mut l.span),
-        Item::UseDecl(u) => visit(&mut u.span),
-        Item::Import(i) => visit(&mut i.span),
+        Item::EffectGroup(g) => visit.span(&mut g.span),
+        Item::EffectVerbDecl(v) => visit.span(&mut v.span),
+        Item::LayoutDef(l) => visit.span(&mut l.span),
+        Item::UseDecl(u) => visit.span(&mut u.span),
+        Item::Import(i) => visit.span(&mut i.span),
         Item::ConstDecl(c) => {
-            visit(&mut c.span);
+            visit.span(&mut c.span);
             visit_type_spans_mut(&mut c.ty, visit);
-            visit_expr_spans_mut(&mut c.value, visit);
+            walk_expr_mut(&mut c.value, visit);
         }
         Item::ModuleBinding(b) => {
-            visit(&mut b.span);
+            visit.span(&mut b.span);
             if let Some(ty) = &mut b.ty {
                 visit_type_spans_mut(ty, visit);
             }
-            visit_expr_spans_mut(&mut b.value, visit);
+            walk_expr_mut(&mut b.value, visit);
         }
         Item::TestCase(t) => {
-            visit(&mut t.span);
-            visit(&mut t.name_span);
+            visit.span(&mut t.span);
+            visit.span(&mut t.name_span);
             visit_block_spans_mut(&mut t.body, visit);
         }
-        Item::AliasDecl(a) => visit(&mut a.span),
-        Item::IndependentDecl(i) => visit(&mut i.span),
+        Item::AliasDecl(a) => visit.span(&mut a.span),
+        Item::IndependentDecl(i) => visit.span(&mut i.span),
         Item::ExternFunction(e) => {
-            visit(&mut e.span);
+            visit.span(&mut e.span);
             for p in &mut e.params {
                 visit_param_mut(p, visit);
             }
@@ -1410,11 +1443,11 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
             }
         }
         Item::ExternBlock(b) => {
-            visit(&mut b.span);
+            visit.span(&mut b.span);
             for it in &mut b.items {
                 match it {
                     ExternItem::Function(e) => {
-                        visit(&mut e.span);
+                        visit.span(&mut e.span);
                         for p in &mut e.params {
                             visit_param_mut(p, visit);
                         }
@@ -1423,32 +1456,32 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
                         }
                     }
                     ExternItem::OpaqueType(o) => {
-                        visit(&mut o.span);
+                        visit.span(&mut o.span);
                     }
                 }
             }
         }
         Item::TypeAlias(a) => {
-            visit(&mut a.span);
+            visit.span(&mut a.span);
             visit_generics_mut(a.generic_params.as_mut(), &mut [], None, visit);
             visit_type_spans_mut(&mut a.ty, visit);
             if let Some(r) = &mut a.refinement {
-                visit_expr_spans_mut(r, visit);
+                walk_expr_mut(r, visit);
             }
         }
         Item::DistinctType(d) => {
-            visit(&mut d.span);
+            visit.span(&mut d.span);
             visit_generics_mut(d.generic_params.as_mut(), &mut [], None, visit);
             visit_type_spans_mut(&mut d.base_type, visit);
             if let Some(r) = &mut d.refinement {
-                visit_expr_spans_mut(r, visit);
+                walk_expr_mut(r, visit);
             }
         }
     }
 }
 
-fn visit_function_mut(f: &mut Function, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut f.span);
+fn visit_function_mut(f: &mut Function, visit: &mut impl MutVisitor) {
+    visit.span(&mut f.span);
     visit_generics_mut(
         f.generic_params.as_mut(),
         &mut [],
@@ -1462,7 +1495,7 @@ fn visit_function_mut(f: &mut Function, visit: &mut impl FnMut(&mut Span)) {
         visit_type_spans_mut(rt, visit);
     }
     for req in &mut f.requires {
-        visit_expr_spans_mut(req, visit);
+        walk_expr_mut(req, visit);
     }
     for ens in &mut f.ensures {
         visit_ensures_mut(ens, visit);
@@ -1470,8 +1503,8 @@ fn visit_function_mut(f: &mut Function, visit: &mut impl FnMut(&mut Span)) {
     visit_block_spans_mut(&mut f.body, visit);
 }
 
-fn visit_impl_block_mut(b: &mut ImplBlock, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut b.span);
+fn visit_impl_block_mut(b: &mut ImplBlock, visit: &mut impl MutVisitor) {
+    visit.span(&mut b.span);
     visit_generics_mut(
         b.generic_params.as_mut(),
         &mut [],
@@ -1483,7 +1516,7 @@ fn visit_impl_block_mut(b: &mut ImplBlock, visit: &mut impl FnMut(&mut Span)) {
         match ii {
             ImplItem::Method(m) => visit_function_mut(m, visit),
             ImplItem::AssocType(a) => {
-                visit(&mut a.span);
+                visit.span(&mut a.span);
                 visit_generics_mut(
                     a.generic_params.as_mut(),
                     &mut [],
@@ -1496,18 +1529,18 @@ fn visit_impl_block_mut(b: &mut ImplBlock, visit: &mut impl FnMut(&mut Span)) {
     }
 }
 
-fn visit_param_mut(p: &mut Param, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut p.span);
+fn visit_param_mut(p: &mut Param, visit: &mut impl MutVisitor) {
+    visit.span(&mut p.span);
     visit_pattern_spans_mut(&mut p.pattern, visit);
     visit_type_spans_mut(&mut p.ty, visit);
     if let Some(d) = &mut p.default_value {
-        visit_expr_spans_mut(d, visit);
+        walk_expr_mut(d, visit);
     }
 }
 
-fn visit_ensures_mut(e: &mut EnsuresClause, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut e.span);
-    visit_expr_spans_mut(&mut e.body, visit);
+fn visit_ensures_mut(e: &mut EnsuresClause, visit: &mut impl MutVisitor) {
+    visit.span(&mut e.span);
+    walk_expr_mut(&mut e.body, visit);
 }
 
 /// Recurse every `Span` reachable from a type expression. Unlike the
@@ -1515,8 +1548,8 @@ fn visit_ensures_mut(e: &mut EnsuresClause, visit: &mut impl FnMut(&mut Span)) {
 /// type, the embedded const exprs (`Array` size, `GenericArg::Const`,
 /// shape dims), and path/generic-arg spans — so a rebase leaves no
 /// file-local offset behind to collide.
-fn visit_type_spans_mut(t: &mut TypeExpr, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut t.span);
+fn visit_type_spans_mut(t: &mut TypeExpr, visit: &mut impl MutVisitor) {
+    visit.span(&mut t.span);
     match &mut t.kind {
         crate::ast::TypeKind::Path(p) => visit_path_expr_mut(p, visit),
         crate::ast::TypeKind::Tuple(tys) => {
@@ -1526,7 +1559,7 @@ fn visit_type_spans_mut(t: &mut TypeExpr, visit: &mut impl FnMut(&mut Span)) {
         }
         crate::ast::TypeKind::Array { element, size } => {
             visit_type_spans_mut(element, visit);
-            visit_expr_spans_mut(size, visit);
+            walk_expr_mut(size, visit);
         }
         crate::ast::TypeKind::Pointer { inner, .. }
         | crate::ast::TypeKind::Ref(inner)
@@ -1559,13 +1592,13 @@ fn visit_type_spans_mut(t: &mut TypeExpr, visit: &mut impl FnMut(&mut Span)) {
             assoc_bindings,
             span,
         } => {
-            visit(span);
+            visit.span(span);
             visit_path_expr_mut(trait_path, visit);
             for a in args {
                 visit_generic_arg_mut(a, visit);
             }
             for b in assoc_bindings {
-                visit(&mut b.span);
+                visit.span(&mut b.span);
                 visit_type_spans_mut(&mut b.ty, visit);
             }
         }
@@ -1573,8 +1606,8 @@ fn visit_type_spans_mut(t: &mut TypeExpr, visit: &mut impl FnMut(&mut Span)) {
     }
 }
 
-fn visit_path_expr_mut(p: &mut crate::ast::PathExpr, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut p.span);
+fn visit_path_expr_mut(p: &mut crate::ast::PathExpr, visit: &mut impl MutVisitor) {
+    visit.span(&mut p.span);
     if let Some(args) = &mut p.generic_args {
         for a in args {
             visit_generic_arg_mut(a, visit);
@@ -1582,17 +1615,17 @@ fn visit_path_expr_mut(p: &mut crate::ast::PathExpr, visit: &mut impl FnMut(&mut
     }
 }
 
-fn visit_generic_arg_mut(a: &mut crate::ast::GenericArg, visit: &mut impl FnMut(&mut Span)) {
+fn visit_generic_arg_mut(a: &mut crate::ast::GenericArg, visit: &mut impl MutVisitor) {
     match a {
         crate::ast::GenericArg::Type(t) => visit_type_spans_mut(t, visit),
-        crate::ast::GenericArg::Const(e) => visit_expr_spans_mut(e, visit),
+        crate::ast::GenericArg::Const(e) => walk_expr_mut(e, visit),
         crate::ast::GenericArg::Shape(s) => {
-            visit(&mut s.span);
+            visit.span(&mut s.span);
             for d in &mut s.dims {
                 match d {
-                    crate::ast::ShapeDim::Const(e) => visit_expr_spans_mut(e, visit),
-                    crate::ast::ShapeDim::Dynamic { span } => visit(span),
-                    crate::ast::ShapeDim::Splice { span, .. } => visit(span),
+                    crate::ast::ShapeDim::Const(e) => walk_expr_mut(e, visit),
+                    crate::ast::ShapeDim::Dynamic { span } => visit.span(span),
+                    crate::ast::ShapeDim::Splice { span, .. } => visit.span(span),
                 }
             }
         }
@@ -1606,8 +1639,8 @@ fn visit_generic_arg_mut(a: &mut crate::ast::GenericArg, visit: &mut impl FnMut(
 // them, and the mut walk decides which get REBASED. A span in one and not the
 // other is worse than a span in neither.
 
-fn visit_trait_bound_mut(b: &mut crate::ast::TraitBound, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut b.span);
+fn visit_trait_bound_mut(b: &mut crate::ast::TraitBound, visit: &mut impl MutVisitor) {
+    visit.span(&mut b.span);
     if let Some(args) = &mut b.generic_args {
         for a in args {
             visit_generic_arg_mut(a, visit);
@@ -1615,12 +1648,12 @@ fn visit_trait_bound_mut(b: &mut crate::ast::TraitBound, visit: &mut impl FnMut(
     }
 }
 
-fn visit_generic_params_mut(g: &mut crate::ast::GenericParams, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut g.span);
+fn visit_generic_params_mut(g: &mut crate::ast::GenericParams, visit: &mut impl MutVisitor) {
+    visit.span(&mut g.span);
     for p in &mut g.params {
-        visit(&mut p.span);
+        visit.span(&mut p.span);
         if let Some(v) = &mut p.variance_span {
-            visit(v);
+            visit.span(v);
         }
         if let Some(ct) = &mut p.const_type {
             visit_type_spans_mut(ct, visit);
@@ -1630,25 +1663,25 @@ fn visit_generic_params_mut(g: &mut crate::ast::GenericParams, visit: &mut impl 
         }
     }
     for ep in &mut g.effect_params {
-        visit(&mut ep.span);
+        visit.span(&mut ep.span);
         for b in &mut ep.bounds {
             visit_trait_bound_mut(b, visit);
         }
     }
 }
 
-fn visit_where_clause_mut(w: &mut crate::ast::WhereClause, visit: &mut impl FnMut(&mut Span)) {
-    visit(&mut w.span);
+fn visit_where_clause_mut(w: &mut crate::ast::WhereClause, visit: &mut impl MutVisitor) {
+    visit.span(&mut w.span);
     for c in &mut w.constraints {
         match c {
             crate::ast::WhereConstraint::TypeBound { bounds, span, .. } => {
-                visit(span);
+                visit.span(span);
                 for b in bounds {
                     visit_trait_bound_mut(b, visit);
                 }
             }
             crate::ast::WhereConstraint::AssocTypeEq { ty, span, .. } => {
-                visit(span);
+                visit.span(span);
                 visit_type_spans_mut(ty, visit);
             }
             crate::ast::WhereConstraint::ProjectionBound {
@@ -1656,15 +1689,15 @@ fn visit_where_clause_mut(w: &mut crate::ast::WhereClause, visit: &mut impl FnMu
                 bounds,
                 span,
             } => {
-                visit(span);
+                visit.span(span);
                 visit_type_spans_mut(projection, visit);
                 for b in bounds {
                     visit_trait_bound_mut(b, visit);
                 }
             }
             crate::ast::WhereConstraint::ConstPredicate { expr, span } => {
-                visit(span);
-                visit_expr_spans_mut(expr, visit);
+                visit.span(span);
+                walk_expr_mut(expr, visit);
             }
         }
     }
@@ -1675,7 +1708,7 @@ fn visit_generics_mut(
     generic_params: Option<&mut crate::ast::GenericParams>,
     bounds: &mut [crate::ast::TraitBound],
     where_clause: Option<&mut crate::ast::WhereClause>,
-    visit: &mut impl FnMut(&mut Span),
+    visit: &mut impl MutVisitor,
 ) {
     if let Some(g) = generic_params {
         visit_generic_params_mut(g, visit);

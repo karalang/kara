@@ -3408,6 +3408,7 @@ impl<'ctx> super::Codegen<'ctx> {
         stack.push(struct_name.to_string());
         for (field, fte) in fields.into_iter().zip(ftes.iter()) {
             let fa = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::FieldAccess {
                     object: Box::new(place.clone()),
                     field,

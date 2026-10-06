@@ -922,6 +922,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let (synth, is_tensor) =
                         self.bind_ref_return_borrow_synth(object, &inner_te)?;
                     let synth_obj = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Identifier(synth.clone()),
                         span: object.span,
                     };
@@ -4442,9 +4443,11 @@ impl<'ctx> super::Codegen<'ctx> {
         );
 
         let rewritten = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Index {
                 object: Box::new(object.clone()),
                 index: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(synth.clone()),
                     span: index.span,
                 }),
@@ -4587,6 +4590,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let self_ident;
                 let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
                     self_ident = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Identifier("self".to_string()),
                         span: inner.span,
                     };

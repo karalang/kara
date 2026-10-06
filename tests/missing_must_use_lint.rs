@@ -95,6 +95,7 @@ fn allow_missing_must_use_attr() -> Attribute {
         args: vec![AttrArg {
             name: None,
             value: Some(karac::ast::Expr {
+                id: karac::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier("missing_must_use".to_string()),
                 span: syn_span(),
             }),

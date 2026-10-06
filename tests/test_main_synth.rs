@@ -177,8 +177,10 @@ fn test_uses_helper() {
 fn synth_no_arg_call(name: &str) -> Expr {
     let zero = Span::default();
     Expr {
+        id: karac::ids::NodeId::DUMMY,
         kind: ExprKind::Call {
             callee: Box::new(Expr {
+                id: karac::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(name.to_string()),
                 span: zero,
             }),

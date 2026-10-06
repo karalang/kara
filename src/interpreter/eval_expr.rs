@@ -844,13 +844,16 @@ impl<'a> super::Interpreter<'a> {
                         .as_ref()
                         .and_then(Self::range_value_bounds)
                         .map(|(lo, hi)| Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             span: index.span,
                             kind: ExprKind::Range {
                                 start: Some(Box::new(Expr {
+                                    id: crate::ids::NodeId::DUMMY,
                                     span: index.span,
                                     kind: ExprKind::Integer(lo.into(), None),
                                 })),
                                 end: Some(Box::new(Expr {
+                                    id: crate::ids::NodeId::DUMMY,
                                     span: index.span,
                                     kind: ExprKind::Integer(hi.into(), None),
                                 })),
@@ -1270,6 +1273,7 @@ impl<'a> super::Interpreter<'a> {
                 // and again at `g`'s. Codegen makes the same rewrite.
                 if self.if_let_rebinds_named_struct_whole(pattern, value) {
                     let block = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Block(crate::ast::whole_rebind_block(
                             pattern, value, then_block,
                         )),
@@ -2791,9 +2795,11 @@ impl<'a> super::Interpreter<'a> {
         }
         self.env.get(&format!("{type_name}.next"))?;
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             span: iterable.span,
             kind: ExprKind::MethodCall {
                 object: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: iterable.span,
                     kind: ExprKind::Identifier(Self::USER_ITER_SLOT.to_string()),
                 }),

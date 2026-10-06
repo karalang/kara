@@ -1469,6 +1469,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .current_span
                     .unwrap_or_else(|| _args[0].value.span);
                 let synth = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: neg_span,
                     kind: ExprKind::Unary {
                         op: UnaryOp::Neg,
@@ -1509,6 +1510,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     UnaryOp::BitNot
                 };
                 let synth = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: _args[0].value.span,
                     kind: ExprKind::Unary {
                         op: un_op,

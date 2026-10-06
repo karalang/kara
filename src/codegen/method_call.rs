@@ -814,6 +814,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 args,
                 args_close_span,
             } => Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::MethodCall {
                     object: Box::new(Self::strip_rev_node(object)),
                     method: method.clone(),
@@ -984,6 +985,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let Some(value) = self.const_place_operand(base)? {
                 let rebuilt = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Index {
                         object: Box::new(value),
                         index: index.clone(),
@@ -1079,6 +1081,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the call's recorded instantiation, which is what lets
                     // the right monomorph be selected at all.
                     let callee = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Path {
                             segments: vec![t.clone(), method.to_string()],
                             generic_args: None,
@@ -1086,6 +1089,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         span: object.span,
                     };
                     let synthetic = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Call {
                             callee: Box::new(callee),
                             args: args.to_vec(),
@@ -1308,6 +1312,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // name alone identifies the shape.
         if method == "chars" && args.is_empty() {
             let chars_call = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::MethodCall {
                     object: Box::new(object.clone()),
                     method: "chars".to_string(),
@@ -3046,6 +3051,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let inner: &Expr =
                 if matches!(inner.kind, ExprKind::SelfValue) && !self.is_atomic_receiver(object) {
                     self_ident = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Identifier("self".to_string()),
                         span: inner.span,
                     };
@@ -9403,6 +9409,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             .var_type_names
                             .insert(synth.clone(), "RequestBuilder".to_string());
                         let synth_expr = Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Identifier(synth.clone()),
                             span: object.span,
                         };
@@ -9462,6 +9469,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .var_type_names
                         .insert(synth.clone(), type_name.to_string());
                     let synth_expr = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Identifier(synth.clone()),
                         span: object.span,
                     };
@@ -9655,6 +9663,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             body
                         } else {
                             wrapped = Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Block(crate::ast::Block {
                                     stmts: pat_stmts,
                                     final_expr: Some(Box::new((**body).clone())),
@@ -9794,6 +9803,7 @@ impl<'ctx> super::Codegen<'ctx> {
             )
         {
             let true_pred = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Bool(true),
                 span: *call_span,
             };
@@ -10027,6 +10037,7 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 let sp = *call_span;
                 let ident = |n: &str| Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(n.to_string()),
                     span: sp,
                 };
@@ -10036,6 +10047,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let cmp = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Binary {
                         op: if method == "max" {
                             BinOp::Gt
@@ -10048,10 +10060,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let body = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::If {
                         condition: Box::new(cmp),
                         then_block: blk(ident("__mmx")),
                         else_branch: Some(Box::new(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Block(blk(ident("__mma"))),
                             span: sp,
                         })),
@@ -10596,6 +10610,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 self.register_var_from_type_expr(&synth, &te);
                 let synth_expr = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(synth.clone()),
                     span: object.span,
                 };
@@ -10728,6 +10743,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
             if self_is_array {
                 let synth = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier("self".to_string()),
                     span: object.span,
                 };
@@ -11126,6 +11142,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let (synth, is_tensor) = self.bind_ref_return_borrow_synth(object, &inner_te)?;
 
         let synth_recv = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.clone()),
             span: object.span,
         };
@@ -12118,6 +12135,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         let synth_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.clone()),
             span: object.span,
         };
@@ -12472,6 +12490,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_types.var_elem_type_exprs.insert(synth.clone(), te);
         }
         let synth_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.clone()),
             span: object.span,
         };
@@ -12607,6 +12626,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .insert(synth.clone(), te);
         }
         let synth_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.clone()),
             span: object.span,
         };

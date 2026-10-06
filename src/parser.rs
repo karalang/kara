@@ -443,7 +443,8 @@ impl Parser {
     }
 
     pub fn parse(mut self) -> ParseResult {
-        let program = self.parse_program();
+        let mut program = self.parse_program();
+        crate::node_ids::assign_node_ids(&mut program);
         ParseResult {
             program,
             errors: self.errors,

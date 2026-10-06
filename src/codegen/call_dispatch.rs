@@ -1968,6 +1968,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let self_norm;
                     let obj_ref: &Expr = if matches!(object.kind, ExprKind::SelfValue) {
                         self_norm = Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Identifier("self".to_string()),
                             span: object.span,
                         };

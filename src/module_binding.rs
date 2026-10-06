@@ -542,6 +542,7 @@ impl Stripper<'_> {
                 };
                 Some(ExprKind::Call {
                     callee: Box::new(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: callee_kind,
                         span: object.span,
                     }),

@@ -5913,6 +5913,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     generic_args: Some(vec![
                                         GenericArg::Type(u8_te),
                                         GenericArg::Const(Expr {
+                                            id: crate::ids::NodeId::DUMMY,
                                             kind: ExprKind::Integer(i128::from(bits / 8), None),
                                             span: value.span,
                                         }),
@@ -14625,8 +14626,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // unchanged and the new value leaked.
                 if matches!(&target.kind, ExprKind::SelfValue) {
                     let renamed = Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: StmtKind::Assign {
                             target: Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Identifier("self".to_string()),
                                 span: target.span,
                             },
@@ -18964,6 +18967,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // other sources keep the enclosing-field discard below.
                     if callee_owned_src.is_some() {
                         let sub_src = Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::FieldAccess {
                                 object: Box::new(value.clone()),
                                 field: fname.clone(),
@@ -22839,6 +22843,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 generic_args: Some(vec![
                     crate::ast::GenericArg::Type(elem.clone()),
                     crate::ast::GenericArg::Const(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Integer(i128::from(*len), None),
                         span: e.span,
                     }),
@@ -27225,6 +27230,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::FieldAccess { object, field } => {
                 let base = self.materialize_displaced_place(object, synths)?;
                 let base_expr = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(base),
                     span: object.span,
                 };
@@ -27307,10 +27313,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 let mut synths = Vec::new();
                 if let Some(base) = self.materialize_displaced_place(inner, &mut synths) {
                     let base_expr = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Identifier(base),
                         span: inner.span,
                     };
                     let rebuilt = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: match &object.kind {
                             ExprKind::FieldAccess { field, .. } => ExprKind::FieldAccess {
                                 object: Box::new(base_expr),
@@ -27371,6 +27379,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let receiver_is_self = matches!(inner.kind, ExprKind::SelfValue);
             let inner: &Expr = if receiver_is_self {
                 self_ident = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier("self".to_string()),
                     span: inner.span,
                 };
@@ -27413,6 +27422,7 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             self.register_var_from_type_expr(&synth, &field_te);
             let synth_expr = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(synth.clone()),
                 span: object.span,
             };
@@ -27509,6 +27519,7 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             self.register_var_from_type_expr(&synth, &elem_te);
             let synth_expr = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(synth.clone()),
                 span: object.span,
             };
@@ -27616,6 +27627,7 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             self.register_var_from_type_expr(&synth, &inner_te);
             let synth_expr = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(synth.clone()),
                 span: object.span,
             };
@@ -31666,6 +31678,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind: crate::ast::TypeKind::Array {
                     element: Box::new(element),
                     size: Box::new(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Integer(items.len() as i128, None),
                         span: e.span,
                     }),

@@ -45,6 +45,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let sp = *call_span;
 
         let ident = |name: &str, sp: &crate::token::Span| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: *sp,
         };
@@ -69,8 +70,10 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // `Vec.new()`
         let vec_new = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Path {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
@@ -84,9 +87,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // `let mut __cas_N: Vec[char] = Vec.new();`
         let let_stmt = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(vec_name.clone()),
                     span: sp,
                 },
@@ -98,6 +103,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // `__cas_N.push(__casc_N)`
         let push_call = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(ident(&vec_name, &sp)),
                 method: "push".to_string(),
@@ -116,16 +122,20 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // `for __casc_N in <string>.chars() { __cas_N.push(__casc_N); }`
         let for_stmt = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(char_name.clone()),
                         span: sp,
                     },
                     iterable: Box::new(chars_call.clone()),
                     body: Block {
                         stmts: vec![Stmt {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: StmtKind::Expr(push_call),
                             span: sp,
                         }],
@@ -174,6 +184,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `chars`/`bytes`.
         crate::presize::presize_block(&mut synth);
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(synth),
             span: sp,
         };
@@ -288,6 +299,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let sp = *call_span;
         let ft_name = format!("__ft_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
@@ -321,6 +333,7 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         // `<prefix>.collect()` at the synthetic span.
         let prefix_collect = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(prefix),
                 method: "collect".to_string(),
@@ -331,9 +344,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: prefix_span,
         };
         let let_ft = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(ft_name.clone()),
                     span: sp,
                 },
@@ -345,6 +360,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Re-apply the ABOVE adaptors to `__ft.iter()` (innermost-above first),
         // then `.collect()` at the ORIGINAL call span (the final result type).
         let mut suffix = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(ident(&ft_name)),
                 method: "iter".to_string(),
@@ -364,6 +380,7 @@ impl<'ctx> super::Codegen<'ctx> {
             } = &call.kind
             {
                 suffix = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::MethodCall {
                         object: Box::new(suffix),
                         method: method.clone(),
@@ -376,6 +393,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         let suffix_collect = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(suffix),
                 method: "collect".to_string(),
@@ -386,6 +404,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![let_ft],
                 final_expr: Some(Box::new(suffix_collect)),
@@ -884,6 +903,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     (
                                         dp,
                                         Expr {
+                                            id: crate::ids::NodeId::DUMMY,
                                             kind: ExprKind::Block(block),
                                             span: body.span,
                                         },
@@ -916,6 +936,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let param =
                                 format!("__mfp_{}_{}", self.indexed_elem_counter, steps.len());
                             let call = Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Call {
                                     callee: Box::new(args[0].value.clone()),
                                     args: vec![CallArg {
@@ -923,6 +944,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         mut_marker: false,
                                         mut_marker_span: None,
                                         value: Expr {
+                                            id: crate::ids::NodeId::DUMMY,
                                             kind: ExprKind::Identifier(param.clone()),
                                             span: args[0].value.span,
                                         },
@@ -1031,6 +1053,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             let param = format!("__idc_{}", self.indexed_elem_counter);
             let body = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(param.clone()),
                 span: *call_span,
             };
@@ -1156,6 +1179,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let ident = |name: &str, sp: &crate::token::Span| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: *sp,
         };
@@ -1183,8 +1207,10 @@ impl<'ctx> super::Codegen<'ctx> {
         //
         // `let mut __icv_N: Vec[U] = Vec.new();`
         let vec_new = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Path {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
@@ -1196,9 +1222,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let let_vec = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(vec_name.clone()),
                     span: sp,
                 },
@@ -1259,6 +1287,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // of memory anyway.
                 if let Some(err) = err_name {
                     let try_push = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::MethodCall {
                             object: Box::new(ident(vec_name, sp)),
                             method: "try_push".to_string(),
@@ -1276,9 +1305,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     };
                     let ok_arm = MatchArm {
                         pattern: Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::TupleVariant {
                                 path: vec!["Ok".to_string()],
                                 patterns: vec![Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: PatternKind::Binding(format!("__icu_{uid}")),
                                     span: *sp,
                                 }],
@@ -1287,6 +1318,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         },
                         guard: None,
                         body: Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Block(Block {
                                 stmts: vec![],
                                 final_expr: None,
@@ -1310,6 +1342,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the flag below is a plain `i64` and the count is extracted
                     // HERE instead of being carried as an enum value.
                     let assign_err = |value: Expr| Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: StmtKind::Assign {
                             target: ident(err, sp),
                             value,
@@ -1317,11 +1350,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         span: *sp,
                     };
                     let inner_match = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Match {
                             scrutinee: Box::new(ident(&e_name, sp)),
                             arms: vec![
                                 MatchArm {
                                     pattern: Pattern {
+                                        id: crate::ids::NodeId::DUMMY,
                                         kind: PatternKind::Struct {
                                             path: vec![
                                                 "AllocError".to_string(),
@@ -1330,6 +1365,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                             fields: vec![crate::ast::FieldPattern {
                                                 name: "requested_bytes".to_string(),
                                                 pattern: Some(Pattern {
+                                                    id: crate::ids::NodeId::DUMMY,
                                                     kind: PatternKind::Binding(b_name.clone()),
                                                     span: *sp,
                                                 }),
@@ -1341,6 +1377,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     },
                                     guard: None,
                                     body: Expr {
+                                        id: crate::ids::NodeId::DUMMY,
                                         kind: ExprKind::Block(Block {
                                             stmts: vec![assign_err(ident(&b_name, sp))],
                                             final_expr: None,
@@ -1352,13 +1389,16 @@ impl<'ctx> super::Codegen<'ctx> {
                                 },
                                 MatchArm {
                                     pattern: Pattern {
+                                        id: crate::ids::NodeId::DUMMY,
                                         kind: PatternKind::Wildcard,
                                         span: *sp,
                                     },
                                     guard: None,
                                     body: Expr {
+                                        id: crate::ids::NodeId::DUMMY,
                                         kind: ExprKind::Block(Block {
                                             stmts: vec![assign_err(Expr {
+                                                id: crate::ids::NodeId::DUMMY,
                                                 kind: ExprKind::Integer(
                                                     0.into(),
                                                     Some(crate::token::IntSuffix::I64),
@@ -1378,9 +1418,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     };
                     let err_arm = MatchArm {
                         pattern: Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::TupleVariant {
                                 path: vec!["Err".to_string()],
                                 patterns: vec![Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: PatternKind::Binding(e_name.clone()),
                                     span: *sp,
                                 }],
@@ -1389,8 +1431,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         },
                         guard: None,
                         body: Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Block(Block {
                                 stmts: vec![Stmt {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: StmtKind::Expr(inner_match),
                                     span: *sp,
                                 }],
@@ -1402,6 +1446,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         span: *sp,
                     };
                     let match_expr = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Match {
                             scrutinee: Box::new(try_push),
                             arms: vec![ok_arm, err_arm],
@@ -1409,12 +1454,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         span: *sp,
                     };
                     return vec![Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: StmtKind::Expr(match_expr),
                         span: *sp,
                     }];
                 }
                 // `__icv_N.push(<current>)`
                 let push_call = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::MethodCall {
                         object: Box::new(ident(vec_name, sp)),
                         method: "push".to_string(),
@@ -1431,6 +1478,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: *sp,
                 };
                 return vec![Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(push_call),
                     span: *sp,
                 }];
@@ -1441,10 +1489,12 @@ impl<'ctx> super::Codegen<'ctx> {
             let st_i = format!("__st_{}_{}", uid, i);
             let stn_i = format!("__stn_{}_{}", uid, i);
             let i64_lit = |n: i64| Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Integer(n.into(), Some(crate::token::IntSuffix::I64)),
                 span: *sp,
             };
             let bool_lit_e = |b: bool, sp: &crate::token::Span| Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Bool(b),
                 span: *sp,
             };
@@ -1454,7 +1504,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // position in the chain, so upstream stages have already run for the
             // element that trips it — exactly as under `karac run`.
             let break_stmt = || Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Expr(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Break {
                         label: None,
                         value: None,
@@ -1464,6 +1516,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 span: *sp,
             };
             let bin = |op: BinOp, l: Expr, r: Expr| Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Binary {
                     op,
                     left: Box::new(l),
@@ -1473,6 +1526,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             // `<name> = <value>;`
             let assign = |name: &str, value: Expr| Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Assign {
                     target: ident(name, sp),
                     value,
@@ -1481,7 +1535,9 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             // `if <cond> { <then> } [else { <els> }]` as an expr-statement.
             let if_stmt = |cond: Expr, then: Vec<Stmt>, els: Option<Vec<Stmt>>| Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Expr(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::If {
                         condition: Box::new(cond),
                         then_block: Block {
@@ -1491,6 +1547,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         },
                         else_branch: els.map(|e| {
                             Box::new(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Block(Block {
                                     stmts: e,
                                     final_expr: None,
@@ -1515,9 +1572,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     body.clone()
                 } else {
                     let bind = Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: StmtKind::Let {
                             is_mut: false,
                             pattern: Pattern {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: PatternKind::Binding(param.to_string()),
                                 span: *sp,
                             },
@@ -1527,6 +1586,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         span: *sp,
                     };
                     Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Block(Block {
                             stmts: vec![bind],
                             final_expr: Some(Box::new(body.clone())),
@@ -1549,9 +1609,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         body.clone()
                     } else {
                         let bind_param = Stmt {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: StmtKind::Let {
                                 is_mut: false,
                                 pattern: Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: PatternKind::Binding(param.clone()),
                                     span: *sp,
                                 },
@@ -1561,6 +1623,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             span: *sp,
                         };
                         Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Block(Block {
                                 stmts: vec![bind_param],
                                 final_expr: Some(Box::new(body.clone())),
@@ -1597,9 +1660,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // current` binds an identifier, never a heap temp).
                     let synth = format!("__icm_{}_{}", uid, i);
                     let let_synth = Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: StmtKind::Let {
                             is_mut: false,
                             pattern: Pattern {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: PatternKind::Binding(synth.clone()),
                                 span: *sp,
                             },
@@ -1633,9 +1698,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         pred.clone()
                     } else {
                         let bind_param = Stmt {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: StmtKind::Let {
                                 is_mut: false,
                                 pattern: Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: PatternKind::Binding(param.clone()),
                                     span: *sp,
                                 },
@@ -1645,6 +1712,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             span: *sp,
                         };
                         Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Block(Block {
                                 stmts: vec![bind_param],
                                 final_expr: Some(Box::new(pred.clone())),
@@ -1656,6 +1724,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let then_stmts =
                         build_body(steps, i + 1, current, vec_name, uid, sp, ident, err_name);
                     let if_expr = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::If {
                             condition: Box::new(guard),
                             then_block: Block {
@@ -1668,6 +1737,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         span: *sp,
                     };
                     vec![Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: StmtKind::Expr(if_expr),
                         span: *sp,
                     }]
@@ -1742,6 +1812,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let guard = bind_param_expr(param, pred);
                     let and = bin(BinOp::And, ident(&st_i, sp), guard);
                     let cond = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Unary {
                             op: UnaryOp::Not,
                             operand: Box::new(and),
@@ -1767,6 +1838,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // through unchanged.
                     let side_effect = bind_param_expr(param, body);
                     let mut out = vec![Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: StmtKind::Expr(side_effect),
                         span: *sp,
                     }];
@@ -1834,13 +1906,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     let tup_name =
                         downstream_param.unwrap_or_else(|| format!("__ietup_{}_{}", uid, i));
                     let tuple = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Tuple(vec![ident(&st_i, sp), current]),
                         span: *sp,
                     };
                     let let_tup = Stmt {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: StmtKind::Let {
                             is_mut: false,
                             pattern: Pattern {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: PatternKind::Binding(tup_name.clone()),
                                 span: *sp,
                             },
@@ -1894,13 +1969,17 @@ impl<'ctx> super::Codegen<'ctx> {
             for_body.insert(
                 0,
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::If {
                             condition: Box::new(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Binary {
                                     op: crate::ast::BinOp::GtEq,
                                     left: Box::new(ident(err, &sp)),
                                     right: Box::new(Expr {
+                                        id: crate::ids::NodeId::DUMMY,
                                         kind: ExprKind::Integer(
                                             0.into(),
                                             Some(crate::token::IntSuffix::I64),
@@ -1912,7 +1991,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             }),
                             then_block: Block {
                                 stmts: vec![Stmt {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: StmtKind::Expr(Expr {
+                                        id: crate::ids::NodeId::DUMMY,
                                         kind: ExprKind::Break {
                                             label: None,
                                             value: None,
@@ -1935,10 +2016,13 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // `for __ice_N in <base_iterable> { <for_body> }`
         let for_stmt = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(elem_name.clone()),
                         span: sp,
                     },
@@ -1967,18 +2051,22 @@ impl<'ctx> super::Codegen<'ctx> {
             span: *sp,
         };
         let i64_lit = |n: i64, sp: &crate::token::Span| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Integer(n.into(), Some(crate::token::IntSuffix::I64)),
             span: *sp,
         };
         let bool_lit = |b: bool, sp: &crate::token::Span| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Bool(b),
             span: *sp,
         };
         let let_stmt =
             |name: &str, is_mut: bool, ty: TypeExpr, value: Expr, sp: &crate::token::Span| Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Let {
                     is_mut,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(name.to_string()),
                         span: *sp,
                     },
@@ -2025,8 +2113,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         &sp,
                     ));
                     let clamped = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::If {
                             condition: Box::new(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Binary {
                                     op: BinOp::Lt,
                                     left: Box::new(ident(&raw, &sp)),
@@ -2040,6 +2130,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 span: sp,
                             },
                             else_branch: Some(Box::new(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Block(Block {
                                     stmts: Vec::new(),
                                     final_expr: Some(Box::new(ident(&raw, &sp))),
@@ -2121,9 +2212,11 @@ impl<'ctx> super::Codegen<'ctx> {
             block_stmts.insert(
                 0,
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Let {
                         is_mut: true,
                         pattern: Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Binding(err.clone()),
                             span: sp,
                         },
@@ -2136,9 +2229,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             span: sp,
                         }),
                         value: Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Unary {
                                 op: crate::ast::UnaryOp::Neg,
                                 operand: Box::new(Expr {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: ExprKind::Integer(
                                         1.into(),
                                         Some(crate::token::IntSuffix::I64),
@@ -2168,8 +2263,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // no such table, which is why the flag carries the byte count
                 // directly and the enum is rebuilt here.
                 let variant_call = |path: Vec<&str>, arg: Expr| Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Call {
                         callee: Box::new(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Path {
                                 segments: path.into_iter().map(str::to_string).collect(),
                                 generic_args: None,
@@ -2187,6 +2284,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let oom = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::StructLiteral {
                         path: vec!["AllocError".to_string(), "OutOfMemory".to_string()],
                         fields: vec![crate::ast::FieldInit {
@@ -2201,10 +2299,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 let cond = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Binary {
                         op: crate::ast::BinOp::GtEq,
                         left: Box::new(ident(err, &sp)),
                         right: Box::new(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Integer(0.into(), Some(crate::token::IntSuffix::I64)),
                             span: sp,
                         }),
@@ -2212,6 +2312,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 };
                 Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::If {
                         condition: Box::new(cond),
                         then_block: Block {
@@ -2220,6 +2321,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             span: sp,
                         },
                         else_branch: Some(Box::new(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Block(Block {
                                 stmts: vec![],
                                 final_expr: Some(Box::new(variant_call(
@@ -2236,6 +2338,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(tail)),
@@ -2335,11 +2438,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .insert((span_b.offset, span_b.length), vec_of(&eb));
 
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         // `<side>.collect()` with the given (synthetic) span.
         let collect_of = |side: &Expr, cspan: &crate::token::Span| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(side.clone()),
                 method: "collect".to_string(),
@@ -2351,9 +2456,11 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let let_side =
             |name: &str, elem: &TypeExpr, side: &Expr, cspan: &crate::token::Span| Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Let {
                     is_mut: false,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(name.to_string()),
                         span: sp,
                     },
@@ -2364,6 +2471,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
         // `<name>.iter()`
         let iter_of = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(ident(name)),
                 method: "iter".to_string(),
@@ -2376,8 +2484,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // `__za.iter().zip(__zb.iter()).collect()` — identity zip on the temps,
         // typed by the ORIGINAL call span (`Vec[(EA, EB)]`).
         let inner_zip_collect = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::MethodCall {
                         object: Box::new(iter_of(&za)),
                         method: "zip".to_string(),
@@ -2401,6 +2511,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![
                     let_side(&za, &ea, side_a, &span_a),
@@ -2470,6 +2581,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let acc = format!("__zmc_{}", uid);
 
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
@@ -2483,16 +2595,20 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // `let mut __zmc: Vec[R] = Vec.new();`
         let let_acc = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(acc.clone()),
                     span: sp,
                 },
                 ty: Some(vec_r),
                 value: Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Call {
                         callee: Box::new(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Path {
                                 segments: vec!["Vec".to_string(), "new".to_string()],
                                 generic_args: None,
@@ -2508,7 +2624,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // `for <param_pat> in <zip_recv> { __zmc.push(<body>); }`
         let push_stmt = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::MethodCall {
                     object: Box::new(ident(&acc)),
                     method: "push".to_string(),
@@ -2527,7 +2645,9 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: param_pat,
@@ -2544,6 +2664,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![let_acc, for_loop],
                 final_expr: Some(Box::new(ident(&acc))),
@@ -2606,6 +2727,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let acc = format!("__fmc_{}", uid);
         let elem = format!("__fmce_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
@@ -2619,16 +2741,20 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // `let mut __fmc: Vec[U] = Vec.new();`
         let let_acc = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(acc.clone()),
                     span: sp,
                 },
                 ty: Some(vec_u),
                 value: Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Call {
                         callee: Box::new(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Path {
                                 segments: vec!["Vec".to_string(), "new".to_string()],
                                 generic_args: None,
@@ -2644,7 +2770,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // `for <elem> in <recv> { __fmc.push(<elem>); }`
         let push_stmt = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::MethodCall {
                     object: Box::new(ident(&acc)),
                     method: "push".to_string(),
@@ -2663,10 +2791,13 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(elem.clone()),
                         span: sp,
                     },
@@ -2683,6 +2814,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![let_acc, for_loop],
                 final_expr: Some(Box::new(ident(&acc))),
@@ -2737,11 +2869,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_name = format!("__chpv_{}", uid);
         let loop_var = format!("__chpy_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         // `<side>.collect()` — recurse through the full collect machinery.
         let collect_of = |side: &Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(side.clone()),
                 method: "collect".to_string(),
@@ -2753,9 +2887,11 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // `let mut __chpv: Vec[E] = <A.collect()>;`
         let let_vec = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(vec_name.clone()),
                     span: sp,
                 },
@@ -2766,10 +2902,13 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // `for __chpy in <B.collect()> { __chpv.push(__chpy); }`
         let merge_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(loop_var.clone()),
                         span: sp,
                     },
@@ -2777,7 +2916,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     attributes: Vec::new(),
                     body: Block {
                         stmts: vec![Stmt {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: StmtKind::Expr(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::MethodCall {
                                     object: Box::new(ident(&vec_name)),
                                     method: "push".to_string(),
@@ -2804,6 +2945,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![let_vec, merge_loop],
                 final_expr: Some(Box::new(ident(&vec_name))),
@@ -2866,14 +3008,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let sname = format!("__cystart_{}", uid);
         let xname = format!("__cyx_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         let i64_lit = |v: i64| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Integer(v.into(), Some(crate::token::IntSuffix::I64)),
             span: sp,
         };
         let bin = |op: BinOp, l: Expr, r: Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Binary {
                 op,
                 left: Box::new(l),
@@ -2882,9 +3027,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(name.to_string()),
                     span: sp,
                 },
@@ -2894,6 +3041,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let assign = |name: &str, value: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Assign {
                 target: ident(name),
                 value,
@@ -2901,7 +3049,9 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let break_stmt = || Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Break {
                     label: None,
                     value: None,
@@ -2911,7 +3061,9 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let if_break = |cond: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::If {
                     condition: Box::new(cond),
                     then_block: Block {
@@ -2926,8 +3078,10 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let vec_new = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Path {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
@@ -2942,7 +3096,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let for_body = vec![
             if_break(bin(BinOp::GtEq, ident(&cname), ident(&nname))),
             Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Expr(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::MethodCall {
                         object: Box::new(ident(&vname)),
                         method: "push".to_string(),
@@ -2963,10 +3119,13 @@ impl<'ctx> super::Codegen<'ctx> {
             assign(&cname, bin(BinOp::Add, ident(&cname), i64_lit(1))),
         ];
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(xname.clone()),
                         span: sp,
                     },
@@ -2989,7 +3148,9 @@ impl<'ctx> super::Codegen<'ctx> {
             if_break(bin(BinOp::Eq, ident(&cname), ident(&sname))),
         ];
         let while_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::While {
                     label: None,
                     condition: Box::new(bin(BinOp::Lt, ident(&cname), ident(&nname))),
@@ -3005,6 +3166,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![
                     let_stmt(true, &vname, Some(vec_te), vec_new),
@@ -3075,13 +3237,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let accname = format!("__sacc_{}", uid);
         let tname = format!("__st_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(name.to_string()),
                     span: sp,
                 },
@@ -3091,6 +3256,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let assign = |name: &str, value: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Assign {
                 target: ident(name),
                 value,
@@ -3119,6 +3285,7 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return Ok(None),
         };
         let tuple_idx = |recv: Expr, idx: u64| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::TupleIndex {
                 object: Box::new(recv),
                 index: idx,
@@ -3126,7 +3293,9 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let push_out = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::MethodCall {
                     object: Box::new(ident(&vname)),
                     method: "push".to_string(),
@@ -3151,10 +3320,13 @@ impl<'ctx> super::Codegen<'ctx> {
             push_out,
         ];
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(x_p.to_string()),
                         span: sp,
                     },
@@ -3171,8 +3343,10 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let vec_new = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Path {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
@@ -3184,6 +3358,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![
                     let_stmt(true, &vname, Some(vec_te), vec_new),
@@ -3290,6 +3465,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 (**body).clone()
             } else {
                 Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Block(Block {
                         stmts: rebinds,
                         final_expr: Some(body.clone()),
@@ -3432,6 +3608,7 @@ impl<'ctx> super::Codegen<'ctx> {
             } => {
                 let new_object = self.substitute_iter_let_receiver(object)?;
                 Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::MethodCall {
                         object: Box::new(new_object),
                         method: method.clone(),
@@ -3544,11 +3721,13 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         let rebind = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: pat.clone(),
                 ty: None,
                 value: Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(fresh.to_string()),
                     span: pat.span,
                 },
@@ -3572,14 +3751,17 @@ impl<'ctx> super::Codegen<'ctx> {
         fresh: &str,
     ) -> Option<(String, Vec<Stmt>)> {
         let bind_from = |name: String, value_kind: ExprKind, span| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(name),
                     span,
                 },
                 ty: None,
                 value: Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: value_kind,
                     span,
                 },
@@ -3588,6 +3770,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let object = |span| {
             Box::new(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(fresh.to_string()),
                 span,
             })
@@ -3654,6 +3837,7 @@ impl<'ctx> super::Codegen<'ctx> {
         Some((
             param,
             Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Block(Block {
                     stmts,
                     final_expr: Some(Box::new(body.clone())),
@@ -3714,9 +3898,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return sink(current);
         }
         let let_bind = |name: &str, value: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(name.to_string()),
                     span: *sp,
                 },
@@ -3726,6 +3912,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: *sp,
         };
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: *sp,
         };
@@ -3736,6 +3923,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 expr.clone()
             } else {
                 Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Block(Block {
                         stmts: vec![let_bind(param, current.clone())],
                         final_expr: Some(Box::new(expr.clone())),
@@ -3747,7 +3935,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let if_stmt =
             |condition: Expr, then_stmts: Vec<Stmt>, else_stmts: Option<Vec<Stmt>>| Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Expr(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::If {
                         condition: Box::new(condition),
                         then_block: Block {
@@ -3757,6 +3947,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         },
                         else_branch: else_stmts.map(|s| {
                             Box::new(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Block(Block {
                                     stmts: s,
                                     final_expr: None,
@@ -3804,6 +3995,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let then_stmts =
                     Self::build_fused_chain_body(steps, i + 1, ident(&fresh), sink, sw_prefix, sp);
                 let block_of = |stmts: Vec<Stmt>| Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Block(Block {
                         stmts,
                         final_expr: None,
@@ -3812,14 +4004,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: *sp,
                 };
                 let match_expr = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Match {
                         scrutinee: Box::new(opt_expr),
                         arms: vec![
                             MatchArm {
                                 pattern: Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: PatternKind::TupleVariant {
                                         path: vec!["Some".to_string()],
                                         patterns: vec![Pattern {
+                                            id: crate::ids::NodeId::DUMMY,
                                             kind: PatternKind::Binding(fresh.clone()),
                                             span: bind_span,
                                         }],
@@ -3832,6 +4027,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             },
                             MatchArm {
                                 pattern: Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: PatternKind::Binding("None".to_string()),
                                     span: *sp,
                                 },
@@ -3844,6 +4040,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: *sp,
                 };
                 vec![Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(match_expr),
                     span: *sp,
                 }]
@@ -3856,7 +4053,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 let then_stmts =
                     Self::build_fused_chain_body(steps, i + 1, current, sink, sw_prefix, sp);
                 let brk = Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Break {
                             label: None,
                             value: None,
@@ -3878,9 +4077,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 let flag = format!("{sw_prefix}{i}");
                 let guard = bind_or_use(body);
                 let cond = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Binary {
                         op: BinOp::And,
                         left: Box::new(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Unary {
                                 op: UnaryOp::Not,
                                 operand: Box::new(ident(&flag)),
@@ -3892,9 +4093,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: *sp,
                 };
                 let mut else_stmts = vec![Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Assign {
                         target: ident(&flag),
                         value: Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Bool(true),
                             span: *sp,
                         },
@@ -3920,6 +4123,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let cnt = format!("{sw_prefix}{i}");
                 let n = format!("{sw_prefix}n{i}");
                 let exhausted = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Binary {
                         op: BinOp::GtEq,
                         left: Box::new(ident(&cnt)),
@@ -3928,7 +4132,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: *sp,
                 };
                 let brk = Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Break {
                             label: None,
                             value: None,
@@ -3959,6 +4165,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let cnt = format!("{sw_prefix}{i}");
                 let n = format!("{sw_prefix}n{i}");
                 let still_skipping = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Binary {
                         op: BinOp::Lt,
                         left: Box::new(ident(&cnt)),
@@ -3979,6 +4186,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let cnt = format!("{sw_prefix}{i}");
                 let n = format!("{sw_prefix}n{i}");
                 let modulo = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Binary {
                         op: BinOp::Mod,
                         left: Box::new(ident(&cnt)),
@@ -3987,6 +4195,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: *sp,
                 };
                 let on_stride = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Binary {
                         op: BinOp::Eq,
                         left: Box::new(modulo),
@@ -4006,6 +4215,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // passes through unchanged.
                 let side_effect = bind_or_use(body);
                 let mut out = vec![Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(side_effect),
                     span: *sp,
                 }];
@@ -4026,13 +4236,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// count-adaptor fused steps.
     pub(super) fn fused_counter_incr(name: &str, sp: &crate::token::Span) -> Stmt {
         let ident = |n: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(n.to_string()),
             span: *sp,
         };
         Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Assign {
                 target: ident(name),
                 value: Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Binary {
                         op: BinOp::Add,
                         left: Box::new(ident(name)),
@@ -4048,6 +4261,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// An `i64`-suffixed integer literal for synthesized fused-chain AST.
     pub(super) fn fused_i64_lit(n: i64, sp: &crate::token::Span) -> Expr {
         Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Integer(n.into(), Some(crate::token::IntSuffix::I64)),
             span: *sp,
         }
@@ -4081,9 +4295,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: *sp,
         };
         let let_stmt = |name: String, is_mut: bool, ty: Option<TypeExpr>, value: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(name),
                     span: *sp,
                 },
@@ -4093,6 +4309,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: *sp,
         };
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: *sp,
         };
@@ -4105,6 +4322,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         true,
                         None,
                         Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Bool(false),
                             span: *sp,
                         },
@@ -4128,8 +4346,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     let raw = format!("{sw_prefix}r{i}");
                     out.push(let_stmt(raw.clone(), false, Some(i64_ty()), count.clone()));
                     let clamped = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::If {
                             condition: Box::new(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Binary {
                                     op: BinOp::Lt,
                                     left: Box::new(ident(&raw)),
@@ -4143,6 +4363,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 span: *sp,
                             },
                             else_branch: Some(Box::new(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Block(Block {
                                     stmts: Vec::new(),
                                     final_expr: Some(Box::new(ident(&raw))),
@@ -4354,6 +4575,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
@@ -4377,9 +4599,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // the direct-acc heap path), then reassign it to the fold body's value.
         let sink = |current: Expr| -> Vec<Stmt> {
             let let_bind = |name: &str, value: Expr| Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Let {
                     is_mut: false,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(name.to_string()),
                         span: sp,
                     },
@@ -4400,6 +4624,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 out.push(let_bind(acc_p, ident(&accname)));
             }
             out.push(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Assign {
                     target: ident(&accname),
                     value: fold_body.clone(),
@@ -4412,10 +4637,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let for_body =
             Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(elem_name),
                         span: sp,
                     },
@@ -4432,9 +4660,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let mut block_stmts = vec![Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(accname.clone()),
                     span: sp,
                 },
@@ -4446,6 +4676,7 @@ impl<'ctx> super::Codegen<'ctx> {
         block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
         block_stmts.push(for_loop);
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&accname))),
@@ -4484,6 +4715,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let acc_p = format!("__sum_acc_{}", uid);
         let x_p = format!("__sum_x_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
@@ -4492,8 +4724,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // isize, u8..u64 / usize, f32 / f64) without spelling a per-type
         // literal suffix (`IntSuffix` has no isize/usize spelling).
         let seed = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Cast {
                 expr: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Integer(if is_product { 1 } else { 0 }, None),
                     span: sp,
                 }),
@@ -4502,6 +4736,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let fold_body = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Binary {
                 op: if is_product { BinOp::Mul } else { BinOp::Add },
                 left: Box::new(ident(&acc_p)),
@@ -4531,17 +4766,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let acc_p = format!("__cnt_acc_{}", uid);
         let x_p = format!("__cnt_x_{}", uid);
         let zero = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Integer(0, None),
             span: sp,
         };
         let fold_body = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Binary {
                 op: BinOp::Add,
                 left: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(acc_p.clone()),
                     span: sp,
                 }),
                 right: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Integer(1, None),
                     span: sp,
                 }),
@@ -4657,6 +4896,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, p, _)| p.clone())
             .unwrap_or_else(|| x_p.to_string());
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
@@ -4672,8 +4912,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Some(<e>)` — the ctor callee is a bare `Identifier` (the form the
         // parser produces and codegen's enum-variant-call recognition expects).
         let some_of = |e: Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier("Some".to_string()),
                     span: sp,
                 }),
@@ -4688,9 +4930,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let let_bind = |name: &str, value: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(name.to_string()),
                     span: sp,
                 },
@@ -4708,11 +4952,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 out.push(let_bind(x_p, current));
             }
             let match_expr = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Match {
                     scrutinee: Box::new(ident(&raccname)),
                     arms: vec![
                         MatchArm {
                             pattern: Pattern {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: PatternKind::Binding("None".to_string()),
                                 span: sp,
                             },
@@ -4722,9 +4968,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         },
                         MatchArm {
                             pattern: Pattern {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: PatternKind::TupleVariant {
                                     path: vec!["Some".to_string()],
                                     patterns: vec![Pattern {
+                                        id: crate::ids::NodeId::DUMMY,
                                         kind: PatternKind::Binding(acc_p.to_string()),
                                         // Unique span registered in
                                         // `pattern_binding_types` above so the
@@ -4745,6 +4993,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 span: sp,
             };
             out.push(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Assign {
                     target: ident(&raccname),
                     value: match_expr,
@@ -4757,10 +5006,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let for_body =
             Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(elem_name),
                         span: sp,
                     },
@@ -4777,9 +5029,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let mut block_stmts = vec![Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(raccname.clone()),
                     span: sp,
                 },
@@ -4791,6 +5045,7 @@ impl<'ctx> super::Codegen<'ctx> {
         block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
         block_stmts.push(for_loop);
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&raccname))),
@@ -4834,6 +5089,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, p, _)| p.clone())
             .unwrap_or_else(|| param.to_string());
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
@@ -4845,9 +5101,11 @@ impl<'ctx> super::Codegen<'ctx> {
             let current_is_param = matches!(&current.kind, ExprKind::Identifier(n) if n == param);
             if !current_is_param {
                 out.push(Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Let {
                         is_mut: false,
                         pattern: Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Binding(param.to_string()),
                             span: sp,
                         },
@@ -4858,6 +5116,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
             }
             out.push(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Expr(body.clone()),
                 span: sp,
             });
@@ -4867,9 +5126,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let for_body =
             Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::For {
                 label: None,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(elem_name),
                     span: sp,
                 },
@@ -4886,10 +5147,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // The terminal yields unit — run the `for` loop as a statement.
         let mut block_stmts = Self::fused_chain_prelude(&steps, &sw_prefix, &sp);
         block_stmts.push(Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(for_loop),
             span: sp,
         });
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: None,
@@ -4951,10 +5214,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, p, _)| p.clone())
             .unwrap_or_else(|| param.to_string());
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         let bool_lit = |b: bool| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Bool(b),
             span: sp,
         };
@@ -4968,11 +5233,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 pred.clone()
             } else {
                 Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Block(Block {
                         stmts: vec![Stmt {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: StmtKind::Let {
                                 is_mut: false,
                                 pattern: Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: PatternKind::Binding(param.to_string()),
                                     span: sp,
                                 },
@@ -4990,6 +5258,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `__aa = <is_any>; break;` — the deciding outcome.
             let decide = vec![
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Assign {
                         target: ident(&resname),
                         value: bool_lit(is_any),
@@ -4997,7 +5266,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 },
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Break {
                             label: None,
                             value: None,
@@ -5015,7 +5286,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 (Vec::new(), Some(decide))
             };
             vec![Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Expr(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::If {
                         condition: Box::new(guard),
                         then_block: Block {
@@ -5025,6 +5298,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         },
                         else_branch: else_stmts.map(|s| {
                             Box::new(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Block(Block {
                                     stmts: s,
                                     final_expr: None,
@@ -5043,10 +5317,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let for_body =
             Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(elem_name),
                         span: sp,
                     },
@@ -5064,9 +5341,11 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // Seed: `any` starts false, `all` starts true.
         let mut block_stmts = vec![Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(resname.clone()),
                     span: sp,
                 },
@@ -5078,6 +5357,7 @@ impl<'ctx> super::Codegen<'ctx> {
         block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
         block_stmts.push(for_loop);
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&resname))),
@@ -5125,14 +5405,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, p, _)| p.clone())
             .unwrap_or_else(|| param.to_string());
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         // `Some(<idx>)` — the ctor callee is a bare `Identifier`, the form the
         // parser produces and codegen's enum-variant-call recognition expects.
         let some_of = |e: Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier("Some".to_string()),
                     span: sp,
                 }),
@@ -5155,11 +5438,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 pred.clone()
             } else {
                 Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Block(Block {
                         stmts: vec![Stmt {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: StmtKind::Let {
                                 is_mut: false,
                                 pattern: Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: PatternKind::Binding(param.to_string()),
                                     span: sp,
                                 },
@@ -5176,6 +5462,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let decide = vec![
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Assign {
                         target: ident(&posname),
                         value: some_of(ident(&idxname)),
@@ -5183,7 +5470,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 },
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Break {
                             label: None,
                             value: None,
@@ -5195,7 +5484,9 @@ impl<'ctx> super::Codegen<'ctx> {
             ];
             vec![
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::If {
                             condition: Box::new(guard),
                             then_block: Block {
@@ -5210,13 +5501,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 },
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Assign {
                         target: ident(&idxname),
                         value: Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Binary {
                                 op: BinOp::Add,
                                 left: Box::new(ident(&idxname)),
                                 right: Box::new(Expr {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: ExprKind::Integer(1, None),
                                     span: sp,
                                 }),
@@ -5232,10 +5526,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let for_body =
             Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(elem_name),
                         span: sp,
                     },
@@ -5269,9 +5566,11 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let mut block_stmts = vec![
             Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Let {
                     is_mut: true,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(posname.clone()),
                         span: sp,
                     },
@@ -5281,14 +5580,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 span: sp,
             },
             Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Let {
                     is_mut: true,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(idxname.clone()),
                         span: sp,
                     },
                     ty: Some(i64_te),
                     value: Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Integer(0, None),
                         span: sp,
                     },
@@ -5299,6 +5601,7 @@ impl<'ctx> super::Codegen<'ctx> {
         block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
         block_stmts.push(for_loop);
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&posname))),
@@ -5359,12 +5662,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, p, _)| p.clone())
             .unwrap_or_else(|| param.to_string());
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         let some_of = |e: Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier("Some".to_string()),
                     span: sp,
                 }),
@@ -5386,9 +5692,11 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut out = Vec::new();
             if !current_is_param {
                 out.push(Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Let {
                         is_mut: false,
                         pattern: Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Binding(param.to_string()),
                             span: sp,
                         },
@@ -5400,6 +5708,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             let decide = vec![
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Assign {
                         target: ident(&findname),
                         value: some_of(ident(param)),
@@ -5407,7 +5716,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 },
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Break {
                             label: None,
                             value: None,
@@ -5418,7 +5729,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 },
             ];
             out.push(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Expr(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::If {
                         condition: Box::new(pred.clone()),
                         then_block: Block {
@@ -5438,10 +5751,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let for_body =
             Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(elem_name),
                         span: sp,
                     },
@@ -5466,9 +5782,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let mut block_stmts = vec![Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(findname.clone()),
                     span: sp,
                 },
@@ -5480,6 +5798,7 @@ impl<'ctx> super::Codegen<'ctx> {
         block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
         block_stmts.push(for_loop);
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&findname))),
@@ -5537,12 +5856,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, p, _)| p.clone())
             .unwrap_or_else(|| param.to_string());
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         let some_of = |e: Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier("Some".to_string()),
                     span: sp,
                 }),
@@ -5566,9 +5888,11 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut out = Vec::new();
             if !current_is_param {
                 out.push(Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Let {
                         is_mut: false,
                         pattern: Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Binding(param.to_string()),
                             span: sp,
                         },
@@ -5579,9 +5903,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
             }
             let some_arm_body = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Block(Block {
                     stmts: vec![
                         Stmt {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: StmtKind::Assign {
                                 target: ident(&findname),
                                 value: some_of(ident(&fresh)),
@@ -5589,7 +5915,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             span: sp,
                         },
                         Stmt {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: StmtKind::Expr(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Break {
                                     label: None,
                                     value: None,
@@ -5605,6 +5933,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 span: sp,
             };
             let none_arm_body = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Block(Block {
                     stmts: Vec::new(),
                     final_expr: None,
@@ -5613,15 +5942,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 span: sp,
             };
             out.push(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Expr(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Match {
                         scrutinee: Box::new(body.clone()),
                         arms: vec![
                             MatchArm {
                                 pattern: Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: PatternKind::TupleVariant {
                                         path: vec!["Some".to_string()],
                                         patterns: vec![Pattern {
+                                            id: crate::ids::NodeId::DUMMY,
                                             kind: PatternKind::Binding(fresh.clone()),
                                             span: bind_span,
                                         }],
@@ -5634,6 +5967,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             },
                             MatchArm {
                                 pattern: Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: PatternKind::Binding("None".to_string()),
                                     span: sp,
                                 },
@@ -5653,10 +5987,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let for_body =
             Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(elem_name),
                         span: sp,
                     },
@@ -5681,9 +6018,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let mut block_stmts = vec![Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(findname.clone()),
                     span: sp,
                 },
@@ -5695,6 +6034,7 @@ impl<'ctx> super::Codegen<'ctx> {
         block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
         block_stmts.push(for_loop);
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&findname))),
@@ -5753,12 +6093,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, p, _)| p.clone())
             .unwrap_or_else(|| param.to_string());
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         let push_to = |vec_name: &str, val: Expr| -> Stmt {
             Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Expr(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::MethodCall {
                         object: Box::new(ident(vec_name)),
                         method: "push".to_string(),
@@ -5784,6 +6127,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let pushed = |param: &str| -> Expr {
             if elem_is_heap {
                 Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::MethodCall {
                         object: Box::new(ident(param)),
                         method: "clone".to_string(),
@@ -5805,9 +6149,11 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut out = Vec::new();
             if !current_is_param {
                 out.push(Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Let {
                         is_mut: false,
                         pattern: Pattern {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: PatternKind::Binding(param.to_string()),
                             span: sp,
                         },
@@ -5818,7 +6164,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
             }
             out.push(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Expr(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::If {
                         condition: Box::new(pred.clone()),
                         then_block: Block {
@@ -5827,6 +6175,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             span: sp,
                         },
                         else_branch: Some(Box::new(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Block(Block {
                                 stmts: vec![push_to(&pf, pushed(param))],
                                 final_expr: None,
@@ -5845,10 +6194,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let for_body =
             Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(elem_name),
                         span: sp,
                     },
@@ -5873,8 +6225,10 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let new_vec = || Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Path {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
@@ -5886,9 +6240,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let let_vec = |name: &str, elem: TypeExpr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(name.to_string()),
                     span: sp,
                 },
@@ -5901,10 +6257,12 @@ impl<'ctx> super::Codegen<'ctx> {
         block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
         block_stmts.push(for_loop);
         let tuple = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Tuple(vec![ident(&pt), ident(&pf)]),
             span: sp,
         };
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(tuple)),
@@ -5954,12 +6312,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, p, _)| p.clone())
             .unwrap_or_else(|| format!("__lne_{}", uid));
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         let some_of = |e: Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier("Some".to_string()),
                     span: sp,
                 }),
@@ -5975,6 +6336,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let sink = |current: Expr| -> Vec<Stmt> {
             let assign = Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Assign {
                     target: ident(&resname),
                     value: some_of(current),
@@ -5987,7 +6349,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let decide = vec![
                 assign,
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Break {
                             label: None,
                             value: None,
@@ -5999,9 +6363,12 @@ impl<'ctx> super::Codegen<'ctx> {
             ];
             vec![
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::If {
                             condition: Box::new(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Binary {
                                     op: BinOp::Eq,
                                     left: Box::new(ident(&idxname)),
@@ -6021,13 +6388,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp,
                 },
                 Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Assign {
                         target: ident(&idxname),
                         value: Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Binary {
                                 op: BinOp::Add,
                                 left: Box::new(ident(&idxname)),
                                 right: Box::new(Expr {
+                                    id: crate::ids::NodeId::DUMMY,
                                     kind: ExprKind::Integer(1, None),
                                     span: sp,
                                 }),
@@ -6043,10 +6413,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let for_body =
             Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(elem_name),
                         span: sp,
                     },
@@ -6079,9 +6452,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let mut block_stmts = vec![Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(resname.clone()),
                     span: sp,
                 },
@@ -6092,9 +6467,11 @@ impl<'ctx> super::Codegen<'ctx> {
         }];
         if is_nth {
             block_stmts.push(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Let {
                     is_mut: false,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(nbname.clone()),
                         span: sp,
                     },
@@ -6104,14 +6481,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 span: sp,
             });
             block_stmts.push(Stmt {
+                id: crate::ids::NodeId::DUMMY,
                 kind: StmtKind::Let {
                     is_mut: true,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(idxname.clone()),
                         span: sp,
                     },
                     ty: Some(i64_te),
                     value: Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Integer(0, None),
                         span: sp,
                     },
@@ -6122,6 +6502,7 @@ impl<'ctx> super::Codegen<'ctx> {
         block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
         block_stmts.push(for_loop);
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&resname))),
@@ -6191,6 +6572,7 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .unwrap_or_else(|| format!("__fle_{uid}"));
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
@@ -6206,6 +6588,7 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             if !elide {
                 out.push(Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Let {
                         is_mut: false,
                         pattern: pattern.clone(),
@@ -6218,6 +6601,7 @@ impl<'ctx> super::Codegen<'ctx> {
             out.extend(body.stmts.iter().cloned());
             if let Some(fe) = &body.final_expr {
                 out.push(Stmt {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: StmtKind::Expr((**fe).clone()),
                     span: sp,
                 });
@@ -6228,9 +6612,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let for_body =
             Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::For {
                 label: label.map(|s| s.to_string()),
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(elem_name),
                     span: sp,
                 },
@@ -6254,10 +6640,12 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let mut block_stmts = prelude;
         block_stmts.push(Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(for_loop),
             span: sp,
         });
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: None,
@@ -6311,14 +6699,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let sp = *call_span;
         let vec_name = format!("__chv_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
 
         // `let mut __chv: Vec[T] = Vec.new();`
         let vec_new = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Path {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
@@ -6330,9 +6721,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let let_vec = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(vec_name.clone()),
                     span: sp,
                 },
@@ -6344,10 +6737,13 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // `for <loop_var> in <src> { __chv.push(<loop_var>); }`
         let for_loop = |loop_var: &str, src: &Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(loop_var.to_string()),
                         span: sp,
                     },
@@ -6355,7 +6751,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     attributes: Vec::new(),
                     body: Block {
                         stmts: vec![Stmt {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: StmtKind::Expr(Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::MethodCall {
                                     object: Box::new(ident(&vec_name)),
                                     method: "push".to_string(),
@@ -6386,6 +6784,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let loop_b = for_loop(&format!("__ch1_{}", uid), src_b);
 
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![let_vec, loop_a, loop_b],
                 final_expr: Some(Box::new(ident(&vec_name))),
@@ -6440,14 +6839,18 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_name = format!("__fmv_{}", uid);
         let inner_var = format!("__fm_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         let for_loop = |var: &str, iterable: Expr, body: Vec<Stmt>| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(var.to_string()),
                         span: sp,
                     },
@@ -6465,8 +6868,10 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let vec_new = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Path {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
@@ -6478,9 +6883,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let let_vec = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(vec_name.clone()),
                     span: sp,
                 },
@@ -6492,7 +6899,9 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Inner: `for __fm in <inner> { __fmv.push(__fm); }`
         let push_inner = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::MethodCall {
                     object: Box::new(ident(&vec_name)),
                     method: "push".to_string(),
@@ -6515,6 +6924,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let outer_loop = for_loop(param, outer.clone(), vec![inner_loop]);
 
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![let_vec, outer_loop],
                 final_expr: Some(Box::new(ident(&vec_name))),
@@ -6570,11 +6980,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let sp = *call_span;
         let vec_name = format!("__fmn_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         let for_loop = |pattern: Pattern, iterable: Expr, body: Vec<Stmt>| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern,
@@ -6591,7 +7004,9 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let push = |value: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::MethodCall {
                     object: Box::new(ident(&vec_name)),
                     method: "push".to_string(),
@@ -6611,16 +7026,20 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let let_vec = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(vec_name.clone()),
                     span: sp,
                 },
                 ty: Some(vec_te),
                 value: Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Call {
                         callee: Box::new(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Path {
                                 segments: vec!["Vec".to_string(), "new".to_string()],
                                 generic_args: None,
@@ -6658,6 +7077,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let var = format!("__fmx_{}", uid);
                 for_loop(
                     Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(var.clone()),
                         span: sp,
                     },
@@ -6669,6 +7089,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let outer_loop = for_loop(pattern.clone(), outer.clone(), vec![inner_loop]);
 
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![let_vec, outer_loop],
                 final_expr: Some(Box::new(ident(&vec_name))),
@@ -6721,13 +7142,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_name = format!("__flc_{}", uid);
         let elem_var = format!("__fli_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
 
         let vec_new = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Path {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
@@ -6739,9 +7163,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let let_vec = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: true,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(vec_name.clone()),
                     span: sp,
                 },
@@ -6752,7 +7178,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // `__flc.push(__fli)`
         let push = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::MethodCall {
                     object: Box::new(ident(&vec_name)),
                     method: "push".to_string(),
@@ -6772,10 +7200,13 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // `for __fli in <recv>.flatten() { __flc.push(__fli); }`
         let for_loop = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::For {
                     label: None,
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(elem_var),
                         span: sp,
                     },
@@ -6792,6 +7223,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![let_vec, for_loop],
                 final_expr: Some(Box::new(ident(&vec_name))),
@@ -6846,6 +7278,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let sp = *call_span;
         let fo_name = format!("__fo_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
@@ -6870,6 +7303,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .owned_temp_drops
             .insert((outer_span.offset, outer_span.length), temp_te.clone());
         let outer_collect = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(outer.clone()),
                 method: "collect".to_string(),
@@ -6880,9 +7314,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: outer_span,
         };
         let let_fo = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(fo_name.clone()),
                     span: sp,
                 },
@@ -6894,6 +7330,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `__fo.iter().flat_map(|param| <inner>).collect()` — identity outer +
         // identity inner, typed by the ORIGINAL call span (`Vec[E]`).
         let fo_iter = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(ident(&fo_name)),
                 method: "iter".to_string(),
@@ -6904,9 +7341,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let closure = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Closure {
                 params: vec![ClosureParam {
                     pattern: Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(param.to_string()),
                         span: sp,
                     },
@@ -6920,8 +7359,10 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let flat_map_collect = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::MethodCall {
                         object: Box::new(fo_iter),
                         method: "flat_map".to_string(),
@@ -6945,6 +7386,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![let_fo],
                 final_expr: Some(Box::new(flat_map_collect)),
@@ -7022,14 +7464,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let endv = format!("__cke_{}", uid);
 
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         let i64_lit = |v: i64| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Integer(v.into(), Some(crate::token::IntSuffix::I64)),
             span: sp,
         };
         let bin = |op: BinOp, l: Expr, r: Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Binary {
                 op,
                 left: Box::new(l),
@@ -7038,9 +7483,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(name.to_string()),
                     span: sp,
                 },
@@ -7050,6 +7497,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let assign = |name: &str, value: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Assign {
                 target: ident(name),
                 value,
@@ -7057,8 +7505,10 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let vec_new = || Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Path {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
@@ -7070,6 +7520,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let len_of = |e: Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(e),
                 method: "len".to_string(),
@@ -7081,7 +7532,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // `<recv>.push(<val>)` where recv is an arbitrary place expression.
         let push_to = |recv: Expr, val: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::MethodCall {
                     object: Box::new(recv),
                     method: "push".to_string(),
@@ -7100,7 +7553,9 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let while_stmt = |cond: Expr, body: Vec<Stmt>| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::While {
                     label: None,
                     condition: Box::new(cond),
@@ -7126,6 +7581,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `base[__ckj]` deep-clones (the heap-index-read fix), so `base`
         // survives and every clone is owned once by the result.
         let base_index = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Index {
                 object: Box::new(base.clone()),
                 index: Box::new(ident(&jv)),
@@ -7142,6 +7598,7 @@ impl<'ctx> super::Codegen<'ctx> {
             bin(BinOp::Lt, ident(&jv), ident(&lenv)),
         );
         let chunk_block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![
                     let_stmt(true, &chunkv, Some(inner_te.clone()), vec_new()),
@@ -7184,6 +7641,7 @@ impl<'ctx> super::Codegen<'ctx> {
             while_stmt(outer_cond, outer_body),
         ];
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts,
                 final_expr: Some(Box::new(ident(&outv))),
@@ -7272,14 +7730,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let nb_name = format!("__znb_{}", uid);
         let i_name = format!("__zi_{}", uid);
         let ident = |name: &str| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(name.to_string()),
             span: sp,
         };
         let i64_lit = |n: i64| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Integer(n.into(), Some(crate::token::IntSuffix::I64)),
             span: sp,
         };
         let bin = |op: BinOp, l: Expr, r: Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Binary {
                 op,
                 left: Box::new(l),
@@ -7288,9 +7749,11 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(name.to_string()),
                     span: sp,
                 },
@@ -7301,6 +7764,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // `<base>.len()`
         let len_of = |base: &Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(base.clone()),
                 method: "len".to_string(),
@@ -7312,6 +7776,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // `<base>[<i>]`
         let index_of = |base: &Expr| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Index {
                 object: Box::new(base.clone()),
                 index: Box::new(ident(&i_name)),
@@ -7320,8 +7785,10 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let vec_new = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Path {
                         segments: vec!["Vec".to_string(), "new".to_string()],
                         generic_args: None,
@@ -7335,7 +7802,9 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Loop body: `__zv.push((A[__zi], B[__zi])); __zi = __zi + 1;`
         let push_pair = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::MethodCall {
                     object: Box::new(ident(&vec_name)),
                     method: "push".to_string(),
@@ -7345,6 +7814,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         mut_marker: false,
                         mut_marker_span: None,
                         value: Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Tuple(vec![index_of(base_a), index_of(base_b)]),
                             span: sp,
                         },
@@ -7357,6 +7827,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let incr = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Assign {
                 target: ident(&i_name),
                 value: bin(BinOp::Add, ident(&i_name), i64_lit(1)),
@@ -7370,7 +7841,9 @@ impl<'ctx> super::Codegen<'ctx> {
             bin(BinOp::Lt, ident(&i_name), ident(&nb_name)),
         );
         let while_stmt = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::While {
                     label: None,
                     condition: Box::new(while_cond),
@@ -7387,6 +7860,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let block = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Block(Block {
                 stmts: vec![
                     let_stmt(true, &vec_name, Some(vec_te), vec_new),

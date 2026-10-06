@@ -1376,6 +1376,7 @@ impl<'a> super::TypeChecker<'a> {
                             // explicit `items: x` form already routed here via
                             // its sub-pattern; this brings shorthand to parity.
                             let synthetic = Pattern {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: PatternKind::Binding(field.name.clone()),
                                 span: field.span,
                             };
@@ -1856,6 +1857,7 @@ impl<'a> super::TypeChecker<'a> {
             RangeBound::Literal(_) => None,
             RangeBound::Path { segments, span } => {
                 let expr = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: if segments.len() == 1 {
                         ExprKind::Identifier(segments[0].clone())
                     } else {
@@ -2136,6 +2138,7 @@ impl<'a> super::TypeChecker<'a> {
                 kind: TypeKind::Array {
                     element: Box::new(Self::type_to_type_expr(element)),
                     size: Box::new(Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Integer(size.as_literal().unwrap_or(0).into(), None),
                         span,
                     }),
@@ -2165,6 +2168,7 @@ impl<'a> super::TypeChecker<'a> {
                     generic_args: Some(vec![
                         GenericArg::Type(Self::type_to_type_expr(element)),
                         GenericArg::Const(Expr {
+                            id: crate::ids::NodeId::DUMMY,
                             kind: ExprKind::Integer(lanes.as_literal().unwrap_or(0).into(), None),
                             span,
                         }),
@@ -2242,10 +2246,12 @@ impl<'a> super::TypeChecker<'a> {
     fn dim_arg_to_shape_dim(d: &DimArg, span: &Span) -> ShapeDim {
         match d {
             DimArg::Const(ConstArg::Literal(v)) => ShapeDim::Const(Box::new(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Integer((*v).into(), None),
                 span: *span,
             })),
             DimArg::Const(ConstArg::ConstParam(name)) => ShapeDim::Const(Box::new(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(name.clone()),
                 span: *span,
             })),

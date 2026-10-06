@@ -208,6 +208,7 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         );
         let raw_ident = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(slot_name.clone()),
             span: *span,
         };
@@ -230,6 +231,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
             self.builder.position_at_end(hit_bb);
             let variant_expr = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Path {
                     segments: vec![enum_name.to_string(), variant.clone()],
                     generic_args: None,
@@ -282,6 +284,7 @@ impl<'ctx> super::Codegen<'ctx> {
             mut_marker: false,
             mut_marker_span: None,
             value: Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(err_slot),
                 span: *span,
             },
@@ -339,6 +342,7 @@ impl<'ctx> super::Codegen<'ctx> {
             mut_marker: false,
             mut_marker_span: None,
             value: Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(REFINE_SELF.to_string()),
                 span: *span,
             },
@@ -366,6 +370,7 @@ impl<'ctx> super::Codegen<'ctx> {
             mut_marker: false,
             mut_marker_span: None,
             value: Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::StringLit(format!("value does not satisfy refinement `{rname}`")),
                 span: *span,
             },

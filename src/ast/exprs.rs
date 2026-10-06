@@ -28,6 +28,9 @@ pub enum ParsedInterpolationPart {
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
+    /// Distinct per node once `crate::node_ids::assign_node_ids` has run;
+    /// `NodeId::DUMMY` before that, and on nodes built later.
+    pub id: crate::ids::NodeId,
 }
 
 /// Narrow an AST integer LITERAL from the i128 node to `i64`, for a consumer
@@ -590,6 +593,7 @@ pub fn desugar_pipe(left: &Expr, right: &Expr, span: Span) -> Option<Expr> {
     };
 
     Some(Expr {
+        id: crate::ids::NodeId::DUMMY,
         span,
         kind: ExprKind::Call { callee, args },
     })
@@ -616,6 +620,7 @@ pub fn desugar_pipe(left: &Expr, right: &Expr, span: Span) -> Option<Expr> {
 /// reports against `??` itself.
 pub fn desugar_nil_coalesce(left: &Expr, right: &Expr, span: Span) -> Expr {
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         span,
         kind: ExprKind::MethodCall {
             object: Box::new(left.clone()),

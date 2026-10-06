@@ -502,6 +502,7 @@ pub(super) fn substitute_const_idents_in_expr(expr: &Expr, subst: &HashMap<Strin
         _ => expr.kind.clone(),
     };
     Expr {
+        id: crate::ids::NodeId::DUMMY,
         kind: new_kind,
         span: expr.span,
     }

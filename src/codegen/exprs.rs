@@ -99,9 +99,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.indexed_elem_counter += 1;
         let span = value.span;
         let stmt = Stmt {
+            id: crate::ids::NodeId::DUMMY,
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Binding(synth.clone()),
                     span,
                 },
@@ -112,6 +114,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.compile_stmt(&stmt)?;
         Ok(Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth),
             span: expr.span,
         }))
@@ -2430,11 +2433,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 || self.mod_bindings.module_bindings.contains_key(&segments[0]))
         {
             let mut obj = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 span: *span,
                 kind: ExprKind::Identifier(segments[0].clone()),
             };
             for member in &segments[1..] {
                 obj = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     span: *span,
                     kind: ExprKind::FieldAccess {
                         object: Box::new(obj),

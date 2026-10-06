@@ -249,6 +249,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     };
                     self.register_var_from_type_expr(&synth, &string_te);
                     let synth_expr = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Identifier(synth.clone()),
                         span: inner.span,
                     };
@@ -322,6 +323,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 self.register_var_from_type_expr(&synth, &elem_te);
                 let synth_expr = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(synth.clone()),
                     span: inner.span,
                 };
@@ -369,6 +371,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let self_ident;
             let obj: &Expr = if matches!(object.kind, ExprKind::SelfValue) {
                 self_ident = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier("self".to_string()),
                     span: object.span,
                 };
@@ -393,6 +396,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                     self.register_var_from_type_expr(&synth, &field_te);
                     let expr = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Identifier(synth.clone()),
                         span: inner.span,
                     };
@@ -465,6 +469,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 self.register_var_from_type_expr(&synth, &vec_te);
                 let expr = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(synth.clone()),
                     span: inner.span,
                 };
@@ -499,6 +504,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 self.register_var_from_type_expr(&synth, &vec_te);
                 let expr = Expr {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: ExprKind::Identifier(synth.clone()),
                     span: inner.span,
                 };
@@ -535,6 +541,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let (synth, is_tensor) = self.bind_ref_return_borrow_synth(inner, &borrow_te)?;
             hoisted_borrow = Some((synth.clone(), is_tensor));
             Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier(synth),
                 span: inner.span,
             })
@@ -746,6 +753,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // recursively dispatch. The recursive call will skip this arm
         // (Identifier, not Index) and fall into the regular flow.
         let synth_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.clone()),
             span: inner.span,
         };
@@ -1057,6 +1065,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         let self_ident;
                         let fobj: &Expr = if matches!(fobj.kind, ExprKind::SelfValue) {
                             self_ident = Expr {
+                                id: crate::ids::NodeId::DUMMY,
                                 kind: ExprKind::Identifier("self".to_string()),
                                 span: fobj.span,
                             };
@@ -1512,6 +1521,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         let synth_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.clone()),
             span: *span,
         };
@@ -1641,6 +1651,7 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         self.register_var_from_type_expr(&synth, &elem_te);
         let synth_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.clone()),
             span: outer.span,
         };
@@ -1692,6 +1703,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let out = match resolved {
                 Ok(Some(base)) => {
                     let synth_expr = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Identifier(base),
                         span: inner_object.span,
                     };
@@ -1846,6 +1858,7 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         self.register_var_from_type_expr(&synth, &elem_te);
         let synth_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.clone()),
             span: inner_object.span,
         };
@@ -1901,6 +1914,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let self_ident;
         let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
             self_ident = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier("self".to_string()),
                 span: inner.span,
             };
@@ -2064,6 +2078,7 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return None,
         };
         Some(Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::MethodCall {
                 object: Box::new(new_obj),
                 method: method.clone(),
@@ -2114,6 +2129,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let self_ident;
         let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
             self_ident = Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind: ExprKind::Identifier("self".to_string()),
                 span: inner.span,
             };
@@ -2143,6 +2159,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.register_var_from_type_expr(&synth, &field_te);
 
         let synth_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.clone()),
             span: root.span,
         };
@@ -2295,6 +2312,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         let synth_expr = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Identifier(synth.clone()),
             span: inner_object.span,
         };
@@ -2367,6 +2385,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let self_ident;
                 let base: &Expr = if matches!(object.kind, ExprKind::SelfValue) {
                     self_ident = Expr {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: ExprKind::Identifier("self".to_string()),
                         span: object.span,
                     };
@@ -2994,6 +3013,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.seed_synthetic_pattern_binding_type(&e_span, ete);
         }
         let mk = |kind: ExprKind| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind,
             span: *call_span,
         };
@@ -3005,10 +3025,12 @@ impl<'ctx> super::Codegen<'ctx> {
             value,
         };
         let bind_pat_spanned = |name: &str, span: crate::token::Span| Pattern {
+            id: crate::ids::NodeId::DUMMY,
             kind: PatternKind::Binding(name.to_string()),
             span,
         };
         let bind_pat = |name: &str| Pattern {
+            id: crate::ids::NodeId::DUMMY,
             kind: PatternKind::Binding(name.to_string()),
             span: *call_span,
         };
@@ -3023,6 +3045,7 @@ impl<'ctx> super::Codegen<'ctx> {
         });
         let present_arm = MatchArm {
             pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::TupleVariant {
                     path: vec![present_ctor.to_string()],
                     patterns: vec![bind_pat_spanned(x_name, x_span)],
@@ -3040,6 +3063,7 @@ impl<'ctx> super::Codegen<'ctx> {
             });
             MatchArm {
                 pattern: Pattern {
+                    id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::TupleVariant {
                         path: vec!["Err".to_string()],
                         patterns: vec![bind_pat_spanned(e_name, e_span)],
@@ -3132,7 +3156,11 @@ impl<'ctx> super::Codegen<'ctx> {
         x_span.length += 4096 + self.optional_chain_counter as usize;
         self.seed_synthetic_pattern_binding_type(&x_span, &payload_te);
 
-        let mk = |kind: ExprKind| Expr { kind, span: *span };
+        let mk = |kind: ExprKind| Expr {
+            id: crate::ids::NodeId::DUMMY,
+            kind,
+            span: *span,
+        };
         let recv = mk(ExprKind::Identifier(x_name.to_string()));
         let projected = match args {
             None => mk(ExprKind::FieldAccess {
@@ -3163,9 +3191,11 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let present_arm = MatchArm {
             pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::TupleVariant {
                     path: vec!["Some".to_string()],
                     patterns: vec![Pattern {
+                        id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(x_name.to_string()),
                         span: x_span,
                     }],
@@ -3178,6 +3208,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let absent_arm = MatchArm {
             pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 // Spelled as a `Binding` named `None`, matching the sibling
                 // synthesis above — a bare unit variant reaches the pattern
                 // compiler in that form.
@@ -3474,6 +3505,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 },
             );
             let mk = |kind: ExprKind| Expr {
+                id: crate::ids::NodeId::DUMMY,
                 kind,
                 span: *call_span,
             };
@@ -4908,6 +4940,7 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         );
         let mk = |kind: ExprKind| Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind,
             span: *call_span,
         };
@@ -4943,6 +4976,7 @@ impl<'ctx> super::Codegen<'ctx> {
         call_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let call = Expr {
+            id: crate::ids::NodeId::DUMMY,
             kind: ExprKind::Call {
                 callee: Box::new(closure.clone()),
                 args: vec![],

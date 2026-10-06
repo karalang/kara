@@ -2852,6 +2852,7 @@ pub fn make_impl_method_function(
         let self_param = Param {
             span,
             pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
                 kind: PatternKind::Binding("self".to_string()),
                 span,
             },
