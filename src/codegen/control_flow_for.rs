@@ -1589,17 +1589,36 @@ impl<'ctx> super::Codegen<'ctx> {
         ) {
             return Ok(None);
         }
-        let val = self.compile_expr(iterable)?;
+        // B-2026-10-06-60 — a map held in a TUPLE ELEMENT (`for (k, v) in
+        // t.0`) is a place, not a temporary: a bare `for` borrows its
+        // collection, so the tuple still owns the map and frees it at its own
+        // scope exit. The typechecker's tables do not tell the two apart, and
+        // treating the element as a fresh temp queued a second free of the
+        // same handle. Alias the element's slot and register no cleanup, as a
+        // named map binding and a struct-field map already iterate.
+        let in_place = if matches!(iterable.kind, ExprKind::TupleIndex { .. }) {
+            self.place_chain_ptr_through_borrow(iterable)
+        } else {
+            None
+        };
         let fn_val = self.current_fn.unwrap();
         let synth = format!("__for_mapset_{}", self.indexed_elem_counter);
         self.indexed_elem_counter += 1;
-        let alloca = self.create_entry_alloca(fn_val, &synth, val.get_type());
-        self.builder.build_store(alloca, val).unwrap();
+        let alloca = match in_place {
+            Some(elem_ptr) => elem_ptr,
+            None => {
+                let val = self.compile_expr(iterable)?;
+                let alloca = self.create_entry_alloca(fn_val, &synth, val.get_type());
+                self.builder.build_store(alloca, val).unwrap();
+                alloca
+            }
+        };
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
         self.variables.insert(
             synth.clone(),
             VarSlot {
                 ptr: alloca,
-                ty: val.get_type(),
+                ty: ptr_ty.into(),
             },
         );
         self.register_var_from_type_expr(&synth, &te);
@@ -1609,17 +1628,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // doesn't leak its entry buffers. Note the arg order: cleanup_parts yields
         // (key_is_vec, val_is_vec, key_shared, val_shared) but `track_map_var`
         // takes (.., val_shared, key_shared).
-        let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn, key_drop_fn) =
-            self.map_temp_cleanup_parts(&te);
-        self.track_map_var_with_val_drop(
-            alloca,
-            key_is_vec,
-            val_is_vec,
-            val_shared,
-            key_shared,
-            val_drop_fn,
-            key_drop_fn,
-        );
+        if in_place.is_none() {
+            let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn, key_drop_fn) =
+                self.map_temp_cleanup_parts(&te);
+            self.track_map_var_with_val_drop(
+                alloca,
+                key_is_vec,
+                val_is_vec,
+                val_shared,
+                key_shared,
+                val_drop_fn,
+                key_drop_fn,
+            );
+        }
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
             span: iterable.span,

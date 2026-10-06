@@ -10693,6 +10693,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // took that walk and leaked the whole map
                                     // (`(m, vec![1])`, 112 B at -O0), while
                                     // `(m, 3)` reached the TypeExpr walk below.
+                                    // A `SortedMap` / `SortedSet` element
+                                    // reaches no gate but this one
+                                    // (B-2026-10-06-60).
                                     let deep_elem_tes = self
                                         .tuple_binding_elem_tes(ty.as_ref(), value)
                                         .filter(|tes| {
@@ -23069,6 +23072,29 @@ impl<'ctx> super::Codegen<'ctx> {
                                 crate::ast::GenericArg::Type(k),
                                 crate::ast::GenericArg::Type(v),
                             ]),
+                            span: e.span,
+                        }),
+                        span: e.span,
+                    });
+                }
+                // B-2026-10-06-60 — the `Set` / `SortedSet` twin: rebuild
+                // `Set[T]` from `set_elem_type_exprs`. A bare `Set` head gave
+                // the tuple drop no key type, so `(s, 2)` over `Set[String]`
+                // freed the handle and leaked every key.
+                if head == "Set" || head == "SortedSet" {
+                    if self
+                        .mapset
+                        .map_hashers
+                        .get(n.as_str())
+                        .is_some_and(|h| *h != crate::hasher_kind::HasherKind::default())
+                    {
+                        return None;
+                    }
+                    let t = self.mapset.set_elem_type_exprs.get(n.as_str())?.clone();
+                    return Some(TypeExpr {
+                        kind: TypeKind::Path(crate::ast::PathExpr {
+                            segments: vec![head.clone()],
+                            generic_args: Some(vec![crate::ast::GenericArg::Type(t)]),
                             span: e.span,
                         }),
                         span: e.span,

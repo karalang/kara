@@ -6740,7 +6740,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.emit_free_if_cap_positive(data, cap, tup_elem_size);
                             }
                         }
-                        "Map" | "HashMap" | "Set" | "HashSet" => {
+                        "Map" | "HashMap" | "Set" | "HashSet" | "SortedMap" | "SortedSet" => {
                             // B-2026-10-04-88 — the flag path below frees a
                             // `Vec`-shaped value's buffer but never walks
                             // INTO a value: a struct value's heap fields and a
@@ -6752,9 +6752,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             // handle from the slot and is null-safe, so the
                             // move dual (`zero_tuple_elem_cap_at` nulls the
                             // slot) is unchanged.
+                            //
+                            // `SortedMap` / `SortedSet` share the KaracMap
+                            // handle and the same drop fn; before
+                            // B-2026-10-06-60 they reached no arm here and
+                            // leaked, masked when a `for` over the element
+                            // freed it as a temporary.
                             let has_kv = match name.as_str() {
-                                "Map" => crate::codegen::helpers::map_kv_type_exprs(te).is_some(),
-                                "Set" => p.generic_args.as_ref().is_some_and(|a| {
+                                "Map" | "SortedMap" => {
+                                    crate::codegen::helpers::map_kv_type_exprs(te).is_some()
+                                }
+                                "Set" | "SortedSet" => p.generic_args.as_ref().is_some_and(|a| {
                                     matches!(a.first(), Some(GenericArg::Type(_)))
                                 }),
                                 _ => false,
@@ -6999,7 +7007,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
-                    "Map" | "HashMap" | "Set" | "HashSet" => {
+                    "Map" | "HashMap" | "Set" | "HashSet" | "SortedMap" | "SortedSet" => {
                         let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
                     }
                     // B-2026-08-03-3 — the neutralizer dual of
@@ -12287,9 +12295,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// slot is an opaque pointer, so the LLVM-type aggregate walk cannot see
     /// it; the let-site asks this so `emit_tuple_elem_drops`' map arm (and its
     /// `zero_tuple_elem_cap_at` dual, which nulls the slot) is reached.
+    ///
+    /// B-2026-10-06-60 — and the sorted heads, which share the handle.
+    /// `type_expr_has_drop_heap` answers `false` for those, so the TypeExpr
+    /// tuple-drop gates ask this too.
     pub(super) fn tuple_elem_is_map_handle(te: &TypeExpr) -> bool {
         matches!(&te.kind, TypeKind::Path(p) if p.segments.last().is_some_and(|n| {
-            matches!(n.as_str(), "Map" | "HashMap" | "Set" | "HashSet")
+            matches!(n.as_str(), "Map" | "HashMap" | "Set" | "HashSet" | "SortedMap" | "SortedSet")
         }))
     }
 

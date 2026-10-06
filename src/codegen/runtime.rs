@@ -2286,7 +2286,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // empty walk means and what it did before this path existed.
         if !elem_tes.iter().enumerate().any(|(i, e)| {
             !skip.contains(&i)
-                && (self.type_expr_has_drop_heap(e) || self.tuple_elem_needs_deep_drop(e))
+                && (self.type_expr_has_drop_heap(e)
+                    || self.tuple_elem_needs_deep_drop(e)
+                    || Self::tuple_elem_is_map_handle(e))
         }) {
             return None;
         }
@@ -2336,10 +2338,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // heapless by design, so a tuple whose only heap hangs off an
         // Option/Result payload bailed here and got no drop fn at all. OR in the
         // narrow Option/Result admit `emit_tuple_elem_drops` now honors.
-        if !elem_tes
-            .iter()
-            .any(|e| self.type_expr_has_drop_heap(e) || self.tuple_elem_needs_deep_drop(e))
-        {
+        if !elem_tes.iter().any(|e| {
+            self.type_expr_has_drop_heap(e)
+                || self.tuple_elem_needs_deep_drop(e)
+                || Self::tuple_elem_is_map_handle(e)
+        }) {
             return None;
         }
         // B-2026-09-03-28 — THE LLVM AGGREGATE TYPE IS PART OF THE KEY, because
