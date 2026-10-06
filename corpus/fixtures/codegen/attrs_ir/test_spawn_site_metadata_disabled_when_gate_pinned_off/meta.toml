@@ -2,7 +2,7 @@ source = "tests/codegen/attrs_ir.rs::test_spawn_site_metadata_disabled_when_gate
 dedup_of = ["tests/codegen/concurrency.rs::test_spawn_site_records_correct_source_location"]
 expect = "stdout"
 exit = 0
-tags = ["par"]
+tags = ["literal-unmatched", "par"]
 class = "unknown"
 expected_from = "legacy-run"
 legacy_backend = "legacy-build"
@@ -10,4 +10,4 @@ legacy_exit = 0
 rules = []
 backends = []
 env = {}
-note = ""
+note = "first literal of the holding test: '@KARAC_SPAWN_SITES_LEN = constant i32 0'"

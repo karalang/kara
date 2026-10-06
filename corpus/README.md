@@ -51,6 +51,16 @@ dataframes, comptime, `dyn`, layout blocks, `catch_panic`, `Regex`,
 a raw string the test fills in with `format!` (recorded as `skip`), and
 `nondeterministic` for a program whose output changes between two legacy runs
 (a bound port, task scheduling, cancellation timing; also `skip`).
+Derived from the record without a run (`record.py --retag`): `needs-driver`
+for a program whose legacy run timed out (almost always a server the Rust
+test drives with a client), `literal-unmatched` for a fixture whose holding
+test has string literals none of which equals the legacy stdout (an IR-shape
+test, a partial assertion, or a pinned legacy bug; the first literal is in
+`note`), and `class = "d"` for every `deferred:*` program. `record.py
+--mirror` runs each kata's same-stem Python mirror and tags `mirror-agrees`
+or `mirror-differs`; most differences are bench programs whose mirror uses a
+different input or random stream, so a difference is a prompt to look, not a
+verdict.
 
 ## Running
 

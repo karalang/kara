@@ -102,6 +102,73 @@ def matches(cand: str, out: str) -> bool:
     return cand == out or cand.strip() == out.strip() or norm_lines(cand) == norm_lines(out)
 
 
+def derive(meta: dict, rel: str, cands: dict, out: str) -> dict:
+    """Tags and class that follow from what was recorded, without a run.
+
+    literal-unmatched  the holding test has string literals and none of them is
+                       the legacy stdout: an IR-shape test, a partial or tolerant
+                       assertion, or a legacy bug the suite pins; the first
+                       literal goes in `note` for the classifier to read
+    needs-driver       the legacy run timed out: almost always a server the Rust
+                       test drives with a client, untestable as a plain program
+    class d            any deferred:* tag (classification rules, section 3)
+    """
+    tags = set(meta.get("tags", []))
+    expect = str(meta.get("expect", ""))
+    note = meta.get("note", "")
+    if "timed out" in note:
+        tags.add("needs-driver")
+    ran = expect == "stdout" or expect.startswith("panic:") or \
+        (expect == "skip" and not note and "format-template" not in tags)
+    if meta.get("expected_from") == "legacy-run" and cands.get(rel) and ran and "literal-unmatched" not in tags:
+        tags.add("literal-unmatched")
+        first = " ".join(cands[rel][0].split())[:120]
+        note = (note + " " if note else "") + f"first literal of the holding test: {first!r}"
+    if any(t.startswith("deferred:") for t in tags) and meta.get("class", "unknown") == "unknown":
+        meta["class"] = "d"
+    meta["tags"] = sorted(tags)
+    meta["note"] = note
+    return meta
+
+
+def retag_one(entry: Path, corpus: Path, cands: dict) -> str:
+    meta = read_toml(entry / "meta.toml")
+    if not (entry / "legacy.out").exists() or meta.get("expected_from") in ("pin", "spec"):
+        return "untouched"
+    before = dict(meta, tags=list(meta.get("tags", [])))
+    meta = derive(meta, str(entry.relative_to(corpus)), cands, "")
+    if meta == before:
+        return "same"
+    write_toml(entry / "meta.toml", meta)
+    return "retagged"
+
+
+def mirror_one(entry: Path, args) -> str:
+    """A kata whose directory holds a Python mirror with the same stem: run it
+    and tag the entry `mirror-agrees` or `mirror-differs` against legacy.out.
+    The mirrors implement the same algorithm (kara-katas CLAUDE.md), so
+    agreement makes legacy's output an independently checked expectation."""
+    meta = read_toml(entry / "meta.toml")
+    src = str(meta.get("source", ""))
+    if not src.startswith("kara-katas/") or not (entry / "legacy.out").exists():
+        return "not-a-kata"
+    py = Path(args.katas) / Path(src[len("kara-katas/"):]).with_suffix(".py")
+    if not py.exists():
+        return "no-mirror"
+    try:
+        r = subprocess.run([sys.executable, py.name], cwd=py.parent, capture_output=True,
+                           timeout=args.timeout, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return "mirror-timeout"
+    if r.returncode != 0:
+        return "mirror-failed"
+    tag = "mirror-agrees" if r.stdout == (entry / "legacy.out").read_bytes() else "mirror-differs"
+    tags = set(meta.get("tags", [])) - {"mirror-agrees", "mirror-differs"}
+    meta["tags"] = sorted(tags | {tag})
+    write_toml(entry / "meta.toml", meta)
+    return tag
+
+
 def recheck_one(entry: Path, args) -> str:
     meta = read_toml(entry / "meta.toml")
     if not (entry / "legacy.out").exists() or meta.get("expect") == "skip":
@@ -176,6 +243,7 @@ def record_one(entry: Path, corpus: Path, cands: dict, args) -> str:
         meta.setdefault("backends", [])
         meta.setdefault("env", {})
         meta["note"] = note
+        meta = derive(meta, rel, cands, out)
     write_toml(entry / "meta.toml", meta)
     return expect.split(":")[0]
 
@@ -189,6 +257,11 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--redo", action="store_true")
+    ap.add_argument("--mirror", action="store_true",
+                    help="run each kata's Python mirror and tag mirror-agrees / mirror-differs")
+    ap.add_argument("--katas", default=str(ROOT.parent / "kara-katas"), help="kara-katas checkout, for --mirror")
+    ap.add_argument("--retag", action="store_true",
+                    help="re-derive tags and class d from what is already recorded, without running anything")
     ap.add_argument("--recheck", action="store_true",
                     help="re-run recorded entries and mark the ones whose output changes as nondeterministic")
     ap.add_argument("--keep-deferred", dest="skip_deferred", action="store_false",
@@ -201,7 +274,14 @@ def main() -> int:
     todo = [e for e in entries(corpus) if not args.filter or any(f in str(e.relative_to(corpus)) for f in args.filter)]
     counts: dict[str, int] = {}
     done = 0
-    step = (lambda e: recheck_one(e, args)) if args.recheck else (lambda e: record_one(e, corpus, cands, args))
+    if args.mirror:
+        step = lambda e: mirror_one(e, args)  # noqa: E731
+    elif args.retag:
+        step = lambda e: retag_one(e, corpus, cands)  # noqa: E731
+    elif args.recheck:
+        step = lambda e: recheck_one(e, args)  # noqa: E731
+    else:
+        step = lambda e: record_one(e, corpus, cands, args)  # noqa: E731
     with cf.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         for v in pool.map(step, todo):
             counts[v] = counts.get(v, 0) + 1

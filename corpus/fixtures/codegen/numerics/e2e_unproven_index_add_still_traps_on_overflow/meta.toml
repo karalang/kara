@@ -2,7 +2,7 @@ source = "tests/codegen/numerics.rs::e2e_unproven_index_add_still_traps_on_overf
 dedup_of = []
 expect = "panic:101"
 exit = 101
-tags = ["panic"]
+tags = ["literal-unmatched", "panic"]
 class = "unknown"
 expected_from = "legacy-run"
 legacy_backend = "legacy-build"
@@ -10,4 +10,4 @@ legacy_exit = 101
 rules = []
 backends = []
 env = {}
-note = ""
+note = "first literal of the holding test: 'stderr={:?}'"

@@ -2,7 +2,7 @@ source = "tests/codegen/patterns.rs::test_e2e_main_exitcode_canonical_match_ok_u
 dedup_of = []
 expect = "panic:3"
 exit = 3
-tags = []
+tags = ["literal-unmatched"]
 class = "unknown"
 expected_from = "legacy-run"
 legacy_backend = "legacy-build"
@@ -10,4 +10,4 @@ legacy_exit = 3
 rules = []
 backends = []
 env = {}
-note = ""
+note = "first literal of the holding test: 'stderr={:?}'"

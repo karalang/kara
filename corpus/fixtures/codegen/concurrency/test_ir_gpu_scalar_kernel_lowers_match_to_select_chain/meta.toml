@@ -2,12 +2,12 @@ source = "tests/codegen/concurrency.rs::test_ir_gpu_scalar_kernel_lowers_match_t
 dedup_of = []
 expect = "skip"
 exit = 1
-tags = ["deferred:gpu"]
-class = "unknown"
+tags = ["deferred:gpu", "literal-unmatched"]
+class = "d"
 expected_from = "legacy-run"
 legacy_backend = "legacy-build"
 legacy_exit = 1
 rules = []
 backends = []
 env = {}
-note = ""
+note = "first literal of the holding test: 'let w = select(select(1, 2, ((input[i] == 1) || (input[i] == 2))), 4, (input[i] == 0));'"
