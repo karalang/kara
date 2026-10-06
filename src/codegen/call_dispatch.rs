@@ -21958,7 +21958,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // record's `Option[String]`; the place-source destructure
             // (`let (a, b) = t`) then saw no payload to disarm in `t` while
             // `t`'s own drop freed it, and `a` freed it again.
-            matches!(n.as_str(), "Option" | "Result")
+            //
+            // B-2026-10-04-91 — and a `Map` its `[K, V]`: `let t = (m, 1)` named
+            // the element bare `Map`, so nothing could index `t.0[1]`.
+            matches!(n.as_str(), "Option" | "Result" | "Map" | "SortedMap")
                 || self
                     .type_decls
                     .struct_generic_params

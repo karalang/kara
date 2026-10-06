@@ -22877,6 +22877,36 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Some(te);
                 }
                 let head = self.var_types.var_type_names.get(n.as_str())?;
+                // B-2026-10-04-91 — a `Map` / `SortedMap` binding: rebuild
+                // `Map[K, V]` from the key and value tables its registration
+                // filled, so `let t = (m, 1); t.0[1].n` types the element as a
+                // map exactly as the annotated `let t: (Map[i64, P], i64)`
+                // does. Default hasher only: a non-default `H` is not
+                // spellable from these tables, and that element keeps the old
+                // bare head.
+                if head == "Map" || head == "SortedMap" {
+                    if self
+                        .mapset
+                        .map_hashers
+                        .get(n.as_str())
+                        .is_some_and(|h| *h != crate::hasher_kind::HasherKind::default())
+                    {
+                        return None;
+                    }
+                    let k = self.mapset.map_key_type_exprs.get(n.as_str())?.clone();
+                    let v = self.var_types.var_elem_type_exprs.get(n.as_str())?.clone();
+                    return Some(TypeExpr {
+                        kind: TypeKind::Path(crate::ast::PathExpr {
+                            segments: vec![head.clone()],
+                            generic_args: Some(vec![
+                                crate::ast::GenericArg::Type(k),
+                                crate::ast::GenericArg::Type(v),
+                            ]),
+                            span: e.span,
+                        }),
+                        span: e.span,
+                    });
+                }
                 if head != "Vec" && head != "VecDeque" {
                     return None;
                 }
