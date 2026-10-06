@@ -15436,9 +15436,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the displaced old buffer leaked once per assignment.
                     let rhs_is_fresh_string_branch =
                         self.rhs_branch_tails_fresh_string(value, name.as_str());
+                    // B-2026-10-05-21 — a bare string literal (`c = "zz"`) is a
+                    // static buffer (`cap = 0`), never the target's, and was in
+                    // no term above: the displaced heap buffer leaked.
+                    let rhs_is_string_literal = matches!(
+                        rhs_tail.kind,
+                        ExprKind::StringLit(_) | ExprKind::MultiStringLit(_)
+                    );
                     let trigger_eager_free = lhs_is_tracked_vec
                         && !rhs_is_self_alias
                         && (staged_fstr_acc.is_some()
+                            || rhs_is_string_literal
                             || rhs_is_moved_alias
                             || rhs_is_fresh
                             || rhs_is_fresh_string_branch
