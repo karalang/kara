@@ -10685,10 +10685,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // such an element to the recursive
                                     // `karac_drop_Vec_<E>`, which drains the live
                                     // elements before freeing the buffer.
+                                    //
+                                    // B-2026-10-04-88 — a `Map` / `Set` element
+                                    // too. Its handle is an opaque pointer the
+                                    // LLVM-type walk cannot see, so a tuple
+                                    // that ALSO holds a visible `Vec`/`String`
+                                    // took that walk and leaked the whole map
+                                    // (`(m, vec![1])`, 112 B at -O0), while
+                                    // `(m, 3)` reached the TypeExpr walk below.
                                     let deep_elem_tes = self
                                         .tuple_binding_elem_tes(ty.as_ref(), value)
                                         .filter(|tes| {
-                                            tes.iter().any(|e| self.tuple_elem_needs_deep_drop(e))
+                                            tes.iter().any(|e| {
+                                                self.tuple_elem_needs_deep_drop(e)
+                                                    || Self::tuple_elem_is_map_handle(e)
+                                            })
                                         });
                                     if let Some(elem_tes) = deep_elem_tes {
                                         if let Some(drop_fn) =

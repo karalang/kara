@@ -6741,6 +6741,31 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                         "Map" | "HashMap" | "Set" | "HashSet" => {
+                            // B-2026-10-04-88 — the flag path below frees a
+                            // `Vec`-shaped value's buffer but never walks
+                            // INTO a value: a struct value's heap fields and a
+                            // `Vec[String]` value's strings leaked. With the
+                            // K/V types in hand, divert to the same deep
+                            // `karac_drop_Map_<K>_<V>` a nested map element
+                            // gets (`emit_free_one_map_handle`: per-value drop
+                            // fn, key walk, shared-half rc decs). It reads the
+                            // handle from the slot and is null-safe, so the
+                            // move dual (`zero_tuple_elem_cap_at` nulls the
+                            // slot) is unchanged.
+                            let has_kv = match name.as_str() {
+                                "Map" => crate::codegen::helpers::map_kv_type_exprs(te).is_some(),
+                                "Set" => p.generic_args.as_ref().is_some_and(|a| {
+                                    matches!(a.first(), Some(GenericArg::Type(_)))
+                                }),
+                                _ => false,
+                            };
+                            if has_kv {
+                                let deep = self.emit_drop_fn_for_type_expr(te);
+                                self.builder
+                                    .build_call(deep, &[field_ptr.into()], "")
+                                    .unwrap();
+                                continue;
+                            }
                             let handle = self
                                 .builder
                                 .build_load(ptr_ty, field_ptr, "drop.tup.map.handle")
@@ -12256,6 +12281,16 @@ impl<'ctx> super::Codegen<'ctx> {
             Some((inner, n)) => n > 0 && self.array_elem_te_has_drop_heap(&inner),
             None => self.type_expr_has_drop_heap(elem),
         }
+    }
+
+    /// B-2026-10-04-88 — is this tuple element a `Map` / `Set` HANDLE? Its
+    /// slot is an opaque pointer, so the LLVM-type aggregate walk cannot see
+    /// it; the let-site asks this so `emit_tuple_elem_drops`' map arm (and its
+    /// `zero_tuple_elem_cap_at` dual, which nulls the slot) is reached.
+    pub(super) fn tuple_elem_is_map_handle(te: &TypeExpr) -> bool {
+        matches!(&te.kind, TypeKind::Path(p) if p.segments.last().is_some_and(|n| {
+            matches!(n.as_str(), "Map" | "HashMap" | "Set" | "HashSet")
+        }))
     }
 
     pub(super) fn tuple_elem_needs_deep_drop(&self, te: &TypeExpr) -> bool {
