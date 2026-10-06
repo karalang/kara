@@ -248,8 +248,8 @@ impl Parser {
             for kw in ["struct ", "enum "] {
                 if let Some(rest) = l.code.strip_prefix(kw) {
                     let mut c = Cur::new(rest);
-                    let name = c.ident().map_err(|e| format!("line {}: {e}", l.no))?;
-                    adt_names.push((l.no, name.to_string()));
+                    let name = c.type_name().map_err(|e| format!("line {}: {e}", l.no))?;
+                    adt_names.push((l.no, name));
                 }
             }
             if let Some(rest) = l.code.strip_prefix("fn ") {
@@ -286,7 +286,7 @@ impl Parser {
             c.expect_kw("enum")?;
             true
         };
-        let name = c.ident()?.to_string();
+        let name = c.type_name()?;
         let id = self.adt_decls[&name];
         if id.0 as usize != self.adts.len() {
             return Err("internal: declarations parsed out of order".into());
@@ -407,7 +407,7 @@ impl Parser {
             return Ok(self.tys.intern(TyKind::MutRef(t)));
         }
         if c.eat_kw("shared") {
-            let a = self.adt(c.ident()?)?;
+            let a = self.adt(&c.type_name()?)?;
             return Ok(self.tys.intern(TyKind::Shared(a)));
         }
         let name = c.ident()?;
@@ -449,7 +449,10 @@ impl Parser {
             }
             other => match int_ty(other) {
                 Some(i) => TyKind::Int(i),
-                None => TyKind::Adt(self.adt(other)?),
+                None => {
+                    let full = format!("{other}{}", c.bracket_suffix()?);
+                    TyKind::Adt(self.adt(&full)?)
+                }
             },
         };
         Ok(self.tys.intern(kind))
@@ -951,7 +954,7 @@ impl Parser {
             ));
         }
         let shared = c.eat_kw("shared");
-        let head = c.ident()?.to_string();
+        let head = c.type_name()?;
         if !shared && c.eat("(") {
             let one = |p: &mut Self, c: &mut Cur| -> Result<Place, String> {
                 let pl = p.place(body, c)?;
@@ -1178,6 +1181,36 @@ impl<'a> Cur<'a> {
             return Err(format!("expected a name at `{start}`"));
         }
         Ok(self.take_while(|c| c.is_alphanumeric() || c == '_'))
+    }
+
+    /// A type name: `R`, or a monomorphic instance such as `Option[R]` or
+    /// `Result[i64, String]`, whose brackets follow the name directly.
+    fn type_name(&mut self) -> Result<String, String> {
+        let n = self.ident()?;
+        Ok(format!("{n}{}", self.bracket_suffix()?))
+    }
+
+    /// `[...]` directly after a name, with nested brackets, or nothing.
+    fn bracket_suffix(&mut self) -> Result<&'a str, String> {
+        let r = self.rest();
+        if !r.starts_with('[') {
+            return Ok("");
+        }
+        let mut depth = 0;
+        for (i, ch) in r.char_indices() {
+            match ch {
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.pos += i + 1;
+                        return Ok(&r[..=i]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Err(format!("unclosed `[` at `{r}`"))
     }
 
     fn number(&mut self) -> Result<u64, String> {
@@ -1487,6 +1520,31 @@ fn take(_1: R) -> () {
         );
         assert!(m.tys.adt(m.adt_named("R").unwrap()).has_drop_impl);
         assert!(m.body("R.drop").is_some());
+    }
+
+    #[test]
+    fn mir_text_names_monomorphic_instances() {
+        let m = round_trip(
+            "\
+struct R: Drop { id: i64 }
+enum Option[R] { None, Some(R) }
+enum Result[i64, String] { Ok(i64), Err(String) }
+
+fn f(_1: R) -> Option[R] {
+    let mut _0: Option[R];
+    let _2: Result[i64, String];
+    bb0: {
+        _0 = Option[R].Some { move _1 };
+        _2 = Result[i64, String].Ok { const 1_i64 };
+        drop(_2) -> bb1;
+    }
+    bb1: {
+        return;
+    }
+}
+",
+        );
+        assert!(m.adt_named("Result[i64, String]").is_some());
     }
 
     #[test]
