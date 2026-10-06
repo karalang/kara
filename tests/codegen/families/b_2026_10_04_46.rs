@@ -58,7 +58,8 @@ fn main() {
 /// only the compiled answer is pinned. `a`, `b` and `c` pass a fresh tuple by
 /// value or discard one (B-2026-09-27-92); `d` is a closure capture and `e` a
 /// displaced element. The interpreter loses the captured body in `d`
-/// (B-2026-10-04-68's closure half); `e` agrees since B-2026-10-04-68.
+/// (B-2026-10-04-68's closure half) and the discarded tuple's in `c`; `e`
+/// agrees since B-2026-10-04-68, and `a` and `b` since B-2026-10-05-119.
 #[test]
 fn e2e_tuple_option_shared_element_is_released_once_compiled_only() {
     let src = r#"shared struct H { id: i64 }
@@ -88,7 +89,7 @@ fn main() {
     assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
     assert_eq!(
         interp_out.join(""),
-        "t1 2\na\nt2\nb\nc\nd4\ndH5\ne5\ndH6\nf7\nf7\ndH7\nend\n",
+        "t1 2\ndH1\na\nt2\ndH2\nb\nc\nd4\ndH5\ne5\ndH6\nf7\nf7\ndH7\nend\n",
         "interpreter"
     );
     assert_eq!(run_program(src).as_deref(), Some(want), "AOT");

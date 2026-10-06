@@ -12580,6 +12580,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// B-2026-10-04-46 — is this tuple element an `Option[shared T]`? The
     /// one shape [`Self::tuple_elem_optres_drop_ok`] declines that the tuple
     /// walk must still release: nothing else ever reaches a tuple slot.
+    /// B-2026-10-05-119 — a tuple element spelled as a `shared` struct (not a
+    /// `shared enum`, and not a generic one).
+    pub(super) fn tuple_elem_is_shared_struct(&self, te: &TypeExpr) -> bool {
+        matches!(&te.kind, TypeKind::Path(p)
+            if p.generic_args.is_none()
+                && p.segments.len() == 1
+                && self
+                    .type_decls
+                    .shared_types
+                    .get(p.segments[0].as_str())
+                    .is_some_and(|info| !info.is_enum))
+    }
+
     pub(super) fn tuple_elem_is_option_shared(&self, te: &TypeExpr) -> bool {
         self.option_inner_shared_type_for_type_expr(te).is_some()
     }

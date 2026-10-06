@@ -12932,6 +12932,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             // the callee's tuple param is caller-retains, so
                             // this temp is the element's only owner.
                             || self.tuple_elem_is_option_shared(e)
+                            // B-2026-10-05-119 — a bare `shared` STRUCT element,
+                            // for the same reason. Not a `shared enum`, which
+                            // both backends leave silent (see above).
+                            || self.tuple_elem_is_shared_struct(e)
                 })
             {
                 let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());

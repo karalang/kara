@@ -6154,11 +6154,12 @@ fn main() {
 /// rather than a transcript somebody re-measured after the fact. Five of the
 /// six pairs are byte-identical here and on `--interp`.
 ///
-/// THE TWO PLACES `--interp` DIFFERS ARE PRE-EXISTING AND SHARED BY BOTH
-/// SPELLINGS, which is why they are pinned rather than fixed: `G-temp` /
-/// `C-temp` both lose the body under `--interp` (a fresh-temp argument to a
-/// by-value param), and `G-named` / `C-named` both place it at the end of
-/// `main` there instead of at the callee's exit. Measured on the CONCRETE
+/// THE TWO PLACES `--interp` DIFFERED WERE PRE-EXISTING AND SHARED BY BOTH
+/// SPELLINGS, which is why they were pinned rather than fixed: `G-temp` /
+/// `C-temp` both lost the body under `--interp` (a fresh-temp argument to a
+/// by-value param; agrees since B-2026-10-05-119, which flipped this pin from
+/// `eaten x` to `eaten dSh4 x`), and `G-named` / `C-named` both place it at
+/// the end of `main` there instead of at the callee's exit. Measured on the CONCRETE
 /// cells alone before this fix, so neither was opened by it. This is the
 /// `--interp` half of that pin; `e2e_generic_enum_shared_payload_is_rc_released`
 /// in `tests/codegen.rs` runs the same program on the other three surfaces.
@@ -6244,7 +6245,7 @@ fn main() {
     // (design.md rule 3). This pin held the old scope-exit answer; the
     // compiled twin (`e2e_generic_enum_shared_payload_is_rc_released`) already
     // printed `eaten dSh5 x`, and the two now agree on those cells.
-    assert_eq!(out, "G-bare\n  x\n  dSh1\nC-bare\n  x\n  dSh1\nG-round\n  x\n  dSh2\nC-round\n  x\n  dSh2\nG-arm\n  got3\n  dSh3\nC-arm\n  got3\n  dSh3\nG-temp\n  eaten\n  x\nC-temp\n  eaten\n  x\nG-named\n  eaten\n  dSh5\n  x\nC-named\n  eaten\n  dSh5\n  x\nG-alias\n  x\n  dSh6\nC-alias\n  x\n  dSh6\npar\n  x\n  dPa7\ntwoparam\n  x\n  dSh8\notherarm\n  x\nunit\n  x\nstring\n  x\nscalar\n  x\nplain\n  dPl13\n  x\nsharedenum\n  dPl14\n  x\nend\n", "got:\n{out}");
+    assert_eq!(out, "G-bare\n  x\n  dSh1\nC-bare\n  x\n  dSh1\nG-round\n  x\n  dSh2\nC-round\n  x\n  dSh2\nG-arm\n  got3\n  dSh3\nC-arm\n  got3\n  dSh3\nG-temp\n  eaten\n  dSh4\n  x\nC-temp\n  eaten\n  dSh4\n  x\nG-named\n  eaten\n  dSh5\n  x\nC-named\n  eaten\n  dSh5\n  x\nG-alias\n  x\n  dSh6\nC-alias\n  x\n  dSh6\npar\n  x\n  dPa7\ntwoparam\n  x\n  dSh8\notherarm\n  x\nunit\n  x\nstring\n  x\nscalar\n  x\nplain\n  dPl13\n  x\nsharedenum\n  dPl14\n  x\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-19-21 — a generic callee that hands its boxed payload back

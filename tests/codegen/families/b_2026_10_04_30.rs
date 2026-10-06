@@ -13,9 +13,11 @@ use super::*;
 /// `let u = t.unwrap()` and `match` cells are controls that were already
 /// clean.
 ///
-/// The interpreter loses the `Drop` body of every handle inside a fresh
-/// `Option` temporary passed by value (`dH1`, `dH4`, `dH8`, `dH9`):
-/// PREDICTS B-2026-09-27-92, whose fix makes its line equal the compiled one.
+/// The interpreter loses the `Drop` body of a handle inside a fresh `Option`
+/// temporary passed by value to a callee that unwraps it (`dH1`, `dH4`,
+/// `dH8`): PREDICTS B-2026-09-27-92, whose fix makes its line equal the
+/// compiled one. `dH9` (a callee that only matches) agrees since
+/// B-2026-10-05-119.
 #[test]
 fn e2e_unwrap_field_read_on_named_option_shared_place_keeps_the_ref() {
     let src = r#"shared struct H { id: i64 }
@@ -46,7 +48,7 @@ fn main() {
     assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
     assert_eq!(
         interp_out.join(""),
-        "h1\ne1\nh2\ne2\ndH2\nl3\nl3\ne3\ndH3\nx4\ne4\nx5\ne5\ndH5\nw6 7\ndH6\ne6\nu8\ne7\nm9\ne8\nh10\nk10\ndH10\ne9\nw11\nw11\ndH11\nr12\nr12\ndH12\nend\n",
+        "h1\ne1\nh2\ne2\ndH2\nl3\nl3\ne3\ndH3\nx4\ne4\nx5\ne5\ndH5\nw6 7\ndH6\ne6\nu8\ne7\nm9\ndH9\ne8\nh10\nk10\ndH10\ne9\nw11\nw11\ndH11\nr12\nr12\ndH12\nend\n",
         "interpreter"
     );
     assert_eq!(run_program(src).as_deref(), Some(want), "AOT");

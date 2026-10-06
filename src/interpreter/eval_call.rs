@@ -5616,6 +5616,18 @@ impl<'a> super::Interpreter<'a> {
                             }
                         }
                         self.run_optres_payload_user_drops_value(&v);
+                        // B-2026-10-05-119 — and a `shared` handle the payload
+                        // holds, where the caller's temporary dies, as the
+                        // struct arm at the end of this walk does. Not a TUPLE
+                        // payload, whose `shared` element every compiled
+                        // surface still leaks (B-2026-10-06-134): releasing it
+                        // here alone would split the backends.
+                        let tuple_payload = matches!(&v, Value::EnumVariant {
+                            data: EnumData::Tuple(vs), ..
+                        } if matches!(vs.as_slice(), [Value::Tuple(_)]));
+                        if !tuple_payload {
+                            self.defer_fresh_shared_arg_release(&v);
+                        }
                         continue;
                     }
                 }
@@ -5633,13 +5645,17 @@ impl<'a> super::Interpreter<'a> {
                 && self.fresh_nameless_container_arg(&arg.value)
             {
                 match arg_vals.get(i) {
-                    Some(Value::Tuple(items)) => {
+                    Some(v @ Value::Tuple(items)) => {
                         let items = items.clone();
+                        // B-2026-10-05-119 — and the `shared` elements.
+                        self.defer_fresh_shared_arg_release(v);
                         self.run_fresh_tuple_arg_elem_drops(callee_name, method_owner, i, items);
                         continue;
                     }
                     Some(v @ Value::Array(_)) => {
                         self.run_discarded_value_user_drops(v.clone());
+                        // B-2026-10-05-119 — and the `shared` elements.
+                        self.defer_fresh_shared_arg_release(v);
                         continue;
                     }
                     _ => {}
@@ -5681,6 +5697,11 @@ impl<'a> super::Interpreter<'a> {
                     // suite caught the double fire on `take_tuple((h, 20))`).
                     if self.discard_tuple_all_elems_safe(elems, items, false) {
                         let items = items.clone();
+                        // B-2026-10-05-119 — and the `shared` elements, where
+                        // the caller's temporary dies.
+                        if let Some(v) = arg_vals.get(i) {
+                            self.defer_fresh_shared_arg_release(v);
+                        }
                         self.run_fresh_tuple_arg_elem_drops(callee_name, method_owner, i, items);
                     }
                 }
@@ -5763,6 +5784,8 @@ impl<'a> super::Interpreter<'a> {
             if is_user_enum_value {
                 let v = v.clone();
                 self.run_enum_payload_user_drops_value(&v);
+                // B-2026-10-05-119 — and a `shared` handle the payload holds.
+                self.defer_fresh_shared_arg_release(&v);
                 continue;
             }
             if !self.program.drop_method_keys.contains_key(&tn) && self.value_runs_user_drop(v) {
