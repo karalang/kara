@@ -14,7 +14,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use std::collections::HashMap;
 
-use super::inference::{resolve_type_vars, substitute_type_params};
+use super::inference::{find_unbound_type_param, resolve_type_vars, substitute_type_params};
 use super::types::{
     strip_refinement, type_display, ConstArg, ConstVarId, DimArg, FloatSize, IntSize,
     ScrutineeMode, SubstValue, Type, TypeVarId, UIntSize, VariantTypeInfo,
@@ -232,6 +232,7 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
     ) -> Type {
         let scrut_ty = self.infer_expr(scrutinee);
+        let scrut_ty = self.freshen_unsolved_scrutinee_params(scrut_ty);
         let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
         let dispatch_ty = dispatch_ty.clone();
         // B-2026-08-31-3 — the CHECK-position twin of `infer_match`'s gate, and
@@ -522,8 +523,53 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-10-01-53. A generic call whose type argument no argument fixes
+    /// (`Result.Ok(a)` leaves `E` open) returns that argument as the
+    /// uninstantiated `TypeParam("E")`, so the unbound-param diagnostic can
+    /// name it at a `let`. As a `match` scrutinee that diagnostic never fires,
+    /// and the arms are what solve it: `Err(e) => e` beside `Ok(v) => v` makes
+    /// `E` the `Ok` payload's type. Left as a `TypeParam`, the `Err` binding
+    /// had no solvable type, recorded no layout, and codegen bound `e` as one
+    /// `i64` word. Replace each type param that is not in scope with a fresh
+    /// variable, so the arms solve it and `finalize_typevar_pattern_bindings`
+    /// records what they solved. Only an enum scrutinee is touched, and an
+    /// in-scope param of the enclosing fn is never renamed.
+    fn freshen_unsolved_scrutinee_params(&mut self, ty: Type) -> Type {
+        let Type::Named { name, .. } = &ty else {
+            return ty;
+        };
+        if !self.env.enums.contains_key(name) {
+            return ty;
+        }
+        let in_scope: std::collections::HashSet<String> =
+            self.enclosing_bounds.keys().cloned().collect();
+        let mut ty = ty;
+        loop {
+            let in_scope_refs: std::collections::HashSet<&str> =
+                in_scope.iter().map(String::as_str).collect();
+            let Some(param) = find_unbound_type_param(&ty, &in_scope_refs).map(str::to_string)
+            else {
+                return ty;
+            };
+            let var = self.env.fresh_type_var();
+            if let Type::TypeVar(id) = var {
+                self.freshened_scrutinee_vars.insert(id);
+            }
+            let subs: HashMap<String, SubstValue> =
+                std::iter::once((param, SubstValue::Type(var))).collect();
+            let next = substitute_type_params(&ty, &subs);
+            // A param the substitution cannot reach (inside a projection)
+            // would loop forever; leave the type as it was.
+            if next == ty {
+                return ty;
+            }
+            ty = next;
+        }
+    }
+
     pub(super) fn infer_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], span: &Span) -> Type {
         let scrut_ty = self.infer_expr(scrutinee);
+        let scrut_ty = self.freshen_unsolved_scrutinee_params(scrut_ty);
         let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
         let dispatch_ty = dispatch_ty.clone();
         // B-2026-08-31-3 — a `v[i]` scrutinee is a BORROW of an element the
@@ -643,6 +689,15 @@ impl<'a> super::TypeChecker<'a> {
 
         for arm_ty in &arm_types {
             if *arm_ty == Type::Never || *arm_ty == Type::Error || result_ty == Type::Error {
+                continue;
+            }
+            // B-2026-10-01-53 — an arm typed by a freshened scrutinee param
+            // takes the other arms' type (see `freshen_unsolved_scrutinee_params`).
+            if self.solve_freshened_scrutinee_var(arm_ty, &result_ty) {
+                continue;
+            }
+            if self.solve_freshened_scrutinee_var(&result_ty, arm_ty) {
+                result_ty = arm_ty.clone();
                 continue;
             }
             match self.join_branch_types(&result_ty, arm_ty) {
@@ -814,6 +869,13 @@ impl<'a> super::TypeChecker<'a> {
         expected: &Type,
     ) {
         let expected = strip_refinement(expected);
+        // B-2026-10-01-53: an unsolved type variable has no surface name yet;
+        // park the binding and record it once the body has solved it.
+        if matches!(expected, Type::TypeVar(_)) && matches!(pattern.kind, PatternKind::Binding(_)) {
+            self.pending_typevar_pattern_bindings
+                .push((pattern.clone(), expected.clone()));
+            return;
+        }
         // Peel an immutable/exclusive borrow: a `ref T` / `mut ref T` payload
         // binding (e.g. `Some(w)` from `Vec.first()` / `Vec.get(i)`, now typed
         // `Option[ref T]`) reconstructs at codegen as the inner *value* T — a
@@ -2487,6 +2549,30 @@ impl<'a> super::TypeChecker<'a> {
             .collect();
         for (key, te) in updates {
             self.pattern_binding_inner_types.insert(key, te);
+        }
+    }
+
+    /// B-2026-10-01-53. Re-record the match-arm bindings parked by
+    /// `record_pattern_binding_surface_types` because their expected type was
+    /// an unsolved type variable. Runs before
+    /// `finalize_pattern_binding_inner_types`, which resolves whatever inner
+    /// types this records. A variable still unsolved here records nothing,
+    /// as before.
+    pub(super) fn finalize_typevar_pattern_bindings(&mut self) {
+        let id_to_name: HashMap<TypeVarId, String> = HashMap::new();
+        let const_id_to_name: HashMap<ConstVarId, String> = HashMap::new();
+        for (pattern, ty) in std::mem::take(&mut self.pending_typevar_pattern_bindings) {
+            let resolved = resolve_type_vars(
+                &ty,
+                &self.env.substitutions,
+                &id_to_name,
+                &self.env.const_substitutions,
+                &const_id_to_name,
+            );
+            if matches!(resolved, Type::TypeVar(_)) {
+                continue;
+            }
+            self.record_pattern_binding_surface_types(&pattern, &resolved);
         }
     }
 

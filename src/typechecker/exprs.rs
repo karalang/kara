@@ -153,7 +153,7 @@ pub(super) fn sibling_array_expectation(body: &Expr, sibling: &Type) -> Option<T
 /// expected-return seeding: a fully concrete return has nothing to seed, and
 /// unifying it against a mismatched expectation could bind ids inside the
 /// EXPECTATION instead. B-2026-08-05-19.
-fn contains_type_var(t: &Type) -> bool {
+pub(super) fn contains_type_var(t: &Type) -> bool {
     match t {
         Type::TypeVar(_) => true,
         Type::Named { args, .. } => args.iter().any(contains_type_var),

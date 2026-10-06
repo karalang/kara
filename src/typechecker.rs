@@ -2645,6 +2645,19 @@ pub struct TypeChecker<'a> {
     /// the let site (where `?T0` is still unsolved), and the resulting
     /// `TypeKind::Error` strands codegen with the wrong element type.
     pub(super) pattern_binding_inner_unresolved: FxHashMap<SpanKey, Type>,
+    /// B-2026-10-01-53. Match-arm payload bindings whose expected type was
+    /// still an unsolved type variable when the arm was checked: the `Err(e)`
+    /// arm of `match Result.Ok(a) { Ok(v) => v, Err(e) => e }` sees `E` only
+    /// once the arm's own result unifies it with `Ok`'s. Nothing was recorded
+    /// for such a binding, so codegen laid `e` out as one i64 word and the
+    /// module failed to verify. Re-recorded at finalize against the solved
+    /// substitutions.
+    pub(super) pending_typevar_pattern_bindings: Vec<(Pattern, Type)>,
+    /// B-2026-10-01-53. The variables `freshen_unsolved_scrutinee_params`
+    /// minted for a `match` scrutinee's unsolved type params. Only these are
+    /// solved by flowing into a declared slot (`check_assignable`), so no
+    /// other inference changes.
+    pub(super) freshened_scrutinee_vars: std::collections::HashSet<TypeVarId>,
     /// Trait bounds for the generic parameters in the current enclosing scope
     /// (impl-level + function/method-level). Indexed by the param's textual
     /// name so it pairs naturally with `Type::TypeParam(name)`. Populated on
@@ -2936,6 +2949,8 @@ impl<'a> TypeChecker<'a> {
             pattern_binding_inner_types: FxHashMap::default(),
             pattern_binding_borrow_modes: FxHashMap::default(),
             pattern_binding_inner_unresolved: FxHashMap::default(),
+            pending_typevar_pattern_bindings: Vec::new(),
+            freshened_scrutinee_vars: std::collections::HashSet::new(),
             enclosing_bounds: FxHashMap::default(),
             current_body_dim_scope: Vec::new(),
             enclosing_trait: None,
@@ -3073,6 +3088,7 @@ impl<'a> TypeChecker<'a> {
         // row — from joining that class.
         self.reject_unqualifiable_impl_collisions();
         self.check_items();
+        self.finalize_typevar_pattern_bindings();
         self.finalize_pattern_binding_inner_types();
         self.finalize_closure_expr_types();
         // Fallible-allocation: under `panic_on_alloc_failure = false`, reject
@@ -5089,7 +5105,31 @@ impl<'a> TypeChecker<'a> {
         (erased(expected) && full(found)) || (full(expected) && erased(found))
     }
 
+    /// B-2026-10-01-53. Bind `var` to `to` when `var` is one of the
+    /// variables `freshen_unsolved_scrutinee_params` minted, still unsolved,
+    /// and `to` is concrete. Returns whether it bound.
+    pub(super) fn solve_freshened_scrutinee_var(&mut self, var: &Type, to: &Type) -> bool {
+        let Type::TypeVar(id) = inference::resolve_type_var_top(var, &self.env.substitutions)
+        else {
+            return false;
+        };
+        if !self.freshened_scrutinee_vars.contains(&id)
+            || matches!(to, Type::Error | Type::Never)
+            || exprs::contains_type_var(to)
+        {
+            return false;
+        }
+        self.env.substitutions.insert(id, to.clone());
+        true
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
+        // B-2026-10-01-53 — a `match` arm handing back a binding whose type
+        // is a scrutinee param no argument fixed (`Err(e) => e` over
+        // `Result.Ok(a)`) is what solves that param.
+        if self.solve_freshened_scrutinee_var(found, expected) {
+            return true;
+        }
         // B-2026-08-20-13 — a FLOAT never flows implicitly into an INTEGER
         // slot. `types_compatible` treats any int/uint/float pair as
         // compatible and says so explicitly ("bidirectional for compatibility
