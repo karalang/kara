@@ -467,6 +467,8 @@ Pin: `panic_runs_no_drops`. Today the interpreter runs the `defer` before the er
 
 **10.3 Errors are values.** `Result` with `?` returns through the normal path, so drops, `defer`s and `errdefer`s run (§7.6–§7.7).
 
+A `main` that returns `Err(e)` is an ordinary error exit: `main`'s drops, `defer`s and `errdefer`s run first, then `e` is written to stderr and the process exits with code **1**. Code 101 stays reserved for a panic, so a script can tell the two apart.
+
 **10.4 Tests.** `karac test` runs each test in its own process, so a panicking test fails alone.
 
 ---

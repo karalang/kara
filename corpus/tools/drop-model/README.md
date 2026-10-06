@@ -28,18 +28,67 @@ It imports nothing from karac. Python 3, stdlib only.
 
 Every DIFF and REJECT is explained; none points at the model.
 
+## Source-level model (corpus programs)
+
+- `kparse.py`: lexer and recursive-descent parser for a subset of Kara (structs, enums, impls incl.
+  `Drop`, traits, generics read loosely, match/if/while/while let/for/loop, `?`, defer/errdefer,
+  `shared` types, f-strings). Raises `Unsupported` or `ParseError` outside the subset.
+- `kmodel.py`: dynamic executor over that AST, same rules as `model.py` (§3, §4, §6, §7, §8) plus:
+  shared handles as counted boxes (§6.1), refs with origins and the §5.5 temporary check, the §3.3
+  loop back-edge check, `?` with `From`, operator modes from the impl (§4.7), and builtins for
+  `Vec`, `String`, `Option`/`Result`, `Map`/`Set` (Map drops flagged unordered). `run_source(src)` returns
+  `(stdout, exit, flags)` or raises `ModelError` for a program v2 rejects (executed path only, so a
+  lower bound). `KARA_MODEL_COUNT_AGG=0` switches handle aggregates (`Option[Node]`, tuples of handles
+  and Copy parts) from counted copies to Rust's move-only rule; the default is counted, pending
+  Gowtham's decision on that card.
+- `corpus_run.py [--tag T] [--path P] [--json OUT] [--include-v2]`: runs the model on every corpus
+  program and compares with the recorded legacy output. `KARA_ROOT` (default: the repo above this
+  directory), `MODEL_TIMEOUT` seconds per program (use 3 for the whole corpus).
+  Verdicts: SAME, ORDER (same lines, other order), ORDER-UNSPEC (differs only in Map drop order),
+  DIFF, V2-REJECT, LEGACY-REJECT, UNSUP, PARSE, CRASH.
+- `validate.py`: the model against `corpus/core` and `corpus/drop-matrix`; exits 1 on a FAIL.
+  Result: core 30 agree, 3 unsupported (escaping capture, `par`, nonescaping param);
+  drop-matrix 256/256. Fault injection (fields dropped first to last) gives 113 matrix failures.
+
+### Whole corpus, 7002 programs, counting rule, 2026-10-06
+
+| Verdict | Count |
+|---|---|
+| UNSUP | 2922 (timeout ~330 at 3 s, `env` 189, `Vec.iter` 187, `Vec.filled` 104, `Vector` 87, `String.bytes` 86, closures 72, integer widths other than i64) |
+| SAME | 2530 |
+| ORDER | 641 |
+| PARSE | 473 (`effect` items 84) |
+| V2-REJECT | 302 (index move 63, Drop-type payload move 52, ref passed to owned param 43, move out of ref 25+, use after move) |
+| DIFF | 61: 51 differ in output, 8 are failed asserts (v2 exits 101, legacy 1; §10.1), 2 are legacy aborts (-6) the model runs to completion |
+| LEGACY-REJECT | 73 |
+| CRASH | 0 |
+
+Under Rust's move-only rule for handle aggregates the V2-REJECT count is 505, of which 188 are
+"move out of a shared place", 181 of them `Option[Handle]` (103 programs, 39 katas, from `a = n.next`).
+
+The drop-relevant subset (1236 programs with a Drop impl or defer) splits SAME 396, ORDER 636,
+V2-REJECT 116, UNSUP 57, DIFF 23, PARSE 4, LEGACY-REJECT 4. The DIFFs read so far are legacy dropping
+too little: a by-value param part left unmoved on one path is never dropped, a `while let` scrutinee
+tuple is never dropped. Legacy is frozen, so these stay here and not in the ledger.
+
+`corpus-verdicts.json` (per program verdict and reason) and `v2-reject-list.tsv` (corpus dir,
+legacy expectation, model reason; 17 of the 302 legacy already rejects) are in the review thread's
+shared folder `review/drop-model/`; regenerate with `corpus_run.py --json`.
+
 ## Limits
 
 - Moves are checked on the executed path only. A maybe-moved use on a path not taken is not reported;
   generators must produce statically valid programs.
-- Not modelled yet: closures and captures (§9), `while let`, `?`, `Map`/`Set`, shared handles (§6),
-  views (§5), `par`. Class-c corpus programs outside this subset need hand review (classification §4).
+- `model.py` does not model closures, `while let`, `?`, `Map`/`Set`, shared handles, views or `par`;
+  `kmodel.py` adds `while let`, `?`, `Map`/`Set` and shared handles, and still lacks closures and
+  captures (§9), views (§5), `par`, effect items, `env` and most iterator adapters.
 - One spec gap read deliberately: an `errdefer` runs when the function exits with an `Err` by any route,
   including a tail `Err(...)`. The draft names only `?` and `return Err(...)`.
 
 ## Next
 
-1. A parser for the subset, so class-c corpus programs with five or fewer drop prints can be checked
-   mechanically (classification §4.1).
-2. Closures, `?`, `while let`, shared handles.
-3. ~~Land beside the corpus.~~ Done by the kata thread 2026-10-06: `corpus/tools/drop-model/` and `corpus/drop-matrix/`.
+1. ~~A parser for the subset.~~ Done: `kparse.py` + `kmodel.py`.
+2. Store the model's stdout per corpus program (`model.out`, verdict in `meta.toml`) as the class-c oracle
+   for the MIR interpreter.
+3. Widen the subset: closures, `Vec.iter` chains, `effect` items, `env`, integer widths.
+4. ~~Land beside the corpus.~~ Done by the kata thread 2026-10-06: `corpus/tools/drop-model/` and `corpus/drop-matrix/`.
