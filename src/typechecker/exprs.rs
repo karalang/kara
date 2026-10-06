@@ -582,6 +582,7 @@ impl<'a> super::TypeChecker<'a> {
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         let ty = self.check_expr_inner(expr, expected);
+        self.record_node_type(expr.id, &ty);
         self.deny_for_element_drop_copy_in_literal(expr);
         ty
     }
@@ -2113,6 +2114,17 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn record_call_type_subs(&mut self, span: &Span, solutions: &HashMap<String, Type>) {
         if solutions.is_empty() {
             return;
+        }
+        // v2 typed HIR: key the frame by the enclosing call's node too, but
+        // only when this record is FOR that call (same span), never for a
+        // receiver or a chained call that shares an ancestor.
+        if let Some((node, key)) = self.current_call_node {
+            if key == SpanKey::from_span(span) && !node.is_dummy() {
+                self.node_call_subs
+                    .entry(node)
+                    .or_default()
+                    .extend(solutions.iter().map(|(n, t)| (n.clone(), t.clone())));
+            }
         }
         let mut frame: FxHashMap<String, String> = FxHashMap::default();
         let mut mangle_frame: FxHashMap<String, String> = FxHashMap::default();
@@ -4206,9 +4218,23 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(expr.kind, ExprKind::Path { .. }) {
             self.variant_ctor_in_callee = in_callee;
         }
+        let saved_call = self.current_call_node;
+        if matches!(
+            expr.kind,
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+        ) {
+            self.current_call_node = Some((expr.id, SpanKey::from_span(&expr.span)));
+        }
+        if let ExprKind::Call { callee, .. } = &expr.kind {
+            if !expr.id.is_dummy() {
+                self.node_call_callees.insert(expr.id, callee.id);
+            }
+        }
         let ty = self.infer_expr_inner(expr);
+        self.current_call_node = saved_call;
         self.variant_ctor_in_callee = false;
         self.record_expr_type(&expr.span, &ty);
+        self.record_node_type(expr.id, &ty);
         self.deny_for_element_drop_copy_in_literal(expr);
         ty
     }

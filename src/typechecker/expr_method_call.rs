@@ -1566,7 +1566,7 @@ impl<'a> super::TypeChecker<'a> {
                 // builtin Option/Result unwrap-family, which is never
                 // `#[unstable]` / `#[deprecated]`.
                 self.check_method_stability(&type_name, method, span);
-                self.method_callee_types.insert(
+                self.record_method_callee(
                     SpanKey::from_span(span),
                     format!("{}.{}", type_name, method),
                 );

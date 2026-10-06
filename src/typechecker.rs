@@ -1919,6 +1919,31 @@ pub struct TypeCheckResult {
     pub weak_elem_store_sites: FxHashSet<SpanKey>,
     pub weak_elem_read_sites: FxHashSet<SpanKey>,
     pub call_type_subs: FxHashMap<SpanKey, FxHashMap<String, String>>,
+    /// v2 typed HIR (redesign M0): the FINAL type of every expression and
+    /// pattern, keyed by its `NodeId` rather than its span, with inference
+    /// variables resolved as far as inference got. Nodes still carrying
+    /// `NodeId::DUMMY` are not recorded. Read by `crate::typed_hir`; no legacy
+    /// phase consumes it.
+    ///
+    /// The `u32` indexes `node_generic_frames`: the ordered generic
+    /// parameters (impl's, then the function's) in scope where the node was
+    /// typed, so a `TypeParam` in its type can be placed by position.
+    pub node_types: FxHashMap<crate::ids::NodeId, (Type, u32)>,
+    /// See `node_types`. Frame 0 is the empty frame (code outside any
+    /// generic function).
+    pub node_generic_frames: Vec<Vec<String>>,
+    /// v2 typed HIR: each generic call's solved type arguments by parameter
+    /// name, keyed by the call expression's `NodeId`. The NodeId twin of
+    /// `call_type_subs`, keeping the full `Type` instead of a head name.
+    pub node_call_subs: FxHashMap<crate::ids::NodeId, FxHashMap<String, Type>>,
+    /// v2 typed HIR: the `Type.method` callee key of each method call, keyed
+    /// by the call's `NodeId`. The node twin of `method_callee_types`, which
+    /// is keyed by a span the call SHARES with its receiver.
+    pub node_method_callees: FxHashMap<crate::ids::NodeId, String>,
+    /// v2 typed HIR: each free call's callee EXPRESSION, keyed by the call's
+    /// `NodeId`, so the callee's name resolution (keyed by that expression's
+    /// own node) can be read per call.
+    pub node_call_callees: FxHashMap<crate::ids::NodeId, crate::ids::NodeId>,
     /// Per-call-site generic-param substitutions as ELEMENT-AWARE mono-mangle
     /// TOKENS (`T` → `"Vec_i64"` / `"Vec_String"` / `"String"`), the sibling of
     /// `call_type_subs` (which is head-only: both `Vec[i64]` and `Vec[String]`
@@ -2607,6 +2632,16 @@ pub struct TypeChecker<'a> {
     /// pushes the resolved frame so `T.method()` and bare-method calls inside
     /// the callee's body can look up `T`'s concrete binding.
     pub(super) call_type_subs: FxHashMap<SpanKey, FxHashMap<String, String>>,
+    /// See the public copies on `TypeCheckResult`.
+    pub(super) node_types: FxHashMap<crate::ids::NodeId, (Type, u32)>,
+    pub(super) node_generic_frames: Vec<Vec<String>>,
+    pub(super) current_generic_frame: u32,
+    pub(super) node_call_subs: FxHashMap<crate::ids::NodeId, FxHashMap<String, Type>>,
+    pub(super) node_method_callees: FxHashMap<crate::ids::NodeId, String>,
+    pub(super) node_call_callees: FxHashMap<crate::ids::NodeId, crate::ids::NodeId>,
+    /// The call expression `infer_expr` is inside, with its span, so
+    /// `record_call_type_subs` can key a frame by node as well as by span.
+    pub(super) current_call_node: Option<(crate::ids::NodeId, SpanKey)>,
     /// B-2026-08-08-14 — see the public copies on `TypeCheckResult`.
     pub(super) float_coerced_arg_sites: FxHashMap<SpanKey, types::FloatSize>,
     pub(super) cast_source_unsigned: FxHashSet<SpanKey>,
@@ -2945,6 +2980,13 @@ impl<'a> TypeChecker<'a> {
             bare_assoc_fn_targets: FxHashMap::default(),
             path_call_method_dispatch: FxHashSet::default(),
             call_type_subs: FxHashMap::default(),
+            node_types: FxHashMap::default(),
+            node_generic_frames: vec![Vec::new()],
+            current_generic_frame: 0,
+            node_call_subs: FxHashMap::default(),
+            node_method_callees: FxHashMap::default(),
+            node_call_callees: FxHashMap::default(),
+            current_call_node: None,
             float_coerced_arg_sites: FxHashMap::default(),
             cast_source_unsigned: FxHashSet::default(),
             weak_elem_store_sites: FxHashSet::default(),
@@ -3210,6 +3252,7 @@ impl<'a> TypeChecker<'a> {
         let distinct_type_traits = self.env.distinct_types.clone();
         let compiler_builtins = self.env.compiler_builtins.clone();
         let must_use_functions = self.env.must_use_functions.clone();
+        let (node_types, node_call_subs) = self.resolved_node_tables();
         TypeCheckResult {
             errors: self.errors,
             warnings: self.warnings,
@@ -3262,6 +3305,11 @@ impl<'a> TypeChecker<'a> {
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             path_call_method_dispatch: self.path_call_method_dispatch,
             call_type_subs: self.call_type_subs,
+            node_types,
+            node_generic_frames: std::mem::take(&mut self.node_generic_frames),
+            node_call_subs,
+            node_method_callees: std::mem::take(&mut self.node_method_callees),
+            node_call_callees: std::mem::take(&mut self.node_call_callees),
             float_coerced_arg_sites: self.float_coerced_arg_sites,
             cast_source_unsigned: self.cast_source_unsigned,
             weak_elem_store_sites: self.weak_elem_store_sites,
@@ -5597,6 +5645,88 @@ impl<'a> TypeChecker<'a> {
             (unwrap(expected), unwrap(found)),
             (Type::Function { .. }, Type::OnceFunction { .. })
         )
+    }
+
+    /// v2 typed HIR: record `ty` as the type of `id`. A later record for the
+    /// same node wins, as in `expr_types` (a checking-position type overrides
+    /// the synthesized one).
+    pub(super) fn record_node_type(&mut self, id: crate::ids::NodeId, ty: &Type) {
+        if !id.is_dummy() {
+            self.node_types
+                .insert(id, (ty.clone(), self.current_generic_frame));
+        }
+    }
+
+    /// Record a method call's `Type.method` callee key, by span for the
+    /// legacy backends and by the enclosing call's node for typed HIR.
+    pub(super) fn record_method_callee(&mut self, key: SpanKey, callee: String) {
+        if let Some((node, call_key)) = self.current_call_node {
+            if call_key == key && !node.is_dummy() {
+                self.node_method_callees.insert(node, callee.clone());
+            }
+        }
+        self.method_callee_types.insert(key, callee);
+    }
+
+    /// Record a method call's impl-parameter bindings (read off the
+    /// receiver's type) as part of the call's node-keyed type arguments, so a
+    /// method's frame holds the impl's parameters as well as its own.
+    pub(super) fn record_node_impl_subs(
+        &mut self,
+        span: &Span,
+        recv_subs: &std::collections::HashMap<String, types::SubstValue>,
+    ) {
+        let Some((node, key)) = self.current_call_node else {
+            return;
+        };
+        if key != SpanKey::from_span(span) || node.is_dummy() {
+            return;
+        }
+        let frame = self.node_call_subs.entry(node).or_default();
+        for (name, sv) in recv_subs {
+            if let types::SubstValue::Type(t) = sv {
+                frame.insert(name.clone(), t.clone());
+            }
+        }
+    }
+
+    /// The node tables with every inference variable resolved through the
+    /// final substitutions. An unsolved variable stays a `TypeVar`, which the
+    /// typed-HIR builder reports instead of guessing.
+    #[allow(clippy::type_complexity)]
+    fn resolved_node_tables(
+        &mut self,
+    ) -> (
+        FxHashMap<crate::ids::NodeId, (Type, u32)>,
+        FxHashMap<crate::ids::NodeId, FxHashMap<String, Type>>,
+    ) {
+        let no_names: std::collections::HashMap<types::TypeVarId, String> =
+            std::collections::HashMap::new();
+        let no_const_names: std::collections::HashMap<types::ConstVarId, String> =
+            std::collections::HashMap::new();
+        let node_types = std::mem::take(&mut self.node_types);
+        let node_call_subs = std::mem::take(&mut self.node_call_subs);
+        let resolve = |ty: &Type| {
+            inference::resolve_type_vars(
+                ty,
+                &self.env.substitutions,
+                &no_names,
+                &self.env.const_substitutions,
+                &no_const_names,
+            )
+        };
+        let node_types = node_types
+            .into_iter()
+            .map(|(id, (ty, frame))| (id, (resolve(&ty), frame)))
+            .collect();
+        let node_call_subs = node_call_subs
+            .into_iter()
+            .map(|(id, frame)| {
+                let frame = frame.into_iter().map(|(n, t)| (n, resolve(&t))).collect();
+                (id, frame)
+            })
+            .collect();
+        (node_types, node_call_subs)
     }
 
     fn record_expr_type(&mut self, span: &Span, ty: &Type) {

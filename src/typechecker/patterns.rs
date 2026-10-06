@@ -2623,6 +2623,7 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn bind_pattern_types(&mut self, pattern: &Pattern, ty: &Type) {
+        self.record_node_type(pattern.id, ty);
         match &pattern.kind {
             PatternKind::Binding(name) => {
                 self.local_scope.insert(name.clone(), ty.clone());

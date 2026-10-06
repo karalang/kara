@@ -1825,6 +1825,11 @@ impl<'a> super::TypeChecker<'a> {
 
         let mut gp = enclosing_generics.to_vec();
         gp.extend(Self::generic_param_names(&f.generic_params));
+        // v2 typed HIR: every node recorded inside this body places its
+        // generic parameters by position in `gp`.
+        let saved_generic_frame = self.current_generic_frame;
+        self.current_generic_frame = self.node_generic_frames.len() as u32;
+        self.node_generic_frames.push(gp.clone());
 
         // Save outer bounds, merge in function-level bounds. Restored after
         // the body is checked so sibling functions don't see this fn's
@@ -2107,6 +2112,7 @@ impl<'a> super::TypeChecker<'a> {
         self.enclosing_bounds = saved_bounds;
         self.current_body_dim_scope = saved_body_dim_scope;
         self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
+        self.current_generic_frame = saved_generic_frame;
         self.lint_override_stack.pop();
     }
 

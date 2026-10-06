@@ -415,7 +415,7 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
-        self.method_callee_types.insert(
+        self.record_method_callee(
             SpanKey::from_span(span),
             format!("BoundedChannel.{}", method),
         );

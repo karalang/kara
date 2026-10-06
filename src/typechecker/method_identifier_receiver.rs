@@ -252,7 +252,7 @@ impl<'a> super::TypeChecker<'a> {
                 // Cancel-narrowing side-table: record `Type.method` for this
                 // call site so codegen can elide the par-branch cancel check
                 // when the resolved callee is provably non-effectful.
-                self.method_callee_types.insert(
+                self.record_method_callee(
                     SpanKey::from_span(span),
                     format!("{}.{}", type_name, method),
                 );
@@ -734,7 +734,7 @@ impl<'a> super::TypeChecker<'a> {
                         GenericArg::Shape(_) => None,
                     })
                     .collect();
-                self.method_callee_types.insert(
+                self.record_method_callee(
                     SpanKey::from_span(span),
                     format!("{}.{}", type_name, method),
                 );

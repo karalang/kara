@@ -165,7 +165,7 @@ impl<'a> super::TypeChecker<'a> {
                 // precisely (the same hardcoded-arm pattern as `CStr.<method>`),
                 // rather than by method name alone — which would hijack a user
                 // type's own `to_cstring` method.
-                self.method_callee_types.insert(
+                self.record_method_callee(
                     crate::resolver::SpanKey::from_span(span),
                     "String.to_cstring".to_string(),
                 );

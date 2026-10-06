@@ -239,7 +239,7 @@ pub(super) fn strip_refinement(ty: &Type) -> &Type {
     cur
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntSize {
     I8,
     I16,
@@ -255,7 +255,7 @@ pub enum IntSize {
     Isize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UIntSize {
     U8,
     U16,
@@ -265,7 +265,7 @@ pub enum UIntSize {
     Usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FloatSize {
     /// IEEE 754-2008 half precision (LLVM `half`).
     F16,
