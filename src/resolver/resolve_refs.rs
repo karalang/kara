@@ -23,6 +23,7 @@
 use std::collections::HashMap;
 
 use crate::ast::*;
+use crate::ids::NodeId;
 use crate::token::Span;
 
 use super::{ResolveError, ResolveErrorKind, SymbolId, SymbolKind};
@@ -290,12 +291,21 @@ impl<'a> super::Resolver<'a> {
         match &pattern.kind {
             PatternKind::Wildcard => {}
             PatternKind::Binding(name) => {
-                let _ = self.table.define(
+                // `E.A` in pattern position is a unit variant, and so is a
+                // bare name that already names one; record what it names.
+                // The name is still defined as before (the typechecker
+                // decides variant-versus-binding), but it is not a binding.
+                let variant = self.pattern_variant_ref(name);
+                let defined = self.table.define(
                     name.clone(),
                     SymbolKind::Variable { is_mut: false },
                     pattern.span,
                     false,
                 );
+                match variant {
+                    Some((id, rest)) => self.record_node_ref(pattern.id, id, &rest),
+                    None => self.record_binding_node(&defined, pattern.id),
+                }
             }
             PatternKind::Literal(_) => {}
             PatternKind::Struct {
@@ -309,6 +319,7 @@ impl<'a> super::Resolver<'a> {
                     if let Some(sym) = self.table.lookup(first) {
                         let id = sym.id;
                         self.record_resolution(&pattern.span, id);
+                        self.record_node_ref(pattern.id, id, &path[1..]);
                     } else {
                         self.error_undefined_name(first, pattern.span);
                     }
@@ -334,6 +345,7 @@ impl<'a> super::Resolver<'a> {
                     if let Some(sym) = self.table.lookup(first) {
                         let id = sym.id;
                         self.record_resolution(&pattern.span, id);
+                        self.record_node_ref(pattern.id, id, &path[1..]);
                     } else {
                         self.error_undefined_name(first, pattern.span);
                     }
@@ -355,14 +367,19 @@ impl<'a> super::Resolver<'a> {
             PatternKind::RangePattern { .. } => {
                 // No bindings to define
             }
-            PatternKind::AtBinding { name, pattern, .. } => {
-                let _ = self.table.define(
+            PatternKind::AtBinding {
+                name,
+                pattern: inner,
+                ..
+            } => {
+                let defined = self.table.define(
                     name.clone(),
                     SymbolKind::Variable { is_mut: false },
-                    pattern.span,
+                    inner.span,
                     false,
                 );
-                self.resolve_pattern(pattern);
+                self.record_binding_node(&defined, pattern.id);
+                self.resolve_pattern(inner);
             }
             PatternKind::Slice {
                 prefix,
@@ -373,17 +390,38 @@ impl<'a> super::Resolver<'a> {
                     self.resolve_pattern(p);
                 }
                 if let Some(RestPattern::Bound(name)) = rest {
-                    let _ = self.table.define(
+                    let defined = self.table.define(
                         name.clone(),
                         SymbolKind::Variable { is_mut: false },
                         pattern.span,
                         false,
                     );
+                    self.record_binding_node(&defined, pattern.id);
                 }
                 for p in suffix {
                     self.resolve_pattern(p);
                 }
             }
+        }
+    }
+
+    /// What a binding-shaped pattern `name` names when it is really a unit
+    /// variant: a dotted path whose first segment resolves, or a bare name that
+    /// resolves to a unit variant. The symbol and the segments after it.
+    fn pattern_variant_ref(&self, name: &str) -> Option<(SymbolId, Vec<String>)> {
+        let mut segs = name.split('.');
+        let first = segs.next()?;
+        let rest: Vec<String> = segs.map(str::to_string).collect();
+        let sym = self.table.lookup(first)?;
+        if !rest.is_empty() {
+            return Some((sym.id, rest));
+        }
+        match &sym.kind {
+            SymbolKind::EnumVariant {
+                variant_kind: super::VariantSymbolKind::Unit,
+                ..
+            } => Some((sym.id, rest)),
+            _ => None,
         }
     }
 
@@ -416,6 +454,7 @@ impl<'a> super::Resolver<'a> {
         name: &str,
         is_mut: bool,
         span: Span,
+        node: Option<NodeId>,
         allow_shadow: bool,
         bound: &mut std::collections::HashSet<String>,
     ) {
@@ -445,6 +484,9 @@ impl<'a> super::Resolver<'a> {
                 false,
             )
         };
+        if let Some(node) = node {
+            self.record_binding_node(&result, node);
+        }
         if let Err(e) = result {
             self.errors.push(e);
         }
@@ -459,7 +501,14 @@ impl<'a> super::Resolver<'a> {
     ) {
         match &pattern.kind {
             PatternKind::Binding(name) => {
-                self.define_binding_leaf(name, is_mut, pattern.span, allow_shadow, bound);
+                self.define_binding_leaf(
+                    name,
+                    is_mut,
+                    pattern.span,
+                    Some(pattern.id),
+                    allow_shadow,
+                    bound,
+                );
             }
             PatternKind::Struct {
                 path,
@@ -471,6 +520,7 @@ impl<'a> super::Resolver<'a> {
                     if let Some(sym) = self.table.lookup(first) {
                         let id = sym.id;
                         self.record_resolution(&pattern.span, id);
+                        self.record_node_ref(pattern.id, id, &path[1..]);
                     } else {
                         self.error_undefined_name(first, pattern.span);
                     }
@@ -488,6 +538,7 @@ impl<'a> super::Resolver<'a> {
                             &field.name,
                             is_mut,
                             field.span,
+                            None,
                             allow_shadow,
                             bound,
                         );
@@ -499,6 +550,7 @@ impl<'a> super::Resolver<'a> {
                     if let Some(sym) = self.table.lookup(first) {
                         let id = sym.id;
                         self.record_resolution(&pattern.span, id);
+                        self.record_node_ref(pattern.id, id, &path[1..]);
                     } else {
                         self.error_undefined_name(first, pattern.span);
                     }
@@ -519,9 +571,20 @@ impl<'a> super::Resolver<'a> {
                     self.define_pattern_bindings_inner(first, is_mut, allow_shadow, bound);
                 }
             }
-            PatternKind::AtBinding { name, pattern, .. } => {
-                self.define_binding_leaf(name, is_mut, pattern.span, allow_shadow, bound);
-                self.define_pattern_bindings_inner(pattern, is_mut, allow_shadow, bound);
+            PatternKind::AtBinding {
+                name,
+                pattern: inner,
+                ..
+            } => {
+                self.define_binding_leaf(
+                    name,
+                    is_mut,
+                    inner.span,
+                    Some(pattern.id),
+                    allow_shadow,
+                    bound,
+                );
+                self.define_pattern_bindings_inner(inner, is_mut, allow_shadow, bound);
             }
             PatternKind::Slice {
                 prefix,
@@ -532,7 +595,14 @@ impl<'a> super::Resolver<'a> {
                     self.define_pattern_bindings_inner(p, is_mut, allow_shadow, bound);
                 }
                 if let Some(RestPattern::Bound(name)) = rest {
-                    self.define_binding_leaf(name, is_mut, pattern.span, allow_shadow, bound);
+                    self.define_binding_leaf(
+                        name,
+                        is_mut,
+                        pattern.span,
+                        Some(pattern.id),
+                        allow_shadow,
+                        bound,
+                    );
                 }
                 for p in suffix {
                     self.define_pattern_bindings_inner(p, is_mut, allow_shadow, bound);

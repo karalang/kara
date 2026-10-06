@@ -349,6 +349,7 @@ impl<'a> super::Resolver<'a> {
                         return;
                     }
                     self.record_resolution(&expr.span, id);
+                    self.record_node_ref(expr.id, id, &[]);
                     // `expr.span` can run past the identifier — a method
                     // call records its receiver under the whole call — but
                     // it always *starts* at it. B-2026-07-31-33.
@@ -364,6 +365,7 @@ impl<'a> super::Resolver<'a> {
                     if let Some(sym) = self.table.lookup(first) {
                         let id = sym.id;
                         self.record_resolution(&expr.span, id);
+                        self.record_node_ref(expr.id, id, &segments[1..]);
                         // The resolved name is the FIRST segment, which the
                         // path span starts at — so the same offset rule
                         // holds and a rename rewrites the qualifier only.
@@ -378,6 +380,7 @@ impl<'a> super::Resolver<'a> {
                 if let Some(sym) = self.table.lookup("self") {
                     let id = sym.id;
                     self.record_resolution(&expr.span, id);
+                    self.record_node_ref(expr.id, id, &[]);
                 } else {
                     self.errors.push(ResolveError {
                         message: "'self' used outside of impl method".to_string(),
@@ -394,6 +397,7 @@ impl<'a> super::Resolver<'a> {
                 if let Some(sym) = self.table.lookup("Self") {
                     let id = sym.id;
                     self.record_resolution(&expr.span, id);
+                    self.record_node_ref(expr.id, id, &[]);
                 } else {
                     self.errors.push(ResolveError {
                         message: "'Self' used outside of impl block".to_string(),
@@ -703,6 +707,7 @@ impl<'a> super::Resolver<'a> {
                     if let Some(sym) = self.table.lookup(first) {
                         let id = sym.id;
                         self.record_resolution(&expr.span, id);
+                        self.record_node_ref(expr.id, id, &path[1..]);
                     } else {
                         self.error_undefined_name(first, expr.span);
                     }

@@ -8,6 +8,7 @@
 
 use crate::ast::*;
 use crate::edit_distance::suggest_similar;
+use crate::ids::NodeId;
 use crate::module::{self, ModuleId, ProgramTree};
 use crate::token::Span;
 use rustc_hash::FxHashMap;
@@ -37,6 +38,15 @@ impl SpanKey {
 }
 
 // ── Symbols ──────────────────────────────────────────────────────
+
+/// What one expression or pattern names: the symbol its first path segment
+/// resolved to, and the path segments after that one (`E.A` resolves `E` and
+/// keeps `["A"]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeRef {
+    pub symbol: SymbolId,
+    pub rest: Vec<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct Symbol {
@@ -974,6 +984,13 @@ impl std::fmt::Display for ResolveError {
 
 pub struct ResolveResult {
     pub resolutions: FxHashMap<SpanKey, SymbolId>,
+    /// Every expression and pattern that names something, by [`NodeId`]: the
+    /// symbol its first path segment resolved to, and the segments after it.
+    /// [`crate::node_res`] turns these into DefIds.
+    pub node_refs: FxHashMap<NodeId, NodeRef>,
+    /// The binding pattern that defines each local variable, where the binding
+    /// is a pattern node of its own.
+    pub binding_nodes: FxHashMap<SymbolId, NodeId>,
     pub symbol_table: SymbolTable,
     pub errors: Vec<ResolveError>,
     /// Phase-8 stdlib-floor § Compiler queries channel sub-item 1.
@@ -1142,6 +1159,10 @@ pub struct Resolver<'a> {
     pub(crate) current_module: Option<ModuleId>,
     pub(crate) table: SymbolTable,
     pub(crate) resolutions: FxHashMap<SpanKey, SymbolId>,
+    /// See [`ResolveResult::node_refs`].
+    pub(crate) node_refs: FxHashMap<NodeId, NodeRef>,
+    /// See [`ResolveResult::binding_nodes`].
+    pub(crate) binding_nodes: FxHashMap<SymbolId, NodeId>,
     pub(crate) errors: Vec<ResolveError>,
     /// Names of the CURRENT signature's channel-endpoint parameters, so a
     /// `with sends(tx)` clause can resolve `tx` against the `tx: Sender[T]`
@@ -1290,6 +1311,8 @@ impl<'a> Resolver<'a> {
             current_module: None,
             table: SymbolTable::new(),
             resolutions: FxHashMap::default(),
+            node_refs: FxHashMap::default(),
+            binding_nodes: FxHashMap::default(),
             errors: Vec::new(),
             channel_resource_params: Vec::new(),
             current_impl_type: None,
@@ -1400,6 +1423,8 @@ impl<'a> Resolver<'a> {
 
         ResolveResult {
             resolutions: self.resolutions,
+            node_refs: self.node_refs,
+            binding_nodes: self.binding_nodes,
             symbol_table: self.table,
             errors: self.errors,
             def_paths: crate::def_path::collect_item_def_paths(self.program),
@@ -1858,6 +1883,30 @@ impl<'a> Resolver<'a> {
 
     fn record_resolution(&mut self, span: &Span, id: SymbolId) {
         self.resolutions.insert(SpanKey::from_span(span), id);
+    }
+
+    /// Record that node `node` names symbol `id`, followed by `rest` (the
+    /// path segments after the one that resolved).
+    pub(crate) fn record_node_ref(&mut self, node: NodeId, id: SymbolId, rest: &[String]) {
+        self.node_refs.insert(
+            node,
+            NodeRef {
+                symbol: id,
+                rest: rest.to_vec(),
+            },
+        );
+    }
+
+    /// Record that the binding `defined` (the result of defining a local) is
+    /// introduced by pattern node `node`.
+    pub(crate) fn record_binding_node(
+        &mut self,
+        defined: &Result<SymbolId, ResolveError>,
+        node: NodeId,
+    ) {
+        if let Ok(id) = defined {
+            self.binding_nodes.insert(*id, node);
+        }
     }
 
     /// Note that `span` *starts* at a bare identifier naming `id`, even if

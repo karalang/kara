@@ -83,6 +83,7 @@ pub mod manifest;
 pub mod missing_must_use_lint;
 pub mod missing_track_caller_lint;
 pub mod node_ids;
+pub mod node_res;
 pub mod presize;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pubgrub_solve;
