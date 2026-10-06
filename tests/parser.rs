@@ -16118,3 +16118,48 @@ fn map_literal_survives_a_formatter_round_trip() {
         "the SortedMap prefix was dropped: {sorted}"
     );
 }
+
+/// B-2026-10-06-126: `.collect::<Vec<i64>>()` / `.sum::[i64]()` is Rust's
+/// turbofish. Kāra has no call-site type arguments, and the `::` used to
+/// surface as "Expected Semicolon, found ColonColon". It is now one named
+/// error whose fix deletes the type list, for angle and square brackets, a
+/// nested `>>`, and a turbofish in the middle of a chain.
+#[test]
+fn method_turbofish_is_named_and_deleted() {
+    for (src, repaired) in [
+        (
+            "fn main() {\n let v: Vec[i64] = (1..4).map(|x| x * 2).collect::<Vec<i64>>();\n println(f\"{v.len()}\");\n}",
+            "let v: Vec[i64] = (1..4).map(|x| x * 2).collect();",
+        ),
+        (
+            "fn main() {\n let s: i64 = (1..4).sum::[i64]();\n println(f\"{s}\");\n}",
+            "let s: i64 = (1..4).sum();",
+        ),
+        (
+            "fn main() {\n let n: i64 = \"42\".parse::<i64>().unwrap() + 1;\n println(f\"{n}\");\n}",
+            "let n: i64 = \"42\".parse().unwrap() + 1;",
+        ),
+    ] {
+        let result = karac::parse(src);
+        assert_eq!(result.errors.len(), 1, "one error, no cascade: {:?}", result.errors);
+        assert!(
+            result.errors[0].message.contains("Rust's turbofish"),
+            "got: {}",
+            result.errors[0].message
+        );
+        assert_eq!(&src[result.errors[0].span.offset..][..2], "::");
+        let fixed = apply_parse_fixes(src, &result);
+        assert!(fixed.contains(repaired), "repaired: {fixed}");
+        assert!(karac::parse(&fixed).errors.is_empty(), "repaired source parses: {fixed}");
+    }
+    // A path's `::` is not a method turbofish and keeps its own handling.
+    let result = karac::parse("fn main() {\n let v = x.y::z;\n}");
+    assert!(
+        result
+            .errors
+            .iter()
+            .all(|e| !e.message.contains("turbofish")),
+        "got: {:?}",
+        result.errors
+    );
+}

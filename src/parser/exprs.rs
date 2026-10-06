@@ -306,6 +306,7 @@ impl super::Parser {
                             } else {
                                 self.expect_identifier()?
                             };
+                            self.reject_method_turbofish();
                             let turbofish = None;
                             if self.check(&Token::LeftParen) {
                                 // Method call
@@ -2618,6 +2619,58 @@ impl super::Parser {
             i += 1;
         }
         false
+    }
+
+    /// B-2026-10-06-126 — `.collect::<Vec<i64>>()` / `.sum::[i64]()` is
+    /// Rust's turbofish. Kāra has no call-site type arguments (design.md
+    /// § Generics: annotate the binding, or qualify the receiver), and the
+    /// `::` used to surface as "Expected Semicolon, found ColonColon" -- or
+    /// whatever the enclosing construct expected next -- at the `::`. Name
+    /// it, skip the type list so the call still parses, and offer its
+    /// deletion as a fix. Called with the method name consumed.
+    fn reject_method_turbofish(&mut self) {
+        if !self.check(&Token::ColonColon)
+            || !matches!(
+                self.peek_token_ref_at(1),
+                Token::LessThan | Token::LeftBracket
+            )
+        {
+            return;
+        }
+        let start = self.current_span();
+        self.advance();
+        // One depth counter for both bracket kinds: the list is a type, so
+        // `<` and `[` only ever nest properly, and `>>` closes two.
+        let mut depth: i64 = 0;
+        loop {
+            match self.peek_token_ref() {
+                Token::LessThan | Token::LeftBracket => depth += 1,
+                Token::GreaterThan | Token::RightBracket => depth -= 1,
+                Token::GreaterGreater => depth -= 2,
+                Token::EOF | Token::Semicolon | Token::LeftBrace | Token::RightBrace => break,
+                _ => {}
+            }
+            self.advance();
+            if depth <= 0 {
+                break;
+            }
+        }
+        let last = self.tokens[self.pos - 1].span;
+        let end = last.offset + last.length;
+        self.error_at(
+            "`::<..>` after a method name is Rust's turbofish; Kāra has no call-site type \
+             arguments -- remove it and annotate the binding instead \
+             (`let v: Vec[i64] = it.collect();`)",
+            start,
+        );
+        self.fix_edits.insert(
+            crate::resolver::SpanKey::from_span(&start),
+            crate::resolver::TextEdit {
+                offset: start.offset,
+                length: end - start.offset,
+                replacement: String::new(),
+            },
+        );
     }
 
     /// `Name[Args] { field: value }` — a struct literal carrying EXPLICIT
