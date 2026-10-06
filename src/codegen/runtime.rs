@@ -17907,7 +17907,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // differs only when an inner AND an outer frame both hold one, which is
         // shadowing across scopes: two distinct bindings, of which only the
         // inner one is being handed out.
-        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
+        for (fi, frame) in self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter_mut()
+            .enumerate()
+            .rev()
+        {
             let Some(idx) = frame.iter().rposition(
                 |a| matches!(a, CleanupAction::UserDrop { binding_name, .. } if binding_name == name),
             ) else {
@@ -17920,6 +17926,13 @@ impl<'ctx> super::Codegen<'ctx> {
             else {
                 continue;
             };
+            // B-2026-10-06-64 — where the generation's own wrapper sat, for a
+            // same-frame reassignment to re-register it in place.
+            let own_pos = frame.iter().position(|a| {
+                matches!(a, CleanupAction::UserDrop { binding_name, binding_ptr, kind, .. }
+                    if binding_name == name && *binding_ptr == newest
+                        && *kind == UserDropKind::OwnWrapper)
+            });
             frame.retain(|action| match action {
                 CleanupAction::UserDrop {
                     binding_name,
@@ -17928,6 +17941,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 } => !(binding_name == name && *binding_ptr == newest),
                 _ => true,
             });
+            if let Some(pos) = own_pos {
+                self.drop_rc
+                    .retracted_user_drop_pos
+                    .insert(newest, (fi, pos));
+            }
             if current == Some(newest) {
                 self.drop_rc
                     .retracted_live_generations
@@ -19334,6 +19352,40 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => true,
             });
         }
+    }
+
+    /// B-2026-10-06-64 — move the own-`Drop` action just registered for
+    /// `name` (the innermost frame's last action) back to where a whole-move
+    /// retraction took the slot's previous action from, so the reassigned
+    /// value drops in the binding's declaration position, after every binding
+    /// declared later. SAME FRAME ONLY: a reassignment in a deeper block may
+    /// not run on every path, and placing an unconditional action in the outer
+    /// frame would fire the moved value's body on the paths that skipped it
+    /// (B-2026-10-06-102). No-op without a recorded position.
+    pub(super) fn move_rearmed_user_drop_to_retracted_pos(
+        &mut self,
+        name: &str,
+        slot: PointerValue<'ctx>,
+    ) {
+        let Some((fi, pos)) = self.drop_rc.retracted_user_drop_pos.remove(&slot) else {
+            return;
+        };
+        let depth = self.drop_rc.scope_cleanup_actions.len();
+        if depth == 0 || fi + 1 != depth {
+            return;
+        }
+        let frame = &mut self.drop_rc.scope_cleanup_actions[fi];
+        let Some(last) = frame.last() else {
+            return;
+        };
+        if !matches!(last, CleanupAction::UserDrop { binding_name, binding_ptr, kind, .. }
+            if binding_name == name && *binding_ptr == slot && *kind == UserDropKind::OwnWrapper)
+        {
+            return;
+        }
+        let action = frame.pop().unwrap();
+        let at = pos.min(frame.len());
+        frame.insert(at, action);
     }
 
     /// B-2026-10-05-110 — move the element-bodies walk just registered for

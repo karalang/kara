@@ -16384,6 +16384,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if let Some(slot) = self.variables.get(name).copied() {
                                     let name = name.clone();
                                     self.track_user_drop_var(&tn, &name, slot.ptr);
+                                    self.move_rearmed_user_drop_to_retracted_pos(&name, slot.ptr);
                                 }
                             }
                         }

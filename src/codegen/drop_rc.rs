@@ -267,6 +267,13 @@ pub(crate) struct DropRc<'ctx> {
         PointerValue<'ctx>,
         (usize, usize, inkwell::values::FunctionValue<'ctx>, String),
     >,
+    /// B-2026-10-06-64 — where a whole-move retraction took a struct
+    /// binding's own `Drop` action from: (frame index, position), keyed by the
+    /// binding's slot. A reassignment in that same frame re-registers the
+    /// action there rather than at the frame's end, so the new value keeps the
+    /// binding's place in the reverse-declaration drop order.
+    pub(crate) retracted_user_drop_pos:
+        std::collections::HashMap<PointerValue<'ctx>, (usize, usize)>,
     /// B-2026-09-05-37 — the MEMORY half of that same bit, keyed by the SLOT a
     /// `CleanupAction::StructDrop` frees rather than by a binding name.
     ///
