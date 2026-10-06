@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 725 |
-| run-vs-build | 602 |
-| leak | 597 |
+| miscompile | 726 |
+| run-vs-build | 604 |
+| leak | 599 |
 | double-free | 427 |
 | codegen-gap | 252 |
 | missing-feature | 221 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2844 |
-| interp | 890 |
+| codegen | 2849 |
+| interp | 892 |
 | typecheck | 347 |
 | other | 114 |
 | ownership | 80 |
@@ -217,7 +217,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-29 | 2026-09-26 | codegen | low | A NAMED STRUCT'S `String` FIELD MOVED THROUGH A BRANCH ARM INTO A BY-VALUE PARAM LEAKS ON EVERY COMPILED SURFACE -- `let q = mkq(3); let a = take(if true { q.name } else { f"z" });` prints `q3 a1 end` on all four surfaces with valgrind 1 block lost; the `ref` twin `bor(if true { q.name } else { f"z" })` and the direct `take(q.name)` are clean | — |
 | B-2026-09-26-31 | 2026-09-26 | codegen | medium | THREE MORE SPELLINGS OF A NAMED `Drop`-LESS STRUCT WITH A `shared` FIELD HANDED BACK IN AN ENUM DOUBLE FREE ON EVERY COMPILED SURFACE -- a user enum conditional hand-back moved out of a `match` (`hoc3(s, true)`), a callee taking two such args (`two3(a, b)`), and the call used directly as the `unwrap` receiver (`mid3(s, true).unwrap()`) | — |
 | B-2026-09-26-32 | 2026-09-26 | codegen | low | A FRESH `Drop`-LESS STRUCT WITH A `shared` FIELD PASSED TO A CONDITIONAL HAND-BACK THAT TAKES THE `None` PATH LEAKS THE FIELD -- `let o = mid3(mk3(10), false)` prints the right output on every surface and loses 16 B at -O0 | — |
-| B-2026-09-26-36 | 2026-09-26 | interp+codegen | medium | [CORRECTED 2026-10-06 under the default param schedule: `h1(s, true)` is now right on all surfaces (`dP5 h`); `h1(P{..}, false)` now prints the due `dP6 h` COMPILED and loses the body under `--interp` (`h end`); the match re-wrap, generic-fn and destructured-wrapper cells still run a double body on all surfaces] A PARAM WRAPPED IN A USER-ENUM VARIANT, RE-WRAPPED OUT OF A `match`, WRAPPED INSIDE A GENERIC FN, OR WHOSE WRAPPER IS DESTRUCTURED IN THE CALLEE, STILL RUNS ITS `Drop` BODY TWICE WHEN HANDED BACK -- `h1(s, true)` over `fn h1(s: P, c: bool) -> Ho[P] { let o = Ho.Full(s); if c { return o } return Ho.Empty }` prints `dP5 dP5 h` on all four surfaces; `h1(P{..}, false)` SPLITS (interp `dP6 h`, compiled `dP6 dP6 h`) | — |
+| B-2026-09-26-36 | 2026-09-26 | interp+codegen | medium | [CORRECTED 2026-10-06 (B-2026-10-06-129): the GENERIC-fn cells are right on every surface under the default param schedule, `cg(s, true)` since a360d0f79 and `cg(P{..}, false)` since B-2026-10-06-129's fix] [CORRECTED 2026-10-06 under the default param schedule: `h1(s, true)` is now right on all surfaces (`dP5 h`); `h1(P{..}, false)` now prints the due `dP6 h` COMPILED and loses the body under `--interp` (`h end`); the match re-wrap, generic-fn and destructured-wrapper cells still run a double body on all surfaces] A PARAM WRAPPED IN A USER-ENUM VARIANT, RE-WRAPPED OUT OF A `match`, WRAPPED INSIDE A GENERIC FN, OR WHOSE WRAPPER IS DESTRUCTURED IN THE CALLEE, STILL RUNS ITS `Drop` BODY TWICE WHEN HANDED BACK -- `h1(s, true)` over `fn h1(s: P, c: bool) -> Ho[P] { let o = Ho.Full(s); if c { return o } return Ho.Empty }` prints `dP5 dP5 h` on all four surfaces; `h1(P{..}, false)` SPLITS (interp `dP6 h`, compiled `dP6 dP6 h`) | — |
 | B-2026-09-26-49 | 2026-09-26 | interp+codegen | medium | A RECURSIVE HAND-BACK THAT SWAPS THE PARAM INTO ANOTHER SLOT, RECURSES THROUGH A METHOD, OR HAS A FRESH EXIT STILL RUNS A `Drop` BODY TWICE ON ALL FOUR SURFACES -- `rsw(s, w, 1)` over `fn rsw(a: P, b: P, n: i64) -> P { if n == 0 { return a } return rsw(b, a, n - 1) }` prints `dP12 dP11 t12 dP12`; `k.mr(s, 2)` over a self-recursive `fn mr(ref self, a: P, n: i64) -> P` prints `dP18 t18 dP18` | — |
 | B-2026-09-26-55 | 2026-09-26 | codegen | medium | AN ENUM ROUNDTRIPPED THROUGH A BY-VALUE CALLEE INSIDE A LOOP RUNS ITS PAYLOAD'S `Drop` BODY ONCE PER ITERATION ON EVERY COMPILED SURFACE -- `while i < 3 { e = pass(e); .. }` over `enum E { A(R), B }` prints `dR1 dR1 dR1 end` on the JIT, `-O0`, `-O2` and `KARAC_AUTO_PAR=0` builds and `dR1 end` under `--interp`; memory balances, so it is the body count alone. The same roundtrip outside a loop, a struct roundtripped in the same loop, and `let f = pass(e)` all agree at one body | — |
 | B-2026-09-26-56 | 2026-09-26 | typecheck | low | W0299 `borrow_projection_copy` IS SILENT WHEN A BORROW PROJECTION IS PASSED TO A USER CALLEE THAT KEEPS IT -- `keep(w.r, mut v)`, a storing associated function and `k.put(w.r)` each copy the field and run its `Drop` body twice on every surface, and none of them warns; the lint fires only for the `Vec.push` builtin argument and a TRAIT associated-function argument. design.md now says which call copies (d618ccbcf), so the rule to implement is settled | — |
@@ -584,6 +584,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-126 | 2026-10-06 | parser | low | RUST'S TURBOFISH ON A METHOD CALL IS REPORTED AS A MISSING SEMICOLON OR PAREN -- `(1..4).sum::[i64]()` and `it.collect::<Vec<i64>>()` fail with "Expected Semicolon, found ColonColon" (or "Expected RightParen, found ColonColon" inside an argument), naming neither the turbofish nor the annotation that replaces it, and `karac fix` has nothing to apply | — |
 | B-2026-10-06-127 | 2026-10-06 | codegen | medium | `fold` WHOSE CLOSURE DESTRUCTURES A TUPLE ACCUMULATOR DOES NOT BUILD -- `(1..=n).fold((0, 1), |(s, p), k| (s + k, p * k))` and the same over `v.iter()` fail `karac build` and LLJIT with "no handler for method 'fold' on non-identifier receiver ... this is a codegen bug"; `|acc, k| (acc.0 + k, acc.1 * k)` builds, as does destructuring the ELEMENT (`|acc, (a, b)|`) | — |
 | B-2026-10-06-128 | 2026-10-06 | codegen | medium | A TERMINAL `sum` OR `fold` ON A RANGE HELD IN A BINDING DOES NOT BUILD -- `let r = 1..=n; let e: i64 = r.sum();` and `r.fold(0, |a, k| a + k)` fail `karac build` and LLJIT with "no handler for method 'sum' on variable 'r'", while `(1..=n).sum()`, `r.map(..).collect()` and `for k in r` all build | — |
+| B-2026-10-06-130 | 2026-10-06 | codegen+interp | medium | A FRESH `Drop`-LESS STRUCT TEMP WITH A `shared` FIELD PASSED TO A CALLEE THAT HANDS IT BACK ON SOME EXITS NEVER RELEASES THE FIELD ON THE EXIT THAT KEEPS IT, ON EVERY SURFACE, AND LEAKS IT COMPILED -- `cx(X { h: H { id: 3 }, n: 3 }, false)` over `fn cx(s: X, c: bool) -> Option[X] { let o = Some(s); if c { return o } return None }` prints `_3 false end` with no `dH3` on `--interp`, -O0 and -O2, and so do its unwrapped twin (`if c { return Some(s) } return None`) and the generic `cg[T]` spelling; `fn rx(s: X, c: bool) -> X { if c { return s } X { .. } }` loses `dH17` under `--interp` only | — |
+| B-2026-10-06-131 | 2026-10-06 | codegen | medium | A USER-ENUM PARAM WRAPPED IN AN `Option` LOCAL AND HANDED BACK ON SOME EXITS NEVER RUNS ITS PAYLOAD'S `Drop` BODY COMPILED ON THE EXIT THAT KEEPS IT -- `ce(E.A(P { id: 11 }), false)` over `fn ce(s: E, c: bool) -> Option[E] { let o = Some(s); if c { return o } return None }` prints `_11 false end` on -O0 and -O2 where `--interp` prints the due `dP11 _11 false end`; a named argument and the generic `cg[T]` spelling too | — |
+| B-2026-10-06-132 | 2026-10-06 | codegen | medium | A BY-VALUE `Vec` PARAM HANDED BACK ON SOME EXITS NEVER RUNS ITS ELEMENTS' `Drop` BODIES COMPILED ON THE EXIT THAT KEEPS IT -- `dv(v, false)` over `fn dv(s: Vec[P], c: bool) -> Option[Vec[P]] { if c { return Some(s) } return None }`, the wrapped `let o = Some(s)` spelling, the bare `fn rv(s: Vec[P], c: bool) -> Vec[P] { if c { return s } Vec.new() }` and the generic `cg[T]` print no `dP15` on -O0 and -O2 where `--interp` prints it | — |
+| B-2026-10-06-133 | 2026-10-06 | codegen | medium | A GENERIC FN THAT HANDS ITS BARE-`T` PARAM BACK IN AN `Option` ON SOME EXITS NEVER RELEASES A `shared` STRUCT ARGUMENT COMPILED, ON EITHER PATH -- `cg(H { id: 1 }, false)` and `cg(H { id: 2 }, true)` over `fn cg[T](s: T, c: bool) -> Option[T] { let o = Some(s); if c { return o } return None }`, and the unwrapped `if c { return Some(s) } return None`, print no `dH` on -O0 and -O2 and lose 1 block, where `--interp` prints `dH1 _1 false end` and `_2 true end dH2` | — |
 
 ### Relocated
 
@@ -3891,6 +3895,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-106 | codegen | low | AN INDEX STORE INTO A MODULE-LEVEL `let mut` ARRAY FAILS THE BUILD -- `COUNTS[1] = 40` over `let mut COUNTS: Array[i64, 3]` stops `karac build` with… | d37c176d0 |
 | B-2026-10-06-108 | typecheck | medium | A DERIVED SUPERTRAIT DOES NOT SATISFY A HAND-WRITTEN TRAIT IMPL -- `#[derive(PartialEq, Eq)]` on a struct beside a hand-written `impl PartialOrd` / `… | 4c67adb10 |
 | B-2026-10-06-113 | interp | high | `--interp` IGNORES AN ENUM'S HAND-WRITTEN `impl Ord` FOR `.cmp()` AND FOR `<` `>` `<=` `>=` -- an enum ordering `Large` before `Small` prints `Small… | 8eaf5220e |
+| B-2026-10-06-129 | interp+codegen | high | SINCE B-2026-10-05-107 (a360d0f79), A GENERIC FN THAT WRAPS ITS BARE-`T` PARAM IN AN `Option` / `Result` LOCAL AND HANDS THAT LOCAL BACK ON SOME EXIT… | 38dbe8501 |
 
 </details>
 
