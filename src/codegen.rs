@@ -7119,6 +7119,7 @@ impl<'ctx> Codegen<'ctx> {
                 freshtemp_payload_bodies_owed_to_arm: false,
                 pattern_binding_field_boxed_payload_disarmed: false,
                 pattern_binding_arm_only_borrows: false,
+                arm_field_move_is_conditional: false,
                 pattern_binding_arm_borrowed_only_names: std::collections::HashSet::new(),
                 pattern_binding_scrutinee_is_owned_param: false,
                 pattern_binding_scrutinee_optres_bodies_are_caller_retained: false,

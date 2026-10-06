@@ -182,6 +182,12 @@ pub(crate) struct PatternState<'ctx> {
     /// Per-ARM, unlike the scrutinee flags around it, because it is a property
     /// of the arm body rather than of the value being matched.
     pub(crate) pattern_binding_arm_only_borrows: bool,
+    /// Step 4c of the drop schedule — the arm being bound is one of several
+    /// in its `match`, so a field it moves out of a named struct scrutinee
+    /// moves only on the path that takes this arm (and passes its guard).
+    /// The field-bodies disarm then masks through a runtime flag rather
+    /// than statically, which would also mask the field on every other path.
+    pub(crate) arm_field_move_is_conditional: bool,
     /// B-2026-08-28-63 — the payload binding NAMES the arm currently being
     /// bound merely reads. Per-BINDING where its sibling above is per-arm,
     /// because a multi-binding pattern can borrow one payload and move

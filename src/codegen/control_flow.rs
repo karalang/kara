@@ -531,9 +531,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // still visits the moved-out field and runs its user `Drop` body a
             // second time on the husk the cap-zeroing just left
             // (B-2026-08-31-26).
+            // Step 4c — the fields move only on the edge that matched, so
+            // the miss edge keeps their bodies through a runtime flag.
+            let saved_cond = self.pattern_state.arm_field_move_is_conditional;
+            self.pattern_state.arm_field_move_is_conditional = crate::param_fate::arms_enabled();
             self.disarm_arm_destructured_struct_field_bodies(value, pattern, &|n: &str| {
                 !super::consume_class::binding_only_borrowed_block(n, then_block)
             });
+            self.pattern_state.arm_field_move_is_conditional = saved_cond;
         }
         // B-2026-06-10-6: a variable `Option[String]`/`Option[Vec]` scrutinee
         // with a `FreeInlineOptionPayload` needs its source `cap` zeroed when
@@ -1559,9 +1564,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // still visits the moved-out field and runs its user `Drop` body a
             // second time on the husk the cap-zeroing just left
             // (B-2026-08-31-26).
+            // Step 4c — the fields move only on the edge that matched, so
+            // the miss edge keeps their bodies through a runtime flag.
+            let saved_cond = self.pattern_state.arm_field_move_is_conditional;
+            self.pattern_state.arm_field_move_is_conditional = crate::param_fate::arms_enabled();
             self.disarm_arm_destructured_struct_field_bodies(value, pattern, &|n: &str| {
                 !super::consume_class::binding_only_borrowed_block(n, body)
             });
+            self.pattern_state.arm_field_move_is_conditional = saved_cond;
         }
         // B-2026-06-10-6: variable inline-`Option` scrutinee source-cap
         // suppression (see `compile_if_let`). No-op for temp / non-inline.

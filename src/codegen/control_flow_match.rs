@@ -1566,6 +1566,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let arm_body = arm.body.clone();
                     let arm_guard = arm.guard.clone();
+                    let saved_cond = self.pattern_state.arm_field_move_is_conditional;
+                    self.pattern_state.arm_field_move_is_conditional =
+                        crate::param_fate::arms_enabled() && arms.len() > 1;
                     self.disarm_arm_destructured_struct_field_bodies(
                         scrutinee,
                         &arm.pattern,
@@ -1576,6 +1579,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 })
                         },
                     );
+                    self.pattern_state.arm_field_move_is_conditional = saved_cond;
                 }
                 // B-2026-07-21-7: ref-chain struct clone — the expr-based
                 // suppression above bails on the borrowed root, so fire the
@@ -15053,7 +15057,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-09-30-42 — a param held by TRANSFER owns this walk in
                 // the callee's frame; an arm on a branch masks it per path, or
                 // the path that never matched loses the field's body.
-                if self.scrutinee_is_transfer_owned_struct_param(scrutinee)
+                // Step 4c — and a named local's walk, when this arm is one of
+                // several: the field moves only on the path that took the arm
+                // (past its guard), so a static mask lost the field's body on
+                // every path that fell through to a sibling arm.
+                if (self.scrutinee_is_transfer_owned_struct_param(scrutinee)
+                    || self.pattern_state.arm_field_move_is_conditional)
                     && self.conditional_field_move_takes_runtime_flag(
                         &var_name,
                         &field_pat.name,
@@ -15108,6 +15117,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     continue;
                 }
                 if let Some(iidx) = inner_field_names.iter().position(|n| n == &ifp.name) {
+                    // Step 4c — the nested leaf moves on this arm's path only;
+                    // mask it there through the `@idx.iidx` runtime flag.
+                    if self.pattern_state.arm_field_move_is_conditional
+                        && self.nested_path_walk_frame(&var_name) == NestedWalkFrame::Above
+                        && self.nested_field_move_takes_runtime_flag(&var_name, &[idx, iidx])
+                    {
+                        continue;
+                    }
                     self.type_decls
                         .struct_moved_nested_field_bodies
                         .entry(var_name.clone())
