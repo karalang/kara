@@ -17,7 +17,9 @@ use std::collections::HashMap;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -8519,6 +8521,10 @@ impl<'ctx> super::Codegen<'ctx> {
     const KARAC_MAP_CAPACITY_OFFSET: u64 = 16;
     const KARAC_MAP_LEN_OFFSET: u64 = 24;
     const KARAC_MAP_TOMBSTONES_OFFSET: u64 = 32;
+    /// `KaracMap.ord_active` (B-2026-10-06-65): nonzero once the map keeps an
+    /// ordered key index. The inline insert bodies cannot maintain it, so they
+    /// take their slow path (the runtime insert, which does) while it is set.
+    const KARAC_MAP_ORD_ACTIVE_OFFSET: u64 = 72;
     /// `val_size` field (offset 48): after status, kv, capacity, len,
     /// tombstones, key_size (5*8 + 2*8 = 48). Read by the Set contains probe to
     /// recover the true bucket stride `key_size + val_size` — a `Set.new()` map
@@ -8674,6 +8680,40 @@ impl<'ctx> super::Codegen<'ctx> {
     /// a key with this hash. Takes the TOP 7 bits because the bucket index
     /// consumes the low ones — a tag sharing them would be constant along a
     /// probe chain and would reject nothing.
+    /// `cond | (map.ord_active != 0)` — routes an inline insert body to its
+    /// runtime slow path while the map keeps an ordered key index, which only
+    /// the runtime insert maintains (B-2026-10-06-65). A plain `Map` / `Set`
+    /// never sets the flag, so its fast path pays one load and a branch that is
+    /// never taken.
+    fn or_map_ord_active(
+        &mut self,
+        map_arg: PointerValue<'ctx>,
+        cond: IntValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_ORD_ACTIVE_OFFSET, false)],
+                    "ord.active.p",
+                )
+                .unwrap()
+        };
+        let active = self
+            .builder
+            .build_load(i64_t, p, "ord.active")
+            .unwrap()
+            .into_int_value();
+        let on = self
+            .builder
+            .build_int_compare(IntPredicate::NE, active, i64_t.const_zero(), "ord.on")
+            .unwrap();
+        self.builder.build_or(cond, on, "slow.or.ord").unwrap()
+    }
+
     pub(super) fn emit_map_ctrl_of(&self, hash: IntValue<'ctx>) -> IntValue<'ctx> {
         let i8_t = self.context.i8_type();
         let i64_t = self.context.i64_type();
@@ -9365,6 +9405,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_compare(IntPredicate::UGT, lhs, rhs, "need_resize")
             .unwrap();
+        let need_resize = self.or_map_ord_active(map_arg, need_resize);
         self.builder
             .build_conditional_branch(need_resize, slow_bb, fast_bb)
             .unwrap();
@@ -10943,6 +10984,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_compare(IntPredicate::UGT, lhs, rhs, "need_resize")
             .unwrap();
+        let need_resize = self.or_map_ord_active(map_arg, need_resize);
         self.builder
             .build_conditional_branch(need_resize, slow_bb, fast_bb)
             .unwrap();

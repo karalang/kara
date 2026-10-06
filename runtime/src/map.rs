@@ -72,6 +72,7 @@
 //! `Codegen::emit_map_ctrl_of` / `emit_map_is_occupied` are their mirrors.
 
 use std::alloc::{alloc, dealloc, Layout};
+use std::collections::BTreeSet;
 use std::ffi::c_void;
 use std::ptr;
 
@@ -188,6 +189,76 @@ struct KaracMap {
     val_size: usize,
     hash_fn: unsafe extern "C" fn(*const c_void) -> u64,
     eq_fn: unsafe extern "C" fn(*const c_void, *const c_void) -> bool,
+    /// Nonzero once [`Self::ord`] holds every key in comparator order. Read by
+    /// codegen's monomorphized insert bodies (`KARAC_MAP_ORD_ACTIVE_OFFSET`),
+    /// which inline the bucket write and so would skip the index: when this is
+    /// set they forward to `karac_map_insert_old` instead. Plain maps never set
+    /// it, so their fast path pays one load and a never-taken branch.
+    ord_active: u64,
+    /// The ordered key index behind `SortedMap` / `SortedSet` ordered queries.
+    /// Built on the first ordered query (`karac_map_sorted_keys`,
+    /// `karac_map_ord_pick`), then kept current by every runtime path that adds
+    /// or removes a key, so `floor` / `ceiling` / `min` / `max` are O(log n)
+    /// and an in-order walk copies instead of sorting. Before this every such
+    /// query gathered and sorted all n keys (B-2026-10-06-65).
+    ord: BTreeSet<OrdKey>,
+    /// The comparator [`Self::ord`] was built with; `Some` exactly when
+    /// `ord_active` is set. Kept apart from the keys so an emptied index can
+    /// still order the next key it is given.
+    ord_cmp: Option<OrdCmpFn>,
+}
+
+/// Comparator over two key blobs, as codegen emits it for a sorted key type:
+/// negative, zero or positive as the first key sorts before, equal to, or
+/// after the second.
+type OrdCmpFn = unsafe extern "C" fn(*const c_void, *const c_void) -> i32;
+
+/// One key of the ordered index: a bit copy of the stored key blob plus the
+/// comparator that orders it. A heap-owning key (a `String`) is copied as its
+/// `{ptr,len,cap}` header, so the copy reads the map's own buffer and must
+/// leave the index before that buffer is freed, which every removal path does
+/// by forgetting the key before it drops it.
+struct OrdKey {
+    bytes: Box<[u8]>,
+    cmp: OrdCmpFn,
+}
+
+impl OrdKey {
+    unsafe fn copy_of(key: *const u8, key_size: usize, cmp: OrdCmpFn) -> Self {
+        let bytes = unsafe { std::slice::from_raw_parts(key, key_size) };
+        OrdKey {
+            bytes: bytes.into(),
+            cmp,
+        }
+    }
+}
+
+impl PartialEq for OrdKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for OrdKey {}
+
+impl PartialOrd for OrdKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OrdKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // SAFETY: both blobs are `key_size` bytes of a live key of the type
+        // the comparator was emitted for.
+        let c = unsafe {
+            (self.cmp)(
+                self.bytes.as_ptr() as *const c_void,
+                other.bytes.as_ptr() as *const c_void,
+            )
+        };
+        c.cmp(&0)
+    }
 }
 
 // Maps are local to a single thread; the compiler never moves them across
@@ -213,8 +284,68 @@ impl KaracMap {
                 val_size,
                 hash_fn,
                 eq_fn,
+                ord_active: 0,
+                ord: BTreeSet::new(),
+                ord_cmp: None,
             });
             Box::into_raw(map)
+        }
+    }
+
+    /// Build the ordered index from the live keys, once; later calls only check
+    /// it is current. B-2026-10-06-65.
+    ///
+    /// The count check is a backstop, not the mechanism: every runtime path that
+    /// adds or removes a key keeps the index current itself. A count that
+    /// disagrees means some path wrote the table without it, and a rebuild is
+    /// both the correct answer and what keeps the copy out of
+    /// `karac_map_sorted_keys`, sized by `len`, in bounds.
+    unsafe fn ord_ensure(&mut self, cmp: OrdCmpFn) {
+        unsafe {
+            if self.ord_active != 0 && self.ord.len() == self.len {
+                return;
+            }
+            let mut ord = BTreeSet::new();
+            for slot in 0..self.capacity {
+                if is_occupied(*self.status.add(slot)) {
+                    ord.insert(OrdKey::copy_of(
+                        self.key_ptr(slot) as *const u8,
+                        self.key_size,
+                        cmp,
+                    ));
+                }
+            }
+            self.ord = ord;
+            self.ord_cmp = Some(cmp);
+            self.ord_active = 1;
+        }
+    }
+
+    /// Record the key just stored at `slot` as new. Reads the STORED blob, not
+    /// the caller's probe: `karac_map_insert_borrowed_str_old` stores a deep
+    /// copy of a borrowed probe, and the index has to alias the map's copy.
+    #[inline]
+    unsafe fn ord_note_new(&mut self, slot: usize) {
+        unsafe {
+            let Some(cmp) = self.ord_cmp else {
+                return;
+            };
+            let key = OrdKey::copy_of(self.key_ptr(slot) as *const u8, self.key_size, cmp);
+            self.ord.insert(key);
+        }
+    }
+
+    /// Drop `probe`'s key from the ordered index. Called by every removal path
+    /// right after its lookup hits and BEFORE it frees the stored key, since the
+    /// index entry aliases that key's buffer and the search compares against it.
+    #[inline]
+    unsafe fn ord_forget(&mut self, probe: *const c_void) {
+        unsafe {
+            let Some(cmp) = self.ord_cmp else {
+                return;
+            };
+            let key = OrdKey::copy_of(probe as *const u8, self.key_size, cmp);
+            self.ord.remove(&key);
         }
     }
 
@@ -460,6 +591,7 @@ impl KaracMap {
             let kv_offset = slot * (self.key_size + self.val_size);
             if !exists {
                 ptr::copy_nonoverlapping(key as *const u8, self.kv.add(kv_offset), self.key_size);
+                self.ord_note_new(slot);
                 self.len += 1;
                 if was_tombstone {
                     self.tombstones -= 1;
@@ -492,6 +624,7 @@ impl KaracMap {
     unsafe fn remove(&mut self, key: *const c_void, drop_key: bool, drop_val: bool) -> bool {
         unsafe {
             if let Some(slot) = self.lookup(key) {
+                self.ord_forget(key);
                 // The bool `remove` discards both halves, so free each heap
                 // `{ptr,len,cap}` the tombstone would orphan. `free-with-drop`
                 // only walks OCCUPIED slots, so a tombstoned buffer leaks
@@ -1061,6 +1194,7 @@ pub unsafe extern "C" fn karac_map_insert_old(
             );
         } else {
             ptr::copy_nonoverlapping(key as *const u8, m.kv.add(kv_offset), m.key_size);
+            m.ord_note_new(slot);
             m.len += 1;
             if was_tombstone {
                 m.tombstones -= 1;
@@ -1129,6 +1263,7 @@ pub unsafe extern "C" fn karac_map_try_insert(
             );
         } else {
             ptr::copy_nonoverlapping(key as *const u8, m.kv.add(kv_offset), m.key_size);
+            m.ord_note_new(slot);
             m.len += 1;
             if was_tombstone {
                 m.tombstones -= 1;
@@ -1216,6 +1351,7 @@ pub unsafe extern "C" fn karac_map_insert_borrowed_str_old(
             ptr::write_unaligned(kslot.add(8) as *mut i64, src_len);
             // cap == len marks an owned buffer the free path will release.
             ptr::write_unaligned(kslot.add(16) as *mut i64, src_len);
+            m.ord_note_new(slot);
             m.len += 1;
             if was_tombstone {
                 m.tombstones -= 1;
@@ -1358,6 +1494,7 @@ pub unsafe extern "C" fn karac_map_remove_old(
     unsafe {
         let m = &mut *(map as *mut KaracMap);
         if let Some(slot) = m.lookup(key) {
+            m.ord_forget(key);
             ptr::copy_nonoverlapping(
                 m.val_ptr(slot) as *const u8,
                 out_old_val as *mut u8,
@@ -1406,6 +1543,7 @@ pub unsafe extern "C" fn karac_map_remove_old_with_key_drop_fn(
     unsafe {
         let m = &mut *(map as *mut KaracMap);
         if let Some(slot) = m.lookup(key) {
+            m.ord_forget(key);
             ptr::copy_nonoverlapping(
                 m.val_ptr(slot) as *const u8,
                 out_old_val as *mut u8,
@@ -1443,12 +1581,12 @@ pub unsafe extern "C" fn karac_map_remove_old_with_key_drop_fn(
 /// for reading; freeing a copied key double-frees.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_sorted_keys(
-    map: *const c_void,
+    map: *mut c_void,
     out_len: *mut usize,
     cmp_fn: unsafe extern "C" fn(*const c_void, *const c_void) -> i32,
 ) -> *mut u8 {
     unsafe {
-        let m = &*(map as *const KaracMap);
+        let m = &mut *(map as *mut KaracMap);
         let n = m.len;
         if !out_len.is_null() {
             *out_len = n;
@@ -1457,25 +1595,64 @@ pub unsafe extern "C" fn karac_map_sorted_keys(
             return ptr::null_mut();
         }
         let ks = m.key_size;
-        // Gather pointers to each live key slot, sort by the comparator, then gather
-        // the sorted keys into the output buffer. Sorting pointers (not the bytes)
-        // keeps the comparator operating on the map's stable key storage.
-        let mut keys: Vec<*const u8> = Vec::with_capacity(n);
-        for slot in 0..m.capacity {
-            if is_occupied(*m.status.add(slot)) {
-                keys.push(m.key_ptr(slot) as *const u8);
-            }
-        }
-        keys.sort_by(|&a, &b| cmp_fn(a as *const c_void, b as *const c_void).cmp(&0));
+        // The ordered index already holds the keys in comparator order, so this
+        // is a copy, not a sort: the first call builds the index and every later
+        // one reuses it (B-2026-10-06-65).
+        m.ord_ensure(cmp_fn);
         let buf = alloc(Layout::array::<u8>(n * ks).unwrap());
         if buf.is_null() {
             crate::fatal::write_stderr(b"panic: out of memory\n");
             std::process::abort();
         }
-        for (i, &kp) in keys.iter().enumerate() {
-            ptr::copy_nonoverlapping(kp, buf.add(i * ks), ks);
+        for (i, k) in m.ord.iter().enumerate() {
+            ptr::copy_nonoverlapping(k.bytes.as_ptr(), buf.add(i * ks), ks);
         }
         buf
+    }
+}
+
+/// The single key an ordered query picks, as a pointer to its blob in the
+/// ordered index, or NULL when no key qualifies (an empty map, or no key on
+/// the asked side of `pivot`). `mode` is 0 for the smallest key (`min`), 1 for
+/// the largest (`max`), 2 for the largest key `<= pivot` (`floor`) and 3 for
+/// the smallest key `>= pivot` (`ceiling`); `pivot` is read only by 2 and 3.
+/// O(log n) once the index exists; the first ordered query on a map builds it.
+/// B-2026-10-06-65: `SortedMap.floor` / `ceiling` / `min` / `max` used to sort
+/// every key on every call.
+/// # Safety
+/// Shared contract above. `cmp_fn` as for [`karac_map_sorted_keys`]; `pivot`
+/// points at a `key_size`-byte key blob when `mode` is 2 or 3. The returned
+/// pointer is a read-only BIT-COPY of the key (a `String` aliases the map's
+/// buffer) and dies at the next mutation of the map: clone it before then.
+#[no_mangle]
+pub unsafe extern "C" fn karac_map_ord_pick(
+    map: *mut c_void,
+    pivot: *const c_void,
+    cmp_fn: OrdCmpFn,
+    mode: i32,
+) -> *const u8 {
+    unsafe {
+        let m = &mut *(map as *mut KaracMap);
+        if m.len == 0 {
+            return ptr::null();
+        }
+        m.ord_ensure(cmp_fn);
+        let picked = match mode {
+            0 => m.ord.first(),
+            1 => m.ord.last(),
+            _ => {
+                let probe = OrdKey::copy_of(pivot as *const u8, m.key_size, cmp_fn);
+                if mode == 2 {
+                    m.ord.range(..=probe).next_back()
+                } else {
+                    m.ord.range(probe..).next()
+                }
+            }
+        };
+        match picked {
+            Some(k) => k.bytes.as_ptr(),
+            None => ptr::null(),
+        }
     }
 }
 
@@ -1522,6 +1699,7 @@ pub unsafe extern "C" fn karac_map_entry(
             let kv_offset = slot * (m.key_size + m.val_size);
             ptr::copy_nonoverlapping(key as *const u8, m.kv.add(kv_offset), m.key_size);
             *m.status.add(slot) = ctrl;
+            m.ord_note_new(slot);
             m.len += 1;
             if was_tombstone {
                 m.tombstones -= 1;
@@ -1652,6 +1830,7 @@ pub unsafe extern "C" fn karac_map_clear(map: *mut c_void) {
     unsafe {
         let m = &mut *(map as *mut KaracMap);
         ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
+        m.ord.clear();
         m.len = 0;
         m.tombstones = 0;
     }
@@ -1710,6 +1889,7 @@ pub unsafe extern "C" fn karac_map_clear_with_drop_vec(
             }
         }
         ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
+        m.ord.clear();
         m.len = 0;
         m.tombstones = 0;
     }
@@ -1748,6 +1928,7 @@ pub unsafe extern "C" fn karac_map_clear_with_val_drop_fn(
             }
         }
         ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
+        m.ord.clear();
         m.len = 0;
         m.tombstones = 0;
     }
@@ -1844,6 +2025,10 @@ mod tests {
         assert_eq!(offset_of!(KaracMap, val_size), 48);
         assert_eq!(offset_of!(KaracMap, hash_fn), 56);
         assert_eq!(offset_of!(KaracMap, eq_fn), 64);
+        // B-2026-10-06-65 — codegen's inline insert bodies read this flag to
+        // divert to the runtime insert, the only one that keeps the ordered
+        // index current. Drift here is a stale index: wrong `floor` answers.
+        assert_eq!(offset_of!(KaracMap, ord_active), 72);
     }
 
     /// Sibling of the offsets test for the CONTROL BYTE (B-2026-07-26-2). The

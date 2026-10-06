@@ -6162,6 +6162,17 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // karac_map_ord_pick(map: ptr, pivot: ptr, cmp_fn: ptr, mode: i32) -> ptr
+        // The one key `SortedMap.min` / `max` / `floor` / `ceiling` picks, from
+        // the map's ordered index in O(log n), or NULL (B-2026-10-06-65).
+        let map_ord_pick_ty =
+            ptr_type.fn_type(&[ptr_md, ptr_md, ptr_md, context.i32_type().into()], false);
+        let karac_map_ord_pick_fn = module.add_function(
+            "karac_map_ord_pick",
+            map_ord_pick_ty,
+            Some(Linkage::External),
+        );
+
         // karac_string_decode_char(data: ptr, len: i64, byte_offset: i64,
         //                          out_codepoint: ptr) -> i64
         // Drives `for c in s` / `for c in s.chars()` lowering. Returns the
@@ -6761,6 +6772,7 @@ impl<'ctx> Codegen<'ctx> {
                 karac_map_clear_with_val_drop_fn_fn,
                 karac_map_iter_new_fn,
                 karac_map_sorted_keys_fn,
+                karac_map_ord_pick_fn,
                 karac_map_iter_next_fn,
                 karac_map_iter_free_fn,
                 karac_string_decode_char_fn,

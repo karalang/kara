@@ -237,6 +237,10 @@ pub(crate) struct RuntimeFns<'ctx> {
     pub(crate) karac_map_clear_with_val_drop_fn_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_iter_new_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_sorted_keys_fn: FunctionValue<'ctx>,
+    /// `karac_map_ord_pick(map, pivot, cmp_fn, mode) -> ptr` — the key an
+    /// ordered single-entry query picks (0 min, 1 max, 2 floor, 3 ceiling), or
+    /// NULL; O(log n) on the map's ordered index (B-2026-10-06-65).
+    pub(crate) karac_map_ord_pick_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_iter_next_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_iter_free_fn: FunctionValue<'ctx>,
     /// `i64 karac_string_decode_char(*const u8 data, i64 len, i64 byte_offset, *mut u32 out_cp)`.

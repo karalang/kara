@@ -181,6 +181,7 @@ codegen-monomorphized and passed in at construction.
 | `karac_map_contains` | Presence check. |
 | `karac_map_entry` | Probe-and-insert-on-vacant for `entry(k).or_insert*` chains. |
 | `karac_map_lookup_slot` | Read-only slot lookup for `entry(k).and_modify` chains. |
+| `karac_map_ord_pick` | The key `SortedMap.min` / `max` / `floor` / `ceiling` picks, from the map's ordered index in O(log n). |
 | `karac_map_len` | Live-entry count. |
 | `karac_map_clear` | Drop every entry; keep the bucket allocation. |
 | `karac_map_iter_new` | Construct a forward iterator. |

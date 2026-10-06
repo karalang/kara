@@ -1102,11 +1102,11 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// `SortedMap.min()` / `max()` / `floor(k)` / `ceiling(k)` — the ordered
-    /// single-entry lookups, returning `Option[(K,V)]` (B-2026-07-18-1). Built
-    /// on the sorted-keys buffer (`emit_sorted_keys_buf`): pick the target index
-    /// (0 for `min`, len-1 for `max`, a comparator scan for `floor`/`ceiling`),
-    /// then deep-clone that key + its looked-up value into a `(K,V)` tuple
-    /// wrapped in `Some`, or `None` when the map is empty / no key satisfies the
+    /// single-entry lookups, returning `Option[(K,V)]` (B-2026-07-18-1). The
+    /// runtime picks the key from the map's ordered index
+    /// (`karac_map_ord_pick`, O(log n) — B-2026-10-06-65), then this
+    /// deep-clones that key + its looked-up value into a `(K,V)` tuple wrapped
+    /// in `Some`, or `None` when the map is empty / no key satisfies the
     /// bound. `min`/`max` need no argument; `floor`/`ceiling` take the pivot key.
     /// Only integer/String keys sort under codegen (via `emit_sorted_key_cmp_fn`,
     /// which rejects other `Ord` key types with an actionable message).
@@ -1120,8 +1120,6 @@ impl<'ctx> super::Codegen<'ctx> {
         val_ty: BasicTypeEnum<'ctx>,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let i64_t = self.context.i64_type();
-        let bool_t = self.context.bool_type();
         let fn_val = self.current_fn.unwrap();
 
         let key_te = self
@@ -1155,126 +1153,41 @@ impl<'ctx> super::Codegen<'ctx> {
             None
         };
 
-        let (kbuf, len) = self.emit_sorted_keys_buf(map_handle, &key_te)?;
-
-        // Compute (found, idx) into allocas. min/max are direct; floor/ceiling
-        // scan the ascending buffer.
-        let found_slot = self.create_entry_alloca(fn_val, "smol.found", bool_t.into());
-        let idx_slot = self.create_entry_alloca(fn_val, "smol.idx", i64_t.into());
-        let zero = i64_t.const_zero();
-        let one = i64_t.const_int(1, false);
-        let len_pos = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SGT, len, zero, "smol.nonempty")
-            .unwrap();
-        match method {
-            "min" => {
-                self.builder.build_store(found_slot, len_pos).unwrap();
-                self.builder.build_store(idx_slot, zero).unwrap();
-            }
-            "max" => {
-                self.builder.build_store(found_slot, len_pos).unwrap();
-                let last = self.builder.build_int_sub(len, one, "smol.last").unwrap();
-                self.builder.build_store(idx_slot, last).unwrap();
-            }
-            "floor" | "ceiling" => {
-                // Scan i = 0..len comparing kbuf[i] to the pivot. floor keeps the
-                // LAST key <= pivot (largest, since ascending); ceiling keeps the
-                // FIRST key >= pivot (smallest). Conditional stores via select.
-                self.builder
-                    .build_store(found_slot, bool_t.const_zero())
-                    .unwrap();
-                self.builder.build_store(idx_slot, zero).unwrap();
-                let (pivot_slot, _, _) = arg_pivot.as_ref().unwrap();
-                let is_floor = method == "floor";
-                let i_slot = self.create_entry_alloca(fn_val, "smol.i", i64_t.into());
-                self.builder.build_store(i_slot, zero).unwrap();
-                let loop_bb = self.context.append_basic_block(fn_val, "smol.loop");
-                let body_bb = self.context.append_basic_block(fn_val, "smol.body");
-                let cont_bb = self.context.append_basic_block(fn_val, "smol.cont");
-                self.builder.build_unconditional_branch(loop_bb).unwrap();
-                self.builder.position_at_end(loop_bb);
-                let i_cur = self
-                    .builder
-                    .build_load(i64_t, i_slot, "smol.i.cur")
-                    .unwrap()
-                    .into_int_value();
-                let more = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::SLT, i_cur, len, "smol.more")
-                    .unwrap();
-                self.builder
-                    .build_conditional_branch(more, body_bb, cont_bb)
-                    .unwrap();
-                self.builder.position_at_end(body_bb);
-                let kptr = unsafe {
-                    self.builder
-                        .build_gep(key_ty, kbuf, &[i_cur], "smol.kptr")
-                        .unwrap()
-                };
-                let c = self
-                    .builder
-                    .build_call(cmp_fn, &[kptr.into(), (*pivot_slot).into()], "smol.cmp")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_int_value();
-                let i32z = self.context.i32_type().const_zero();
-                let cur_found = self
-                    .builder
-                    .build_load(bool_t, found_slot, "smol.f.cur")
-                    .unwrap()
-                    .into_int_value();
-                // in-range: floor → cmp <= 0; ceiling → cmp >= 0.
-                let pred = if is_floor {
-                    inkwell::IntPredicate::SLE
-                } else {
-                    inkwell::IntPredicate::SGE
-                };
-                let in_range = self
-                    .builder
-                    .build_int_compare(pred, c, i32z, "smol.inrange")
-                    .unwrap();
-                // floor: take on every in-range i (keeps the last/largest).
-                // ceiling: take only the FIRST in-range i (found still false).
-                let take = if is_floor {
-                    in_range
-                } else {
-                    let not_found = self.builder.build_not(cur_found, "smol.notfound").unwrap();
-                    self.builder
-                        .build_and(in_range, not_found, "smol.take")
-                        .unwrap()
-                };
-                let new_found = self
-                    .builder
-                    .build_or(cur_found, take, "smol.f.new")
-                    .unwrap();
-                self.builder.build_store(found_slot, new_found).unwrap();
-                let cur_idx = self
-                    .builder
-                    .build_load(i64_t, idx_slot, "smol.idx.cur")
-                    .unwrap()
-                    .into_int_value();
-                let new_idx = self
-                    .builder
-                    .build_select(take, i_cur, cur_idx, "smol.idx.new")
-                    .unwrap()
-                    .into_int_value();
-                self.builder.build_store(idx_slot, new_idx).unwrap();
-                let i_next = self
-                    .builder
-                    .build_int_add(i_cur, one, "smol.i.next")
-                    .unwrap();
-                self.builder.build_store(i_slot, i_next).unwrap();
-                self.builder.build_unconditional_branch(loop_bb).unwrap();
-                self.builder.position_at_end(cont_bb);
-            }
+        // B-2026-10-06-65 — the runtime keeps the map's keys in an ordered
+        // index, so the pick is one O(log n) call. This used to gather and sort
+        // every key into a fresh buffer, then scan it, on every call.
+        let mode = match method {
+            "min" => 0,
+            "max" => 1,
+            "floor" => 2,
+            "ceiling" => 3,
             _ => {
                 return Err(format!(
                     "compile_sorted_map_option_lookup: bad method '{method}'"
                 ))
             }
-        }
+        };
+        let pivot_ptr = match arg_pivot.as_ref() {
+            Some((slot, _, _)) => *slot,
+            None => self.context.ptr_type(AddressSpace::default()).const_null(),
+        };
+        let cmp_ptr = cmp_fn.as_global_value().as_pointer_value();
+        let kptr = self
+            .builder
+            .build_call(
+                self.runtime_fns.karac_map_ord_pick_fn,
+                &[
+                    map_handle.into(),
+                    pivot_ptr.into(),
+                    cmp_ptr.into(),
+                    self.context.i32_type().const_int(mode, false).into(),
+                ],
+                "smol.pick",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
 
         // Free the fresh-owned pivot arg (floor/ceiling) — a lookup arg, never
         // stored (no-op for a borrowed/literal/scalar key).
@@ -1287,9 +1200,8 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let found = self
             .builder
-            .build_load(bool_t, found_slot, "smol.found.v")
-            .unwrap()
-            .into_int_value();
+            .build_is_not_null(kptr, "smol.found.v")
+            .unwrap();
         let some_bb = self.context.append_basic_block(fn_val, "smol.some");
         let none_bb = self.context.append_basic_block(fn_val, "smol.none");
         let merge_bb = self.context.append_basic_block(fn_val, "smol.merge");
@@ -1297,18 +1209,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(found, some_bb, none_bb)
             .unwrap();
 
-        // Some: clone kbuf[idx] + its value into a fresh (K,V) tuple.
+        // Some: clone the picked key + its value into a fresh (K,V) tuple. The
+        // picked pointer is into the map's index and dies at the next mutation;
+        // nothing between here and the clone mutates the map.
         self.builder.position_at_end(some_bb);
-        let idx = self
-            .builder
-            .build_load(i64_t, idx_slot, "smol.idx.f")
-            .unwrap()
-            .into_int_value();
-        let kptr = unsafe {
-            self.builder
-                .build_gep(key_ty, kbuf, &[idx], "smol.f.kptr")
-                .unwrap()
-        };
         let k_slot = self.create_entry_alloca(fn_val, "smol.k", key_ty);
         self.kvg_emit_half(Some(key_clone), key_ty, kptr, k_slot, "smol.k.clone");
         let raw_val = self.create_entry_alloca(fn_val, "smol.rawv", val_ty);
@@ -1344,10 +1248,6 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         let opt = self.build_option_some_via_phis(&words, some_end_bb, none_bb, "smol.opt");
-        // `free(NULL)` is a no-op (empty map → null buffer).
-        self.builder
-            .build_call(self.runtime_fns.free_fn, &[kbuf.into()], "")
-            .unwrap();
         Ok(opt)
     }
 
