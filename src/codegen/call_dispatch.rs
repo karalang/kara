@@ -15758,7 +15758,12 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
-        let mem = self.enum_boxed_payload_interior_drop(te, true)?;
+        // B-2026-10-05-27 — `Option[shared T]` has no memory-only interior
+        // drop; its element drop releases the handle when `Some`.
+        let mem = match self.enum_boxed_payload_interior_drop(te, true) {
+            Some(f) => f,
+            None => self.option_shared_payload_element_drop(te)?,
+        };
         if !self.vec_elem_te_reaches_user_drop_nested(te) {
             return Some(mem);
         }
@@ -16147,6 +16152,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         .filter(|te| {
                             self.vec_elem_te_reaches_user_drop_nested(te)
                                 || self.shared_genum_interior_moves_tracked(te)
+                                // B-2026-10-05-27 — an `Option[shared]`
+                                // handle: an arm binding retains its own
+                                // reference (`retain_shgen_option_shared_binding`).
+                                || self.option_inner_shared_type_for_type_expr(te).is_some()
                         })
                         .and_then(|te| self.shared_genum_interior_drop(&te));
                     if interior.is_some() {

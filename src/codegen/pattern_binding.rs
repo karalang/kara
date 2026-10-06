@@ -219,6 +219,63 @@ impl<'ctx> super::Codegen<'ctx> {
         Some((head, inner))
     }
 
+    /// B-2026-10-05-27 — an `Option[shared T]` payload bound whole out of a
+    /// generic `shared enum`'s erased slot (`G.Y(o)` over `G[Option[M]]`) owns
+    /// its own reference: retain the handle at the bind and release it at the
+    /// binding's scope exit, as an `Option[shared]` local does. The release fn
+    /// now releases the handle the box holds (the constructor records the
+    /// interior for exactly this payload type), so a bare view handed on
+    /// (`G.Y(o) => o` returned) would leave the box and the new owner both
+    /// releasing it. The shared-handle sibling (`G[M]`) already retains at its
+    /// bind. Field-gated to the erased slot, which is the only one the
+    /// constructor gives that interior to.
+    pub(super) fn retain_shgen_option_shared_binding(
+        &mut self,
+        sub_pat: &Pattern,
+        enum_name: &str,
+        variant: &str,
+        i: usize,
+    ) {
+        let PatternKind::Binding(name) = &sub_pat.kind else {
+            return;
+        };
+        if !self.shared_genum_field_unclassified(enum_name, variant, i) {
+            return;
+        }
+        let key = (sub_pat.span.offset, sub_pat.span.length);
+        let Some(te) = self
+            .pattern_state
+            .pattern_binding_inner_types
+            .get(&key)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(heap_type) = self
+            .option_inner_shared_type_for_type_expr(&te)
+            .map(|(_, info)| info.heap_type)
+        else {
+            return;
+        };
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get("Option") else {
+            return;
+        };
+        let option_ty = layout.llvm_type;
+        if slot.ty != option_ty.into() {
+            return;
+        }
+        self.null_init_slot_in_entry_block(slot.ptr);
+        self.track_rc_option_var(name, slot.ptr, option_ty, heap_type);
+        let ident = Expr {
+            kind: ExprKind::Identifier(name.clone()),
+            span: sub_pat.span,
+        };
+        self.share_option_shared_ref_for_arg(&ident);
+    }
+
     pub(super) fn bind_pattern_values(
         &mut self,
         pattern: &Pattern,
@@ -2577,6 +2634,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                     let bound =
                                         self.reconstruct_payload_value(sub_pat, &field_words)?;
                                     self.bind_pattern_values(sub_pat, bound)?;
+                                    self.retain_shgen_option_shared_binding(
+                                        sub_pat,
+                                        enum_name,
+                                        variant_name,
+                                        i,
+                                    );
                                     self.record_deboxed_payload_box(
                                         sub_pat,
                                         &field_words,
