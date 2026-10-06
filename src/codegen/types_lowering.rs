@@ -319,7 +319,9 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Best-effort concrete `TypeExpr` for an expression, span-keyed on the
     /// expression ITSELF (so it is only sound where that span is uncontested —
-    /// see [`Self::struct_literal_inst_from_fields`], its only caller).
+    /// see [`Self::struct_literal_inst_from_fields`] and
+    /// [`Self::filled_value_te`], which checks the answer against the compiled
+    /// value's LLVM type before trusting it).
     ///
     /// Tries the instantiation record first (it carries generic args), then the
     /// concrete-named table, then the String set, and only then falls back to
@@ -328,7 +330,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// heap value built inline — is exactly the shape this exists for, so the
     /// fallback-first spelling resolves nothing. `None` rather than a nameless
     /// `TypeExpr` when every source is silent.
-    fn concrete_type_expr_of_expr(&self, e: &Expr) -> Option<TypeExpr> {
+    pub(super) fn concrete_type_expr_of_expr(&self, e: &Expr) -> Option<TypeExpr> {
         let key = (e.span.offset, e.span.length);
         if let Some(te) = self.enum_inst_type_from_span(e) {
             return Some(te);

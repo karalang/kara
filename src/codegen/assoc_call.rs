@@ -3954,6 +3954,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let elem_te = self.var_types.pending_let_elem_type_expr.take();
             let n = self.compile_expr(&args[0].value)?.into_int_value();
             let val = self.compile_expr(&args[1].value)?;
+            let elem_te = elem_te.or_else(|| self.filled_value_te(&args[1].value, val));
             // See the note at the `Vec[v; n]` twin in `exprs.rs` — the fill value
             // is moved into the buffer, so its own scope-exit cleanup must be
             // suppressed or it double-frees (B-2026-08-21-22).

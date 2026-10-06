@@ -1419,11 +1419,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // construction and `expr_yields_fresh_owned_temp` recognizes
                 // only `Call`/`MethodCall`, so the wrapper never reached this
                 // gate and the loop lost the whole buffer per execution.
+                // B-2026-10-05-109 — a repeat literal (`[v; n]`, `Vec[v; n]`) is
+                // a collection literal too, and was left out: the loop iterated
+                // it and never freed it.
                 let fresh = self.expr_yields_fresh_owned_temp(iterable)
                     || self.expr_is_fresh_owned_branch_tail(iterable)
                     || matches!(
                         iterable.kind,
-                        ExprKind::PrefixCollectionLiteral { .. } | ExprKind::ArrayLiteral(_)
+                        ExprKind::PrefixCollectionLiteral { .. }
+                            | ExprKind::ArrayLiteral(_)
+                            | ExprKind::RepeatLiteral { .. }
                     );
                 (te, fresh)
             } else {

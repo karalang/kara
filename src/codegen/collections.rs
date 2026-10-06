@@ -1886,6 +1886,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// trivial elements that dominate and degrades to the prior behavior for the
     /// rare un-annotated nested-collection fill. `free(malloc(0))` is
     /// well-defined, so `n == 0` is not special-cased.
+    /// B-2026-10-05-109 — the element type of a `Vec.filled(n, v)` / `Vec[v; n]`
+    /// with no destination to thread one from (a `for` iterable, an argument),
+    /// read off the fill value itself. Without it `build_vec_filled` saw no
+    /// element type, took the bit-copy path, and stored ONE heap buffer in
+    /// every slot: `for s in Vec.filled(2, base.clone()) { .. }` freed it once
+    /// per slot. Adopted only when it lowers to exactly the compiled value's
+    /// type, so it decides whether to deep-clone and never changes the
+    /// buffer's layout.
+    pub(super) fn filled_value_te(
+        &self,
+        value: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Option<TypeExpr> {
+        let te = self.concrete_type_expr_of_expr(value)?;
+        (self.llvm_type_for_type_expr(&te) == val.get_type()).then_some(te)
+    }
+
     pub(super) fn build_vec_filled(
         &mut self,
         n: IntValue<'ctx>,
@@ -2429,6 +2446,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // nested repeat/`filled` value does not inherit a stale element type.
             let elem_te = self.var_types.pending_let_elem_type_expr.take();
             let val = self.compile_expr(value)?;
+            let elem_te = elem_te.or_else(|| self.filled_value_te(value, val));
             // Moved into every slot — suppress its independent cleanup before the
             // count's compile overwrites `last_fstr_acc` (B-2026-08-21-22).
             self.suppress_fstr_acc_if_moved_out(value);
