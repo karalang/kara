@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 122 |
 | crash | 112 |
 | soundness | 98 |
-| use-after-free | 84 |
+| use-after-free | 85 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2775 |
-| interp | 869 |
+| codegen | 2776 |
+| interp | 870 |
 | typecheck | 335 |
 | other | 113 |
 | ownership | 80 |
@@ -336,7 +336,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-83 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` ENUM METHOD CALLED ON A STRUCT FIELD RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY SURFACE -- with `struct W { e: E, k: i64 }` and `fn m(self) -> i64 { match self { E.A(s) => s.id, E.B(n) => n } }`, `let w1 = W { e: E.A(mks(1)), k: 0 }; println(f"m {w1.e.m()}")` prints `dS1 m 1 dS1` | — |
 | B-2026-09-29-84 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` ENUM METHOD WHOSE `match` / `if let` DOES NOT BIND THE LIVE VARIANT'S PAYLOAD LOSES THAT PAYLOAD'S `Drop` BODY ON EVERY SURFACE -- with `enum E { A(S), B(i64), C(S) }`, `fn k(self) -> i64 { match self { E.A(s) => s.id, _ => 0 } }` at `let b = E.C(mks(3)); b.k()` prints no `dS3`, and `fn g(self) -> i64 { if let E.A(s) = self { return s.id }; return 0 }` at `E.C(mks(2))` none either | — |
 | B-2026-09-29-91 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` ENUM METHOD THAT MATCHES ON `self` AND HANDS `self` TO A BY-VALUE FREE FUNCTION ON ANOTHER PATH LOSES THE PAYLOAD'S `Drop` BODY ON THAT PATH, ON EVERY SURFACE -- with `fn eat(e: E) -> i64 { match e { E.A(s) => s.id, .. } }`, `fn h1(self, c: bool) -> i64 { if c { return eat(self) }; match self { .. } }` at `let z = E.A(mks(23)); z.h1(true)` prints no `dS23` | — |
-| B-2026-09-29-92 | 2026-09-29 | codegen | medium | [CORRECTED 2026-10-06: the three ARGUMENT spellings, `give(Hb { .. })`, `give(mkh())` and `outer(Hb { .. })`, are FIXED by B-2026-10-05-118 (d12cd317d); the two temp RECEIVER spellings and `give(w.h)` remain] A FRESH-TEMP STRUCT WHOSE ENUM FIELD BOXES AN `Array` PAYLOAD STILL DOUBLE-FREES WHEN HANDED ON BY VALUE, AS AN ARGUMENT OR AS AN OWNED-`self` RECEIVER -- `give(Hb { g: Eb.A(mk()) })`, `give(mkh())` and `Hb { g: Eb.A(mk()) }.give()` over `struct Hb { g: Eb }` and `enum Eb { A(Array[String, 2]), B }` abort with `free(): double free detected in tcache 2` at `-O0` and `-O2` (7 valgrind errors at `-O0`) before and after B-2026-09-20-4, whose NAMED spellings are clean | — |
 | B-2026-09-29-93 | 2026-09-29 | codegen | low | A CONCRETE STRUCT HOLDING A GENERIC ENUM FIELD WHOSE PAYLOAD IS HEAP-BOXED LEAKS THE PAYLOAD'S OWN HEAP AT SCOPE EXIT, with no call anywhere -- `let h = Hb { g: G.Y(f"aaaaaaaa-1") };` over `struct Hb { g: G[String] }` loses the 10-byte String, `G[Array[String, 2]]` loses both 10-byte elements (20 B in 2 blocks) and `G[Vec[String]]` leaks as well, at `-O0`, while `let g = G.Y([..])` alone is clean | — |
 | B-2026-09-29-96 | 2026-09-29 | interp+codegen | medium | REMAINDER OF B-2026-09-29-75: A BY-VALUE ENUM PARAM HANDED TO AN OWNED-`self` METHOD THAT TAKES ITS PAYLOAD STILL RUNS THE PAYLOAD'S `Drop` BODY TWICE, ON EVERY SURFACE, WHEN THE CALL IS ON SOME PATHS ONLY, THE CALLEE IS GENERIC, THE ENUM HAS ITS OWN `Drop`, OR THE METHOD RETURNS THE ENUM -- `fn p8(t: E, c: bool) -> i64 { if c { return t.m2() }; .. }` at `p8(E.A(mks(7)), true)` prints `dS7 dS7` | — |
 | B-2026-09-29-102 | 2026-09-29 | interp+codegen | medium | A FIELD OF A BY-VALUE STRUCT PARAM MOVED DIRECTLY INTO A STRUCT LITERAL OR `Some` THAT IS BOUND TO A LOCAL RUNS ITS `Drop` BODY TWICE ON EVERY BACKEND, INTERPRETER INCLUDED -- `fn f(q: Wq) -> i64 { let k = Kq { s: q.u }; return k.s.id }` over `struct P { id: i64 }` with a `Drop` prints `dP9 dP9 r9` for `dP9 r9`, with no `shared` value anywhere | — |
@@ -539,6 +538,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-2 | 2026-10-06 | interp+codegen | medium | DESTRUCTURING A BY-VALUE `(Option[H], i64)` PARAM WITH `H` `shared` RUNS NO `Drop` BODY UNDER `--interp`, WHILE COMPILED RUNS IT AFTER THE CALLER HAS USED THE RESULT -- `fn fpo(p: (Option[H], i64)) -> i64 { let (a, b) = p; b }` then `println(f"f{fpo(mk(1))}")` prints `f1 dH1 end` compiled and `f1 end` interpreted | — |
 | B-2026-10-06-3 | 2026-10-06 | interp+codegen | low | AN `Option[shared]` LOCAL MOVED BY `let mut c = a` AND THEN REASSIGNED RUNS THE DISPLACED BODY ONLY AT SCOPE EXIT, IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `let a = Some(mkh(1)); let mut c = a; c = Some(mkh(2)); println("x1")` prints `x1 dH2 dH1 end` compiled and `x1 dH1 dH2 end` interpreted | — |
 | B-2026-10-06-5 | 2026-10-06 | interp | low | `--interp` LOSES THE `Drop` BODY OF A `shared` VALUE CAPTURED BY A CLOSURE, BARE, IN AN `Option` OR IN A TUPLE -- `fn cap(i: i64) { let p = mk(i); let f = || p.1; println(f"c{f()}") }` then `cap(1)` prints `c1 end` interpreted against compiled `c1 dH1 end` (B-2026-10-04-68's closure half) | — |
+| B-2026-10-06-6 | 2026-10-06 | codegen+interp | high | AN OWNED-`self` METHOD THAT RETURNS `self` ON A STRUCT WITH A DIRECT `shared` FIELD READS AND WRITES THE FREED HANDLE ON EVERY COMPILED SPELLING, AND UNDER `--interp` A DISCARDED TEMP RECEIVER NEVER RUNS ITS `Drop` BODY -- `let b = X { h: H { id: 2 }, n: 2 }.me();` over `struct X { h: H, n: i64 }`, `impl X { fn me(self) -> X { self } }` and a `shared struct H` with a printing `Drop` prints the right `_2 end dH2` at -O0 with 1 invalid read and 1 invalid write of size 8 under valgrind, as do the named `let x = X { .. }; let b = x.me();` and the call-result `mkx(2).me()`; the discarded `X { .. }.me();` prints `dH2 _2` compiled and `_2 end` (no `dH2`) under `--interp` | — |
 
 ### Relocated
 
@@ -3533,6 +3533,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-79 | codegen | high | A NESTED STRUCT FIELD RETURNED OUT OF A BY-VALUE PARAM THAT HOLDS A `shared` VALUE READS FREED MEMORY ON EVERY COMPILED SURFACE (TITLE CORRECTED AT C… | 8b58e6865 |
 | B-2026-09-29-80 | codegen | medium | A GENERIC BY-VALUE PARAM WITH A FIELD MOVED OUT BEFORE A `..` DESTRUCTURE RUNS NO `Drop` BODY AND LEAKS 16 B ON EVERY COMPILED SURFACE -- `fn f[U](q:… | 34088fa5d |
 | B-2026-09-29-78 | codegen | high | `i128` / `u128` ARITHMETIC BESIDE A SUFFIXLESS LITERAL IS COMPUTED AT 64 BITS WHEN COMPILED -- `b + 1` over `b: i128 = 100000000000000000000i128` pri… | be94bca62 |
+| B-2026-09-29-92 | codegen | medium | [CORRECTED 2026-10-06: the three ARGUMENT spellings, `give(Hb { . | 945894310 |
 | B-2026-09-29-94 | typecheck | low | A NEGATED SUFFIXLESS LITERAL IS NOT WIDTH-POLYMORPHIC THE WAY A POSITIVE ONE IS -- `a + -1` over `a: i32` is rejected with "cannot mix integer types… | fd5d4cfcb |
 | B-2026-09-29-100 | codegen | high | REMAINDER OF B-2026-09-29-79: A LOCAL BOUND STRAIGHT FROM A NESTED STRUCT FIELD OF A BY-VALUE PARAM THAT HOLDS A `shared` VALUE STILL ALIASES THE CAL… | dbf3f7187 |
 | B-2026-09-29-101 | codegen | high | REMAINDER OF B-2026-09-29-79: A NESTED STRUCT FIELD OF A BY-VALUE PARAM THAT HOLDS A `shared` VALUE, PASSED TO A BY-VALUE CALLEE THAT HANDS IT BACK,… | c47dc9a28 |
