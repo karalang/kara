@@ -3017,6 +3017,43 @@ impl<'ctx> super::Codegen<'ctx> {
         self.array_alias_bodies_leave = saved;
     }
 
+    /// B-2026-10-06-77 — when every value-producing branch of `e` (an `if`
+    /// with an `else`, a `match`, or a block) ends in a bare identifier the
+    /// typechecker typed as a borrowed Vec/String (`borrow_vec_typed_exprs`),
+    /// the first such identifier: the whole expression is then a re-borrow
+    /// of one of those sources, exactly like `let l = a`.
+    pub(super) fn borrowed_payload_branch_source(&self, e: &Expr) -> Option<String> {
+        match &e.kind {
+            ExprKind::Identifier(name) => self
+                .span_tables
+                .borrow_vec_typed_exprs
+                .contains(&(e.span.offset, e.span.length))
+                .then(|| name.clone()),
+            ExprKind::Block(b) | ExprKind::Seq(b) => {
+                self.borrowed_payload_branch_source(b.final_expr.as_deref()?)
+            }
+            ExprKind::If {
+                then_block,
+                else_branch: Some(else_branch),
+                ..
+            } => {
+                let first =
+                    self.borrowed_payload_branch_source(then_block.final_expr.as_deref()?)?;
+                self.borrowed_payload_branch_source(else_branch)?;
+                Some(first)
+            }
+            ExprKind::Match { arms, .. } if !arms.is_empty() => {
+                let mut first = None;
+                for arm in arms {
+                    let src = self.borrowed_payload_branch_source(&arm.body)?;
+                    first.get_or_insert(src);
+                }
+                first
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn arm_tail_rebind_root(body: &Expr, tail: &str) -> String {
         let (ExprKind::Block(b) | ExprKind::Seq(b)) = &body.kind else {
             return tail.to_string();

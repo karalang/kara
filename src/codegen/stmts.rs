@@ -7167,6 +7167,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         .span_tables
                         .borrow_vec_typed_exprs
                         .contains(&(value.span.offset, value.span.length));
+                // B-2026-10-06-77 — `let longer = if c { a } else { b }` (or a
+                // `match`) whose every branch tail is a borrow-typed
+                // identifier: the binding is the same re-borrow as `let l = a`,
+                // so it takes the same no-free, dispatch-copying path.
+                let borrowed_branch_source = if rhs_is_borrowed_payload_vec {
+                    None
+                } else {
+                    self.borrowed_payload_branch_source(value)
+                };
+                let rhs_is_borrowed_payload_vec =
+                    rhs_is_borrowed_payload_vec || borrowed_branch_source.is_some();
                 // B-2026-09-24-8 — `let x = p.source` over a field DECLARED
                 // `ref String`. The field read already derefs to a bit-copy of
                 // the borrowed header; the typechecker now registers `x` as a
@@ -9808,7 +9819,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `track_vec_var` fires (the block below is skipped for
                     // `borrow_elided`), so the alias never double-frees.
                     if rhs_is_borrowed_payload_vec {
-                        if let ExprKind::Identifier(src) = &value.kind {
+                        let src = match &value.kind {
+                            ExprKind::Identifier(src) => Some(src.clone()),
+                            _ => borrowed_branch_source.clone(),
+                        };
+                        if let Some(src) = src {
                             if let Some(&elem_ty) = self.var_types.vec_elem_types.get(src.as_str())
                             {
                                 self.var_types
