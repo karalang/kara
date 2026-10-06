@@ -1,0 +1,30 @@
+
+#[derive(Clone)]
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+layout entities: Vec[Entity] {
+    group pos { x, y }
+    group vel { vx, vy }
+}
+impl Entity {
+    fn sum(ref self) -> i64 { return self.x + self.y + self.vx + self.vy; }
+    fn bump(mut ref self) { self.x = self.x + 1000; self.vy = self.vy + 7; }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 6 {
+        entities.push(Entity { x: i, y: i * 10, vx: i * 100, vy: i * 1000 });
+        i = i + 1;
+    }
+    let c = entities[5].clone();
+    println(f"clone5 {c.x} {c.y} {c.vx} {c.vy}");
+    let d = entities[3].clone();
+    println(f"clone3 {d.x} {d.y} {d.vx} {d.vy}");
+    println(f"read5 {entities[5].sum()}");
+    println(f"read0 {entities[0].sum()}");
+    entities[4].bump();
+    println(f"mut4 {entities[4].x} {entities[4].y} {entities[4].vx} {entities[4].vy}");
+    println(f"neighbour3 {entities[3].x} {entities[3].vy}");
+    println(f"neighbour5 {entities[5].x} {entities[5].vy}");
+    println(f"field5 {entities[5].vx}");
+}

@@ -1,0 +1,17 @@
+struct M { b: i64, rows: Array[u16, 3], neg: Array[i8, 2], fl: Array[f32, 2] }
+struct W { x: i64, a: Array[u8, 2] }
+impl W {
+    fn take(ref self, a: Array[u8, 3]) -> i64 { (a[0] as i64) + self.x }
+    fn make(a: Array[u8, 2]) -> W { W { x: 1, a } }
+}
+fn z() -> Array[u8, 4] { [255; 4] }
+fn g(a: Array[i16, 2], k: i64) -> i64 { (a[0] as i64) + (a[1] as i64) + k }
+fn f(a: Array[u8, 2]) -> u8 { a[1] }
+fn mk(b: i64) -> M { M { b, rows: [7; 3], neg: [0; 2], fl: [0.0; 2] } }
+fn main() {
+    let m = M { b: 1, rows: [65535; 3], neg: [-1; 2], fl: [0.5; 2] };
+    let w = W { x: 10, a: [0; 2] };
+    let t: (i64, Array[u16, 2]) = (3, [7; 2]);
+    println(f"{m.rows[0]} {m.neg[1]} {m.fl[0]} {z()[3]} {g([-300; 2], 1)} {f([9; 2])}");
+    println(f"{w.take([200; 3])} {w.take([201, 0, 0])} {W.make([250; 2]).a[1]} {W.make([1, 2]).a[1]} {t.1[1]} {mk(4).rows[2]}");
+}

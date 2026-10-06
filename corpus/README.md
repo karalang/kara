@@ -48,9 +48,12 @@ Tags come from the source and from `karac check --output=json`: `drop`,
 and `for_element_drop_copy` lints), `deferred:<feature>` (GPU, tensors,
 dataframes, comptime, `dyn`, layout blocks, `catch_panic`, `Regex`,
 `normalize`), `bench` and `differential` for katas, `format-template` for
-a raw string the test fills in with `format!` (recorded as `skip`), and
-`nondeterministic` for a program whose output changes between two legacy runs
-(a bound port, task scheduling, cancellation timing; also `skip`).
+a raw string the test fills in at run time, with `format!` or by `push_str` onto
+a `String::from` head (recorded as `skip`), and `nondeterministic` for a
+program whose output changes between two legacy runs (a bound port, task
+scheduling, cancellation timing; also `skip`). A raw string bound by `let` and
+filled in with `.replace("KEY", "..")` is not a template: it becomes one
+program per replacement, named `<test>__<variable>`.
 Derived from the record without a run (`record.py --retag`): `needs-driver`
 for a program whose legacy run timed out (almost always a server the Rust
 test drives with a client), `literal-unmatched` for a fixture whose holding

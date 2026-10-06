@@ -1,6 +1,9 @@
 
 struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
-LAYOUT
+layout entities: Vec[Entity] {
+    group pos { x, y }
+    group vel { vx, vy }
+}
 fn main() {
     let mut entities: Vec[Entity] = Vec.new();
     let mut i: i64 = 0;

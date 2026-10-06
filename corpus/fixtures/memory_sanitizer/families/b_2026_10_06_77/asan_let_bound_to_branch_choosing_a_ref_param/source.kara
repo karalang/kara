@@ -1,0 +1,20 @@
+fn pick(a: ref String, b: ref String) -> i64 {
+    let longer = if a.len() > b.len() { a } else { b };
+    let m = match a.len() { 0 => b, _ => a };
+    longer.len() * 100 + m.len()
+}
+fn joined(a: ref Vec[String], b: ref Vec[String]) -> String {
+    let v = match b.len() > a.len() { true => b, false => a };
+    let mut out = "";
+    for s in v { out = out + s; }
+    out + f"{v.len()}"
+}
+fn main() {
+    let x = f"hel{1}lo";
+    let y = f"h{2}";
+    println(f"{pick(x, y)} {pick(y, x)}");
+    let p = vec![f"p{0}", f"q{1}"];
+    let r = vec![f"r{2}", f"s{3}", f"t{4}"];
+    println(joined(p, r));
+    println(f"{x} {y} {p.len()} {r[2]}");
+}

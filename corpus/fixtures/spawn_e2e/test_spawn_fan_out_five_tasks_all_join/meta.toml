@@ -1,8 +1,8 @@
 source = "tests/spawn_e2e.rs::test_spawn_fan_out_five_tasks_all_join"
 dedup_of = []
-expect = "stdout"
+expect = "skip"
 exit = 0
-tags = ["closure", "literal-unmatched", "par"]
+tags = ["closure", "literal-unmatched", "nondeterministic", "par"]
 class = "unknown"
 expected_from = "legacy-run"
 legacy_backend = "legacy-build"
@@ -10,4 +10,4 @@ legacy_exit = 0
 rules = []
 backends = []
 env = {}
-note = "first literal of the holding test: 'skip: libkarac_runtime.a not built (run `cargo build -p karac-runtime --release`)'"
+note = "first literal of the holding test: 'skip: libkarac_runtime.a not built (run `cargo build -p karac-runtime --release`)' output differs between two legacy runs (a bound port, scheduling or timing)"

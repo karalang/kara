@@ -1,0 +1,8 @@
+clone5 5 50 500 5000
+clone3 3 30 300 3000
+read5 5555
+read0 0
+mut4 1004 40 400 4007
+neighbour3 3 3000
+neighbour5 5 5000
+field5 500

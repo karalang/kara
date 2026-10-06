@@ -126,15 +126,31 @@ def fixture_programs(tests: Path):
                 cands.append("\n".join(items))
             for _, off, src in progs:
                 before = text[max(0, off - 40) : off]
-                yield {
+                base = {
                     "area": fixture_area(path, tests),
                     "holder": name,
                     "file": str(path.relative_to(tests.parent)),
                     "line": text.count("\n", 0, off) + 1,
-                    "src": src,
-                    "template": bool(re.search(r"format!\(\s*$", before)),
                     "candidates": [c for c in dict.fromkeys(cands) if c.strip()],
                 }
+                # A literal the test finishes at run time is not a program:
+                # `format!(r#"..."#, ..)` fills holes, and `String::from(r#"..."#)`
+                # is the head of a string the test goes on to push_str onto.
+                template = bool(re.search(r"(format!|String::from)\(\s*$", before))
+                # `let body = r#"..KEY.."#; let x = body.replace("KEY", "..")`:
+                # one program per replacement, each named after its variable.
+                var = re.search(r"let\s+(\w+)\s*(?::\s*&str\s*)?=\s*$", before)
+                subs = []
+                if var and not template:
+                    pat = re.compile(r"let\s+(\w+)\s*=\s*" + re.escape(var.group(1)) +
+                                     r"\.replace\(\s*\"([^\"]+)\"\s*,\s*\"((?:[^\"\\]|\\.)*)\"\s*,?\s*\)")
+                    subs = [m for m in pat.finditer(text, off, end) if m.group(2) in src]
+                if subs:
+                    for m in subs:
+                        yield dict(base, holder=f"{name}__{m.group(1)}",
+                                   src=src.replace(m.group(2), unescape(m.group(3))), template=False)
+                else:
+                    yield dict(base, src=src, template=template)
 
 
 def main() -> int:

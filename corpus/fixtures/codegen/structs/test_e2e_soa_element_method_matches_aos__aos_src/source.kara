@@ -1,7 +1,7 @@
 
 #[derive(Clone)]
 struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
-LAYOUT
+
 impl Entity {
     fn sum(ref self) -> i64 { return self.x + self.y + self.vx + self.vy; }
     fn bump(mut ref self) { self.x = self.x + 1000; self.vy = self.vy + 7; }

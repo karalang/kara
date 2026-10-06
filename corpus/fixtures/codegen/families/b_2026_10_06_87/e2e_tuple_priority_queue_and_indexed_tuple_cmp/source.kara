@@ -1,0 +1,14 @@
+fn main() {
+    let mut pq: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    pq.push((3, 1));
+    pq.push((1, 2));
+    pq.push((1, 0));
+    while let Some((a, b)) = pq.pop() { println(f"{a} {b}"); }
+    let mut q3: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    let mut i = 0;
+    while i < 5 { q3.push((10 - i, i, i * i)); i += 1; }
+    let mut out = 0;
+    while let Some((_a, b, _c)) = q3.pop() { out = out * 10 + b; }
+    let v = vec![(1, 2), (0, 5)];
+    println(f"{out} {v[0].cmp(v[1]) == Ordering.Greater} {v[1].cmp(v[0]) == Ordering.Less} {v[0].cmp(v[0]) == Ordering.Equal}");
+}
