@@ -421,6 +421,15 @@ impl<'a> super::Resolver<'a> {
                 variant_kind: super::VariantSymbolKind::Unit,
                 ..
             } => Some((sym.id, rest)),
+            // A prelude variant (`None`, `Less`, ...) is a scope-0 symbol
+            // with a synthetic span, unless user code shadows the name.
+            SymbolKind::Function { .. }
+                if sym.span.line == 0
+                    && sym.span.column == 0
+                    && crate::prelude::PRELUDE_VARIANTS.contains(&first) =>
+            {
+                Some((sym.id, rest))
+            }
             _ => None,
         }
     }

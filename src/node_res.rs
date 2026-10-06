@@ -99,7 +99,10 @@ fn res_of(
             }
         }
         _ if sym.name == "Self" && r.rest.is_empty() => return Res::SelfTy,
-        _ => match defs.lookup(module, &sym.name) {
+        _ => match defs
+            .lookup(module, &sym.name)
+            .or_else(|| defs.prelude_variant(&sym.name))
+        {
             Some(d) => Cursor::Def(d),
             None => return builtin(&sym.name, &r.rest),
         },
@@ -251,6 +254,8 @@ mod tests {
                  \x20   let p = P.new(helper());\n\
                  \x20   let q = P { x: p.x };\n\
                  \x20   println(helper2(Shape.Sq(q.x)));\n\
+                 \x20   let o = Some(1);\n\
+                 \x20   match o { Some(n) => println(n), None => println(0) }\n\
                  }\n",
             ),
         ]);
@@ -271,6 +276,8 @@ mod tests {
         want("p", "local p (pattern)");
         want("s", "local s (pattern)");
         want("println", "Builtin(\"println\")");
+        want("Some", "std::option::Option::Some");
+        want("None", "std::option::Option::None");
         assert!(!got.iter().any(|(_, r)| r == "Err"), "{got:#?}");
     }
 

@@ -122,6 +122,47 @@ fn item_def(item: &Item) -> Vec<(&str, DefKind)> {
     }
 }
 
+/// Types the compiler provides with no source declaration, with their
+/// generic parameters. Each gets a def at `std::builtin::<Name>` unless the
+/// baked stdlib declares the name, so a Kāra definition replaces it as soon
+/// as it lands.
+const BUILTIN_TYPES: &[(&str, DefKind, &[&str])] = &[
+    ("Range", DefKind::Struct, &["T"]),
+    ("RangeInclusive", DefKind::Struct, &["T"]),
+    ("RangeFrom", DefKind::Struct, &["T"]),
+    ("RangeTo", DefKind::Struct, &["T"]),
+    ("RangeToInclusive", DefKind::Struct, &["T"]),
+    ("RangeFull", DefKind::Struct, &[]),
+    ("Iterator", DefKind::Trait, &["Item"]),
+    ("Unit", DefKind::Struct, &[]),
+    ("StringSlice", DefKind::Struct, &[]),
+    ("CStr", DefKind::Struct, &[]),
+    ("CString", DefKind::Struct, &[]),
+    ("GpuBuffer", DefKind::Struct, &["T"]),
+];
+
+/// The enum each prelude variant name belongs to.
+const PRELUDE_VARIANT_ENUMS: &[(&str, &str)] = &[
+    ("Some", "Option"),
+    ("None", "Option"),
+    ("Ok", "Result"),
+    ("Err", "Result"),
+    ("Less", "Ordering"),
+    ("Equal", "Ordering"),
+    ("Greater", "Ordering"),
+    ("Relaxed", "MemoryOrdering"),
+    ("Acquire", "MemoryOrdering"),
+    ("Release", "MemoryOrdering"),
+    ("AcqRel", "MemoryOrdering"),
+    ("SeqCst", "MemoryOrdering"),
+    ("Occupied", "Entry"),
+    ("Vacant", "Entry"),
+    ("Nfc", "NormalizationForm"),
+    ("Nfd", "NormalizationForm"),
+    ("Nfkc", "NormalizationForm"),
+    ("Nfkd", "NormalizationForm"),
+];
+
 fn path_of(prefix: &[String], tail: &[&str]) -> DefPath {
     let mut segments = prefix.to_vec();
     segments.extend(tail.iter().map(|s| s.to_string()));
@@ -198,6 +239,13 @@ impl ProgramDefs {
         }
     }
 
+    /// The stdlib variant a bare prelude variant name (`Some`, `Ok`,
+    /// `Less`, ...) refers to, when the stdlib declares its enum.
+    pub fn prelude_variant(&self, name: &str) -> Option<DefId> {
+        let (_, parent) = PRELUDE_VARIANT_ENUMS.iter().find(|(v, _)| *v == name)?;
+        self.variant(*self.stdlib_items.get(*parent)?, name)
+    }
+
     /// The variant `name` of the enum `enum_def`.
     pub fn variant(&self, enum_def: DefId, name: &str) -> Option<DefId> {
         self.variants.get(&enum_def)?.get(name).copied()
@@ -209,6 +257,18 @@ impl ProgramDefs {
             let prefix = vec!["std".to_string(), stem.to_string()];
             let items = self.add_items(&prefix, &program.items);
             self.stdlib_items.extend(items);
+        }
+        let builtin = ["std".to_string(), "builtin".to_string()];
+        for &(name, kind, params) in BUILTIN_TYPES {
+            if self.stdlib_items.contains_key(name) {
+                continue;
+            }
+            let id = self.table.intern(path_of(&builtin, &[name]), kind);
+            if !params.is_empty() {
+                self.generics
+                    .insert(id, params.iter().map(|p| p.to_string()).collect());
+            }
+            self.stdlib_items.insert(name.to_string(), id);
         }
         for (_, program) in crate::prelude::STDLIB_PROGRAMS.iter() {
             self.add_impls(&program.items, |defs, name| {
@@ -451,6 +511,17 @@ mod tests {
         let some = defs.variant(option, "Some").unwrap();
         assert_eq!(path(&defs, some), "std::option::Option::Some");
         assert_eq!(path(&defs, defs.lookup(0, "main").unwrap()), "main");
+        assert_eq!(defs.prelude_variant("Some"), Some(some));
+        assert_eq!(
+            path(&defs, defs.prelude_variant("Err").unwrap()),
+            "std::result::Result::Err"
+        );
+        // Compiler-provided types without a declaration get a builtin def.
+        let range = defs.lookup(0, "Range").unwrap();
+        assert_eq!(path(&defs, range), "std::builtin::Range");
+        assert_eq!(defs.generic_params(range), ["T"]);
+        let iter = defs.lookup(0, "Iterator").unwrap();
+        assert_eq!(defs.table.get(iter).kind, DefKind::Trait);
     }
 
     #[test]
