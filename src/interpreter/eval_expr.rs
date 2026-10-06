@@ -635,7 +635,8 @@ impl<'a> super::Interpreter<'a> {
             }
 
             // Prefix collection literal: `Vec[e1, e2, ...]` / `Array[e1, ...]`
-            ExprKind::PrefixCollectionLiteral { items, .. } => {
+            // / `Set[e1, ...]`.
+            ExprKind::PrefixCollectionLiteral { type_name, items } => {
                 let vals: Vec<Value> = items
                     .iter()
                     .map(|e| {
@@ -651,7 +652,15 @@ impl<'a> super::Interpreter<'a> {
                         v
                     })
                     .collect();
-                Value::array_of(vals)
+                // B-2026-10-06-82 — `Set[1, 1, 2]` is a `Set` (design.md
+                // § Collection Literals), so it dedups and answers `Set`
+                // methods. Built as an array it held 3 items, and
+                // `insert(5)` dispatched to `Vec.insert(index)`.
+                if type_name == "Set" {
+                    Value::set_of(vals)
+                } else {
+                    Value::array_of(vals)
+                }
             }
 
             // Repeat literal: `[v; n]` / `Vec[v; n]` / `Array[v; n]`. Value
