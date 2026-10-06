@@ -92,16 +92,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 713 |
+| miscompile | 714 |
 | run-vs-build | 597 |
 | leak | 584 |
 | double-free | 424 |
-| codegen-gap | 230 |
+| codegen-gap | 231 |
 | missing-feature | 217 |
 | other | 168 |
 | diagnostics | 147 |
 | perf | 144 |
-| false-positive | 122 |
+| false-positive | 124 |
 | crash | 112 |
 | soundness | 98 |
 | use-after-free | 86 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2784 |
+| codegen | 2787 |
 | interp | 874 |
-| typecheck | 335 |
+| typecheck | 338 |
 | other | 113 |
 | ownership | 80 |
 | cli | 74 |
@@ -543,6 +543,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-37 | 2026-10-06 | interp+codegen | low | A DEEP TUPLE-ELEMENT STORE (`p.0.0 = R { id: 9 }`) RUNS NO `Drop` BODY FOR THE DISPLACED VALUE ON ANY SURFACE -- `let mut p = (mkr(1), 5); p.0.0 = R { id: 9 }; println(f"j{p.1} {p.0.1}")` prints `j5 1 dR9 end` everywhere, with no `dR1` | — |
 | B-2026-10-06-38 | 2026-10-06 | interp+codegen | low | A `shared` HANDLE ALIASED INTO A LATER BINDING AND THEN REASSIGNED AWAY DROPS IN THE WRONG ORDER AT SCOPE EXIT UNDER `--interp` -- `let mut o = Some(H { id: 1 }); let g = o; o = Some(H { id: 2 }); println(f"o{g.is_some()}")` prints `otrue dH1 dH2` compiled and `otrue dH2 dH1` interpreted | — |
 | B-2026-10-06-39 | 2026-10-06 | interp | low | A STORE THROUGH A `mut ref Option[H]` PARAM (`H` `shared`) RUNS NO `Drop` BODY FOR THE CALLER'S DISPLACED HANDLE UNDER `--interp` -- `fn setm(x: mut ref Option[H]) { x = Some(H { id: 9 }); }` then `let mut o = Some(H { id: 1 }); setm(mut o)` prints `o9 dH9 end` interpreted against compiled `dH1 o9 dH9 end` | — |
+| B-2026-10-06-43 | 2026-10-06 | codegen | medium | A `const` OF `Array` OR `Vec` TYPE USED DIRECTLY AS AN INDEX BASE, A `.len()` RECEIVER OR A `for` ITERABLE FAILS `karac build`, AND A MODULE-LEVEL `let` OF `Array[T, N]` FAILS THE SAME WAY FOR `.len()` AND `for`; `--interp` RUNS EVERY CASE, AND BINDING THE CONSTANT TO A LOCAL FIRST BUILDS | — |
 
 ### Relocated
 
@@ -3811,6 +3812,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-4 | codegen | high | [FIXED 2026-10-06] ASSIGNING A FIELD OR TUPLE ELEMENT TO ITSELF READS FREED MEMORY COMPILED -- `let mut p = mks(1); p.0 = p.0; println(f"{p.0.id}")`… | 096260fee |
 | B-2026-10-06-33 | codegen | medium | A CLOSURE INSIDE A GENERIC FN THAT BUILDS A GENERIC STRUCT OVER THE FN'S `T` FAILS MODULE VERIFICATION WHEN `T` IS NOT `i64` -- `fn wrapit[T](v: T) -… | 4efb2013b |
 | B-2026-10-06-34 | codegen | high | A GENERIC FN THAT HANDS ITS BY-VALUE `T` PARAM TO A CLOSURE WHICH RETURNS IT FREES THE ARGUMENT TWICE WHEN `T` IS HEAP-BACKED -- `fn w[T](v: T) -> i6… | 8dbb4d2da |
+| B-2026-10-06-41 | typecheck | medium | `const NAME: Array[T, N] = [..]` IS REFUSED ON EVERY SURFACE WITH "expected 'Array[i64, 3]', found 'Vec[i64]'", WHILE THE SAME ANNOTATION ON A LOCAL… | da1850607 |
+| B-2026-10-06-42 | typecheck+codegen | high | A MODULE-LEVEL `let V: Vec[i64] = [1, 2, 3]` TYPECHECKS AND IS THEN MISCOMPILED: UNDER `karac build` `V[2]` PANICS 'vec index out of bounds' AND `for… | 242cc2ec8 |
+| B-2026-10-06-40 | typecheck+codegen | medium | `.len()` AND `.is_empty()` ON A FIXED `Array` WHOSE ELEMENTS ARE NOT SCALAR (TUPLES, `String`, `Option`, `Vec`) ARE REFUSED WITH "no method 'len' on… | e4461e129 |
 
 </details>
 
