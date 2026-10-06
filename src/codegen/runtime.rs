@@ -19255,6 +19255,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 .retracted_live_generations
                 .insert((name.to_string(), p));
         }
+        // B-2026-10-05-110 — remember where the live slot's walk sat.
+        if let Some(slot) = self.variables.get(name).map(|v| v.ptr) {
+            let pos = self
+                .drop_rc
+                .scope_cleanup_actions
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(fi, frame)| {
+                    frame.iter().enumerate().find_map(|(i, a)| match a {
+                        CleanupAction::UserDrop {
+                            binding_name,
+                            binding_ptr,
+                            kind: UserDropKind::ContainerElemBodies,
+                            drop_fn,
+                            type_name,
+                        } if binding_name == name && *binding_ptr == slot => {
+                            Some((fi, i, *drop_fn, type_name.clone()))
+                        }
+                        _ => None,
+                    })
+                });
+            if let Some(pos) = pos {
+                self.drop_rc.retracted_walk_pos.insert(slot, pos);
+            }
+        }
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {
                 CleanupAction::UserDrop {
@@ -19270,6 +19296,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => true,
             });
         }
+    }
+
+    /// B-2026-10-05-110 — move the element-bodies walk just registered for
+    /// `name` (the innermost frame's last action) back to where a whole-move
+    /// retraction took the slot's previous walk from, so the re-armed walk
+    /// drains in the binding's own declaration position rather than ahead of
+    /// every binding declared after it. No-op without a recorded position, or
+    /// when that frame is no longer on the stack.
+    pub(super) fn move_rearmed_walk_to_retracted_pos(
+        &mut self,
+        name: &str,
+        slot: PointerValue<'ctx>,
+    ) {
+        let Some((fi, pos, _, _)) = self.drop_rc.retracted_walk_pos.remove(&slot) else {
+            return;
+        };
+        let depth = self.drop_rc.scope_cleanup_actions.len();
+        if depth == 0 || fi >= depth {
+            return;
+        }
+        let Some(last) = self.drop_rc.scope_cleanup_actions[depth - 1].last() else {
+            return;
+        };
+        if !matches!(last, CleanupAction::UserDrop { binding_name, binding_ptr, kind, .. }
+            if binding_name == name && *binding_ptr == slot && *kind == UserDropKind::ContainerElemBodies)
+        {
+            return;
+        }
+        let action = self.drop_rc.scope_cleanup_actions[depth - 1].pop().unwrap();
+        let frame = &mut self.drop_rc.scope_cleanup_actions[fi];
+        let at = pos.min(frame.len());
+        frame.insert(at, action);
     }
 
     /// Whole-value MOVE disarm for container-bodies actions. A binding whose

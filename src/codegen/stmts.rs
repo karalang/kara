@@ -15471,11 +15471,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             // being displaced, unlike truncate's tail), and it
                             // runs FIRST so the bodies read what the frees
                             // below invalidate.
+                            // B-2026-10-05-111 — not over a value a move took
+                            // whole (`let q = v; v = [..]`): `q` runs those.
+                            let moved_whole =
+                                self.drop_rc.retracted_walk_pos.contains_key(&slot.ptr)
+                                    && !self.has_armed_container_elem_bodies(name.as_str());
                             if let Some(bodies) = self
                                 .var_types
                                 .var_elem_type_exprs
                                 .get(name)
                                 .cloned()
+                                .filter(|_| !moved_whole)
                                 .and_then(|te| self.emit_nested_vec_elem_bodies_fn(&te))
                             {
                                 self.emit_displaced_container_bodies_call(
@@ -15902,6 +15908,42 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-10-05-110 — which tuple elements a move masked out
+                    // of the target's walk; the store hands the target a whole
+                    // fresh value, so they are re-armed (before the store for a
+                    // deeper-frame store, which converts to a runtime flag the
+                    // displacement above has already read, and after it below).
+                    let tuple_rearm: Option<(inkwell::types::StructType<'ctx>, Vec<u32>)> =
+                        if !rhs_is_self_alias
+                            && !rhs_mentions_lhs
+                            && !self.expr_is_param_view(value)
+                            && !self.let_call_result_is_param_view(value)
+                            && self
+                                .var_types
+                                .var_type_names
+                                .get(name.as_str())
+                                .is_none_or(|tn| tn == "Tuple")
+                        {
+                            match (
+                                self.variables.get(name).map(|s| s.ty),
+                                self.var_types.tuple_var_elem_tes.get(name.as_str()),
+                            ) {
+                                (Some(BasicTypeEnum::StructType(agg)), Some(tes)) => {
+                                    let n = tes.len() as u32;
+                                    Some((agg, (0..n).collect()))
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+                    if let Some((agg, idxs)) = &tuple_rearm {
+                        if self.has_armed_container_elem_bodies(name.as_str()) {
+                            for &i in idxs {
+                                self.rearm_reassigned_moved_tuple_elem(name, i, *agg, true);
+                            }
+                        }
+                    }
                     // B-2026-07-30-11 (enum-assign displacement) — the ENUM
                     // sibling of the struct leg above: `b = Box2.Empty;` over
                     // `Full(Res{..})` silently discarded the payload's Drop
@@ -16312,6 +16354,90 @@ impl<'ctx> super::Codegen<'ctx> {
                                     let name = name.clone();
                                     self.track_container_elem_bodies_before_own(
                                         &tn, &name, slot.ptr, walker,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    // B-2026-10-05-110 — the tuple sibling of the two re-arms
+                    // above. A move (`let q = p`, `let a = p.0`, `let (a, b) =
+                    // p`) retracted or masked the walk, and nothing re-armed it,
+                    // so the stored value's element bodies never ran. Elements
+                    // the move masked are un-masked one by one; a walk the move
+                    // retracted whole is registered again for the new value,
+                    // skipping the elements a literal fills from a param view.
+                    // Same innermost-frame placement caveat as the struct leg.
+                    if let Some((agg, idxs)) = &tuple_rearm {
+                        if self.has_armed_container_elem_bodies(name.as_str()) {
+                            for &i in idxs {
+                                self.rearm_reassigned_moved_tuple_elem(name, i, *agg, false);
+                            }
+                        } else if let (Some(slot), Some(elem_tes)) = (
+                            self.variables.get(name).copied(),
+                            self.var_types
+                                .tuple_var_elem_tes
+                                .get(name.as_str())
+                                .cloned(),
+                        ) {
+                            let mut skip: std::collections::HashSet<u32> =
+                                self.tuple_literal_param_view_elems(value);
+                            if let Some(slots) = self.call_result_agg_slot_views(value) {
+                                skip.extend(
+                                    slots
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, s)| **s == Some(true))
+                                        .map(|(k, _)| k as u32),
+                                );
+                            }
+                            self.tuple_moved_elem_bodies.remove(name.as_str());
+                            self.tuple_moved_elem_payload_bodies.remove(name.as_str());
+                            if !skip.is_empty() {
+                                self.tuple_moved_elem_bodies
+                                    .insert(name.clone(), skip.clone());
+                            }
+                            if let Some(bodies) = self.emit_tuple_elem_user_drop_bodies_fn_skipping(
+                                *agg, &elem_tes, &skip,
+                            ) {
+                                let name = name.clone();
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    &name,
+                                    slot.ptr,
+                                    bodies,
+                                    UserDropKind::ContainerElemBodies,
+                                );
+                                self.move_rearmed_walk_to_retracted_pos(&name, slot.ptr);
+                            }
+                        }
+                    } else if !rhs_is_self_alias
+                        && !rhs_mentions_lhs
+                        && !lhs_is_tracked_value_enum
+                        && !self.expr_is_param_view(value)
+                        && !self.let_call_result_is_param_view(value)
+                        && !self.has_armed_container_elem_bodies(name.as_str())
+                    {
+                        // The `Option` / `Vec` spelling: the move retracted the
+                        // walk whole, and the new value has the same type, so the
+                        // same walk goes back where it was. A user enum keeps its
+                        // own leg above, which leaves an own-`Drop` enum's moved
+                        // slot silent on purpose.
+                        if let Some(slot) = self.variables.get(name).copied() {
+                            if let Some((fi, pos, drop_fn, type_name)) =
+                                self.drop_rc.retracted_walk_pos.remove(&slot.ptr)
+                            {
+                                if fi < self.drop_rc.scope_cleanup_actions.len() {
+                                    let frame = &mut self.drop_rc.scope_cleanup_actions[fi];
+                                    let at = pos.min(frame.len());
+                                    frame.insert(
+                                        at,
+                                        super::state::CleanupAction::UserDrop {
+                                            binding_name: name.clone(),
+                                            binding_ptr: slot.ptr,
+                                            drop_fn,
+                                            type_name,
+                                            kind: UserDropKind::ContainerElemBodies,
+                                        },
                                     );
                                 }
                             }

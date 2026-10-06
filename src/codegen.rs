@@ -6632,6 +6632,7 @@ impl<'ctx> Codegen<'ctx> {
                 assigned_names: std::collections::HashSet::new(),
                 cond_move_drop_flag_slots: HashMap::new(),
                 retracted_live_generations: std::collections::HashSet::new(),
+                retracted_walk_pos: std::collections::HashMap::new(),
                 cond_move_mem_drop_flags: HashMap::new(),
                 cond_move_box_drop_flags: HashMap::new(),
                 param_view_mem_drops: HashMap::new(),

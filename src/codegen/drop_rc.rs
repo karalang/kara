@@ -252,6 +252,15 @@ pub(crate) struct DropRc<'ctx> {
     /// never moved. Keyed by slot, so a reassignment that re-registers on the
     /// same slot is retracted normally again.
     pub(crate) retracted_live_generations: std::collections::HashSet<(String, PointerValue<'ctx>)>,
+    /// B-2026-10-05-110 — where a whole-move retraction took a binding's
+    /// element-bodies walk from: (frame index, position in that frame), keyed
+    /// by the binding's slot, with the walk and its type name. A later
+    /// reassignment re-arms the walk at that spot, so it keeps its place in
+    /// the reverse-declaration drop order.
+    pub(crate) retracted_walk_pos: std::collections::HashMap<
+        PointerValue<'ctx>,
+        (usize, usize, inkwell::values::FunctionValue<'ctx>, String),
+    >,
     /// B-2026-09-05-37 — the MEMORY half of that same bit, keyed by the SLOT a
     /// `CleanupAction::StructDrop` frees rather than by a binding name.
     ///
