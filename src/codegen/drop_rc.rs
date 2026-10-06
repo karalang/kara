@@ -234,6 +234,12 @@ pub(crate) struct DropRc<'ctx> {
     /// top of a loop body the hand-off sits later in -- cannot, and would walk
     /// the consumed payload again on the next trip.
     pub(crate) assigned_names: HashSet<String>,
+    /// B-2026-10-05-124 — the SLOTS behind `assigned_names`: a reassignment
+    /// of one generation of a name (an earlier block's `let mut p`) says
+    /// nothing about a later generation's hand-off, and the name-keyed answer
+    /// made that hand-off retract its walk on every path, losing the value a
+    /// later store displaces on the path that kept it.
+    pub(crate) assigned_slots: HashSet<PointerValue<'ctx>>,
     /// B-2026-09-23-23 — the GENERATION each `cond_move_drop_flags` bit was
     /// created for: the binding's slot at the move site that made it, or
     /// `None` once two generations of one name have asked for it.

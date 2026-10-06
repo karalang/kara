@@ -19201,8 +19201,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .filter(|_| self.payload_vars.shadowed_top_level_locals.contains(name));
         // B-2026-09-30-6 — see `DropRc::assigned_names`.
         // B-2026-09-30-12 — unless the reassignment made the bit itself.
+        // B-2026-10-05-124 — of THIS generation, when its slot is known.
         let reassigned_mut = self.drop_rc.mut_let_names.contains(name)
-            && self.drop_rc.assigned_names.contains(name)
+            && match self.variables.get(name) {
+                Some(v) => self.drop_rc.assigned_slots.contains(&v.ptr),
+                None => self.drop_rc.assigned_names.contains(name),
+            }
             && self.handoff_flag_for(name).is_none();
         if !self.drop_rc.cond_store_flag_params.contains(name)
             && !reassigned_mut
@@ -19355,6 +19359,85 @@ impl<'ctx> super::Codegen<'ctx> {
         let frame = &mut self.drop_rc.scope_cleanup_actions[fi];
         let at = pos.min(frame.len());
         frame.insert(at, action);
+    }
+
+    /// B-2026-10-06-62 — a store into `name` in a frame DEEPER than the one
+    /// whose walk a whole move retracted (`let q = p; while c { p = mk(); }`,
+    /// `if c { p = mk(); }`) may run zero times or several. A static re-arm
+    /// then answers wrong both ways: the walk ran over the MOVED value when
+    /// the store never ran, and a second iteration's store displaced the
+    /// first's value without its bodies. So the walk goes back at its
+    /// recorded position behind a per-path bit that starts `false` (the move
+    /// is unconditional) and is registered as the binding's
+    /// `cond_move_drop_flags` bit. The existing readers of that bit then guard
+    /// the store's displacement, set it `true` after the store, and gate the
+    /// scope-exit walk.
+    ///
+    /// Called BEFORE the store's displacement. Interim, at an assignment
+    /// position: the shared drop schedule retires it when it reaches
+    /// assignments. Narrow by design: declines a shadowed name, a binding
+    /// that already has a bit, and a `ref` param.
+    pub(super) fn rearm_retracted_walk_behind_flag(&mut self, name: &str) {
+        let Some(slot) = self.variables.get(name).map(|v| v.ptr) else {
+            return;
+        };
+        let Some((fi, pos, drop_fn, type_name)) =
+            self.drop_rc.retracted_walk_pos.get(&slot).cloned()
+        else {
+            return;
+        };
+        let depth = self.drop_rc.scope_cleanup_actions.len();
+        if depth == 0 || fi + 1 >= depth {
+            return;
+        }
+        if self.drop_rc.cond_move_drop_flags.contains_key(name)
+            || self.payload_vars.shadowed_gen_names.contains(name)
+            || self.payload_vars.shadowed_top_level_locals.contains(name)
+            || self.borrow_vars.ref_params.contains_key(name)
+        {
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let Some(entry) = fn_val.get_first_basic_block() else {
+            return;
+        };
+        let b = self.context.create_builder();
+        match entry.get_terminator() {
+            Some(term) => b.position_before(&term),
+            None => b.position_at_end(entry),
+        }
+        let bool_t = self.context.bool_type();
+        let Ok(flag) = b.build_alloca(bool_t, &format!("rearmwalk.{name}")) else {
+            return;
+        };
+        if b.build_store(flag, bool_t.const_int(0, false)).is_err() {
+            return;
+        }
+        self.store_at_loop_decl_anchor(name, flag, false);
+        self.drop_rc
+            .cond_move_drop_flags
+            .insert(name.to_string(), flag);
+        self.drop_rc
+            .cond_move_drop_flag_slots
+            .insert(name.to_string(), None);
+        self.drop_rc.retracted_walk_pos.remove(&slot);
+        self.drop_rc
+            .retracted_live_generations
+            .remove(&(name.to_string(), slot));
+        let frame = &mut self.drop_rc.scope_cleanup_actions[fi];
+        let at = pos.min(frame.len());
+        frame.insert(
+            at,
+            CleanupAction::UserDrop {
+                binding_name: name.to_string(),
+                binding_ptr: slot,
+                drop_fn,
+                type_name,
+                kind: UserDropKind::ContainerElemBodies,
+            },
+        );
     }
 
     /// Whole-value MOVE disarm for container-bodies actions. A binding whose

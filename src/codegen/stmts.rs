@@ -14640,6 +14640,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-09-30-6 — see `DropRc::assigned_names`.
                 if let ExprKind::Identifier(n) = &target.kind {
                     self.drop_rc.assigned_names.insert(n.clone());
+                    if let Some(v) = self.variables.get(n) {
+                        self.drop_rc.assigned_slots.insert(v.ptr);
+                    }
                 }
                 // `f = g;` moves g's container value into f — retract g's
                 // bodies action, same rule as the Let-arm hook above (the
@@ -15319,6 +15322,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         ExprKind::Identifier(rhs_name) if rhs_name != name
                             && self.var_types.vec_elem_types.contains_key(rhs_name.as_str())
                     );
+                    // B-2026-10-06-62 — a store one frame deeper than the walk a
+                    // whole move retracted re-arms it behind a runtime bit,
+                    // before any displacement below reads whether it is armed.
+                    if !rhs_is_self_alias
+                        && !crate::deque_head::expr_mentions_name_deep(value, name)
+                        && !self.expr_is_param_view(value)
+                        && !self.let_call_result_is_param_view(value)
+                    {
+                        self.rearm_retracted_walk_behind_flag(name);
+                    }
                     // B-2026-07-22-2: `acc = mk().s;` — the RHS is the staged
                     // fresh-temp field move (a buffer distinct from acc's old
                     // one, about to be owned by acc via the consume below), so
