@@ -13746,7 +13746,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         // reaches the registrar at all and the orphaned original
                         // leaks. Kept in lockstep with that gate — they answer the
                         // same question about the same structs.
-                        self.type_expr_has_drop_heap(f) || self.option_field_te_has_drop_heap(f)
+                        self.type_expr_has_drop_heap(f)
+                            || self.option_field_te_has_drop_heap(f)
+                            // B-2026-10-05-120 — an `Option[shared]` field. Its
+                            // entry copy is an rc-INC of the box
+                            // (`deep_copy_option_inline_payload_in_place`'s shared
+                            // leg), so the callee's param holds a reference of its
+                            // own and a hand-back returns THAT one. Left out, the
+                            // caller read the param as forwarded and stood its
+                            // fresh temp down, so the temp's reference was never
+                            // released: `keepw(W { o: Some(H { id: 4 }), n: 8 })`
+                            // leaked the box and never ran `H`'s body.
+                            || self.option_inner_shared_type_for_type_expr(f).is_some()
                     })
                 })
     }
