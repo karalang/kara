@@ -233,6 +233,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let te = self
             .enum_inst_type_from_span(expr)
             .or_else(|| self.struct_literal_inst_from_fields(expr))?;
+        // B-2026-10-06-33 — through the enclosing monomorph's substitution: a
+        // literal over the fn's own `T` (`|x: T| Bx { a: x, b: 3 }` inside
+        // `wrapit[T = String]`) records `Bx[T]`, and laying that out left `T`
+        // as `i64` while the body built the `String` instance.
+        let te = self.subst_monomorph_type_params(&te);
         if let TypeKind::Path(p) = &te.kind {
             let name = p.segments.last()?;
             let args = p.generic_args.as_ref()?;
