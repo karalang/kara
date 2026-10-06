@@ -52798,3 +52798,23 @@ fn array_len_and_is_empty_hold_for_every_element_type() {
         "an element-reading method on a String array stays refused: {errors:?}"
     );
 }
+
+/// B-2026-10-06-41: a `const` with an `Array[T, N]` annotation takes
+/// its bracket literal in the array form, as a local or module-level `let`
+/// does. It was inferred with no expectation, so the literal defaulted to
+/// `Vec` and the declaration was refused. A wrong length is still an error.
+#[test]
+fn const_array_annotation_drives_the_literal_form() {
+    typecheck_ok(
+        "const LINES: Array[(i64, i64, i64), 2] = [(1, 3, 2), (4, 6, 5)];\n\
+         const NUMS: Array[i64, 3] = [10, 20, 30];\n\
+         const ZEROS: Array[u8, 4] = [0; 4];\n\
+         const LIST: Vec[i64] = [1, 2];\n\
+         fn main() { let a = NUMS; let b = LINES; println(f\"{a[1]} {b.len()}\"); }",
+    );
+    let errors = typecheck_errors("const NUMS: Array[i64, 3] = [10, 20];");
+    assert!(
+        !errors.is_empty(),
+        "a two-element literal for a three-element array is still an error"
+    );
+}

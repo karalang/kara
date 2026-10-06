@@ -3508,8 +3508,15 @@ impl<'a> super::TypeChecker<'a> {
 
     fn check_const_decl(&mut self, c: &ConstDecl) {
         let declared_ty = self.lower_type_expr(&c.ty, &[]);
-        let value_ty = self.infer_expr(&c.value);
-        self.check_assignable(&declared_ty, &value_ty, c.value.span);
+        // B-2026-10-06-41: CHECK the value against the declared type
+        // rather than inferring it bare and comparing afterwards. A bracket
+        // literal takes its form from the expected type (design.md § Standard
+        // Data Structures: "annotation drives the form"), so inferring it with
+        // no expectation always produced the `Vec` default, and
+        // `const LINES: Array[i64, 3] = [1, 2, 3];` was refused with
+        // "expected 'Array[i64, 3]', found 'Vec[i64]'" -- the form a local
+        // `let` and a module-level `let` both accept.
+        self.check_expr(&c.value, &declared_ty);
     }
 
     /// Slice 4 + 5 of design.md § Module-Level Bindings (§1280-1297,
