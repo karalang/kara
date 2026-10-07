@@ -105,7 +105,7 @@ fn moved_in_loop_is_an_error() {
              let s = \"hi\".to_string();\n\
              for i in 0..2 { take(s); }\n\
          }\n",
-        "value 's' was moved in a previous iteration of the loop",
+        "value 's' is moved inside a loop and not assigned again",
     );
 }
 
@@ -709,6 +709,32 @@ fn a_by_value_binding_moves_its_part_out_of_an_owned_scrutinee() {
              println(n.is_some());\n\
              let o: Option[String] = Some(\"a\".to_string());\n\
              match o { Some(s) => println(s), None => {} }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_loop_must_reassign_a_moved_place_before_it_loops_back() {
+    // §3.3: every path back to the loop head must assign the place again;
+    // an assignment earlier in the body does not count.
+    rejected_then_fixed(
+        "loop-reassign-before",
+        "fn take(s: String) { println(s); }\n\
+         fn main() {\n\
+             let mut t = \"a\".to_string();\n\
+             let mut i = 0;\n\
+             while i < 2 { t = \"b\".to_string(); take(t); i = i + 1; }\n\
+         }\n",
+        "not assigned again",
+    );
+    accepted(
+        "loop-reassign-after",
+        "fn take(s: String) { println(s); }\n\
+         fn main() {\n\
+             let mut t = \"a\".to_string();\n\
+             let mut i = 0;\n\
+             while i < 2 { take(t); t = \"b\".to_string(); i = i + 1; }\n\
+             println(t);\n\
          }\n",
     );
 }

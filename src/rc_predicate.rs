@@ -786,8 +786,8 @@ pub(crate) fn direct_uam_all_consume_sites_from_sites(
 /// reaches `b` along predecessor edges without crossing `v`. One
 /// entry per back-edge; nested loops appear as separate entries
 /// (the inner loop's set is a subset of its enclosing loop's set).
-fn natural_loops(cfg: &Cfg, dom: &DominatorTree) -> Vec<FxHashSet<BlockId>> {
-    let mut loops: Vec<FxHashSet<BlockId>> = Vec::new();
+fn natural_loops(cfg: &Cfg, dom: &DominatorTree) -> Vec<(BlockId, FxHashSet<BlockId>)> {
+    let mut loops: Vec<(BlockId, FxHashSet<BlockId>)> = Vec::new();
     for b in 0..cfg.num_blocks() {
         for &v in &cfg.block(b).successors {
             if !dom.dominates(v, b) {
@@ -813,10 +813,45 @@ fn natural_loops(cfg: &Cfg, dom: &DominatorTree) -> Vec<FxHashSet<BlockId>> {
                     }
                 }
             }
-            loops.push(visited);
+            loops.push((v, visited));
         }
     }
     loops
+}
+
+/// v2 core §3.3: can control get from just after the use at `(cb, ci)` back
+/// to `header` without passing a rebind of `binding` that covers `place`?
+fn reaches_header_unrebound(
+    cfg: &Cfg,
+    nloop: &FxHashSet<BlockId>,
+    header: BlockId,
+    (cb, ci): (BlockId, usize),
+    place: &PlacePath,
+) -> bool {
+    let binding = &cfg.block(cb).uses[ci].binding;
+    let rebinds = |u: &UseSite| {
+        &u.binding == binding
+            && matches!(u.kind, UseKind::Reassign | UseKind::Define)
+            && place_rebind_covers(&u.place, place)
+    };
+    if cfg.block(cb).uses[ci + 1..].iter().any(rebinds) {
+        return false;
+    }
+    let mut seen: FxHashSet<BlockId> = FxHashSet::default();
+    let mut stack: Vec<BlockId> = cfg.block(cb).successors.clone();
+    while let Some(b) = stack.pop() {
+        if b == header {
+            return true;
+        }
+        if !nloop.contains(&b) || !seen.insert(b) {
+            continue;
+        }
+        if cfg.block(b).uses.iter().any(rebinds) {
+            continue;
+        }
+        stack.extend(cfg.block(b).successors.iter().copied());
+    }
+    false
 }
 
 /// Find each binding's first in-loop Consume site that fires the
@@ -852,9 +887,20 @@ pub(crate) fn loop_of_consume_candidates_from_sites(
             // outside the inner body) does not close the inner
             // back-edge — it leaves the Consume re-entering its
             // already-moved value on the next iteration.
-            let fires = loops.iter().any(|nloop| {
+            let fires = loops.iter().any(|(header, nloop)| {
                 if !nloop.contains(cb) {
                     return false;
+                }
+                // v2 core §3.3: the move is an error unless EVERY path back
+                // to the loop head initializes the place again; a rebind
+                // earlier in the body does not count. A loop-local `let`
+                // still declares the place inside the loop.
+                if crate::ownership::core_rules() {
+                    let local = uses
+                        .iter()
+                        .any(|(rb, _, u)| u.kind == UseKind::Define && nloop.contains(rb));
+                    return !local
+                        && reaches_header_unrebound(cfg, nloop, *header, (*cb, *_ci), &c.place);
                 }
                 // A rebind of the binding INSIDE the same natural loop
                 // suppresses the rule: either a `name = …` reassignment

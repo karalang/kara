@@ -160,8 +160,8 @@ impl<'a> super::OwnershipChecker<'a> {
                     if entry.other_use_span.offset <= entry.consume_span.offset =>
                 {
                     format!(
-                        "value '{binding}' was moved in a previous iteration of the loop \
-                         (moved at line {line}:{col})"
+                        "value '{binding}' is moved inside a loop and not assigned again before \
+                         the next iteration (moved at line {line}:{col}; core-semantics.md §3.3)"
                     )
                 }
                 RcTrigger::DirectReuseAfterConsume => format!(
