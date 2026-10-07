@@ -219,8 +219,26 @@ impl Validator<'_> {
                 None
             }
             Rvalue::UnaryOp(_, o) => self.operand(o),
-            Rvalue::Cast(_, o, t) => {
-                self.operand(o);
+            Rvalue::Cast(kind, o, t) => {
+                if let Some(from) = self.operand(o) {
+                    let ok = match (kind, self.tys.kind(from), self.tys.kind(*t)) {
+                        (CastKind::IntToInt, TyKind::Int(_), TyKind::Int(_))
+                        | (CastKind::IntToFloat, TyKind::Int(_), TyKind::Float(_))
+                        | (CastKind::FloatToInt, TyKind::Float(_), TyKind::Int(_))
+                        | (CastKind::FloatToFloat, TyKind::Float(_), TyKind::Float(_))
+                        | (CastKind::IntToChar, TyKind::Int(IntTy::U8), TyKind::Char)
+                        | (CastKind::CharToInt, TyKind::Char, TyKind::Int(_))
+                        | (CastKind::BoolToInt, TyKind::Bool, TyKind::Int(_)) => true,
+                        _ => false,
+                    };
+                    if !ok {
+                        self.err(format!(
+                            "{kind:?} cast from {} to {}",
+                            self.tys.display(from),
+                            self.tys.display(*t)
+                        ));
+                    }
+                }
                 Some(*t)
             }
             Rvalue::Aggregate(kind, ops) => {

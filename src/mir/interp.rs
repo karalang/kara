@@ -2217,6 +2217,14 @@ impl<'a> Interp<'a> {
                             super::ty::FloatTy::F64 => f,
                         }))
                     }
+                    (CastKind::IntToChar, Value::Int(i), _) => match u8::try_from(i) {
+                        Ok(b) => Ok(Value::Char(b as char)),
+                        Err(_) => err(format!("{i} is not a u8")),
+                    },
+                    (CastKind::CharToInt, Value::Char(c), TyKind::Int(it)) => {
+                        Ok(Value::Int(wrap(c as i128, it)))
+                    }
+                    (CastKind::BoolToInt, Value::Bool(b), _) => Ok(Value::Int(b as i128)),
                     (k, x, _) => err(format!("cannot cast {x:?} with {k:?}")),
                 }
             }

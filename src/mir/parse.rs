@@ -942,6 +942,9 @@ impl Parser {
                     "IntToFloat" => CastKind::IntToFloat,
                     "FloatToInt" => CastKind::FloatToInt,
                     "FloatToFloat" => CastKind::FloatToFloat,
+                    "IntToChar" => CastKind::IntToChar,
+                    "CharToInt" => CastKind::CharToInt,
+                    "BoolToInt" => CastKind::BoolToInt,
                     other => return Err(format!("unknown cast kind `{other}`")),
                 };
                 c.expect(")")?;

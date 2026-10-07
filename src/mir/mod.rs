@@ -341,4 +341,59 @@ fn eat(_1: R, _2: bool) -> () {
         b.new_block();
         assert_eq!(b.finish().unwrap_err(), "bb0 has no terminator");
     }
+
+    /// `u8 as char`, `char as` an integer and `bool as` an integer: the
+    /// validator checks each kind against its operand and target, and the
+    /// interpreter runs them.
+    #[test]
+    fn mir_char_and_bool_casts() {
+        let src = |body: &str| {
+            format!(
+                "
+fn main() -> () {{
+    let mut _0: ();
+    let _1: char;
+    let _2: u32;
+    let _3: i64;
+    let _4: u8;
+    let _5: ();
+    bb0: {{
+{body}        _5 = println(copy _1, copy _2, copy _3, copy _4) -> bb1;
+    }}
+    bb1: {{
+        _0 = const ();
+        return;
+    }}
+}}
+"
+            )
+        };
+        let m = parse_module(&src("        _1 = const 97_u8 as char (IntToChar);
+        _2 = copy _1 as u32 (CharToInt);
+        _3 = const true as i64 (BoolToInt);
+        _4 = const 'z' as u8 (CharToInt);
+"))
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(validate(&m.bodies[0], &m.tys), Vec::<String>::new());
+        let prog = interp::Program::from_module(&m);
+        let r = interp::run(&prog, &m.tys, "main", vec![]);
+        // `println` writes its arguments with no separator.
+        assert_eq!(r.output, "a971122\n", "{:?}", r.outcome);
+
+        let bad = parse_module(&src("        _1 = const 97_u32 as char (IntToChar);
+        _2 = const 'a' as u32 (BoolToInt);
+        _3 = const 1_i64;
+        _4 = const 1_u8;
+"))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let errs = validate(&bad.bodies[0], &bad.tys);
+        assert!(
+            errors_mention(&errs, "IntToChar cast from u32 to char"),
+            "{errs:?}"
+        );
+        assert!(
+            errors_mention(&errs, "BoolToInt cast from char to u32"),
+            "{errs:?}"
+        );
+    }
 }

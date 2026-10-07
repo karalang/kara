@@ -315,6 +315,14 @@ pub enum CastKind {
     IntToFloat,
     FloatToInt,
     FloatToFloat,
+    /// `u8 as char`: every byte is a Unicode scalar, so it cannot fail.
+    /// Wider integers reach `char` through `char.try_from`.
+    IntToChar,
+    /// `c as u32` and other integer targets: the scalar value, wrapped to
+    /// the target width.
+    CharToInt,
+    /// `b as i64`: 0 or 1.
+    BoolToInt,
 }
 
 #[derive(Debug, Clone, PartialEq)]
