@@ -1272,6 +1272,30 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.call_native("String.add", vec![l, r], dest);
                 Ok(())
             }
+            // `a < b` and the rest through the library's `String.lt` (byte
+            // order): `a > b` is `b < a`, `a <= b` is `!(b < a)`.
+            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+                let l = self.lib_arg(left, true)?;
+                let r = self.lib_arg(right, true)?;
+                let (args, negate) = match bin {
+                    BinOp::Lt => (vec![l, r], false),
+                    BinOp::Gt => (vec![r, l], false),
+                    BinOp::Le => (vec![r, l], true),
+                    _ => (vec![l, r], true),
+                };
+                if !negate {
+                    self.call_native("String.lt", args, dest);
+                } else {
+                    let bool_t = self.tys().bool();
+                    let t = self.temp(bool_t);
+                    self.call_native("String.lt", args, Place::local(t));
+                    self.assign(
+                        dest,
+                        Rvalue::UnaryOp(UnOp::Not, Operand::Move(Place::local(t))),
+                    );
+                }
+                Ok(())
+            }
             _ => self.unsupported(left.span, "this operator on strings"),
         }
     }
@@ -3890,6 +3914,71 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 Ok(())
             }
+            // Each alternative in turn: the first that matches goes on.
+            PatternKind::Or(alts) => {
+                let ok = self.b.new_block();
+                for (i, alt) in alts.iter().enumerate() {
+                    let next = if i + 1 == alts.len() {
+                        fail
+                    } else {
+                        self.b.new_block()
+                    };
+                    self.test_pattern(alt, place, t, next)?;
+                    self.goto(ok);
+                    self.cur = next;
+                }
+                self.cur = ok;
+                Ok(())
+            }
+            PatternKind::AtBinding { pattern, .. } => self.test_pattern(pattern, place, t, fail),
+            PatternKind::RangePattern {
+                start,
+                end,
+                inclusive,
+            } => {
+                let bound = |b: &Option<crate::ast::RangeBound>| -> Option<Option<u128>> {
+                    match b {
+                        None => Some(None),
+                        Some(crate::ast::RangeBound::Literal(LiteralPattern::Integer(v, _))) => {
+                            Some(Some(*v as u128))
+                        }
+                        Some(crate::ast::RangeBound::Literal(LiteralPattern::Char(c))) => {
+                            Some(Some(*c as u128))
+                        }
+                        _ => None,
+                    }
+                };
+                let (Some(lo), Some(hi)) = (bound(start), bound(end)) else {
+                    return self.unsupported(pat.span, "a range pattern with a named bound");
+                };
+                let bool_t = self.tys().bool();
+                let konst = |v: u128| {
+                    Operand::Const(Const {
+                        ty: t,
+                        kind: ConstKind::Scalar(v),
+                    })
+                };
+                let checks = [
+                    lo.map(|v| (BinOp::Ge, v)),
+                    hi.map(|v| (if *inclusive { BinOp::Le } else { BinOp::Lt }, v)),
+                ];
+                for (op, v) in checks.into_iter().flatten() {
+                    let c = self.temp(bool_t);
+                    self.assign(
+                        c,
+                        Rvalue::BinaryOp(op, Operand::Copy(place.clone()), konst(v)),
+                    );
+                    let ok = self.b.new_block();
+                    self.goto_with(
+                        TerminatorKind::SwitchInt {
+                            discr: Operand::Copy(Place::local(c)),
+                            targets: SwitchTargets::if_else(ok, fail),
+                        },
+                        ok,
+                    );
+                }
+                Ok(())
+            }
             _ => self.unsupported(pat.span, "this pattern"),
         }
     }
@@ -3932,6 +4021,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             },
             ok,
         );
+    }
+
+    /// Does `pat` bind a name (a unit variant written bare does not)?
+    fn pattern_binds(&self, pat: &Pattern) -> bool {
+        !pat.binding_names().is_empty()
     }
 
     /// Bind the names of a pattern known to match. A binding moves its
@@ -3998,6 +4092,21 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                 }
                 Ok(())
+            }
+            PatternKind::RangePattern { .. } => Ok(()),
+            // Which alternative matched is not known here, so only an
+            // or-pattern that binds nothing is lowered.
+            PatternKind::Or(_) if !self.pattern_binds(pat) => Ok(()),
+            // `x @ p`: `x` names the whole, `p` binds its parts. Both can
+            // hold their values only when the whole is copied or borrowed.
+            PatternKind::AtBinding {
+                name,
+                pattern,
+                by_ref: at_ref,
+            } if by_ref || *at_ref || self.is_copy(t) || !self.pattern_binds(pattern) => {
+                let by_ref = by_ref || *at_ref;
+                self.bind_one(name, pat.id, place.clone(), t, by_ref, out);
+                self.bind_pattern(pattern, place, t, by_ref, out)
             }
             _ => self.unsupported(pat.span, "this pattern"),
         }
@@ -4417,9 +4526,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ if name.contains('.') => {
                 let (owner, m) = name.rsplit_once('.').unwrap();
                 let t = self.expr_ty(e)?;
-                let ty_name = self.tys().display(t);
+                let mut ty_name = self.tys().display(t);
                 if ty_name.split('[').next() != Some(owner) {
-                    return self.unsupported(e.span, &format!("the builtin `{name}`"));
+                    // A library function that builds something else
+                    // (`String.from_utf8` returns a `Result`): named by
+                    // its owner alone.
+                    if !matches!(owner, "String" | "char") {
+                        return self.unsupported(e.span, &format!("the builtin `{name}`"));
+                    }
+                    ty_name = owner.to_string();
                 }
                 let mut ops = Vec::new();
                 for a in args {
@@ -4446,8 +4561,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                     match p {
                         ParsedInterpolationPart::Text(s) => ops.push(self.static_str(s)),
                         ParsedInterpolationPart::Expr(x, None) => self.print_operands(x, ops)?,
-                        ParsedInterpolationPart::Expr(x, Some(_)) => {
-                            return self.unsupported(x.span, "a format spec")
+                        ParsedInterpolationPart::Expr(x, Some(spec)) => {
+                            // `{x:.3}`: the library's `format_spec` renders
+                            // the value by the spec into a String the
+                            // statement drops.
+                            let mut inner = Vec::new();
+                            self.print_operands(x, &mut inner)?;
+                            inner.push(self.static_str(spec));
+                            let st = self.tys().tcx().intern(HK::Str);
+                            let s = self.scoped_temp(st);
+                            self.call_native("format_spec", inner, Place::local(s));
+                            ops.push(self.ref_to(Place::local(s), st));
                         }
                     }
                 }
@@ -5920,6 +6044,46 @@ fn main() {
         assert_eq!(
             run_source(src),
             Ok(("p = pos, q = neg\nneg\n".to_string(), Some(0)))
+        );
+    }
+
+    /// Or-patterns, range patterns (ints and chars, open and closed) and
+    /// `x @ p` / `ref x @ p` bindings.
+    #[test]
+    fn or_range_and_at_patterns() {
+        let src = r#"
+struct Foo { a: i64, n: i64 }
+fn vowel(c: char) -> bool {
+    return match c {
+        'a' | 'e' | 'i' | 'o' | 'u' => true,
+        _ => false,
+    };
+}
+fn grade(n: i64) -> String {
+    match n {
+        0..10 => "low",
+        10..=19 => "mid",
+        x @ (20 | 21) => if x == 20 { "twenty" } else { "21" },
+        _ => "high",
+    }
+}
+fn main() {
+    let f = Foo { a: 1, n: 2 };
+    match f {
+        ref w @ Foo { a, n } => println(f"{w.a} {a} {n}"),
+    }
+    println(f"{vowel('e')} {vowel('z')} {grade(3)} {grade(15)} {grade(20)} {grade(21)} {grade(99)}");
+    let c = 'k';
+    let k = match c { 'a'..='m' => 1, _ => 2 };
+    println(k);
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok((
+                "1 1 2\ntrue false low mid twenty 21 high\n1\n".to_string(),
+                Some(0)
+            ))
         );
     }
 
