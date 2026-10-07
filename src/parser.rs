@@ -231,6 +231,9 @@ pub struct Parser {
     /// keyword is recognized in the receiver parse but belongs to the
     /// function. B-2026-08-01-33 stage 2.7.
     pub(crate) frozen_self_consumed: bool,
+    /// Set when the receiver just parsed was written `own self` (D5); taken
+    /// by the function or trait method that owns the receiver.
+    pub(crate) own_self_consumed: bool,
     /// `freeze <place>` initializer spans collected during the parse, moved
     /// onto [`crate::ast::Program::freeze_spans`] at the end. B-2026-08-01-33
     /// stage 3.
@@ -391,6 +394,7 @@ impl Parser {
             pending_assoc_bindings: Vec::new(),
             frozen_consumed: false,
             frozen_self_consumed: false,
+            own_self_consumed: false,
             freeze_spans: rustc_hash::FxHashSet::default(),
             ref_binding_spans: rustc_hash::FxHashSet::default(),
             mut_ref_binding_spans: rustc_hash::FxHashSet::default(),
@@ -670,6 +674,7 @@ impl Parser {
                     params: Vec::new(),
                     self_param: None,
                     self_is_frozen: false,
+                    self_is_own: false,
                     self_span: None,
                     return_type: None,
                     effects: None,

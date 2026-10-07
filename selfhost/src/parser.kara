@@ -3761,6 +3761,26 @@ impl Parser {
         if self.pos >= self.tokens.len() {
             return SelfMode.NoSelf;
         }
+        // `own self` (D5): the owned receiver, the same as a bare `self` until
+        // the flip.
+        let is_own = match self.tokens[self.pos].token {
+            Own => true,
+            _ => false,
+        };
+        if is_own and self.pos + 1 < self.tokens.len() {
+            let next_self = match self.tokens[self.pos + 1].token {
+                SelfValue => true,
+                _ => false,
+            };
+            if next_self {
+                self.advance(); // `own`
+                self.advance(); // `self`
+                if self.at_comma() {
+                    self.advance();
+                }
+                return SelfMode.OwnedSelf;
+            }
+        }
         let is_self = match self.tokens[self.pos].token {
             SelfValue => true,
             _ => false,
@@ -3847,6 +3867,16 @@ impl Parser {
             let start = self.current_span();
             let name = self.take_member_name();
             self.eat_colon();
+            // `x: own T` (D5): owned, as a bare `T` is until the flip.
+            if self.pos < self.tokens.len() {
+                let is_own = match self.tokens[self.pos].token {
+                    Own => true,
+                    _ => false,
+                };
+                if is_own {
+                    self.advance();
+                }
+            }
             let ty = self.parse_type();
             params.push(FnParamNode {
                 name: name,

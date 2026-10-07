@@ -1318,8 +1318,18 @@ impl<'a> Lexer<'a> {
         let src = self.source;
         let open = self.current;
         let eof = src.len();
-        let line_end = |from: usize| src[from..].iter().position(|&b| b == b'\n').map_or(eof, |i| from + i);
-        let lead_ws = |from: usize| src[from..].iter().take_while(|&&b| b == b' ' || b == b'\t').count();
+        let line_end = |from: usize| {
+            src[from..]
+                .iter()
+                .position(|&b| b == b'\n')
+                .map_or(eof, |i| from + i)
+        };
+        let lead_ws = |from: usize| {
+            src[from..]
+                .iter()
+                .take_while(|&&b| b == b' ' || b == b'\t')
+                .count()
+        };
         if src.get(open) != Some(&b'\n') {
             let resume = line_end(open);
             return Err((
@@ -1442,8 +1452,9 @@ impl<'a> Lexer<'a> {
                 current_text.push('{');
             } else if self.peek() == b'}' {
                 if self.peek_next() != b'}' {
-                    return Err("unmatched `}` in an f-string; a literal brace is written `}}`"
-                        .to_string());
+                    return Err(
+                        "unmatched `}` in an f-string; a literal brace is written `}}`".to_string(),
+                    );
                 }
                 self.advance();
                 self.advance();

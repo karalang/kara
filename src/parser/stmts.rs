@@ -433,9 +433,7 @@ impl super::Parser {
         if Self::is_block_like_prefix(expr)
             || matches!(
                 &expr.kind,
-                ExprKind::LabeledBlock { .. }
-                    | ExprKind::Try(_)
-                    | ExprKind::Comptime(_)
+                ExprKind::LabeledBlock { .. } | ExprKind::Try(_) | ExprKind::Comptime(_)
             )
         {
             return;

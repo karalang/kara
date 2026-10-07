@@ -207,7 +207,12 @@ impl super::Formatter {
         self.write_ident(&f.name);
         self.format_generic_params(&f.generic_params);
         self.write_str("(");
-        self.format_fn_params_with_receiver(&f.self_param, f.self_is_frozen, &f.params);
+        self.format_fn_params_with_receiver(
+            &f.self_param,
+            f.self_is_frozen,
+            f.self_is_own,
+            &f.params,
+        );
         self.write_str(")");
         if let Some(ref rt) = f.return_type {
             self.write_str(" -> ");
@@ -222,8 +227,13 @@ impl super::Formatter {
         self.output.push('\n');
     }
 
-    pub(super) fn format_fn_params(&mut self, self_param: &Option<SelfParam>, params: &[Param]) {
-        self.format_fn_params_with_receiver(self_param, false, params)
+    pub(super) fn format_fn_params(
+        &mut self,
+        self_param: &Option<SelfParam>,
+        self_is_own: bool,
+        params: &[Param],
+    ) {
+        self.format_fn_params_with_receiver(self_param, false, self_is_own, params)
     }
 
     /// `self_is_frozen` carries `frozen self` (B-2026-08-01-33 stage 2.7),
@@ -235,12 +245,14 @@ impl super::Formatter {
         &mut self,
         self_param: &Option<SelfParam>,
         self_is_frozen: bool,
+        self_is_own: bool,
         params: &[Param],
     ) {
         let mut first = true;
         if let Some(ref sp) = self_param {
             first = false;
             match sp {
+                SelfParam::Owned if self_is_own => self.write_str("own self"),
                 SelfParam::Owned => self.write_str("self"),
                 SelfParam::Ref if self_is_frozen => self.write_str("frozen self"),
                 SelfParam::Ref => self.write_str("ref self"),
@@ -257,6 +269,9 @@ impl super::Formatter {
             }
             self.format_pattern(&p.pattern);
             self.write_str(": ");
+            if p.is_own {
+                self.write_str("own ");
+            }
             // `frozen` is recorded on the param, not inside its type
             // (see `Param::is_frozen`), so it has to be written back here —
             // `format_type_expr` will never see it. Without this, `karac fmt`
@@ -623,7 +638,7 @@ impl super::Formatter {
         self.write_ident(&m.name);
         self.format_generic_params(&m.generic_params);
         self.write_str("(");
-        self.format_fn_params(&m.self_param, &m.params);
+        self.format_fn_params(&m.self_param, m.self_is_own, &m.params);
         self.write_str(")");
         if let Some(ref rt) = m.return_type {
             self.write_str(" -> ");

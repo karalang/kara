@@ -700,6 +700,7 @@ pub(crate) fn subst_type_expr(
             return_type,
             effect_spec,
             is_once,
+            own_params,
         } => TypeKind::FnType {
             params: params.iter().map(|p| subst_type_expr(p, subst)).collect(),
             return_type: return_type
@@ -707,6 +708,7 @@ pub(crate) fn subst_type_expr(
                 .map(|r| Box::new(subst_type_expr(r, subst))),
             effect_spec: effect_spec.clone(),
             is_once: *is_once,
+            own_params: own_params.clone(),
         },
         _ => te.kind.clone(),
     };
@@ -1097,6 +1099,7 @@ fn trait_method_to_function(m: &TraitMethod, stdlib_origin: bool) -> Function {
         self_param: m.self_param.clone(),
         // Trait methods carry no `frozen` receiver (stage 2.7 is impl-only).
         self_is_frozen: false,
+        self_is_own: false,
         self_span: None,
         return_type: m.return_type.clone(),
         effects: m.effects.clone(),
@@ -1429,6 +1432,7 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
         params: Vec::new(),
         self_param: None,
         self_is_frozen: false,
+        self_is_own: false,
         self_span: None,
         return_type: Some(ret_ty.clone()),
         effects: None,

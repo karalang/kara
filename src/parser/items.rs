@@ -454,8 +454,10 @@ impl super::Parser {
         // Cleared before the receiver parse so a previous function's `frozen
         // self` can never leak into this one, and taken immediately after.
         self.frozen_self_consumed = false;
+        self.own_self_consumed = false;
         let (self_param, self_span, params) = self.parse_fn_params()?;
         let self_is_frozen = std::mem::take(&mut self.frozen_self_consumed);
+        let self_is_own = std::mem::take(&mut self.own_self_consumed);
         self.fn_context_stack.pop();
         self.expect(&Token::RightParen)?;
 
@@ -507,6 +509,7 @@ impl super::Parser {
             params,
             self_param,
             self_is_frozen,
+            self_is_own,
             self_span,
             return_type,
             effects,
@@ -1551,14 +1554,12 @@ impl super::Parser {
             return Some((SelfParam::Ref, self.span_from(&start)));
         }
 
-        // own self — rejected under 2A; bare `self` is the owned/consuming receiver.
+        // `own self` — the owned/consuming receiver (core semantics
+        // amendment 8, D5). Until a bare `self` flips to borrowed it is the
+        // same receiver as `self`; the spelling is recorded for `karac fmt`.
         if self.eat(&Token::Own) {
             if self.eat(&Token::SelfValue) {
-                self.error(
-                    "`own self` is not a valid receiver form. \
-                     Bare `self` is the owned/consuming receiver; \
-                     `ref self` and `mut ref self` are the two borrow forms.",
-                );
+                self.own_self_consumed = true;
                 return Some((SelfParam::Owned, self.span_from(&start)));
             }
             self.pos = saved;
@@ -1652,6 +1653,7 @@ impl super::Parser {
                 // `frozen` permission, so a `frozen` there is already
                 // reported. Never frozen.
                 is_frozen: false,
+                is_own: false,
             });
         }
 
@@ -1677,6 +1679,8 @@ impl super::Parser {
         self.frozen_ok = self.fn_context_stack.last() != Some(&FnContext::Extern);
         self.escaping_ok = true;
         self.frozen_consumed = false;
+        // `x: own T` (D5): owned, which a bare `T` also means until the flip.
+        let is_own = self.eat(&Token::Own);
         let ty = self.parse_type();
         self.frozen_ok = false;
         self.escaping_ok = false;
@@ -1696,6 +1700,7 @@ impl super::Parser {
             doc_comment,
             is_comptime,
             is_frozen,
+            is_own,
         })
     }
 

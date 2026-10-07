@@ -2386,6 +2386,7 @@ impl<'a> EffectChecker<'a> {
                             self_param: m.self_param.clone(),
                             // Trait methods carry no `frozen` receiver (stage 2.7 is impl-only).
                             self_is_frozen: false,
+                            self_is_own: false,
                             self_span: None,
                             return_type: m.return_type.clone(),
                             effects: m.effects.clone(),
@@ -2784,6 +2785,7 @@ fn collect_effect_var_names_in_type(ty: &TypeExpr, out: &mut Vec<String>) {
             return_type,
             effect_spec,
             is_once: _,
+            own_params: _,
         } => {
             if let Some(EffectSpec::Specific(list)) = effect_spec {
                 for item in &list.items {
@@ -2968,6 +2970,7 @@ fn format_type_expr_with_subs(
             return_type,
             effect_spec,
             is_once,
+            own_params: _,
         } => {
             out.push_str(if *is_once { "OnceFn(" } else { "Fn(" });
             for (i, p) in params.iter().enumerate() {

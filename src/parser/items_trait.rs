@@ -429,7 +429,9 @@ impl super::Parser {
         // parsed *after* the matching pop below, so RPITIT
         // (`fn m() -> impl T`) keeps working.
         self.push_impl_trait_block(crate::parser::ImplTraitBlockReason::TraitMethodArg);
+        self.own_self_consumed = false;
         let (self_param, self_span, params) = self.parse_fn_params()?;
+        let self_is_own = std::mem::take(&mut self.own_self_consumed);
         self.pop_impl_trait_block();
         self.fn_context_stack.pop();
         self.expect(&Token::RightParen)?;
@@ -474,6 +476,7 @@ impl super::Parser {
             name,
             generic_params,
             self_param,
+            self_is_own,
             self_span,
             params,
             return_type,

@@ -2453,6 +2453,7 @@ impl<'a> super::TypeChecker<'a> {
                     return_type: Some(Box::new(Self::type_to_type_expr(return_type))),
                     effect_spec: None,
                     is_once: matches!(ty, Type::OnceFunction { .. }),
+                    own_params: Vec::new(),
                 },
                 span,
             },

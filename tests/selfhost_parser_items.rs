@@ -116,6 +116,8 @@ const CORPUS: &[&str] = &[
     "fn read(ref self) -> i64 { 0 }",
     "fn write(mut ref self, n: i64) {}",
     "fn read_arg(ref self, x: i64) -> i64 { x }",
+    // `own` (D5 step 1): the owned forms, rendered as their bare spelling.
+    "fn take(own self, x: own String) -> i64 { 0 }",
     // `trait` definitions (no generics / supertraits / effects). Method bodies
     // stay within the slice-2 expr surface (default bodies are optional).
     "trait Empty {}",
@@ -378,6 +380,7 @@ fn render_rust_type(te: &TypeExpr) -> String {
             return_type,
             effect_spec,
             is_once,
+            own_params: _,
         } => {
             assert!(
                 effect_spec.is_none(),

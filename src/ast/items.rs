@@ -208,6 +208,9 @@ pub struct Function {
     /// consult this flag. False for every other receiver form and for every
     /// free function.
     pub self_is_frozen: bool,
+    /// The receiver is written `own self` (D5): the same receiver as a bare
+    /// `self` until the flip, kept for the formatter and the flip.
+    pub self_is_own: bool,
     /// The receiver's span (`self`, `ref self`, `mut ref self`), when there
     /// is one. Lets a diagnostic about the receiver's mode point at it and
     /// carry a fix that rewrites it.
@@ -376,6 +379,10 @@ pub struct Param {
     /// or generic arguments is what `TypeKind::Frozen` is retained for, and it
     /// is a stage-2 decision that needs a checker behind each position first.
     pub is_frozen: bool,
+    /// Written `own T` (core semantics amendment 8, D5). Until the meaning
+    /// of a bare `T` flips to borrowed, `own T` means exactly `T`; the bit
+    /// is kept so the formatter writes it back and the flip can read it.
+    pub is_own: bool,
 }
 
 impl Param {
@@ -772,6 +779,8 @@ pub struct TraitMethod {
     pub name: String,
     pub generic_params: Option<GenericParams>,
     pub self_param: Option<SelfParam>,
+    /// The receiver is written `own self` (D5); see `Function::self_is_own`.
+    pub self_is_own: bool,
     /// Source span of the receiver tokens (`self`, `ref self`,
     /// `mut ref self`) when `self_param` is present. Lets diagnostics
     /// that fire on the receiver mode (E0412 resource-receiver
@@ -8559,10 +8568,12 @@ pub fn closure_as_function(params: &[super::ClosureParam], body: &Expr) -> Funct
                 doc_comment: None,
                 is_comptime: false,
                 is_frozen: false,
+                is_own: false,
             })
             .collect(),
         self_param: None,
         self_is_frozen: false,
+        self_is_own: false,
         self_span: None,
         return_type: None,
         effects: None,

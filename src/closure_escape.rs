@@ -2761,6 +2761,7 @@ pub fn rewrite_self_in_type_expr(te: &TypeExpr, type_name: &str) -> TypeExpr {
             return_type,
             effect_spec,
             is_once,
+            own_params,
         } => TypeKind::FnType {
             params: params
                 .iter()
@@ -2771,6 +2772,7 @@ pub fn rewrite_self_in_type_expr(te: &TypeExpr, type_name: &str) -> TypeExpr {
                 .map(|r| Box::new(rewrite_self_in_type_expr(r, type_name))),
             effect_spec: effect_spec.clone(),
             is_once: *is_once,
+            own_params: own_params.clone(),
         },
         _ => te.kind.clone(),
     };
@@ -2861,6 +2863,7 @@ pub fn make_impl_method_function(
             // form — the mode is only accepted by `parse_param`, and self
             // params never go through it.
             is_frozen: false,
+            is_own: false,
         };
         f.params.insert(0, self_param);
     }

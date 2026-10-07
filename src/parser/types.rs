@@ -479,7 +479,10 @@ impl super::Parser {
                 self.advance();
                 self.expect(&Token::LeftParen)?;
                 let mut params = Vec::new();
+                let mut own_params = Vec::new();
                 while !self.check(&Token::RightParen) && !self.is_at_end() {
+                    // `Fn(own T)` (D5): an owned parameter of the function type.
+                    own_params.push(self.eat(&Token::Own));
                     params.push(self.parse_type()?);
                     if !self.eat(&Token::Comma) {
                         break;
@@ -537,6 +540,11 @@ impl super::Parser {
                         return_type,
                         effect_spec,
                         is_once,
+                        own_params: if own_params.contains(&true) {
+                            own_params
+                        } else {
+                            Vec::new()
+                        },
                     },
                     span,
                 })

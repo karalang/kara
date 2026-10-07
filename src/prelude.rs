@@ -2062,6 +2062,7 @@ fn stub_function(name: &str, span: &Span) -> Item {
         params: Vec::new(),
         self_param: None,
         self_is_frozen: false,
+        self_is_own: false,
         self_span: None,
         return_type: None,
         effects: None,

@@ -425,6 +425,10 @@ pub enum TypeKind {
         /// effect-spec structure; only the lowering target differs
         /// (`Type::OnceFunction` vs `Type::Function`).
         is_once: bool,
+        /// Which parameters are written `own T` (D5), one flag per entry of
+        /// `params`, or empty when none is. Kept for the formatter and the
+        /// flip of a bare `T` to borrowed; `own T` means `T` until then.
+        own_params: Vec<bool>,
     },
     Ref(Box<TypeExpr>),
     MutRef(Box<TypeExpr>),

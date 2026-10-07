@@ -3128,7 +3128,6 @@ impl super::Parser {
         );
     }
 
-
     /// Check if current position is `ident:` followed by a loop keyword
     /// (labeled loop) or `{` (labeled block — design.md § Loops > "Labeled
     /// blocks", syntax.md §5.3). Both forms share the `IDENT ":"` prefix

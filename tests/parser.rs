@@ -5888,7 +5888,10 @@ fn test_assignment_and_compound_assignment_are_match_arm_bodies() {
     assert!(errors.is_empty(), "{:?}", errors);
     let dump = format!("{:?}", prog);
     assert!(dump.contains("Assign"), "plain assignment arm: {dump}");
-    assert!(dump.contains("CompoundAssign"), "compound assignment arm: {dump}");
+    assert!(
+        dump.contains("CompoundAssign"),
+        "compound assignment arm: {dump}"
+    );
 }
 
 #[test]
@@ -7947,20 +7950,6 @@ fn test_struct_literal_spread() {
             }
         }
     }
-}
-
-#[test]
-fn test_own_self_param_rejected() {
-    let (_prog, errors) = parse_with_errors("struct Foo {} impl Foo { fn consume(own self) { } }");
-    assert!(
-        !errors.is_empty(),
-        "expected parse error on `own self`, got none"
-    );
-    assert!(
-        errors.iter().any(|e| e.message.contains("own self")),
-        "expected diagnostic mentioning `own self`, got: {:?}",
-        errors
-    );
 }
 
 #[test]

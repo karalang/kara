@@ -119,7 +119,8 @@ fn mcjit_runs_par_block() {
     // `par {}` lowers to `karac_par_run` (karac runtime symbol). The
     // orc2 wrap's W1 risk list flagged this explicitly — auto-par
     // codegen must survive JIT load. This is the smoke test for that.
-    let src = "fn main() {\n  par {\n    spawn; { let _x = 1; }\n    spawn; { let _y = 2; }\n  }\n}";
+    let src =
+        "fn main() {\n  par {\n    spawn; { let _x = 1; }\n    spawn; { let _y = 2; }\n  }\n}";
     assert_eq!(jit(src), 0);
 }
 

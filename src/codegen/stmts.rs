@@ -15492,10 +15492,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // B-2026-10-05-21 — a bare string literal (`c = "zz"`) is a
                     // static buffer (`cap = 0`), never the target's, and was in
                     // no term above: the displaced heap buffer leaked.
-                    let rhs_is_string_literal = matches!(
-                        rhs_tail.kind,
-                        ExprKind::StringLit(_)
-                    );
+                    let rhs_is_string_literal = matches!(rhs_tail.kind, ExprKind::StringLit(_));
                     // B-2026-10-03-14 — a String branch whose tails are fresh
                     // or the target itself (`s = if c { f"q" } else { s }`).
                     // The old buffer may be what is stored back, so it is freed

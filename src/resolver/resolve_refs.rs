@@ -53,6 +53,7 @@ impl<'a> super::Resolver<'a> {
                 return_type,
                 effect_spec,
                 is_once: _,
+                own_params: _,
             } => {
                 for p in params {
                     self.resolve_type_expr(p);

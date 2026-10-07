@@ -1266,8 +1266,9 @@ fn test_break_inside_closure_cannot_target_enclosing_label() {
 
     // Labeled-loop variant — fixes the audit-finding gap (LB4 fixes
     // the loop-side closure-boundary rule as a side-effect).
-    let errors_loop =
-        resolve_errors("fn main() { 'lbl: for x in [1, 2] { let f = || { continue 'lbl; }; f(); } }");
+    let errors_loop = resolve_errors(
+        "fn main() { 'lbl: for x in [1, 2] { let f = || { continue 'lbl; }; f(); } }",
+    );
     assert!(
         errors_loop
             .iter()

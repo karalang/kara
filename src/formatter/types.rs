@@ -213,6 +213,7 @@ impl super::Formatter {
                 return_type,
                 effect_spec,
                 is_once,
+                own_params,
             } => {
                 let is_mut = self
                     .mut_fn_types
@@ -227,6 +228,9 @@ impl super::Formatter {
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         self.write_str(", ");
+                    }
+                    if own_params.get(i) == Some(&true) {
+                        self.write_str("own ");
                     }
                     self.format_type_expr(p);
                 }

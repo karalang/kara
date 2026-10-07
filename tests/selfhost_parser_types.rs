@@ -142,6 +142,7 @@ fn render_rust_type(te: &TypeExpr) -> String {
             return_type,
             effect_spec,
             is_once,
+            own_params: _,
         } => {
             assert!(
                 effect_spec.is_none(),

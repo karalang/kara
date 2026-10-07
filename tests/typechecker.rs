@@ -2899,9 +2899,7 @@ fn test_unit_is_not_display_in_fstring() {
     // it must be rejected at typecheck, closing the divergence at the source.
     // The reachable form is `f"{()}"` (an empty `{}` hole is a parse error,
     // and `{{}}` is a pair of literal braces).
-    for src in [
-        "fn main() { let s = f\"x{()}y\"; }",
-    ] {
+    for src in ["fn main() { let s = f\"x{()}y\"; }"] {
         let errors = typecheck_errors(src);
         assert!(
             errors

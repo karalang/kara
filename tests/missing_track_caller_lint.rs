@@ -99,6 +99,7 @@ fn make_function(name: &str, stdlib_origin: bool, is_pub: bool) -> Function {
         params: Vec::new(),
         self_param: None,
         self_is_frozen: false,
+        self_is_own: false,
         self_span: None,
         return_type: Some(path_type("i64")),
         effects: None,
