@@ -1,0 +1,95 @@
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "d", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+enum Opt { S(R), N }
+enum SOpt { S(i64), N }
+
+fn pick(_1: i64) -> Opt {
+    let mut _0: Opt;
+    let _2: bool;
+    let _3: R;
+    bb0: {
+        _2 = Gt(copy _1, const 0_i64);
+        switchInt(copy _2) -> [0: bb2, otherwise: bb1];
+    }
+    bb1: {
+        _3 = R { copy _1 };
+        _0 = Opt.S { move _3 };
+        return;
+    }
+    bb2: {
+        _0 = Opt.N {  };
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: i64; // n
+    let _2: Opt;
+    let _3: i64;
+    let _4: R; // r
+    let _5: ();
+    let _6: shared SOpt; // s
+    let _7: i64;
+    bb0: {
+        _1 = const 2_i64;
+        goto -> bb1;
+    }
+    bb1: {
+        _2 = pick(copy _1) -> bb2;
+    }
+    bb2: {
+        _3 = discriminant(_2);
+        switchInt(copy _3) -> [0: bb3, otherwise: bb6];
+    }
+    bb3: {
+        _4 = move (_2 as S).0;
+        _5 = println(const "w", copy _4.0) -> bb4;
+    }
+    bb4: {
+        drop(_4) -> bb5;
+    }
+    bb5: {
+        _1 = Sub(copy _1, const 1_i64);
+        goto -> bb1;
+    }
+    bb6: {
+        drop(_2) -> bb7;
+    }
+    bb7: {
+        _5 = println(const "end") -> bb8;
+    }
+    bb8: {
+        _6 = shared SOpt.S { const 7_i64 };
+        _7 = discriminant(_6);
+        switchInt(copy _7) -> [0: bb9, otherwise: bb10];
+    }
+    bb9: {
+        _5 = println(const "shared S") -> bb11;
+    }
+    bb10: {
+        _5 = println(const "shared N") -> bb11;
+    }
+    bb11: {
+        drop(_6) -> bb12;
+    }
+    bb12: {
+        _2 = pick(const 0_i64) -> bb13;
+    }
+    bb13: {
+        _0 = const ();
+        return;
+    }
+}

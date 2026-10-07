@@ -127,7 +127,11 @@ impl Value {
     fn any_init(&self) -> bool {
         match self {
             Value::Uninit => false,
-            Value::Agg(fs) | Value::Variant(_, fs) => fs.iter().any(Value::any_init),
+            // A value with no parts (a fieldless variant, an empty tuple)
+            // is initialized; one whose every part was moved out is not.
+            Value::Agg(fs) | Value::Variant(_, fs) => {
+                fs.is_empty() || fs.iter().any(Value::any_init)
+            }
             _ => true,
         }
     }
@@ -662,7 +666,7 @@ impl<'a> Interp<'a> {
         let frame = self.frames.last().expect("a frame is running");
         for (i, v) in frame.locals.iter().enumerate().skip(1) {
             let ty = body.locals[i].ty;
-            if self.tys.needs_drop(ty) && v.any_init() {
+            if self.owns_drop(v, ty) {
                 return err(format!(
                     "_{i}: {} still owns a value at return; a drop is missing",
                     self.tys.display(ty)
@@ -856,15 +860,14 @@ impl<'a> Interp<'a> {
                 let (addr, ty) = self
                     .resolve(body, p, Mode::Write)?
                     .expect("write mode never probes");
-                let needs_drop = self.tys.needs_drop(ty);
-                let slot = self.slot_mut(&addr)?;
-                if needs_drop && slot.any_init() {
+                let old = self.slot(&addr)?;
+                if self.owns_drop(&old, ty) {
                     let what = pretty::place(body, self.tys, p);
                     return err(format!(
                         "assignment overwrites {what}, which still owns a value"
                     ));
                 }
-                *slot = v.clone();
+                *self.slot_mut(&addr)? = v.clone();
                 if p.projection.is_empty() && body.local(p.local).kind == LocalKind::DropFlag {
                     self.events
                         .push(Event::Flag(p.local, matches!(v, Value::Bool(true))));
@@ -880,12 +883,11 @@ impl<'a> Interp<'a> {
             }
             StatementKind::StorageDead(l) => {
                 let ty = body.local(*l).ty;
-                let needs_drop = self.tys.needs_drop(ty);
-                let slot = &mut self.frames.last_mut().expect("frame").locals[l.index()];
-                if needs_drop && slot.any_init() {
+                let slot = &self.frames.last().expect("frame").locals[l.index()];
+                if self.owns_drop(slot, ty) {
                     return err(format!("StorageDead({l}) while it still owns a value"));
                 }
-                *slot = Value::Uninit;
+                self.frames.last_mut().expect("frame").locals[l.index()] = Value::Uninit;
                 Ok(())
             }
             StatementKind::SetDiscriminant(p, v) => {
@@ -1017,7 +1019,12 @@ impl<'a> Interp<'a> {
             }
             Rvalue::Discriminant(p) => {
                 let (addr, _) = self.resolve_read(body, p)?;
-                match self.slot(&addr)? {
+                let v = match self.slot(&addr)? {
+                    // A `shared enum`: the variant lives in the counted box.
+                    Value::Shared(id) => self.live(id)?.value.clone(),
+                    v => v,
+                };
+                match v {
                     Value::Variant(v, _) => Ok(Value::Int(v as i128)),
                     _ => err("discriminant of a value that is not an initialized enum"),
                 }
@@ -1196,12 +1203,11 @@ impl<'a> Interp<'a> {
                 let (addr, ty) = self
                     .resolve(body, destination, Mode::Write)?
                     .expect("write mode never probes");
-                let needs_drop = self.tys.needs_drop(ty);
-                let slot = self.slot_mut(&addr)?;
-                if needs_drop && slot.any_init() {
+                let old = self.slot(&addr)?;
+                if self.owns_drop(&old, ty) {
                     return err("call result overwrites a place that still owns a value");
                 }
-                *slot = ret;
+                *self.slot_mut(&addr)? = ret;
                 self.events
                     .push(Event::Init(self.place_str(body, destination)));
                 Ok(Some(*target))
@@ -1304,6 +1310,36 @@ impl<'a> Interp<'a> {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Whether `v`, a value of type `ty`, holds anything its drop would
+    /// act on: a user `Drop` body, a heap allocation or a counted handle.
+    /// A fieldless variant, or one whose payload was moved out, owns
+    /// nothing, so leaving it in place at a return or overwriting it is
+    /// not a missing drop.
+    fn owns_drop(&self, v: &Value, ty: Ty) -> bool {
+        if !self.tys.needs_drop(ty) {
+            return false;
+        }
+        let (variant, parts) = match v {
+            Value::Uninit => return false,
+            Value::Agg(fs) => (None, fs),
+            Value::Variant(k, fs) => (Some(*k), fs),
+            _ => return true,
+        };
+        let kind = self.tys.kind(ty);
+        if let TyKind::Adt(a) = kind {
+            if self.tys.adt(a).has_drop_impl && v.any_init() {
+                return true;
+            }
+        }
+        parts.iter().enumerate().any(|(i, part)| {
+            let pty = match kind {
+                TyKind::Array(e, _) => Some(e),
+                _ => self.tys.field_ty(ty, variant, i as u32),
+            };
+            pty.is_some_and(|t| self.owns_drop(part, t))
+        })
     }
 
     /// `ty` is the ADT or shared type; its fields are read through it.
@@ -1999,6 +2035,19 @@ exit main
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
+        assert_eq!(ran, 1);
+    }
+
+    /// A strict drop of a fieldless variant, a fieldless variant left in
+    /// place at a return, and the discriminant of a `shared enum`.
+    #[test]
+    fn mir_interp_runs_the_enum_pins() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let want = |pin: &str| {
+            let out = root.join("tests/mir/interp").join(format!("{pin}.out"));
+            (std::fs::read_to_string(out).unwrap(), 0)
+        };
+        let ran = run_pin_files("tests/mir/interp", MirPhase::DropsElaborated, &want);
         assert_eq!(ran, 1);
     }
 
