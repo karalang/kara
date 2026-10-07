@@ -211,33 +211,7 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
         println!("(no fixable diagnostics in {filename})");
         return;
     }
-    let mut edits = fixes.edits;
-
-    // Drop overlapping edits (e.g. the same token reported by multiple
-    // sources). Sort by offset descending so that applying them in order
-    // does not invalidate the offsets of later edits.
-    edits.sort_by_key(|(_, e)| std::cmp::Reverse(e.offset));
-    let mut deduped: Vec<(usize, crate::resolver::TextEdit)> = Vec::with_capacity(edits.len());
-    let mut last_start = usize::MAX;
-    // Two diagnostics can ask for the same edit (a move out of a borrowed
-    // place and a use after that move both clone at the move site); apply it
-    // once, or a zero-length insertion lands twice (`k.clone().clone()`).
-    let mut seen: std::collections::HashSet<(usize, usize, String)> =
-        std::collections::HashSet::new();
-    for (fix, edit) in edits {
-        if !seen.insert((edit.offset, edit.length, edit.replacement.clone())) {
-            continue;
-        }
-        let end = edit.offset.saturating_add(edit.length);
-        if end > last_start {
-            // Overlaps a later (higher-offset) edit already in the buffer
-            // — skip silently. This is a defense-in-depth measure; the
-            // resolver shouldn't normally emit overlapping replacements.
-            continue;
-        }
-        last_start = edit.offset;
-        deduped.push((fix, edit));
-    }
+    let deduped = dedupe_fixes(fixes.edits);
 
     if dry_run {
         println!("would apply {} fix(es) to {filename}:", deduped.len());
@@ -342,6 +316,57 @@ impl FixSet {
         for g in groups {
             self.edits.extend(g.iter().cloned().map(|e| (self.next, e)));
             self.next += 1;
+        }
+    }
+}
+
+/// The edits to apply, sorted by descending offset so that applying them in
+/// order does not invalidate the offsets of later ones.
+///
+/// Two diagnostics can ask for the same edit (a move out of a borrowed place
+/// and a use after that move both clone at the move site); it is applied once,
+/// or a zero-length insertion lands twice (`k.clone().clone()`).
+///
+/// Two different fixes that overlap, or that both insert at one offset (whose
+/// order would be arbitrary: `par ` and `#[derive(Copy)]` ahead of the same
+/// `struct`), conflict. The later one is left out whole, so a multi-edit
+/// envelope is never half applied; at one offset, a multi-edit migration is
+/// kept ahead of a single edit.
+fn dedupe_fixes(
+    mut edits: Vec<(usize, crate::resolver::TextEdit)>,
+) -> Vec<(usize, crate::resolver::TextEdit)> {
+    let mut sizes: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (f, _) in &edits {
+        *sizes.entry(*f).or_default() += 1;
+    }
+    edits.sort_by_key(|(f, e)| (std::cmp::Reverse(e.offset), std::cmp::Reverse(sizes[f])));
+    let mut dropped: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    loop {
+        let mut deduped: Vec<(usize, crate::resolver::TextEdit)> = Vec::new();
+        let mut seen: std::collections::HashSet<(usize, usize, String)> =
+            std::collections::HashSet::new();
+        let mut conflict = None;
+        for (fix, edit) in edits.iter().filter(|(f, _)| !dropped.contains(f)) {
+            if !seen.insert((edit.offset, edit.length, edit.replacement.clone())) {
+                continue;
+            }
+            if let Some((last_fix, last)) = deduped.last() {
+                let end = edit.offset.saturating_add(edit.length);
+                let same_spot = edit.offset == last.offset
+                    && (edit.length == 0 || last.length == 0)
+                    && last_fix != fix;
+                if end > last.offset || same_spot {
+                    conflict = Some(*fix);
+                    break;
+                }
+            }
+            deduped.push((*fix, edit.clone()));
+        }
+        match conflict {
+            Some(f) => {
+                dropped.insert(f);
+            }
+            None => return deduped,
         }
     }
 }
@@ -943,6 +968,41 @@ mod tests {
             length,
             replacement: replacement.to_string(),
         }
+    }
+
+    #[test]
+    fn two_fixes_inserting_at_one_offset_keep_the_migration() {
+        // Fix 0 inserts `#[derive(Copy)]` at the start of `struct`'s line; fix
+        // 1 is a three-edit migration inserting `par ` there too. Applying
+        // both would write `par #[derive(Copy)]`; the migration is kept and
+        // the single edit is left out.
+        let edits = vec![
+            (0, edit(0, 0, "#[derive(Copy)]\n")),
+            (1, edit(0, 0, "par ")),
+            (1, edit(20, 4, "")),
+            (1, edit(30, 0, "Mutex[")),
+            (2, edit(40, 0, ".clone()")),
+        ];
+        let kept: Vec<usize> = dedupe_fixes(edits).iter().map(|(f, _)| *f).collect();
+        assert_eq!(kept, vec![2, 1, 1, 1]);
+    }
+
+    #[test]
+    fn an_overlap_drops_the_whole_later_fix() {
+        // Fix 0 overlaps fix 1's first edit, which is applied first (edits go
+        // in descending offset order). Fix 0 is left out, and so is fix 2,
+        // the same edit asked for twice: fix 1 is applied whole.
+        let edits = vec![
+            (0, edit(10, 5, "x")),
+            (1, edit(12, 2, "y")),
+            (1, edit(2, 0, "z")),
+            (2, edit(10, 5, "x")),
+        ];
+        let kept: Vec<(usize, usize)> = dedupe_fixes(edits)
+            .iter()
+            .map(|(f, e)| (*f, e.offset))
+            .collect();
+        assert_eq!(kept, vec![(1, 12), (1, 2)]);
     }
 
     #[test]
