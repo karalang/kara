@@ -12,9 +12,18 @@
 //!   Only a value whose type can hold a reference has origins. A call
 //!   with a whole-local `mut ref` argument may store the other arguments'
 //!   borrows into its pointee, so the pointee's origins grow by theirs
-//!   (§5.3; `TaskGroup.spawn` is the §9.5 case); so does `(*r) = v`.
+//!   (§5.3); so does `(*r) = v`. `TaskGroup.spawn` stores its closure
+//!   through `ref self` (§9.5), so a whole-local `ref TaskGroup` argument
+//!   does the same.
 //! - §5.9: a write, mutable borrow or non-`Copy` move through a `ref` is
 //!   an error unless a `shared` handle is projected after that deref.
+//! - §6.2: a `mut` field of a shared value is a place rooted at the handle
+//!   local, so a conflict through the same handle is found like any other.
+//!   Through another handle the places differ and the run-time borrow flag
+//!   decides.
+//! - Each error ends with its code, shared with `karac check`: E0516 for
+//!   an access that conflicts with a live borrow, E0517 for §5.9 and E0509
+//!   for a result that borrows a place this function owns.
 //! - A backward liveness gives the locals that may still be used. A loan
 //!   is live where some live local may hold it (non-lexical, §5.6).
 //! - An access to a place that overlaps a live loan's place conflicts when
@@ -110,7 +119,7 @@ pub fn check_borrows(
                     }
                     if conflicts(loan, &place, access) {
                         errs.push(format!(
-                            "{}: {} of {} while it is borrowed{} (borrow at {})",
+                            "{}: {} of {} while it is borrowed{} (borrow at {}) [E0516]",
                             loc(at, n),
                             access_name(access),
                             show_place(body, tys, &place),
@@ -130,7 +139,7 @@ pub fn check_borrows(
                 for (li, loan) in loans.iter().enumerate() {
                     if o[0][li] && !loan.place.projection.contains(&ProjElem::Deref) {
                         errs.push(format!(
-                            "{}: the result borrows {}, which this function owns (borrow at {})",
+                            "{}: the result borrows {}, which this function owns (borrow at {}) [E0509]",
                             loc(at, n),
                             show_place(body, tys, &loan.place),
                             loc(loan.at, body.blocks[loan.at.0].statements.len()),
@@ -176,7 +185,7 @@ fn read_only_errors(body: &Body, tys: &TyInterner) -> Vec<String> {
                 };
                 if through_shared_ref(body, tys, &place) {
                     errs.push(format!(
-                        "{}: {} of {} through a shared reference",
+                        "{}: {} of {} through a shared reference [E0517]",
                         loc((bi, si), n),
                         what,
                         show_place(body, tys, &place),
@@ -291,13 +300,15 @@ impl Cx<'_> {
         } else {
             // A store through a reference: the places the reference
             // mutably borrows now hold `val` too.
-            self.store_through(o, dest.local, &val);
+            self.store_through(o, dest.local, &val, false);
         }
     }
 
     /// A value with origins `val` is stored through the reference held in
-    /// local `r`: every local place `r` mutably borrows may now hold it.
-    fn store_through(&self, o: &mut Origins, r: Local, val: &[bool]) {
+    /// local `r`: every local place `r` mutably borrows may now hold it, or
+    /// every place it borrows at all when `through_shared` (a receiver that
+    /// stores through `ref self`).
+    fn store_through(&self, o: &mut Origins, r: Local, val: &[bool], through_shared: bool) {
         if !val.iter().any(|b| *b) {
             return;
         }
@@ -307,7 +318,7 @@ impl Cx<'_> {
             .enumerate()
             .filter(|(li, l)| {
                 o[r.index()][*li]
-                    && l.kind == BorrowKind::Mut
+                    && (through_shared || l.kind == BorrowKind::Mut)
                     && !l.place.projection.contains(&ProjElem::Deref)
                     && self.holds(&l.place)
             })
@@ -378,17 +389,25 @@ impl Cx<'_> {
         let before = o.clone();
         for (i, a) in args.iter().enumerate() {
             let Some(p) = a.place() else { continue };
-            let is_mut_ref = place_ty(self.body, self.tys, p)
-                .is_ok_and(|pt| matches!(self.tys.kind(pt.ty), TyKind::MutRef(_)));
-            if !is_mut_ref || !p.projection.is_empty() {
+            let Ok(pt) = place_ty(self.body, self.tys, p) else {
                 continue;
-            }
+            };
+            let stores = match self.tys.kind(pt.ty) {
+                TyKind::MutRef(_) => Some(false),
+                // `TaskGroup.spawn` takes `ref self` and still stores its
+                // closure's borrows in the group (§9.5).
+                TyKind::Ref(t) if is_task_group(self.tys, t) => Some(true),
+                _ => None,
+            };
+            let Some(through_shared) = stores.filter(|_| p.projection.is_empty()) else {
+                continue;
+            };
             let mut others = vec![false; self.loans.len()];
             let rest = args.iter().enumerate().filter(|(j, _)| *j != i);
             for a in std::iter::once(func).chain(rest.map(|(_, a)| a)) {
                 self.operand_origins(&before, a, &mut others);
             }
-            self.store_through(o, p.local, &others);
+            self.store_through(o, p.local, &others, through_shared);
         }
         let mut val = vec![false; self.loans.len()];
         let from = if receiver { &args[..1] } else { args };
@@ -425,7 +444,7 @@ fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
                 let adt = tys.adt(a);
                 // A task group holds its tasks' closures, which the
                 // runtime keeps out of its declared fields (§9.5).
-                if adt.name == "TaskGroup" {
+                if is_task_group(tys, ty) {
                     return true;
                 }
                 let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
@@ -441,6 +460,13 @@ fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
         }
     }
     go(tys, ty, &mut Vec::new())
+}
+
+/// `TaskGroup` holds its tasks' closures outside its declared fields and
+/// stores them through `ref self` (§9.5), so it is the one type MIR treats
+/// as holding borrows whatever it declares.
+fn is_task_group(tys: &TyInterner, ty: Ty) -> bool {
+    matches!(tys.kind(ty), TyKind::Adt(a) if tys.adt(a).name == "TaskGroup")
 }
 
 /// Forward dataflow of origins; `None` for an unreachable block.
@@ -1092,8 +1118,9 @@ fn main() -> () {{
         assert_eq!(errors(&src("")), Vec::<String>::new());
     }
 
-    /// `TaskGroup` declares only an id but holds its tasks' closures, so
-    /// a spawn into it keeps the closure's borrows live (§9.5).
+    /// `TaskGroup` declares only an id but holds its tasks' closures, and
+    /// `spawn` stores them through `ref self`, so a spawn keeps the
+    /// closure's borrows live while the group lives (§9.5).
     #[test]
     fn mir_borrowck_task_group_holds_spawned_borrows() {
         let src = |tail: &str| {
@@ -1101,7 +1128,7 @@ fn main() -> () {{
                 "
 struct TaskGroup {{ id: i64 }}
 
-fn TaskGroup.spawn(_1: mut ref TaskGroup, _2: closure#1(ref i64)) -> () {{
+fn TaskGroup.spawn(_1: ref TaskGroup, _2: closure#1(ref i64)) -> () {{
     let mut _0: ();
     bb0: {{
         _0 = const ();
@@ -1115,7 +1142,7 @@ fn main() -> () {{
     let mut _2: TaskGroup;
     let _3: ref i64;
     let _4: closure#1(ref i64);
-    let _5: mut ref TaskGroup;
+    let _5: ref TaskGroup;
     let _6: ();
     let _7: i64;
     bb0: {{
@@ -1123,7 +1150,7 @@ fn main() -> () {{
         _2 = TaskGroup {{ const 0_i64 }};
         _3 = &_1;
         _4 = closure#1(ref i64) [move _3];
-        _5 = &mut _2;
+        _5 = &_2;
         _6 = TaskGroup.spawn(move _5, move _4) -> bb1;
     }}
     bb1: {{
@@ -1137,9 +1164,62 @@ fn main() -> () {{
         };
         one(
             &errors(&src("        _7 = copy _2.0;\n")),
-            "bb1[0]: write of _1 while it is borrowed (borrow at bb0[2])",
+            "bb1[0]: write of _1 while it is borrowed (borrow at bb0[2]) [E0516]",
         );
         assert_eq!(errors(&src("")), Vec::<String>::new());
+    }
+
+    /// §6.2: a `mut` field of a shared value borrowed through one handle
+    /// local cannot be written through that local while the borrow is
+    /// live; through a second handle to the same object the places differ,
+    /// so the run-time flag decides. A `Copy` field read as a value holds
+    /// no borrow.
+    #[test]
+    fn mir_borrowck_shared_field_borrows() {
+        let src = |stmts: &str| {
+            format!(
+                "
+struct Bag {{ n: i64, items: Vec[i64] }}
+
+fn main() -> () {{
+    let mut _0: ();
+    let _1: shared Bag;
+    let _2: shared Bag;
+    let _3: ref Vec[i64];
+    let _4: mut ref Vec[i64];
+    let _5: i64;
+    let _6: ref Vec[i64];
+    let _7: Vec[i64];
+    bb0: {{
+        _7 = Vec[i64].new() -> bb1;
+    }}
+    bb1: {{
+        _1 = shared Bag {{ const 0_i64, move _7 }};
+        _2 = retain(_1);
+{stmts}        _0 = const ();
+        return;
+    }}
+}}
+"
+            )
+        };
+        one(
+            &errors(&src("        _3 = &_1.1;
+        _4 = &mut _1.1;
+        _6 = copy _3;
+")),
+            "bb1[3]: mutable borrow of _1.1 while it is borrowed (borrow at bb1[2]) [E0516]",
+        );
+        let other_handle = errors(&src("        _3 = &_1.1;
+        _4 = &mut _2.1;
+        _6 = copy _3;
+"));
+        assert_eq!(other_handle, Vec::<String>::new());
+        let copy_field = errors(&src("        _5 = copy _1.0;
+        _1.0 = const 7_i64;
+        _5 = copy _5;
+"));
+        assert_eq!(copy_field, Vec::<String>::new());
     }
 
     /// §5.9: nothing is written or mutably borrowed through a `ref`.
@@ -1330,8 +1410,12 @@ fn main() -> () {
                 }
                 continue;
             }
+            // A pin another thread adds before it reaches this table only
+            // has to be refused by something, or not build yet.
             let Some((_, must_build, want)) = err_pins.iter().find(|(p, ..)| *p == pin) else {
-                bad.push(format!("{pin}: not in this test's table"));
+                if matches!(&verdict, Ok(refused) if refused.is_empty()) {
+                    bad.push(format!("{pin}: accepted (and not in this test's table)"));
+                }
                 continue;
             };
             match verdict {
