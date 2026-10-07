@@ -586,12 +586,17 @@ class Parser:
                 elif trait == "From" and t1[2] and t1[2][0][0] == "app":
                     prog.from_impls[(tname, t1[2][0][1])] = f
                 else:
+                    if f.name in ms and ms[f.name] is not prog.traits.get(trait, {}).get(f.name) \
+                            and not getattr(ms[f.name], "is_default", False):
+                        # `impl Show for Vec[i64]` beside `impl Show for Vec[String]`: dispatch needs the type arguments
+                        raise Unsupported(f"two impls define {tname}.{f.name} (dispatch per instantiation)")
                     ms[f.name] = f
             if trait and trait != "Drop":
                 prog.trait_impls.setdefault(tname, set()).add(trait)
                 # trait default methods the impl did not override
                 for mname, mdef in prog.traits.get(trait, {}).items():
                     if mname not in ms and mdef.body is not None:
+                        mdef.is_default = True
                         ms[mname] = mdef
             return
         if self.at("fn") or self.at("async") or self.at("extern") or self.at("unsafe"):
@@ -822,11 +827,17 @@ class Parser:
 
     def prange_tail(self, p):
         if self.at("..=") or self.at(".."):
+            exclusive = self.at("..")
             self.i += 1
             neg = self.eat("-")
             hi = self.cur.v
             self.i += 1
-            return ("prange", p[1], -hi if neg else hi)
+            hi = -hi if neg else hi
+            if exclusive:
+                if not isinstance(hi, int):
+                    raise Unsupported("exclusive range pattern over a non-integer")
+                hi -= 1
+            return ("prange", p[1], hi)
         return p
 
     # ── expressions ──
@@ -878,19 +889,23 @@ class Parser:
             a = ("bin", op, a, b)
         return a
 
-    def unary(self):
+    def prefix(self):
         if self.at("-"):
             self.i += 1
-            e = self.unary()
+            e = self.prefix()
             if e[0] in ("int", "float"):
                 return (e[0], -e[1])
             return ("un", "-", e)
         if self.at("!") or self.at("not"):
             self.i += 1
-            return ("un", "!", self.unary())
+            return ("un", "!", self.prefix())
         if self.at("&") or self.at("*"):
             raise Unsupported("& / * operators")
-        e = self.postfix()
+        return self.postfix()
+
+    def unary(self):
+        # prefix operators bind tighter than `as`: `-1i32 as u8` is `(-1i32) as u8`
+        e = self.prefix()
         while self.at("as"):
             self.i += 1
             e = ("cast", e, self.ty())

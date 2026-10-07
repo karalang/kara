@@ -265,7 +265,8 @@ A view **may** enter a branch of `par {}`, or a `TaskGroup` task that joins insi
 - Using a handle as a value (assigning it, passing it, storing it) **increments** the count. The source stays usable.
 - Every binding, field or temporary holding a handle **releases** it when that holder is dropped, under §7.
 - The object's `Drop` body and fields run when the count reaches zero.
-- A struct that *contains* a handle is an ordinary move-only value. Moving it moves the handle without counting; `.clone()` increments.
+- An `Option` or a tuple whose parts are only handles, Copy values, and further such `Option`s and tuples (`Option[Node]`, `(Node, i64)`, `Option[(Node, Node)]`) is a **handle aggregate**. It is duplicated the same way: using it as a value increments every handle inside it, the source stays usable, and each copy releases its own handles when dropped. So `cur = node.next` walks a list without `.clone()` (decision 2026-10-06).
+- Any other type that contains a handle, a user `struct` or `enum` or a `Vec[Node]`, is an ordinary move-only value. Moving it moves the handle without counting; `.clone()` increments.
 
 **6.2 `mut` fields of a shared value carry a borrow flag each.**
 - Projecting a `ref` into such a field holds a read borrow of that field while the reference is live. A `mut ref` holds a write borrow.

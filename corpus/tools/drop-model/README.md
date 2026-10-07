@@ -54,25 +54,25 @@ Every DIFF and REJECT is explained; none points at the model.
 
 | Verdict | Count |
 |---|---|
-| UNSUP | 2922 (timeout ~330 at 3 s, `env` 189, `Vec.iter` 187, `Vec.filled` 104, `Vector` 87, `String.bytes` 86, closures 72, integer widths other than i64) |
-| SAME | 2530 |
+| UNSUP | 2948 (timeout ~330 at 3 s, `Vec.iter` 187, `env` 187, `Vec.filled` 104, `Vector` 87, closures, weak references, integer widths other than i64, hand-written `Hash`/`Ord` used outside an operator, impls chosen per instantiation) |
+| SAME | 2536 |
 | ORDER | 641 |
-| PARSE | 473 (`effect` items 84) |
-| V2-REJECT | 302 (index move 63, Drop-type payload move 52, ref passed to owned param 43, move out of ref 25+, use after move) |
-| DIFF | 61: 51 differ in output, 8 are failed asserts (v2 exits 101, legacy 1; §10.1), 2 are legacy aborts (-6) the model runs to completion |
+| PARSE | 458 (`effect` items 84) |
+| V2-REJECT | 314 (index move 63, ref passed to owned param 55, Drop-type payload move 52, move out of ref 24, use after move) |
+| DIFF | 32: 22 differ in output, 8 are failed asserts (v2 exits 101, legacy 1; §10.1), 2 are legacy aborts (-6) the model runs to completion |
 | LEGACY-REJECT | 73 |
 | CRASH | 0 |
+
+The 22 output DIFFs read so far are legacy running too few `Drop` bodies (a local moved into a temporary
+`match` scrutinee, fields destructured out of `self`, a by-value param part left unmoved on one path),
+legacy running one twice (a binding moved out of a borrowed `if let` place), or legacy evaluating a compound
+assignment's subscripts twice (§3). Legacy is frozen, so these stay here and not in the ledger.
 
 Under Rust's move-only rule for handle aggregates the V2-REJECT count is 505, of which 188 are
 "move out of a shared place", 181 of them `Option[Handle]` (103 programs, 39 katas, from `a = n.next`).
 
-The drop-relevant subset (1236 programs with a Drop impl or defer) splits SAME 396, ORDER 636,
-V2-REJECT 116, UNSUP 57, DIFF 23, PARSE 4, LEGACY-REJECT 4. The DIFFs read so far are legacy dropping
-too little: a by-value param part left unmoved on one path is never dropped, a `while let` scrutinee
-tuple is never dropped. Legacy is frozen, so these stay here and not in the ledger.
-
 `corpus-verdicts.json` (per program verdict and reason) and `v2-reject-list.tsv` (corpus dir,
-legacy expectation, model reason; 17 of the 302 legacy already rejects) are in the review thread's
+legacy expectation, model reason; 17 of the 314 legacy already rejects) are in the review thread's
 shared folder `review/drop-model/`; regenerate with `corpus_run.py --json`.
 
 ## Limits

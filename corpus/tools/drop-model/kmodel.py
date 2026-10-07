@@ -177,6 +177,8 @@ def _child(v, st):
     if v is MOVED:
         raise ModelError("use of a moved place")
     k, key = st
+    if k == "k":
+        return v.keys[key]
     if k == "f":
         if isinstance(v, Rec):
             return v.fields[key]
@@ -198,7 +200,9 @@ def _child(v, st):
 
 def _set_child(v, st, nv):
     k, key = st
-    if k == "f":
+    if k == "k":
+        v.keys[key] = nv
+    elif k == "f":
         if isinstance(v, Rec):
             v.fields[key] = nv
         else:
@@ -272,7 +276,7 @@ class Model:
         def walk(x):
             if isinstance(x, Handle):
                 return True
-            if isinstance(x, Enum) and x.ty in ("Option", "Result") and isinstance(x.payload, list):
+            if isinstance(x, Enum) and x.ty == "Option" and isinstance(x.payload, list):
                 return all(walk(y) or self.is_copy(y) for y in x.payload) and any(walk(y) for y in x.payload)
             if isinstance(x, Tup):
                 return all(walk(y) or self.is_copy(y) for y in x.elems) and any(walk(y) for y in x.elems)
@@ -796,7 +800,12 @@ class Model:
 
     def generic_param(self, fdef, prm):
         t = prm.ty
-        return t is not None and t[0] == "app" and (t[1] in fdef.generics or len(t[1]) == 1)
+        if t is None or t[0] != "app":
+            return False
+        if t[1] in fdef.generics:
+            return True
+        # an impl-level parameter is not in fdef.generics; a one-letter name that is not a declared type is one
+        return len(t[1]) == 1 and t[1] not in self.p.structs and t[1] not in self.p.enums
 
     def type_name(self, v):
         v = v
@@ -966,13 +975,38 @@ class Model:
         v = self.read(e[1])
         t = e[2][1] if e[2][0] == "app" else None
         if t in ("f64", "f32"):
-            return Prim(float(v.v), "float")
+            x = float(ord(v.v) if v.kind == "char" else v.v)
+            if t == "f32":
+                import struct
+                try:
+                    x = struct.unpack("f", struct.pack("f", x))[0]
+                except OverflowError:
+                    x = float("inf") if x > 0 else float("-inf")
+            return Prim(x, "float")
         if t in INT_TYPES:
             if v.kind == "char":
-                return Prim(ord(v.v), "int")
-            if v.kind == "bool":
-                return Prim(int(v.v), "int")
-            return Prim(int(v.v), "int")
+                x = ord(v.v)
+            elif v.kind == "bool":
+                x = int(v.v)
+            elif v.kind == "float":
+                # Rust `as`: truncate toward zero, saturate at the target's bounds, NaN is 0
+                import math
+                f = v.v
+                lo, hi = {"i8": (-2**7, 2**7 - 1), "u8": (0, 2**8 - 1), "i16": (-2**15, 2**15 - 1), "u16": (0, 2**16 - 1),
+                          "i32": (-2**31, 2**31 - 1), "u32": (0, 2**32 - 1)}.get(t, (-2**63, 2**63 - 1))
+                if t in ("u64", "usize", "u128", "i128"):
+                    raise Unsupported("integer width (the model's integers are i64)")
+                return Prim(0 if math.isnan(f) else max(lo, min(hi, int(f) if math.isfinite(f) else (hi if f > 0 else lo))), "int")
+            else:
+                x = int(v.v)
+            bits = {"i8": 8, "u8": 8, "i16": 16, "u16": 16, "i32": 32, "u32": 32}.get(t)
+            if bits is not None:  # `as` truncates to the target width
+                x &= (1 << bits) - 1
+                if t[0] == "i" and x >= 1 << (bits - 1):
+                    x -= 1 << bits
+            elif t in ("u64", "usize") and x < 0:
+                raise Unsupported("integer width (the model's integers are i64)")
+            return Prim(x, "int")
         if t == "char":
             return Prim(chr(v.v), "char")
         raise Unsupported(f"cast to {t}")
@@ -1004,11 +1038,18 @@ class Model:
             return Prim(bool(self.read(a).v) or bool(self.read(b).v), "bool")
         x = self.read(a)
         y = self.read(b)
+        u = self.user_compare(op, x, y)
+        if u is not None:
+            return Prim(u, "bool")
         if op in ("==", "!="):
             r = self.equal(x, y)
             return Prim(r if op == "==" else not r, "bool")
         if op in ("<", ">", "<=", ">="):
-            kx, ky = self.sort_key(x), self.sort_key(y)
+            px, py = self.deref_value(x), self.deref_value(y)
+            if isinstance(px, Prim) and isinstance(py, Prim):
+                kx, ky = px.v, py.v  # IEEE: every ordering against NaN is false
+            else:
+                kx, ky = self.sort_key(x), self.sort_key(y)
             r = {"<": kx < ky, ">": kx > ky, "<=": kx <= ky, ">=": kx >= ky}[op]
             return Prim(r, "bool")
         if isinstance(x, Str) or isinstance(y, Str):
@@ -1061,6 +1102,8 @@ class Model:
         return Prim(r, kind)
 
     def equal(self, x, y) -> bool:
+        if self.user_type(x):
+            raise Unsupported("equality or hashing through a hand-written impl outside an operator")
         x, y = self.deref_value(x), self.deref_value(y)
         if isinstance(x, Prim) and isinstance(y, Prim):
             return x.v == y.v
@@ -1080,7 +1123,58 @@ class Model:
             return False
         raise Unsupported(f"equality on {type(x).__name__}")
 
+    USER_CMP = ("eq", "ne", "partial_cmp", "cmp", "lt", "le", "gt", "ge", "hash")
+
+    def user_type(self, x):
+        """The name of a user type with a hand-written comparison or hash impl, else None."""
+        x = self.deref_value(x)
+        if isinstance(x, Handle):
+            x = x.box.v
+        if isinstance(x, (Rec, Enum)) and x.ty in self.p.methods:
+            if any(m in self.p.methods[x.ty] for m in self.USER_CMP):
+                return x.ty
+        return None
+
+    def user_compare(self, op, x, y):
+        """A comparison operator on a type with its own impl calls the impl (§4.7); None if structural."""
+        if op not in ("==", "!=", "<", ">", "<=", ">="):
+            return None
+        t = self.user_type(x)
+        if t is None:
+            return None
+        rx = Ref(Cell(self.deref_value(x), "<cmp>", temp=True), [])
+        ry = Ref(Cell(self.deref_value(y), "<cmp>", temp=True), [])
+        if op in ("==", "!="):
+            f = self.find_method(t, "eq")
+            if f is None:
+                raise Unsupported(f"derived equality on {t} beside a hand-written ordering")
+            r = bool(self.call_user(f, rx, [ry], t).v)
+            return r if op == "==" else not r
+        f = self.find_method(t, "partial_cmp") or self.find_method(t, "cmp")
+        if f is None:
+            raise Unsupported(f"ordering on {t} without partial_cmp/cmp")
+        o = self.deref_value(self.call_user(f, rx, [ry], t))
+        if isinstance(o, Enum) and o.ty == "Option":
+            if o.var == "None":
+                return False
+            o = self.deref_value(o.payload[0])
+        if not (isinstance(o, Enum) and o.var in ("Less", "Equal", "Greater")):
+            raise Unsupported("comparison impl returned a non-Ordering")
+        return {"<": o.var == "Less", ">": o.var == "Greater",
+                "<=": o.var != "Greater", ">=": o.var != "Less"}[op]
+
+    def map_add(self, m, k, v):
+        """A new entry: Sorted* keep key order, Map/Set insertion order (their walk is unordered anyway)."""
+        i = len(m.keys)
+        if m.kind in ("SortedMap", "SortedSet"):
+            kk = self.sort_key(k)
+            i = next((j for j, x in enumerate(m.keys) if self.sort_key(x) > kk), len(m.keys))
+        m.keys.insert(i, k)
+        m.vals.insert(i, v)
+
     def sort_key(self, x):
+        if self.user_type(x):
+            raise Unsupported("sorting or keying by a hand-written comparison impl")
         x = self.deref_value(x)
         if isinstance(x, Prim):
             return (0, x.v)
@@ -1478,8 +1572,7 @@ class Model:
         if pl[0] == "mapins":  # `m[k] = v` on a fresh key inserts (legacy behaviour; design.md is silent)
             _, m, k = pl
             v = self.value(rhs)
-            m.keys.append(self.clone_value(k) if isinstance(k, Str) else k)
-            m.vals.append(v)
+            self.map_add(m, self.clone_value(k) if isinstance(k, Str) else k, v)
             return UNIT
         c, p, b = pl
         if place[0] == "var" and c.refbind:
@@ -1878,6 +1971,10 @@ class Model:
         if name in ("get", "first", "last"):
             if name == "get":
                 i = self.read(args[0]).v
+            elif args:
+                if name == "first":
+                    raise Unsupported("Vec.first with an argument")
+                i = len(v.elems) - 1 - self.read(args[0]).v  # `last(k)` counts back from the end
             else:
                 i = 0 if name == "first" else len(v.elems) - 1
             if not 0 <= i < len(v.elems):
@@ -2001,8 +2098,7 @@ class Model:
                 if i is not None:
                     self.drop_value(k)
                     return Prim(False, "bool")
-                m.keys.append(k)
-                m.vals.append(None)
+                self.map_add(m, k, None)
                 return Prim(True, "bool")
             v = self.value(args[1])
             i = self.map_find(m, k)
@@ -2011,8 +2107,7 @@ class Model:
                 m.vals[i] = v
                 self.drop_value(k)
                 return some(old)
-            m.keys.append(k)
-            m.vals.append(v)
+            self.map_add(m, k, v)
             return none()
         if name in ("get", "get_mut"):
             k = self.read(args[0])
@@ -2039,10 +2134,13 @@ class Model:
 
 
 _WIDE = re.compile(r"\b(?:i128|u128|u64|usize)\b|\b\d+_?(?:u64|i128|u128)\b")
+_WEAK = re.compile(r"\bweak\s+[A-Z]|\bWeak\[|\.downgrade\(")
 _NARROW = re.compile(r"\b(?:i8|i16|i32|u8|u16|u32)\b")
 
 
 def run_source(src: str):
+    if _WEAK.search(src):
+        raise Unsupported("weak references")
     prog = parse(src)
     m = Model(prog)
     if "main" not in prog.fns:
