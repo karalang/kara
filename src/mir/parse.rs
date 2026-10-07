@@ -940,7 +940,7 @@ impl Parser {
         }
         if c.eat("[") {
             let elem = match self.tys.kind(dest) {
-                TyKind::Array(e, _) => *e,
+                TyKind::Array(e, _) => e,
                 _ => {
                     return Err(format!(
                         "array aggregate assigned to {}",
@@ -1033,7 +1033,7 @@ fn variant_of(body: &Body, tys: &TyInterner, p: &Place, name: &str) -> Result<Va
     let (TyKind::Adt(a) | TyKind::Shared(a)) = tys.kind(pt.ty) else {
         return Err(format!("{} is not an enum", tys.display(pt.ty)));
     };
-    tys.adt(*a)
+    tys.adt(a)
         .variants
         .iter()
         .position(|v| v.name == name)

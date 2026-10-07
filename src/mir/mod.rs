@@ -41,7 +41,7 @@ mod tests {
     /// `struct R { id: i64 }` with a Drop body, and
     /// `enum E { A(R), B }`.
     fn types() -> (TyInterner, Ty, Ty, Ty) {
-        let mut tys = TyInterner::new();
+        let tys = TyInterner::new();
         let i64t = tys.int(IntTy::I64);
         let r = tys.add_adt(AdtDef {
             def: DefId(1),
@@ -156,7 +156,7 @@ fn eat(_1: R, _2: bool) -> () {
 
     #[test]
     fn mir_pretty_prints_projections_and_constants() {
-        let (mut tys, i64t, rt, et) = types();
+        let (tys, i64t, rt, et) = types();
         let mut b = BodyBuilder::new(inst("f"), i64t);
         let e = b.arg("e", et);
         let bb0 = b.new_block();
@@ -330,7 +330,7 @@ fn eat(_1: R, _2: bool) -> () {
 
     #[test]
     fn mir_builder_refuses_unterminated_block() {
-        let mut tys = TyInterner::new();
+        let tys = TyInterner::new();
         let unit = tys.unit();
         let mut b = BodyBuilder::new(inst("t"), unit);
         b.new_block();

@@ -530,10 +530,10 @@ impl<'a> Interp<'a> {
     fn n_fields(&self, ty: Ty, variant: Option<u32>) -> usize {
         match self.tys.kind(ty) {
             TyKind::Tuple(ts) | TyKind::Closure(_, ts) => ts.len(),
-            TyKind::Array(_, n) => *n as usize,
+            TyKind::Array(_, n) => n as usize,
             TyKind::Adt(a) | TyKind::Shared(a) => self
                 .tys
-                .adt(*a)
+                .adt(a)
                 .variants
                 .get(variant.unwrap_or(0) as usize)
                 .map_or(0, |v| v.fields.len()),
@@ -621,7 +621,7 @@ impl<'a> Interp<'a> {
                         other => return err(format!("deref of non-reference {other:?}")),
                     }
                     ty = match self.tys.kind(ty) {
-                        TyKind::Ref(t) | TyKind::MutRef(t) => *t,
+                        TyKind::Ref(t) | TyKind::MutRef(t) => t,
                         _ => return err("deref of a non-reference type"),
                     };
                 }
@@ -640,7 +640,7 @@ impl<'a> Interp<'a> {
                     };
                     addr.path.push(i);
                     ty = match self.tys.kind(ty) {
-                        TyKind::Array(e, _) | TyKind::Slice(e) => *e,
+                        TyKind::Array(e, _) | TyKind::Slice(e) => e,
                         _ => return err("index into a non-array type"),
                     };
                     // Bounds are checked when the slot is reached.
@@ -741,7 +741,7 @@ impl<'a> Interp<'a> {
                     Some(ch) => Value::Char(ch),
                     None => return err(format!("invalid char constant {v}")),
                 },
-                TyKind::Int(it) => Value::Int(from_bits(*v, *it)),
+                TyKind::Int(it) => Value::Int(from_bits(*v, it)),
                 _ => return err("scalar constant of a non-scalar type"),
             },
             ConstKind::Float(bits) => Value::Float(f64::from_bits(*bits)),
@@ -788,10 +788,10 @@ impl<'a> Interp<'a> {
                 let (x, ty) = self.operand(body, a)?;
                 match (op, x, self.tys.kind(ty)) {
                     (UnOp::Not, Value::Bool(b), _) => Ok(Value::Bool(!b)),
-                    (UnOp::Not, Value::Int(i), TyKind::Int(it)) => Ok(Value::Int(wrap(!i, *it))),
+                    (UnOp::Not, Value::Int(i), TyKind::Int(it)) => Ok(Value::Int(wrap(!i, it))),
                     (UnOp::Neg, Value::Int(i), TyKind::Int(it)) => {
                         let r = -i;
-                        if wrap(r, *it) != r {
+                        if wrap(r, it) != r {
                             return err("negation overflowed");
                         }
                         Ok(Value::Int(r))
@@ -863,7 +863,7 @@ impl<'a> Interp<'a> {
 
     fn adt_value(&self, ty: Ty, variant: VariantIdx, vals: Vec<Value>) -> Value {
         match self.tys.kind(ty) {
-            TyKind::Adt(a) | TyKind::Shared(a) if self.tys.adt(*a).is_enum => {
+            TyKind::Adt(a) | TyKind::Shared(a) if self.tys.adt(a).is_enum => {
                 Value::Variant(variant.0, vals)
             }
             _ => Value::Agg(vals),
@@ -889,7 +889,7 @@ impl<'a> Interp<'a> {
                 if op.is_comparison() {
                     return Ok((cmp(a.cmp(&b)), false));
                 }
-                let TyKind::Int(it) = *self.tys.kind(ty) else {
+                let TyKind::Int(it) = self.tys.kind(ty) else {
                     return err("integer operands of a non-integer type");
                 };
                 let exact = match op {
@@ -962,7 +962,7 @@ impl<'a> Interp<'a> {
                 let bits = match (v, self.tys.kind(ty)) {
                     (Value::Bool(b), _) => b as u128,
                     (Value::Char(c), _) => c as u128,
-                    (Value::Int(i), TyKind::Int(it)) => to_bits(i, *it),
+                    (Value::Int(i), TyKind::Int(it)) => to_bits(i, it),
                     (v, _) => return err(format!("switchInt on {v:?}")),
                 };
                 let next = targets

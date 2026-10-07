@@ -144,7 +144,7 @@ pub fn place(body: &Body, tys: &TyInterner, p: &Place) -> String {
 fn variant_name(body: &Body, tys: &TyInterner, base: &Place, v: u32) -> String {
     if let Ok(PlaceTy { ty, .. }) = place_ty(body, tys, base) {
         if let TyKind::Adt(a) | TyKind::Shared(a) = tys.kind(ty) {
-            if let Some(var) = tys.adt(*a).variants.get(v as usize) {
+            if let Some(var) = tys.adt(a).variants.get(v as usize) {
                 return var.name.clone();
             }
         }
@@ -225,7 +225,7 @@ pub fn rvalue(body: &Body, tys: &TyInterner, rv: &Rvalue) -> String {
                 let shared = matches!(kind, AggregateKind::Shared { .. });
                 let (name, vname) = match tys.kind(*ty) {
                     TyKind::Adt(a) | TyKind::Shared(a) => {
-                        let adt = tys.adt(*a);
+                        let adt = tys.adt(a);
                         let vname = if adt.is_enum {
                             adt.variants
                                 .get(variant.index())

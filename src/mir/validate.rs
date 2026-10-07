@@ -50,7 +50,7 @@ impl Validator<'_> {
                     body.arg_count
                 ));
             }
-            if decl.kind == LocalKind::DropFlag && *self.tys.kind(decl.ty) != TyKind::Bool {
+            if decl.kind == LocalKind::DropFlag && self.tys.kind(decl.ty) != TyKind::Bool {
                 self.err(format!("_{i}: a drop flag must be bool"));
             }
         }
@@ -157,8 +157,8 @@ impl Validator<'_> {
             StatementKind::SetDiscriminant(p, v) => {
                 if let Some(ty) = self.place(p) {
                     match self.tys.kind(ty) {
-                        TyKind::Adt(a) if self.tys.adt(*a).is_enum => {
-                            if v.index() >= self.tys.adt(*a).variants.len() {
+                        TyKind::Adt(a) if self.tys.adt(a).is_enum => {
+                            if v.index() >= self.tys.adt(a).variants.len() {
                                 self.err(format!("variant {} out of range", v.0));
                             }
                         }
@@ -233,7 +233,7 @@ impl Validator<'_> {
 
     fn aggregate_fields(&mut self, ty: Ty, variant: VariantIdx, got: &[Option<Ty>]) {
         let a = match self.tys.kind(ty) {
-            TyKind::Adt(a) | TyKind::Shared(a) => *a,
+            TyKind::Adt(a) | TyKind::Shared(a) => a,
             _ => {
                 self.err(format!("ADT aggregate of non-ADT {}", self.tys.display(ty)));
                 return;
@@ -317,5 +317,5 @@ impl Validator<'_> {
 
 /// `usize`, for index locals.
 pub fn is_usize(tys: &TyInterner, t: Ty) -> bool {
-    *tys.kind(t) == TyKind::Int(IntTy::Usize)
+    tys.kind(t) == TyKind::Int(IntTy::Usize)
 }

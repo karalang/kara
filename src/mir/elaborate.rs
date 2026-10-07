@@ -759,7 +759,7 @@ mod tests {
 
     impl World {
         fn new() -> World {
-            let mut tys = TyInterner::new();
+            let tys = TyInterner::new();
             let i64t = tys.int(IntTy::I64);
             let unit = tys.unit();
             let boolt = tys.bool();

@@ -37,7 +37,7 @@ fn project(
     match *elem {
         ProjElem::Field(f, declared) => {
             if let (TyKind::Adt(a) | TyKind::Shared(a), None) = (kind, cur.variant) {
-                if tys.adt(*a).is_enum {
+                if tys.adt(a).is_enum {
                     return Err(format!(
                         "field {} of enum {} without a downcast",
                         f.0,
@@ -63,8 +63,8 @@ fn project(
             })
         }
         ProjElem::Downcast(v) => match kind {
-            TyKind::Adt(a) | TyKind::Shared(a) if tys.adt(*a).is_enum && cur.variant.is_none() => {
-                if v.index() >= tys.adt(*a).variants.len() {
+            TyKind::Adt(a) | TyKind::Shared(a) if tys.adt(a).is_enum && cur.variant.is_none() => {
+                if v.index() >= tys.adt(a).variants.len() {
                     return Err(format!("{} has no variant {}", tys.display(cur.ty), v.0));
                 }
                 Ok(PlaceTy {
@@ -76,7 +76,7 @@ fn project(
         },
         ProjElem::Deref => match kind {
             TyKind::Ref(t) | TyKind::MutRef(t) => Ok(PlaceTy {
-                ty: *t,
+                ty: t,
                 variant: None,
             }),
             _ => Err(format!("deref of non-reference {}", tys.display(cur.ty))),
@@ -87,7 +87,7 @@ fn project(
                 .get(idx.index())
                 .ok_or_else(|| format!("index {idx} is not a local of this body"))?
                 .ty;
-            if *tys.kind(idx_ty) != TyKind::Int(IntTy::Usize) {
+            if tys.kind(idx_ty) != TyKind::Int(IntTy::Usize) {
                 return Err(format!(
                     "index {idx} has type {}, not usize",
                     tys.display(idx_ty)
@@ -97,7 +97,7 @@ fn project(
         }
         ProjElem::ConstIndex(i) => {
             if let TyKind::Array(_, n) = kind {
-                if i >= *n {
+                if i >= n {
                     return Err(format!(
                         "constant index {i} out of bounds for {}",
                         tys.display(cur.ty)
@@ -112,7 +112,7 @@ fn project(
 fn element(tys: &TyInterner, cur: PlaceTy) -> Result<PlaceTy, String> {
     match tys.kind(cur.ty) {
         TyKind::Array(e, _) | TyKind::Slice(e) => Ok(PlaceTy {
-            ty: *e,
+            ty: e,
             variant: None,
         }),
         _ => Err(format!("index into non-array {}", tys.display(cur.ty))),

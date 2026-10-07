@@ -112,6 +112,77 @@ pub enum TyKind {
     Param(ParamTy),
     /// A type that already failed to check; never reaches MIR.
     Error,
+
+    // ── produced by MIR lowering only; typed HIR never contains these ──
+    /// A static string slice: the type of a `"..."` constant in MIR.
+    StaticStr,
+    /// A handle to a `shared` ADT instance (reference counted). Typed HIR
+    /// writes a shared type as [`TyKind::Adt`] (shared-ness is the
+    /// definition's); MIR makes the handle explicit.
+    Shared {
+        def: DefId,
+        args: TyList,
+    },
+    /// A library collection the MIR interpreter implements natively
+    /// (`docs/spikes/mir-types.md` § 8, open question 2) until the stdlib
+    /// defines it in Kāra.
+    Intrinsic {
+        kind: IntrinsicKind,
+        args: TyList,
+    },
+    /// A function item; its value is zero-sized.
+    FnDef {
+        def: DefId,
+        args: TyList,
+    },
+    /// A closure; its fields are the captures, in capture order.
+    Closure {
+        def: DefId,
+        captures: TyList,
+    },
+}
+
+/// The natively implemented collections of [`TyKind::Intrinsic`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntrinsicKind {
+    /// `Vec[T]`
+    Vec,
+    /// `Map[K, V]`
+    Map,
+    /// `Set[T]`
+    Set,
+}
+
+impl IntrinsicKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            IntrinsicKind::Vec => "Vec",
+            IntrinsicKind::Map => "Map",
+            IntrinsicKind::Set => "Set",
+        }
+    }
+}
+
+/// A struct or enum definition as the middle end needs it. Field types are
+/// written in the definition's own generic parameters ([`TyKind::Param`] by
+/// position); [`TyCtxt::field_ty`] instantiates them. A struct is a
+/// single-variant ADT whose variant carries the struct's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdtDef {
+    pub def: DefId,
+    pub name: String,
+    pub is_enum: bool,
+    pub variants: Vec<VariantDef>,
+    /// A user `Drop` body exists for this type itself.
+    pub has_drop_impl: bool,
+    /// Derives `Copy`.
+    pub is_copy: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariantDef {
+    pub name: String,
+    pub fields: Vec<(String, Ty)>,
 }
 
 /// Why a legacy `Type` has no v2 counterpart.
@@ -139,6 +210,7 @@ struct Tables {
 pub struct TyCtxt {
     tables: RefCell<Tables>,
     names: Interner,
+    adts: RefCell<FxHashMap<DefId, std::rc::Rc<AdtDef>>>,
 }
 
 impl Default for TyCtxt {
@@ -152,6 +224,7 @@ impl TyCtxt {
         TyCtxt {
             tables: RefCell::new(Tables::default()),
             names: Interner::new(),
+            adts: RefCell::new(FxHashMap::default()),
         }
     }
 
@@ -260,7 +333,12 @@ impl TyCtxt {
         let kind = self.kind(ty);
         f(kind);
         match kind {
-            TyKind::Tuple(list) | TyKind::Adt { args: list, .. } => {
+            TyKind::Tuple(list)
+            | TyKind::Adt { args: list, .. }
+            | TyKind::Shared { args: list, .. }
+            | TyKind::Intrinsic { args: list, .. }
+            | TyKind::FnDef { args: list, .. }
+            | TyKind::Closure { captures: list, .. } => {
                 for t in self.list(list) {
                     self.walk(t, f);
                 }
@@ -285,7 +363,8 @@ impl TyCtxt {
             | TyKind::Unit
             | TyKind::Never
             | TyKind::Param(_)
-            | TyKind::Error => {}
+            | TyKind::Error
+            | TyKind::StaticStr => {}
         }
     }
 
@@ -300,6 +379,22 @@ impl TyCtxt {
             TyKind::Adt { def, args: a } => TyKind::Adt {
                 def,
                 args: self.subst_list(a, args, const_args),
+            },
+            TyKind::Shared { def, args: a } => TyKind::Shared {
+                def,
+                args: self.subst_list(a, args, const_args),
+            },
+            TyKind::Intrinsic { kind, args: a } => TyKind::Intrinsic {
+                kind,
+                args: self.subst_list(a, args, const_args),
+            },
+            TyKind::FnDef { def, args: a } => TyKind::FnDef {
+                def,
+                args: self.subst_list(a, args, const_args),
+            },
+            TyKind::Closure { def, captures } => TyKind::Closure {
+                def,
+                captures: self.subst_list(captures, args, const_args),
             },
             TyKind::Fn { params, ret, once } => TyKind::Fn {
                 params: self.subst_list(params, args, const_args),
@@ -398,7 +493,130 @@ impl TyCtxt {
             ),
             TyKind::Param(p) => self.resolve_name(p.name).to_string(),
             TyKind::Error => "{error}".into(),
+            TyKind::StaticStr => "str".into(),
+            TyKind::Shared { def, args } => {
+                format!(
+                    "shared {}",
+                    self.display(self.adt(def, &self.list(args)), def_name)
+                )
+            }
+            TyKind::Intrinsic { kind, args } => format!("{}[{}]", kind.name(), list(args)),
+            TyKind::FnDef { def, .. } => format!("fn#{}", def.0),
+            TyKind::Closure { def, .. } => format!("closure#{}", def.0),
         }
+    }
+
+    // ── ADT definitions ─────────────────────────────────────────────
+
+    /// Register the definition of an ADT. A second registration of the
+    /// same `def` replaces the first.
+    pub fn add_adt_def(&self, adt: AdtDef) {
+        self.adts
+            .borrow_mut()
+            .insert(adt.def, std::rc::Rc::new(adt));
+    }
+
+    /// The registered definition of `def`, if any.
+    pub fn adt_def(&self, def: DefId) -> Option<std::rc::Rc<AdtDef>> {
+        self.adts.borrow().get(&def).cloned()
+    }
+
+    /// The ADT definition and instance arguments behind an `Adt` or `Shared`
+    /// type.
+    pub fn adt_of(&self, ty: Ty) -> Option<(std::rc::Rc<AdtDef>, Vec<Ty>)> {
+        match self.kind(ty) {
+            TyKind::Adt { def, args } | TyKind::Shared { def, args } => {
+                Some((self.adt_def(def)?, self.list(args)))
+            }
+            _ => None,
+        }
+    }
+
+    /// The type of field `f` of `ty` (seen as `variant` when `ty` is an
+    /// enum), instantiated, or `None` when `ty` has no such field. Tuples and
+    /// closures index their elements and captures.
+    pub fn field_ty(&self, ty: Ty, variant: Option<u32>, f: u32) -> Option<Ty> {
+        match self.kind(ty) {
+            TyKind::Tuple(l) | TyKind::Closure { captures: l, .. } if variant.is_none() => {
+                self.list(l).get(f as usize).copied()
+            }
+            TyKind::Adt { .. } | TyKind::Shared { .. } => {
+                let (adt, args) = self.adt_of(ty)?;
+                let v = match (adt.is_enum, variant) {
+                    (false, None) => adt.variants.first()?,
+                    (true, Some(v)) => adt.variants.get(v as usize)?,
+                    _ => return None,
+                };
+                let (_, t) = v.fields.get(f as usize)?;
+                Some(self.subst(*t, &args, &[]))
+            }
+            _ => None,
+        }
+    }
+
+    /// `Copy` per core semantics § 1.1: primitives and shared references,
+    /// and tuples / arrays / closures / ADTs whose parts are `Copy` (an ADT
+    /// only when it derives `Copy`).
+    pub fn is_copy(&self, ty: Ty) -> bool {
+        match self.kind(ty) {
+            TyKind::Bool
+            | TyKind::Char
+            | TyKind::Int(_)
+            | TyKind::UInt(_)
+            | TyKind::Float(_)
+            | TyKind::Unit
+            | TyKind::Never
+            | TyKind::StaticStr
+            | TyKind::Ref(_)
+            | TyKind::RawPtr { .. }
+            | TyKind::FnDef { .. } => true,
+            TyKind::Tuple(l) | TyKind::Closure { captures: l, .. } => {
+                self.list(l).into_iter().all(|t| self.is_copy(t))
+            }
+            TyKind::Array { elem, .. } => self.is_copy(elem),
+            TyKind::Adt { def, .. } => self.adt_def(def).is_some_and(|a| a.is_copy),
+            TyKind::Str
+            | TyKind::Slice { .. }
+            | TyKind::Shared { .. }
+            | TyKind::MutRef(_)
+            | TyKind::Intrinsic { .. }
+            | TyKind::Weak(_)
+            | TyKind::Fn { .. }
+            | TyKind::Param(_)
+            | TyKind::Error => false,
+        }
+    }
+
+    /// Core semantics § 1.4: owns heap memory, holds a shared handle, or has
+    /// a `Drop` body anywhere inside.
+    pub fn needs_drop(&self, ty: Ty) -> bool {
+        match self.kind(ty) {
+            TyKind::Str | TyKind::Shared { .. } | TyKind::Intrinsic { .. } | TyKind::Weak(_) => {
+                true
+            }
+            TyKind::Tuple(l) | TyKind::Closure { captures: l, .. } => {
+                self.list(l).into_iter().any(|t| self.needs_drop(t))
+            }
+            TyKind::Array { elem, .. } => self.needs_drop(elem),
+            TyKind::Adt { .. } => {
+                let Some((adt, args)) = self.adt_of(ty) else {
+                    return false;
+                };
+                adt.has_drop_impl
+                    || adt.variants.iter().any(|v| {
+                        v.fields
+                            .iter()
+                            .any(|(_, t)| self.needs_drop(self.subst(*t, &args, &[])))
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// Does this type itself have a user `Drop` body (not counting parts)?
+    pub fn has_drop_impl(&self, ty: Ty) -> bool {
+        matches!(self.kind(ty), TyKind::Adt { def, .. }
+            if self.adt_def(def).is_some_and(|a| a.has_drop_impl))
     }
 
     // ── bridge from the legacy typechecker ──────────────────────────
@@ -613,5 +831,40 @@ mod tests {
             tcx.lower_legacy(&Type::TypeParam("Z".into()), &lookup, &params),
             Err(LowerError::UnknownParam("Z".into()))
         );
+    }
+
+    #[test]
+    fn adt_instances_instantiate_their_fields() {
+        let tcx = TyCtxt::new();
+        let t = tcx.intern(TyKind::Param(ParamTy {
+            index: 0,
+            name: tcx.param_name("T"),
+        }));
+        // enum Option[T] { None, Some(T) }
+        tcx.add_adt_def(AdtDef {
+            def: DefId(2),
+            name: "Option".into(),
+            is_enum: true,
+            variants: vec![
+                VariantDef {
+                    name: "None".into(),
+                    fields: vec![],
+                },
+                VariantDef {
+                    name: "Some".into(),
+                    fields: vec![("0".into(), t)],
+                },
+            ],
+            has_drop_impl: false,
+            is_copy: false,
+        });
+        let of_int = tcx.adt(DefId(2), &[tcx.i64()]);
+        let of_str = tcx.adt(DefId(2), &[tcx.str()]);
+        assert_eq!(tcx.field_ty(of_int, Some(1), 0), Some(tcx.i64()));
+        assert_eq!(tcx.field_ty(of_str, Some(1), 0), Some(tcx.str()));
+        assert_eq!(tcx.field_ty(of_int, None, 0), None);
+        assert!(!tcx.needs_drop(of_int));
+        assert!(tcx.needs_drop(of_str));
+        assert!(!tcx.has_drop_impl(of_str));
     }
 }

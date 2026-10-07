@@ -1,18 +1,26 @@
-//! MIR types: interned, monomorphic.
+//! MIR types: the shared interned [`crate::ty::Ty`], seen through MIR's own
+//! vocabulary.
 //!
-//! A [`Ty`] is a `Copy` handle into a [`TyInterner`]. MIR is built after
-//! monomorphisation, so there are no type parameters, projections or
-//! inference variables here; the typed-HIR work will replace this
-//! interner with the shared one, keeping the handle-plus-kind shape
-//! (`docs/spikes/mir-types.md` §8, open question 1).
+//! The handles and their storage are the shared [`TyCtxt`]'s, so a type the
+//! MIR builder takes from typed HIR is the same handle here. ADTs are
+//! registered by [`DefId`] ([`crate::ty::AdtDef`]); an [`AdtId`] is that
+//! DefId's index. MIR is built after monomorphisation, so the types MIR
+//! works with are concrete (no `Param`): an ADT instance is `(def, args)`,
+//! and [`TyInterner::field_ty`] instantiates field types with the args.
+//!
+//! [`TyKind`] here is a VIEW, built on demand by [`TyInterner::kind`]: it
+//! names the integer widths MIR distinguishes as one [`IntTy`], spells
+//! ADTs by [`AdtId`], and carries tuple elements and captures as vectors.
+//! Interning a view converts it back. An `Adt(id)` view stands for the
+//! instance with no arguments; types with arguments come from typed HIR or
+//! from [`TyInterner::tcx`] directly.
 
-use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::ids::DefId;
-
-/// Handle to an interned [`TyKind`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Ty(pub u32);
+pub use crate::ty::{AdtDef, IntrinsicKind, Ty, TyCtxt, VariantDef};
+use crate::ty::{ArrayLen, TyKind as SharedKind};
+use crate::typechecker::types::{FloatSize, IntSize, UIntSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntTy {
@@ -56,31 +64,54 @@ impl IntTy {
     }
 }
 
+impl IntTy {
+    fn to_shared(self) -> SharedKind {
+        match self {
+            IntTy::I8 => SharedKind::Int(IntSize::I8),
+            IntTy::I16 => SharedKind::Int(IntSize::I16),
+            IntTy::I32 => SharedKind::Int(IntSize::I32),
+            IntTy::I64 => SharedKind::Int(IntSize::I64),
+            IntTy::U8 => SharedKind::UInt(UIntSize::U8),
+            IntTy::U16 => SharedKind::UInt(UIntSize::U16),
+            IntTy::U32 => SharedKind::UInt(UIntSize::U32),
+            IntTy::U64 => SharedKind::UInt(UIntSize::U64),
+            IntTy::Usize => SharedKind::UInt(UIntSize::Usize),
+        }
+    }
+
+    fn from_shared(k: SharedKind) -> Option<IntTy> {
+        Some(match k {
+            SharedKind::Int(IntSize::I8) => IntTy::I8,
+            SharedKind::Int(IntSize::I16) => IntTy::I16,
+            SharedKind::Int(IntSize::I32) => IntTy::I32,
+            SharedKind::Int(IntSize::I64) => IntTy::I64,
+            SharedKind::UInt(UIntSize::U8) => IntTy::U8,
+            SharedKind::UInt(UIntSize::U16) => IntTy::U16,
+            SharedKind::UInt(UIntSize::U32) => IntTy::U32,
+            SharedKind::UInt(UIntSize::U64) => IntTy::U64,
+            SharedKind::UInt(UIntSize::Usize) => IntTy::Usize,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FloatTy {
     F32,
     F64,
 }
 
-/// A user struct or enum definition as MIR needs it: monomorphic field
-/// types per variant, and whether the type has a user `Drop` body. A
-/// struct is a single-variant ADT.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AdtDef {
-    pub def: DefId,
-    pub name: String,
-    pub is_enum: bool,
-    pub variants: Vec<VariantDef>,
-    pub has_drop_impl: bool,
-    pub is_copy: bool,
+/// An ADT's index: the [`DefId`] it is registered under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AdtId(pub u32);
+
+impl AdtId {
+    pub fn def(self) -> DefId {
+        DefId(self.0)
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct VariantDef {
-    pub name: String,
-    pub fields: Vec<(String, Ty)>,
-}
-
+/// MIR's view of a type. See the module docs.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TyKind {
     Bool,
@@ -94,7 +125,7 @@ pub enum TyKind {
     Tuple(Vec<Ty>),
     Array(Ty, u64),
     Slice(Ty),
-    /// A user struct or enum; index into [`TyInterner::adts`].
+    /// A user struct or enum.
     Adt(AdtId),
     /// A `shared struct` / `shared enum` handle (reference counted).
     Shared(AdtId),
@@ -107,6 +138,9 @@ pub enum TyKind {
     FnDef(DefId),
     /// A closure; its fields are the captures, in capture order.
     Closure(DefId, Vec<Ty>),
+    /// A shared kind MIR has no view of (a generic parameter, a function
+    /// pointer, a raw pointer, ...): never valid in a MIR body.
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -117,15 +151,16 @@ pub enum IntrinsicTy {
     Set(Ty),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct AdtId(pub u32);
-
-/// Interns [`TyKind`]s and holds the ADT definitions they refer to.
-#[derive(Debug, Default)]
+/// MIR's handle on the shared type context.
+#[derive(Default)]
 pub struct TyInterner {
-    kinds: Vec<TyKind>,
-    map: HashMap<TyKind, Ty>,
-    adts: Vec<AdtDef>,
+    tcx: TyCtxt,
+}
+
+impl std::fmt::Debug for TyInterner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TyInterner")
+    }
 }
 
 impl TyInterner {
@@ -133,108 +168,164 @@ impl TyInterner {
         Self::default()
     }
 
-    pub fn intern(&mut self, kind: TyKind) -> Ty {
-        if let Some(&t) = self.map.get(&kind) {
-            return t;
+    /// Build MIR over an existing context, such as typed HIR's.
+    pub fn from_tcx(tcx: TyCtxt) -> Self {
+        TyInterner { tcx }
+    }
+
+    /// The shared context underneath.
+    pub fn tcx(&self) -> &TyCtxt {
+        &self.tcx
+    }
+
+    pub fn intern(&self, kind: TyKind) -> Ty {
+        let tcx = &self.tcx;
+        let none = || tcx.empty_list();
+        let shared = match kind {
+            TyKind::Bool => SharedKind::Bool,
+            TyKind::Char => SharedKind::Char,
+            TyKind::Int(i) => i.to_shared(),
+            TyKind::Float(FloatTy::F32) => SharedKind::Float(FloatSize::F32),
+            TyKind::Float(FloatTy::F64) => SharedKind::Float(FloatSize::F64),
+            TyKind::Unit => SharedKind::Unit,
+            TyKind::Never => SharedKind::Never,
+            TyKind::Str => SharedKind::StaticStr,
+            TyKind::Tuple(ts) => SharedKind::Tuple(tcx.intern_list(&ts)),
+            TyKind::Array(e, n) => SharedKind::Array {
+                elem: e,
+                len: ArrayLen::Known(n),
+            },
+            TyKind::Slice(e) => SharedKind::Slice {
+                elem: e,
+                mutable: false,
+            },
+            TyKind::Adt(a) => SharedKind::Adt {
+                def: a.def(),
+                args: none(),
+            },
+            TyKind::Shared(a) => SharedKind::Shared {
+                def: a.def(),
+                args: none(),
+            },
+            TyKind::Ref(t) => SharedKind::Ref(t),
+            TyKind::MutRef(t) => SharedKind::MutRef(t),
+            TyKind::Intrinsic(IntrinsicTy::String) => SharedKind::Str,
+            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => SharedKind::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args: tcx.intern_list(&[e]),
+            },
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v)) => SharedKind::Intrinsic {
+                kind: IntrinsicKind::Map,
+                args: tcx.intern_list(&[k, v]),
+            },
+            TyKind::Intrinsic(IntrinsicTy::Set(e)) => SharedKind::Intrinsic {
+                kind: IntrinsicKind::Set,
+                args: tcx.intern_list(&[e]),
+            },
+            TyKind::FnDef(d) => SharedKind::FnDef {
+                def: d,
+                args: none(),
+            },
+            TyKind::Closure(d, caps) => SharedKind::Closure {
+                def: d,
+                captures: tcx.intern_list(&caps),
+            },
+            TyKind::Other => SharedKind::Error,
+        };
+        tcx.intern(shared)
+    }
+
+    /// MIR's view of `t`.
+    pub fn kind(&self, t: Ty) -> TyKind {
+        let tcx = &self.tcx;
+        match tcx.kind(t) {
+            SharedKind::Bool => TyKind::Bool,
+            SharedKind::Char => TyKind::Char,
+            k @ (SharedKind::Int(_) | SharedKind::UInt(_)) => match IntTy::from_shared(k) {
+                Some(i) => TyKind::Int(i),
+                None => TyKind::Other,
+            },
+            SharedKind::Float(FloatSize::F32) => TyKind::Float(FloatTy::F32),
+            SharedKind::Float(FloatSize::F64) => TyKind::Float(FloatTy::F64),
+            SharedKind::Unit => TyKind::Unit,
+            SharedKind::Never => TyKind::Never,
+            SharedKind::StaticStr => TyKind::Str,
+            SharedKind::Str => TyKind::Intrinsic(IntrinsicTy::String),
+            SharedKind::Tuple(l) => TyKind::Tuple(tcx.list(l)),
+            SharedKind::Array {
+                elem,
+                len: ArrayLen::Known(n),
+            } => TyKind::Array(elem, n),
+            SharedKind::Slice { elem, .. } => TyKind::Slice(elem),
+            SharedKind::Adt { def, .. } => TyKind::Adt(AdtId(def.0)),
+            SharedKind::Shared { def, .. } => TyKind::Shared(AdtId(def.0)),
+            SharedKind::Ref(t) => TyKind::Ref(t),
+            SharedKind::MutRef(t) => TyKind::MutRef(t),
+            SharedKind::Intrinsic { kind, args } => {
+                let a = tcx.list(args);
+                match (kind, a.as_slice()) {
+                    (IntrinsicKind::Vec, [e]) => TyKind::Intrinsic(IntrinsicTy::Vec(*e)),
+                    (IntrinsicKind::Map, [k, v]) => TyKind::Intrinsic(IntrinsicTy::Map(*k, *v)),
+                    (IntrinsicKind::Set, [e]) => TyKind::Intrinsic(IntrinsicTy::Set(*e)),
+                    _ => TyKind::Other,
+                }
+            }
+            SharedKind::FnDef { def, .. } => TyKind::FnDef(def),
+            SharedKind::Closure { def, captures } => TyKind::Closure(def, tcx.list(captures)),
+            _ => TyKind::Other,
         }
-        let t = Ty(self.kinds.len() as u32);
-        self.kinds.push(kind.clone());
-        self.map.insert(kind, t);
-        t
     }
 
-    pub fn kind(&self, t: Ty) -> &TyKind {
-        &self.kinds[t.0 as usize]
-    }
-
-    pub fn add_adt(&mut self, adt: AdtDef) -> AdtId {
-        let id = AdtId(self.adts.len() as u32);
-        self.adts.push(adt);
+    /// Register `adt` under its DefId, which is its [`AdtId`].
+    pub fn add_adt(&self, adt: AdtDef) -> AdtId {
+        let id = AdtId(adt.def.0);
+        self.tcx.add_adt_def(adt);
         id
     }
 
-    pub fn adt(&self, id: AdtId) -> &AdtDef {
-        &self.adts[id.0 as usize]
+    /// The definition behind `id`. Panics when nothing is registered, as an
+    /// index past the end did.
+    pub fn adt(&self, id: AdtId) -> Rc<AdtDef> {
+        self.tcx
+            .adt_def(id.def())
+            .unwrap_or_else(|| panic!("no ADT registered for {id:?}"))
     }
 
     // Shorthands for the common leaves.
-    pub fn unit(&mut self) -> Ty {
-        self.intern(TyKind::Unit)
+    pub fn unit(&self) -> Ty {
+        self.tcx.unit()
     }
-    pub fn bool(&mut self) -> Ty {
-        self.intern(TyKind::Bool)
+    pub fn bool(&self) -> Ty {
+        self.tcx.bool()
     }
-    pub fn int(&mut self, i: IntTy) -> Ty {
-        self.intern(TyKind::Int(i))
+    pub fn int(&self, i: IntTy) -> Ty {
+        self.tcx.intern(i.to_shared())
     }
 
     /// `Copy` per core semantics §1.1: primitives, and tuples / arrays /
     /// ADTs whose parts are `Copy` (an ADT only when derived).
     pub fn is_copy(&self, t: Ty) -> bool {
-        match self.kind(t) {
-            TyKind::Bool
-            | TyKind::Char
-            | TyKind::Int(_)
-            | TyKind::Float(_)
-            | TyKind::Unit
-            | TyKind::Never
-            | TyKind::Str
-            | TyKind::Ref(_)
-            | TyKind::FnDef(_) => true,
-            TyKind::Tuple(ts) => ts.iter().all(|&t| self.is_copy(t)),
-            TyKind::Array(e, _) => self.is_copy(*e),
-            TyKind::Adt(a) => self.adt(*a).is_copy,
-            TyKind::Closure(_, caps) => caps.iter().all(|&t| self.is_copy(t)),
-            TyKind::Slice(_) | TyKind::Shared(_) | TyKind::MutRef(_) | TyKind::Intrinsic(_) => {
-                false
-            }
-        }
+        self.tcx.is_copy(t)
     }
 
     /// Core semantics §1.4: owns heap memory, holds a shared handle, or
     /// has a `Drop` body anywhere inside.
     pub fn needs_drop(&self, t: Ty) -> bool {
-        match self.kind(t) {
-            TyKind::Shared(_) | TyKind::Intrinsic(_) => true,
-            TyKind::Tuple(ts) | TyKind::Closure(_, ts) => ts.iter().any(|&t| self.needs_drop(t)),
-            TyKind::Array(e, _) => self.needs_drop(*e),
-            TyKind::Adt(a) => {
-                let adt = self.adt(*a);
-                adt.has_drop_impl
-                    || adt
-                        .variants
-                        .iter()
-                        .any(|v| v.fields.iter().any(|(_, t)| self.needs_drop(*t)))
-            }
-            _ => false,
-        }
+        self.tcx.needs_drop(t)
     }
 
     /// Does this type itself have a user `Drop` body (not counting parts)?
     pub fn has_drop_impl(&self, t: Ty) -> bool {
-        matches!(self.kind(t), TyKind::Adt(a) if self.adt(*a).has_drop_impl)
+        self.tcx.has_drop_impl(t)
     }
 
     /// The type of field `f` of `t` (seen as `variant` when `t` is an
     /// enum), or `None` when `t` has no such field.
     pub fn field_ty(&self, t: Ty, variant: Option<u32>, f: u32) -> Option<Ty> {
-        match self.kind(t) {
-            TyKind::Tuple(ts) | TyKind::Closure(_, ts) if variant.is_none() => {
-                ts.get(f as usize).copied()
-            }
-            TyKind::Adt(a) | TyKind::Shared(a) => {
-                let adt = self.adt(*a);
-                let v = match (adt.is_enum, variant) {
-                    (false, None) => adt.variants.first()?,
-                    (true, Some(v)) => adt.variants.get(v as usize)?,
-                    _ => return None,
-                };
-                v.fields.get(f as usize).map(|(_, t)| *t)
-            }
-            _ => None,
-        }
+        self.tcx.field_ty(t, variant, f)
     }
 
+    /// The MIR text form of `t`.
     pub fn display(&self, t: Ty) -> String {
         match self.kind(t) {
             TyKind::Bool => "bool".into(),
@@ -249,20 +340,35 @@ impl TyInterner {
                 let parts: Vec<String> = ts.iter().map(|&t| self.display(t)).collect();
                 format!("({})", parts.join(", "))
             }
-            TyKind::Array(e, n) => format!("Array[{}, {}]", self.display(*e), n),
-            TyKind::Slice(e) => format!("Slice[{}]", self.display(*e)),
-            TyKind::Adt(a) => self.adt(*a).name.clone(),
-            TyKind::Shared(a) => format!("shared {}", self.adt(*a).name),
-            TyKind::Ref(t) => format!("ref {}", self.display(*t)),
-            TyKind::MutRef(t) => format!("mut ref {}", self.display(*t)),
+            TyKind::Array(e, n) => format!("Array[{}, {}]", self.display(e), n),
+            TyKind::Slice(e) => format!("Slice[{}]", self.display(e)),
+            TyKind::Adt(_) => self.adt_name(t),
+            TyKind::Shared(_) => format!("shared {}", self.adt_name(t)),
+            TyKind::Ref(t) => format!("ref {}", self.display(t)),
+            TyKind::MutRef(t) => format!("mut ref {}", self.display(t)),
             TyKind::Intrinsic(IntrinsicTy::String) => "String".into(),
-            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => format!("Vec[{}]", self.display(*e)),
+            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => format!("Vec[{}]", self.display(e)),
             TyKind::Intrinsic(IntrinsicTy::Map(k, v)) => {
-                format!("Map[{}, {}]", self.display(*k), self.display(*v))
+                format!("Map[{}, {}]", self.display(k), self.display(v))
             }
-            TyKind::Intrinsic(IntrinsicTy::Set(e)) => format!("Set[{}]", self.display(*e)),
+            TyKind::Intrinsic(IntrinsicTy::Set(e)) => format!("Set[{}]", self.display(e)),
             TyKind::FnDef(d) => format!("fn#{}", d.0),
             TyKind::Closure(d, _) => format!("closure#{}", d.0),
+            TyKind::Other => self.tcx.display(t, &|d| format!("def#{}", d.0)),
+        }
+    }
+
+    /// An ADT type's name: its definition's, followed by the instance
+    /// arguments when it has any.
+    fn adt_name(&self, t: Ty) -> String {
+        let Some((adt, args)) = self.tcx.adt_of(t) else {
+            return self.tcx.display(t, &|d| format!("def#{}", d.0));
+        };
+        if args.is_empty() {
+            adt.name.clone()
+        } else {
+            let parts: Vec<String> = args.iter().map(|&a| self.display(a)).collect();
+            format!("{}[{}]", adt.name, parts.join(", "))
         }
     }
 }
