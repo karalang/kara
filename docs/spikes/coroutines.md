@@ -1,6 +1,6 @@
 # Spike: stackful or stackless tasks for `suspends`
 
-Status: **for decision** by Gowtham before M2 fixes the frame layout (plan recheck 2026-10-07 §2.3). Written by the MIR owner. Claims are marked **(checked)** when read off the spec or the tree, and **(inferred)** otherwise.
+Status: **decided 2026-10-07: stackless** (Gowtham, on the decision card; plan recheck 2026-10-07 §2.3). Written by the MIR owner. Claims are marked **(checked)** when read off the spec or the tree, and **(inferred)** otherwise.
 
 ## What is being decided
 
