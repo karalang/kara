@@ -1740,3 +1740,29 @@ fn capture_prefixes_are_removed() {
         );
     }
 }
+
+/// §11.7: `collect_all` and `collect_all_vec` are removed; a `par` block
+/// whose branches produce `Result`s already returns every result. §11.1:
+/// so is the free `spawn`.
+#[test]
+fn collect_all_is_removed() {
+    rejected_with(
+        "collect-all-vec",
+        "fn ok(n: i64) -> Result[i64, String] { Ok(n) }\n\
+         fn main() {\n\
+             let fs: Vec[Fn() -> Result[i64, String]] = vec![|| ok(1), || ok(2)];\n\
+             let rs = collect_all_vec(fs);\n\
+             println(f\"{rs.len()}\");\n\
+         }\n",
+        "`collect_all_vec` is removed (§11.7)",
+    );
+    rejected_with(
+        "free-spawn",
+        "fn add(a: i64, b: i64) -> i64 { a + b }\n\
+         fn main() {\n\
+             let h: TaskHandle[i64] = spawn(|| add(40, 2));\n\
+             println(f\"{h.join()}\");\n\
+         }\n",
+        "free `spawn` is removed (§11.1)",
+    );
+}

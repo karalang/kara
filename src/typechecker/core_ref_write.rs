@@ -28,7 +28,9 @@
 //! on to one, or a local bound to such a closure. A closure that moves a
 //! capture out is an `OnceFn`, which the type checker already reports where
 //! an `Fn` is expected (E0235). The removed capture prefixes are reported
-//! here too, with the edit that deletes them.
+//! here too, with the edit that deletes them, as are calls of the removed
+//! `collect_all` and `collect_all_vec` (§11.7) and of the free `spawn`
+//! (§11.1).
 
 use super::*;
 use crate::index_disjoint::{for_each_child_public, Child};
@@ -98,6 +100,8 @@ struct Walk<'t, 'a> {
     kind_errors: Vec<(Span, String)>,
     /// Removed capture prefixes, with the edit that deletes each (§9.6).
     prefix_errors: Vec<(Span, String, FixIt)>,
+    /// Calls of removed library functions (§11.7).
+    removed_calls: Vec<(Span, String)>,
     /// The callee of each call of an `OnceFn` value, for the ownership
     /// pass's E0500 wording (§9.6).
     once_calls: FxHashSet<SpanKey>,
@@ -202,6 +206,7 @@ impl<'a> TypeChecker<'a> {
             kind_errors: Vec::new(),
             prefix_errors: Vec::new(),
             once_calls: FxHashSet::default(),
+            removed_calls: Vec::new(),
         };
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
             w.self_read_only = matches!(f.self_param, Some(SelfParam::Ref));
@@ -253,6 +258,9 @@ impl<'a> TypeChecker<'a> {
         let kind_errors = w.kind_errors;
         let prefix_errors = w.prefix_errors;
         let once_calls = w.once_calls;
+        for (span, message) in w.removed_calls {
+            self.type_error(message, span, TypeErrorKind::RemovedInCore);
+        }
         for (span, message) in kind_errors {
             self.type_error(message, span, TypeErrorKind::FnKindMismatch);
         }
@@ -737,6 +745,28 @@ impl Walk<'_, '_> {
             self.once_calls.insert(SpanKey::from_span(&callee.span));
         }
         if self.lookup(name).is_some() {
+            return;
+        }
+        if matches!(name.as_str(), "collect_all" | "collect_all_vec")
+            && !self.fn_decls.contains_key(name.as_str())
+        {
+            self.removed_calls.push((
+                callee.span,
+                format!(
+                    "`{name}` is removed (§11.7); a `par {{ … }}` block whose branches \
+                     produce `Result` values without `?` already returns every result, \
+                     in source order"
+                ),
+            ));
+            return;
+        }
+        if name == "spawn" && !self.fn_decls.contains_key("spawn") {
+            self.removed_calls.push((
+                callee.span,
+                "free `spawn` is removed (§11.1); a task starts only in `par { … }`, \
+                 `par for` or `TaskGroup.spawn`, so it cannot outlive its scope"
+                    .to_string(),
+            ));
             return;
         }
         let Some(f) = self.fn_decls.get(name.as_str()).copied() else {

@@ -813,6 +813,11 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0519",
         ty("CapturePrefixRemoved", Some(DiagnosticClass::TypeMismatch)),
     ),
+    // v2 core: library items the core removes (§11.7 `collect_all`).
+    (
+        "E0520",
+        ty("RemovedInCore", Some(DiagnosticClass::TypeMismatch)),
+    ),
     // ── provider escape ─────────────────────────────────────────
     ("E0600", prov("ProviderEscape")),
     // ── lint (non-`TypeErrorKind`) ──────────────────────────────

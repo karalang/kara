@@ -1827,6 +1827,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::WriteThroughSharedRef => "E0517",
                 crate::typechecker::TypeErrorKind::FnKindMismatch => "E0518",
                 crate::typechecker::TypeErrorKind::CapturePrefixRemoved => "E0519",
+                crate::typechecker::TypeErrorKind::RemovedInCore => "E0520",
                 crate::typechecker::TypeErrorKind::LazyLockRuntimeCapture => "E0284",
                 crate::typechecker::TypeErrorKind::IndexMoveNonCopy => "E0285",
                 crate::typechecker::TypeErrorKind::NilCoalesceNotWrapped => "E0276",

@@ -709,6 +709,9 @@ pub enum TypeErrorKind {
     /// v2 core §9.6: the closure capture prefixes `own |x|`, `ref |x|` and
     /// `mut ref |x|` are removed; captures are inferred (E0519).
     CapturePrefixRemoved,
+    /// v2 core: a library item the core removes: `collect_all` and
+    /// `collect_all_vec` (§11.7), the free `spawn` (§11.1) (E0520).
+    RemovedInCore,
     /// B-2026-08-26-15 — a `LazyLock.new` closure captured a function local.
     LazyLockRuntimeCapture,
     /// `let t = v[i]` / `x = v[j]` where the element type is not `Copy`.
@@ -1331,7 +1334,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::BorrowConflict
         | TypeErrorKind::WriteThroughSharedRef
         | TypeErrorKind::FnKindMismatch
-        | TypeErrorKind::CapturePrefixRemoved => Some(DC::TypeMismatch),
+        | TypeErrorKind::CapturePrefixRemoved
+        | TypeErrorKind::RemovedInCore => Some(DC::TypeMismatch),
 
         TypeErrorKind::WrongNumberOfArgs | TypeErrorKind::AtomicMissingOrdering => {
             Some(DC::WrongNumberOfArgs)
