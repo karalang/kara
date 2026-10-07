@@ -1458,6 +1458,12 @@ pub struct TypeCheckResult {
     /// §1.1), so the read copies the reference and moves nothing; the
     /// pipeline drops a use-after-move whose consume site is one of these.
     pub core_ref_copy_spans: FxHashSet<SpanKey>,
+    /// v2 core (strict commands only): scrutinees whose pattern binds a
+    /// non-`Copy` part by value. That moves the part out (§4.6), so the
+    /// ownership pass treats the scrutinee place as consumed there.
+    /// Each maps to the edits that make its moving bindings `ref`s, which
+    /// is `karac fix`'s repair for a later use of the scrutinee.
+    pub core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// Receiver `Vector[T, N]` type for each vector **instance**-method call
     /// (`reduce_*` / `dot` / `cross` / `select`), keyed by the method-call
     /// span, recorded as `(element, lane_count)`. A `MethodCall`'s span equals
@@ -2217,6 +2223,11 @@ pub struct TypeChecker<'a> {
     pub(super) core_shared_depth: usize,
     /// See [`TypeCheckResult::core_ref_copy_spans`].
     pub(super) core_ref_copy_spans: FxHashSet<SpanKey>,
+    /// See [`TypeCheckResult::core_moving_scrutinees`].
+    pub(super) core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// The `ref ` insertions for the by-value, non-`Copy` bindings found
+    /// while a scrutinee's pattern is checked.
+    pub(super) core_pattern_moves: Vec<crate::resolver::TextEdit>,
     pub(super) errors: Vec<TypeError>,
     pub(super) warnings: Vec<TypeError>,
     pub(super) expr_types: FxHashMap<SpanKey, Type>,
@@ -2941,6 +2952,8 @@ impl<'a> TypeChecker<'a> {
             core_shorthand_field: false,
             core_shared_depth: 0,
             core_ref_copy_spans: FxHashSet::default(),
+            core_moving_scrutinees: FxHashMap::default(),
+            core_pattern_moves: Vec::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             expr_types: FxHashMap::default(),
@@ -3301,6 +3314,7 @@ impl<'a> TypeChecker<'a> {
             expr_types: self.expr_types,
             clonable_expr_spans,
             core_ref_copy_spans: self.core_ref_copy_spans,
+            core_moving_scrutinees: self.core_moving_scrutinees,
             vector_method_receivers: self.vector_method_receivers,
             pointer_method_receiver_pointees: self.pointer_method_receiver_pointees,
             struct_info: self.env.structs,

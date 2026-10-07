@@ -675,3 +675,40 @@ fn a_field_read_through_a_ref_binding_or_a_handle_is_a_borrow() {
          }\n",
     );
 }
+
+#[test]
+fn a_by_value_binding_moves_its_part_out_of_an_owned_scrutinee() {
+    // §4.6: over an owned scrutinee a plain binding moves the part out, so a
+    // later use of the scrutinee is a use after move; `karac fix` adds `ref`.
+    rejected_then_fixed_by(
+        "pattern-move-match",
+        "fn main() {\n\
+             let o: Option[String] = Some(\"a\".to_string());\n\
+             match o { Some(s) => println(s), None => {} }\n\
+             println(o.is_some());\n\
+         }\n",
+        "moves its part out",
+        "Some(ref s)",
+    );
+    rejected_then_fixed_by(
+        "pattern-move-if-let",
+        "fn main() {\n\
+             let o: Option[String] = Some(\"a\".to_string());\n\
+             if let Some(s) = o { println(s); }\n\
+             println(o.is_some());\n\
+         }\n",
+        "moves its part out",
+        "Some(ref s)",
+    );
+    // `Copy` parts copy, and nothing used afterwards is fine either way.
+    accepted(
+        "pattern-copy",
+        "fn main() {\n\
+             let n: Option[i64] = Some(1);\n\
+             match n { Some(k) => println(k), None => {} }\n\
+             println(n.is_some());\n\
+             let o: Option[String] = Some(\"a\".to_string());\n\
+             match o { Some(s) => println(s), None => {} }\n\
+         }\n",
+    );
+}

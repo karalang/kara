@@ -1536,6 +1536,26 @@ impl Pipeline {
                 e.kind != crate::ownership::OwnershipErrorKind::MoveOutOfPlace
                     || !index_moves.contains(&crate::resolver::SpanKey::from_span(&e.span))
             });
+            // §4.6: when the move is a pattern binding taking a part out of
+            // the scrutinee, the repair is `ref` on that binding.
+            let pattern_moves = &self.typed.as_ref().unwrap().core_moving_scrutinees;
+            for e in ownership.errors.iter_mut() {
+                if e.kind != crate::ownership::OwnershipErrorKind::UseAfterMove {
+                    continue;
+                }
+                let Some(edits) = e
+                    .consume_span
+                    .and_then(|c| pattern_moves.get(&crate::resolver::SpanKey::from_span(&c)))
+                else {
+                    continue;
+                };
+                e.message += " (a binding in that pattern moves its part out; \
+                               bind it as `ref name` to borrow it)";
+                e.replacement = None;
+                ownership
+                    .error_fix_diffs
+                    .insert(crate::resolver::SpanKey::from_span(&e.span), edits.clone());
+            }
             ownership.errors.sort_by_key(|e| e.span.offset);
         }
         self.ownership = Some(ownership);

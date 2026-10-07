@@ -1158,7 +1158,7 @@ impl Drop for CoreRulesGuard {
     }
 }
 
-fn core_rules() -> bool {
+pub(crate) fn core_rules() -> bool {
     CORE_RULES.with(|c| c.get())
 }
 

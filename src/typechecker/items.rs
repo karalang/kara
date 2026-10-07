@@ -6473,7 +6473,7 @@ impl<'a> super::TypeChecker<'a> {
                         std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
                     let prev_bp =
                         std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
-                    self.check_pattern_against(pattern, &dispatch_ty, mode);
+                    self.check_scrutinee_pattern(pattern, &dispatch_ty, mode, value);
                     self.current_scrutinee_borrow_projection = prev_bp;
                     self.current_scrutinee_core_borrowed = prev_core;
                 }
@@ -6545,7 +6545,7 @@ impl<'a> super::TypeChecker<'a> {
                     std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
                 let prev_bp =
                     std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
-                self.check_pattern_against(pattern, &dispatch_ty, mode);
+                self.check_scrutinee_pattern(pattern, &dispatch_ty, mode, value);
                 self.current_scrutinee_borrow_projection = prev_bp;
                 self.current_scrutinee_core_borrowed = prev_core;
             }

@@ -316,6 +316,17 @@ impl<'a> UseClassifier<'a> {
     /// never moved (design.md § Match Arm Binding Modes). Falls back
     /// to `param_types` / `local_types` when the span lookup misses,
     /// matching the same lookup chain used in `classify_identifier`.
+    /// v2 core §4.6: does a by-value binding in this scrutinee's pattern
+    /// move a part out of it? The typechecker records it, under the strict
+    /// commands only.
+    fn core_pattern_moves(&self, scrutinee: &Expr) -> bool {
+        crate::ownership::core_rules()
+            && self
+                .tc
+                .core_moving_scrutinees
+                .contains_key(&SpanKey::from_span(&scrutinee.span))
+    }
+
     fn is_borrow_typed_expr(&self, expr: &Expr) -> bool {
         let ty = self
             .tc
@@ -961,7 +972,13 @@ impl<'a> UseClassifier<'a> {
                 // as `match` step 4. For simplicity (and to align with the
                 // dataflow conservative read-of-scrutinee in ownership.rs)
                 // treat it as Reading; `match` does the binds-anything check.
-                self.walk_expr(value, Mode::Reading);
+                // Under the v2 core a by-value binding moves its part out.
+                let scrut_mode = if self.core_pattern_moves(value) {
+                    Mode::Consuming
+                } else {
+                    Mode::Reading
+                };
+                self.walk_expr(value, scrut_mode);
                 self.walk_block(then_block, mode);
                 if let Some(eb) = else_branch {
                     self.walk_expr(eb, mode);
@@ -1017,7 +1034,9 @@ impl<'a> UseClassifier<'a> {
                         any_arm_moves_its_binding = true;
                     }
                 }
-                let scrut_mode = if any_arm_binds && any_arm_moves_its_binding && !scrut_is_borrow {
+                let scrut_mode = if (any_arm_binds && any_arm_moves_its_binding && !scrut_is_borrow)
+                    || self.core_pattern_moves(scrutinee)
+                {
                     Mode::Consuming
                 } else {
                     Mode::Reading
@@ -1032,7 +1051,12 @@ impl<'a> UseClassifier<'a> {
                 self.walk_block(body, Mode::Reading);
             }
             ExprKind::WhileLet { value, body, .. } => {
-                self.walk_expr(value, Mode::Reading);
+                let scrut_mode = if self.core_pattern_moves(value) {
+                    Mode::Consuming
+                } else {
+                    Mode::Reading
+                };
+                self.walk_expr(value, scrut_mode);
                 self.walk_block(body, Mode::Reading);
             }
             ExprKind::For { iterable, body, .. } => {

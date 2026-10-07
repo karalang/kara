@@ -194,7 +194,7 @@ impl<'a> super::TypeChecker<'a> {
         let scrut_core = self.scrutinee_core_borrowed(value);
         let prev_core = std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
         let prev_bp = std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
-        self.check_pattern_against(pattern, &dispatch_ty, mode);
+        self.check_scrutinee_pattern(pattern, &dispatch_ty, mode, value);
         self.current_scrutinee_borrow_projection = prev_bp;
         self.current_scrutinee_core_borrowed = prev_core;
         self.current_arm_body_block = prev_blk;
@@ -263,7 +263,7 @@ impl<'a> super::TypeChecker<'a> {
                 std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
             let prev_bp =
                 std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
-            self.check_pattern_against(&arm.pattern, &dispatch_ty, mode);
+            self.check_scrutinee_pattern(&arm.pattern, &dispatch_ty, mode, scrutinee);
             self.current_scrutinee_borrow_projection = prev_bp;
             self.current_scrutinee_core_borrowed = prev_core;
             self.current_arm_body = prev_arm_body;
@@ -615,7 +615,7 @@ impl<'a> super::TypeChecker<'a> {
                 std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
             let prev_bp =
                 std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
-            self.check_pattern_against(&arm.pattern, &dispatch_ty, mode);
+            self.check_scrutinee_pattern(&arm.pattern, &dispatch_ty, mode, scrutinee);
             self.current_scrutinee_borrow_projection = prev_bp;
             self.current_scrutinee_core_borrowed = prev_core;
             self.current_arm_body = prev_arm_body;
@@ -1142,6 +1142,30 @@ impl<'a> super::TypeChecker<'a> {
                             .contains(&SpanKey::from_span(&pattern.span)))
                 {
                     self.local_scope.mark_view(name);
+                } else if self.cli_lint_overrides.strict_core
+                    && matches!(mode, ScrutineeMode::Owned)
+                    && !matches!(
+                        expected,
+                        Type::Ref(_)
+                            | Type::MutRef(_)
+                            | Type::Error
+                            | Type::Never
+                            | Type::TypeParam(_)
+                    )
+                    && !self.is_copy_type_during_check(expected)
+                    && !self.copy_is_only_an_rc_retain(expected)
+                {
+                    // §4.6: a plain binding over an owned scrutinee moves
+                    // its part out; `ref name` would borrow it instead.
+                    self.core_pattern_moves.push(crate::resolver::TextEdit {
+                        offset: pattern.span.offset,
+                        length: 0,
+                        replacement: if self.core_shorthand_field {
+                            format!("{name}: ref ")
+                        } else {
+                            "ref ".to_string()
+                        },
+                    });
                 }
                 self.record_pattern_binding_borrow_mode(&pattern.span, mode, expected);
                 self.record_pattern_binding_surface_types(pattern, expected);
@@ -1637,6 +1661,27 @@ impl<'a> super::TypeChecker<'a> {
     /// v2 core §4.6: destructuring a `shared` value counts as a `ref`
     /// scrutinee, so every binding under it borrows its part (and moving one
     /// is §3.7's error, which the view rules report).
+    /// [`Self::check_pattern_against`] for the pattern of `scrutinee`,
+    /// recording it in `core_moving_scrutinees` when a binding moves a part
+    /// out of it.
+    pub(super) fn check_scrutinee_pattern(
+        &mut self,
+        pattern: &Pattern,
+        ty: &Type,
+        mode: ScrutineeMode,
+        scrutinee: &Expr,
+    ) {
+        let prev = std::mem::take(&mut self.core_pattern_moves);
+        self.check_pattern_against(pattern, ty, mode);
+        let moves = std::mem::replace(&mut self.core_pattern_moves, prev);
+        if !moves.is_empty() {
+            self.core_moving_scrutinees
+                .entry(SpanKey::from_span(&scrutinee.span))
+                .or_default()
+                .extend(moves);
+        }
+    }
+
     fn core_enters_shared(&self, type_name: &str, mode: ScrutineeMode) -> bool {
         self.cli_lint_overrides.strict_core
             && matches!(mode, ScrutineeMode::Owned)
