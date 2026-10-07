@@ -1,7 +1,7 @@
 fn main() {
     let mut x: Vec[i64] = Vec.new(); x.push(1); x.push(2);
     let mut y: Vec[i64] = Vec.new(); y.push(1); y.push(9);
-    println("before")
+    println("before");
     assert_eq(x, y);
     println("WRONG: unequal vecs compared equal")
 }

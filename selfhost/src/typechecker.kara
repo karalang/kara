@@ -720,10 +720,6 @@ impl Checker {
                 let StrLit { value, span } = n;
                 ExprInfo { category: 3, span: span }
             }
-            MultiStr(n) => {
-                let StrLit { value, span } = n;
-                ExprInfo { category: 3, span: span }
-            }
             Ident(n) => {
                 let IdentExpr { name, span } = n;
                 let c = self.lookup_cat(name);

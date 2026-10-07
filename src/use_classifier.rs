@@ -689,7 +689,6 @@ impl<'a> UseClassifier<'a> {
             | ExprKind::Bool(..)
             | ExprKind::CharLit(..)
             | ExprKind::StringLit(..)
-            | ExprKind::MultiStringLit(..)
             | ExprKind::Path { .. }
             | ExprKind::SelfType => {}
 

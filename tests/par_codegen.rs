@@ -319,42 +319,42 @@ fn main() {{
         for (label, body, want) in [
             (
                 "later binding from a Vec-returning call",
-                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"b{b.len()}\"); println(f\"done\")",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"b{b.len()}\"); println(f\"done\");",
                 "a10\ndR10\nb1\ndone\n",
             ),
             (
                 "later binding from a call returning a struct wrapping a Vec",
-                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: WrapV = mk_w(); println(f\"b{b.ys.len()}\"); println(f\"done\")",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: WrapV = mk_w(); println(f\"b{b.ys.len()}\"); println(f\"done\");",
                 "a10\ndR10\nb1\ndone\n",
             ),
             (
                 "later binding never read",
-                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"done\")",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"done\");",
                 "a10\ndR10\ndone\n",
             ),
             (
                 "two elements: both bodies, both correct",
-                "let a: Box3 = build2(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"b{b.len()}\"); println(f\"done\")",
+                "let a: Box3 = build2(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"b{b.len()}\"); println(f\"done\");",
                 "a10\ndR10\ndR11\nb1\ndone\n",
             ),
             (
                 "call returning String (control)",
-                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: String = mk_s(); println(f\"b{b.len()}\"); println(f\"done\")",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: String = mk_s(); println(f\"b{b.len()}\"); println(f\"done\");",
                 "a10\ndR10\nb2\ndone\n",
             ),
             (
                 "call returning i64 (control)",
-                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: i64 = mk_i(); println(f\"b{b}\"); println(f\"done\")",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: i64 = mk_i(); println(f\"b{b}\"); println(f\"done\");",
                 "a10\ndR10\nb5\ndone\n",
             ),
             (
                 "Vec built in place (control)",
-                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let mut b: Vec[String] = Vec.new(); b.push(f\"q\"); println(f\"b{b.len()}\"); println(f\"done\")",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let mut b: Vec[String] = Vec.new(); b.push(f\"q\"); println(f\"b{b.len()}\"); println(f\"done\");",
                 "a10\ndR10\nb1\ndone\n",
             ),
             (
                 "no later binding (control)",
-                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); println(f\"done\")",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); println(f\"done\");",
                 "a10\ndR10\ndone\n",
             ),
         ] {
@@ -418,7 +418,7 @@ fn main() {{
                  let b = mk(4);\n\
                  let h2: i64 = heavy(2000);\n\
                  println(\"mid\");\n\
-                 println(f\"h={h1 + h2}\")",
+                 println(f\"h={h1 + h2}\");",
                 "A\ndR3\ndR4\nmid\nh=5329344654\n",
             ),
             (
@@ -429,7 +429,7 @@ fn main() {{
                  let q = mk(2);\n\
                  let h2: i64 = heavy(2000);\n\
                  println(\"mid\");\n\
-                 println(f\"h={h1 + h2}\")",
+                 println(f\"h={h1 + h2}\");",
                 "A\ndR1\ndR2\nmid\nh=5329344654\n",
             ),
         ] {
@@ -786,11 +786,11 @@ fn main() {
             )
         };
         let bodies: &[(&str, &str)] = &[
-            ("a field place bound to a local", "let k = o.inner; k.v"),
-            ("an element bound to a local", "let k = o.kids[0]; k.v"),
+            ("a field place bound to a local", "let k = o.inner; k.v;"),
+            ("an element bound to a local", "let k = o.kids[0]; k.v;"),
             (
                 "a bound alias passed on to a frozen slot",
-                "let k = o.inner; readi(k)",
+                "let k = o.inner; readi(k);",
             ),
         ];
         for (label, body) in bodies {
@@ -863,15 +863,15 @@ fn main() {
         let bodies: &[(&str, &str)] = &[
             (
                 "a shared element read as a scalar",
-                "let mut s: i64 = 0; for k in n.kids { s = s + k.v; } s",
+                "let mut s: i64 = 0; for k in n.kids { s = s + k.v; } s;",
             ),
             (
                 "a shared element passed to a frozen slot",
-                "let mut s: i64 = 0; for k in n.kids { s = s + g(k); } s",
+                "let mut s: i64 = 0; for k in n.kids { s = s + g(k); } s;",
             ),
             (
                 "a scalar element",
-                "let mut s: i64 = 0; for k in n.nums { s = s + k; } s",
+                "let mut s: i64 = 0; for k in n.nums { s = s + k; } s;",
             ),
             // B-2026-08-01-33 — the `.iter()` spelling, which is the one the
             // kata corpus actually writes (22 uses against 0 of the bare-place
@@ -883,11 +883,11 @@ fn main() {
             // peel is admitting a lowering nobody measured.
             (
                 "a shared element read as a scalar, through `.iter()`",
-                "let mut s: i64 = 0; for k in n.kids.iter() { s = s + k.v; } s",
+                "let mut s: i64 = 0; for k in n.kids.iter() { s = s + k.v; } s;",
             ),
             (
                 "a shared element passed to a frozen slot, through `.iter()`",
-                "let mut s: i64 = 0; for k in n.kids.iter() { s = s + g(k); } s",
+                "let mut s: i64 = 0; for k in n.kids.iter() { s = s + g(k); } s;",
             ),
         ];
         for (label, body) in bodies {
@@ -903,7 +903,7 @@ fn main() {
         // The discriminating leg: aliasing a loop element goes through the
         // stage-2.5 binding path, where `frozen` and `ref` genuinely differ.
         // If this pair ever collapses, the zeros above stop meaning anything.
-        let alias_body = "let mut s: i64 = 0; for k in n.kids { let j = k; s = s + j.v; } s";
+        let alias_body = "let mut s: i64 = 0; for k in n.kids { let j = k; s = s + j.v; } s;";
         assert_eq!(
             traffic_in(&ir_for_analyzed(&program("frozen ", alias_body)), "outer"),
             (0, 0),

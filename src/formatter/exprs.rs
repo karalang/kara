@@ -60,12 +60,6 @@ impl super::Formatter {
                 self.write_str(&escape_string(s));
                 self.write_str("\"");
             }
-            ExprKind::MultiStringLit(s) => {
-                // Multi-line strings keep their format
-                self.write_str("\"\"\"");
-                self.write_str(s);
-                self.write_str("\"\"\"");
-            }
             ExprKind::CStringLit { bytes, .. } => {
                 // `c"..."` — re-emit by escaping the bytes. The
                 // formatter's job is to produce a syntactically
@@ -355,7 +349,7 @@ impl super::Formatter {
                 self.format_block(body);
             }
             ExprKind::LabeledBlock { label, body, .. } => {
-                write!(self.output, "{label}: ").unwrap();
+                write!(self.output, "'{label}: ").unwrap();
                 self.format_block(body);
             }
             ExprKind::Closure {

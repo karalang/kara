@@ -56,31 +56,31 @@ fn k23() { let f = |h: Hp| { match h { Hp.Full(P { a, b }) => takes(a) + b, Hp.E
 fn k24() { let v: Vec[W] = [mkw("w"), mkw("ww")]; let f = |w: W| w.s.len(); for w in v { println(f"k24 {f(w)}") } }
 fn k25() { let f = |q: Ho[String]| { match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() } }; let a = f(mkh("x")); let b = f(mkh("xx")); println(f"k25 {a.len()} {b.len()}"); }
 fn main() {
-    k1()
-    k2()
-    k3()
-    k4()
-    k5()
-    k6()
-    k7()
-    k8()
-    k9()
-    k10()
-    k11()
-    k12()
-    k13()
-    k14()
-    k15()
-    k16()
-    k17()
-    k18()
-    k19()
-    k20()
-    k21()
-    k22()
-    k23()
-    k24()
-    k25()
+    k1();
+    k2();
+    k3();
+    k4();
+    k5();
+    k6();
+    k7();
+    k8();
+    k9();
+    k10();
+    k11();
+    k12();
+    k13();
+    k14();
+    k15();
+    k16();
+    k17();
+    k18();
+    k19();
+    k20();
+    k21();
+    k22();
+    k23();
+    k24();
+    k25();
     println("end")
 }"#;
     let want = "k1 25\nk2 26\nk3 5\nk4 25\nk5 25\nk6 25\nk7 25 26\nk8 25\nk9 0\nk10 25\nk10 0\nk11 25\nk12 25\nk13\nk14 25\nk15 25\nk16 25\nk17 26\nk18 25\nk19 25\nk20 26\nk21 25\nk22 26\nk23 27\nk24 25\nk24 26\nk25 25 26\nend\n";

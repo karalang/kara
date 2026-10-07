@@ -708,12 +708,12 @@ fn f7(x: R) -> Vec[R] { let mut v = Vec[x]; v = Vec[mk(8)]; return v }
 fn g7(x: R) { let mut v = Vec[x]; v = Vec[mk(8)]; println("in") }
 fn h7() { let w = mk(3); let mut v = Vec[w]; v = Vec[mk(8)]; println("in") }
 fn main() {
-  println("-ct"); let a = cm(mk(1), true); println(f"k{a.len()}")
-  println("-cf"); let b = cm(mk(2), false); println(f"k{b.len()}")
-  println("-it"); let c = ci(mk(4), true); println(f"k{c.len()}")
-  println("-if"); let d = ci(mk(5), false); println(f"k{d.len()}")
-  println("-p7"); let e = f7(mk(17)); println(f"k{e.len()}")
-  println("-r3"); g7(mk(6)); println("k")
+  println("-ct"); let a = cm(mk(1), true); println(f"k{a.len()}");
+  println("-cf"); let b = cm(mk(2), false); println(f"k{b.len()}");
+  println("-it"); let c = ci(mk(4), true); println(f"k{c.len()}");
+  println("-if"); let d = ci(mk(5), false); println(f"k{d.len()}");
+  println("-p7"); let e = f7(mk(17)); println(f"k{e.len()}");
+  println("-r3"); g7(mk(6)); println("k");
   println("-r5"); h7(); println("k")
 }
 "##,

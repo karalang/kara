@@ -1309,7 +1309,6 @@ impl<'a> super::EffectChecker<'a> {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Continue { .. }

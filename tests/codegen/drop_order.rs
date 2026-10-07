@@ -1298,17 +1298,17 @@ impl W { fn unwrap_a(self) -> R { return self.a; } fn opt(self) -> Option[R] { r
 fn p_plain(h: HoRes) { println(f"  pd{h.a.id}") }
 
 fn main() {
-  println("temp-recv-fields");  HoRes { a: mk(1), b: Result.Ok(mk(101)) }.plain()
-  println("temp-recv-own");     mk(2).ident()
-  println("temp-recv-ownd");    OwnD { a: mk(3), n: 3 }.eat()
-  println("temp-recv-pair");    Pair { a: mk(4), b: mk(104) }.eat()
-  println("temp-recv-refself"); Pair { a: mk(5), b: mk(105) }.peek()
-  println("param-twin");        p_plain(HoRes { a: mk(6), b: Result.Ok(mk(106)) })
-  println("local-recv");        let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; h.plain()
-  println("scalar-return");     let v = mk(8).area(); println(f"  v{v}")
-  println("returns-self");      let m = mk(9).me(); println(f"  m{m.id}")
-  println("hands-field-out");   let g = W { a: mk(10) }.unwrap_a(); println(f"  g{g.id}")
-  println("generic-return");    let o = W { a: mk(11) }.opt(); println("  built")
+  println("temp-recv-fields");  HoRes { a: mk(1), b: Result.Ok(mk(101)) }.plain();
+  println("temp-recv-own");     mk(2).ident();
+  println("temp-recv-ownd");    OwnD { a: mk(3), n: 3 }.eat();
+  println("temp-recv-pair");    Pair { a: mk(4), b: mk(104) }.eat();
+  println("temp-recv-refself"); Pair { a: mk(5), b: mk(105) }.peek();
+  println("param-twin");        p_plain(HoRes { a: mk(6), b: Result.Ok(mk(106)) });
+  println("local-recv");        let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; h.plain();
+  println("scalar-return");     let v = mk(8).area(); println(f"  v{v}");
+  println("returns-self");      let m = mk(9).me(); println(f"  m{m.id}");
+  println("hands-field-out");   let g = W { a: mk(10) }.unwrap_a(); println(f"  g{g.id}");
+  println("generic-return");    let o = W { a: mk(11) }.opt(); println("  built");
   println("done")
 }
 "#;
@@ -1429,17 +1429,17 @@ fn cell_shared() { let h = Hb { a: R2 { id: 11, sh: Box1 { v: 111 } }, b: R2 { i
 fn cell_live()   { let h = H2 { a: mk(10), b: mk(110) }; let z = h.a.id; println(f"  z{z}"); println(f"  b{h.b.id}") }
 
 fn main() {
-    println("scalar");   cell_scalar()
-    println("method");   cell_method()
-    println("nodest");   cell_nodest()
-    println("three");    cell_three()
-    println("own");      cell_own()
-    println("whole");    cell_whole()
-    println("plain");    cell_plain()
-    println("move");     cell_move()
-    println("threehop"); cell_three_hop()
-    println("shared");   cell_shared()
-    println("live");     cell_live()
+    println("scalar");   cell_scalar();
+    println("method");   cell_method();
+    println("nodest");   cell_nodest();
+    println("three");    cell_three();
+    println("own");      cell_own();
+    println("whole");    cell_whole();
+    println("plain");    cell_plain();
+    println("move");     cell_move();
+    println("threehop"); cell_three_hop();
+    println("shared");   cell_shared();
+    println("live");     cell_live();
     println("done")
 }
 "#,
@@ -1578,13 +1578,13 @@ fn gfn[T](h: G[T]) -> i64 { let (r, k) = h.pe; println("  in"); return k; }
 fn gfnLocal() { let h = G[R] { pe: (mk(65), 5), z: 9 }; let _ = gfn(h); }
 
 fn main() {
-    println("collide");  let _ = plainLocal();  println("collide end")
-    println("fresh");    let _ = plainFresh();  println("fresh end")
-    println("strfield"); let _ = plainStr();    println("strfield end")
-    println("nongen");   let _ = ngLocal(5);    println("nongen end")
-    println("marker");   let _ = plainMark();   println("marker end")
-    println("nodrop");   let _ = plainNoDrop(); println("nodrop end")
-    println("genparam"); gfnLocal();            println("genparam end")
+    println("collide");  let _ = plainLocal();  println("collide end");
+    println("fresh");    let _ = plainFresh();  println("fresh end");
+    println("strfield"); let _ = plainStr();    println("strfield end");
+    println("nongen");   let _ = ngLocal(5);    println("nongen end");
+    println("marker");   let _ = plainMark();   println("marker end");
+    println("nodrop");   let _ = plainNoDrop(); println("nodrop end");
+    println("genparam"); gfnLocal();            println("genparam end");
     println("done")
     }
     "#,
@@ -1809,12 +1809,12 @@ impl H {
 
 fn main() {
     let h = H { n: 0 };
-    println("m1 bare-die");       h.m1(mk(1))
-    println("m2 rebind-die");     h.m2(mk(2))
-    println("m3 into-call");      h.m3(mk(3))
-    println("m4 wrap-moveout");   let v = h.m4(mk(4)); println(f"  v={v}")
-    println("m5 destr-intocall"); h.m5((mk(5), 9))
-    println("m6 destr-die");      h.m6((mk(6), 9))
+    println("m1 bare-die");       h.m1(mk(1));
+    println("m2 rebind-die");     h.m2(mk(2));
+    println("m3 into-call");      h.m3(mk(3));
+    println("m4 wrap-moveout");   let v = h.m4(mk(4)); println(f"  v={v}");
+    println("m5 destr-intocall"); h.m5((mk(5), 9));
+    println("m6 destr-die");      h.m6((mk(6), 9));
     println("done")
 }
 "#
@@ -7996,7 +7996,7 @@ fn nested(p: R) -> i64 {
     let mut acc: i64 = 0;
     for a in 0..2 {
         for b in 0..2 {
-            println(f"n{a}{b}")
+            println(f"n{a}{b}");
             let mut out: R = R { id: 10 * a + b, tag: f"t" };
             if a == 0 and b == 1 { out = p; }
             acc = acc + out.id;
@@ -8728,8 +8728,8 @@ impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
 struct H { o: Option[R], r: Result[R, i64], p: R, n: i64 }
 fn mk(t: String, n: i64) -> H { H { o: Some(R { s: f"o{t}" }), r: Ok(R { s: f"r{t}" }), p: R { s: f"p{t}" }, n: n } }
 fn main() {
-    let h = mk("3", 1); if h.n > 0 { let x = h.p; println(x.s) } else { println("no") }; println("k3")
-    let h = mk("4", 0); if h.n > 0 { let x = h.p; println(x.s) } else { println("no") }; println("k4")
+    let h = mk("3", 1); if h.n > 0 { let x = h.p; println(x.s) } else { println("no") }; println("k3");
+    let h = mk("4", 0); if h.n > 0 { let x = h.p; println(x.s) } else { println("no") }; println("k4");
     println("end")
 }
 "#,
@@ -8959,7 +8959,7 @@ fn round() {
     println("end")
 }
 fn main() {
-    round()
+    round();
     round()
 }
 "#,
@@ -9015,7 +9015,7 @@ fn round() {
     println("end")
 }
 fn main() {
-    round()
+    round();
     round()
 }
 "#,

@@ -38,10 +38,10 @@ fn shs(e: Se) -> String {
 }
 
 fn main() {
-    println("start")
+    println("start");
     let big: i128 = 100000000000000000000i128;
-    println(show(E.Int(Lit { value: big, suffix: "i128".to_string() })))
-    println(show(E.Nest(Outer { lit: Lit { value: big + 1, suffix: "n".to_string() }, k: 7 })))
-    println(show(E.Int(Lit { value: -5, suffix: "neg".to_string() })))
+    println(show(E.Int(Lit { value: big, suffix: "i128".to_string() })));
+    println(show(E.Nest(Outer { lit: Lit { value: big + 1, suffix: "n".to_string() }, k: 7 })));
+    println(show(E.Int(Lit { value: -5, suffix: "neg".to_string() })));
     println(shs(Se.Int(Lit { value: big + 2, suffix: "sh".to_string() })))
 }

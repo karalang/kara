@@ -423,7 +423,7 @@ impl<'a> super::TypeChecker<'a> {
             // rule that forbids `String` does not transfer: a default is a
             // fresh per-call allocation, which is exactly what the example
             // asks for.
-            ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => {}
+            ExprKind::StringLit(_) => {}
             // A STRUCT LITERAL built from constant expressions. The tuple
             // sibling was already accepted by the arm above, so only the
             // struct spelling was refused — nothing distinguishes them here.

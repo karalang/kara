@@ -29,7 +29,7 @@ fn main() {
     assert_eq(s.clone(), f"w5");
     let s2 = f"w{5}";
     assert_eq(if c { s2 } else { mk(6) }, s.clone());
-    println(s)
+    println(s);
     println("end")
 }
 "#,

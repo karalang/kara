@@ -43,19 +43,19 @@ fn s11() { let h = mkc("k"); let g = || keepc(h); println(f"s11 {g()}"); println
 fn s12() { let h = mkc("l"); let g = || keepc(h); println(f"s12 {g()}"); println(f"s12 {keepc(h)}"); let f = |q: Hc| keepc(q); println(f"s12 {f(mkc("xx"))}"); }
 fn s13() { let h = mkc("m"); let g = || keepc(h); println(f"s13 {g()}"); println(f"s13 {keepc(h)}"); let f = |h: Hc| gr(h); println(f"s13 {f(mkc("xx"))}"); }
 fn main() {
-    s1()
-    s2()
-    s3()
-    s4()
-    s5()
-    s6()
-    s7()
-    s8()
-    s9()
-    s10()
-    s11()
-    s12()
-    s13()
+    s1();
+    s2();
+    s3();
+    s4();
+    s5();
+    s6();
+    s7();
+    s8();
+    s9();
+    s10();
+    s11();
+    s12();
+    s13();
     println("end")
 }"#;
     let want = "s1 26\ns1 25\ns2 26\ns2 25\ns3 26\ns3 25\ns4 4\ns4 25\ns5 25\ns5 26\ns6 26\ns6 25\ns7 126\ns7 25\ns8 26 27\ns8 25\ns8 25\ns9 25\ns9 25\ns9 26\ns10 26\ns10 25\ns11 25\ns11 25\ns12 25\ns12 25\ns12 26\ns13 25\ns13 25\ns13 26\nend\n";

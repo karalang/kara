@@ -1,5 +1,5 @@
 
 fn main() {
-    let x: i64 = lbl: { inner: { break lbl 7; 0 } };
+    let x: i64 = 'lbl: { 'inner: { break 'lbl 7; 0 } };
     println(x);
 }

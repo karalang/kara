@@ -29,15 +29,15 @@ fn c7() { let r = mk3(8); match r { Result.Ok(v) => println(v), Result.Err(e) =>
 fn c8() { let mut v: Vec[E3] = Vec.new(); let r = mk3(10); match r { Result.Ok(_) => println(0), Result.Err(e) => v.push(e) }; println(v[0].inner.k) }
 fn c9() { let r: Result[i64, E6] = Result.Err(E6 { inner: Sh { k: 11, s: hs(11) }, n: 11 }); match r { Result.Ok(v) => println(v), Result.Err(e) => { let z = e; println(z.n) } } }
 fn main() {
-    c1()
-    c2()
-    c3(mk3(12))
-    c4()
-    c5()
-    c6()
-    c7()
-    c8()
-    c9()
+    c1();
+    c2();
+    c3(mk3(12));
+    c4();
+    c5();
+    c6();
+    c7();
+    c8();
+    c9();
     println("end")
 }"#;
     let want = "4\nheap-string-long-enough-4\n9\nheap-string-long-enough-9\n12\n8\n6\ndE66\n7\n7\n8\n10\n11\ndE611\nend\n";

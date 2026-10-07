@@ -11,7 +11,7 @@ fn main() {
     let z: Vec[(Vec[i64], i64)] = [([1], 1), ([2, 3], 2)];
     let mut out: Vec[Vec[i64]] = [];
     for pair in z.into_iter() { let (a, j) = pair; out.push(a) }
-    println(f"e {out.len()} {out[1].len()}")
+    println(f"e {out.len()} {out[1].len()}");
     let s: Vec[(S, i64)] = [(S { x: f"a-heap-string-longer-than-sso-{4}" }, 4)];
     for pair in s.into_iter() { let (q, j) = pair; let t = q; println(f"f {t.x.len()} {j}") }
     println("end")

@@ -25,13 +25,13 @@ fn c6(x: Option[(R, R)]) { let mut h = x; h = None; println("c6"); }
 fn c7(x: Option[Array[R, 2]]) { let mut h = x; println("c7a"); h = None; println("c7b"); }
 fn c9() { let mut h: Option[Array[R, 2]] = Some([mk(91), mk(92)]); h = None; println("c9"); }
 fn main() {
-  c1(Some([mk(11), mk(12)])); println("l1")
-  let a: Option[Array[R, 2]] = Some([mk(21), mk(22)]); c2(a); println("l2")
-  c3(Ok([mk(31), mk(32)])); println("l3")
-  let r = c5(Some([mk(51), mk(52)])); println("l5")
-  c6(Some((mk(61), mk(62)))); println("l6")
-  c7(Some([mk(71), mk(72)])); println("l7")
-  c9(); println("l9")
+  c1(Some([mk(11), mk(12)])); println("l1");
+  let a: Option[Array[R, 2]] = Some([mk(21), mk(22)]); c2(a); println("l2");
+  c3(Ok([mk(31), mk(32)])); println("l3");
+  let r = c5(Some([mk(51), mk(52)])); println("l5");
+  c6(Some((mk(61), mk(62)))); println("l6");
+  c7(Some([mk(71), mk(72)])); println("l7");
+  c9(); println("l9");
   println("end")
 }
 "#,

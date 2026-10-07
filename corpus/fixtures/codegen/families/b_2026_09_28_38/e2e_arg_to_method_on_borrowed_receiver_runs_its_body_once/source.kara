@@ -25,22 +25,22 @@ fn pv(v: mut ref Vec[S], s: S) { v.push(s); println("pv") }
 fn bf(b: mut ref B, s: S) { b.add(s); println("bf") }
 fn main() {
   let mut q = Q { z: 0 };
-  q.only(mks(1)); println("a")
-  let n = mks(2); q.only(n); println("b")
-  q.monly(mks(3)); println("c")
-  feat(q, mks(4)); println("d")
-  q.two(mks(5)); println("e")
-  q.viab(mks(6)); println("g")
-  q.cond(mks(7), true); println("h")
-  q.cond(mks(8), false); println("i")
-  let r = q.pq(mks(9), false); println(f"j{r.id}")
-  let t = q.pq(mks(10), true); println(f"k{t.id}")
+  q.only(mks(1)); println("a");
+  let n = mks(2); q.only(n); println("b");
+  q.monly(mks(3)); println("c");
+  feat(q, mks(4)); println("d");
+  q.two(mks(5)); println("e");
+  q.viab(mks(6)); println("g");
+  q.cond(mks(7), true); println("h");
+  q.cond(mks(8), false); println("i");
+  let r = q.pq(mks(9), false); println(f"j{r.id}");
+  let t = q.pq(mks(10), true); println(f"k{t.id}");
   let mut b = B { xs: Vec.new() };
-  b.fwd(mks(11)); println("l")
-  b.cfwd(mks(12), true); println("m")
-  b.cfwd(mks(13), false); println("n")
-  bf(mut b, mks(14)); println("p")
+  b.fwd(mks(11)); println("l");
+  b.cfwd(mks(12), true); println("m");
+  b.cfwd(mks(13), false); println("n");
+  bf(mut b, mks(14)); println("p");
   let mut v: Vec[S] = Vec.new();
-  pv(mut v, mks(15)); println(f"r{v.len()}")
+  pv(mut v, mks(15)); println(f"r{v.len()}");
   println("end")
 }

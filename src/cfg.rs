@@ -971,7 +971,6 @@ impl<'a> CfgBuilder<'a> {
             | ExprKind::Bool(..)
             | ExprKind::CharLit(..)
             | ExprKind::StringLit(..)
-            | ExprKind::MultiStringLit(..)
             | ExprKind::Path { .. }
             | ExprKind::SelfType => cur,
 

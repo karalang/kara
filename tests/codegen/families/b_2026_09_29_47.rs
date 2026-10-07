@@ -44,18 +44,18 @@ fn c10() { println(f"r{pv(W3 { u: mk(9), n: 2 })}") }
 fn c11() { let w = W3 { u: mk(9), n: 2 }; println(f"r{pv(w)}") }
 fn c12() { let w = W3 { u: mk(9), n: 2 }; println(f"r{w.go()}") }
 fn main() {
-  println("-c1"); c1()
-  println("-c2"); c2()
-  println("-c3"); c3()
-  println("-c4"); c4()
-  println("-c5"); c5()
-  println("-c6"); c6()
-  println("-c7"); c7()
-  println("-c8"); c8()
-  println("-c9"); c9()
-  println("-c10"); c10()
-  println("-c11"); c11()
-  println("-c12"); c12()
+  println("-c1"); c1();
+  println("-c2"); c2();
+  println("-c3"); c3();
+  println("-c4"); c4();
+  println("-c5"); c5();
+  println("-c6"); c6();
+  println("-c7"); c7();
+  println("-c8"); c8();
+  println("-c9"); c9();
+  println("-c10"); c10();
+  println("-c11"); c11();
+  println("-c12"); c12();
   println("end")
 }
 "#,

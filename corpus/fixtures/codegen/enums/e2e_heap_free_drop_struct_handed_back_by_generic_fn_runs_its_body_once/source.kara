@@ -27,16 +27,16 @@ fn i_discmkh() { let p = P { id: 12 }; let _ = mkh(p); println("i") }
 fn j_discwrapR() { let r = R { id: 13, s: f"s{13}" }; wrap(r); println("j") }
 fn k_owndrop() { let p = P { id: 14 }; wrapd(p); println("k") }
 fn main() {
-    a_let()
-    b_wrap()
-    c_arg()
-    d_meth()
-    e_nested()
-    f_loop()
-    g_stmt()
-    h_discwrap()
-    i_discmkh()
-    j_discwrapR()
-    k_owndrop()
+    a_let();
+    b_wrap();
+    c_arg();
+    d_meth();
+    e_nested();
+    f_loop();
+    g_stmt();
+    h_discwrap();
+    i_discmkh();
+    j_discwrapR();
+    k_owndrop();
     println("end")
 }

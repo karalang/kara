@@ -36,23 +36,23 @@ fn h13(k: i64, c: bool) -> Result[i64, i64] { let r = m4(k); if c { let x = r?; 
 fn pr(r: Result[i64, i64]) { match r { Result.Ok(v) => println(f"ok{v}"), Result.Err(e) => println(f"err{e}") } }
 fn po(o: Option[i64]) { match o { Option.Some(v) => println(f"some{v}"), Option.None => println("none") } }
 fn main() {
-    pr(h1(8))
-    pr(h1(1))
-    pr(h2(8))
-    pr(h3(8))
-    pr(h3(1))
-    pr(h4(8))
-    pr(h5(8))
-    po(h6(8))
-    po(h6(1))
+    pr(h1(8));
+    pr(h1(1));
+    pr(h2(8));
+    pr(h3(8));
+    pr(h3(1));
+    pr(h4(8));
+    pr(h5(8));
+    po(h6(8));
+    po(h6(1));
     match h7(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.v) }
     match h8(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.v) }
-    po(h9(8))
-    pr(h10(8))
-    pr(h10(4))
-    pr(h11(9))
-    pr(h12(8))
-    pr(h13(8, true))
-    pr(h13(9, false))
+    po(h9(8));
+    pr(h10(8));
+    pr(h10(4));
+    pr(h11(9));
+    pr(h12(8));
+    pr(h13(8, true));
+    pr(h13(9, false));
     println("end")
 }

@@ -1756,19 +1756,17 @@ fn test_cost_model_empty_vec_new_counts_as_constant() {
 
 #[test]
 fn test_cost_model_multi_string_lit_counts_as_constant() {
-    // Sibling to the ByteLit test. `MultiStringLit` (Kāra's multi-line
-    // string literal form) is textual data with no runtime work, parity
-    // with `StringLit`. Pre-fix the heuristic listed `StringLit` but
-    // not `MultiStringLit`, so a let-of-multi-string would also drive
-    // the non-constant count past 1 and emit a wasteful par-group.
-    // Without a concrete bench failure for this one, this test is the
-    // forward-compat guard: the analyzer should treat both string-
-    // literal forms identically for the cost-model gate.
+    // Sibling to the ByteLit test. A `"""` block is textual data with no
+    // runtime work. It once had its own AST node, which the heuristic missed;
+    // it now lexes to the same `StringLit` as `"..."`, and this test keeps the
+    // block form covered by the cost-model gate.
     let analysis = analyze(
         r#"
         fn main() {
-            let banner: String = """hello
-                                    world""";
+            let banner: String = """
+                hello
+                world
+                """;
             let mut buf: Vec[u8] = Vec.new();
             let n: i64 = 0i64;
             println(banner);
@@ -1782,7 +1780,7 @@ fn test_cost_model_multi_string_lit_counts_as_constant() {
         assert!(
             group.is_trivial,
             "Group {:?} (reason: {:?}) should be marked trivial — \
-             MultiStringLit is a literal, only Vec.new() does real work",
+             a string literal is constant, only Vec.new() does real work",
             group.statement_indices, group.reason
         );
     }

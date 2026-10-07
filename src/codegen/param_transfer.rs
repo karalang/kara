@@ -478,7 +478,6 @@ fn all_regions(program: &Program) -> Vec<(Option<String>, Region<'_>)> {
             | Item::EffectGroup(_)
             | Item::EffectVerbDecl(_)
             | Item::LayoutDef(_)
-            | Item::UseDecl(_)
             | Item::Import(_)
             | Item::AliasDecl(_)
             | Item::IndependentDecl(_)
@@ -633,7 +632,6 @@ fn visit_expr<'a, F: FnMut(Node<'a>)>(e: &'a Expr, f: &mut F) {
         | ExprKind::CharLit(_)
         | ExprKind::ByteLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::ByteStringLit(_)
         | ExprKind::Bool(_)

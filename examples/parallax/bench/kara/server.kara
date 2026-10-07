@@ -143,11 +143,11 @@ fn handle(req: Request) -> Response {
     let d = get_dashboard(1);
     Response {
         status: 200,
-        body: f"\{\"profile\":\{\"user_id\":1,\"name\":\"{d.profile_name}\"\},\"latest_order\":\{\"order_id\":{d.order_id}\},\"top_notification\":\{\"kind\":{d.notif_kind}\},\"top_recommendation\":\{\"item_id\":{d.rec_id}\}\}",
+        body: f"{{\"profile\":{{\"user_id\":1,\"name\":\"{d.profile_name}\"}},\"latest_order\":{{\"order_id\":{d.order_id}}},\"top_notification\":{{\"kind\":{d.notif_kind}}},\"top_recommendation\":{{\"item_id\":{d.rec_id}}}}}",
     }
 }
 
 fn main() {
-    let _result = Server.serve("127.0.0.1:0", handle);
+    let _result = Server.serve(";127.0.0.1;:0", handle);
     println("server exited unexpectedly");
 }

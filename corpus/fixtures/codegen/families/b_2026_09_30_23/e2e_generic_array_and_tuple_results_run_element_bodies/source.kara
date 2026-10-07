@@ -12,20 +12,20 @@ fn tupp1[T](w: G2[T]) -> (T, i64) { return (w.r, 5); }
 fn tupp2[T](w: G2[T]) -> (i64, T) { return (5, w.r); }
 fn outer[U](a: U) -> i64 { let t = tupg(mk(60), mk(61)); let e = arrm(mk(62)); return 1; }
 fn main() {
-  println("-c1"); let e = arrg(mk(1), mk(2)); println(f"r{e[1].id}")
-  println("-c2"); let w = G2 { q: mk(3), r: mk(4) }; let f = arrgf(w); println(f"r{f[0].id}")
-  println("-c3"); let m = arrm(mk(5)); println(f"r{m[0].id}")
-  println("-c4"); let t = tupg(mk(6), mk(7)); println(f"r{t.1.id}")
-  println("-c5"); let u = tupm(mk(8), 9); println(f"r{u.0.id}{u.1}")
-  println("-c6"); let w2 = G2 { q: mk(10), r: mk(11) }; let g = tupf(w2); println(f"r{g.0.id}")
-  println("-c7"); tupm(mk(12), 1); println("r")
-  println("-c8"); let n = 1; match n { 1 => tupm(mk(13), 1), _ => tupm(mk(14), 2) }; println("r")
-  println("-c9"); arrm(mk(15)); println("r")
-  println("-c10"); tupg(mk(16), mk(17)); println("r")
-  println("-c11"); let w3 = G2 { q: mk(18), r: mk(19) }; tupp1(w3); println("r")
-  println("-c12"); let w4 = G2 { q: mk(20), r: mk(21) }; tupp2(w4); println("r")
-  println("-c13"); let _ = arrm(mk(22)); println("r")
-  println("-c14"); let _ = tupm(mk(23), 1); println("r")
-  println("-c15"); let o = outer(mk(24)); println(f"r{o}")
+  println("-c1"); let e = arrg(mk(1), mk(2)); println(f"r{e[1].id}");
+  println("-c2"); let w = G2 { q: mk(3), r: mk(4) }; let f = arrgf(w); println(f"r{f[0].id}");
+  println("-c3"); let m = arrm(mk(5)); println(f"r{m[0].id}");
+  println("-c4"); let t = tupg(mk(6), mk(7)); println(f"r{t.1.id}");
+  println("-c5"); let u = tupm(mk(8), 9); println(f"r{u.0.id}{u.1}");
+  println("-c6"); let w2 = G2 { q: mk(10), r: mk(11) }; let g = tupf(w2); println(f"r{g.0.id}");
+  println("-c7"); tupm(mk(12), 1); println("r");
+  println("-c8"); let n = 1; match n { 1 => tupm(mk(13), 1), _ => tupm(mk(14), 2) }; println("r");
+  println("-c9"); arrm(mk(15)); println("r");
+  println("-c10"); tupg(mk(16), mk(17)); println("r");
+  println("-c11"); let w3 = G2 { q: mk(18), r: mk(19) }; tupp1(w3); println("r");
+  println("-c12"); let w4 = G2 { q: mk(20), r: mk(21) }; tupp2(w4); println("r");
+  println("-c13"); let _ = arrm(mk(22)); println("r");
+  println("-c14"); let _ = tupm(mk(23), 1); println("r");
+  println("-c15"); let o = outer(mk(24)); println(f"r{o}");
   println("end")
 }

@@ -830,13 +830,13 @@ fn annres() { let t: (R, Result[R, String]) = (mk(7), Result[R, String].Ok(mk(77
               let (r, o) = t; println(f"  rd{r.id}") }
 
 fn main() {
-    println("loc1");   loc1()
-    println("loc0");   loc0()
-    println("ctl");    ctl()
-    println("proj");   proj()
-    println("used");   used()
-    println("none");   none()
-    println("annres"); annres()
+    println("loc1");   loc1();
+    println("loc0");   loc0();
+    println("ctl");    ctl();
+    println("proj");   proj();
+    println("used");   used();
+    println("none");   none();
+    println("annres"); annres();
     println("done")
 }
 "#,
@@ -960,15 +960,15 @@ fn ostr() { let h = HoS { a: mk(8), b: Option.Some(f"s8") }; let HoS { a, b } = 
 fn ren()  { let h = Ho2 { a: mk(10), b: Option.Some(mk(110)) }; let Ho2 { a: p, b: q } = h; println(f"  rd{p.id}") }
 
 fn main() {
-    println("loc");   loc()
-    println("lit");   lit()
-    println("call");  call()
-    println("ctl");   ctl()
-    println("param"); param(mkho(5))
-    println("used");  used()
-    println("none");  none()
-    println("ostr");  ostr()
-    println("ren");   ren()
+    println("loc");   loc();
+    println("lit");   lit();
+    println("call");  call();
+    println("ctl");   ctl();
+    println("param"); param(mkho(5));
+    println("used");  used();
+    println("none");  none();
+    println("ostr");  ostr();
+    println("ren");   ren();
     println("done")
 }
 "#,
@@ -1057,14 +1057,14 @@ fn wesc()   { let t: (R, Result[W, String]) = (mk(8), Result.Ok(mkw(108))); let 
               let g = match b { Result.Ok(w) => w, Result.Err(_) => mkw(0) }; println(f"  got{g.id}") }
 
 fn main() {
-  println("read");   read()
-  println("call");   call()
-  println("inner");  inner()
-  println("esc");    esc()
-  println("errc");   errc()
-  println("wread");  wread()
-  println("winner"); winner()
-  println("wesc");   wesc()
+  println("read");   read();
+  println("call");   call();
+  println("inner");  inner();
+  println("esc");    esc();
+  println("errc");   errc();
+  println("wread");  wread();
+  println("winner"); winner();
+  println("wesc");   wesc();
   println("done")
 }
 "#;
@@ -1182,20 +1182,20 @@ fn wildres() { let (ro, _) = (mk(15), Result[R, String].Ok(mk(115))); println(f"
 fn strres()  { let (rp, op) = (mk(17), Result[String, String].Ok(f"p17")); println(f"  s{rp.id}") }
 
 fn main() {
-  println("annres");  annres()
-  println("unann");   unann()
-  println("fresh");   fresh()
-  println("errside"); errside()
-  println("consok");  consok()
-  println("conserr"); conserr()
-  println("moved");   moved()
-  println("ret");     ret()
-  println("arg");     arg()
-  println("field");   field()
-  println("loopr");   loopr()
-  println("nested");  nested()
-  println("wildres"); wildres()
-  println("strres");  strres()
+  println("annres");  annres();
+  println("unann");   unann();
+  println("fresh");   fresh();
+  println("errside"); errside();
+  println("consok");  consok();
+  println("conserr"); conserr();
+  println("moved");   moved();
+  println("ret");     ret();
+  println("arg");     arg();
+  println("field");   field();
+  println("loopr");   loopr();
+  println("nested");  nested();
+  println("wildres"); wildres();
+  println("strres");  strres();
   println("done")
 }
 "#;
@@ -1342,18 +1342,18 @@ fn fld()     { let hm = H { a: mk(13), b: Option.Some(mk(113)) }; let H { a, b }
 fn loc()     { let on = Option.Some(mk(11)); let qn = on; println(f"  o{qn.is_some()}") }
 
 fn main() {
-  println("rebind");  rebind()
-  println("ret");     ret()
-  println("twohop");  twohop()
-  println("loopreb"); loopreb()
-  println("slot0");   slot0()
-  println("matched"); matched()
-  println("arg");     arg()
-  println("stay");    stay()
-  println("plain");   plain()
-  println("instr");   instr()
-  println("fld");     fld()
-  println("loc");     loc()
+  println("rebind");  rebind();
+  println("ret");     ret();
+  println("twohop");  twohop();
+  println("loopreb"); loopreb();
+  println("slot0");   slot0();
+  println("matched"); matched();
+  println("arg");     arg();
+  println("stay");    stay();
+  println("plain");   plain();
+  println("instr");   instr();
+  println("fld");     fld();
+  println("loc");     loc();
   println("done")
 }
 "#;
@@ -1543,29 +1543,29 @@ fn frplain(){ let (r, _) = (mk(46), mk(146)); println(f"  rd{r.id}") }
 fn frnone(){ let n: Option[R] = Option.None; let (r, _) = (mk(47), n); println(f"  rd{r.id}") }
 
 fn main() {
-    println("wr");     wr()
-    println("wboth");  wboth()
-    println("w0");     w0()
-    println("resw");   resw()
-    println("nestw");  nestw()
-    println("projw");  projw()
-    println("nonew");  nonew()
-    println("loopw");  loopw()
-    println("bind");   bind()
-    println("bothst"); bothst()
-    println("optstr"); optstr()
-    println("undest"); undest()
-    println("marm");   marm()
-    println("i64opt"); i64opt()
-    println("frw");     frw()
-    println("frres");   frres()
-    println("frw0");    frw0()
-    println("frboth");  frboth()
-    println("frnest");  frnest()
-    println("frloop");  frloop()
-    println("frstr");   frstr()
-    println("frplain"); frplain()
-    println("frnone");  frnone()
+    println("wr");     wr();
+    println("wboth");  wboth();
+    println("w0");     w0();
+    println("resw");   resw();
+    println("nestw");  nestw();
+    println("projw");  projw();
+    println("nonew");  nonew();
+    println("loopw");  loopw();
+    println("bind");   bind();
+    println("bothst"); bothst();
+    println("optstr"); optstr();
+    println("undest"); undest();
+    println("marm");   marm();
+    println("i64opt"); i64opt();
+    println("frw");     frw();
+    println("frres");   frres();
+    println("frw0");    frw0();
+    println("frboth");  frboth();
+    println("frnest");  frnest();
+    println("frloop");  frloop();
+    println("frstr");   frstr();
+    println("frplain"); frplain();
+    println("frnone");  frnone();
     println("done")
 }
 "#,
@@ -1746,46 +1746,46 @@ fn mkho(n: i64) -> HoRes { return HoRes { a: mk(n), b: Result.Ok(mk(n + 100)) };
 fn takes(h: HoRes) { let HoRes { a, b } = h; println(f"  p{a.id}") }
 
 fn main() {
-    println("loc")
+    println("loc");
     let h1 = HoRes { a: mk(1), b: Result.Ok(mk(101)) };
     let HoRes { a, b } = h1;
-    println(f"  rd{a.id}")
+    println(f"  rd{a.id}");
 
-    println("box")
+    println("box");
     let h2 = HoRes3 { a: mk3(2), b: Result.Ok(mk3(102)) };
     let HoRes3 { a: a2, b: b2 } = h2;
-    println(f"  rd{a2.id}")
+    println(f"  rd{a2.id}");
 
-    println("err")
+    println("err");
     let h3 = HoRes { a: mk(3), b: Result.Err(f"e3") };
     let HoRes { a: a3, b: b3 } = h3;
-    println(f"  rd{a3.id}")
+    println(f"  rd{a3.id}");
 
-    println("wild")
+    println("wild");
     let h4 = HoRes { a: mk(4), b: Result.Ok(mk(104)) };
     let HoRes { a: a4, b: _ } = h4;
-    println(f"  rd{a4.id}")
+    println(f"  rd{a4.id}");
 
-    println("awild")
+    println("awild");
     let h5 = HoRes { a: mk(5), b: Result.Ok(mk(105)) };
     let HoRes { a: _, b: b5 } = h5;
-    println("  rb5")
+    println("  rb5");
 
-    println("nest")
+    println("nest");
     let h6 = HoRes { a: mk(6), b: Result.Ok(mk(106)) };
     { let HoRes { a: a6, b: b6 } = h6; println(f"  in{a6.id}") }
-    println("  outer")
+    println("  outer");
 
-    println("param")
-    takes(HoRes { a: mk(7), b: Result.Ok(mk(107)) })
+    println("param");
+    takes(HoRes { a: mk(7), b: Result.Ok(mk(107)) });
 
-    println("call")
+    println("call");
     let HoRes { a: a8, b: b8 } = mkho(8);
-    println(f"  rd{a8.id}")
+    println(f"  rd{a8.id}");
 
-    println("lit")
+    println("lit");
     let HoRes { a: a9, b: b9 } = HoRes { a: mk(9), b: Result.Ok(mk(109)) };
-    println(f"  rd{a9.id}")
+    println(f"  rd{a9.id}");
 
     println("done")
 }
@@ -1890,12 +1890,12 @@ fn c_nodest() { let w = WrapR { inner: (mk(5), Result.Ok(mk(105))) }; println(f"
 fn c_live()   { let g = OuterR { h: WrapR { inner: (mk(6), Result.Ok(mk(106))) } }; let (a6, b6) = g.h.inner; println(f"  rd{a6.id}"); println(f"  g{g.h.inner.0.id}") }
 
 fn main() {
-    println("named"); c_named(); println("named end")
-    println("one");   c_one();   println("one end")
-    println("two");   c_two();   println("two end")
-    println("three"); c_three(); println("three end")
-    println("nodest");c_nodest();println("nodest end")
-    println("live");  c_live();  println("live end")
+    println("named"); c_named(); println("named end");
+    println("one");   c_one();   println("one end");
+    println("two");   c_two();   println("two end");
+    println("three"); c_three(); println("three end");
+    println("nodest");c_nodest();println("nodest end");
+    println("live");  c_live();  println("live end");
     println("done")
 }
 "#,
@@ -2659,11 +2659,11 @@ fn e2e_boxed_payload_handed_out_of_a_match_arm_keeps_its_value() {
              fn rebind(w: W) -> i64 { let v = w; return match v { W.T(x) => x.a.unwrap_or(0), W.U(n) => n }; }\n\
              fn store(w: W, out: mut ref Vec[W]) { out.push(w); }\n\
              fn main() {\n\
-             \x20   let p = payout(W.T(mkx(23))); println(f\"a={p.a.unwrap_or(0)}/{p.s}\")\n\
-             \x20   let q = payout(W.U(24)); println(f\"b={q.a.unwrap_or(0)}/{q.s}\")\n\
-             \x20   let r = payoutc(C.T(mkc(25))); println(f\"c={r.n}/{r.s}\")\n\
-             \x20   println(f\"d={rebind(W.T(mkx(26)))}\")\n\
-             \x20   let mut v: Vec[W] = Vec.new(); store(W.T(mkx(27)), mut v); println(f\"e={v.len()}\")\n\
+             \x20   let p = payout(W.T(mkx(23))); println(f\"a={p.a.unwrap_or(0)}/{p.s}\");\n\
+             \x20   let q = payout(W.U(24)); println(f\"b={q.a.unwrap_or(0)}/{q.s}\");\n\
+             \x20   let r = payoutc(C.T(mkc(25))); println(f\"c={r.n}/{r.s}\");\n\
+             \x20   println(f\"d={rebind(W.T(mkx(26)))}\");\n\
+             \x20   let mut v: Vec[W] = Vec.new(); store(W.T(mkx(27)), mut v); println(f\"e={v.len()}\");\n\
              \x20   println(\"end\")\n\
              }\n\
              ",
@@ -2972,14 +2972,14 @@ fn g7(s: ref S) { println(f"  b{s.r.id}"); println("  end") }
 fn g8()      { let s = S { r: R { id: 8 }, k: 0 }; let S { r, k } = s; let m = r; println(f"  b{m.id}"); println("  end") }
 
 fn main() {
-    println("plain");    g1(S { r: R { id: 1 }, k: 0 });  println("plain end")
-    println("rename");   g2(S { r: R { id: 2 }, k: 0 });  println("rename end")
-    println("rest");     g3(S { r: R { id: 3 }, k: 0 });  println("rest end")
-    println("heapstr");  g4(Hs { r: R { id: 4 }, name: "nm" }); println("heapstr end")
-    println("nested");   g5(Ou { inner: In { r: R { id: 5 } }, k: 0 }); println("nested end")
-    println("norebind"); g6(S { r: R { id: 6 }, k: 0 });  println("norebind end")
-    println("refparam"); let rs = S { r: R { id: 7 }, k: 0 }; g7(rs); println("refparam end")
-    println("local");    g8();                             println("local end")
+    println("plain");    g1(S { r: R { id: 1 }, k: 0 });  println("plain end");
+    println("rename");   g2(S { r: R { id: 2 }, k: 0 });  println("rename end");
+    println("rest");     g3(S { r: R { id: 3 }, k: 0 });  println("rest end");
+    println("heapstr");  g4(Hs { r: R { id: 4 }, name: "nm" }); println("heapstr end");
+    println("nested");   g5(Ou { inner: In { r: R { id: 5 } }, k: 0 }); println("nested end");
+    println("norebind"); g6(S { r: R { id: 6 }, k: 0 });  println("norebind end");
+    println("refparam"); let rs = S { r: R { id: 7 }, k: 0 }; g7(rs); println("refparam end");
+    println("local");    g8();                             println("local end");
     println("done")
 }
 "#,
@@ -4472,10 +4472,10 @@ fn e2e_diverging_arm_over_a_freshtemp_scrutinee_keeps_its_control_flow() {
                 "labeled-break",
                 "fn main() {\n\
                  \x20 let mut i = 0;\n\
-                 \x20 outer: while i < 3 {\n\
+                 \x20 'outer: while i < 3 {\n\
                  \x20   let mut j = 0;\n\
                  \x20   while j < 3 {\n\
-                 \x20     match mk(7) { E.A(n) => { println(f\"v{n}\"); break outer; } E.B => {} };\n\
+                 \x20     match mk(7) { E.A(n) => { println(f\"v{n}\"); break 'outer; } E.B => {} };\n\
                  \x20     j = j + 1;\n\
                  \x20   }\n\
                  \x20   i = i + 1;\n\

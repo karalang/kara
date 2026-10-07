@@ -2907,7 +2907,6 @@ impl<'ctx> super::Codegen<'ctx> {
     fn closure_body_produces_heap_string(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::InterpolatedStringLit(_) => true,
             // `to_lowercase`/`to_uppercase` are String→String only when the
             // receiver is not a `char` — B-2026-08-12-25 put a char→char fold

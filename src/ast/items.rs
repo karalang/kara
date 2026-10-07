@@ -126,7 +126,6 @@ pub enum Item {
     EffectGroup(EffectGroupDecl),
     EffectVerbDecl(EffectVerbDecl),
     LayoutDef(LayoutDef),
-    UseDecl(UseDecl),
     Import(ImportDecl),
     ConstDecl(ConstDecl),
     /// `[ATTRIBUTES] [VIS] let [mut] NAME[: TYPE] = INIT;` — module-level
@@ -1063,15 +1062,7 @@ pub enum LayoutItem {
 
 // ── Module & Import ──────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
-pub struct UseDecl {
-    pub span: Span,
-    pub is_pub: bool,
-    pub path: Vec<String>,
-}
-
-/// New module-system import (CR-24). Replaces `UseDecl` once the parser emits
-/// `import` syntax in slice 5. Supports brace-grouped multi-item imports and
+/// Module-system import (CR-24). Supports brace-grouped multi-item imports and
 /// per-item `as` renames:
 ///
 /// ```text
@@ -5431,7 +5422,6 @@ fn fn_conditionally_returns_param_bare_legacy(
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::Bool(_) => false,
             ExprKind::InterpolatedStringLit(parts) => parts.iter().any(|p| match p {
                 crate::ast::ParsedInterpolationPart::Text(_) => false,
@@ -5745,7 +5735,6 @@ fn fn_conditionally_returns_param_bare_legacy(
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::Bool(_)
             | ExprKind::SelfValue
             | ExprKind::Path { .. } => true,
@@ -12903,7 +12892,6 @@ fn straight_line_expr(e: &Expr) -> bool {
         | ExprKind::CharLit(..)
         | ExprKind::ByteLit(..)
         | ExprKind::StringLit(..)
-        | ExprKind::MultiStringLit(..)
         | ExprKind::InterpolatedStringLit(..)
         | ExprKind::ByteStringLit(..)
         | ExprKind::Bool(..)

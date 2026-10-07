@@ -5,7 +5,7 @@ fn mks(i: i64) -> S { S { r: R { id: i }, s: f"ssssssssssssssssssssssssssss{i}" 
 fn a3(s: Option[S]) -> i64 { match s { Some(x) => { let s = 5; x.r.id + s } None => 0 } }
 fn a4(s: Option[S]) -> i64 { match s { Some(x) => { let t = 5; x.r.id + t } None => 0 } }
 fn main() {
-    println(f"k{a3(Some(mks(1)))}"); let b = Some(mks(2)); println(f"k{a3(b)}")
-    println(f"k{a4(Some(mks(3)))}"); let c = Some(mks(4)); println(f"k{a4(c)}")
+    println(f"k{a3(Some(mks(1)))}"); let b = Some(mks(2)); println(f"k{a3(b)}");
+    println(f"k{a4(Some(mks(3)))}"); let c = Some(mks(4)); println(f"k{a4(c)}");
     println("end")
 }

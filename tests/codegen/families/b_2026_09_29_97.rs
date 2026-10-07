@@ -19,7 +19,7 @@ enum E {
 }
 
 fn main() {
-    println("start")
+    println("start");
     let e = E.Int(Lit { value: 100000000000000000000i128, k: 3 });
     match e {
         Int(l) => println(l.value.to_string() + " " + l.k.to_string()),
@@ -85,11 +85,11 @@ fn shs(e: Se) -> String {
 }
 
 fn main() {
-    println("start")
+    println("start");
     let big: i128 = 100000000000000000000i128;
-    println(show(E.Int(Lit { value: big, suffix: "i128".to_string() })))
-    println(show(E.Nest(Outer { lit: Lit { value: big + 1, suffix: "n".to_string() }, k: 7 })))
-    println(show(E.Int(Lit { value: -5, suffix: "neg".to_string() })))
+    println(show(E.Int(Lit { value: big, suffix: "i128".to_string() })));
+    println(show(E.Nest(Outer { lit: Lit { value: big + 1, suffix: "n".to_string() }, k: 7 })));
+    println(show(E.Int(Lit { value: -5, suffix: "neg".to_string() })));
     println(shs(Se.Int(Lit { value: big + 2, suffix: "sh".to_string() })))
 }
 "#,
@@ -153,7 +153,7 @@ fn render(e: Ex) -> String {
 }
 
 fn main() {
-    println("start")
+    println("start");
     let mut toks: Vec[Spanned] = Vec.new();
     toks.push(Spanned { token: Tok.Integer(100000000000000000000i128, "i128".to_string()), at: 0 });
     toks.push(Spanned { token: Tok.Word("w".to_string()), at: 1 });

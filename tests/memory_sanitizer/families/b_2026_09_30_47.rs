@@ -55,12 +55,12 @@ fn h7(c: bool) -> i64 {
   return 0
 }
 fn main() {
-  println(f"r {h1(false)}"); println(f"r {h1(true)}")
-  println(f"r {h2(false)}"); println(f"r {h2(true)}")
-  println(f"r {h3(false)}")
-  println(f"r {h4(false, false)}"); println(f"r {h4(true, false)}"); println(f"r {h4(true, true)}")
-  println(f"r {h5(false)}"); println(f"r {h5(true)}")
-  println(f"r {h6(false)}"); println(f"r {h6(true)}")
+  println(f"r {h1(false)}"); println(f"r {h1(true)}");
+  println(f"r {h2(false)}"); println(f"r {h2(true)}");
+  println(f"r {h3(false)}");
+  println(f"r {h4(false, false)}"); println(f"r {h4(true, false)}"); println(f"r {h4(true, true)}");
+  println(f"r {h5(false)}"); println(f"r {h5(true)}");
+  println(f"r {h6(false)}"); println(f"r {h6(true)}");
   println(f"r {h7(false)}"); println(f"r {h7(true)}")
 }
 "#,

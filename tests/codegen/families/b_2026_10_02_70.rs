@@ -66,10 +66,10 @@ fn main() {
     }
     println(f"h {acc}");
     let mut p = 0;
-    outer: for a in [1, 2, 3] {
+    'outer: for a in [1, 2, 3] {
         for b in [10, 20, 30] {
             if b == 30 and a == 2 {
-                break outer;
+                break 'outer;
             }
             p += a * b;
         }
@@ -92,10 +92,10 @@ fn main() {
         u = u ^ x;
     }
     println(f"l {u}");
-    let w = found: {
+    let w = 'found: {
         for x in [4, 5, 6] {
             if x == 5 {
-                break found x * 2;
+                break 'found x * 2;
             }
         }
         0

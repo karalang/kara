@@ -32,31 +32,31 @@ fn a8(n: i64) -> i64 { let mut t = 0; for i in 1..n { let z = match mo(i) { Opti
 fn a9(n: i64) -> i64 { let mut t = 0; for i in 1..n { let z = match mo(i) { Option.Some(H2 { v, .. }) => { if i == 2 { continue } v.id }, Option.None => 0 }; t = t + z; } t }
 fn a10(k: i64) -> i64 { if let Result.Ok(H2 { v, r, .. }) = rs(k) { v.id + r.id } else { 0 } }
 fn main() {
-    println(a1(3))
-    println("-")
-    println(a1(0))
-    println("-")
-    println(a2(3))
-    println("-")
-    println(a3(3))
-    println("-")
-    println(a4(3))
-    println("-")
-    println(a4(0))
-    println("-")
-    println(a5(3))
-    println("-")
-    println(a6(3))
-    println("-")
-    println(a7(3))
-    println("-")
-    println(a7(1))
-    println("-")
-    println(a8(3))
-    println("-")
-    println(a9(4))
-    println("-")
-    println(a10(4))
+    println(a1(3));
+    println("-");
+    println(a1(0));
+    println("-");
+    println(a2(3));
+    println("-");
+    println(a3(3));
+    println("-");
+    println(a4(3));
+    println("-");
+    println(a4(0));
+    println("-");
+    println(a5(3));
+    println("-");
+    println(a6(3));
+    println("-");
+    println(a7(3));
+    println("-");
+    println(a7(1));
+    println("-");
+    println(a8(3));
+    println("-");
+    println(a9(4));
+    println("-");
+    println(a10(4));
     println("end")
 }"#;
     let want = "d30\nd3\n3\n-\n0\n-\nd30\nd3\n34\n-\nd30\nd3\n1\n-\nd30\nd3\n3\n-\n0\n-\nd30\nd3\n3\n-\n31\nd30\nd3\n3\n-\nd30\nd3\n3\n-\nd10\nd1\n0\n-\nd10\nd1\nd20\nd2\n3\n-\nd10\nd1\nd20\nd2\nd30\nd3\n4\n-\nd40\nd4\n44\nend\n";
@@ -82,13 +82,13 @@ fn b2(k: i64) -> i64 { match mo(k) { Option.Some(H2 { v, .. }) => { let w = v; w
 fn b3(k: i64) -> i64 { match rs(k) { Result.Ok(H2 { v, .. }) => take(v), Result.Err(e) => e } }
 fn b4(k: i64) -> i64 { if let Option.Some(H2 { v, .. }) = mo(k) { take(v) } else { 0 } }
 fn main() {
-    println(b1(3))
-    println("-")
-    println(b2(3))
-    println("-")
-    println(b3(3))
-    println("-")
-    println(b4(3))
+    println(b1(3));
+    println("-");
+    println(b2(3));
+    println("-");
+    println(b3(3));
+    println("-");
+    println(b4(3));
     println("end")
 }"#;
     let want = "d3\nd30\n3\n-\nd3\nd30\n3\n-\nd3\nd30\n3\n-\nd3\nd30\n3\nend\n";

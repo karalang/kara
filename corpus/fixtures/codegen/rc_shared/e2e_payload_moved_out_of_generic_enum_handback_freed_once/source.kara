@@ -38,23 +38,23 @@ fn p_local_eat() { let o = Ho.Full(mk2(20)); match o { Ho.Full(x) => eat2(x), Ho
 fn q_letelse_move() { let s = mk2(21); let o = mkh(s); let Ho.Full(x) = o else { return }; let y = x; println(f"q{y.id}") }
 fn r_local_nodrop() { let o = Ho.Full(mk3(22)); match o { Ho.Full(x) => println(f"r{x.id}"), Ho.Empty => println("e") } }
 fn main() {
-    a_unwrap(); println("a.")
-    b_unwrap_nodrop(); println("b.")
-    c_ho_move(); println("c.")
-    d_mid_move(); println("d.")
-    e_push(); println("e.")
-    f_loop(); println("f.")
-    g_ho_loop(); println("g.")
-    h_ho_read(); println("h.")
-    i_ho_ref(); println("i.")
-    j_local_read(); println("j.")
-    k_local_ifl(); println("k.")
-    l_ho_ifl(); println("l.")
-    m_ho_shared_field(); println("m.")
-    n_ho_ifl_move(); println("n.")
-    o_local_shared_field(); println("o.")
-    p_local_eat(); println("p.")
-    q_letelse_move(); println("q.")
-    r_local_nodrop(); println("r.")
+    a_unwrap(); println("a.");
+    b_unwrap_nodrop(); println("b.");
+    c_ho_move(); println("c.");
+    d_mid_move(); println("d.");
+    e_push(); println("e.");
+    f_loop(); println("f.");
+    g_ho_loop(); println("g.");
+    h_ho_read(); println("h.");
+    i_ho_ref(); println("i.");
+    j_local_read(); println("j.");
+    k_local_ifl(); println("k.");
+    l_ho_ifl(); println("l.");
+    m_ho_shared_field(); println("m.");
+    n_ho_ifl_move(); println("n.");
+    o_local_shared_field(); println("o.");
+    p_local_eat(); println("p.");
+    q_letelse_move(); println("q.");
+    r_local_nodrop(); println("r.");
     println("end")
 }

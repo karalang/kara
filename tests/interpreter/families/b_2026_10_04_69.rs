@@ -40,14 +40,14 @@ fn lv(o: Option[S]) { let mut v: Vec[S] = Vec.new(); match o { Some(r) => v.push
 fn lk(o: Option[S], k: bool) { let q2 = Q { z: 1 }; if k { match o { Some(r) => q2.eat(r), None => {} } } println("lk") }
 fn sh(o: Option[S]) { let b = B { xs: Vec.new() }; match o { Some(b) => { let q2 = Q { z: 1 }; q2.eat(b) }, None => {} } println("sh") }
 fn main() {
-  lo(Some(mks(1))); println("a")
-  lt(Some(mks(2))); println("b")
-  lc(Some(mks(3))); println("c")
-  ln(Some(mks(4))); println("d")
-  lp(Some(mks(6))); println("f")
-  lk(Some(mks(8)), true); println("h")
-  lk(Some(mks(9)), false); println("i")
-  sh(Some(mks(10))); println("j")
+  lo(Some(mks(1))); println("a");
+  lt(Some(mks(2))); println("b");
+  lc(Some(mks(3))); println("c");
+  ln(Some(mks(4))); println("d");
+  lp(Some(mks(6))); println("f");
+  lk(Some(mks(8)), true); println("h");
+  lk(Some(mks(9)), false); println("i");
+  sh(Some(mks(10))); println("j");
   println("end")
 }
 "#);

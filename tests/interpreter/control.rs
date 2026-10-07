@@ -370,10 +370,10 @@ fn test_labeled_break_exits_outer_loop() {
     assert_eq!(
         run("fn main() {\n\
                  let mut count = 0;\n\
-                 outer: for x in [1, 2, 3] {\n\
+                 'outer: for x in [1, 2, 3] {\n\
                      for y in [10, 20, 30] {\n\
                          count = count + 1;\n\
-                         break outer ();\n\
+                         break 'outer ();\n\
                      }\n\
                  }\n\
                  println(count);\n\
@@ -387,10 +387,10 @@ fn test_labeled_continue_skips_outer_iteration() {
     assert_eq!(
         run("fn main() {\n\
                  let mut count = 0;\n\
-                 outer: for x in [1, 2, 3] {\n\
+                 'outer: for x in [1, 2, 3] {\n\
                      for y in [10, 20] {\n\
                          count = count + 1;\n\
-                         continue outer;\n\
+                         continue 'outer;\n\
                      }\n\
                  }\n\
                  println(count);\n\
@@ -403,9 +403,9 @@ fn test_labeled_continue_skips_outer_iteration() {
 fn test_labeled_break_with_value() {
     assert_eq!(
         run("fn main() {\n\
-                 let result = outer: loop {\n\
+                 let result = 'outer: loop {\n\
                      loop {\n\
-                         break outer 42;\n\
+                         break 'outer 42;\n\
                      }\n\
                  };\n\
                  println(result);\n\
@@ -419,11 +419,11 @@ fn test_labeled_break_while_loop() {
     assert_eq!(
         run("fn main() {\n\
                  let mut i = 0;\n\
-                 outer: while i < 5 {\n\
+                 'outer: while i < 5 {\n\
                      let mut j = 0;\n\
                      while j < 5 {\n\
                          if j == 2 {\n\
-                             break outer ();\n\
+                             break 'outer ();\n\
                          }\n\
                          j = j + 1;\n\
                      }\n\
@@ -440,7 +440,7 @@ fn test_unlabeled_break_still_works() {
     assert_eq!(
         run("fn main() {\n\
                  let mut count = 0;\n\
-                 outer: for x in [1, 2, 3] {\n\
+                 'outer: for x in [1, 2, 3] {\n\
                      for y in [10, 20, 30] {\n\
                          count = count + 1;\n\
                          break;\n\
@@ -466,7 +466,7 @@ fn test_interpreter_labeled_block_break_with_value() {
     // to 42 through the tree-walk path.
     assert_eq!(
         run("fn main() {\n\
-             let x: i64 = lbl: { break lbl 42; -1 };\n\
+             let x: i64 = 'lbl: { break 'lbl 42; -1 };\n\
              println(x);\n\
          }"),
         "42\n"
@@ -479,7 +479,7 @@ fn test_interpreter_labeled_block_bare_break_unit() {
     // post-block println runs.
     assert_eq!(
         run("fn main() {\n\
-             lbl: { break lbl; };\n\
+             'lbl: { break 'lbl; };\n\
              println(7);\n\
          }"),
         "7\n"
@@ -492,7 +492,7 @@ fn test_interpreter_labeled_block_tail_expression() {
     // becomes the labeled block's value.
     assert_eq!(
         run("fn main() {\n\
-             let x: i64 = lbl: { 99 };\n\
+             let x: i64 = 'lbl: { 99 };\n\
              println(x);\n\
          }"),
         "99\n"
@@ -1393,27 +1393,27 @@ fn aggregate_literal_at_explicit_return_fires_element_bodies_once() {
         // The row's own repro: the struct literal at the return site.
         (
             "struct-literal-at-return",
-            "let a: Box3 = build(14); println(f\"v{a.xs[0].id}\")\n",
+            "let a: Box3 = build(14); println(f\"v{a.xs[0].id}\");\n",
             "mid\nv14\ndR14\n",
         ),
         // A TUPLE literal in the same position — the other aggregate form
         // the disarm walks.
         (
             "tuple-literal-at-return",
-            "let t: (Vec[R], i64) = build_tuple(20); println(f\"t{t.1}\")\n",
+            "let t: (Vec[R], i64) = build_tuple(20); println(f\"t{t.1}\");\n",
             "t7\ndR20\n",
         ),
         // Two independent sources moved into ONE literal.
         (
             "two-vec-fields",
-            "let w: Two = build_two(30); println(f\"w{w.xs[0].id}{w.ys[0].id}\")\n",
+            "let w: Two = build_two(30); println(f\"w{w.xs[0].id}{w.ys[0].id}\");\n",
             "w3031\ndR31\ndR30\n",
         ),
         // A CONDITIONAL return: the compiled disarm is static, so it has to
         // cover every returning path rather than the syntactic tail alone.
         (
             "conditional-return",
-            "let c: Box3 = build_cond(40); println(f\"c{c.xs[0].id}\")\n",
+            "let c: Box3 = build_cond(40); println(f\"c{c.xs[0].id}\");\n",
             "c40\ndR40\n",
         ),
         // The two spellings that were ALREADY correct on every surface,
@@ -1423,13 +1423,13 @@ fn aggregate_literal_at_explicit_return_fires_element_bodies_once() {
         (
             "named-binding-then-return",
             "let a: Box3 = { let mut v: Vec[R] = Vec.new(); v.push(R { id: 50, tag: f\"t\" }); let bx: Box3 = Box3 { xs: v }; bx };\n\
-             println(f\"v{a.xs[0].id}\")\n",
+             println(f\"v{a.xs[0].id}\");\n",
             "v50\ndR50\n",
         ),
         (
             "bare-tail-literal",
             "let a: Box3 = { let mut v: Vec[R] = Vec.new(); v.push(R { id: 60, tag: f\"t\" }); Box3 { xs: v } };\n\
-             println(f\"v{a.xs[0].id}\")\n",
+             println(f\"v{a.xs[0].id}\");\n",
             "v60\ndR60\n",
         ),
     ] {
@@ -1832,9 +1832,9 @@ fn test_loop_break_dominated_init_oracle() {
              println(x);\n\
              let c = true;\n\
              let mut y: i64;\n\
-             outer: loop {\n\
+             'outer: loop {\n\
                  loop {\n\
-                     if c { y = 9; break outer; }\n\
+                     if c { y = 9; break 'outer; }\n\
                      y = 1;\n\
                      break;\n\
                  }\n\

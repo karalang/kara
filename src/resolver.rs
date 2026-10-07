@@ -1088,7 +1088,6 @@ fn module_top_level_names_for_id(tree: &ProgramTree, id: ModuleId) -> Vec<String
             // test cases are not callables and expose no cross-module name.
             Item::ImplBlock(_)
             | Item::LayoutDef(_)
-            | Item::UseDecl(_)
             | Item::Import(_)
             | Item::AliasDecl(_)
             | Item::IndependentDecl(_)
@@ -1972,7 +1971,7 @@ fn infer_stub_arg_type(expr: &Expr) -> Option<String> {
         ExprKind::Bool(_) => "bool",
         ExprKind::CharLit(_) => "char",
         ExprKind::ByteLit(_) | ExprKind::ByteStringLit(_) => "u8",
-        ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => "String",
+        ExprKind::StringLit(_) => "String",
         ExprKind::CStringLit { .. } => "ref CStr",
         _ => return None,
     };

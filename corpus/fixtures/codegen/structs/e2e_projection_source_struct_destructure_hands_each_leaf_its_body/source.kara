@@ -23,14 +23,14 @@ fn cell_nodest(){ let w = WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108))
 fn cell_move()  { let w = WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } }; let h = w.inner; println(f"  rd{h.a.id}") }
 
 fn main() {
-    println("res");    cell_res()
-    println("local");  cell_local()
-    println("opt");    cell_opt()
-    println("pln");    cell_pln()
-    println("str");    cell_str()
-    println("two");    cell_two()
-    println("live");   cell_live()
-    println("nodest"); cell_nodest()
-    println("move");   cell_move()
+    println("res");    cell_res();
+    println("local");  cell_local();
+    println("opt");    cell_opt();
+    println("pln");    cell_pln();
+    println("str");    cell_str();
+    println("two");    cell_two();
+    println("live");   cell_live();
+    println("nodest"); cell_nodest();
+    println("move");   cell_move();
     println("done")
 }

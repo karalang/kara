@@ -19,14 +19,14 @@ fn g[T](o: T) -> T { o }
 fn g2[T](s: T, o: T) -> T { o }
 fn g3[T](o: T) -> T { let t = o; t }
 fn main() {
-    g(R { id: 1 }); println("_a1")
-    let _ = g(R { id: 2 }); println("_a2")
-    g(S { r: R { id: 3 }, s: "sssssssssssssssssssssssssssss" }); println("_a3")
-    g2(R { id: 4 }, R { id: 5 }); println("_a4")
-    g3(R { id: 6 }); println("_a5")
-    let a = R { id: 7 }; g(a); println("_a6")
-    g(mks(8)); println("_a7")
-    let r = g(R { id: 9 }); println(f"k{r.id}"); println("_a8")
+    g(R { id: 1 }); println("_a1");
+    let _ = g(R { id: 2 }); println("_a2");
+    g(S { r: R { id: 3 }, s: "sssssssssssssssssssssssssssss" }); println("_a3");
+    g2(R { id: 4 }, R { id: 5 }); println("_a4");
+    g3(R { id: 6 }); println("_a5");
+    let a = R { id: 7 }; g(a); println("_a6");
+    g(mks(8)); println("_a7");
+    let r = g(R { id: 9 }); println(f"k{r.id}"); println("_a8");
     println("end")
 }
 "#);

@@ -440,7 +440,6 @@ fn is_local(expr: &Expr, cx: &Ctx<'_>) -> bool {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_) => true,
         ExprKind::InterpolatedStringLit(parts) => parts.iter().all(|p| match p {
@@ -958,7 +957,6 @@ fn visit_children<'e>(expr: &'e Expr, v: &mut impl Visit<'e>) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Identifier(_)

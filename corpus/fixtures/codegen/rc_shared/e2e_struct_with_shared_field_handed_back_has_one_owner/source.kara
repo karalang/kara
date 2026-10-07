@@ -27,18 +27,18 @@ fn l_push() { let s = S3 { h: Sh { k: 1 }, id: 14 }; let v = st(s); let c = S3 {
 fn m_loop() { for i in 0..3 { let s = S3 { h: Sh { k: i }, id: 16 }; let t = idg(s); println(f"m{t.h.k}") } }
 
 fn main() {
-    a_gen_drop()
-    b_gen_plain()
-    c_conc_plain()
-    d_wrap_drop()
-    e_wrap_plain()
-    f_method()
-    g_shared_alive()
-    h_conc_disc()
-    i_conc_letdisc()
-    j_gen_disc()
-    k_rebind()
-    l_push()
-    m_loop()
+    a_gen_drop();
+    b_gen_plain();
+    c_conc_plain();
+    d_wrap_drop();
+    e_wrap_plain();
+    f_method();
+    g_shared_alive();
+    h_conc_disc();
+    i_conc_letdisc();
+    j_gen_disc();
+    k_rebind();
+    l_push();
+    m_loop();
     println("end")
 }

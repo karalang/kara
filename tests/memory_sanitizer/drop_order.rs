@@ -3726,7 +3726,7 @@ fn round() {
     println("end")
 }
 fn main() {
-    round()
+    round();
     round()
 }
 "#,
@@ -3911,7 +3911,7 @@ fn round() {
     println("done")
 }
 fn main() {
-    round()
+    round();
     round()
 }
 "#,
@@ -4095,7 +4095,7 @@ fn round() {
     println("done");
 }
 fn main() {
-    round()
+    round();
     round()
 }
 "#,

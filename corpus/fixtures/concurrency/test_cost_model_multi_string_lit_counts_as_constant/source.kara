@@ -1,7 +1,9 @@
 
         fn main() {
-            let banner: String = """hello
-                                    world""";
+            let banner: String = """
+                hello
+                world
+                """;
             let mut buf: Vec[u8] = Vec.new();
             let n: i64 = 0i64;
             println(banner);

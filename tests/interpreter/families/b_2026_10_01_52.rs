@@ -25,13 +25,13 @@ fn h6(a: Vec[R]) -> Vec[R] { match Option.Some(a) { Some(v) => { let u = v; prin
 fn h7(a: Vec[R]) -> Vec[R] { let r: Result[Vec[R], i64] = Ok(a); match r { Ok(v) => v, Err(_) => Vec.new() } }
 fn h8(a: R) -> R { let o = Some(a); match o { Some(v) => v, None => mkr(99) } }
 fn main() {
-  println("-h1"); let a1: Vec[R] = [mkr(1), mkr(2)]; let z1 = h1(a1); println(f"y{z1.len()}")
-  println("-h2"); let a2: Array[R, 2] = [mkr(3), mkr(4)]; let z2 = h2(a2); println(f"y{z2[0].id}")
-  println("-h3"); let a3: Vec[R] = [mkr(5), mkr(6)]; let z3 = h3(a3); println(f"y{z3.len()}")
-  println("-h4"); let a4: Vec[R] = [mkr(7), mkr(8)]; let z4 = h4(a4); println(f"y{z4.len()}")
-  println("-h5"); let a5: Vec[R] = [mkr(9), mkr(10)]; let z5 = h5(a5); println(f"y{z5.len()}")
-  println("-h6"); let a6: Vec[R] = [mkr(11), mkr(12)]; let z6 = h6(a6); println(f"y{z6.len()}")
-  println("-h7"); let a7: Vec[R] = [mkr(13), mkr(14)]; let z7 = h7(a7); println(f"y{z7.len()}")
+  println("-h1"); let a1: Vec[R] = [mkr(1), mkr(2)]; let z1 = h1(a1); println(f"y{z1.len()}");
+  println("-h2"); let a2: Array[R, 2] = [mkr(3), mkr(4)]; let z2 = h2(a2); println(f"y{z2[0].id}");
+  println("-h3"); let a3: Vec[R] = [mkr(5), mkr(6)]; let z3 = h3(a3); println(f"y{z3.len()}");
+  println("-h4"); let a4: Vec[R] = [mkr(7), mkr(8)]; let z4 = h4(a4); println(f"y{z4.len()}");
+  println("-h5"); let a5: Vec[R] = [mkr(9), mkr(10)]; let z5 = h5(a5); println(f"y{z5.len()}");
+  println("-h6"); let a6: Vec[R] = [mkr(11), mkr(12)]; let z6 = h6(a6); println(f"y{z6.len()}");
+  println("-h7"); let a7: Vec[R] = [mkr(13), mkr(14)]; let z7 = h7(a7); println(f"y{z7.len()}");
   println("-h8"); let z8 = h8(mkr(15)); println(f"y{z8.id}")
 }
 "#);

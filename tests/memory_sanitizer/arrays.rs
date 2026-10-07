@@ -8189,7 +8189,7 @@ fn round() {
     println("end")
 }
 fn main() {
-    round()
+    round();
     round()
 }
 "#,

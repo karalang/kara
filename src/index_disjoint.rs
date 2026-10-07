@@ -1227,7 +1227,6 @@ impl Prover<'_> {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::SelfValue
@@ -1667,7 +1666,6 @@ fn for_each_child<'a>(expr: &'a Expr, on: &mut dyn FnMut(Child<'a>)) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Identifier(_)

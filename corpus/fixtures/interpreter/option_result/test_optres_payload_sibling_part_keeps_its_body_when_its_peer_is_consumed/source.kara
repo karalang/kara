@@ -18,19 +18,19 @@ fn named(o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  m
 fn mk() -> (R, R) { (R { id: 5 }, R { id: 6 }) }
 
 fn main() {
-    println("row");      { eat(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
-    println("second");   { eat1(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
-    println("result");   { eatr(Result.Ok((R { id: 5 }, R { id: 6 }))) } println("  out")
-    println("method");   { let h = H { n: 1 }; h.eat(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
-    println("three");    { eat3(Option.Some((R { id: 5 }, R { id: 6 }, R { id: 7 }))) } println("  out")
-    println("iflet");    { eatif(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
-    println("call-arg"); { eat(Option.Some(mk())) } println("  out")
-    println("later");    { later(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
-    println("ctl-named-arg"); { let a = Option.Some((R { id: 5 }, R { id: 6 })); eat(a) } println("  out")
-    println("ctl-nomove"); { nomove(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
-    println("ctl-scalar"); { scalar(Option.Some((R { id: 5 }, 9))) } println("  out")
-    println("ctl-both");   { both(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
-    println("ctl-escape"); { let g = hands(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-    println("ctl-struct"); { named(Option.Some(P { r: R { id: 5 }, q: R { id: 6 } })) } println("  out")
+    println("row");      { eat(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out");
+    println("second");   { eat1(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out");
+    println("result");   { eatr(Result.Ok((R { id: 5 }, R { id: 6 }))) } println("  out");
+    println("method");   { let h = H { n: 1 }; h.eat(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out");
+    println("three");    { eat3(Option.Some((R { id: 5 }, R { id: 6 }, R { id: 7 }))) } println("  out");
+    println("iflet");    { eatif(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out");
+    println("call-arg"); { eat(Option.Some(mk())) } println("  out");
+    println("later");    { later(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out");
+    println("ctl-named-arg"); { let a = Option.Some((R { id: 5 }, R { id: 6 })); eat(a) } println("  out");
+    println("ctl-nomove"); { nomove(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out");
+    println("ctl-scalar"); { scalar(Option.Some((R { id: 5 }, 9))) } println("  out");
+    println("ctl-both");   { both(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out");
+    println("ctl-escape"); { let g = hands(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+    println("ctl-struct"); { named(Option.Some(P { r: R { id: 5 }, q: R { id: 6 } })) } println("  out");
     println("end")
 }

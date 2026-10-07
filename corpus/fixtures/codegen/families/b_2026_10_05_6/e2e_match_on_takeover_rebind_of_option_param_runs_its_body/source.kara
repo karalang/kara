@@ -9,15 +9,15 @@ fn q6(x: Option[R], c: bool) { let mut h = x; if c { match h { Some(a) => printl
 fn q7(x: Option[R]) { let mut h = x; match h { Some(a) if a.id > 3 => println(f"g{a.id}"), _ => println("o") } h = None; println("q7"); }
 fn q8(x: Option[R], c: bool) { let mut h = x; match h { Some(a) => println(f"m{a.id}"), None => println("n") } if c { h = None; } println("q8"); }
 fn main() {
-    q1(Some([mk(11), mk(12)])); println("_a1")
-    q2(Some([mk(21), mk(22)])); println("_a2")
-    q3(); println("_a3")
-    q4(Some(mk(41))); println("_a4")
-    let o = Some(mk(42)); q4(o); println("_a5")
-    let o: Option[Array[R, 2]] = Some([mk(13), mk(14)]); q1(o); println("_a6")
-    q6(Some(mk(61)), true); println("_a7")
-    q7(Some(mk(71))); println("_a8")
-    q8(Some(mk(81)), false); println("_a9")
-    let o = Some(mk(82)); q8(o, true); println("_b1")
+    q1(Some([mk(11), mk(12)])); println("_a1");
+    q2(Some([mk(21), mk(22)])); println("_a2");
+    q3(); println("_a3");
+    q4(Some(mk(41))); println("_a4");
+    let o = Some(mk(42)); q4(o); println("_a5");
+    let o: Option[Array[R, 2]] = Some([mk(13), mk(14)]); q1(o); println("_a6");
+    q6(Some(mk(61)), true); println("_a7");
+    q7(Some(mk(71))); println("_a8");
+    q8(Some(mk(81)), false); println("_a9");
+    let o = Some(mk(82)); q8(o, true); println("_b1");
     println("end")
 }

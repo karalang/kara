@@ -25,21 +25,21 @@ fn o() { let mut o: Option[H] = None; o = Some(H { id: 30 }); o = Some(H { id: 3
 fn p() { let mut h = H { id: 32 }; if true { h = H { id: 33 }; } println(f"p{h.id}") }
 fn q() { let a = H { id: 34 }; let mut c = a; c = H { id: 35 }; println(f"q{c.id}") }
 fn main() {
-    a()
-    b()
-    c()
-    d()
-    e()
-    f()
-    g()
-    i()
-    j()
-    k()
-    l()
-    m()
-    n()
-    o()
-    p()
-    q()
+    a();
+    b();
+    c();
+    d();
+    e();
+    f();
+    g();
+    i();
+    j();
+    k();
+    l();
+    m();
+    n();
+    o();
+    p();
+    q();
     println("end")
 }

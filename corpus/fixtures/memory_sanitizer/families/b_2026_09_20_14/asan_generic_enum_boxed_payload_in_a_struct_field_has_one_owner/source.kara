@@ -8,15 +8,15 @@ fn mk(n: i64) -> G1[W] { return G1.Y(W { s: f"payload-heap-string-{n}", n: n }) 
 fn takeg(g: G1[W]) { match g { G1.Y(w) => println(f"took{w.n}"), G1.N => println("n") } }
 fn mksm(n: i64) -> Sm { return Sm { g: mk(n), k: n } }
 fn main() {
-    let s1 = S { g: mk(1), k: 7 }; println(f"a{s1.k}")
-    let s2 = Sm { g: mk(2), k: 7 }; println(f"b{s2.k}")
-    let g3 = mk(3); let s3 = Sm { g: g3, k: 7 }; println(f"c{s3.k}")
+    let s1 = S { g: mk(1), k: 7 }; println(f"a{s1.k}");
+    let s2 = Sm { g: mk(2), k: 7 }; println(f"b{s2.k}");
+    let g3 = mk(3); let s3 = Sm { g: g3, k: 7 }; println(f"c{s3.k}");
     let s4 = Sm { g: mk(4), k: 7 }; match s4.g { G1.Y(_) => println("d"), G1.N => println("n") }
-    let s5 = S { g: mk(5), k: 7 }; let x5 = s5.g; println(f"e{s5.k}")
-    let s6 = Sm { g: mk(6), k: 7 }; let s6b = s6; println(f"f{s6b.k}")
-    let s7 = S { g: mk(7), k: 7 }; let s7b = s7; println(f"g{s7b.k}")
-    let mut v: Vec[W] = Vec.new(); let s8 = Sm { g: mk(8), k: 7 }; match s8.g { G1.Y(w) => v.push(w), G1.N => println("n") }; println(f"h{v.len()}")
-    let s13 = Sm { g: mk(13), k: 13 }; takeg(s13.g); println("i")
-    let mut u: Vec[Sm] = Vec.new(); u.push(mksm(14)); println(f"j{u.len()}")
+    let s5 = S { g: mk(5), k: 7 }; let x5 = s5.g; println(f"e{s5.k}");
+    let s6 = Sm { g: mk(6), k: 7 }; let s6b = s6; println(f"f{s6b.k}");
+    let s7 = S { g: mk(7), k: 7 }; let s7b = s7; println(f"g{s7b.k}");
+    let mut v: Vec[W] = Vec.new(); let s8 = Sm { g: mk(8), k: 7 }; match s8.g { G1.Y(w) => v.push(w), G1.N => println("n") }; println(f"h{v.len()}");
+    let s13 = Sm { g: mk(13), k: 13 }; takeg(s13.g); println("i");
+    let mut u: Vec[Sm] = Vec.new(); u.push(mksm(14)); println(f"j{u.len()}");
     println("end")
 }

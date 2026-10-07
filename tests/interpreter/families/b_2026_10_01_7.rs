@@ -33,19 +33,19 @@ impl H {
   fn mkv(x: Option[R]) -> Vec[Option[R]] { return Vec[x] }
 }
 fn main() {
-  println("-q1"); let a = ov(Some(mk(1))); println(f"k{a.len()}")
-  println("-q2"); let b = oa(Some(mk(2))); println(f"k{b.len()}")
-  println("-q7"); let o = Some(mk(3)); let c = ov(o); println(f"k{c.len()}")
-  println("-w2"); let o2 = Some(mk(4)); let d = ow(o2); println(f"k{d.n}")
-  println("-t2"); let o3 = Some(mk(5)); let e = ot(o3); println(f"k{e.1}")
-  println("-c1"); let o4 = Some(mk(6)); let f = oc(o4, true); println(f"k{f.len()}")
-  println("-c2"); let o5 = Some(mk(7)); let g = oc(o5, false); println(f"k{g.len()}")
-  println("-i1"); let o6 = Some(mk(8)); let h = id(o6); println(f"k{h.is_some()}")
-  println("-r2"); let o7: Result[R, i64] = Ok(mk(9)); let r = rv(o7); println(f"k{r.len()}")
-  println("-m1"); let hz = H { k: 1 }; let o8 = Some(mk(10)); let m = hz.wv(o8); println(f"k{m.len()}")
-  println("-m2"); let o9 = Some(mk(11)); let n = H.mkv(o9); println(f"k{n.len()}")
-  println("-g1"); let p = Some(mk(12)); let q = gv(p); println(f"k{q.len()}")
-  println("-g2"); let s = gv(Some(mk(13))); println(f"k{s.len()}")
+  println("-q1"); let a = ov(Some(mk(1))); println(f"k{a.len()}");
+  println("-q2"); let b = oa(Some(mk(2))); println(f"k{b.len()}");
+  println("-q7"); let o = Some(mk(3)); let c = ov(o); println(f"k{c.len()}");
+  println("-w2"); let o2 = Some(mk(4)); let d = ow(o2); println(f"k{d.n}");
+  println("-t2"); let o3 = Some(mk(5)); let e = ot(o3); println(f"k{e.1}");
+  println("-c1"); let o4 = Some(mk(6)); let f = oc(o4, true); println(f"k{f.len()}");
+  println("-c2"); let o5 = Some(mk(7)); let g = oc(o5, false); println(f"k{g.len()}");
+  println("-i1"); let o6 = Some(mk(8)); let h = id(o6); println(f"k{h.is_some()}");
+  println("-r2"); let o7: Result[R, i64] = Ok(mk(9)); let r = rv(o7); println(f"k{r.len()}");
+  println("-m1"); let hz = H { k: 1 }; let o8 = Some(mk(10)); let m = hz.wv(o8); println(f"k{m.len()}");
+  println("-m2"); let o9 = Some(mk(11)); let n = H.mkv(o9); println(f"k{n.len()}");
+  println("-g1"); let p = Some(mk(12)); let q = gv(p); println(f"k{q.len()}");
+  println("-g2"); let s = gv(Some(mk(13))); println(f"k{s.len()}");
   println("-l1"); for i in 0..2 { let u = Some(mk(20 + i)); let v = ov(u); println(f"k{v.len()}") }
   println("-n1"); let z: Option[R] = None; let y = ov(z); println(f"k{y.len()}")
 }

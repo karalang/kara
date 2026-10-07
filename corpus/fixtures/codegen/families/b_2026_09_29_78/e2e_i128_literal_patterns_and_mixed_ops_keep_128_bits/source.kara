@@ -16,31 +16,31 @@ fn clu(x: u128) -> String {
 }
 
 fn main() {
-    println("start")
+    println("start");
     let b: i128 = 100000000000000000000i128;
-    println(cls(b))
-    println(cls(b + 1))
-    println(cls(18446744073709551616i128))
-    println(cls(3))
-    println(clu(340282366920938463463374607431768211455u128))
-    println(clu(18446744073709551615u128))
+    println(cls(b));
+    println(cls(b + 1));
+    println(cls(18446744073709551616i128));
+    println(cls(3));
+    println(clu(340282366920938463463374607431768211455u128));
+    println(clu(18446744073709551615u128));
     let s = b.abs() + 1;
-    println(s.to_string())
+    println(s.to_string());
     let mut acc: i128 = 1;
     for i in 0..70 {
         acc = acc * 2;
     }
-    println(acc.to_string())
+    println(acc.to_string());
     let x: i128 = if b != 0 { 7 } else { 8 };
-    println((x + b).to_string())
+    println((x + b).to_string());
     let v: Vec[i128] = vec![b, 1, 2];
     let mut sum: i128 = 0;
     for e in v { sum = sum + e + 1; }
-    println(sum.to_string())
+    println(sum.to_string());
     let o: Option[i128] = Some(b + 5);
     match o { Some(z) => println(z.to_string()), None => println("n") }
     let h = (b >> 64) + 1;
-    println(h.to_string())
-    println((b / 1000000007).to_string())
+    println(h.to_string());
+    println((b / 1000000007).to_string());
     println((-b % 1000000007).to_string())
 }

@@ -53,14 +53,14 @@ fn twice(h: HoRes)     { let HoRes { a, b } = h; let c = b; let d = c;
                          match d { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
 
 fn main() {
-  println("rebind");     rebind(HoRes { a: mk(1), b: Result.Ok(mk(101)) })
-  println("rebindu");    rebindu(HoRes { a: mk(2), b: Result.Ok(mk(102)) })
-  println("rebindcall"); rebindcall(HoRes { a: mk(3), b: Result.Ok(mk(103)) })
-  println("orebind");    orebind(HoOpt { a: mk(4), b: Option.Some(mk(104)) })
-  println("prebind");    prebind(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } })
-  println("porebind");   porebind(WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } })
-  println("direct");     direct(HoRes { a: mk(7), b: Result.Ok(mk(107)) })
-  println("twice");      twice(HoRes { a: mk(8), b: Result.Ok(mk(108)) })
+  println("rebind");     rebind(HoRes { a: mk(1), b: Result.Ok(mk(101)) });
+  println("rebindu");    rebindu(HoRes { a: mk(2), b: Result.Ok(mk(102)) });
+  println("rebindcall"); rebindcall(HoRes { a: mk(3), b: Result.Ok(mk(103)) });
+  println("orebind");    orebind(HoOpt { a: mk(4), b: Option.Some(mk(104)) });
+  println("prebind");    prebind(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } });
+  println("porebind");   porebind(WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } });
+  println("direct");     direct(HoRes { a: mk(7), b: Result.Ok(mk(107)) });
+  println("twice");      twice(HoRes { a: mk(8), b: Result.Ok(mk(108)) });
   println("done")
 }
 "#,
@@ -139,27 +139,27 @@ struct HoRes { a: R, b: Result[R, String] }
 struct WrapR { inner: HoRes }
 fn eat(x: R) { println(f"  eat{x.id}") }
 impl HoRes {
-    fn s_match(self)  { let HoRes { a, b } = self; println(f"  rd{a.id}")
+    fn s_match(self)  { let HoRes { a, b } = self; println(f"  rd{a.id}");
                         match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
     fn s_unused(self) { let HoRes { a, b } = self; println(f"  rd{a.id}") }
     fn s_call(self)   { let HoRes { a, b } = self;
                         match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
 }
 impl WrapR {
-    fn p_match(self)  { let HoRes { a, b } = self.inner; println(f"  rd{a.id}")
+    fn p_match(self)  { let HoRes { a, b } = self.inner; println(f"  rd{a.id}");
                         match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
     fn p_unused(self) { let HoRes { a, b } = self.inner; println(f"  rd{a.id}") }
 }
 fn main() {
-    println("start")
+    println("start");
     let mut i = 0;
     while i < 3 {
         let k = i * 10;
-        HoRes { a: mk(k + 1), b: Result.Ok(mk(k + 101)) }.s_match()
-        HoRes { a: mk(k + 2), b: Result.Ok(mk(k + 102)) }.s_unused()
-        HoRes { a: mk(k + 3), b: Result.Ok(mk(k + 103)) }.s_call()
-        WrapR { inner: HoRes { a: mk(k + 4), b: Result.Ok(mk(k + 104)) } }.p_match()
-        WrapR { inner: HoRes { a: mk(k + 5), b: Result.Ok(mk(k + 105)) } }.p_unused()
+        HoRes { a: mk(k + 1), b: Result.Ok(mk(k + 101)) }.s_match();
+        HoRes { a: mk(k + 2), b: Result.Ok(mk(k + 102)) }.s_unused();
+        HoRes { a: mk(k + 3), b: Result.Ok(mk(k + 103)) }.s_call();
+        WrapR { inner: HoRes { a: mk(k + 4), b: Result.Ok(mk(k + 104)) } }.p_match();
+        WrapR { inner: HoRes { a: mk(k + 5), b: Result.Ok(mk(k + 105)) } }.p_unused();
         i = i + 1;
     }
 }

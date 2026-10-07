@@ -15,12 +15,12 @@ fn f5(q: W3) -> (S2, i64) { let x = q.u; return (x, q.n) }
 fn f6(q: W7) -> Option[S5] { let x = q.u; return Some(x) }
 fn f7(q: W7) -> Vec[S5] { let x = q.u; let W7 { n, .. } = q; println(f"n{n}"); let mut v: Vec[S5] = Vec.new(); v.push(x); return v }
 fn main() {
-  println("-c1"); let a = f1(W3 { u: mk(9), n: 2 }); println(f"r{a.s.id}{a.s.h.k}")
-  println("-c2"); let b = f2(W3 { u: mk(8), n: 3 }); println(f"r{b.s.id}{b.s.h.k}")
+  println("-c1"); let a = f1(W3 { u: mk(9), n: 2 }); println(f"r{a.s.id}{a.s.h.k}");
+  println("-c2"); let b = f2(W3 { u: mk(8), n: 3 }); println(f"r{b.s.id}{b.s.h.k}");
   println("-c3"); let c = f3(W3 { u: mk(7), n: 2 }); if let Some(x) = c { println(f"r{x.id}{x.h.k}") }
-  println("-c4"); let d = f4(W3 { u: mk(6), n: 2 }); println(f"r{d.len()}{d[0].id}{d[0].h.k}")
-  println("-c5"); let (e, m) = f5(W3 { u: mk(5), n: 4 }); println(f"r{e.id}{e.h.k}{m}")
+  println("-c4"); let d = f4(W3 { u: mk(6), n: 2 }); println(f"r{d.len()}{d[0].id}{d[0].h.k}");
+  println("-c5"); let (e, m) = f5(W3 { u: mk(5), n: 4 }); println(f"r{e.id}{e.h.k}{m}");
   println("-c6"); let g = f6(W7 { u: S5 { h: Sh { k: 4 }, t: f"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{1}", id: 4 }, n: 2 }); if let Some(x) = g { println(f"r{x.id}{x.h.k}{x.t.len()}") }
-  println("-c7"); let h = f7(W7 { u: S5 { h: Sh { k: 3 }, t: f"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb{2}", id: 3 }, n: 5 }); println(f"r{h.len()}{h[0].id}{h[0].t.len()}")
+  println("-c7"); let h = f7(W7 { u: S5 { h: Sh { k: 3 }, t: f"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb{2}", id: 3 }, n: 5 }); println(f"r{h.len()}{h[0].id}{h[0].t.len()}");
   println("end")
 }

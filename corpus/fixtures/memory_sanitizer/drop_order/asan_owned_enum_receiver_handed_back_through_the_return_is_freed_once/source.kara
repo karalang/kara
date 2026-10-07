@@ -32,6 +32,6 @@ fn round() {
     println("done")
 }
 fn main() {
-    round()
+    round();
     round()
 }

@@ -29,13 +29,13 @@ fn f_nest() { let s = mk(14); nest3(s, true, true); let s2 = mk(15); nest3(s2, f
 fn g_temp_loop() { let t = passp(mk(21), true); println(f"g{t.id}"); for i in 0..3 { let s = mk(i); let u = passp(s, i == 1); println(f"g{u.id}") } }
 fn h_direct() { let s = mk(22); let w = mk(23); let t = pickS3(s, true, w); let s2 = mk2(24); let w2 = mk2(25); let t2 = pickS2(s2, false, w2); println(f"h{t.id} {t2.id}") }
 fn main() {
-    a_pass()
-    b_pass2()
-    c_letret()
-    d_stmt()
-    e_stmtR()
-    f_nest()
-    g_temp_loop()
-    h_direct()
+    a_pass();
+    b_pass2();
+    c_letret();
+    d_stmt();
+    e_stmtR();
+    f_nest();
+    g_temp_loop();
+    h_direct();
     println("end")
 }

@@ -36,10 +36,10 @@ fn w3() -> i64 { let mut n = 0; let mut i = 0;
 fn w4() -> i64 { let t = E.A(mks(40)); let t = E.B(t.m1()); return t.m1() }
 fn w5() -> i64 { let t = E.B(5); let t = t.m1(); return t }
 fn main() {
-  println(f"r {v1(true)}"); println(f"r {v2(true)}"); println(f"r {v3(true)}"); println(f"r {v4(true)}")
-  println(f"r {v5()}"); println(f"r {v6()}")
-  println(f"r {w1(E.A(mks(20)))}")
-  println(f"r {w2()}"); println(f"r {w3()}"); println(f"r {w4()}"); println(f"r {w5()}")
+  println(f"r {v1(true)}"); println(f"r {v2(true)}"); println(f"r {v3(true)}"); println(f"r {v4(true)}");
+  println(f"r {v5()}"); println(f"r {v6()}");
+  println(f"r {w1(E.A(mks(20)))}");
+  println(f"r {w2()}"); println(f"r {w3()}"); println(f"r {w4()}"); println(f"r {w5()}");
   println("end")
 }
 "#);

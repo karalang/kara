@@ -31,16 +31,16 @@ fn h() { let p = (mkr(12), 5); let q = p.0; let r = q; println(f"h{p.1} {r.1}") 
 fn i() { let p = (mkw(13), 5); if p.1 > 3 { let q = p.0; println(f"i{q.1}") } println(f"i{p.1}") }
 fn j() { let p = (mkr(14), mkr(15)); let q = p.0; println(f"j{q.1}"); println(f"j{p.1.1}") }
 fn main() {
-    a()
-    b()
-    c()
-    d()
-    e()
-    f()
-    g()
-    h()
-    i()
-    j()
+    a();
+    b();
+    c();
+    d();
+    e();
+    f();
+    g();
+    h();
+    i();
+    j();
     println("end")
 }
 "#;

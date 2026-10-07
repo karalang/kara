@@ -241,7 +241,6 @@ impl<'a> super::Resolver<'a> {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Return(None)

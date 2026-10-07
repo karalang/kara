@@ -115,6 +115,7 @@ impl super::Parser {
                             });
                         } else {
                             // Expression without semicolon and not at end
+                            self.require_stmt_semicolon(&expr);
                             stmts.push(Stmt {
                                 id: crate::ids::NodeId::DUMMY,
                                 span: expr.span,
@@ -187,8 +188,9 @@ impl super::Parser {
                 },
             });
         }
-        // Block-like expression (`if`/`while`/`match`/...) or a trailing
-        // expression without a semicolon — both are statements here.
+        // Block-like expression (`if`/`while`/`match`/...) or an expression
+        // missing its `;` (diagnosed) — both are statements here.
+        self.require_stmt_semicolon(&expr);
         Some(Stmt {
             id: crate::ids::NodeId::DUMMY,
             span: expr.span,
@@ -422,6 +424,47 @@ impl super::Parser {
                 .to_string(),
             span: self.span_from(&start),
         });
+    }
+
+    /// `;` is required after every expression statement that does not end
+    /// in a block (design review 2026-10-07 § 5). Called where a statement
+    /// ended without one; reports it with an edit inserting the `;`.
+    fn require_stmt_semicolon(&mut self, expr: &Expr) {
+        if Self::is_block_like_prefix(expr)
+            || matches!(
+                &expr.kind,
+                ExprKind::LabeledBlock { .. }
+                    | ExprKind::Try(_)
+                    | ExprKind::Comptime(_)
+            )
+        {
+            return;
+        }
+        // `println!(..)`: the `!` abutting the name is Rust macro syntax, which
+        // the next statement diagnoses and repairs; the `;` is not missing.
+        if self.check(&Token::Bang)
+            && self.current_span().offset == expr.span.offset + expr.span.length
+        {
+            return;
+        }
+        // A statement that already failed to parse is not also missing its
+        // `;`: the recovery stopped it early, so the next token is the error's.
+        if self
+            .errors
+            .last()
+            .is_some_and(|e| e.span.offset >= expr.span.offset)
+        {
+            return;
+        }
+        self.error_at("expected `;` after this expression statement", expr.span);
+        self.fix_edits.insert(
+            crate::resolver::SpanKey::from_span(&expr.span),
+            crate::resolver::TextEdit {
+                offset: expr.span.offset + expr.span.length,
+                length: 0,
+                replacement: ";".to_string(),
+            },
+        );
     }
 
     fn is_block_expr(&self, expr: &Expr) -> bool {

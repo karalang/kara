@@ -341,7 +341,6 @@ impl Filler {
             | ExprKind::ByteLit(..)
             | ExprKind::ByteStringLit(..)
             | ExprKind::StringLit(..)
-            | ExprKind::MultiStringLit(..)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(..)
             | ExprKind::Identifier(..)

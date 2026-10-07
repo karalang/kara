@@ -1994,7 +1994,7 @@ fn gpu_u32_reductions_are_unsigned_end_to_end() {
         \x20   let m = gpu.max(v);\n\
         \x20   match m {\n\
         \x20       Some(x) => {\n\
-        \x20           println(f\"{x}\")\n\
+        \x20           println(f\"{x}\");\n\
         \x20           let halved: u32 = x / 2;\n\
         \x20           println(f\"{halved}\")\n\
         \x20       },\n\
@@ -2202,7 +2202,7 @@ fn gpu_mean_equals_the_sum_over_the_count_on_the_device() {
         "fn main() {\n\
         \x20   let mut v: Vec[f32] = [];\n\
         \x20   let mut p: Vec[f32] = [];\n\
-        \x20   for i in 0..4096 { v.push(0.1) p.push(0.1) }\n\
+        \x20   for i in 0..4096 { v.push(0.1); p.push(0.1) }\n\
         \x20   let m = gpu.mean(v);\n\
         \x20   match m {\n\
         \x20       Some(x) => println(f\"{x}\"),\n\
@@ -2260,11 +2260,11 @@ fn gpu_dot_equals_the_sum_of_the_products_on_the_device() {
         \x20   for i in 0..4096 {\n\
         \x20       let x: f32 = 0.1;\n\
         \x20       let y: f32 = 1.0;\n\
-        \x20       a.push(x)\n\
-        \x20       b.push(y)\n\
+        \x20       a.push(x);\n\
+        \x20       b.push(y);\n\
         \x20       p.push(x * y)\n\
         \x20   }\n\
-        \x20   println(f\"{gpu.dot(a, b)}\")\n\
+        \x20   println(f\"{gpu.dot(a, b)}\");\n\
         \x20   println(f\"{gpu.sum(p)}\")\n\
         }\n",
         "409.6000061035156\n409.6000061035156",
@@ -2287,7 +2287,7 @@ fn gpu_dot_equals_the_sum_of_the_products_on_the_device() {
         "fn main() {\n\
         \x20   let mut a: Vec[f32] = [];\n\
         \x20   let mut b: Vec[f32] = [];\n\
-        \x20   for i in 0..65 { a.push(2.0) b.push(3.0) }\n\
+        \x20   for i in 0..65 { a.push(2.0); b.push(3.0) }\n\
         \x20   println(f\"{gpu.dot(a, b)}\")\n\
         }\n",
         "390",

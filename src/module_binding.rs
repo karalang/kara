@@ -249,7 +249,6 @@ impl Stripper<'_> {
             | Item::EffectGroup(_)
             | Item::EffectVerbDecl(_)
             | Item::LayoutDef(_)
-            | Item::UseDecl(_)
             | Item::Import(_)
             | Item::AliasDecl(_)
             | Item::IndependentDecl(_)
@@ -570,7 +569,6 @@ impl Stripper<'_> {
             | ExprKind::ByteLit(..)
             | ExprKind::ByteStringLit(..)
             | ExprKind::StringLit(..)
-            | ExprKind::MultiStringLit(..)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(..)
             | ExprKind::Identifier(..)

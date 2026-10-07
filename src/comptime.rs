@@ -477,7 +477,6 @@ fn walk_child_exprs(expr: &Expr, f: &mut impl FnMut(&Expr) -> bool) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::InterpolatedStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
@@ -739,7 +738,6 @@ impl Folder<'_> {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::InterpolatedStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)

@@ -9,9 +9,9 @@ enum Mode { FastPath, SlowPath }
 enum Evt { KeyDown(i64), MouseUp }
 
 fn main() {
-    println(f"{Direction.Up}")
-    println(Direction.Down)
-    println(f"{Mode.FastPath}")
-    println(f"{Evt.MouseUp}")
+    println(f"{Direction.Up}");
+    println(Direction.Down);
+    println(f"{Mode.FastPath}");
+    println(f"{Evt.MouseUp}");
     println(f"{Direction.Up} then {Direction.Down}")
 }

@@ -8903,15 +8903,15 @@ fn main() {
     let mut m: Map[K, V] = Map.new();
     m.insert(K { n: 1 }, V { n: 1 });
     m.remove(K { n: 1 });
-    println(f"map len={m.len()}")
+    println(f"map len={m.len()}");
     let mut sm: SortedMap[K, V] = SortedMap.new();
     sm.insert(K { n: 2 }, V { n: 2 });
     sm.remove(K { n: 2 });
-    println(f"smap len={sm.len()}")
+    println(f"smap len={sm.len()}");
     let mut st: Set[K] = Set.new();
     st.insert(K { n: 3 });
     st.remove(K { n: 3 });
-    println(f"set len={st.len()}")
+    println(f"set len={st.len()}");
     let mut ss: SortedSet[K] = SortedSet.new();
     ss.insert(K { n: 4 });
     ss.remove(K { n: 4 });
@@ -9899,23 +9899,23 @@ fn c14() { let v: Vec[Ho[String]] = vec![Ho.Full("kk".to_string() + "ll")]; let 
 fn c15() { let v: Vec[Ho[String]] = vec![Ho.Full("mm".to_string() + "nn"), Ho.Empty]; let mut n = 0; for h in v { n = n + keep(h); } println(f"s{n}"); for h in v { show(h) } }
 fn c16() { let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); let h: Ho[String] = Ho.Full("oo".to_string() + "pp"); w[0] = h; println(f"w{w.len()}"); }
 fn main() {
-    c00()
-    c01()
-    c02()
-    c03()
-    c04()
-    c05()
-    c06()
-    c07()
-    c08()
-    c09()
-    c10()
-    c11()
-    c12()
-    c13()
-    c14()
-    c15()
-    c16()
+    c00();
+    c01();
+    c02();
+    c03();
+    c04();
+    c05();
+    c06();
+    c07();
+    c08();
+    c09();
+    c10();
+    c11();
+    c12();
+    c13();
+    c14();
+    c15();
+    c16();
     println("end")
 }
 "#,
@@ -10040,27 +10040,27 @@ fn s12() { let mut v: Vec[H] = Vec.new(); v.push(H { g: Ho.Full(R { id: 5 }) });
 fn w9() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
 fn m15() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
 fn main() {
-    v01()
-    v02()
-    v03()
-    v04()
-    v05()
-    v06()
-    v09()
-    v10()
-    v11()
-    v12()
-    v13()
-    s01()
-    s04()
-    s06()
-    s07()
-    s08()
-    s09()
-    s10()
-    s12()
-    w9()
-    m15()
+    v01();
+    v02();
+    v03();
+    v04();
+    v05();
+    v06();
+    v09();
+    v10();
+    v11();
+    v12();
+    v13();
+    s01();
+    s04();
+    s06();
+    s07();
+    s08();
+    s09();
+    s10();
+    s12();
+    w9();
+    m15();
     println("end")
 }
 "#,

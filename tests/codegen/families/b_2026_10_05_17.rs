@@ -83,10 +83,10 @@ fn main() {
         if s == "stop" { break }
         println(f"e:{s}");
     }
-    outer: for a in CountUp { current: 0, limit: 4 } {
+    'outer: for a in CountUp { current: 0, limit: 4 } {
         for b in CountUp { current: 0, limit: 4 } {
-            if b == 2 { continue outer }
-            if a == 2 { break outer }
+            if b == 2 { continue 'outer }
+            if a == 2 { break 'outer }
             println(f"f:{a}{b}");
         }
     }

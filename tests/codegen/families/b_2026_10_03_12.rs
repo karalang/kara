@@ -20,18 +20,18 @@ fn names(t: String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(
 fn main() {
     let a = names(f"a{1}");
     let b = names(f"a{1}");
-    assert_eq(a.clone(), b.clone()); println("vs eq")
-    assert_ne(a.clone(), names(f"z{2}")); println("vs ne")
+    assert_eq(a.clone(), b.clone()); println("vs eq");
+    assert_ne(a.clone(), names(f"z{2}")); println("vs ne");
     let mut x: Vec[i64] = Vec.new(); x.push(1); x.push(2);
     let mut y: Vec[i64] = Vec.new(); y.push(1); y.push(9);
-    assert_ne(x.clone(), y.clone()); println("vi ne")
-    assert_eq(x[0..2], x[0..2]); println("sl eq")
+    assert_ne(x.clone(), y.clone()); println("vi ne");
+    assert_eq(x[0..2], x[0..2]); println("sl eq");
     let t = (1, 2, 3);
-    assert_ne(t, (1, 2, 4)); println("tu ne")
-    assert_eq(t, (1, 2, 3)); println("tu eq")
+    assert_ne(t, (1, 2, 4)); println("tu ne");
+    assert_eq(t, (1, 2, 3)); println("tu eq");
     let n = Node { v: 1 };
-    assert_ne(T3 { h: n, a: 1, b: 2 }, T3 { h: n, a: 1, b: 3 }); println("st ne")
-    assert_eq([f"a{1}", f"b{2}"], [f"a{1}", f"b{2}"]); println("ar eq")
+    assert_ne(T3 { h: n, a: 1, b: 2 }, T3 { h: n, a: 1, b: 3 }); println("st ne");
+    assert_eq([f"a{1}", f"b{2}"], [f"a{1}", f"b{2}"]); println("ar eq");
     println(a.len() + b.len())
 }
 "#,
@@ -56,7 +56,7 @@ fn e2e_assert_eq_fails_on_unequal_vec() {
         r#"fn main() {
     let mut x: Vec[i64] = Vec.new(); x.push(1); x.push(2);
     let mut y: Vec[i64] = Vec.new(); y.push(1); y.push(9);
-    println("before")
+    println("before");
     assert_eq(x, y);
     println("WRONG: unequal vecs compared equal")
 }

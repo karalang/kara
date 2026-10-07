@@ -12316,7 +12316,7 @@ fn test_fstring_hole_contributes_its_effects_to_inference() {
     // The shapes a hole can carry: a method receiver, an operand of a binary
     // expression, one of two holes, and a hole nested in another f-string.
     for (label, body) in [
-        ("method", "let w = W { v: 1 }; println(f\"{w.m()}\")"),
+        ("method", "let w = W { v: 1 }; println(f\"{w.m()}\");"),
         ("binary", "println(f\"{touch() + 1}\")"),
         ("two holes", "println(f\"a{touch()}b{touch()}c\")"),
         ("nested f-string", "println(f\"{f\"{touch()}\"}\")"),
@@ -12375,7 +12375,7 @@ fn test_interpolation_hole_effects_match_let_hoisted_twin_for_every_verb() {
             )
         };
         let hole = effectcheck_ok(&prog("println(f\"{touch()}\")"));
-        let lifted = effectcheck_ok(&prog("let n = touch(); println(f\"{n}\")"));
+        let lifted = effectcheck_ok(&prog("let n = touch(); println(f\"{n}\");"));
         let mut got: Vec<String> = hole.inferred_effects["f"]
             .effects
             .iter()
@@ -12426,7 +12426,7 @@ fn test_interpolation_hole_does_not_bypass_public_fn_effect_verification() {
 fn test_interpolation_hole_call_is_visible_to_the_target_gate() {
     for body in [
         "println(f\"{touch()}\")",
-        "let n = touch(); println(f\"{n}\")",
+        "let n = touch(); println(f\"{n}\");",
     ] {
         let errs = effectcheck_errors(&format!(
             "effect resource Display;\n\
@@ -12458,11 +12458,11 @@ fn test_interpolation_hole_effects_survive_every_hole_position() {
                    fn touch() -> i64 with writes(Db) { return 1 }\n";
     for body in [
         "println(f\"{touch()}\")",
-        "let s = f\"{touch()}\"; println(s)",
+        "let s = f\"{touch()}\"; println(s);",
         "println(f\"{touch():04}\")",
         "println(f\"{touch()} and {touch()}\")",
         "println(f\"{touch() + 1}\")",
-        "let s = S { v: 1 }; println(f\"{s.get()}\")",
+        "let s = S { v: 1 }; println(f\"{s.get()}\");",
         "return f\"{touch()}\"",
     ] {
         let ret = if body.starts_with("return") {
@@ -12514,7 +12514,7 @@ fn test_interpolation_hole_records_a_module_binding_read() {
 #[test]
 fn test_par_block_inside_an_interpolation_hole_is_still_conflict_checked() {
     for (label, body) in [
-        ("plain", "let n = { par { COUNTER = 1; } 5 }; println(n)"),
+        ("plain", "let n = { par { COUNTER = 1; } 5 }; println(n);"),
         ("hole", "println(f\"{ { par { COUNTER = 1; } 5 } }\")"),
     ] {
         let errors = effectcheck_errors(&format!(

@@ -1097,7 +1097,6 @@ impl Resolver {
             Char(_) => {}
             Byte(_) => {}
             Str(_) => {}
-            MultiStr(_) => {}
             Error(_) => {}
             Ident(n) => {
                 let IdentExpr { name, span } = n;

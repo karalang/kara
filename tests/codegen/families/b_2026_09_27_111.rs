@@ -37,21 +37,21 @@ fn c14() { let mut g = E.X(mk(35)); let mut i = 0; while let E.X(t) = g { printl
 fn c15() { let mut g = E.X(mk(36)); match g { E.X(t) => { if t.id > 0 { println(t.id); g = E.Y; } else { println(0) } } E.Y => { println("x0") } }; match g { E.X(t) => println(t.id), E.Y => println(0) } }
 fn c13() { let mut g = E.X(mk(34)); match g { E.X(t) => { let u = t; g = E.X(mk(3)); println(u.tag) } E.Y => { println("x0") } } }
 fn main() {
-    c1()
-    c2()
-    c3()
-    c4()
-    c5()
-    c6()
-    c7()
-    c8()
-    c9()
-    c10()
-    c11()
-    c12()
-    c13()
-    c14()
-    c15()
+    c1();
+    c2();
+    c3();
+    c4();
+    c5();
+    c6();
+    c7();
+    c8();
+    c9();
+    c10();
+    c11();
+    c12();
+    c13();
+    c14();
+    c15();
     println("end")
 }"#;
     let want = "xt20-heap-string-long-enough-to-allocate\nxt21-heap-string-long-enough-to-allocate\nxt22-heap-string-long-enough-to-allocate\n4\nxt23-heap-string-long-enough-to-allocate\nxt24-heap-string-long-enough-to-allocate\n25\nxt25-heap-string-long-enough-to-allocate\nxt27-heap-string-long-enough-to-allocate\n0\nxt28-heap-string-long-enough-to-allocate\nxt30-heap-string-long-enough-to-allocate\nxt31-heap-string-long-enough-to-allocate\n32\nxt32-heap-string-long-enough-to-allocate\n32\nxt33-heap-string-long-enough-to-allocate\nt33-heap-string-long-enough-to-allocate\nt34-heap-string-long-enough-to-allocate\nxt35-heap-string-long-enough-to-allocate\nxt35-heap-string-long-enough-to-allocate\n36\n0\nend\n";

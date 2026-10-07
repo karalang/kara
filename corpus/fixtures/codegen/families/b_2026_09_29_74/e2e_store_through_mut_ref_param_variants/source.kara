@@ -8,10 +8,10 @@ fn inner(x: mut ref Option[R]) -> i64 { x = Some(mk(60, f"i")); 4 }
 fn outer(x: mut ref Option[R]) -> i64 { inner(x) }
 fn gk(x: mut ref Option[R]) -> i64 { let n = match x { Some(r) => r.id, None => 0 }; x = Some(mk(n + 100, f"k")); 5 }
 fn main() {
-    let mut a: Result[R, i64] = Ok(mk(1, f"a")); println(f"n{gr(mut a)}"); println("a1")
-    let mut b = Some(mk(2, f"b")); println(f"n{gn(mut b)}"); println("a2")
-    let mut c = Some(mk(3, f"c")); println(f"n{g2(mut c)}"); println("a3")
-    let mut d = Some(mk(4, f"d")); println(f"n{outer(mut d)}"); println("a4")
-    let mut e = Some(mk(5, f"e")); println(f"n{gk(mut e)}"); println("a5")
+    let mut a: Result[R, i64] = Ok(mk(1, f"a")); println(f"n{gr(mut a)}"); println("a1");
+    let mut b = Some(mk(2, f"b")); println(f"n{gn(mut b)}"); println("a2");
+    let mut c = Some(mk(3, f"c")); println(f"n{g2(mut c)}"); println("a3");
+    let mut d = Some(mk(4, f"d")); println(f"n{outer(mut d)}"); println("a4");
+    let mut e = Some(mk(5, f"e")); println(f"n{gk(mut e)}"); println("a5");
     let mut f: Result[R, i64] = Err(3); println(f"n{gr(mut f)}"); println("end")
 }

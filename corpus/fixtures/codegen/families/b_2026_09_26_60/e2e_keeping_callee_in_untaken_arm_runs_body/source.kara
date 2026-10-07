@@ -27,7 +27,7 @@ fn main() {
     { let d = mkd(5); let p = if c { keepd(d) } else { mkd(50) }; println(f"p{p.id}") }
     { let d = mkd(6); let p = match h.k { 2 => keepd(d), _ => mkd(60) }; println(f"p{p.id}") }
     for i in 7..10 { let d = mkd(i); if i == 8 { std(mut v, d); } }
-    println("a5")
+    println("a5");
     { let d = mkd(11); if d.id > 3 { let k = keepd(d); println(f"k{k.id}"); } println("a6") }
     { let f = mkf(21); if f.id > 30 { stf(mut w, f); } println("b1") }
     { let f = mkf(22); if f.id > 30 { let k = keepf(f); println(f"k{k.id}"); } println("b2") }

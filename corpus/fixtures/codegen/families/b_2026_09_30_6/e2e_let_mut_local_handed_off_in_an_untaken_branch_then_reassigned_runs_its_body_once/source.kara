@@ -15,9 +15,9 @@ fn r7(c: bool) -> i64 { let mut t = E.A(mks(40)); if c { let y = t; println("y")
 fn r8(c: bool) -> i64 { let mut t = E.A(mks(50)); if c { let y = t; println("y") }; if not c { t = E.A(mks(51)); }; println("re"); return 0 }
 fn main() {
   let mut k = 0;
-  while k < 2 { let c = k == 1; println(f"c {c}")
+  while k < 2 { let c = k == 1; println(f"c {c}");
     println(f"r {r1(c)}"); println(f"r {r2(c)}"); println(f"r {r3(c)}");
-    println(f"r {r5(c)}"); println(f"r {r6(c)}"); println(f"r {r7(c)}"); println(f"r {r8(c)}")
+    println(f"r {r5(c)}"); println(f"r {r6(c)}"); println(f"r {r7(c)}"); println(f"r {r8(c)}");
     k = k + 1; }
   println("end")
 }

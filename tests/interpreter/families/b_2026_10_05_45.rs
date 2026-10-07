@@ -22,15 +22,15 @@ fn gc[T](s: T, o: T) -> T { let s = o; let t = s; t }
 fn go[T](s: Option[T], o: Option[T]) -> Option[T] { let s = o; s }
 fn n5(s: R, o: R) -> R { let s = o; s }
 fn main() {
-    let r = g5(R { id: 1 }, R { id: 2 }); println(f"k{r.id}"); println("_a1")
-    let a = R { id: 3 }; let b = R { id: 4 }; let r = g5(a, b); println(f"k{r.id}"); println("_a2")
-    let a = R { id: 5 }; let b = R { id: 6 }; let r = g5(b, a); println(f"k{r.id}"); println("_a3")
-    let r = gm(R { id: 7 }, R { id: 8 }); println(f"k{r.id}"); println("_a4")
-    let r = gb(R { id: 9 }, R { id: 10 }, true); println(f"k{r.id}"); println("_a5")
-    let r = gc(R { id: 11 }, R { id: 12 }); println(f"k{r.id}"); println("_a6")
-    let r = go(Some(R { id: 13 }), Some(R { id: 14 })); println(f"k{r.is_some()}"); println("_a7")
-    g5(R { id: 15 }, R { id: 16 }); println("_a8")
-    let r = n5(R { id: 17 }, R { id: 18 }); println(f"k{r.id}"); println("_a9")
+    let r = g5(R { id: 1 }, R { id: 2 }); println(f"k{r.id}"); println("_a1");
+    let a = R { id: 3 }; let b = R { id: 4 }; let r = g5(a, b); println(f"k{r.id}"); println("_a2");
+    let a = R { id: 5 }; let b = R { id: 6 }; let r = g5(b, a); println(f"k{r.id}"); println("_a3");
+    let r = gm(R { id: 7 }, R { id: 8 }); println(f"k{r.id}"); println("_a4");
+    let r = gb(R { id: 9 }, R { id: 10 }, true); println(f"k{r.id}"); println("_a5");
+    let r = gc(R { id: 11 }, R { id: 12 }); println(f"k{r.id}"); println("_a6");
+    let r = go(Some(R { id: 13 }), Some(R { id: 14 })); println(f"k{r.is_some()}"); println("_a7");
+    g5(R { id: 15 }, R { id: 16 }); println("_a8");
+    let r = n5(R { id: 17 }, R { id: 18 }); println(f"k{r.id}"); println("_a9");
     println("end")
 }
 "#);

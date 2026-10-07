@@ -6,7 +6,7 @@ struct W { e: SMono, n: i64 }
 fn show(s: SMono) { match s { SMono.P(r) => println(f"  p{r.s.len()}"), SMono.Q => println("  q") } }
 
 fn main() {
-    println("tuple"); { let t: (SMono, i64) = (SMono.P(mkr(1)), 3); let (s, n) = t; println(f"  n={n}"); show(s); println("  mid") } println("  out")
-    println("struct"); { let w = W { e: SMono.P(mkr(2)), n: 2 }; let W { e, n } = w; println(f"  n={n}"); show(e); println("  mid") } println("  out")
+    println("tuple"); { let t: (SMono, i64) = (SMono.P(mkr(1)), 3); let (s, n) = t; println(f"  n={n}"); show(s); println("  mid") } println("  out");
+    println("struct"); { let w = W { e: SMono.P(mkr(2)), n: 2 }; let W { e, n } = w; println(f"  n={n}"); show(e); println("  mid") } println("  out");
     println("end")
 }

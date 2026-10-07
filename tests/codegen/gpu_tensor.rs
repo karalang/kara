@@ -5411,7 +5411,7 @@ fn test_e2e_derived_display_unaffected_by_depth_dispatch() {
 struct Plain { n: i64 }
 fn main() {
     let p = Plain { n: 5 };
-    println(f"top={p}")
+    println(f"top={p}");
     let v = [Plain { n: 5 }];
     println(f"vec={v}")
 }

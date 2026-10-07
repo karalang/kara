@@ -5800,7 +5800,6 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::ByteLit(..)
             | ExprKind::ByteStringLit(..)
             | ExprKind::StringLit(..)
-            | ExprKind::MultiStringLit(..)
             | ExprKind::Bool(..) => true,
             _ => false,
         }

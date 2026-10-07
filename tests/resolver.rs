@@ -230,20 +230,20 @@ fn test_type_alias_registered() {
 }
 
 #[test]
-fn test_use_decl_imports_name() {
-    let result = resolve_ok("use std.collections.HashMap;");
+fn test_single_import_binds_last_segment() {
+    let result = resolve_ok("import mymod.collections.HashMap;");
     let sym = result.symbol_table.lookup_in_scope(ScopeId(0), "HashMap");
     assert!(sym.is_some());
     if let SymbolKind::Import { ref path } = sym.unwrap().kind {
-        assert_eq!(path, &["std", "collections", "HashMap"]);
+        assert_eq!(path, &["mymod", "collections", "HashMap"]);
     } else {
         panic!("expected Import symbol");
     }
 }
 
 #[test]
-fn test_pub_use_decl_visibility() {
-    let result = resolve_ok("pub use db.connection.Connection;");
+fn test_pub_import_visibility() {
+    let result = resolve_ok("pub import db.connection.Connection;");
     let sym = result
         .symbol_table
         .lookup_in_scope(ScopeId(0), "Connection");
@@ -264,8 +264,7 @@ fn test_bogus_std_import_rejected_single_file() {
     // a dead `math` alias that then ICE'd both backends on use ("variable
     // 'math' not found ... should be caught by resolver"). `std` is the
     // compiler's own namespace, fully known at compile time, so it is validated
-    // even without a module tree. (`use` is the trusted cross-module-reference
-    // mechanism and is deliberately NOT validated — see the tests below.)
+    // even without a module tree.
     for src in [
         "import std.math;\nfn main() { }",
         "import std.completelybogus;\nfn main() { }",
@@ -286,13 +285,11 @@ fn test_bogus_std_import_rejected_single_file() {
 #[test]
 fn test_valid_std_and_user_imports_still_accepted() {
     // The fix must NOT flag real gated stdlib modules, the prelude, a trusted
-    // user cross-file `import` (single-file mode can't see its module tree), or
-    // a `use` of any path (the trusted cross-module-reference mechanism).
+    // user cross-file `import` (single-file mode can't see its module tree).
     resolve_ok("import std.autograd.{Tape};\nfn main() { }");
     resolve_ok("import std.web.{Server};\nfn main() { }");
     resolve_ok("import std.prelude.{Vec};\nfn main() { }");
     resolve_ok("import mymod.{Foo};\nfn main() { }");
-    resolve_ok("use std.collections.HashMap;\nfn main() { }");
 }
 
 #[test]
@@ -1149,7 +1146,7 @@ fn test_break_undefined_label() {
     // Use `continue` to test undefined labels — no value ambiguity.
     // `break` with an unknown identifier is parsed as `break <value-expr>`,
     // not as a labeled break, since the parser only recognizes known loop labels.
-    let errors = resolve_errors("fn main() { loop { continue unknown_label; } }");
+    let errors = resolve_errors("fn main() { loop { continue 'unknown_label; } }");
     assert!(
         errors
             .iter()
@@ -1161,7 +1158,7 @@ fn test_break_undefined_label() {
 #[test]
 fn test_break_wrong_label() {
     // `outer:` is a known label, but `wrong` is not — resolver catches it via continue
-    let errors = resolve_errors("fn main() { outer: loop { loop { continue wrong; } } }");
+    let errors = resolve_errors("fn main() { 'outer: loop { loop { continue 'wrong; } } }");
     assert!(errors
         .iter()
         .any(|e| e.kind == ResolveErrorKind::UndefinedLabel && e.message.contains("wrong")));
@@ -1169,7 +1166,7 @@ fn test_break_wrong_label() {
 
 #[test]
 fn test_continue_undefined_label() {
-    let errors = resolve_errors("fn main() { loop { continue unknown_label; } }");
+    let errors = resolve_errors("fn main() { loop { continue 'unknown_label; } }");
     assert!(
         errors
             .iter()
@@ -1180,18 +1177,18 @@ fn test_continue_undefined_label() {
 
 #[test]
 fn test_break_valid_label_ok() {
-    resolve_ok("fn main() { outer: loop { loop { break outer (); } } }");
+    resolve_ok("fn main() { 'outer: loop { loop { break 'outer (); } } }");
 }
 
 #[test]
 fn test_continue_valid_label_ok() {
-    resolve_ok("fn main() { outer: while true { while true { continue outer; } } }");
+    resolve_ok("fn main() { 'outer: while true { while true { continue 'outer; } } }");
 }
 
 #[test]
 fn test_break_label_with_value_undefined() {
     // With a known outer label, break with a wrong label is caught by the resolver
-    let errors = resolve_errors("fn main() { outer: loop { loop { continue nope; } } }");
+    let errors = resolve_errors("fn main() { 'outer: loop { loop { continue 'nope; } } }");
     assert!(errors
         .iter()
         .any(|e| e.kind == ResolveErrorKind::UndefinedLabel && e.message.contains("nope")));
@@ -1199,7 +1196,7 @@ fn test_break_label_with_value_undefined() {
 
 #[test]
 fn test_labeled_for_loop_ok() {
-    resolve_ok("fn main() { outer: for x in [1, 2] { for y in [3, 4] { break outer (); } } }");
+    resolve_ok("fn main() { 'outer: for x in [1, 2] { for y in [3, 4] { break 'outer (); } } }");
 }
 
 // ── Labeled Block Validation ───────────────────────────────────
@@ -1210,16 +1207,16 @@ fn test_labeled_block_nested_same_name_shadows() {
     // `break label` resolves to inner. Outer `break label` after
     // exiting inner refers to outer. Resolver-level check: both
     // breaks resolve without an unknown-label diagnostic.
-    resolve_ok("fn main() { lbl: { lbl: { break lbl; } break lbl; } }");
+    resolve_ok("fn main() { 'lbl: { 'lbl: { break 'lbl; } break 'lbl; } }");
 }
 
 #[test]
 fn test_labeled_block_unknown_label_diagnostic() {
-    // `continue never_declared;` outside any labeled construct
+    // `continue 'never_declared;` outside any labeled construct
     // produces UndefinedLabel — same diagnostic family used for
     // labeled loops. (Use `continue` rather than `break <expr>`
     // to avoid the parser swallowing the identifier as a value.)
-    let errors = resolve_errors("fn main() { loop { continue never_declared; } }");
+    let errors = resolve_errors("fn main() { loop { continue 'never_declared; } }");
     assert!(errors.iter().any(|e| {
         e.kind == ResolveErrorKind::UndefinedLabel && e.message.contains("never_declared")
     }));
@@ -1230,7 +1227,7 @@ fn test_continue_label_to_block_rejected() {
     // `lbl: { continue lbl; }` is rejected with the new
     // E_CONTINUE_LABEL_BLOCK diagnostic — `continue` is only valid
     // for loop labels, not for labeled blocks.
-    let errors = resolve_errors("fn main() { lbl: { continue lbl; } }");
+    let errors = resolve_errors("fn main() { 'lbl: { continue 'lbl; } }");
     let hit = errors.iter().find(|e| {
         e.kind == ResolveErrorKind::ContinueOnBlockLabel
             && e.message.contains("E_CONTINUE_LABEL_BLOCK")
@@ -1258,7 +1255,7 @@ fn test_break_inside_closure_cannot_target_enclosing_label() {
     // surfaces this as `undefined loop label`. Same shape with a
     // labeled `for` loop also rejects (audit-finding fix: the
     // labeled-loop closure-boundary gap was missed before this slice).
-    let errors_block = resolve_errors("fn main() { lbl: { let f = || { break lbl; }; f(); } }");
+    let errors_block = resolve_errors("fn main() { 'lbl: { let f = || { break 'lbl; }; f(); } }");
     assert!(
         errors_block
             .iter()
@@ -1270,7 +1267,7 @@ fn test_break_inside_closure_cannot_target_enclosing_label() {
     // Labeled-loop variant — fixes the audit-finding gap (LB4 fixes
     // the loop-side closure-boundary rule as a side-effect).
     let errors_loop =
-        resolve_errors("fn main() { lbl: for x in [1, 2] { let f = || { continue lbl; }; f(); } }");
+        resolve_errors("fn main() { 'lbl: for x in [1, 2] { let f = || { continue 'lbl; }; f(); } }");
     assert!(
         errors_loop
             .iter()
@@ -1285,7 +1282,7 @@ fn test_labeled_block_label_scope_ends_at_closing_brace() {
     // The label scope ends at the closing `}` of the labeled
     // block. A subsequent `continue lbl;` at the same scope as the
     // labeled block's parent rejects with UndefinedLabel.
-    let errors = resolve_errors("fn main() { loop { lbl: { } continue lbl; } }");
+    let errors = resolve_errors("fn main() { loop { 'lbl: { } continue 'lbl; } }");
     assert!(
         errors
             .iter()
@@ -5097,7 +5094,7 @@ fn test_undefined_label_suggests_nearby_label() {
     // labels in scope and reports a `did you mean` suggestion.
     // B-2026-07-07-3: that suggestion is now machine-applicable — the label
     // identifier's span (`label_span`) anchors a `.replacement`.
-    let src = "fn main() { outer: loop { loop { continue otuer; } } }";
+    let src = "fn main() { 'outer: loop { loop { continue 'otuer; } } }";
     let errors = resolve_errors(src);
     let err = errors
         .iter()
@@ -5121,7 +5118,7 @@ fn test_undefined_label_suggests_nearby_label() {
 #[test]
 fn test_undefined_label_no_suggestion_when_nothing_close() {
     // No nearby label → no suggestion, no spurious `did you mean`.
-    let errors = resolve_errors("fn main() { loop { continue zzzzzzzz; } }");
+    let errors = resolve_errors("fn main() { loop { continue 'zzzzzzzz; } }");
     let err = errors
         .iter()
         .find(|e| e.kind == ResolveErrorKind::UndefinedLabel)
@@ -5912,7 +5909,7 @@ fn builtin_fn_as_bare_statement_is_rejected() {
 fn builtin_fn_in_block_form_is_rejected() {
     // The shape that found the bug: Kāra has real block-form constructs
     // (`par { }`, `seq { }`), so `spawn { … }` is the natural wrong guess.
-    let errs = resolve_errors("fn main() { spawn { println(\"x\"); }; }");
+    let errs = resolve_errors("fn main() { spawn; { println(\"x\"); }; }");
     assert!(
         errs.iter().any(|e| e.message.contains("`spawn(|| …)`")),
         "the `spawn` diagnostic must name the closure form, got: {errs:?}"

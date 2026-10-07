@@ -52,7 +52,7 @@ fn main() {
   println("-c14"); ms();
   println("-c15"); empty();
   println("-c16"); let k = 2; match k { 1 => mv(21), _ => mv(23) };
-  println("-c17"); let v = mv(25); println(f"r{v.len()}")
+  println("-c17"); let v = mv(25); println(f"r{v.len()}");
   println("end")
 }
 "#);

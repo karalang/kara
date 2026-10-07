@@ -2897,11 +2897,10 @@ fn test_unit_is_not_display_in_fstring() {
     // rendered `()` under the interpreter but `0` under codegen — a run-vs-build
     // divergence. Unit is not Display (Rust has no `Display for ()` either), so
     // it must be rejected at typecheck, closing the divergence at the source.
-    // The degenerate reachable form is `f"a{{}}b"`, where `{}` parses as an
-    // empty unit block; the explicit form is `f"{()}"`.
+    // The reachable form is `f"{()}"` (an empty `{}` hole is a parse error,
+    // and `{{}}` is a pair of literal braces).
     for src in [
         "fn main() { let s = f\"x{()}y\"; }",
-        "fn main() { let s = f\"a{{}}b\"; }",
     ] {
         let errors = typecheck_errors(src);
         assert!(
@@ -2912,9 +2911,9 @@ fn test_unit_is_not_display_in_fstring() {
         );
     }
     // A genuinely Display-able interpolation still typechecks, and the
-    // backslash brace-escape (`\\{` / `\\}`) renders literal braces (no interp).
+    // doubled-brace escape (`{{` / `}}`) renders literal braces (no interp).
     typecheck_ok("fn main() { let n = 7; let s = f\"n={n}\"; }");
-    typecheck_ok("fn main() { let s = f\"a\\{\\}b\"; }");
+    typecheck_ok("fn main() { let s = f\"a{{}}b\"; }");
 }
 
 #[test]
@@ -22088,14 +22087,14 @@ fn test_labeled_block_bare_break_exits_with_unit() {
     // with unit; the post-break tail (`-1`) is `Type::Never`-reachable
     // (typechecker ignores its type for LUB unless it's reached).
     // Expected: block type is `()`. Confirmed by check-mode against `()`.
-    typecheck_ok("fn main() { let x: () = lbl: { break lbl; }; }");
+    typecheck_ok("fn main() { let x: () = 'lbl: { break 'lbl; }; }");
 }
 
 #[test]
 fn test_labeled_block_break_with_value_joined_with_tail() {
     // Block type is i64 via LUB of break-with-value (1) and tail (-1).
     typecheck_ok(
-        "fn main() { let x: i64 = found: { for r in [1, 2] { if r == 1 { break found 1; } } -1 }; }",
+        "fn main() { let x: i64 = 'found: { for r in [1, 2] { if r == 1 { break 'found 1; } } -1 }; }",
     );
 }
 
@@ -22104,7 +22103,7 @@ fn test_labeled_block_multi_break_lub_inference() {
     // Two `break label expr` sites with the same i64 type; tail is also
     // i64. Block type infers as i64 via LUB.
     typecheck_ok(
-        "fn main() { let x: i64 = lbl: { if true { break lbl 1; } if false { break lbl 2; } 3 }; }",
+        "fn main() { let x: i64 = 'lbl: { if true { break 'lbl 1; } if false { break 'lbl 2; } 3 }; }",
     );
 }
 
@@ -46534,7 +46533,7 @@ fn a_bare_break_in_a_nested_while_does_not_reach_the_outer_loop() {
 fn labeled_loop_break_value_is_collected_too() {
     // Labeled LOOPS dropped their break values for the same reason
     // unlabeled ones did — neither pushed a collector frame.
-    typecheck_ok("fn go() -> i64 { outer: loop { break outer 7 } }");
+    typecheck_ok("fn go() -> i64 { 'outer: loop { break 'outer 7 } }");
 }
 
 // ── Impl-block generics are in scope for ASSOCIATED functions ───

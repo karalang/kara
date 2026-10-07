@@ -1438,7 +1438,6 @@ pub fn collect_assigned_roots_expr(expr: &Expr, out: &mut std::collections::Hash
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::SelfValue
         | ExprKind::SelfType

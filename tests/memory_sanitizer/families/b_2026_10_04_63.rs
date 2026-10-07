@@ -41,21 +41,21 @@ fn fa(q: mut ref Q, o: Option[S]) { match o { Some(r) => q.add(r), None => {} } 
 fn fw(q: ref Q, w: W) { q.eat(w.r); println("fw") }
 fn main() {
   let mut q = Q { z: 0, keep: Vec.new() };
-  q.po(Some(mks(1))); println("a")
-  q.pi(Some(mks(2))); println("b")
-  q.pr(Ok(mks(3))); println("c")
-  q.pw(W { r: mks(4), n: 1 }); println("d")
-  q.pc(W { r: mks(5), n: 1 }, true); println("e")
-  q.pc(W { r: mks(6), n: 1 }, false); println("f")
-  q.sa(Some(mks(7))); println("g")
-  q.sf(Some(mks(8))); println("h")
-  q.so(Some(mks(9))); println("i")
-  q.sw(W { r: mks(10), n: 1 }); println("j")
-  let k = q.ret(Some(mks(11))); println("k")
-  fo(q, Some(mks(12))); println("l")
-  fa(mut q, Some(mks(13))); println("m")
-  fw(q, W { r: mks(14), n: 1 }); println("n")
-  println(f"len{q.keep.len()}")
+  q.po(Some(mks(1))); println("a");
+  q.pi(Some(mks(2))); println("b");
+  q.pr(Ok(mks(3))); println("c");
+  q.pw(W { r: mks(4), n: 1 }); println("d");
+  q.pc(W { r: mks(5), n: 1 }, true); println("e");
+  q.pc(W { r: mks(6), n: 1 }, false); println("f");
+  q.sa(Some(mks(7))); println("g");
+  q.sf(Some(mks(8))); println("h");
+  q.so(Some(mks(9))); println("i");
+  q.sw(W { r: mks(10), n: 1 }); println("j");
+  let k = q.ret(Some(mks(11))); println("k");
+  fo(q, Some(mks(12))); println("l");
+  fa(mut q, Some(mks(13))); println("m");
+  fw(q, W { r: mks(14), n: 1 }); println("n");
+  println(f"len{q.keep.len()}");
   println("end")
 }
 "#,

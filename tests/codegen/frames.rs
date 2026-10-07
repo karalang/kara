@@ -1359,7 +1359,7 @@ fn test_e2e_iter_chain_reduce_float_and_narrow_int_payload() {
                  let w: Vec[F64] = f.iter().map(F64.from).collect();\n\
                  let hi: F64 = w.max().unwrap_or(F64.from(0.0));\n\
                  let lo: F64 = w.min().unwrap_or(F64.from(0.0));\n\
-                 println(hi.value)\n\
+                 println(hi.value);\n\
                  println(lo.value)\n\
              }",
         ) {

@@ -28,7 +28,7 @@ fn b2() -> i64 { let o: Result[G2[R], i64] = Result.Ok(G2 { v: mk(14), r: mk(144
 fn b9() -> i64 { match mkres(9) { Result.Ok(g) => g.r.id, Result.Err(e) => e } }
 fn main() {
     println(a1()); println(a2()); println(a5()); println(a9()); println(a11());
-    println(b1()); println(b2()); println(b9())
+    println(b1()); println(b2()); println(b9());
     println("end")
 }"#,
         &[
@@ -59,8 +59,8 @@ fn d2() -> i64 { let o = Option.Some(G { v: mk(2), n: 2 }); match o { Option.Som
 fn d3() -> i64 { let o = Option.Some(G { v: mk(3), n: 3 }); match o { Option.Some(G { v, n }) => v.id + n, Option.None => 0 } }
 fn d4() -> i64 { let o = Option.Some(G { v: mk(4), n: 4 }); match o { Option.Some(G { n, .. }) => n, Option.None => 0 } }
 fn main() {
-    println(c1()); println(c2()); println(c3()); println(c4()); println(c5())
-    println(d1()); println(d2()); println(d3()); println(d4())
+    println(c1()); println(c2()); println(c3()); println(c4()); println(c5());
+    println(d1()); println(d2()); println(d3()); println(d4());
     println("end")
 }"#,
         &[
@@ -85,7 +85,7 @@ fn m4() -> i64 { if let Result.Ok(G3 { w, .. }) = mkres(4) { println(w); w.len()
 fn m5() -> i64 { let o = Option.Some(G3 { v: ms(5), w: ms(55) }); match o { Option.Some(G3 { v, .. }) => { println(v); v.len() }, Option.None => 0 } }
 fn m6() -> i64 { match Option.Some(G3 { v: ms(6), w: ms(66) }) { Option.Some(G3 { w, .. }) => { println(w); w.len() }, Option.None => 0 } }
 fn main() {
-    println(m1()); println(m2()); println(m3()); println(m4()); println(m5()); println(m6())
+    println(m1()); println(m2()); println(m3()); println(m4()); println(m5()); println(m6());
     println("end")
 }"#,
         &[
@@ -135,8 +135,8 @@ fn t8() -> i64 { let o = Option.Some(G { v: mk(8), n: 8 }); match o { Option.Som
 fn t9() -> i64 { let o = Option.Some(G { v: mk(9), n: 9 }); if let Option.Some(g) = o { take(g) } else { 0 } }
 fn t10() -> i64 { let o = Option.Some(G2 { v: mr(10), r: mr(100) }); match o { Option.Some(g) => { let a = take2(g); a }, Option.None => 0 } }
 fn main() {
-    println(t1()); println(t2()); println(t3()); println(t5()); println(t6())
-    println(t7()); println(t8()); println(t9()); println(t10())
+    println(t1()); println(t2()); println(t3()); println(t5()); println(t6());
+    println(t7()); println(t8()); println(t9()); println(t10());
     println("end")
 }"#,
         &[

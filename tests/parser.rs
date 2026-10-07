@@ -2702,12 +2702,40 @@ fn test_module_binding_missing_equals_recovers() {
     );
 }
 
+/// `use` is gone (design review 2026-10-07 § 3): it is diagnosed with a
+/// machine-applicable rewrite to `import`, and parsed as that import so the
+/// rest of the file still checks.
 #[test]
-fn test_use_decl() {
-    let prog = parse_ok("use std.collections.HashMap;");
-    if let Item::UseDecl(u) = &prog.items[0] {
-        assert_eq!(u.path, vec!["std", "collections", "HashMap"]);
+fn test_use_decl_is_rejected_and_parsed_as_import() {
+    for (src, is_pub) in [
+        ("use std.collections.HashMap;", false),
+        ("pub use db.connection.Connection;", true),
+    ] {
+        let result = karac::parse(src);
+        assert_eq!(result.errors.len(), 1, "{src}: {:?}", result.errors);
+        let err = &result.errors[0];
+        assert!(
+            err.message.contains("write `import`"),
+            "{src}: {}",
+            err.message
+        );
+        let edit = result
+            .fix_edits
+            .get(&karac::resolver::SpanKey::from_span(&err.span))
+            .expect("the `use` diagnostic carries a fix");
+        assert_eq!(&src[edit.offset..edit.offset + edit.length], "use");
+        assert_eq!(edit.replacement, "import");
+        match &result.program.items[0] {
+            Item::Import(i) => assert_eq!(i.is_pub, is_pub, "{src}"),
+            other => panic!("{src}: expected an Import, got {other:?}"),
+        }
     }
+}
+
+/// `use` stays an ordinary name everywhere it does not start a declaration.
+#[test]
+fn test_use_is_an_ordinary_name() {
+    parse_ok("fn use(x: i64) -> i64 { x }\nfn main() { let use_count = use(1); let r = use(2); }");
 }
 
 #[test]
@@ -2715,27 +2743,6 @@ fn test_pub_struct() {
     let prog = parse_ok("pub struct Config { timeout: u64 }");
     if let Item::StructDef(s) = &prog.items[0] {
         assert!(s.is_pub);
-    }
-}
-
-#[test]
-fn test_pub_use_decl() {
-    let prog = parse_ok("pub use db.connection.Connection;");
-    if let Item::UseDecl(u) = &prog.items[0] {
-        assert!(u.is_pub);
-        assert_eq!(u.path, vec!["db", "connection", "Connection"]);
-    } else {
-        panic!("Expected UseDecl");
-    }
-}
-
-#[test]
-fn test_use_decl_not_pub_by_default() {
-    let prog = parse_ok("use std.io.Read;");
-    if let Item::UseDecl(u) = &prog.items[0] {
-        assert!(!u.is_pub);
-    } else {
-        panic!("Expected UseDecl");
     }
 }
 
@@ -5863,216 +5870,25 @@ fn test_error_unexpected_token() {
     assert!(errors[0].message.contains("Expected identifier"));
 }
 
+/// An assignment written as a bare match-arm body is legal (design review
+/// 2026-10-07 § 5): `=> x = y,` and `=> x += y,` mean the block holding that
+/// one assignment, so no braces and no `;` are needed.
 #[test]
-fn test_assignment_as_bare_match_arm_body_reports_braces_without_cascading() {
-    // Assignment is a statement, not an expression, so it cannot be a bare
-    // match arm body. Before the recovery path, the arm-body failure aborted
-    // the whole `match`, the enclosing function's remaining statements
-    // resynchronized at TOP LEVEL, and the file drew THREE errors — the second
-    // and third fictional, the third asserting the file "contains both
-    // top-level statements and an explicit `fn main()`" about a file that has
-    // no top-level statements at all. Pin both halves: the message names the
-    // fix, and exactly one error is reported per offending arm.
-    let (_, errors) = parse_with_errors(
-        "fn main() {\n\
-             let mut total = 0;\n\
-             let x: Option[i64] = Some(3);\n\
-             match x {\n\
-                 Some(q) => total = total + q,\n\
-                 None => total = 0,\n\
-             }\n\
-             println(total.to_string());\n\
-         }",
-    );
-    assert_eq!(
-        errors.len(),
-        2,
-        "expected exactly one error per offending arm and no resync cascade; got: {:?}",
-        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
-    for e in &errors {
-        assert!(
-            e.message.contains("wrap it in braces"),
-            "expected the braces fix-it; got: {}",
-            e.message
-        );
-    }
-    assert!(
-        !errors
-            .iter()
-            .any(|e| e.message.contains("top-level statements")),
-        "the script-mode ambiguity error is a resync artifact here and must not appear; got: {:?}",
-        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
-}
-
-/// B-2026-08-13-13. The message above tells the reader to write
-/// `pattern => { place = value; }`. Assert that what it prescribes actually
-/// PARSES — the original shipped without the semicolon, and following it
-/// verbatim produced a second, different error (`Expected Semicolon, found
-/// RightBrace`).
-///
-/// The test does not hard-code the suggested text and then separately check a
-/// hand-written copy of it: it LIFTS the snippet out of the diagnostic,
-/// substitutes a concrete place and value for the metavariables, and parses
-/// the result. So the message and the grammar cannot drift apart again without
-/// this failing, whatever the message is reworded to.
-#[test]
-fn test_braces_suggestion_for_a_bare_assignment_arm_body_actually_parses() {
-    let (_, errors) = parse_with_errors(
-        "fn main() {\n\
-             let mut total = 0;\n\
-             match Some(3) {\n\
-                 Some(q) => total = total + q,\n\
-                 None => {}\n\
-             }\n\
-         }",
-    );
-    assert_eq!(errors.len(), 1, "{:?}", errors);
-    let msg = &errors[0].message;
-
-    // Lift the backticked snippet after "wrap it in braces: ".
-    let tail = msg
-        .split("wrap it in braces: ")
-        .nth(1)
-        .unwrap_or_else(|| panic!("message lost its fix-it: {msg}"));
-    let suggested = tail
-        .trim()
-        .trim_start_matches('`')
-        .trim_end_matches('`')
-        .to_string();
-
-    // `pattern => { place = value; }` with the metavariables filled in.
-    let concrete = suggested
-        .replace("pattern", "Some(q)")
-        .replace("place", "total")
-        .replace("value", "total + q");
-    let program = format!(
-        "fn main() {{\n\
-             let mut total = 0;\n\
-             match Some(3) {{\n\
-                 {concrete},\n\
-                 None => {{}}\n\
-             }}\n\
-         }}"
-    );
-    let reparsed = parse(&program);
-    assert!(
-        reparsed.errors.is_empty(),
-        "the diagnostic prescribes code that does not parse.\n  suggested: {suggested}\n  \
-         program:\n{program}\n  errors: {:?}",
-        reparsed
-            .errors
-            .iter()
-            .map(|e| &e.message)
-            .collect::<Vec<_>>()
-    );
-}
-
-/// B-2026-08-13-13, second half: the repair is machine-applicable. A wrap is
-/// two insertions and the parser holds no source text, so it cannot fit the
-/// single-edit `fix_edits` slot — it lands in the `fix_diffs` envelope, keyed
-/// by the diagnostic's span like every other fix channel. Applying the
-/// envelope must produce a program that parses; applying HALF of it must not
-/// be something a consumer can do by accident, which is why the single-edit
-/// slot stays empty for this diagnostic.
-#[test]
-fn test_bare_assignment_arm_body_carries_an_applicable_brace_wrap() {
-    for (label, src) in [
-        (
-            "plain assignment",
-            "fn main() {\n\
-                 let mut total = 0;\n\
-                 match Some(3) {\n\
-                     Some(q) => total = total + q,\n\
-                     None => {}\n\
-                 }\n\
-             }",
-        ),
-        (
-            "compound assignment",
-            "fn main() {\n\
-                 let mut total = 0;\n\
-                 match Some(3) {\n\
-                     Some(q) => total += q,\n\
-                     None => {}\n\
-                 }\n\
-             }",
-        ),
-        (
-            // The braced form's muscle memory: the author already wrote the
-            // `;`. The closer must reuse it rather than add a second.
-            "author-supplied semicolon",
-            "fn main() {\n\
-                 let mut total = 0;\n\
-                 match Some(3) {\n\
-                     Some(q) => total = total + q;,\n\
-                     None => {}\n\
-                 }\n\
-             }",
-        ),
-    ] {
-        let result = parse(src);
-        assert_eq!(result.errors.len(), 1, "{label}: {:?}", result.errors);
-        let key = karac::resolver::SpanKey::from_span(&result.errors[0].span);
-        assert!(
-            !result.fix_edits.contains_key(&key),
-            "{label}: a two-sided wrap must not advertise a one-sided fix",
-        );
-        let edits = result
-            .fix_diffs
-            .get(&key)
-            .unwrap_or_else(|| panic!("{label}: no fix envelope attached to the diagnostic"));
-        assert_eq!(edits.len(), 2, "{label}: a wrap is an open and a close");
-
-        // Apply descending by offset, exactly as `cmd_fix` does.
-        let mut applied = src.to_string();
-        let mut sorted = edits.clone();
-        sorted.sort_by_key(|e| std::cmp::Reverse(e.offset));
-        for e in &sorted {
-            applied.replace_range(e.offset..e.offset + e.length, &e.replacement);
-        }
-        let reparsed = parse(&applied);
-        assert!(
-            reparsed.errors.is_empty(),
-            "{label}: applying the fix left the file unparseable:\n{applied}\n  errors: {:?}",
-            reparsed
-                .errors
-                .iter()
-                .map(|e| &e.message)
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            !applied.contains(";;"),
-            "{label}: the author's own semicolon was duplicated:\n{applied}",
-        );
-    }
-}
-
-#[test]
-fn test_compound_assignment_as_bare_match_arm_body_reports_braces() {
-    // Sibling of the test above for the compound forms (`+=` and friends),
-    // which take the other branch of the recovery's operator check.
-    let (_, errors) = parse_with_errors(
-        "fn main() {\n\
-             let mut total = 0;\n\
-             match Some(3) {\n\
-                 Some(q) => total += q,\n\
-                 None => {}\n\
-             }\n\
-         }",
-    );
-    assert_eq!(
-        errors.len(),
-        1,
-        "expected exactly one error; got: {:?}",
-        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
-    assert!(
-        errors[0].message.contains("wrap it in braces"),
-        "expected the braces fix-it; got: {}",
-        errors[0].message
-    );
+fn test_assignment_and_compound_assignment_are_match_arm_bodies() {
+    let src = "fn main() {\n\
+                   let mut total = 0;\n\
+                   let x: Option[i64] = Some(3);\n\
+                   match x {\n\
+                       Some(q) => total = total + q,\n\
+                       None => total += 1,\n\
+                   }\n\
+                   println(total.to_string());\n\
+               }";
+    let (prog, errors) = parse_with_errors(src);
+    assert!(errors.is_empty(), "{:?}", errors);
+    let dump = format!("{:?}", prog);
+    assert!(dump.contains("Assign"), "plain assignment arm: {dump}");
+    assert!(dump.contains("CompoundAssign"), "compound assignment arm: {dump}");
 }
 
 #[test]
@@ -7664,7 +7480,7 @@ fn test_lock_block_with_alias() {
 
 #[test]
 fn test_labeled_loop() {
-    let prog = parse_ok("fn main() { outer: loop { break outer; } }");
+    let prog = parse_ok("fn main() { 'outer: loop { break 'outer; } }");
     let expr = first_fn_expr(&prog);
     if let ExprKind::Loop { label, .. } = &expr.kind {
         assert_eq!(label.as_deref(), Some("outer"));
@@ -7675,7 +7491,7 @@ fn test_labeled_loop() {
 
 #[test]
 fn test_labeled_while() {
-    let prog = parse_ok("fn main() { outer: while true { break outer; } }");
+    let prog = parse_ok("fn main() { 'outer: while true { break 'outer; } }");
     if let Item::Function(f) = &prog.items[0] {
         let stmt = &f.body.stmts[0];
         if let StmtKind::Expr(expr) = &stmt.kind {
@@ -7690,7 +7506,7 @@ fn test_labeled_while() {
 
 #[test]
 fn test_labeled_for() {
-    let prog = parse_ok("fn main() { outer: for x in items { continue outer; } }");
+    let prog = parse_ok("fn main() { 'outer: for x in items { continue 'outer; } }");
     if let Item::Function(f) = &prog.items[0] {
         let stmt = &f.body.stmts[0];
         if let StmtKind::Expr(expr) = &stmt.kind {
@@ -7706,7 +7522,7 @@ fn test_labeled_for() {
 #[test]
 fn test_break_with_label() {
     // `break outer;` inside a loop labeled `outer:` is parsed as a labeled break.
-    let prog = parse_ok("fn main() { outer: loop { break outer; } }");
+    let prog = parse_ok("fn main() { 'outer: loop { break 'outer; } }");
     let expr = first_fn_expr(&prog);
     if let ExprKind::Loop { body, .. } = &expr.kind {
         if let StmtKind::Expr(inner) = &body.stmts[0].kind {
@@ -7724,7 +7540,7 @@ fn test_break_with_label() {
 
 #[test]
 fn test_continue_with_label() {
-    let prog = parse_ok("fn main() { outer: loop { continue outer; } }");
+    let prog = parse_ok("fn main() { 'outer: loop { continue 'outer; } }");
     let expr = first_fn_expr(&prog);
     if let ExprKind::Loop { body, .. } = &expr.kind {
         if let StmtKind::Expr(inner) = &body.stmts[0].kind {
@@ -7763,7 +7579,7 @@ fn test_labeled_block_basic_parse() {
     // attached to the AST node and the body parsed as a normal block.
     // Inner `break label;` is recognized as labeled break (the label is
     // active in `loop_labels` during body parse).
-    let prog = parse_ok("fn main() { outer: { break outer; } }");
+    let prog = parse_ok("fn main() { 'outer: { break 'outer; } }");
     let expr = first_fn_expr(&prog);
     if let ExprKind::LabeledBlock { label, body, .. } = &expr.kind {
         assert_eq!(label, "outer");
@@ -7785,7 +7601,7 @@ fn test_labeled_block_basic_parse() {
 fn test_labeled_block_nested_parse() {
     // Two nested labeled blocks parse with the inner block as a
     // distinct LabeledBlock node within the outer's body.
-    let prog = parse_ok("fn main() { outer: { inner: { break outer; } } }");
+    let prog = parse_ok("fn main() { 'outer: { 'inner: { break 'outer; } } }");
     let expr = first_fn_expr(&prog);
     if let ExprKind::LabeledBlock { label, body, .. } = &expr.kind {
         assert_eq!(label, "outer");

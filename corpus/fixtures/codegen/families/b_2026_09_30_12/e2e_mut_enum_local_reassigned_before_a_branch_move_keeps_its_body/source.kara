@@ -29,7 +29,7 @@ fn r6(c: bool) -> i64 {
   return 0
 }
 fn main() {
-  println(f"r {r4(false)}"); println(f"r {r4(true)}")
-  println(f"r {r5(false)}"); println(f"r {r5(true)}")
+  println(f"r {r4(false)}"); println(f"r {r4(true)}");
+  println(f"r {r5(false)}"); println(f"r {r5(true)}");
   println(f"r {r6(false)}"); println(f"r {r6(true)}")
 }

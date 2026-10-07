@@ -11,17 +11,17 @@ fn g6(s: Option[R], o: Option[R]) -> Option[R] { let n = s.is_some(); let s = o;
 struct B { v: i64 }
 impl B { fn m[T](self, s: T, o: T, c: bool) -> T { if c { return s } let s = o; s } }
 fn main() {
-    let r = g0(R { id: 24 }, R { id: 25 }, false); println(f"k{r.id}"); println("_a0")
-    let r = g0(R { id: 22 }, R { id: 23 }, true); println(f"k{r.id}"); println("_b0")
-    let r = g1(R { id: 1 }, R { id: 2 }, false); println(f"k{r.id}"); println("_a1")
-    let r = g1(R { id: 3 }, R { id: 4 }, true); println(f"k{r.id}"); println("_a2")
-    let r = g2(R { id: 5 }, R { id: 6 }, true); println(f"k{r.id}"); println("_a3")
-    let r = g2(R { id: 7 }, R { id: 8 }, false); println(f"k{r.id}"); println("_a4")
-    let p = g3(R { id: 9 }, R { id: 10 }, false); println(f"k{p.s.id}{p.n}"); println("_a5")
-    let p = g3(R { id: 11 }, R { id: 12 }, true); println(f"k{p.s.id}{p.n}"); println("_a6")
-    println(f"k{g4(R { id: 13 }, true)}"); println("_a7")
-    let r = g5(R { id: 14 }, R { id: 15 }, false); println(f"k{r.id}"); println("_a8")
-    let r = g6(Some(R { id: 16 }), Some(R { id: 17 })); println(f"k{r.is_some()}"); println("_a9")
-    let b = B { v: 1 }; let r = b.m(R { id: 18 }, R { id: 19 }, false); println(f"k{r.id}"); println("_b1")
+    let r = g0(R { id: 24 }, R { id: 25 }, false); println(f"k{r.id}"); println("_a0");
+    let r = g0(R { id: 22 }, R { id: 23 }, true); println(f"k{r.id}"); println("_b0");
+    let r = g1(R { id: 1 }, R { id: 2 }, false); println(f"k{r.id}"); println("_a1");
+    let r = g1(R { id: 3 }, R { id: 4 }, true); println(f"k{r.id}"); println("_a2");
+    let r = g2(R { id: 5 }, R { id: 6 }, true); println(f"k{r.id}"); println("_a3");
+    let r = g2(R { id: 7 }, R { id: 8 }, false); println(f"k{r.id}"); println("_a4");
+    let p = g3(R { id: 9 }, R { id: 10 }, false); println(f"k{p.s.id}{p.n}"); println("_a5");
+    let p = g3(R { id: 11 }, R { id: 12 }, true); println(f"k{p.s.id}{p.n}"); println("_a6");
+    println(f"k{g4(R { id: 13 }, true)}"); println("_a7");
+    let r = g5(R { id: 14 }, R { id: 15 }, false); println(f"k{r.id}"); println("_a8");
+    let r = g6(Some(R { id: 16 }), Some(R { id: 17 })); println(f"k{r.is_some()}"); println("_a9");
+    let b = B { v: 1 }; let r = b.m(R { id: 18 }, R { id: 19 }, false); println(f"k{r.id}"); println("_b1");
     println("end")
 }

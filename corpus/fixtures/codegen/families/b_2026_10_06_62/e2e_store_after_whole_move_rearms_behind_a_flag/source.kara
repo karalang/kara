@@ -16,25 +16,25 @@ fn m(c: bool, d: bool) {
     { let mut p = mkr(94); if d { let q = p; println(f"q{q.1}"); } p = mkr(95); println(f"m{p.1}") }
 }
 fn main() {
-    a(0)
-    a(1)
-    a(2)
-    b(false)
-    b(true)
-    d(0)
-    d(2)
-    e(false)
-    e(true)
-    f(0)
-    f(3)
-    g(0)
-    g(2)
-    h(1)
-    k(false)
-    k(true)
-    println(f"l{l(false)}")
-    println(f"l{l(true)}")
-    m(true, false)
-    m(true, true)
+    a(0);
+    a(1);
+    a(2);
+    b(false);
+    b(true);
+    d(0);
+    d(2);
+    e(false);
+    e(true);
+    f(0);
+    f(3);
+    g(0);
+    g(2);
+    h(1);
+    k(false);
+    k(true);
+    println(f"l{l(false)}");
+    println(f"l{l(true)}");
+    m(true, false);
+    m(true, true);
     println("end")
 }

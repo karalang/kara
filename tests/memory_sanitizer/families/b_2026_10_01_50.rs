@@ -21,7 +21,7 @@ fn o8(c: bool, n: i64) { let o = Some(mk(n)); match o { Some(w) => { if c { let 
 fn r8(c: bool, n: i64) { let o: Result[W1, i64] = Ok(mk(n)); match o { Ok(w) => { if c { let _ = Some(w); println("a") }; println("b") }, Err(v) => println(f"{v}") }; println("e") }
 fn i8(c: bool, n: i64) { let o = Some(mk(n)); if let Some(w) = o { if c { let _ = E.A(w); println("a") }; println("b") }; println("e") }
 fn main() {
-  a8(false, 1); a8(true, 2); o8(false, 3); o8(true, 4); r8(false, 5); r8(true, 6); i8(false, 7); i8(true, 8)
+  a8(false, 1); a8(true, 2); o8(false, 3); o8(true, 4); r8(false, 5); r8(true, 6); i8(false, 7); i8(true, 8);
   println("end")
 }
 "#,

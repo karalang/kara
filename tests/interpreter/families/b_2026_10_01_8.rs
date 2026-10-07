@@ -25,15 +25,15 @@ fn pv[T](x: T) -> T { let y = x; return y; }
 struct H { n: i64 }
 impl H { fn keep[T](ref self, x: T) -> T { return x } }
 fn main() {
-  println("-a1"); let a: Array[R, 2] = [mk(42), mk(43)]; pg(a); println("r")
-  println("-a2"); let b: Array[R, 2] = [mk(44), mk(45)]; let c = pg(b); println(f"r{c[1].id}")
-  println("-a6"); let d: Array[R, 2] = [mk(46), mk(47)]; let _ = pg(d); println("r")
-  println("-t1"); let e: Array[R, 2] = [mk(48), mk(49)]; let t = pt(e); println(f"r{t.1}")
-  println("-k1"); let f: Array[R, 2] = [mk(50), mk(51)]; let k = gk(f); println(f"r{k}")
-  println("-c1"); let g: Array[R, 2] = [mk(52), mk(53)]; let gg = pc(g, true); println("r")
-  println("-v1"); let h: Array[R, 2] = [mk(54), mk(55)]; let hh = pv(h); println("r")
-  println("-m1"); let hz = H { n: 1 }; let m: Array[R, 2] = [mk(56), mk(57)]; let mm = hz.keep(m); println("r")
-  println("-s1"); let s: Array[String, 2] = [f"x{1}", f"y{2}"]; let ss = pg(s); println(f"r{ss[0]}")
+  println("-a1"); let a: Array[R, 2] = [mk(42), mk(43)]; pg(a); println("r");
+  println("-a2"); let b: Array[R, 2] = [mk(44), mk(45)]; let c = pg(b); println(f"r{c[1].id}");
+  println("-a6"); let d: Array[R, 2] = [mk(46), mk(47)]; let _ = pg(d); println("r");
+  println("-t1"); let e: Array[R, 2] = [mk(48), mk(49)]; let t = pt(e); println(f"r{t.1}");
+  println("-k1"); let f: Array[R, 2] = [mk(50), mk(51)]; let k = gk(f); println(f"r{k}");
+  println("-c1"); let g: Array[R, 2] = [mk(52), mk(53)]; let gg = pc(g, true); println("r");
+  println("-v1"); let h: Array[R, 2] = [mk(54), mk(55)]; let hh = pv(h); println("r");
+  println("-m1"); let hz = H { n: 1 }; let m: Array[R, 2] = [mk(56), mk(57)]; let mm = hz.keep(m); println("r");
+  println("-s1"); let s: Array[String, 2] = [f"x{1}", f"y{2}"]; let ss = pg(s); println(f"r{ss[0]}");
   println("-l1"); let l: Array[R, 1] = [mk(58)]; for i in 0..2 { let q = pg(mk(60 + i)); } let ll = pg(l); println("r")
 }
 "#);

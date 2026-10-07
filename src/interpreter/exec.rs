@@ -1635,7 +1635,6 @@ pub(crate) fn collect_free_idents_expr(
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::SelfValue
         | ExprKind::SelfType

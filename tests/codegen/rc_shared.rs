@@ -3949,19 +3949,19 @@ fn l_push() { let s = S3 { h: Sh { k: 1 }, id: 14 }; let v = st(s); let c = S3 {
 fn m_loop() { for i in 0..3 { let s = S3 { h: Sh { k: i }, id: 16 }; let t = idg(s); println(f"m{t.h.k}") } }
 
 fn main() {
-    a_gen_drop()
-    b_gen_plain()
-    c_conc_plain()
-    d_wrap_drop()
-    e_wrap_plain()
-    f_method()
-    g_shared_alive()
-    h_conc_disc()
-    i_conc_letdisc()
-    j_gen_disc()
-    k_rebind()
-    l_push()
-    m_loop()
+    a_gen_drop();
+    b_gen_plain();
+    c_conc_plain();
+    d_wrap_drop();
+    e_wrap_plain();
+    f_method();
+    g_shared_alive();
+    h_conc_disc();
+    i_conc_letdisc();
+    j_gen_disc();
+    k_rebind();
+    l_push();
+    m_loop();
     println("end")
 }
 "#,
@@ -4009,15 +4009,15 @@ fn h_option() { let s = mk(18); let o = midS3(s, true); let s2 = mk(19); let o2 
 fn i_loop() { for i in 0..3 { let s = mk(i); let t = keep1(s, i == 1); println(f"i{t.id}") } }
 
 fn main() {
-    a_method()
-    b_method_disc()
-    c_pick()
-    d_keep1()
-    e_method_pick()
-    f_store()
-    g_self_store()
-    h_option()
-    i_loop()
+    a_method();
+    b_method_disc();
+    c_pick();
+    d_keep1();
+    e_method_pick();
+    f_store();
+    g_self_store();
+    h_option();
+    i_loop();
     println("end")
 }
 "#,
@@ -4085,14 +4085,14 @@ fn f_nest() { let s = mk(14); nest3(s, true, true); let s2 = mk(15); nest3(s2, f
 fn g_temp_loop() { let t = passp(mk(21), true); println(f"g{t.id}"); for i in 0..3 { let s = mk(i); let u = passp(s, i == 1); println(f"g{u.id}") } }
 fn h_direct() { let s = mk(22); let w = mk(23); let t = pickS3(s, true, w); let s2 = mk2(24); let w2 = mk2(25); let t2 = pickS2(s2, false, w2); println(f"h{t.id} {t2.id}") }
 fn main() {
-    a_pass()
-    b_pass2()
-    c_letret()
-    d_stmt()
-    e_stmtR()
-    f_nest()
-    g_temp_loop()
-    h_direct()
+    a_pass();
+    b_pass2();
+    c_letret();
+    d_stmt();
+    e_stmtR();
+    f_nest();
+    g_temp_loop();
+    h_direct();
     println("end")
 }
 "#,
@@ -4154,21 +4154,21 @@ fn inner2(a: S2) { let o = Some(a); println(f"n{o.is_some()}") }
 fn innerho(a: S3) { let o = Ho.Full(a); println("nho") }
 fn n_params() { let s = mk(18); let o = midS3(s, true); let s2 = mk(19); let o2 = midS3(s2, false); let s3 = mk(20); let o3 = wrap3(s3); let s4 = mk(21); inner3(s4); let s5 = mk2(22); inner2(s5); let s6 = mk(23); innerho(s6); println("n") }
 fn main() {
-    a_some()
-    b_drop()
-    c_temp()
-    d_generic()
-    e_match()
-    f_unwrap()
-    g_push()
-    h_rebind()
-    i_reassign()
-    j_loop()
-    k_enum()
-    l_moves()
-    n_params()
+    a_some();
+    b_drop();
+    c_temp();
+    d_generic();
+    e_match();
+    f_unwrap();
+    g_push();
+    h_rebind();
+    i_reassign();
+    j_loop();
+    k_enum();
+    l_moves();
+    n_params();
     let r = ret();
-    println(f"m{r.is_some()}")
+    println(f"m{r.is_some()}");
     println("end")
 }
 "#,
@@ -4210,12 +4210,12 @@ fn c_mid_none() { let s = mk2(3); let o = mid(s, false); println("c") }
 fn d_discard() { let s = mk2(4); mkh(s); println("d") }
 fn e_underscore() { let s = mk2(5); let _ = mkh(s); println("e") }
 fn f_match_ho() {
-    let s = mk2(6); let h = mkh(s); println("f")
+    let s = mk2(6); let h = mkh(s); println("f");
     match h { Ho.Full(x) => println(f"got{x.id}"), Ho.Empty => println("none") }
     println("f after")
 }
 fn g_match_opt() {
-    let s = mk2(7); let o = mid(s, true); println("g")
+    let s = mk2(7); let o = mid(s, true); println("g");
     match o { Some(x) => println(f"got{x.id}"), None => println("none") }
     println("g after")
 }
@@ -4234,17 +4234,17 @@ fn k_local() {
     let q = Some(mk2(16)); match q { Some(x) => rd(x), None => println("none") }
 }
 fn main() {
-    a_bound()
-    b_mid_some()
-    c_mid_none()
-    d_discard()
-    e_underscore()
-    f_match_ho()
-    g_match_opt()
-    h_ref_arm()
-    i_loop()
-    j_method()
-    k_local()
+    a_bound();
+    b_mid_some();
+    c_mid_none();
+    d_discard();
+    e_underscore();
+    f_match_ho();
+    g_match_opt();
+    h_ref_arm();
+    i_loop();
+    j_method();
+    k_local();
     println("end")
 }
 "#,
@@ -4310,24 +4310,24 @@ fn p_local_eat() { let o = Ho.Full(mk2(20)); match o { Ho.Full(x) => eat2(x), Ho
 fn q_letelse_move() { let s = mk2(21); let o = mkh(s); let Ho.Full(x) = o else { return }; let y = x; println(f"q{y.id}") }
 fn r_local_nodrop() { let o = Ho.Full(mk3(22)); match o { Ho.Full(x) => println(f"r{x.id}"), Ho.Empty => println("e") } }
 fn main() {
-    a_unwrap(); println("a.")
-    b_unwrap_nodrop(); println("b.")
-    c_ho_move(); println("c.")
-    d_mid_move(); println("d.")
-    e_push(); println("e.")
-    f_loop(); println("f.")
-    g_ho_loop(); println("g.")
-    h_ho_read(); println("h.")
-    i_ho_ref(); println("i.")
-    j_local_read(); println("j.")
-    k_local_ifl(); println("k.")
-    l_ho_ifl(); println("l.")
-    m_ho_shared_field(); println("m.")
-    n_ho_ifl_move(); println("n.")
-    o_local_shared_field(); println("o.")
-    p_local_eat(); println("p.")
-    q_letelse_move(); println("q.")
-    r_local_nodrop(); println("r.")
+    a_unwrap(); println("a.");
+    b_unwrap_nodrop(); println("b.");
+    c_ho_move(); println("c.");
+    d_mid_move(); println("d.");
+    e_push(); println("e.");
+    f_loop(); println("f.");
+    g_ho_loop(); println("g.");
+    h_ho_read(); println("h.");
+    i_ho_ref(); println("i.");
+    j_local_read(); println("j.");
+    k_local_ifl(); println("k.");
+    l_ho_ifl(); println("l.");
+    m_ho_shared_field(); println("m.");
+    n_ho_ifl_move(); println("n.");
+    o_local_shared_field(); println("o.");
+    p_local_eat(); println("p.");
+    q_letelse_move(); println("q.");
+    r_local_nodrop(); println("r.");
     println("end")
 }
 "#,
@@ -4385,20 +4385,20 @@ fn m_meth_mid_unwrap() { let h = H { n: 0 }; let s = mk2(13); let o = h.midm(s, 
 fn n_assoc() { let s = mk2(14); let o = H.wrapa(s); println("n") }
 fn o_loop() { for i in 15..19 { let s = mk2(i); let o = midS(s, i % 2 == 0); match o { Some(x) => println(f"o{x.id}"), None => println(f"on{i}") } } }
 fn main() {
-    a_wrap(); println("a.")
-    b_mkh(); println("b.")
-    c_mid_some(); println("c.")
-    d_mid_none(); println("d.")
-    f_wrap_unwrap(); println("f.")
-    g_mid_move(); println("g.")
-    h_mkh_read(); println("h.")
-    i_mono_read(); println("i.")
-    j_mono_move(); println("j.")
-    k_meth(); println("k.")
-    l_meth_mid_none(); println("l.")
-    m_meth_mid_unwrap(); println("m.")
-    n_assoc(); println("n.")
-    o_loop(); println("o.")
+    a_wrap(); println("a.");
+    b_mkh(); println("b.");
+    c_mid_some(); println("c.");
+    d_mid_none(); println("d.");
+    f_wrap_unwrap(); println("f.");
+    g_mid_move(); println("g.");
+    h_mkh_read(); println("h.");
+    i_mono_read(); println("i.");
+    j_mono_move(); println("j.");
+    k_meth(); println("k.");
+    l_meth_mid_none(); println("l.");
+    m_meth_mid_unwrap(); println("m.");
+    n_assoc(); println("n.");
+    o_loop(); println("o.");
     println("end")
 }
 "#,
@@ -4462,26 +4462,26 @@ fn s_loop() {
 }
 fn t_reassign() { let o = Some(mk2(21)); let p = keep(o); let mut q = p; q = Some(mk2(22)); println(f"t{q.is_some()}") }
 fn main() {
-    a_unwrap(); println("a.")
-    b_match_move(); println("b.")
-    c_match_read(); println("c.")
-    d_iflet(); println("d.")
-    e_plain(); println("e.")
-    f_chain(); println("f.")
-    g_generic(); println("g.")
-    h_maybe(); println("h.")
-    i_maybe_none(); println("i.")
-    j_wrap_chain(); println("j.")
-    k_s3(); println("k.")
-    l_rebind(); println("l.")
-    m_unwrap_or(); println("m.")
-    n_call_unwrap(); println("n.")
-    o_ret(); println("o.")
-    p_ret_plain(); println("p.")
-    q_field(); println("q.")
-    r_wrap_call_unwrap(); println("r.")
-    s_loop(); println("s.")
-    t_reassign(); println("t.")
+    a_unwrap(); println("a.");
+    b_match_move(); println("b.");
+    c_match_read(); println("c.");
+    d_iflet(); println("d.");
+    e_plain(); println("e.");
+    f_chain(); println("f.");
+    g_generic(); println("g.");
+    h_maybe(); println("h.");
+    i_maybe_none(); println("i.");
+    j_wrap_chain(); println("j.");
+    k_s3(); println("k.");
+    l_rebind(); println("l.");
+    m_unwrap_or(); println("m.");
+    n_call_unwrap(); println("n.");
+    o_ret(); println("o.");
+    p_ret_plain(); println("p.");
+    q_field(); println("q.");
+    r_wrap_call_unwrap(); println("r.");
+    s_loop(); println("s.");
+    t_reassign(); println("t.");
     println("end")
 }
 "#,
@@ -4538,21 +4538,21 @@ fn m() { let mut v: Vec[P] = Vec.new(); v.push(P { id: 13 }); let p = vv(v); pri
 fn n() { let w = w1(P { id: 14 }); println(f"n{w.o.is_some()}") }
 fn o() { let p = t1(P { id: 15 }); println(f"o{p.1}") }
 fn main() {
-    a(); println("a.")
-    b(); println("b.")
-    c(); println("c.")
-    d(); println("d.")
-    e(); println("e.")
-    f(); println("f.")
-    g(); println("g.")
-    h(); println("h.")
-    i(); println("i.")
-    j(); println("j.")
-    k(); println("k.")
-    l(); println("l.")
-    m(); println("m.")
-    n(); println("n.")
-    o(); println("o.")
+    a(); println("a.");
+    b(); println("b.");
+    c(); println("c.");
+    d(); println("d.");
+    e(); println("e.");
+    f(); println("f.");
+    g(); println("g.");
+    h(); println("h.");
+    i(); println("i.");
+    j(); println("j.");
+    k(); println("k.");
+    l(); println("l.");
+    m(); println("m.");
+    n(); println("n.");
+    o(); println("o.");
     println("end")
 }
 "#,
@@ -4604,23 +4604,23 @@ fn o() { let s = mk3(14); let o = mid3(s, true); let q = o; let v = q.unwrap(); 
 fn p() { let s = mk3(15); let o = wrap3(s); let v = o.expect("x"); println(f"p{v.id}") }
 fn q() { let s = mk3(16); let o = mid3(s, true); if let Some(x) = o { println(f"q{x.id}") } }
 fn main() {
-    a(); println("a.")
-    b(); println("b.")
-    c(); println("c.")
-    d(); println("d.")
-    e(); println("e.")
-    f(); println("f.")
-    g(); println("g.")
-    h(); println("h.")
-    i(); println("i.")
-    j(); println("j.")
-    k(); println("k.")
-    l(); println("l.")
-    m(); println("m.")
-    n(); println("n.")
-    o(); println("o.")
-    p(); println("p.")
-    q(); println("q.")
+    a(); println("a.");
+    b(); println("b.");
+    c(); println("c.");
+    d(); println("d.");
+    e(); println("e.");
+    f(); println("f.");
+    g(); println("g.");
+    h(); println("h.");
+    i(); println("i.");
+    j(); println("j.");
+    k(); println("k.");
+    l(); println("l.");
+    m(); println("m.");
+    n(); println("n.");
+    o(); println("o.");
+    p(); println("p.");
+    q(); println("q.");
     println("end")
 }
 "#,
@@ -4681,23 +4681,23 @@ fn cp() { let o = noret(mk2(17)); println(f"s{o.is_some()}"); }
 fn cq() { let mut i = 0; while i < 2 { let o = midS(mk2(20 + i), i == 0); println(f"s{o.is_some()}"); i = i + 1; } }
 fn cr() { let o = wrapS(mk2(18)); let q = o; println(f"s{q.is_some()}"); }
 fn main() {
-    ca(); println("a.")
-    cb(); println("b.")
-    cc(); println("c.")
-    cd(); println("d.")
-    ce(); println("e.")
-    cf(); println("f.")
-    cg(); println("g.")
-    ch(); println("h.")
-    ci(); println("i.")
-    ck(); println("k.")
-    cl(); println("l.")
-    cm(); println("m.")
-    cn(); println("n.")
-    co(); println("o.")
-    cp(); println("p.")
-    cq(); println("q.")
-    cr(); println("r.")
+    ca(); println("a.");
+    cb(); println("b.");
+    cc(); println("c.");
+    cd(); println("d.");
+    ce(); println("e.");
+    cf(); println("f.");
+    cg(); println("g.");
+    ch(); println("h.");
+    ci(); println("i.");
+    ck(); println("k.");
+    cl(); println("l.");
+    cm(); println("m.");
+    cn(); println("n.");
+    co(); println("o.");
+    cp(); println("p.");
+    cq(); println("q.");
+    cr(); println("r.");
     println("end")
 }
 "#,
@@ -4763,26 +4763,26 @@ fn s() { let x = H { n: 1 }; let p = x.m(P { id: 18 }, true); println(f"s{p.is_s
 fn t() { let p = H.a(P { id: 19 }, true); println(f"t{p.is_some()}") }
 fn u() { let mut i = 0; while i < 3 { let s = mk2(20 + i); let p = sq(s, i == 1); println(f"u{p.is_some()}"); i = i + 1; } }
 fn main() {
-    a(); println("a.")
-    b(); println("b.")
-    c(); println("c.")
-    d(); println("d.")
-    e(); println("e.")
-    f(); println("f.")
-    g(); println("g.")
-    h(); println("h.")
-    i(); println("i.")
-    j(); println("j.")
-    k(); println("k.")
-    l(); println("l.")
-    m(); println("m.")
-    n(); println("n.")
-    o(); println("o.")
-    q(); println("q.")
-    r(); println("r.")
-    s(); println("s.")
-    t(); println("t.")
-    u(); println("u.")
+    a(); println("a.");
+    b(); println("b.");
+    c(); println("c.");
+    d(); println("d.");
+    e(); println("e.");
+    f(); println("f.");
+    g(); println("g.");
+    h(); println("h.");
+    i(); println("i.");
+    j(); println("j.");
+    k(); println("k.");
+    l(); println("l.");
+    m(); println("m.");
+    n(); println("n.");
+    o(); println("o.");
+    q(); println("q.");
+    r(); println("r.");
+    s(); println("s.");
+    t(); println("t.");
+    u(); println("u.");
     println("end")
 }
 "#,
@@ -4879,43 +4879,43 @@ fn c34() { let k = K { n: 1 }; let s = mk(16); let t = k.mp(s, false); println(f
 fn c35() { let s = mk(17); let w = mk(18); let t = pickS3(s, true, w); println(f"t{t.id}"); let s2 = mk(19); let t2 = outer(s2, true); println(f"t{t2.id}"); }
 fn c36() { let s = mk2(20); let t = outer2(s, true); let s2 = mk2(21); let t2 = passp2(s2, false); println(f"t{t.id} {t2.id}"); }
 fn main() {
-    c00()
-    c01()
-    c02()
-    c03()
-    c04()
-    c05()
-    c06()
-    c07()
-    c08()
-    c09()
-    c10()
-    c11()
-    c12()
-    c13()
-    c14()
-    c15()
-    c16()
-    c17()
-    c18()
-    c19()
-    c20()
-    c21()
-    c22()
-    c23()
-    c24()
-    c25()
-    c26()
-    c27()
-    c28()
-    c29()
-    c30()
-    c31()
-    c32()
-    c33()
-    c34()
-    c35()
-    c36()
+    c00();
+    c01();
+    c02();
+    c03();
+    c04();
+    c05();
+    c06();
+    c07();
+    c08();
+    c09();
+    c10();
+    c11();
+    c12();
+    c13();
+    c14();
+    c15();
+    c16();
+    c17();
+    c18();
+    c19();
+    c20();
+    c21();
+    c22();
+    c23();
+    c24();
+    c25();
+    c26();
+    c27();
+    c28();
+    c29();
+    c30();
+    c31();
+    c32();
+    c33();
+    c34();
+    c35();
+    c36();
     println("end")
 }
 "#,
@@ -4973,19 +4973,19 @@ fn c10() { let s = P { id: 17 }; let t = wrap(s, 2); println(f"t{t.id}"); }
 fn c11() { let mut i = 0; while i < 3 { let s = mk2(20 + i); let t = rs2(s, i); println(f"t{t.id}"); i = i + 1; } }
 fn c12() { let s = P { id: 19 }; rs(s, 1); println("disc"); }
 fn main() {
-    c00()
-    c01()
-    c02()
-    c03()
-    c04()
-    c05()
-    c06()
-    c07()
-    c08()
-    c09()
-    c10()
-    c11()
-    c12()
+    c00();
+    c01();
+    c02();
+    c03();
+    c04();
+    c05();
+    c06();
+    c07();
+    c08();
+    c09();
+    c10();
+    c11();
+    c12();
     println("end")
 }
 "#,
@@ -5041,16 +5041,16 @@ fn h_passp() { let s = mk(70); let t = passp(s, true); let s2 = mk(71); let t2 =
 fn i_control() { let s = R { id: 80, tag: "a" }; let w = R { id: 81, tag: "b" }; let t = pick(s, true, w); let s2 = R { id: 82, tag: "c" }; let w2 = R { id: 83, tag: "d" }; let t2 = pick(s2, false, w2); let p = P { id: 84 }; let q = P { id: 85 }; let t3 = pick(p, true, q); let r = R { id: 86, tag: "e" }; let v = stc(r, true); println(f"i{t.id} {t2.id} {t3.id} {v.len()}") }
 fn j_mid() { let s = mk(90); let o = mid(s, true); let s2 = mk2(91); let o2 = mid(s2, false); println("j") }
 fn main() {
-    a_pick2()
-    b_pick3()
-    c_disc()
-    d_temp()
-    e_loop()
-    f_stc()
-    g_gcond()
-    h_passp()
-    i_control()
-    j_mid()
+    a_pick2();
+    b_pick3();
+    c_disc();
+    d_temp();
+    e_loop();
+    f_stc();
+    g_gcond();
+    h_passp();
+    i_control();
+    j_mid();
     println("end")
 }
 "#,

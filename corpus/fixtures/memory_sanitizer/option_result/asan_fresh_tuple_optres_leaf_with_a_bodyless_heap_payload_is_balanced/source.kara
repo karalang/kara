@@ -16,16 +16,16 @@ fn odrop()  { let (r, o) = (mk(10), Option.Some(mk(110))); println(f"  l{r.id}{o
 fn loops()  { let mut i = 0; while i < 2 { let (r, o) = (mk(11), Option.Some(f"p11")); println(f"  m{r.id}{o.is_some()}"); i = i + 1; } println("  n") }
 
 fn main() {
-  println("ostr");   ostr()
-  println("owild");  owild()
-  println("rstr");   rstr()
-  println("ovec");   ovec()
-  println("vwild");  vwild()
-  println("ocarry"); ocarry()
-  println("omove");  omove()
-  println("oarm");   oarm()
-  println("rarm");   rarm()
-  println("odrop");  odrop()
-  println("loops");  loops()
+  println("ostr");   ostr();
+  println("owild");  owild();
+  println("rstr");   rstr();
+  println("ovec");   ovec();
+  println("vwild");  vwild();
+  println("ocarry"); ocarry();
+  println("omove");  omove();
+  println("oarm");   oarm();
+  println("rarm");   rarm();
+  println("odrop");  odrop();
+  println("loops");  loops();
   println("done")
 }

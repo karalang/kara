@@ -321,7 +321,6 @@ impl<'a> super::TypeChecker<'a> {
             | ExprKind::ByteLit(..)
             | ExprKind::ByteStringLit(..)
             | ExprKind::StringLit(..)
-            | ExprKind::MultiStringLit(..)
             | ExprKind::InterpolatedStringLit(..)
             | ExprKind::CStringLit { .. }
             | ExprKind::Path { .. }

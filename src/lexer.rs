@@ -278,7 +278,7 @@ impl<'a> Lexer<'a> {
                 if self.peek() == b'"' && self.peek_next() == b'"' {
                     self.advance(); // second "
                     self.advance(); // third "
-                    self.multi_string()
+                    self.triple_string(false)
                 } else {
                     self.string()
                 }
@@ -287,10 +287,16 @@ impl<'a> Lexer<'a> {
             // Character literals
             b'\'' => self.char_literal(),
 
-            // Interpolated String literals
+            // Interpolated String literals: `f"..."` and the `f"""` block.
             b'f' if self.peek() == b'"' => {
                 self.advance(); // consume '"'
-                self.interpolated_string()
+                if self.peek() == b'"' && self.peek_next() == b'"' {
+                    self.advance(); // second "
+                    self.advance(); // third "
+                    self.triple_string(true)
+                } else {
+                    self.interpolated_string()
+                }
             }
 
             // C-string literals (v60 item 18). The opening `c` has been
@@ -319,23 +325,13 @@ impl<'a> Lexer<'a> {
                 self.byte_string_literal()
             }
 
+            // Raw string `r"..."` / `r#"..."#` (any number of `#`): no escape
+            // processing, ends at the quote followed by as many `#`s.
+            b'r' if self.at_raw_string_open() => self.raw_string(),
+
             // Raw-identifier escape `r#NAME` (design.md § Raw Identifiers).
-            // `r"` is the reserved-string-prefix path (handled below); `r#"..."#`
-            // is the reserved hash-string form (caught later via the lone `r`
-            // identifier + the `#`-dispatched `reserved_hash_guarded_string`).
             // Only `r#` followed by an identifier-start byte enters this path.
             b'r' if self.peek() == b'#' && is_alpha(self.peek_next()) => self.raw_identifier(),
-
-            // Reserved single-letter string-prefix syntax (v60 item 10).
-            // `f"..."` is already handled above. Every other ASCII-alphabetic
-            // single-letter prefix immediately followed by `"` is reserved at
-            // v1; emit a focused diagnostic and consume the string body for
-            // clean error recovery so the parser sees one diagnostic, not a
-            // cascade. The `_` underscore prefix (`_"..."`) is also rejected
-            // for consistency.
-            _ if (c.is_ascii_alphabetic() || c == b'_') && self.peek() == b'"' => {
-                self.reserved_prefix_string(c)
-            }
 
             // Numbers
             _ if is_digit(c) => self.number(),
@@ -693,39 +689,6 @@ impl<'a> Lexer<'a> {
         self.make_spanned(Token::Error(msg))
     }
 
-    /// Reserved single-letter string-prefix syntax (v60 item 10). The opening
-    /// `prefix` letter has been consumed; the next byte is the opening `"`.
-    /// We consume the string body — handling escape sequences identically to
-    /// the regular string lexer — so the error token replaces the entire
-    /// prefix-string construct, not just the prefix. `f"..."` and `c"..."`
-    /// have dedicated dispatch arms higher up; this path catches every
-    /// other ASCII-alphabetic single-letter prefix and the underscore form.
-    fn reserved_prefix_string(&mut self, prefix: u8) -> SpannedToken {
-        self.advance(); // consume opening `"`
-        while self.peek() != b'"' && !self.is_at_end() {
-            if self.peek() == b'\n' {
-                self.line += 1;
-                self.column = 0;
-            }
-            if self.peek() == b'\\' {
-                self.advance();
-                if !self.is_at_end() {
-                    self.advance();
-                }
-            } else {
-                self.advance();
-            }
-        }
-        if self.peek() == b'"' {
-            self.advance(); // closing quote
-        }
-        let msg = format!(
-            "string prefix '{}\"...\"' is reserved for future use; only `f\"...\"` and `c\"...\"` are recognized in v1",
-            prefix as char
-        );
-        self.make_spanned(Token::Error(msg))
-    }
-
     /// Parse a `c"..."` C-string literal body. The opening `c` and `"`
     /// have been consumed. Produces a `Token::CStringLiteral` with the
     /// raw byte sequence (no trailing NUL — codegen appends one) plus the
@@ -870,49 +833,9 @@ impl<'a> Lexer<'a> {
                 self.column = 0;
             }
             if self.peek() == b'\\' {
-                self.advance(); // consume backslash
-                if self.is_at_end() {
-                    return self.make_spanned(Token::Error(
-                        "Unterminated string: trailing backslash".to_string(),
-                    ));
-                }
-                match self.peek() {
-                    b'n' => {
-                        self.advance();
-                        value.push('\n');
-                    }
-                    b't' => {
-                        self.advance();
-                        value.push('\t');
-                    }
-                    b'r' => {
-                        self.advance();
-                        value.push('\r');
-                    }
-                    b'\\' => {
-                        self.advance();
-                        value.push('\\');
-                    }
-                    b'"' => {
-                        self.advance();
-                        value.push('"');
-                    }
-                    b'0' => {
-                        self.advance();
-                        value.push('\0');
-                    }
-                    b'u' => {
-                        self.advance();
-                        match self.parse_unicode_escape() {
-                            Ok(c) => value.push(c),
-                            Err(msg) => return self.make_spanned(Token::Error(msg)),
-                        }
-                    }
-                    _ => {
-                        let c = self.consume_codepoint();
-                        return self
-                            .make_spanned(Token::Error(format!("Unknown escape sequence: \\{c}")));
-                    }
+                match self.string_escape() {
+                    Ok(c) => value.push(c),
+                    Err(msg) => return self.make_spanned(Token::Error(msg)),
                 }
             } else {
                 value.push(self.consume_codepoint());
@@ -927,9 +850,99 @@ impl<'a> Lexer<'a> {
         self.make_spanned(Token::StringLiteral(value))
     }
 
+    /// One escape sequence in a string body; the cursor is ON the `\`.
+    /// `\n \t \r \\ \" \0 \u{..}`, shared by `"..."`, `"""` and `f"..."`.
+    fn string_escape(&mut self) -> Result<char, String> {
+        self.advance(); // consume backslash
+        if self.is_at_end() {
+            return Err("Unterminated string: trailing backslash".to_string());
+        }
+        let c = match self.peek() {
+            b'n' => '\n',
+            b't' => '\t',
+            b'r' => '\r',
+            b'\\' => '\\',
+            b'"' => '"',
+            b'0' => '\0',
+            b'u' => {
+                self.advance();
+                return self.parse_unicode_escape();
+            }
+            b'{' | b'}' => {
+                let b = self.advance() as char;
+                return Err(format!(
+                    "`\\{b}` is not an escape; a literal brace in an f-string is written `{b}{b}`"
+                ));
+            }
+            _ => {
+                let c = self.consume_codepoint();
+                return Err(format!("Unknown escape sequence: \\{c}"));
+            }
+        };
+        self.advance();
+        Ok(c)
+    }
+
+    /// `r"` or `r#…#"` at the cursor (the `r` already consumed).
+    fn at_raw_string_open(&self) -> bool {
+        let mut i = 0;
+        while self.peek_at(i) == b'#' {
+            i += 1;
+        }
+        self.peek_at(i) == b'"'
+    }
+
+    /// `r"..."` / `r#"..."#` — the `r` has been consumed. The body is taken
+    /// verbatim, newlines included; it ends at a `"` followed by as many `#`
+    /// as opened it.
+    fn raw_string(&mut self) -> SpannedToken {
+        let mut hashes = 0;
+        while self.peek() == b'#' {
+            self.advance();
+            hashes += 1;
+        }
+        self.advance(); // opening `"`
+        let body_start = self.current;
+        loop {
+            if self.is_at_end() {
+                return self.make_spanned(Token::Error("Unterminated raw string".to_string()));
+            }
+            if self.peek() == b'"' && (1..=hashes).all(|k| self.peek_at(k) == b'#') {
+                let value = self.slice_text(body_start, self.current).to_string();
+                self.advance(); // closing `"`
+                for _ in 0..hashes {
+                    self.advance();
+                }
+                return self.make_spanned(Token::StringLiteral(value));
+            }
+            if self.peek() == b'\n' {
+                self.line += 1;
+                self.column = 0;
+            }
+            self.consume_codepoint();
+        }
+    }
+
     fn char_literal(&mut self) -> SpannedToken {
         if self.is_at_end() {
             return self.make_spanned(Token::Error("Unterminated character literal".to_string()));
+        }
+
+        // `'outer` — a loop / block label (design review 2026-10-07 § 5): a
+        // quote, an identifier, and NO closing quote. `'a'` is still the char.
+        if is_alpha(self.peek()) {
+            let mut len = 1;
+            while is_alpha(self.peek_at(len)) || is_digit(self.peek_at(len)) {
+                len += 1;
+            }
+            if self.peek_at(len) != b'\'' {
+                let name_start = self.current;
+                for _ in 0..len {
+                    self.advance();
+                }
+                let name = self.slice_text(name_start, self.current).to_string();
+                return self.make_spanned(Token::Label(name));
+            }
         }
 
         let ch = if self.peek() == b'\\' {
@@ -1242,44 +1255,200 @@ impl<'a> Lexer<'a> {
         self.make_spanned(Token::ByteLiteral(byte))
     }
 
-    fn multi_string(&mut self) -> SpannedToken {
-        let mut value = String::new();
-        loop {
-            if self.is_at_end() {
-                return self
-                    .make_spanned(Token::Error("Unterminated multi-line string".to_string()));
+    /// `"""` block (`f"""` when `interpolated`); the opening quotes are
+    /// consumed. Swift's rules (design review 2026-10-07 § 5): the opening
+    /// quotes end their line, the closing `"""` sits on a line of its own,
+    /// and that line's indentation is removed from every line of the body.
+    /// Escapes are processed after the indentation is removed. The newline
+    /// before the closing line is not part of the value.
+    fn triple_string(&mut self, interpolated: bool) -> SpannedToken {
+        let layout = match self.triple_layout() {
+            Ok(layout) => layout,
+            Err((msg, resume_at)) => {
+                self.skip_to(resume_at);
+                return self.make_spanned(Token::Error(msg));
             }
-            if self.peek() == b'"'
-                && self.peek_next() == b'"'
-                && self.current + 2 < self.source.len()
-                && self.source[self.current + 2] == b'"'
-            {
-                self.advance(); // 1st
-                self.advance(); // 2nd
-                self.advance(); // 3rd
-                break;
+        };
+        // The newline after the opening quotes. (Line bookkeeping first, then
+        // the advance, so the column is 1-based like every other newline here.)
+        self.line += 1;
+        self.column = 0;
+        self.advance();
+        self.skip_indent(layout.indent);
+        let token = if interpolated {
+            match self.interpolation_parts(Some(&layout)) {
+                Ok(parts) => Token::InterpolatedStringLiteral(parts),
+                Err(msg) => Token::Error(msg),
             }
+        } else {
+            let mut value = String::new();
+            let mut failed = None;
+            while self.current < layout.body_end {
+                if self.peek() == b'\n' {
+                    value.push('\n');
+                    self.line += 1;
+                    self.column = 0;
+                    self.advance();
+                    self.skip_indent(layout.indent);
+                } else if self.peek() == b'\\' {
+                    match self.string_escape() {
+                        Ok(c) => value.push(c),
+                        Err(msg) => {
+                            failed = Some(msg);
+                            break;
+                        }
+                    }
+                } else {
+                    value.push(self.consume_codepoint());
+                }
+            }
+            match failed {
+                Some(msg) => Token::Error(msg),
+                None => Token::StringLiteral(value),
+            }
+        };
+        self.skip_to(layout.close_end);
+        self.make_spanned(token)
+    }
+
+    /// Find where a `"""` body ends and how deep its closing line is
+    /// indented, without moving the cursor (which sits just past the opening
+    /// quotes). An error carries the offset to resume lexing at.
+    fn triple_layout(&self) -> Result<TripleLayout, (String, usize)> {
+        let src = self.source;
+        let open = self.current;
+        let eof = src.len();
+        let line_end = |from: usize| src[from..].iter().position(|&b| b == b'\n').map_or(eof, |i| from + i);
+        let lead_ws = |from: usize| src[from..].iter().take_while(|&&b| b == b' ' || b == b'\t').count();
+        if src.get(open) != Some(&b'\n') {
+            let resume = line_end(open);
+            return Err((
+                "a `\"\"\"` string starts on the line after its opening quotes; \
+                 put a line break right after `\"\"\"`"
+                    .to_string(),
+                resume,
+            ));
+        }
+        let body_start = open + 1;
+        let mut line = body_start;
+        let (close_line, indent) = loop {
+            if line >= eof {
+                return Err(("Unterminated multi-line string".to_string(), eof));
+            }
+            let ws = lead_ws(line);
+            if src[line + ws..].starts_with(b"\"\"\"") {
+                break (line, ws);
+            }
+            line = line_end(line) + 1;
+        };
+        let indent_bytes = &src[close_line..close_line + indent];
+        let close_end = close_line + indent + 3;
+        let mut line = body_start;
+        while line < close_line {
+            let end = line_end(line);
+            let ws = lead_ws(line);
+            let blank = line + ws == end;
+            if !blank && !src[line..end].starts_with(indent_bytes) {
+                return Err((
+                    "a line of a `\"\"\"` string is indented less than its closing \
+                     `\"\"\"`; indent it at least as far as the closing quotes"
+                        .to_string(),
+                    close_end,
+                ));
+            }
+            line = end + 1;
+        }
+        let body_end = if close_line == body_start {
+            body_start
+        } else {
+            close_line - 1
+        };
+        Ok(TripleLayout {
+            body_end,
+            indent,
+            close_end,
+        })
+    }
+
+    /// Skip up to `indent` leading spaces/tabs at the start of a `"""` line
+    /// (fewer only on a whitespace-only line, which becomes empty).
+    fn skip_indent(&mut self, indent: usize) {
+        let mut n = 0;
+        while n < indent && (self.peek() == b' ' || self.peek() == b'\t') {
+            self.advance();
+            n += 1;
+        }
+    }
+
+    /// Advance to `offset`, keeping the line count right across newlines.
+    fn skip_to(&mut self, offset: usize) {
+        while self.current < offset && !self.is_at_end() {
             if self.peek() == b'\n' {
                 self.line += 1;
                 self.column = 0;
             }
-            value.push(self.consume_codepoint());
+            self.consume_codepoint();
         }
-        self.make_spanned(Token::MultiStringLiteral(value))
     }
 
     fn interpolated_string(&mut self) -> SpannedToken {
+        let parts = match self.interpolation_parts(None) {
+            Ok(parts) => parts,
+            Err(msg) => return self.make_spanned(Token::Error(msg)),
+        };
+        if self.is_at_end() {
+            return self.make_spanned(Token::Error("Unterminated interpolated string".to_string()));
+        }
+        self.advance(); // closing quote
+        self.make_spanned(Token::InterpolatedStringLiteral(parts))
+    }
+
+    /// The body of an f-string, as text and `{expr}` parts. For `f"..."`
+    /// (`layout` is `None`) it stops at the closing `"`, unconsumed; for an
+    /// `f"""` block it stops at the end of the body and removes the closing
+    /// line's indentation after each newline. `{{` and `}}` are literal braces.
+    fn interpolation_parts(
+        &mut self,
+        layout: Option<&TripleLayout>,
+    ) -> Result<Vec<crate::token::InterpolationPart>, String> {
         use crate::token::InterpolationPart;
         let mut parts = Vec::new();
         let mut current_text = String::new();
 
-        while self.peek() != b'"' && !self.is_at_end() {
+        loop {
+            let done = match layout {
+                Some(l) => self.current >= l.body_end,
+                None => self.peek() == b'"' || self.is_at_end(),
+            };
+            if done {
+                break;
+            }
             if self.peek() == b'\n' {
+                if let Some(l) = layout {
+                    current_text.push('\n');
+                    self.line += 1;
+                    self.column = 0;
+                    self.advance();
+                    self.skip_indent(l.indent);
+                    continue;
+                }
                 self.line += 1;
                 self.column = 0;
             }
 
-            if self.peek() == b'{' {
+            if self.peek() == b'{' && self.peek_next() == b'{' {
+                self.advance();
+                self.advance();
+                current_text.push('{');
+            } else if self.peek() == b'}' {
+                if self.peek_next() != b'}' {
+                    return Err("unmatched `}` in an f-string; a literal brace is written `}}`"
+                        .to_string());
+                }
+                self.advance();
+                self.advance();
+                current_text.push('}');
+            } else if self.peek() == b'{' {
                 if !current_text.is_empty() {
                     parts.push(InterpolationPart::Text(current_text.clone()));
                     current_text.clear();
@@ -1347,12 +1516,10 @@ impl<'a> Lexer<'a> {
                         // quotes. Previously copied verbatim, then silently emitted
                         // as literal text (the `\` fails to re-parse) — wrong output,
                         // no error. Emit a clear diagnostic instead.
-                        return self.make_spanned(Token::Error(
-                            "unexpected '\\' in f-string interpolation `{…}`; string \
+                        return Err("unexpected '\\' in f-string interpolation `{…}`; string \
                              literals inside an interpolation use plain quotes — write \
                              `{f(\"x\")}`, not escaped quotes"
-                                .to_string(),
-                        ));
+                            .to_string());
                     }
                     if c == b'\n' {
                         self.line += 1;
@@ -1367,80 +1534,16 @@ impl<'a> Lexer<'a> {
                     column: expr_column,
                 });
             } else if self.peek() == b'\\' {
-                self.advance(); // consume backslash
-
-                // A backslash as the last byte of input: `peek()` hands back the
-                // `b'\0'` EOF sentinel, which `consume_codepoint()` treats as an
-                // ASCII byte and `advance()`s past the end of `source`. The
-                // sibling `string()` lexer already guards exactly this
-                // (B-2026-09-19-1); the f-string body did not, and both `Fuzz`
-                // targets found it.
-                if self.is_at_end() {
-                    return self.make_spanned(Token::Error(
-                        "Unterminated interpolated string: trailing backslash".to_string(),
-                    ));
-                }
-                match self.peek() {
-                    b'n' => {
-                        self.advance();
-                        current_text.push('\n');
-                    }
-                    b't' => {
-                        self.advance();
-                        current_text.push('\t');
-                    }
-                    b'r' => {
-                        self.advance();
-                        current_text.push('\r');
-                    }
-                    b'\\' => {
-                        self.advance();
-                        current_text.push('\\');
-                    }
-                    b'"' => {
-                        self.advance();
-                        current_text.push('"');
-                    }
-                    b'{' => {
-                        self.advance();
-                        current_text.push('{');
-                    } // escaped brace
-                    b'}' => {
-                        self.advance();
-                        current_text.push('}');
-                    } // escaped brace
-                    b'0' => {
-                        self.advance();
-                        current_text.push('\0');
-                    }
-                    b'u' => {
-                        self.advance();
-                        match self.parse_unicode_escape() {
-                            Ok(c) => current_text.push(c),
-                            Err(msg) => return self.make_spanned(Token::Error(msg)),
-                        }
-                    }
-                    _ => {
-                        let c = self.consume_codepoint();
-                        return self
-                            .make_spanned(Token::Error(format!("Unknown escape sequence: \\{c}")));
-                    }
-                }
+                current_text.push(self.string_escape()?);
             } else {
                 current_text.push(self.consume_codepoint());
             }
         }
 
-        if self.is_at_end() {
-            return self.make_spanned(Token::Error("Unterminated interpolated string".to_string()));
-        }
-
-        self.advance(); // closing quote
         if !current_text.is_empty() {
             parts.push(InterpolationPart::Text(current_text));
         }
-
-        self.make_spanned(Token::InterpolatedStringLiteral(parts))
+        Ok(parts)
     }
 
     /// Raw-identifier escape `r#NAME` (design.md § Raw Identifiers). On entry
@@ -1595,18 +1698,10 @@ impl<'a> Lexer<'a> {
             "typeof" => Token::ReservedFuture("typeof"),
             "virtual" => Token::ReservedFuture("virtual"),
             // Regular identifier
-            _ => {
-                if is_reserved_fragment_specifier_namespace(text) {
-                    Token::Error(format!(
-                        "'{text}' is a reserved identifier name; this naming convention is reserved for future edition-versionable syntax categories in macros / comptime fragment specifiers — use 'r#{text}' if you need this exact identifier today, or rename to a non-year-suffixed form"
-                    ))
-                } else {
-                    Token::Identifier {
-                        name: text.to_string(),
-                        raw: false,
-                    }
-                }
-            }
+            _ => Token::Identifier {
+                name: text.to_string(),
+                raw: false,
+            },
         };
         self.make_spanned(token)
     }
@@ -1834,6 +1929,15 @@ impl<'a> Lexer<'a> {
     }
 }
 
+/// Where a `"""` body ends (the offset of the newline before the closing
+/// line, which is not part of the value), how many bytes of indentation each
+/// line drops, and the offset just past the closing quotes.
+struct TripleLayout {
+    body_end: usize,
+    indent: usize,
+    close_end: usize,
+}
+
 fn is_alpha(c: u8) -> bool {
     c.is_ascii_alphabetic() || c == b'_'
 }
@@ -1867,25 +1971,6 @@ fn utf8_byte_len(lead: u8) -> Option<usize> {
     } else {
         None
     }
-}
-
-// ── Reserved fragment-specifier identifier namespace ──────────────
-
-/// Per design.md § Reserved Fragment-Specifier Identifier Namespace (v60 item 62).
-/// Matches `expr_<NNNN>` where `NNNN` is a 4-digit year in `2020..=2099`.
-/// Reservation is checked only on the `identifier()` path; `r#expr_2026`
-/// flows through `raw_identifier()`, which bypasses this check structurally.
-fn is_reserved_fragment_specifier_namespace(name: &str) -> bool {
-    let Some(rest) = name.strip_prefix("expr_") else {
-        return false;
-    };
-    if rest.len() != 4 || !rest.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
-    }
-    let Ok(year) = rest.parse::<u32>() else {
-        return false;
-    };
-    (2020..=2099).contains(&year)
 }
 
 // ── Identifier case-class ─────────────────────────────────────────

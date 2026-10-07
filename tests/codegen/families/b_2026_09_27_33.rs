@@ -42,20 +42,20 @@ fn c12() { let s = "l".to_string() + "-heap-string-long-enough"; let f = || take
 fn c13() { let w = mkw("m"); let f = || takew(w); println(f"c13 {f()}"); println(f"c13 {takew(w)}"); }
 fn c14() { let w = mkw("n"); let f = || { let w = mkw("nn"); takew(w) }; println(f"c14 {f()} {w.s}"); }
 fn main() {
-    c1()
-    c2()
-    c3()
-    c4()
-    c5()
-    c6()
-    c7()
-    c8()
-    c9()
-    c10()
-    c11()
-    c12()
-    c13()
-    c14()
+    c1();
+    c2();
+    c3();
+    c4();
+    c5();
+    c6();
+    c7();
+    c8();
+    c9();
+    c10();
+    c11();
+    c12();
+    c13();
+    c14();
     println("end")
 }"#;
     let want = "c1 25\nc2 26\nc2 0\nc3 27\nc4 25 25\nc5 25 25\nc6 25\nc7 125\nc8 25\nc8 26\nc9 25\nc10 never called\nc11 25\nc12 25\nc13 25\nc13 25\nc14 26 n-heap-string-long-enough\nend\n";
@@ -102,20 +102,20 @@ fn d12() { let h = mkc("l"); let f = || keepc(h); println(f"d12 {f()}"); println
 fn d13() { let h = mkh("m"); let f = || h; let r = f(); println(f"d13 {keep(r)}"); }
 fn d14() { let h = mkh("n"); let f = own || { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"d14 {f()}"); }
 fn main() {
-    d1()
-    d2()
-    d3()
-    d4()
-    d5()
-    d6()
-    d7()
-    d8()
-    d9()
-    d10()
-    d11()
-    d12()
-    d13()
-    d14()
+    d1();
+    d2();
+    d3();
+    d4();
+    d5();
+    d6();
+    d7();
+    d8();
+    d9();
+    d10();
+    d11();
+    d12();
+    d13();
+    d14();
     println("end")
 }"#;
     let want = "d1 25\nd2 26 26\nd3 27\nd4 25 25\nd5 25\nd6 25 25\nd7 25\nd8 25\nd9 i-heap-string-long-enough\nd10 25\nd11 26\nd11 0\nd12 25\nd12 25\nd13 25\nd14 25\nend\n";

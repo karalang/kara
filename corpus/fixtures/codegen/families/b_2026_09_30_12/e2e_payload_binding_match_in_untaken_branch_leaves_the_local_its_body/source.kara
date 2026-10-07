@@ -23,8 +23,8 @@ fn a8(c: bool) -> i64 {
   return 0
 }
 fn main() {
-  println(f"r {a5(false)}"); println(f"r {a5(true)}")
-  println(f"r {a6(false)}"); println(f"r {a6(true)}")
-  println(f"r {a7(false)}"); println(f"r {a7(true)}")
+  println(f"r {a5(false)}"); println(f"r {a5(true)}");
+  println(f"r {a6(false)}"); println(f"r {a6(true)}");
+  println(f"r {a7(false)}"); println(f"r {a7(true)}");
   println(f"r {a8(false)}"); println(f"r {a8(true)}")
 }

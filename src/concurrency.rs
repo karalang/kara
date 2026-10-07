@@ -988,7 +988,6 @@ fn expr_is_binding_free(expr: &Expr) -> bool {
         | ExprKind::ByteLit(..)
         | ExprKind::ByteStringLit(..)
         | ExprKind::StringLit(..)
-        | ExprKind::MultiStringLit(..)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(..) => true,
         ExprKind::Binary { left, right, .. } => {

@@ -1063,7 +1063,6 @@ fn collect_mut_arg_roots_expr(expr: &Expr, out: &mut HashSet<String>) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::SelfValue
         | ExprKind::SelfType
@@ -1346,7 +1345,6 @@ fn collect_par_in_expr(expr: &Expr, out: &mut Vec<(Block, Span)>) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Continue { .. }
@@ -1920,7 +1918,6 @@ impl<'a> ModBindingSynthWalker<'a> {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Continue { .. }

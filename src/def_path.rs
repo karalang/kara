@@ -210,8 +210,7 @@ pub fn collect_item_def_paths(program: &Program) -> HashMap<String, DefPath> {
             // resolvable identifier; the synthesized opaque function
             // (slice 3) carries its own DefPath via the lowered
             // Item::Function.
-            Item::UseDecl(_)
-            | Item::Import(_)
+            Item::Import(_)
             | Item::ExternBlock(_)
             | Item::AliasDecl(_)
             | Item::IndependentDecl(_)

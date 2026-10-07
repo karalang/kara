@@ -10,13 +10,13 @@ fn d9(y: R) { let mut v = Vec[mk(5)]; v = Vec[y]; v = Vec[mk(6)]; println(f"in{v
 fn a1(y: R) { let mut v = [mk(7)]; v = [y]; println(f"in{v.len()}") }
 fn g4[T](x: T, y: T) { let mut v: Vec[T] = Vec.new(); v = Vec[y]; println(f"in{v.len()}") }
 fn main() {
-  println("-d2"); d2(mk(10), mk(11)); println("k")
-  println("-d3"); d3(mk(12)); println("k")
-  println("-d4"); d4(mk(13), mk(14)); println("k")
-  println("-d7"); d7(mk(15)); println("k")
-  println("-d8t"); d8(mk(16), true); println("k")
-  println("-d8f"); d8(mk(17), false); println("k")
-  println("-d9"); d9(mk(18)); println("k")
-  println("-a1"); a1(mk(19)); println("k")
+  println("-d2"); d2(mk(10), mk(11)); println("k");
+  println("-d3"); d3(mk(12)); println("k");
+  println("-d4"); d4(mk(13), mk(14)); println("k");
+  println("-d7"); d7(mk(15)); println("k");
+  println("-d8t"); d8(mk(16), true); println("k");
+  println("-d8f"); d8(mk(17), false); println("k");
+  println("-d9"); d9(mk(18)); println("k");
+  println("-a1"); a1(mk(19)); println("k");
   println("-g4"); g4(mk(20), mk(21)); println("k")
 }

@@ -21,15 +21,15 @@ fn f3(x: Option[R], n: i64) { let mut h = x; match n { 1 => { h = Some(mk(9)); }
 fn f4(x: Option[R]) { let mut h = x; h = None; println("f4"); }
 fn f5(x: R, c: bool) { let mut h = x; if c { h = mk(8); } println("f5"); }
 fn main() {
-    let o = Some(mk(1)); f1(o, true); println("_a1")
-    let o = Some(mk(2)); f1(o, false); println("_a2")
-    f1(Some(mk(3)), true); println("_a3")
-    let o: Option[Array[R, 2]] = Some([mk(4), mk(5)]); f2(o, true); println("_a4")
-    let o: Option[Array[R, 2]] = Some([mk(6), mk(7)]); f2(o, false); println("_a5")
-    let o = Some(mk(10)); f3(o, 1); println("_a6")
-    let o = Some(mk(11)); f3(o, 2); println("_a7")
-    let o = Some(mk(12)); f4(o); println("_a8")
-    let a = mk(13); f5(a, true); println("_a9")
+    let o = Some(mk(1)); f1(o, true); println("_a1");
+    let o = Some(mk(2)); f1(o, false); println("_a2");
+    f1(Some(mk(3)), true); println("_a3");
+    let o: Option[Array[R, 2]] = Some([mk(4), mk(5)]); f2(o, true); println("_a4");
+    let o: Option[Array[R, 2]] = Some([mk(6), mk(7)]); f2(o, false); println("_a5");
+    let o = Some(mk(10)); f3(o, 1); println("_a6");
+    let o = Some(mk(11)); f3(o, 2); println("_a7");
+    let o = Some(mk(12)); f4(o); println("_a8");
+    let a = mk(13); f5(a, true); println("_a9");
     println("end")
 }
 "#);

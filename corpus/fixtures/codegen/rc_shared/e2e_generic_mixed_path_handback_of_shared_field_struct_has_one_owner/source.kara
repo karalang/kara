@@ -24,15 +24,15 @@ fn h_passp() { let s = mk(70); let t = passp(s, true); let s2 = mk(71); let t2 =
 fn i_control() { let s = R { id: 80, tag: "a" }; let w = R { id: 81, tag: "b" }; let t = pick(s, true, w); let s2 = R { id: 82, tag: "c" }; let w2 = R { id: 83, tag: "d" }; let t2 = pick(s2, false, w2); let p = P { id: 84 }; let q = P { id: 85 }; let t3 = pick(p, true, q); let r = R { id: 86, tag: "e" }; let v = stc(r, true); println(f"i{t.id} {t2.id} {t3.id} {v.len()}") }
 fn j_mid() { let s = mk(90); let o = mid(s, true); let s2 = mk2(91); let o2 = mid(s2, false); println("j") }
 fn main() {
-    a_pick2()
-    b_pick3()
-    c_disc()
-    d_temp()
-    e_loop()
-    f_stc()
-    g_gcond()
-    h_passp()
-    i_control()
-    j_mid()
+    a_pick2();
+    b_pick3();
+    c_disc();
+    d_temp();
+    e_loop();
+    f_stc();
+    g_gcond();
+    h_passp();
+    i_control();
+    j_mid();
     println("end")
 }

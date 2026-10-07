@@ -26,21 +26,21 @@ fn c14() { let mut g = hh(21, 1); g.n = 2; if let x = g { println(x.n) } }
 fn c15() { for i in 0..2 { let g = hh(22, i); if let x = g { println(x.n) } } }
 fn c16() { let g = hh(23, 1); let x = g else { return }; let y = x; println(y.n) }
 fn main() {
-    c1()
-    c2()
-    c3()
-    c4()
-    c5()
-    c6()
-    c7()
-    c8()
-    c9()
-    c10()
-    c11()
-    c12()
-    c13()
-    c14()
-    c15()
-    c16()
+    c1();
+    c2();
+    c3();
+    c4();
+    c5();
+    c6();
+    c7();
+    c8();
+    c9();
+    c10();
+    c11();
+    c12();
+    c13();
+    c14();
+    c15();
+    c16();
     println("end")
 }

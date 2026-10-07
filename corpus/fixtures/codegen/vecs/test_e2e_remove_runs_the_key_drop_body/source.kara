@@ -8,15 +8,15 @@ fn main() {
     let mut m: Map[K, V] = Map.new();
     m.insert(K { n: 1 }, V { n: 1 });
     m.remove(K { n: 1 });
-    println(f"map len={m.len()}")
+    println(f"map len={m.len()}");
     let mut sm: SortedMap[K, V] = SortedMap.new();
     sm.insert(K { n: 2 }, V { n: 2 });
     sm.remove(K { n: 2 });
-    println(f"smap len={sm.len()}")
+    println(f"smap len={sm.len()}");
     let mut st: Set[K] = Set.new();
     st.insert(K { n: 3 });
     st.remove(K { n: 3 });
-    println(f"set len={st.len()}")
+    println(f"set len={st.len()}");
     let mut ss: SortedSet[K] = SortedSet.new();
     ss.insert(K { n: 4 });
     ss.remove(K { n: 4 });

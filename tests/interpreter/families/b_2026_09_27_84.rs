@@ -30,17 +30,17 @@ fn o3(x: Option[Array[R, 2]]) { let h = x; match h { Some(a) => println(f"o3 {a[
 fn t1(x: Option[(R, R)]) { let h = x; println("t1"); }
 fn t2(x: Option[(R, R)]) { let h = x; let h2 = h; println("t2"); }
 fn main() {
-  e1(EArr.A([mk(1), mk(2)])); println("a")
-  e2(EArr.A([mk(3), mk(4)])); println("b")
-  e3(EArr.A([mk(5), mk(6)])); println("c")
-  e4(EArr.A([mk(7), mk(8)])); println("d")
-  let r5 = e5(EArr.A([mk(9), mk(10)])); println("e")
-  e6(EArr.A([mk(11), mk(12)])); println("f")
-  o1(Some([mk(21), mk(22)])); println("g")
-  o2(Some([mk(23), mk(24)])); println("h")
-  o3(Some([mk(25), mk(26)])); println("i")
-  t1(Some((mk(41), mk(42)))); println("m")
-  t2(Some((mk(43), mk(44)))); println("n")
+  e1(EArr.A([mk(1), mk(2)])); println("a");
+  e2(EArr.A([mk(3), mk(4)])); println("b");
+  e3(EArr.A([mk(5), mk(6)])); println("c");
+  e4(EArr.A([mk(7), mk(8)])); println("d");
+  let r5 = e5(EArr.A([mk(9), mk(10)])); println("e");
+  e6(EArr.A([mk(11), mk(12)])); println("f");
+  o1(Some([mk(21), mk(22)])); println("g");
+  o2(Some([mk(23), mk(24)])); println("h");
+  o3(Some([mk(25), mk(26)])); println("i");
+  t1(Some((mk(41), mk(42)))); println("m");
+  t2(Some((mk(43), mk(44)))); println("n");
   println("end")
 }
 "#);

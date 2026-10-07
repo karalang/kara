@@ -692,7 +692,6 @@ pub(super) fn item_name(item: &crate::ast::Item) -> Option<&str> {
         // mangles to opaque function ids (slice 3), so there is no
         // user-shadowable identifier to surface here.
         Item::ImplBlock(_)
-        | Item::UseDecl(_)
         | Item::Import(_)
         | Item::IndependentDecl(_)
         | Item::ExternBlock(_)
@@ -727,7 +726,6 @@ pub(super) fn item_span(item: &crate::ast::Item) -> &crate::token::Span {
         Item::EffectVerbDecl(v) => &v.span,
         Item::AliasDecl(a) => &a.span,
         Item::ImplBlock(b) => &b.span,
-        Item::UseDecl(u) => &u.span,
         Item::Import(i) => &i.span,
         Item::IndependentDecl(d) => &d.span,
         Item::ExternBlock(b) => &b.span,

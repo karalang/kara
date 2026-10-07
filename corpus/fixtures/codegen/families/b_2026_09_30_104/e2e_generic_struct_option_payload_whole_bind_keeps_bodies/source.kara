@@ -14,7 +14,7 @@ fn d2() -> i64 { let o = Option.Some(G { v: mk(2), n: 2 }); match o { Option.Som
 fn d3() -> i64 { let o = Option.Some(G { v: mk(3), n: 3 }); match o { Option.Some(G { v, n }) => v.id + n, Option.None => 0 } }
 fn d4() -> i64 { let o = Option.Some(G { v: mk(4), n: 4 }); match o { Option.Some(G { n, .. }) => n, Option.None => 0 } }
 fn main() {
-    println(c1()); println(c2()); println(c3()); println(c4()); println(c5())
-    println(d1()); println(d2()); println(d3()); println(d4())
+    println(c1()); println(c2()); println(c3()); println(c4()); println(c5());
+    println(d1()); println(d2()); println(d3()); println(d4());
     println("end")
 }

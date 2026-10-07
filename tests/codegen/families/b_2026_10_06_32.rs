@@ -42,21 +42,21 @@ fn o() { let f = |q: Ho[String]| q; println(f"o{keep(f(mkh("e")))}") }
 fn p() { let f = |q: Ho[String]| { q }; println(f"p{keep(f(mkh("e")))}") }
 fn r() { let h = mkh("m"); let f = || { h }; let z = f(); println(f"r{keep(z)}") }
 fn main() {
-    a()
-    b()
-    c()
-    d()
-    e()
-    f()
-    g()
-    h()
-    k()
-    l()
-    m()
-    n()
-    o()
-    p()
-    r()
+    a();
+    b();
+    c();
+    d();
+    e();
+    f();
+    g();
+    h();
+    k();
+    l();
+    m();
+    n();
+    o();
+    p();
+    r();
     println("end")
 }
 "#;

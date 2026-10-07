@@ -37,9 +37,9 @@ fn a8(c: bool) -> i64 {
   return 0
 }
 fn main() {
-  println(f"r {a5(false)}"); println(f"r {a5(true)}")
-  println(f"r {a6(false)}"); println(f"r {a6(true)}")
-  println(f"r {a7(false)}"); println(f"r {a7(true)}")
+  println(f"r {a5(false)}"); println(f"r {a5(true)}");
+  println(f"r {a6(false)}"); println(f"r {a6(true)}");
+  println(f"r {a7(false)}"); println(f"r {a7(true)}");
   println(f"r {a8(false)}"); println(f"r {a8(true)}")
 }
 "#,
@@ -94,11 +94,11 @@ fn c7(c: bool) -> i64 {
   return 0
 }
 fn main() {
-  println(f"r {c2(false)}"); println(f"r {c2(true)}")
-  println(f"r {c3(false)}"); println(f"r {c3(true)}")
-  println(f"r {c4(false)}"); println(f"r {c4(true)}")
-  println(f"r {c5(false, true)}"); println(f"r {c5(true, false)}"); println(f"r {c5(true, true)}")
-  println(f"r {c6(false)}"); println(f"r {c6(true)}")
+  println(f"r {c2(false)}"); println(f"r {c2(true)}");
+  println(f"r {c3(false)}"); println(f"r {c3(true)}");
+  println(f"r {c4(false)}"); println(f"r {c4(true)}");
+  println(f"r {c5(false, true)}"); println(f"r {c5(true, false)}"); println(f"r {c5(true, true)}");
+  println(f"r {c6(false)}"); println(f"r {c6(true)}");
   println(f"r {c7(false)}"); println(f"r {c7(true)}")
 }
 "#,
@@ -147,8 +147,8 @@ fn r6(c: bool) -> i64 {
   return 0
 }
 fn main() {
-  println(f"r {r4(false)}"); println(f"r {r4(true)}")
-  println(f"r {r5(false)}"); println(f"r {r5(true)}")
+  println(f"r {r4(false)}"); println(f"r {r4(true)}");
+  println(f"r {r5(false)}"); println(f"r {r5(true)}");
   println(f"r {r6(false)}"); println(f"r {r6(true)}")
 }
 "#,
@@ -194,8 +194,8 @@ fn r6(c: bool) -> i64 {
   return 0
 }
 fn main() {
-  println(f"r {r4(false)}"); println(f"r {r4(true)}")
-  println(f"r {r5(false)}"); println(f"r {r5(true)}")
+  println(f"r {r4(false)}"); println(f"r {r4(true)}");
+  println(f"r {r5(false)}"); println(f"r {r5(true)}");
   println(f"r {r6(false)}"); println(f"r {r6(true)}")
 }
 "#,

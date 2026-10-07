@@ -28,7 +28,7 @@ fn b2() -> i64 { let o: Result[G2[R], i64] = Result.Ok(G2 { v: mk(14), r: mk(144
 fn b9() -> i64 { match mkres(9) { Result.Ok(g) => g.r.id, Result.Err(e) => e } }
 fn main() {
     println(a1()); println(a2()); println(a5()); println(a9()); println(a11());
-    println(b1()); println(b2()); println(b9())
+    println(b1()); println(b2()); println(b9());
     println("end")
 }"#;
     let want = "d11\nd1\n1\nd22\nd2\n2\nd55\nd5\n5\nd99\nd9\n99\nd111\nd11\n11\nd133\nd13\n13\nd144\nd14\n14\nd90\nd9\n90\nend\n";
@@ -57,8 +57,8 @@ fn d2() -> i64 { let o = Option.Some(G { v: mk(2), n: 2 }); match o { Option.Som
 fn d3() -> i64 { let o = Option.Some(G { v: mk(3), n: 3 }); match o { Option.Some(G { v, n }) => v.id + n, Option.None => 0 } }
 fn d4() -> i64 { let o = Option.Some(G { v: mk(4), n: 4 }); match o { Option.Some(G { n, .. }) => n, Option.None => 0 } }
 fn main() {
-    println(c1()); println(c2()); println(c3()); println(c4()); println(c5())
-    println(d1()); println(d2()); println(d3()); println(d4())
+    println(c1()); println(c2()); println(c3()); println(c4()); println(c5());
+    println(d1()); println(d2()); println(d3()); println(d4());
     println("end")
 }"#;
     let want = "1\n33\n34\n4\n5\nd1\n1\nd2\n4\nd3\n6\nd4\n4\nend\n";
@@ -82,7 +82,7 @@ fn m4() -> i64 { if let Result.Ok(G3 { w, .. }) = mkres(4) { println(w); w.len()
 fn m5() -> i64 { let o = Option.Some(G3 { v: ms(5), w: ms(55) }); match o { Option.Some(G3 { v, .. }) => { println(v); v.len() }, Option.None => 0 } }
 fn m6() -> i64 { match Option.Some(G3 { v: ms(6), w: ms(66) }) { Option.Some(G3 { w, .. }) => { println(w); w.len() }, Option.None => 0 } }
 fn main() {
-    println(m1()); println(m2()); println(m3()); println(m4()); println(m5()); println(m6())
+    println(m1()); println(m2()); println(m3()); println(m4()); println(m5()); println(m6());
     println("end")
 }"#;
     let want = "a-heap-string-longer-than-sso-1\n31\na-heap-string-longer-than-sso-22\n32\na-heap-string-longer-than-sso-3\n31\na-heap-string-longer-than-sso-40\n32\na-heap-string-longer-than-sso-5\n31\na-heap-string-longer-than-sso-66\n32\nend\n";
@@ -119,8 +119,8 @@ fn t8() -> i64 { let o = Option.Some(G { v: mk(8), n: 8 }); match o { Option.Som
 fn t9() -> i64 { let o = Option.Some(G { v: mk(9), n: 9 }); if let Option.Some(g) = o { take(g) } else { 0 } }
 fn t10() -> i64 { let o = Option.Some(G2 { v: mr(10), r: mr(100) }); match o { Option.Some(g) => { let a = take2(g); a }, Option.None => 0 } }
 fn main() {
-    println(t1()); println(t2()); println(t3()); println(t5()); println(t6())
-    println(t7()); println(t8()); println(t9()); println(t10())
+    println(t1()); println(t2()); println(t3()); println(t5()); println(t6());
+    println(t7()); println(t8()); println(t9()); println(t10());
     println("end")
 }"#;
     let want = "32\nd22\nd2\n24\nd33\nd3\n36\nd5\n10\n37\n38\n8\n40\nd100\nd10\n110\nend\n";

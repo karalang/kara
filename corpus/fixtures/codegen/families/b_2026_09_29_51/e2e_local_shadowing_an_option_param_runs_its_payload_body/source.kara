@@ -6,9 +6,9 @@ fn h6(x: Option[R]) -> i64 { let x = Some(mk(12, f"l")); 1 }
 fn h7(x: Option[R]) -> i64 { let x = Some(mk(13, f"m")); if let Some(r) = x { return r.id } 0 }
 fn h8(x: R) -> i64 { let x = mk(14, f"n"); x.id }
 fn main() {
-    println(f"n{h5(Some(mk(5, f"e")))}")
-    println(f"n{h6(Some(mk(6, f"f")))}")
-    println(f"n{h7(Some(mk(7, f"g")))}")
-    println(f"n{h8(mk(8, f"h"))}")
+    println(f"n{h5(Some(mk(5, f"e")))}");
+    println(f"n{h6(Some(mk(6, f"f")))}");
+    println(f"n{h7(Some(mk(7, f"g")))}");
+    println(f"n{h8(mk(8, f"h"))}");
     println("end")
 }

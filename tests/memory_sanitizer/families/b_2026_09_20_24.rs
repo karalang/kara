@@ -35,23 +35,23 @@ fn mkv() -> Vec[D] { return [mkd(5)] }
 fn mkt(n: i64) -> (D, i64) { return (mkd(n), 7) }
 fn mktt() -> (D, D) { return (mkd(7), mkd(8)) }
 fn main() {
-    println(f"a {afirst([mkd(1)])}")
-    println(f"b {afirst(mka())}")
-    println(f"c {apair([mkd(3), mkd(4)])}")
+    println(f"a {afirst([mkd(1)])}");
+    println(f"b {afirst(mka())}");
+    println(f"c {apair([mkd(3), mkd(4)])}");
     aseven([mkd(9)]);
-    println("d")
-    println(f"e {afwd([mkd(10)])}")
-    println(f"f {vlen([mkd(11), mkd(12)])}")
-    println(f"g {vlen(mkv())}")
-    println(f"h {tsnd(mkt(6))}")
-    println(f"i {tone(mktt())}")
-    println(f"j {qv(([mkd(13)], 7))}")
-    println(f"k {qa(([mkd(14)], 7))}")
-    println(f"l {qd(([mkd(15), mkd(16)], 7))}")
+    println("d");
+    println(f"e {afwd([mkd(10)])}");
+    println(f"f {vlen([mkd(11), mkd(12)])}");
+    println(f"g {vlen(mkv())}");
+    println(f"h {tsnd(mkt(6))}");
+    println(f"i {tone(mktt())}");
+    println(f"j {qv(([mkd(13)], 7))}");
+    println(f"k {qa(([mkd(14)], 7))}");
+    println(f"l {qd(([mkd(15), mkd(16)], 7))}");
     let h = H { k: 0 };
-    println(f"m {h.mlen([mkd(17)])}")
-    println(f"n {H.afirst([mkd(18)])}")
-    println(f"o {glen([mkd(19)])}")
+    println(f"m {h.mlen([mkd(17)])}");
+    println(f"n {H.afirst([mkd(18)])}");
+    println(f"o {glen([mkd(19)])}");
     { let w = tkeep(mkt(22)); println(f"p {w.id}") }
     { let v = vkeep([mkd(20)]); println(f"q {v.len()}") }
     { let x = mkd(21); println(f"r {vlen([x])}") }

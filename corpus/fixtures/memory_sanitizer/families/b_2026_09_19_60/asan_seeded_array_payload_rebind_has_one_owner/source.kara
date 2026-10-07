@@ -12,13 +12,13 @@ fn bare() { let a: Array[R, 2] = mka(50); match Some(a) { Some(v) => { let u = v
 fn okseed() { let a: Array[R, 2] = mka(60); match Ok(a) { Ok(v) => { let u = v; println(f"ok {u[0].id}") }, Err(e) => { println(f"e{e}") } } }
 fn strs() { let a: Array[String, 2] = mks(); match Option.Some(a) { Option.Some(v) => { let u = v; println(f"strs {u[1]}") }, Option.None => {} } }
 fn main() {
-    rebind()
-    untyped()
-    store()
-    iflet()
-    bare()
-    okseed()
-    strs()
+    rebind();
+    untyped();
+    store();
+    iflet();
+    bare();
+    okseed();
+    strs();
     let mut i = 0;
     while i < 2 { let a: Array[R, 2] = mka(70 + i * 2); match Option.Some(a) { Option.Some(v) => { let u = v; println(f"loop {u[0].id}") }, Option.None => {} }; i = i + 1; }
     println("end")

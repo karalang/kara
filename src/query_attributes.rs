@@ -208,7 +208,6 @@ fn walk_item(item: &Item, filter: &AttributeQueryFilter, out: &mut Vec<Attribute
         Item::EffectResource(_)
         | Item::EffectGroup(_)
         | Item::EffectVerbDecl(_)
-        | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
         | Item::IndependentDecl(_) => {}

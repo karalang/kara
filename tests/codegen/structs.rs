@@ -263,10 +263,10 @@ fn a3() { let t = (mk(3), Option.Some(mk(33))); let x = t.0; println(f"  e3 {x.i
 fn a4() { let t = (0, Option.Some(mk(4)));                   println("  e4") }
 
 fn main() {
-    println("scalar-first");  a1(); println("scalar-first end")
-    println("heap-first");    a2(); println("heap-first end")
-    println("masked");        a3(); println("masked end")
-    println("unmasked-peer"); a4(); println("unmasked-peer end")
+    println("scalar-first");  a1(); println("scalar-first end");
+    println("heap-first");    a2(); println("heap-first end");
+    println("masked");        a3(); println("masked end");
+    println("unmasked-peer"); a4(); println("unmasked-peer end");
     println("done")
 }
 "#,
@@ -371,13 +371,13 @@ fn c1() { let h = H  { pe: (mk(6), 0) };            let (r, k) = h.pe;      prin
 fn c2(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
 
 fn main() {
-    println("wild");     w1();                      println("wild end")
-    println("wildidx");  w2();                      println("wildidx end")
-    println("wildopt");  w3();                      println("wildopt end")
-    println("nested");   n1();                      println("nested end")
-    println("owndrop");  d1();                      println("owndrop end")
-    println("plain");    c1();                      println("plain end")
-    println("param");    c2(H { pe: (mk(7), 0) });  println("param end")
+    println("wild");     w1();                      println("wild end");
+    println("wildidx");  w2();                      println("wildidx end");
+    println("wildopt");  w3();                      println("wildopt end");
+    println("nested");   n1();                      println("nested end");
+    println("owndrop");  d1();                      println("owndrop end");
+    println("plain");    c1();                      println("plain end");
+    println("param");    c2(H { pe: (mk(7), 0) });  println("param end");
     println("done")
 }
 "#,
@@ -465,14 +465,14 @@ fn twice(h: HoRes)     { let HoRes { a, b } = h; let c = b; let d = c;
                          match d { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
 
 fn main() {
-  println("rebind");     rebind(HoRes { a: mk(1), b: Result.Ok(mk(101)) })
-  println("rebindu");    rebindu(HoRes { a: mk(2), b: Result.Ok(mk(102)) })
-  println("rebindcall"); rebindcall(HoRes { a: mk(3), b: Result.Ok(mk(103)) })
-  println("orebind");    orebind(HoOpt { a: mk(4), b: Option.Some(mk(104)) })
-  println("prebind");    prebind(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } })
-  println("porebind");   porebind(WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } })
-  println("direct");     direct(HoRes { a: mk(7), b: Result.Ok(mk(107)) })
-  println("twice");      twice(HoRes { a: mk(8), b: Result.Ok(mk(108)) })
+  println("rebind");     rebind(HoRes { a: mk(1), b: Result.Ok(mk(101)) });
+  println("rebindu");    rebindu(HoRes { a: mk(2), b: Result.Ok(mk(102)) });
+  println("rebindcall"); rebindcall(HoRes { a: mk(3), b: Result.Ok(mk(103)) });
+  println("orebind");    orebind(HoOpt { a: mk(4), b: Option.Some(mk(104)) });
+  println("prebind");    prebind(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } });
+  println("porebind");   porebind(WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } });
+  println("direct");     direct(HoRes { a: mk(7), b: Result.Ok(mk(107)) });
+  println("twice");      twice(HoRes { a: mk(8), b: Result.Ok(mk(108)) });
   println("done")
 }
 "#;
@@ -599,15 +599,15 @@ fn cell_nodest(){ let w = WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108))
 fn cell_move()  { let w = WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } }; let h = w.inner; println(f"  rd{h.a.id}") }
 
 fn main() {
-    println("res");    cell_res()
-    println("local");  cell_local()
-    println("opt");    cell_opt()
-    println("pln");    cell_pln()
-    println("str");    cell_str()
-    println("two");    cell_two()
-    println("live");   cell_live()
-    println("nodest"); cell_nodest()
-    println("move");   cell_move()
+    println("res");    cell_res();
+    println("local");  cell_local();
+    println("opt");    cell_opt();
+    println("pln");    cell_pln();
+    println("str");    cell_str();
+    println("two");    cell_two();
+    println("live");   cell_live();
+    println("nodest"); cell_nodest();
+    println("move");   cell_move();
     println("done")
 }
 "#,
@@ -677,12 +677,12 @@ fn f5(h: H)   { let h2 = h; let (r, k) = h2.pe; let m = r; println(f"  b{m.id}")
 fn f6(h: ref H) { println(f"  b{h.pe.0.id}") }
 
 fn main() {
-    println("plain");    f1(H  { pe: (R { id: 1 }, 0) });                println("plain end")
-    println("ownstr");   f2(Hs { pe: (R { id: 2 }, 0), name: "n" });     println("ownstr end")
-    println("twohop");   f3(G  { h: H { pe: (R { id: 3 }, 0) } });       println("twohop end")
-    println("norebind"); f4(H  { pe: (R { id: 4 }, 0) });                println("norebind end")
-    println("rebind");   f5(H  { pe: (R { id: 5 }, 0) });                println("rebind end")
-    println("refparam"); let h6 = H { pe: (R { id: 6 }, 0) }; f6(h6);    println("refparam end")
+    println("plain");    f1(H  { pe: (R { id: 1 }, 0) });                println("plain end");
+    println("ownstr");   f2(Hs { pe: (R { id: 2 }, 0), name: "n" });     println("ownstr end");
+    println("twohop");   f3(G  { h: H { pe: (R { id: 3 }, 0) } });       println("twohop end");
+    println("norebind"); f4(H  { pe: (R { id: 4 }, 0) });                println("norebind end");
+    println("rebind");   f5(H  { pe: (R { id: 5 }, 0) });                println("rebind end");
+    println("refparam"); let h6 = H { pe: (R { id: 6 }, 0) }; f6(h6);    println("refparam end");
     println("done")
 }
 "#,
@@ -774,13 +774,13 @@ fn g6()             { let t = (R { id: 26 }, 0); let t2 = t; let (r, k) = t2; le
 fn g7(h: H)         { let h2 = h; println("  np") }
 
 fn main() {
-    println("norebind"); g1(H { pe: (R { id: 21 }, 0) });                     println("norebind end")
-    println("rebind");   g2(H { pe: (R { id: 22 }, 0) });                     println("rebind end")
-    println("twohop");   g3(H { pe: (R { id: 23 }, 0) });                     println("twohop end")
-    println("tupreb");   g4((R { id: 24 }, 0));                               println("tupreb end")
-    println("method");   let o = Hold { n: 0 }; o.take(H { pe: (R { id: 25 }, 0) }); println("method end")
-    println("local");    g6();                                                println("local end")
-    println("noproj");   g7(H { pe: (R { id: 27 }, 0) });                     println("noproj end")
+    println("norebind"); g1(H { pe: (R { id: 21 }, 0) });                     println("norebind end");
+    println("rebind");   g2(H { pe: (R { id: 22 }, 0) });                     println("rebind end");
+    println("twohop");   g3(H { pe: (R { id: 23 }, 0) });                     println("twohop end");
+    println("tupreb");   g4((R { id: 24 }, 0));                               println("tupreb end");
+    println("method");   let o = Hold { n: 0 }; o.take(H { pe: (R { id: 25 }, 0) }); println("method end");
+    println("local");    g6();                                                println("local end");
+    println("noproj");   g7(H { pe: (R { id: 27 }, 0) });                     println("noproj end");
     println("done")
 }
 "#,
@@ -899,18 +899,18 @@ fn n11() { let g = G4 { g: G { h: H { pe: (mk(34), 0) } } }; let (r, k) = g.g.h.
 fn n12() { let g = G { h: H { pe: (mk(35), 0) } }; println(f"  b{g.h.pe.0.id}/{g.h.pe.0.tag}") }
 
 fn main() {
-    println("local1hop");   n1();                      println("local1hop end")
-    println("norebind");    n2();                      println("norebind end")
-    println("baretuple");   n3();                      println("baretuple end")
-    println("sibling");     n4();                      println("sibling end")
-    println("bothelems");   n5();                      println("bothelems end")
-    println("noDestr");     n6();                      println("noDestr end")
-    println("paramroot");   n7(H { pe: (mk(27), 0) }); println("paramroot end")
-    println("twohop");      n8();                      println("twohop end")
-    println("outersib");    n9();                      println("outersib end")
-    println("midsib");      n10();                     println("midsib end")
-    println("threehop");    n11();                     println("threehop end")
-    println("deepNoDestr"); n12();                     println("deepNoDestr end")
+    println("local1hop");   n1();                      println("local1hop end");
+    println("norebind");    n2();                      println("norebind end");
+    println("baretuple");   n3();                      println("baretuple end");
+    println("sibling");     n4();                      println("sibling end");
+    println("bothelems");   n5();                      println("bothelems end");
+    println("noDestr");     n6();                      println("noDestr end");
+    println("paramroot");   n7(H { pe: (mk(27), 0) }); println("paramroot end");
+    println("twohop");      n8();                      println("twohop end");
+    println("outersib");    n9();                      println("outersib end");
+    println("midsib");      n10();                     println("midsib end");
+    println("threehop");    n11();                     println("threehop end");
+    println("deepNoDestr"); n12();                     println("deepNoDestr end");
     println("done")
 }
 "#,
@@ -1085,14 +1085,14 @@ fn u7(h: H)  { let x = h.pe; println(f"  b{x.0.id}/{x.0.tag}") }
 fn u8()      { let h = H { pe: (mk(48), 0) }; let x = h.pe; let y = x; println(f"  b{y.0.id}/{y.0.tag}") }
 
 fn main() {
-    println("bound");     u1();                      println("bound end")
-    println("project");   u2();                      println("project end")
-    println("destr");     u3();                      println("destr end")
-    println("deep");      u4();                      println("deep end")
-    println("literal");   u5();                      println("literal end")
-    println("nobind");    u6();                      println("nobind end")
-    println("paramroot"); u7(H { pe: (mk(47), 0) }); println("paramroot end")
-    println("rebound");   u8();                      println("rebound end")
+    println("bound");     u1();                      println("bound end");
+    println("project");   u2();                      println("project end");
+    println("destr");     u3();                      println("destr end");
+    println("deep");      u4();                      println("deep end");
+    println("literal");   u5();                      println("literal end");
+    println("nobind");    u6();                      println("nobind end");
+    println("paramroot"); u7(H { pe: (mk(47), 0) }); println("paramroot end");
+    println("rebound");   u8();                      println("rebound end");
     println("done")
 }
 "#,
@@ -1195,12 +1195,12 @@ fn q6(t: (Z, i64))        { println(f"q6 {t.0.tag}") }
 fn q7() { let t = (Z { tag: "z7" }, 0); println(f"q7 {t.0.tag}") }
 
 fn main() {
-    q1(((R { id: 1 }, 0), 0))
-    q2((R { id: 2 }, 0))
-    q3(((R { id: 3 }, 0), 0))
-    q4((R { id: 4 }, 0))
-    q5()
-    q6((Z { tag: "z6" }, 0))
+    q1(((R { id: 1 }, 0), 0));
+    q2((R { id: 2 }, 0));
+    q3(((R { id: 3 }, 0), 0));
+    q4((R { id: 4 }, 0));
+    q5();
+    q6((Z { tag: "z6" }, 0));
     q7()
 }
 "#,
@@ -5123,7 +5123,7 @@ fn test_labeled_block_break_from_nested_block_e2e() {
     let out = run_program(
         r#"
 fn main() {
-    let x: i64 = lbl: { inner: { break lbl 7; 0 } };
+    let x: i64 = 'lbl: { 'inner: { break 'lbl 7; 0 } };
     println(x);
 }
 "#,
@@ -5146,10 +5146,10 @@ fn test_labeled_loop_nested_break_outer_e2e() {
         r#"
 fn main() {
     let mut count = 0;
-    outer: while true {
-        inner: while true {
+    'outer: while true {
+        'inner: while true {
             count = count + 1;
-            break outer ();
+            break 'outer ();
         }
         // Without the latent-bug fix, the outer-loop body would
         // re-enter `inner` here every iteration. With the fix, the

@@ -55,8 +55,8 @@ fn main() {
     match takes(Some(Some(hs(4)))) { Some(v) => println(v), None => println("none") }
     match taker(Ok(Some(hs(5)))) { Some(v) => println(v), None => println("none") }
     match take3(Some(Some(Some(hs(6))))) { Some(Some(v)) => println(v), _ => println("none") }
-    println(peeks(Some(Some(hs(7)))))
-    println(readr(Some(Some(mk(8)))))
+    println(peeks(Some(Some(hs(7)))));
+    println(readr(Some(Some(mk(8)))));
     let e: Option[Option[String]] = Some(Some(hs(9)));
     let f = match e { Some(inner) => inner, None => None };
     match f { Some(v) => println(v), None => println("none") }

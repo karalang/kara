@@ -543,8 +543,11 @@ fn test_char_literal_in_binding() {
 
 #[test]
 fn test_char_literal_unterminated() {
-    let tokens = tokens_only("'a");
+    // `'a` with no closing quote is a label (`'outer`), so an unterminated
+    // char literal needs a non-letter body.
+    let tokens = tokens_only("'1");
     assert!(matches!(tokens[0], Token::Error(_)));
+    assert_eq!(tokens_only("'a")[0], Token::Label("a".to_string()));
 }
 
 #[test]
@@ -854,15 +857,112 @@ fn test_interpolated_string_escaped_quote_is_clear_error() {
 
 // ── Multi-line strings ───────────────────────────────────────────
 
+// `"""` follows Swift's rules (design review 2026-10-07 § 5): the opening
+// quotes end their line, the closing `"""` sits on its own line, its
+// indentation is removed from every line, escapes are processed, and the
+// newline before the closing line is not part of the value.
+
+fn one_string(source: &str) -> String {
+    match &tokens_only(source)[0] {
+        Token::StringLiteral(s) => s.clone(),
+        other => panic!("expected a string literal for {source:?}, got {other:?}"),
+    }
+}
+
+fn one_error(source: &str) -> String {
+    match &tokens_only(source)[0] {
+        Token::Error(m) => m.clone(),
+        other => panic!("expected a lex error for {source:?}, got {other:?}"),
+    }
+}
+
 #[test]
-fn test_multi_line_string() {
-    let source = "let s = \"\"\"hello\nworld\"\"\"";
-    let tokens = tokens_only(source);
-    // Find the MultiStringLiteral token (might be at index 2 or 3 depending on parsing)
-    let has_multi = tokens
-        .iter()
-        .any(|t| matches!(t, Token::MultiStringLiteral(_)));
-    assert!(has_multi, "Expected MultiStringLiteral, got: {:?}", tokens);
+fn test_triple_string_drops_the_closing_lines_indent() {
+    let src = "\"\"\"\n    hello\n      world\n    \"\"\"";
+    assert_eq!(one_string(src), "hello\n  world");
+}
+
+#[test]
+fn test_triple_string_processes_escapes() {
+    let src = "\"\"\"\n  a\\tb \\\"q\\\" \"unescaped\"\n  \"\"\"";
+    assert_eq!(one_string(src), "a\tb \"q\" \"unescaped\"");
+}
+
+#[test]
+fn test_triple_string_keeps_blank_lines_and_extra_indent() {
+    let src = "\"\"\"\n  a\n\n    b\n  \"\"\"";
+    assert_eq!(one_string(src), "a\n\n  b");
+    // Closing quotes at column 0 remove nothing.
+    assert_eq!(one_string("\"\"\"\n x\n\"\"\""), " x");
+    // An empty block.
+    assert_eq!(one_string("\"\"\"\n\"\"\""), "");
+}
+
+#[test]
+fn test_triple_string_must_start_on_the_next_line() {
+    let msg = one_error("\"\"\"hello\n\"\"\"");
+    assert!(msg.contains("starts on the line after"), "{msg}");
+}
+
+#[test]
+fn test_triple_string_line_indented_less_than_the_closing_quotes() {
+    let msg = one_error("\"\"\"\n    a\n  b\n    \"\"\"");
+    assert!(msg.contains("indented less"), "{msg}");
+}
+
+#[test]
+fn test_triple_string_unterminated() {
+    let msg = one_error("\"\"\"\n  a\n");
+    assert!(msg.contains("Unterminated"), "{msg}");
+}
+
+#[test]
+fn test_interpolated_triple_string() {
+    use karac::token::InterpolationPart;
+    let tokens = tokens_only("f\"\"\"\n    x = {x}\n    {{literal}}\n    \"\"\"");
+    let Token::InterpolatedStringLiteral(parts) = &tokens[0] else {
+        panic!("expected an f-string, got {:?}", tokens[0]);
+    };
+    assert!(matches!(&parts[0], InterpolationPart::Text(t) if t == "x = "));
+    assert!(matches!(&parts[1], InterpolationPart::Expr { raw, .. } if raw == "x"));
+    assert!(matches!(&parts[2], InterpolationPart::Text(t) if t == "\n{literal}"));
+}
+
+#[test]
+fn test_raw_strings_take_the_body_verbatim() {
+    assert_eq!(one_string(r#"r"a\nb""#), "a\\nb");
+    assert_eq!(one_string(r##"r#"say "hi""#"##), "say \"hi\"");
+    assert_eq!(one_string("r##\"a\"#b\"##"), "a\"#b");
+    assert_eq!(one_string("r\"two\nlines\""), "two\nlines");
+}
+
+#[test]
+fn test_fstring_doubled_braces_are_literal() {
+    use karac::token::InterpolationPart;
+    let tokens = tokens_only(r#"f"{{a}} {b}""#);
+    let Token::InterpolatedStringLiteral(parts) = &tokens[0] else {
+        panic!("expected an f-string, got {:?}", tokens[0]);
+    };
+    assert!(matches!(&parts[0], InterpolationPart::Text(t) if t == "{a} "));
+    assert!(matches!(&parts[1], InterpolationPart::Expr { raw, .. } if raw == "b"));
+}
+
+#[test]
+fn test_fstring_lone_close_brace_and_backslash_brace_are_errors() {
+    let msg = one_error(r#"f"a } b""#);
+    assert!(msg.contains("`}}`"), "{msg}");
+    let msg = one_error(r#"f"a \{ b""#);
+    assert!(msg.contains("`{{`"), "{msg}");
+}
+
+/// The single-letter string prefixes and `expr_NNNN` are no longer reserved.
+#[test]
+fn test_freed_prefixes_and_fragment_names_are_identifiers() {
+    let tokens = tokens_only(r#"x"s""#);
+    assert!(matches!(&tokens[0], Token::Identifier { name, .. } if name == "x"));
+    assert!(matches!(&tokens[1], Token::StringLiteral(s) if s == "s"));
+    let tokens = tokens_only("expr_2026");
+    assert!(matches!(&tokens[0], Token::Identifier { name, .. } if name == "expr_2026"));
 }
 
 // ── Defer/errdefer keywords ──────────────────────────────────────
@@ -1410,53 +1510,6 @@ fn test_v60_reserved_hash_guarded_string() {
 }
 
 #[test]
-fn test_v60_reserved_string_prefix_diagnostic() {
-    // Per design.md § Reserved Single-Letter String-Prefix Syntax (v60 item 10).
-    // Every ASCII single-letter prefix immediately followed by `"` is reserved
-    // at v1, except the RECOGNIZED ones — `f"..."` (interpolated strings),
-    // `c"..."` (C-strings) and, since B-2026-08-20-37, `b"..."` (byte
-    // strings). The lexer emits a focused reserved-prefix diagnostic for the
-    // rest and consumes the string body for clean error recovery.
-    //
-    // `b` was in this list because § Reserved Single-Letter String-Prefix
-    // Syntax listed `b"..."` as reserved with type `Slice[u8]`, while
-    // § Byte and Byte-String Literals specified it as shipped with type
-    // `Array[u8, N]` and "Not `Slice[u8]`". The owner settled that
-    // contradiction in favour of the byte-literal section, so `b` now lexes
-    // and is covered by `byte_string_literal_resolves_escapes_and_length`.
-    for prefix in ['a', 'g', 'r', 'x', 'z', '_'] {
-        let source = format!(r#"{prefix}"hello""#);
-        let tokens = tokens_only(&source);
-        assert_eq!(
-            tokens,
-            vec![
-                Token::Error(format!(
-                    "string prefix '{prefix}\"...\"' is reserved for future use; only `f\"...\"` and `c\"...\"` are recognized in v1"
-                )),
-                Token::EOF,
-            ],
-            "expected reserved-prefix error for '{prefix}\"...\"'",
-        );
-    }
-    // `f"..."` is one recognized prefix — it must continue to lex as
-    // an interpolated string, not as a reserved-prefix error.
-    let tokens = tokens_only(r#"f"hello""#);
-    assert!(
-        matches!(tokens[0], Token::InterpolatedStringLiteral(_)),
-        "expected f\"...\" to lex as InterpolatedStringLiteral, got {:?}",
-        tokens[0]
-    );
-    // `c"..."` is the other recognized prefix — it lexes to
-    // Token::CStringLiteral. Detailed coverage below.
-    let tokens = tokens_only(r#"c"hello""#);
-    assert!(
-        matches!(tokens[0], Token::CStringLiteral { .. }),
-        "expected c\"...\" to lex as CStringLiteral, got {:?}",
-        tokens[0]
-    );
-}
-
-#[test]
 fn test_c_string_literal_ascii_body() {
     let tokens = tokens_only(r#"c"hello""#);
     match &tokens[0] {
@@ -1853,10 +1906,9 @@ fn test_raw_double_hash_falls_through_to_reserved_hash_string() {
 
 #[test]
 fn test_raw_identifier_does_not_intercept_r_string_prefix() {
-    // `r"..."` is the reserved-string-prefix path — must not enter the raw
-    // identifier path.
+    // `r"..."` is a raw string — it must not enter the raw identifier path.
     let tokens = tokens_only(r#"r"hello""#);
-    assert!(matches!(&tokens[0], Token::Error(msg) if msg.contains("reserved")));
+    assert_eq!(tokens[0], Token::StringLiteral("hello".to_string()));
 }
 
 // ── Non-ASCII identifier diagnostics (design.md § Identifiers — Unicode) ────
@@ -1972,12 +2024,8 @@ fn test_char_literal_emoji() {
 
 #[test]
 fn test_multi_string_preserves_non_ascii() {
-    // Triple-quoted multi-line strings go through a separate body path.
-    let tokens = tokens_only(r#""""hello αβγ""""#);
-    let Token::MultiStringLiteral(s) = &tokens[0] else {
-        panic!("expected MultiStringLiteral, got {:?}", tokens[0]);
-    };
-    assert_eq!(s, "hello αβγ");
+    // Triple-quoted strings go through a separate body path.
+    assert_eq!(one_string("\"\"\"\n  hello αβγ\n  \"\"\""), "hello αβγ");
 }
 
 #[test]
@@ -2011,136 +2059,6 @@ fn test_non_ascii_in_line_comment_skipped() {
     assert_eq!(tokens[2], Token::Equal);
     assert_eq!(tokens[3], Token::Integer(1, None));
 }
-
-// ── Reserved fragment-specifier identifier namespace ──────────────
-// Per design.md § Reserved Fragment-Specifier Identifier Namespace
-// (v60 item 62). `expr_<NNNN>` for NNNN in 2020..=2099 is reserved at v1.
-
-fn reserved_fragment_specifier_error(name: &str) -> Token {
-    Token::Error(format!(
-        "'{name}' is a reserved identifier name; this naming convention is reserved for future edition-versionable syntax categories in macros / comptime fragment specifiers — use 'r#{name}' if you need this exact identifier today, or rename to a non-year-suffixed form"
-    ))
-}
-
-#[test]
-fn test_reserved_fragment_specifier_rejected_in_let() {
-    // Boundary years and a mid-range year all reject.
-    for year in ["2020", "2026", "2099"] {
-        let source = format!("let expr_{year} = 1;");
-        let tokens = tokens_only(&source);
-        let name = format!("expr_{year}");
-        assert_eq!(tokens[0], Token::Let);
-        assert_eq!(
-            tokens[1],
-            reserved_fragment_specifier_error(&name),
-            "expected reservation error for '{name}'",
-        );
-        assert_eq!(tokens[2], Token::Equal);
-        assert_eq!(tokens[3], Token::Integer(1, None));
-        assert_eq!(tokens[4], Token::Semicolon);
-    }
-}
-
-#[test]
-fn test_reserved_fragment_specifier_rejected_at_fn_name() {
-    // The reservation fires at the identifier-token boundary, regardless of
-    // syntactic position. `fn expr_2026() {}` rejects on the function name.
-    let tokens = tokens_only("fn expr_2026() { }");
-    assert_eq!(tokens[0], Token::Fn);
-    assert_eq!(tokens[1], reserved_fragment_specifier_error("expr_2026"),);
-}
-
-#[test]
-fn test_reserved_fragment_specifier_rejected_at_struct_field() {
-    // Struct field names lex as plain identifiers, so the reservation fires
-    // there too.
-    let tokens = tokens_only("struct S { expr_2030: i64 }");
-    assert_eq!(tokens[0], Token::Struct);
-    assert_eq!(tokens[1], ident("S"));
-    assert_eq!(tokens[2], Token::LeftBrace);
-    assert_eq!(tokens[3], reserved_fragment_specifier_error("expr_2030"),);
-}
-
-#[test]
-fn test_reserved_fragment_specifier_diagnostic_contains_both_fix_its() {
-    // Diagnostic shape (slice 5): help line offers the raw-escape fix-it
-    // and the rename fix-it, both inline in the message.
-    let tokens = tokens_only("let expr_2026 = 1;");
-    let Token::Error(msg) = &tokens[1] else {
-        panic!("expected reservation error, got {:?}", tokens[1]);
-    };
-    assert!(
-        msg.contains("'r#expr_2026'"),
-        "missing raw-escape fix-it: {msg}"
-    );
-    assert!(
-        msg.contains("rename to a non-year-suffixed form"),
-        "missing rename fix-it: {msg}",
-    );
-}
-
-#[test]
-fn test_reserved_fragment_specifier_negative_cases_accept() {
-    // Each of these must lex as an ordinary identifier — covering every
-    // exit condition of the namespace check.
-    let cases = [
-        // No `expr_` prefix.
-        ("x", "x"),
-        // Different prefix.
-        ("expression", "expression"),
-        // `expr_` prefix but non-year suffix.
-        ("expr_v2", "expr_v2"),
-        // Different prefix containing a year.
-        ("version_2026", "version_2026"),
-        // `expr_` prefix with year out of reserved range (low).
-        ("expr_1999", "expr_1999"),
-        // `expr_` prefix with year out of reserved range (high).
-        ("expr_3000", "expr_3000"),
-        // 4 digits but not a year-shaped value at boundary just below 2020.
-        ("expr_2019", "expr_2019"),
-        // 4 digits just above 2099.
-        ("expr_2100", "expr_2100"),
-        // Wrong digit count — 3 digits.
-        ("expr_202", "expr_202"),
-        // Wrong digit count — 5 digits.
-        ("expr_20260", "expr_20260"),
-    ];
-    for (source, expected_name) in cases {
-        let tokens = tokens_only(&format!("let {source} = 1;"));
-        assert_eq!(tokens[0], Token::Let);
-        assert_eq!(
-            tokens[1],
-            ident(expected_name),
-            "expected '{source}' to lex as plain identifier",
-        );
-        assert_eq!(tokens[2], Token::Equal);
-    }
-}
-
-#[test]
-fn test_reserved_fragment_specifier_raw_escape_exempted() {
-    // `r#expr_2026` lexes as a raw-escaped identifier with name `expr_2026`
-    // and `raw=true`. The reservation check lives in `identifier()`; the raw
-    // path is structurally separate.
-    let tokens = tokens_only("let r#expr_2026 = 1;");
-    assert_eq!(tokens[0], Token::Let);
-    assert_eq!(tokens[1], raw_ident("expr_2026"));
-    assert_eq!(tokens[2], Token::Equal);
-    assert_eq!(tokens[3], Token::Integer(1, None));
-    assert_eq!(tokens[4], Token::Semicolon);
-}
-
-#[test]
-fn test_reserved_fragment_specifier_fn_with_non_year_suffix_accepts() {
-    // `fn expr_v2()` is the user-facing rename fix-it shape; it must lex
-    // through as a plain identifier with no diagnostic.
-    let tokens = tokens_only("fn expr_v2() { }");
-    assert_eq!(tokens[0], Token::Fn);
-    assert_eq!(tokens[1], ident("expr_v2"));
-    assert_eq!(tokens[2], Token::LeftParen);
-}
-
-// ── Shape-literal grammar (Phase 11 Q2): `...` variadic-splice token ──
 
 #[test]
 fn test_dotdotdot_lexes_as_single_token() {

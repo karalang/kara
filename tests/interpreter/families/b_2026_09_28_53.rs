@@ -35,17 +35,17 @@ fn show(t: String, v: Option[Option[S]]) {
 }
 
 fn main() {
-    let a = c1(mk(1)); println("-1"); show("c1", a); println("-1b")
-    let b = c2(mk(2)); println("-2"); show("c2", b); println("-2b")
-    let c = c3(mk(3)); println("-3")
+    let a = c1(mk(1)); println("-1"); show("c1", a); println("-1b");
+    let b = c2(mk(2)); println("-2"); show("c2", b); println("-2b");
+    let c = c3(mk(3)); println("-3");
     match c { Ok(Some(s)) => println(f"c3:{s.r.id}"), _ => println("c3:x") }
-    println("-3b")
-    let d = c4(mk(4), true); println("-4"); show("c4t", d); println("-4b")
-    let e = c4(mk(5), false); println("-5"); show("c4f", e); println("-5b")
-    let f = c5(mk(6), true); println("-6"); show("c5t", f); println("-6b")
-    let g = c5(mk(7), false); println("-7"); show("c5f", g); println("-7b")
-    let h = c6(mk(8)); println("-8"); show("c6", h); println("-8b")
-    let i = c7(mk(9)); println("-9")
+    println("-3b");
+    let d = c4(mk(4), true); println("-4"); show("c4t", d); println("-4b");
+    let e = c4(mk(5), false); println("-5"); show("c4f", e); println("-5b");
+    let f = c5(mk(6), true); println("-6"); show("c5t", f); println("-6b");
+    let g = c5(mk(7), false); println("-7"); show("c5f", g); println("-7b");
+    let h = c6(mk(8)); println("-8"); show("c6", h); println("-8b");
+    let i = c7(mk(9)); println("-9");
     match i { Some(s) => println(f"c7:{s.r.id}"), None => println("c7:none") }
     println("end")
 }"#);

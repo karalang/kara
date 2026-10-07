@@ -193,7 +193,6 @@ impl<'a> super::Interpreter<'a> {
                 Value::array_of(bytes.iter().map(|b| Value::Int(i128::from(*b))).collect())
             }
             ExprKind::StringLit(s) => Value::String(s.clone()),
-            ExprKind::MultiStringLit(s) => Value::String(s.clone()),
             // `c"..."` — bytes exclude the trailing NUL (a codegen-level
             // artifact; design.md § C-String Literals pins `len()` to the
             // source byte count). See `Value::CStr`'s doc for the

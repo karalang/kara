@@ -39,25 +39,25 @@ fn s() { let x = H { n: 1 }; let p = x.m(P { id: 18 }, true); println(f"s{p.is_s
 fn t() { let p = H.a(P { id: 19 }, true); println(f"t{p.is_some()}") }
 fn u() { let mut i = 0; while i < 3 { let s = mk2(20 + i); let p = sq(s, i == 1); println(f"u{p.is_some()}"); i = i + 1; } }
 fn main() {
-    a(); println("a.")
-    b(); println("b.")
-    c(); println("c.")
-    d(); println("d.")
-    e(); println("e.")
-    f(); println("f.")
-    g(); println("g.")
-    h(); println("h.")
-    i(); println("i.")
-    j(); println("j.")
-    k(); println("k.")
-    l(); println("l.")
-    m(); println("m.")
-    n(); println("n.")
-    o(); println("o.")
-    q(); println("q.")
-    r(); println("r.")
-    s(); println("s.")
-    t(); println("t.")
-    u(); println("u.")
+    a(); println("a.");
+    b(); println("b.");
+    c(); println("c.");
+    d(); println("d.");
+    e(); println("e.");
+    f(); println("f.");
+    g(); println("g.");
+    h(); println("h.");
+    i(); println("i.");
+    j(); println("j.");
+    k(); println("k.");
+    l(); println("l.");
+    m(); println("m.");
+    n(); println("n.");
+    o(); println("o.");
+    q(); println("q.");
+    r(); println("r.");
+    s(); println("s.");
+    t(); println("t.");
+    u(); println("u.");
     println("end")
 }

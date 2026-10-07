@@ -5,8 +5,8 @@ impl Display for Sh {
 }
 fn main() {
     let a = Sh { v: 1 };
-    println(f"top={a}")
-    println(a.to_string())
+    println(f"top={a}");
+    println(a.to_string());
     let v = [Sh { v: 2 }];
     println(f"vec={v}")
 }

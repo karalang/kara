@@ -195,21 +195,23 @@ const CORPUS: &[&str] = &[
     // Labeled loops + labeled break/continue (slice 2b). Note the seed's span
     // quirk: a labeled `loop` span starts at the LABEL, while a labeled
     // `while`/`for` span starts at the KEYWORD (the label is excluded).
-    "outer: loop { break outer }",
-    "outer: loop { break outer 42 }",
-    "outer: while a { continue outer }",
-    "outer: for x in xs { break outer }",
-    "loop { outer: loop { break outer } }",
+    "'outer: loop { break 'outer }",
+    "'outer: loop { break 'outer 42 }",
+    "'outer: while a { continue 'outer }",
+    "'outer: for x in xs { break 'outer }",
+    "loop { 'outer: loop { break 'outer } }",
     // Adversarial: a NON-label value identifier inside a labeled loop must stay
     // a value (`break x`), exercising the non-consuming known-label peek.
-    "outer: loop { break x }",
-    "outer: loop { break a + b }",
-    "row: while a { col: while b { break row } }",
+    "'outer: loop { break x }",
+    "'outer: loop { break a + b }",
+    "'row: while a { 'col: while b { break 'row } }",
     // match + patterns (slice 3b core) — wildcard, binding, literals, tuple,
     // single-segment tuple-variant, or-patterns, guards, block/non-block arms.
     "match x { 1 => a }",
     "match x { _ => a }",
     "match x { y => y }",
+    // An assignment arm body is a block holding the assignment.
+    "match x { 1 => y = 2, _ => y = 3 }",
     "match x { 1 => a, 2 => b }",
     "match x { 1 => a, _ => b }",
     "match x { 0 => a, n => n }",
@@ -626,7 +628,6 @@ fn render_rust_expr(e: &Expr) -> String {
         ExprKind::CharLit(c) => format!("(char {}{sp})", escape_for_render(&c.to_string())),
         ExprKind::ByteLit(b) => format!("(byte {b}{sp})"),
         ExprKind::StringLit(s) => format!("(str {}{sp})", escape_for_render(s)),
-        ExprKind::MultiStringLit(s) => format!("(mstr {}{sp})", escape_for_render(s)),
         ExprKind::Identifier(name) => format!("(ident {name}{sp})"),
         ExprKind::Path {
             segments,

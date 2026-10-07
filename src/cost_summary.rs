@@ -488,7 +488,6 @@ fn walk_expr_for_with_provider(expr: &Expr, out: &mut Vec<WithProviderSite>) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::InterpolatedStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)

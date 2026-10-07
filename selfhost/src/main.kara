@@ -187,10 +187,6 @@ fn render(tok: SpannedToken) -> String {
             line.push_str("STR ");
             line.push_str(escape_for_render(v));
         }
-        MultiStringLiteral(v) => {
-            line.push_str("MSTR ");
-            line.push_str(escape_for_render(v));
-        }
         InterpolatedStringLiteral(parts) => {
             line.push_str("FSTR");
             for p in parts {
@@ -219,6 +215,10 @@ fn render(tok: SpannedToken) -> String {
                 line.push_str(" ");
                 line.push_str(b.to_string());
             }
+        }
+        Label(name) => {
+            line.push_str("LABEL ");
+            line.push_str(name);
         }
         CharLiteral(c) => {
             line.push_str("CHAR ");

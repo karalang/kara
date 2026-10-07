@@ -27,22 +27,22 @@ fn o() { let s = mk3(14); let o = mid3(s, true); let q = o; let v = q.unwrap(); 
 fn p() { let s = mk3(15); let o = wrap3(s); let v = o.expect("x"); println(f"p{v.id}") }
 fn q() { let s = mk3(16); let o = mid3(s, true); if let Some(x) = o { println(f"q{x.id}") } }
 fn main() {
-    a(); println("a.")
-    b(); println("b.")
-    c(); println("c.")
-    d(); println("d.")
-    e(); println("e.")
-    f(); println("f.")
-    g(); println("g.")
-    h(); println("h.")
-    i(); println("i.")
-    j(); println("j.")
-    k(); println("k.")
-    l(); println("l.")
-    m(); println("m.")
-    n(); println("n.")
-    o(); println("o.")
-    p(); println("p.")
-    q(); println("q.")
+    a(); println("a.");
+    b(); println("b.");
+    c(); println("c.");
+    d(); println("d.");
+    e(); println("e.");
+    f(); println("f.");
+    g(); println("g.");
+    h(); println("h.");
+    i(); println("i.");
+    j(); println("j.");
+    k(); println("k.");
+    l(); println("l.");
+    m(); println("m.");
+    n(); println("n.");
+    o(); println("o.");
+    p(); println("p.");
+    q(); println("q.");
     println("end")
 }

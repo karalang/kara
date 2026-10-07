@@ -11,12 +11,12 @@ fn b2(k: i64) -> i64 { match mo(k) { Option.Some(H2 { v, .. }) => { let w = v; w
 fn b3(k: i64) -> i64 { match rs(k) { Result.Ok(H2 { v, .. }) => take(v), Result.Err(e) => e } }
 fn b4(k: i64) -> i64 { if let Option.Some(H2 { v, .. }) = mo(k) { take(v) } else { 0 } }
 fn main() {
-    println(b1(3))
-    println("-")
-    println(b2(3))
-    println("-")
-    println(b3(3))
-    println("-")
-    println(b4(3))
+    println(b1(3));
+    println("-");
+    println(b2(3));
+    println("-");
+    println(b3(3));
+    println("-");
+    println(b4(3));
     println("end")
 }

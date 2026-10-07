@@ -196,15 +196,14 @@ impl Formatter {
 
         for item in &program.items {
             match item {
-                Item::UseDecl(_) | Item::Import(_) => uses.push(item),
+                Item::Import(_) => uses.push(item),
                 _ => rest.push(item),
             }
         }
 
-        // Sort use / import decls alphabetically by path.
+        // Sort import decls alphabetically by path.
         uses.sort_by(|a, b| {
             let path_a = match a {
-                Item::UseDecl(u) => u.path.clone(),
                 Item::Import(i) => {
                     let mut p = i.path.clone();
                     if let Some(first) = i.items.first() {
@@ -215,7 +214,6 @@ impl Formatter {
                 _ => unreachable!(),
             };
             let path_b = match b {
-                Item::UseDecl(u) => u.path.clone(),
                 Item::Import(i) => {
                     let mut p = i.path.clone();
                     if let Some(first) = i.items.first() {

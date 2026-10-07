@@ -56,8 +56,8 @@ pub(super) fn stmt_is_constant_init(stmt: &Stmt) -> bool {
 /// `non_constant_count` over the `<= 1` threshold and emitting a par-block for
 /// a (`let l = N; let zero = b'0'; let buf = Vec.new(); let j = 0;`) prologue —
 /// the captured `l` then became an opaque load and LLVM lost the const-prop
-/// into `k % l` (~47ms on a 10M-iter hot loop). `MultiStringLit` is parity with
-/// `StringLit`.
+/// into `k % l` (~47ms on a 10M-iter hot loop). (`"""` literals lex to a
+/// plain `StringLit`.)
 ///
 /// The composite-literal recursion was added 2026-06-14 (auto-par ordered-
 /// output corpus probe): once output suppression was removed, test-harness
@@ -79,7 +79,6 @@ pub(super) fn expr_is_constant_init(expr: &Expr) -> bool {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Identifier(_) => true,

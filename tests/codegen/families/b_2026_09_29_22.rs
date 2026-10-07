@@ -38,17 +38,17 @@ fn c9() { let mut o = O { u: None }; o.u = Some(mk(9)); println("x"); o.u = Some
 fn c10() { let mut o = Oi { u: Some(4) }; o.u = None; println(f"x{o.u.is_none()}") }
 fn c11() { let mut o = O { u: Some(mk(9)) }; let mut i = 0; while i < 3 { o.u = Some(mk(i)); i = i + 1; } println("x") }
 fn main() {
-  println("-c1"); c1()
-  println("-c2"); c2()
-  println("-c3"); c3()
-  println("-c4"); c4()
-  println("-c5"); c5()
-  println("-c6"); c6()
-  println("-c7"); c7()
-  println("-c8"); c8()
-  println("-c9"); c9()
-  println("-c10"); c10()
-  println("-c11"); c11()
+  println("-c1"); c1();
+  println("-c2"); c2();
+  println("-c3"); c3();
+  println("-c4"); c4();
+  println("-c5"); c5();
+  println("-c6"); c6();
+  println("-c7"); c7();
+  println("-c8"); c8();
+  println("-c9"); c9();
+  println("-c10"); c10();
+  println("-c11"); c11();
   println("end")
 }
 "#,

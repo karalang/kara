@@ -25,19 +25,19 @@ fn wildres() { let (ro, _) = (mk(15), Result[R, String].Ok(mk(115))); println(f"
 fn strres()  { let (rp, op) = (mk(17), Result[String, String].Ok(f"p17")); println(f"  s{rp.id}") }
 
 fn main() {
-  println("annres");  annres()
-  println("unann");   unann()
-  println("fresh");   fresh()
-  println("errside"); errside()
-  println("consok");  consok()
-  println("conserr"); conserr()
-  println("moved");   moved()
-  println("ret");     ret()
-  println("arg");     arg()
-  println("field");   field()
-  println("loopr");   loopr()
-  println("nested");  nested()
-  println("wildres"); wildres()
-  println("strres");  strres()
+  println("annres");  annres();
+  println("unann");   unann();
+  println("fresh");   fresh();
+  println("errside"); errside();
+  println("consok");  consok();
+  println("conserr"); conserr();
+  println("moved");   moved();
+  println("ret");     ret();
+  println("arg");     arg();
+  println("field");   field();
+  println("loopr");   loopr();
+  println("nested");  nested();
+  println("wildres"); wildres();
+  println("strres");  strres();
   println("done")
 }

@@ -5,9 +5,9 @@ fn main() {
     println(x);
     let c = true;
     let mut y: i64;
-    outer: loop {
+    'outer: loop {
         loop {
-            if c { y = 9; break outer; }
+            if c { y = 9; break 'outer; }
             y = 1;
             break;
         }

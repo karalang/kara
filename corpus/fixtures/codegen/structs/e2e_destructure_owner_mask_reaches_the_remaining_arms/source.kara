@@ -20,12 +20,12 @@ fn c1() { let h = H  { pe: (mk(6), 0) };            let (r, k) = h.pe;      prin
 fn c2(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
 
 fn main() {
-    println("wild");     w1();                      println("wild end")
-    println("wildidx");  w2();                      println("wildidx end")
-    println("wildopt");  w3();                      println("wildopt end")
-    println("nested");   n1();                      println("nested end")
-    println("owndrop");  d1();                      println("owndrop end")
-    println("plain");    c1();                      println("plain end")
-    println("param");    c2(H { pe: (mk(7), 0) });  println("param end")
+    println("wild");     w1();                      println("wild end");
+    println("wildidx");  w2();                      println("wildidx end");
+    println("wildopt");  w3();                      println("wildopt end");
+    println("nested");   n1();                      println("nested end");
+    println("owndrop");  d1();                      println("owndrop end");
+    println("plain");    c1();                      println("plain end");
+    println("param");    c2(H { pe: (mk(7), 0) });  println("param end");
     println("done")
 }

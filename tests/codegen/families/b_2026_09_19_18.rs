@@ -32,21 +32,21 @@ fn eat(w: W) { println("  eat") }
 fn mkw(n: i64) -> W { let w = W { e: SMono.P(mkr(n)), n: n }; println("  built"); w }
 
 fn main() {
-    println("field");  { let w = W { e: SMono.P(mkr(1)), n: 1 }; println("  mid") } println("  out")
-    println("fuse");   { let w = W { e: SMono.P(mkr(2)), n: 2 }; println(f"  n={w.n}"); println("  mid") } println("  out")
-    println("fmove");  { let w = W { e: SMono.P(mkr(3)), n: 3 }; eat(w); println("  mid") } println("  out")
-    println("vec");    { let v: Vec[SMono] = [SMono.P(mkr(4))]; println("  mid") } println("  out")
-    println("vuse");   { let v: Vec[SMono] = [SMono.P(mkr(5)), SMono.Q]; println(f"  n={v.len()}"); println("  mid") } println("  out")
-    println("opt");    { let o: Option[SMono] = Some(SMono.P(mkr(6))); println("  mid") } println("  out")
-    println("ouse");   { let o: Option[SMono] = Some(SMono.P(mkr(7))); println(f"  s={o.is_some()}"); println("  mid") } println("  out")
-    println("enum");   { let h: H3 = H3.P(SMono.P(mkr(8))); println("  mid") } println("  out")
-    println("tuple");  { let t: (SMono, i64) = (SMono.P(mkr(9)), 3); println("  mid") } println("  out")
-    println("pushed"); { let w = W { e: SMono.P(mkr(1)), n: 1 }; let mut v: Vec[W] = Vec.new(); v.push(w); println(f"  n={v.len()}"); println("  mid") } println("  out")
-    println("ret");    { let x = mkw(2); println("  mid") } println("  out")
-    println("reass");  { let mut w = W { e: SMono.P(mkr(3)), n: 1 }; println("  a"); w = W { e: SMono.P(mkr(44)), n: 2 }; println(f"  n={w.n}"); println("  mid") } println("  out")
-    println("rebind"); { let v: Vec[SMono] = [SMono.P(mkr(5))]; let x = v; println(f"  n={x.len()}"); println("  mid") } println("  out")
-    println("shadow"); { let w = W { e: SMono.P(mkr(6)), n: 1 }; let w = W { e: SMono.P(mkr(77)), n: 2 }; println("  mid") } println("  out")
-    println("loop");   { let mut i = 0; while i < 2 { let w = W { e: SMono.P(mkr(i)), n: i }; println(f"  it{i}"); i = i + 1; } println("  mid") } println("  out")
+    println("field");  { let w = W { e: SMono.P(mkr(1)), n: 1 }; println("  mid") } println("  out");
+    println("fuse");   { let w = W { e: SMono.P(mkr(2)), n: 2 }; println(f"  n={w.n}"); println("  mid") } println("  out");
+    println("fmove");  { let w = W { e: SMono.P(mkr(3)), n: 3 }; eat(w); println("  mid") } println("  out");
+    println("vec");    { let v: Vec[SMono] = [SMono.P(mkr(4))]; println("  mid") } println("  out");
+    println("vuse");   { let v: Vec[SMono] = [SMono.P(mkr(5)), SMono.Q]; println(f"  n={v.len()}"); println("  mid") } println("  out");
+    println("opt");    { let o: Option[SMono] = Some(SMono.P(mkr(6))); println("  mid") } println("  out");
+    println("ouse");   { let o: Option[SMono] = Some(SMono.P(mkr(7))); println(f"  s={o.is_some()}"); println("  mid") } println("  out");
+    println("enum");   { let h: H3 = H3.P(SMono.P(mkr(8))); println("  mid") } println("  out");
+    println("tuple");  { let t: (SMono, i64) = (SMono.P(mkr(9)), 3); println("  mid") } println("  out");
+    println("pushed"); { let w = W { e: SMono.P(mkr(1)), n: 1 }; let mut v: Vec[W] = Vec.new(); v.push(w); println(f"  n={v.len()}"); println("  mid") } println("  out");
+    println("ret");    { let x = mkw(2); println("  mid") } println("  out");
+    println("reass");  { let mut w = W { e: SMono.P(mkr(3)), n: 1 }; println("  a"); w = W { e: SMono.P(mkr(44)), n: 2 }; println(f"  n={w.n}"); println("  mid") } println("  out");
+    println("rebind"); { let v: Vec[SMono] = [SMono.P(mkr(5))]; let x = v; println(f"  n={x.len()}"); println("  mid") } println("  out");
+    println("shadow"); { let w = W { e: SMono.P(mkr(6)), n: 1 }; let w = W { e: SMono.P(mkr(77)), n: 2 }; println("  mid") } println("  out");
+    println("loop");   { let mut i = 0; while i < 2 { let w = W { e: SMono.P(mkr(i)), n: i }; println(f"  it{i}"); i = i + 1; } println("  mid") } println("  out");
     println("end")
 }"#,
     ) else {

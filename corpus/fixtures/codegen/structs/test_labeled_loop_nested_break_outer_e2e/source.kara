@@ -1,10 +1,10 @@
 
 fn main() {
     let mut count = 0;
-    outer: while true {
-        inner: while true {
+    'outer: while true {
+        'inner: while true {
             count = count + 1;
-            break outer ();
+            break 'outer ();
         }
         // Without the latent-bug fix, the outer-loop body would
         // re-enter `inner` here every iteration. With the fix, the

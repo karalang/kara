@@ -13,11 +13,11 @@ fn q6(t: (Z, i64))        { println(f"q6 {t.0.tag}") }
 fn q7() { let t = (Z { tag: "z7" }, 0); println(f"q7 {t.0.tag}") }
 
 fn main() {
-    q1(((R { id: 1 }, 0), 0))
-    q2((R { id: 2 }, 0))
-    q3(((R { id: 3 }, 0), 0))
-    q4((R { id: 4 }, 0))
-    q5()
-    q6((Z { tag: "z6" }, 0))
+    q1(((R { id: 1 }, 0), 0));
+    q2((R { id: 2 }, 0));
+    q3(((R { id: 3 }, 0), 0));
+    q4((R { id: 4 }, 0));
+    q5();
+    q6((Z { tag: "z6" }, 0));
     q7()
 }

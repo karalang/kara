@@ -9,19 +9,19 @@ fn g(c: bool) { let mut v = [R { id: 15 }]; match c { true => { let q = v; print
 fn h(c: bool) { let mut v = [R { id: 17 }]; if c { let q = v; println(f"q{q.len()}"); } let w = [R { id: 18 }]; v = w; println(f"h{v.len()}") }
 fn k(c: bool) { let mut a = [R { id: 19 }, R { id: 20 }]; if c { let q = a; println(f"q{q.len()}"); } a = [R { id: 21 }, R { id: 22 }]; println(f"k{a.len()}") }
 fn main() {
-    a(true)
-    a(false)
-    b(true)
-    b(false)
-    d(3)
-    e(true)
-    e(false)
-    f(true)
-    g(true)
-    g(false)
-    h(true)
-    h(false)
-    k(true)
-    k(false)
+    a(true);
+    a(false);
+    b(true);
+    b(false);
+    d(3);
+    e(true);
+    e(false);
+    f(true);
+    g(true);
+    g(false);
+    h(true);
+    h(false);
+    k(true);
+    k(false);
     println("end")
 }

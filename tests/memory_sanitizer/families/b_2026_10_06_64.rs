@@ -26,12 +26,12 @@ fn h() { let mut r = R { id: 13 }; let q = r; let mut r = R { id: 14 }; let w = 
 fn k() { let mut s = S { name: "a".to_string() }; let t = s; let u = S { name: "u".to_string() }; s = S { name: "b".to_string() }; println(f"k{t.name}{u.name}{s.name}") }
 fn n() { let mut r = R { id: 20 }; let q = r; r = R { id: 21 }; r = R { id: 22 }; println(f"n{q.id}{r.id}") }
 fn main() {
-    a()
-    c()
-    d()
-    e()
-    h()
-    k()
+    a();
+    c();
+    d();
+    e();
+    h();
+    k();
     n()
 }"#,
         &[

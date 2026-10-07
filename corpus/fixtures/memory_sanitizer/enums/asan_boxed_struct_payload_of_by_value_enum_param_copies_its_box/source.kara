@@ -10,15 +10,15 @@ fn sinkw(w: W1) -> i64 { return 2 }
 fn eatw(w: W1) -> i64 { return match w { W1.T(s) => s.n, W1.U(n) => n } }
 
 fn main() {
-    println(f"t1={sink(It.A(Sm { a: None, sp: 2 }))}")
+    println(f"t1={sink(It.A(Sm { a: None, sp: 2 }))}");
     let a = It.A(Sm { a: None, sp: 3 });
-    println(f"t2={sink(a)}")
-    println(f"t3={eat(It.A(Sm { a: None, sp: 4 }))}")
+    println(f"t2={sink(a)}");
+    println(f"t3={eat(It.A(Sm { a: None, sp: 4 }))}");
     let b = It.A(Sm { a: None, sp: 5 });
-    println(f"t4={eat(b)}")
-    println(f"t5={sinkw(W1.T(S1 { a: Option.Some("hi"), n: 6 }))}")
+    println(f"t4={eat(b)}");
+    println(f"t5={sinkw(W1.T(S1 { a: Option.Some("hi"), n: 6 }))}");
     let c = W1.T(S1 { a: Option.Some("ho"), n: 7 });
-    println(f"t6={sinkw(c)}")
-    println(f"t7={eatw(W1.T(S1 { a: Option.Some("he"), n: 8 }))}")
+    println(f"t6={sinkw(c)}");
+    println(f"t7={eatw(W1.T(S1 { a: Option.Some("he"), n: 8 }))}");
     println("end")
 }

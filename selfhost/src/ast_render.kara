@@ -322,14 +322,6 @@ pub fn render_expr(e: Expr) -> String {
             out.push_str(span_str(off, len));
             out.push_str(")");
         }
-        MultiStr(n) => {
-            let off = n.span.offset;
-            let len = n.span.length;
-            out.push_str("(mstr ");
-            out.push_str(escape_for_render(n.value));
-            out.push_str(span_str(off, len));
-            out.push_str(")");
-        }
         Ident(n) => {
             let off = n.span.offset;
             let len = n.span.length;

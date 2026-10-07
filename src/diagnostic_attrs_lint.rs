@@ -193,7 +193,6 @@ fn walk_item(item: &Item, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
         Item::EffectResource(_)
         | Item::EffectGroup(_)
         | Item::EffectVerbDecl(_)
-        | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
         | Item::IndependentDecl(_) => {}

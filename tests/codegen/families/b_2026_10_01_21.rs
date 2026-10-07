@@ -29,18 +29,18 @@ fn x_ok() -> bool { return true }
 fn c8(x: R, c: bool) { let mut v = Vec[x]; while c { v = Vec[mk(8)]; break } println(f"in{v.len()}") }
 fn c9(x: R) { let mut v = Vec[x]; println(f"pre{v.len()}"); v = Vec[mk(8)]; println(f"in{v.len()}") }
 fn main() {
-  println("-r3"); g7(mk(6)); println("k")
-  println("-a8"); g8(mk(9)); println("k")
-  println("-p7"); let e = f7(mk(17)); println(f"k{e.len()}")
-  println("-r5"); h7(); println("k")
-  println("-c1"); c1(mk(1), true); println("k")
-  println("-c1f"); c1(mk(2), false); println("k")
-  println("-c3"); c3(mk(5)); println("k")
-  println("-c4"); c4(mk(6)); println("k")
-  println("-c7"); c7(mk(10)); println("k")
-  println("-c8"); c8(mk(11), true); println("k")
-  println("-c8f"); c8(mk(12), false); println("k")
-  println("-c9"); c9(mk(13)); println("k")
+  println("-r3"); g7(mk(6)); println("k");
+  println("-a8"); g8(mk(9)); println("k");
+  println("-p7"); let e = f7(mk(17)); println(f"k{e.len()}");
+  println("-r5"); h7(); println("k");
+  println("-c1"); c1(mk(1), true); println("k");
+  println("-c1f"); c1(mk(2), false); println("k");
+  println("-c3"); c3(mk(5)); println("k");
+  println("-c4"); c4(mk(6)); println("k");
+  println("-c7"); c7(mk(10)); println("k");
+  println("-c8"); c8(mk(11), true); println("k");
+  println("-c8f"); c8(mk(12), false); println("k");
+  println("-c9"); c9(mk(13)); println("k");
   println("-l1"); for i in 0..2 { g7(mk(20 + i)) } println("k")
 }
 "#,
@@ -70,11 +70,11 @@ fn d5(x: R, y: R, c: bool) { let mut v = Vec[x]; if c { v = Vec[y]; } println(f"
 fn d6(x: R, y: R) { let mut v = Vec[x]; v = Vec[y]; v = Vec[mk(8)]; println(f"in{v.len()}") }
 fn f8(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; } return v }
 fn main() {
-  println("-d2"); d2(mk(5), mk(6)); println("k")
-  println("-d4"); d4(mk(8), mk(9)); println("k")
-  println("-d5"); d5(mk(1), mk(2), true); println("k")
-  println("-d5f"); d5(mk(3), mk(4), false); println("k")
-  println("-d6"); d6(mk(10), mk(11)); println("k")
+  println("-d2"); d2(mk(5), mk(6)); println("k");
+  println("-d4"); d4(mk(8), mk(9)); println("k");
+  println("-d5"); d5(mk(1), mk(2), true); println("k");
+  println("-d5f"); d5(mk(3), mk(4), false); println("k");
+  println("-d6"); d6(mk(10), mk(11)); println("k");
   println("-ht"); let a = f8(mk(12), true); println(f"k{a.len()}")
 }
 "#,

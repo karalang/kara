@@ -13,15 +13,15 @@ enum HoldSr { P(Sr), Q }
 fn tag(e: ref SMono) -> i64 { match e { SMono.P(_) => { return 1 } SMono.Q => { return 0 } } }
 
 fn main() {
-    println("temp");    { let s: SMono = SMono.P(mkr(1)); } println("  out")
-    println("named");   { let r = mkr(2); let s: SMono = SMono.P(r); } println("  out")
-    println("two");     { let a: SMono = SMono.P(mkr(3)); let b = a; } println("  out")
-    println("live");    { let s: SMono = SMono.P(mkr(4)); println("  mid") } println("  out")
-    println("noheap");  { let s: Sz = Sz.P(Z { n: 5 }); println("  mid") } println("  out")
-    println("unitvar"); { let s: Unit = Unit.Q; println("  mid") } println("  out")
-    println("qvar");    { let s: SMono = SMono.Q; println("  mid") } println("  out")
-    println("uselater"); { let s: SMono = SMono.P(mkr(9)); println("  mid"); println(f"  t{tag(s)}") } println("  out")
-    println("psh");     { let h: HoldSr = HoldSr.P(Sr { s: "sssss" }); println("  mid") } println("  out")
-    println("control"); { let m: Mono = Mono.P(mkr(8)); println("  mid") } println("  out")
+    println("temp");    { let s: SMono = SMono.P(mkr(1)); } println("  out");
+    println("named");   { let r = mkr(2); let s: SMono = SMono.P(r); } println("  out");
+    println("two");     { let a: SMono = SMono.P(mkr(3)); let b = a; } println("  out");
+    println("live");    { let s: SMono = SMono.P(mkr(4)); println("  mid") } println("  out");
+    println("noheap");  { let s: Sz = Sz.P(Z { n: 5 }); println("  mid") } println("  out");
+    println("unitvar"); { let s: Unit = Unit.Q; println("  mid") } println("  out");
+    println("qvar");    { let s: SMono = SMono.Q; println("  mid") } println("  out");
+    println("uselater"); { let s: SMono = SMono.P(mkr(9)); println("  mid"); println(f"  t{tag(s)}") } println("  out");
+    println("psh");     { let h: HoldSr = HoldSr.P(Sr { s: "sssss" }); println("  mid") } println("  out");
+    println("control"); { let m: Mono = Mono.P(mkr(8)); println("  mid") } println("  out");
     println("end")
 }

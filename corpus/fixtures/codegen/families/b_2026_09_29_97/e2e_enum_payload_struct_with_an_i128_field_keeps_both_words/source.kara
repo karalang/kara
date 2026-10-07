@@ -9,7 +9,7 @@ enum E {
 }
 
 fn main() {
-    println("start")
+    println("start");
     let e = E.Int(Lit { value: 100000000000000000000i128, k: 3 });
     match e {
         Int(l) => println(l.value.to_string() + " " + l.k.to_string()),

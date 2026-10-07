@@ -4321,7 +4321,6 @@ impl<'a> super::TypeChecker<'a> {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_) => {}
 
@@ -6218,7 +6217,6 @@ impl<'a> super::TypeChecker<'a> {
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::InterpolatedStringLit(_)
             | ExprKind::Bool(_)
             | ExprKind::Binary { .. }

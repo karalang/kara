@@ -203,26 +203,26 @@ fn wfesc()    { let h = HoW { a: mk(20), b: Result.Ok(mkw(120)) }; let HoW { a, 
                 let g = match b { Result.Ok(x) => x, Result.Err(e) => mkw(0) }; println(f"  got{g.id}") }
 
 fn main() {
-  println("rebind");   rebind()
-  println("rebindu");  rebindu()
-  println("esc");      esc()
-  println("escerr");   escerr()
-  println("esciflet"); esciflet()
-  println("call");     call()
-  println("inner");    inner()
-  println("strreb");   strreb()
-  println("stresc");   stresc()
-  println("optesc");   optesc()
-  println("treb");     treb()
-  println("trebu");    trebu()
-  println("tesc");     tesc()
-  println("freb");     freb()
-  println("fesc");     fesc()
-  println("wreb");     wreb()
-  println("wesc");     wesc()
-  println("wtreb");    wtreb()
-  println("wfreb");    wfreb()
-  println("wfesc");    wfesc()
+  println("rebind");   rebind();
+  println("rebindu");  rebindu();
+  println("esc");      esc();
+  println("escerr");   escerr();
+  println("esciflet"); esciflet();
+  println("call");     call();
+  println("inner");    inner();
+  println("strreb");   strreb();
+  println("stresc");   stresc();
+  println("optesc");   optesc();
+  println("treb");     treb();
+  println("trebu");    trebu();
+  println("tesc");     tesc();
+  println("freb");     freb();
+  println("fesc");     fesc();
+  println("wreb");     wreb();
+  println("wesc");     wesc();
+  println("wtreb");    wtreb();
+  println("wfreb");    wfreb();
+  println("wfesc");    wfesc();
   println("done")
 }
 "#;
@@ -336,23 +336,23 @@ fn e2e_string_slice_inline_fast_path_matches_the_runtime() {
              \x20   let mut i = 0;\n\
              \x20   let mut n = 0;\n\
              \x20   while i < 20 { let t = s[i..(i + 3)]; n = n + t.len(); i = i + 1; }\n\
-             \x20   println(f\"1 {n}\")\n\
+             \x20   println(f\"1 {n}\");\n\
              \x20   let e = s[5..5];\n\
-             \x20   println(f\"2 {e.len()}\")\n\
+             \x20   println(f\"2 {e.len()}\");\n\
              \x20   let e2 = String.new();\n\
-             \x20   println(f\"3 {e == e2}\")\n\
+             \x20   println(f\"3 {e == e2}\");\n\
              \x20   let a = s[0..23];\n\
              \x20   let b = s[0..24];\n\
-             \x20   println(f\"4 {a.len()} {b.len()} [{a}] [{b}]\")\n\
+             \x20   println(f\"4 {a.len()} {b.len()} [{a}] [{b}]\");\n\
              \x20   let full = s[0..s.len()];\n\
-             \x20   println(f\"5 {full.len()} {full == s}\")\n\
+             \x20   println(f\"5 {full.len()} {full == s}\");\n\
              \x20   let m = \"h\\u{e9}llo w\\u{f6}rld\";\n\
-             \x20   println(f\"6 [{m[0..1]}] [{m[1..3]}]\")\n\
+             \x20   println(f\"6 [{m[0..1]}] [{m[1..3]}]\");\n\
              \x20   let mut src = String.new();\n\
              \x20   src.push_str(\"abcdefghij\");\n\
              \x20   let keep = src[2..6];\n\
              \x20   src.push_str(\"XXXXXXXXXX\");\n\
-             \x20   println(f\"7 [{keep}]\")\n\
+             \x20   println(f\"7 [{keep}]\");\n\
              \x20   println(\"end\")\n\
              }\n\
              ",

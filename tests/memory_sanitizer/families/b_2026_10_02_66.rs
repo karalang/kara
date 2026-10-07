@@ -18,10 +18,10 @@ fn keepE(e: E) -> E { return e }
 fn a1(c: bool) -> i64 { let t = E.A(mks(1)); if c { let k = keep(t); println("k") }; return 0 }
 fn a2(c: bool) -> i64 { let t = E.A(mks(2)); if c { let k = keepE(t); println("k") }; return 0 }
 fn main() {
-    println(f"r {a1(false)}")
-    println(f"r {a1(true)}")
-    println(f"r {a2(false)}")
-    println(f"r {a2(true)}")
+    println(f"r {a1(false)}");
+    println(f"r {a1(true)}");
+    println(f"r {a2(false)}");
+    println(f"r {a2(true)}");
     println("end")
 }
 "#,

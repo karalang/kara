@@ -13,13 +13,13 @@ impl Display for U {
 struct G { u: U }
 fn main() {
     let a = H { u: E.A { n: 1 } };
-    println(f"{a}")
+    println(f"{a}");
     let t = H { u: E.T(1, 2) };
-    println(f"{t}")
+    println(f"{t}");
     let s = H { u: E.S { s: "hi" } };
-    println(f"{s}")
+    println(f"{s}");
     let z = H { u: E.Z };
-    println(f"{z}")
+    println(f"{z}");
     let g = G { u: U.Q };
     println(f"{g}")
 }

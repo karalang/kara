@@ -1494,7 +1494,7 @@ fn test_let_else_moved_payload_single_drop() {
              enum Box2 { Full(Res), Empty }\n\
              fn check(w: Box2) {\n\
                  let Full(r2) = w else {\n\
-                     println(\"nope\")\n\
+                     println(\"nope\");\n\
                      return\n\
                  }\n\
                  println(f\"bound {r2.id}\")\n\
@@ -1503,7 +1503,7 @@ fn test_let_else_moved_payload_single_drop() {
                  let w = Box2.Full(Res { id: 52 });\n\
                  println(\"a\");\n\
                  let Full(r2) = w else {\n\
-                     println(\"nope\")\n\
+                     println(\"nope\");\n\
                      return\n\
                  }\n\
                  println(f\"bound {r2.id}\");\n\
@@ -5104,12 +5104,12 @@ fn producer_call_arg_runs_the_enum_payload_body() {
         ),
         (
             "via named local, struct variant (control)",
-            "let x = mkS(7); eatS(x)",
+            "let x = mkS(7); eatS(x);",
             "e\ndSv\ndR7\n",
         ),
         (
             "via named local, tuple variant (control)",
-            "let y = mkT(8); eatT(y)",
+            "let y = mkT(8); eatT(y);",
             "e\ndTv\ndR8\n",
         ),
         (
@@ -5179,27 +5179,27 @@ fn discarded_enum_struct_variant_literal_runs_its_payload_body() {
     for (label, body, want) in [
         (
             "struct-variant literal",
-            "let _ = Sv.Hold { inner: R { id: 1 } }; println(\"d\")",
+            "let _ = Sv.Hold { inner: R { id: 1 } }; println(\"d\");",
             "dSv\ndR1\nd\n",
         ),
         (
             "tuple-variant literal (control)",
-            "let _ = Tv.A(R { id: 2 }); println(\"d\")",
+            "let _ = Tv.A(R { id: 2 }); println(\"d\");",
             "dTv\ndR2\nd\n",
         ),
         (
             "no-own-drop-enum (control)",
-            "let _ = Nd.H { inner: R { id: 3 } }; println(\"d\")",
+            "let _ = Nd.H { inner: R { id: 3 } }; println(\"d\");",
             "dR3\nd\n",
         ),
         (
             "block-peel",
-            "let _ = { Sv.Hold { inner: R { id: 4 } } }; println(\"d\")",
+            "let _ = { Sv.Hold { inner: R { id: 4 } } }; println(\"d\");",
             "dSv\ndR4\nd\n",
         ),
         (
             "no-else-if",
-            "let c = true; let _ = if c { Sv.Hold { inner: R { id: 5 } } }; println(\"d\")",
+            "let c = true; let _ = if c { Sv.Hold { inner: R { id: 5 } } }; println(\"d\");",
             "dSv\ndR5\nd\n",
         ),
         (
@@ -5207,22 +5207,22 @@ fn discarded_enum_struct_variant_literal_runs_its_payload_body() {
             // runs the payload body too, matching the bound local. Kept as
             // the producer-call control; see the codegen twin.
             "producer-call (control: a call producer, own body + payload)",
-            "let _ = mk(6); println(\"d\")",
+            "let _ = mk(6); println(\"d\");",
             "dSv\ndR6\nd\n",
         ),
         (
             "two-tail-if",
-            "let c = true; let _ = if c { Sv.Hold { inner: R { id: 7 } } } else { Sv.Nil }; println(\"d\")",
+            "let c = true; let _ = if c { Sv.Hold { inner: R { id: 7 } } } else { Sv.Nil }; println(\"d\");",
             "dSv\ndR7\nd\n",
         ),
         (
             "match",
-            "let n = 1; let _ = match n { 1 => { Sv.Hold { inner: R { id: 8 } } } _ => { Sv.Nil } }; println(\"d\")",
+            "let n = 1; let _ = match n { 1 => { Sv.Hold { inner: R { id: 8 } } } _ => { Sv.Nil } }; println(\"d\");",
             "dSv\ndR8\nd\n",
         ),
         (
             "two-tail-if, tuple variant (control)",
-            "let c = true; let _ = if c { Tv.A(R { id: 9 }) } else { Tv.Nil }; println(\"d\")",
+            "let c = true; let _ = if c { Tv.A(R { id: 9 }) } else { Tv.Nil }; println(\"d\");",
             "dTv\ndR9\nd\n",
         ),
     ] {
@@ -5315,7 +5315,7 @@ fn fresh_temp_unqualified_struct_variant_arg_runs_its_drop_bodies() {
         ),
         (
             "named-local unqualified (control)",
-            "let a = Hold { inner: R { id: 4 } }; eat(a)",
+            "let a = Hold { inner: R { id: 4 } }; eat(a);",
             "e\ndSv\ndR4\n",
         ),
         (
@@ -5400,7 +5400,7 @@ fn fresh_temp_struct_variant_arg_runs_its_drop_bodies() {
         ),
         (
             "named-local (control)",
-            "let a = Sv.Hold { inner: R { id: 3 } }; eat(a)",
+            "let a = Sv.Hold { inner: R { id: 3 } }; eat(a);",
             "e\ndSv\ndR3\n",
         ),
         (
@@ -5487,18 +5487,18 @@ fn nestArg(t: ((Option[R], i64), i64)) -> i64 { println(f"  in{t.1}"); return 0;
 fn resArg(t: (Result[R, i64], i64)) -> i64 { println(f"  in{t.1}"); return 0; }
 
 fn main() {
-    println("baretemp");   let _ = optArg((Some(mk(11)), 7));                println("baretemp end")
-    println("qualtemp");   let _ = optArg((Option.Some(mk(12)), 7));         println("qualtemp end")
-    println("twobare");    let _ = twoArg((Some(mk(13)), Some(mk(14))));     println("twobare end")
-    println("secondpos");  let _ = sndArg((7, Some(mk(15))));                println("secondpos end")
-    println("bareuv");     let _ = uvArg((A(mk(16)), 7));                    println("bareuv end")
-    println("qualuv");     let _ = uvArg((W.A(mk(17)), 7));                  println("qualuv end")
-    println("mixed");      let _ = mixArg((Some(mk(18)), mk(19)));           println("mixed end")
-    println("nested");     let _ = nestArg(((Some(mk(20)), 7), 9));          println("nested end")
-    println("bareok");     let _ = resArg((Ok(mk(21)), 7));                  println("bareok end")
-    println("barenone");   let _ = optArg((None, 7));                        println("barenone end")
-    println("discard");    let _ = (Some(mk(22)), 7);                        println("discard end")
-    println("movedplace"); let r = mk(23); let _ = optArg((Some(r), 7));     println("movedplace end")
+    println("baretemp");   let _ = optArg((Some(mk(11)), 7));                println("baretemp end");
+    println("qualtemp");   let _ = optArg((Option.Some(mk(12)), 7));         println("qualtemp end");
+    println("twobare");    let _ = twoArg((Some(mk(13)), Some(mk(14))));     println("twobare end");
+    println("secondpos");  let _ = sndArg((7, Some(mk(15))));                println("secondpos end");
+    println("bareuv");     let _ = uvArg((A(mk(16)), 7));                    println("bareuv end");
+    println("qualuv");     let _ = uvArg((W.A(mk(17)), 7));                  println("qualuv end");
+    println("mixed");      let _ = mixArg((Some(mk(18)), mk(19)));           println("mixed end");
+    println("nested");     let _ = nestArg(((Some(mk(20)), 7), 9));          println("nested end");
+    println("bareok");     let _ = resArg((Ok(mk(21)), 7));                  println("bareok end");
+    println("barenone");   let _ = optArg((None, 7));                        println("barenone end");
+    println("discard");    let _ = (Some(mk(22)), 7);                        println("discard end");
+    println("movedplace"); let r = mk(23); let _ = optArg((Some(r), 7));     println("movedplace end");
     println("done")
 }
 "#),
@@ -5586,7 +5586,7 @@ shared enum Sh { S(R), Z }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
 fn shArg(t: (Sh, i64)) -> i64 { println(f"  in{t.1}"); return 0; }
 fn main() {
-    println("bare"); let _ = shArg((S(mk(1)), 7)); println("bare end")
+    println("bare"); let _ = shArg((S(mk(1)), 7)); println("bare end");
     println("done")
 }
 "#),
@@ -5905,15 +5905,15 @@ enum Plain { Pa, Pb }
 impl Drop for Plain { fn drop(mut ref self) { println(f"  dP") } }
 fn tag(u: ref U) -> i64 { match u { U.Ua => { return 1 } U.Ub => { return 0 } } }
 fn main() {
-    println("qual");     { let s = U.Ua; println("  mid") } println("  out")
-    println("bare");     { let s = Ub; println("  mid") } println("  out")
-    println("two");      { let s = U.Ua; let t = U.Ub; println("  mid") } println("  out")
-    println("alias");    { let s = U.Ua; let t = s; println("  mid") } println("  out")
-    println("uselater"); { let s = U.Ua; println("  mid"); println(f"  t{tag(s)}") } println("  out")
-    println("reassign"); { let mut s = U.Ua; s = U.Ub; println("  mid") } println("  out")
-    println("nodrop");   { let s = V.Va; println("  mid") } println("  out")
-    println("par");      { let s = W.Wa; println("  mid") } println("  out")
-    println("plain");    { let s = Plain.Pa; println("  mid") } println("  out")
+    println("qual");     { let s = U.Ua; println("  mid") } println("  out");
+    println("bare");     { let s = Ub; println("  mid") } println("  out");
+    println("two");      { let s = U.Ua; let t = U.Ub; println("  mid") } println("  out");
+    println("alias");    { let s = U.Ua; let t = s; println("  mid") } println("  out");
+    println("uselater"); { let s = U.Ua; println("  mid"); println(f"  t{tag(s)}") } println("  out");
+    println("reassign"); { let mut s = U.Ua; s = U.Ub; println("  mid") } println("  out");
+    println("nodrop");   { let s = V.Va; println("  mid") } println("  out");
+    println("par");      { let s = W.Wa; println("  mid") } println("  out");
+    println("plain");    { let s = Plain.Pa; println("  mid") } println("  out");
     println("end")
 }
 "#);
@@ -5970,16 +5970,16 @@ enum HoldSr { P(Sr), Q }
 fn tag(e: ref SMono) -> i64 { match e { SMono.P(_) => { return 1 } SMono.Q => { return 0 } } }
 
 fn main() {
-    println("temp");    { let s: SMono = SMono.P(mkr(1)); } println("  out")
-    println("named");   { let r = mkr(2); let s: SMono = SMono.P(r); } println("  out")
-    println("two");     { let a: SMono = SMono.P(mkr(3)); let b = a; } println("  out")
-    println("live");    { let s: SMono = SMono.P(mkr(4)); println("  mid") } println("  out")
-    println("noheap");  { let s: Sz = Sz.P(Z { n: 5 }); println("  mid") } println("  out")
-    println("unitvar"); { let s: Unit = Unit.Q; println("  mid") } println("  out")
-    println("qvar");    { let s: SMono = SMono.Q; println("  mid") } println("  out")
-    println("uselater"); { let s: SMono = SMono.P(mkr(9)); println("  mid"); println(f"  t{tag(s)}") } println("  out")
-    println("psh");     { let h: HoldSr = HoldSr.P(Sr { s: "sssss" }); println("  mid") } println("  out")
-    println("control"); { let m: Mono = Mono.P(mkr(8)); println("  mid") } println("  out")
+    println("temp");    { let s: SMono = SMono.P(mkr(1)); } println("  out");
+    println("named");   { let r = mkr(2); let s: SMono = SMono.P(r); } println("  out");
+    println("two");     { let a: SMono = SMono.P(mkr(3)); let b = a; } println("  out");
+    println("live");    { let s: SMono = SMono.P(mkr(4)); println("  mid") } println("  out");
+    println("noheap");  { let s: Sz = Sz.P(Z { n: 5 }); println("  mid") } println("  out");
+    println("unitvar"); { let s: Unit = Unit.Q; println("  mid") } println("  out");
+    println("qvar");    { let s: SMono = SMono.Q; println("  mid") } println("  out");
+    println("uselater"); { let s: SMono = SMono.P(mkr(9)); println("  mid"); println(f"  t{tag(s)}") } println("  out");
+    println("psh");     { let h: HoldSr = HoldSr.P(Sr { s: "sssss" }); println("  mid") } println("  out");
+    println("control"); { let m: Mono = Mono.P(mkr(8)); println("  mid") } println("  out");
     println("end")
 }
 "#);
@@ -6046,14 +6046,14 @@ shared enum Lst { Cons(R2, Lst), Nil }
 enum Plain { P(R2), Q }
 
 fn main() {
-    println("nested");   { let h: H3 = H3.P(SMono.P(mkr(1))); println("  mid") } println("  out")
-    println("par");      { let h: Hp = Hp.P(PMono.P(mkr(2))); println("  mid") } println("  out")
-    println("owndrop");  { let h: Hd = Hd.P(Sdd.P(mkr(3))); println("  mid") } println("  out")
-    println("noheap");   { let h: Hz = Hz.P(Sz.P(Z { n: 4 })); println("  mid") } println("  out")
-    println("qvar");     { let h: Hn = Hn.P(SMono.Q); println("  mid") } println("  out")
-    println("unitvar");  { let h: Hn = Hn.Q; println("  mid") } println("  out")
-    println("reclist");  { let a: Lst = Lst.Cons(mkr(5), Lst.Nil); let b: Lst = Lst.Cons(mkr(6), a); println("  mid") } println("  out")
-    println("control");  { let p: Plain = Plain.P(mkr(7)); println("  mid") } println("  out")
+    println("nested");   { let h: H3 = H3.P(SMono.P(mkr(1))); println("  mid") } println("  out");
+    println("par");      { let h: Hp = Hp.P(PMono.P(mkr(2))); println("  mid") } println("  out");
+    println("owndrop");  { let h: Hd = Hd.P(Sdd.P(mkr(3))); println("  mid") } println("  out");
+    println("noheap");   { let h: Hz = Hz.P(Sz.P(Z { n: 4 })); println("  mid") } println("  out");
+    println("qvar");     { let h: Hn = Hn.P(SMono.Q); println("  mid") } println("  out");
+    println("unitvar");  { let h: Hn = Hn.Q; println("  mid") } println("  out");
+    println("reclist");  { let a: Lst = Lst.Cons(mkr(5), Lst.Nil); let b: Lst = Lst.Cons(mkr(6), a); println("  mid") } println("  out");
+    println("control");  { let p: Plain = Plain.P(mkr(7)); println("  mid") } println("  out");
     println("end")
 }
 "#);
@@ -6373,7 +6373,7 @@ fn main() {
     println("arrpayload");{ let a: G[Array[String, 2]] = G.Y([f"mmmmmmmm-13", f"nnnnnnnn-14"]); let b = mid(a, true); match b { G.Y(v) => { println("  arr") } G.N => { println("  none") } } }
     println("matchtail"); { let a: G[String] = G.Y(f"oooooooo-15"); let b = tailmatch(a, 1); show(b) }
     println("chain");     { let a: G[String] = G.Y(f"pppppppp-16"); let b = mid(mid(a, true), true); show(b) }
-    println("blocktail"); { let a: G[String] = G.Y(f"rrrrrrrr-18"); mid(a, true) }; println("  out")
+    println("blocktail"); { let a: G[String] = G.Y(f"rrrrrrrr-18"); mid(a, true) }; println("  out");
     println("mono");      { let a: M = M.Y(f"qqqqqqqq-17"); let b = midmono(a, true); match b { M.Y(v) => { println(f"  {v.len()}") } M.N => { println("  none") } } }
     println("end")
 }
@@ -6474,16 +6474,16 @@ impl A { fn atup(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return 
 fn ffn(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
 
 fn main() {
-  println("free-fn");       { let g = ffn(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("method-ref");    { let h = H { n: 1 }; let g = h.mref(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("method-owned");  { let h = H { n: 1 }; let g = h.mown(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("method-result"); { let h = H { n: 1 }; let g = h.mres(Result.Ok((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("method-second"); { let h = H { n: 1 }; let g = h.msnd(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("method-struct"); { let h = H { n: 1 }; let g = h.mstr(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
-  println("method-destr");  { let h = H { n: 1 }; let g = h.mdes(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("ctl-nomove");    { let h = H { n: 1 }; h.mnom(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
-  println("ctl-whole");     { let h = H { n: 1 }; let g = h.mwho(Option.Some((R { id: 5 }, R { id: 6 }))); println("  kept") } println("  out")
-  println("ctl-assoc");     { let g = A.atup(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
+  println("free-fn");       { let g = ffn(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("method-ref");    { let h = H { n: 1 }; let g = h.mref(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("method-owned");  { let h = H { n: 1 }; let g = h.mown(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("method-result"); { let h = H { n: 1 }; let g = h.mres(Result.Ok((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("method-second"); { let h = H { n: 1 }; let g = h.msnd(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("method-struct"); { let h = H { n: 1 }; let g = h.mstr(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out");
+  println("method-destr");  { let h = H { n: 1 }; let g = h.mdes(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("ctl-nomove");    { let h = H { n: 1 }; h.mnom(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out");
+  println("ctl-whole");     { let h = H { n: 1 }; let g = h.mwho(Option.Some((R { id: 5 }, R { id: 6 }))); println("  kept") } println("  out");
+  println("ctl-assoc");     { let g = A.atup(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
   println("end")
 }
 "#);
@@ -6526,19 +6526,19 @@ impl Z { fn zdup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r }
 fn dup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } }
 fn sink(r: R) { println(f"  sank{r.id}") }
 fn main() {
-  println("dup-a");      { let g = A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
-  println("dup-c");      { let g = C.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
-  println("peer");       { let g = B.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
-  println("dup-tuple");  { let g = A.tdup(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("dup-result"); { let g = A.rdup(Result.Ok(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
-  println("discard");    { A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println("  after") } println("  out")
-  println("field");      { let b = Bx { v: A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })) }; println(f"  in{b.v.id}") } println("  out")
-  println("to-callee");  { sink(A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }))) } println("  out")
-  println("loop");       { let mut i = 0; while i < 2 { let g = A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  it{g.id}"); i = i + 1; } } println("  out")
-  println("method");     { let h = H { n: 1 }; let g = h.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
-  println("ctl-uniq");   { let g = Z.zdup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
-  println("ctl-free");   { let g = dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
-  println("ctl-whole");  { let g = A.whole(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println("  kept") } println("  out")
+  println("dup-a");      { let g = A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out");
+  println("dup-c");      { let g = C.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out");
+  println("peer");       { let g = B.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out");
+  println("dup-tuple");  { let g = A.tdup(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("dup-result"); { let g = A.rdup(Result.Ok(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out");
+  println("discard");    { A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println("  after") } println("  out");
+  println("field");      { let b = Bx { v: A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })) }; println(f"  in{b.v.id}") } println("  out");
+  println("to-callee");  { sink(A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }))) } println("  out");
+  println("loop");       { let mut i = 0; while i < 2 { let g = A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  it{g.id}"); i = i + 1; } } println("  out");
+  println("method");     { let h = H { n: 1 }; let g = h.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out");
+  println("ctl-uniq");   { let g = Z.zdup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out");
+  println("ctl-free");   { let g = dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out");
+  println("ctl-whole");  { let g = A.whole(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println("  kept") } println("  out");
   println("end")
 }
 "#);

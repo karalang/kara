@@ -28,23 +28,23 @@ fn md(a: R) -> i64 { tupc(a, mk(52)); return 1; }
 fn mw(a: R) -> i64 { let _ = tupc(a, mk(53)); return 1; }
 fn pk(a: R) -> i64 { let t = tupk(a); return t.1; }
 fn main() {
-  println("oc"); oc(mk(1), mk(2))
-  println("ov"); ov(mk(3), mk(4))
-  println("o1"); o1(mk(5))
-  println("og"); og(mk(6), mk(7))
-  println("oh"); oh(mk(8), mk(9))
-  println("or"); orr(mk(10), mk(11))
-  println("ob"); ob(mk(12), mk(13))
-  println("dc"); dc(mk(16), mk(17))
-  println("dv"); dv(mk(18), mk(19))
-  println("dt"); dt(mk(20), mk(21))
-  println("dg"); dg(mk(22), mk(23))
-  println("wc"); wc(mk(24), mk(25))
-  println("wv"); wv(mk(26), mk(27))
-  println("wt"); wt(mk(28), mk(29))
-  println("mt"); mt(mk(30))
-  println("md"); md(mk(31))
-  println("mw"); mw(mk(32))
-  println("pk"); let k = pk(mk(33)); println(f"k{k}")
+  println("oc"); oc(mk(1), mk(2));
+  println("ov"); ov(mk(3), mk(4));
+  println("o1"); o1(mk(5));
+  println("og"); og(mk(6), mk(7));
+  println("oh"); oh(mk(8), mk(9));
+  println("or"); orr(mk(10), mk(11));
+  println("ob"); ob(mk(12), mk(13));
+  println("dc"); dc(mk(16), mk(17));
+  println("dv"); dv(mk(18), mk(19));
+  println("dt"); dt(mk(20), mk(21));
+  println("dg"); dg(mk(22), mk(23));
+  println("wc"); wc(mk(24), mk(25));
+  println("wv"); wv(mk(26), mk(27));
+  println("wt"); wt(mk(28), mk(29));
+  println("mt"); mt(mk(30));
+  println("md"); md(mk(31));
+  println("mw"); mw(mk(32));
+  println("pk"); let k = pk(mk(33)); println(f"k{k}");
   println("end")
 }

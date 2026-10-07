@@ -653,7 +653,6 @@ impl Walker<'_> {
             | ExprKind::ByteLit(..)
             | ExprKind::ByteStringLit(..)
             | ExprKind::StringLit(..)
-            | ExprKind::MultiStringLit(..)
             | ExprKind::InterpolatedStringLit(..)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(..)

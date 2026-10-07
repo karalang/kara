@@ -5716,7 +5716,6 @@ fn rewrite_loop_ctl_expr(e: &mut Expr, cfg: &LoopCtlRewrite) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Identifier(_)

@@ -38,25 +38,25 @@ fn s_loop() {
 }
 fn t_reassign() { let o = Some(mk2(21)); let p = keep(o); let mut q = p; q = Some(mk2(22)); println(f"t{q.is_some()}") }
 fn main() {
-    a_unwrap(); println("a.")
-    b_match_move(); println("b.")
-    c_match_read(); println("c.")
-    d_iflet(); println("d.")
-    e_plain(); println("e.")
-    f_chain(); println("f.")
-    g_generic(); println("g.")
-    h_maybe(); println("h.")
-    i_maybe_none(); println("i.")
-    j_wrap_chain(); println("j.")
-    k_s3(); println("k.")
-    l_rebind(); println("l.")
-    m_unwrap_or(); println("m.")
-    n_call_unwrap(); println("n.")
-    o_ret(); println("o.")
-    p_ret_plain(); println("p.")
-    q_field(); println("q.")
-    r_wrap_call_unwrap(); println("r.")
-    s_loop(); println("s.")
-    t_reassign(); println("t.")
+    a_unwrap(); println("a.");
+    b_match_move(); println("b.");
+    c_match_read(); println("c.");
+    d_iflet(); println("d.");
+    e_plain(); println("e.");
+    f_chain(); println("f.");
+    g_generic(); println("g.");
+    h_maybe(); println("h.");
+    i_maybe_none(); println("i.");
+    j_wrap_chain(); println("j.");
+    k_s3(); println("k.");
+    l_rebind(); println("l.");
+    m_unwrap_or(); println("m.");
+    n_call_unwrap(); println("n.");
+    o_ret(); println("o.");
+    p_ret_plain(); println("p.");
+    q_field(); println("q.");
+    r_wrap_call_unwrap(); println("r.");
+    s_loop(); println("s.");
+    t_reassign(); println("t.");
     println("end")
 }

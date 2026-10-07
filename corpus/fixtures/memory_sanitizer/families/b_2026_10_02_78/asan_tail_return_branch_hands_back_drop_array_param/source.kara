@@ -5,10 +5,10 @@ fn g(a: Option[Array[R, 2]], d: Array[R, 2]) -> Array[R, 2] { return match a { S
 fn h(c: bool, d: Array[R, 2]) -> Array[R, 2] { if c { return if c { d } else { [mk(8), mk(9)] } } [mk(6), mk(7)] }
 fn main() {
     let a: Option[Array[R, 2]] = None;
-    let r = g(a, [mk(1), mk(2)]); println(f"got {r[0].id} {r[1].id}")
+    let r = g(a, [mk(1), mk(2)]); println(f"got {r[0].id} {r[1].id}");
     let b: Option[Array[R, 2]] = Some([mk(3), mk(4)]);
-    let q = g(b, [mk(5), mk(10)]); println(f"got {q[0].id} {q[1].id}")
-    let t = h(true, [mk(11), mk(12)]); println(f"got {t[0].id}")
-    let u = h(false, [mk(13), mk(14)]); println(f"got {u[0].id}")
+    let q = g(b, [mk(5), mk(10)]); println(f"got {q[0].id} {q[1].id}");
+    let t = h(true, [mk(11), mk(12)]); println(f"got {t[0].id}");
+    let u = h(false, [mk(13), mk(14)]); println(f"got {u[0].id}");
     println("end")
 }

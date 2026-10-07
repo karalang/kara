@@ -34,20 +34,20 @@ fn nest(a: R, b: R, c: R, d: R) -> Array[Array[R, 2], 2] { return [[a, b], [c, d
 fn rb(a: R, b: R) -> Array[R, 2] { let x = a; return [x, b]; }
 fn tail(a: R, b: R) -> Array[R, 2] { [a, b] }
 fn main() {
-  println("-c1"); let c1 = arrc(mk(1), mk(2)); println(f"r{c1[0].id}{c1[1].id}")
-  println("-c2"); let p = mk(3); let q = mk(4); let c2 = arrc(p, q); println(f"r{c2[1].id}")
+  println("-c1"); let c1 = arrc(mk(1), mk(2)); println(f"r{c1[0].id}{c1[1].id}");
+  println("-c2"); let p = mk(3); let q = mk(4); let c2 = arrc(p, q); println(f"r{c2[1].id}");
   println("-c3"); arrc(mk(5), mk(6));
-  println("-c4"); let c4 = cnd(mk(7), mk(8), true); println(f"r{c4[0].id}{c4[1].id}")
-  println("-c5"); let c5 = cnd(mk(9), mk(10), false); println(f"r{c5[0].id}{c5[1].id}")
-  println("-c6"); let c6 = cndt(mk(11), true); println(f"r{c6[0].id}")
-  println("-c7"); let c7 = cndt(mk(12), false); println(f"r{c7[0].id}")
-  println("-c8"); let c8 = mix(mk(13)); println(f"r{c8[0].id}{c8[1].id}")
-  println("-c9"); let c9 = inst(mk(14), mk(15)); println(f"r{c9.xs[0].id}{c9.n}")
-  println("-c10"); let c10 = intup(mk(16), mk(17)); println(f"r{c10.1}")
-  println("-c11"); let c11 = nest(mk(18), mk(19), mk(20), mk(21)); println("r11")
-  println("-c12"); let c12 = rb(mk(22), mk(23)); println(f"r{c12[0].id}")
-  println("-c13"); let k = K { a: 1 }; let c13 = k.am(mk(24), mk(25)); println(f"r{c13[1].id}")
-  println("-c14"); let c14: Array[R, 1] = K.st(mk(26)); println("r14")
+  println("-c4"); let c4 = cnd(mk(7), mk(8), true); println(f"r{c4[0].id}{c4[1].id}");
+  println("-c5"); let c5 = cnd(mk(9), mk(10), false); println(f"r{c5[0].id}{c5[1].id}");
+  println("-c6"); let c6 = cndt(mk(11), true); println(f"r{c6[0].id}");
+  println("-c7"); let c7 = cndt(mk(12), false); println(f"r{c7[0].id}");
+  println("-c8"); let c8 = mix(mk(13)); println(f"r{c8[0].id}{c8[1].id}");
+  println("-c9"); let c9 = inst(mk(14), mk(15)); println(f"r{c9.xs[0].id}{c9.n}");
+  println("-c10"); let c10 = intup(mk(16), mk(17)); println(f"r{c10.1}");
+  println("-c11"); let c11 = nest(mk(18), mk(19), mk(20), mk(21)); println("r11");
+  println("-c12"); let c12 = rb(mk(22), mk(23)); println(f"r{c12[0].id}");
+  println("-c13"); let k = K { a: 1 }; let c13 = k.am(mk(24), mk(25)); println(f"r{c13[1].id}");
+  println("-c14"); let c14: Array[R, 1] = K.st(mk(26)); println("r14");
   println("-c15"); cnd(mk(29), mk(30), true);
   println("end")
 }

@@ -14,62 +14,62 @@ fn e2e_i128_arith_with_an_unsuffixed_literal_runs_at_128_bits() {
 fn five() -> i128 { 5 }
 
 fn main() {
-    println("start")
+    println("start");
     let b: i128 = 100000000000000000000i128;
     let u: u128 = 200000000000000000000u128;
-    println("add " + (b + 1).to_string())
-    println("radd " + (1 + b).to_string())
-    println("sub " + (b - 1).to_string())
-    println("mul " + (b * 2).to_string())
-    println("div " + (b / 3).to_string())
-    println("mod " + (b % 7).to_string())
-    println("and " + (b & 255).to_string())
-    println("or " + (b | 1).to_string())
-    println("xor " + (b ^ 1).to_string())
-    println("shr " + (b >> 1).to_string())
-    println("shl " + (b << 1).to_string())
-    println("gt " + (b > 5).to_string())
-    println("lt " + (b < 5).to_string())
-    println("eq " + (b == 5).to_string())
-    println("ne " + (b != 5).to_string())
+    println("add " + (b + 1).to_string());
+    println("radd " + (1 + b).to_string());
+    println("sub " + (b - 1).to_string());
+    println("mul " + (b * 2).to_string());
+    println("div " + (b / 3).to_string());
+    println("mod " + (b % 7).to_string());
+    println("and " + (b & 255).to_string());
+    println("or " + (b | 1).to_string());
+    println("xor " + (b ^ 1).to_string());
+    println("shr " + (b >> 1).to_string());
+    println("shl " + (b << 1).to_string());
+    println("gt " + (b > 5).to_string());
+    println("lt " + (b < 5).to_string());
+    println("eq " + (b == 5).to_string());
+    println("ne " + (b != 5).to_string());
     let mut v = b;
     v += 1;
-    println("pluseq " + v.to_string())
+    println("pluseq " + v.to_string());
     v -= 2;
-    println("minuseq " + v.to_string())
+    println("minuseq " + v.to_string());
     v *= 2;
-    println("muleq " + v.to_string())
-    println("wadd " + b.wrapping_add(1).to_string())
-    println("wmul " + b.wrapping_mul(10).to_string())
-    println("wsub " + b.wrapping_sub(1).to_string())
-    println("sadd " + b.saturating_add(1).to_string())
-    println("smul " + b.saturating_mul(2).to_string())
+    println("muleq " + v.to_string());
+    println("wadd " + b.wrapping_add(1).to_string());
+    println("wmul " + b.wrapping_mul(10).to_string());
+    println("wsub " + b.wrapping_sub(1).to_string());
+    println("sadd " + b.saturating_add(1).to_string());
+    println("smul " + b.saturating_mul(2).to_string());
     match b.checked_add(1) {
         Some(x) => println("cadd " + x.to_string()),
         None => println("cadd none"),
     }
-    println("min " + b.min(5).to_string())
-    println("max " + b.max(5).to_string())
-    println("pow " + b.pow(1).to_string())
-    println("id " + id(b + 1).to_string())
-    println("five " + (five() + b).to_string())
+    println("min " + b.min(5).to_string());
+    println("max " + b.max(5).to_string());
+    println("pow " + b.pow(1).to_string());
+    println("id " + id(b + 1).to_string());
+    println("five " + (five() + b).to_string());
     let neg: i128 = -b;
-    println("neg " + (neg - 1).to_string())
-    println("uadd " + (u + 1).to_string())
-    println("usub " + (u - 1).to_string())
-    println("ugt " + (u > 1).to_string())
-    println("udiv " + (u / 3).to_string())
+    println("neg " + (neg - 1).to_string());
+    println("uadd " + (u + 1).to_string());
+    println("usub " + (u - 1).to_string());
+    println("ugt " + (u > 1).to_string());
+    println("udiv " + (u / 3).to_string());
     let mut i: i128 = 0;
     let mut n = 0;
     while i < b {
         i = i + 2000000000000000000;
         n += 1;
     }
-    println("loop " + n.to_string())
+    println("loop " + n.to_string());
     let arr = [b, b + 1];
-    println("arr " + arr[1].to_string())
+    println("arr " + arr[1].to_string());
     let t = (b + 2, 1);
-    println("tup " + t.0.to_string())
+    println("tup " + t.0.to_string());
     let c = if b > 0 { b - 3 } else { 0 };
     println("if " + c.to_string())
 }
@@ -145,29 +145,29 @@ fn ret_lit() -> i128 {
 }
 
 fn main() {
-    println("start")
+    println("start");
     let b: i128 = 100000000000000000000i128;
-    println(pick(b, 0).to_string())
-    println(pick(b, 1).to_string())
-    println(pick(b, 2).to_string())
-    println(pk(b, true).to_string())
-    println(pk(b, false).to_string())
+    println(pick(b, 0).to_string());
+    println(pick(b, 1).to_string());
+    println(pick(b, 2).to_string());
+    println(pk(b, true).to_string());
+    println(pk(b, false).to_string());
     let c = if b > 0 { b - 3 } else { 0 };
-    println(c.to_string())
+    println(c.to_string());
     let d = if b < 0 { 0 } else { b - 3 };
-    println(d.to_string())
+    println(d.to_string());
     let u: u128 = 340282366920938463463374607431768211455u128;
     let e = if u > 0 { u } else { 0 };
-    println(e.to_string())
+    println(e.to_string());
     let f: u128 = match 3 { 1 => 5, _ => u - 1 };
-    println(f.to_string())
-    println((ret_lit() + b).to_string())
+    println(f.to_string());
+    println((ret_lit() + b).to_string());
     let o: Option[i128] = if b > 0 { Some(b) } else { None };
     match o { Some(z) => println(z.to_string()), None => println("n") }
     let w: i128 = b.wrapping_add(-1i128);
-    println(w.to_string())
+    println(w.to_string());
     let x: i128 = (-b).wrapping_mul(3);
-    println(x.to_string())
+    println(x.to_string());
     let y: u128 = u.wrapping_add(1);
     println(y.to_string())
 }
@@ -221,32 +221,32 @@ fn clu(x: u128) -> String {
 }
 
 fn main() {
-    println("start")
+    println("start");
     let b: i128 = 100000000000000000000i128;
-    println(cls(b))
-    println(cls(b + 1))
-    println(cls(18446744073709551616i128))
-    println(cls(3))
-    println(clu(340282366920938463463374607431768211455u128))
-    println(clu(18446744073709551615u128))
+    println(cls(b));
+    println(cls(b + 1));
+    println(cls(18446744073709551616i128));
+    println(cls(3));
+    println(clu(340282366920938463463374607431768211455u128));
+    println(clu(18446744073709551615u128));
     let s = b.abs() + 1;
-    println(s.to_string())
+    println(s.to_string());
     let mut acc: i128 = 1;
     for i in 0..70 {
         acc = acc * 2;
     }
-    println(acc.to_string())
+    println(acc.to_string());
     let x: i128 = if b != 0 { 7 } else { 8 };
-    println((x + b).to_string())
+    println((x + b).to_string());
     let v: Vec[i128] = vec![b, 1, 2];
     let mut sum: i128 = 0;
     for e in v { sum = sum + e + 1; }
-    println(sum.to_string())
+    println(sum.to_string());
     let o: Option[i128] = Some(b + 5);
     match o { Some(z) => println(z.to_string()), None => println("n") }
     let h = (b >> 64) + 1;
-    println(h.to_string())
-    println((b / 1000000007).to_string())
+    println(h.to_string());
+    println((b / 1000000007).to_string());
     println((-b % 1000000007).to_string())
 }
 "#,

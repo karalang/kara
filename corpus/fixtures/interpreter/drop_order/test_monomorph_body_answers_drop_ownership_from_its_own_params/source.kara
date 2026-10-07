@@ -29,12 +29,12 @@ fn gfn[T](h: G[T]) -> i64 { let (r, k) = h.pe; println("  in"); return k; }
 fn gfnLocal() { let h = G[R] { pe: (mk(65), 5), z: 9 }; let _ = gfn(h); }
 
 fn main() {
-    println("collide");  let _ = plainLocal();  println("collide end")
-    println("fresh");    let _ = plainFresh();  println("fresh end")
-    println("strfield"); let _ = plainStr();    println("strfield end")
-    println("nongen");   let _ = ngLocal(5);    println("nongen end")
-    println("marker");   let _ = plainMark();   println("marker end")
-    println("nodrop");   let _ = plainNoDrop(); println("nodrop end")
-    println("genparam"); gfnLocal();            println("genparam end")
+    println("collide");  let _ = plainLocal();  println("collide end");
+    println("fresh");    let _ = plainFresh();  println("fresh end");
+    println("strfield"); let _ = plainStr();    println("strfield end");
+    println("nongen");   let _ = ngLocal(5);    println("nongen end");
+    println("marker");   let _ = plainMark();   println("marker end");
+    println("nodrop");   let _ = plainNoDrop(); println("nodrop end");
+    println("genparam"); gfnLocal();            println("genparam end");
     println("done")
 }

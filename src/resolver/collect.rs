@@ -48,7 +48,6 @@ impl<'a> super::Resolver<'a> {
                 Item::ConstDecl(c) => self.collect_const(c),
                 Item::ModuleBinding(b) => self.collect_module_binding(b),
                 Item::TypeAlias(t) => self.collect_type_alias(t),
-                Item::UseDecl(u) => self.collect_use(u),
                 Item::Import(i) => self.collect_import(i),
                 Item::ExternFunction(e) => self.collect_extern_function(e),
                 Item::ExternBlock(b) => {
@@ -1717,21 +1716,6 @@ impl<'a> super::Resolver<'a> {
     fn record_unstable_if_present(&mut self, id: SymbolId, payload: &Option<Unstable>) {
         if let Some(p) = payload {
             self.table.record_unstable(id, p.clone());
-        }
-    }
-
-    fn collect_use(&mut self, u: &UseDecl) {
-        if let Some(last) = u.path.last() {
-            if let Err(err) = self.table.define(
-                last.clone(),
-                SymbolKind::Import {
-                    path: u.path.clone(),
-                },
-                u.span,
-                u.is_pub,
-            ) {
-                self.errors.push(err);
-            }
         }
     }
 

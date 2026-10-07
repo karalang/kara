@@ -16,14 +16,14 @@ fn twohop(x: X, c: bool) -> i64 { if c { let k = keep(x.w.r); return k.id; } 0 }
 fn fwd(w: W, c: bool) -> i64 { ret(w, c) }
 impl W { fn assoc(w: W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 } }
 fn main() {
-    println(f"a{ret(mkw(1), false)}"); println(f"a{ret(mkw(2), true)}")
-    println(f"b{push(mkw(3), false)}"); println(f"b{push(mkw(4), true)}")
-    println(f"c{tailpush(mkw(5), false)}"); println(f"c{tailpush(mkw(6), true)}")
-    println(f"e{viaalias(mkw(7), false)}"); println(f"e{viaalias(mkw(8), true)}")
-    println(f"f{viaaliaspush(mkw(9), false)}"); println(f"f{viaaliaspush(mkw(10), true)}")
-    println(f"g{arm(mkw(11), false)}"); println(f"g{arm(mkw(12), true)}")
-    println(f"h{twohop(mkx(13), false)}"); println(f"h{twohop(mkx(14), true)}")
-    println(f"i{fwd(mkw(15), false)}"); println(f"i{fwd(mkw(16), true)}")
-    println(f"j{W.assoc(mkw(17), false)}"); println(f"j{W.assoc(mkw(18), true)}")
+    println(f"a{ret(mkw(1), false)}"); println(f"a{ret(mkw(2), true)}");
+    println(f"b{push(mkw(3), false)}"); println(f"b{push(mkw(4), true)}");
+    println(f"c{tailpush(mkw(5), false)}"); println(f"c{tailpush(mkw(6), true)}");
+    println(f"e{viaalias(mkw(7), false)}"); println(f"e{viaalias(mkw(8), true)}");
+    println(f"f{viaaliaspush(mkw(9), false)}"); println(f"f{viaaliaspush(mkw(10), true)}");
+    println(f"g{arm(mkw(11), false)}"); println(f"g{arm(mkw(12), true)}");
+    println(f"h{twohop(mkx(13), false)}"); println(f"h{twohop(mkx(14), true)}");
+    println(f"i{fwd(mkw(15), false)}"); println(f"i{fwd(mkw(16), true)}");
+    println(f"j{W.assoc(mkw(17), false)}"); println(f"j{W.assoc(mkw(18), true)}");
     println("end")
 }

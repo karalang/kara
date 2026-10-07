@@ -1050,55 +1050,55 @@ fn mkho(n: i64) -> HoRes { return HoRes { a: mk(n), b: Result.Ok(mk(n + 100)) };
 fn mkhs(n: i64) -> HoStr { return HoStr { a: mk(n), b: Result.Ok(f"s{n + 100}") }; }
 fn mkhw(n: i64) -> HoW { return HoW { a: mk(n), b: Result.Ok(mkw(n + 100)) }; }
 
-fn loc()    { let h = HoRes { a: mk(1), b: Result.Ok(mk(101)) }; let HoRes { a, b } = h; println(f"  rd{a.id}")
+fn loc()    { let h = HoRes { a: mk(1), b: Result.Ok(mk(101)) }; let HoRes { a, b } = h; println(f"  rd{a.id}");
               match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
-fn iflet()  { let h = HoRes { a: mk(2), b: Result.Ok(mk(102)) }; let HoRes { a, b } = h; println(f"  rd{a.id}")
+fn iflet()  { let h = HoRes { a: mk(2), b: Result.Ok(mk(102)) }; let HoRes { a, b } = h; println(f"  rd{a.id}");
               if let Result.Ok(r) = b { println(f"  ok{r.id}") } }
-fn errs()   { let h = HoErr { a: mk(3), b: Result.Err(mk(103)) }; let HoErr { a, b } = h; println(f"  rd{a.id}")
+fn errs()   { let h = HoErr { a: mk(3), b: Result.Err(mk(103)) }; let HoErr { a, b } = h; println(f"  rd{a.id}");
               match b { Result.Ok(s) => println(f"  ok{s}"), Result.Err(r) => println(f"  er{r.id}") } }
-fn noread() { let h = HoRes { a: mk(4), b: Result.Ok(mk(104)) }; let HoRes { a, b } = h; println(f"  rd{a.id}")
+fn noread() { let h = HoRes { a: mk(4), b: Result.Ok(mk(104)) }; let HoRes { a, b } = h; println(f"  rd{a.id}");
               match b { Result.Ok(r) => println("  ok"), Result.Err(e) => println(f"  er{e}") } }
 fn solo()   { let h = SoloRes { b: Result.Ok(mk(105)) }; let SoloRes { b } = h;
               match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
-fn rename() { let h = HoRes { a: mk(6), b: Result.Ok(mk(106)) }; let HoRes { a: aa, b: bb } = h; println(f"  rd{aa.id}")
+fn rename() { let h = HoRes { a: mk(6), b: Result.Ok(mk(106)) }; let HoRes { a: aa, b: bb } = h; println(f"  rd{aa.id}");
               match bb { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
 fn unused() { let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; let HoRes { a, b } = h; println(f"  rd{a.id}") }
-fn fcall()  { let HoRes { a, b } = mkho(8); println(f"  rd{a.id}")
+fn fcall()  { let HoRes { a, b } = mkho(8); println(f"  rd{a.id}");
               match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
-fn flit()   { let HoRes { a, b } = HoRes { a: mk(9), b: Result.Ok(mk(109)) }; println(f"  rd{a.id}")
+fn flit()   { let HoRes { a, b } = HoRes { a: mk(9), b: Result.Ok(mk(109)) }; println(f"  rd{a.id}");
               match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
 fn fcallu() { let HoRes { a, b } = mkho(10); println(f"  rd{a.id}") }
 fn fstru()  { let HoStr { a, b } = mkhs(11); println(f"  rd{a.id}") }
-fn fstr()   { let HoStr { a, b } = mkhs(12); println(f"  rd{a.id}")
+fn fstr()   { let HoStr { a, b } = mkhs(12); println(f"  rd{a.id}");
               match b { Result.Ok(s) => println(f"  ok{s}"), Result.Err(e) => println(f"  er{e}") } }
-fn wloc()   { let h = HoW { a: mk(13), b: Result.Ok(mkw(113)) }; let HoW { a, b } = h; println(f"  rd{a.id}")
+fn wloc()   { let h = HoW { a: mk(13), b: Result.Ok(mkw(113)) }; let HoW { a, b } = h; println(f"  rd{a.id}");
               match b { Result.Ok(w) => println(f"  ok{w.id}"), Result.Err(e) => println(f"  er{e}") } }
 fn wunused(){ let h = HoW { a: mk(14), b: Result.Ok(mkw(114)) }; let HoW { a, b } = h; println(f"  rd{a.id}") }
-fn wfcall() { let HoW { a, b } = mkhw(15); println(f"  rd{a.id}")
+fn wfcall() { let HoW { a, b } = mkhw(15); println(f"  rd{a.id}");
               match b { Result.Ok(w) => println(f"  ok{w.id}"), Result.Err(e) => println(f"  er{e}") } }
 fn wfcallu(){ let HoW { a, b } = mkhw(16); println(f"  rd{a.id}") }
 fn param()  { take(HoRes { a: mk(17), b: Result.Ok(mk(117)) }) }
-fn take(h: HoRes) { let HoRes { a, b } = h; println(f"  rd{a.id}")
+fn take(h: HoRes) { let HoRes { a, b } = h; println(f"  rd{a.id}");
               match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
 
 fn main() {
-  println("loc");     loc()
-  println("iflet");   iflet()
-  println("errs");    errs()
-  println("noread");  noread()
-  println("solo");    solo()
-  println("rename");  rename()
-  println("unused");  unused()
-  println("fcall");   fcall()
-  println("flit");    flit()
-  println("fcallu");  fcallu()
-  println("fstru");   fstru()
-  println("fstr");    fstr()
-  println("wloc");    wloc()
-  println("wunused"); wunused()
-  println("wfcall");  wfcall()
-  println("wfcallu"); wfcallu()
-  println("param");   param()
+  println("loc");     loc();
+  println("iflet");   iflet();
+  println("errs");    errs();
+  println("noread");  noread();
+  println("solo");    solo();
+  println("rename");  rename();
+  println("unused");  unused();
+  println("fcall");   fcall();
+  println("flit");    flit();
+  println("fcallu");  fcallu();
+  println("fstru");   fstru();
+  println("fstr");    fstr();
+  println("wloc");    wloc();
+  println("wunused"); wunused();
+  println("wfcall");  wfcall();
+  println("wfcallu"); wfcallu();
+  println("param");   param();
   println("done")
 }
 "#;
@@ -1221,18 +1221,18 @@ struct Outer { h: WrapR }
 fn eat(x: R) { println(f"  eat{x.id}") }
 
 fn unused()  { let w = WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
-fn rmatch()  { let w = WrapR { inner: HoRes { a: mk(2), b: Result.Ok(mk(102)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+fn rmatch()  { let w = WrapR { inner: HoRes { a: mk(2), b: Result.Ok(mk(102)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}");
                match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
-fn rlive()   { let w = WrapR { inner: HoRes { a: mk(3), b: Result.Ok(mk(103)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+fn rlive()   { let w = WrapR { inner: HoRes { a: mk(3), b: Result.Ok(mk(103)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}");
                match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") }
                println(f"  w{w.inner.a.id}") }
 fn ounused() { let w = WrapO { inner: HoOpt { a: mk(4), b: Option.Some(mk(104)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}") }
-fn omatch()  { let w = WrapO { inner: HoOpt { a: mk(5), b: Option.Some(mk(105)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+fn omatch()  { let w = WrapO { inner: HoOpt { a: mk(5), b: Option.Some(mk(105)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}");
                match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
-fn olive()   { let w = WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+fn olive()   { let w = WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}");
                match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") }
                println(f"  w{w.inner.a.id}") }
-fn two()     { let g = Outer { h: WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } } }; let HoRes { a, b } = g.h.inner; println(f"  rd{a.id}")
+fn two()     { let g = Outer { h: WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } } }; let HoRes { a, b } = g.h.inner; println(f"  rd{a.id}");
                match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
 fn rcall()   { let w = WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108)) } }; let HoRes { a, b } = w.inner;
                match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
@@ -1259,24 +1259,24 @@ fn livecall(){ let w = WrapR { inner: HoRes { a: mk(18), b: Result.Ok(mk(118)) }
                println(f"  w{w.inner.a.id}") }
 
 fn main() {
-  println("unused");   unused()
-  println("rmatch");   rmatch()
-  println("rlive");    rlive()
-  println("ounused");  ounused()
-  println("omatch");   omatch()
-  println("olive");    olive()
-  println("two");      two()
-  println("rcall");    rcall()
-  println("resc");     resc()
-  println("rrebind");  rrebind()
-  println("ocall");    ocall()
-  println("oesc");     oesc()
-  println("orebind");  orebind()
-  println("wild");     wild()
-  println("awild");    awild()
-  println("nest");     nest()
-  println("errs");     errs()
-  println("livecall"); livecall()
+  println("unused");   unused();
+  println("rmatch");   rmatch();
+  println("rlive");    rlive();
+  println("ounused");  ounused();
+  println("omatch");   omatch();
+  println("olive");    olive();
+  println("two");      two();
+  println("rcall");    rcall();
+  println("resc");     resc();
+  println("rrebind");  rrebind();
+  println("ocall");    ocall();
+  println("oesc");     oesc();
+  println("orebind");  orebind();
+  println("wild");     wild();
+  println("awild");    awild();
+  println("nest");     nest();
+  println("errs");     errs();
+  println("livecall"); livecall();
   println("done")
 }
 "#;
@@ -1405,12 +1405,12 @@ struct WrapO { inner: HoOpt }
 struct Outer { h: WrapR }
 fn eat(x: R) { println(f"  eat{x.id}") }
 
-fn rmatch(w: WrapR)  { let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+fn rmatch(w: WrapR)  { let HoRes { a, b } = w.inner; println(f"  rd{a.id}");
                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
-fn rlive(w: WrapR)   { let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+fn rlive(w: WrapR)   { let HoRes { a, b } = w.inner; println(f"  rd{a.id}");
                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") }
                        println(f"  w{w.inner.a.id}") }
-fn two(o: Outer)     { let HoRes { a, b } = o.h.inner; println(f"  rd{a.id}")
+fn two(o: Outer)     { let HoRes { a, b } = o.h.inner; println(f"  rd{a.id}");
                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
 fn rcall(w: WrapR)   { let HoRes { a, b } = w.inner;
                        match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
@@ -1423,9 +1423,9 @@ fn awild(w: WrapR)   { let HoRes { a: _, b } = w.inner;
 fn livecall(w: WrapR){ let HoRes { a, b } = w.inner;
                        match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") }
                        println(f"  w{w.inner.a.id}") }
-fn omatch(w: WrapO)  { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+fn omatch(w: WrapO)  { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}");
                        match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
-fn olive(w: WrapO)   { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+fn olive(w: WrapO)   { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}");
                        match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") }
                        println(f"  w{w.inner.a.id}") }
 fn ocall(w: WrapO)   { let HoOpt { a, b } = w.inner;
@@ -1433,19 +1433,19 @@ fn ocall(w: WrapO)   { let HoOpt { a, b } = w.inner;
 fn ounused(w: WrapO) { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}") }
 
 fn main() {
-  println("rmatch");   rmatch(WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } })
-  println("rlive");    rlive(WrapR { inner: HoRes { a: mk(2), b: Result.Ok(mk(102)) } })
-  println("two");      two(Outer { h: WrapR { inner: HoRes { a: mk(3), b: Result.Ok(mk(103)) } } })
-  println("rcall");    rcall(WrapR { inner: HoRes { a: mk(4), b: Result.Ok(mk(104)) } })
-  println("runused");  runused(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } })
-  println("errs");     errs(WrapE { inner: HoErr { a: mk(6), b: Result.Err(mk(106)) } })
-  println("wild");     wild(WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } })
-  println("awild");    awild(WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108)) } })
-  println("livecall"); livecall(WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } })
-  println("omatch");   omatch(WrapO { inner: HoOpt { a: mk(10), b: Option.Some(mk(110)) } })
-  println("olive");    olive(WrapO { inner: HoOpt { a: mk(11), b: Option.Some(mk(111)) } })
-  println("ocall");    ocall(WrapO { inner: HoOpt { a: mk(12), b: Option.Some(mk(112)) } })
-  println("ounused");  ounused(WrapO { inner: HoOpt { a: mk(13), b: Option.Some(mk(113)) } })
+  println("rmatch");   rmatch(WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } });
+  println("rlive");    rlive(WrapR { inner: HoRes { a: mk(2), b: Result.Ok(mk(102)) } });
+  println("two");      two(Outer { h: WrapR { inner: HoRes { a: mk(3), b: Result.Ok(mk(103)) } } });
+  println("rcall");    rcall(WrapR { inner: HoRes { a: mk(4), b: Result.Ok(mk(104)) } });
+  println("runused");  runused(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } });
+  println("errs");     errs(WrapE { inner: HoErr { a: mk(6), b: Result.Err(mk(106)) } });
+  println("wild");     wild(WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } });
+  println("awild");    awild(WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108)) } });
+  println("livecall"); livecall(WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } });
+  println("omatch");   omatch(WrapO { inner: HoOpt { a: mk(10), b: Option.Some(mk(110)) } });
+  println("olive");    olive(WrapO { inner: HoOpt { a: mk(11), b: Option.Some(mk(111)) } });
+  println("ocall");    ocall(WrapO { inner: HoOpt { a: mk(12), b: Option.Some(mk(112)) } });
+  println("ounused");  ounused(WrapO { inner: HoOpt { a: mk(13), b: Option.Some(mk(113)) } });
   println("done")
 }
 "#;
@@ -1591,21 +1591,21 @@ fn plainel(){ let (_, oq) = (mk(9), mk(109)); println("  q") }
 fn wildcd() { let (_, _) = (mk(31), Option.Some(mk(131))); println("  w") }
 
 fn main() {
-  println("bind");    bind()
-  println("bindsib"); bindsib()
-  println("slot0");   slot0()
-  println("nested");  nested()
-  println("nestpl");  nestpl()
-  println("loopb");   loopb()
-  println("consume"); consume()
-  println("moved");   moved()
-  println("ret");     ret()
-  println("arg");     arg()
-  println("field");   field()
-  println("instr");   instr()
-  println("none");    none()
-  println("plainel"); plainel()
-  println("wildcd");  wildcd()
+  println("bind");    bind();
+  println("bindsib"); bindsib();
+  println("slot0");   slot0();
+  println("nested");  nested();
+  println("nestpl");  nestpl();
+  println("loopb");   loopb();
+  println("consume"); consume();
+  println("moved");   moved();
+  println("ret");     ret();
+  println("arg");     arg();
+  println("field");   field();
+  println("instr");   instr();
+  println("none");    none();
+  println("plainel"); plainel();
+  println("wildcd");  wildcd();
   println("done")
 }
 "#;
@@ -1734,13 +1734,13 @@ fn enumArg(t: (R, W))              -> i64 { println(f"  rd{t.0.id}"); return 0; 
 fn destr(t: (R, Option[R]))        -> i64 { let (r, o) = t; println(f"  rd{r.id}"); return 0; }
 
 fn main() {
-    println("opttemp");  let _ = optArg((mk(1), Option.Some(mk(11))));  println("opttemp end")
-    println("errtemp");  let _ = resArg((mk(3), Result.Err(7)));        println("errtemp end")
-    println("enumtemp"); let _ = enumArg((mk(4), W.A(mk(44))));         println("enumtemp end")
-    println("destr");    let _ = destr((mk(5), Option.Some(mk(55))));   println("destr end")
-    println("nonetemp"); let _ = optArg((mk(6), Option.None));          println("nonetemp end")
-    println("localarg"); let a = (mk(7), Option.Some(mk(77))); let _ = optArg(a); println("localarg end")
-    println("localonly"); let b = (mk(8), Option.Some(mk(88))); println(f"  rd{b.0.id}"); println("localonly end")
+    println("opttemp");  let _ = optArg((mk(1), Option.Some(mk(11))));  println("opttemp end");
+    println("errtemp");  let _ = resArg((mk(3), Result.Err(7)));        println("errtemp end");
+    println("enumtemp"); let _ = enumArg((mk(4), W.A(mk(44))));         println("enumtemp end");
+    println("destr");    let _ = destr((mk(5), Option.Some(mk(55))));   println("destr end");
+    println("nonetemp"); let _ = optArg((mk(6), Option.None));          println("nonetemp end");
+    println("localarg"); let a = (mk(7), Option.Some(mk(77))); let _ = optArg(a); println("localarg end");
+    println("localonly"); let b = (mk(8), Option.Some(mk(88))); println(f"  rd{b.0.id}"); println("localonly end");
     println("done")
 }
 "#,
@@ -4240,15 +4240,15 @@ fn eat2(o: Option[(R, R)]) { match o { Option.Some(t) => { let x = t.0; println(
 fn peek(o: Option[(R, i64)]) { match o { Option.Some(t) => { println(f"  mid{t.1}"); } Option.None => { println("  n"); } } }
 fn hands(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { let y = t.1; println("  mid"); return t.0; } Option.None => { return R { id: 0 }; } } }
 fn main() {
-    println("named");    { let a = Option.Some((R { id: 5 }, 9)); eat(a); } println("  out")
-    println("temp");     { eat(Option.Some((R { id: 5 }, 9))); } println("  out")
-    println("result");   { let a: Result[(R, i64), i64] = Result.Ok((R { id: 5 }, 9)); eatr(a); } println("  out")
-    println("method");   { let h = Hd { n: 1 }; let a = Option.Some((R { id: 5 }, 9)); h.eat(a); } println("  out")
-    println("assoc");    { let a = Option.Some((R { id: 5 }, 9)); Snk.eat(a); } println("  out")
-    println("second");   { let a = Option.Some((9, R { id: 5 })); eat1(a); } println("  out")
-    println("sibling");  { let a = Option.Some((R { id: 5 }, R { id: 6 })); eat2(a); } println("  out")
-    println("nomove");   { let a = Option.Some((R { id: 5 }, 9)); peek(a); } println("  out")
-    println("mixed");    { let a = Option.Some((R { id: 5 }, R { id: 6 })); let r = hands(a); println(f"  got{r.id}"); } println("  out")
+    println("named");    { let a = Option.Some((R { id: 5 }, 9)); eat(a); } println("  out");
+    println("temp");     { eat(Option.Some((R { id: 5 }, 9))); } println("  out");
+    println("result");   { let a: Result[(R, i64), i64] = Result.Ok((R { id: 5 }, 9)); eatr(a); } println("  out");
+    println("method");   { let h = Hd { n: 1 }; let a = Option.Some((R { id: 5 }, 9)); h.eat(a); } println("  out");
+    println("assoc");    { let a = Option.Some((R { id: 5 }, 9)); Snk.eat(a); } println("  out");
+    println("second");   { let a = Option.Some((9, R { id: 5 })); eat1(a); } println("  out");
+    println("sibling");  { let a = Option.Some((R { id: 5 }, R { id: 6 })); eat2(a); } println("  out");
+    println("nomove");   { let a = Option.Some((R { id: 5 }, 9)); peek(a); } println("  out");
+    println("mixed");    { let a = Option.Some((R { id: 5 }, R { id: 6 })); let r = hands(a); println(f"  got{r.id}"); } println("  out");
     println("end")
 }
 "#,

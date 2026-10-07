@@ -5124,7 +5124,7 @@ impl<'a> super::TypeChecker<'a> {
                 element: Box::new(Type::UInt(UIntSize::U8)),
                 size: ConstArg::Literal(bytes.len() as i64),
             },
-            ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => Type::Str,
+            ExprKind::StringLit(_) => Type::Str,
             // `c"..."` C-string literal — typed `ref CStr` per
             // design.md § C-String Literals (v60 item 18). The
             // underlying `CStr` type itself is Phase 8 stdlib work

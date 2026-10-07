@@ -32,18 +32,18 @@ fn c10() { let s = P { id: 17 }; let t = wrap(s, 2); println(f"t{t.id}"); }
 fn c11() { let mut i = 0; while i < 3 { let s = mk2(20 + i); let t = rs2(s, i); println(f"t{t.id}"); i = i + 1; } }
 fn c12() { let s = P { id: 19 }; rs(s, 1); println("disc"); }
 fn main() {
-    c00()
-    c01()
-    c02()
-    c03()
-    c04()
-    c05()
-    c06()
-    c07()
-    c08()
-    c09()
-    c10()
-    c11()
-    c12()
+    c00();
+    c01();
+    c02();
+    c03();
+    c04();
+    c05();
+    c06();
+    c07();
+    c08();
+    c09();
+    c10();
+    c11();
+    c12();
     println("end")
 }

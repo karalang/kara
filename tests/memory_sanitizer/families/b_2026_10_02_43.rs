@@ -30,23 +30,23 @@ fn a11() -> i64 { match Option.Some(mkr(11)) { Some(v) => { return v.id } None =
 fn h1(a: R) -> R { match Option.Some(a) { Some(v) => { return v } None => { return mkr(0) } } }
 fn h6(a: R) -> R { if let Some(v) = Some(a) { return v } return mkr(0) }
 fn main() {
-    println("-a1t"); let r = a1(true); println(f"y{r.id}")
-    println("-a1f"); let r = a1(false); println(f"y{r.id}")
-    println("-a2t"); let r = a2(true); println(f"y{r.id}")
-    println("-a2f"); let r = a2(false); println(f"y{r.id}")
-    println("-a3"); let r = a3(); println(f"y{r.is_some()}")
-    println("-a4"); let r = a4(); println(f"y{r.id}")
-    println("-a5"); let r = a5(); println(f"y{r.id}")
-    println("-a6"); let r = a6(); println(f"y{r.id}")
-    println("-a7"); let r = a7(); println(f"y{r.id}")
-    println("-a8t"); let r = a8(true); println(f"y{r.id}")
-    println("-a8f"); let r = a8(false); println(f"y{r.id}")
-    println("-a9"); let r = a9(1); println(f"y{r.id}")
-    println("-a9n"); let r = a9(7); println(f"y{r.id}")
-    println("-a10"); let r = a10(); println(f"y{r.id}")
-    println("-a11"); let z = a11(); println(f"y{z}")
-    println("-h1"); let r = h1(mkr(12)); println(f"y{r.id}")
-    println("-h6"); let r = h6(mkr(13)); println(f"y{r.id}")
+    println("-a1t"); let r = a1(true); println(f"y{r.id}");
+    println("-a1f"); let r = a1(false); println(f"y{r.id}");
+    println("-a2t"); let r = a2(true); println(f"y{r.id}");
+    println("-a2f"); let r = a2(false); println(f"y{r.id}");
+    println("-a3"); let r = a3(); println(f"y{r.is_some()}");
+    println("-a4"); let r = a4(); println(f"y{r.id}");
+    println("-a5"); let r = a5(); println(f"y{r.id}");
+    println("-a6"); let r = a6(); println(f"y{r.id}");
+    println("-a7"); let r = a7(); println(f"y{r.id}");
+    println("-a8t"); let r = a8(true); println(f"y{r.id}");
+    println("-a8f"); let r = a8(false); println(f"y{r.id}");
+    println("-a9"); let r = a9(1); println(f"y{r.id}");
+    println("-a9n"); let r = a9(7); println(f"y{r.id}");
+    println("-a10"); let r = a10(); println(f"y{r.id}");
+    println("-a11"); let z = a11(); println(f"y{z}");
+    println("-h1"); let r = h1(mkr(12)); println(f"y{r.id}");
+    println("-h6"); let r = h6(mkr(13)); println(f"y{r.id}");
     println("end")
 }
 "#,

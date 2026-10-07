@@ -14,17 +14,17 @@ fn k() -> i64 { let mut t = 0; let mut i = 0; while i < 3 { let h: G[Option[M]] 
 fn n() -> i64 { let h: G[Option[M]] = G.Y(None); let z: G[Option[M]] = G.N; let x = match h { G.Y(o) => olen(o), G.N => 7 }; let y = match z { G.Y(o) => olen(o), G.N => 7 }; x + y }
 fn p() -> Vec[Option[M]] { let h: G[Option[M]] = G.Y(Some(M.My(mkv("p")))); let mut v: Vec[Option[M]] = []; match h { G.Y(o) => { v.push(o) }, G.N => {} } v }
 fn main() {
-    println(f"a{a()}")
-    println(f"b{b()}")
-    println(f"c{c()}")
+    println(f"a{a()}");
+    println(f"b{b()}");
+    println(f"c{c()}");
     let od = d();
-    println(f"d{olen(od)}")
+    println(f"d{olen(od)}");
     let oe = e();
-    println(f"e{oe.is_some()}")
-    println(f"f{f()}")
-    println(f"g{g()}")
-    println(f"k{k()}")
-    println(f"n{n()}")
+    println(f"e{oe.is_some()}");
+    println(f"f{f()}");
+    println(f"g{g()}");
+    println(f"k{k()}");
+    println(f"n{n()}");
     let v = p();
     println(f"p{v.len()}")
 }

@@ -1,5 +1,5 @@
 
 fn main() {
-    assert(false)
+    assert(false);
     println(99)
 }

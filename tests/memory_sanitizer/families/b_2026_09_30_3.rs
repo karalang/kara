@@ -29,7 +29,7 @@ fn main() {
     for pair in v.iter() { match pair { (a, j) => println(f"g {take(a)}") } }
     let mut out: Vec[Vec[i64]] = Vec.new();
     for pair in v.iter() { match pair { (a, j) => out.push(a) } }
-    println(f"h {v.len()} {out.len()} {out[1].len()}")
+    println(f"h {v.len()} {out.len()} {out[1].len()}");
     let w: Vec[(String, i64)] = [(f"a-heap-string-longer-than-sso-{1}", 1)];
     for (i, pair) in w.iter().enumerate() { match pair { (a, j) => println(f"i {i} {a.len()}") } }
     let n: Vec[((String, i64), i64)] = [((f"a-heap-string-longer-than-sso-{2}", 3), 4)];

@@ -22,8 +22,8 @@
 //!   `Self`, then each method body. Impl-method names are NOT scope bindings
 //!   (siblings dispatch via `self.m()`), mirroring the seed. Operator-trait /
 //!   `Into` impl restrictions produce out-of-slice error kinds, so the corpus
-//!   avoids those trait names as impl targets. `use a.b.c;` binds the last path
-//!   segment `c` (`collect_use`), so a reference to it resolves and a repeated
+//!   avoids those trait names as impl targets. `import a.b.c;` binds the last path
+//!   segment `c` (`collect_import`), so a reference to it resolves and a repeated
 //!   import is a duplicate — the standalone `resolve()` validates no path.
 //! - **Slice 2c** seeds the FULL prelude — the 16 primitives plus every
 //!   `PRELUDE_{FUNCTIONS,TYPES,TRAITS,VARIANTS,EFFECT_RESOURCES}` name and the
@@ -148,10 +148,10 @@ const CORPUS: &[&str] = &[
     // Typos of prelude names still surface as undefined (seeding is exact).
     "fn typo_fn() { printlnn(\"x\") }",
     "fn typo_ty(x: Veec) {}",
-    // ── use imports — bind the last path segment (no module graph to validate
-    // the path in isolation, so a bare `use` is clean).
-    "use foo.bar;",
-    "use a.b.c;",
+    // ── single imports — bind the last path segment (no module graph to
+    // validate the path in isolation, so a bare `import` is clean).
+    "import foo.bar;",
+    "import a.b.c;",
     // ── match-arm pattern BINDINGS ── the arm pattern binds its variables into
     // the arm scope (and resolves any variant path) before the guard/body. A
     // prelude variant path (`Some`) resolves; a bare uppercase pattern (`None`)
@@ -209,14 +209,14 @@ const CORPUS: &[&str] = &[
     // `resolve_block.rs` `loop_labels` check). A valid in-scope label resolves
     // clean; `continue <unknown>` is the reachable path (the parser routes an
     // unknown identifier after `break` to a VALUE → UndefinedName instead).
-    "fn f() { outer: loop { continue outer } }",
-    "fn f() { outer: loop { break outer } }",
-    "fn f() { loop { continue nope } }",
-    "fn f() { outer: loop { inner: loop { continue outer } } }",
-    "fn f() { outer: while true { continue outer } }",
-    "fn f(v: Vec[i64]) { outer: for x in v { continue outer } }",
+    "fn f() { 'outer: loop { continue 'outer } }",
+    "fn f() { 'outer: loop { break 'outer } }",
+    "fn f() { loop { continue 'nope } }",
+    "fn f() { 'outer: loop { 'inner: loop { continue 'outer } } }",
+    "fn f() { 'outer: while true { continue 'outer } }",
+    "fn f(v: Vec[i64]) { 'outer: for x in v { continue 'outer } }",
     // An out-of-scope label after the labeled loop closes — UndefinedLabel.
-    "fn f() { outer: loop { break outer } loop { continue outer } }",
+    "fn f() { 'outer: loop { break 'outer } loop { continue 'outer } }",
     // ── annotated `let` (`let x: T = v`) ── the parser now captures the `: T`
     // annotation (previously it desynced into a stray assignment); the resolver
     // resolves the initializer, THEN the annotation type, THEN binds — so a
@@ -277,9 +277,9 @@ const PROGRAM_CORPUS: &[&str] = &[
     "fn ok_one() {}\nfn bad() { missing() }",
     // Undefined type referenced across items where NO declaration supplies it.
     "fn f(x: Undeclared) {}\nfn g() {}",
-    // `use` binds the imported name — a call to it resolves, forward or back.
-    "use foo.bar;\nfn f() { bar() }",
-    "fn f() { bar() }\nuse foo.bar;",
+    // An import binds the imported name — a call to it resolves, forward or back.
+    "import foo.bar;\nfn f() { bar() }",
+    "fn f() { bar() }\nimport foo.bar;",
     // Enum variant names are registered globally (the seed's `collect_enum`), so
     // a variant resolves as a value, as a pattern constructor path, and forward.
     "enum E { A(i64), B }\nfn f(e: E) -> i64 { match e { A(x) => x, B => 0 } }",
@@ -293,10 +293,10 @@ const PROGRAM_CORPUS: &[&str] = &[
     "struct Point { x: i64, y: i64 }\nfn f(p: Point) -> i64 { match p { Point { x: a, y: b } => a + b } }",
     "struct P { a: i64, b: i64 }\nfn f(p: P) -> i64 { let P { a, .. } = p; a }",
     "fn f(p: i64) -> i64 { match p { Undef { x } => x, _ => 0 } }",
-    // A `use` import colliding with a declaration of the same name — dup.
-    "use foo.thing;\nfn thing() {}",
+    // An import colliding with a declaration of the same name — dup.
+    "import foo.thing;\nfn thing() {}",
     // Two imports of the same last segment — dup.
-    "use a.dup;\nuse b.dup;",
+    "import a.dup;\nimport b.dup;",
     // ── `import` declarations ── single form binds the last segment; the braced
     // group binds every listed item (with `as` aliases). Single-file mode binds
     // without validating the module prefix, matching `karac::resolve`.

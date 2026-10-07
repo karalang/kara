@@ -19,18 +19,18 @@ fn l() { let mut p = mk(20); p.0 = p.0; println(f"l{p.1} {p.0.unwrap().id}") }
 fn m() { let mut p = mkst(21); p.0 = p.0; println(f"m{p.1} {p.0}") }
 fn n() { let mut w = W { h: H { id: 22 }, n: 23 }; w.h = w.h; println(f"n{w.h.id} {w.n}") }
 fn main() {
-    a()
-    b()
-    c()
-    d()
-    e()
-    f()
-    g()
-    i()
-    j()
-    k()
-    l()
-    m()
-    n()
+    a();
+    b();
+    c();
+    d();
+    e();
+    f();
+    g();
+    i();
+    j();
+    k();
+    l();
+    m();
+    n();
     println("end")
 }

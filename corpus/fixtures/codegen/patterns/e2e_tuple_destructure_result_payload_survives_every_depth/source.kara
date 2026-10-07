@@ -14,11 +14,11 @@ fn c_nodest() { let w = WrapR { inner: (mk(5), Result.Ok(mk(105))) }; println(f"
 fn c_live()   { let g = OuterR { h: WrapR { inner: (mk(6), Result.Ok(mk(106))) } }; let (a6, b6) = g.h.inner; println(f"  rd{a6.id}"); println(f"  g{g.h.inner.0.id}") }
 
 fn main() {
-    println("named"); c_named(); println("named end")
-    println("one");   c_one();   println("one end")
-    println("two");   c_two();   println("two end")
-    println("three"); c_three(); println("three end")
-    println("nodest");c_nodest();println("nodest end")
-    println("live");  c_live();  println("live end")
+    println("named"); c_named(); println("named end");
+    println("one");   c_one();   println("one end");
+    println("two");   c_two();   println("two end");
+    println("three"); c_three(); println("three end");
+    println("nodest");c_nodest();println("nodest end");
+    println("live");  c_live();  println("live end");
     println("done")
 }

@@ -35,7 +35,7 @@ fn main() {
     let c = true;
     { let t: (Vec[D], i64) = ([mkd(13), mkd(14)], 7); let (a, j) = t; if c { let b = a; println(f"p6 {b.len()}") } println(f"p6 {j}") }
     let v = ret();
-    println(f"p7 {v.len()}")
+    println(f"p7 {v.len()}");
     { let t: (Vec[Vec[D]], i64) = ([[mkd(15)], [mkd(16)]], 7); let (a, j) = t; println(f"p8 {j} {a.len()}") }
     { let t: (Vec[E], i64) = ([E.A(mkd(17)), E.B(2)], 7); let (a, j) = t; println(f"p9 {j} {a.len()}") }
     { let t: (Vec[Option[D]], i64) = ([Option.Some(mkd(18)), Option.None], 7); let (a, j) = t; println(f"p10 {j} {a.len()}") }

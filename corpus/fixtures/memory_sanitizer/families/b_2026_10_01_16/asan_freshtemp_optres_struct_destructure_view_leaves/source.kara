@@ -15,30 +15,30 @@ fn a8(n: i64) -> i64 { let mut t = 0; for i in 1..n { let z = match mo(i) { Opti
 fn a9(n: i64) -> i64 { let mut t = 0; for i in 1..n { let z = match mo(i) { Option.Some(H2 { v, .. }) => { if i == 2 { continue } v.id }, Option.None => 0 }; t = t + z; } t }
 fn a10(k: i64) -> i64 { if let Result.Ok(H2 { v, r, .. }) = rs(k) { v.id + r.id } else { 0 } }
 fn main() {
-    println(a1(3))
-    println("-")
-    println(a1(0))
-    println("-")
-    println(a2(3))
-    println("-")
-    println(a3(3))
-    println("-")
-    println(a4(3))
-    println("-")
-    println(a4(0))
-    println("-")
-    println(a5(3))
-    println("-")
-    println(a6(3))
-    println("-")
-    println(a7(3))
-    println("-")
-    println(a7(1))
-    println("-")
-    println(a8(3))
-    println("-")
-    println(a9(4))
-    println("-")
-    println(a10(4))
+    println(a1(3));
+    println("-");
+    println(a1(0));
+    println("-");
+    println(a2(3));
+    println("-");
+    println(a3(3));
+    println("-");
+    println(a4(3));
+    println("-");
+    println(a4(0));
+    println("-");
+    println(a5(3));
+    println("-");
+    println(a6(3));
+    println("-");
+    println(a7(3));
+    println("-");
+    println(a7(1));
+    println("-");
+    println(a8(3));
+    println("-");
+    println(a9(4));
+    println("-");
+    println(a10(4));
     println("end")
 }

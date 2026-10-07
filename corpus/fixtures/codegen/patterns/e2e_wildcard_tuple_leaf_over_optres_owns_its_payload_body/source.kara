@@ -35,28 +35,28 @@ fn frplain(){ let (r, _) = (mk(46), mk(146)); println(f"  rd{r.id}") }
 fn frnone(){ let n: Option[R] = Option.None; let (r, _) = (mk(47), n); println(f"  rd{r.id}") }
 
 fn main() {
-    println("wr");     wr()
-    println("wboth");  wboth()
-    println("w0");     w0()
-    println("resw");   resw()
-    println("nestw");  nestw()
-    println("projw");  projw()
-    println("nonew");  nonew()
-    println("loopw");  loopw()
-    println("bind");   bind()
-    println("bothst"); bothst()
-    println("optstr"); optstr()
-    println("undest"); undest()
-    println("marm");   marm()
-    println("i64opt"); i64opt()
-    println("frw");     frw()
-    println("frres");   frres()
-    println("frw0");    frw0()
-    println("frboth");  frboth()
-    println("frnest");  frnest()
-    println("frloop");  frloop()
-    println("frstr");   frstr()
-    println("frplain"); frplain()
-    println("frnone");  frnone()
+    println("wr");     wr();
+    println("wboth");  wboth();
+    println("w0");     w0();
+    println("resw");   resw();
+    println("nestw");  nestw();
+    println("projw");  projw();
+    println("nonew");  nonew();
+    println("loopw");  loopw();
+    println("bind");   bind();
+    println("bothst"); bothst();
+    println("optstr"); optstr();
+    println("undest"); undest();
+    println("marm");   marm();
+    println("i64opt"); i64opt();
+    println("frw");     frw();
+    println("frres");   frres();
+    println("frw0");    frw0();
+    println("frboth");  frboth();
+    println("frnest");  frnest();
+    println("frloop");  frloop();
+    println("frstr");   frstr();
+    println("frplain"); frplain();
+    println("frnone");  frnone();
     println("done")
 }

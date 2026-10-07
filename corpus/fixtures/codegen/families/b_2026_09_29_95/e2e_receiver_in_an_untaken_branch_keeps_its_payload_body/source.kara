@@ -17,9 +17,9 @@ fn main() {
   let mut k = 0;
   while k < 2 {
     let c = k == 1;
-    println(f"c {c}")
-    println(f"r {a1(c)}"); println(f"r {a2(c)}"); println(f"r {a3(c)}"); println(f"r {a4(c)}")
-    println(f"r {a5(c, true)}"); println(f"r {a5(true, c)}"); println(f"r {a6(c)}"); println(f"r {a7(c)}")
+    println(f"c {c}");
+    println(f"r {a1(c)}"); println(f"r {a2(c)}"); println(f"r {a3(c)}"); println(f"r {a4(c)}");
+    println(f"r {a5(c, true)}"); println(f"r {a5(true, c)}"); println(f"r {a6(c)}"); println(f"r {a7(c)}");
     k = k + 1;
   }
   println("end")

@@ -29,20 +29,20 @@ fn inner2(a: S2) { let o = Some(a); println(f"n{o.is_some()}") }
 fn innerho(a: S3) { let o = Ho.Full(a); println("nho") }
 fn n_params() { let s = mk(18); let o = midS3(s, true); let s2 = mk(19); let o2 = midS3(s2, false); let s3 = mk(20); let o3 = wrap3(s3); let s4 = mk(21); inner3(s4); let s5 = mk2(22); inner2(s5); let s6 = mk(23); innerho(s6); println("n") }
 fn main() {
-    a_some()
-    b_drop()
-    c_temp()
-    d_generic()
-    e_match()
-    f_unwrap()
-    g_push()
-    h_rebind()
-    i_reassign()
-    j_loop()
-    k_enum()
-    l_moves()
-    n_params()
+    a_some();
+    b_drop();
+    c_temp();
+    d_generic();
+    e_match();
+    f_unwrap();
+    g_push();
+    h_rebind();
+    i_reassign();
+    j_loop();
+    k_enum();
+    l_moves();
+    n_params();
     let r = ret();
-    println(f"m{r.is_some()}")
+    println(f"m{r.is_some()}");
     println("end")
 }

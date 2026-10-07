@@ -33,20 +33,20 @@ fn m() { let mut v: Vec[P] = Vec.new(); v.push(P { id: 13 }); let p = vv(v); pri
 fn n() { let w = w1(P { id: 14 }); println(f"n{w.o.is_some()}") }
 fn o() { let p = t1(P { id: 15 }); println(f"o{p.1}") }
 fn main() {
-    a(); println("a.")
-    b(); println("b.")
-    c(); println("c.")
-    d(); println("d.")
-    e(); println("e.")
-    f(); println("f.")
-    g(); println("g.")
-    h(); println("h.")
-    i(); println("i.")
-    j(); println("j.")
-    k(); println("k.")
-    l(); println("l.")
-    m(); println("m.")
-    n(); println("n.")
-    o(); println("o.")
+    a(); println("a.");
+    b(); println("b.");
+    c(); println("c.");
+    d(); println("d.");
+    e(); println("e.");
+    f(); println("f.");
+    g(); println("g.");
+    h(); println("h.");
+    i(); println("i.");
+    j(); println("j.");
+    k(); println("k.");
+    l(); println("l.");
+    m(); println("m.");
+    n(); println("n.");
+    o(); println("o.");
     println("end")
 }

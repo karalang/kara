@@ -833,7 +833,6 @@ fn collect_expr_bindings(e: &Expr, rb: &mut RegionBindings) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Identifier(_)
@@ -1083,7 +1082,6 @@ fn for_each_block_in_expr<'a>(e: &'a Expr, f: &mut impl FnMut(&'a Block)) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Identifier(_)
@@ -1470,7 +1468,6 @@ pub(super) fn expr_children_all<F: Fn(&Expr) -> bool + Copy>(e: &Expr, pred: F) 
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Identifier(_)

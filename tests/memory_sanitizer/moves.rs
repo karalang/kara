@@ -55,17 +55,17 @@ impl W { fn unwrap_a(self) -> R { return self.a; } fn opt(self) -> Option[R] { r
 fn p_plain(h: HoRes) { println(f"  pd{h.a.id}") }
 
 fn main() {
-  println("temp-recv-fields");  HoRes { a: mk(1), b: Result.Ok(mk(101)) }.plain()
-  println("temp-recv-own");     mk(2).ident()
-  println("temp-recv-ownd");    OwnD { a: mk(3), n: 3 }.eat()
-  println("temp-recv-pair");    Pair { a: mk(4), b: mk(104) }.eat()
-  println("temp-recv-refself"); Pair { a: mk(5), b: mk(105) }.peek()
-  println("param-twin");        p_plain(HoRes { a: mk(6), b: Result.Ok(mk(106)) })
-  println("local-recv");        let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; h.plain()
-  println("scalar-return");     let v = mk(8).area(); println(f"  v{v}")
-  println("returns-self");      let m = mk(9).me(); println(f"  m{m.id}")
-  println("hands-field-out");   let g = W { a: mk(10) }.unwrap_a(); println(f"  g{g.id}")
-  println("generic-return");    let o = W { a: mk(11) }.opt(); println("  built")
+  println("temp-recv-fields");  HoRes { a: mk(1), b: Result.Ok(mk(101)) }.plain();
+  println("temp-recv-own");     mk(2).ident();
+  println("temp-recv-ownd");    OwnD { a: mk(3), n: 3 }.eat();
+  println("temp-recv-pair");    Pair { a: mk(4), b: mk(104) }.eat();
+  println("temp-recv-refself"); Pair { a: mk(5), b: mk(105) }.peek();
+  println("param-twin");        p_plain(HoRes { a: mk(6), b: Result.Ok(mk(106)) });
+  println("local-recv");        let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; h.plain();
+  println("scalar-return");     let v = mk(8).area(); println(f"  v{v}");
+  println("returns-self");      let m = mk(9).me(); println(f"  m{m.id}");
+  println("hands-field-out");   let g = W { a: mk(10) }.unwrap_a(); println(f"  g{g.id}");
+  println("generic-return");    let o = W { a: mk(11) }.opt(); println("  built");
   println("done")
 }
 "#,

@@ -4498,7 +4498,7 @@ fn a_128bit_enum_payload_round_trips_in_the_interpreter() {
              let g: Box128 = Box128.Pair(1267650600228229401496703205376i128, 42i64);\n\
              match g {\n\
              Box128.W(x) => println(x),\n\
-             Box128.Pair(p, q) => { println(p) println(q) }\n\
+             Box128.Pair(p, q) => { println(p); println(q) }\n\
              Box128.Nothing => println(\"nb\"),\n\
              }\n\
              let i: Option[i128] = None;\n\

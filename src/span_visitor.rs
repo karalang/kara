@@ -184,7 +184,6 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         Item::EffectGroup(g) => visit(&g.span),
         Item::EffectVerbDecl(v) => visit(&v.span),
         Item::LayoutDef(l) => visit(&l.span),
-        Item::UseDecl(u) => visit(&u.span),
         Item::Import(i) => visit(&i.span),
         Item::ConstDecl(c) => {
             visit(&c.span);
@@ -507,7 +506,6 @@ fn visit_expr(e: &Expr, visit: &mut impl FnMut(&Span)) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Identifier(_)
@@ -917,7 +915,6 @@ fn walk_expr_mut(e: &mut Expr, visit: &mut impl MutVisitor) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Identifier(_)
@@ -1428,7 +1425,6 @@ fn walk_item_mut(item: &mut Item, visit: &mut impl MutVisitor) {
         Item::EffectGroup(g) => visit.span(&mut g.span),
         Item::EffectVerbDecl(v) => visit.span(&mut v.span),
         Item::LayoutDef(l) => visit.span(&mut l.span),
-        Item::UseDecl(u) => visit.span(&mut u.span),
         Item::Import(i) => visit.span(&mut i.span),
         Item::ConstDecl(c) => {
             visit.span(&mut c.span);

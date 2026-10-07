@@ -47,19 +47,19 @@ fn f6(k: i64) -> Result[i64, E6] { let x = e_q(k)?; Result.Ok(x) }
 fn f7(k: i64) -> Result[i64, E1] { let m = M { k: 1 }; let x = m.get(k)?; Result.Ok(x) }
 fn main() {
     match f1(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f1(2) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f2(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.v) }
-    println("-")
+    println("-");
     match f3(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f4(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f5(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f6(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f7(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
     println("end")
 }"#;

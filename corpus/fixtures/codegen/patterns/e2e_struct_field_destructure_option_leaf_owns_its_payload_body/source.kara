@@ -19,14 +19,14 @@ fn ostr() { let h = HoS { a: mk(8), b: Option.Some(f"s8") }; let HoS { a, b } = 
 fn ren()  { let h = Ho2 { a: mk(10), b: Option.Some(mk(110)) }; let Ho2 { a: p, b: q } = h; println(f"  rd{p.id}") }
 
 fn main() {
-    println("loc");   loc()
-    println("lit");   lit()
-    println("call");  call()
-    println("ctl");   ctl()
-    println("param"); param(mkho(5))
-    println("used");  used()
-    println("none");  none()
-    println("ostr");  ostr()
-    println("ren");   ren()
+    println("loc");   loc();
+    println("lit");   lit();
+    println("call");  call();
+    println("ctl");   ctl();
+    println("param"); param(mkho(5));
+    println("used");  used();
+    println("none");  none();
+    println("ostr");  ostr();
+    println("ren");   ren();
     println("done")
 }

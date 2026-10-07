@@ -135,14 +135,14 @@ fn wesc()   { let t: (R, Result[W, String]) = (mk(8), Result.Ok(mkw(108))); let 
               let g = match b { Result.Ok(w) => w, Result.Err(_) => mkw(0) }; println(f"  got{g.id}") }
 
 fn main() {
-  println("read");   read()
-  println("call");   call()
-  println("inner");  inner()
-  println("esc");    esc()
-  println("errc");   errc()
-  println("wread");  wread()
-  println("winner"); winner()
-  println("wesc");   wesc()
+  println("read");   read();
+  println("call");   call();
+  println("inner");  inner();
+  println("esc");    esc();
+  println("errc");   errc();
+  println("wread");  wread();
+  println("winner"); winner();
+  println("wesc");   wesc();
   println("done")
 }
 "#,
@@ -729,20 +729,20 @@ fn wildres() { let (ro, _) = (mk(15), Result[R, String].Ok(mk(115))); println(f"
 fn strres()  { let (rp, op) = (mk(17), Result[String, String].Ok(f"p17")); println(f"  s{rp.id}") }
 
 fn main() {
-  println("annres");  annres()
-  println("unann");   unann()
-  println("fresh");   fresh()
-  println("errside"); errside()
-  println("consok");  consok()
-  println("conserr"); conserr()
-  println("moved");   moved()
-  println("ret");     ret()
-  println("arg");     arg()
-  println("field");   field()
-  println("loopr");   loopr()
-  println("nested");  nested()
-  println("wildres"); wildres()
-  println("strres");  strres()
+  println("annres");  annres();
+  println("unann");   unann();
+  println("fresh");   fresh();
+  println("errside"); errside();
+  println("consok");  consok();
+  println("conserr"); conserr();
+  println("moved");   moved();
+  println("ret");     ret();
+  println("arg");     arg();
+  println("field");   field();
+  println("loopr");   loopr();
+  println("nested");  nested();
+  println("wildres"); wildres();
+  println("strres");  strres();
   println("done")
 }
 "#,
@@ -856,18 +856,18 @@ fn fld()     { let hm = H { a: mk(13), b: Option.Some(mk(113)) }; let H { a, b }
 fn loc()     { let on = Option.Some(mk(11)); let qn = on; println(f"  o{qn.is_some()}") }
 
 fn main() {
-  println("rebind");  rebind()
-  println("ret");     ret()
-  println("twohop");  twohop()
-  println("loopreb"); loopreb()
-  println("slot0");   slot0()
-  println("matched"); matched()
-  println("arg");     arg()
-  println("stay");    stay()
-  println("plain");   plain()
-  println("instr");   instr()
-  println("fld");     fld()
-  println("loc");     loc()
+  println("rebind");  rebind();
+  println("ret");     ret();
+  println("twohop");  twohop();
+  println("loopreb"); loopreb();
+  println("slot0");   slot0();
+  println("matched"); matched();
+  println("arg");     arg();
+  println("stay");    stay();
+  println("plain");   plain();
+  println("instr");   instr();
+  println("fld");     fld();
+  println("loc");     loc();
   println("done")
 }
 "#,
@@ -8721,13 +8721,13 @@ fn payoutc(c: C) -> Ctl { return match c { C.T(x) => x, C.U(n) => mkc(n) }; }\n\
 fn store(w: W, out: mut ref Vec[W]) { out.push(w); }\n\
 fn main() {\n\
   // THE DEFECT: hand a boxed, copy-declined payload out of the arm.\n\
-  let p = payout(W.T(mkx(23))); println(f\"a={p.a.unwrap_or(0)}\")\n\
+  let p = payout(W.T(mkx(23))); println(f\"a={p.a.unwrap_or(0)}\");\n\
   // the U arm of the same callee -- no payload box to free at all\n\
-  let q = payout(W.U(24)); println(f\"b={q.a.unwrap_or(0)}\")\n\
+  let q = payout(W.U(24)); println(f\"b={q.a.unwrap_or(0)}\");\n\
   // COPY-SUPPORTED twin: entry-copied, the envelope is the callee's own\n\
-  let r = payoutc(C.T(mkc(25))); println(f\"c={r.n}\")\n\
+  let r = payoutc(C.T(mkc(25))); println(f\"c={r.n}\");\n\
   // a neighbour that was already clean and must stay clean\n\
-  let mut v: Vec[W] = Vec.new(); store(W.T(mkx(27)), mut v); println(f\"e={v.len()}\")\n\
+  let mut v: Vec[W] = Vec.new(); store(W.T(mkx(27)), mut v); println(f\"e={v.len()}\");\n\
   println(\"end\")\n\
 }\n",
         &["a=23", "b=24", "c=25", "e=1", "end"],
@@ -10730,7 +10730,7 @@ fn round() {
     println("end");
 }
 fn main() {
-    round()
+    round();
     round()
 }
 "#,

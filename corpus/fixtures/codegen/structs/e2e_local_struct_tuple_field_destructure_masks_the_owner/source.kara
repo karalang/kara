@@ -23,17 +23,17 @@ fn n11() { let g = G4 { g: G { h: H { pe: (mk(34), 0) } } }; let (r, k) = g.g.h.
 fn n12() { let g = G { h: H { pe: (mk(35), 0) } }; println(f"  b{g.h.pe.0.id}/{g.h.pe.0.tag}") }
 
 fn main() {
-    println("local1hop");   n1();                      println("local1hop end")
-    println("norebind");    n2();                      println("norebind end")
-    println("baretuple");   n3();                      println("baretuple end")
-    println("sibling");     n4();                      println("sibling end")
-    println("bothelems");   n5();                      println("bothelems end")
-    println("noDestr");     n6();                      println("noDestr end")
-    println("paramroot");   n7(H { pe: (mk(27), 0) }); println("paramroot end")
-    println("twohop");      n8();                      println("twohop end")
-    println("outersib");    n9();                      println("outersib end")
-    println("midsib");      n10();                     println("midsib end")
-    println("threehop");    n11();                     println("threehop end")
-    println("deepNoDestr"); n12();                     println("deepNoDestr end")
+    println("local1hop");   n1();                      println("local1hop end");
+    println("norebind");    n2();                      println("norebind end");
+    println("baretuple");   n3();                      println("baretuple end");
+    println("sibling");     n4();                      println("sibling end");
+    println("bothelems");   n5();                      println("bothelems end");
+    println("noDestr");     n6();                      println("noDestr end");
+    println("paramroot");   n7(H { pe: (mk(27), 0) }); println("paramroot end");
+    println("twohop");      n8();                      println("twohop end");
+    println("outersib");    n9();                      println("outersib end");
+    println("midsib");      n10();                     println("midsib end");
+    println("threehop");    n11();                     println("threehop end");
+    println("deepNoDestr"); n12();                     println("deepNoDestr end");
     println("done")
 }

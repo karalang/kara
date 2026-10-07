@@ -21,7 +21,7 @@ fn y9() -> i64 { let o = Option.Some(h(15)); match o { Option.Some(H2 { v, n, ..
 fn yb() -> i64 { let o = Option.Some(h(16)); match o { Option.Some(H2 { v, n, .. }) => { println(v.id); n }, Option.None => 0 } }
 fn yc() -> i64 { let o: Result[H2, R] = Result.Ok(h(17)); match o { Result.Ok(H2 { v, .. }) => v.id, Result.Err(e) => e.id } }
 fn main() {
-    println(m1()); println(m2()); println(m3()); println(m4()); println(m5()); println(m6()); println(m7())
-    println(y6()); println(y7()); println(y8()); println(y9()); println(yb()); println(yc())
+    println(m1()); println(m2()); println(m3()); println(m4()); println(m5()); println(m6()); println(m7());
+    println(y6()); println(y7()); println(y8()); println(y9()); println(yb()); println(yc());
     println("end")
 }

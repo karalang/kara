@@ -14,13 +14,13 @@ fn u7(h: H)  { let x = h.pe; println(f"  b{x.0.id}/{x.0.tag}") }
 fn u8()      { let h = H { pe: (mk(48), 0) }; let x = h.pe; let y = x; println(f"  b{y.0.id}/{y.0.tag}") }
 
 fn main() {
-    println("bound");     u1();                      println("bound end")
-    println("project");   u2();                      println("project end")
-    println("destr");     u3();                      println("destr end")
-    println("deep");      u4();                      println("deep end")
-    println("literal");   u5();                      println("literal end")
-    println("nobind");    u6();                      println("nobind end")
-    println("paramroot"); u7(H { pe: (mk(47), 0) }); println("paramroot end")
-    println("rebound");   u8();                      println("rebound end")
+    println("bound");     u1();                      println("bound end");
+    println("project");   u2();                      println("project end");
+    println("destr");     u3();                      println("destr end");
+    println("deep");      u4();                      println("deep end");
+    println("literal");   u5();                      println("literal end");
+    println("nobind");    u6();                      println("nobind end");
+    println("paramroot"); u7(H { pe: (mk(47), 0) }); println("paramroot end");
+    println("rebound");   u8();                      println("rebound end");
     println("done")
 }

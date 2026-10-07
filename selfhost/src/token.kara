@@ -193,10 +193,11 @@ pub enum Token {
     IntegerOutOfRange(String, String),
     Float(f64, String),
     StringLiteral(String),
-    MultiStringLiteral(String),
     InterpolatedStringLiteral(Vec[InterpPart]),
     CStringLiteral(CStr),
     CharLiteral(char),
+    // `'outer` — a loop / labeled-block label, without its quote.
+    Label(String),
     ByteLiteral(u8),
     // `b"…"` — the escape-resolved bytes. The Rust twin's
     // `Token::ByteStringLiteral`; the parser turns it into the

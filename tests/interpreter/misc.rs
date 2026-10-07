@@ -3099,7 +3099,7 @@ fn gpu_mean_is_the_sum_divided_by_the_count() {
         "fn main() {\n\
         \x20   let mut v: Vec[f32] = [];\n\
         \x20   let mut p: Vec[f32] = [];\n\
-        \x20   for i in 0..4096 { v.push(0.1) p.push(0.1) }\n\
+        \x20   for i in 0..4096 { v.push(0.1); p.push(0.1) }\n\
         \x20   let m = gpu.mean(v);\n\
         \x20   match m {\n\
         \x20       Some(x) => println(f\"{x}\"),\n\
@@ -3143,11 +3143,11 @@ fn gpu_dot_is_the_sum_of_the_products() {
         \x20   for i in 0..4096 {\n\
         \x20       let x: f32 = 0.1;\n\
         \x20       let y: f32 = 1.0;\n\
-        \x20       a.push(x)\n\
-        \x20       b.push(y)\n\
+        \x20       a.push(x);\n\
+        \x20       b.push(y);\n\
         \x20       p.push(x * y)\n\
         \x20   }\n\
-        \x20   println(f\"{gpu.dot(a, b)}\")\n\
+        \x20   println(f\"{gpu.dot(a, b)}\");\n\
         \x20   println(f\"{gpu.sum(p)}\")\n\
         }",
     );

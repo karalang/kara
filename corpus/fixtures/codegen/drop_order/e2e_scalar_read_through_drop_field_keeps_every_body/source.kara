@@ -30,16 +30,16 @@ fn cell_shared() { let h = Hb { a: R2 { id: 11, sh: Box1 { v: 111 } }, b: R2 { i
 fn cell_live()   { let h = H2 { a: mk(10), b: mk(110) }; let z = h.a.id; println(f"  z{z}"); println(f"  b{h.b.id}") }
 
 fn main() {
-    println("scalar");   cell_scalar()
-    println("method");   cell_method()
-    println("nodest");   cell_nodest()
-    println("three");    cell_three()
-    println("own");      cell_own()
-    println("whole");    cell_whole()
-    println("plain");    cell_plain()
-    println("move");     cell_move()
-    println("threehop"); cell_three_hop()
-    println("shared");   cell_shared()
-    println("live");     cell_live()
+    println("scalar");   cell_scalar();
+    println("method");   cell_method();
+    println("nodest");   cell_nodest();
+    println("three");    cell_three();
+    println("own");      cell_own();
+    println("whole");    cell_whole();
+    println("plain");    cell_plain();
+    println("move");     cell_move();
+    println("threehop"); cell_three_hop();
+    println("shared");   cell_shared();
+    println("live");     cell_live();
     println("done")
 }

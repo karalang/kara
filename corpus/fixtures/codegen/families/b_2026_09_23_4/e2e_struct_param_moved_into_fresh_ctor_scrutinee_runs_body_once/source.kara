@@ -19,20 +19,20 @@ fn h3(a: R) -> W { match Some(a) { Some(v) => { return W { r: v, n: 1 } } None =
 fn h4(a: R) -> i64 { match Some(a) { Some(v) => { let s = W { r: v, n: 3 }; return s.n } None => { return 0 } } }
 fn h7(a: R) -> i64 { let k = match Some(a) { Some(v) => v.id, None => 0 }; return k }
 fn main() {
-    println("-t1"); let z = t1(mkr(1)); println(f"y{z}")
-    println("-t2"); let z = t2(mkr(2)); println(f"y{z}")
-    println("-t3"); let z = t3(mkr(3)); println(f"y{z}")
-    println("-t4"); let z = t4(mkr(4)); println(f"y{z}")
-    println("-t6"); let z = t6(mkr(6)); println(f"y{z}")
-    println("-t7"); let z = t7(W { r: mkr(7), n: 70 }); println(f"y{z}")
-    println("-t9"); let z = t9(mkr(9)); println(f"y{z}")
-    println("-ta"); let z = t10(mkr(10)); println(f"y{z}")
-    println("-tb"); let z = t11(mkr(11), mkr(12)); println(f"y{z}")
-    println("-tc"); let z = t12(mkr(13)); println(f"y{z}")
-    println("-tn"); let a = mkr(14); let z = t2(a); println(f"y{z}")
-    println("-h2f"); let r = h2(mkr(15), false); println(f"y{r.id}")
-    println("-h3"); let w = h3(mkr(16)); println(f"y{w.n}")
-    println("-h4"); let z = h4(mkr(17)); println(f"y{z}")
-    println("-h7"); let z = h7(mkr(18)); println(f"y{z}")
+    println("-t1"); let z = t1(mkr(1)); println(f"y{z}");
+    println("-t2"); let z = t2(mkr(2)); println(f"y{z}");
+    println("-t3"); let z = t3(mkr(3)); println(f"y{z}");
+    println("-t4"); let z = t4(mkr(4)); println(f"y{z}");
+    println("-t6"); let z = t6(mkr(6)); println(f"y{z}");
+    println("-t7"); let z = t7(W { r: mkr(7), n: 70 }); println(f"y{z}");
+    println("-t9"); let z = t9(mkr(9)); println(f"y{z}");
+    println("-ta"); let z = t10(mkr(10)); println(f"y{z}");
+    println("-tb"); let z = t11(mkr(11), mkr(12)); println(f"y{z}");
+    println("-tc"); let z = t12(mkr(13)); println(f"y{z}");
+    println("-tn"); let a = mkr(14); let z = t2(a); println(f"y{z}");
+    println("-h2f"); let r = h2(mkr(15), false); println(f"y{r.id}");
+    println("-h3"); let w = h3(mkr(16)); println(f"y{w.n}");
+    println("-h4"); let z = h4(mkr(17)); println(f"y{z}");
+    println("-h7"); let z = h7(mkr(18)); println(f"y{z}");
     println("end")
 }

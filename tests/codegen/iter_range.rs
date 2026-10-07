@@ -382,45 +382,45 @@ impl Sink {
 }
 
 fn main() {
-  println("named")
+  println("named");
   { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); eat(a) }
-  println("  out")
+  println("  out");
 
-  println("temp")
-  eat(Option.Some(P { r: R { id: 5 }, n: 9 }))
-  println("  out")
+  println("temp");
+  eat(Option.Some(P { r: R { id: 5 }, n: 9 }));
+  println("  out");
 
-  println("after")
+  println("after");
   { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); eat_after(a) }
-  println("  out")
+  println("  out");
 
-  println("heap")
+  println("heap");
   { let a = Option.Some(Ph { h: H { name: "n5", id: 5 }, n: 9 }); eat_heap(a) }
-  println("  out")
+  println("  out");
 
-  println("tuple")
+  println("tuple");
   { let a = Option.Some((R { id: 5 }, 9)); eat_tuple(a) }
-  println("  out")
+  println("  out");
 
-  println("nomove")
+  println("nomove");
   { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); eat_nomove(a) }
-  println("  out")
+  println("  out");
 
-  println("method")
+  println("method");
   { let s = Sink { tag: 1 }; let a = Option.Some(P { r: R { id: 5 }, n: 9 }); s.take(a) }
-  println("  out")
+  println("  out");
 
-  println("assoc")
+  println("assoc");
   { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); Sink.grab(a) }
-  println("  out")
+  println("  out");
 
-  println("two")
+  println("two");
   { let a = Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }); eat_two(a) }
-  println("  out")
+  println("  out");
 
-  println("none")
+  println("none");
   { let a: Option[P] = Option.None; eat(a) }
-  println("  out")
+  println("  out");
 
   println("end")
 }
@@ -3506,9 +3506,9 @@ fn test_e2e_let_bound_range_control_flow_and_labels() {
                  let outer = 0..3;\n\
                  let inner = 0..3;\n\
                  let mut c = 0;\n\
-                 o: for i in outer {\n\
+                 'o: for i in outer {\n\
                      for j in inner {\n\
-                         if j == 2 { continue o; }\n\
+                         if j == 2 { continue 'o; }\n\
                          c = c + 1;\n\
                      }\n\
                  }\n\

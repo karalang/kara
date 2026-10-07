@@ -67,8 +67,8 @@ pub enum ExprKind {
     /// `b'A'` byte char literal — type `u8` (design.md § Byte and
     /// Byte-String Literals; phase-1-lexer slice).
     ByteLit(u8),
+    /// `"..."`, `"""..."""` and `r"..."` all lex to this one literal.
     StringLit(String),
-    MultiStringLit(String),
     InterpolatedStringLit(Vec<ParsedInterpolationPart>),
     /// `c"..."` C-string literal — UTF-8 bytes without the trailing
     /// NUL (codegen appends it). `source_len` records the textual

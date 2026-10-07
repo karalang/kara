@@ -22,23 +22,23 @@ fn k3() { let mut q = W { u: mk(9) }; { let x = q.u; println(f"b{x.id}") } q.u =
 fn k4w() -> W { let mut q = W { u: mk(9) }; let x = q.u; println(f"m{x.id}"); q.u = mk(8); return q }
 fn k4() { let w = k4w(); println(f"x{w.u.id}") }
 fn k7() {
-  let mut q = Q { u: mk(9) }; let x = q.u; println(f"x{x.id}")
+  let mut q = Q { u: mk(9) }; let x = q.u; println(f"x{x.id}");
   q.u = mk(8); let y = q.u; q.u = mk(7); println(f"y{y.id}{q.u.id}")
 }
 fn k8() { let mut q = W { u: mk(9) }; let x = q.u; println(f"x{x.id}") }
 fn main() {
-  println("-r1"); r1()
-  println("-r2"); r2()
-  println("-r3"); r3()
-  println("-r4"); r4()
-  println("-r5"); r5()
-  println("-r6"); r6()
-  println("-r7"); r7()
-  println("-k1"); k1()
-  println("-k2"); k2()
-  println("-k3"); k3()
-  println("-k4"); k4()
-  println("-k7"); k7()
-  println("-k8"); k8()
+  println("-r1"); r1();
+  println("-r2"); r2();
+  println("-r3"); r3();
+  println("-r4"); r4();
+  println("-r5"); r5();
+  println("-r6"); r6();
+  println("-r7"); r7();
+  println("-k1"); k1();
+  println("-k2"); k2();
+  println("-k3"); k3();
+  println("-k4"); k4();
+  println("-k7"); k7();
+  println("-k8"); k8();
   println("end")
 }

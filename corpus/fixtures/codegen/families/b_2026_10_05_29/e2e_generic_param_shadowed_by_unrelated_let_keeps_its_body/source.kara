@@ -8,14 +8,14 @@ fn g3[T](s: T, n: i64) -> i64 { let t = n; t }
 fn g8[T](s: T, n: i64) -> i64 { let m = s; let s = n; s }
 fn g9[T](s: T, n: i64) -> i64 { let s = n + 1; s }
 fn main() {
-    println(f"k{g1(R { id: 13 }, 4)}"); println("_a1")
-    let a = R { id: 14 }; println(f"k{g1(a, 4)}"); println("_a2")
-    println(f"k{g1(mks(20), 4)}"); println("_a3")
-    let a = mks(21); let n = g1(a, 5); println(f"k{n}"); println("_a4")
-    println(f"k{g2(Some(R { id: 22 }), 4)}"); println("_a5")
-    let o = Some(R { id: 23 }); println(f"k{g2(o, 4)}"); println("_a6")
-    println(f"k{g3(R { id: 24 }, 4)}"); println("_a7")
-    println(f"k{g8(R { id: 25 }, 4)}"); println("_a8")
-    let a = R { id: 26 }; println(f"k{g9(a, 4)}"); println("_a9")
+    println(f"k{g1(R { id: 13 }, 4)}"); println("_a1");
+    let a = R { id: 14 }; println(f"k{g1(a, 4)}"); println("_a2");
+    println(f"k{g1(mks(20), 4)}"); println("_a3");
+    let a = mks(21); let n = g1(a, 5); println(f"k{n}"); println("_a4");
+    println(f"k{g2(Some(R { id: 22 }), 4)}"); println("_a5");
+    let o = Some(R { id: 23 }); println(f"k{g2(o, 4)}"); println("_a6");
+    println(f"k{g3(R { id: 24 }, 4)}"); println("_a7");
+    println(f"k{g8(R { id: 25 }, 4)}"); println("_a8");
+    let a = R { id: 26 }; println(f"k{g9(a, 4)}"); println("_a9");
     println("end")
 }

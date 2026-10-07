@@ -57,8 +57,8 @@ fn main() {
  { let w = W { n: 1 }; let g: G1[R] = G1.Y(mk(46)); let b = w.keep(g, true); println("m_back") }
  { let w = W { n: 1 }; let b = w.keep(G1.Y(mk(47)), false); println("mt_dies") }
  { let g: G1[i64] = G1.Y(5); let b = two(g, G1.N, false); println("scalar") }
- println(f"{early(true)}")
- println(f"{early(false)}")
+ println(f"{early(true)}");
+ println(f"{early(false)}");
  println("end")
 }"#);
     assert_eq!(out, "dR1\nn_bound_dies\ndR2\nn_bound_back\ndR3\nn_disc_dies\ndR4\nn_disc_back\ndR5\nn_disc_id\ndR6\nn_bound_id\ndR7\nn_wrap_dies\ndR11\nt_bound_dies\ndR12\nt_bound_back\ndR13\nt_disc_dies\ndR14\nt_disc_back\ndR15\nt_disc_id\ndR16\nt_bound_id\ndR17\nt_wrap_dies\ns_bound_dies\ns_disc_back\ns_disc_dies\ns_disc_id\ns_n_disc_dies\ndR30\ndR31\nt_loop\ndR40\nn_ifexpr\ndR42\ndR41\ntwo_a\ndR43\ndR44\ntwo_b\ndR45\nm_dies\ndR46\nm_back\ndR47\nmt_dies\nscalar\ndR50\n1\ndR50\nearly_tail\n0\nend\n", "got:\n{out}");

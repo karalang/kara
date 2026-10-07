@@ -35,22 +35,22 @@ fn cp() { let o = noret(mk2(17)); println(f"s{o.is_some()}"); }
 fn cq() { let mut i = 0; while i < 2 { let o = midS(mk2(20 + i), i == 0); println(f"s{o.is_some()}"); i = i + 1; } }
 fn cr() { let o = wrapS(mk2(18)); let q = o; println(f"s{q.is_some()}"); }
 fn main() {
-    ca(); println("a.")
-    cb(); println("b.")
-    cc(); println("c.")
-    cd(); println("d.")
-    ce(); println("e.")
-    cf(); println("f.")
-    cg(); println("g.")
-    ch(); println("h.")
-    ci(); println("i.")
-    ck(); println("k.")
-    cl(); println("l.")
-    cm(); println("m.")
-    cn(); println("n.")
-    co(); println("o.")
-    cp(); println("p.")
-    cq(); println("q.")
-    cr(); println("r.")
+    ca(); println("a.");
+    cb(); println("b.");
+    cc(); println("c.");
+    cd(); println("d.");
+    ce(); println("e.");
+    cf(); println("f.");
+    cg(); println("g.");
+    ch(); println("h.");
+    ci(); println("i.");
+    ck(); println("k.");
+    cl(); println("l.");
+    cm(); println("m.");
+    cn(); println("n.");
+    co(); println("o.");
+    cp(); println("p.");
+    cq(); println("q.");
+    cr(); println("r.");
     println("end")
 }

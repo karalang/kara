@@ -14,7 +14,7 @@ fn fwd(a: D) -> Array[D, 1] { keep1(a, mkd(92)) }
 fn condt(a: D, k: bool) -> Array[D, 1] { if k { [a] } else { [mkd(93)] } }
 fn tup(a: D, b: D) -> (D, D) { (a, b) }
 fn main() {
-    println(f"a {usea(tail(mkd(1), mkd(2)))}")
+    println(f"a {usea(tail(mkd(1), mkd(2)))}");
     { let x = tail(mkd(3), mkd(4)); println(f"b {x[0].id}") }
     { let p = mkd(5); let q = mkd(6); let x = tail(p, q); println(f"c {x[1].id}") }
     { let x = vtail(mkd(7), mkd(8)); println(f"d {x.len()}") }

@@ -1077,15 +1077,6 @@ impl super::Parser {
                     kind: ExprKind::StringLit(s),
                 })
             }
-            Token::MultiStringLiteral(s) => {
-                let s = s.clone();
-                self.advance();
-                Some(Expr {
-                    id: crate::ids::NodeId::DUMMY,
-                    span: self.span_from(&start),
-                    kind: ExprKind::MultiStringLit(s),
-                })
-            }
             &Token::CStringLiteral {
                 ref bytes,
                 source_len,
@@ -1500,6 +1491,24 @@ impl super::Parser {
                     span: self.span_from(&start),
                     kind: ExprKind::Return(value),
                 })
+            }
+
+            // `'outer: loop { .. }` / `'outer: { .. }` — a labeled loop or block.
+            Token::Label(name) => {
+                let name = name.clone();
+                self.advance();
+                if self.check(&Token::Colon) && self.is_loop_label() {
+                    self.advance(); // consume ':'
+                    return self.parse_labeled_after_colon(name, start);
+                }
+                self.error_at(
+                    &format!(
+                        "a label is followed by `:` and a loop or block: \
+                         `'{name}: loop {{ .. }}`"
+                    ),
+                    start,
+                );
+                None
             }
 
             // Break
@@ -2216,49 +2225,14 @@ impl super::Parser {
             return self.parse_prefix_collection_literal("Vec".to_string(), &start);
         }
 
-        // Check for labeled loop / labeled block: `label: while/for/loop`
-        // or `label: { ... }`. `is_loop_label` accepts both shapes.
+        // The pre-sigil label spelling `outer: loop { .. }`. Labels are now
+        // written `'outer` (design review 2026-10-07 § 5); diagnose with the
+        // rewrite and parse the construct the author meant.
         if self.check(&Token::Colon) && self.is_loop_label() {
+            self.error_bare_label(&name, &start);
+            self.bare_label_names.insert(name.clone());
             self.advance(); // consume ':'
-            match self.peek_token_ref() {
-                Token::While => return self.parse_while_expr_with_label(Some(name)),
-                Token::For => return self.parse_for_expr_with_label(Some(name)),
-                Token::Loop => {
-                    self.advance();
-                    self.loop_labels.push((name.clone(), LabelKind::Loop));
-                    let body = self.parse_block()?;
-                    self.loop_labels.pop();
-                    return Some(Expr {
-                        id: crate::ids::NodeId::DUMMY,
-                        span: self.span_from(&start),
-                        kind: ExprKind::Loop {
-                            label: Some(name),
-                            body,
-                            attributes: Vec::new(),
-                        },
-                    });
-                }
-                Token::LeftBrace => {
-                    // Labeled block: `label: { ... }`. Use the label
-                    // identifier's span (`start`) for diagnostic span fidelity
-                    // (LB hard-stop default fallback: label_span on
-                    // LabeledBlock only; loop-side parity is v1.x polish).
-                    let label_span = start;
-                    self.loop_labels.push((name.clone(), LabelKind::Block));
-                    let body = self.parse_block()?;
-                    self.loop_labels.pop();
-                    return Some(Expr {
-                        id: crate::ids::NodeId::DUMMY,
-                        span: self.span_from(&start),
-                        kind: ExprKind::LabeledBlock {
-                            label: name,
-                            label_span,
-                            body,
-                        },
-                    });
-                }
-                _ => unreachable!(),
-            }
+            return self.parse_labeled_after_colon(name, start);
         }
 
         // Check for path: Name.Name2.... Type/Const-class idents (uppercase leading)
@@ -3091,6 +3065,70 @@ impl super::Parser {
 
     // ── Label Helpers ─────────────────────────────────────────────
 
+    /// The construct after a label and its `:` — `while`, `for`, `loop`, or
+    /// a block. The cursor sits just past the `:`; the caller has checked the
+    /// next token with [`Self::is_loop_label`].
+    fn parse_labeled_after_colon(&mut self, name: String, start: Span) -> Option<Expr> {
+        match self.peek_token_ref() {
+            Token::While => self.parse_while_expr_with_label(Some(name)),
+            Token::For => self.parse_for_expr_with_label(Some(name)),
+            Token::Loop => {
+                self.advance();
+                self.loop_labels.push((name.clone(), LabelKind::Loop));
+                let body = self.parse_block()?;
+                self.loop_labels.pop();
+                Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: self.span_from(&start),
+                    kind: ExprKind::Loop {
+                        label: Some(name),
+                        body,
+                        attributes: Vec::new(),
+                    },
+                })
+            }
+            Token::LeftBrace => {
+                // Labeled block: `label: { ... }`. Use the label
+                // identifier's span (`start`) for diagnostic span fidelity
+                // (LB hard-stop default fallback: label_span on
+                // LabeledBlock only; loop-side parity is v1.x polish).
+                let label_span = start;
+                self.loop_labels.push((name.clone(), LabelKind::Block));
+                let body = self.parse_block()?;
+                self.loop_labels.pop();
+                Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: self.span_from(&start),
+                    kind: ExprKind::LabeledBlock {
+                        label: name,
+                        label_span,
+                        body,
+                    },
+                })
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// `outer: loop` / `break outer` / `continue outer` — the label spelled
+    /// without its `'`. Reported once per site with an edit that inserts the
+    /// quote, so `karac fix` migrates old source mechanically.
+    fn error_bare_label(&mut self, name: &str, at: &Span) {
+        self.error_at(
+            &format!("labels are written with a leading `'`: `'{name}`"),
+            *at,
+        );
+        self.fix_edits.insert(
+            crate::resolver::SpanKey::from_span(at),
+            crate::resolver::TextEdit {
+                offset: at.offset,
+                length: 0,
+                replacement: "'".to_string(),
+            },
+        );
+    }
+
+
     /// Check if current position is `ident:` followed by a loop keyword
     /// (labeled loop) or `{` (labeled block — design.md § Loops > "Labeled
     /// blocks", syntax.md §5.3). Both forms share the `IDENT ":"` prefix
@@ -3107,40 +3145,39 @@ impl super::Parser {
             )
     }
 
-    /// Parse break arguments: `break [label] [expr]`
+    /// Parse break arguments: `break ['label] [expr]`. A bare identifier is
+    /// always a value — the label carries its `'`.
     fn parse_break_args(&mut self) -> (Option<String>, Option<Box<Expr>>) {
-        if self.check(&Token::Semicolon)
-            || self.check(&Token::RightBrace)
-            || self.check(&Token::Comma)
-        {
+        if self.at_break_end() {
             return (None, None);
         }
-        if let Token::Identifier { name, .. } = self.peek_token_ref() {
-            let name = name.clone();
-            let is_known_label = self.loop_labels.iter().any(|(n, _)| n == &name);
-            if self.pos + 1 < self.tokens.len() {
-                let after = &self.tokens[self.pos + 1].token;
-                if is_known_label
-                    && matches!(after, Token::Semicolon | Token::RightBrace | Token::Comma)
-                {
-                    // `break label;` / `break label,` — known loop label, no value
-                    self.advance();
-                    return (Some(name), None);
-                }
-                // `break label expr` — identifier NOT followed by ; , or }
-                // means label + value (only if it's a known label)
-                if is_known_label
-                    && !matches!(after, Token::Semicolon | Token::RightBrace | Token::Comma)
-                {
-                    self.advance();
-                    let value = self.parse_expression().map(Box::new);
-                    return (Some(name), value);
-                }
+        let label = match self.peek_token_ref() {
+            Token::Label(name) => Some(name.clone()),
+            // `break outer` naming an enclosing label: the pre-sigil spelling.
+            // Read it as the label it meant, but say how it is written now.
+            Token::Identifier { name, .. }
+                if self.bare_label_names.contains(name)
+                    && self.loop_labels.iter().any(|(n, _)| n == name) =>
+            {
+                let name = name.clone();
+                let span = self.current_span();
+                self.error_bare_label(&name, &span);
+                Some(name)
+            }
+            _ => None,
+        };
+        if label.is_some() {
+            self.advance();
+            if self.at_break_end() {
+                return (label, None);
             }
         }
-        // Parse as value expression (covers `break expr;` and `break ident;`)
         let value = self.parse_expression().map(Box::new);
-        (None, value)
+        (label, value)
+    }
+
+    fn at_break_end(&self) -> bool {
+        self.check(&Token::Semicolon) || self.check(&Token::RightBrace) || self.check(&Token::Comma)
     }
 
     /// Parse continue label: `continue [label]`. Returns the label name and
@@ -3150,63 +3187,50 @@ impl super::Parser {
         if self.check(&Token::Semicolon) || self.check(&Token::RightBrace) {
             return (None, None);
         }
-        if let Token::Identifier { name, .. } = self.peek_token_ref() {
-            let name = name.clone();
-            let span = self.current_span();
-            self.advance();
-            (Some(name), Some(span))
-        } else {
-            (None, None)
+        match self.peek_token_ref() {
+            Token::Label(name) => {
+                let name = name.clone();
+                // The span names the label without its `'`, so a rename fix
+                // replaces the name and keeps the sigil.
+                let mut span = self.current_span();
+                span.offset += 1;
+                span.column += 1;
+                span.length = span.length.saturating_sub(1);
+                self.advance();
+                (Some(name), Some(span))
+            }
+            // `continue outer` — continue takes no value, so a bare name here
+            // can only be a label written without its `'`.
+            Token::Identifier { name, .. } => {
+                let name = name.clone();
+                let span = self.current_span();
+                self.error_bare_label(&name, &span);
+                self.advance();
+                (Some(name), Some(span))
+            }
+            _ => (None, None),
         }
     }
 
-    /// Recover a `match` arm whose body is an ASSIGNMENT written without
-    /// braces — `Some(q) => total = total + q,`.
+    /// A `match` arm whose body is an assignment written without braces —
+    /// `Some(q) => total = total + q,` or `=> n += 1,`. Legal (design review
+    /// 2026-10-07 § 5): the body is the block holding that one assignment, as
+    /// if the author had written `=> { total = total + q; }`.
     ///
-    /// Assignment is a statement in Kāra, not an expression, so the arm body
-    /// (parsed with `parse_expression`) stops at `total` and the `=` is a hard
-    /// parse error. Left to the generic path that error read `Expected
-    /// RightBrace, found Equal`, which names neither the rule nor the fix, and
-    /// — worse — aborted the whole `match`, so the enclosing function's
-    /// remaining statements resynchronized at TOP LEVEL and drew a bogus third
-    /// diagnostic claiming the file "contains both top-level statements and an
-    /// explicit `fn main()`". Three errors, two of them fictional, for one
-    /// missing pair of braces.
-    ///
-    /// So consume the assignment here instead: report exactly what is wrong
-    /// with the fix inline, then build the arm body the author meant — a block
-    /// holding the assignment statement, unit-typed like the braced form they
-    /// should have written. Parsing continues at the next arm, the cascade
-    /// disappears, and downstream phases see a well-formed tree.
-    ///
-    /// Returns the recovered block when an assignment was consumed, and the
-    /// untouched body otherwise (the overwhelmingly common case) — so the
+    /// Assignment is a statement, so `parse_expression` stops at the target
+    /// and the caller hands it here. Returns the block when an assignment was
+    /// consumed, and the untouched body otherwise (the common case), so the
     /// caller can use the result unconditionally.
     fn recover_assignment_arm_body(&mut self, expr: Expr) -> Expr {
         let target_span = expr.span;
-        let (op_span, compound) = if self.check(&Token::Equal) {
-            let span = self.current_span();
-            self.advance();
-            (span, None)
+        let compound = if self.eat(&Token::Equal) {
+            None
         } else {
-            let span = self.current_span();
             match self.try_compound_op() {
-                Some(op) => (span, Some(op)),
+                Some(op) => Some(op),
                 None => return expr,
             }
         };
-
-        // The suggested form must PARSE. `{ place = value }` does not:
-        // an assignment is a statement, and a block's final statement needs
-        // its terminator, so dropping the `;` moves the error rather than
-        // fixing it (`Expected Semicolon, found RightBrace`). B-2026-08-13-13
-        // — a diagnostic that prescribes non-compiling code is worse than one
-        // that says nothing, because the reader trusts it.
-        self.error_at(
-            "assignment is a statement, not an expression, so it cannot be a bare \
-             `match` arm body — wrap it in braces: `pattern => { place = value; }`",
-            op_span,
-        );
 
         let Some(value) = self.parse_expression() else {
             return Expr {
@@ -3215,41 +3239,8 @@ impl super::Parser {
                 kind: ExprKind::Error,
             };
         };
-        // Optional `;` — accepted so the braced form's muscle memory
-        // (`=> total = total + q;,`) does not produce a second error.
-        let existing_semi = self
-            .check(&Token::Semicolon)
-            .then(|| self.current_span())
-            .map(|s| s.offset + s.length);
+        // A `;` before the arm's `,` is tolerated (`=> total = total + q;,`).
         self.eat(&Token::Semicolon);
-
-        // Attach the repair the message describes, so `karac fix` performs it
-        // rather than leaving the author to. A wrap is two insertions and the
-        // parser holds no source text, so it cannot be expressed as one
-        // range-replacement — hence the multi-edit envelope. Both edits are
-        // zero-length inserts at offsets the tokens already carry: `{ ` at the
-        // assignment target's start, and the closer after the value (reusing
-        // the author's own `;` when they wrote one, so `=> x = 1;,` does not
-        // gain a second).
-        let (close_at, close_text) = match existing_semi {
-            Some(after_semi) => (after_semi, " }"),
-            None => (value.span.offset + value.span.length, "; }"),
-        };
-        self.fix_diffs.insert(
-            crate::resolver::SpanKey::from_span(&op_span),
-            vec![
-                crate::resolver::TextEdit {
-                    offset: target_span.offset,
-                    length: 0,
-                    replacement: "{ ".to_string(),
-                },
-                crate::resolver::TextEdit {
-                    offset: close_at,
-                    length: 0,
-                    replacement: close_text.to_string(),
-                },
-            ],
-        );
 
         let span = self.span_from(&target_span);
         let kind = match compound {

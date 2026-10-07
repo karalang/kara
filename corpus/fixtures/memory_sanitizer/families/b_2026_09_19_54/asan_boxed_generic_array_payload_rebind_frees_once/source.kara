@@ -16,20 +16,20 @@ fn eat(g: G[Array[String, 2]]) -> i64 { match g { G.Y(x) => { let y = x; return 
 fn ret(g: G[Array[String, 2]]) -> Array[String, 2] { match g { G.Y(x) => { let y = x; return y } G.N => { return mka(f"q") } } }
 fn push(g: G[Array[String, 2]]) -> i64 { let mut v: Vec[Array[String, 2]] = []; match g { G.Y(x) => { let y = x; v.push(y) } G.N => {} }; return v.len() }
 fn main() {
-    println(f"rebind {rebind(G.Y(mka(f"ab")))}")
-    println(f"typed {typed(G.Y(mka(f"ab")))}")
-    println(f"chain {chain(G.Y(mka(f"ab")))}")
-    println(f"noret {noret(G.Y(mka(f"ab")))}")
-    println(f"iflet {iflet(G.Y(mka(f"ab")))}")
-    println(f"whilelet {whilelet(G.Y(mka(f"ab")))}")
-    println(f"local {local()}")
-    println(f"vecs {vecs(G.Y([[1, 2], [3]]))}")
-    println("drops")
+    println(f"rebind {rebind(G.Y(mka(f"ab")))}");
+    println(f"typed {typed(G.Y(mka(f"ab")))}");
+    println(f"chain {chain(G.Y(mka(f"ab")))}");
+    println(f"noret {noret(G.Y(mka(f"ab")))}");
+    println(f"iflet {iflet(G.Y(mka(f"ab")))}");
+    println(f"whilelet {whilelet(G.Y(mka(f"ab")))}");
+    println(f"local {local()}");
+    println(f"vecs {vecs(G.Y([[1, 2], [3]]))}");
+    println("drops");
     let n = drops(G.Y([D { s: f"1" }, D { s: f"22" }]));
-    println(f"  {n}")
-    println(f"eat {eat(G.Y(mka(f"ab")))}")
+    println(f"  {n}");
+    println(f"eat {eat(G.Y(mka(f"ab")))}");
     let a = ret(G.Y(mka(f"cd")));
-    println(f"ret {a[1]}")
-    println(f"push {push(G.Y(mka(f"ab")))}")
+    println(f"ret {a[1]}");
+    println(f"push {push(G.Y(mka(f"ab")))}");
     println("end")
 }

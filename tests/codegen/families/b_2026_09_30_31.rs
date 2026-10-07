@@ -25,33 +25,33 @@ struct K { n: i64 }
 impl K { fn ma(ref self) -> Array[W1, 1] { return [W1 { v: 45 }] } fn mt(ref self) -> (W1, i64) { return (W1 { v: 46 }, 1) } }
 fn main() {
     mka();
-    println("a")
+    println("a");
     mkt();
-    println("b")
+    println("b");
     let _ = mka();
-    println("c")
+    println("c");
     let _ = mkt();
-    println("d")
+    println("d");
     mk2();
-    println("e")
+    println("e");
     let a: Array[W1, 1] = [W1 { v: 1 }];
     pa(a);
-    println("f")
+    println("f");
     let t = (W1 { v: 2 }, 3);
     pt(t);
-    println("g")
+    println("g");
     pa([W1 { v: 4 }]);
-    println("h")
+    println("h");
     let k = K { n: 0 };
     k.ma();
     k.mt();
-    println("j")
+    println("j");
     let c = true;
     if c { mka() } else { mka() };
-    println("k")
+    println("k");
     let m = 2;
     match m { 1 => mkt(), _ => mkt() };
-    println("l")
+    println("l");
     let mut i = 0;
     while i < 2 { mka(); i = i + 1; }
     println("end")

@@ -37,7 +37,7 @@ fn render(e: Ex) -> String {
 }
 
 fn main() {
-    println("start")
+    println("start");
     let mut toks: Vec[Spanned] = Vec.new();
     toks.push(Spanned { token: Tok.Integer(100000000000000000000i128, "i128".to_string()), at: 0 });
     toks.push(Spanned { token: Tok.Word("w".to_string()), at: 1 });

@@ -126,7 +126,7 @@ and a function can be called `union` or `lock`:
 ```
 union        // `union NAME { ... }` — the FFI-only untagged union (design.md § FFI Unions)
 marker       // `marker trait NAME;` (design.md § Marker Traits)
-mod  use     // item forms, followed by a name
+mod          // `mod NAME` is rejected with a pointer to the directory-based module system
 weak         // `weak T` — before a type
 lock         // `lock m { ... }` / `lock m as x { ... }` — before a name
 resource  verb  group  stable  transparent   // effect declarations
@@ -139,6 +139,9 @@ alias  independent   // resource-aliasing declarations, followed by a name
 
 The lexer emits each as an identifier and the parser recognises it by name in
 those positions. `r#` on one of them is redundant but still accepted.
+
+`use` is no longer syntax: `use a.b.C;` is an error whose machine-applicable fix
+rewrites it to `import a.b.C;` (§ Module System). `use` is an ordinary name.
 
 All keywords are reserved — they cannot be used as identifiers without the `r#` raw-identifier escape (§1.3 IDENTIFIER, design.md § Raw Identifiers). `r#NAME` parses as the identifier `NAME` even when `NAME` is a reserved keyword (`r#async`, `r#try`, `r#move`, `r#comptime`, etc.). Structural markers — `self`, `Self`, `_`, `super`, `crate`, `pub`, `priv`, `private`, `mut`, `ref`, `own` — cannot be raw-escaped (`error[E_RAW_IDENT_NOT_ALLOWED]`, emitted as `E0004`; the canonical list is `token::UNESCAPABLE_MARKERS`, which the lexer's rejection and the parser's decision to suggest `r#` at all both read).
 
@@ -198,21 +201,28 @@ FLOAT_SUFFIX = "f32" | "f64"
               // otherwise it lexes as INTEGER.
 
 STRING      = [ STRING_PREFIX ] '"' { CHAR | ESCAPE_SEQ_FOR_PREFIX } '"'
-MULTI_STR   = '"""' { any char } '"""'
-              // Multi-line string — preserves newlines and indentation
-INTERP_STR  = 'f"' { CHAR | "{" EXPR "}" } '"'
+MULTI_STR   = '"""' NEWLINE { LINE NEWLINE } INDENT '"""'
+              // A `"""` block (Swift's rules). The opening quotes end their
+              // line. The closing `"""` sits on a line of its own, and its
+              // INDENT is removed from every line of the body; a non-blank line
+              // indented less than that is an error. Escapes are processed.
+              // The newline before the closing line is not part of the value.
+              // Same type as "...": the lexer produces one string literal.
+RAW_STR     = "r" { "#" } '"' { any char } '"' { "#" }
+              // No escape processing; ends at a `"` followed by as many `#` as
+              // opened it: r"C:\path", r#"say "hi""#.
+INTERP_STR  = 'f"' { CHAR | "{{" | "}}" | "{" EXPR "}" } '"'
+            | 'f"""' ... '"""'   // a MULTI_STR with interpolation
               // f"hello {name}" desugars to String.concat("hello ", name.to_string())
+              // `{{` and `}}` are literal braces; a lone `}` is an error, and
+              // so is `\{` (write `{{`).
 
-STRING_PREFIX = "b" | "r" | "br" | "rb" | "c"
-              // Reserved prefix letters. A prefix is only recognized when it is
-              // immediately followed by `'` or `"` with no intervening whitespace;
-              // bare identifiers named `b`, `r`, `c`, `br`, `rb` therefore remain
-              // legal wherever identifiers are legal.
-              //
-              // v1 support: only `b` is implemented. `r`, `br`, `rb`, and `c` are
-              // grammatically reserved so future additions do not collide with
-              // user identifiers; the lexer emits a "not yet implemented" diagnostic
-              // for the reserved-but-not-yet-supported combinations.
+STRING_PREFIX = "b" | "c"
+              // A prefix is only recognized when it is immediately followed by
+              // `'` or `"` with no intervening whitespace; bare identifiers named
+              // `b` or `c` remain legal wherever identifiers are legal. Other
+              // letters are not reserved: `x"s"` is the identifier `x` followed
+              // by a string.
 
 BOOL        = "true" | "false"
 
@@ -1126,6 +1136,16 @@ STATEMENT = LET_STATEMENT
           // so `return expr;` parses as EXPR_STATEMENT. This is intentional —
           // same design as Rust.
 
+EXPR_STATEMENT = EXPR ";"
+               | BLOCK_LIKE_EXPR [ ";" ]
+          // `;` is required after every expression statement that does not end
+          // in a block; a missing one is an error whose fix inserts it. The
+          // block-like forms (`if`, `match`, `while`, `for`, `loop`, a block,
+          // `unsafe`, `seq`, `par`, `lock`, a labeled block, `try`, `comptime`)
+          // need none. A block's last expression without `;` is its value.
+          // A `match` arm body may be a bare assignment: `p => x = y,` and
+          // `p => n += 1,` mean `p => { x = y; }`.
+
 LET_STATEMENT      = "let" [ "mut" ] PATTERN [ ":" TYPE ] "=" EXPR ";"
 LET_UNINIT_STATEMENT = "let" [ "mut" ] IDENT ":" TYPE ";"
                      // Uninitialized declaration — no initializer. The IDENT is in scope
@@ -1252,10 +1272,14 @@ PRIMARY = INTEGER | FLOAT | STRING | MULTI_STR | INTERP_STR | CHAR_LIT | BOOL
 BLOCK         = "{" { STATEMENT } [ EXPR ] "}"
                 // Last expression without ";" is the block's return value.
 
-LABELED_BLOCK = IDENT ":" BLOCK
-                // Labeled block — same as BLOCK but `break IDENT [expr]` from
+LABELED_BLOCK = LABEL ":" BLOCK
+                // Labeled block — same as BLOCK but `break LABEL [expr]` from
                 // anywhere inside exits the block (with optional value).
-                // `continue IDENT` is a compile error — only loops accept it.
+                // `continue LABEL` is a compile error — only loops accept it.
+LABEL         = "'" IDENT
+                // `'outer` — a quote and a name with no closing quote ('a' is
+                // a char). The old unquoted spelling (`outer: loop`) is an
+                // error whose fix inserts the `'`.
 
 TRY_EXPR      = "try" BLOCK
                 // Try block — value is Result[T, E]. The block's tail expr
@@ -1274,10 +1298,10 @@ let result = {
 };
 
 // Labeled block — early exit with value
-let result = found: {
+let result = 'found: {
     for row in matrix {
         for cell in row {
-            if cell == target { break found cell; }
+            if cell == target { break 'found cell; }
         }
     }
     -1                       // tail expression when nothing broke out
@@ -1487,23 +1511,24 @@ match response {
 ### 5.7 Loop Expressions
 
 ```
-LABELED_LOOP  = IDENT ":" ( WHILE_EXPR | FOR_EXPR | LOOP_EXPR )
+LABELED_LOOP  = LABEL ":" ( WHILE_EXPR | FOR_EXPR | LOOP_EXPR )
 WHILE_EXPR    = "while" EXPR BLOCK
               | "while" "let" PATTERN "=" EXPR BLOCK
               // while let Some(x) = iter.next() { ... }
 FOR_EXPR      = "for" PATTERN "in" EXPR BLOCK
 LOOP_EXPR     = "loop" BLOCK
-BREAK_EXPR    = "break" [ IDENT ] [ EXPR ]
-              // break;             — exit innermost loop
-              // break label;       — exit loop or labeled block named `label`
-              // break expr;        — exit innermost loop with value
-              // break label expr;  — exit loop or labeled block named `label`
-              //                      with value
-CONTINUE_EXPR = "continue" [ IDENT ]
-              // continue;          — skip to next iteration of innermost loop
-              // continue label;    — skip to next iteration of loop named `label`
-              //                      (a labeled BLOCK is rejected here — only
-              //                      loops accept `continue label`)
+BREAK_EXPR    = "break" [ LABEL ] [ EXPR ]
+              // break;              — exit innermost loop
+              // break 'label;       — exit loop or labeled block `'label`
+              // break expr;         — exit innermost loop with value; a bare
+              //                       name is always a value (`break x`)
+              // break 'label expr;  — exit loop or labeled block `'label`
+              //                       with value
+CONTINUE_EXPR = "continue" [ LABEL ]
+              // continue;           — skip to next iteration of innermost loop
+              // continue 'label;    — skip to next iteration of loop `'label`
+              //                       (a labeled BLOCK is rejected here — only
+              //                       loops accept `continue 'label`)
 ```
 
 ```
@@ -1524,10 +1549,10 @@ loop {
 }
 
 // Labeled loops — break/continue target an outer loop by name
-outer: for row in matrix {
+'outer: for row in matrix {
     for val in row {
         if val == target {
-            break outer;       // exits the outer for loop
+            break 'outer;      // exits the outer for loop
         }
     }
 }

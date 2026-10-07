@@ -24,21 +24,21 @@ fn c13() { let v: Vec[Ho[String]] = vec![Ho.Full("ii".to_string() + "jj"), Ho.Em
 fn c14() { let v: Vec[Ho[String]] = vec![Ho.Full("kk".to_string() + "ll")]; let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); for h in v { w[0] = h; } println(f"w{w.len()}"); }
 fn c16() { let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); let h: Ho[String] = Ho.Full("oo".to_string() + "pp"); w[0] = h; println(f"w{w.len()}"); }
 fn main() {
-    c00()
-    c01()
-    c02()
-    c03()
-    c04()
-    c05()
-    c06()
-    c07()
-    c08()
-    c09()
-    c10()
-    c11()
-    c12()
-    c13()
-    c14()
-    c16()
+    c00();
+    c01();
+    c02();
+    c03();
+    c04();
+    c05();
+    c06();
+    c07();
+    c08();
+    c09();
+    c10();
+    c11();
+    c12();
+    c13();
+    c14();
+    c16();
     println("end")
 }

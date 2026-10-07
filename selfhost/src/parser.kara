@@ -149,8 +149,8 @@ struct Parser {
     tokens: Vec[SpannedToken],
     pos: i64,
     // In-scope loop labels (innermost last). Pushed when entering a labeled
-    // loop, popped on exit; `break <ident>` consults it to tell a label
-    // (`break outer`) from a value (`break x`) — the seed's `is_known_label`.
+    // loop, popped on exit, like the seed's stack. Labels carry their `'`
+    // now, so `break` no longer needs it to tell a label from a value.
     loop_labels: Vec[String],
     // When true, a bare `Name { … }` reads as `Name` followed by a body block,
     // not a struct literal — set while parsing `if`/`while`/`for` conditions so
@@ -162,25 +162,6 @@ struct Parser {
 impl Parser {
     fn new(tokens: Vec[SpannedToken]) -> Parser {
         Parser { tokens: tokens, pos: 0, loop_labels: Vec.new(), no_struct_literal: false }
-    }
-
-    // True iff `name` is currently an in-scope loop label. The owned stack
-    // entries compare directly against the borrowed `name` — comparison
-    // operators auto-deref reference operands (`String == ref String`).
-    fn label_known(ref self, name: ref String) -> bool {
-        let mut i = 0;
-        let mut found = false;
-        loop {
-            if i >= self.loop_labels.len() {
-                break;
-            }
-            if self.loop_labels[i] == name {
-                found = true;
-                break;
-            }
-            i = i + 1;
-        }
-        found
     }
 
     fn advance(mut ref self) {
@@ -994,7 +975,7 @@ impl Parser {
         })
     }
 
-    // `name : (while | for | loop)` — a labeled loop. `name` is already
+    // `'name : (while | for | loop)` — a labeled loop. The label is already
     // consumed; `label_start` is its span (used only by the `loop` arm). Pushes
     // the label for the body's `break`/`continue`, dispatches, then pops.
     fn parse_labeled_loop(mut ref self, name: String, label_start: Span) -> Expr {
@@ -1039,31 +1020,30 @@ impl Parser {
         }
     }
 
-    // True iff the current token is an identifier naming an in-scope loop label.
-    // Non-consuming (the identifier is only consumed once classified as a
-    // label) — mirrors the seed's `peek_token` borrow in `parse_break_args`.
-    fn current_is_known_label(ref self) -> bool {
+    // The current token's label name (`'outer` → "outer"), or "" when it is
+    // not a label. Non-consuming.
+    fn label_here(ref self) -> String {
         if self.pos >= self.tokens.len() {
-            return false;
+            return "".to_string();
         }
         match self.tokens[self.pos].token {
-            Identifier(n) => self.label_known(n),
-            _ => false,
+            Label(n) => n,
+            _ => "".to_string(),
         }
     }
 
-    // `break [label] [value]`. A known loop label may precede the optional
-    // value; otherwise a leading identifier is the start of the value
-    // expression. Mirrors `src/parser/exprs.rs::parse_break_args`.
+    // `break ['label] [value]`. A label carries its `'`; a bare identifier is
+    // always the start of the value. Mirrors
+    // `src/parser/exprs.rs::parse_break_args`.
     fn parse_break(mut ref self, start: Span) -> Expr {
         self.advance(); // break
         let mut label: Option[String] = None;
         let mut value: Option[Expr] = None;
         if not self.at_break_terminator() {
-            if self.loop_labels.len() > 0 {
-                if self.current_is_known_label() {
-                    label = Some(self.take_member_name());
-                }
+            let l = self.label_here();
+            if l != "" {
+                self.advance();
+                label = Some(l);
             }
             if not self.at_break_terminator() {
                 value = Some(self.parse_expr_bp(0));
@@ -1089,8 +1069,7 @@ impl Parser {
         }
     }
 
-    // `continue [label]`. The seed takes ANY following identifier as the label
-    // (no known-label check), stopping at `;` / `}`.
+    // `continue ['label]`, stopping at `;` / `}`.
     fn parse_continue(mut ref self, start: Span) -> Expr {
         self.advance(); // continue
         let mut label: Option[String] = None;
@@ -1104,12 +1083,10 @@ impl Parser {
             true
         };
         if not stop {
-            let is_ident = match self.tokens[self.pos].token {
-                Identifier(_) => true,
-                _ => false,
-            };
-            if is_ident {
-                label = Some(self.take_member_name());
+            let l = self.label_here();
+            if l != "" {
+                self.advance();
+                label = Some(l);
             }
         }
         Expr.Continue(ContinueExpr {
@@ -1680,13 +1657,6 @@ impl Parser {
                     span: self.span_from(start),
                 })
             }
-            MultiStringLiteral(s) => {
-                self.advance();
-                Expr.MultiStr(StrLit {
-                    value: s,
-                    span: self.span_from(start),
-                })
-            }
             True => {
                 self.advance();
                 Expr.Bool(BoolLit {
@@ -1759,14 +1729,22 @@ impl Parser {
             // Grouping / tuple.
             LeftParen => self.parse_paren_or_tuple(),
 
-            // Bare identifier (paths / struct literals / generic-args land in
-            // later slices) — or a labeled loop `name: while/for/loop`. `start`
-            // is the label identifier's span (the labeled-`loop` span anchor).
-            Identifier(name) => {
+            // A labeled loop `'name: while/for/loop`. `start` is the label's
+            // span (the labeled-`loop` span anchor).
+            Label(name) => {
                 self.advance();
                 if self.at_loop_label() {
                     self.parse_labeled_loop(name, start)
-                } else if starts_upper(name) and self.at_dot() {
+                } else {
+                    Expr.Error(SpanNode { span: self.span_from(start) })
+                }
+            }
+
+            // Bare identifier (paths / struct literals / generic-args land in
+            // later slices).
+            Identifier(name) => {
+                self.advance();
+                if starts_upper(name) and self.at_dot() {
                     self.parse_path_expr(name, start)
                 } else if self.at_struct_literal_open(name) {
                     self.parse_struct_literal_body(name, start)
@@ -2687,13 +2665,6 @@ impl Parser {
                     span: self.span_from(start),
                 })
             }
-            MultiStringLiteral(s) => {
-                self.advance();
-                Pattern.StrPat(PatStr {
-                    value: s,
-                    span: self.span_from(start),
-                })
-            }
             LeftParen => self.parse_tuple_pattern(start),
             // Identifier: plain binding, or a single-segment tuple-variant
             // `Name(...)`. `@` / range / struct / qualified-path forms are
@@ -2916,7 +2887,38 @@ impl Parser {
                 let blk = self.parse_block();
                 Expr.Blk(blk)
             } else {
-                self.parse_expr_bp(0)
+                let body_start = self.current_span();
+                let e = self.parse_expr_bp(0);
+                // `=> place = value,` — an assignment arm body is the block
+                // holding that one assignment (design review 2026-10-07 § 5);
+                // the seed spans the statement, block and arm body alike from
+                // the target to the end of the value.
+                let is_assign = if self.pos < self.tokens.len() {
+                    match self.tokens[self.pos].token {
+                        Equal => true,
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                if is_assign {
+                    self.advance(); // =
+                    let v = self.parse_expr_bp(0);
+                    self.eat_semicolon();
+                    let mut one: Vec[Stmt] = Vec.new();
+                    one.push(Stmt.Assign(AssignStmt {
+                        target: e,
+                        value: v,
+                        span: self.span_from(clone_span(body_start)),
+                    }));
+                    Expr.Blk(Block {
+                        stmts: one,
+                        tail: None,
+                        span: self.span_from(body_start),
+                    })
+                } else {
+                    e
+                }
             };
             arms.push(MatchArm {
                 pattern: pattern,
@@ -2974,13 +2976,10 @@ impl Parser {
         if self.pos >= self.tokens.len() {
             return Item.ErrItem(SpanNode { span: self.current_span() });
         }
-        // Contextual item keywords: `use NAME`, `union NAME`, `par struct` /
-        // `par enum`. Each is a keyword only when the next token fits.
+        // Contextual item keywords: `union NAME`, `par struct` / `par enum`.
+        // Each is a keyword only when the next token fits. (`use` is gone:
+        // it reaches the error arm below, as the seed rejects it.)
         let w = self.word_at(0);
-        if w == "use" and self.word_at(1) != "" {
-            // `use` carries neither attributes nor doc (seed parity) — both drop.
-            return self.parse_use_decl(is_pub);
-        }
         if w == "union" and self.word_at(1) != "" {
             return self.parse_union_def(is_pub, attrs, doc);
         }
@@ -3034,53 +3033,6 @@ impl Parser {
                 Item.ErrItem(SpanNode { span: self.span_from(start) })
             }
         }
-    }
-
-    // A dotted path of bare identifiers (`a`, `a.b.c`). Mirrors the seed's
-    // `parse_path_segments` for the `use`-path shape (no generic args). Reads
-    // each segment via `take_member_name` (one match per token).
-    fn parse_dotted_path(mut ref self) -> Vec[String] {
-        let mut segs: Vec[String] = Vec.new();
-        let first = self.take_member_name();
-        segs.push(first);
-        loop {
-            let is_dot = if self.pos < self.tokens.len() {
-                match self.tokens[self.pos].token {
-                    Dot => true,
-                    _ => false,
-                }
-            } else {
-                false
-            };
-            if not is_dot {
-                break;
-            }
-            self.advance(); // consume `.`
-            let nm = self.take_member_name();
-            segs.push(nm);
-        }
-        segs
-    }
-
-    // `use a.b.c;` — `start` is captured at `use` (the seed's `span_from`
-    // through the `;`).
-    fn parse_use_decl(mut ref self, is_pub: bool) -> Item {
-        let start = self.current_span();
-        self.advance(); // `use`
-        let segs = self.parse_dotted_path();
-        self.eat_semicolon();
-        // A `use a.b.c` binds its LAST segment (the seed's `path.last()`).
-        let mut names: Vec[String] = Vec.new();
-        let n = segs.len();
-        if n > 0 {
-            names.push(dup_str(segs[n - 1]));
-        }
-        Item.Use(UseDeclNode {
-            is_pub: is_pub,
-            segments: segs,
-            names: names,
-            span: self.span_from(start),
-        })
     }
 
     // `import mod.Item;` (single — binds the last segment) or

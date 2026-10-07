@@ -16,19 +16,19 @@ fn cvl(a: R, f: bool) -> Vec[R] { let v = [a]; if f { return v; } return [mk(90)
 fn vp(a: R) -> Vec[R] { let v = Vec[a]; v }
 fn gl[T](a: T, b: T) -> Vec[T] { let v = [a, b]; return v; }
 fn main() {
-  println("-c1"); let v1 = vl(mk(1), mk(2)); println(f"r{v1.len()}")
-  println("-c2"); let v2 = al(mk(3), mk(4)); println(f"r{v2[0].id}")
-  println("-c3"); let v3 = vm(mk(5), mk(6)); println(f"r{v3.len()}")
-  println("-c4"); let v4 = vu(mk(7), mk(8)); println(f"r{v4.len()}")
-  println("-c5"); let v5 = vr(mk(9), mk(10)); println(f"r{v5.len()}")
-  println("-c6"); let v6 = vn(mk(11)); println(f"r{v6.len()}")
-  println("-c7"); let v7 = vf(mk(12)); println(f"r{v7.len()}")
-  println("-c8"); let c = mk(13); let v8 = vl(c, mk(14)); println(f"r{v8.len()}")
-  println("-c10"); let v10 = H.m(mk(17), mk(18)); println(f"r{v10.len()}")
-  println("-c11"); let v11 = vt(mk(19), mk(20)); println(f"r{v11.len()}")
-  println("-c13"); let v13 = cvl(mk(22), false); println(f"r{v13.len()}")
-  println("-c14"); let v14 = gl(mk(23), mk(24)); println(f"r{v14.len()}")
-  println("-c15"); let v15 = vp(mk(25)); println(f"r{v15.len()}")
+  println("-c1"); let v1 = vl(mk(1), mk(2)); println(f"r{v1.len()}");
+  println("-c2"); let v2 = al(mk(3), mk(4)); println(f"r{v2[0].id}");
+  println("-c3"); let v3 = vm(mk(5), mk(6)); println(f"r{v3.len()}");
+  println("-c4"); let v4 = vu(mk(7), mk(8)); println(f"r{v4.len()}");
+  println("-c5"); let v5 = vr(mk(9), mk(10)); println(f"r{v5.len()}");
+  println("-c6"); let v6 = vn(mk(11)); println(f"r{v6.len()}");
+  println("-c7"); let v7 = vf(mk(12)); println(f"r{v7.len()}");
+  println("-c8"); let c = mk(13); let v8 = vl(c, mk(14)); println(f"r{v8.len()}");
+  println("-c10"); let v10 = H.m(mk(17), mk(18)); println(f"r{v10.len()}");
+  println("-c11"); let v11 = vt(mk(19), mk(20)); println(f"r{v11.len()}");
+  println("-c13"); let v13 = cvl(mk(22), false); println(f"r{v13.len()}");
+  println("-c14"); let v14 = gl(mk(23), mk(24)); println(f"r{v14.len()}");
+  println("-c15"); let v15 = vp(mk(25)); println(f"r{v15.len()}");
   println("-c16"); al(mk(26), mk(27));
   println("end")
 }

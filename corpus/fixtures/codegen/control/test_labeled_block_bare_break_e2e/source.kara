@@ -1,5 +1,5 @@
 
 fn main() {
-    lbl: { break lbl; };
+    'lbl: { break 'lbl; };
     println(7);
 }

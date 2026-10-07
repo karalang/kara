@@ -10,8 +10,8 @@ fn c_one()   { let w = WrapO { inner: (mk(2), Option.Some(mk(102))) }; let (a2, 
 fn c_two()   { let g = OuterO { h: WrapO { inner: (mk(3), Option.Some(mk(103))) } }; let (a3, b3) = g.h.inner; println(f"  rd{a3.id}") }
 
 fn main() {
-    println("named"); c_named(); println("named end")
-    println("one");   c_one();   println("one end")
-    println("two");   c_two();   println("two end")
+    println("named"); c_named(); println("named end");
+    println("one");   c_one();   println("one end");
+    println("two");   c_two();   println("two end");
     println("done")
 }

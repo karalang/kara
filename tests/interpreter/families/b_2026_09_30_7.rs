@@ -46,15 +46,15 @@ fn c7() { let s = mk(7); let a = keep(s); println(f"{s.h.k} {a.h.k}") }
 fn c8() { let s = S5 { h: Sh { k: 8 }, t: f"aaaaaaaaaaaaaaaaaaaaaaaaaaaaa{4}", id: 8 }; let a = keep5(s); let d = keep5(s); println(f"{a.t.len()}{a.h.k} {d.t.len()}{d.h.k}") }
 fn c9(q: W3) -> i64 { let x = q.u; let a = keep(x); let d = keep(x); return a.h.k * 10 + d.h.k }
 fn main() {
-  println("-c1"); c1()
-  println("-c2"); println(f"s{c2(W3 { u: mk(2), n: 2 })}")
-  println("-c3"); c3()
-  println("-c4"); println(f"s{c4(W3 { u: mk(4), n: 2 })}")
-  println("-c5"); c5()
-  println("-c6"); c6()
-  println("-c7"); c7()
-  println("-c8"); c8()
-  println("-c9"); println(f"s{c9(W3 { u: mk(9), n: 2 })}")
+  println("-c1"); c1();
+  println("-c2"); println(f"s{c2(W3 { u: mk(2), n: 2 })}");
+  println("-c3"); c3();
+  println("-c4"); println(f"s{c4(W3 { u: mk(4), n: 2 })}");
+  println("-c5"); c5();
+  println("-c6"); c6();
+  println("-c7"); c7();
+  println("-c8"); c8();
+  println("-c9"); println(f"s{c9(W3 { u: mk(9), n: 2 })}");
   println("end")
 }
 "#);

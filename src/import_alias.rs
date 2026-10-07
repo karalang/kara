@@ -285,7 +285,6 @@ pub(crate) fn declared_names(items: &[Item]) -> HashSet<String> {
                 false
             }
             Item::ImplBlock(_)
-            | Item::UseDecl(_)
             | Item::Import(_)
             | Item::AliasDecl(_)
             | Item::IndependentDecl(_)
@@ -438,7 +437,6 @@ pub(crate) fn rewrite_item(item: &mut Item, subst: &HashMap<String, TypeExpr>) {
         }
         // No type or path reference either an alias or a rename can reach.
         Item::EffectVerbDecl(_)
-        | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
         | Item::IndependentDecl(_) => {}

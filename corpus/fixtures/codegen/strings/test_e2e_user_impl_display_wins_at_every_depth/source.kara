@@ -12,22 +12,22 @@ impl Display for Wrap {
 struct Holder { u: Ue }
 fn main() {
     let e = Ue.A { n: 7 };
-    println(f"top={e}")
+    println(f"top={e}");
     let v = [Ue.A { n: 7 }, Ue.B];
-    println(f"vec={v}")
-    println(f"lit={[Ue.B]}")
+    println(f"vec={v}");
+    println(f"lit={[Ue.B]}");
     let nest = [[Ue.B]];
-    println(f"nest={nest}")
+    println(f"nest={nest}");
     let t = (Ue.B, 1);
-    println(f"tup={t}")
+    println(f"tup={t}");
     let h = Holder { u: Ue.B };
-    println(f"fld={h.u}")
+    println(f"fld={h.u}");
     let w = Wrap { u: Ue.A { n: 3 } };
-    println(f"wrap={w}")
-    println(f"vw={[Wrap { u: Ue.B }]}")
+    println(f"wrap={w}");
+    println(f"vw={[Wrap { u: Ue.B }]}");
     let mut m: Map[String, Ue] = Map.new();
     m.insert("k", Ue.B);
-    println(f"map={m}")
-    println(f"str={v.to_string()}")
+    println(f"map={m}");
+    println(f"str={v.to_string()}");
     println(v)
 }

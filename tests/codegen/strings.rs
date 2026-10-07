@@ -1004,18 +1004,18 @@ fn e2e_string_slice_heap_route_matches_the_clone_contract() {
              \x20   let a = s[0..24];\n\
              \x20   let b = s[4..40];\n\
              \x20   let c = s[0..s.len()];\n\
-             \x20   println(f\"1 {a.len()} [{a}]\")\n\
-             \x20   println(f\"2 {b.len()} [{b}]\")\n\
-             \x20   println(f\"3 {c == s}\")\n\
+             \x20   println(f\"1 {a.len()} [{a}]\");\n\
+             \x20   println(f\"2 {b.len()} [{b}]\");\n\
+             \x20   println(f\"3 {c == s}\");\n\
              \x20   let d = c.clone();\n\
-             \x20   println(f\"4 {d == c} {d.len() == c.len()}\")\n\
+             \x20   println(f\"4 {d == c} {d.len() == c.len()}\");\n\
              \x20   let mut e = s[10..40];\n\
              \x20   e.push_str(\"!\");\n\
-             \x20   println(f\"5 {e.len()} [{e}]\")\n\
+             \x20   println(f\"5 {e.len()} [{e}]\");\n\
              \x20   let mut v: Vec[String] = Vec.new();\n\
              \x20   let mut i = 0;\n\
              \x20   while i < 8 { v.push(s[i..(i + 30)]); i = i + 1; }\n\
-             \x20   println(f\"6 {v.len()} {v[0].len()} [{v[7]}]\")\n\
+             \x20   println(f\"6 {v.len()} {v[0].len()} [{v[7]}]\");\n\
              \x20   println(\"end\")\n\
              }\n\
              ",
@@ -1558,10 +1558,10 @@ fn moverstr() { let o = Option.Some(f"z12"); let q = o; println(f"  s{q.is_some(
 fn unshared() { let d = Option.Some(mk(13)); let e = d; println(f"  d{e.is_some()}") }
 
 fn main() {
-  println("mover");    mover()
-  println("moverstr"); moverstr()
-  println("unshared"); unshared()
-  println("retained"); retained()
+  println("mover");    mover();
+  println("moverstr"); moverstr();
+  println("unshared"); unshared();
+  println("retained"); retained();
   println("done")
 }
 "#;
@@ -3101,12 +3101,12 @@ fn test_e2e_option_map_string_value_bodies_compile_and_run() {
         ("f-string", "|x| f\"[{x}]\"", "[hi]\n"),
         (
             "block, concat tail",
-            "|x| { let t = x + \"!\"; t }",
+            "|x| { let t = x + \"!\"; t };",
             "hi!\n",
         ),
         (
             "block, literal tail",
-            "|x| { let t = \"fixed\"; t }",
+            "|x| { let t = \"fixed\"; t };",
             "fixed\n",
         ),
     ] {
@@ -9362,7 +9362,7 @@ fn test_assert_eq_string_pass() {
     let out = run_program(
         r#"
 fn main() {
-    assert_eq("hello", "hello")
+    assert_eq("hello", "hello");
     println(1)
 }
 "#,
@@ -10310,10 +10310,10 @@ enum Mode { FastPath, SlowPath }
 enum Evt { KeyDown(i64), MouseUp }
 
 fn main() {
-    println(f"{Direction.Up}")
-    println(Direction.Down)
-    println(f"{Mode.FastPath}")
-    println(f"{Evt.MouseUp}")
+    println(f"{Direction.Up}");
+    println(Direction.Down);
+    println(f"{Mode.FastPath}");
+    println(f"{Evt.MouseUp}");
     println(f"{Direction.Up} then {Direction.Down}")
 }
 "#
@@ -10358,23 +10358,23 @@ impl Display for Wrap {
 struct Holder { u: Ue }
 fn main() {
     let e = Ue.A { n: 7 };
-    println(f"top={e}")
+    println(f"top={e}");
     let v = [Ue.A { n: 7 }, Ue.B];
-    println(f"vec={v}")
-    println(f"lit={[Ue.B]}")
+    println(f"vec={v}");
+    println(f"lit={[Ue.B]}");
     let nest = [[Ue.B]];
-    println(f"nest={nest}")
+    println(f"nest={nest}");
     let t = (Ue.B, 1);
-    println(f"tup={t}")
+    println(f"tup={t}");
     let h = Holder { u: Ue.B };
-    println(f"fld={h.u}")
+    println(f"fld={h.u}");
     let w = Wrap { u: Ue.A { n: 3 } };
-    println(f"wrap={w}")
-    println(f"vw={[Wrap { u: Ue.B }]}")
+    println(f"wrap={w}");
+    println(f"vw={[Wrap { u: Ue.B }]}");
     let mut m: Map[String, Ue] = Map.new();
     m.insert("k", Ue.B);
-    println(f"map={m}")
-    println(f"str={v.to_string()}")
+    println(f"map={m}");
+    println(f"str={v.to_string()}");
     println(v)
 }
 "#
@@ -10429,13 +10429,13 @@ impl Display for U {
 struct G { u: U }
 fn main() {
     let a = H { u: E.A { n: 1 } };
-    println(f"{a}")
+    println(f"{a}");
     let t = H { u: E.T(1, 2) };
-    println(f"{t}")
+    println(f"{t}");
     let s = H { u: E.S { s: "hi" } };
-    println(f"{s}")
+    println(f"{s}");
     let z = H { u: E.Z };
-    println(f"{z}")
+    println(f"{z}");
     let g = G { u: U.Q };
     println(f"{g}")
 }
@@ -10667,8 +10667,8 @@ impl Display for Sh {
 }
 fn main() {
     let a = Sh { v: 1 };
-    println(f"top={a}")
-    println(a.to_string())
+    println(f"top={a}");
+    println(a.to_string());
     let v = [Sh { v: 2 }];
     println(f"vec={v}")
 }

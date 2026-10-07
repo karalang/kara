@@ -9,9 +9,9 @@ fn tail() -> i64 { let a: Array[R, 2] = mka(20); let k: Array[R, 2] = match Opti
 fn rebeat() -> i64 { let a: Array[R, 2] = mka(30); match Option.Some(a) { Option.Some(v) => { let u = v; return eat(u) }, Option.None => { return 0 } } }
 fn main() {
     let b = mka(40);
-    println(f"keep {keep(b)}")
-    println(f"push {push()}")
-    println(f"tail {tail()}")
-    println(f"rebeat {rebeat()}")
+    println(f"keep {keep(b)}");
+    println(f"push {push()}");
+    println(f"tail {tail()}");
+    println(f"rebeat {rebeat()}");
     println("end")
 }

@@ -17,15 +17,15 @@ impl A { fn atup(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return 
 fn ffn(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
 
 fn main() {
-  println("free-fn");       { let g = ffn(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("method-ref");    { let h = H { n: 1 }; let g = h.mref(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("method-owned");  { let h = H { n: 1 }; let g = h.mown(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("method-result"); { let h = H { n: 1 }; let g = h.mres(Result.Ok((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("method-second"); { let h = H { n: 1 }; let g = h.msnd(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("method-struct"); { let h = H { n: 1 }; let g = h.mstr(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
-  println("method-destr");  { let h = H { n: 1 }; let g = h.mdes(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
-  println("ctl-nomove");    { let h = H { n: 1 }; h.mnom(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
-  println("ctl-whole");     { let h = H { n: 1 }; let g = h.mwho(Option.Some((R { id: 5 }, R { id: 6 }))); println("  kept") } println("  out")
-  println("ctl-assoc");     { let g = A.atup(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
+  println("free-fn");       { let g = ffn(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("method-ref");    { let h = H { n: 1 }; let g = h.mref(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("method-owned");  { let h = H { n: 1 }; let g = h.mown(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("method-result"); { let h = H { n: 1 }; let g = h.mres(Result.Ok((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("method-second"); { let h = H { n: 1 }; let g = h.msnd(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("method-struct"); { let h = H { n: 1 }; let g = h.mstr(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out");
+  println("method-destr");  { let h = H { n: 1 }; let g = h.mdes(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
+  println("ctl-nomove");    { let h = H { n: 1 }; h.mnom(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out");
+  println("ctl-whole");     { let h = H { n: 1 }; let g = h.mwho(Option.Some((R { id: 5 }, R { id: 6 }))); println("  kept") } println("  out");
+  println("ctl-assoc");     { let g = A.atup(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");
   println("end")
 }

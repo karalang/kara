@@ -15,13 +15,13 @@ fn g7(s: ref S) { println(f"  b{s.r.id}"); println("  end") }
 fn g8()      { let s = S { r: R { id: 8 }, k: 0 }; let S { r, k } = s; let m = r; println(f"  b{m.id}"); println("  end") }
 
 fn main() {
-    println("plain");    g1(S { r: R { id: 1 }, k: 0 });  println("plain end")
-    println("rename");   g2(S { r: R { id: 2 }, k: 0 });  println("rename end")
-    println("rest");     g3(S { r: R { id: 3 }, k: 0 });  println("rest end")
-    println("heapstr");  g4(Hs { r: R { id: 4 }, name: "nm" }); println("heapstr end")
-    println("nested");   g5(Ou { inner: In { r: R { id: 5 } }, k: 0 }); println("nested end")
-    println("norebind"); g6(S { r: R { id: 6 }, k: 0 });  println("norebind end")
-    println("refparam"); let rs = S { r: R { id: 7 }, k: 0 }; g7(rs); println("refparam end")
-    println("local");    g8();                             println("local end")
+    println("plain");    g1(S { r: R { id: 1 }, k: 0 });  println("plain end");
+    println("rename");   g2(S { r: R { id: 2 }, k: 0 });  println("rename end");
+    println("rest");     g3(S { r: R { id: 3 }, k: 0 });  println("rest end");
+    println("heapstr");  g4(Hs { r: R { id: 4 }, name: "nm" }); println("heapstr end");
+    println("nested");   g5(Ou { inner: In { r: R { id: 5 } }, k: 0 }); println("nested end");
+    println("norebind"); g6(S { r: R { id: 6 }, k: 0 });  println("norebind end");
+    println("refparam"); let rs = S { r: R { id: 7 }, k: 0 }; g7(rs); println("refparam end");
+    println("local");    g8();                             println("local end");
     println("done")
 }

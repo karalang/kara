@@ -1,1 +1,1 @@
-fn main() { let group = 1; println(f"{group}"); }
+fn main() { let where = 1; println(f"{where}"); }

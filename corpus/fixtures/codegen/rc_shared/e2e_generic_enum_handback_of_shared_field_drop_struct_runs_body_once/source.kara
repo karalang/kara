@@ -15,12 +15,12 @@ fn c_mid_none() { let s = mk2(3); let o = mid(s, false); println("c") }
 fn d_discard() { let s = mk2(4); mkh(s); println("d") }
 fn e_underscore() { let s = mk2(5); let _ = mkh(s); println("e") }
 fn f_match_ho() {
-    let s = mk2(6); let h = mkh(s); println("f")
+    let s = mk2(6); let h = mkh(s); println("f");
     match h { Ho.Full(x) => println(f"got{x.id}"), Ho.Empty => println("none") }
     println("f after")
 }
 fn g_match_opt() {
-    let s = mk2(7); let o = mid(s, true); println("g")
+    let s = mk2(7); let o = mid(s, true); println("g");
     match o { Some(x) => println(f"got{x.id}"), None => println("none") }
     println("g after")
 }
@@ -39,16 +39,16 @@ fn k_local() {
     let q = Some(mk2(16)); match q { Some(x) => rd(x), None => println("none") }
 }
 fn main() {
-    a_bound()
-    b_mid_some()
-    c_mid_none()
-    d_discard()
-    e_underscore()
-    f_match_ho()
-    g_match_opt()
-    h_ref_arm()
-    i_loop()
-    j_method()
-    k_local()
+    a_bound();
+    b_mid_some();
+    c_mid_none();
+    d_discard();
+    e_underscore();
+    f_match_ho();
+    g_match_opt();
+    h_ref_arm();
+    i_loop();
+    j_method();
+    k_local();
     println("end")
 }

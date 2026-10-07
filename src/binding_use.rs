@@ -930,7 +930,6 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
         | ExprKind::CharLit(_)
         | ExprKind::ByteLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::ByteStringLit(_)
         | ExprKind::Bool(_)

@@ -40,11 +40,11 @@ fn g7(c: bool) -> i64 {
   return 0
 }
 fn main() {
-  println(f"r {g1(false)}"); println(f"r {g1(true)}")
-  println(f"r {g2(false)}"); println(f"r {g2(true)}")
-  println(f"r {g3(false, true)}"); println(f"r {g3(true, false)}"); println(f"r {g3(true, true)}")
-  println(f"r {g4(false)}"); println(f"r {g4(true)}")
-  println(f"r {g5(false)}")
-  println(f"r {g6(false)}"); println(f"r {g6(true)}")
+  println(f"r {g1(false)}"); println(f"r {g1(true)}");
+  println(f"r {g2(false)}"); println(f"r {g2(true)}");
+  println(f"r {g3(false, true)}"); println(f"r {g3(true, false)}"); println(f"r {g3(true, true)}");
+  println(f"r {g4(false)}"); println(f"r {g4(true)}");
+  println(f"r {g5(false)}");
+  println(f"r {g6(false)}"); println(f"r {g6(true)}");
   println(f"r {g7(false)}"); println(f"r {g7(true)}")
 }

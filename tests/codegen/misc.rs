@@ -2279,11 +2279,11 @@ fn test_e2e_chars_bailout_matches_the_single_copy_loop() {
              fn outer_jump(s: ref String) -> i64 {\n\
              \x20   let mut a = 0i64;\n\
              \x20   let mut r = 0i64;\n\
-             \x20   rounds: while r < 2i64 {\n\
+             \x20   'rounds: while r < 2i64 {\n\
              \x20       r = r + 1i64;\n\
              \x20       for ch in s.chars() {\n\
-             \x20           if ch == 'z' { continue rounds; }\n\
-             \x20           if ch == '\u{df}' { break rounds; }\n\
+             \x20           if ch == 'z' { continue 'rounds; }\n\
+             \x20           if ch == '\u{df}' { break 'rounds; }\n\
              \x20           a = a + (ch as i64);\n\
              \x20       }\n\
              \x20       a = a + 1000i64;\n\

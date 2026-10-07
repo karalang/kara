@@ -6223,7 +6223,7 @@ fn collect_unfulfilled_expects(
 
 /// The item's own lint overrides (the attached `#[allow]` / `#[warn]`
 /// / `#[deny]` / `#[expect]` slice from slice 4a). `None` for item
-/// kinds that don't carry attributes (`UseDecl`, `Import`, etc.) —
+/// kinds that don't carry attributes (`Import`, etc.) —
 /// callers skip them. `ImplBlock` returns the *block's* overrides;
 /// per-method overrides are walked separately at the call site.
 fn item_own_lint_overrides(item: &Item) -> Option<&[crate::lints::LintLevelOverride]> {

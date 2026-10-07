@@ -10,15 +10,15 @@ impl K {
   fn sc(i: i64) -> Array[i64, 2] { return [i, i + 1] }
 }
 fn main() {
-  println("-a"); let a = K.fr(1); println("r")
-  println("-e"); let e = K.fr(5); println(f"r{e[0].id}")
-  println("-t"); let t = K.f2(10); println(f"r{t[1].id}")
-  println("-n1"); let w = mk(70); let r = K.pa([w]); println(f"r:{r[0].id}")
-  println("-n3"); let b: Array[R, 1] = [mk(20)]; let r3 = K.pa(b); println(f"r:{r3[0].id}")
-  println("-g"); let g = K.gr(mk(30)); println(f"r{g[0].id}")
-  println("-s"); let s = K.sc(3); println(f"r{s[1]}")
-  println("-d"); K.fr(40); println("r")
-  println("-w"); let _ = K.fr(41); println("r")
-  println("-rb"); let x = K.fr(50); let y = x; println(f"r{y[0].id}")
+  println("-a"); let a = K.fr(1); println("r");
+  println("-e"); let e = K.fr(5); println(f"r{e[0].id}");
+  println("-t"); let t = K.f2(10); println(f"r{t[1].id}");
+  println("-n1"); let w = mk(70); let r = K.pa([w]); println(f"r:{r[0].id}");
+  println("-n3"); let b: Array[R, 1] = [mk(20)]; let r3 = K.pa(b); println(f"r:{r3[0].id}");
+  println("-g"); let g = K.gr(mk(30)); println(f"r{g[0].id}");
+  println("-s"); let s = K.sc(3); println(f"r{s[1]}");
+  println("-d"); K.fr(40); println("r");
+  println("-w"); let _ = K.fr(41); println("r");
+  println("-rb"); let x = K.fr(50); let y = x; println(f"r{y[0].id}");
   println("end")
 }

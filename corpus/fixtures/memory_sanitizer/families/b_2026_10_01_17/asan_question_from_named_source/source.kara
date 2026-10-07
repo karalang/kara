@@ -48,21 +48,21 @@ fn g2(k: i64) -> Result[i64, E8] { let r = e_b2(k); let x = r?; Result.Ok(x) }
 fn g3(k: i64) -> Result[i64, E9] { let r = e_b3(k); let x = r?; Result.Ok(x) }
 fn main() {
     match f1(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f1(2) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f2(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.v) }
-    println("-")
+    println("-");
     match f3(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f4(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f5(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f6(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f7(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match g1(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
     match g2(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
     match g3(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }

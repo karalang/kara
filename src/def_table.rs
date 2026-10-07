@@ -119,7 +119,6 @@ fn item_def(item: &Item) -> Vec<(&str, DefKind)> {
         | Item::EffectGroup(_)
         | Item::EffectVerbDecl(_)
         | Item::LayoutDef(_)
-        | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
         | Item::IndependentDecl(_)

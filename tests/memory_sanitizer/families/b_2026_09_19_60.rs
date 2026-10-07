@@ -29,13 +29,13 @@ fn bare() { let a: Array[R, 2] = mka(50); match Some(a) { Some(v) => { let u = v
 fn okseed() { let a: Array[R, 2] = mka(60); match Ok(a) { Ok(v) => { let u = v; println(f"ok {u[0].id}") }, Err(e) => { println(f"e{e}") } } }
 fn strs() { let a: Array[String, 2] = mks(); match Option.Some(a) { Option.Some(v) => { let u = v; println(f"strs {u[1]}") }, Option.None => {} } }
 fn main() {
-    rebind()
-    untyped()
-    store()
-    iflet()
-    bare()
-    okseed()
-    strs()
+    rebind();
+    untyped();
+    store();
+    iflet();
+    bare();
+    okseed();
+    strs();
     let mut i = 0;
     while i < 2 { let a: Array[R, 2] = mka(70 + i * 2); match Option.Some(a) { Option.Some(v) => { let u = v; println(f"loop {u[0].id}") }, Option.None => {} }; i = i + 1; }
     println("end")
@@ -92,10 +92,10 @@ fn tail() -> i64 { let a: Array[R, 2] = mka(20); let k: Array[R, 2] = match Opti
 fn rebeat() -> i64 { let a: Array[R, 2] = mka(30); match Option.Some(a) { Option.Some(v) => { let u = v; return eat(u) }, Option.None => { return 0 } } }
 fn main() {
     let b = mka(40);
-    println(f"keep {keep(b)}")
-    println(f"push {push()}")
-    println(f"tail {tail()}")
-    println(f"rebeat {rebeat()}")
+    println(f"keep {keep(b)}");
+    println(f"push {push()}");
+    println(f"tail {tail()}");
+    println(f"rebeat {rebeat()}");
     println("end")
 }"#,
         &[

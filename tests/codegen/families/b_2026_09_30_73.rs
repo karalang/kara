@@ -38,22 +38,22 @@ fn c14() { let mut g = hh(21, 1); g.n = 2; if let x = g { println(x.n) } }
 fn c15() { for i in 0..2 { let g = hh(22, i); if let x = g { println(x.n) } } }
 fn c16() { let g = hh(23, 1); let x = g else { return }; let y = x; println(y.n) }
 fn main() {
-    c1()
-    c2()
-    c3()
-    c4()
-    c5()
-    c6()
-    c7()
-    c8()
-    c9()
-    c10()
-    c11()
-    c12()
-    c13()
-    c14()
-    c15()
-    c16()
+    c1();
+    c2();
+    c3();
+    c4();
+    c5();
+    c6();
+    c7();
+    c8();
+    c9();
+    c10();
+    c11();
+    c12();
+    c13();
+    c14();
+    c15();
+    c16();
     println("end")
 }"#;
     let want = "1\nds4 34\n2\n34\n7\n1\nds8 34\n3\n1\n1\nds11 35\n1\nds14 35\n1\n1\nds15 35\n6\nds16 35\n8\nds18 35\n9\nds19 35\n99\nds20 35\n2\n2\nds21 35\n0\nds22 35\n1\nds22 35\n1\nds23 35\nend\n";

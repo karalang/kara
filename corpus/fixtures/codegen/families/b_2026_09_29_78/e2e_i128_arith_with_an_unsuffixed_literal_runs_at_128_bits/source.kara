@@ -2,62 +2,62 @@ fn id(x: i128) -> i128 { x }
 fn five() -> i128 { 5 }
 
 fn main() {
-    println("start")
+    println("start");
     let b: i128 = 100000000000000000000i128;
     let u: u128 = 200000000000000000000u128;
-    println("add " + (b + 1).to_string())
-    println("radd " + (1 + b).to_string())
-    println("sub " + (b - 1).to_string())
-    println("mul " + (b * 2).to_string())
-    println("div " + (b / 3).to_string())
-    println("mod " + (b % 7).to_string())
-    println("and " + (b & 255).to_string())
-    println("or " + (b | 1).to_string())
-    println("xor " + (b ^ 1).to_string())
-    println("shr " + (b >> 1).to_string())
-    println("shl " + (b << 1).to_string())
-    println("gt " + (b > 5).to_string())
-    println("lt " + (b < 5).to_string())
-    println("eq " + (b == 5).to_string())
-    println("ne " + (b != 5).to_string())
+    println("add " + (b + 1).to_string());
+    println("radd " + (1 + b).to_string());
+    println("sub " + (b - 1).to_string());
+    println("mul " + (b * 2).to_string());
+    println("div " + (b / 3).to_string());
+    println("mod " + (b % 7).to_string());
+    println("and " + (b & 255).to_string());
+    println("or " + (b | 1).to_string());
+    println("xor " + (b ^ 1).to_string());
+    println("shr " + (b >> 1).to_string());
+    println("shl " + (b << 1).to_string());
+    println("gt " + (b > 5).to_string());
+    println("lt " + (b < 5).to_string());
+    println("eq " + (b == 5).to_string());
+    println("ne " + (b != 5).to_string());
     let mut v = b;
     v += 1;
-    println("pluseq " + v.to_string())
+    println("pluseq " + v.to_string());
     v -= 2;
-    println("minuseq " + v.to_string())
+    println("minuseq " + v.to_string());
     v *= 2;
-    println("muleq " + v.to_string())
-    println("wadd " + b.wrapping_add(1).to_string())
-    println("wmul " + b.wrapping_mul(10).to_string())
-    println("wsub " + b.wrapping_sub(1).to_string())
-    println("sadd " + b.saturating_add(1).to_string())
-    println("smul " + b.saturating_mul(2).to_string())
+    println("muleq " + v.to_string());
+    println("wadd " + b.wrapping_add(1).to_string());
+    println("wmul " + b.wrapping_mul(10).to_string());
+    println("wsub " + b.wrapping_sub(1).to_string());
+    println("sadd " + b.saturating_add(1).to_string());
+    println("smul " + b.saturating_mul(2).to_string());
     match b.checked_add(1) {
         Some(x) => println("cadd " + x.to_string()),
         None => println("cadd none"),
     }
-    println("min " + b.min(5).to_string())
-    println("max " + b.max(5).to_string())
-    println("pow " + b.pow(1).to_string())
-    println("id " + id(b + 1).to_string())
-    println("five " + (five() + b).to_string())
+    println("min " + b.min(5).to_string());
+    println("max " + b.max(5).to_string());
+    println("pow " + b.pow(1).to_string());
+    println("id " + id(b + 1).to_string());
+    println("five " + (five() + b).to_string());
     let neg: i128 = -b;
-    println("neg " + (neg - 1).to_string())
-    println("uadd " + (u + 1).to_string())
-    println("usub " + (u - 1).to_string())
-    println("ugt " + (u > 1).to_string())
-    println("udiv " + (u / 3).to_string())
+    println("neg " + (neg - 1).to_string());
+    println("uadd " + (u + 1).to_string());
+    println("usub " + (u - 1).to_string());
+    println("ugt " + (u > 1).to_string());
+    println("udiv " + (u / 3).to_string());
     let mut i: i128 = 0;
     let mut n = 0;
     while i < b {
         i = i + 2000000000000000000;
         n += 1;
     }
-    println("loop " + n.to_string())
+    println("loop " + n.to_string());
     let arr = [b, b + 1];
-    println("arr " + arr[1].to_string())
+    println("arr " + arr[1].to_string());
     let t = (b + 2, 1);
-    println("tup " + t.0.to_string())
+    println("tup " + t.0.to_string());
     let c = if b > 0 { b - 3 } else { 0 };
     println("if " + c.to_string())
 }

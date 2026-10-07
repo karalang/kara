@@ -41,25 +41,25 @@ fn ow(x: R) -> Option[R] { let mut o = Some(x); return o }
 fn rb(x: R) -> Vec[R] { let mut v = Vec[x]; let w = v; return w }
 fn lp(x: R) -> Vec[R] { let mut v = Vec[x]; for i in 0..2 { v.push(mk(30 + i)) } return v }
 fn main() {
-  println("-p1"); let a = f1(mk(1)); println(f"k{a.len()}")
-  println("-p2"); let b = f2(mk(2)); println(f"k{b.len()}")
-  println("-p5"); let e = f5(mk(5)); println(f"k{e.len()}")
-  println("-p6"); let g = f6(mk(6)); println(f"k{g[0].id}")
-  println("-p8"); let i = f8(mk(18)); println(f"k{i.len()}")
-  println("-p9"); let j = f9(mk(19)); println(f"k{j.len()}")
-  println("-p10"); let l = f10(mk(20)); println(f"k{l.len()}")
-  println("-d1"); f1(mk(21)); println("k")
-  println("-n1"); let w = mk(22); let m = f1(w); println(f"k{m.len()}")
-  println("-t1"); let t = t1(mk(23)); println(f"k{t.1}")
-  println("-s1"); let s = s1(mk(24)); println(f"k{s.n}")
-  println("-c2"); c2(mk(25), mk(26)); println("k")
-  println("-me"); let kk = K { a: 1 }; let ma = kk.m(mk(41)); println(f"k{ma.len()}")
-  println("-as"); let ab = K.a(mk(42)); println(f"k{ab.len()}")
-  println("-g"); let gc = gv(mk(43)); println(f"k{gc.len()}")
-  println("-cf"); let ce = cnd(mk(45), false); println(f"k{ce.len()}")
-  println("-nr"); let nf = nr(mk(46)); println(f"k{nf}")
-  println("-ow"); let og = ow(mk(47)); match og { Some(r) => println(f"u{r.id}"), None => println("n") } println("k")
-  println("-rb"); let rh = rb(mk(48)); println(f"k{rh.len()}")
+  println("-p1"); let a = f1(mk(1)); println(f"k{a.len()}");
+  println("-p2"); let b = f2(mk(2)); println(f"k{b.len()}");
+  println("-p5"); let e = f5(mk(5)); println(f"k{e.len()}");
+  println("-p6"); let g = f6(mk(6)); println(f"k{g[0].id}");
+  println("-p8"); let i = f8(mk(18)); println(f"k{i.len()}");
+  println("-p9"); let j = f9(mk(19)); println(f"k{j.len()}");
+  println("-p10"); let l = f10(mk(20)); println(f"k{l.len()}");
+  println("-d1"); f1(mk(21)); println("k");
+  println("-n1"); let w = mk(22); let m = f1(w); println(f"k{m.len()}");
+  println("-t1"); let t = t1(mk(23)); println(f"k{t.1}");
+  println("-s1"); let s = s1(mk(24)); println(f"k{s.n}");
+  println("-c2"); c2(mk(25), mk(26)); println("k");
+  println("-me"); let kk = K { a: 1 }; let ma = kk.m(mk(41)); println(f"k{ma.len()}");
+  println("-as"); let ab = K.a(mk(42)); println(f"k{ab.len()}");
+  println("-g"); let gc = gv(mk(43)); println(f"k{gc.len()}");
+  println("-cf"); let ce = cnd(mk(45), false); println(f"k{ce.len()}");
+  println("-nr"); let nf = nr(mk(46)); println(f"k{nf}");
+  println("-ow"); let og = ow(mk(47)); match og { Some(r) => println(f"u{r.id}"), None => println("n") } println("k");
+  println("-rb"); let rh = rb(mk(48)); println(f"k{rh.len()}");
   println("-lp"); let li = lp(mk(10)); println(f"k{li.len()}")
 }
 "#,

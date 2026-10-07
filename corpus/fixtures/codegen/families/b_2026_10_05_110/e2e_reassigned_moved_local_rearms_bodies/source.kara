@@ -16,19 +16,19 @@ fn l() { let mut v = [R { id: 27 }]; let q = v; v = [R { id: 28 }]; println(f"l{
 fn m() { let mut v: Vec[R] = [R { id: 29 }]; let q = v; v = [R { id: 30 }, R { id: 31 }]; println(f"m{v.len()}{q.len()}") }
 fn n() { let mut v = [R { id: 32 }]; v = [R { id: 33 }]; println(f"n{v.len()}") }
 fn main() {
-    a()
-    b()
-    c()
-    d()
-    e()
-    f()
-    g()
-    h()
-    i()
-    j()
-    k()
-    l()
-    m()
-    n()
+    a();
+    b();
+    c();
+    d();
+    e();
+    f();
+    g();
+    h();
+    i();
+    j();
+    k();
+    l();
+    m();
+    n();
     println("end")
 }

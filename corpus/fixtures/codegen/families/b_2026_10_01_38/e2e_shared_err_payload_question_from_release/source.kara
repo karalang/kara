@@ -15,15 +15,15 @@ fn f6(r: Result[i64, Sh]) -> Result[i64, E2] { let x = r?; Result.Ok(x) }
 fn p2(r: Result[i64, E2]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) } }
 fn p3(r: Result[i64, E3]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) } }
 fn main() {
-    p2(f1(8))
-    p2(f1(2))
-    p2(f2(8))
-    p3(f3(8))
-    p3(f4(9))
-    p3(f4(3))
-    p2(f5(9))
-    p2(f6(mk(8)))
+    p2(f1(8));
+    p2(f1(2));
+    p2(f2(8));
+    p3(f3(8));
+    p3(f4(9));
+    p3(f4(3));
+    p2(f5(9));
+    p2(f6(mk(8)));
     let a = mk(9);
-    p2(f6(a))
+    p2(f6(a));
     println("end")
 }

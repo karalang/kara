@@ -24,16 +24,16 @@ fn lt(k: i64, f: bool) { let a = mk(k); if f { let x = (a, 1); println(f"in{x.1}
 fn lv(k: i64, f: bool) { let a = mk(k); if f { let x: Vec[R] = [a]; println(f"in{x.len()}"); } println("out") }
 fn lw(n: i64) { let mut i = 0; while i < n { let a = mk(30 + i); if i == 1 { let x = (a, i); println(f"w{x.1}"); } i = i + 1; } println("wend") }
 fn main() {
-  let a1 = ps(mk(1), true); println(f"r{a1.n}")
-  let a2 = ps(mk(2), false); println(f"r{a2.n}")
-  let b1 = pt(mk(3), true); println(f"r{b1.1}")
-  let b2 = pt(mk(4), false); println(f"r{b2.1}")
-  let c1 = pv(mk(5), true); println(f"r{c1.len()}")
-  let c2 = pv(mk(6), false); println(f"r{c2.len()}")
-  ls(7, true); ls(8, false)
-  lt(9, true); lt(10, false)
-  lv(11, true); lv(12, false)
-  lw(3)
+  let a1 = ps(mk(1), true); println(f"r{a1.n}");
+  let a2 = ps(mk(2), false); println(f"r{a2.n}");
+  let b1 = pt(mk(3), true); println(f"r{b1.1}");
+  let b2 = pt(mk(4), false); println(f"r{b2.1}");
+  let c1 = pv(mk(5), true); println(f"r{c1.len()}");
+  let c2 = pv(mk(6), false); println(f"r{c2.len()}");
+  ls(7, true); ls(8, false);
+  lt(9, true); lt(10, false);
+  lv(11, true); lv(12, false);
+  lw(3);
   println("end")
 }
 "#,

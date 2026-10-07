@@ -2453,7 +2453,7 @@ fn e2e_128bit_enum_payload_round_trip() {
              let g: Box128 = Box128.Pair(1267650600228229401496703205376i128, 42i64);\n\
              match g {\n\
              Box128.W(x) => println(x),\n\
-             Box128.Pair(p, q) => { println(p) println(q) }\n\
+             Box128.Pair(p, q) => { println(p); println(q) }\n\
              Box128.Nothing => println(\"nb\"),\n\
              }\n\
              let h: Option[i128] = Some(1267650600228229401496703205376i128);\n\
@@ -8150,7 +8150,7 @@ fn test_assert_eq_int_pass() {
     let out = run_program(
         r#"
 fn main() {
-    assert_eq(1 + 1, 2)
+    assert_eq(1 + 1, 2);
     println(42)
 }
 "#,
@@ -8165,7 +8165,7 @@ fn test_assert_eq_int_fail_formats_operands() {
     let captured = run_program_capturing(
         r#"
 fn main() {
-    assert_eq(1, 2)
+    assert_eq(1, 2);
     println(99)
 }
 "#,

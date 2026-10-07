@@ -45,9 +45,9 @@ fn f4() -> i64 {
   return 0
 }
 fn main() {
-  println(f"r {f1()}")
-  println(f"r {f2(false)}"); println(f"r {f2(true)}")
-  println(f"r {f4()}")
+  println(f"r {f1()}");
+  println(f"r {f2(false)}"); println(f"r {f2(true)}");
+  println(f"r {f4()}");
   println("end")
 }
 "#);

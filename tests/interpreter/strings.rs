@@ -1778,11 +1778,11 @@ fn test_char_try_from_interpreter() {
         r#"fn show(r: Result[char, i64]) { match r { Ok(ch) => println(ch.to_string()), Err(cp) => println("err:" + cp.to_string()), } }
         fn main() {
             let b: u8 = 65;
-            show(char.try_from(b))
-            show(char.try_from(97))
-            show(char.try_from(0x1F600))
-            show(char.try_from(0xD800))
-            show(char.try_from(0x110000))
+            show(char.try_from(b));
+            show(char.try_from(97));
+            show(char.try_from(0x1F600));
+            show(char.try_from(0xD800));
+            show(char.try_from(0x110000));
             show(char.try_from(-1))
         }"#,
     );
@@ -3001,10 +3001,10 @@ fn moverstr() { let o = Option.Some(f"z12"); let q = o; println(f"  s{q.is_some(
 fn unshared() { let d = Option.Some(mk(13)); let e = d; println(f"  d{e.is_some()}") }
 
 fn main() {
-  println("mover");    mover()
-  println("moverstr"); moverstr()
-  println("unshared"); unshared()
-  println("retained"); retained()
+  println("mover");    mover();
+  println("moverstr"); moverstr();
+  println("unshared"); unshared();
+  println("retained"); retained();
   println("done")
 }
 "#);

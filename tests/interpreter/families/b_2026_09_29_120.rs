@@ -52,17 +52,17 @@ fn f8(q: W4, b: bool) -> S4 { let kp = Kp { a: 1 }; return kp.gm(q.u, b, m4(0)) 
 fn f9(q: W4) -> S4 { let kp = Kp { a: 1 }; return kp.gk(q.u) }
 fn f10(q: W3, b: bool) -> i64 { let r = maybe(q.u, b); println(f"n{q.n} r{r.id} k{r.h.k}"); return r.id * 10 + q.n }
 fn main() {
-  println("-c1"); let a = f1(W3 { u: mk(9), n: 2 }, true); println(f"r{a.id}{a.h.k}"); let a2 = f1(W3 { u: mk(8), n: 2 }, false); println(f"r{a2.id}{a2.h.k}")
-  println("-c2"); let b = f2(W3 { u: mk(7), n: 2 }, true); println(f"r{b.id}{b.h.k}"); let b2 = f2(W3 { u: mk(6), n: 2 }, false); println(f"r{b2.id}{b2.h.k}")
-  println("-c3"); let c = f3(W5 { u: m5(5), n: 2 }, true); println(f"r{c.id}{c.h.k}{c.t.len()}"); let c2 = f3(W5 { u: m5(4), n: 2 }, false); println(f"r{c2.id}{c2.h.k}{c2.t.len()}")
-  println("-c4"); let d = f4(W4 { u: m4(3), n: 2 }, true); println(f"r{d.id}{d.h.k}"); let d2 = f4(W4 { u: m4(2), n: 2 }, false); println(f"r{d2.id}{d2.h.k}")
-  println("-c5"); let e = f5(W4 { u: m4(13), n: 2 }, true); println(f"r{e.id}{e.h.k}"); let e2 = f5(W4 { u: m4(12), n: 2 }, false); println(f"r{e2.id}{e2.h.k}")
-  println("-c6"); let g = f6(W3 { u: mk(19), n: 2 }, true); println(f"r{g.id}{g.h.k}"); let g2 = f6(W3 { u: mk(18), n: 2 }, false); println(f"r{g2.id}{g2.h.k}")
-  println("-c7"); let h = f7(W3 { u: mk(17), n: 2 }, true); println(f"r{h.id}{h.h.k}"); let h2 = f7(W3 { u: mk(16), n: 2 }, false); println(f"r{h2.id}{h2.h.k}")
-  println("-c8"); let i = f8(W4 { u: m4(15), n: 2 }, true); println(f"r{i.id}{i.h.k}"); let i2 = f8(W4 { u: m4(14), n: 2 }, false); println(f"r{i2.id}{i2.h.k}")
-  println("-c9"); let j = f9(W4 { u: m4(11), n: 2 }); println(f"r{j.id}{j.h.k}")
-  println("-c10"); let l = f10(W3 { u: mk(21), n: 3 }, true); println(f"s{l}"); let l2 = f10(W3 { u: mk(22), n: 4 }, false); println(f"s{l2}")
-  println("-c11"); let z = maybe(mk(31), true); let y = mk(32); let x = maybe(y, false); println(f"z{z.id} x{x.id}")
+  println("-c1"); let a = f1(W3 { u: mk(9), n: 2 }, true); println(f"r{a.id}{a.h.k}"); let a2 = f1(W3 { u: mk(8), n: 2 }, false); println(f"r{a2.id}{a2.h.k}");
+  println("-c2"); let b = f2(W3 { u: mk(7), n: 2 }, true); println(f"r{b.id}{b.h.k}"); let b2 = f2(W3 { u: mk(6), n: 2 }, false); println(f"r{b2.id}{b2.h.k}");
+  println("-c3"); let c = f3(W5 { u: m5(5), n: 2 }, true); println(f"r{c.id}{c.h.k}{c.t.len()}"); let c2 = f3(W5 { u: m5(4), n: 2 }, false); println(f"r{c2.id}{c2.h.k}{c2.t.len()}");
+  println("-c4"); let d = f4(W4 { u: m4(3), n: 2 }, true); println(f"r{d.id}{d.h.k}"); let d2 = f4(W4 { u: m4(2), n: 2 }, false); println(f"r{d2.id}{d2.h.k}");
+  println("-c5"); let e = f5(W4 { u: m4(13), n: 2 }, true); println(f"r{e.id}{e.h.k}"); let e2 = f5(W4 { u: m4(12), n: 2 }, false); println(f"r{e2.id}{e2.h.k}");
+  println("-c6"); let g = f6(W3 { u: mk(19), n: 2 }, true); println(f"r{g.id}{g.h.k}"); let g2 = f6(W3 { u: mk(18), n: 2 }, false); println(f"r{g2.id}{g2.h.k}");
+  println("-c7"); let h = f7(W3 { u: mk(17), n: 2 }, true); println(f"r{h.id}{h.h.k}"); let h2 = f7(W3 { u: mk(16), n: 2 }, false); println(f"r{h2.id}{h2.h.k}");
+  println("-c8"); let i = f8(W4 { u: m4(15), n: 2 }, true); println(f"r{i.id}{i.h.k}"); let i2 = f8(W4 { u: m4(14), n: 2 }, false); println(f"r{i2.id}{i2.h.k}");
+  println("-c9"); let j = f9(W4 { u: m4(11), n: 2 }); println(f"r{j.id}{j.h.k}");
+  println("-c10"); let l = f10(W3 { u: mk(21), n: 3 }, true); println(f"s{l}"); let l2 = f10(W3 { u: mk(22), n: 4 }, false); println(f"s{l2}");
+  println("-c11"); let z = maybe(mk(31), true); let y = mk(32); let x = maybe(y, false); println(f"z{z.id} x{x.id}");
   println("end")
 }
 "#);

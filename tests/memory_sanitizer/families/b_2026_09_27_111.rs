@@ -37,21 +37,21 @@ fn c14() { let mut g = E.X(mk(35)); let mut i = 0; while let E.X(t) = g { printl
 fn c15() { let mut g = E.X(mk(36)); match g { E.X(t) => { if t.id > 0 { println(t.id); g = E.Y; } else { println(0) } } E.Y => { println("x0") } }; match g { E.X(t) => println(t.id), E.Y => println(0) } }
 fn c13() { let mut g = E.X(mk(34)); match g { E.X(t) => { let u = t; g = E.X(mk(3)); println(u.tag) } E.Y => { println("x0") } } }
 fn main() {
-    c1()
-    c2()
-    c3()
-    c4()
-    c5()
-    c6()
-    c7()
-    c8()
-    c9()
-    c10()
-    c11()
-    c12()
-    c13()
-    c14()
-    c15()
+    c1();
+    c2();
+    c3();
+    c4();
+    c5();
+    c6();
+    c7();
+    c8();
+    c9();
+    c10();
+    c11();
+    c12();
+    c13();
+    c14();
+    c15();
     println("end")
 }"#,
         &[

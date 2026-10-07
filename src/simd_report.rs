@@ -653,7 +653,6 @@ impl Scan<'_> {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::InterpolatedStringLit(_)
             | ExprKind::Bool(_)

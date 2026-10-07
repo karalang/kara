@@ -23,15 +23,15 @@ impl W {
 impl T { fn deep(self, c: bool) -> i64 { if c { let k = keep(self.w.r); return k.id; } 0 } }
 fn main() {
     let h = H { k: 0 };
-    println(f"a{h.ret(mkw(1), false)}"); println(f"a{h.ret(mkw(2), true)}")
-    let w3 = mkw(3); println(f"b{h.push(w3, false)}"); let w4 = mkw(4); println(f"b{h.push(w4, true)}")
-    println(f"c{h.al(mkw(5), false)}"); println(f"c{h.al(mkw(6), true)}")
-    println(f"e{H { k: 7 }.owns(mkw(7), false)}"); println(f"e{H { k: 8 }.owns(mkw(8), true)}")
-    println(f"f{h.two(1, mkw(9), false)}"); println(f"f{h.two(1, mkw(10), true)}")
-    println(f"g{mkw(11).ret(false)}"); let w12 = mkw(12); println(f"g{w12.ret(true)}")
-    println(f"i{mkw(13).tail(false)}"); println(f"i{mkw(14).tail(true)}")
-    let w15 = mkw(15); println(f"j{w15.al(false)}"); println(f"j{mkw(16).al(true)}")
-    let s17 = mkw(17).both(false); println(f"l{s17.id}"); let s18 = mkw(18).both(true); println(f"l{s18.id}")
-    println(f"m{mkt(19).deep(false)}"); let t20 = mkt(20); println(f"m{t20.deep(true)}")
+    println(f"a{h.ret(mkw(1), false)}"); println(f"a{h.ret(mkw(2), true)}");
+    let w3 = mkw(3); println(f"b{h.push(w3, false)}"); let w4 = mkw(4); println(f"b{h.push(w4, true)}");
+    println(f"c{h.al(mkw(5), false)}"); println(f"c{h.al(mkw(6), true)}");
+    println(f"e{H { k: 7 }.owns(mkw(7), false)}"); println(f"e{H { k: 8 }.owns(mkw(8), true)}");
+    println(f"f{h.two(1, mkw(9), false)}"); println(f"f{h.two(1, mkw(10), true)}");
+    println(f"g{mkw(11).ret(false)}"); let w12 = mkw(12); println(f"g{w12.ret(true)}");
+    println(f"i{mkw(13).tail(false)}"); println(f"i{mkw(14).tail(true)}");
+    let w15 = mkw(15); println(f"j{w15.al(false)}"); println(f"j{mkw(16).al(true)}");
+    let s17 = mkw(17).both(false); println(f"l{s17.id}"); let s18 = mkw(18).both(true); println(f"l{s18.id}");
+    println(f"m{mkt(19).deep(false)}"); let t20 = mkt(20); println(f"m{t20.deep(true)}");
     println("end")
 }

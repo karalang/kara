@@ -30,13 +30,13 @@ fn c1(c: bool, d: bool) -> i64 {
 fn c2(c: bool) -> i64 {
   let t = mk(3);
   match Hr.P(mk(4)) { Hr.P(t) => { let u = t; if c { return u.v } println(f"u{u.v}") } Hr.Q => {} }
-  println(f"t{t.v}")
+  println(f"t{t.v}");
   return 0
 }
 fn c3(c: bool) -> i64 {
   let t = mk(5);
   match Hr.P(mk(6)) { Hr.P(t) => { if c { return 9 } let u = t; println(f"u{u.v}") } Hr.Q => {} }
-  println(f"t{t.v}")
+  println(f"t{t.v}");
   return 0
 }
 fn c4(c: bool) -> i64 {
@@ -59,7 +59,7 @@ fn c6(c: bool) -> i64 {
   let t = mk(40);
   if c { take(t); }
   match Hr.P(mk(41)) { Hr.P(t) => { take(t); } Hr.Q => {} }
-  println("end6")
+  println("end6");
   return 0
 }
 fn f3(c: bool) -> i64 {
@@ -71,16 +71,16 @@ fn f3(c: bool) -> i64 {
 fn a2() -> i64 {
   let t = mk(60);
   if let Hr.P(t) = Hr.P(mk(61)) { let u = t; println(f"u{u.v}") }
-  println(f"t{t.v}")
+  println(f"t{t.v}");
   return 0
 }
 fn main() {
-  println(f"r {f3(false)}"); println(f"r {f3(true)}"); println(f"r {a2()}")
-  println(f"r {c1(false, false)}"); println(f"r {c1(false, true)}"); println(f"r {c1(true, false)}"); println(f"r {c1(true, true)}")
-  println(f"r {c2(false)}"); println(f"r {c2(true)}")
-  println(f"r {c3(false)}"); println(f"r {c3(true)}")
-  println(f"r {c4(false)}"); println(f"r {c4(true)}")
-  println(f"r {c5(false)}"); println(f"r {c5(true)}")
+  println(f"r {f3(false)}"); println(f"r {f3(true)}"); println(f"r {a2()}");
+  println(f"r {c1(false, false)}"); println(f"r {c1(false, true)}"); println(f"r {c1(true, false)}"); println(f"r {c1(true, true)}");
+  println(f"r {c2(false)}"); println(f"r {c2(true)}");
+  println(f"r {c3(false)}"); println(f"r {c3(true)}");
+  println(f"r {c4(false)}"); println(f"r {c4(true)}");
+  println(f"r {c5(false)}"); println(f"r {c5(true)}");
   println(f"r {c6(false)}"); println(f"r {c6(true)}")
 }
 "#);

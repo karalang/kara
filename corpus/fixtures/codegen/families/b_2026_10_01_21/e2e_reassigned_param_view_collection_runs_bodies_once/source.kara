@@ -13,17 +13,17 @@ fn x_ok() -> bool { return true }
 fn c8(x: R, c: bool) { let mut v = Vec[x]; while c { v = Vec[mk(8)]; break } println(f"in{v.len()}") }
 fn c9(x: R) { let mut v = Vec[x]; println(f"pre{v.len()}"); v = Vec[mk(8)]; println(f"in{v.len()}") }
 fn main() {
-  println("-r3"); g7(mk(6)); println("k")
-  println("-a8"); g8(mk(9)); println("k")
-  println("-p7"); let e = f7(mk(17)); println(f"k{e.len()}")
-  println("-r5"); h7(); println("k")
-  println("-c1"); c1(mk(1), true); println("k")
-  println("-c1f"); c1(mk(2), false); println("k")
-  println("-c3"); c3(mk(5)); println("k")
-  println("-c4"); c4(mk(6)); println("k")
-  println("-c7"); c7(mk(10)); println("k")
-  println("-c8"); c8(mk(11), true); println("k")
-  println("-c8f"); c8(mk(12), false); println("k")
-  println("-c9"); c9(mk(13)); println("k")
+  println("-r3"); g7(mk(6)); println("k");
+  println("-a8"); g8(mk(9)); println("k");
+  println("-p7"); let e = f7(mk(17)); println(f"k{e.len()}");
+  println("-r5"); h7(); println("k");
+  println("-c1"); c1(mk(1), true); println("k");
+  println("-c1f"); c1(mk(2), false); println("k");
+  println("-c3"); c3(mk(5)); println("k");
+  println("-c4"); c4(mk(6)); println("k");
+  println("-c7"); c7(mk(10)); println("k");
+  println("-c8"); c8(mk(11), true); println("k");
+  println("-c8f"); c8(mk(12), false); println("k");
+  println("-c9"); c9(mk(13)); println("k");
   println("-l1"); for i in 0..2 { g7(mk(20 + i)) } println("k")
 }

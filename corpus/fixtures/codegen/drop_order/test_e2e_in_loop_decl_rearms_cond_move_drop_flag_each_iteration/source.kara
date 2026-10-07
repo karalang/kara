@@ -43,7 +43,7 @@ fn nested(p: R) -> i64 {
     let mut acc: i64 = 0;
     for a in 0..2 {
         for b in 0..2 {
-            println(f"n{a}{b}")
+            println(f"n{a}{b}");
             let mut out: R = R { id: 10 * a + b, tag: f"t" };
             if a == 0 and b == 1 { out = p; }
             acc = acc + out.id;

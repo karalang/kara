@@ -5793,29 +5793,29 @@ fn mkx(i: i64) -> X1 { return X1 { a: Option.Some(i), s: f\"s{i}\" }; }\n\
 fn mkm(i: i64) -> Map[i64, String] { let mut m: Map[i64, String] = Map.new(); m.insert(i, f\"v{i}\"); return m; }\n\
 fn main() {\n\
   // boxed, owns heap -- fresh temp / named local / match-consuming / hand-back / two-hop\n\
-  sink(W.T(mkx(1)));                       println(\"c1\")\n\
-  let a = W.T(mkx(2)); sink(a);            println(\"c2\")\n\
-  println(f\"c3={eat(W.T(mkx(3)))}\")\n\
-  let b = W.T(mkx(4)); println(f\"c4={eat(b)}\")\n\
-  let z = hand(W.T(mkx(5))); println(f\"c5={eat(z)}\")\n\
-  hop(W.T(mkx(6)));                        println(\"c6\")\n\
+  sink(W.T(mkx(1)));                       println(\"c1\");\n\
+  let a = W.T(mkx(2)); sink(a);            println(\"c2\");\n\
+  println(f\"c3={eat(W.T(mkx(3)))}\");\n\
+  let b = W.T(mkx(4)); println(f\"c4={eat(b)}\");\n\
+  let z = hand(W.T(mkx(5))); println(f\"c5={eat(z)}\");\n\
+  hop(W.T(mkx(6)));                        println(\"c6\");\n\
   // method and assoc, fresh temp and named local (the assoc named-local leg)\n\
   let h = H { n: 1 };\n\
-  h.pv(W.T(mkx(7)));                       println(\"c7\")\n\
-  let c = W.T(mkx(8)); h.pv(c);            println(\"c8\")\n\
-  W.av(W.T(mkx(9)));                       println(\"c9\")\n\
-  let d = W.T(mkx(10)); W.av(d);           println(\"c10\")\n\
+  h.pv(W.T(mkx(7)));                       println(\"c7\");\n\
+  let c = W.T(mkx(8)); h.pv(c);            println(\"c8\");\n\
+  W.av(W.T(mkx(9)));                       println(\"c9\");\n\
+  let d = W.T(mkx(10)); W.av(d);           println(\"c10\");\n\
   // boxed with a Map field, and the INLINE Map payload\n\
-  sinkv(V.T(X3 { a: Option.Some(11), m: mkm(11) })); println(\"c11\")\n\
-  let e = V.T(X3 { a: Option.Some(12), m: mkm(12) }); sinkv(e); println(\"c12\")\n\
-  sinky(Y.T(M { m: mkm(13), n: 13 }));     println(\"c13\")\n\
-  let f = Y.T(M { m: mkm(14), n: 14 }); sinky(f); println(\"c14\")\n\
+  sinkv(V.T(X3 { a: Option.Some(11), m: mkm(11) })); println(\"c11\");\n\
+  let e = V.T(X3 { a: Option.Some(12), m: mkm(12) }); sinkv(e); println(\"c12\");\n\
+  sinky(Y.T(M { m: mkm(13), n: 13 }));     println(\"c13\");\n\
+  let f = Y.T(M { m: mkm(14), n: 14 }); sinky(f); println(\"c14\");\n\
   // a Drop-bearing payload field that owns heap -- the body must fire exactly once\n\
-  sinkd(D.T(Xd { a: Option.Some(15), r: R2 { id: 15, s: \"h15\" } })); println(\"c15\")\n\
-  let g = D.T(Xd { a: Option.Some(16), r: R2 { id: 16, s: \"h16\" } }); sinkd(g); println(\"c16\")\n\
+  sinkd(D.T(Xd { a: Option.Some(15), r: R2 { id: 15, s: \"h15\" } })); println(\"c15\");\n\
+  let g = D.T(Xd { a: Option.Some(16), r: R2 { id: 16, s: \"h16\" } }); sinkd(g); println(\"c16\");\n\
   // CONTROL: a copy-supported (NestedStruct) payload stays entry-copied\n\
-  sinkc(C.T(Ctl { s: \"17\" }));             println(\"c17\")\n\
-  let i = C.T(Ctl { s: \"18\" }); sinkc(i);  println(\"c18\")\n\
+  sinkc(C.T(Ctl { s: \"17\" }));             println(\"c17\");\n\
+  let i = C.T(Ctl { s: \"18\" }); sinkc(i);  println(\"c18\");\n\
   println(\"end\")\n\
 }\n\
 ",
@@ -5938,16 +5938,16 @@ fn sinkw(w: W1) -> i64 { return 2 }
 fn eatw(w: W1) -> i64 { return match w { W1.T(s) => s.n, W1.U(n) => n } }
 
 fn main() {
-    println(f"t1={sink(It.A(Sm { a: None, sp: 2 }))}")
+    println(f"t1={sink(It.A(Sm { a: None, sp: 2 }))}");
     let a = It.A(Sm { a: None, sp: 3 });
-    println(f"t2={sink(a)}")
-    println(f"t3={eat(It.A(Sm { a: None, sp: 4 }))}")
+    println(f"t2={sink(a)}");
+    println(f"t3={eat(It.A(Sm { a: None, sp: 4 }))}");
     let b = It.A(Sm { a: None, sp: 5 });
-    println(f"t4={eat(b)}")
-    println(f"t5={sinkw(W1.T(S1 { a: Option.Some("hi"), n: 6 }))}")
+    println(f"t4={eat(b)}");
+    println(f"t5={sinkw(W1.T(S1 { a: Option.Some("hi"), n: 6 }))}");
     let c = W1.T(S1 { a: Option.Some("ho"), n: 7 });
-    println(f"t6={sinkw(c)}")
-    println(f"t7={eatw(W1.T(S1 { a: Option.Some("he"), n: 8 }))}")
+    println(f"t6={sinkw(c)}");
+    println(f"t7={eatw(W1.T(S1 { a: Option.Some("he"), n: 8 }))}");
     println("end")
 }
 "#,
@@ -10623,14 +10623,14 @@ fn shv(g: Gen[Vec[String]]) { match g { Gen.Y(v) => { println(f"v:{v.len()}") } 
 fn wrap[T](g: Gen[T], c: bool) -> Hg[T] { if c { return Hg { g: g } } return Hg { g: Gen.N } }
 
 fn main() {
-    let a: Gen[String] = Gen.Y(f"aa-local-2"); shw(a); shw(a)
-    let b: Gen[String] = Gen.Y(f"bbb-thrice-33"); shw(b); shw(b); shw(b)
-    let c: Holder = Holder { g: Gen.Y(f"cccc-field-444") }; shw(c.g); shw(c.g)
-    let d: Gen[Wide] = Gen.Y(Wide { a: f"ddddd-struct-5555", b: f"ddddd-struct-5556", c: f"ddddd-struct-5557" }); shs(d); shs(d)
-    let mut q: Vec[String] = Vec.new(); q.push(f"eeeeee-vecelem-66666"); let e: Gen[Vec[String]] = Gen.Y(q); shv(e); shv(e)
-    let f: Gen[String] = Gen.Y(f"fffffff-escape-777777"); let h: Gen[String] = idf(f); shw(f); shw(h)
-    let i: Hg[String] = Hg { g: Gen.Y(f"gggggggg-genfield-8888888") }; shw(i.g); shw(i.g)
-    let j: Gen[String] = Gen.Y(f"hhhhhhhhh-wrapped-99999999"); let k: Hg[String] = wrap(j, true); shw(k.g); shw(k.g)
+    let a: Gen[String] = Gen.Y(f"aa-local-2"); shw(a); shw(a);
+    let b: Gen[String] = Gen.Y(f"bbb-thrice-33"); shw(b); shw(b); shw(b);
+    let c: Holder = Holder { g: Gen.Y(f"cccc-field-444") }; shw(c.g); shw(c.g);
+    let d: Gen[Wide] = Gen.Y(Wide { a: f"ddddd-struct-5555", b: f"ddddd-struct-5556", c: f"ddddd-struct-5557" }); shs(d); shs(d);
+    let mut q: Vec[String] = Vec.new(); q.push(f"eeeeee-vecelem-66666"); let e: Gen[Vec[String]] = Gen.Y(q); shv(e); shv(e);
+    let f: Gen[String] = Gen.Y(f"fffffff-escape-777777"); let h: Gen[String] = idf(f); shw(f); shw(h);
+    let i: Hg[String] = Hg { g: Gen.Y(f"gggggggg-genfield-8888888") }; shw(i.g); shw(i.g);
+    let j: Gen[String] = Gen.Y(f"hhhhhhhhh-wrapped-99999999"); let k: Hg[String] = wrap(j, true); shw(k.g); shw(k.g);
     println("done")
 }
 "#,
@@ -11740,17 +11740,17 @@ fn i_discmkh() { let p = P { id: 12 }; let _ = mkh(p); println("i") }
 fn j_discwrapR() { let r = R { id: 13, s: f"s{13}" }; wrap(r); println("j") }
 fn k_owndrop() { let p = P { id: 14 }; wrapd(p); println("k") }
 fn main() {
-    a_let()
-    b_wrap()
-    c_arg()
-    d_meth()
-    e_nested()
-    f_loop()
-    g_stmt()
-    h_discwrap()
-    i_discmkh()
-    j_discwrapR()
-    k_owndrop()
+    a_let();
+    b_wrap();
+    c_arg();
+    d_meth();
+    e_nested();
+    f_loop();
+    g_stmt();
+    h_discwrap();
+    i_discmkh();
+    j_discwrapR();
+    k_owndrop();
     println("end")
 }
 "#,
@@ -11800,7 +11800,7 @@ fn round() {
     println("end")
 }
 fn main() {
-    round()
+    round();
     round()
 }
 "#,

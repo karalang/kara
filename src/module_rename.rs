@@ -345,7 +345,6 @@ fn rename_declaration(
         Item::ExternFunction(_)
         | Item::ExternBlock(_)
         | Item::ImplBlock(_)
-        | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
         | Item::IndependentDecl(_)

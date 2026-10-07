@@ -13482,9 +13482,9 @@ fn loop_assignment_dominating_every_break_initializes() {
         "fn main() {\n\
              let c = true;\n\
              let mut x: i64;\n\
-             outer: loop {\n\
+             'outer: loop {\n\
                  loop {\n\
-                     if c { x = 9; break outer; }\n\
+                     if c { x = 9; break 'outer; }\n\
                      x = 1;\n\
                      break;\n\
                  }\n\
@@ -13515,9 +13515,9 @@ fn loop_break_not_dominated_by_assignment_stays_uninitialized() {
         "fn main() {\n\
              let c = true;\n\
              let mut x: i64;\n\
-             outer: loop {\n\
+             'outer: loop {\n\
                  loop {\n\
-                     if c { break outer; }\n\
+                     if c { break 'outer; }\n\
                      x = 1;\n\
                      break;\n\
                  }\n\

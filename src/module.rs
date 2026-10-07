@@ -1661,7 +1661,6 @@ fn module_defines_local_item(module: &Module, name: &str) -> bool {
         Item::EffectVerbDecl(v) => v.verb_name == name,
         Item::ImplBlock(_)
         | Item::LayoutDef(_)
-        | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
         | Item::IndependentDecl(_)

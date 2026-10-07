@@ -318,17 +318,17 @@ fn s10(t: (R, i64)) { let t2 = t; let (r, k) = t2; let m = r; println(f"  b{m.id
 fn s11(h: H)        { let (r, k) = h.pe; let m = r; println(f"  b{m.id}") }
 
 fn main() {
-    println("param");      s1((R { id: 1 }, 0));            println("param end")
-    println("chained");    s2((R { id: 2 }, 0));            println("chained end")
-    println("two");        s3((R { id: 3 }, R { id: 4 }));  println("two end")
-    println("letelse");    s4(W.A(R { id: 5 }));            println("letelse end")
-    println("norebind");   s5((R { id: 6 }, 0));            println("norebind end")
-    println("arm");        s6((R { id: 8 }, 0));            println("arm end")
-    println("local");      s7();                            println("local end")
-    println("structpat");  s8(S { r: R { id: 9 }, k: 0 });  println("structpat end")
-    println("nested");     s9(((R { id: 10 }, 0), 0));      println("nested end")
-    println("viewsrc");    s10((R { id: 11 }, 0));          println("viewsrc end")
-    println("proj");       s11(H { pe: (R { id: 12 }, 0) });println("proj end")
+    println("param");      s1((R { id: 1 }, 0));            println("param end");
+    println("chained");    s2((R { id: 2 }, 0));            println("chained end");
+    println("two");        s3((R { id: 3 }, R { id: 4 }));  println("two end");
+    println("letelse");    s4(W.A(R { id: 5 }));            println("letelse end");
+    println("norebind");   s5((R { id: 6 }, 0));            println("norebind end");
+    println("arm");        s6((R { id: 8 }, 0));            println("arm end");
+    println("local");      s7();                            println("local end");
+    println("structpat");  s8(S { r: R { id: 9 }, k: 0 });  println("structpat end");
+    println("nested");     s9(((R { id: 10 }, 0), 0));      println("nested end");
+    println("viewsrc");    s10((R { id: 11 }, 0));          println("viewsrc end");
+    println("proj");       s11(H { pe: (R { id: 12 }, 0) });println("proj end");
     println("done")
 }
 "#),
@@ -597,14 +597,14 @@ fn freshtemp_scrutinee_body_fires_at_construct_exit() {
                 ),
                 (
                 "nested-in-expression",
-                "println(f\"c{sink(match mk(2) { E.A(r) => { r.id } E.B => { 0 } })}\")\n",
+                "println(f\"c{sink(match mk(2) { E.A(r) => { r.id } E.B => { 0 } })}\");\n",
                 "dR2\ndE\nc2\npost\n",
                 ),
                 (
                 "two-in-one-statement",
                 "let a = match mk(3) { E.A(r) => { r.id } E.B => { 0 } }\n\
                  \x20       + match mk(4) { E.A(r) => { r.id } E.B => { 0 } };\n\
-                 println(f\"a{a}\")\n",
+                 println(f\"a{a}\");\n",
                 "dR3\ndE\ndR4\ndE\na7\npost\n",
                 ),
                 (
@@ -621,7 +621,7 @@ fn freshtemp_scrutinee_body_fires_at_construct_exit() {
                 (
                 "let-bound-value",
                 "let x = match mk(8) { E.A(r) => { r.id } E.B => { 0 } };\n\
-                 println(f\"x{x}\")\n",
+                 println(f\"x{x}\");\n",
                 "dR8\ndE\nx8\npost\n",
                 ),
                 (

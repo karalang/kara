@@ -20,13 +20,13 @@ fn h5(k: i64) -> Result[i64, E9] { let x = mk(k)?; Result.Ok(x) }
 fn main() {
     match h1(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
     match h1(1) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match h2(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match h3(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match h4(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match h5(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.id) }
     println("end")
 }

@@ -17,10 +17,10 @@ fn h6(x: Option[R]) -> i64 { let x = Some(mk(12, f"l")); 1 }
 fn h7(x: Option[R]) -> i64 { let x = Some(mk(13, f"m")); if let Some(r) = x { return r.id } 0 }
 fn h8(x: R) -> i64 { let x = mk(14, f"n"); x.id }
 fn main() {
-    println(f"n{h5(Some(mk(5, f"e")))}")
-    println(f"n{h6(Some(mk(6, f"f")))}")
-    println(f"n{h7(Some(mk(7, f"g")))}")
-    println(f"n{h8(mk(8, f"h"))}")
+    println(f"n{h5(Some(mk(5, f"e")))}");
+    println(f"n{h6(Some(mk(6, f"f")))}");
+    println(f"n{h7(Some(mk(7, f"g")))}");
+    println(f"n{h8(mk(8, f"h"))}");
     println("end")
 }
 "#;
@@ -52,16 +52,16 @@ fn k5(x: Option[R], c: bool) -> i64 { if c { let x = Some(mk(25, f"e")); if let 
 fn k6(x: mut ref Option[R]) -> i64 { let x = Some(mk(26, f"f")); match x { Some(r) => r.id, None => 0 } }
 fn k7(x: Option[R]) -> Option[R] { let x = Some(mk(27, f"g")); x }
 fn main() {
-    println(f"n{k1(Some(mk(1, f"p")))}")
-    println(f"n{k2(Some(mk(2, f"q")))}")
-    println(f"n{k3(Some(mk(3, f"r")))}")
-    println(f"n{k4(mk(4, f"s"))}")
-    println(f"n{k5(Some(mk(5, f"t")), true)}")
-    println(f"n{k5(Some(mk(6, f"u")), false)}")
+    println(f"n{k1(Some(mk(1, f"p")))}");
+    println(f"n{k2(Some(mk(2, f"q")))}");
+    println(f"n{k3(Some(mk(3, f"r")))}");
+    println(f"n{k4(mk(4, f"s"))}");
+    println(f"n{k5(Some(mk(5, f"t")), true)}");
+    println(f"n{k5(Some(mk(6, f"u")), false)}");
     let mut m = Some(mk(7, f"v"));
-    println(f"n{k6(mut m)}")
+    println(f"n{k6(mut m)}");
     let g = k7(Some(mk(8, f"w")));
-    println(f"g{g.is_some()}")
+    println(f"g{g.is_some()}");
     println("end")
 }
 "#;

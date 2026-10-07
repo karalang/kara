@@ -23,15 +23,15 @@ fn ge(x: mut ref E) -> i64 { x = E.A(mk(80, f"e-{1}-heap-string-longer-than-sso"
 fn gg[T](x: mut ref Option[T], v: T) -> i64 { x = Some(v); 3 }
 fn gs(x: mut ref Option[String]) -> i64 { x = Some(f"new-{3}-heap-string-longer-than-sso"); 4 }
 fn main() {
-    let mut o = Some(mk(1, f"a-{1}-heap-string-longer-than-sso")); println(f"n{gm(mut o)}"); println("a1")
-    let mut r = mk(2, f"b-{1}-heap-string-longer-than-sso"); println(f"n{hm(mut r)}"); println("a2")
-    println(f"n{gm(mut Some(mk(3, f"c-{1}-heap-string-longer-than-sso")))}"); println("a3")
-    println(f"n{hm(mut mk(4, f"d-{1}-heap-string-longer-than-sso"))}"); println("a4")
-    let mut a: Result[R, i64] = Ok(mk(5, f"r-{1}-heap-string-longer-than-sso")); println(f"n{gr(mut a)}"); println("a5")
-    let mut h = H { o: Some(mk(6, f"o-{1}-heap-string-longer-than-sso")), k: 0 }; println(f"n{gh(mut h)}"); println("a6")
-    let mut e = E.A(mk(7, f"v-{1}-heap-string-longer-than-sso")); println(f"n{ge(mut e)}"); println("a7")
-    let mut g = Some(mk(8, f"t-{1}-heap-string-longer-than-sso")); println(f"n{gg(mut g, mk(90, f"g-{1}-heap-string-longer-than-sso"))}"); println("a8")
-    let mut s = Some(f"old-{1}-heap-string-longer-than-sso"); println(f"n{gs(mut s)}"); println(f"{s.unwrap()}")
+    let mut o = Some(mk(1, f"a-{1}-heap-string-longer-than-sso")); println(f"n{gm(mut o)}"); println("a1");
+    let mut r = mk(2, f"b-{1}-heap-string-longer-than-sso"); println(f"n{hm(mut r)}"); println("a2");
+    println(f"n{gm(mut Some(mk(3, f"c-{1}-heap-string-longer-than-sso")))}"); println("a3");
+    println(f"n{hm(mut mk(4, f"d-{1}-heap-string-longer-than-sso"))}"); println("a4");
+    let mut a: Result[R, i64] = Ok(mk(5, f"r-{1}-heap-string-longer-than-sso")); println(f"n{gr(mut a)}"); println("a5");
+    let mut h = H { o: Some(mk(6, f"o-{1}-heap-string-longer-than-sso")), k: 0 }; println(f"n{gh(mut h)}"); println("a6");
+    let mut e = E.A(mk(7, f"v-{1}-heap-string-longer-than-sso")); println(f"n{ge(mut e)}"); println("a7");
+    let mut g = Some(mk(8, f"t-{1}-heap-string-longer-than-sso")); println(f"n{gg(mut g, mk(90, f"g-{1}-heap-string-longer-than-sso"))}"); println("a8");
+    let mut s = Some(f"old-{1}-heap-string-longer-than-sso"); println(f"n{gs(mut s)}"); println(f"{s.unwrap()}");
     println("end")
 }
 "#,

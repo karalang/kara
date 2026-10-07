@@ -39,11 +39,11 @@ const OFFSET_SHIFT: i64 = 0;
 /// naming-convention diagnostics; const *values* stay literal/identifier-simple
 /// so the Rust-side expr renderer below can stay compact.
 const CORPUS: &[&str] = &[
-    // `use` declarations.
-    "use foo;",
-    "use a.b.c;",
-    "use a.b.c.d.e;",
-    "pub use std.io;",
+    // Single-form `import` declarations (`use` is no longer syntax).
+    "import foo;",
+    "import a.b.c;",
+    "import a.b.c.d.e;",
+    "pub import std.io;",
     // `const` declarations — primitive values.
     "const MAX: i64 = 100;",
     "const ZERO: i64 = 0;",
@@ -295,7 +295,6 @@ fn render_rust_expr(e: &Expr) -> String {
         ExprKind::CharLit(c) => format!("(char {}{sp})", escape_for_render(&c.to_string())),
         ExprKind::ByteLit(b) => format!("(byte {b}{sp})"),
         ExprKind::StringLit(s) => format!("(str {}{sp})", escape_for_render(s)),
-        ExprKind::MultiStringLit(s) => format!("(mstr {}{sp})", escape_for_render(s)),
         ExprKind::Identifier(name) => format!("(ident {name}{sp})"),
         ExprKind::SelfValue => format!("(self{sp})"),
         ExprKind::SelfType => format!("(Self{sp})"),
@@ -778,12 +777,16 @@ fn render_rust_meta(attrs: &[Attribute], doc: &Option<String>) -> String {
 /// Item render — must match `ast_render.kara::render_item`.
 fn render_rust_item(item: &Item) -> String {
     match item {
-        Item::UseDecl(u) => {
+        // The selfhost node for an import still renders under its old `use`
+        // tag; the single form is the prefix plus the one bound item.
+        Item::Import(i) => {
+            let mut path = i.path.clone();
+            path.extend(i.items.iter().map(|it| it.name.clone()));
             format!(
                 "(use{}{} {})",
-                vis(u.is_pub),
-                span_item_off_len(u.span.offset, u.span.length),
-                u.path.join(".")
+                vis(i.is_pub),
+                span_item_off_len(i.span.offset, i.span.length),
+                path.join(".")
             )
         }
         Item::ConstDecl(c) => {

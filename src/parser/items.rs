@@ -11,7 +11,7 @@
 //! `parse_assoc_type_binding`), effect declarations
 //! (`parse_effect_decl`, `parse_effect_group_body`,
 //! `parse_optional_effect_list`, `parse_effect_list`,
-//! `parse_resource`), module surface (`parse_use_decl`,
+//! `parse_resource`), module surface (`import_item`,
 //! `parse_import_decl`, `parse_import_subtree`,
 //! `group_import_leaves`,
 //! `parse_const_decl`, `parse_alias_decl`,
@@ -220,26 +220,30 @@ impl super::Parser {
                 self.reject_mod_decl();
                 None
             }
+            // `use a.b.C;` was the pre-module-system spelling of `import`. It is
+            // gone (design review 2026-10-07 § 3); the diagnostic carries the
+            // rewrite, and the declaration is parsed as the `import` it means
+            // so the rest of the file still checks.
             Token::Identifier {
                 ref name,
                 raw: false,
             } if name == "use" && matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) => {
-                let decl = self.parse_use_decl(is_pub)?;
-                Some(Item::UseDecl(decl))
+                let use_span = self.current_span();
+                self.error_at(
+                    "`use` is not Kāra syntax; write `import` (`import a.b.C;`)",
+                    use_span,
+                );
+                self.fix_edits.insert(
+                    crate::resolver::SpanKey::from_span(&use_span),
+                    crate::resolver::TextEdit {
+                        offset: use_span.offset,
+                        length: use_span.length,
+                        replacement: "import".to_string(),
+                    },
+                );
+                self.import_item(is_pub)
             }
-            Token::Import => {
-                let mut decls = self.parse_import_decl(is_pub)?;
-                if decls.is_empty() {
-                    return None;
-                }
-                // Nested grouping can expand one statement into several
-                // decls. The item loop takes one `Item` per call, so the
-                // extras queue up and are drained there.
-                let first = decls.remove(0);
-                self.pending_extra_items
-                    .extend(decls.into_iter().map(Item::Import));
-                Some(Item::Import(first))
-            }
+            Token::Import => self.import_item(is_pub),
             Token::Const => {
                 let decl = self.parse_const_decl(attributes, is_pub, is_private)?;
                 Some(Item::ConstDecl(decl))
@@ -2468,16 +2472,20 @@ impl super::Parser {
         });
     }
 
-    fn parse_use_decl(&mut self, is_pub: bool) -> Option<UseDecl> {
-        let start = self.current_span();
-        self.expect_kw("use")?;
-        let path = self.parse_path_segments()?;
-        self.expect(&Token::Semicolon)?;
-        Some(UseDecl {
-            span: self.span_from(&start),
-            is_pub,
-            path,
-        })
+    /// An `import` declaration as an item. The cursor sits on `import` (or on
+    /// the `use` the caller has already diagnosed).
+    fn import_item(&mut self, is_pub: bool) -> Option<Item> {
+        let mut decls = self.parse_import_decl(is_pub)?;
+        if decls.is_empty() {
+            return None;
+        }
+        // Nested grouping can expand one statement into several
+        // decls. The item loop takes one `Item` per call, so the
+        // extras queue up and are drained there.
+        let first = decls.remove(0);
+        self.pending_extra_items
+            .extend(decls.into_iter().map(Item::Import));
+        Some(Item::Import(first))
     }
 
     /// Parse `import` declarations per design.md § Module System:
@@ -2507,7 +2515,7 @@ impl super::Parser {
     /// not by the syntax used.
     fn parse_import_decl(&mut self, is_pub: bool) -> Option<Vec<ImportDecl>> {
         let start = self.current_span();
-        self.expect(&Token::Import)?;
+        self.advance(); // `import` (or a diagnosed `use`)
 
         let first_span = self.current_span();
         let first_name = self.expect_identifier()?;

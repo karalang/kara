@@ -1936,7 +1936,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(());
         }
         match &e.kind {
-            ExprKind::StringLit(s) | ExprKind::MultiStringLit(s) => {
+            ExprKind::StringLit(s) => {
                 let op = self.static_str(s);
                 self.call_native("String.from", vec![op], dest);
                 Ok(())
@@ -4833,7 +4833,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// by reference.
     fn print_operands(&mut self, a: &'a Expr, ops: &mut Vec<Operand>) -> R<()> {
         match &a.kind {
-            ExprKind::StringLit(s) | ExprKind::MultiStringLit(s) => {
+            ExprKind::StringLit(s) => {
                 ops.push(self.static_str(s));
                 Ok(())
             }
@@ -5829,7 +5829,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         if !borrows {
             return self.expr_operand(a);
         }
-        if let ExprKind::StringLit(s) | ExprKind::MultiStringLit(s) = &a.kind {
+        if let ExprKind::StringLit(s) = &a.kind {
             return Ok(self.static_str(s));
         }
         let at = self.expr_ty(a)?;

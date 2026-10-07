@@ -590,7 +590,6 @@ impl<'a> OwnershipChecker<'a> {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::SelfValue
@@ -2140,7 +2139,6 @@ impl<'a> OwnershipChecker<'a> {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::SelfValue
@@ -2693,7 +2691,6 @@ fn walk_fn_exprs(block: &Block, f: &mut impl FnMut(&Expr, bool)) {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Identifier(_)
@@ -3085,7 +3082,6 @@ impl<'a> OwnershipChecker<'a> {
                 | Item::EffectResource(_)
                 | Item::EffectGroup(_)
                 | Item::EffectVerbDecl(_)
-                | Item::UseDecl(_)
                 | Item::Import(_)
                 | Item::AliasDecl(_)
                 | Item::IndependentDecl(_)

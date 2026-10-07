@@ -6389,7 +6389,6 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn expr_is_string_like(&self, expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::InterpolatedStringLit(_) => true,
             ExprKind::Identifier(n) => {
                 self.var_types.string_vars.contains(n.as_str())

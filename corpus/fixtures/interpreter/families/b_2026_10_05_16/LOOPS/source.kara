@@ -49,9 +49,9 @@ fn main() {
     }
     println(f"d {d}");
     let mut e = 0;
-    outer: for x in CountUp { current: 1, limit: 10 } {
+    'outer: for x in CountUp { current: 1, limit: 10 } {
         for y in CountUp { current: 1, limit: 10 } {
-            if x * y == 12 { e = x * 100 + y; break outer; }
+            if x * y == 12 { e = x * 100 + y; break 'outer; }
         }
     }
     println(f"e {e}");

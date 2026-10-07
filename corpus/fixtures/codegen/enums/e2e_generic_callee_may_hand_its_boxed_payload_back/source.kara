@@ -24,7 +24,7 @@ fn main() {
     println("arrpayload");{ let a: G[Array[String, 2]] = G.Y([f"mmmmmmmm-13", f"nnnnnnnn-14"]); let b = mid(a, true); match b { G.Y(v) => { println("  arr") } G.N => { println("  none") } } }
     println("matchtail"); { let a: G[String] = G.Y(f"oooooooo-15"); let b = tailmatch(a, 1); show(b) }
     println("chain");     { let a: G[String] = G.Y(f"pppppppp-16"); let b = mid(mid(a, true), true); show(b) }
-    println("blocktail"); { let a: G[String] = G.Y(f"rrrrrrrr-18"); mid(a, true) }; println("  out")
+    println("blocktail"); { let a: G[String] = G.Y(f"rrrrrrrr-18"); mid(a, true) }; println("  out");
     println("mono");      { let a: M = M.Y(f"qqqqqqqq-17"); let b = midmono(a, true); match b { M.Y(v) => { println(f"  {v.len()}") } M.N => { println("  none") } } }
     println("end")
 }

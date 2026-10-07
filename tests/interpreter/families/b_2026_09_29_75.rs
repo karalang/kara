@@ -35,21 +35,21 @@ fn pi(t: E) -> i64 { println(f"pi {t.m2()}"); return 0 }
 fn pb(t: E) -> i64 { let x = t.mb(); println(f"pb {x}"); return x }
 fn p9(t: E) -> S { return t.take() }
 fn main() {
-  println(f"r {p2(E.A(mks(1)))}")
-  let e = E.A(mks(2)); println(f"r {p2(e)}")
-  println(f"r {p6(E.A(mks(3)))}")
-  println(f"r {p7(E.A(mks(4)), false)}")
-  println(f"r {p7(E.A(mks(5)), true)}")
-  println(f"r {fwd(E.A(mks(6)))}")
-  let h = H { k: 100 }; println(f"r {h.q(E.A(mks(7)))}")
-  let e8 = E.A(mks(8)); println(f"r {h.q(e8)}")
-  println(f"r {pa(E.A(mks(9)))}")
-  println(f"r {pi(E.A(mks(10)))}")
-  println(f"r {pb(E.A(mks(11)))}")
-  let s = p9(E.A(mks(12))); println(f"got {s.id}")
+  println(f"r {p2(E.A(mks(1)))}");
+  let e = E.A(mks(2)); println(f"r {p2(e)}");
+  println(f"r {p6(E.A(mks(3)))}");
+  println(f"r {p7(E.A(mks(4)), false)}");
+  println(f"r {p7(E.A(mks(5)), true)}");
+  println(f"r {fwd(E.A(mks(6)))}");
+  let h = H { k: 100 }; println(f"r {h.q(E.A(mks(7)))}");
+  let e8 = E.A(mks(8)); println(f"r {h.q(e8)}");
+  println(f"r {pa(E.A(mks(9)))}");
+  println(f"r {pi(E.A(mks(10)))}");
+  println(f"r {pb(E.A(mks(11)))}");
+  let s = p9(E.A(mks(12))); println(f"got {s.id}");
   let mut i = 0;
   while i < 2 { let w = E.A(mks(13 + i)); println(f"r {p2(w)}"); i = i + 1; }
-  println(f"r {p2(E.B(15))}")
+  println(f"r {p2(E.B(15))}");
   println("end")
 }
 "#);

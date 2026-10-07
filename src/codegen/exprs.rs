@@ -4456,8 +4456,7 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
-            | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_) => true,
+            | ExprKind::StringLit(_) => true,
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
                 Self::fstr_part_is_side_effect_free(object)
             }

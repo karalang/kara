@@ -64,31 +64,31 @@ fn fld_res() { let s: Result[R2, i64] = Ok(mkr(1)); let mut h = Hre { r: Err(0) 
 fn fld_gen() { let s = G.X(f"aaaaaaaa{1}"); let mut h = Hg { e: G.Y }; h.e = s; if let G.X(r) = h.e { println(f"  k{r.len()}") } }
 
 fn main() {
-    println("bind_plain"); bind_plain()
-    println("bind_drop"); bind_drop()
-    println("bind_own"); bind_own()
-    println("bind_inner"); bind_inner()
-    println("bind_taken"); bind_taken()
-    println("bind_untaken"); bind_untaken()
-    println("bind_disp"); bind_disp()
-    println("fld_plain"); fld_plain()
-    println("fld_drop"); fld_drop()
-    println("fld_shared"); fld_shared()
-    println("fld_shared_inner"); fld_shared_inner()
-    println("fld_shared_disp"); fld_shared_disp()
-    println("fld_shared_loop"); fld_shared_loop()
-    println("fld_shared_untaken"); fld_shared_untaken()
-    println("fld_shared_method"); fld_shared_method()
-    println("fld_own"); fld_own()
-    println("fld_own_untaken"); fld_own_untaken()
-    println("fld_taken"); fld_taken()
-    println("fld_loop"); fld_loop()
-    println("fld_opt"); fld_opt()
-    println("fld_opt_taken"); fld_opt_taken()
-    println("fld_opt_drop"); fld_opt_drop()
-    println("fld_opt_loop"); fld_opt_loop()
-    println("fld_res"); fld_res()
-    println("fld_gen"); fld_gen()
+    println("bind_plain"); bind_plain();
+    println("bind_drop"); bind_drop();
+    println("bind_own"); bind_own();
+    println("bind_inner"); bind_inner();
+    println("bind_taken"); bind_taken();
+    println("bind_untaken"); bind_untaken();
+    println("bind_disp"); bind_disp();
+    println("fld_plain"); fld_plain();
+    println("fld_drop"); fld_drop();
+    println("fld_shared"); fld_shared();
+    println("fld_shared_inner"); fld_shared_inner();
+    println("fld_shared_disp"); fld_shared_disp();
+    println("fld_shared_loop"); fld_shared_loop();
+    println("fld_shared_untaken"); fld_shared_untaken();
+    println("fld_shared_method"); fld_shared_method();
+    println("fld_own"); fld_own();
+    println("fld_own_untaken"); fld_own_untaken();
+    println("fld_taken"); fld_taken();
+    println("fld_loop"); fld_loop();
+    println("fld_opt"); fld_opt();
+    println("fld_opt_taken"); fld_opt_taken();
+    println("fld_opt_drop"); fld_opt_drop();
+    println("fld_opt_loop"); fld_opt_loop();
+    println("fld_res"); fld_res();
+    println("fld_gen"); fld_gen();
     println("end")
 }"#);
     assert_eq!(out, "bind_plain\n  k9\nbind_drop\n  k9\n  d9\nbind_own\n  dOwn\n  k9\n  dOwn\nbind_inner\n  k9\nbind_taken\n  k9\nbind_untaken\n  dOwn\n  dOwn\n  mid\nbind_disp\n  k9\nfld_plain\n  k9\nfld_drop\n  k9\n  d9\nfld_shared\n  k9\n  d9\nfld_shared_inner\n  mid\n  k9\n  d9\nfld_shared_disp\n  d10\n  x\n  d9\n  y\nfld_shared_loop\n  d9\n  d9\n  d9\n  mid\nfld_shared_untaken\n  d9\n  mid\nfld_shared_method\n  k9\n  d9\nfld_own\n  dOwn\n  k9\n  dOwn\nfld_own_untaken\n  dOwn\n  dOwn\n  mid\nfld_taken\n  d9\n  mid\nfld_loop\n  k9\nfld_opt\n  k9\nfld_opt_taken\n  k9\nfld_opt_drop\n  d9\n  mid\nfld_opt_loop\n  d9\n  d9\n  d9\n  mid\nfld_res\n  d9\n  mid\nfld_gen\n  k9\nend\n", "got:\n{out}");

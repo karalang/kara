@@ -35,15 +35,15 @@ fn sum(l: L) -> i64 { match l { L.Cons(v, n) => match n { Some(x) => v + sum(x),
 fn tail(l: L) -> Option[L] { match l { L.Cons(_, n) => n, L.Nil => None } }
 fn k() -> i64 { let mut l = L.Cons(0, None); let mut i = 1; while i < 5 { l = L.Cons(i, Some(l)); i = i + 1; } let t = tail(l); sum(l) + match t { Some(x) => sum(x), None => 0 } }
 fn main() {
-    println(f"a{a()}")
-    println(f"b{b()}")
-    println(f"c{c()}")
+    println(f"a{a()}");
+    println(f"b{b()}");
+    println(f"c{c()}");
     let od = d();
-    println(f"d{olen(od)}")
+    println(f"d{olen(od)}");
     let oe = e();
-    println(f"e{oe.is_some()}")
-    println(f"f{f()}")
-    println(f"g{g()}")
+    println(f"e{oe.is_some()}");
+    println(f"f{f()}");
+    println(f"g{g()}");
     println(f"k{k()}")
 }
 "#;

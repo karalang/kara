@@ -7,13 +7,13 @@ fn h(r: Result[S4, S4]) -> Result[i64, S4] { let x = r?; println(x.v); Result.Ok
 fn hc(r: Result[S4, S4], c: bool) -> Result[i64, S4] { if c { let x = r?; println(x.v); return Result.Ok(x.id) } println("skip"); Result.Ok(0) }
 fn pr(r: Result[i64, S4]) { match r { Result.Ok(v) => println(f"ok{v}"), Result.Err(e) => println(f"err{e.id}") } }
 fn main() {
-    pr(h(mk(8)))
-    pr(h(mk(2)))
+    pr(h(mk(8)));
+    pr(h(mk(2)));
     let a = mk(9);
-    pr(h(a))
-    pr(hc(mk(7), true))
-    pr(hc(mk(3), true))
+    pr(h(a));
+    pr(hc(mk(7), true));
+    pr(hc(mk(3), true));
     let b = mk(6);
-    pr(hc(b, false))
+    pr(hc(b, false));
     println("end")
 }

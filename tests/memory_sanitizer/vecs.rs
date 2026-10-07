@@ -6843,12 +6843,12 @@ fn asan_labeled_loop_break_vec_value_single_owner() {
     assert_clean_asan_run_min_allocs(
         "fn pick() -> Vec[i64] {\n\
              \x20   let mut i: i64 = env.args().len() - 1;\n\
-             \x20   outer: loop {\n\
+             \x20   'outer: loop {\n\
              \x20       i = i + 1;\n\
              \x20       let mut j = 0;\n\
              \x20       while j < 2 {\n\
              \x20           j = j + 1;\n\
-             \x20           if i == 2 { break outer [i, j, i + j] }\n\
+             \x20           if i == 2 { break 'outer [i, j, i + j] }\n\
              \x20       }\n\
              \x20   }\n\
              }\n\
@@ -8221,22 +8221,22 @@ fn c13() { let v: Vec[Ho[String]] = vec![Ho.Full("ii".to_string() + "jj"), Ho.Em
 fn c14() { let v: Vec[Ho[String]] = vec![Ho.Full("kk".to_string() + "ll")]; let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); for h in v { w[0] = h; } println(f"w{w.len()}"); }
 fn c16() { let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); let h: Ho[String] = Ho.Full("oo".to_string() + "pp"); w[0] = h; println(f"w{w.len()}"); }
 fn main() {
-    c00()
-    c01()
-    c02()
-    c03()
-    c04()
-    c05()
-    c06()
-    c07()
-    c08()
-    c09()
-    c10()
-    c11()
-    c12()
-    c13()
-    c14()
-    c16()
+    c00();
+    c01();
+    c02();
+    c03();
+    c04();
+    c05();
+    c06();
+    c07();
+    c08();
+    c09();
+    c10();
+    c11();
+    c12();
+    c13();
+    c14();
+    c16();
     println("end")
 }
 "#,
@@ -8357,27 +8357,27 @@ fn s12() { let mut v: Vec[H] = Vec.new(); v.push(H { g: Ho.Full(R { id: 5 }) });
 fn w9() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
 fn m15() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
 fn main() {
-    v01()
-    v02()
-    v03()
-    v04()
-    v05()
-    v06()
-    v09()
-    v10()
-    v11()
-    v12()
-    v13()
-    s01()
-    s04()
-    s06()
-    s07()
-    s08()
-    s09()
-    s10()
-    s12()
-    w9()
-    m15()
+    v01();
+    v02();
+    v03();
+    v04();
+    v05();
+    v06();
+    v09();
+    v10();
+    v11();
+    v12();
+    v13();
+    s01();
+    s04();
+    s06();
+    s07();
+    s08();
+    s09();
+    s10();
+    s12();
+    w9();
+    m15();
     println("end")
 }
 "#,

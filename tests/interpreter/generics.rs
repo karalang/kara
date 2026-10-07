@@ -1598,42 +1598,42 @@ fn let_bound_scalar_field_read_runs_sibling_body_once() {
     for (label, body, want) in [
         (
             "let-bound scalar read",
-            "let h = H { r: R { id: 3 }, n: 4 }; let q = h.n; println(f\"{q}\")",
+            "let h = H { r: R { id: 3 }, n: 4 }; let q = h.n; println(f\"{q}\");",
             "dH\ndR3\n4\n",
         ),
         (
             "no field read (control)",
-            "let h = H { r: R { id: 3 }, n: 4 }; println(\"mid\")",
+            "let h = H { r: R { id: 3 }, n: 4 }; println(\"mid\");",
             "dH\ndR3\nmid\n",
         ),
         (
             "inline read (control)",
-            "let h = H { r: R { id: 3 }, n: 4 }; println(f\"{h.n}\")",
+            "let h = H { r: R { id: 3 }, n: 4 }; println(f\"{h.n}\");",
             "4\ndH\ndR3\n",
         ),
         (
             "two reads run one set of bodies",
-            "let h = H { r: R { id: 3 }, n: 4 }; let q = h.n; let w = h.n; println(f\"{q}{w}\")",
+            "let h = H { r: R { id: 3 }, n: 4 }; let q = h.n; let w = h.n; println(f\"{q}{w}\");",
             "dH\ndR3\n44\n",
         ),
         (
             "wrapper without its own Drop (control)",
-            "let p = P { r: R { id: 3 }, n: 4 }; let q = p.n; println(f\"{q}\")",
+            "let p = P { r: R { id: 3 }, n: 4 }; let q = p.n; println(f\"{q}\");",
             "dR3\n4\n",
         ),
         (
             "reading the Drop-bearing field (control)",
-            "let h = H { r: R { id: 5 }, n: 4 }; let q = h.r; println(\"z\")",
+            "let h = H { r: R { id: 5 }, n: 4 }; let q = h.r; println(\"z\");",
             "dR5\ndH\nz\n",
         ),
         (
             "two Drop siblings each run once",
-            "let h = H2 { r: R { id: 1 }, r2: R { id: 2 }, n: 4 }; let q = h.n; println(f\"{q}\")",
+            "let h = H2 { r: R { id: 1 }, r2: R { id: 2 }, n: 4 }; let q = h.n; println(f\"{q}\");",
             "dH2\ndR2\ndR1\n4\n",
         ),
         (
             "field read inside an expression (control)",
-            "let h = H { r: R { id: 4 }, n: 4 }; let q = h.n + 1; println(f\"{q}\")",
+            "let h = H { r: R { id: 4 }, n: 4 }; let q = h.n + 1; println(f\"{q}\");",
             "dH\ndR4\n5\n",
         ),
     ] {
@@ -1811,17 +1811,17 @@ fn n11() { let h = G[R] { pe: (mk(51), 5), z: 9 }; let k = n10(h); println(f"  b
 fn n12(h: Gn) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
 
 fn main() {
-    println("generic");    n1();                             println("generic end")
-    println("marker");     n2();                             println("marker end")
-    println("nongeneric"); n3();                             println("nongeneric end")
-    println("rebind");     n4();                             println("rebind end")
-    println("bothelems");  n5();                             println("bothelems end")
-    println("secondpos");  n6();                             println("secondpos end")
-    println("nodrop");     n7();                             println("nodrop end")
-    println("wildcard");   n8();                             println("wildcard end")
-    println("nested");     n9();                             println("nested end")
-    println("genericfn");  n11();                            println("genericfn end")
-    println("paramroot");  n12(Gn { pe: (mk(52), 0), z: 9 }); println("paramroot end")
+    println("generic");    n1();                             println("generic end");
+    println("marker");     n2();                             println("marker end");
+    println("nongeneric"); n3();                             println("nongeneric end");
+    println("rebind");     n4();                             println("rebind end");
+    println("bothelems");  n5();                             println("bothelems end");
+    println("secondpos");  n6();                             println("secondpos end");
+    println("nodrop");     n7();                             println("nodrop end");
+    println("wildcard");   n8();                             println("wildcard end");
+    println("nested");     n9();                             println("nested end");
+    println("genericfn");  n11();                            println("genericfn end");
+    println("paramroot");  n12(Gn { pe: (mk(52), 0), z: 9 }); println("paramroot end");
     println("done")
 }
 "#),

@@ -35,29 +35,29 @@ fn q8(r: Result[Sh, String]) -> Result[i64, String] { let x = r?; Result.Ok(x.k)
 fn q9(r: Result[Sh, i64]) -> Result[i64, i64] { let x = r?; Result.Ok(x.k) }
 fn q10(k: i64) -> Option[i64] { let r = mo(k); let x = r?; Option.Some(x.k) }
 fn main() {
-    pr(m1(8))
-    pr(m1(1))
-    println(m2(8))
-    pr(m3(8))
-    pr(q1(8))
-    pr(q1(1))
-    pr(q2(8))
-    po(q3(8))
-    po(q3(1))
-    pi(q4(8))
-    pi(q4(1))
+    pr(m1(8));
+    pr(m1(1));
+    println(m2(8));
+    pr(m3(8));
+    pr(q1(8));
+    pr(q1(1));
+    pr(q2(8));
+    po(q3(8));
+    po(q3(1));
+    pi(q4(8));
+    pi(q4(1));
     match q5(8) { Result.Ok(s) => println(s.k), Result.Err(e) => println(e) }
     let mut v: Vec[Sh] = Vec.new();
-    pr(q6(8, mut v))
-    pr(q6(9, mut v))
-    pr(q6(1, mut v))
-    println(v[1].k)
-    pr(q7(9))
-    pr(q8(mk(8)))
+    pr(q6(8, mut v));
+    pr(q6(9, mut v));
+    pr(q6(1, mut v));
+    println(v[1].k);
+    pr(q7(9));
+    pr(q8(mk(8)));
     let a = mk(9);
-    pr(q8(a))
-    pi(q9(mi(7)))
-    po(q10(8))
+    pr(q8(a));
+    pi(q9(mi(7)));
+    po(q10(8));
     println("end")
 }"#;
     let want = "8\nheap-string-long-enough-1\n8\n8\n8\nheap-string-long-enough-1\n8\n8\n0\n8\n1\n8\n1\n2\nheap-string-long-enough-1\n9\n21\n8\n9\n7\n8\nend\n";
@@ -87,16 +87,16 @@ fn f6(r: Result[i64, Sh]) -> Result[i64, E2] { let x = r?; Result.Ok(x) }
 fn p2(r: Result[i64, E2]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) } }
 fn p3(r: Result[i64, E3]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) } }
 fn main() {
-    p2(f1(8))
-    p2(f1(2))
-    p2(f2(8))
-    p3(f3(8))
-    p3(f4(9))
-    p3(f4(3))
-    p2(f5(9))
-    p2(f6(mk(8)))
+    p2(f1(8));
+    p2(f1(2));
+    p2(f2(8));
+    p3(f3(8));
+    p3(f4(9));
+    p3(f4(3));
+    p2(f5(9));
+    p2(f6(mk(8)));
     let a = mk(9);
-    p2(f6(a))
+    p2(f6(a));
     println("end")
 }"#;
     let want = "25\n2\n25\n8\n9\n3\n25\n25\n25\nend\n";

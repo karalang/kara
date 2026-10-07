@@ -24,10 +24,6 @@ impl super::Formatter {
             Item::EffectGroup(e) => self.format_effect_group(e),
             Item::EffectVerbDecl(e) => self.format_effect_verb_decl(e),
             Item::LayoutDef(l) => self.format_layout(l),
-            Item::UseDecl(u) => {
-                let vis = if u.is_pub { "pub " } else { "" };
-                self.writeln(&format!("{vis}use {};", path_str(&u.path)));
-            }
             Item::Import(i) => {
                 let vis = if i.is_pub { "pub " } else { "" };
                 let prefix = path_str(&i.path);

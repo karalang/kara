@@ -9,10 +9,10 @@ fn payoutc(c: C) -> Ctl { return match c { C.T(x) => x, C.U(n) => mkc(n) }; }
 fn rebind(w: W) -> i64 { let v = w; return match v { W.T(x) => x.a.unwrap_or(0), W.U(n) => n }; }
 fn store(w: W, out: mut ref Vec[W]) { out.push(w); }
 fn main() {
-    let p = payout(W.T(mkx(23))); println(f"a={p.a.unwrap_or(0)}/{p.s}")
-    let q = payout(W.U(24)); println(f"b={q.a.unwrap_or(0)}/{q.s}")
-    let r = payoutc(C.T(mkc(25))); println(f"c={r.n}/{r.s}")
-    println(f"d={rebind(W.T(mkx(26)))}")
-    let mut v: Vec[W] = Vec.new(); store(W.T(mkx(27)), mut v); println(f"e={v.len()}")
+    let p = payout(W.T(mkx(23))); println(f"a={p.a.unwrap_or(0)}/{p.s}");
+    let q = payout(W.U(24)); println(f"b={q.a.unwrap_or(0)}/{q.s}");
+    let r = payoutc(C.T(mkc(25))); println(f"c={r.n}/{r.s}");
+    println(f"d={rebind(W.T(mkx(26)))}");
+    let mut v: Vec[W] = Vec.new(); store(W.T(mkx(27)), mut v); println(f"e={v.len()}");
     println("end")
 }

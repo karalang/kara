@@ -448,7 +448,6 @@ fn check_item_default(item: &Item, errors: &mut Vec<ResolveError>) {
         Item::EffectResource(_)
         | Item::EffectGroup(_)
         | Item::EffectVerbDecl(_)
-        | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
         | Item::IndependentDecl(_) => {}
@@ -591,13 +590,12 @@ fn visit_item(item: &Item, errors: &mut Vec<ResolveError>) {
             }
         }
         Item::LayoutDef(l) => visit_attrs(&l.attributes, errors),
-        // EffectResource / EffectGroup / EffectVerbDecl / UseDecl /
+        // EffectResource / EffectGroup / EffectVerbDecl /
         // Import / AliasDecl / IndependentDecl carry no attribute fields
         // at the AST level.
         Item::EffectResource(_)
         | Item::EffectGroup(_)
         | Item::EffectVerbDecl(_)
-        | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
         | Item::IndependentDecl(_) => {}

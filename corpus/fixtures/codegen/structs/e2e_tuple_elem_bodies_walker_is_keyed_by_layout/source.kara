@@ -8,9 +8,9 @@ fn a3() { let t = (mk(3), Option.Some(mk(33))); let x = t.0; println(f"  e3 {x.i
 fn a4() { let t = (0, Option.Some(mk(4)));                   println("  e4") }
 
 fn main() {
-    println("scalar-first");  a1(); println("scalar-first end")
-    println("heap-first");    a2(); println("heap-first end")
-    println("masked");        a3(); println("masked end")
-    println("unmasked-peer"); a4(); println("unmasked-peer end")
+    println("scalar-first");  a1(); println("scalar-first end");
+    println("heap-first");    a2(); println("heap-first end");
+    println("masked");        a3(); println("masked end");
+    println("unmasked-peer"); a4(); println("unmasked-peer end");
     println("done")
 }

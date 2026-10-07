@@ -12,17 +12,17 @@ fn nestArg(t: ((Option[R], i64), i64)) -> i64 { println(f"  in{t.1}"); return 0;
 fn resArg(t: (Result[R, i64], i64)) -> i64 { println(f"  in{t.1}"); return 0; }
 
 fn main() {
-    println("baretemp");   let _ = optArg((Some(mk(11)), 7));                println("baretemp end")
-    println("qualtemp");   let _ = optArg((Option.Some(mk(12)), 7));         println("qualtemp end")
-    println("twobare");    let _ = twoArg((Some(mk(13)), Some(mk(14))));     println("twobare end")
-    println("secondpos");  let _ = sndArg((7, Some(mk(15))));                println("secondpos end")
-    println("bareuv");     let _ = uvArg((A(mk(16)), 7));                    println("bareuv end")
-    println("qualuv");     let _ = uvArg((W.A(mk(17)), 7));                  println("qualuv end")
-    println("mixed");      let _ = mixArg((Some(mk(18)), mk(19)));           println("mixed end")
-    println("nested");     let _ = nestArg(((Some(mk(20)), 7), 9));          println("nested end")
-    println("bareok");     let _ = resArg((Ok(mk(21)), 7));                  println("bareok end")
-    println("barenone");   let _ = optArg((None, 7));                        println("barenone end")
-    println("discard");    let _ = (Some(mk(22)), 7);                        println("discard end")
-    println("movedplace"); let r = mk(23); let _ = optArg((Some(r), 7));     println("movedplace end")
+    println("baretemp");   let _ = optArg((Some(mk(11)), 7));                println("baretemp end");
+    println("qualtemp");   let _ = optArg((Option.Some(mk(12)), 7));         println("qualtemp end");
+    println("twobare");    let _ = twoArg((Some(mk(13)), Some(mk(14))));     println("twobare end");
+    println("secondpos");  let _ = sndArg((7, Some(mk(15))));                println("secondpos end");
+    println("bareuv");     let _ = uvArg((A(mk(16)), 7));                    println("bareuv end");
+    println("qualuv");     let _ = uvArg((W.A(mk(17)), 7));                  println("qualuv end");
+    println("mixed");      let _ = mixArg((Some(mk(18)), mk(19)));           println("mixed end");
+    println("nested");     let _ = nestArg(((Some(mk(20)), 7), 9));          println("nested end");
+    println("bareok");     let _ = resArg((Ok(mk(21)), 7));                  println("bareok end");
+    println("barenone");   let _ = optArg((None, 7));                        println("barenone end");
+    println("discard");    let _ = (Some(mk(22)), 7);                        println("discard end");
+    println("movedplace"); let r = mk(23); let _ = optArg((Some(r), 7));     println("movedplace end");
     println("done")
 }

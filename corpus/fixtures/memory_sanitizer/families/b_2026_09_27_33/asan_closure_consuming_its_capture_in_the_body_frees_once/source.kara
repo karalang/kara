@@ -22,19 +22,19 @@ fn d12() { let h = mkc("l"); let f = || keepc(h); println(f"d12 {f()}"); println
 fn d13() { let h = mkh("m"); let f = || h; let r = f(); println(f"d13 {keep(r)}"); }
 fn d14() { let h = mkh("n"); let f = own || { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"d14 {f()}"); }
 fn main() {
-    d1()
-    d2()
-    d3()
-    d4()
-    d5()
-    d6()
-    d7()
-    d8()
-    d9()
-    d10()
-    d11()
-    d12()
-    d13()
-    d14()
+    d1();
+    d2();
+    d3();
+    d4();
+    d5();
+    d6();
+    d7();
+    d8();
+    d9();
+    d10();
+    d11();
+    d12();
+    d13();
+    d14();
     println("end")
 }

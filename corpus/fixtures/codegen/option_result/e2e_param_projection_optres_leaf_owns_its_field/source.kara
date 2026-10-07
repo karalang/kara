@@ -10,12 +10,12 @@ struct WrapO { inner: HoOpt }
 struct Outer { h: WrapR }
 fn eat(x: R) { println(f"  eat{x.id}") }
 
-fn rmatch(w: WrapR)  { let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+fn rmatch(w: WrapR)  { let HoRes { a, b } = w.inner; println(f"  rd{a.id}");
                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
-fn rlive(w: WrapR)   { let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+fn rlive(w: WrapR)   { let HoRes { a, b } = w.inner; println(f"  rd{a.id}");
                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") }
                        println(f"  w{w.inner.a.id}") }
-fn two(o: Outer)     { let HoRes { a, b } = o.h.inner; println(f"  rd{a.id}")
+fn two(o: Outer)     { let HoRes { a, b } = o.h.inner; println(f"  rd{a.id}");
                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
 fn rcall(w: WrapR)   { let HoRes { a, b } = w.inner;
                        match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
@@ -28,9 +28,9 @@ fn awild(w: WrapR)   { let HoRes { a: _, b } = w.inner;
 fn livecall(w: WrapR){ let HoRes { a, b } = w.inner;
                        match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") }
                        println(f"  w{w.inner.a.id}") }
-fn omatch(w: WrapO)  { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+fn omatch(w: WrapO)  { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}");
                        match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
-fn olive(w: WrapO)   { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+fn olive(w: WrapO)   { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}");
                        match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") }
                        println(f"  w{w.inner.a.id}") }
 fn ocall(w: WrapO)   { let HoOpt { a, b } = w.inner;
@@ -38,18 +38,18 @@ fn ocall(w: WrapO)   { let HoOpt { a, b } = w.inner;
 fn ounused(w: WrapO) { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}") }
 
 fn main() {
-  println("rmatch");   rmatch(WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } })
-  println("rlive");    rlive(WrapR { inner: HoRes { a: mk(2), b: Result.Ok(mk(102)) } })
-  println("two");      two(Outer { h: WrapR { inner: HoRes { a: mk(3), b: Result.Ok(mk(103)) } } })
-  println("rcall");    rcall(WrapR { inner: HoRes { a: mk(4), b: Result.Ok(mk(104)) } })
-  println("runused");  runused(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } })
-  println("errs");     errs(WrapE { inner: HoErr { a: mk(6), b: Result.Err(mk(106)) } })
-  println("wild");     wild(WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } })
-  println("awild");    awild(WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108)) } })
-  println("livecall"); livecall(WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } })
-  println("omatch");   omatch(WrapO { inner: HoOpt { a: mk(10), b: Option.Some(mk(110)) } })
-  println("olive");    olive(WrapO { inner: HoOpt { a: mk(11), b: Option.Some(mk(111)) } })
-  println("ocall");    ocall(WrapO { inner: HoOpt { a: mk(12), b: Option.Some(mk(112)) } })
-  println("ounused");  ounused(WrapO { inner: HoOpt { a: mk(13), b: Option.Some(mk(113)) } })
+  println("rmatch");   rmatch(WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } });
+  println("rlive");    rlive(WrapR { inner: HoRes { a: mk(2), b: Result.Ok(mk(102)) } });
+  println("two");      two(Outer { h: WrapR { inner: HoRes { a: mk(3), b: Result.Ok(mk(103)) } } });
+  println("rcall");    rcall(WrapR { inner: HoRes { a: mk(4), b: Result.Ok(mk(104)) } });
+  println("runused");  runused(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } });
+  println("errs");     errs(WrapE { inner: HoErr { a: mk(6), b: Result.Err(mk(106)) } });
+  println("wild");     wild(WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } });
+  println("awild");    awild(WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108)) } });
+  println("livecall"); livecall(WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } });
+  println("omatch");   omatch(WrapO { inner: HoOpt { a: mk(10), b: Option.Some(mk(110)) } });
+  println("olive");    olive(WrapO { inner: HoOpt { a: mk(11), b: Option.Some(mk(111)) } });
+  println("ocall");    ocall(WrapO { inner: HoOpt { a: mk(12), b: Option.Some(mk(112)) } });
+  println("ounused");  ounused(WrapO { inner: HoOpt { a: mk(13), b: Option.Some(mk(113)) } });
   println("done")
 }

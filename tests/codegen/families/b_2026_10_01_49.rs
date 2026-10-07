@@ -23,7 +23,7 @@ fn e() { let o = Some(mk(5)); let t = match o { Some(w) => (2, (w, 1)), None => 
 fn g() { let o = Some(mk(6)); let t = match o { Some(w) => (((w, 1), 2), 3), None => (((mk(0), 0), 0), 0) }; println(f"g {t.1}") }
 fn h() { let o = Some(mk(7)); let t = if let Some(w) = o { ((w, 1), 2) } else { ((mk(0), 0), 0) }; println(f"h {t.1}") }
 fn main() {
-  a(); b(); c(Some(mk(3))); d(); e(); g(); h()
+  a(); b(); c(Some(mk(3))); d(); e(); g(); h();
   println("end")
 }
 "#;

@@ -28,14 +28,14 @@ fn c6() { let mut g: H[R] = H.X(mk(25)); match g { H.X(t) => { println(f"w{t.id}
 fn c7() { let mut g: H[R] = H.X(mk(26)); if let H.X(t) = g { println(f"w{t.id}"); g = H.Y; } }
 fn c8() { let mut g = E.X(mk(27)); let mut i = 0; while let E.X(t) = g { println(f"w{t.id}"); i = i + 1; if i > 1 { g = E.Y; } } }
 fn main() {
-    c1()
-    c2()
-    c3()
-    c4()
-    c5()
-    c6()
-    c7()
-    c8()
+    c1();
+    c2();
+    c3();
+    c4();
+    c5();
+    c6();
+    c7();
+    c8();
     println("end")
 }"#;
     let want = "w20 39 20\nw20 39 20\nwt21-heap-string-long-enough-to-allocate\nw39\nw39\nw38\nt23-heap-string-long-enough-to-allocate\n23\n24\n24\n24\nw25\nw26\nw27\nw27\nend\n";

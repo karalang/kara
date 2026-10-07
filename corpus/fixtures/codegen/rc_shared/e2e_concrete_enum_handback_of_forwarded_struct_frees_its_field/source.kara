@@ -31,19 +31,19 @@ fn m_meth_mid_unwrap() { let h = H { n: 0 }; let s = mk2(13); let o = h.midm(s, 
 fn n_assoc() { let s = mk2(14); let o = H.wrapa(s); println("n") }
 fn o_loop() { for i in 15..19 { let s = mk2(i); let o = midS(s, i % 2 == 0); match o { Some(x) => println(f"o{x.id}"), None => println(f"on{i}") } } }
 fn main() {
-    a_wrap(); println("a.")
-    b_mkh(); println("b.")
-    c_mid_some(); println("c.")
-    d_mid_none(); println("d.")
-    f_wrap_unwrap(); println("f.")
-    g_mid_move(); println("g.")
-    h_mkh_read(); println("h.")
-    i_mono_read(); println("i.")
-    j_mono_move(); println("j.")
-    k_meth(); println("k.")
-    l_meth_mid_none(); println("l.")
-    m_meth_mid_unwrap(); println("m.")
-    n_assoc(); println("n.")
-    o_loop(); println("o.")
+    a_wrap(); println("a.");
+    b_mkh(); println("b.");
+    c_mid_some(); println("c.");
+    d_mid_none(); println("d.");
+    f_wrap_unwrap(); println("f.");
+    g_mid_move(); println("g.");
+    h_mkh_read(); println("h.");
+    i_mono_read(); println("i.");
+    j_mono_move(); println("j.");
+    k_meth(); println("k.");
+    l_meth_mid_none(); println("l.");
+    m_meth_mid_unwrap(); println("m.");
+    n_assoc(); println("n.");
+    o_loop(); println("o.");
     println("end")
 }

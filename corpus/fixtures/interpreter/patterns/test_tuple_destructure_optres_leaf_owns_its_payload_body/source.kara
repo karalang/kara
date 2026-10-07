@@ -18,13 +18,13 @@ fn annres() { let t: (R, Result[R, String]) = (mk(7), Result[R, String].Ok(mk(77
 fn stale() { let t = (mk(8), Option.Some(mk(88))); let (r, o) = t; println(f"  rd{r.id}") }
 
 fn main() {
-    println("loc1");   loc1()
-    println("loc0");   loc0()
-    println("ctl");    ctl()
-    println("proj");   proj()
-    println("used");   used()
-    println("none");   none()
-    println("annres"); annres()
-    println("stale");  stale()
+    println("loc1");   loc1();
+    println("loc0");   loc0();
+    println("ctl");    ctl();
+    println("proj");   proj();
+    println("used");   used();
+    println("none");   none();
+    println("annres"); annres();
+    println("stale");  stale();
     println("done")
 }

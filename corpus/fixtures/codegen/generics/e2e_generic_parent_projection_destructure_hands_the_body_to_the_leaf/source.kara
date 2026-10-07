@@ -22,16 +22,16 @@ fn n11() { let h = G[R] { pe: (mk(51), 5), z: 9 }; let k = n10(h); println(f"  b
 fn n12(h: Gn) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
 
 fn main() {
-    println("generic");    n1();                             println("generic end")
-    println("marker");     n2();                             println("marker end")
-    println("nongeneric"); n3();                             println("nongeneric end")
-    println("rebind");     n4();                             println("rebind end")
-    println("bothelems");  n5();                             println("bothelems end")
-    println("secondpos");  n6();                             println("secondpos end")
-    println("nodrop");     n7();                             println("nodrop end")
-    println("wildcard");   n8();                             println("wildcard end")
-    println("nested");     n9();                             println("nested end")
-    println("genericfn");  n11();                            println("genericfn end")
-    println("paramroot");  n12(Gn { pe: (mk(52), 0), z: 9 }); println("paramroot end")
+    println("generic");    n1();                             println("generic end");
+    println("marker");     n2();                             println("marker end");
+    println("nongeneric"); n3();                             println("nongeneric end");
+    println("rebind");     n4();                             println("rebind end");
+    println("bothelems");  n5();                             println("bothelems end");
+    println("secondpos");  n6();                             println("secondpos end");
+    println("nodrop");     n7();                             println("nodrop end");
+    println("wildcard");   n8();                             println("wildcard end");
+    println("nested");     n9();                             println("nested end");
+    println("genericfn");  n11();                            println("genericfn end");
+    println("paramroot");  n12(Gn { pe: (mk(52), 0), z: 9 }); println("paramroot end");
     println("done")
 }

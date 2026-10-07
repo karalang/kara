@@ -957,7 +957,7 @@ fn test_assert_true_continues() {
     let out = run_program(
         r#"
 fn main() {
-    assert(true)
+    assert(true);
     println(7)
 }
 "#,
@@ -972,7 +972,7 @@ fn test_assert_false_emits_failure_and_short_circuits() {
     let captured = run_program_capturing(
         r#"
 fn main() {
-    assert(false)
+    assert(false);
     println(99)
 }
 "#,
@@ -1006,7 +1006,7 @@ fn test_assert_ne_pass() {
     let out = run_program(
         r#"
 fn main() {
-    assert_ne(1, 2)
+    assert_ne(1, 2);
     println(42)
 }
 "#,

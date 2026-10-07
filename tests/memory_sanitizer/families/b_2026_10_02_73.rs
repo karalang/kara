@@ -50,11 +50,11 @@ fn deepk[T](x: Option[Option[T]]) -> Option[T] {
     }
 }
 fn main() {
-    println(deep(Some(Some(mk(1)))))
-    println(deepn(Some(Some(mk(2)))))
-    println(deepif(Some(Some(mk(3)))))
-    println(deepg(Some(Some(mk(4)))))
-    println(triple(Some(Some(Some(mk(5))))))
+    println(deep(Some(Some(mk(1)))));
+    println(deepn(Some(Some(mk(2)))));
+    println(deepif(Some(Some(mk(3)))));
+    println(deepg(Some(Some(mk(4)))));
+    println(triple(Some(Some(Some(mk(5))))));
     match deepk(Some(Some(mk(6)))) {
         Some(r) => println(r.id),
         None => println("none"),

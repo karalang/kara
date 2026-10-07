@@ -58,8 +58,8 @@ fn main() {
  { let w = W { n: 1 }; let g: G1[R] = G1.Y(mk(46)); let b = w.keep(g, true); println("m_back") }
  { let w = W { n: 1 }; let b = w.keep(G1.Y(mk(47)), false); println("mt_dies") }
  { let g: G1[i64] = G1.Y(5); let b = two(g, G1.N, false); println("scalar") }
- println(f"{early(true)}")
- println(f"{early(false)}")
+ println(f"{early(true)}");
+ println(f"{early(false)}");
  println("end")
 }"#,
     ) else {

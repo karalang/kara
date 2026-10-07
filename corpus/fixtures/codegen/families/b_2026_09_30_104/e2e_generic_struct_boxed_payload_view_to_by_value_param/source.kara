@@ -22,7 +22,7 @@ fn t8() -> i64 { let o = Option.Some(G { v: mk(8), n: 8 }); match o { Option.Som
 fn t9() -> i64 { let o = Option.Some(G { v: mk(9), n: 9 }); if let Option.Some(g) = o { take(g) } else { 0 } }
 fn t10() -> i64 { let o = Option.Some(G2 { v: mr(10), r: mr(100) }); match o { Option.Some(g) => { let a = take2(g); a }, Option.None => 0 } }
 fn main() {
-    println(t1()); println(t2()); println(t3()); println(t5()); println(t6())
-    println(t7()); println(t8()); println(t9()); println(t10())
+    println(t1()); println(t2()); println(t3()); println(t5()); println(t6());
+    println(t7()); println(t8()); println(t9()); println(t10());
     println("end")
 }

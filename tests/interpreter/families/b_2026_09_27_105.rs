@@ -77,15 +77,15 @@ fn twohop(x: X, c: bool) -> i64 { if c { let k = keep(x.w.r); return k.id; } 0 }
 fn fwd(w: W, c: bool) -> i64 { ret(w, c) }
 impl W { fn assoc(w: W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 } }
 fn main() {
-    println(f"a{ret(mkw(1), false)}"); println(f"a{ret(mkw(2), true)}")
-    println(f"b{push(mkw(3), false)}"); println(f"b{push(mkw(4), true)}")
-    println(f"c{tailpush(mkw(5), false)}"); println(f"c{tailpush(mkw(6), true)}")
-    println(f"e{viaalias(mkw(7), false)}"); println(f"e{viaalias(mkw(8), true)}")
-    println(f"f{viaaliaspush(mkw(9), false)}"); println(f"f{viaaliaspush(mkw(10), true)}")
-    println(f"g{arm(mkw(11), false)}"); println(f"g{arm(mkw(12), true)}")
-    println(f"h{twohop(mkx(13), false)}"); println(f"h{twohop(mkx(14), true)}")
-    println(f"i{fwd(mkw(15), false)}"); println(f"i{fwd(mkw(16), true)}")
-    println(f"j{W.assoc(mkw(17), false)}"); println(f"j{W.assoc(mkw(18), true)}")
+    println(f"a{ret(mkw(1), false)}"); println(f"a{ret(mkw(2), true)}");
+    println(f"b{push(mkw(3), false)}"); println(f"b{push(mkw(4), true)}");
+    println(f"c{tailpush(mkw(5), false)}"); println(f"c{tailpush(mkw(6), true)}");
+    println(f"e{viaalias(mkw(7), false)}"); println(f"e{viaalias(mkw(8), true)}");
+    println(f"f{viaaliaspush(mkw(9), false)}"); println(f"f{viaaliaspush(mkw(10), true)}");
+    println(f"g{arm(mkw(11), false)}"); println(f"g{arm(mkw(12), true)}");
+    println(f"h{twohop(mkx(13), false)}"); println(f"h{twohop(mkx(14), true)}");
+    println(f"i{fwd(mkw(15), false)}"); println(f"i{fwd(mkw(16), true)}");
+    println(f"j{W.assoc(mkw(17), false)}"); println(f"j{W.assoc(mkw(18), true)}");
     println("end")
 }"#);
     assert_eq!(out, "d1n1\nd101n101\na0\nd2n2\nd102n102\na2\nd3n3\nd103n103\nb0\nd4n4\nd104n104\nb1\nd5n5\nd105n105\nc0\nd6n6\nd106n106\nc1\nd7n7\nd107n107\ne0\nd8n8\nd108n108\ne8\nd9n9\nd109n109\nf0\nd10n10\nd110n110\nf1\nd11n11\nd111n111\ng0\nd12n12\nd112n112\ng12\nd13n13\nd313n313\nd113n113\nh0\nd14n14\nd314n314\nd114n114\nh14\nd15n15\nd115n115\ni0\nd16n16\nd116n116\ni16\nd17n17\nd117n117\nj0\nd18n18\nd118n118\nj18\nend\n");

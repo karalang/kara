@@ -75,26 +75,26 @@ fn wfesc()    { let h = HoW { a: mk(20), b: Result.Ok(mkw(120)) }; let HoW { a, 
                 let g = match b { Result.Ok(x) => x, Result.Err(e) => mkw(0) }; println(f"  got{g.id}") }
 
 fn main() {
-  println("rebind");   rebind()
-  println("rebindu");  rebindu()
-  println("esc");      esc()
-  println("escerr");   escerr()
-  println("esciflet"); esciflet()
-  println("call");     call()
-  println("inner");    inner()
-  println("strreb");   strreb()
-  println("stresc");   stresc()
-  println("optesc");   optesc()
-  println("treb");     treb()
-  println("trebu");    trebu()
-  println("tesc");     tesc()
-  println("freb");     freb()
-  println("fesc");     fesc()
-  println("wreb");     wreb()
-  println("wesc");     wesc()
-  println("wtreb");    wtreb()
-  println("wfreb");    wfreb()
-  println("wfesc");    wfesc()
+  println("rebind");   rebind();
+  println("rebindu");  rebindu();
+  println("esc");      esc();
+  println("escerr");   escerr();
+  println("esciflet"); esciflet();
+  println("call");     call();
+  println("inner");    inner();
+  println("strreb");   strreb();
+  println("stresc");   stresc();
+  println("optesc");   optesc();
+  println("treb");     treb();
+  println("trebu");    trebu();
+  println("tesc");     tesc();
+  println("freb");     freb();
+  println("fesc");     fesc();
+  println("wreb");     wreb();
+  println("wesc");     wesc();
+  println("wtreb");    wtreb();
+  println("wfreb");    wfreb();
+  println("wfesc");    wfesc();
   println("done")
 }
 "#,

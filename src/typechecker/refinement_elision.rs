@@ -265,7 +265,6 @@ fn expr_is_literal(e: &Expr) -> bool {
             | ExprKind::ByteLit(..)
             | ExprKind::ByteStringLit(..)
             | ExprKind::StringLit(..)
-            | ExprKind::MultiStringLit(..)
             | ExprKind::Bool(..)
     )
 }

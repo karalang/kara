@@ -31,24 +31,24 @@ fn w8(x: R, c: bool) -> Vec[R] { return f8(x, c) }
 struct S { k: i64 }
 impl S { fn m8(ref self, x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; } return v } }
 fn main() {
-  println("ft"); let a = f8(mk(1), true); println(f"k{a.len()}")
-  println("ff"); let b = f8(mk(2), false); println(f"k{b.len()}")
-  println("gt"); let c = g8(mk(3), true); println(f"k{c.len()}")
-  println("gf"); let d = g8(mk(4), false); println(f"k{d.len()}")
-  println("h2"); let e = h8(mk(5), 2); println(f"k{e.len()}")
-  println("st"); let g = s8(mk(6), true); println(f"k{g.len()}")
-  println("sf"); let h = s8(mk(7), false); println(f"k{h.len()}")
-  println("mf"); let i = fm(mk(10), false); println(f"k{i.len()}")
-  println("2t"); let j = f2(mk(11), mk(12), true); println(f"k{j.len()}")
-  println("qf"); let k = fq(mq(13), false); println(f"k{k.len()}")
-  println("qt"); let l = fq(mq(14), true); println(f"k{l.len()}")
-  println("ef"); let m = fe(mk(15), false); println(f"k{m.len()}")
-  println("wt"); let n = w8(mk(16), true); println(f"k{n.len()}")
-  println("wf"); let o = w8(mk(17), false); println(f"k{o.len()}")
+  println("ft"); let a = f8(mk(1), true); println(f"k{a.len()}");
+  println("ff"); let b = f8(mk(2), false); println(f"k{b.len()}");
+  println("gt"); let c = g8(mk(3), true); println(f"k{c.len()}");
+  println("gf"); let d = g8(mk(4), false); println(f"k{d.len()}");
+  println("h2"); let e = h8(mk(5), 2); println(f"k{e.len()}");
+  println("st"); let g = s8(mk(6), true); println(f"k{g.len()}");
+  println("sf"); let h = s8(mk(7), false); println(f"k{h.len()}");
+  println("mf"); let i = fm(mk(10), false); println(f"k{i.len()}");
+  println("2t"); let j = f2(mk(11), mk(12), true); println(f"k{j.len()}");
+  println("qf"); let k = fq(mq(13), false); println(f"k{k.len()}");
+  println("qt"); let l = fq(mq(14), true); println(f"k{l.len()}");
+  println("ef"); let m = fe(mk(15), false); println(f"k{m.len()}");
+  println("wt"); let n = w8(mk(16), true); println(f"k{n.len()}");
+  println("wf"); let o = w8(mk(17), false); println(f"k{o.len()}");
   let s = S { k: 1 };
-  println("mt"); let p = s.m8(mk(18), true); println(f"k{p.len()}")
-  println("mf2"); let q = s.m8(mk(19), false); println(f"k{q.len()}")
-  let w = mk(20); println("nf"); let r = f8(w, false); println(f"k{r.len()}")
+  println("mt"); let p = s.m8(mk(18), true); println(f"k{p.len()}");
+  println("mf2"); let q = s.m8(mk(19), false); println(f"k{q.len()}");
+  let w = mk(20); println("nf"); let r = f8(w, false); println(f"k{r.len()}");
   println("end")
 }
 "#,

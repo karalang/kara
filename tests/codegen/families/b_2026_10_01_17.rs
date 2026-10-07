@@ -54,24 +54,24 @@ fn h13(k: i64, c: bool) -> Result[i64, i64] { let r = m4(k); if c { let x = r?; 
 fn pr(r: Result[i64, i64]) { match r { Result.Ok(v) => println(f"ok{v}"), Result.Err(e) => println(f"err{e}") } }
 fn po(o: Option[i64]) { match o { Option.Some(v) => println(f"some{v}"), Option.None => println("none") } }
 fn main() {
-    pr(h1(8))
-    pr(h1(1))
-    pr(h2(8))
-    pr(h3(8))
-    pr(h3(1))
-    pr(h4(8))
-    pr(h5(8))
-    po(h6(8))
-    po(h6(1))
+    pr(h1(8));
+    pr(h1(1));
+    pr(h2(8));
+    pr(h3(8));
+    pr(h3(1));
+    pr(h4(8));
+    pr(h5(8));
+    po(h6(8));
+    po(h6(1));
     match h7(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.v) }
     match h8(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.v) }
-    po(h9(8))
-    pr(h10(8))
-    pr(h10(4))
-    pr(h11(9))
-    pr(h12(8))
-    pr(h13(8, true))
-    pr(h13(9, false))
+    po(h9(8));
+    pr(h10(8));
+    pr(h10(4));
+    pr(h11(9));
+    pr(h12(8));
+    pr(h13(8, true));
+    pr(h13(9, false));
     println("end")
 }"#;
     let want = "heap-string-long-enough-8\nok8\nerr1\nheap-string-long-enough-8\nok2\nheap-string-long-enough-8\ndR8\nok8\nerr1\nheap-string-long-enough-8\ndS8\nok8\nheap-string-long-enough-8\nok8\nheap-string-long-enough-8\ndS8\nsome8\nnone\nheap-string-long-enough-8\ndS8\nheap-string-long-enough-8\ndR8\ndS8\nsome8\ndR8\nok8\nok25\ndS6\ndS7\ndS8\nok21\nheap-string-long-enough-8\ndS8\nok8\nheap-string-long-enough-8\ndS8\nok8\ndS9\nskip\nok0\nend\n";
@@ -93,14 +93,14 @@ fn h(r: Result[S4, S4]) -> Result[i64, S4] { let x = r?; println(x.v); Result.Ok
 fn hc(r: Result[S4, S4], c: bool) -> Result[i64, S4] { if c { let x = r?; println(x.v); return Result.Ok(x.id) } println("skip"); Result.Ok(0) }
 fn pr(r: Result[i64, S4]) { match r { Result.Ok(v) => println(f"ok{v}"), Result.Err(e) => println(f"err{e.id}") } }
 fn main() {
-    pr(h(mk(8)))
-    pr(h(mk(2)))
+    pr(h(mk(8)));
+    pr(h(mk(2)));
     let a = mk(9);
-    pr(h(a))
-    pr(hc(mk(7), true))
-    pr(hc(mk(3), true))
+    pr(h(a));
+    pr(hc(mk(7), true));
+    pr(hc(mk(3), true));
     let b = mk(6);
-    pr(hc(b, false))
+    pr(hc(b, false));
     println("end")
 }"#;
     let want = "heap-string-long-enough-8\ndS8\nok8\nerr102\ndS102\nheap-string-long-enough-9\ndS9\nok9\nheap-string-long-enough-7\ndS7\nok7\nerr103\ndS103\nskip\ndS6\nok0\nend\n";
@@ -164,21 +164,21 @@ fn g2(k: i64) -> Result[i64, E8] { let r = e_b2(k); let x = r?; Result.Ok(x) }
 fn g3(k: i64) -> Result[i64, E9] { let r = e_b3(k); let x = r?; Result.Ok(x) }
 fn main() {
     match f1(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f1(2) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f2(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.v) }
-    println("-")
+    println("-");
     match f3(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f4(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f5(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f6(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match f7(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
-    println("-")
+    println("-");
     match g1(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
     match g2(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
     match g3(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }

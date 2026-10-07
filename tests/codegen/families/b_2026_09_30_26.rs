@@ -29,18 +29,18 @@ fn vtc(a: R, f: bool) -> Vec[R] { if f { vec![a] } else { vec![mk(91)] } }
 fn vmix(a: R) -> Vec[R] { return vec![a, mk(50)]; }
 fn vf(w: W3) -> Vec[R] { return vec![w.q, w.r]; }
 fn main() {
-  println("-c1"); let c1 = vc(mk(1), mk(2)); println(f"r{c1.len()}{c1[0].id}")
-  println("-c2"); let p = mk(3); let q = mk(4); let c2 = vc(p, q); println(f"r{c2[1].id}")
-  println("-c4"); let c4 = vt(mk(7), mk(8)); println(f"r{c4[1].id}")
-  println("-c5"); let c5 = va(mk(9), mk(10)); println(f"r{c5[0].id}")
-  println("-c6"); let c6 = vcc(mk(11), true); println(f"r{c6[0].id}")
-  println("-c7"); let c7 = vcc(mk(12), false); println(f"r{c7[0].id}")
-  println("-c8"); let c8 = vtc(mk(13), true); println(f"r{c8[0].id}")
-  println("-c9"); let c9 = vtc(mk(14), false); println(f"r{c9[0].id}")
-  println("-c10"); let c10 = vmix(mk(15)); println(f"r{c10[0].id}{c10[1].id}")
-  println("-c11"); let k = K { a: 1 }; let c11 = k.vm(mk(16), mk(17)); println(f"r{c11[1].id}")
-  println("-c12"); let c12 = vf(W3 { q: mk(18), r: mk(19), n: 1 }); println(f"r{c12[1].id}")
-  println("-c13"); let w = W3 { q: mk(20), r: mk(21), n: 2 }; let c13 = vf(w); println(f"r{c13[0].id}")
+  println("-c1"); let c1 = vc(mk(1), mk(2)); println(f"r{c1.len()}{c1[0].id}");
+  println("-c2"); let p = mk(3); let q = mk(4); let c2 = vc(p, q); println(f"r{c2[1].id}");
+  println("-c4"); let c4 = vt(mk(7), mk(8)); println(f"r{c4[1].id}");
+  println("-c5"); let c5 = va(mk(9), mk(10)); println(f"r{c5[0].id}");
+  println("-c6"); let c6 = vcc(mk(11), true); println(f"r{c6[0].id}");
+  println("-c7"); let c7 = vcc(mk(12), false); println(f"r{c7[0].id}");
+  println("-c8"); let c8 = vtc(mk(13), true); println(f"r{c8[0].id}");
+  println("-c9"); let c9 = vtc(mk(14), false); println(f"r{c9[0].id}");
+  println("-c10"); let c10 = vmix(mk(15)); println(f"r{c10[0].id}{c10[1].id}");
+  println("-c11"); let k = K { a: 1 }; let c11 = k.vm(mk(16), mk(17)); println(f"r{c11[1].id}");
+  println("-c12"); let c12 = vf(W3 { q: mk(18), r: mk(19), n: 1 }); println(f"r{c12[1].id}");
+  println("-c13"); let w = W3 { q: mk(20), r: mk(21), n: 2 }; let c13 = vf(w); println(f"r{c13[0].id}");
   println("end")
 }
 "#,
@@ -75,7 +75,7 @@ fn fwd(a: D) -> Array[D, 1] { keep1(a, mkd(92)) }
 fn condt(a: D, k: bool) -> Array[D, 1] { if k { [a] } else { [mkd(93)] } }
 fn tup(a: D, b: D) -> (D, D) { (a, b) }
 fn main() {
-    println(f"a {usea(tail(mkd(1), mkd(2)))}")
+    println(f"a {usea(tail(mkd(1), mkd(2)))}");
     { let x = tail(mkd(3), mkd(4)); println(f"b {x[0].id}") }
     { let p = mkd(5); let q = mkd(6); let x = tail(p, q); println(f"c {x[1].id}") }
     { let x = vtail(mkd(7), mkd(8)); println(f"d {x.len()}") }

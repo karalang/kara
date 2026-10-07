@@ -36,14 +36,14 @@ fn p8(o: Option[W1]) { if let Some(w) = o { let _ = S2 { r: w, k: 2 }; println("
 fn p9(r: Result[W1, i64]) { match r { Ok(w) => { let _ = [w]; println("p9") }, Err(_) => {} } }
 fn e1(e: E) { match e { E.A(w) => { let _ = (w, 1); println("e1") }, E.B => {} } }
 fn main() {
-    d1(mk(1)); println("x"); d2(mk(2)); println("x"); d3(mk(3)); println("x"); d4(mk(4)); println("x")
-    d5(mk(5)); println("x"); d6(mk(6)); println("x"); d7(mk(7)); println("x"); d8(mk(8)); println("x")
-    p1(Some(mk(11))); println("x"); p2(Some(mk(12))); println("x"); p3(Some(mk(13))); println("x")
-    p4(Some(mk(14))); println("x"); p5(Some(mk(15))); println("x"); p6(Some(mk(16))); println("x")
-    p7(Some(mk(17)), true); println("x"); p7(Some(mk(18)), false); println("x")
-    p8(Some(mk(19))); println("x"); p9(Ok(mk(20))); println("x"); e1(E.A(mk(21))); println("x")
-    let a = mk(22); d3(a); println("x")
-    let b = Some(mk(23)); p2(b); println("x")
+    d1(mk(1)); println("x"); d2(mk(2)); println("x"); d3(mk(3)); println("x"); d4(mk(4)); println("x");
+    d5(mk(5)); println("x"); d6(mk(6)); println("x"); d7(mk(7)); println("x"); d8(mk(8)); println("x");
+    p1(Some(mk(11))); println("x"); p2(Some(mk(12))); println("x"); p3(Some(mk(13))); println("x");
+    p4(Some(mk(14))); println("x"); p5(Some(mk(15))); println("x"); p6(Some(mk(16))); println("x");
+    p7(Some(mk(17)), true); println("x"); p7(Some(mk(18)), false); println("x");
+    p8(Some(mk(19))); println("x"); p9(Ok(mk(20))); println("x"); e1(E.A(mk(21))); println("x");
+    let a = mk(22); d3(a); println("x");
+    let b = Some(mk(23)); p2(b); println("x");
     println("end")
 }
 "#,

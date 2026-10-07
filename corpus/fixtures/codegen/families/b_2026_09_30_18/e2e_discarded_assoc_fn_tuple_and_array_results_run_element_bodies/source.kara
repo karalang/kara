@@ -24,6 +24,6 @@ fn main() {
   println("-c8"); H.plain(11);
   println("-c9"); let k = 2; match k { 1 => H.mint(12), _ => H.mint(13) };
   println("-c10"); E.A((mk(14), 1));
-  println("-c11"); let t = H.mint(15); println(f"r{t.1}")
+  println("-c11"); let t = H.mint(15); println(f"r{t.1}");
   println("end")
 }

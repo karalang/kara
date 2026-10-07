@@ -8,9 +8,9 @@ struct Holder { m: Map[K, V] }
 fn main() {
     let mut a: Map[K, V] = Map.new();
     a.insert(K { id: 1 }, V { id: 1 });
-    println("--before-clear--")
+    println("--before-clear--");
     a.clear();
-    println("--after-clear--")
+    println("--after-clear--");
     { let mut b: Map[K, V] = Map.new();
       b.insert(K { id: 2 }, V { id: 2 });
       let h = Holder { m: b };

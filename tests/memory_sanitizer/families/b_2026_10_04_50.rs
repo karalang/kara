@@ -36,28 +36,28 @@ fn f13(a: R, b: bool) { let mut c = a; if b { c.id = 7; c = mk(9); } println("in
 fn f14(a: R, b: bool) { let mut c = a; if b { c = mk(9); } else { println(f"e{c.id}"); } println("in"); }
 fn f15(a: R, b: bool) -> i64 { let mut c = a; if b { c = mk(9); } println("in"); c.id }
 fn main() {
-  f1(mk(1), true); println("k_s1t")
-  f1(mk(1), false); println("k_s1f")
-  f2(E.A(mk(1)), true); println("k_s2t")
-  f2(E.A(mk(1)), false); println("k_s2f")
-  f3(Some(mk(1)), true); println("k_s3t")
-  f3(Some(mk(1)), false); println("k_s3f")
-  f4(Some([mk(1), mk(2)]), true); println("k_s4t")
-  f4(Some([mk(1), mk(2)]), false); println("k_s4f")
-  f5(mk(1), true); println("k_s5t")
-  f6(mk(1)); println("k_s6")
-  let r = f7(mk(1), true); println(f"k_s7t{r.id}")
-  let r = f7(mk(1), false); println(f"k_s7f{r.id}")
-  f8(mk(1), true); println("k_s8t")
-  let x = mk(1); f9(x, true); println("k_s9t")
-  let mut v: Vec[R] = Vec.new(); v.push(mk(1)); v.push(mk(2)); f10(v, true); println("k_u1t")
-  let mut v: Vec[R] = Vec.new(); v.push(mk(1)); v.push(mk(2)); f10(v, false); println("k_u1f")
-  f11(mk(1), 1); println("k_u2t")
-  f11(mk(1), 2); println("k_u2f")
-  f12(mk(1)); println("k_u3")
-  f13(mk(1), true); println("k_u5t")
-  f14(mk(1), false); println("k_u6t")
-  let n = f15(mk(1), true); println(f"k_u8t{n}")
+  f1(mk(1), true); println("k_s1t");
+  f1(mk(1), false); println("k_s1f");
+  f2(E.A(mk(1)), true); println("k_s2t");
+  f2(E.A(mk(1)), false); println("k_s2f");
+  f3(Some(mk(1)), true); println("k_s3t");
+  f3(Some(mk(1)), false); println("k_s3f");
+  f4(Some([mk(1), mk(2)]), true); println("k_s4t");
+  f4(Some([mk(1), mk(2)]), false); println("k_s4f");
+  f5(mk(1), true); println("k_s5t");
+  f6(mk(1)); println("k_s6");
+  let r = f7(mk(1), true); println(f"k_s7t{r.id}");
+  let r = f7(mk(1), false); println(f"k_s7f{r.id}");
+  f8(mk(1), true); println("k_s8t");
+  let x = mk(1); f9(x, true); println("k_s9t");
+  let mut v: Vec[R] = Vec.new(); v.push(mk(1)); v.push(mk(2)); f10(v, true); println("k_u1t");
+  let mut v: Vec[R] = Vec.new(); v.push(mk(1)); v.push(mk(2)); f10(v, false); println("k_u1f");
+  f11(mk(1), 1); println("k_u2t");
+  f11(mk(1), 2); println("k_u2f");
+  f12(mk(1)); println("k_u3");
+  f13(mk(1), true); println("k_u5t");
+  f14(mk(1), false); println("k_u6t");
+  let n = f15(mk(1), true); println(f"k_u8t{n}");
   println("end")
 }
 "#,

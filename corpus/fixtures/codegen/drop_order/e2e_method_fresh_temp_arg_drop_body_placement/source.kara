@@ -16,11 +16,11 @@ impl H {
 
 fn main() {
     let h = H { n: 0 };
-    println("m1 bare-die");       h.m1(mk(1))
-    println("m2 rebind-die");     h.m2(mk(2))
-    println("m3 into-call");      h.m3(mk(3))
-    println("m4 wrap-moveout");   let v = h.m4(mk(4)); println(f"  v={v}")
-    println("m5 destr-intocall"); h.m5((mk(5), 9))
-    println("m6 destr-die");      h.m6((mk(6), 9))
+    println("m1 bare-die");       h.m1(mk(1));
+    println("m2 rebind-die");     h.m2(mk(2));
+    println("m3 into-call");      h.m3(mk(3));
+    println("m4 wrap-moveout");   let v = h.m4(mk(4)); println(f"  v={v}");
+    println("m5 destr-intocall"); h.m5((mk(5), 9));
+    println("m6 destr-die");      h.m6((mk(6), 9));
     println("done")
 }

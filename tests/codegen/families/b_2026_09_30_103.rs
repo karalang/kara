@@ -37,8 +37,8 @@ fn y9() -> i64 { let o = Option.Some(h(15)); match o { Option.Some(H2 { v, n, ..
 fn yb() -> i64 { let o = Option.Some(h(16)); match o { Option.Some(H2 { v, n, .. }) => { println(v.id); n }, Option.None => 0 } }
 fn yc() -> i64 { let o: Result[H2, R] = Result.Ok(h(17)); match o { Result.Ok(H2 { v, .. }) => v.id, Result.Err(e) => e.id } }
 fn main() {
-    println(m1()); println(m2()); println(m3()); println(m4()); println(m5()); println(m6()); println(m7())
-    println(y6()); println(y7()); println(y8()); println(y9()); println(yb()); println(yc())
+    println(m1()); println(m2()); println(m3()); println(m4()); println(m5()); println(m6()); println(m7());
+    println(y6()); println(y7()); println(y8()); println(y9()); println(yb()); println(yc());
     println("end")
 }"#;
     let want = "d11\nd1\n1\nd22\nd2\n24\nd33\nd3\n34\n4\nd44\nd4\n0\nd55\nd5\n55\nd6\nd66\n6\nd77\nd7\n7\nd8\nd88\n8\n9\nd9\nd99\n0\nd14\nd13\nd12\n12\nd165\nd15\n15\n16\nd176\nd16\n1\nd187\nd17\n17\nend\n";

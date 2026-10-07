@@ -34,17 +34,17 @@ fn e9() { let v: Vec[Hc] = [mkc("i")]; for h in v { if let Hc.Full(s) = h { prin
 fn e10() { let v: Vec[Hc] = [mkc("j")]; for h in v.iter() { if let Hc.Full(s) = h { println(f"e10 {s.len()}") } } }
 fn e11() { let v: Vec[Hc] = [mkc("k")]; for h in v { let mut n = 0; while let Hc.Full(s) = h { n = n + takes(s); if n > 0 { break } }; println(f"e11 {n}") } }
 fn main() {
-    e1()
-    e2()
-    e3()
-    e4()
-    e5()
-    e6()
-    e7()
-    e8()
-    e9()
-    e10()
-    e11()
+    e1();
+    e2();
+    e3();
+    e4();
+    e5();
+    e6();
+    e7();
+    e8();
+    e9();
+    e10();
+    e11();
     println("end")
 }"#;
     let want = "e1 25\ne2 26\ne2 0\ne3 27\ne4 d-heap-string-long-enough\ne5 25\ne5 25\ne6 25\ne6 25\ne7 g-heap-string-long-enough 1\ne8 h-heap-string-long-enough 2\ne9 25\ne9 25\ne10 25\ne11 25\nend\n";

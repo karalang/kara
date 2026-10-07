@@ -12,12 +12,12 @@ fn g6()             { let t = (R { id: 26 }, 0); let t2 = t; let (r, k) = t2; le
 fn g7(h: H)         { let h2 = h; println("  np") }
 
 fn main() {
-    println("norebind"); g1(H { pe: (R { id: 21 }, 0) });                     println("norebind end")
-    println("rebind");   g2(H { pe: (R { id: 22 }, 0) });                     println("rebind end")
-    println("twohop");   g3(H { pe: (R { id: 23 }, 0) });                     println("twohop end")
-    println("tupreb");   g4((R { id: 24 }, 0));                               println("tupreb end")
-    println("method");   let o = Hold { n: 0 }; o.take(H { pe: (R { id: 25 }, 0) }); println("method end")
-    println("local");    g6();                                                println("local end")
-    println("noproj");   g7(H { pe: (R { id: 27 }, 0) });                     println("noproj end")
+    println("norebind"); g1(H { pe: (R { id: 21 }, 0) });                     println("norebind end");
+    println("rebind");   g2(H { pe: (R { id: 22 }, 0) });                     println("rebind end");
+    println("twohop");   g3(H { pe: (R { id: 23 }, 0) });                     println("twohop end");
+    println("tupreb");   g4((R { id: 24 }, 0));                               println("tupreb end");
+    println("method");   let o = Hold { n: 0 }; o.take(H { pe: (R { id: 25 }, 0) }); println("method end");
+    println("local");    g6();                                                println("local end");
+    println("noproj");   g7(H { pe: (R { id: 27 }, 0) });                     println("noproj end");
     println("done")
 }

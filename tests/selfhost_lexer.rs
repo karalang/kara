@@ -197,9 +197,23 @@ const CORPUS: &[&str] = &[
     r#""line\nbreak""#,
     r#""back\\slash""#,
     r#""""#,
-    r#""""triple quoted""""#,
-    r#""""has "" inner quotes""""#,
+    // `"""` blocks: Swift rules — dedent by the closing line, escapes, the
+    // newline before the closing quotes dropped, and the two layout errors.
+    "\"\"\"\n  triple quoted\n  \"\"\"",
+    "\"\"\"\n    has \"\" inner quotes\n      and \\t an escape\n\n    \"\"\" + x",
+    "\"\"\"same line\"\"\" y",
+    "\"\"\"\n    a\n  b\n    \"\"\" z",
+    "f\"\"\"\n  v={v} {{lit}}\n  \"\"\"",
+    // Raw strings and f-string brace rules.
+    r###"r"a\nb" r#"say "hi""# r##"x"#y"##"###,
+    "r\"open",
+    r#"f"{{a}} {b} }}""#,
+    r#"f"a } b""#,
+    r#"f"a \{ b""#,
+    r#""plain \{""#,
     r#"'a' 'Z' '1' ' '"#,
+    // Labels: `'name` not closed by a quote is a LABEL token.
+    r#"'outer: loop { break 'outer; } 'a: while x { continue 'a; } 'a' 'x1"#,
     r#"'\n' '\t' '\r' '\\' '\''"#,
     r#"b'A' b'z' b'0' b'~'"#,
     r#"b'\n' b'\t' b'\\' b'\'' b'"'"#,
@@ -256,17 +270,13 @@ const CORPUS: &[&str] = &[
     "let r#struct = 1",
     // Structural markers are not reservable → Error.
     "r#self r#mut r#ref",
-    // Reserved single-letter string prefixes (`x"…"`, `_"…"`, `r"…"`); `f`/`c`
-    // are the only recognized ones (covered in slice D-cont).
+    // Single-letter string prefixes other than `f`/`c`/`b`/`r` are free: an
+    // identifier followed by a string.
     "x\"abc\"",
     "_\"y\"",
     "r\"raw\"",
     "z\"esc \\\" end\"",
-    // A reserved prefix mid-expression, with recovery. Stays a still-reserved
-    // letter: `b` is no longer reserved (B-2026-08-20-37), so spelling this
-    // case with `b` would test byte strings, not recovery. The byte-string
-    // cases below cover `b` now that the Kāra lexer lexes it too
-    // (B-2026-08-21-17).
+    // An identifier abutting a string mid-expression.
     "a + g\"\" + c",
     // Byte strings — both lexers must agree on the resolved bytes, the escape
     // table, and the two refusals. `\u{…}` and a raw non-ASCII byte are
@@ -294,7 +304,7 @@ const CORPUS: &[&str] = &[
     "f16 bf16",
     "gen async await comptime pure box",
     "become do final override priv typeof virtual",
-    // Reserved `expr_<year>` fragment-specifier namespace vs ordinary idents.
+    // `expr_<year>` names are ordinary identifiers (no longer reserved).
     "expr_2026 expr_2050 expr_2099 expr_2020",
     "expr_2019 expr_2100 expr_abcd expr_99 express",
     "let expr_2030 = 1",
@@ -578,9 +588,6 @@ fn render_rust(t: &SpannedToken) -> String {
         // String / char values go through escape_for_render (shared with the
         // Kāra `render`) so control chars don't break the line-based compare.
         Token::StringLiteral(v) => return body_with(s, &format!("STR {}", escape_for_render(v))),
-        Token::MultiStringLiteral(v) => {
-            return body_with(s, &format!("MSTR {}", escape_for_render(v)))
-        }
         Token::InterpolatedStringLiteral(parts) => {
             let mut b = "FSTR".to_string();
             for p in parts {
@@ -615,6 +622,7 @@ fn render_rust(t: &SpannedToken) -> String {
             return body_with(s, &format!("CHAR {}", escape_for_render(&c.to_string())))
         }
         Token::ByteLiteral(b) => return body_with(s, &format!("BYTE {b}")),
+        Token::Label(name) => return body_with(s, &format!("LABEL {name}")),
         // `b"..."` (B-2026-08-20-37). NOTE: the SELF-HOSTED Kāra lexer does
         // not lex this form yet — it still takes the reserved-string-prefix
         // path and emits `ERROR`. The two lexers therefore disagree on any

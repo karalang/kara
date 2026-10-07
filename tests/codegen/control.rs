@@ -1709,9 +1709,9 @@ fn test_e2e_continue_in_chars_loop_advances_the_byte_offset() {
              \x20   let mut t: String = \"a\u{e9}\";\n\
              \x20   t.push('z');\n\
              \x20   let mut m = 0i64;\n\
-             \x20   outer: for c in t.chars() {\n\
+             \x20   'outer: for c in t.chars() {\n\
              \x20       for k in 0i64..3i64 {\n\
-             \x20           if k == 1i64 { continue outer; }\n\
+             \x20           if k == 1i64 { continue 'outer; }\n\
              \x20           m = m + (c as i64);\n\
              \x20       }\n\
              \x20   }\n\
@@ -2358,23 +2358,23 @@ fn test_e2e_for_adaptor_tail_complete() {
                  for w in xs.iter().windows(2).skip(2) { d = d + w[0]; }\n\
                  println(d);\n\
                  let mut g1: i64 = 0;\n\
-                 out1: for y in vv.iter().flat_map(|row| row.iter()) {\n\
+                 'out1: for y in vv.iter().flat_map(|row| row.iter()) {\n\
                      g1 = g1 + y;\n\
-                     if y == 3 { break out1 (); }\n\
+                     if y == 3 { break 'out1 (); }\n\
                  }\n\
                  println(g1);\n\
                  let mut h: i64 = 0;\n\
-                 out2: for y in vv.iter().flat_map(|row| row.iter()) {\n\
-                     if y % 2 == 0 { continue out2; }\n\
+                 'out2: for y in vv.iter().flat_map(|row| row.iter()) {\n\
+                     if y % 2 == 0 { continue 'out2; }\n\
                      h = h + y;\n\
                  }\n\
                  println(h);\n\
                  let mut m: i64 = 0;\n\
                  let mut pulls: i64 = 0;\n\
-                 out4: for x in xs.iter().cycle() {\n\
+                 'out4: for x in xs.iter().cycle() {\n\
                      pulls = pulls + 1;\n\
                      if pulls == 12 { break; }\n\
-                     if x % 2 == 0 { continue out4; }\n\
+                     if x % 2 == 0 { continue 'out4; }\n\
                      m = m + x;\n\
                  }\n\
                  println(m);\n\
@@ -3629,7 +3629,7 @@ fn test_e2e_shadow_labeled_block_reverts() {
     let out = run_program(
         "fn main() {\n\
              let x = 1;\n\
-             let y = lbl: { let x = 50; break lbl x; };\n\
+             let y = 'lbl: { let x = 50; break 'lbl x; };\n\
              println(y.to_string());\n\
              println(x.to_string());\n\
              }",
@@ -3686,7 +3686,7 @@ fn test_labeled_block_break_with_value_e2e() {
     let out = run_program(
         r#"
 fn main() {
-    let x: i64 = lbl: { break lbl 42; -1 };
+    let x: i64 = 'lbl: { break 'lbl 42; -1 };
     println(x);
 }
 "#,
@@ -3703,7 +3703,7 @@ fn test_labeled_block_bare_break_e2e() {
     let out = run_program(
         r#"
 fn main() {
-    lbl: { break lbl; };
+    'lbl: { break 'lbl; };
     println(7);
 }
 "#,
@@ -3720,7 +3720,7 @@ fn test_labeled_block_tail_expression_when_no_break_e2e() {
     let out = run_program(
         r#"
 fn main() {
-    let x: i64 = lbl: { 99 };
+    let x: i64 = 'lbl: { 99 };
     println(x);
 }
 "#,
@@ -5659,9 +5659,9 @@ fn main() {
     println(x);
     let c = true;
     let mut y: i64;
-    outer: loop {
+    'outer: loop {
         loop {
-            if c { y = 9; break outer; }
+            if c { y = 9; break 'outer; }
             y = 1;
             break;
         }

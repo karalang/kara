@@ -257,6 +257,8 @@ pub enum Token {
     IntegerOutOfRange(u128, Option<IntSuffix>),
     Float(f64, Option<FloatSuffix>),
     CharLiteral(char),
+    /// `'outer` — a loop or labeled-block label, without its quote.
+    Label(String),
     /// `b'A'` byte char literal — type `u8` (design.md § Byte and
     /// Byte-String Literals; phase-1-lexer slice).
     ByteLiteral(u8),
@@ -269,8 +271,8 @@ pub enum Token {
     /// spelling — so the quoted form is pure surface sugar over a shape
     /// typecheck / interp / codegen already handle (B-2026-08-20-37).
     ByteStringLiteral(Vec<u8>),
+    /// `"..."`, a dedented `"""` block, or a raw `r"..."` / `r#"..."#`.
     StringLiteral(String),
-    MultiStringLiteral(String),
     InterpolatedStringLiteral(Vec<InterpolationPart>),
     /// `c"..."` — C-string literal. `bytes` excludes the trailing NUL (the
     /// codegen layer appends it); `source_len` records the textual length

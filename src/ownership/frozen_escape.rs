@@ -1886,7 +1886,6 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Path { .. }

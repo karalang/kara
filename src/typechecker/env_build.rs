@@ -913,7 +913,6 @@ impl<'a> super::TypeChecker<'a> {
                 | Item::EffectResource(_)
                 | Item::EffectGroup(_)
                 | Item::EffectVerbDecl(_)
-                | Item::UseDecl(_)
                 | Item::Import(_)
                 | Item::LayoutDef(_)
                 | Item::AliasDecl(_)

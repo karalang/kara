@@ -24,18 +24,18 @@ fn s11() { let h = mkc("k"); let g = || keepc(h); println(f"s11 {g()}"); println
 fn s12() { let h = mkc("l"); let g = || keepc(h); println(f"s12 {g()}"); println(f"s12 {keepc(h)}"); let f = |q: Hc| keepc(q); println(f"s12 {f(mkc("xx"))}"); }
 fn s13() { let h = mkc("m"); let g = || keepc(h); println(f"s13 {g()}"); println(f"s13 {keepc(h)}"); let f = |h: Hc| gr(h); println(f"s13 {f(mkc("xx"))}"); }
 fn main() {
-    s1()
-    s2()
-    s3()
-    s4()
-    s5()
-    s6()
-    s7()
-    s8()
-    s9()
-    s10()
-    s11()
-    s12()
-    s13()
+    s1();
+    s2();
+    s3();
+    s4();
+    s5();
+    s6();
+    s7();
+    s8();
+    s9();
+    s10();
+    s11();
+    s12();
+    s13();
     println("end")
 }

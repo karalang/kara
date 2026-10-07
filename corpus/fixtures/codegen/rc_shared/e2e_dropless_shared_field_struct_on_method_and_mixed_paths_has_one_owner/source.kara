@@ -24,14 +24,14 @@ fn h_option() { let s = mk(18); let o = midS3(s, true); let s2 = mk(19); let o2 
 fn i_loop() { for i in 0..3 { let s = mk(i); let t = keep1(s, i == 1); println(f"i{t.id}") } }
 
 fn main() {
-    a_method()
-    b_method_disc()
-    c_pick()
-    d_keep1()
-    e_method_pick()
-    f_store()
-    g_self_store()
-    h_option()
-    i_loop()
+    a_method();
+    b_method_disc();
+    c_pick();
+    d_keep1();
+    e_method_pick();
+    f_store();
+    g_self_store();
+    h_option();
+    i_loop();
     println("end")
 }

@@ -419,7 +419,6 @@ fn collect_callees_in_expr(
         | ExprKind::ByteLit(_)
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Continue { .. }
         | ExprKind::Return(None)

@@ -409,7 +409,6 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::SelfValue
@@ -456,7 +455,6 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::ByteLit(_)
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Identifier(_)
@@ -15496,7 +15494,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // no term above: the displaced heap buffer leaked.
                     let rhs_is_string_literal = matches!(
                         rhs_tail.kind,
-                        ExprKind::StringLit(_) | ExprKind::MultiStringLit(_)
+                        ExprKind::StringLit(_)
                     );
                     // B-2026-10-03-14 — a String branch whose tails are fresh
                     // or the target itself (`s = if c { f"q" } else { s }`).
@@ -25818,7 +25816,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // behind a `cap > 0` guard, so the emitted free is a runtime no-op.
             // It is admitted only as `InertLiteral`, never as `Mints`, so it
             // can never by itself make a construct qualify.
-            ExprKind::StringLit(..) | ExprKind::MultiStringLit(..) => BranchTailClass::InertLiteral,
+            ExprKind::StringLit(..) => BranchTailClass::InertLiteral,
             _ => {
                 // B-2026-10-04-76 — a bare arm tail `x[1]` over the arm's own
                 // binding was deep-copied before the arm's frame drained
@@ -25934,7 +25932,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // A string literal is rodata (`cap == 0`, every free skips it) and
             // a fresh call result has no owner but the literal it moved into,
             // so neither names a place a later read could reach.
-            ExprKind::StringLit(..) | ExprKind::MultiStringLit(..) => true,
+            ExprKind::StringLit(..) => true,
             _ => self.expr_yields_fresh_owned_temp(e),
         }
     }
@@ -29245,7 +29243,7 @@ impl<'ctx> super::Codegen<'ctx> {
     fn discard_arm_tail_qualifies(&self, tail: &Expr) -> bool {
         match &tail.kind {
             ExprKind::InterpolatedStringLit(_) => true,
-            ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => true,
+            ExprKind::StringLit(_) => true,
             ExprKind::Binary { .. } => self
                 .span_tables
                 .string_typed_exprs
@@ -31263,7 +31261,6 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
             | ExprKind::StringLit(..)
-            | ExprKind::MultiStringLit(..)
             | ExprKind::InterpolatedStringLit(_) => true,
             ExprKind::StructLiteral { fields, .. } => fields
                 .iter()
@@ -32378,7 +32375,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> bool {
         let tail_fresh = |e: &Expr| {
             self.rhs_stages_fstr_acc(e)
-                || matches!(e.kind, ExprKind::StringLit(_) | ExprKind::MultiStringLit(_))
+                || matches!(e.kind, ExprKind::StringLit(_))
                 || matches!(&e.kind, ExprKind::Identifier(n) if n != target
                     && self.var_types.vec_elem_types.contains_key(n.as_str()))
                 || (allow_self && matches!(&e.kind, ExprKind::Identifier(n) if n == target))

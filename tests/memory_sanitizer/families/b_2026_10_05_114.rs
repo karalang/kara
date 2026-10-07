@@ -27,12 +27,12 @@ fn d() { let mut p = (mkw(8), 5); p.0 = mkw(9); println(f"d{p.1} {p.0.0.s}") }
 fn e() { let mut p = ((R { id: 10 }, R { id: 11 }), 5); p.0 = (R { id: 12 }, R { id: 13 }); println(f"e{p.1}") }
 fn f() { let mut p = (mkr(14), mkr(15)); p.1 = mkr(16); println(f"f{p.0.1} {p.1.1}") }
 fn main() {
-    a()
-    b()
-    c()
-    d()
-    e()
-    f()
+    a();
+    b();
+    c();
+    d();
+    e();
+    f();
     println("end")
 }"#,
         &[

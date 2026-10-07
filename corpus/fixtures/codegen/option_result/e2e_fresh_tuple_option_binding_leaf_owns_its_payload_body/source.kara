@@ -22,20 +22,20 @@ fn plainel(){ let (_, oq) = (mk(9), mk(109)); println("  q") }
 fn wildcd() { let (_, _) = (mk(31), Option.Some(mk(131))); println("  w") }
 
 fn main() {
-  println("bind");    bind()
-  println("bindsib"); bindsib()
-  println("slot0");   slot0()
-  println("nested");  nested()
-  println("nestpl");  nestpl()
-  println("loopb");   loopb()
-  println("consume"); consume()
-  println("moved");   moved()
-  println("ret");     ret()
-  println("arg");     arg()
-  println("field");   field()
-  println("instr");   instr()
-  println("none");    none()
-  println("plainel"); plainel()
-  println("wildcd");  wildcd()
+  println("bind");    bind();
+  println("bindsib"); bindsib();
+  println("slot0");   slot0();
+  println("nested");  nested();
+  println("nestpl");  nestpl();
+  println("loopb");   loopb();
+  println("consume"); consume();
+  println("moved");   moved();
+  println("ret");     ret();
+  println("arg");     arg();
+  println("field");   field();
+  println("instr");   instr();
+  println("none");    none();
+  println("plainel"); plainel();
+  println("wildcd");  wildcd();
   println("done")
 }

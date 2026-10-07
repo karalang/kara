@@ -19,8 +19,8 @@ fn mks(i: i64) -> S { S { r: R { id: i }, s: f"ssssssssssssssssssssssssssss{i}" 
 fn a3(s: Option[S]) -> i64 { match s { Some(x) => { let s = 5; x.r.id + s } None => 0 } }
 fn a4(s: Option[S]) -> i64 { match s { Some(x) => { let t = 5; x.r.id + t } None => 0 } }
 fn main() {
-    println(f"k{a3(Some(mks(1)))}"); let b = Some(mks(2)); println(f"k{a3(b)}")
-    println(f"k{a4(Some(mks(3)))}"); let c = Some(mks(4)); println(f"k{a4(c)}")
+    println(f"k{a3(Some(mks(1)))}"); let b = Some(mks(2)); println(f"k{a3(b)}");
+    println(f"k{a4(Some(mks(3)))}"); let c = Some(mks(4)); println(f"k{a4(c)}");
     println("end")
 }
 "#,
@@ -49,13 +49,13 @@ fn b5(s: Option[S]) -> i64 { let s = 5; s }
 fn k8(x: S) -> S { let x = mks(28); x }
 fn k7(x: Option[S]) -> Option[S] { let x = Some(mks(27)); x }
 fn main() {
-    println(f"k{b4(mks(1))}"); let a = mks(2); println(f"k{b4(a)}")
-    println(f"k{c1(mks(3))}"); println(f"k{c2(mks(4))}")
-    println(f"k{b5(Some(mks(5)))}"); let b = Some(mks(6)); println(f"k{b5(b)}")
-    let d = mks(7); let i = k8(d); println(f"i{i.r.id}")
-    let e = mks(8); k8(e); println("e")
-    let j = k8(mks(9)); println(f"j{j.r.id}")
-    let f = Some(mks(10)); let g = k7(f); println(f"g{g.is_some()}")
+    println(f"k{b4(mks(1))}"); let a = mks(2); println(f"k{b4(a)}");
+    println(f"k{c1(mks(3))}"); println(f"k{c2(mks(4))}");
+    println(f"k{b5(Some(mks(5)))}"); let b = Some(mks(6)); println(f"k{b5(b)}");
+    let d = mks(7); let i = k8(d); println(f"i{i.r.id}");
+    let e = mks(8); k8(e); println("e");
+    let j = k8(mks(9)); println(f"j{j.r.id}");
+    let f = Some(mks(10)); let g = k7(f); println(f"g{g.is_some()}");
     println("end")
 }
 "#,

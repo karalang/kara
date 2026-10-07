@@ -8,9 +8,9 @@ fn moverstr() { let o = Option.Some(f"z12"); let q = o; println(f"  s{q.is_some(
 fn unshared() { let d = Option.Some(mk(13)); let e = d; println(f"  d{e.is_some()}") }
 
 fn main() {
-  println("mover");    mover()
-  println("moverstr"); moverstr()
-  println("unshared"); unshared()
-  println("retained"); retained()
+  println("mover");    mover();
+  println("moverstr"); moverstr();
+  println("unshared"); unshared();
+  println("retained"); retained();
   println("done")
 }

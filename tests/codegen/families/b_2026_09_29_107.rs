@@ -26,12 +26,12 @@ fn vv(v: Vec[D]) -> i64 { let b = v; return b.len() }
 fn vk(v: Vec[D], k: bool) -> i64 { let b = v; if k { return take(b) } return 0 }
 fn main() {
     { let t: (Vec[D], i64) = ([mkd(1), mkd(2)], 7); println(f"a {pv(t)}") }
-    println(f"b {pi(([1, 2, 3], 7))}")
-    println(f"c {ps((f"a-heap-string-longer-than-sso-{1}", 7))}")
+    println(f"b {pi(([1, 2, 3], 7))}");
+    println(f"c {ps((f"a-heap-string-longer-than-sso-{1}", 7))}");
     { let t: (Vec[D], i64) = ([mkd(3)], 1); println(f"d {pm(t)}") }
     { let r = pr(([mkd(4)], 5)); println(f"e {r.len()}") }
     { let v: Vec[D] = [mkd(5), mkd(6)]; println(f"f {vv(v)}") }
-    { let v: Vec[D] = [mkd(7)]; println(f"g {vk(v, true)}") let u: Vec[D] = [mkd(8)]; println(f"h {vk(u, false)}") }
+    { let v: Vec[D] = [mkd(7)]; println(f"g {vk(v, true)}"); let u: Vec[D] = [mkd(8)]; println(f"h {vk(u, false)}") }
     { let mut i = 0; while i < 3 { let t: (Vec[D], i64) = ([mkd(10 + i)], i); println(f"l {pv(t)}"); i = i + 1; } }
     println("end")
 }
@@ -63,7 +63,7 @@ fn main() {
     let z: Vec[(Vec[i64], i64)] = [([1], 1), ([2, 3], 2)];
     let mut out: Vec[Vec[i64]] = [];
     for pair in z.into_iter() { let (a, j) = pair; out.push(a) }
-    println(f"e {out.len()} {out[1].len()}")
+    println(f"e {out.len()} {out[1].len()}");
     let s: Vec[(S, i64)] = [(S { x: f"a-heap-string-longer-than-sso-{4}" }, 4)];
     for pair in s.into_iter() { let (q, j) = pair; let t = q; println(f"f {t.x.len()} {j}") }
     println("end")

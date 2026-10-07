@@ -271,6 +271,10 @@ pub struct Parser {
     /// disambiguate `break label expr`) work uniformly across both label
     /// kinds. Pushed at the entry to a labeled construct, popped on exit.
     pub(crate) loop_labels: Vec<(String, LabelKind)>,
+    /// Labels declared in the pre-sigil spelling (`outer: loop`). A `break
+    /// outer` naming one of them is that label, diagnosed with the `'` fix;
+    /// any other bare name after `break` is a value.
+    pub(crate) bare_label_names: std::collections::HashSet<String>,
     /// Items produced by a single `parse_item` call beyond the first. Only
     /// `import` fills this today: design.md defines nested grouping
     /// (`import a.{b.{c, d}, e};`) as *equivalent to* three flat imports, and
@@ -375,6 +379,7 @@ impl Parser {
             tokens,
             pos: 0,
             loop_labels: Vec::new(),
+            bare_label_names: std::collections::HashSet::new(),
             errors: Vec::new(),
             recursion_depth: 0,
             pending_extra_items: Vec::new(),

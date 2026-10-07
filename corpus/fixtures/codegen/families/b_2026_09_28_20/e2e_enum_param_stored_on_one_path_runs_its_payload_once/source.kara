@@ -15,11 +15,11 @@ struct H { k: i64 }
 impl H { fn m(ref self, v: mut ref Vec[G], x: G, c: bool) { if c { v.push(x); } } }
 fn main() {
     let mut xs: Vec[G] = Vec.new();
-    csg(mut xs, mkv(1).g, false); csg(mut xs, mkv(2).g, true); println(f"a{xs.len()}")
-    tl(mut xs, G.A(mkd(3)), false); let g4 = G.A(mkd(4)); tl(mut xs, g4, true); println(f"b{xs.len()}")
-    println(f"c{loc(G.A(mkd(5)), false)}"); let v6 = mkv(6); println(f"c{loc(v6.g, true)}")
-    let h = H { k: 0 }; let v7 = mkv(7); h.m(mut xs, v7.g, false); h.m(mut xs, G.A(mkd(8)), true); println(f"e{xs.len()}")
-    let u9 = U { v: mkv(9) }; csg(mut xs, u9.v.g, false); let u10 = U { v: mkv(10) }; csg(mut xs, u10.v.g, true); println(f"f{xs.len()}")
-    csg(mut xs, G.B, false); csg(mut xs, G.B, true); println(f"g{xs.len()}")
+    csg(mut xs, mkv(1).g, false); csg(mut xs, mkv(2).g, true); println(f"a{xs.len()}");
+    tl(mut xs, G.A(mkd(3)), false); let g4 = G.A(mkd(4)); tl(mut xs, g4, true); println(f"b{xs.len()}");
+    println(f"c{loc(G.A(mkd(5)), false)}"); let v6 = mkv(6); println(f"c{loc(v6.g, true)}");
+    let h = H { k: 0 }; let v7 = mkv(7); h.m(mut xs, v7.g, false); h.m(mut xs, G.A(mkd(8)), true); println(f"e{xs.len()}");
+    let u9 = U { v: mkv(9) }; csg(mut xs, u9.v.g, false); let u10 = U { v: mkv(10) }; csg(mut xs, u10.v.g, true); println(f"f{xs.len()}");
+    csg(mut xs, G.B, false); csg(mut xs, G.B, true); println(f"g{xs.len()}");
     println("end")
 }

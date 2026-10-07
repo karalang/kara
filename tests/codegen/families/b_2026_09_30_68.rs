@@ -23,18 +23,18 @@ fn gv[T](x: T) -> Vec[T] { return Vec[x] }
 fn gfa[T](x: Vec[T]) -> Vec[T] { return x; }
 fn gfa2[T](x: T) -> Array[T, 1] { return [x]; }
 fn main() {
-  println("c3"); pg([mk(40), mk(41)]); println("r")
-  println("c5"); gv(mk(7)); println("r")
-  println("v1"); let v: Vec[R] = [mk(44)]; pg(v); println("r")
-  println("e1"); gv(E.A(mk(47))); println("r")
-  println("l1"); let _ = pg([mk(49)]); println("r")
-  println("l2"); let _ = gv(mk(50)); println("r")
-  println("b1"); let n = 1; match n { 1 => gv(mk(51)), _ => gv(mk(52)) }; println("r")
-  println("ga"); let w = [mk(60)]; gfa(w); println("r")
-  println("gb"); gfa2(mk(61)); println("r")
-  println("ve"); pg(Vec[E.A(mk(62)), E.B]); println("r")
-  println("k1"); let k = gv(mk(53)); println(f"k{k.len()}")
-  println("s1"); pg(mk(54)); println("r")
+  println("c3"); pg([mk(40), mk(41)]); println("r");
+  println("c5"); gv(mk(7)); println("r");
+  println("v1"); let v: Vec[R] = [mk(44)]; pg(v); println("r");
+  println("e1"); gv(E.A(mk(47))); println("r");
+  println("l1"); let _ = pg([mk(49)]); println("r");
+  println("l2"); let _ = gv(mk(50)); println("r");
+  println("b1"); let n = 1; match n { 1 => gv(mk(51)), _ => gv(mk(52)) }; println("r");
+  println("ga"); let w = [mk(60)]; gfa(w); println("r");
+  println("gb"); gfa2(mk(61)); println("r");
+  println("ve"); pg(Vec[E.A(mk(62)), E.B]); println("r");
+  println("k1"); let k = gv(mk(53)); println(f"k{k.len()}");
+  println("s1"); pg(mk(54)); println("r");
   println("end")
 }
 "#,

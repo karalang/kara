@@ -1537,17 +1537,17 @@ fn cell_shared() { let h = Hb { a: R2 { id: 11, sh: Box1 { v: 111 } }, b: R2 { i
 fn cell_live()   { let h = H2 { a: mk(10), b: mk(110) }; let z = h.a.id; println(f"  z{z}"); println(f"  b{h.b.id}") }
 
 fn main() {
-    println("scalar");   cell_scalar()
-    println("method");   cell_method()
-    println("nodest");   cell_nodest()
-    println("three");    cell_three()
-    println("own");      cell_own()
-    println("whole");    cell_whole()
-    println("plain");    cell_plain()
-    println("move");     cell_move()
-    println("threehop"); cell_three_hop()
-    println("shared");   cell_shared()
-    println("live");     cell_live()
+    println("scalar");   cell_scalar();
+    println("method");   cell_method();
+    println("nodest");   cell_nodest();
+    println("three");    cell_three();
+    println("own");      cell_own();
+    println("whole");    cell_whole();
+    println("plain");    cell_plain();
+    println("move");     cell_move();
+    println("threehop"); cell_three_hop();
+    println("shared");   cell_shared();
+    println("live");     cell_live();
     println("done")
 }
 "#),
@@ -1690,12 +1690,12 @@ impl H {
 
 fn main() {
     let h = H { n: 0 };
-    println("m1 bare-die");       h.m1(mk(1))
-    println("m2 rebind-die");     h.m2(mk(2))
-    println("m3 into-call");      h.m3(mk(3))
-    println("m4 wrap-moveout");   let v = h.m4(mk(4)); println(f"  v={v}")
-    println("m5 destr-intocall"); h.m5((mk(5), 9))
-    println("m6 destr-die");      h.m6((mk(6), 9))
+    println("m1 bare-die");       h.m1(mk(1));
+    println("m2 rebind-die");     h.m2(mk(2));
+    println("m3 into-call");      h.m3(mk(3));
+    println("m4 wrap-moveout");   let v = h.m4(mk(4)); println(f"  v={v}");
+    println("m5 destr-intocall"); h.m5((mk(5), 9));
+    println("m6 destr-die");      h.m6((mk(6), 9));
     println("done")
 }
 "#),
@@ -2431,7 +2431,7 @@ fn test_conditionally_returned_param_user_drop_body_runs_once() {
         (
             "discarded-call",
             "fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }\n\
-             fn main() { take(R { id: 41 }, false) println(\"end\") }\n",
+             fn main() { take(R { id: 41 }, false); println(\"end\") }\n",
             "drop 41\ndrop 99\nend\n",
         ),
         // BOUNDARY — an AGGREGATE-LITERAL return route. `fn_returns_param`
@@ -2521,8 +2521,8 @@ fn test_conditionally_returned_param_user_drop_body_runs_once() {
             "struct T { n: i64 }\n\
              impl T { fn take(ref self, r: R, k: bool) -> R { if k { return r } R { id: 9 } } }\n\
              fn main() { let t = T { n: 1 };\n\
-             \x20  let a = t.take(R { id: 4 }, false); println(f\"got {a.id}\")\n\
-             \x20  let b = t.take(R { id: 3 }, true); println(f\"got {b.id}\")\n\
+             \x20  let a = t.take(R { id: 4 }, false); println(f\"got {a.id}\");\n\
+             \x20  let b = t.take(R { id: 3 }, true); println(f\"got {b.id}\");\n\
              \x20  let c = t.take(R { id: 5 }, false); println(f\"got {c.id}\") }\n",
             "drop 4\ngot 9\ndrop 9\ngot 3\ndrop 3\ndrop 5\ngot 9\ndrop 9\n",
         ),
@@ -3656,14 +3656,14 @@ fn test_owned_param_temps_drop_in_reverse_argument_order() {
          enum P {{ A, B }}\n\
          fn main() {{\n\
          \x20   let a = one(if true {{ mk(1) }} else {{ mk(2) }});\n\
-         \x20   println(f\"a={{a}}\")\n\
+         \x20   println(f\"a={{a}}\");\n\
          \x20   let p = P.A;\n\
          \x20   let b = one(match p {{ P.A => mk(3), P.B => mk(4) }});\n\
-         \x20   println(f\"b={{b}}\")\n\
+         \x20   println(f\"b={{b}}\");\n\
          \x20   let c = one({{ let t = mk(5); t }});\n\
-         \x20   println(f\"c={{c}}\")\n\
+         \x20   println(f\"c={{c}}\");\n\
          \x20   let d = one(mk(6));\n\
-         \x20   println(f\"d={{d}}\")\n\
+         \x20   println(f\"d={{d}}\");\n\
          \x20   let e0 = if true {{ mk(7) }} else {{ mk(8) }};\n\
          \x20   let e = one(e0);\n\
          \x20   println(f\"e={{e}}\")\n\
@@ -3936,7 +3936,7 @@ fn test_returned_struct_param_field_user_drop_body_runs_once() {
             "struct W { r: R, n: i64 }\n\
              fn keep(w: W) -> R { let W { r, n } = w; r }\n\
              fn eat(w: W) -> i64 { let W { r, n } = w; n }\n\
-             fn main() { let a = keep(W { r: R { id: 41 }, n: 1 }); println(f\"{a.id}\")\n\
+             fn main() { let a = keep(W { r: R { id: 41 }, n: 1 }); println(f\"{a.id}\");\n\
              \x20           let b = eat(W { r: R { id: 42 }, n: 2 }); println(f\"{b}\") }\n",
             "41\ndrop 41\ndrop 42\n2\n",
         ),
@@ -4148,7 +4148,7 @@ fn in_loop_decl_rearms_drop_flag_each_iteration() {
              let mut acc: i64 = 0;\n\
              for a in 0..2 {\n\
                  for b in 0..2 {\n\
-                     println(f\"n{a}{b}\")\n\
+                     println(f\"n{a}{b}\");\n\
                      let mut out: R = R { id: 10 * a + b, tag: f\"t\" };\n\
                      if a == 0 and b == 1 { out = p; }\n\
                      acc = acc + out.id;\n\
@@ -5206,13 +5206,13 @@ fn gfn[T](h: G[T]) -> i64 { let (r, k) = h.pe; println("  in"); return k; }
 fn gfnLocal() { let h = G[R] { pe: (mk(65), 5), z: 9 }; let _ = gfn(h); }
 
 fn main() {
-    println("collide");  let _ = plainLocal();  println("collide end")
-    println("fresh");    let _ = plainFresh();  println("fresh end")
-    println("strfield"); let _ = plainStr();    println("strfield end")
-    println("nongen");   let _ = ngLocal(5);    println("nongen end")
-    println("marker");   let _ = plainMark();   println("marker end")
-    println("nodrop");   let _ = plainNoDrop(); println("nodrop end")
-    println("genparam"); gfnLocal();            println("genparam end")
+    println("collide");  let _ = plainLocal();  println("collide end");
+    println("fresh");    let _ = plainFresh();  println("fresh end");
+    println("strfield"); let _ = plainStr();    println("strfield end");
+    println("nongen");   let _ = ngLocal(5);    println("nongen end");
+    println("marker");   let _ = plainMark();   println("marker end");
+    println("nodrop");   let _ = plainNoDrop(); println("nodrop end");
+    println("genparam"); gfnLocal();            println("genparam end");
     println("done")
 }
 "#),
@@ -5304,17 +5304,17 @@ impl W { fn unwrap_a(self) -> R { return self.a; } fn opt(self) -> Option[R] { r
 fn p_plain(h: HoRes) { println(f"  pd{h.a.id}") }
 
 fn main() {
-  println("temp-recv-fields");  HoRes { a: mk(1), b: Result.Ok(mk(101)) }.plain()
-  println("temp-recv-own");     mk(2).ident()
-  println("temp-recv-ownd");    OwnD { a: mk(3), n: 3 }.eat()
-  println("temp-recv-pair");    Pair { a: mk(4), b: mk(104) }.eat()
-  println("temp-recv-refself"); Pair { a: mk(5), b: mk(105) }.peek()
-  println("param-twin");        p_plain(HoRes { a: mk(6), b: Result.Ok(mk(106)) })
-  println("local-recv");        let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; h.plain()
-  println("scalar-return");     let v = mk(8).area(); println(f"  v{v}")
-  println("returns-self");      let m = mk(9).me(); println(f"  m{m.id}")
-  println("hands-field-out");   let g = W { a: mk(10) }.unwrap_a(); println(f"  g{g.id}")
-  println("generic-return");    let o = W { a: mk(11) }.opt(); println("  built")
+  println("temp-recv-fields");  HoRes { a: mk(1), b: Result.Ok(mk(101)) }.plain();
+  println("temp-recv-own");     mk(2).ident();
+  println("temp-recv-ownd");    OwnD { a: mk(3), n: 3 }.eat();
+  println("temp-recv-pair");    Pair { a: mk(4), b: mk(104) }.eat();
+  println("temp-recv-refself"); Pair { a: mk(5), b: mk(105) }.peek();
+  println("param-twin");        p_plain(HoRes { a: mk(6), b: Result.Ok(mk(106)) });
+  println("local-recv");        let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; h.plain();
+  println("scalar-return");     let v = mk(8).area(); println(f"  v{v}");
+  println("returns-self");      let m = mk(9).me(); println(f"  m{m.id}");
+  println("hands-field-out");   let g = W { a: mk(10) }.unwrap_a(); println(f"  g{g.id}");
+  println("generic-return");    let o = W { a: mk(11) }.opt(); println("  built");
   println("done")
 }
 "#);
@@ -7048,21 +7048,21 @@ fn m() { let mut v: Vec[P] = Vec.new(); v.push(P { id: 13 }); let p = vv(v); pri
 fn n() { let w = w1(P { id: 14 }); println(f"n{w.o.is_some()}") }
 fn o() { let p = t1(P { id: 15 }); println(f"o{p.1}") }
 fn main() {
-    a(); println("a.")
-    b(); println("b.")
-    c(); println("c.")
-    d(); println("d.")
-    e(); println("e.")
-    f(); println("f.")
-    g(); println("g.")
-    h(); println("h.")
-    i(); println("i.")
-    j(); println("j.")
-    k(); println("k.")
-    l(); println("l.")
-    m(); println("m.")
-    n(); println("n.")
-    o(); println("o.")
+    a(); println("a.");
+    b(); println("b.");
+    c(); println("c.");
+    d(); println("d.");
+    e(); println("e.");
+    f(); println("f.");
+    g(); println("g.");
+    h(); println("h.");
+    i(); println("i.");
+    j(); println("j.");
+    k(); println("k.");
+    l(); println("l.");
+    m(); println("m.");
+    n(); println("n.");
+    o(); println("o.");
     println("end")
 }
 "#);
@@ -7124,26 +7124,26 @@ fn s() { let x = H { n: 1 }; let p = x.m(P { id: 18 }, true); println(f"s{p.is_s
 fn t() { let p = H.a(P { id: 19 }, true); println(f"t{p.is_some()}") }
 fn u() { let mut i = 0; while i < 3 { let s = mk2(20 + i); let p = sq(s, i == 1); println(f"u{p.is_some()}"); i = i + 1; } }
 fn main() {
-    a(); println("a.")
-    b(); println("b.")
-    c(); println("c.")
-    d(); println("d.")
-    e(); println("e.")
-    f(); println("f.")
-    g(); println("g.")
-    h(); println("h.")
-    i(); println("i.")
-    j(); println("j.")
-    k(); println("k.")
-    l(); println("l.")
-    m(); println("m.")
-    n(); println("n.")
-    o(); println("o.")
-    q(); println("q.")
-    r(); println("r.")
-    s(); println("s.")
-    t(); println("t.")
-    u(); println("u.")
+    a(); println("a.");
+    b(); println("b.");
+    c(); println("c.");
+    d(); println("d.");
+    e(); println("e.");
+    f(); println("f.");
+    g(); println("g.");
+    h(); println("h.");
+    i(); println("i.");
+    j(); println("j.");
+    k(); println("k.");
+    l(); println("l.");
+    m(); println("m.");
+    n(); println("n.");
+    o(); println("o.");
+    q(); println("q.");
+    r(); println("r.");
+    s(); println("s.");
+    t(); println("t.");
+    u(); println("u.");
     println("end")
 }
 "#);
@@ -7271,43 +7271,43 @@ fn c34() { let k = K { n: 1 }; let s = mk(16); let t = k.mp(s, false); println(f
 fn c35() { let s = mk(17); let w = mk(18); let t = pickS3(s, true, w); println(f"t{t.id}"); let s2 = mk(19); let t2 = outer(s2, true); println(f"t{t2.id}"); }
 fn c36() { let s = mk2(20); let t = outer2(s, true); let s2 = mk2(21); let t2 = passp2(s2, false); println(f"t{t.id} {t2.id}"); }
 fn main() {
-    c00()
-    c01()
-    c02()
-    c03()
-    c04()
-    c05()
-    c06()
-    c07()
-    c08()
-    c09()
-    c10()
-    c11()
-    c12()
-    c13()
-    c14()
-    c15()
-    c16()
-    c17()
-    c18()
-    c19()
-    c20()
-    c21()
-    c22()
-    c23()
-    c24()
-    c25()
-    c26()
-    c27()
-    c28()
-    c29()
-    c30()
-    c31()
-    c32()
-    c33()
-    c34()
-    c35()
-    c36()
+    c00();
+    c01();
+    c02();
+    c03();
+    c04();
+    c05();
+    c06();
+    c07();
+    c08();
+    c09();
+    c10();
+    c11();
+    c12();
+    c13();
+    c14();
+    c15();
+    c16();
+    c17();
+    c18();
+    c19();
+    c20();
+    c21();
+    c22();
+    c23();
+    c24();
+    c25();
+    c26();
+    c27();
+    c28();
+    c29();
+    c30();
+    c31();
+    c32();
+    c33();
+    c34();
+    c35();
+    c36();
     println("end")
 }
 "#);
@@ -7361,7 +7361,7 @@ fn round() {
     println("end")
 }
 fn main() {
-    round()
+    round();
     round()
 }
 "#,
@@ -7416,19 +7416,19 @@ fn c10() { let s = P { id: 17 }; let t = wrap(s, 2); println(f"t{t.id}"); }
 fn c11() { let mut i = 0; while i < 3 { let s = mk2(20 + i); let t = rs2(s, i); println(f"t{t.id}"); i = i + 1; } }
 fn c12() { let s = P { id: 19 }; rs(s, 1); println("disc"); }
 fn main() {
-    c00()
-    c01()
-    c02()
-    c03()
-    c04()
-    c05()
-    c06()
-    c07()
-    c08()
-    c09()
-    c10()
-    c11()
-    c12()
+    c00();
+    c01();
+    c02();
+    c03();
+    c04();
+    c05();
+    c06();
+    c07();
+    c08();
+    c09();
+    c10();
+    c11();
+    c12();
     println("end")
 }
 "#);
@@ -7479,7 +7479,7 @@ fn round() {
     println("end")
 }
 fn main() {
-    round()
+    round();
     round()
 }
 "#,
@@ -7651,22 +7651,22 @@ fn c13() { let v: Vec[Ho[String]] = vec![Ho.Full("ii".to_string() + "jj"), Ho.Em
 fn c14() { let v: Vec[Ho[String]] = vec![Ho.Full("kk".to_string() + "ll")]; let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); for h in v { w[0] = h; } println(f"w{w.len()}"); }
 fn c16() { let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); let h: Ho[String] = Ho.Full("oo".to_string() + "pp"); w[0] = h; println(f"w{w.len()}"); }
 fn main() {
-    c00()
-    c01()
-    c02()
-    c03()
-    c04()
-    c05()
-    c06()
-    c07()
-    c08()
-    c09()
-    c10()
-    c11()
-    c12()
-    c13()
-    c14()
-    c16()
+    c00();
+    c01();
+    c02();
+    c03();
+    c04();
+    c05();
+    c06();
+    c07();
+    c08();
+    c09();
+    c10();
+    c11();
+    c12();
+    c13();
+    c14();
+    c16();
     println("end")
 }
 "#);
@@ -8074,27 +8074,27 @@ fn s12() { let mut v: Vec[H] = Vec.new(); v.push(H { g: Ho.Full(R { id: 5 }) });
 fn w9() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
 fn m15() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
 fn main() {
-    v01()
-    v02()
-    v03()
-    v04()
-    v05()
-    v06()
-    v09()
-    v10()
-    v11()
-    v12()
-    v13()
-    s01()
-    s04()
-    s06()
-    s07()
-    s08()
-    s09()
-    s10()
-    s12()
-    w9()
-    m15()
+    v01();
+    v02();
+    v03();
+    v04();
+    v05();
+    v06();
+    v09();
+    v10();
+    v11();
+    v12();
+    v13();
+    s01();
+    s04();
+    s06();
+    s07();
+    s08();
+    s09();
+    s10();
+    s12();
+    w9();
+    m15();
     println("end")
 }
 "#);
