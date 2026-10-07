@@ -6,7 +6,7 @@ is the other half — the **consume** direction: Kāra as the host program,
 calling into the system's zlib through the shipped FFI surface. Together they
 are the two legs of the additive-adoption story.
 
-Spec: [`docs/design.md` § FFI](../../docs/design.md#ffi) (the
+Spec: [`docs/design.md` § FFI](../../docs/design.md#15-unsafe-ffi-and-layout-control) (the
 `unsafe extern "C" { }` block, effect defaults, trust-not-verify) and
 § "Foreign-library linking — the `[link]` table".
 

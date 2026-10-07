@@ -29,7 +29,7 @@ fn double(x: f32) -> f32 { x * 2.0 }
 
 Dispatched over a buffer of `f32`, **one GPU invocation per element**. Semantic contract for slice-0: a kernel `fn k(x: T) -> U` dispatched over a `[T]` buffer produces a `[U]` buffer.
 
-> **Semantic choice to confirm.** [design.md § GPU Subset Constraints](../design.md#gpu-subset-constraints) shows `gpu.dispatch(dot, a, b)` where the kernel takes *whole arrays* and `dot` even reduces to a scalar. **Reductions need workgroup memory and are explicitly NOT slice-0.** The per-element-map form is the cleanest floor; the whole-array / reduction / multi-buffer forms are later increments. Confirm the per-element-map contract before 0c wires `gpu.dispatch`.
+> **Semantic choice to confirm.** [deferred.md § GPU Subset Constraints](../deferred.md#gpu-subset-constraints) shows `gpu.dispatch(dot, a, b)` where the kernel takes *whole arrays* and `dot` even reduces to a scalar. **Reductions need workgroup memory and are explicitly NOT slice-0.** The per-element-map form is the cleanest floor; the whole-array / reduction / multi-buffer forms are later increments. Confirm the per-element-map contract before 0c wires `gpu.dispatch`.
 
 ## What the codegen emits (WGSL)
 

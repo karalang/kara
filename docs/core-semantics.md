@@ -40,9 +40,23 @@ Gowtham approved these at 16:53Z as decisions D1, D2, D4 and D6 of the design re
 6. **Follows from the review's batch and D6, adopted at the same time** (§4, §5.7, §6.3, §9.3, §9.5, §11.1–§11.3, §11.6, §11.7, §12, §13).
    - There is no free `spawn`. Tasks start only in `par {}`, `par for` and `TaskGroup.spawn`.
    - `par { e1, e2 }` is a comma-separated list of branch expressions whose value is the tuple of their values, and `par for x in it { body }` is one branch per element, whose value is a `Vec`.
-   - `TaskGroup.spawn` takes `ref self`, so a group can be shared by `ref` with the functions that spawn into it.
+   - `TaskGroup.spawn` borrows its receiver (`self`), so a group can be passed borrowed to the functions that spawn into it.
    - The `with _` annotation is removed: a non-escaping function parameter's effects come from the argument at each call.
    - `par struct` and `par enum` are renamed `sync struct` and `sync enum`, since `par` now names the fork-join constructs.
+7. **Consistency with the design.md rewrite** (§1.1, §4.6, §4.7, §5.2, §5.3, §5.10, §6.1, §6.3, §7.4, §7.7, §7.11, §8.3, §9.1, §10), from the review thread's answers in `review/design-rewrite/DECISIONS.md`.
+   - A `Fn` closure whose captures are all `Copy` is `Copy`.
+   - `for x in e` consumes an `Iterator` and borrows anything else through `Iterable`.
+   - §4.7's example uses D8's `Add[Rhs = Self]` with `Output`.
+   - `StringSlice` is `Str`. A view of static data, such as a string literal typed `Str`, has no origins.
+   - A `let … else` initializer's temporaries drop before the `else` block.
+   - A `Drop` body may panic, since a panic aborts and `panics` is default-permitted.
+   - The short-circuit operators are `and`, `or` and `??`.
+   - `sync` fields are never `mut`; they must be `CrossTask`, and mutation goes through `Atomic[T]` and `Mutex[T]`. One error code, `E_NOT_CROSS_TASK`, covers any value that may not enter a task.
+   - A `frozen` handle is not counted, so a closure that captures one is a view (§5.7).
+   - A handle passed to a borrowed parameter is borrowed and not counted (§6.1). A deadlocked `recv` on a single-threaded target panics (§10.1).
+   - Over a borrowed scrutinee a `Copy` part binds by copy (§4.6), and a `ref` to a `Copy` value is read wherever the value is expected (§5.10). Both matter more under D5, where most parameters are borrowed.
+   - `errdefer` runs on every failure return, a tail `Err(...)` and `return None` included (§7.7). The panic handler is enabled by `#[panic_handler]` alone (§10.2).
+8. **D5, borrow-by-default parameters** (Gowtham, 2026-10-07 18:26Z) (§3.1, §3.6, §4.1–§4.3, §4.7, §5.4, §5.9, §7.4, §9.5, §9.6). A bare parameter `x: T` borrows (for a `Copy` type it is a copy); `x: own T` is owned and the callee drops it; `x: mut ref T` is unchanged. Receivers are `self` (borrowed), `own self` and `mut ref self`. Only the spelling changes: every parameter still has one declared mode, and §4.2's rule for owned parameters is unchanged. The pins keep the earlier spelling until the `karac fix` migration rewrites them.
 
 ---
 
@@ -81,6 +95,7 @@ Gowtham approved these at 16:53Z as decisions D1, D2, D4 and D6 of the design re
 - `Array[T, N]`, tuples and `Option[T]` when their parts are `Copy`.
 - User types with `#[derive(Copy)]`, which the compiler checks field by field.
 - `ref T`, but not `mut ref T`. Copying a shared reference gives a second reference to the same place, with the same origins (§5.3). So `let u = x;` with `x` bound by `ref` makes `u` a reference too, and moves nothing.
+- A closure of kind `Fn` (§9.6) whose captures are all `Copy`, `ref` captures included. A `MutFn` or `OnceFn` closure never is.
 - `distinct type` does not inherit `Copy`.
 - All of this is unchanged from `design.md` Part 6.
 
@@ -119,8 +134,8 @@ Gowtham approved these at 16:53Z as decisions D1, D2, D4 and D6 of the design re
 **3.1 Where a move happens.** In each of these positions, a move-only value moves:
 - a `let` initializer;
 - the right-hand side of an assignment;
-- an argument to a by-value parameter;
-- a `self` (consuming) receiver;
+- an argument to an `own` parameter;
+- an `own self` (consuming) receiver;
 - a `return` or a block's tail value;
 - a field or element of a struct, tuple, array or enum literal;
 - a capture by an escaping closure (§9);
@@ -128,7 +143,7 @@ Gowtham approved these at 16:53Z as decisions D1, D2, D4 and D6 of the design re
 - `for x in c.into_iter()`.
 
 Whether an argument moves is decided only by the callee's declared parameter mode.
-An operator is a call to the method its operand type's impl provides, so the same rule applies: the operands' modes are those declared by the impl method the operator resolves to (§4.7). `String`'s `+` is `fn add(ref self, other: ref String)` (`design.md` § Collection Core Methods), so `a + b` on `String` moves neither operand. Comparison operators borrow both. On `Copy` types the question does not arise.
+An operator is a call to the method its operand type's impl provides, so the same rule applies: the operands' modes are those declared by the impl method the operator resolves to (§4.7). `String`'s `+` is `fn add(self, other: String) -> String`, which borrows both, so `a + b` on `String` moves neither operand. Comparison operators borrow both. On `Copy` types the question does not arise.
 
 **3.2 Use after move (C1).** Using a place that is moved, or maybe-moved, on any path reaching the use is error **E0500**. "Using" means reading it, borrowing it, moving it, or calling a method on it.
 
@@ -145,7 +160,7 @@ Pins:
 - At scope end it is dropped only on the paths where it is still initialized. A backend implements that with a drop flag where the paths cannot be told apart statically.
 - Pin: `drop_conditional_move`.
 
-**3.6 Partial moves (C4).** A non-`Copy` field, tuple element or enum payload may be moved out of an **owned local, pattern binding or by-value parameter**, unless the root's type, or any type on the path from the root to the moved part, has a `Drop` body.
+**3.6 Partial moves (C4).** A non-`Copy` field, tuple element or enum payload may be moved out of an **owned local, pattern binding or `own` parameter**, unless the root's type, or any type on the path from the root to the moved part, has a `Drop` body.
 - After a partial move, the root cannot be used, borrowed or moved as a whole. Its remaining fields still can.
 - Assigning a value back into the moved field restores it, without dropping anything. The root is usable as a whole again once every moved part is restored.
 - The fields that were not moved drop at the root's scope end (§7.9).
@@ -168,13 +183,15 @@ Pins:
 ## 4. Parameters, calls and patterns
 
 **4.1 Modes are declared and unchanged.**
-- Parameter forms: bare `T` (owned), `ref T`, `mut ref T`, `Slice[T]`, `mut Slice[T]`.
-- Receivers: `self`, `ref self`, `mut ref self`.
+- Parameter forms: bare `T` (borrowed; a copy for a `Copy` type), `own T` (owned), `mut ref T`, `Slice[T]`, `mut Slice[T]`. `ref T` in a parameter is a redundant spelling of bare `T`; `karac fix` removes it.
+- Receivers: `self` (borrowed), `own self`, `mut ref self`.
+- An argument to a borrowed parameter of type `T` may be a value or place of type `T`, or a `ref T` or `mut ref T`. The callee sees a read-only borrow for the call. Nothing moves and no handle is counted (§6.1); a temporary argument drops at the end of the caller's statement (§7.4).
+- An `escaping` function-typed parameter (§9.3) is owned.
 - Call sites carry `mut` markers (`design.md` Part 1½).
 - `ref` is never written at a call site.
 
 **4.2 Owned parameters belong to the callee (C2).**
-- An owned parameter, including a by-value `self`, is a local of the callee's outermost scope, declared before the body in parameter order.
+- An owned parameter (`own T`, including `own self`) is a local of the callee's outermost scope, declared before the body in parameter order.
 - The callee drops it at its scope end (§7.3), unless it moves it on.
 - The caller has moved the argument (§3.1) and never touches it again. A temporary passed as an argument also belongs to the callee.
 - A conditional move inside the callee uses a drop flag inside the callee.
@@ -183,7 +200,7 @@ This replaces D3.4 of the drop judgment (the caller dropping the argument when t
 
 Pins: `drop_callee_owns`, `drop_callee_returns`.
 
-**4.3 Receivers on shared types.** A `shared` type's methods take `ref self` only. This is unchanged.
+**4.3 Receivers on shared types.** A `shared` type's methods take a borrowed `self` only. This is unchanged apart from the spelling.
 
 **4.4 Return values** move to the caller.
 
@@ -191,7 +208,7 @@ Pins: `drop_callee_owns`, `drop_callee_returns`.
 
 **4.6 Pattern binding modes.** This covers `match`, `if let`, `while let`, `let` destructuring and `for` patterns. The mode of every binding is decided by the pattern and the scrutinee's type, never by how the arm uses the binding.
 
-- **A `ref` or view scrutinee:** every binding is a `ref` into it, and moving a binding is an error (§3.7).
+- **A `ref` or view scrutinee:** a binding of a non-`Copy` part is a `ref` into it, and moving it is an error (§3.7). A binding of a `Copy` part copies it, so `match shape { Circle { radius } => radius * radius, … }` on a borrowed `shape` needs no `*`.
 - **A `shared` scrutinee** (a handle, or any place reached through one) counts as a `ref` scrutinee. A shared value's contents are only ever reached through a handle (§6.1), so nothing can move out of them. A plain binding of a part is therefore a `ref` automatically, and moving it is an error whose fix is `.clone()`. A binding that covers the whole handle copies the handle (§6.1). This is unlike a type with a `Drop` body (below), where a plain binding of a part still needs an explicit `ref`. A `mut` field of `Copy` or handle-aggregate type is the exception: it is read as a value (§6.2), so the scrutinee is a temporary.
 - **An owned scrutinee** (a place rooted at a local or parameter the function owns, or a temporary):
   - A plain binding `name` of a non-`Copy` part **moves** that part out of the scrutinee on that path. That is a partial move (§3.6), or a whole move if the binding covers the whole value. The binding drops at the end of its arm or body unless moved on.
@@ -201,16 +218,16 @@ Pins: `drop_callee_owns`, `drop_callee_returns`.
 - **A temporary scrutinee:**
   - In `match`, `if let` and `while let`, the temporary lives through the construct (§7.4). Whatever its bindings did not move drops at the end of the construct.
   - In `let`, the temporary ends at the `;`. The parts not bound (by `_` or `..`) drop there with the rest of it, so `let (a, _) = pair();` drops the second element at the `;`.
-- **`Copy` bindings** copy.
+- **`Copy` bindings** copy, whatever the scrutinee.
 - **A pattern over a type with a `Drop` body** may bind the whole value, but may not move a part out (§3.7).
-- **`for x in c`** borrows `c` through `Iterable`; `x` is the iterator's item, `ref T` for the standard collections. **`for x in c.into_iter()`** moves `c` and each item.
+- **`for x in e`** consumes `e` when its type is an `Iterator`: `for x in c.into_iter()` moves `c` and each item. Otherwise it borrows `e` through `Iterable`, and `x` is the iterator's item, `ref T` for the standard collections.
 
 Pins: `ok_match_binding_modes`, `drop_match_scrutinee`, `drop_underscore`, `ok_pattern_binds_nothing`.
 
-**4.7 An impl's modes may be weaker than its trait's.** An impl method may declare any parameter, the receiver included, with the same mode as the trait method or a weaker one, in the order owned → `mut ref` → `ref` (and `mut Slice[T]` → `Slice[T]`). It may never declare a stronger one.
+**4.7 An impl's modes may be weaker than its trait's.** An impl method may declare any parameter, the receiver included, with the same mode as the trait method or a weaker one, in the order `own` → `mut ref` → borrowed (and `mut Slice[T]` → `Slice[T]`). It may never declare a stronger one.
 - A call whose impl is known where it is checked (a concrete type, including an operator on one) uses the impl's modes.
-- A call through a generic bound is checked against the trait's modes, so an argument the trait takes by value is moved there. When the instance's impl borrows it instead, the moved value becomes a temporary of the call and drops at the end of the enclosing statement (§7.4).
-- So `trait Add { fn add(self, rhs: Self) -> Self; }` and `String`'s `fn add(ref self, other: ref String)` conform. `a + b` on two `String` locals moves neither (§3.1). Inside `fn sum[T: Add](a: T, b: T) -> T { a + b }`, both move.
+- A call through a generic bound is checked against the trait's modes, so an argument the trait takes `own` is moved there. When the instance's impl borrows it instead, the moved value becomes a temporary of the call and drops at the end of the enclosing statement (§7.4).
+- So `trait Add[Rhs = Self] { type Output; fn add(own self, rhs: own Rhs) -> Self.Output; }` and `String`'s `fn add(self, other: String) -> String` conform. `a + b` on two `String` locals moves neither (§3.1). Inside `fn sum[T: Add[Output = T]](a: own T, b: own T) -> T { a + b }`, both move.
 
 ---
 
@@ -223,7 +240,7 @@ Pins: `ok_match_binding_modes`, `drop_match_scrutinee`, `drop_underscore`, `ok_p
 - inside a view (§5.2).
 
 **5.2 Views.** A *view* is any type that contains a `ref` or `mut ref` after generic substitution. Examples:
-- `Slice[T]` and `StringSlice`;
+- `Slice[T]` and `Str`;
 - iterators over a borrowed collection;
 - borrowed structs (structs with `ref` fields);
 - `Option[ref T]`;
@@ -239,11 +256,13 @@ A view borrows exactly like a reference.
 - branches take the union of their arms;
 - a call with a `mut ref` argument (a `mut ref self` receiver included) whose pointee can hold a reference may store the other reference and view arguments into it, so the pointee's origins grow by theirs. `v.push(r)` on a `Vec[ref T]` is the common case.
 
+**Static data has no origins.** A view of data that lives for the whole program, such as a string literal typed `Str` or a `Slice` of a constant, borrows nothing, so none of §5.5–§5.7 limits it.
+
 Only a value whose type can hold a reference has origins: a reference, a view, a closure, and an aggregate or collection containing one. A type the compiler cannot see into counts as one that can; `TaskGroup` is such a type, because it holds its tasks' closures. So an `i64` copied out through a reference borrows nothing.
 
 **5.4 The signature rule.** For a function that returns a reference or a view:
-- if it has a `ref self` or `mut ref self` receiver, the result borrows from `self` only;
-- otherwise, the result borrows from every `ref`, `mut ref` and view parameter;
+- if it has a `self` or `mut ref self` receiver, the result borrows from `self` only;
+- otherwise, the result borrows from every borrowed parameter of a non-`Copy` type, every `mut ref` parameter and every view parameter;
 - with no such parameter, returning a reference or view is an error.
 
 The body is checked against the rule. A function that needs a different relation must be restructured or return an owned value.
@@ -279,23 +298,25 @@ A view **may** enter a branch of `par {}` or `par for`, or a `TaskGroup` task th
 - The checks of §5.6–§5.7 run on the monomorphised instance.
 - An instance whose body stores a view-typed value somewhere a view may not go is an error. It is reported at the instantiation site, with a note at the generic body's line.
 
-**5.9 Nothing is written through a `ref`.** A place whose path dereferences a `ref` is read-only. That covers a `ref` parameter or receiver, a `ref` pattern binding, the item of `for x in c` (§4.6), a `ref` returned by a call, and a local bound to any of these. Such a place may not be:
+**5.9 Nothing is written through a `ref`.** A place whose path dereferences a `ref` is read-only. That covers a borrowed parameter or receiver (bare `T`, `self`), a `ref` pattern binding, the item of `for x in c` (§4.6), a `ref` returned by a call, and a local bound to any of these. Such a place may not be:
 - assigned or compound-assigned;
 - mutably borrowed: a `mut ref self` receiver, an argument marked `mut`, or a `mut ref name` binding;
 - moved out of (§3.7).
 
-**The exception** is a `mut` field of a `shared` value. It is writable through any handle, however the handle was reached, under §6.2's flags; that is why a shared type's methods can take `ref self` (§4.3).
+**The exception** is a `mut` field of a `shared` value. It is writable through any handle, however the handle was reached, under §6.2's flags; that is why a shared type's methods can take a borrowed `self` (§4.3).
 
 **The fixes:** declare the parameter `mut ref T` and mark its call sites `mut`; iterate with `c.iter_mut()`; or bind with `mut ref name` from a mutable owned scrutinee.
 
 Pins: `err_write_through_ref`, `ok_shared_field_through_ref`.
+
+**5.10 Reading a `Copy` value through a reference.** A `ref T` or `mut ref T` whose `T` is `Copy` is read as a `T` wherever a `T` is expected: an operator operand, an argument, a `let` with a `T` annotation, a field or element of a literal, a return value. Nothing is moved and the reference stays usable. `*r` writes the read explicitly. So `for x in v { total += x }` over a `Vec[i64]` needs no `*`, and neither does a bare parameter of a `Copy` type, which is already a copy (§4.1).
 
 ---
 
 ## 6. Sharing (C7)
 
 **6.1 `shared struct` and `shared enum`.** These have reference semantics within one task, and their count is not atomic.
-- Using a handle as a value (assigning it, passing it, storing it) **increments** the count. The source stays usable.
+- Using a handle as a value (assigning it, passing it to an `own` parameter, storing it, returning it) **increments** the count, including when the handle is read from a borrowed place. The source stays usable. Passing a handle to a borrowed parameter borrows it and counts nothing.
 - Every binding, field or temporary holding a handle **releases** it when that holder is dropped, under §7.
 - The object's `Drop` body and fields run when the count reaches zero.
 - An `Option` or a tuple whose parts are only handles, Copy values, and further such `Option`s and tuples (`Option[Node]`, `(Node, i64)`, `Option[(Node, Node)]`) is a **handle aggregate**. It is duplicated the same way: using it as a value increments every handle inside it, the source stays usable, and each copy releases its own handles when dropped. So `cur = node.next` walks a list without `.clone()` (decision 2026-10-06).
@@ -312,8 +333,8 @@ Pins: `err_write_through_ref`, `ok_shared_field_through_ref`.
 
 Pins: `ok_shared_peek_then_mutate`, `err_shared_field_same_handle`, `panic_shared_field_alias`.
 
-**6.3 Across tasks.** Shared handles never cross a task boundary (`E_CONCURRENT_SHARED_STRUCT`).
-- `sync struct` and `sync enum` (formerly `par struct` and `par enum`) use an atomic count, and their `mut` fields must be `Atomic[T]` or `Mutex[T]`.
+**6.3 Across tasks.** Shared handles never cross a task boundary (`E_NOT_CROSS_TASK`).
+- `sync struct` and `sync enum` (formerly `par struct` and `par enum`) use an atomic count. Their fields are never `mut` and must be `CrossTask`; mutation goes through `Atomic[T]` and `Mutex[T]`, whose methods borrow.
 - `frozen T` is read-only and may be shared by any number of tasks.
 
 **6.4 No implicit sharing.** The compiler never turns an owned value into a shared or atomically counted one. `design.md` Part 4 (RC fallback) and the automatic promotion of Rc to Arc are removed. Where the fallback would have fired, the program has an E0500 (§3.2) or an escaping capture (§9.3).
@@ -360,9 +381,10 @@ Pins: `drop_defer`, `drop_callee_owns`, `drop_shadowing`.
 |---|---|
 | expression statement `e;` | at the `;` |
 | `let` initializer | at the `;` (after the bindings take what they move) |
-| argument passed to a `ref` / `mut ref` parameter or borrowed receiver, including an operator operand or index operand passed that way | at the end of the enclosing statement |
-| argument passed **by value** | it is not a caller temporary: it moves into the callee, which drops it (§4.2) |
+| argument passed to a borrowed or `mut ref` parameter or receiver, including an operator operand or index operand passed that way | at the end of the enclosing statement |
+| argument passed to an **`own`** parameter | it is not a caller temporary: it moves into the callee, which drops it (§4.2) |
 | `if` / `while` condition | after the condition is evaluated, before the branch |
+| `let … else` initializer | before the `else` block runs, or at the `;` when the pattern matches |
 | `match` guard | at the end of the guard |
 | `match` / `if let` scrutinee | at the end of the whole construct |
 | `while let` scrutinee | at the end of each iteration's body |
@@ -385,7 +407,7 @@ The same holds for a field or element place. Pin: `drop_assign`.
 
 **7.7 `defer` and `errdefer`.**
 - A `defer` block runs when its scope ends, in its LIFO position.
-- An `errdefer` block runs in its LIFO position only when the function is exiting through an error return (`?` or `return Err(...)`). Otherwise it is skipped.
+- An `errdefer` block runs in its LIFO position only when the function returns the failure variant of its `Result` or `Option` return type, however that value was produced: `?`, `return Err(...)`, `return None`, or a tail `Err(...)`. Otherwise it is skipped.
 - Neither runs on a panic (§10).
 
 Pin: `errdefer_only_on_error`. Today it prints `rollback` before `defer`.
@@ -414,7 +436,7 @@ Pins: `drop_aggregates`, `drop_user_body_first`.
 
 **7.11 `Drop` bodies.**
 - Form: `fn drop(mut ref self)`.
-- A `Drop` body must not panic; the effect checker enforces that.
+- A `Drop` body may panic. The panic ends the process like any other (§10.2); `panics` is default-permitted (§12).
 - Its effects are charged to the scope that performs the drop (§12).
 
 ---
@@ -439,7 +461,7 @@ Pin: `eval_order`.
 
 Pins: `eval_order`, `ok_compound_assign_once`. Today `=` evaluates `v` first, and `op=` evaluates the index twice.
 
-**8.3 Short circuits.** `&&`, `||` and `?.` evaluate the right-hand side only when it is needed.
+**8.3 Short circuits.** `and`, `or` and `??` evaluate the right-hand side only when it is needed.
 
 **8.4 No observable reordering.** An implementation may not reorder anything a program can observe:
 - output and I/O;
@@ -458,7 +480,7 @@ Reordering that cannot be observed is allowed.
 - **by `mut ref`** if the body mutates it;
 - **by move** if the body moves it, or if the closure escapes (§9.3).
 
-`Copy` places are copied. Shared handles are counted.
+`Copy` places are copied. `shared` and `sync` handles are counted. A `frozen` handle is never counted, so a closure that captures one is a view (§5.2, §5.7).
 
 **9.2 Closures as views.** A closure with any `ref` or `mut ref` capture is a view (§5). It can be called and passed down, but not stored where §5.7 forbids it.
 
@@ -483,7 +505,7 @@ Pins: `err_escaping_capture_reused` (today it compiles and prints both lines), `
 - A closure whose body moves a capture out has kind `OnceFn` (§9.6). Calling it consumes the closure: the moved capture goes where the body sends it, and the other captures drop at the end of that call, as the callee's locals would.
 
 **9.5 `TaskGroup` tasks borrow.** The closure passed to `TaskGroup.spawn` captures as §9.1 infers: by `ref`, by `mut ref` or by move, place by place. It is not escaping.
-- `spawn` takes `ref self`, so a group can be passed by `ref` to the functions and tasks that spawn into it, such as a server's request handlers. Spawns on one group are synchronized.
+- `spawn` borrows its receiver (`self`), so a group can be passed borrowed to the functions and tasks that spawn into it, such as a server's request handlers. Spawns on one group are synchronized.
 - The group then borrows the closure's origins (§5.3) until it drops. Dropping a group joins its tasks, so the drop is the borrow's last use (§5.6). The returned `TaskHandle` borrows nothing; it owns its task's result.
 - So while the group lives, a captured place may not be written, moved or dropped, and a second task may not capture by `mut ref` a place another task already captured.
 - Every origin must outlive the group. A place declared after the group in the same scope drops before it (§7.3), which is an error. Declare the place first, or put the group in an inner block.
@@ -494,7 +516,7 @@ Pins: `ok_taskgroup_borrows`, `err_taskgroup_write_while_borrowed`, `err_taskgro
 
 **9.6 Function types have a kind** (2026-10-07, D2).
 - **`Fn(A) -> R`** may be called any number of times, through any access, `ref` included. Its call only reads the captures.
-- **`MutFn(A) -> R`** may be called any number of times, and a call may mutate its captures. It can be called only through an access that is unique: an owned binding, an owned parameter or a `mut ref`. A `ref` to a `MutFn` cannot call it, which rules out a call re-entering the same closure.
+- **`MutFn(A) -> R`** may be called any number of times, and a call may mutate its captures. It can be called only through an access that is unique: an owned binding, an `own` parameter or a `mut ref`. A shared borrow of a `MutFn` (a `ref`, or a bare parameter) cannot call it, which rules out a call re-entering the same closure.
 - **`OnceFn(A) -> R`** may be called once. The call moves the value (§3), so a second call is E0500.
 - **Kinds of closures and functions.**
   - A closure literal gets the most permissive kind its body allows: `Fn` if it only reads its captures, `MutFn` if it mutates one, `OnceFn` if it moves one out.
@@ -517,11 +539,12 @@ Pins: `ok_closure_kinds`, `err_once_called_twice`, `err_fn_kind_mismatch`.
 - `unwrap` / `expect` on `None` or `Err`;
 - a shared borrow-flag conflict (§6.2);
 - a failed assertion;
-- allocation failure, unless the profile configures otherwise.
+- allocation failure;
+- a channel `recv` that can never complete because no other task can run (deadlock, on a single-threaded target).
 
 **10.2 What a panic does:**
 1. It writes the message, the source location and the error-return trace to stderr.
-2. It runs the profile's custom panic handler, if there is one.
+2. It runs the program's custom panic handler (`#[panic_handler]`), if there is one. A panic inside the handler ends the process at once.
 3. It ends the process with exit code **101**.
 
 **No** `Drop` body, `defer` or `errdefer` runs, and every other task ends with the process. `catch_panic`, `panic = "unwind"` and `extern "C-unwind"` do not exist.
@@ -660,6 +683,6 @@ Plain `wasm32` targets stay.
 ## Appendix B — Open items
 
 - ~~The drop schedule thread's review of §7.~~ Folded in on 2026-10-06 from its rewritten §0 (D1–D9) and its review of DRAFT 1 (binding modes by pattern, `_` and `..`, shadowing, by-value argument temporaries, closure captures, loops, the collection-order note): partial moves are rejected when any type on the path has a `Drop` body; by-value `self` and temporary arguments are callee-owned; drops are not uses; restoring a moved field drops nothing. Its D9 forbade removing any reference-count change; this file allows removing a matched pair when no count reaches zero at a different point, to keep RC elision possible.
-- Whether a tail `Err(...)` (a function body ending in an `Err` value without `return`) is an error exit for `errdefer` (§7.7). The reference model assumes it is, as in Zig; §7.7 names only `?` and `return Err(...)`.
+- ~~Whether a tail `Err(...)` is an error exit for `errdefer` (§7.7).~~ Settled 2026-10-07: it is, as is `return None` (§7.7).
 - Diagnostic codes for the new errors in §3.7, §5.4–§5.7 and §9.3. Thread A assigns them while implementing C1/C3/C7.
 - More pins: one per remaining rule (§5.6 overlap and two-phase borrows, §7.4's guard, condition and `while let` rows, §11.5, §12 item 5). These come with the corpus extraction. §6.2 has its pins as of 2026-10-07.

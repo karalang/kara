@@ -4,7 +4,20 @@ Items to validate, benchmark, or revisit during specific implementation phases. 
 
 Sourced from open gaps identified during design review that don't require design decisions but do require action during implementation.
 
-Status-marker convention (including the `[->]` "explicitly deferred" state) is documented in [`docs/deferred.md § Tracker status markers`](../deferred.md#tracker-status-markers).
+Status-marker convention (including the `[->]` "explicitly deferred" state) is documented in [Tracker status markers](#tracker-status-markers) below.
+
+## Tracker status markers
+
+The phase trackers in this directory use four checkbox states. The fourth — `[->]` — is specifically about intra-epic deferrals (a slice acknowledged-but-skipped within an otherwise shipping epic).
+
+| Marker | Meaning |
+|--------|---------|
+| `[ ]` | Not yet started. |
+| `[~]` | Partially shipped — one or more slices done, others still open and scheduled. |
+| `[x]` | Fully shipped. |
+| `[->]` | Explicitly deferred. The body must record the **reason** and the **reopen condition** (a concrete trigger that flips the entry back to `[~]`). Greppable as `\[->\]` for ledger sweeps. |
+
+`[x]` and `[->]` are both "no further work scheduled today"; the difference is whether the rest of the item is *done* or *acknowledged-but-skipped*. Use `[->]` when shipping the placeholder annotation would be busywork without a real motivating signal — it preserves the decision so a future reader doesn't mistake the gap for forgotten scope. `[~]` is reserved for work actively in flight or with an identified next step; once that step is "wait for an external trigger," the marker should flip to `[->]`.
 
 ---
 

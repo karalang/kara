@@ -5,7 +5,7 @@ renders the component to HTML; the browser hydrates it and drives live
 DOM updates — running the **same** component function on both sides.
 
 This is the worked example for the SSR / isomorphic-rendering pattern in
-[design.md § Cross-target Compilation](../../docs/design.md#cross-target-compilation)
+[deferred.md § Cross-target Compilation](../../docs/deferred.md#cross-target-compilation)
 and the book chapter
 [Server-Side Rendering](../../docs/book/src/ch17-ssr.md).
 

@@ -111,7 +111,7 @@ DOM host fns, and calls `hydrate`. One component, rendered two ways.
 
 This is not just style. Because the component is target-agnostic, the
 compiler type-checks and effect-checks it **once per target** (see
-[the design notes on cross-target compilation](https://github.com/karalang/kara/blob/main/docs/design.md#cross-target-compilation)).
+[the design notes on cross-target compilation](https://github.com/karalang/kara/blob/main/docs/deferred.md#cross-target-compilation)).
 A user-defined resource like `Sink` has no target affinity — it lives
 wherever a provider for it does — so the same component is provably correct
 on the server and the client without a single conditional.

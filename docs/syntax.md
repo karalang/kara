@@ -1,5 +1,7 @@
 # Kāra Syntax Specification
 
+> **Out of date.** This grammar describes the legacy compiler. [design.md](design.md), rewritten on 2026-10-07, is the normative specification, and where the two disagree design.md wins: borrow-by-default parameters with `own`, contextual keywords, the label sigil, map literals, raw strings, tuple-valued `par`, `par(limit: n)`, and default generic arguments among them. This file is being rewritten to match.
+
 Complete grammar reference for the Kāra programming language — a systems language with algebraic effects, ownership inference, and auto-parallelism. For semantics and rationale, see [design.md](design.md).
 
 **Notation:** Grammar rules use a simplified EBNF:
@@ -1551,7 +1553,7 @@ let (a, b) = par {
 };
 ```
 
-See [Explicit Concurrency: `par {}` and `spawn()`](design.md#explicit-concurrency-par--and-spawn) in the design doc for full semantics, failure handling, and relationship to auto-concurrency and `spawn()`.
+See [Explicit Concurrency: `par {}` and `spawn()`](design.md#13-concurrency) in the design doc for full semantics, failure handling, and relationship to auto-concurrency and `spawn()`.
 
 **Stdlib concurrency primitives.** The following are stdlib functions/types (not syntax), but complement `par {}` and `seq {}`:
 

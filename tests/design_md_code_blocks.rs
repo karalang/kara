@@ -20,6 +20,11 @@
 //! fires.
 
 const DESIGN_MD: &str = include_str!("../docs/design.md");
+/// The standard library's method tables moved out of design.md into
+/// `docs/library/` in the 2026-10-07 rewrite; the prose guards below that
+/// pinned library text follow it there.
+const STRINGS_MD: &str = include_str!("../docs/library/strings.md");
+const COLLECTIONS_MD: &str = include_str!("../docs/library/collections.md");
 
 /// Line kind for the enclosing-block stack.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -348,7 +353,19 @@ fn kara_blocks(text: &str) -> Vec<(usize, &str)> {
 /// SECOND defect the first had been hiding: that line is also missing its
 /// terminator, and no terminator gate could see it while the parser was failing
 /// earlier on the same line. Both are fixed; the exemption goes.
-const NON_TERMINATOR: &[(&str, &str)] = &[];
+///
+/// ONE ENTRY IS BACK, and it is of a different kind from every entry before
+/// it: the spec is AHEAD of the parser rather than wrong. The 2026-10-07 design
+/// rewrite gives the operator traits a right-hand-side type parameter with a
+/// default (`trait Add[Rhs = Self]`, and `Map`'s `H = SipHash13BuildHasher`),
+/// and the frozen legacy parser does not accept default generic arguments, so
+/// it stops at the `=` and every later trait line reads as a missing `;`. The
+/// guard test below retires the entry the moment the parser accepts the form.
+const NON_TERMINATOR: &[(&str, &str)] = &[(
+    "Rhs = Self",
+    "default generic arguments (design.md § Default generic arguments) are \
+     specified ahead of the frozen legacy parser",
+)];
 
 // REMOVED, and the removal is exactly what the sibling test below exists to
 // force. `matches!` was listed here because it surfaced as `Expected Semicolon,
@@ -565,51 +582,29 @@ fn design_md_derive_display_data_variant_example_compiles() {
     // parser accepts.
 }
 
-/// B-2026-08-17-35 leg (2) — § Subscript Trait opened "User-defined types
-/// support `[]` indexing by implementing two standard traits" with no v1
-/// caveat, while the resolver rejects a user impl outright. The neighbouring
-/// § Operator Traits DOES carry the caveat, so the two sections disagreed with
-/// each other about the same v1 boundary.
-///
-/// This ties the prose to the compiler in both directions. If v1 ever admits
-/// user-defined operator impls, the rejection below stops firing and this test
-/// fails — which is the point: the caveat would then be the stale claim, and
-/// the failure is the reminder to remove it.
+/// B-2026-08-17-35 leg (2) pinned § Subscript Trait's v1 caveat ("operator
+/// traits are stdlib-only") to the resolver that enforced it. The 2026-10-07
+/// design review reversed that boundary: user impls of every operator trait,
+/// `Index` and `IndexMut` included, are part of the language, and the frozen
+/// legacy resolver's rejection is now the stale side, to be replaced rather
+/// than documented. What stays worth pinning is that the spec says so where a
+/// reader looks for it, so a later edit cannot quietly restore the old caveat.
 #[test]
-fn design_md_subscript_trait_v1_caveat_matches_the_resolver() {
-    let src = "struct Grid { cells: Vec[i64] }\n\
-               impl Index[i64] for Grid {\n\
-                   type Output = i64;\n\
-                   fn index(ref self, idx: i64) -> ref Self.Output { self.cells[idx] }\n\
-               }\n\
-               fn main() { println(1); }\n";
-    let mut parsed = karac::parse(src);
-    assert!(
-        parsed.errors.is_empty(),
-        "parse errors: {:?}",
-        parsed.errors
-    );
-    karac::prepare_for_resolve(&mut parsed.program);
-    let resolved = karac::resolve(&parsed.program);
-    let rejected = resolved
-        .errors
-        .iter()
-        .any(|e| e.message.contains("operator traits are stdlib-only"));
-    assert!(
-        rejected,
-        "v1 no longer rejects a user-defined `impl Index`; § Subscript Trait's \
-         v1 caveat has become the stale claim and must be removed"
-    );
+fn design_md_operator_traits_admit_user_impls() {
     let section = DESIGN_MD
-        .split("### Subscript Trait")
+        .split("**User impls are allowed**")
         .nth(1)
-        .expect("§ Subscript Trait heading has moved — re-anchor this test");
-    let intro = &section[..section.len().min(1200)];
+        .expect("§ Operator traits must still say that user impls are allowed");
+    let window: String = section.chars().take(300).collect();
     assert!(
-        intro.contains("stdlib types only") || intro.contains("stdlib-only"),
-        "§ Subscript Trait must state the v1 boundary the resolver enforces, as \
-         its sibling § Operator Traits does; without it a reader transcribes an \
-         impl the compiler refuses"
+        window.contains("`Index` and `IndexMut` included"),
+        "§ Operator traits must keep naming the subscript traits among the ones \
+         a user may implement"
+    );
+    assert!(
+        !DESIGN_MD.contains("stdlib types only") && !DESIGN_MD.contains("stdlib-only"),
+        "design.md has regained a v1 caveat that operator traits are stdlib-only; \
+         the 2026-10-07 design review removed that boundary"
     );
 }
 
@@ -634,16 +629,16 @@ fn design_md_subscript_trait_v1_caveat_matches_the_resolver() {
 #[test]
 fn operator_traits_vec_redirect_names_only_extend() {
     let section = DESIGN_MD
-        .split("**Notably absent:**")
+        .split("**There is no `impl Add for Vec[T]`.**")
         .nth(1)
-        .expect("§ Operator Traits must still carry the `Notably absent` paragraph");
-    // Bound the window to the paragraph plus its follow-up note, so a later
-    // unrelated `vec.concat` elsewhere in the document cannot fail this.
-    let window: String = section.chars().take(2200).collect();
+        .expect("§ Operator traits must still carry the `impl Add for Vec[T]` paragraph");
+    // Bound the window to the paragraph, so a later unrelated `vec.concat`
+    // elsewhere in the document cannot fail this.
+    let window: String = section.chars().take(1200).collect();
 
     assert!(
         !window.contains("vec.concat(other)"),
-        "§ Operator Traits offers `vec.concat(other)` as a redirect for \
+        "§ Operator traits offers `vec.concat(other)` as a redirect for \
          `vec1 + vec2` again. `Vec.concat()` is the zero-argument `Vec[String]` \
          join, not a two-Vec concatenation — a reader who follows it gets \
          `Vec.concat() requires String elements`. Name `extend`, which is the \
@@ -655,12 +650,13 @@ fn operator_traits_vec_redirect_names_only_extend() {
          Vec's elements to another — the whole point of having no \
          `impl Add for Vec[T]` is that the diagnostic names a real method"
     );
-    // `append` was the other plausible name a reader might reach for; the
-    // paragraph says outright that it does not exist, so keep that.
+    // `append` was the other plausible name a reader might reach for. The
+    // `Vec` table in the library reference says outright that it does not
+    // exist, so keep that.
     assert!(
-        window.contains("`append` does not exist"),
-        "the paragraph should keep saying `append` does not exist — it is the \
-         name a Rust reader tries first"
+        COLLECTIONS_MD.contains("There is no `append`"),
+        "library/collections.md should keep saying there is no `append` — it is \
+         the name a Rust reader tries first"
     );
 }
 
@@ -675,22 +671,24 @@ fn operator_traits_vec_redirect_names_only_extend() {
 /// roadmap.md schedules the module at Phase 11+ (P1) behind FFI stabilisation —
 /// so the absence is a schedule, and the text has to say which.
 ///
+/// The paragraph moved to `library/collections.md` in the 2026-10-07 rewrite.
+///
 /// A prose guard, like the `vec.concat` one above: the claim lives in a
 /// sentence rather than a fenced block, so `scripts/design-conformance.py`
 /// cannot see it.
 #[test]
 fn hash_section_points_the_crypto_gap_at_its_tracker() {
-    let section = DESIGN_MD
-        .split("**Stability policy.**")
+    let section = COLLECTIONS_MD
+        .split("**`StableHash` is not a cryptographic hash.**")
         .nth(1)
-        .expect("§ `Hash` and `Hasher` must still carry the stability policy");
-    let window: String = section.chars().take(4000).collect();
+        .expect("library/collections.md must still say `StableHash` is not a cryptographic hash");
+    let window: String = section.chars().take(1500).collect();
 
     assert!(
-        window.contains("deferred.md § std.crypto"),
-        "the stability paragraph must name where the cryptographic-hash work \
-         lives, or its \"there is none\" reads as an unclaimed gap rather than \
-         a schedule (B-2026-08-26-2)"
+        window.contains("`std.crypto`") && window.contains("deferred.md"),
+        "the paragraph must name where the cryptographic-hash work lives, or \
+         its \"not yet available\" reads as an unclaimed gap rather than a \
+         schedule (B-2026-08-26-2)"
     );
     assert!(
         window.contains("BLAKE3"),
@@ -699,7 +697,7 @@ fn hash_section_points_the_crypto_gap_at_its_tracker() {
          is coming"
     );
     assert!(
-        window.contains("not a collision-resistant hash"),
+        window.contains("not collision-resistant"),
         "the substitution warning is the paragraph's whole reason to exist and \
          must survive edits to the surrounding text"
     );
@@ -730,8 +728,7 @@ fn hash_section_points_the_crypto_gap_at_its_tracker() {
 /// callable on an instance.
 #[test]
 fn design_md_string_table_names_only_methods_that_exist() {
-    let table = string_method_table(DESIGN_MD)
-        .expect("could not locate the **`String`** method table in design.md");
+    let table = string_method_tables(STRINGS_MD);
     // A floor, so a table that moves or a parser that stops matching cannot
     // make this lint silently pass over an empty set.
     assert!(
@@ -741,6 +738,7 @@ fn design_md_string_table_names_only_methods_that_exist() {
     );
     let missing: Vec<&String> = table
         .iter()
+        .filter(|name| !SPEC_AHEAD_STRING_METHODS.iter().any(|(m, _)| m == name))
         .filter(|name| !string_method_exists(name))
         .collect();
     assert!(
@@ -753,41 +751,72 @@ fn design_md_string_table_names_only_methods_that_exist() {
     );
 }
 
-/// Extract the first-column method names from design.md's **`String`** table.
-/// Stops at the first blank line after the table starts, so it cannot run on
-/// into the sections that follow. Operator rows (`+`) and anything that is not
-/// a bare identifier are skipped — they are not method-name lookups.
-fn string_method_table(text: &str) -> Option<Vec<String>> {
-    let start = text.find("**`String`**")?;
+/// Methods the 2026-10-07 library reference specifies and the frozen legacy
+/// compiler does not have. The redesign replaces that compiler rather than
+/// extending it, so these arrive with the new pipeline's standard library, not
+/// as legacy fixes. Each entry is checked to be STILL absent by the test below,
+/// so it has to leave this list the day the compiler gains the method.
+const SPEC_AHEAD_STRING_METHODS: &[(&str, &str)] = &[
+    ("as_str", "the whole string as a `Str` value"),
+    ("clear", "empties a `String`"),
+];
+
+#[test]
+fn spec_ahead_string_methods_are_still_absent() {
+    for (name, what) in SPEC_AHEAD_STRING_METHODS {
+        assert!(
+            string_method_tables(STRINGS_MD).iter().any(|n| n == name),
+            "{name:?} ({what}) is no longer in library/strings.md; drop it from \
+             SPEC_AHEAD_STRING_METHODS"
+        );
+        assert!(
+            !string_method_exists(name),
+            "the compiler now has `String.{name}` ({what}); drop it from \
+             SPEC_AHEAD_STRING_METHODS so the table check covers it"
+        );
+    }
+}
+
+/// Extract the first-column method names from every `Str`/`String` method
+/// table in `library/strings.md` (a table whose header's first cell is
+/// `Method`, before the C-strings section), which
+/// is where design.md's single `String` table went in the 2026-10-07 rewrite.
+/// Operator rows (`+`) and anything that is not a bare identifier are skipped —
+/// they are not method-name lookups.
+fn string_method_tables(text: &str) -> Vec<String> {
     let mut names = Vec::new();
-    let mut seen_header = false;
-    for line in text[start..].lines().skip(1) {
+    let mut in_method_table = false;
+    for line in text.lines() {
         let t = line.trim();
-        if t.is_empty() {
-            if seen_header {
-                break;
-            }
-            continue;
+        // The C-string tables list `CStr`/`CString` methods, which are not
+        // `String` lookups.
+        if t.starts_with("## C strings") {
+            break;
         }
         if !t.starts_with('|') {
-            if seen_header {
-                break;
-            }
+            in_method_table = false;
             continue;
         }
-        seen_header = true;
         let cell = t.trim_matches('|').split('|').next().unwrap_or("").trim();
+        if cell == "Method" {
+            in_method_table = true;
+            continue;
+        }
+        if !in_method_table {
+            continue;
+        }
         let name = cell.trim_matches('`').trim();
         if name.is_empty()
-            || name == "Method"
             || name.starts_with("---")
             || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         {
             continue;
         }
-        names.push(name.to_string());
+        if !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
     }
-    Some(names)
+    names
 }
 
 /// `true` when `String` has a method (or associated function) of this name.
@@ -839,117 +868,28 @@ fn string_method_exists(name: &str) -> bool {
     false
 }
 
-/// design.md's canonical `?` example must be REALIZABLE. B-2026-08-26-4.
+/// design.md's `?` example must not name a method that does not exist.
+/// B-2026-08-26-4.
 ///
-/// That row: § Conversion Traits is the section that teaches cross-error-type
-/// propagation, and its worked example opened
+/// That row: § Conversion Traits' worked example opened
+/// `let n = input.parse_i64()?;`, and `parse_i64` existed only as the internal
+/// runtime symbol `karac_runtime_parse_i64`, so a reader copying the section
+/// that teaches `?` got `no method 'parse_i64' on type 'String'`.
 ///
-/// ```text
-/// let n = input.parse_i64()?;   // ParseError — requires From[ParseError] for AppError
-/// ```
-///
-/// where NEITHER name resolves. `parse_i64` exists in the tree only as the
-/// internal runtime symbol `karac_runtime_parse_i64`, never as a user-facing
-/// method, so a reader copying the section that teaches `?` got
-/// `no method 'parse_i64' on type 'String'` — the copy did not merely
-/// misbehave, it did not compile.
-///
-/// The real API is a different SHAPE, not a different spelling, which is why
-/// the repair was not a rename: `i64.parse(s)` returns `Option[i64]`, and an
-/// absent `Option` carries no error VALUE, so it cannot demonstrate the `From`
-/// conversion the section exists to explain. The document contained both forms
-/// and only one of them was real.
-///
-/// WHAT THIS PINS, and why it is not "the block parses". A spec fragment
-/// legitimately names types and functions it does not define — `AppError`,
-/// `store` and `DbError` are the reader's to write, and a fragment that
-/// defined them would stop being a fragment. What a reader CANNOT supply is a
-/// method on a BUILT-IN type. So the blocks are typechecked against a preamble
-/// giving exactly the user-level names the section itself establishes; every
-/// name still unresolved after that is a call into the language, and has to
-/// exist. Under that rule the old example fails on `parse_i64` and the current
-/// one passes — both verified directly, not assumed.
-///
-/// The `impl From` block is taken FROM the document rather than restated here,
-/// so this cannot quietly drift from the section it guards.
-///
-/// TYPECHECKS is deliberately as far as this goes, and the reason is worth
-/// knowing before anyone strengthens it: the example does not RUN correctly
-/// today. Its shape — two `impl From[X] for AppError` for one target, which is
-/// exactly what the section's own two comment lines call for — dispatches to
-/// the wrong impl on both backends, filed as B-2026-08-27-1. Asserting output
-/// here would either fail or, worse, pin the wrong answer. When that row is
-/// fixed, extending this to an end-to-end run is the natural next step.
+/// This test used to TYPECHECK the section's `parse_and_store` /
+/// `parse_setting` blocks against a minimal preamble. The 2026-10-07 rewrite
+/// replaced that worked example with a shorter `impl From` block written in the
+/// borrow-by-default spelling (`fn from(e: own ParseError)`), which the frozen
+/// legacy parser rejects, so a typecheck against it would test the parser's
+/// age rather than the document. What stays pinned is the specific regression:
+/// the internal symbol's name must not come back as a user-facing method.
 #[test]
-fn design_md_question_operator_example_is_realizable() {
-    let blocks = kara_blocks(DESIGN_MD);
-    let pick = |needle: &str| -> String {
-        blocks
-            .iter()
-            .find(|(_, b)| b.contains(needle))
-            .map(|(_, b)| b.to_string())
-            .unwrap_or_else(|| {
-                panic!(
-                    "§ Conversion Traits' `{needle}` block has moved or been renamed — \
-                     re-anchor this test rather than deleting it"
-                )
-            })
-    };
-    let from_impl = pick("Effectful From impl");
-    let propagate = pick("fn parse_and_store");
-    let bridge = pick("fn parse_setting");
-
-    // Exactly the names the section leans on but never defines. Deliberately
-    // minimal: anything added here is a name the reader would have to invent,
-    // so the smaller it stays, the more the test is really checking the
-    // document. `log_error` takes `ref` because the doc's `From` body logs the
-    // error and THEN moves it into `AppError.Parse`; an owned parameter would
-    // move it twice. `ParseError`/`DbError` are structs rather than enums
-    // because v1 allows only one level of enum nesting — an `enum ParseError`
-    // inside `AppError.Parse` is rejected by E_ENUM_NESTED_ENUM_PAYLOAD.
-    let preamble = "struct ParseError { input: String }\n\
-                    struct DbError { code: i64 }\n\
-                    enum AppError { Parse(ParseError), Db(DbError) }\n\
-                    fn log_error(e: ref ParseError) with writes(Log) { println(\"parse failed\"); }\n\
-                    fn store(n: i64) -> Result[(), DbError] { Ok(()) }\n\
-                    impl From[DbError] for AppError { fn from(e: DbError) -> AppError { AppError.Db(e) } }\n\
-                    fn main() { println(\"ok\"); }\n";
-
-    let src = format!("{preamble}\n{from_impl}\n{propagate}\n{bridge}\n");
-    let mut parsed = karac::parse(&src);
-    assert!(
-        parsed.errors.is_empty(),
-        "§ Conversion Traits' `?` blocks must parse:\n{:?}\n--- source ---\n{src}",
-        parsed
-            .errors
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-    );
-    karac::prepare_for_resolve(&mut parsed.program);
-    let resolved = karac::resolve(&parsed.program);
-    assert!(
-        resolved.errors.is_empty(),
-        "§ Conversion Traits' `?` example names something that does not \
-         resolve:\n{:?}\n--- source ---\n{src}",
-        resolved
-            .errors
-            .iter()
-            .map(|e| e.message.clone())
-            .collect::<Vec<_>>()
-    );
-    let checked = karac::typecheck(&parsed.program, &resolved);
-    assert!(
-        checked.errors.is_empty(),
-        "§ Conversion Traits' `?` example does not typecheck. It is the \
-         canonical example for a core language feature and the first thing a \
-         reader copies, so a call it makes into the language must exist \
-         (B-2026-08-26-4 was `input.parse_i64()`, which never did):\n{:?}\n\
-         --- source ---\n{src}",
-        checked
-            .errors
-            .iter()
-            .map(|e| e.message.clone())
-            .collect::<Vec<_>>()
-    );
+fn design_md_question_operator_example_names_no_internal_method() {
+    for (doc, text) in [("design.md", DESIGN_MD), ("library/strings.md", STRINGS_MD)] {
+        assert!(
+            !text.contains("parse_i64"),
+            "{doc} names `parse_i64`, which is an internal runtime symbol and \
+             not a method a program can call (B-2026-08-26-4)"
+        );
+    }
 }

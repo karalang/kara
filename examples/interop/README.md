@@ -6,7 +6,7 @@ linkable library with a C ABI, and drop it into an existing C or Rust
 program that keeps everything else — the Rust-in-Firefox / Zig-alongside-C
 playbook. This directory is the worked proof-point.
 
-Spec: [`docs/design.md` § Exported C ABI](../../docs/design.md#exported-c-abi).
+Spec: [`docs/deferred.md` § Exported C ABI](../../docs/deferred.md#exported-c-abi).
 Spike: [`docs/spikes/additive-interop-adoption.md`](../../docs/spikes/additive-interop-adoption.md).
 
 ## The kernel
