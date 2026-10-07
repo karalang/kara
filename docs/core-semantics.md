@@ -28,6 +28,22 @@
 8. **Two `par` branches that both print conflict** (§11.2), because `println` has `writes(Stdout)`. Today the runtime buffers each branch's output and replays it in source order.
 9. **A panic exits with code 101** (§10), as today.
 
+## Amendments (approved 2026-10-07)
+
+Gowtham approved these at 16:53Z as decisions D1, D2, D4 and D6 of the design review (`review/DESIGN_REVIEW_2026-10-07.md`, revised by its §0).
+
+1. **D1, peek-then-mutate** (§6.2). A `mut` field of a shared value whose type is `Copy` or a handle aggregate is read as a value, so `match cur.next { Some(nxt) => cur.next = nxt.next … }` works. For other `mut` fields, a conflict through the same handle is a compile error, and only a conflict through another handle is a runtime check.
+2. **D2, closure kinds** (§9.4, §9.6). Function types are `Fn`, `MutFn` or `OnceFn`, so whether a function value may be called twice is known from its type. The capture prefixes `own |x|`, `ref |x|` and `mut ref |x|` are removed.
+3. **D4, failure in `par {}`** (§11.7). No branch is cancelled. Every branch runs to completion, and the source-earliest error is returned. `Cancellable`, `#[derive(Cancellable)]` and `collect_all*` are removed. Cooperative cancellation at I/O calls is planned for M4.
+4. **D6, sends and receives keep their order** (§11.2, §12). Two sends to the same resource conflict, and so do two receives. A resource rooted at a value (a channel, a connection, a file) is keyed by that value.
+5. **Clarification: only bindings move** (§4.6). A pattern that binds nothing by value moves nothing.
+6. **Follows from the review's batch and D6, adopted at the same time** (§4, §5.7, §6.3, §9.3, §9.5, §11.1–§11.3, §11.6, §11.7, §12, §13).
+   - There is no free `spawn`. Tasks start only in `par {}`, `par for` and `TaskGroup.spawn`.
+   - `par { e1, e2 }` is a comma-separated list of branch expressions whose value is the tuple of their values, and `par for x in it { body }` is one branch per element, whose value is a `Vec`.
+   - `TaskGroup.spawn` takes `ref self`, so a group can be shared by `ref` with the functions that spawn into it.
+   - The `with _` annotation is removed: a non-escaping function parameter's effects come from the argument at each call.
+   - `par struct` and `par enum` are renamed `sync struct` and `sync enum`, since `par` now names the fork-join constructs.
+
 ---
 
 ## 0. Scope and conventions
@@ -137,7 +153,7 @@ Pins:
 
 **3.7 Moves that are errors (C3).** It is an error to move a non-`Copy` value out of a place rooted at:
 - a `ref` or `mut ref` parameter or binding, or a view (§5);
-- a `shared`, `par` or `frozen` value (§6);
+- a `shared`, `sync` or `frozen` value (§6);
 - an index projection `v[i]` (already `E_INDEX_MOVE_NON_COPY`);
 - a field of a type with a `Drop` body.
 
@@ -176,7 +192,7 @@ Pins: `drop_callee_owns`, `drop_callee_returns`.
 **4.6 Pattern binding modes.** This covers `match`, `if let`, `while let`, `let` destructuring and `for` patterns. The mode of every binding is decided by the pattern and the scrutinee's type, never by how the arm uses the binding.
 
 - **A `ref` or view scrutinee:** every binding is a `ref` into it, and moving a binding is an error (§3.7).
-- **A `shared` scrutinee** (a handle, or any place reached through one) counts as a `ref` scrutinee. A shared value's contents are only ever reached through a handle (§6.1), so nothing can move out of them. A plain binding of a part is therefore a `ref` automatically, and moving it is an error whose fix is `.clone()`. A binding that covers the whole handle copies the handle (§6.1). This is unlike a type with a `Drop` body (below), where a plain binding of a part still needs an explicit `ref`.
+- **A `shared` scrutinee** (a handle, or any place reached through one) counts as a `ref` scrutinee. A shared value's contents are only ever reached through a handle (§6.1), so nothing can move out of them. A plain binding of a part is therefore a `ref` automatically, and moving it is an error whose fix is `.clone()`. A binding that covers the whole handle copies the handle (§6.1). This is unlike a type with a `Drop` body (below), where a plain binding of a part still needs an explicit `ref`. A `mut` field of `Copy` or handle-aggregate type is the exception: it is read as a value (§6.2), so the scrutinee is a temporary.
 - **An owned scrutinee** (a place rooted at a local or parameter the function owns, or a temporary):
   - A plain binding `name` of a non-`Copy` part **moves** that part out of the scrutinee on that path. That is a partial move (§3.6), or a whole move if the binding covers the whole value. The binding drops at the end of its arm or body unless moved on.
   - `ref name` **borrows** the part instead and leaves the scrutinee intact. `mut ref name` borrows it mutably and requires a mutable scrutinee.
@@ -251,13 +267,13 @@ Pins:
 - **Method calls:** in a method call with a `mut ref self` receiver, the receiver's borrow starts after the arguments are evaluated. So `v.push(v.len())` is legal (two-phase borrow).
 
 **5.7 Where a view may not go.** A view may not be stored in, or flow into:
-- a field of a `shared`, `par` or `frozen` type;
+- a field of a `shared`, `sync` or `frozen` type;
 - a global;
-- an unstructured task (`spawn`) or a channel;
+- a channel;
 - an escaping closure (§9.3);
 - the function's result, except as §5.4 allows.
 
-A view **may** enter a branch of `par {}`, or a `TaskGroup` task that joins inside the scope of every origin (§9.5).
+A view **may** enter a branch of `par {}` or `par for`, or a `TaskGroup` task that joins inside the scope of every origin (§9.5).
 
 **5.8 Views in generic code.** A generic parameter may be instantiated with a view.
 - The checks of §5.6–§5.7 run on the monomorphised instance.
@@ -285,13 +301,19 @@ Pins: `err_write_through_ref`, `ok_shared_field_through_ref`.
 - An `Option` or a tuple whose parts are only handles, Copy values, and further such `Option`s and tuples (`Option[Node]`, `(Node, i64)`, `Option[(Node, Node)]`) is a **handle aggregate**. It is duplicated the same way: using it as a value increments every handle inside it, the source stays usable, and each copy releases its own handles when dropped. So `cur = node.next` walks a list without `.clone()` (decision 2026-10-06).
 - Any other type that contains a handle, a user `struct` or `enum` or a `Vec[Node]`, is an ordinary move-only value. Moving it moves the handle without counting; `.clone()` increments.
 
-**6.2 `mut` fields of a shared value carry a borrow flag each.**
-- Projecting a `ref` into such a field holds a read borrow of that field while the reference is live. A `mut ref` holds a write borrow.
-- Assigning the field, or taking a write borrow, while another borrow of the same field is live is a **panic**.
-- A `match` on a `mut` field holds a read borrow for the arm. That is why `design.md`'s "peek-then-mutate" idiom panics; this is unchanged.
+**6.2 `mut` fields of a shared value** (amended 2026-10-07, D1).
+- **`Copy` and handle-aggregate fields are read as values.** Reading a `mut` field whose type is `Copy` or a handle aggregate (§6.1) copies it, or counts its handles. That includes reading it as a `match`, `if let` or `while let` scrutinee. No borrow is held, so the field may be assigned while the copy is in use. So `match cur.next { Some(nxt) => { cur.next = nxt.next; } None => {} }` is legal: the arm works on a counted copy of the field. This is the `cur = node.next` rule of §6.1, applied to `match`.
+- **Other `mut` fields are borrowed.** This covers a `Vec`, a `String`, a user struct, or any type that is neither `Copy` nor a handle aggregate.
+  - Projecting a `ref` into such a field holds a read borrow of it while the reference is live.
+  - A `mut ref`, including a `mut ref self` method call on the field, holds a write borrow.
+  - A `match` or `for` over the field holds a read borrow for the whole construct.
+- **A conflict through the same handle is a compile error.** Suppose the conflicting access reaches the field through the same handle place as the live borrow: the same local, parameter or `self`, not reassigned in between. Then writing the field, or taking a write borrow of it, while the borrow is live is an error. The borrow checker finds it as in §5.6. The common case is pushing to `self.items` inside `for x in self.items`.
+- **A conflict through another handle is a runtime check.** Two different handles may name the same object, and the compiler cannot always see that. So each `mut` field of a type that is neither `Copy` nor a handle aggregate carries a borrow flag. A conflicting access through another handle is a **panic** (§10.1).
+
+Pins: `ok_shared_peek_then_mutate`, `err_shared_field_same_handle`, `panic_shared_field_alias`.
 
 **6.3 Across tasks.** Shared handles never cross a task boundary (`E_CONCURRENT_SHARED_STRUCT`).
-- `par struct` uses an atomic count, and its `mut` fields must be `Atomic[T]` or `Mutex[T]`.
+- `sync struct` and `sync enum` (formerly `par struct` and `par enum`) use an atomic count, and their `mut` fields must be `Atomic[T]` or `Mutex[T]`.
 - `frozen T` is read-only and may be shared by any number of tasks.
 
 **6.4 No implicit sharing.** The compiler never turns an owned value into a shared or atomically counted one. `design.md` Part 4 (RC fallback) and the automatic promotion of Rc to Arc are removed. Where the fallback would have fired, the program has an E0500 (§3.2) or an escaping capture (§9.3).
@@ -444,29 +466,44 @@ Reordering that cannot be observed is allowed.
 - returned;
 - stored in a struct field, a collection or a global that is not a local view;
 - passed to an `escaping` function parameter;
-- sent to a task.
+- sent through a channel.
 
 An escaping closure captures every place by move. A captured place is then moved (§3), and using it afterwards is E0500. The fix is to clone before creating the closure.
 
 **Function-typed parameters** are non-escaping by default:
 - the callee may call such a parameter or pass it to another non-escaping parameter, and nothing else;
 - storing or returning it requires the declaration `f: escaping Fn(A) -> R`;
-- `spawn` takes an escaping closure. `TaskGroup.spawn` does not (§9.5).
+- there is no free `spawn`. Tasks start only in `par {}`, `par for` and `TaskGroup.spawn`, and none of them takes an escaping closure (§9.5, §11.1).
 
 Pins: `err_escaping_capture_reused` (today it compiles and prints both lines), `err_store_nonescaping_param`.
 
 **9.4 When captures drop.**
 - A by-move capture moves the captured value into the closure when the closure is created.
 - A closure's captures drop when the closure value drops, in reverse capture order, which is the order their names first appear in the body.
-- A closure whose body moves a capture out can be called only once (`design.md` § First-Class Functions, "once-callable"). The call consumes the closure: the moved capture goes where the body sends it, and the other captures drop at the end of that call, as the callee's locals would.
+- A closure whose body moves a capture out has kind `OnceFn` (§9.6). Calling it consumes the closure: the moved capture goes where the body sends it, and the other captures drop at the end of that call, as the callee's locals would.
 
 **9.5 `TaskGroup` tasks borrow.** The closure passed to `TaskGroup.spawn` captures as §9.1 infers: by `ref`, by `mut ref` or by move, place by place. It is not escaping.
+- `spawn` takes `ref self`, so a group can be passed by `ref` to the functions and tasks that spawn into it, such as a server's request handlers. Spawns on one group are synchronized.
 - The group then borrows the closure's origins (§5.3) until it drops. Dropping a group joins its tasks, so the drop is the borrow's last use (§5.6). The returned `TaskHandle` borrows nothing; it owns its task's result.
 - So while the group lives, a captured place may not be written, moved or dropped, and a second task may not capture by `mut ref` a place another task already captured.
 - Every origin must outlive the group. A place declared after the group in the same scope drops before it (§7.3), which is an error. Declare the place first, or put the group in an inner block.
-- This is §5.3's `mut ref` rule applied to `spawn`'s `mut ref self` receiver; nothing about `TaskGroup` is special except that it can hold a reference.
+- So a task spawned from inside another task (a request handler, say) can capture that task's own locals only by move: they do not outlive the group.
+- This is §5.3's rule for a method that stores a reference in its receiver. Nothing about `TaskGroup` is special except that it holds references through a `ref` receiver.
 
 Pins: `ok_taskgroup_borrows`, `err_taskgroup_write_while_borrowed`, `err_taskgroup_origin_declared_after`.
+
+**9.6 Function types have a kind** (2026-10-07, D2).
+- **`Fn(A) -> R`** may be called any number of times, through any access, `ref` included. Its call only reads the captures.
+- **`MutFn(A) -> R`** may be called any number of times, and a call may mutate its captures. It can be called only through an access that is unique: an owned binding, an owned parameter or a `mut ref`. A `ref` to a `MutFn` cannot call it, which rules out a call re-entering the same closure.
+- **`OnceFn(A) -> R`** may be called once. The call moves the value (§3), so a second call is E0500.
+- **Kinds of closures and functions.**
+  - A closure literal gets the most permissive kind its body allows: `Fn` if it only reads its captures, `MutFn` if it mutates one, `OnceFn` if it moves one out.
+  - A named function is an `Fn`.
+  - An `Fn` may be passed where a `MutFn` or `OnceFn` is expected, and a `MutFn` where an `OnceFn` is expected. Passing a closure where a more permissive kind is expected is an error that names the capture responsible.
+- **Orthogonal parts.** The kind is independent of `escaping` (§9.3) and of the effect clause, so `escaping MutFn(Event) with writes(Log)` is one type.
+- **Removed.** The capture prefixes `own |x|`, `ref |x|` and `mut ref |x|` are removed; capture modes are §9.1's. Write `.clone()` before the closure to give it its own copy.
+
+Pins: `ok_closure_kinds`, `err_once_called_twice`, `err_fn_kind_mismatch`.
 
 ---
 
@@ -501,33 +538,52 @@ A `main` that returns `Err(e)` is an ordinary error exit: `main`'s drops, `defer
 
 ## 11. Concurrency (C9)
 
-**11.1 Structured constructs only.** `par { b1 b2 … }`, `TaskGroup` and `spawn` with a scope-local handle. There is no automatic parallelisation of statements.
+**11.1 Structured constructs only.**
+- `par { e1, e2, … }` runs its comma-separated branch expressions concurrently; its value is the tuple of their values. A branch may be a block.
+- `par for x in it { body }` runs one branch per element; its value is the `Vec` of the bodies' values, in iteration order. It may take a limit on the number of branches in flight (`design.md`).
+- `TaskGroup` runs tasks that join when the group drops (§9.5).
+- There is no free `spawn`.
+- v1 has no automatic parallelisation of statements; it returns in M4 under §11.5's rule (redesign amendment, 2026-10-07).
 
 **11.2 `par {}` branches must not conflict.**
 - Two branches conflict when one writes, moves, mutably borrows or drops a place or resource that another reads or writes.
 - Resources come from effects (§12).
 - `println` has `writes(Stdout)`, so two printing branches conflict.
+- Two branches that both `sends` to the same resource conflict, and so do two that both `receives` from it, because messages on one channel or connection have an order (D6, 2026-10-07). A branch that sends and one that receives on the same resource do not conflict.
+- The iterations of a `par for` are branches of one block, so two iterations conflict by the same rule.
 - A conflict is an error that names both accesses. Disjoint index ranges proven by the existing disjointness analysis do not conflict.
 
 Pin: `err_par_conflict` (already an error today, E0408).
 
 **11.3 What may enter a task:**
 - owned values (moved in);
-- `frozen` and `par struct` handles;
+- `frozen` and `sync` handles;
 - views, into `par {}` branches and `TaskGroup` tasks only (§5.7, §9.5).
 
 Shared handles may not.
 
 **11.4 Panics** in a task end the process (§10).
 
-**11.5 Automatic loop parallelisation** is an optimisation, and it may change nothing observable:
+**11.5 Automatic parallelisation** of loops, and of statements from M4, is an optimisation, and it may change nothing observable:
 - the same output;
 - the same values, bit for bit, including floating point;
 - the same panics, both whether and where.
 
 It applies only where the compiler proves all of that. In particular, it does not reassociate floating-point reductions. It does not parallelise a checked integer reduction whose prefix sums could overflow where the parallel partial sums would not.
 
-**11.6 Data races** cannot happen in a program that compiles: §11.2–§11.3 plus `par struct`'s field rules guarantee it.
+**11.6 Data races** cannot happen in a program that compiles: §11.2–§11.3 plus the field rules of `sync` types guarantee it.
+
+**11.7 Failure in `par {}`** (2026-10-07, D4).
+- **`?` in a branch** keeps `design.md`'s block-piercing meaning. It ends that branch, running the branch's drops, `defer`s and `errdefer`s as an error exit (§7.6–§7.7). The error is returned from the enclosing function once the block is done.
+- **No branch is cancelled.** Every other branch runs to completion.
+- **When the block is done:**
+  - If any branch ended with an error, the enclosing function returns the **source-earliest** one (for `par for`, the earliest in iteration order). That holds whichever failed first, so the result is deterministic. The block's other values, errors included, drop in reverse source order as the block is left (§7.6).
+  - Otherwise the block has its value, as `design.md` defines it.
+- **A panic** in any branch ends the process (§11.4).
+- **Removed.** `Cancellable`, `#[derive(Cancellable)]`, `collect_all` and `collect_all_vec` are removed. A block whose branches produce `Result` values without `?` already returns every result, in source order.
+- **Planned for M4, not yet core:** cooperative cancellation. Once a branch fails or a deadline passes, a sibling's next I/O or suspending call returns `Err(Cancelled)`, which converts into the branch's error type through `From` and propagates with `?`. Pure computation is never interrupted.
+
+Pin: `par_error_runs_siblings`.
 
 ---
 
@@ -539,8 +595,13 @@ The effect system is as in `design.md`, with four defaults made sound:
 2. An `extern` function must declare its effects; otherwise it has every effect.
 3. A drop's effects are those of the dropped type's drop glue, transitively. They are charged to the scope where §7 places the drop.
 4. Recursive functions get their effects from a fixpoint over the call-graph strongly connected component, starting empty and iterating to a fixed point. Callees are identified by definition id, never by name.
+5. A resource rooted at a value, such as `sends(tx)` or `writes(self.cache)`, is keyed by that value for conflict checking (D6, 2026-10-07). Two channels, two connections or two files are two resources. When the compiler cannot tell whether two such values are the same, they conflict. A program-wide resource such as `Network` stays a capability ("may use the network"), not one shared key, so two calls on separate connections do not conflict.
 
-**Effect polymorphism** keeps only the `with _` pass-through. The effects of a generic call are computed on the monomorphised instance.
+**Effect polymorphism needs no annotation** (D6, 2026-10-07).
+- A call through a non-escaping function-typed parameter has the effects of the argument passed at each call site, and they are charged to that caller.
+- The effects of a generic call are computed on the monomorphised instance.
+- A call through an escaping function value has the effects its type declares (`escaping Fn(Request) -> Response with reads(Db)`); storing a value whose effects exceed them is an error. With no effect clause, a call through it has every effect (default 1). Effect variables for stored callbacks arrive with the services track.
+- The `with _` annotation is removed.
 
 ---
 
@@ -550,7 +611,7 @@ These leave the core and the v2 gate until after parity:
 - GPU, tensors, autograd;
 - dataframe, columns, Arrow;
 - `comptime` beyond `#[derive]`;
-- effect polymorphism beyond `with _`;
+- named effect variables (`with E`);
 - layout blocks;
 - `dyn`;
 - self-hosting;
@@ -601,4 +662,4 @@ Plain `wasm32` targets stay.
 - ~~The drop schedule thread's review of §7.~~ Folded in on 2026-10-06 from its rewritten §0 (D1–D9) and its review of DRAFT 1 (binding modes by pattern, `_` and `..`, shadowing, by-value argument temporaries, closure captures, loops, the collection-order note): partial moves are rejected when any type on the path has a `Drop` body; by-value `self` and temporary arguments are callee-owned; drops are not uses; restoring a moved field drops nothing. Its D9 forbade removing any reference-count change; this file allows removing a matched pair when no count reaches zero at a different point, to keep RC elision possible.
 - Whether a tail `Err(...)` (a function body ending in an `Err` value without `return`) is an error exit for `errdefer` (§7.7). The reference model assumes it is, as in Zig; §7.7 names only `?` and `return Err(...)`.
 - Diagnostic codes for the new errors in §3.7, §5.4–§5.7 and §9.3. Thread A assigns them while implementing C1/C3/C7.
-- More pins: one per remaining rule (§5.6 overlap and two-phase borrows, §6.2 borrow-flag panic, §7.4's guard, condition and `while let` rows, §11.5). These come with the corpus extraction.
+- More pins: one per remaining rule (§5.6 overlap and two-phase borrows, §7.4's guard, condition and `while let` rows, §11.5, §12 item 5). These come with the corpus extraction. §6.2 has its pins as of 2026-10-07.
