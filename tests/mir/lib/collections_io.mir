@@ -1,0 +1,230 @@
+enum Option[i64] { None, Some(i64) }
+enum Option[u8] { None, Some(u8) }
+enum Option[f64] { None, Some(f64) }
+enum IoError { NotFound, PermissionDenied, AlreadyExists, UnexpectedEof, InvalidUtf8, Interrupted, Other(String) }
+enum Result[(), IoError] { Ok(()), Err(IoError) }
+enum Result[String, IoError] { Ok(String), Err(IoError) }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: ();
+    let _2: SortedMap[i64, i64];
+    let _3: mut ref SortedMap[i64, i64];
+    let _4: Option[i64];
+    let _5: ref SortedMap[i64, i64];
+    let _6: ref SortedMap[i64, i64];
+    let _7: i64;
+    let _8: ref (i64, i64);
+    let _9: ref Option[i64];
+    let _10: ref SortedMap[i64, i64];
+    let _11: SortedSet[i64];
+    let _12: mut ref SortedSet[i64];
+    let _13: bool;
+    let _14: ref SortedSet[i64];
+    let _15: VecDeque[i64];
+    let _16: mut ref VecDeque[i64];
+    let _17: ref Option[i64];
+    let _18: ref VecDeque[i64];
+    let _19: ref VecDeque[i64];
+    let _20: ref Option[i64];
+    let _21: ref Option[i64];
+    let _22: ref Option[i64];
+    let _23: Option[u8];
+    let _24: ref Option[u8];
+    let _25: Option[f64];
+    let _26: ref Option[f64];
+    let _27: String;
+    let _28: String;
+    let _29: ref String;
+    let _30: ref String;
+    let _31: Result[(), IoError];
+    let _32: Result[String, IoError];
+    let _33: ref Result[(), IoError];
+    let _34: ref Result[String, IoError];
+    let _35: ref Result[String, IoError];
+    bb0: {
+        _2 = SortedMap[i64, i64].new() -> bb1;
+    }
+    bb1: {
+        _3 = &mut _2;
+        _4 = SortedMap[i64, i64].insert(move _3, const 3_i64, const 30_i64) -> bb2;
+    }
+    bb2: {
+        _3 = &mut _2;
+        _4 = SortedMap[i64, i64].insert(move _3, const 1_i64, const 10_i64) -> bb3;
+    }
+    bb3: {
+        _3 = &mut _2;
+        _4 = SortedMap[i64, i64].insert(move _3, const 2_i64, const 20_i64) -> bb4;
+    }
+    bb4: {
+        _5 = &_2;
+        _1 = println(move _5) -> bb5;
+    }
+    bb5: {
+        _6 = &_2;
+        _8 = SortedMap[i64, i64].entry_at(move _6, const 0_i64) -> bb6;
+    }
+    bb6: {
+        _1 = println(copy (*_8).0) -> bb7;
+    }
+    bb7: {
+        _3 = &mut _2;
+        _4 = SortedMap[i64, i64].remove(move _3, const 1_i64) -> bb8;
+    }
+    bb8: {
+        _9 = &_4;
+        _1 = println(move _9) -> bb9;
+    }
+    bb9: {
+        _10 = &_2;
+        _1 = println(move _10) -> bb10;
+    }
+    bb10: {
+        drop(_2) -> bb11;
+    }
+    bb11: {
+        _11 = SortedSet[i64].new() -> bb12;
+    }
+    bb12: {
+        _12 = &mut _11;
+        _13 = SortedSet[i64].insert(move _12, const 9_i64) -> bb13;
+    }
+    bb13: {
+        _12 = &mut _11;
+        _13 = SortedSet[i64].insert(move _12, const 4_i64) -> bb14;
+    }
+    bb14: {
+        _12 = &mut _11;
+        _13 = SortedSet[i64].insert(move _12, const 7_i64) -> bb15;
+    }
+    bb15: {
+        _12 = &mut _11;
+        _13 = SortedSet[i64].insert(move _12, const 4_i64) -> bb16;
+    }
+    bb16: {
+        _14 = &_11;
+        _1 = println(move _14) -> bb17;
+    }
+    bb17: {
+        drop(_11) -> bb18;
+    }
+    bb18: {
+        _15 = VecDeque[i64].new() -> bb19;
+    }
+    bb19: {
+        _16 = &mut _15;
+        _1 = VecDeque[i64].push_back(move _16, const 1_i64) -> bb20;
+    }
+    bb20: {
+        _16 = &mut _15;
+        _1 = VecDeque[i64].push_back(move _16, const 2_i64) -> bb21;
+    }
+    bb21: {
+        _16 = &mut _15;
+        _1 = VecDeque[i64].push_front(move _16, const 0_i64) -> bb22;
+    }
+    bb22: {
+        _16 = &mut _15;
+        _4 = VecDeque[i64].pop_front(move _16) -> bb23;
+    }
+    bb23: {
+        _17 = &_4;
+        _1 = println(move _17) -> bb24;
+    }
+    bb24: {
+        _18 = &_15;
+        _7 = VecDeque[i64].len(move _18) -> bb25;
+    }
+    bb25: {
+        _1 = println(copy _7) -> bb26;
+    }
+    bb26: {
+        _19 = &_15;
+        _1 = println(move _19) -> bb27;
+    }
+    bb27: {
+        drop(_15) -> bb28;
+    }
+    bb28: {
+        _4 = i64.parse(const " 42 ") -> bb29;
+    }
+    bb29: {
+        _20 = &_4;
+        _1 = println(move _20) -> bb30;
+    }
+    bb30: {
+        _4 = i64.parse(const "x") -> bb31;
+    }
+    bb31: {
+        _21 = &_4;
+        _1 = println(move _21) -> bb32;
+    }
+    bb32: {
+        _4 = i64.from_str_radix(const "ff", const 16_u32) -> bb33;
+    }
+    bb33: {
+        _22 = &_4;
+        _1 = println(move _22) -> bb34;
+    }
+    bb34: {
+        _23 = u8.parse(const "300") -> bb35;
+    }
+    bb35: {
+        _24 = &_23;
+        _1 = println(move _24) -> bb36;
+    }
+    bb36: {
+        _25 = f64.parse(const "2.5") -> bb37;
+    }
+    bb37: {
+        _26 = &_25;
+        _1 = println(move _26) -> bb38;
+    }
+    bb38: {
+        _27 = String.from(const "/tmp/karac_mir_fs_natives.txt") -> bb39;
+    }
+    bb39: {
+        _28 = String.from(const "hello file") -> bb40;
+    }
+    bb40: {
+        _29 = &_27;
+        _30 = &_28;
+        _31 = FileSystem.write(move _29, move _30) -> bb41;
+    }
+    bb41: {
+        _33 = &_31;
+        _1 = println(move _33) -> bb42;
+    }
+    bb42: {
+        _29 = &_27;
+        _32 = FileSystem.read_to_string(move _29) -> bb43;
+    }
+    bb43: {
+        _34 = &_32;
+        _1 = println(move _34) -> bb44;
+    }
+    bb44: {
+        drop(_32) -> bb45;
+    }
+    bb45: {
+        _32 = FileSystem.read_to_string(const "/tmp/karac_mir_no_such_dir/x.txt") -> bb46;
+    }
+    bb46: {
+        _35 = &_32;
+        _1 = println(move _35) -> bb47;
+    }
+    bb47: {
+        drop(_32) -> bb48;
+    }
+    bb48: {
+        drop(_27) -> bb49;
+    }
+    bb49: {
+        drop(_28) -> bb50;
+    }
+    bb50: {
+        _0 = ();
+        return;
+    }
+}

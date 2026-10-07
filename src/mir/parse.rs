@@ -426,7 +426,7 @@ impl Parser {
             "f32" => TyKind::Float(FloatTy::F32),
             "f64" => TyKind::Float(FloatTy::F64),
             "String" => TyKind::Intrinsic(IntrinsicTy::String),
-            "Array" | "Slice" | "Vec" | "Set" | "Map" => {
+            "Array" | "Slice" | "Vec" | "Set" | "Map" | "VecDeque" | "SortedSet" | "SortedMap" => {
                 c.expect("[")?;
                 let a = self.ty(c)?;
                 let kind = match name {
@@ -437,10 +437,16 @@ impl Parser {
                     "Slice" => TyKind::Slice(a),
                     "Vec" => TyKind::Intrinsic(IntrinsicTy::Vec(a)),
                     "Set" => TyKind::Intrinsic(IntrinsicTy::Set(a)),
+                    "VecDeque" => TyKind::Intrinsic(IntrinsicTy::VecDeque(a)),
+                    "SortedSet" => TyKind::Intrinsic(IntrinsicTy::SortedSet(a)),
                     _ => {
                         c.expect(",")?;
                         let b = self.ty(c)?;
-                        TyKind::Intrinsic(IntrinsicTy::Map(a, b))
+                        if name == "SortedMap" {
+                            TyKind::Intrinsic(IntrinsicTy::SortedMap(a, b))
+                        } else {
+                            TyKind::Intrinsic(IntrinsicTy::Map(a, b))
+                        }
                     }
                 };
                 c.expect("]")?;

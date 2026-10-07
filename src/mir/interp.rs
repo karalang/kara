@@ -536,7 +536,12 @@ impl<'a> Interp<'a> {
                 self.vec_more_method(ty_name, method, args, arg_tys)
             }
             ("Vec" | "String", _) => self.collection_method(ty_name, method, args, arg_tys, ret),
-            ("Map" | "Set", "clone") => {
+            ("FileSystem", "write" | "read_to_string") => self.fs_method(method, args, ret),
+            (t, "parse" | "from_str_radix") if t == "f64" || int_width(t).is_some() => {
+                self.parse_number(t, method, &args, ret)
+            }
+            ("VecDeque", _) => self.deque_method(ty_name, method, args, arg_tys, ret),
+            ("Map" | "Set" | "SortedMap" | "SortedSet", "clone") => {
                 let [v] = args.as_slice() else {
                     return err(format!("{name} takes one argument"));
                 };
@@ -547,7 +552,9 @@ impl<'a> Interp<'a> {
                 };
                 self.clone_value(&v, t)
             }
-            ("Map" | "Set", _) => self.table_method(ty_name, method, args, arg_tys, ret),
+            ("Map" | "Set" | "SortedMap" | "SortedSet", _) => {
+                self.table_method(ty_name, method, args, arg_tys, ret)
+            }
             (
                 _,
                 "max" | "min" | "abs" | "pow" | "wrapping_add" | "wrapping_sub" | "wrapping_mul"
@@ -1190,7 +1197,10 @@ impl<'a> Interp<'a> {
         ret: Ty,
     ) -> R<Value> {
         let name = format!("{ty_name}.{method}");
-        let is_map = ty_name.starts_with("Map");
+        let is_map = ty_name.starts_with("Map") || ty_name.starts_with("SortedMap");
+        // A sorted table keeps its entries in key order, so iteration and
+        // `entry_at` walk keys in ascending order.
+        let sorted = ty_name.starts_with("Sorted");
         if method == "new" {
             return Ok(self.alloc_box(ty_name, Value::Agg(vec![])));
         }
@@ -1242,7 +1252,8 @@ impl<'a> Interp<'a> {
                     }
                     (true, None, [val]) => {
                         let entry = Value::Agg(vec![key.clone(), val.clone()]);
-                        self.vec_elems(id)?.push(entry);
+                        let at = self.insert_at(id, key, is_map, sorted)?;
+                        self.vec_elems(id)?.insert(at, entry);
                         self.option(ret, None)
                     }
                     (false, Some(_), []) => {
@@ -1250,7 +1261,8 @@ impl<'a> Interp<'a> {
                         Ok(Value::Bool(false))
                     }
                     (false, None, []) => {
-                        self.vec_elems(id)?.push(key.clone());
+                        let at = self.insert_at(id, key, is_map, sorted)?;
+                        self.vec_elems(id)?.insert(at, key.clone());
                         Ok(Value::Bool(true))
                     }
                     _ => err(format!("{name}: wrong arguments")),
@@ -1353,6 +1365,7 @@ impl<'a> Interp<'a> {
                         i
                     }
                     None => {
+                        let at = self.insert_at(id, key, true, sorted)?;
                         let v = if method == "entry_or_insert_with" {
                             let fty = *arg_tys.get(2).ok_or_else(|| {
                                 Stop::Error(format!("{name} needs its closure's type"))
@@ -1364,9 +1377,9 @@ impl<'a> Interp<'a> {
                         } else {
                             val.clone()
                         };
-                        let entries = self.vec_elems(id)?;
-                        entries.push(Value::Agg(vec![key.clone(), v]));
-                        entries.len() - 1
+                        self.vec_elems(id)?
+                            .insert(at, Value::Agg(vec![key.clone(), v]));
+                        at
                     }
                 };
                 Ok(Value::Ref(Addr {
@@ -1397,6 +1410,170 @@ impl<'a> Interp<'a> {
 
     /// The key and value types of a `Map` receiver, or the element type
     /// (twice) of a `Set` one.
+    /// Where a new key goes: the end of an insertion-ordered table, or
+    /// before the first larger key of a sorted one.
+    fn insert_at(&mut self, id: AllocId, key: &Value, is_map: bool, sorted: bool) -> R<usize> {
+        let entries = self.vec_elems(id)?.clone();
+        if !sorted {
+            return Ok(entries.len());
+        }
+        let want = self.key_form(key)?;
+        for (i, e) in entries.iter().enumerate() {
+            let k = match (is_map, e) {
+                (true, Value::Agg(pair)) => &pair[0],
+                (false, k) => k,
+                _ => return err("a malformed map entry"),
+            };
+            if key_order(&self.key_form(k)?, &want) == std::cmp::Ordering::Greater {
+                return Ok(i);
+            }
+        }
+        Ok(entries.len())
+    }
+
+    /// `VecDeque[T]`: a `Vec`'s allocation, used from both ends.
+    fn deque_method(
+        &mut self,
+        ty_name: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        let name = format!("{ty_name}.{method}");
+        if matches!(method, "new" | "with_capacity") {
+            return Ok(self.alloc_box(ty_name, Value::Agg(vec![])));
+        }
+        let Some(recv) = args.first() else {
+            return err(format!("{name} needs a receiver"));
+        };
+        let id = self.box_behind(recv)?;
+        match (method, &args[1..]) {
+            ("len", []) => Ok(Value::Int(self.vec_elems(id)?.len() as i128)),
+            ("is_empty", []) => Ok(Value::Bool(self.vec_elems(id)?.is_empty())),
+            ("push_back", [v]) => {
+                self.vec_elems(id)?.push(v.clone());
+                Ok(Value::Unit)
+            }
+            ("push_front", [v]) => {
+                self.vec_elems(id)?.insert(0, v.clone());
+                Ok(Value::Unit)
+            }
+            ("pop_back", []) => {
+                let v = self.vec_elems(id)?.pop();
+                self.option(ret, v)
+            }
+            ("pop_front", []) => {
+                let elems = self.vec_elems(id)?;
+                let v = (!elems.is_empty()).then(|| elems.remove(0));
+                self.option(ret, v)
+            }
+            ("front" | "back", []) => {
+                let n = self.vec_elems(id)?.len();
+                let i = if method == "front" {
+                    0
+                } else {
+                    n.wrapping_sub(1)
+                };
+                let at = (n > 0).then(|| {
+                    Value::Ref(Addr {
+                        root: Root::Heap(id),
+                        path: vec![i as u64],
+                    })
+                });
+                self.option_of_place(ret, at)
+            }
+            ("entry_at" | "index" | "index_mut", [Value::Int(i)]) => {
+                let i = self.bounds(id, *i, false)?;
+                Ok(Value::Ref(Addr {
+                    root: Root::Heap(id),
+                    path: vec![i as u64],
+                }))
+            }
+            ("clone", []) => {
+                let t = self.deref_ty(arg_tys.first().copied(), &name)?;
+                let v = Value::Box(id);
+                self.clone_value(&v, t)
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// `FileSystem.write(path, text)` and `FileSystem.read_to_string(path)`
+    /// on the real file system, as the legacy interpreter does; an I/O
+    /// failure is an `Err(IoError)` with legacy's variant for its kind.
+    fn fs_method(&mut self, method: &str, args: Vec<Value>, ret: Ty) -> R<Value> {
+        let name = format!("FileSystem.{method}");
+        let res = match (method, args.as_slice()) {
+            ("write", [path, text]) => {
+                let (path, text) = (self.string_at(path)?, self.string_at(text)?);
+                std::fs::write(path, text).map(|()| None)
+            }
+            ("read_to_string", [path]) => {
+                let path = self.string_at(path)?;
+                std::fs::read_to_string(path).map(Some)
+            }
+            _ => return err(format!("{name}: wrong arguments")),
+        };
+        match res {
+            Ok(None) => self.variant_named(ret, None, "Ok", vec![Value::Unit]),
+            Ok(Some(text)) => {
+                let s = self.alloc_box("String", Value::Str(text));
+                self.variant_named(ret, None, "Ok", vec![s])
+            }
+            Err(e) => {
+                use std::io::ErrorKind as K;
+                let (kind, msg) = match e.kind() {
+                    K::NotFound => ("NotFound", None),
+                    K::PermissionDenied => ("PermissionDenied", None),
+                    K::AlreadyExists => ("AlreadyExists", None),
+                    K::UnexpectedEof => ("UnexpectedEof", None),
+                    K::InvalidData => ("InvalidUtf8", None),
+                    K::Interrupted => ("Interrupted", None),
+                    _ => ("Other", Some(e.to_string())),
+                };
+                let fields = match msg {
+                    Some(m) => vec![self.alloc_box("String", Value::Str(m))],
+                    None => Vec::new(),
+                };
+                let payload = self.variant_named(ret, Some("Err"), kind, fields)?;
+                self.variant_named(ret, None, "Err", vec![payload])
+            }
+        }
+    }
+
+    /// `i64.parse(s)`, `f64.parse(s)`, `u8.from_str_radix(s, 16)`: `Some`
+    /// of the number when the trimmed text is one that fits the type.
+    fn parse_number(&mut self, ty: &str, method: &str, args: &[Value], ret: Ty) -> R<Value> {
+        let name = format!("{ty}.{method}");
+        let (text, radix) = match (method, args) {
+            ("parse", [s]) => (self.string_at(s)?, 10),
+            ("from_str_radix", [s, Value::Int(r)]) => (self.string_at(s)?, *r),
+            _ => return err(format!("{name}: wrong arguments")),
+        };
+        let text = text.trim();
+        let v = if ty == "f64" {
+            text.parse::<f64>().ok().map(Value::Float)
+        } else {
+            let (bits, signed) = int_width(ty).expect("checked by the caller");
+            let n = if (2..=36).contains(&radix) && (signed || !text.starts_with('-')) {
+                i128::from_str_radix(text, radix as u32).ok()
+            } else {
+                None
+            };
+            n.filter(|n| {
+                if signed {
+                    let half = 1i128 << (bits - 1);
+                    (-half..half).contains(n)
+                } else {
+                    *n >= 0 && (bits == 128 || *n < (1i128 << bits))
+                }
+            })
+            .map(Value::Int)
+        };
+        self.option(ret, v)
+    }
+
     fn table_tys(&self, arg_tys: &[Ty], name: &str) -> R<(Ty, Ty)> {
         let mut t = *arg_tys
             .first()
@@ -1405,8 +1582,8 @@ impl<'a> Interp<'a> {
             t = inner;
         }
         match self.tys.kind(t) {
-            TyKind::Intrinsic(IntrinsicTy::Map(k, v)) => Ok((k, v)),
-            TyKind::Intrinsic(IntrinsicTy::Set(e)) => Ok((e, e)),
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => Ok((k, v)),
+            TyKind::Intrinsic(IntrinsicTy::Set(e) | IntrinsicTy::SortedSet(e)) => Ok((e, e)),
             _ => err(format!("{name} on {}", self.tys.display(t))),
         }
     }
@@ -1464,7 +1641,7 @@ impl<'a> Interp<'a> {
                 let text = self.string_at(v)?;
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
-            (TyKind::Intrinsic(IntrinsicTy::Vec(e)), _) => {
+            (TyKind::Intrinsic(IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e)), _) => {
                 let id = self.box_behind(v)?;
                 let elems = self.vec_elems(id)?.clone();
                 let mut out = Vec::with_capacity(elems.len());
@@ -1496,7 +1673,7 @@ impl<'a> Interp<'a> {
                 self.events.push(Event::Retain(*id, c));
                 Ok(Value::Shared(*id))
             }
-            (TyKind::Intrinsic(IntrinsicTy::Map(k, val)), _) => {
+            (TyKind::Intrinsic(IntrinsicTy::Map(k, val) | IntrinsicTy::SortedMap(k, val)), _) => {
                 let id = self.box_behind(v)?;
                 let entries = self.vec_elems(id)?.clone();
                 let mut out = Vec::with_capacity(entries.len());
@@ -1511,7 +1688,7 @@ impl<'a> Interp<'a> {
                 let name = self.tys.display(ty);
                 Ok(self.alloc_box(&name, Value::Agg(out)))
             }
-            (TyKind::Intrinsic(IntrinsicTy::Set(e)), _) => {
+            (TyKind::Intrinsic(IntrinsicTy::Set(e) | IntrinsicTy::SortedSet(e)), _) => {
                 let id = self.box_behind(v)?;
                 let elems = self.vec_elems(id)?.clone();
                 let mut out = Vec::with_capacity(elems.len());
@@ -1961,7 +2138,7 @@ impl<'a> Interp<'a> {
                 let tys = vec![e; fs.len()];
                 format!("[{}]", list(self, fs, &tys)?.join(", "))
             }
-            (TyKind::Intrinsic(IntrinsicTy::Vec(e)), Value::Box(id)) => {
+            (TyKind::Intrinsic(IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e)), Value::Box(id)) => {
                 let fs = self.vec_elems(*id)?.clone();
                 let tys = vec![e; fs.len()];
                 format!("[{}]", list(self, &fs, &tys)?.join(", "))
@@ -1977,7 +2154,10 @@ impl<'a> Interp<'a> {
                 let tys = vec![e; fs.len()];
                 format!("[{}]", list(self, &fs, &tys)?.join(", "))
             }
-            (TyKind::Intrinsic(IntrinsicTy::Map(kt, vt)), Value::Box(id)) => {
+            (
+                TyKind::Intrinsic(IntrinsicTy::Map(kt, vt) | IntrinsicTy::SortedMap(kt, vt)),
+                Value::Box(id),
+            ) => {
                 // `{k: v, ...}` in iteration order.
                 let entries = self.vec_elems(*id)?.clone();
                 let mut parts = Vec::with_capacity(entries.len());
@@ -1991,7 +2171,10 @@ impl<'a> Interp<'a> {
                 }
                 format!("{{{}}}", parts.join(", "))
             }
-            (TyKind::Intrinsic(IntrinsicTy::Set(e)), Value::Box(id)) => {
+            (
+                TyKind::Intrinsic(IntrinsicTy::Set(e) | IntrinsicTy::SortedSet(e)),
+                Value::Box(id),
+            ) => {
                 let fs = self.vec_elems(*id)?.clone();
                 let tys = vec![e; fs.len()];
                 format!("{{{}}}", list(self, &fs, &tys)?.join(", "))
@@ -3091,6 +3274,50 @@ fn from_bits(v: u128, it: IntTy) -> i128 {
     wrap(v as i128, it)
 }
 
+/// The width and signedness of an integer type named `name`.
+fn int_width(name: &str) -> Option<(u32, bool)> {
+    Some(match name {
+        "i8" => (8, true),
+        "i16" => (16, true),
+        "i32" => (32, true),
+        "i64" | "isize" => (64, true),
+        "i128" => (128, true),
+        "u8" => (8, false),
+        "u16" => (16, false),
+        "u32" => (32, false),
+        "u64" | "usize" => (64, false),
+        "u128" => (128, false),
+        _ => return None,
+    })
+}
+
+/// The order of two keys in `key_form`: numbers, text and chars by value,
+/// tuples and structs field by field, enums by variant then payload.
+fn key_order(a: &Value, b: &Value) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        (Value::Char(x), Value::Char(y)) => x.cmp(y),
+        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+        (Value::Agg(xs), Value::Agg(ys)) => xs
+            .iter()
+            .zip(ys)
+            .map(|(x, y)| key_order(x, y))
+            .find(|o| o.is_ne())
+            .unwrap_or(xs.len().cmp(&ys.len())),
+        (Value::Variant(i, xs), Value::Variant(j, ys)) => i.cmp(j).then_with(|| {
+            xs.iter()
+                .zip(ys)
+                .map(|(x, y)| key_order(x, y))
+                .find(|o| o.is_ne())
+                .unwrap_or(Ordering::Equal)
+        }),
+        _ => Ordering::Equal,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3784,7 +4011,7 @@ fn main() -> () {
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
-        assert_eq!(ran, 8);
+        assert_eq!(ran, 9);
     }
 
     /// A strict drop of a fieldless variant, a fieldless variant left in
