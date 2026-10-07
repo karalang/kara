@@ -6270,6 +6270,29 @@ impl<'a> super::TypeChecker<'a> {
                         self.local_scope.mark_view(n);
                     }
                 }
+                // §4.6: moving an element out is fixed by consuming the
+                // collection, when the loop iterates an owned local one.
+                let into_iter_at = (core_borrowed
+                    && self.for_iterable_is_owned_local_collection(iterable, &iter_ty))
+                .then(|| {
+                    let at = Span {
+                        offset: iterable.span.offset + iterable.span.length,
+                        length: 0,
+                        ..iterable.span
+                    };
+                    (at, self.local_scope.depth())
+                });
+                let saved_into_iter: Vec<(String, Option<(Span, usize)>)> = pattern
+                    .binding_names()
+                    .into_iter()
+                    .map(|n| {
+                        let prev = match into_iter_at {
+                            Some(at) => self.core_for_into_iter.insert(n.clone(), at),
+                            None => self.core_for_into_iter.remove(&n),
+                        };
+                        (n, prev)
+                    })
+                    .collect();
                 // See the `While` arm: valueless frame, so an unlabeled
                 // `break` stops here instead of reaching an outer `loop`.
                 self.break_value_types
@@ -6281,6 +6304,12 @@ impl<'a> super::TypeChecker<'a> {
                     self.infer_expr(final_expr);
                 }
                 self.break_value_types.pop();
+                for (n, prev) in saved_into_iter {
+                    match prev {
+                        Some(at) => self.core_for_into_iter.insert(n, at),
+                        None => self.core_for_into_iter.remove(&n),
+                    };
+                }
                 self.local_scope.pop();
                 Type::Unit
             }

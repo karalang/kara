@@ -5487,6 +5487,25 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// §4.6: does this `for` iterate a local collection the function owns,
+    /// so that `.into_iter()` appended to it moves the elements out? A
+    /// borrowed binding (a `ref` local, a view, a `ref` parameter) would be a
+    /// move out of a borrow instead.
+    pub(super) fn for_iterable_is_owned_local_collection(
+        &self,
+        iterable: &Expr,
+        iter_ty: &Type,
+    ) -> bool {
+        let ExprKind::Identifier(n) = &iterable.kind else {
+            return false;
+        };
+        matches!(iter_ty, Type::Named { name, .. }
+            if matches!(name.as_str(), "Vec" | "Set" | "SortedSet" | "Map" | "SortedMap"))
+            && !self.local_scope.is_view(n)
+            && !self.current_fn_ref_params.contains(n.as_str())
+            && matches!(self.local_scope.lookup(n), Some(Type::Named { .. }))
+    }
+
     /// The pattern-scrutinee entry to [`Self::warn_borrow_projection_copy`]
     /// (`match`, `if let`, `while let`, `let … else`). A bare `for` element
     /// destructured here stays with the partial-move rules, which treat it as
@@ -5637,6 +5656,12 @@ impl<'a> super::TypeChecker<'a> {
                 },
                 replacement: ".clone()".to_string(),
             })
+        } else if let Some(at) = self.core_for_into_iter_fix(value) {
+            // `for x in c` → `for x in c.into_iter()` (§4.6).
+            Some(crate::typechecker::FixIt {
+                span: at,
+                replacement: ".into_iter()".to_string(),
+            })
         } else if self.core_let_ref_fix {
             // `let x = s.f` → `let x = ref s.f` (§5.1).
             Some(crate::typechecker::FixIt {
@@ -5656,6 +5681,19 @@ impl<'a> super::TypeChecker<'a> {
             "borrow_projection_copy",
             fix_it,
         );
+    }
+
+    /// Where `.into_iter()` would turn the `for` element this value is rooted
+    /// at into an owned one, under the strict commands.
+    fn core_for_into_iter_fix(&self, value: &Expr) -> Option<Span> {
+        if !self.cli_lint_overrides.strict_core {
+            return None;
+        }
+        let ExprKind::Identifier(n) = &Self::projection_root(value).kind else {
+            return None;
+        };
+        let (at, depth) = *self.core_for_into_iter.get(n.as_str())?;
+        (self.local_scope.depth_of(n) == Some(depth) && self.local_scope.is_view(n)).then_some(at)
     }
 
     /// B-2026-09-27-69 follow-up, decided by the project owner: moving a bare
@@ -5709,15 +5747,27 @@ impl<'a> super::TypeChecker<'a> {
             message += ". Use the element in place (read its fields, or pass it to a `ref` \
                  parameter); this type has no `.clone()`";
         }
-        let fix_it = has_clone.then(|| crate::typechecker::FixIt {
-            span: Span {
-                offset: value.span.offset + value.span.length,
-                length: 0,
-                line: value.span.line,
-                column: value.span.column,
-            },
-            replacement: ".clone()".to_string(),
-        });
+        let into_iter = self.core_for_into_iter_fix(value);
+        if into_iter.is_some() && !has_clone {
+            message += ", or iterate with `.into_iter()` to move the elements out";
+        }
+        let fix_it = if has_clone {
+            Some(crate::typechecker::FixIt {
+                span: Span {
+                    offset: value.span.offset + value.span.length,
+                    length: 0,
+                    line: value.span.line,
+                    column: value.span.column,
+                },
+                replacement: ".clone()".to_string(),
+            })
+        } else {
+            // `for x in c` → `for x in c.into_iter()` (§4.6).
+            into_iter.map(|at| crate::typechecker::FixIt {
+                span: at,
+                replacement: ".into_iter()".to_string(),
+            })
+        };
         self.type_lint_warning_with_fix(
             message,
             value.span,

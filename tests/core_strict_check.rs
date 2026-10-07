@@ -1389,3 +1389,58 @@ fn a_ref_local_borrows_a_projection() {
         "let m = ref s.r;",
     );
 }
+
+/// §4.6: a bare `for` element is a `ref`; moving it out is fixed by
+/// iterating the owned collection with `.into_iter()`, when the element type
+/// has no `.clone()` (with one, `.clone()` stays the fix: it is always valid).
+#[test]
+fn a_for_element_moves_out_by_into_iter() {
+    rejected_then_fixed_by(
+        "for-elem-into-iter",
+        "struct Job { id: i64 }\n\
+         fn run(j: Job) { println(j.id) }\n\
+         fn main() {\n\
+             let jobs = vec![Job { id: 1 }, Job { id: 2 }];\n\
+             for j in jobs {\n\
+                 run(j);\n\
+             }\n\
+         }\n",
+        "cannot move 'j'",
+        "for j in jobs.into_iter() {",
+    );
+    rejected_then_fixed_by(
+        "for-elem-drop-into-iter",
+        "struct Res { id: i64 }\n\
+         impl Drop for Res { fn drop(mut ref self) { println(self.id) } }\n\
+         fn take(r: Res) { println(r.id) }\n\
+         fn main() {\n\
+             let rs = vec![Res { id: 1 }, Res { id: 2 }];\n\
+             let mut kept: Vec[Res] = Vec.new();\n\
+             for r in rs {\n\
+                 if r.id == 1 { take(r); } else { kept.push(r); }\n\
+             }\n\
+             println(kept.len());\n\
+         }\n",
+        "cannot move",
+        "for r in rs.into_iter() {",
+    );
+    // A collection the function only borrows cannot be consumed: no fix.
+    let (dir, path) = fixture(
+        "for-elem-borrowed",
+        "struct Job { id: i64 }\n\
+         fn run(j: Job) { println(j.id) }\n\
+         fn all(jobs: ref Vec[Job]) {\n\
+             for j in jobs {\n\
+                 run(j);\n\
+             }\n\
+         }\n\
+         fn main() { all(vec![Job { id: 1 }]); }\n",
+    );
+    karac().arg("fix").arg(&path).output().unwrap();
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !fixed.contains("into_iter"),
+        "a borrowed collection must not be consumed: {fixed}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

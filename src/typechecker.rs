@@ -578,6 +578,16 @@ impl LocalTypeScope {
         false
     }
 
+    /// The scope depth `name` resolves at (0 is the outermost).
+    pub(super) fn depth_of(&self, name: &str) -> Option<usize> {
+        self.scopes.iter().rposition(|s| s.contains_key(name))
+    }
+
+    /// The depth of the innermost scope.
+    pub(super) fn depth(&self) -> usize {
+        self.scopes.len() - 1
+    }
+
     pub(super) fn lookup(&self, name: &str) -> Option<&Type> {
         for scope in self.scopes.iter().rev() {
             if let Some(ty) = scope.get(name) {
@@ -2258,6 +2268,12 @@ pub struct TypeChecker<'a> {
     /// of a borrowed place there can be fixed by borrowing it instead
     /// (`let x = ref s.f`, core-semantics.md §5.1).
     pub(super) core_let_ref_fix: bool,
+    /// Under the strict commands, each bare `for` element in scope whose loop
+    /// iterates an owned local collection, mapped to the end of that iterable:
+    /// a move out of the element is fixed there by `.into_iter()` (§4.6).
+    /// The depth is the loop's scope, so a shadowing binding of the same
+    /// name is not mistaken for the element.
+    pub(super) core_for_into_iter: FxHashMap<String, (Span, usize)>,
     /// Every call under the strict commands: its node, its span, and the
     /// callee's name when it is a plain free-function call.
     pub(super) core_call_sites: Vec<(crate::ids::NodeId, Span, Option<String>)>,
@@ -2994,6 +3010,7 @@ impl<'a> TypeChecker<'a> {
             core_generic_moves: FxHashMap::default(),
             current_fn_core_key: None,
             core_let_ref_fix: false,
+            core_for_into_iter: FxHashMap::default(),
             core_call_sites: Vec::new(),
             core_pattern_moves: Vec::new(),
             errors: Vec::new(),
