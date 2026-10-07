@@ -1,0 +1,96 @@
+struct Plain { n: i64, s: String }
+
+enum Shape { Dot, Circle { r: i64 } }
+
+enum Option[String] { None, Some(String) }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: Map[i64, String]; // m
+    let _2: mut ref Map[i64, String];
+    let _3: Option[String];
+    let _4: ref Map[i64, String];
+    let _5: ();
+    let _6: String;
+    let _7: ref Option[String];
+    let _8: Set[i64]; // set
+    let _9: mut ref Set[i64];
+    let _10: bool;
+    let _11: ref Set[i64];
+    let _12: Plain; // p
+    let _13: ref Plain;
+    let _14: Shape; // c
+    let _15: ref Shape;
+    let _16: shared Plain; // q
+    let _17: ref shared Plain;
+    bb0: {
+        _1 = Map[i64, String].new() -> bb1;
+    }
+    bb1: {
+        _6 = String.from(const "x") -> bb2;
+    }
+    bb2: {
+        _2 = &mut _1;
+        _3 = Map[i64, String].insert(move _2, const 1_i64, move _6) -> bb3;
+    }
+    bb3: {
+        drop(_3) -> bb4;
+    }
+    bb4: {
+        _4 = &_1;
+        _3 = Map[i64, String].get(move _4, const 1_i64) -> bb5;
+    }
+    bb5: {
+        _7 = &_3;
+        _4 = &_1;
+        _5 = println(move _7, const " ", move _4) -> bb6;
+    }
+    bb6: {
+        drop(_3) -> bb7;
+    }
+    bb7: {
+        _8 = Set[i64].new() -> bb8;
+    }
+    bb8: {
+        _9 = &mut _8;
+        _10 = Set[i64].insert(move _9, const 3_i64) -> bb9;
+    }
+    bb9: {
+        _11 = &_8;
+        _5 = println(move _11) -> bb10;
+    }
+    bb10: {
+        _6 = String.from(const "p") -> bb11;
+    }
+    bb11: {
+        _12 = Plain { const 1_i64, move _6 };
+        _14 = Shape.Circle { const 2_i64 };
+        _13 = &_12;
+        _15 = &_14;
+        _5 = println(move _13, const " ", move _15) -> bb12;
+    }
+    bb12: {
+        _6 = String.from(const "q") -> bb13;
+    }
+    bb13: {
+        _16 = shared Plain { const 2_i64, move _6 };
+        _17 = &_16;
+        _5 = println(move _17) -> bb14;
+    }
+    bb14: {
+        drop(_16) -> bb15;
+    }
+    bb15: {
+        drop(_12) -> bb16;
+    }
+    bb16: {
+        drop(_8) -> bb17;
+    }
+    bb17: {
+        drop(_1) -> bb18;
+    }
+    bb18: {
+        _0 = const ();
+        return;
+    }
+}

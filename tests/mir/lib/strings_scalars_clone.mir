@@ -41,6 +41,9 @@ fn main() -> () {
     let _23: ref shared Res;
     let _24: String;
     let _25: ref String;
+    let _26: String;
+    let _27: Vec[u8];
+    let _28: ref Vec[u8];
     bb0: {
         _1 = String.from(const "  Hello, World  ") -> bb1;
     }
@@ -161,6 +164,24 @@ fn main() -> () {
         drop(_1) -> bb33;
     }
     bb33: {
+        _26 = String.index_range(const "héllo", const 0_i64, const 3_i64) -> bb34;
+    }
+    bb34: {
+        _11 = &_10;
+        _27 = Vec[u8].from_slice(move _11) -> bb35;
+    }
+    bb35: {
+        _2 = &_26;
+        _28 = &_27;
+        _4 = println(move _2, const " ", move _28) -> bb36;
+    }
+    bb36: {
+        drop(_27) -> bb37;
+    }
+    bb37: {
+        drop(_26) -> bb38;
+    }
+    bb38: {
         _0 = const ();
         return;
     }

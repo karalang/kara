@@ -1,0 +1,4 @@
+Some(x) {1: x}
+{3}
+Plain { n: 1, s: p } Circle { r: 2 }
+Plain { n: 2, s: q }

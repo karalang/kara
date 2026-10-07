@@ -436,6 +436,23 @@ impl<'a> Interp<'a> {
             ("String", _) if STRING_TEXT_METHODS.contains(&method) => {
                 self.string_text_method(name, method, args, ret)
             }
+            ("Vec", "from_slice") => {
+                // A new Vec of clones of the slice's elements.
+                let [view] = args.as_slice() else {
+                    return err(format!("{name} takes a slice"));
+                };
+                let e = match self.tys.kind(ret) {
+                    TyKind::Intrinsic(IntrinsicTy::Vec(e)) => e,
+                    _ => return err(format!("{name} into {}", self.tys.display(ret))),
+                };
+                let (base, lo, len) = self.view_of(view)?;
+                let mut out = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    let x = self.slot(&base.child(lo + i))?;
+                    out.push(self.clone_value(&x, e)?);
+                }
+                Ok(self.alloc_box(ty_name, Value::Agg(out)))
+            }
             ("Vec", _) if VEC_MORE_METHODS.contains(&method) => {
                 self.vec_more_method(ty_name, method, args, arg_tys)
             }
@@ -582,7 +599,7 @@ impl<'a> Interp<'a> {
                         path: vec![0],
                     })
                 });
-                self.option(ret, elem)
+                self.option_of_place(ret, elem)
             }
             (true, "last", [v]) => {
                 let id = self.box_behind(v)?;
@@ -593,7 +610,7 @@ impl<'a> Interp<'a> {
                         path: vec![n as u64 - 1],
                     })
                 });
-                self.option(ret, elem)
+                self.option_of_place(ret, elem)
             }
             (true, "get" | "last", [v, Value::Int(i)]) => {
                 let id = self.box_behind(v)?;
@@ -605,7 +622,7 @@ impl<'a> Interp<'a> {
                         path: vec![i as u64],
                     })
                 });
-                self.option(ret, elem)
+                self.option_of_place(ret, elem)
             }
             (true, "swap", [v, Value::Int(i), Value::Int(j)]) => {
                 let id = self.box_behind(v)?;
@@ -1117,7 +1134,7 @@ impl<'a> Interp<'a> {
                         path: vec![i as u64, 1],
                     })
                 });
-                self.option(ret, at)
+                self.option_of_place(ret, at)
             }
             ("index" | "index_mut", [key]) if is_map => {
                 // `m[k]`: a missing key panics (design.md § Collection
@@ -1542,6 +1559,22 @@ impl<'a> Interp<'a> {
                 let t = s[lo..hi].to_string();
                 new_string(self, t)
             }
+            "index_range" => {
+                // `s[a..b]`: a new String; out of range, inverted or off a
+                // char boundary panics, unlike `substring`.
+                let (lo, hi) = (int(1)?, int(2)?);
+                let ok = 0 <= lo
+                    && lo <= hi
+                    && hi <= s.len() as i128
+                    && s.is_char_boundary(lo as usize)
+                    && s.is_char_boundary(hi as usize);
+                if !ok {
+                    self.events.push(Event::Abort(AbortReason::Panic));
+                    return Err(Stop::Abort(AbortReason::Panic));
+                }
+                let t = s[lo as usize..hi as usize].to_string();
+                new_string(self, t)
+            }
             "split" => {
                 let parts: Vec<String> = s.split(text(1)?).map(str::to_string).collect();
                 let mut out = Vec::with_capacity(parts.len());
@@ -1678,6 +1711,37 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// `Some` of the element a lookup found, or `None`: a reference to it
+    /// when `ret`'s payload is a reference, else a copy (a lookup typed
+    /// `Option[V]` hands back its own value).
+    fn option_of_place(&mut self, ret: Ty, found: Option<Value>) -> R<Value> {
+        let Some(Value::Ref(at)) = found else {
+            return self.option(ret, found);
+        };
+        let payload = match self.tys.kind(ret) {
+            TyKind::Adt(a) => {
+                let some = self
+                    .tys
+                    .adt(a)
+                    .variants
+                    .iter()
+                    .position(|v| v.name == "Some");
+                some.and_then(|k| self.tys.field_ty(ret, Some(k as u32), 0))
+            }
+            _ => None,
+        };
+        match payload.map(|t| (t, self.tys.kind(t))) {
+            Some((_, TyKind::Ref(_) | TyKind::MutRef(_))) | None => {
+                self.option(ret, Some(Value::Ref(at)))
+            }
+            Some((t, _)) => {
+                let v = self.slot(&at)?;
+                let copy = self.clone_value(&v, t)?;
+                self.option(ret, Some(copy))
+            }
+        }
+    }
+
     /// `Some(v)` or `None` in the `Option` type `ret`, by variant name.
     fn option(&self, ret: Ty, v: Option<Value>) -> R<Value> {
         let TyKind::Adt(a) = self.tys.kind(ret) else {
@@ -1773,6 +1837,49 @@ impl<'a> Interp<'a> {
                 let tys = vec![e; fs.len()];
                 format!("[{}]", list(self, &fs, &tys)?.join(", "))
             }
+            (TyKind::Intrinsic(IntrinsicTy::Map(kt, vt)), Value::Box(id)) => {
+                // `{k: v, ...}` in iteration order.
+                let entries = self.vec_elems(*id)?.clone();
+                let mut parts = Vec::with_capacity(entries.len());
+                for e in &entries {
+                    let Value::Agg(pair) = e else {
+                        return err("a malformed map entry");
+                    };
+                    let k = self.display_typed(&pair[0], kt)?;
+                    let v = self.display_typed(&pair[1], vt)?;
+                    parts.push(format!("{k}: {v}"));
+                }
+                format!("{{{}}}", parts.join(", "))
+            }
+            (TyKind::Intrinsic(IntrinsicTy::Set(e)), Value::Box(id)) => {
+                let fs = self.vec_elems(*id)?.clone();
+                let tys = vec![e; fs.len()];
+                format!("{{{}}}", list(self, &fs, &tys)?.join(", "))
+            }
+            (TyKind::Shared(_), Value::Shared(id)) => {
+                // A derived Display shows the value behind the handle.
+                let inner = self.live(*id)?.value.clone();
+                let TyKind::Shared(a) = self.tys.kind(ty) else {
+                    unreachable!("matched above")
+                };
+                let adt = self.tys.adt(a);
+                self.display_adt(&adt, ty, &inner)?
+            }
+            (TyKind::Adt(a), Value::Agg(_)) => {
+                let adt = self.tys.adt(a);
+                self.display_adt(&adt, ty, v)?
+            }
+            (TyKind::Adt(a), Value::Variant(k, fs))
+                if !self.tys.adt(a).is_enum || {
+                    let adt = self.tys.adt(a);
+                    adt.variants.get(*k as usize).is_some_and(|var| {
+                        var.fields.iter().any(|(n, _)| n.parse::<u32>().is_err())
+                    })
+                } =>
+            {
+                let adt = self.tys.adt(a);
+                self.display_adt(&adt, ty, &Value::Variant(*k, fs.clone()))?
+            }
             (TyKind::Adt(a), Value::Variant(k, fs)) => {
                 let adt = self.tys.adt(a);
                 let Some(var) = adt.variants.get(*k as usize) else {
@@ -1793,6 +1900,44 @@ impl<'a> Interp<'a> {
                 }
             }
             _ => self.display(v)?,
+        })
+    }
+
+    /// A struct, or an enum variant with named fields, as a derived
+    /// `Display` shows it: `Name { f: v, g: w }`, `Name(a, b)` for
+    /// positional fields, `Name` alone with none. `ty` is the ADT type,
+    /// possibly `shared`.
+    fn display_adt(&mut self, adt: &crate::mir::ty::AdtDef, ty: Ty, v: &Value) -> R<String> {
+        let (k, fs, name) = match v {
+            Value::Agg(fs) if !adt.is_enum => (None, fs.clone(), adt.name.clone()),
+            Value::Variant(k, fs) => {
+                let Some(var) = adt.variants.get(*k as usize) else {
+                    return err(format!("{} has no variant {k}", adt.name));
+                };
+                (Some(*k), fs.clone(), var.name.clone())
+            }
+            other => return err(format!("print cannot show {other:?} as {}", adt.name)),
+        };
+        if fs.is_empty() {
+            return Ok(name);
+        }
+        let var = &adt.variants[k.unwrap_or(0) as usize];
+        let mut parts = Vec::with_capacity(fs.len());
+        for (i, f) in fs.iter().enumerate() {
+            let Some(t) = self.tys.field_ty(ty, k, i as u32) else {
+                return err(format!("{name} has no field {i}"));
+            };
+            let shown = self.display_typed(f, t)?;
+            match var.fields.get(i).map(|(n, _)| n.as_str()) {
+                Some(n) if n.parse::<u32>().is_err() => parts.push(format!("{n}: {shown}")),
+                _ => parts.push(shown),
+            }
+        }
+        let named = var.fields.iter().any(|(n, _)| n.parse::<u32>().is_err());
+        Ok(if named {
+            format!("{name} {{ {} }}", parts.join(", "))
+        } else {
+            format!("{name}({})", parts.join(", "))
         })
     }
 
@@ -2689,9 +2834,9 @@ const STRING_TEXT_METHODS: &[&str] = &[
     "substring",
     "split",
     "bytes",
+    "index_range",
 ];
 
-/// `Vec[R].len` -> (`Vec[R]`, `len`); a plain `println` -> (`println`, ``).
 /// `Vec` methods [`Interp::vec_more_method`] implements.
 const VEC_MORE_METHODS: &[&str] = &[
     "sort",
@@ -2750,6 +2895,7 @@ fn cmp_keys(xs: &[Value], ys: &[Value]) -> std::cmp::Ordering {
     xs.len().cmp(&ys.len())
 }
 
+/// `Vec[R].len` -> (`Vec[R]`, `len`); a plain `println` -> (`println`, ``).
 fn split_method(name: &str) -> (&str, &str) {
     let mut depth = 0;
     let mut dot = None;
@@ -3496,7 +3642,7 @@ fn main() -> () {
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
-        assert_eq!(ran, 5);
+        assert_eq!(ran, 6);
     }
 
     /// A strict drop of a fieldless variant, a fieldless variant left in
