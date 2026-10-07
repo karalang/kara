@@ -1,0 +1,345 @@
+// etl_orders: write two CSV extracts, load them, validate, join, aggregate.
+
+enum Tier {
+    Gold,
+    Silver,
+    Bronze,
+}
+
+impl Tier {
+    fn parse(s: ref String) -> Option[Tier] {
+        if s == "gold" {
+            Some(Tier.Gold)
+        } else if s == "silver" {
+            Some(Tier.Silver)
+        } else if s == "bronze" {
+            Some(Tier.Bronze)
+        } else {
+            None
+        }
+    }
+
+    fn label(ref self) -> String {
+        match self {
+            Tier.Gold => "GOLD",
+            Tier.Silver => "SILVER",
+            Tier.Bronze => "BRONZE",
+        }
+    }
+}
+
+struct Customer {
+    id: i64,
+    name: String,
+    tier: Tier,
+}
+
+struct Date {
+    year: i64,
+    month: i64,
+    day: i64,
+}
+
+impl Date {
+    fn month_key(ref self) -> String {
+        if self.month < 10 {
+            f"{self.year}-0{self.month}"
+        } else {
+            f"{self.year}-{self.month}"
+        }
+    }
+}
+
+struct Order {
+    id: i64,
+    line: i64,
+    customer_id: i64,
+    date: Date,
+    sku: String,
+    quantity: i64,
+    unit_cents: i64,
+}
+
+enum RejectReason {
+    WrongColumnCount(i64, i64),
+    BadNumber(String, String),
+    BadDate(String),
+    NegativeQuantity(i64),
+    ZeroQuantity,
+    UnknownTier(String),
+    UnknownCustomer(i64),
+}
+
+impl RejectReason {
+    fn describe(ref self) -> String {
+        match self {
+            RejectReason.WrongColumnCount(want, got) => f"expected {want} columns, got {got}",
+            RejectReason.BadNumber(field, raw) => f"field {field} is not a number: '{raw}'",
+            RejectReason.BadDate(raw) => f"invalid date '{raw}'",
+            RejectReason.NegativeQuantity(q) => f"negative quantity {q}",
+            RejectReason.ZeroQuantity => "zero quantity",
+            RejectReason.UnknownTier(t) => f"unknown tier '{t}'",
+            RejectReason.UnknownCustomer(id) => f"no customer with id {id}",
+        }
+    }
+}
+
+struct Reject {
+    file: String,
+    line: i64,
+    reason: RejectReason,
+}
+
+struct Totals {
+    orders: i64,
+    units: i64,
+    revenue_cents: i64,
+}
+
+// ---------- extract: generate the source files ----------
+
+fn customers_csv() -> String {
+    let names = ["Acme Corp", "Birch & Co", "Cobalt Labs", "Delta Freight", "Ember Foods",
+                 "Fjord Media", "Granite LLC", "Harbor Tech", "Iris Health"];
+    let tiers = ["gold", "silver", "bronze", "silver", "gold", "bronze", "bronze", "silver", "platinum"];
+    let mut out = "customer_id,name,tier\n";
+    let mut i = 0;
+    while i < names.len() {
+        out.push_str(f"{i + 1},{names[i]},{tiers[i]}\n");
+        i = i + 1;
+    }
+    out
+}
+
+fn orders_csv() -> String {
+    let skus = ["WIDGET", "GADGET", "SPROCKET", "GIZMO"];
+    let mut out = "order_id,customer_id,date,sku,quantity,unit_cents\n";
+    let mut i = 0;
+    while i < 36 {
+        let cust = (i * 7) % 10 + 1;
+        let month = (i * 5) % 6 + 1;
+        let day = (i * 11) % 28 + 1;
+        let qty = (i * 3) % 7 + 1;
+        let cents = 199 + (i * 37) % 900;
+        let mm = if month < 10 { f"0{month}" } else { f"{month}" };
+        let dd = if day < 10 { f"0{day}" } else { f"{day}" };
+        out.push_str(f"{1000 + i},{cust},2026-{mm}-{dd},{skus[i % 4]},{qty},{cents}\n");
+        i = i + 1;
+    }
+    out.push_str("1036,2,2026-02-30,WIDGET,3,450\n");
+    out.push_str("1037,3,2026-04-11,GADGET,-2,1200\n");
+    out.push_str("1038,5,2026-13-01,GIZMO,1,999\n");
+    out.push_str("1039,4,2026-05-07,SPROCKET,0,350\n");
+    out.push_str("1040,1,2026-03-xx,WIDGET,2,250\n");
+    out.push_str("1041,6,2026-06-15,GADGET,4\n");
+    out.push_str("1042,7,2026-01-20,GIZMO,five,800\n");
+    out.push_str("1043,8,2024-02-29,WIDGET,2,1500\n");
+    out.push_str("1044,2,2026-02-29,GIZMO,1,700\n");
+    out.push_str("1045,9,2026-06-01,SPROCKET,-10,120\n");
+    out
+}
+
+// ---------- transform helpers ----------
+
+fn parse_int(field: ref String, raw: ref String) -> Result[i64, RejectReason] {
+    match i64.parse(raw.trim()) {
+        Some(n) => Ok(n),
+        None => Err(RejectReason.BadNumber(field.to_string(), raw.to_string())),
+    }
+}
+
+fn is_leap(year: i64) -> bool {
+    (year % 4 == 0 and year % 100 != 0) or year % 400 == 0
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    if month == 2 {
+        if is_leap(year) { 29 } else { 28 }
+    } else if month == 4 or month == 6 or month == 9 or month == 11 {
+        30
+    } else {
+        31
+    }
+}
+
+fn parse_date(raw: ref String) -> Result[Date, RejectReason] {
+    let parts = raw.split("-");
+    if parts.len() != 3 {
+        return Err(RejectReason.BadDate(raw.to_string()));
+    }
+    let year = match i64.parse(parts[0]) {
+        Some(y) => y,
+        None => return Err(RejectReason.BadDate(raw.to_string())),
+    };
+    let month = match i64.parse(parts[1]) {
+        Some(m) => m,
+        None => return Err(RejectReason.BadDate(raw.to_string())),
+    };
+    let day = match i64.parse(parts[2]) {
+        Some(d) => d,
+        None => return Err(RejectReason.BadDate(raw.to_string())),
+    };
+    if month < 1 or month > 12 or day < 1 or day > days_in_month(year, month) {
+        return Err(RejectReason.BadDate(raw.to_string()));
+    }
+    Ok(Date { year, month, day })
+}
+
+fn parse_order(line: ref String, line_no: i64) -> Result[Order, RejectReason] {
+    let cols = line.split(",");
+    if cols.len() != 6 {
+        return Err(RejectReason.WrongColumnCount(6, cols.len()));
+    }
+    let id = parse_int("order_id", cols[0])?;
+    let customer_id = parse_int("customer_id", cols[1])?;
+    let date = parse_date(cols[2])?;
+    let quantity = parse_int("quantity", cols[4])?;
+    let unit_cents = parse_int("unit_cents", cols[5])?;
+    if quantity < 0 {
+        return Err(RejectReason.NegativeQuantity(quantity));
+    }
+    if quantity == 0 {
+        return Err(RejectReason.ZeroQuantity);
+    }
+    Ok(Order { id, line: line_no, customer_id, date, sku: cols[3].trim(), quantity, unit_cents })
+}
+
+fn parse_customer(line: ref String) -> Result[Customer, RejectReason] {
+    let cols = line.split(",");
+    if cols.len() != 3 {
+        return Err(RejectReason.WrongColumnCount(3, cols.len()));
+    }
+    let id = parse_int("customer_id", cols[0])?;
+    let tier = match Tier.parse(cols[2].trim()) {
+        Some(t) => t,
+        None => return Err(RejectReason.UnknownTier(cols[2].trim())),
+    };
+    Ok(Customer { id, name: cols[1].trim(), tier })
+}
+
+fn load_orders(path: String) -> Result[(Vec[Order], Vec[Reject]), IoError] {
+    let text = fs.read_to_string(path)?;
+    let mut good = Vec.new();
+    let mut bad = Vec.new();
+    let mut line_no = 0;
+    for line in text.split("\n") {
+        line_no = line_no + 1;
+        if line_no == 1 or line.trim().is_empty() {
+            continue;
+        }
+        match parse_order(line, line_no) {
+            Ok(o) => good.push(o),
+            Err(r) => bad.push(Reject { file: path.to_string(), line: line_no, reason: r }),
+        }
+    }
+    Ok((good, bad))
+}
+
+fn load_customers(path: String) -> Result[(Vec[Customer], Vec[Reject]), IoError] {
+    let text = fs.read_to_string(path)?;
+    let mut good = Vec.new();
+    let mut bad = Vec.new();
+    let mut line_no = 0;
+    for line in text.split("\n") {
+        line_no = line_no + 1;
+        if line_no == 1 or line.trim().is_empty() {
+            continue;
+        }
+        match parse_customer(line) {
+            Ok(c) => good.push(c),
+            Err(r) => bad.push(Reject { file: path.to_string(), line: line_no, reason: r }),
+        }
+    }
+    Ok((good, bad))
+}
+
+fn money(cents: i64) -> String {
+    let whole = cents / 100;
+    let frac = cents % 100;
+    if frac < 10 { f"{whole}.0{frac}" } else { f"{whole}.{frac}" }
+}
+
+fn pad_right(s: String, width: i64) -> String {
+    let mut out = s;
+    while out.len() < width {
+        out.push_str(" ");
+    }
+    out
+}
+
+fn add_to(table: mut ref SortedMap[String, Totals], key: String, qty: i64, cents: i64) {
+    let prev = match table.get(key) {
+        Some(t) => Totals { orders: t.orders, units: t.units, revenue_cents: t.revenue_cents },
+        None => Totals { orders: 0, units: 0, revenue_cents: 0 },
+    };
+    table.insert(key, Totals {
+        orders: prev.orders + 1,
+        units: prev.units + qty,
+        revenue_cents: prev.revenue_cents + cents,
+    });
+}
+
+// ---------- load ----------
+
+fn main() -> Result[(), IoError] {
+    fs.write("customers.csv", customers_csv())?;
+    fs.write("orders.csv", orders_csv())?;
+
+    let order_load = load_orders("orders.csv");
+    let customer_load = load_customers("customers.csv");
+
+    let (orders, order_rejects) = order_load?;
+    let (customers, customer_rejects) = customer_load?;
+
+    let mut by_id: Map[i64, Customer] = Map.new();
+    for c in customers {
+        by_id.insert(c.id, c);
+    }
+
+    let mut rejects: Vec[Reject] = Vec.new();
+    rejects.append(customer_rejects);
+    rejects.append(order_rejects);
+
+    let mut by_tier_month: SortedMap[String, Totals] = SortedMap.new();
+    let mut by_tier: SortedMap[String, Totals] = SortedMap.new();
+    let mut joined = 0;
+    let mut grand = 0;
+    for o in orders {
+        match by_id.get(o.customer_id) {
+            Some(c) => {
+                let revenue = o.quantity * o.unit_cents;
+                let tier = c.tier.label();
+                add_to(mut by_tier_month, f"{tier} {o.date.month_key()}", o.quantity, revenue);
+                add_to(mut by_tier, tier, o.quantity, revenue);
+                joined = joined + 1;
+                grand = grand + revenue;
+            }
+            None => {
+                rejects.push(Reject {
+                    file: "orders.csv",
+                    line: o.line,
+                    reason: RejectReason.UnknownCustomer(o.customer_id),
+                });
+            }
+        }
+    }
+
+    println(f"loaded {by_id.len()} customers, {joined} joined orders, {rejects.len()} rejects");
+    println("");
+    println("REJECTS");
+    for r in rejects {
+        println(f"  {r.file}:{r.line}: {r.reason.describe()}");
+    }
+    println("");
+    println("REVENUE BY TIER AND MONTH");
+    for (key, t) in by_tier_month {
+        println(f"  {pad_right(key.clone(), 16)} orders={t.orders} units={t.units} revenue={money(t.revenue_cents)}");
+    }
+    println("");
+    println("REVENUE BY TIER");
+    for (key, t) in by_tier {
+        println(f"  {pad_right(key.clone(), 8)} orders={t.orders} units={t.units} revenue={money(t.revenue_cents)}");
+    }
+    println(f"TOTAL revenue={money(grand)}");
+    Ok(())
+}

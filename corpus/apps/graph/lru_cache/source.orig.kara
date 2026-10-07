@@ -1,0 +1,353 @@
+// LRU cache: a doubly linked list of shared nodes plus a key index.
+// The list runs from the most recently used entry (head) to the least
+// recently used one (tail). Commands come from small script files that the
+// program writes itself and then replays against two caches.
+
+shared struct Node {
+    key: String,
+    mut value: i64,
+    mut prev: Option[Node],
+    mut next: Option[Node],
+}
+
+enum EvictReason {
+    Capacity,
+    Deleted,
+    Shrunk,
+}
+
+impl EvictReason {
+    fn label(ref self) -> String {
+        match self {
+            EvictReason.Capacity => "capacity",
+            EvictReason.Deleted => "deleted",
+            EvictReason.Shrunk => "shrunk",
+        }
+    }
+}
+
+enum Command {
+    Get(String),
+    Peek(String),
+    Put(String, i64),
+    Delete(String),
+    Resize(i64),
+    Dump,
+}
+
+enum ScriptError {
+    UnknownCommand { line: i64, word: String },
+    MissingArgument { line: i64, command: String },
+    BadNumber { line: i64, text: String },
+}
+
+impl Display for ScriptError {
+    fn to_string(ref self) -> String {
+        match self {
+            ScriptError.UnknownCommand { line, word } => f"line {line}: unknown command '{word}'",
+            ScriptError.MissingArgument { line, command } => f"line {line}: '{command}' is missing an argument",
+            ScriptError.BadNumber { line, text } => f"line {line}: '{text}' is not a number",
+        }
+    }
+}
+
+struct Listener {
+    name: String,
+    on_evict: Fn(String, i64, EvictReason) -> Option[String],
+}
+
+struct Stats {
+    hits: i64,
+    misses: i64,
+    evictions: i64,
+    deletes: i64,
+    inserts: i64,
+    updates: i64,
+}
+
+struct LruCache {
+    capacity: i64,
+    index: Map[String, Node],
+    head: Option[Node],
+    tail: Option[Node],
+    stats: Stats,
+    listeners: Vec[Listener],
+}
+
+impl LruCache {
+    fn new(capacity: i64) -> LruCache {
+        LruCache {
+            capacity,
+            index: Map.new(),
+            head: None,
+            tail: None,
+            stats: Stats { hits: 0, misses: 0, evictions: 0, deletes: 0, inserts: 0, updates: 0 },
+            listeners: Vec.new(),
+        }
+    }
+
+    fn on_evict(mut ref self, listener: Listener) {
+        self.listeners.push(listener);
+    }
+
+    fn len(ref self) -> i64 {
+        self.index.len()
+    }
+
+    // Remove a node from the list, leaving it free-standing.
+    fn unlink(mut ref self, node: Node) {
+        match node.prev {
+            Some(p) => { p.next = node.next; }
+            None => { self.head = node.next; }
+        }
+        match node.next {
+            Some(n) => { n.prev = node.prev; }
+            None => { self.tail = node.prev; }
+        }
+        node.prev = None;
+        node.next = None;
+    }
+
+    // Insert a free-standing node at the most-recently-used end.
+    fn push_front(mut ref self, node: Node) {
+        node.prev = None;
+        node.next = self.head;
+        match self.head {
+            Some(h) => { h.prev = Some(node); }
+            None => { self.tail = Some(node); }
+        }
+        self.head = Some(node);
+    }
+
+    fn touch(mut ref self, node: Node) {
+        self.unlink(node);
+        self.push_front(node);
+    }
+
+    fn notify(ref self, key: String, value: i64, reason: EvictReason) {
+        for listener in self.listeners {
+            match (listener.on_evict)(key, value, reason) {
+                Some(msg) => println(f"    [{listener.name}] {msg}"),
+                None => {}
+            }
+        }
+    }
+
+    fn evict_lru(mut ref self, reason: EvictReason) {
+        let victim = match self.tail {
+            Some(t) => t,
+            None => return,
+        };
+        self.unlink(victim);
+        self.index.remove(victim.key);
+        self.stats.evictions += 1;
+        println(f"  evict {victim.key}={victim.value} ({reason.label()})");
+        self.notify(victim.key, victim.value, reason);
+    }
+
+    fn get(mut ref self, key: String) -> Option[i64] {
+        let found = self.index.get(key);
+        match found {
+            Some(node) => {
+                self.stats.hits += 1;
+                self.touch(node);
+                Some(node.value)
+            }
+            None => {
+                self.stats.misses += 1;
+                None
+            }
+        }
+    }
+
+    fn peek(ref self, key: String) -> Option[i64] {
+        match self.index.get(key) {
+            Some(node) => Some(node.value),
+            None => None,
+        }
+    }
+
+    fn put(mut ref self, key: String, value: i64) {
+        match self.index.get(key) {
+            Some(node) => {
+                node.value = value;
+                self.stats.updates += 1;
+                self.touch(node);
+                return;
+            }
+            None => {}
+        }
+        if self.len() >= self.capacity {
+            self.evict_lru(EvictReason.Capacity);
+        }
+        let node = Node { key: key, value: value, prev: None, next: None };
+        self.index.insert(key, node);
+        self.push_front(node);
+        self.stats.inserts += 1;
+    }
+
+    fn delete(mut ref self, key: String) -> bool {
+        match self.index.remove(key) {
+            Some(node) => {
+                self.unlink(node);
+                self.stats.deletes += 1;
+                self.notify(node.key, node.value, EvictReason.Deleted);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn resize(mut ref self, capacity: i64) {
+        self.capacity = capacity;
+        while self.len() > self.capacity {
+            self.evict_lru(EvictReason.Shrunk);
+        }
+    }
+
+    // Keys from most to least recently used.
+    fn order(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        let mut cur = self.head;
+        while let Some(n) = cur {
+            out.push(f"{n.key}={n.value}");
+            cur = n.next;
+        }
+        out
+    }
+}
+
+fn join(parts: Vec[String], sep: String) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for p in parts {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(p);
+        first = false;
+    }
+    out
+}
+
+fn parse_number(line: i64, text: String) -> Result[i64, ScriptError] {
+    match i64.parse(text) {
+        Some(n) => Ok(n),
+        None => Err(ScriptError.BadNumber { line, text }),
+    }
+}
+
+fn arg(words: ref Vec[String], i: i64, line: i64) -> Result[String, ScriptError] {
+    if i < words.len() {
+        Ok(words[i].clone())
+    } else {
+        Err(ScriptError.MissingArgument { line, command: words[0].clone() })
+    }
+}
+
+fn parse_line(line: i64, text: String) -> Result[Command, ScriptError] {
+    let words = text.split(" ");
+    let cmd = words[0].clone();
+    if cmd == "get" {
+        Ok(Command.Get(arg(words, 1, line)?))
+    } else if cmd == "peek" {
+        Ok(Command.Peek(arg(words, 1, line)?))
+    } else if cmd == "put" {
+        let key = arg(words, 1, line)?;
+        let value = parse_number(line, arg(words, 2, line)?)?;
+        Ok(Command.Put(key, value))
+    } else if cmd == "del" {
+        Ok(Command.Delete(arg(words, 1, line)?))
+    } else if cmd == "resize" {
+        Ok(Command.Resize(parse_number(line, arg(words, 1, line)?)?))
+    } else if cmd == "dump" {
+        Ok(Command.Dump)
+    } else {
+        Err(ScriptError.UnknownCommand { line, word: cmd })
+    }
+}
+
+fn parse_script(source: String) -> (Vec[Command], Vec[ScriptError]) {
+    let mut commands: Vec[Command] = Vec.new();
+    let mut errors: Vec[ScriptError] = Vec.new();
+    let mut line_no = 0;
+    for raw in source.split("\n") {
+        line_no += 1;
+        let text = raw.trim();
+        if text.is_empty() or text.starts_with("#") {
+            continue;
+        }
+        match parse_line(line_no, text) {
+            Ok(c) => commands.push(c),
+            Err(e) => errors.push(e),
+        }
+    }
+    (commands, errors)
+}
+
+fn show(v: Option[i64]) -> String {
+    match v {
+        Some(n) => f"{n}",
+        None => "miss",
+    }
+}
+
+fn run_script(name: String, capacity: i64, source: String) {
+    println(f"== {name} (capacity {capacity}) ==");
+    let (commands, errors) = parse_script(source);
+    for e in errors {
+        println(f"  skip {e}");
+    }
+
+    let mut cache = LruCache.new(capacity);
+    cache.on_evict(Listener {
+        name: "audit",
+        on_evict: |key, value, reason| Some(f"{key} left with {value} ({reason.label()})"),
+    });
+    cache.on_evict(Listener {
+        name: "big",
+        on_evict: |key, value, reason| if value >= 100 { Some(f"large value {value} under {key} dropped") } else { None },
+    });
+
+    for cmd in commands {
+        match cmd {
+            Command.Get(k) => println(f"  get {k} -> {show(cache.get(k))}"),
+            Command.Peek(k) => println(f"  peek {k} -> {show(cache.peek(k))}"),
+            Command.Put(k, v) => {
+                println(f"  put {k}={v}");
+                cache.put(k, v);
+            }
+            Command.Delete(k) => {
+                let removed = cache.delete(k);
+                println(f"  del {k} -> {removed}");
+            }
+            Command.Resize(n) => {
+                println(f"  resize {n}");
+                cache.resize(n);
+            }
+            Command.Dump => println(f"  order [{join(cache.order(), ", ")}]"),
+        }
+    }
+
+    let s = cache.stats;
+    let total = s.hits + s.misses;
+    let rate = if total == 0 { 0 } else { s.hits * 100 / total };
+    println(f"  hits {s.hits}, misses {s.misses}, hit rate {rate}%");
+    println(f"  inserts {s.inserts}, updates {s.updates}, deletes {s.deletes}, evictions {s.evictions}");
+    println(f"  final order [{join(cache.order(), ", ")}] size {cache.len()}/{cache.capacity}");
+}
+
+fn main() -> Result[(), IoError] {
+    let session_script = "# web session cache\nput alice 10\nput bob 20\nput carol 30\nget alice\nput dave 40\nget bob\nget carol\npeek alice\nput alice 110\nput erin 50\ndump\ndel carol\ndel zed\nget erin\nput ivy 60\nfetch alice\nput frank\nresize 2\nget alice\nput gina 120\nput hank 7\n";
+    let query_script = "# query result cache\nput q1 5\nput q2 150\nget q1\nput q3 9\nget q2\nput q1 x\nput q4 1\nget q3\nresize 1\nput q5 300\nget q1\ndump\n";
+
+    fs.write("session.script", session_script)?;
+    fs.write("query.script", query_script)?;
+
+    let session = fs.read_to_string("session.script")?;
+    let query = fs.read_to_string("query.script")?;
+
+    run_script("sessions", 3, session);
+    run_script("queries", 2, query);
+    Ok(())
+}

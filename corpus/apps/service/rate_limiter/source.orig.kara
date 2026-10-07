@@ -1,0 +1,399 @@
+// Rate limiter service: replays a request log (logical timestamps) through a per-(client, route)
+// policy (token bucket or sliding window) and a per-client quota bucket, detecting bursts and
+// putting repeat offenders in a penalty box. Ends with per-client and per-route summaries.
+
+const CLIENT_CAPACITY: i64 = 6;
+const CLIENT_REFILL_MILLI: i64 = 400;
+const BURST_WINDOW: i64 = 3;
+const BURST_THRESHOLD: i64 = 4;
+const PENALTY_STRIKES: i64 = 3;
+const PENALTY_TICKS: i64 = 8;
+const LOG_PATH: String = "requests.log";
+
+#[derive(Clone)]
+enum Policy {
+    Open,
+    Bucket { capacity: i64, refill_milli: i64 },
+    Window { window: i64, limit: i64 },
+}
+
+// v1 rejects an enum payload of enum type (E_ENUM_NESTED_ENUM_PAYLOAD), so the
+// throttle reason is flattened into the decision itself.
+enum Decision {
+    Allow { tokens_left: i64 },
+    RouteBucket,
+    RouteWindow,
+    ClientQuota,
+    Penalty,
+}
+
+impl Decision {
+    fn is_allow(ref self) -> bool {
+        match self { Decision.Allow { .. } => true, _ => false }
+    }
+
+    fn label(ref self) -> String {
+        match self {
+            Decision.Allow { .. } => "allow",
+            Decision.RouteBucket => "route-bucket",
+            Decision.RouteWindow => "route-window",
+            Decision.ClientQuota => "client-quota",
+            Decision.Penalty => "penalty",
+        }
+    }
+}
+
+enum ParseError {
+    FieldCount(i64),
+    BadNumber { field: String, text: String },
+    NonPositiveCost(i64),
+}
+
+impl Display for ParseError {
+    fn to_string(ref self) -> String {
+        match self {
+            ParseError.FieldCount(n) => f"expected 4 fields, found {n}",
+            ParseError.BadNumber { field, text } => f"bad {field} '{text}'",
+            ParseError.NonPositiveCost(c) => f"cost must be positive, got {c}",
+        }
+    }
+}
+
+enum LimitError {
+    UnknownRoute(String),
+}
+
+impl Display for LimitError {
+    fn to_string(ref self) -> String {
+        match self {
+            LimitError.UnknownRoute(r) => f"unknown route {r}",
+        }
+    }
+}
+
+struct Request { number: i64, time: i64, client: String, route: String, cost: i64 }
+
+struct TokenBucket { capacity_milli: i64, refill_milli: i64, tokens_milli: i64, last_tick: i64 }
+
+impl TokenBucket {
+    fn new(capacity: i64, refill_milli: i64) -> TokenBucket {
+        TokenBucket { capacity_milli: capacity * 1000, refill_milli, tokens_milli: capacity * 1000, last_tick: 0 }
+    }
+
+    fn refill(mut ref self, now: i64) {
+        if now > self.last_tick {
+            let gained = (now - self.last_tick) * self.refill_milli;
+            self.tokens_milli += gained;
+            if self.tokens_milli > self.capacity_milli { self.tokens_milli = self.capacity_milli; }
+            self.last_tick = now;
+        }
+    }
+
+    fn can_take(mut ref self, now: i64, cost: i64) -> bool {
+        self.refill(now);
+        self.tokens_milli >= cost * 1000
+    }
+
+    fn take(mut ref self, cost: i64) {
+        self.tokens_milli -= cost * 1000;
+    }
+}
+
+struct SlidingWindow {
+    window: i64, limit: i64, stamps: VecDeque[i64],
+}
+
+impl SlidingWindow {
+    fn new(window: i64, limit: i64) -> SlidingWindow {
+        SlidingWindow { window, limit, stamps: VecDeque.new() }
+    }
+
+    fn evict(mut ref self, now: i64) {
+        while let Some(ts) = self.stamps.pop_front() {
+            if ts > now - self.window {
+                self.stamps.push_front(ts);
+                break;
+            }
+        }
+    }
+
+    fn has_room(mut ref self, now: i64) -> bool {
+        self.evict(now);
+        self.stamps.len() < self.limit
+    }
+
+    fn record(mut ref self, now: i64) -> i64 {
+        self.evict(now);
+        self.stamps.push_back(now);
+        self.stamps.len()
+    }
+}
+
+struct ClientStats {
+    total: i64, allowed: i64, route_throttled: i64, quota_throttled: i64, penalized: i64,
+    bursts: i64, peak: i64, strikes: i64, blocked_until: i64,
+    recent: SlidingWindow,
+}
+
+impl ClientStats {
+    fn new() -> ClientStats {
+        ClientStats {
+            total: 0, allowed: 0, route_throttled: 0, quota_throttled: 0, penalized: 0,
+            bursts: 0, peak: 0, strikes: 0, blocked_until: -1,
+            recent: SlidingWindow.new(BURST_WINDOW, 1000000),
+        }
+    }
+}
+
+struct RouteStats { allowed: i64, throttled: i64, units: i64 }
+
+struct Limiter {
+    routes: Map[String, Policy],
+    client_buckets: Map[String, TokenBucket], route_buckets: Map[String, TokenBucket],
+    route_windows: Map[String, SlidingWindow],
+    clients: Map[String, ClientStats], route_stats: Map[String, RouteStats],
+}
+
+impl Limiter {
+    fn new() -> Limiter {
+        let mut routes = Map.new();
+        routes.insert("/login", Policy.Window { window: 20, limit: 3 });
+        routes.insert("/search", Policy.Bucket { capacity: 4, refill_milli: 500 });
+        routes.insert("/upload", Policy.Window { window: 30, limit: 2 });
+        routes.insert("/health", Policy.Open);
+        Limiter {
+            routes, client_buckets: Map.new(), route_buckets: Map.new(),
+            route_windows: Map.new(), clients: Map.new(), route_stats: Map.new(),
+        }
+    }
+
+    fn handle(mut ref self, req: ref Request) -> Result[Decision, LimitError] {
+        // Workaround: passing `req.route` to a `ref String` method parameter double-frees
+        // under codegen, so the lookup is inlined here instead of living in `policy_for`.
+        let policy = match self.routes.get(req.route) {
+            Some(p) => p.clone(),
+            None => return Err(LimitError.UnknownRoute(req.route.clone())),
+        };
+        let decision = self.decide(req, policy);
+        self.record(req, decision);
+        Ok(decision)
+    }
+
+    fn decide(mut ref self, req: ref Request, policy: Policy) -> Decision {
+        let blocked_until = match self.clients.get(req.client) {
+            Some(stats) => stats.blocked_until,
+            None => -1,
+        };
+        if req.time < blocked_until {
+            return Decision.Penalty;
+        }
+        // Workaround: `map.entry(k).or_insert(v)` on a struct value crashes or fails to compile
+        // under codegen, so each limiter is taken out of its map, used, and put back.
+        let key = f"{req.client} {req.route}";
+        let mut quota = self.client_buckets.remove(req.client) ?? TokenBucket.new(CLIENT_CAPACITY, CLIENT_REFILL_MILLI);
+        let decision = match policy {
+            Policy.Open => admit(mut quota, req),
+            Policy.Bucket { capacity, refill_milli } => {
+                let mut bucket = self.route_buckets.remove(key) ?? TokenBucket.new(capacity, refill_milli);
+                let d = if bucket.can_take(req.time, req.cost) { admit(mut quota, req) } else { Decision.RouteBucket };
+                if d.is_allow() {
+                    bucket.take(req.cost);
+                }
+                self.route_buckets.insert(key, bucket);
+                d
+            }
+            Policy.Window { window, limit } => {
+                let mut win = self.route_windows.remove(key) ?? SlidingWindow.new(window, limit);
+                let d = if win.has_room(req.time) { admit(mut quota, req) } else { Decision.RouteWindow };
+                if d.is_allow() {
+                    win.record(req.time);
+                }
+                self.route_windows.insert(key, win);
+                d
+            }
+        };
+        self.client_buckets.insert(req.client, quota);
+        decision
+    }
+
+    fn record(mut ref self, req: ref Request, decision: ref Decision) {
+        // Same take-out / put-back workaround as in `decide`.
+        let mut stats = self.clients.remove(req.client) ?? ClientStats.new();
+        let mut route = self.route_stats.remove(req.route) ?? RouteStats { allowed: 0, throttled: 0, units: 0 };
+        stats.total += 1;
+        let in_window = stats.recent.record(req.time);
+        if in_window > stats.peak {
+            stats.peak = in_window;
+        }
+        if in_window == BURST_THRESHOLD {
+            stats.bursts += 1;
+            println(f"  ! burst: {req.client} sent {in_window} requests within {BURST_WINDOW} ticks");
+        }
+        match decision {
+            Decision.Allow { .. } => {
+                stats.allowed += 1;
+                stats.strikes = 0;
+                route.allowed += 1;
+                route.units += req.cost;
+            }
+            Decision.Penalty => {
+                route.throttled += 1;
+                stats.penalized += 1;
+            }
+            _ => {
+                route.throttled += 1;
+                match decision {
+                    Decision.ClientQuota => { stats.quota_throttled += 1; }
+                    _ => { stats.route_throttled += 1; }
+                }
+                stats.strikes += 1;
+                if stats.strikes >= PENALTY_STRIKES {
+                    stats.blocked_until = req.time + PENALTY_TICKS;
+                    stats.strikes = 0;
+                    println(f"  ! penalty: {req.client} blocked until t={stats.blocked_until}");
+                }
+            }
+        }
+        self.clients.insert(req.client, stats);
+        self.route_stats.insert(req.route, route);
+    }
+
+    fn print_summary(ref self) {
+        println("== clients ==");
+        let mut ids: Vec[String] = Vec.new();
+        for (id, _) in self.clients {
+            ids.push(id.clone());
+        }
+        ids.sort();
+        for id in ids {
+            let Some(s) = self.clients.get(id) else { continue; };
+            let tokens = match self.client_buckets.get(id) {
+                Some(b) => fmt_milli(b.tokens_milli),
+                None => "n/a",
+            };
+            println(f"{id}: total={s.total} allowed={s.allowed} route={s.route_throttled} quota={s.quota_throttled} penalty={s.penalized} bursts={s.bursts} peak={s.peak} tokens={tokens}");
+        }
+        println("== routes ==");
+        let mut names: Vec[String] = Vec.new();
+        for (name, _) in self.route_stats {
+            names.push(name.clone());
+        }
+        names.sort();
+        for name in names {
+            let Some(r) = self.route_stats.get(name) else { continue; };
+            println(f"{name}: allowed={r.allowed} throttled={r.throttled} units={r.units}");
+        }
+    }
+}
+
+// Milli-units as a fixed-point decimal: 2400 -> "2.400" (1000 + frac keeps the zero padding).
+fn fmt_milli(m: i64) -> String {
+    let padded = f"{1000 + m % 1000}";
+    f"{m / 1000}.{padded.substring(1)}"
+}
+
+fn admit(quota: mut ref TokenBucket, req: ref Request) -> Decision {
+    if quota.can_take(req.time, req.cost) {
+        quota.take(req.cost);
+        Decision.Allow { tokens_left: quota.tokens_milli }
+    } else {
+        Decision.ClientQuota
+    }
+}
+
+fn describe(decision: ref Decision) -> String {
+    match decision {
+        Decision.Allow { tokens_left } => f"allow (quota {fmt_milli(tokens_left)})",
+        _ => f"throttle {decision.label()}",
+    }
+}
+
+fn parse_num(text: ref String, field: String) -> Result[i64, ParseError] {
+    match i64.parse(text) {
+        Some(n) => Ok(n),
+        None => Err(ParseError.BadNumber { field, text: text.clone() }),
+    }
+}
+
+fn parse_line(line: ref String, number: i64) -> Result[Request, ParseError] {
+    let parts = line.trim().split(" ");
+    if parts.len() != 4 {
+        return Err(ParseError.FieldCount(parts.len()));
+    }
+    let time = parse_num(parts[0], "time")?;
+    let cost = parse_num(parts[3], "cost")?;
+    if cost <= 0 {
+        return Err(ParseError.NonPositiveCost(cost));
+    }
+    Ok(Request { number, time, client: parts[1].clone(), route: parts[2].clone(), cost })
+}
+
+fn build_log() -> String {
+    let clients = ["acme", "bolt", "cyan", "delta", "echo"];
+    let routes = ["/login", "/search", "/upload", "/health"];
+    let mut out = String.new();
+    for t in 0..60 {
+        if t % 2 == 0 {
+            let k = t / 2;
+            let client = clients[(k * 3) % 5].clone();
+            let route = routes[k % 4].clone();
+            let cost = if route == "/upload" { 3 } else { 1 };
+            out.push_str(f"{t} {client} {route} {cost}\n");
+        }
+        if t >= 30 and t < 33 {
+            for _ in 0..3 { out.push_str(f"{t} bolt /search 1\n"); }
+        }
+        if t >= 40 and t <= 45 {
+            out.push_str(f"{t} delta /login 1\n");
+        }
+        if t % 7 == 0 {
+            out.push_str(f"{t} cyan /login 1\n");
+        }
+        if t == 13 { out.push_str("13 acme /login\n"); }
+        if t == 27 { out.push_str("27 delta /search x\n"); }
+        if t == 44 { out.push_str("44 echo /health 0\n"); }
+        if t == 50 { out.push_str("50 zulu /admin 1\n"); }
+        if t >= 50 and t < 53 {
+            for _ in 0..3 { out.push_str(f"{t} echo /health 1\n"); }
+        }
+    }
+    out
+}
+
+fn main() -> Result[(), IoError] {
+    let log = build_log();
+    fs.write(LOG_PATH, log)?;
+    let text = fs.read_to_string(LOG_PATH)?;
+    let mut requests: Vec[Request] = Vec.new();
+    let mut line_no = 0;
+    let mut malformed = 0;
+    for line in text.split("\n") {
+        line_no += 1;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match parse_line(line, requests.len() + 1) {
+            Ok(req) => requests.push(req),
+            Err(e) => {
+                malformed += 1;
+                println(f"line {line_no}: skipped ({e})");
+            }
+        }
+    }
+    println(f"parsed {requests.len()} requests, {malformed} malformed lines");
+    let mut limiter = Limiter.new();
+    let mut rejected = 0;
+    for req in requests {
+        let head = f"#{req.number} t={req.time} {req.client} {req.route} cost={req.cost}";
+        match limiter.handle(req) {
+            Ok(decision) => println(f"{head} -> {describe(decision)}"),
+            Err(e) => {
+                rejected += 1;
+                println(f"{head} -> rejected ({e})");
+            }
+        }
+    }
+    println(f"rejected {rejected} requests");
+    limiter.print_summary();
+    Ok(())
+}

@@ -1,0 +1,53 @@
+--- a/config.ini (28 lines)
++++ b/config.ini (29 lines)
+@@ -1,7 +1,7 @@
+ # server configuration
+ [server]
+-host = localhost
++host = 0.0.0.0
+ port = 8080
+-workers = 4
++workers = 8
+ timeout = 30
+ keepalive = 5
+@@ -15,5 +15,5 @@
+ [http]
+ max_body = 1mb
+-compression = off
++compression = gzip
+ cors = none
+ 
+@@ -25,4 +25,5 @@
+ [retry]
+ retry = 3
+-backoff = linear
++backoff = exponential
++jitter = on
+ # end
+summary: 3 hunk(s), 5 insertion(s)(+), 4 deletion(s)(-), 24 unchanged
+
+--- a/story.txt (14 lines)
++++ b/story.txt (16 lines)
+@@ -1,8 +1,8 @@
+-The quick brown fox
++A quick brown fox
+ jumps over the lazy dog.
+ It was a sunny day.
+-Birds were singing.
+ The fox was hungry.
+ It looked for food.
++It found an apple.
+ The dog slept on.
+ Nothing else happened.
+@@ -11,4 +11,6 @@
+ The farmer came home.
+ He fed the chickens.
++He fed the pigs.
+ He closed the gate.
++The sun went down.
+ The end.
+summary: 2 hunk(s), 4 insertion(s)(+), 2 deletion(s)(-), 12 unchanged
+
+error: document has no name
+
+pairs: 3, failed: 1

@@ -1,0 +1,396 @@
+// observer_list: a tiny spreadsheet. Changing a cell recomputes its dependents in
+// dependency order and notifies observers, which may unsubscribe while notified.
+
+enum Formula {
+    Const(i64),
+    Sum(Vec[String]),
+    Max(Vec[String]),
+    Scale(String, i64),
+    Product(String, String),
+    Diff(String, String),
+    Div(String, String),
+}
+
+fn join_names(names: ref Vec[String]) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for n in names {
+        if not first { out.push_str(", "); }
+        out.push_str(n);
+        first = false;
+    }
+    out
+}
+
+impl Formula {
+    fn deps(ref self) -> Vec[String] {
+        match self {
+            Formula.Const(_) => Vec.new(),
+            Formula.Sum(names) | Formula.Max(names) => names.clone(),
+            Formula.Scale(a, _) => [a.clone()],
+            Formula.Product(a, b) | Formula.Diff(a, b) | Formula.Div(a, b) => [a.clone(), b.clone()],
+        }
+    }
+}
+
+impl Display for Formula {
+    fn to_string(ref self) -> String {
+        match self {
+            Formula.Const(n) => f"{n}",
+            Formula.Sum(names) => f"SUM({join_names(names)})",
+            Formula.Max(names) => f"MAX({join_names(names)})",
+            Formula.Scale(a, k) => f"{a} * {k}",
+            Formula.Product(a, b) => f"{a} * {b}",
+            Formula.Diff(a, b) => f"{a} - {b}",
+            Formula.Div(a, b) => f"{a} / {b}",
+        }
+    }
+}
+
+enum SheetError {
+    UnknownCell(String),
+    DuplicateCell(String),
+    Cycle(String, String),
+    DivByZero(String),
+}
+
+impl Display for SheetError {
+    fn to_string(ref self) -> String {
+        match self {
+            SheetError.UnknownCell(n) => f"unknown cell {n}",
+            SheetError.DuplicateCell(n) => f"cell {n} already defined",
+            SheetError.Cycle(n, via) => f"cycle: {n} would depend on itself via {via}",
+            SheetError.DivByZero(n) => f"division by zero in {n}",
+        }
+    }
+}
+
+struct Cell {
+    name: String,
+    formula: Formula,
+    value: i64,
+}
+
+enum ObserverKind {
+    Audit,
+    Threshold(i64),
+    OneShot,
+    Countdown(i64),
+    Trend,
+}
+
+enum Reaction {
+    Keep,
+    Unsubscribe,
+}
+
+struct Observer {
+    id: i64,
+    label: String,
+    watch: String,
+    kind: ObserverKind,
+    seen: i64,
+}
+
+impl Observer {
+    fn watches(ref self, cell: ref String) -> bool {
+        self.watch == "*" or self.watch == cell
+    }
+    fn notify(mut ref self, cell: ref String, old: i64, new: i64) -> Reaction {
+        self.seen += 1;
+        let tag = f"[{self.label}#{self.id}]";
+        match self.kind {
+            ObserverKind.Audit => {
+                println(f"    {tag} {cell}: {old} -> {new}");
+                Reaction.Keep
+            }
+            ObserverKind.Threshold(limit) => {
+                if new > limit {
+                    println(f"    {tag} ALERT {cell}={new} exceeds {limit}; unsubscribing");
+                    Reaction.Unsubscribe
+                } else {
+                    println(f"    {tag} {cell}={new} within {limit}");
+                    Reaction.Keep
+                }
+            }
+            ObserverKind.OneShot => {
+                println(f"    {tag} first change of {cell} seen ({old} -> {new}); unsubscribing");
+                Reaction.Unsubscribe
+            }
+            ObserverKind.Countdown(n) => {
+                let left = n - self.seen;
+                if left <= 0 {
+                    println(f"    {tag} {cell}={new}, last notification; unsubscribing");
+                    Reaction.Unsubscribe
+                } else {
+                    println(f"    {tag} {cell}={new}, {left} left");
+                    Reaction.Keep
+                }
+            }
+            ObserverKind.Trend => {
+                let delta = new - old;
+                let dir = if delta > 0 { "up" } else { "down" };
+                println(f"    {tag} {cell} went {dir} by {delta.abs()}");
+                Reaction.Keep
+            }
+        }
+    }
+}
+
+struct Change {
+    cell: i64,
+    old: i64,
+    new: i64,
+}
+
+struct Sheet {
+    cells: Vec[Cell],
+    index: Map[String, i64],
+    observers: Vec[Observer],
+    next_id: i64,
+}
+
+impl Sheet {
+    fn new() -> Sheet {
+        Sheet { cells: Vec.new(), index: Map.new(), observers: Vec.new(), next_id: 1 }
+    }
+    fn lookup(ref self, name: ref String) -> Result[i64, SheetError] {
+        match self.index.get(name) {
+            Some(i) => Ok(i),
+            None => Err(SheetError.UnknownCell(name.clone())),
+        }
+    }
+    fn value_of(ref self, name: ref String) -> Result[i64, SheetError] {
+        let i = self.lookup(name)?;
+        Ok(self.cells[i].value)
+    }
+    fn eval(ref self, name: ref String, formula: ref Formula) -> Result[i64, SheetError] {
+        match formula {
+            Formula.Const(n) => Ok(*n),
+            Formula.Sum(names) => {
+                let mut total = 0;
+                for n in names {
+                    total += self.value_of(n)?;
+                }
+                Ok(total)
+            }
+            Formula.Max(names) => {
+                let mut best = self.value_of(names[0])?;
+                for n in names {
+                    let v = self.value_of(n)?;
+                    if v > best { best = v; }
+                }
+                Ok(best)
+            }
+            Formula.Scale(a, k) => Ok(self.value_of(a)? * *k),
+            Formula.Product(a, b) => Ok(self.value_of(a)? * self.value_of(b)?),
+            Formula.Diff(a, b) => Ok(self.value_of(a)? - self.value_of(b)?),
+            Formula.Div(a, b) => {
+                let d = self.value_of(b)?;
+                if d == 0 { return Err(SheetError.DivByZero(name.clone())); }
+                Ok(self.value_of(a)? / d)
+            }
+        }
+    }
+    // Does `from` (transitively) depend on `target`?
+    fn reaches(ref self, from: ref String, target: ref String) -> bool {
+        let mut stack: Vec[String] = [from.clone()];
+        let mut visited: Set[String] = Set.new();
+        while let Some(cur) = stack.pop() {
+            if cur == target { return true; }
+            if not visited.insert(cur.clone()) { continue; }
+            if let Some(i) = self.index.get(cur) {
+                for d in self.cells[i].formula.deps() {
+                    stack.push(d);
+                }
+            }
+        }
+        false
+    }
+    fn check_formula(ref self, name: ref String, formula: ref Formula) -> Result[(), SheetError] {
+        for d in formula.deps() {
+            self.lookup(d)?;
+            if self.reaches(d, name) { return Err(SheetError.Cycle(name.clone(), d)); }
+        }
+        Ok(())
+    }
+    fn define(mut ref self, name: String, formula: Formula) -> Result[(), SheetError] {
+        if self.index.contains_key(name) { return Err(SheetError.DuplicateCell(name)); }
+        self.check_formula(name, formula)?;
+        let value = self.eval(name, formula)?;
+        println(f"define {name} = {formula} -> {value}");
+        self.index.insert(name.clone(), self.cells.len());
+        self.cells.push(Cell { name: name, formula: formula, value: value });
+        Ok(())
+    }
+    // Topological order over all cells: repeatedly take the lowest-index
+    // cell whose dependencies are already placed.
+    fn topo_order(ref self) -> Vec[i64] {
+        let n = self.cells.len();
+        let mut placed = Vec.filled(n, false);
+        let mut order: Vec[i64] = Vec.new();
+        while order.len() < n {
+            let mut i = 0;
+            while i < n {
+                if not placed[i] {
+                    let mut ready = true;
+                    for d in self.cells[i].formula.deps() {
+                        let j = self.index[d];
+                        if not placed[j] { ready = false; }
+                    }
+                    if ready {
+                        placed[i] = true;
+                        order.push(i);
+                        break;
+                    }
+                }
+                i += 1;
+            }
+        }
+        order
+    }
+    fn affected_by(ref self, start: i64) -> Vec[bool] {
+        let mut hit = Vec.filled(self.cells.len(), false);
+        hit[start] = true;
+        let mut queue: Vec[i64] = [start];
+        while let Some(cur) = queue.pop() {
+            let cur_name = self.cells[cur].name.clone();
+            let mut j = 0;
+            while j < self.cells.len() {
+                if not hit[j] and self.cells[j].formula.deps().contains(cur_name) {
+                    hit[j] = true;
+                    queue.push(j);
+                }
+                j += 1;
+            }
+        }
+        hit
+    }
+    fn set(mut ref self, name: String, formula: Formula) -> Result[i64, SheetError] {
+        let idx = self.lookup(name)?;
+        self.check_formula(name, formula)?;
+        println(f"set {name} = {formula}");
+        self.cells[idx].formula = formula;
+        let hit = self.affected_by(idx);
+        let mut changes: Vec[Change] = Vec.new();
+        for i in self.topo_order() {
+            if not hit[i] { continue; }
+            let old = self.cells[i].value;
+            let cell_name = self.cells[i].name.clone();
+            match self.eval(cell_name, self.cells[i].formula) {
+                Ok(v) => {
+                    if v != old {
+                        self.cells[i].value = v;
+                        changes.push(Change { cell: i, old: old, new: v });
+                    }
+                }
+                Err(e) => println(f"  ! {e}; {cell_name} keeps {old}"),
+            }
+        }
+        println(f"  recomputed, {changes.len()} cell(s) changed");
+        for c in changes {
+            let cell_name = self.cells[c.cell].name.clone();
+            self.notify_all(cell_name, c.old, c.new);
+        }
+        Ok(changes.len())
+    }
+    fn notify_all(mut ref self, cell: String, old: i64, new: i64) {
+        let mut i = 0;
+        while i < self.observers.len() {
+            if not self.observers[i].watches(cell) {
+                i += 1;
+                continue;
+            }
+            match self.observers[i].notify(cell, old, new) {
+                Reaction.Keep => { i += 1; }
+                Reaction.Unsubscribe => {
+                    let gone = self.observers.remove(i);
+                    println(f"    - {gone.label}#{gone.id} removed ({gone.seen} notification(s))");
+                }
+            }
+        }
+    }
+    fn subscribe(mut ref self, label: String, watch: String, kind: ObserverKind) -> i64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        println(f"subscribe {label}#{id} on {watch}");
+        self.observers.push(Observer { id: id, label: label, watch: watch, kind: kind, seen: 0 });
+        id
+    }
+    fn unsubscribe(mut ref self, id: i64) -> bool {
+        let mut i = 0;
+        while i < self.observers.len() {
+            if self.observers[i].id == id {
+                let o = self.observers.remove(i);
+                println(f"unsubscribe {o.label}#{o.id}");
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+    fn report(ref self) {
+        println("final values:");
+        for c in self.cells {
+            println(f"  {c.name} = {c.value}    ({c.formula})");
+        }
+        println(f"subscribers left: {self.observers.len()}");
+        for o in self.observers {
+            println(f"  {o.label}#{o.id} on {o.watch}, notified {o.seen} time(s)");
+        }
+    }
+}
+
+fn report_err(step: String, r: Result[(), SheetError]) {
+    match r {
+        Ok(()) => {}
+        Err(e) => println(f"{step} failed: {e}"),
+    }
+}
+
+fn apply(sheet: mut ref Sheet, name: String, formula: Formula) {
+    match sheet.set(name, formula) {
+        Ok(_) => {}
+        Err(e) => println(f"set {name} rejected: {e}"),
+    }
+}
+
+fn build_sheet(sheet: mut ref Sheet) -> Result[(), SheetError] {
+    sheet.define("A1", Formula.Const(10))?;
+    sheet.define("A2", Formula.Const(20))?;
+    sheet.define("A3", Formula.Sum(["A1", "A2"]))?;
+    sheet.define("B1", Formula.Scale("A3", 2))?;
+    sheet.define("B2", Formula.Product("A1", "A2"))?;
+    sheet.define("C1", Formula.Max(["B1", "B2", "A3"]))?;
+    sheet.define("C2", Formula.Diff("C1", "B1"))?;
+    sheet.define("D1", Formula.Div("C1", "A1"))?;
+    Ok(())
+}
+
+fn main() {
+    let mut sheet = Sheet.new();
+    report_err("build", build_sheet(mut sheet));
+    report_err("redefine", sheet.define("B1", Formula.Const(1)));
+    report_err("define", sheet.define("E1", Formula.Sum(["A1", "Z9"])));
+
+    sheet.subscribe("audit", "*", ObserverKind.Audit);
+    sheet.subscribe("alarm", "C1", ObserverKind.Threshold(300));
+    sheet.subscribe("once", "A3", ObserverKind.OneShot);
+    sheet.subscribe("tick", "B1", ObserverKind.Countdown(2));
+    sheet.subscribe("b1-once", "B1", ObserverKind.OneShot);
+    let trend = sheet.subscribe("trend", "C2", ObserverKind.Trend);
+
+    apply(mut sheet, "A1", Formula.Const(15));
+    apply(mut sheet, "A2", Formula.Const(5));
+    apply(mut sheet, "A1", Formula.Const(0));
+    apply(mut sheet, "A1", Formula.Sum(["C2", "A2"]));
+    apply(mut sheet, "Z9", Formula.Const(3));
+    apply(mut sheet, "A2", Formula.Const(100));
+    apply(mut sheet, "A3", Formula.Const(7));
+    if sheet.unsubscribe(trend) { println("trend observer detached"); }
+    if not sheet.unsubscribe(trend) {
+        println(f"observer #{trend} was already gone");
+    }
+    apply(mut sheet, "A1", Formula.Const(4));
+    sheet.report();
+}

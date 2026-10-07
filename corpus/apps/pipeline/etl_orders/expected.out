@@ -1,0 +1,41 @@
+loaded 8 customers, 30 joined orders, 17 rejects
+
+REJECTS
+  customers.csv:10: unknown tier 'platinum'
+  orders.csv:38: invalid date '2026-02-30'
+  orders.csv:39: negative quantity -2
+  orders.csv:40: invalid date '2026-13-01'
+  orders.csv:41: zero quantity
+  orders.csv:42: invalid date '2026-03-xx'
+  orders.csv:43: expected 6 columns, got 5
+  orders.csv:44: field quantity is not a number: 'five'
+  orders.csv:46: invalid date '2026-02-29'
+  orders.csv:47: negative quantity -10
+  orders.csv:6: no customer with id 9
+  orders.csv:9: no customer with id 10
+  orders.csv:16: no customer with id 9
+  orders.csv:19: no customer with id 10
+  orders.csv:26: no customer with id 9
+  orders.csv:29: no customer with id 10
+  orders.csv:36: no customer with id 9
+
+REVENUE BY TIER AND MONTH
+  BRONZE 2026-01   orders=2 units=11 revenue=72.95
+  BRONZE 2026-02   orders=2 units=3 revenue=13.62
+  BRONZE 2026-03   orders=2 units=8 revenue=58.72
+  BRONZE 2026-04   orders=1 units=4 revenue=30.16
+  BRONZE 2026-05   orders=2 units=6 revenue=25.02
+  BRONZE 2026-06   orders=1 units=6 revenue=13.44
+  GOLD 2026-01     orders=3 units=10 revenue=43.48
+  GOLD 2026-03     orders=2 units=7 revenue=57.59
+  GOLD 2026-05     orders=3 units=18 revenue=95.04
+  SILVER 2024-02   orders=1 units=2 revenue=30.00
+  SILVER 2026-02   orders=3 units=17 revenue=124.74
+  SILVER 2026-04   orders=4 units=13 revenue=66.70
+  SILVER 2026-06   orders=4 units=14 revenue=74.86
+
+REVENUE BY TIER
+  BRONZE   orders=10 units=38 revenue=213.91
+  GOLD     orders=8 units=35 revenue=196.11
+  SILVER   orders=12 units=46 revenue=296.30
+TOTAL revenue=706.32

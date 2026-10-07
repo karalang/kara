@@ -1,0 +1,26 @@
+loaded temp: 10 readings
+loaded humid: 6 readings
+loaded press: 6 readings
+    ts     temp(C)    humid(%)  press(hPa)
+     0        21.1           -           -
+     5       21.1*        46.8           -
+    10        22.7       46.8*      1012.9
+    20        21.7        51.0     1012.9*
+    30       21.7*       51.0*      1014.0
+    40        22.4       51.0*     1014.0*
+    50        21.5        46.2      1013.3
+    60        20.6       46.2*     1013.3*
+    65       20.6*        50.4     1013.3*
+    70       20.6*       50.4*      1012.8
+    80        21.3       50.4*     1012.8*
+    90        20.3       50.4*      1013.8
+    95       20.3*        45.6     1013.8*
+   100        21.9       45.6*     1013.8*
+   110       21.9*        49.8      1013.2
+   120        22.7       49.8*     1013.2*
+gap report (* = carried forward):
+  temp: samples=10 gaps=6 leading_missing=0 longest_gap_run=2
+  humid: samples=6 gaps=9 leading_missing=1 longest_gap_run=3
+  press: samples=6 gaps=8 leading_missing=2 longest_gap_run=2
+merged rows: 16, total filled cells: 23
+done

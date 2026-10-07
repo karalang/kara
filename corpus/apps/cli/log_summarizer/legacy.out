@@ -1,0 +1,39 @@
+== log summary ==
+files: 3, lines: 120, parsed: 105, malformed: 15
+-- malformed lines --
+  app.log:13: expected 5 fields, got 1
+  app.log:17: bad number 'n/a'
+  app.log:26: expected 5 fields, got 1
+  app.log:34: bad number 'n/a'
+  app.log:39: expected 5 fields, got 1
+  auth.log:13: expected 5 fields, got 1
+  auth.log:17: bad number 'n/a'
+  auth.log:26: expected 5 fields, got 1
+  auth.log:34: bad number 'n/a'
+  auth.log:39: expected 5 fields, got 1
+  db.log:13: expected 5 fields, got 1
+  db.log:17: bad number 'n/a'
+  db.log:26: expected 5 fields, got 1
+  db.log:34: bad number 'n/a'
+  db.log:39: expected 5 fields, got 1
+-- levels --
+  DEBUG: 11
+  INFO: 50
+  WARN: 24
+  ERROR: 20
+-- components --
+  app/api: count=6 p50=189ms p95=539ms
+  app/cache: count=6 p50=129ms p95=362ms
+  app/worker: count=23 p50=198ms p95=514ms
+  auth/login: count=14 p50=223ms p95=469ms
+  auth/session: count=7 p50=274ms p95=537ms
+  auth/token: count=14 p50=232ms p95=594ms
+  db/pool: count=8 p50=112ms p95=360ms
+  db/query: count=14 p50=222ms p95=516ms
+  db/replica: count=13 p50=156ms p95=521ms
+-- top errors --
+  1. upstream timeout (5)
+  2. null payload (4)
+  3. invalid token (3)
+  4. template render failed (3)
+  5. deadlock detected (2)

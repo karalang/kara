@@ -1,0 +1,8755 @@
+{
+ "cli/config_merge": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Config.apply",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Config.int",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Config.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Config.validate",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "ConfigError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Layer.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Value.render",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "coerce",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "defaults",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "join",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "load_cli",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "load_env",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "load_file",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "pad",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "parse_bool",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "report",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "schema",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "own",
+    "fn": "Config.apply",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Config.apply",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "raw",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Config.apply",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "layer",
+    "type": "Layer",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Config.int",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Config.new",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "schema",
+    "type": "SortedMap[String, Kind]",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Config.validate",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "required",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "coerce",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "coerce",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "raw",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "coerce",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "kind",
+    "type": "Kind",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "coerce",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "layer",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "items",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sep",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "load_cli",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cfg",
+    "type": "Config",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "load_cli",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "args",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "load_env",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cfg",
+    "type": "Config",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "load_env",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "vars",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "load_file",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cfg",
+    "type": "Config",
+    "use": "mutated"
+   },
+   {
+    "declared": "own",
+    "fn": "load_file",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "load_file",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "pad",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_bool",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "report",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cfg",
+    "type": "Config",
+    "use": "read"
+   }
+  ]
+ },
+ "cli/csv_report": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "CsvError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "MonthTotal.add",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "MonthTotal.new",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "RowError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Sale.revenue_cents",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Totals.absorb",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Totals.zero",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "aggregate",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "embedded_csv",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "format_money",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "load_sales",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "month_label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "pad_left",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "pad_right",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_csv",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "parse_month",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "parse_price",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "parse_sale",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "print_report",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "row",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "rule",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "validate_upload",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "MonthTotal.add",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sale",
+    "type": "Sale",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "MonthTotal.new",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "region",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "MonthTotal.new",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "month",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Totals.absorb",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "m",
+    "type": "MonthTotal",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "aggregate",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sales",
+    "type": "Vec[Sale]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "load_sales",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "month_label",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "pad_left",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "pad_right",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_csv",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_month",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "date",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_price",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_sale",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "rec",
+    "type": "RawRecord",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_report",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "totals",
+    "type": "Vec[MonthTotal]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "row",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "region",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "row",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "month",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "validate_upload",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "validate_upload",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   }
+  ]
+ },
+ "cli/log_summarizer": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "Level.index",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Level.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Level.parse",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "ParseError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Rng.new",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Rng.next",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Summary.add_log",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Summary.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Summary.top_errors",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "generate_log",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "info_message",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_line",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_log",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "percentile",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "print_summary",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "Level.parse",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Summary.add_log",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "log",
+    "type": "ParsedLog",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "generate_log",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "spec",
+    "type": "ServiceSpec",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_line",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "parse_log",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "service",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_log",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "percentile",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sorted",
+    "type": "Vec[i64]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_summary",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "summary",
+    "type": "Summary",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_summary",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "logs",
+    "type": "Vec[ParsedLog]",
+    "use": "read"
+   }
+  ]
+ },
+ "cli/text_diff": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "DiffError.describe",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Document.line_count",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Document.parse",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Edit.is_change",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Edit.prefix",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Edit.render",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Hunk.header",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "build_hunks",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "collect_stats",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "config_new",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "config_old",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "diff_pair",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "edit_script",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "lcs_table",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "make_hunk",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "print_diff",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "range_spec",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "story_new",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "story_old",
+    "pub": false,
+    "resources": []
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "own",
+    "fn": "Document.parse",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Document.parse",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "build_hunks",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "edits",
+    "type": "Vec[Edit]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "collect_stats",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "edits",
+    "type": "Vec[Edit]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "diff_pair",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "old_name",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "diff_pair",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "old_text",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "diff_pair",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "new_name",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "diff_pair",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "new_text",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "edit_script",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "old",
+    "type": "Document",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "edit_script",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "new",
+    "type": "Document",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "lcs_table",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "old",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "lcs_table",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "new",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "make_hunk",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "edits",
+    "type": "Vec[Edit]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_diff",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "old",
+    "type": "Document",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_diff",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "new",
+    "type": "Document",
+    "use": "read"
+   }
+  ]
+ },
+ "cli/todo_store": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "Command.mutates",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Filter.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Filter.matches",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Filter.parse",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Store.apply",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Store.empty",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Store.index_of",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Store.list",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Store.parse",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Store.serialize",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Todo.has_tag",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Todo.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Todo.render",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Todo.to_line",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "TodoError.from",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "TodoError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "join_from",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)"
+    ],
+    "fn": "load_store",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "need_id",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "need_text",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_command",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_id",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "reads(FileSystem)"
+    ],
+    "fn": "read_or_empty",
+    "pub": false,
+    "resources": [
+     "FileSystem"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)"
+    ],
+    "fn": "run_line",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "store_path",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "summary",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)"
+    ],
+    "fn": "undo_last",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "undo_path",
+    "pub": false,
+    "resources": []
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "Filter.matches",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "t",
+    "type": "Todo",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Filter.parse",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "word",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Store.apply",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "cmd",
+    "type": "Command",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Store.list",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "filter",
+    "type": "Filter",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Store.parse",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Todo.has_tag",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "tag",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Todo.new",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "title",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "TodoError.from",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "e",
+    "type": "IoError",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "join_from",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "parts",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "join_from",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sep",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "need_id",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "words",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "need_id",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "op",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "need_text",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "words",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "need_text",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "complaint",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_command",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_id",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "word",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "read_or_empty",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "run_line",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "summary",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "store",
+    "type": "Store",
+    "use": "read"
+   }
+  ]
+ },
+ "cli/word_freq_multi": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "AppError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "FreqTable.absorb",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "FreqTable.add",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "FreqTable.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "FreqTable.top",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "FreqTable.unique",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "StopWords.contains",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "StopWords.english",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "corpus",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "count_document",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "describe_io",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "into_document",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "normalize",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "print_report",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "run",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "tokenize",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(FileSystem)"
+    ],
+    "fn": "write_corpus",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "FreqTable.absorb",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "other",
+    "type": "FreqTable",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "FreqTable.add",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "word",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "FreqTable.new",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "label",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "StopWords.contains",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "word",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "count_document",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "doc",
+    "type": "Document",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "count_document",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "stop",
+    "type": "StopWords",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "describe_io",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "e",
+    "type": "IoError",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "into_document",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "into_document",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "read",
+    "type": "Result[String, IoError]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "normalize",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_report",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "table",
+    "type": "FreqTable",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "tokenize",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "write_corpus",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "docs",
+    "type": "Vec[Document]",
+    "use": "read"
+   }
+  ]
+ },
+ "graph/dep_resolver": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "Constraint.matches",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Constraint.parse",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Constraint.text",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "ResolveError.describe",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Resolver.best_match",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Resolver.load",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Resolver.plan",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Resolver.require",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Resolver.visit",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Version.compare",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Version.parse",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Version.text",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "join",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_dep",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_release",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)"
+    ],
+    "fn": "run_scenario",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "Constraint.matches",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "v",
+    "type": "Version",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Constraint.parse",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Resolver.best_match",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Resolver.best_match",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "c",
+    "type": "Constraint",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Resolver.best_match",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "required_by",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Resolver.load",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Resolver.plan",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "roots",
+    "type": "Vec[Dep]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Resolver.require",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Resolver.require",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "c",
+    "type": "Constraint",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Resolver.require",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "required_by",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Resolver.visit",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "Resolver.visit",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "state",
+    "type": "Map[String, i64]",
+    "use": "mutated"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "Resolver.visit",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "stack",
+    "type": "Vec[String]",
+    "use": "mutated"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "Resolver.visit",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "order",
+    "type": "Vec[String]",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "Version.compare",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "other",
+    "type": "Version",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Version.parse",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "items",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sep",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "parse_dep",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "parse_release",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "run_scenario",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sc",
+    "type": "Scenario",
+    "use": "read"
+   }
+  ]
+ },
+ "graph/doc_tree": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "DocTree.append",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "DocTree.check",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "DocTree.delete",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "DocTree.depth",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "DocTree.detach",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "DocTree.find_by_path",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "DocTree.insert_at",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "DocTree.is_ancestor_or_self",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "DocTree.move_subtree",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "DocTree.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "DocTree.number_of",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "DocTree.path_of",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "DocTree.position_in_parent",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "DocTree.rank_among_kind",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "DocTree.render",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "DocTree.render_into",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "DocTree.stats",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "TreeError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "build_handbook",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "indent",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "join",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "locate",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "print_outline",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "writes(Stdout)"
+    ],
+    "fn": "report",
+    "pub": false,
+    "resources": [
+     "Stdout"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "own",
+    "fn": "DocTree.append",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "kind",
+    "type": "NodeKind",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "DocTree.append",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "title",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "DocTree.find_by_path",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "DocTree.insert_at",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "kind",
+    "type": "NodeKind",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "DocTree.insert_at",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "title",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "DocTree.new",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "title",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "DocTree.render_into",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "out",
+    "type": "Vec[String]",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "parts",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sep",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "locate",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "doc",
+    "type": "DocTree",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "locate",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_outline",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "doc",
+    "type": "DocTree",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "print_outline",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "heading",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "report",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "label",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "report",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "r",
+    "type": "Result[(), TreeError]",
+    "use": "read"
+   }
+  ]
+ },
+ "graph/entity_system": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "EntityRef.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Pos.distance",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "SetupError.describe",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Team.name",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "World.despawn",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "World.is_alive",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "World.living",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "World.name_of",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "World.nearest_enemy",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "World.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "World.position",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "World.render",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "World.run_combat",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "World.run_movement",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "World.run_targeting",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "World.spawn",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "World.team_strength",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "arm",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "clamp",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "parse_number",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_order",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "roster",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "sign",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "step_toward",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "template",
+    "pub": false,
+    "resources": []
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "own",
+    "fn": "World.spawn",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "kind",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_number",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_order",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "template",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "kind",
+    "type": "String",
+    "use": "read"
+   }
+  ]
+ },
+ "graph/lru_cache": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "EvictReason.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "LruCache.delete",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "LruCache.evict_lru",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "LruCache.get",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "LruCache.len",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "LruCache.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "LruCache.notify",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "LruCache.on_evict",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "LruCache.order",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "LruCache.peek",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "LruCache.push_front",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "LruCache.put",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "LruCache.resize",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "LruCache.touch",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "LruCache.unlink",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "ScriptError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "arg",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "join",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_line",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "parse_number",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_script",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "run_script",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "show",
+    "pub": false,
+    "resources": []
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "own",
+    "fn": "LruCache.delete",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "LruCache.get",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "LruCache.notify",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "LruCache.on_evict",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "listener",
+    "type": "Listener",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "LruCache.peek",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "LruCache.push_front",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "node",
+    "type": "Node",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "LruCache.put",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "LruCache.touch",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "node",
+    "type": "Node",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "LruCache.unlink",
+    "inferred": "mut_ref",
+    "into_iter": false,
+    "param": "node",
+    "type": "Node",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "arg",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "words",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "parts",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sep",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "parse_line",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "parse_number",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "parse_script",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "source",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "run_script",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "run_script",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "source",
+    "type": "String",
+    "use": "stored"
+   }
+  ]
+ },
+ "graph/observer_list": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Formula.deps",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Formula.to_string",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "writes(Stdout)"
+    ],
+    "fn": "Observer.notify",
+    "pub": false,
+    "resources": [
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Observer.watches",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Sheet.affected_by",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Sheet.check_formula",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "Sheet.define",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Sheet.eval",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Sheet.lookup",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Sheet.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "Sheet.notify_all",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Sheet.reaches",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "writes(Stdout)"
+    ],
+    "fn": "Sheet.report",
+    "pub": false,
+    "resources": [
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "Sheet.set",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "Sheet.subscribe",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Sheet.topo_order",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "Sheet.unsubscribe",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Sheet.value_of",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "SheetError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "apply",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "build_sheet",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "join_names",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "writes(Stdout)"
+    ],
+    "fn": "report_err",
+    "pub": false,
+    "resources": [
+     "Stdout"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "Observer.notify",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cell",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Observer.watches",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cell",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Sheet.check_formula",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Sheet.check_formula",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "formula",
+    "type": "Formula",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Sheet.define",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Sheet.define",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "formula",
+    "type": "Formula",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Sheet.eval",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Sheet.eval",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "formula",
+    "type": "Formula",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Sheet.lookup",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Sheet.notify_all",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cell",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Sheet.reaches",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "from",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Sheet.reaches",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "target",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Sheet.set",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Sheet.set",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "formula",
+    "type": "Formula",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Sheet.subscribe",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "label",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Sheet.subscribe",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "watch",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Sheet.subscribe",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "kind",
+    "type": "ObserverKind",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Sheet.value_of",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "apply",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sheet",
+    "type": "Sheet",
+    "use": "mutated"
+   },
+   {
+    "declared": "own",
+    "fn": "apply",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "apply",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "formula",
+    "type": "Formula",
+    "use": "stored"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "build_sheet",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sheet",
+    "type": "Sheet",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "join_names",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "names",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "report_err",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "step",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "report_err",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "r",
+    "type": "Result[(), SheetError]",
+    "use": "read"
+   }
+  ]
+ },
+ "graph/undo_history": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Buffer.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Buffer.splice",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Command.describe",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "EditError.message",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Editor.begin",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Editor.check_no_group",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Editor.end",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Editor.execute",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Editor.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Editor.redo",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Editor.run_step",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Editor.undo",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "del",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "ins",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "labels",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "rep",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "script",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "Buffer.splice",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "insert",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Editor.begin",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "label",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Editor.execute",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "cmd",
+    "type": "Command",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Editor.run_step",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "step",
+    "type": "Step",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "ins",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "labels",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "groups",
+    "type": "Vec[Group]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "rep",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "stored"
+   }
+  ]
+ },
+ "pipeline/etl_orders": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "Date.month_key",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "RejectReason.describe",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Tier.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Tier.parse",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "add_to",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "customers_csv",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "days_in_month",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "is_leap",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)"
+    ],
+    "fn": "load_customers",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)"
+    ],
+    "fn": "load_orders",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "money",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "orders_csv",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "pad_right",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "parse_customer",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "parse_date",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "parse_int",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "parse_order",
+    "pub": false,
+    "resources": []
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "Tier.parse",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "add_to",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "table",
+    "type": "SortedMap[String, Totals]",
+    "use": "mutated"
+   },
+   {
+    "declared": "own",
+    "fn": "add_to",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "load_customers",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "load_orders",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "pad_right",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_customer",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_date",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "raw",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_int",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "field",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_int",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "raw",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_order",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   }
+  ]
+ },
+ "pipeline/invoice_pipeline": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "PipelineError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "build_invoice",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "category_name",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "currency_code",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "format_money",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "format_rate",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "group_thousands",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "input_text",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "pad3",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "pad_left",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "pad_right",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "parse_category",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "parse_currency",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_discount",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "parse_int",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_orders",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_record",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "parse_region",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "price_line",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "print_invoice",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "region_name",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "round_div",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "tax_rate_bps",
+    "pub": false,
+    "resources": []
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "build_invoice",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "order",
+    "type": "Order",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "category_name",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "c",
+    "type": "Category",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "group_thousands",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "sep",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "pad_left",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "pad_right",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_category",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_currency",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_discount",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_int",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "parse_orders",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "parse_orders",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "rejects",
+    "type": "Vec[String]",
+    "use": "mutated"
+   },
+   {
+    "declared": "own",
+    "fn": "parse_record",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "parse_record",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "orders",
+    "type": "Vec[Order]",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_region",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "price_line",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "item",
+    "type": "LineItem",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "price_line",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "region",
+    "type": "Region",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_invoice",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "inv",
+    "type": "Invoice",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "region_name",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "r",
+    "type": "Region",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "tax_rate_bps",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cat",
+    "type": "Category",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "tax_rate_bps",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "region",
+    "type": "Region",
+    "use": "read"
+   }
+  ]
+ },
+ "pipeline/join_dedupe": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "RowError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Source.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "canonical_domain",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "data_lines",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "dedupe_contacts",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "dedupe_signups",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "format_date",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "join_lines",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "normalize_email",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "normalize_name",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "pad2",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "parse_channel",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_contact",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "parse_date",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_signup",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "split_fields",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "title_case",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(FileSystem)"
+    ],
+    "fn": "write_exports",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "canonical_domain",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "domain",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "data_lines",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "dedupe_contacts",
+    "inferred": "ref",
+    "into_iter": true,
+    "param": "rows",
+    "type": "Vec[Contact]",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "dedupe_signups",
+    "inferred": "ref",
+    "into_iter": true,
+    "param": "rows",
+    "type": "Vec[Signup]",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "join_lines",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "lines",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "normalize_email",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "raw",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "normalize_name",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "raw",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_channel",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "raw",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_contact",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_date",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "raw",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_signup",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "split_fields",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "title_case",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "word",
+    "type": "String",
+    "use": "read"
+   }
+  ]
+ },
+ "pipeline/schema_transform": {
+  "casts": [
+   {
+    "line": 16,
+    "target": "u32",
+    "text": "'0'..='9' => Some(c as u32 - '0' as u32),"
+   },
+   {
+    "line": 16,
+    "target": "u32",
+    "text": "'0'..='9' => Some(c as u32 - '0' as u32),"
+   },
+   {
+    "line": 17,
+    "target": "u32",
+    "text": "'a'..='f' => Some(c as u32 - 'a' as u32 + 10),"
+   },
+   {
+    "line": 17,
+    "target": "u32",
+    "text": "'a'..='f' => Some(c as u32 - 'a' as u32 + 10),"
+   },
+   {
+    "line": 18,
+    "target": "u32",
+    "text": "'A'..='F' => Some(c as u32 - 'A' as u32 + 10),"
+   },
+   {
+    "line": 18,
+    "target": "u32",
+    "text": "'A'..='F' => Some(c as u32 - 'A' as u32 + 10),"
+   },
+   {
+    "line": 113,
+    "target": "u32",
+    "text": "if (c as u32) < 32 { return Err(self.fail(\"control character in string\".to_string())); }"
+   },
+   {
+    "line": 184,
+    "target": "u32",
+    "text": "_ if (c as u32) < 32 => out.push_str(f\"\\\\u00{hex[(c as u32 / 16) as i64]}{hex[(c as u32 % 16) as i64]}\"),"
+   },
+   {
+    "line": 184,
+    "target": "u32",
+    "text": "_ if (c as u32) < 32 => out.push_str(f\"\\\\u00{hex[(c as u32 / 16) as i64]}{hex[(c as u32 % 16) as i64]}\"),"
+   },
+   {
+    "line": 184,
+    "target": "i64",
+    "text": "_ if (c as u32) < 32 => out.push_str(f\"\\\\u00{hex[(c as u32 / 16) as i64]}{hex[(c as u32 % 16) as i64]}\"),"
+   },
+   {
+    "line": 184,
+    "target": "u32",
+    "text": "_ if (c as u32) < 32 => out.push_str(f\"\\\\u00{hex[(c as u32 / 16) as i64]}{hex[(c as u32 % 16) as i64]}\"),"
+   },
+   {
+    "line": 184,
+    "target": "i64",
+    "text": "_ if (c as u32) < 32 => out.push_str(f\"\\\\u00{hex[(c as u32 / 16) as i64]}{hex[(c as u32 % 16) as i64]}\"),"
+   }
+  ],
+  "effects": [
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "JsonParser.eat",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "JsonParser.expect",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "JsonParser.fail",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "JsonParser.parse_array",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "JsonParser.parse_number",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "JsonParser.parse_object",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "JsonParser.parse_string",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "JsonParser.parse_unicode_escape",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "JsonParser.parse_value",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "JsonParser.parse_word",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "JsonParser.peek",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "JsonParser.skip_ws",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "JsonParser.take_digits",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Status.from_code",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Status.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "hex_val",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "migrate",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "optional_string",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_document",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "split_address",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "to_json",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "transform",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "v1_records",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "write_json",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "write_string",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   }
+  ],
+  "non_i64_types": {
+   "u32": 12
+  },
+  "params": [
+   {
+    "declared": "own",
+    "fn": "JsonParser.fail",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "msg",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "JsonParser.parse_unicode_escape",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "out",
+    "type": "String",
+    "use": "mutated"
+   },
+   {
+    "declared": "own",
+    "fn": "JsonParser.parse_word",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "word",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "JsonParser.parse_word",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "value",
+    "type": "JsonValue",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "JsonParser.take_digits",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "out",
+    "type": "String",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "Status.from_code",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "code",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "migrate",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "record",
+    "type": "JsonValue",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "optional_string",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "obj",
+    "type": "SortedMap[String, JsonValue]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "optional_string",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "optional_string",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "errors",
+    "type": "Vec[String]",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_document",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "split_address",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "raw",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "to_json",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "v",
+    "type": "JsonValue",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "transform",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "obj",
+    "type": "SortedMap[String, JsonValue]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "write_json",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "v",
+    "type": "JsonValue",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "write_json",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "out",
+    "type": "String",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "write_string",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "write_string",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "out",
+    "type": "String",
+    "use": "mutated"
+   }
+  ]
+ },
+ "pipeline/sensor_merge": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "PipelineError.describe",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "SensorKind.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "SensorKind.unit",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "format_tenths",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "gap_stats",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "generate_csv",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "load",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "merge",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "next_source",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "pad_left",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_log",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "print_gaps",
+    "pub": false,
+    "resources": [
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "print_table",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "render_cell",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "run",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "wobble",
+    "pub": false,
+    "resources": []
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "gap_stats",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "rows",
+    "type": "Vec[MergedRow]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "generate_csv",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "spec",
+    "type": "SensorSpec",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "load",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "kind",
+    "type": "SensorKind",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "load",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "load",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "Result[String, IoError]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "merge",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "logs",
+    "type": "Vec[SensorLog]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "next_source",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "logs",
+    "type": "Vec[SensorLog]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "next_source",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cursors",
+    "type": "Vec[i64]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "pad_left",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "parse_log",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "kind",
+    "type": "SensorKind",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_log",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_log",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_gaps",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "logs",
+    "type": "Vec[SensorLog]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_gaps",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "rows",
+    "type": "Vec[MergedRow]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_table",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "logs",
+    "type": "Vec[SensorLog]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_table",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "rows",
+    "type": "Vec[MergedRow]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "render_cell",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cell",
+    "type": "Cell",
+    "use": "read"
+   }
+  ]
+ },
+ "pipeline/windowed_stats": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "ParseError.describe",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Pipeline.classify",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Pipeline.ingest",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Pipeline.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "SensorLedger.record",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "WindowStats.add",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "WindowStats.mean_centi",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "WindowStats.new",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "WindowStats.stddev_milli",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "bump",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "floor_to",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "fmt_fixed",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "isqrt",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "load_stream",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "pad_left",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_fixed",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_line",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "print_windows",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "round_div",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "run",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "synthesize",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "Pipeline.classify",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "ev",
+    "type": "Event",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Pipeline.ingest",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "ev",
+    "type": "Event",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Pipeline.new",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "config",
+    "type": "Config",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "SensorLedger.record",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "arrival",
+    "type": "Arrival",
+    "use": "stored"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "bump",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "windows",
+    "type": "Map[WindowKey, WindowStats]",
+    "use": "mutated"
+   },
+   {
+    "declared": "own",
+    "fn": "bump",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "key",
+    "type": "WindowKey",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "load_stream",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "load_stream",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "content",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "pad_left",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "s",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_fixed",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_line",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "print_windows",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "title",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "print_windows",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "windows",
+    "type": "Map[WindowKey, WindowStats]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "synthesize",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sensor",
+    "type": "String",
+    "use": "read"
+   }
+  ]
+ },
+ "service/http_router": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "ApiError.to_reply",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "App.after",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "App.before",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "App.dispatch",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "App.handle",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "HttpRequest.header",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Method.name",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Method.parse",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Router.add",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "Router.handler_at",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Router.lookup",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "build_app",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "compile_pattern",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "create_user",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "delete_user",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "email_owner",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "get_user",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "health",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "join",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "list_users",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "match_pattern",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "pad4",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "param_id",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_form",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "reason",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "req",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "serve_file",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "split_path",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "update_user",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "App.after",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "reply",
+    "type": "Reply",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "App.before",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "req",
+    "type": "HttpRequest",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "App.dispatch",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "req",
+    "type": "HttpRequest",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "App.handle",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "req",
+    "type": "HttpRequest",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "HttpRequest.header",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Method.parse",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "raw",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Router.add",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "pattern",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Router.add",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "handler",
+    "type": "Handler",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Router.lookup",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "compile_pattern",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "pattern",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "create_user",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "ctx",
+    "type": "RouteCtx",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "create_user",
+    "inferred": "mut_ref",
+    "into_iter": false,
+    "param": "store",
+    "type": "UserStore",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "delete_user",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "ctx",
+    "type": "RouteCtx",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "delete_user",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "store",
+    "type": "UserStore",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "email_owner",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "store",
+    "type": "UserStore",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "email_owner",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "email",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "get_user",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "ctx",
+    "type": "RouteCtx",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "get_user",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "store",
+    "type": "UserStore",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "health",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "ctx",
+    "type": "RouteCtx",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "health",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "store",
+    "type": "UserStore",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "items",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sep",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "list_users",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "ctx",
+    "type": "RouteCtx",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "list_users",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "store",
+    "type": "UserStore",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "match_pattern",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "pattern",
+    "type": "Vec[Segment]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "match_pattern",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "parts",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "param_id",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "ctx",
+    "type": "RouteCtx",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "param_id",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "key",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_form",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "body",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "req",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "method",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "req",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "req",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "headers",
+    "type": "Vec[(String, String)]",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "req",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "body",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "serve_file",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "ctx",
+    "type": "RouteCtx",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "serve_file",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "store",
+    "type": "UserStore",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "split_path",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "path",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "update_user",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "ctx",
+    "type": "RouteCtx",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "update_user",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "store",
+    "type": "UserStore",
+    "use": "mutated"
+   }
+  ]
+ },
+ "service/job_queue": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "Job.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Job.new",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "JobError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "JobKind.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Queue.log",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Queue.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Queue.settle",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Queue.submit",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Queue.take_next",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "backoff",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "suspends()"
+    ],
+    "fn": "call_remote",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "kind_index",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "suspends()",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "suspends()"
+    ],
+    "fn": "run_worker",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "seed_jobs",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "validate",
+    "pub": false,
+    "resources": []
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "own",
+    "fn": "Job.new",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "kind",
+    "type": "JobKind",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Job.new",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "payload",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Queue.log",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "msg",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Queue.settle",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cfg",
+    "type": "Config",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Queue.settle",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "outcome",
+    "type": "Outcome",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Queue.submit",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "job",
+    "type": "Job",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "call_remote",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "job",
+    "type": "Job",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "kind_index",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "kind",
+    "type": "JobKind",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "run_worker",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "slot",
+    "type": "Option[Job]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "validate",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "job",
+    "type": "Job",
+    "use": "read"
+   }
+  ]
+ },
+ "service/profile_aggregator": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [
+     "allocates(Heap)",
+     "suspends()"
+    ],
+    "fn": "AccountsBackend.fetch",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "AccountsBackend.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "FetchError.describe",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "OrderStatus.is_cancelled",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "OrderStatus.is_open",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "OrderStatus.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "OrdersBackend.add",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "suspends()"
+    ],
+    "fn": "OrdersBackend.fetch",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "OrdersBackend.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Profile.discounted_spend",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Profile.is_degraded",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Profile.open_orders",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Profile.total_spent",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "suspends()"
+    ],
+    "fn": "RecsBackend.fetch",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "RecsBackend.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "RequestError.describe",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Tier.discount_pct",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Tier.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "already_ordered",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "suspends()"
+    ],
+    "fn": "build_profile",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "check_id",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "format_cents",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "guest_account",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "join",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "suspends()",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "pick_recommendations",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "popular_items",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "render",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "own",
+    "fn": "OrdersBackend.add",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "item",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "OrdersBackend.add",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "status",
+    "type": "OrderStatus",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "already_ordered",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "orders",
+    "type": "Vec[Order]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "already_ordered",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "item",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "build_profile",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "accounts",
+    "type": "AccountsBackend",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "build_profile",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "orders",
+    "type": "OrdersBackend",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "build_profile",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "recs",
+    "type": "RecsBackend",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "check_id",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "seen",
+    "type": "Set[i64]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "items",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sep",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "pick_recommendations",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "candidates",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "pick_recommendations",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "orders",
+    "type": "Vec[Order]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "render",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "profile",
+    "type": "Profile",
+    "use": "read"
+   }
+  ]
+ },
+ "service/pubsub_broker": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Broker.connect",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Broker.disconnect",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Broker.execute",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Broker.find",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Broker.hand_to",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Broker.lookup",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Broker.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Broker.publish",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Broker.stats",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Broker.subscribe",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Broker.unsubscribe",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "BrokerError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Message.copy_as",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Message.render",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Subscriber.deliver",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Subscriber.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "Subscriber.wants",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "join",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_command",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "report",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "segments_match",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "panics()"
+    ],
+    "fn": "topic_matches",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "validate_pattern",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "validate_topic",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "own",
+    "fn": "Broker.connect",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Broker.disconnect",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Broker.execute",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Broker.find",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Broker.hand_to",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "msg",
+    "type": "Message",
+    "use": "stored"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "Broker.hand_to",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "log",
+    "type": "Vec[String]",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "Broker.lookup",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Broker.publish",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "topic",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Broker.publish",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "payload",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Broker.subscribe",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Broker.subscribe",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "pattern",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Broker.unsubscribe",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Broker.unsubscribe",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "pattern",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Subscriber.deliver",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "msg",
+    "type": "Message",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Subscriber.new",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "name",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Subscriber.wants",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "topic",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "parts",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sep",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_command",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "report",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "broker",
+    "type": "Broker",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "segments_match",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "pattern",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "segments_match",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "topic",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "topic_matches",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "pattern",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "topic_matches",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "topic",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "validate_pattern",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "pattern",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "validate_topic",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "topic",
+    "type": "String",
+    "use": "read"
+   }
+  ]
+ },
+ "service/rate_limiter": {
+  "casts": [],
+  "effects": [
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "ClientStats.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "Decision.is_allow",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Decision.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "LimitError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "Limiter.decide",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "Limiter.handle",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Limiter.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "Limiter.print_summary",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "Limiter.record",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "ParseError.to_string",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "SlidingWindow.evict",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "SlidingWindow.has_room",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "SlidingWindow.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "SlidingWindow.record",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "TokenBucket.can_take",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "TokenBucket.new",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "TokenBucket.refill",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "TokenBucket.take",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "admit",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "build_log",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "describe",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "fmt_milli",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "reads(FileSystem)",
+     "writes(FileSystem)",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "FileSystem",
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "parse_line",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "parse_num",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   }
+  ],
+  "non_i64_types": {},
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "Limiter.decide",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "req",
+    "type": "Request",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Limiter.decide",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "policy",
+    "type": "Policy",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Limiter.handle",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "req",
+    "type": "Request",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Limiter.record",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "req",
+    "type": "Request",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Limiter.record",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "decision",
+    "type": "Decision",
+    "use": "read"
+   },
+   {
+    "declared": "mut ref",
+    "fn": "admit",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "quota",
+    "type": "TokenBucket",
+    "use": "mutated"
+   },
+   {
+    "declared": "ref",
+    "fn": "admit",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "req",
+    "type": "Request",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "describe",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "decision",
+    "type": "Decision",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_line",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "line",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "parse_num",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "text",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "parse_num",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "field",
+    "type": "String",
+    "use": "stored"
+   }
+  ]
+ },
+ "service/session_store": {
+  "casts": [
+   {
+    "line": 118,
+    "target": "u32",
+    "text": "let code = (c as u32) as i64;"
+   },
+   {
+    "line": 118,
+    "target": "i64",
+    "text": "let code = (c as u32) as i64;"
+   }
+  ],
+  "effects": [
+   {
+    "effects": [],
+    "fn": "Expiry.label",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Session.absolute_deadline",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Session.expires_at",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Session.expiry",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "Session.idle_deadline",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [],
+    "fn": "SessionError.describe",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Store.add_user",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Store.check",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "writes(Stdout)"
+    ],
+    "fn": "Store.dump",
+    "pub": false,
+    "resources": [
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Store.live_session",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "Store.login",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Store.logout",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Store.new",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Store.oldest_of",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Store.refresh",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "writes(Stdout)"
+    ],
+    "fn": "Store.run_due_sweeps",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Store.sessions_of",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "Store.sweep",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "derive_token",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "hex8",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "join",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [],
+    "fn": "login_req",
+    "pub": false,
+    "resources": []
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()",
+     "writes(Stdout)"
+    ],
+    "fn": "main",
+    "pub": false,
+    "resources": [
+     "Heap",
+     "Stdout"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)"
+    ],
+    "fn": "requests",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   },
+   {
+    "effects": [
+     "allocates(Heap)",
+     "panics()"
+    ],
+    "fn": "resolve",
+    "pub": false,
+    "resources": [
+     "Heap"
+    ]
+   }
+  ],
+  "non_i64_types": {
+   "u32": 1
+  },
+  "params": [
+   {
+    "declared": "ref",
+    "fn": "Session.absolute_deadline",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cfg",
+    "type": "Config",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Session.expires_at",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cfg",
+    "type": "Config",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Session.expiry",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cfg",
+    "type": "Config",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Session.idle_deadline",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "cfg",
+    "type": "Config",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Store.add_user",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "user",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "Store.add_user",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "password",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Store.check",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "token",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Store.live_session",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "token",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Store.login",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "user",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Store.login",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "password",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Store.logout",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "token",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "Store.new",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "cfg",
+    "type": "Config",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "Store.oldest_of",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "user",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Store.refresh",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "token",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "Store.sessions_of",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "user",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "derive_token",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "user",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "parts",
+    "type": "Vec[String]",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "join",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "sep",
+    "type": "String",
+    "use": "read"
+   },
+   {
+    "declared": "own",
+    "fn": "login_req",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "user",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "own",
+    "fn": "login_req",
+    "inferred": "own",
+    "into_iter": false,
+    "param": "password",
+    "type": "String",
+    "use": "stored"
+   },
+   {
+    "declared": "ref",
+    "fn": "resolve",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "r",
+    "type": "TokenRef",
+    "use": "read"
+   },
+   {
+    "declared": "ref",
+    "fn": "resolve",
+    "inferred": "ref",
+    "into_iter": false,
+    "param": "issued",
+    "type": "Vec[String]",
+    "use": "read"
+   }
+  ]
+ }
+}

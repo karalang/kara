@@ -1,0 +1,307 @@
+// text_diff: line-oriented diff of embedded text pairs.
+// Computes an LCS edit script and prints unified-diff style hunks
+// with two lines of context, followed by a short summary per pair.
+
+const CONTEXT: i64 = 2;
+const MAX_LINES: i64 = 500;
+
+enum EditKind {
+    Keep,
+    Insert,
+    Delete,
+}
+
+struct Edit {
+    kind: EditKind,
+    old_pos: i64,
+    new_pos: i64,
+    text: String,
+}
+
+struct Hunk {
+    old_start: i64,
+    old_len: i64,
+    new_start: i64,
+    new_len: i64,
+    edits: Vec[Edit],
+}
+
+struct Document {
+    name: String,
+    lines: Vec[String],
+}
+
+enum DiffError {
+    EmptyName,
+    TooLarge { name: String, lines: i64 },
+}
+
+struct DiffStats {
+    insertions: i64,
+    deletions: i64,
+    unchanged: i64,
+}
+
+impl DiffError {
+    fn describe(ref self) -> String {
+        match self {
+            DiffError.EmptyName => "document has no name".to_string(),
+            DiffError.TooLarge { name, lines } => f"{name}: {lines} lines exceeds limit",
+        }
+    }
+}
+
+impl Document {
+    fn parse(name: String, text: String) -> Result[Document, DiffError] {
+        if name.is_empty() {
+            return Err(DiffError.EmptyName);
+        }
+        let mut lines = text.split("\n");
+        // A trailing newline produces one empty trailing piece; drop it.
+        if lines.len() > 0 and lines[lines.len() - 1].is_empty() {
+            lines.pop();
+        }
+        if lines.len() > MAX_LINES {
+            return Err(DiffError.TooLarge { name: name, lines: lines.len() });
+        }
+        Ok(Document { name: name, lines: lines })
+    }
+
+    fn line_count(ref self) -> i64 {
+        self.lines.len()
+    }
+}
+
+impl Edit {
+    fn prefix(ref self) -> String {
+        match self.kind {
+            EditKind.Keep => " ",
+            EditKind.Insert => "+",
+            EditKind.Delete => "-",
+        }
+    }
+
+    fn is_change(ref self) -> bool {
+        match self.kind {
+            EditKind.Keep => false,
+            _ => true,
+        }
+    }
+
+    fn render(ref self) -> String {
+        self.prefix() + self.text
+    }
+}
+
+fn range_spec(start: i64, len: i64) -> String {
+    // Unified diff convention: 1-based start; an empty range names
+    // the line before it; a length of one is omitted.
+    let shown = if len == 0 { start } else { start + 1 };
+    if len == 1 {
+        f"{shown}"
+    } else {
+        f"{shown},{len}"
+    }
+}
+
+impl Hunk {
+    fn header(ref self) -> String {
+        let old_spec = range_spec(self.old_start, self.old_len);
+        let new_spec = range_spec(self.new_start, self.new_len);
+        f"@@ -{old_spec} +{new_spec} @@"
+    }
+}
+
+// Builds the suffix-LCS table: table[i][j] is the LCS length of
+// old[i..] and new[j..].
+fn lcs_table(old: ref Vec[String], new: ref Vec[String]) -> Vec[Vec[i64]] {
+    let n = old.len();
+    let m = new.len();
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..(n + 1) {
+        table.push(Vec.filled(m + 1, 0));
+    }
+    let mut i = n - 1;
+    while i >= 0 {
+        let mut j = m - 1;
+        while j >= 0 {
+            if old[i] == new[j] {
+                table[i][j] = table[i + 1][j + 1] + 1;
+            } else {
+                let down = table[i + 1][j];
+                let right = table[i][j + 1];
+                table[i][j] = if down >= right { down } else { right };
+            }
+            j = j - 1;
+        }
+        i = i - 1;
+    }
+    table
+}
+
+fn edit_script(old: ref Document, new: ref Document) -> Vec[Edit] {
+    let a = old.lines;
+    let b = new.lines;
+    let table = lcs_table(a, b);
+    let mut edits: Vec[Edit] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < a.len() and j < b.len() {
+        if a[i] == b[j] {
+            edits.push(Edit { kind: EditKind.Keep, old_pos: i, new_pos: j, text: a[i] });
+            i = i + 1;
+            j = j + 1;
+        } else if table[i + 1][j] >= table[i][j + 1] {
+            edits.push(Edit { kind: EditKind.Delete, old_pos: i, new_pos: j, text: a[i] });
+            i = i + 1;
+        } else {
+            edits.push(Edit { kind: EditKind.Insert, old_pos: i, new_pos: j, text: b[j] });
+            j = j + 1;
+        }
+    }
+    while i < a.len() {
+        edits.push(Edit { kind: EditKind.Delete, old_pos: i, new_pos: j, text: a[i] });
+        i = i + 1;
+    }
+    while j < b.len() {
+        edits.push(Edit { kind: EditKind.Insert, old_pos: i, new_pos: j, text: b[j] });
+        j = j + 1;
+    }
+    edits
+}
+
+fn collect_stats(edits: ref Vec[Edit]) -> DiffStats {
+    let mut stats = DiffStats { insertions: 0, deletions: 0, unchanged: 0 };
+    for e in edits {
+        match e.kind {
+            EditKind.Keep => { stats.unchanged = stats.unchanged + 1; }
+            EditKind.Insert => { stats.insertions = stats.insertions + 1; }
+            EditKind.Delete => { stats.deletions = stats.deletions + 1; }
+        }
+    }
+    stats
+}
+
+fn make_hunk(edits: ref Vec[Edit], lo: i64, hi: i64) -> Hunk {
+    let mut hunk = Hunk {
+        old_start: edits[lo].old_pos,
+        old_len: 0,
+        new_start: edits[lo].new_pos,
+        new_len: 0,
+        edits: Vec.new(),
+    };
+    let mut k = lo;
+    while k <= hi {
+        let e = ref edits[k];
+        match e.kind {
+            EditKind.Keep => {
+                hunk.old_len = hunk.old_len + 1;
+                hunk.new_len = hunk.new_len + 1;
+            }
+            EditKind.Delete => { hunk.old_len = hunk.old_len + 1; }
+            EditKind.Insert => { hunk.new_len = hunk.new_len + 1; }
+        }
+        hunk.edits.push(Edit { kind: e.kind, old_pos: e.old_pos, new_pos: e.new_pos, text: e.text });
+        k = k + 1;
+    }
+    hunk
+}
+
+// Groups changes into hunks: two changes share a hunk when the run of
+// unchanged lines between them is at most twice the context width.
+fn build_hunks(edits: ref Vec[Edit], context: i64) -> Vec[Hunk] {
+    let mut changes: Vec[i64] = Vec.new();
+    let mut idx = 0;
+    for e in edits {
+        if e.is_change() {
+            changes.push(idx);
+        }
+        idx = idx + 1;
+    }
+    let mut hunks: Vec[Hunk] = Vec.new();
+    if changes.is_empty() {
+        return hunks;
+    }
+    let last = edits.len() - 1;
+    let mut group_first = changes[0];
+    let mut group_last = changes[0];
+    let mut c = 1;
+    while c < changes.len() {
+        let next = changes[c];
+        if next - group_last - 1 <= 2 * context {
+            group_last = next;
+        } else {
+            let lo = if group_first - context < 0 { 0 } else { group_first - context };
+            let hi = if group_last + context > last { last } else { group_last + context };
+            hunks.push(make_hunk(edits, lo, hi));
+            group_first = next;
+            group_last = next;
+        }
+        c = c + 1;
+    }
+    let lo = if group_first - context < 0 { 0 } else { group_first - context };
+    let hi = if group_last + context > last { last } else { group_last + context };
+    hunks.push(make_hunk(edits, lo, hi));
+    hunks
+}
+
+fn print_diff(old: ref Document, new: ref Document) {
+    println(f"--- a/{old.name} ({old.line_count()} lines)");
+    println(f"+++ b/{new.name} ({new.line_count()} lines)");
+    let edits = edit_script(old, new);
+    let hunks = build_hunks(edits, CONTEXT);
+    if hunks.is_empty() {
+        println("(no differences)");
+    }
+    for h in hunks {
+        println(h.header());
+        for e in h.edits {
+            println(e.render());
+        }
+    }
+    let stats = collect_stats(edits);
+    println(f"summary: {hunks.len()} hunk(s), {stats.insertions} insertion(s)(+), {stats.deletions} deletion(s)(-), {stats.unchanged} unchanged");
+}
+
+fn diff_pair(old_name: String, old_text: String, new_name: String, new_text: String) -> Result[(), DiffError] {
+    let old = Document.parse(old_name, old_text)?;
+    let new = Document.parse(new_name, new_text)?;
+    print_diff(old, new);
+    Ok(())
+}
+
+fn config_old() -> String {
+    "# server configuration\n[server]\nhost = localhost\nport = 8080\nworkers = 4\ntimeout = 30\nkeepalive = 5\n\n[logging]\nlog_level = info\nlog_file = /var/log/app.log\nrotate = daily\nkeep = 7\n\n[http]\nmax_body = 1mb\ncompression = off\ncors = none\n\n[cache]\ncache = memory\ncache_ttl = 60\ncache_size = 256\n\n[retry]\nretry = 3\nbackoff = linear\n# end\n"
+}
+
+fn config_new() -> String {
+    "# server configuration\n[server]\nhost = 0.0.0.0\nport = 8080\nworkers = 8\ntimeout = 30\nkeepalive = 5\n\n[logging]\nlog_level = info\nlog_file = /var/log/app.log\nrotate = daily\nkeep = 7\n\n[http]\nmax_body = 1mb\ncompression = gzip\ncors = none\n\n[cache]\ncache = memory\ncache_ttl = 60\ncache_size = 256\n\n[retry]\nretry = 3\nbackoff = exponential\njitter = on\n# end\n"
+}
+
+fn story_old() -> String {
+    "The quick brown fox\njumps over the lazy dog.\nIt was a sunny day.\nBirds were singing.\nThe fox was hungry.\nIt looked for food.\nThe dog slept on.\nNothing else happened.\nA breeze moved the grass.\nClouds drifted east.\nThe farmer came home.\nHe fed the chickens.\nHe closed the gate.\nThe end.\n"
+}
+
+fn story_new() -> String {
+    "A quick brown fox\njumps over the lazy dog.\nIt was a sunny day.\nThe fox was hungry.\nIt looked for food.\nIt found an apple.\nThe dog slept on.\nNothing else happened.\nA breeze moved the grass.\nClouds drifted east.\nThe farmer came home.\nHe fed the chickens.\nHe fed the pigs.\nHe closed the gate.\nThe sun went down.\nThe end.\n"
+}
+
+fn main() {
+    let pairs = [
+        ("config.ini", config_old(), "config.ini", config_new()),
+        ("story.txt", story_old(), "story.txt", story_new()),
+        ("", "a\n", "b.txt", "b\n"),
+    ];
+    let mut failures = 0;
+    for (old_name, old_text, new_name, new_text) in pairs {
+        match diff_pair(old_name, old_text, new_name, new_text) {
+            Ok(()) => {}
+            Err(e) => {
+                println(f"error: {e.describe()}");
+                failures = failures + 1;
+            }
+        }
+        println("");
+    }
+    println(f"pairs: {pairs.len()}, failed: {failures}");
+}

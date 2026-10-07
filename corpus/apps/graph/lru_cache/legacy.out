@@ -1,0 +1,62 @@
+== sessions (capacity 3) ==
+  skip line 17: unknown command 'fetch'
+  skip line 18: 'put' is missing an argument
+  put alice=10
+  put bob=20
+  put carol=30
+  get alice -> 10
+  put dave=40
+  evict bob=20 (capacity)
+    [audit] bob left with 20 (capacity)
+  get bob -> miss
+  get carol -> 30
+  peek alice -> 10
+  put alice=110
+  put erin=50
+  evict dave=40 (capacity)
+    [audit] dave left with 40 (capacity)
+  order [erin=50, alice=110, carol=30]
+    [audit] carol left with 30 (deleted)
+  del carol -> true
+  del zed -> false
+  get erin -> 50
+  put ivy=60
+  resize 2
+  evict alice=110 (shrunk)
+    [audit] alice left with 110 (shrunk)
+    [big] large value 110 under alice dropped
+  get alice -> miss
+  put gina=120
+  evict erin=50 (capacity)
+    [audit] erin left with 50 (capacity)
+  put hank=7
+  evict ivy=60 (capacity)
+    [audit] ivy left with 60 (capacity)
+  hits 3, misses 2, hit rate 60%
+  inserts 8, updates 1, deletes 1, evictions 5
+  final order [hank=7, gina=120] size 2/2
+== queries (capacity 2) ==
+  skip line 7: 'x' is not a number
+  put q1=5
+  put q2=150
+  get q1 -> 5
+  put q3=9
+  evict q2=150 (capacity)
+    [audit] q2 left with 150 (capacity)
+    [big] large value 150 under q2 dropped
+  get q2 -> miss
+  put q4=1
+  evict q1=5 (capacity)
+    [audit] q1 left with 5 (capacity)
+  get q3 -> 9
+  resize 1
+  evict q4=1 (shrunk)
+    [audit] q4 left with 1 (shrunk)
+  put q5=300
+  evict q3=9 (capacity)
+    [audit] q3 left with 9 (capacity)
+  get q1 -> miss
+  order [q5=300]
+  hits 2, misses 2, hit rate 50%
+  inserts 5, updates 0, deletes 0, evictions 4
+  final order [q5=300] size 1/1

@@ -1,0 +1,43 @@
+t=1 ok   login alice -> s-174a5a79
+t=3 ok   login bob -> s-1230e7d1
+t=4 FAIL bad password for 'carol'
+t=5 FAIL unknown user 'mallory'
+t=10 ok   refresh s-174a5a79 -> expires 40
+t=12 ok   login alice -> s-015d72f4
+t=15 ok   check s-1230e7d1 -> bob
+t=20 ok   login alice -> s-12a69263 (evicted s-174a5a79)
+t=22 FAIL unknown token s-174a5a79
+t=25 ok   refresh s-015d72f4 -> expires 55
+t=38 ok   check s-015d72f4 -> alice
+  [sweep t=40] removed 1: s-1230e7d1
+t=41 ok   login carol -> s-19424e1a
+t=45 ok   logout s-19424e1a (carol)
+t=46 FAIL unknown token s-19424e1a
+t=50 FAIL unknown token s-deadbeef
+t=52 ok   login bob -> s-1817b7eb
+t=60 FAIL token s-12a69263 expired (idle)
+t=75 ok   refresh s-1817b7eb -> expires 105
+  [sweep t=80] removed 1: s-015d72f4
+t=90 FAIL unknown token s-12a69263
+t=100 ok   refresh s-1817b7eb -> expires 130
+t=104 ok   login alice -> s-0ee87728
+t=106 ok   login alice -> s-0f2d16b2
+t=108 ok   login alice -> s-0f71b63c (evicted s-0ee87728)
+t=110 FAIL unknown token s-0ee87728
+t=118 ok   check s-0f71b63c -> alice
+  [sweep t=120] nothing expired
+t=125 ok   refresh s-1817b7eb -> expires 142
+t=130 ok   refresh s-0f71b63c -> expires 160
+t=140 FAIL token s-0f2d16b2 expired (idle)
+t=145 FAIL token s-1817b7eb expired (absolute)
+t=150 ok   logout s-0f71b63c (alice)
+t=152 ok   login carol -> s-1095388f
+t=155 ok   login bob -> s-321b5d5b
+t=158 ok   check s-321b5d5b -> bob
+  [sweep t=160] nothing expired
+t=184 ok   login alice -> s-17d94344
+store at t=184: 3 session(s)
+  s-1095388f user=carol created=152 last_seen=152 expires=182 stale:idle
+  s-17d94344 user=alice created=184 last_seen=184 expires=214 live
+  s-321b5d5b user=bob created=155 last_seen=155 expires=185 live
+requests: 24 ok, 10 failed, 12 tokens issued

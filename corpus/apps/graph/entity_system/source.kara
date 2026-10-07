@@ -1,0 +1,398 @@
+// entity_system: a small entity-component system. Entities live in generational slots and
+// hold references (index + generation) to targets that may die; a dead slot may be reused
+// by a later spawn, so every reference is re-validated before it is followed.
+
+const ARENA_MAX: i64 = 16;
+const SIGHT: i64 = 14;
+const TICKS: i64 = 10;
+
+#[derive(Copy, Clone, Eq)]
+struct EntityRef { index: i64, generation: i64 }
+impl EntityRef {
+    fn label(ref self) -> String {
+        f"#{self.index}.{self.generation}"
+    }
+}
+
+#[derive(Copy, Clone, Eq)]
+enum Team { Red, Blue }
+impl Team {
+    fn name(ref self) -> String {
+        match self {
+            Team.Red => "red",
+            Team.Blue => "blue",
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct Pos { x: i64, y: i64 }
+impl Pos {
+    fn distance(ref self, other: Pos) -> i64 {
+        (self.x - other.x).abs() + (self.y - other.y).abs()
+    }
+}
+
+#[derive(Copy, Clone)]
+struct Motion { vel: Pos, speed: i64 }
+#[derive(Copy, Clone)]
+struct Health { current: i64, max: i64 }
+#[derive(Copy, Clone)]
+struct Weapon { damage: i64, range: i64, cooldown: i64, ready_in: i64 }
+
+struct Template { hp: i64, speed: i64, weapon: Option[Weapon] }
+struct SpawnOrder { tick: i64, team: Team, kind: String, pos: Pos }
+struct Hit { attacker: EntityRef, target: EntityRef, amount: i64 }
+
+enum SetupError {
+    BadLine(String),
+    UnknownTeam(String),
+    UnknownKind(String),
+    BadNumber(String),
+}
+
+impl SetupError {
+    fn describe(ref self) -> String {
+        match self {
+            SetupError.BadLine(line) => f"malformed roster line '{line}'",
+            SetupError.UnknownTeam(t) => f"unknown team '{t}'",
+            SetupError.UnknownKind(k) => f"unknown unit kind '{k}'",
+            SetupError.BadNumber(n) => f"not a number: '{n}'",
+        }
+    }
+}
+
+fn arm(damage: i64, range: i64, cooldown: i64) -> Option[Weapon] {
+    Some(Weapon { damage, range, cooldown, ready_in: 0 })
+}
+
+fn template(kind: ref String) -> Option[Template] {
+    match kind {
+        "knight" => Some(Template { hp: 40, speed: 2, weapon: arm(6, 1, 0) }),
+        "archer" => Some(Template { hp: 20, speed: 1, weapon: arm(4, 5, 1) }),
+        "tower" => Some(Template { hp: 60, speed: 0, weapon: arm(3, 6, 0) }),
+        "squire" => Some(Template { hp: 25, speed: 2, weapon: arm(4, 1, 0) }),
+        "raider" => Some(Template { hp: 25, speed: 3, weapon: arm(5, 1, 0) }),
+        "brute" => Some(Template { hp: 50, speed: 1, weapon: arm(8, 1, 1) }),
+        "scout" => Some(Template { hp: 12, speed: 2, weapon: arm(2, 3, 0) }),
+        "beacon" => Some(Template { hp: 15, speed: 0, weapon: None }),
+        _ => None,
+    }
+}
+
+fn parse_number(text: ref String) -> Result[i64, SetupError] {
+    match i64.parse(text) {
+        Some(n) => Ok(n),
+        None => Err(SetupError.BadNumber(text.clone())),
+    }
+}
+
+fn parse_order(line: ref String) -> Result[SpawnOrder, SetupError] {
+    let parts = line.split(" ");
+    if parts.len() != 5 {
+        return Err(SetupError.BadLine(line.clone()));
+    }
+    let tick = parse_number(parts[0])?;
+    let team = match parts[1] {
+        "red" => Team.Red,
+        "blue" => Team.Blue,
+        other => return Err(SetupError.UnknownTeam(other.to_string())),
+    };
+    let kind = parts[2].clone();
+    if template(kind).is_none() {
+        return Err(SetupError.UnknownKind(kind));
+    }
+    let x = parse_number(parts[3])?;
+    let y = parse_number(parts[4])?;
+    Ok(SpawnOrder { tick, team, kind, pos: Pos { x, y } })
+}
+
+fn sign(v: i64) -> i64 { if v > 0 { 1 } else if v < 0 { -1 } else { 0 } }
+
+fn clamp(v: i64, lo: i64, hi: i64) -> i64 { if v < lo { lo } else if v > hi { hi } else { v } }
+
+fn step_toward(delta: i64, speed: i64) -> i64 {
+    let mag = delta.abs();
+    let step = if speed < mag { speed } else { mag };
+    sign(delta) * step
+}
+
+struct Slot { generation: i64, alive: bool, name: String, team: Team }
+
+struct World {
+    slots: Vec[Slot],
+    free: Vec[i64],
+    positions: Vec[Option[Pos]],
+    motions: Vec[Option[Motion]],
+    healths: Vec[Option[Health]],
+    weapons: Vec[Option[Weapon]],
+    targets: Vec[Option[EntityRef]],
+    log: Vec[String],
+}
+
+impl World {
+    fn new() -> World {
+        World {
+            slots: Vec.new(), free: Vec.new(), positions: Vec.new(), motions: Vec.new(),
+            healths: Vec.new(), weapons: Vec.new(), targets: Vec.new(), log: Vec.new(),
+        }
+    }
+
+    fn is_alive(ref self, e: EntityRef) -> bool {
+        e.index >= 0 and e.index < self.slots.len()
+            and self.slots[e.index].alive
+            and self.slots[e.index].generation == e.generation
+    }
+
+    fn name_of(ref self, e: EntityRef) -> String {
+        self.slots[e.index].name.clone()
+    }
+
+    fn position(ref self, e: EntityRef) -> Pos {
+        self.positions[e.index].unwrap()
+    }
+
+    fn spawn(mut ref self, kind: String, team: Team, pos: Pos) -> EntityRef {
+        let t = template(kind).unwrap();
+        let e = match self.free.pop() {
+            Some(index) => {
+                let generation = self.slots[index].generation + 1;
+                self.slots[index] = Slot { generation, alive: true, name: kind, team };
+                self.positions[index] = Some(pos);
+                EntityRef { index, generation }
+            }
+            None => {
+                let index = self.slots.len();
+                self.slots.push(Slot { generation: 0, alive: true, name: kind, team });
+                self.positions.push(Some(pos));
+                self.motions.push(None);
+                self.healths.push(None);
+                self.weapons.push(None);
+                self.targets.push(None);
+                EntityRef { index, generation: 0 }
+            }
+        };
+        self.healths[e.index] = Some(Health { current: t.hp, max: t.hp });
+        if t.speed > 0 {
+            self.motions[e.index] = Some(Motion { vel: Pos { x: 0, y: 0 }, speed: t.speed });
+        }
+        if let Some(w) = t.weapon {
+            self.weapons[e.index] = Some(w);
+        }
+        e
+    }
+
+    fn despawn(mut ref self, e: EntityRef) {
+        let i = e.index;
+        self.slots[i].alive = false;
+        self.positions[i] = None;
+        self.motions[i] = None;
+        self.healths[i] = None;
+        self.weapons[i] = None;
+        self.targets[i] = None;
+        self.free.push(i);
+    }
+
+    fn living(ref self) -> Vec[EntityRef] {
+        let mut out = Vec.new();
+        for i in 0..self.slots.len() {
+            if self.slots[i].alive {
+                out.push(EntityRef { index: i, generation: self.slots[i].generation });
+            }
+        }
+        out
+    }
+
+    fn nearest_enemy(ref self, e: EntityRef) -> Option[EntityRef] {
+        let me = self.position(e);
+        let team = self.slots[e.index].team;
+        let mut best: Option[EntityRef] = None;
+        let mut best_dist = 0;
+        for other in self.living() {
+            if self.slots[other.index].team == team or self.healths[other.index].is_none() {
+                continue;
+            }
+            let d = me.distance(self.position(other));
+            if d <= SIGHT and (best.is_none() or d < best_dist) {
+                best = Some(other);
+                best_dist = d;
+            }
+        }
+        best
+    }
+
+    fn run_targeting(mut ref self) {
+        for e in self.living() {
+            if self.weapons[e.index].is_none() {
+                continue;
+            }
+            let who = f"{self.name_of(e)} {e.label()}";
+            if let Some(cur) = self.targets[e.index] {
+                if self.is_alive(cur) {
+                    continue;
+                }
+                if self.slots[cur.index].alive {
+                    self.log.push(f"{who} dropped stale target {cur.label()} (slot reused)");
+                } else {
+                    self.log.push(f"{who} lost target {cur.label()} (destroyed)");
+                }
+                self.targets[e.index] = None;
+            }
+            if let Some(found) = self.nearest_enemy(e) {
+                self.targets[e.index] = Some(found);
+                self.log.push(f"{who} targets {self.name_of(found)} {found.label()}");
+            }
+        }
+    }
+
+    fn run_movement(mut ref self) {
+        for e in self.living() {
+            let Some(m) = self.motions[e.index] else { continue };
+            let pos = self.position(e);
+            let mut vel = Pos { x: 0, y: 0 };
+            if let Some(t) = self.targets[e.index] {
+                if self.is_alive(t) {
+                    let tp = self.position(t);
+                    let range = match self.weapons[e.index] {
+                        Some(w) => w.range,
+                        None => 0,
+                    };
+                    let dx = tp.x - pos.x;
+                    let dy = tp.y - pos.y;
+                    if dx.abs() + dy.abs() > range {
+                        if dx.abs() >= dy.abs() {
+                            vel = Pos { x: step_toward(dx, m.speed), y: 0 };
+                        } else {
+                            vel = Pos { x: 0, y: step_toward(dy, m.speed) };
+                        }
+                    }
+                }
+            }
+            self.motions[e.index] = Some(Motion { vel, speed: m.speed });
+            let next = Pos { x: clamp(pos.x + vel.x, 0, ARENA_MAX), y: clamp(pos.y + vel.y, 0, ARENA_MAX) };
+            self.positions[e.index] = Some(next);
+        }
+    }
+
+    fn run_combat(mut ref self) {
+        let mut hits: Vec[Hit] = Vec.new();
+        for e in self.living() {
+            let Some(w) = self.weapons[e.index] else { continue };
+            if w.ready_in > 0 {
+                self.weapons[e.index] = Some(Weapon { damage: w.damage, range: w.range, cooldown: w.cooldown, ready_in: w.ready_in - 1 });
+                continue;
+            }
+            let Some(t) = self.targets[e.index] else { continue };
+            if not self.is_alive(t) {
+                continue;
+            }
+            if self.position(e).distance(self.position(t)) <= w.range {
+                hits.push(Hit { attacker: e, target: t, amount: w.damage });
+                self.weapons[e.index] = Some(Weapon { damage: w.damage, range: w.range, cooldown: w.cooldown, ready_in: w.cooldown });
+            }
+        }
+        for hit in hits {
+            let Hit { attacker, target, amount } = hit;
+            if not self.is_alive(attacker) {
+                self.log.push(f"{attacker.label()} fell before it could strike {target.label()}");
+                continue;
+            }
+            if not self.is_alive(target) {
+                self.log.push(f"{self.name_of(attacker)} {attacker.label()} shot at {target.label()} but it was already gone");
+                continue;
+            }
+            let h = self.healths[target.index].unwrap();
+            let left = if h.current - amount > 0 { h.current - amount } else { 0 };
+            self.healths[target.index] = Some(Health { current: left, max: h.max });
+            self.log.push(f"{self.name_of(attacker)} {attacker.label()} hits {self.name_of(target)} {target.label()} for {amount} ({left} left)");
+            if left == 0 {
+                self.log.push(f"{self.name_of(target)} {target.label()} is destroyed");
+                self.despawn(target);
+            }
+        }
+    }
+
+    fn team_strength(ref self, team: Team) -> i64 {
+        let mut total = 0;
+        for e in self.living() {
+            if let Some(h) = self.healths[e.index] {
+                if self.slots[e.index].team == team { total += h.current; }
+            }
+        }
+        total
+    }
+
+    fn render(mut ref self, tick: i64) {
+        println(f"=== tick {tick} ===");
+        if self.log.is_empty() { println("  (no events)"); }
+        for line in self.log {
+            println(f"  * {line}");
+        }
+        self.log.clear();
+        for i in 0..self.slots.len() {
+            let slot = ref self.slots[i];
+            if not slot.alive {
+                println(f"  [{i}] free (last gen {slot.generation})");
+                continue;
+            }
+            let e = EntityRef { index: i, generation: slot.generation };
+            let p = self.position(e);
+            let mut line = f"  [{i}] {e.label()} {slot.team.name()} {slot.name} at ({p.x},{p.y})";
+            if let Some(h) = self.healths[i] {
+                line.push_str(f" hp {h.current}/{h.max}");
+            }
+            if let Some(m) = self.motions[i] {
+                line.push_str(f" vel ({m.vel.x},{m.vel.y})");
+            }
+            if let Some(t) = self.targets[i] {
+                line.push_str(f" -> {t.label()}");
+            }
+            println(line);
+        }
+        println(f"  strength: red {self.team_strength(Team.Red)} blue {self.team_strength(Team.Blue)}");
+    }
+}
+
+fn roster() -> Vec[String] {
+    let spec = "0 red knight 0 0;0 red archer 1 4;0 red tower 2 2;0 blue raider 12 1;"
+        + "0 blue brute 10 6;0 blue scout 8 3;0 blue beacon 14 8;3 red squire 0 5;"
+        + "4 blue raider 15 2;6 green knight 1 1;7 red dragon 3 3;x red knight 1 1;8 blue scout";
+    spec.split(";")
+}
+
+fn main() {
+    let mut orders: Vec[SpawnOrder] = Vec.new();
+    for line in roster() {
+        match parse_order(line) {
+            Ok(order) => orders.push(order),
+            Err(err) => println(f"roster: skipped: {err.describe()}"),
+        }
+    }
+    println(f"roster: {orders.len()} spawn orders accepted");
+
+    let mut world = World.new();
+    for tick in 0..=TICKS {
+        for order in orders {
+            if order.tick == tick {
+                let e = world.spawn(order.kind.clone(), order.team, order.pos);
+                world.log.push(f"spawned {order.kind} {e.label()} for {order.team.name()} at ({order.pos.x},{order.pos.y})");
+            }
+        }
+        if tick > 0 {
+            world.run_targeting();
+            world.run_movement();
+            world.run_combat();
+        }
+        world.render(tick);
+    }
+
+    let red = world.team_strength(Team.Red);
+    let blue = world.team_strength(Team.Blue);
+    if red > blue {
+        println(f"result: red leads {red} to {blue}");
+    } else if blue > red {
+        println(f"result: blue leads {blue} to {red}");
+    } else {
+        println(f"result: draw at {red}");
+    }
+}

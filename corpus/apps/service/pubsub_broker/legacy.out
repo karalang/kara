@@ -1,0 +1,66 @@
+[1] connected alice (capacity 3)
+[2] connected bob (capacity 2)
+[3] connected carol (capacity 4)
+[4] error: client 'alice' is already connected
+[5] error: invalid mailbox capacity 'zero'
+[6] pubr #1 sensors.kitchen.temp -> 0 subscriber(s)
+[7] pubr #2 sensors.garage.temp -> 0 subscriber(s)
+[8] pub #3 sensors.kitchen.humidity -> 0 subscriber(s)
+[9] alice subscribed to sensors.*.temp (2 retained)
+[10] bob subscribed to sensors.# (2 retained)
+[11] carol subscribed to alerts.# (0 retained)
+[12] carol subscribed to sensors.kitchen.* (1 retained)
+[13] carol already subscribed to alerts.#
+[14] error: unknown client 'dave'
+[15] error: invalid pattern 'sensors.#.temp'
+[16] pub #4 sensors.kitchen.temp -> 3 subscriber(s)
+[16]   bob mailbox full, dropped #2
+[17] pub #5 sensors.garage.temp -> 2 subscriber(s)
+[17]   alice mailbox full, dropped #2
+[17]   bob mailbox full, dropped #1
+[18] pub #6 alerts -> 1 subscriber(s)
+[19] pub #7 alerts.security.door -> 1 subscriber(s)
+[20] error: invalid topic 'sensors..temp'
+[21] pub #8 sensors.attic.temp -> 2 subscriber(s)
+[21]   alice mailbox full, dropped #1
+[21]   bob mailbox full, dropped #4
+[22] pub #9 sensors.attic.humidity -> 1 subscriber(s)
+[22]   bob mailbox full, dropped #5
+[23] alice unsubscribed from sensors.*.temp
+[24] error: client 'alice' is not subscribed to 'alerts.#'
+[25] alice subscribed to alerts.*.door (0 retained)
+[26] pub #10 alerts.security.door -> 2 subscriber(s)
+[26]   alice mailbox full, dropped #4
+[26]   carol mailbox full, dropped #1
+[27] pubr #11 alerts.status -> 1 subscriber(s)
+[27]   carol mailbox full, dropped #4
+[28] alice subscribed to alerts.status (1 retained)
+[28]   alice mailbox full, dropped #5
+[29] cleared retained sensors.kitchen.temp (had value: true)
+[30] bob subscribed to sensors.kitchen.temp (0 retained)
+[31] stats: clients=3 published=11 deliveries=19 evictions=10 retained=2
+[32] disconnected bob, discarding 2 pending message(s)
+[33] pub #12 sensors.kitchen.temp -> 1 subscriber(s)
+[33]   carol mailbox full, dropped #6
+[34] error: cannot parse command 'frobnicate now'
+[35] connected erin (capacity 1)
+[36] erin subscribed to # (2 retained)
+[36]   erin mailbox full, dropped #11
+[37] pub #13 ops.deploy -> 1 subscriber(s)
+[37]   erin mailbox full, dropped #2
+[38] pub #14 ops.deploy -> 1 subscriber(s)
+[38]   erin mailbox full, dropped #13
+[39] stats: clients=3 published=14 deliveries=24 evictions=14 retained=2
+39 commands, 7 rejected
+== mailboxes ==
+alice cap=3 accepted=7 dropped=4 patterns=[alerts.*.door, alerts.status]
+  #8 sensors.attic.temp = 30.1
+  #10 alerts.security.door = back door opened
+  #11 alerts.status = armed [retained]
+carol cap=4 accepted=7 dropped=3 patterns=[alerts.#, sensors.kitchen.*]
+  #7 alerts.security.door = front door opened
+  #10 alerts.security.door = back door opened
+  #11 alerts.status = armed
+  #12 sensors.kitchen.temp = 23.0
+erin cap=1 accepted=4 dropped=3 patterns=[#]
+  #14 ops.deploy = v1.2.4 shipped

@@ -1,0 +1,398 @@
+// csv_report: parse an embedded sales CSV (quoted fields, embedded commas,
+// escaped quotes, embedded newlines), group by region and month, and print a
+// fixed-width report with per-region subtotals and a grand total.
+
+const EXPECTED_FIELDS: i64 = 6;
+
+enum CsvError {
+    UnterminatedQuote { line: i64 },
+    StrayQuote { line: i64 },
+}
+
+impl Display for CsvError {
+    fn to_string(ref self) -> String {
+        match self {
+            UnterminatedQuote { line } => f"unterminated quoted field starting on line {line}",
+            StrayQuote { line } => f"unexpected quote inside unquoted field on line {line}",
+        }
+    }
+}
+
+enum RowError {
+    FieldCount { line: i64, got: i64 },
+    BadDate { line: i64, text: String },
+    BadQuantity { line: i64, text: String },
+    BadPrice { line: i64, text: String },
+    EmptyRegion { line: i64 },
+}
+
+impl Display for RowError {
+    fn to_string(ref self) -> String {
+        match self {
+            FieldCount { line, got } => f"line {line}: expected {EXPECTED_FIELDS} fields, found {got}",
+            BadDate { line, text } => f"line {line}: invalid date '{text}'",
+            BadQuantity { line, text } => f"line {line}: invalid quantity '{text}'",
+            BadPrice { line, text } => f"line {line}: invalid unit price '{text}'",
+            EmptyRegion { line } => f"line {line}: region is empty",
+        }
+    }
+}
+
+struct RawRecord {
+    line: i64,
+    fields: Vec[String],
+}
+
+struct Sale {
+    region: String,
+    month: String,
+    product: String,
+    quantity: i64,
+    price_cents: i64,
+}
+
+impl Sale {
+    fn revenue_cents(ref self) -> i64 { self.quantity * self.price_cents }
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct MonthTotal {
+    region: String,
+    month: String,
+    orders: i64,
+    units: i64,
+    revenue_cents: i64,
+}
+
+impl MonthTotal {
+    fn new(region: String, month: String) -> MonthTotal {
+        MonthTotal { region: region, month: month, orders: 0, units: 0, revenue_cents: 0 }
+    }
+
+    fn add(mut ref self, sale: ref Sale) {
+        self.orders = self.orders + 1;
+        self.units = self.units + sale.quantity;
+        self.revenue_cents = self.revenue_cents + sale.revenue_cents();
+    }
+}
+
+struct Totals {
+    orders: i64,
+    units: i64,
+    revenue_cents: i64,
+}
+
+impl Totals {
+    fn zero() -> Totals { Totals { orders: 0, units: 0, revenue_cents: 0 } }
+
+    fn absorb(mut ref self, m: ref MonthTotal) {
+        self.orders = self.orders + m.orders;
+        self.units = self.units + m.units;
+        self.revenue_cents = self.revenue_cents + m.revenue_cents;
+    }
+}
+
+fn parse_csv(text: ref String) -> Result[Vec[RawRecord], CsvError] {
+    let chars: Vec[char] = text.chars().collect();
+    let n = chars.len();
+    let mut records: Vec[RawRecord] = Vec.new();
+    let mut fields: Vec[String] = Vec.new();
+    let mut field = String.new();
+    let mut in_quotes = false;
+    let mut line = 1;
+    let mut record_line = 1;
+    let mut quote_line = 0;
+    let mut i = 0;
+    while i < n {
+        let c = chars[i];
+        if in_quotes {
+            if c == '"' {
+                if i + 1 < n and chars[i + 1] == '"' {
+                    field.push('"');
+                    i = i + 1;
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                if c == '\n' { line = line + 1; }
+                field.push(c);
+            }
+        } else if c == '"' {
+            if field.is_empty() {
+                in_quotes = true;
+                quote_line = line;
+            } else {
+                return Err(StrayQuote { line: line });
+            }
+        } else if c == ',' {
+            fields.push(field);
+            field = String.new();
+        } else if c == '\n' {
+            fields.push(field);
+            field = String.new();
+            let blank = fields.len() == 1 and fields[0].is_empty();
+            if not blank { records.push(RawRecord { line: record_line, fields: fields }); }
+            fields = Vec.new();
+            line = line + 1;
+            record_line = line;
+        } else if c != '\r' {
+            field.push(c);
+        }
+        i = i + 1;
+    }
+    if in_quotes { return Err(UnterminatedQuote { line: quote_line }); }
+    if not field.is_empty() or not fields.is_empty() {
+        fields.push(field);
+        records.push(RawRecord { line: record_line, fields: fields });
+    }
+    Ok(records)
+}
+
+fn parse_month(date: ref String) -> Option[String] {
+    if date.len() != 10 or date.char_at(4) != Some('-') or date.char_at(7) != Some('-') {
+        return None;
+    }
+    let year = i64.parse(date.substring(0, 4))?;
+    let month = i64.parse(date.substring(5, 7))?;
+    let day = i64.parse(date.substring(8, 10))?;
+    if year < 2000 or month < 1 or month > 12 or day < 1 or day > 31 { return None; }
+    Some(date.substring(0, 7))
+}
+
+fn parse_price(text: ref String) -> Option[i64] {
+    let cleaned = text.replace(",", "");
+    let parts = cleaned.split(".");
+    let dollars = i64.parse(parts[0])?;
+    if dollars < 0 { return None; }
+    if parts.len() == 1 { return Some(dollars * 100); }
+    if parts.len() != 2 or parts[1].len() != 2 { return None; }
+    let cents = i64.parse(parts[1])?;
+    if cents < 0 { return None; }
+    Some(dollars * 100 + cents)
+}
+
+fn parse_sale(rec: ref RawRecord) -> Result[Sale, RowError] {
+    if rec.fields.len() != EXPECTED_FIELDS {
+        return Err(FieldCount { line: rec.line, got: rec.fields.len() });
+    }
+    let date = rec.fields[0].trim();
+    let month = match parse_month(date) {
+        Some(m) => m,
+        None => return Err(BadDate { line: rec.line, text: date }),
+    };
+    let region = rec.fields[1].trim();
+    if region.is_empty() { return Err(EmptyRegion { line: rec.line }); }
+    let qty_text = rec.fields[3].trim();
+    let quantity = match i64.parse(qty_text) {
+        Some(q) if q > 0 => q,
+        _ => return Err(BadQuantity { line: rec.line, text: qty_text }),
+    };
+    let price_text = rec.fields[4].trim();
+    let price_cents = match parse_price(price_text) {
+        Some(p) => p,
+        None => return Err(BadPrice { line: rec.line, text: price_text }),
+    };
+    Ok(Sale {
+        region: region,
+        month: month,
+        product: rec.fields[2].trim(),
+        quantity: quantity,
+        price_cents: price_cents,
+    })
+}
+
+fn aggregate(sales: ref Vec[Sale]) -> Vec[MonthTotal] {
+    let mut index: Map[String, i64] = Map.new();
+    let mut totals: Vec[MonthTotal] = Vec.new();
+    for sale in sales {
+        let key = f"{sale.region}|{sale.month}";
+        let pos = match index.get(key) {
+            Some(p) => p,
+            None => -1,
+        };
+        if pos >= 0 {
+            totals[pos].add(sale);
+        } else {
+            let mut total = MonthTotal.new(sale.region, sale.month);
+            total.add(sale);
+            index.insert(key, totals.len());
+            totals.push(total);
+        }
+    }
+    totals.sort();
+    totals
+}
+
+fn pad_right(s: ref String, width: i64) -> String {
+    let mut out = String.new();
+    out.push_str(s);
+    while out.len() < width { out.push(' '); }
+    out
+}
+
+fn pad_left(s: ref String, width: i64) -> String {
+    let mut out = String.new();
+    let mut fill = width - s.len();
+    while fill > 0 { out.push(' '); fill = fill - 1; }
+    out.push_str(s);
+    out
+}
+
+fn format_money(cents: i64) -> String {
+    let digits = f"{cents / 100}";
+    let chars: Vec[char] = digits.chars().collect();
+    let n = chars.len();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        if i > 0 and (n - i) % 3 == 0 { out.push(','); }
+        out.push(chars[i]);
+        i = i + 1;
+    }
+    let rem = cents % 100;
+    out.push('.');
+    if rem < 10 { out.push('0'); }
+    out.push_str(f"{rem}");
+    out
+}
+
+fn month_label(key: ref String) -> String {
+    let name = match i64.parse(key.substring(5, 7)) {
+        Some(1) => "Jan", Some(2) => "Feb", Some(3) => "Mar", Some(4) => "Apr",
+        Some(5) => "May", Some(6) => "Jun", Some(7) => "Jul", Some(8) => "Aug",
+        Some(9) => "Sep", Some(10) => "Oct", Some(11) => "Nov", Some(12) => "Dec",
+        _ => "???",
+    };
+    f"{name} {key.substring(0, 4)}"
+}
+
+fn row(region: ref String, month: ref String, orders: i64, units: i64, revenue: i64) -> String {
+    let avg = if orders > 0 { revenue / orders } else { 0 };
+    pad_right(region, 11) + pad_right(month, 11) + pad_left(orders.to_string(), 6)
+        + pad_left(units.to_string(), 8) + pad_left(format_money(revenue), 15)
+        + pad_left(format_money(avg), 13)
+}
+
+fn rule(c: char, width: i64) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < width { out.push(c); i = i + 1; }
+    out
+}
+
+fn print_report(totals: ref Vec[MonthTotal]) {
+    let width = 64;
+    println(pad_right("REGION", 11) + pad_right("MONTH", 11) + pad_left("ORDERS", 6)
+        + pad_left("UNITS", 8) + pad_left("REVENUE", 15) + pad_left("AVG ORDER", 13));
+    println(rule('-', width));
+    let mut grand = Totals.zero();
+    let mut sub = Totals.zero();
+    let mut current = String.new();
+    for t in totals {
+        if t.region != current {
+            if not current.is_empty() {
+                println(row("", "subtotal", sub.orders, sub.units, sub.revenue_cents));
+                println("");
+            }
+            current = t.region.clone();
+            sub = Totals.zero();
+            println(row(t.region, month_label(t.month), t.orders, t.units, t.revenue_cents));
+        } else {
+            println(row("", month_label(t.month), t.orders, t.units, t.revenue_cents));
+        }
+        sub.absorb(t);
+        grand.absorb(t);
+    }
+    if not current.is_empty() { println(row("", "subtotal", sub.orders, sub.units, sub.revenue_cents)); }
+    println(rule('=', width));
+    println(row("GRAND TOTAL", "", grand.orders, grand.units, grand.revenue_cents));
+}
+
+fn embedded_csv() -> String {
+    let lines = [
+        "date,region,product,quantity,unit_price,customer",
+        "2024-01-05,North,Widget,10,12.50,\"Acme, Inc.\"",
+        "2024-01-17,South,Gadget,3,\"1,250.00\",Initech",
+        "2024-01-20,North,Gizmo,5,7.25,\"The \"\"Best\"\" Shop\"",
+        "2024-02-02,East,Widget,8,12.50,Globex",
+        "2024-02-11,North,Widget,12,12.00,\"Acme, Inc.\"",
+        "2024-02-14,South,Doohickey,20,3.10,\"Smith & Sons, LLC\"",
+        "2024-02-29,East,Gadget,1,\"1,199.99\",\"Umbrella \"\"Corp\"\"\"",
+        "",
+        "2024-03-03,West,Widget,7,12.50,Hooli",
+        "2024-03-09,North,Gizmo,ten,7.25,Initech",
+        "2024-03-15,West,Gadget,2,\"1,250.00\",\"Pied Piper, \"\"Compression\"\" Div.\"",
+        "2024-03-21,East,Gizmo,15,7.00,Globex",
+        "2024-13-02,South,Widget,4,12.50,Initech",
+        "2024-03-28,South,Widget,6,12.50",
+        "2024-01-30, North ,Doohickey,40,2.95,\"Vandelay Industries\"",
+        "2024-02-20,West,Gizmo,9,7.25,\"Bluth Company",
+        "Banana Stand\"",
+        "2024-03-30,North,Gadget,1,\"1,250.00\",\"Acme, Inc.\"",
+        "2024-02-08,East,Doohickey,25,2.95,Kramerica",
+        "2024-01-12,West,Widget,3,12.5,Hooli",
+        "2024-03-11,,Widget,2,12.50,Nobody",
+        "2024-01-25,South,Gizmo,4,7.25,\"Initech\"",
+        "2024-03-17,East,Widget,0,12.50,Globex",
+        "2024-03-19,West,Doohickey,30,\"2.95\",\"Hooli, \"\"XYZ\"\"\"",
+    ];
+    let mut out = String.new();
+    for line in lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn load_sales(text: ref String) -> Result[(Vec[Sale], Vec[RowError]), CsvError] {
+    let records = parse_csv(text)?;
+    let mut sales: Vec[Sale] = Vec.new();
+    let mut rejected: Vec[RowError] = Vec.new();
+    let mut first = true;
+    for rec in records {
+        if first { first = false; continue; }
+        match parse_sale(rec) {
+            Ok(sale) => sales.push(sale),
+            Err(e) => rejected.push(e),
+        }
+    }
+    Ok((sales, rejected))
+}
+
+fn validate_upload(name: ref String, text: ref String) {
+    match parse_csv(text) {
+        Ok(records) => println(f"  {name}: ok ({records.len()} records)"),
+        Err(e) => println(f"  {name}: error: {e}"),
+    }
+}
+
+fn main() -> Result[(), IoError] {
+    let path = "sales.csv";
+    fs.write(path, embedded_csv())?;
+    let text = fs.read_to_string(path)?;
+
+    let (sales, rejected) = match load_sales(text) {
+        Ok(pair) => pair,
+        Err(e) => {
+            println(f"fatal: {e}");
+            return Ok(());
+        }
+    };
+
+    println("SALES REPORT BY REGION AND MONTH");
+    println(f"source: {path} ({sales.len() + rejected.len()} data rows, {sales.len()} accepted, {rejected.len()} rejected)");
+    println("");
+    let totals = aggregate(sales);
+    print_report(totals);
+
+    println("");
+    println("Rejected rows:");
+    for e in rejected { println(f"  {e}"); }
+
+    println("");
+    println("Upload validation:");
+    validate_upload("good.csv", "a,b\n\"x, y\",\"say \"\"hi\"\"\"\n");
+    validate_upload("truncated.csv", "date,region\n2024-01-01,\"North\n");
+    validate_upload("stray.csv", "a,b\nfoo,ba\"r\n");
+    Ok(())
+}

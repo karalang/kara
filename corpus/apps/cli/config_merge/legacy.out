@@ -1,0 +1,32 @@
+resolved 12 keys:
+  cache.enabled    = false                              (cli)
+  cache.ttl        = 600                                (file:app.local.conf)
+  db.pool          = 16                                 (file:app.conf)
+  db.url           = "postgres://db.internal:5432/app?sslmode=require" (env)
+  features.flags   = [search, export]                   (cli)
+  log.file_path    = "/tmp/app-staging.log"             (file:app.local.conf)
+  log.json         = true                               (cli)
+  log.level        = "warn"                             (env)
+  metrics.interval = 60                                 (default)
+  server.host      = "staging.example.org"              (file:app.local.conf)
+  server.port      = 9090                               (env)
+  server.workers   = 32                                 (cli)
+winning layers:
+  cli: 4
+  default: 1
+  env: 3
+  file:app.conf: 1
+  file:app.local.conf: 3
+errors (12):
+  file:app.conf: unknown key 'db.retries'
+  app.local.conf:3: cannot parse 'this line is broken'
+  file:app.local.conf: log.level: 'verbose' is not one of debug|info|warn|error
+  env: cache.ttl: expected an integer, got 'abc'
+  env:6: cannot parse 'APP_BROKEN'
+  env: log.json: expected a boolean, got 'maybe'
+  cli: server.port: 70000 is outside [1, 65535]
+  cli: metrics.interval: expected an integer, got '15s'
+  cli: unknown key 'colour'
+  cli:7: cannot parse 'positional'
+  required key 'auth.token' is not set
+  constraint: server.workers (32) must not exceed db.pool (16)

@@ -1,0 +1,28 @@
+== web app [app ^1.0.0] ==
+plan: 4 packages
+  1. install log 0.3.2
+  2. install json 1.4.0 (needs log)
+  3. install http 2.1.0 (needs json, log)
+  4. install app 1.0.0 (needs http, json)
+== two roots sharing deps [json ^1.0.0, http >=2.0.0, log *] ==
+plan: 3 packages
+  1. install log 0.3.2
+  2. install json 1.4.0 (needs log)
+  3. install http 2.1.0 (needs json, log)
+== plugin cycle [app ^1.0.0] ==
+error: dependency cycle: core -> plugin -> hooks -> core
+== version conflict [app ^1.0.0] ==
+error: conflict on 'json': 1.4.0 already selected, but app@1.0.0 needs =1.1.0
+== unsatisfiable [cli ^0.9.0] ==
+error: no version of 'log' matches >=2.0.0 (required by cli@0.9.0; available: 0.3.0, 0.3.2, 1.0.0)
+== missing package [app ^1.0.0, metrics ^0.1.0] ==
+error: package 'metrics' not found (required by <root>)
+== pinned old json [json =1.1.0, log *] ==
+plan: 2 packages
+  1. install log 0.3.2
+  2. install json 1.1.0 (needs log)
+== pinned old log [log =0.3.0, json *] ==
+error: conflict on 'log': 0.3.0 already selected, but json@1.4.0 needs ^0.3.1
+== bad manifest [app 1.x] ==
+error: parse error: bad constraint '1.x'
+summary: 3 resolved (9 installs), 6 failed

@@ -1,0 +1,50 @@
+== event log ==
+submit #1 email(alice@example.com) prio=5
+submit #2 report(q3-sales) prio=3
+submit #3 webhook(hooks.acme.io) prio=7
+submit #4 resize(cat.png) prio=1
+submit #5 webhook(down.legacy.net) prio=4
+submit #6 email() prio=6
+submit #7 report(inventory) prio=3
+submit #8 email(bob@example.com) prio=2
+submit #9 resize(big photo.jpg) prio=8
+submit #10 webhook(pay.stripe.test) prio=9
+[t0] w1 #10 webhook(pay.stripe.test) attempt 1 failed: timeout; retry in 1 at t1
+[t0] w2 #9 resize(big photo.jpg) attempt 1 failed permanently: payload has whitespace -> dead letter
+[t0] w3 #3 webhook(hooks.acme.io) attempt 1 failed: timeout; retry in 1 at t1
+[t1] w1 #10 webhook(pay.stripe.test) attempt 2 ok: delivered to pay.stripe.test
+[t1] w2 #3 webhook(hooks.acme.io) attempt 2 ok: delivered to hooks.acme.io
+[t1] w3 #6 email() attempt 1 failed permanently: empty payload -> dead letter
+[t2] w1 #1 email(alice@example.com) attempt 1 ok: sent to alice@example.com
+[t2] w2 #5 webhook(down.legacy.net) attempt 1 failed: http 503; retry in 1 at t3
+[t2] w3 #2 report(q3-sales) attempt 1 failed: db busy; retry in 1 at t3
+[t3] w1 #5 webhook(down.legacy.net) attempt 2 failed: http 503; retry in 2 at t5
+[t3] w2 #2 report(q3-sales) attempt 2 failed: db busy; retry in 2 at t5
+[t3] w3 #7 report(inventory) attempt 1 failed: db busy; retry in 1 at t4
+[t4] w1 #7 report(inventory) attempt 2 failed: db busy; retry in 2 at t6
+[t4] w2 #8 email(bob@example.com) attempt 1 ok: sent to bob@example.com
+[t4] w3 #4 resize(cat.png) attempt 1 failed: worker oom; retry in 1 at t5
+[t5] w1 #5 webhook(down.legacy.net) attempt 3 failed: http 503; retry in 4 at t9
+[t5] w2 #2 report(q3-sales) attempt 3 ok: report q3-sales rows=56
+[t5] w3 #4 resize(cat.png) attempt 2 ok: resized cat.png
+[t6] w1 #7 report(inventory) attempt 3 ok: report inventory rows=63
+[t7] idle (1 waiting)
+[t8] idle (1 waiting)
+[t9] w1 #5 webhook(down.legacy.net) attempt 4 failed: http 503; attempts exhausted -> dead letter
+== dead letter queue ==
+#5 webhook(down.legacy.net) attempts=4
+#6 email() attempts=1
+#9 resize(big photo.jpg) attempts=1
+== completion order ==
+#10 #3 #1 #8 #2 #4 #7
+== stats ==
+ticks: 10
+workers: 3
+dispatched: 20
+succeeded: 7
+retried: 10
+dead: 3
+dead-letter attempts: 6
+idle ticks: 2
+ok by kind: email=2 report=2 webhook=2 resize=1
+still pending: 0

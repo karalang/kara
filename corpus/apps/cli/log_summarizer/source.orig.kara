@@ -1,0 +1,343 @@
+// log_summarizer: writes three service logs, reads them back, parses each
+// line, and prints a summary (level counts, per-component counts and latency
+// percentiles, and the most frequent error messages).
+//
+// Log line format (pipe-delimited):
+//   <seq>|<LEVEL>|<component>|<latency_ms>|<message>
+
+enum Level {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl Level {
+    fn parse(s: ref String) -> Option[Level] {
+        if s == "DEBUG" {
+            Some(Level.Debug)
+        } else if s == "INFO" {
+            Some(Level.Info)
+        } else if s == "WARN" {
+            Some(Level.Warn)
+        } else if s == "ERROR" {
+            Some(Level.Error)
+        } else {
+            None
+        }
+    }
+
+    fn label(ref self) -> String {
+        match self {
+            Level.Debug => "DEBUG",
+            Level.Info => "INFO",
+            Level.Warn => "WARN",
+            Level.Error => "ERROR",
+        }
+    }
+
+    fn index(ref self) -> i64 {
+        match self {
+            Level.Debug => 0,
+            Level.Info => 1,
+            Level.Warn => 2,
+            Level.Error => 3,
+        }
+    }
+}
+
+struct LogEntry {
+    sequence: i64,
+    level: Level,
+    component: String,
+    latency_ms: i64,
+    message: String,
+}
+
+enum ParseError {
+    WrongFieldCount(i64),
+    BadNumber(String),
+    UnknownLevel(String),
+}
+
+impl Display for ParseError {
+    fn to_string(ref self) -> String {
+        match self {
+            ParseError.WrongFieldCount(n) => f"expected 5 fields, got {n}",
+            ParseError.BadNumber(s) => f"bad number '{s}'",
+            ParseError.UnknownLevel(s) => f"unknown level '{s}'",
+        }
+    }
+}
+
+// Deterministic linear congruential generator so the logs are reproducible.
+struct Rng {
+    state: i64,
+}
+
+impl Rng {
+    fn new(seed: i64) -> Rng {
+        Rng { state: seed }
+    }
+
+    fn next(mut ref self, bound: i64) -> i64 {
+        self.state = (self.state * 1103515245 + 12345) % 2147483648;
+        (self.state / 65536) % bound
+    }
+}
+
+struct ServiceSpec {
+    name: String,
+    seed: i64,
+    components: Vec[String],
+    errors: Vec[String],
+}
+
+const LINES_PER_FILE: i64 = 40;
+
+fn info_message(level: ref Level, roll: i64) -> String {
+    match level {
+        Level.Debug => if roll % 2 == 0 { "cache probe" } else { "retry scheduled" },
+        Level.Info => if roll % 2 == 0 { "request served" } else { "job finished" },
+        Level.Warn => if roll % 2 == 0 { "slow response" } else { "queue backlog" },
+        Level.Error => "unexpected failure",
+    }
+}
+
+fn generate_log(spec: ref ServiceSpec) -> String {
+    let mut rng = Rng.new(spec.seed);
+    let mut out = String.new();
+    for i in 0..LINES_PER_FILE {
+        if i % 13 == 12 {
+            out.push_str("--- log rotated ---\n");
+            continue;
+        }
+        let roll = rng.next(100);
+        let level = if roll < 15 {
+            Level.Debug
+        } else if roll < 60 {
+            Level.Info
+        } else if roll < 80 {
+            Level.Warn
+        } else {
+            Level.Error
+        };
+        let component = spec.components[rng.next(spec.components.len())].clone();
+        let mut latency = 5 + rng.next(400);
+        let message = match level {
+            Level.Error => {
+                latency = latency + 200;
+                spec.errors[rng.next(spec.errors.len())]
+            }
+            _ => info_message(level, rng.next(10)),
+        };
+        let latency_text = if i % 17 == 16 { "n/a".to_string() } else { latency.to_string() };
+        out.push_str(f"{i}|{level.label()}|{component}|{latency_text}|{message}\n");
+    }
+    out
+}
+
+fn parse_line(line: ref String) -> Result[LogEntry, ParseError] {
+    let fields = line.split("|");
+    if fields.len() != 5 {
+        return Err(ParseError.WrongFieldCount(fields.len()));
+    }
+    let sequence = match i64.parse(fields[0].trim()) {
+        Some(n) => n,
+        None => return Err(ParseError.BadNumber(fields[0].clone())),
+    };
+    let level = match Level.parse(fields[1].trim()) {
+        Some(l) => l,
+        None => return Err(ParseError.UnknownLevel(fields[1].clone())),
+    };
+    let latency_ms = match i64.parse(fields[3].trim()) {
+        Some(n) => n,
+        None => return Err(ParseError.BadNumber(fields[3].clone())),
+    };
+    Ok(LogEntry {
+        sequence: sequence,
+        level: level,
+        component: fields[2].trim(),
+        latency_ms: latency_ms,
+        message: fields[4].trim(),
+    })
+}
+
+struct ParsedLog {
+    service: String,
+    entries: Vec[LogEntry],
+    problems: Vec[String],
+}
+
+fn parse_log(service: String, text: ref String) -> ParsedLog {
+    let mut entries = Vec.new();
+    let mut problems = Vec.new();
+    let mut line_no = 0;
+    for line in text.split("\n") {
+        if line.is_empty() {
+            continue;
+        }
+        line_no = line_no + 1;
+        match parse_line(line) {
+            Ok(entry) => entries.push(entry),
+            Err(e) => problems.push(f"{service}.log:{line_no}: {e}"),
+        }
+    }
+    ParsedLog { service: service, entries: entries, problems: problems }
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct ErrorRank {
+    neg_count: i64,
+    message: String,
+}
+
+struct Summary {
+    level_counts: Vec[i64],
+    component_counts: SortedMap[String, i64],
+    component_latencies: SortedMap[String, Vec[i64]],
+    error_counts: Map[String, i64],
+    total_lines: i64,
+}
+
+impl Summary {
+    fn new() -> Summary {
+        Summary {
+            level_counts: [0, 0, 0, 0],
+            component_counts: SortedMap.new(),
+            component_latencies: SortedMap.new(),
+            error_counts: Map.new(),
+            total_lines: 0,
+        }
+    }
+
+    fn add_log(mut ref self, log: ref ParsedLog) {
+        self.total_lines = self.total_lines + log.entries.len() + log.problems.len();
+        for entry in log.entries {
+            let idx = entry.level.index();
+            self.level_counts[idx] = self.level_counts[idx] + 1;
+            let key = f"{log.service}/{entry.component}";
+            let count = self.component_counts.get(key).unwrap_or(0);
+            self.component_counts.insert(key.clone(), count + 1);
+            self.component_latencies.entry(key).or_insert_with(|| Vec.new()).push(entry.latency_ms);
+            if entry.level.index() == 3 {
+                let n = self.error_counts.get(entry.message).unwrap_or(0);
+                self.error_counts.insert(entry.message, n + 1);
+            }
+        }
+    }
+
+    fn top_errors(ref self, limit: i64) -> Vec[ErrorRank] {
+        let mut ranks = Vec.new();
+        for (message, count) in self.error_counts {
+            ranks.push(ErrorRank { neg_count: 0 - count, message: message });
+        }
+        ranks.sort();
+        let mut top = Vec.new();
+        for r in ranks {
+            if top.len() >= limit {
+                break;
+            }
+            top.push(r);
+        }
+        top
+    }
+}
+
+// Nearest-rank percentile over an ascending-sorted slice of samples.
+fn percentile(sorted: ref Vec[i64], pct: i64) -> i64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let mut rank = (sorted.len() * pct + 99) / 100;
+    if rank < 1 {
+        rank = 1;
+    }
+    sorted[rank - 1]
+}
+
+fn print_summary(summary: ref Summary, logs: ref Vec[ParsedLog]) {
+    let mut parsed = 0;
+    let mut malformed = 0;
+    for log in logs {
+        parsed = parsed + log.entries.len();
+        malformed = malformed + log.problems.len();
+    }
+    println("== log summary ==");
+    println(f"files: {logs.len()}, lines: {summary.total_lines}, parsed: {parsed}, malformed: {malformed}");
+
+    println("-- malformed lines --");
+    for log in logs {
+        for p in log.problems {
+            println(f"  {p}");
+        }
+    }
+
+    println("-- levels --");
+    let levels = [Level.Debug, Level.Info, Level.Warn, Level.Error];
+    for level in levels {
+        println(f"  {level.label()}: {summary.level_counts[level.index()]}");
+    }
+
+    println("-- components --");
+    for (name, count) in summary.component_counts {
+        let mut samples = summary.component_latencies.get(name).unwrap_or(Vec.new());
+        samples.sort();
+        let p50 = percentile(samples, 50);
+        let p95 = percentile(samples, 95);
+        println(f"  {name}: count={count} p50={p50}ms p95={p95}ms");
+    }
+
+    println("-- top errors --");
+    let top = summary.top_errors(5);
+    let mut rank = 1;
+    for r in top {
+        println(f"  {rank}. {r.message} ({0 - r.neg_count})");
+        rank = rank + 1;
+    }
+}
+
+fn main() -> Result[(), IoError] {
+    let app_spec = ServiceSpec {
+        name: "app",
+        seed: 7,
+        components: ["api", "cache", "worker"],
+        errors: ["upstream timeout", "null payload", "template render failed"],
+    };
+    let auth_spec = ServiceSpec {
+        name: "auth",
+        seed: 42,
+        components: ["login", "token", "session"],
+        errors: ["invalid token", "password mismatch", "account locked"],
+    };
+    let db_spec = ServiceSpec {
+        name: "db",
+        seed: 1234,
+        components: ["query", "pool", "replica"],
+        errors: ["deadlock detected", "connection refused", "upstream timeout"],
+    };
+
+    let app_text = generate_log(app_spec);
+    let auth_text = generate_log(auth_spec);
+    let db_text = generate_log(db_spec);
+
+    fs.write("app.log", app_text)?;
+    fs.write("auth.log", auth_text)?;
+    fs.write("db.log", db_text)?;
+
+    let app_raw = fs.read_to_string("app.log")?;
+    let auth_raw = fs.read_to_string("auth.log")?;
+    let db_raw = fs.read_to_string("db.log")?;
+
+    let app_log = parse_log(app_spec.name, app_raw);
+    let auth_log = parse_log(auth_spec.name, auth_raw);
+    let db_log = parse_log(db_spec.name, db_raw);
+
+    let logs = [app_log, auth_log, db_log];
+    let mut summary = Summary.new();
+    for log in logs {
+        summary.add_log(log);
+    }
+    print_summary(summary, logs);
+    Ok(())
+}

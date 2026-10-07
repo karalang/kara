@@ -1,0 +1,342 @@
+// Job queue simulator: a small worker pool pulls jobs by priority, calls a
+// (simulated) remote service, and retries transient failures with
+// exponential backoff measured in logical ticks. Jobs that exhaust their
+// attempts, or fail permanently, land in a dead-letter queue.
+
+enum JobKind {
+    Email,
+    Report,
+    Webhook,
+    Resize,
+}
+
+impl Display for JobKind {
+    fn to_string(ref self) -> String {
+        match self {
+            JobKind.Email => "email",
+            JobKind.Report => "report",
+            JobKind.Webhook => "webhook",
+            JobKind.Resize => "resize",
+        }
+    }
+}
+
+enum JobError {
+    Transient(String),
+    Permanent(String),
+}
+
+impl Display for JobError {
+    fn to_string(ref self) -> String {
+        match self {
+            JobError.Transient(msg) => f"transient: {msg}",
+            JobError.Permanent(msg) => f"permanent: {msg}",
+        }
+    }
+}
+
+struct Job {
+    id: i64,
+    kind: JobKind,
+    payload: String,
+    priority: i64,
+    attempts: i64,
+    ready_at: i64,
+}
+
+impl Job {
+    fn new(id: i64, kind: JobKind, payload: String, priority: i64) -> Job {
+        Job { id, kind, payload, priority, attempts: 0, ready_at: 0 }
+    }
+
+    fn label(ref self) -> String {
+        f"#{self.id} {self.kind}({self.payload})"
+    }
+}
+
+struct Outcome {
+    worker: i64,
+    job: Job,
+    result: Result[String, JobError],
+}
+
+struct Config {
+    workers: i64,
+    max_attempts: i64,
+    base_backoff: i64,
+    max_ticks: i64,
+}
+
+struct Stats {
+    dispatched: i64,
+    succeeded: i64,
+    retried: i64,
+    dead: i64,
+    idle_ticks: i64,
+}
+
+struct Queue {
+    pending: Vec[Job],
+    dead_letter: Vec[Job],
+    completed: Vec[i64],
+    events: Vec[String],
+    stats: Stats,
+}
+
+impl Queue {
+    fn new() -> Queue {
+        Queue {
+            pending: Vec.new(),
+            dead_letter: Vec.new(),
+            completed: Vec.new(),
+            events: Vec.new(),
+            stats: Stats { dispatched: 0, succeeded: 0, retried: 0, dead: 0, idle_ticks: 0 },
+        }
+    }
+
+    fn submit(mut ref self, job: Job) {
+        self.events.push(f"submit {job.label()} prio={job.priority}");
+        self.pending.push(job);
+    }
+
+    fn log(mut ref self, tick: i64, msg: String) {
+        self.events.push(f"[t{tick}] {msg}");
+    }
+
+    // Highest priority first; ties go to the lowest id. Only jobs whose
+    // backoff has expired are eligible.
+    fn take_next(mut ref self, tick: i64) -> Option[Job] {
+        let mut best: i64 = -1;
+        let mut i: i64 = 0;
+        while i < self.pending.len() {
+            let cand = ref self.pending[i];
+            if cand.ready_at <= tick {
+                if best < 0 {
+                    best = i;
+                } else {
+                    let cur = ref self.pending[best];
+                    if cand.priority > cur.priority
+                        or (cand.priority == cur.priority and cand.id < cur.id) {
+                        best = i;
+                    }
+                }
+            }
+            i += 1;
+        }
+        if best < 0 {
+            return None;
+        }
+        Some(self.pending.remove(best))
+    }
+
+    fn settle(mut ref self, tick: i64, cfg: ref Config, outcome: Outcome) {
+        let mut job = outcome.job;
+        let w = outcome.worker;
+        match outcome.result {
+            Ok(output) => {
+                self.stats.succeeded += 1;
+                self.completed.push(job.id);
+                self.log(tick, f"w{w} {job.label()} attempt {job.attempts} ok: {output}");
+            }
+            Err(JobError.Permanent(msg)) => {
+                self.stats.dead += 1;
+                self.log(tick, f"w{w} {job.label()} attempt {job.attempts} failed permanently: {msg} -> dead letter");
+                self.dead_letter.push(job);
+            }
+            Err(JobError.Transient(msg)) => {
+                if job.attempts >= cfg.max_attempts {
+                    self.stats.dead += 1;
+                    self.log(tick, f"w{w} {job.label()} attempt {job.attempts} failed: {msg}; attempts exhausted -> dead letter");
+                    self.dead_letter.push(job);
+                } else {
+                    let delay = backoff(cfg.base_backoff, job.attempts);
+                    job.ready_at = tick + delay;
+                    self.stats.retried += 1;
+                    self.log(tick, f"w{w} {job.label()} attempt {job.attempts} failed: {msg}; retry in {delay} at t{job.ready_at}");
+                    self.pending.push(job);
+                }
+            }
+        }
+    }
+}
+
+// Exponential backoff: base * 2^(attempt-1) ticks.
+fn backoff(base: i64, attempt: i64) -> i64 {
+    let mut delay = base;
+    let mut n = 1;
+    while n < attempt {
+        delay = delay * 2;
+        n += 1;
+    }
+    delay
+}
+
+fn validate(job: ref Job) -> Result[(), JobError] {
+    if job.payload.is_empty() {
+        return Err(JobError.Permanent("empty payload".to_string()));
+    }
+    if job.payload.contains(" ") {
+        return Err(JobError.Permanent("payload has whitespace".to_string()));
+    }
+    Ok(())
+}
+
+// The "remote" service. Each call costs one round trip (sleep_ms(2)).
+// Failure rule is deterministic, keyed on kind, payload and attempt number.
+fn call_remote(job: ref Job, attempt: i64) -> Result[String, JobError] {
+    sleep_ms(2);
+    validate(job)?;
+    match job.kind {
+        JobKind.Email => Ok(f"sent to {job.payload}"),
+        JobKind.Report => {
+            if attempt < 3 {
+                Err(JobError.Transient("db busy".to_string()))
+            } else {
+                Ok(f"report {job.payload} rows={job.payload.len() * 7}")
+            }
+        }
+        JobKind.Webhook => {
+            if job.payload.starts_with("down") {
+                Err(JobError.Transient("http 503".to_string()))
+            } else if attempt < 2 {
+                Err(JobError.Transient("timeout".to_string()))
+            } else {
+                Ok(f"delivered to {job.payload}")
+            }
+        }
+        JobKind.Resize => {
+            if attempt < 2 {
+                Err(JobError.Transient("worker oom".to_string()))
+            } else {
+                Ok(f"resized {job.payload}")
+            }
+        }
+    }
+}
+
+// One worker handles at most one job per tick.
+fn run_worker(worker: i64, slot: Option[Job]) -> Option[Outcome] {
+    match slot {
+        None => None,
+        Some(job) => {
+            let mut claimed = job;
+            claimed.attempts += 1;
+            let result = call_remote(claimed, claimed.attempts);
+            Some(Outcome { worker, job: claimed, result })
+        }
+    }
+}
+
+fn seed_jobs() -> Vec[Job] {
+    let mut jobs: Vec[Job] = Vec.new();
+    jobs.push(Job.new(1, JobKind.Email, "alice@example.com".to_string(), 5));
+    jobs.push(Job.new(2, JobKind.Report, "q3-sales".to_string(), 3));
+    jobs.push(Job.new(3, JobKind.Webhook, "hooks.acme.io".to_string(), 7));
+    jobs.push(Job.new(4, JobKind.Resize, "cat.png".to_string(), 1));
+    jobs.push(Job.new(5, JobKind.Webhook, "down.legacy.net".to_string(), 4));
+    jobs.push(Job.new(6, JobKind.Email, "".to_string(), 6));
+    jobs.push(Job.new(7, JobKind.Report, "inventory".to_string(), 3));
+    jobs.push(Job.new(8, JobKind.Email, "bob@example.com".to_string(), 2));
+    jobs.push(Job.new(9, JobKind.Resize, "big photo.jpg".to_string(), 8));
+    jobs.push(Job.new(10, JobKind.Webhook, "pay.stripe.test".to_string(), 9));
+    jobs
+}
+
+fn kind_index(kind: ref JobKind) -> i64 {
+    match kind {
+        JobKind.Email => 0,
+        JobKind.Report => 1,
+        JobKind.Webhook => 2,
+        JobKind.Resize => 3,
+    }
+}
+
+fn main() {
+    let cfg = Config { workers: 3, max_attempts: 4, base_backoff: 1, max_ticks: 50 };
+    let mut queue = Queue.new();
+    for job in seed_jobs() {
+        queue.submit(job);
+    }
+
+    let mut tick: i64 = 0;
+    while not queue.pending.is_empty() and tick < cfg.max_ticks {
+        // Selection is sequential: each worker claims the best ready job.
+        let s1 = queue.take_next(tick);
+        let s2 = queue.take_next(tick);
+        let s3 = queue.take_next(tick);
+
+        // Dispatch: three independent remote calls, one per worker.
+        let o1 = run_worker(1, s1);
+        let o2 = run_worker(2, s2);
+        let o3 = run_worker(3, s3);
+
+        let mut ran = 0;
+        for slot in [o1, o2, o3] {
+            if let Some(outcome) = slot {
+                ran += 1;
+                queue.stats.dispatched += 1;
+                queue.settle(tick, cfg, outcome);
+            }
+        }
+        if ran == 0 {
+            queue.stats.idle_ticks += 1;
+            queue.log(tick, f"idle ({queue.pending.len()} waiting)");
+        }
+        tick += 1;
+    }
+
+    println("== event log ==");
+    for line in queue.events {
+        println(line);
+    }
+
+    println("== dead letter queue ==");
+    let mut dead_ids: Vec[i64] = Vec.new();
+    for job in queue.dead_letter {
+        dead_ids.push(job.id);
+    }
+    dead_ids.sort();
+    if dead_ids.is_empty() {
+        println("(empty)");
+    }
+    for id in dead_ids {
+        for job in queue.dead_letter {
+            if job.id == id {
+                println(f"{job.label()} attempts={job.attempts}");
+            }
+        }
+    }
+
+    println("== completion order ==");
+    let mut order = String.new();
+    for id in queue.completed {
+        if not order.is_empty() {
+            order.push_str(" ");
+        }
+        order.push_str(f"#{id}");
+    }
+    println(order);
+
+    let mut per_kind = [0, 0, 0, 0];
+    let mut attempts_total = 0;
+    for job in seed_jobs() {
+        if queue.completed.contains(job.id) {
+            per_kind[kind_index(job.kind)] += 1;
+        }
+    }
+    for job in queue.dead_letter {
+        attempts_total += job.attempts;
+    }
+
+    println("== stats ==");
+    println(f"ticks: {tick}");
+    println(f"workers: {cfg.workers}");
+    println(f"dispatched: {queue.stats.dispatched}");
+    println(f"succeeded: {queue.stats.succeeded}");
+    println(f"retried: {queue.stats.retried}");
+    println(f"dead: {queue.stats.dead}");
+    println(f"dead-letter attempts: {attempts_total}");
+    println(f"idle ticks: {queue.stats.idle_ticks}");
+    println(f"ok by kind: email={per_kind[0]} report={per_kind[1]} webhook={per_kind[2]} resize={per_kind[3]}");
+    println(f"still pending: {queue.pending.len()}");
+}

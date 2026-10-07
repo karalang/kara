@@ -1,0 +1,399 @@
+// Session store service: login / logout / refresh / check over requests with
+// logical timestamps. Deterministic tokens, idle + absolute expiry, a per-user
+// session cap (oldest evicted) and a periodic sweep of expired sessions.
+
+let HASH_MOD: i64 = 1000000007;
+let HASH_BASE: i64 = 131;
+
+struct Config {
+    idle_timeout: i64,
+    absolute_timeout: i64,
+    max_per_user: i64,
+    sweep_interval: i64,
+}
+
+struct Session {
+    token: String,
+    user: String,
+    created: i64,
+    last_seen: i64,
+}
+
+shared enum Expiry {
+    Idle,
+    Absolute,
+}
+
+enum SessionError {
+    UnknownUser(String),
+    BadPassword(String),
+    UnknownToken(String),
+    Expired(String, Expiry),
+}
+
+shared enum TokenRef {
+    Issued(i64),
+    Literal(String),
+}
+
+enum Op {
+    Login { user: String, password: String },
+    Logout(TokenRef),
+    Refresh(TokenRef),
+    Check(TokenRef),
+}
+
+struct Request {
+    t: i64,
+    op: Op,
+}
+
+struct LoginOutcome {
+    token: String,
+    evicted: Option[String],
+}
+
+impl Expiry {
+    fn label(ref self) -> String {
+        match self {
+            Expiry.Idle => "idle",
+            Expiry.Absolute => "absolute",
+        }
+    }
+}
+
+impl SessionError {
+    fn describe(ref self) -> String {
+        match self {
+            SessionError.UnknownUser(u) => f"unknown user '{u}'",
+            SessionError.BadPassword(u) => f"bad password for '{u}'",
+            SessionError.UnknownToken(t) => f"unknown token {t}",
+            SessionError.Expired(t, why) => f"token {t} expired ({why.label()})",
+        }
+    }
+}
+
+impl Session {
+    fn idle_deadline(ref self, cfg: ref Config) -> i64 {
+        self.last_seen + cfg.idle_timeout
+    }
+
+    fn absolute_deadline(ref self, cfg: ref Config) -> i64 {
+        self.created + cfg.absolute_timeout
+    }
+
+    fn expires_at(ref self, cfg: ref Config) -> i64 {
+        let idle = self.idle_deadline(cfg);
+        let absolute = self.absolute_deadline(cfg);
+        if idle < absolute { idle } else { absolute }
+    }
+
+    fn expiry(ref self, cfg: ref Config, now: i64) -> Option[Expiry] {
+        if now >= self.absolute_deadline(cfg) {
+            Some(Expiry.Absolute)
+        } else if now >= self.idle_deadline(cfg) {
+            Some(Expiry.Idle)
+        } else {
+            None
+        }
+    }
+}
+
+fn hex8(n: i64) -> String {
+    let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"];
+    let mut out = String.new();
+    let mut shift = 28;
+    while shift >= 0 {
+        let d = (n >> shift) & 15;
+        out.push_str(digits[d]);
+        shift = shift - 4;
+    }
+    out
+}
+
+fn derive_token(user: ref String, t: i64, serial: i64) -> String {
+    let seed = f"{user}|{t}|{serial}";
+    let mut h: i64 = 7;
+    for c in seed.chars() {
+        let code = (c as u32) as i64;
+        h = (h * HASH_BASE + code) % HASH_MOD;
+    }
+    // second round folds the sequence in again so neighbours spread out
+    h = (h * HASH_BASE + serial * 977) % HASH_MOD;
+    f"s-{hex8(h)}"
+}
+
+struct Store {
+    cfg: Config,
+    credentials: Map[String, String],
+    sessions: SortedMap[String, Session],
+    serial: i64,
+    next_sweep: i64,
+}
+
+impl Store {
+    fn new(cfg: Config) -> Store {
+        let first_sweep = cfg.sweep_interval;
+        Store {
+            cfg,
+            credentials: Map.new(),
+            sessions: SortedMap.new(),
+            serial: 0,
+            next_sweep: first_sweep,
+        }
+    }
+
+    fn add_user(mut ref self, user: String, password: String) {
+        self.credentials.insert(user, password);
+    }
+
+    fn sessions_of(ref self, user: ref String) -> Vec[String] {
+        let mut out = Vec.new();
+        for (tok, s) in self.sessions {
+            if s.user == *user {
+                out.push(tok.clone());
+            }
+        }
+        out
+    }
+
+    fn oldest_of(ref self, user: ref String) -> Option[String] {
+        let mut best: Option[String] = None;
+        let mut best_created = 0;
+        for (tok, s) in self.sessions {
+            if s.user == *user and (best.is_none() or s.created < best_created) {
+                best = Some(tok.clone());
+                best_created = s.created;
+            }
+        }
+        best
+    }
+
+    fn login(mut ref self, user: ref String, password: ref String, now: i64) -> Result[LoginOutcome, SessionError] {
+        let expected = match self.credentials.get(user) {
+            Some(p) => p.clone(),
+            None => return Err(SessionError.UnknownUser(user.clone())),
+        };
+        if expected != *password {
+            return Err(SessionError.BadPassword(user.clone()));
+        }
+        let mut evicted: Option[String] = None;
+        if self.sessions_of(user).len() >= self.cfg.max_per_user {
+            match self.oldest_of(user) {
+                Some(old) => {
+                    self.sessions.remove(old);
+                    evicted = Some(old);
+                }
+                None => {}
+            }
+        }
+        self.serial = self.serial + 1;
+        let token = derive_token(user, now, self.serial);
+        let session = Session {
+            token: token.clone(),
+            user: user.clone(),
+            created: now,
+            last_seen: now,
+        };
+        self.sessions.insert(token.clone(), session);
+        Ok(LoginOutcome { token, evicted })
+    }
+
+    // Looks a token up and enforces expiry; an expired session is removed.
+    fn live_session(mut ref self, token: ref String, now: i64) -> Result[Session, SessionError] {
+        let session = match self.sessions.remove(token) {
+            Some(s) => s,
+            None => return Err(SessionError.UnknownToken(token.clone())),
+        };
+        match session.expiry(self.cfg, now) {
+            Some(why) => Err(SessionError.Expired(token.clone(), why)),
+            None => Ok(session),
+        }
+    }
+
+    fn refresh(mut ref self, token: ref String, now: i64) -> Result[i64, SessionError] {
+        let mut session = self.live_session(token, now)?;
+        session.last_seen = now;
+        let deadline = session.expires_at(self.cfg);
+        self.sessions.insert(token.clone(), session);
+        Ok(deadline)
+    }
+
+    fn check(mut ref self, token: ref String, now: i64) -> Result[String, SessionError] {
+        let session = self.live_session(token, now)?;
+        let user = session.user.clone();
+        self.sessions.insert(token.clone(), session);
+        Ok(user)
+    }
+
+    fn logout(mut ref self, token: ref String, now: i64) -> Result[String, SessionError] {
+        let session = self.live_session(token, now)?;
+        Ok(session.user)
+    }
+
+    fn sweep(mut ref self, now: i64) -> Vec[String] {
+        let mut expired = Vec.new();
+        for (tok, s) in self.sessions {
+            if s.expiry(self.cfg, now).is_some() {
+                expired.push(tok.clone());
+            }
+        }
+        for tok in expired {
+            self.sessions.remove(tok);
+        }
+        expired
+    }
+
+    fn run_due_sweeps(mut ref self, now: i64) {
+        while self.next_sweep <= now {
+            let at = self.next_sweep;
+            let removed = self.sweep(at);
+            if removed.is_empty() {
+                println(f"  [sweep t={at}] nothing expired");
+            } else {
+                println(f"  [sweep t={at}] removed {removed.len()}: {join(removed, ", ")}");
+            }
+            self.next_sweep = at + self.cfg.sweep_interval;
+        }
+    }
+
+    fn dump(ref self, now: i64) {
+        println(f"store at t={now}: {self.sessions.len()} session(s)");
+        for (tok, s) in self.sessions {
+            let state = match s.expiry(self.cfg, now) {
+                Some(why) => f"stale:{why.label()}",
+                None => "live",
+            };
+            println(f"  {tok} user={s.user} created={s.created} last_seen={s.last_seen} expires={s.expires_at(self.cfg)} {state}");
+        }
+    }
+}
+
+fn join(parts: ref Vec[String], sep: ref String) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for p in parts {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(p);
+        first = false;
+    }
+    out
+}
+
+fn resolve(r: ref TokenRef, issued: ref Vec[String]) -> String {
+    match r {
+        TokenRef.Issued(i) => {
+            if *i < issued.len() { issued[*i].clone() } else { f"s-unissued{i}" }
+        }
+        TokenRef.Literal(s) => s.clone(),
+    }
+}
+
+fn login_req(t: i64, user: String, password: String) -> Request {
+    Request { t, op: Op.Login { user, password } }
+}
+
+fn requests() -> Vec[Request] {
+    let mut rs = Vec.new();
+    rs.push(login_req(1, "alice", "wonderland"));
+    rs.push(login_req(3, "bob", "builder"));
+    rs.push(login_req(4, "carol", "guess"));
+    rs.push(login_req(5, "mallory", "letmein"));
+    rs.push(Request { t: 10, op: Op.Refresh(TokenRef.Issued(0)) });
+    rs.push(login_req(12, "alice", "wonderland"));
+    rs.push(Request { t: 15, op: Op.Check(TokenRef.Issued(1)) });
+    rs.push(login_req(20, "alice", "wonderland"));
+    rs.push(Request { t: 22, op: Op.Refresh(TokenRef.Issued(0)) });
+    rs.push(Request { t: 25, op: Op.Refresh(TokenRef.Issued(2)) });
+    rs.push(Request { t: 38, op: Op.Check(TokenRef.Issued(2)) });
+    rs.push(login_req(41, "carol", "sunshine"));
+    rs.push(Request { t: 45, op: Op.Logout(TokenRef.Issued(4)) });
+    rs.push(Request { t: 46, op: Op.Logout(TokenRef.Issued(4)) });
+    rs.push(Request { t: 50, op: Op.Refresh(TokenRef.Literal("s-deadbeef")) });
+    rs.push(login_req(52, "bob", "builder"));
+    rs.push(Request { t: 60, op: Op.Refresh(TokenRef.Issued(3)) });
+    rs.push(Request { t: 75, op: Op.Refresh(TokenRef.Issued(5)) });
+    rs.push(Request { t: 90, op: Op.Refresh(TokenRef.Issued(3)) });
+    rs.push(Request { t: 100, op: Op.Refresh(TokenRef.Issued(5)) });
+    rs.push(login_req(104, "alice", "wonderland"));
+    rs.push(login_req(106, "alice", "wonderland"));
+    rs.push(login_req(108, "alice", "wonderland"));
+    rs.push(Request { t: 110, op: Op.Check(TokenRef.Issued(6)) });
+    rs.push(Request { t: 118, op: Op.Check(TokenRef.Issued(8)) });
+    rs.push(Request { t: 125, op: Op.Refresh(TokenRef.Issued(5)) });
+    rs.push(Request { t: 130, op: Op.Refresh(TokenRef.Issued(8)) });
+    rs.push(Request { t: 140, op: Op.Refresh(TokenRef.Issued(7)) });
+    rs.push(Request { t: 145, op: Op.Check(TokenRef.Issued(5)) });
+    rs.push(Request { t: 150, op: Op.Logout(TokenRef.Issued(8)) });
+    rs.push(login_req(152, "carol", "sunshine"));
+    rs.push(login_req(155, "bob", "builder"));
+    rs.push(Request { t: 158, op: Op.Check(TokenRef.Issued(10)) });
+    rs.push(login_req(184, "alice", "wonderland"));
+    rs
+}
+
+fn main() {
+    let cfg = Config { idle_timeout: 30, absolute_timeout: 90, max_per_user: 2, sweep_interval: 40 };
+    let mut store = Store.new(cfg);
+    store.add_user("alice", "wonderland");
+    store.add_user("bob", "builder");
+    store.add_user("carol", "sunshine");
+
+    let mut issued: Vec[String] = Vec.new();
+    let mut ok_count = 0;
+    let mut err_count = 0;
+    let mut last_t = 0;
+    for req in requests() {
+        store.run_due_sweeps(req.t);
+        last_t = req.t;
+        let line = match req.op {
+            Op.Login { user, password } => {
+                match store.login(user, password, req.t) {
+                    Ok(LoginOutcome { token, evicted }) => {
+                        issued.push(token.clone());
+                        match evicted {
+                            Some(old) => Ok(f"login {user} -> {token} (evicted {old})"),
+                            None => Ok(f"login {user} -> {token}"),
+                        }
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            Op.Logout(r) => {
+                let tok = resolve(r, issued);
+                match store.logout(tok, req.t) {
+                    Ok(user) => Ok(f"logout {tok} ({user})"),
+                    Err(e) => Err(e),
+                }
+            }
+            Op.Refresh(r) => {
+                let tok = resolve(r, issued);
+                match store.refresh(tok, req.t) {
+                    Ok(deadline) => Ok(f"refresh {tok} -> expires {deadline}"),
+                    Err(e) => Err(e),
+                }
+            }
+            Op.Check(r) => {
+                let tok = resolve(r, issued);
+                match store.check(tok, req.t) {
+                    Ok(user) => Ok(f"check {tok} -> {user}"),
+                    Err(e) => Err(e),
+                }
+            }
+        };
+        match line {
+            Ok(msg) => {
+                ok_count = ok_count + 1;
+                println(f"t={req.t} ok   {msg}");
+            }
+            Err(e) => {
+                err_count = err_count + 1;
+                println(f"t={req.t} FAIL {e.describe()}");
+            }
+        }
+    }
+    store.dump(last_t);
+    println(f"requests: {ok_count} ok, {err_count} failed, {issued.len()} tokens issued");
+}

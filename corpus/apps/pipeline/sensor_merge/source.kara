@@ -1,0 +1,335 @@
+// pipeline/sensor_merge
+//
+// Three sensors (temperature, humidity, pressure) each log timestamped
+// readings to their own CSV file. Each sensor samples on its own period and
+// occasionally drops a sample. This program writes the three files, reads them
+// back, k-way merges the readings by timestamp, fills the gaps by carrying each
+// sensor's last value forward, and prints the merged table plus a per-sensor
+// gap report.
+
+enum SensorKind {
+    Temperature,
+    Humidity,
+    Pressure,
+}
+
+impl SensorKind {
+    fn label(ref self) -> String {
+        match self {
+            SensorKind.Temperature => "temp",
+            SensorKind.Humidity => "humid",
+            SensorKind.Pressure => "press",
+        }
+    }
+
+    fn unit(ref self) -> String {
+        match self {
+            SensorKind.Temperature => "C",
+            SensorKind.Humidity => "%",
+            SensorKind.Pressure => "hPa",
+        }
+    }
+}
+
+struct Reading {
+    ts: i64,
+    value: i64, // fixed point, tenths of a unit
+}
+
+struct SensorSpec {
+    kind: SensorKind,
+    path: String,
+    period: i64,
+    offset: i64,
+    base: i64,
+    swing: i64,
+    drop_every: i64,
+}
+
+struct SensorLog {
+    kind: SensorKind,
+    readings: Vec[Reading],
+}
+
+enum PipelineError {
+    Io(String, IoError),
+    BadLine(String, i64, String),
+    OutOfOrder(String, i64),
+}
+
+impl PipelineError {
+    fn describe(ref self) -> String {
+        match self {
+            PipelineError.Io(path, _) => f"io error on {path}",
+            PipelineError.BadLine(path, line_no, text) => f"{path}:{line_no}: cannot parse '{text}'",
+            PipelineError.OutOfOrder(path, line_no) => f"{path}:{line_no}: timestamp went backwards",
+        }
+    }
+}
+
+// One row of the merged table: the timestamp plus one cell per sensor.
+enum Cell {
+    Fresh(i64),
+    Carried(i64),
+    Missing,
+}
+
+struct MergedRow {
+    ts: i64,
+    cells: Vec[Cell],
+}
+
+struct GapStats {
+    fresh: i64,
+    carried: i64,
+    missing: i64,
+    longest_run: i64,
+}
+
+// ---------- formatting helpers ----------
+
+fn format_tenths(v: i64) -> String {
+    let sign = if v < 0 { "-" } else { "" };
+    let mag = v.abs();
+    f"{sign}{mag / 10}.{mag % 10}"
+}
+
+fn pad_left(s: String, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = s.len();
+    while n < width {
+        out.push_str(" ");
+        n = n + 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn render_cell(cell: ref Cell) -> String {
+    match cell {
+        Cell.Fresh(v) => format_tenths(v),
+        Cell.Carried(v) => format_tenths(v) + "*",
+        Cell.Missing => "-",
+    }
+}
+
+// ---------- data generation ----------
+
+// Deterministic wobble so the readings look like real data without randomness.
+fn wobble(i: i64, swing: i64) -> i64 {
+    let phase = (i * 7 + 3) % 11;
+    (phase - 5) * swing / 5
+}
+
+fn generate_csv(spec: ref SensorSpec, horizon: i64) -> String {
+    let mut out = String.new();
+    out.push_str("ts,value\n");
+    let mut ts = spec.offset;
+    let mut i = 0;
+    while ts <= horizon {
+        let dropped = spec.drop_every > 0 and i % spec.drop_every == spec.drop_every - 1;
+        if not dropped {
+            let value = spec.base + wobble(i, spec.swing);
+            out.push_str(f"{ts},{value}\n");
+        }
+        ts = ts + spec.period;
+        i = i + 1;
+    }
+    out
+}
+
+// ---------- parsing ----------
+
+fn parse_log(kind: SensorKind, path: ref String, text: ref String) -> Result[SensorLog, PipelineError] {
+    let mut readings: Vec[Reading] = Vec.new();
+    let lines = text.split("\n");
+    let mut line_no = 0;
+    let mut last_ts = -1;
+    for raw in lines {
+        line_no = line_no + 1;
+        let line = raw.trim();
+        if line.is_empty() or line_no == 1 {
+            continue;
+        }
+        let parts = line.split(",");
+        if parts.len() != 2 {
+            return Err(PipelineError.BadLine(path.to_string(), line_no, line));
+        }
+        let ts = match i64.parse(parts[0].trim()) {
+            Some(n) => n,
+            None => return Err(PipelineError.BadLine(path.to_string(), line_no, line)),
+        };
+        let value = match i64.parse(parts[1].trim()) {
+            Some(n) => n,
+            None => return Err(PipelineError.BadLine(path.to_string(), line_no, line)),
+        };
+        if ts <= last_ts {
+            return Err(PipelineError.OutOfOrder(path.to_string(), line_no));
+        }
+        last_ts = ts;
+        readings.push(Reading { ts: ts, value: value });
+    }
+    Ok(SensorLog { kind: kind, readings: readings })
+}
+
+fn load(kind: SensorKind, path: String, text: Result[String, IoError]) -> Result[SensorLog, PipelineError] {
+    match text {
+        Ok(body) => parse_log(kind, path, body),
+        Err(e) => Err(PipelineError.Io(path, e)),
+    }
+}
+
+// ---------- k-way merge ----------
+
+// Returns the index of the sensor whose next unread reading has the smallest
+// timestamp, or None when every log is exhausted.
+fn next_source(logs: ref Vec[SensorLog], cursors: ref Vec[i64]) -> Option[i64] {
+    let mut best: Option[i64] = None;
+    let mut best_ts = 0;
+    for k in 0..logs.len() {
+        let pos = cursors[k];
+        if pos < logs[k].readings.len() {
+            let ts = logs[k].readings[pos].ts;
+            if best.is_none() or ts < best_ts {
+                best = Some(k);
+                best_ts = ts;
+            }
+        }
+    }
+    best
+}
+
+fn merge(logs: ref Vec[SensorLog]) -> Vec[MergedRow] {
+    let n = logs.len();
+    let mut cursors = Vec.filled(n, 0);
+    let mut last: Vec[Option[i64]] = Vec.filled(n, None);
+    let mut rows: Vec[MergedRow] = Vec.new();
+
+    loop {
+        let first = match next_source(logs, cursors) {
+            Some(k) => k,
+            None => break,
+        };
+        let ts = logs[first].readings[cursors[first]].ts;
+
+        let mut cells: Vec[Cell] = Vec.new();
+        for k in 0..n {
+            let pos = cursors[k];
+            if pos < logs[k].readings.len() and logs[k].readings[pos].ts == ts {
+                let v = logs[k].readings[pos].value;
+                cells.push(Cell.Fresh(v));
+                last[k] = Some(v);
+                cursors[k] = pos + 1;
+            } else {
+                match last[k] {
+                    Some(v) => cells.push(Cell.Carried(v)),
+                    None => cells.push(Cell.Missing),
+                }
+            }
+        }
+        rows.push(MergedRow { ts: ts, cells: cells });
+    }
+    rows
+}
+
+fn gap_stats(rows: ref Vec[MergedRow], k: i64) -> GapStats {
+    let mut stats = GapStats { fresh: 0, carried: 0, missing: 0, longest_run: 0 };
+    let mut run = 0;
+    for row in rows {
+        match row.cells[k] {
+            Cell.Fresh(_) => {
+                stats.fresh = stats.fresh + 1;
+                run = 0;
+            }
+            Cell.Carried(_) => {
+                stats.carried = stats.carried + 1;
+                run = run + 1;
+                if run > stats.longest_run {
+                    stats.longest_run = run;
+                }
+            }
+            Cell.Missing => {
+                stats.missing = stats.missing + 1;
+            }
+        }
+    }
+    stats
+}
+
+// ---------- report ----------
+
+fn print_table(logs: ref Vec[SensorLog], rows: ref Vec[MergedRow]) {
+    let mut header = pad_left("ts", 6);
+    for log in logs {
+        let title = log.kind.label() + "(" + log.kind.unit() + ")";
+        header.push_str(pad_left(title, 12));
+    }
+    println(header);
+    for row in rows {
+        let mut line = pad_left(f"{row.ts}", 6);
+        for cell in row.cells {
+            line.push_str(pad_left(render_cell(cell), 12));
+        }
+        println(line);
+    }
+}
+
+fn print_gaps(logs: ref Vec[SensorLog], rows: ref Vec[MergedRow]) {
+    println("gap report (* = carried forward):");
+    let mut total_carried = 0;
+    for k in 0..logs.len() {
+        let stats = gap_stats(rows, k);
+        total_carried = total_carried + stats.carried;
+        let name = logs[k].kind.label();
+        println(f"  {name}: samples={stats.fresh} gaps={stats.carried} leading_missing={stats.missing} longest_gap_run={stats.longest_run}");
+    }
+    println(f"merged rows: {rows.len()}, total filled cells: {total_carried}");
+}
+
+fn run() -> Result[(), PipelineError] {
+    let horizon = 120;
+    let specs = [
+        SensorSpec { kind: SensorKind.Temperature, path: "sensor_temp.csv", period: 10, offset: 0, base: 215, swing: 12, drop_every: 4 },
+        SensorSpec { kind: SensorKind.Humidity, path: "sensor_humid.csv", period: 15, offset: 5, base: 480, swing: 30, drop_every: 3 },
+        SensorSpec { kind: SensorKind.Pressure, path: "sensor_press.csv", period: 20, offset: 10, base: 10132, swing: 8, drop_every: 0 },
+    ];
+
+    let temp_csv = generate_csv(specs[0], horizon);
+    let humid_csv = generate_csv(specs[1], horizon);
+    let press_csv = generate_csv(specs[2], horizon);
+
+    // Write the three logs; each targets its own file.
+    let w_temp = fs.write("sensor_temp.csv", temp_csv);
+    let w_humid = fs.write("sensor_humid.csv", humid_csv);
+    let w_press = fs.write("sensor_press.csv", press_csv);
+    if w_temp.is_err() or w_humid.is_err() or w_press.is_err() {
+        return Err(PipelineError.Io("write", IoError.Other("could not write sensor logs")));
+    }
+
+    // Read the three logs back; the reads are independent of each other.
+    let temp_text = fs.read_to_string("sensor_temp.csv");
+    let humid_text = fs.read_to_string("sensor_humid.csv");
+    let press_text = fs.read_to_string("sensor_press.csv");
+
+    let mut logs: Vec[SensorLog] = Vec.new();
+    logs.push(load(SensorKind.Temperature, "sensor_temp.csv", temp_text)?);
+    logs.push(load(SensorKind.Humidity, "sensor_humid.csv", humid_text)?);
+    logs.push(load(SensorKind.Pressure, "sensor_press.csv", press_text)?);
+
+    for log in logs {
+        let name = log.kind.label();
+        println(f"loaded {name}: {log.readings.len()} readings");
+    }
+
+    let rows = merge(logs);
+    print_table(logs, rows);
+    print_gaps(logs, rows);
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => println("done"),
+        Err(e) => println(f"pipeline failed: {e.describe()}"),
+    }
+}

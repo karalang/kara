@@ -1,0 +1,400 @@
+// pubsub_broker: an in-process publish/subscribe broker.
+//
+// Topics are dot-separated paths ("sensors.kitchen.temp"). Subscriptions are
+// patterns over those paths: `*` matches exactly one segment and `#` (only as
+// the last segment) matches zero or more trailing segments. Each subscriber
+// owns a bounded mailbox that drops its OLDEST message when full. Publishing
+// with the retain flag stores the message as the topic's last-known value,
+// which is replayed to every later subscription that matches it; a retained
+// publish with an empty payload clears the topic instead.
+
+#[derive(Clone)]
+struct Message {
+    id: i64,
+    topic: String,
+    payload: String,
+    retained: bool,
+}
+
+impl Message {
+    fn copy_as(ref self, retained: bool) -> Message {
+        Message { id: self.id, topic: self.topic.clone(), payload: self.payload.clone(), retained }
+    }
+
+    fn render(ref self) -> String {
+        let flag = if self.retained { " [retained]" } else { "" };
+        f"#{self.id} {self.topic} = {self.payload}{flag}"
+    }
+}
+
+enum BrokerError {
+    BadTopic(String),
+    BadPattern(String),
+    BadCapacity(String),
+    UnknownClient(String),
+    DuplicateClient(String),
+    NotSubscribed(String, String),
+    BadCommand(String),
+}
+
+impl Display for BrokerError {
+    fn to_string(ref self) -> String {
+        match self {
+            BrokerError.BadTopic(t) => f"invalid topic '{t}'",
+            BrokerError.BadPattern(p) => f"invalid pattern '{p}'",
+            BrokerError.BadCapacity(c) => f"invalid mailbox capacity '{c}'",
+            BrokerError.UnknownClient(c) => f"unknown client '{c}'",
+            BrokerError.DuplicateClient(c) => f"client '{c}' is already connected",
+            BrokerError.NotSubscribed(c, p) => f"client '{c}' is not subscribed to '{p}'",
+            BrokerError.BadCommand(line) => f"cannot parse command '{line}'",
+        }
+    }
+}
+
+enum Command {
+    Connect(String, i64),
+    Subscribe(String, String),
+    Unsubscribe(String, String),
+    Publish(String, String, bool),
+    Disconnect(String),
+    Stats,
+}
+
+// ---------------------------------------------------------------- topics
+
+fn validate_topic(topic: ref String) -> Result[Vec[String], BrokerError] {
+    let segs = topic.split(".");
+    for seg in segs.iter() {
+        if seg.is_empty() or seg.contains("*") or seg.contains("#") {
+            return Err(BrokerError.BadTopic(topic.clone()));
+        }
+    }
+    Ok(segs)
+}
+
+fn validate_pattern(pattern: ref String) -> Result[Vec[String], BrokerError] {
+    let segs = pattern.split(".");
+    let last = segs.len() - 1;
+    for (i, seg) in segs.iter().enumerate() {
+        let wildcard = seg == "*" or seg == "#";
+        if seg.is_empty() {
+            return Err(BrokerError.BadPattern(pattern.clone()));
+        }
+        if not wildcard and (seg.contains("*") or seg.contains("#")) {
+            return Err(BrokerError.BadPattern(pattern.clone()));
+        }
+        if seg == "#" and i != last {
+            return Err(BrokerError.BadPattern(pattern.clone()));
+        }
+    }
+    Ok(segs)
+}
+
+fn segments_match(pattern: ref Vec[String], topic: ref Vec[String], pi: i64, ti: i64) -> bool {
+    if pi == pattern.len() {
+        return ti == topic.len();
+    }
+    if pattern[pi] == "#" {
+        return true;
+    }
+    if ti == topic.len() {
+        return false;
+    }
+    if pattern[pi] == "*" or pattern[pi] == topic[ti] {
+        return segments_match(pattern, topic, pi + 1, ti + 1);
+    }
+    false
+}
+
+fn topic_matches(pattern: ref String, topic: ref String) -> bool {
+    let p = pattern.split(".");
+    let t = topic.split(".");
+    segments_match(p, t, 0, 0)
+}
+
+fn join(parts: ref Vec[String], start: i64, sep: ref String) -> String {
+    let mut out = String.new();
+    for i in start..parts.len() {
+        if i > start {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// ------------------------------------------------------------ subscribers
+
+struct Subscriber {
+    name: String,
+    capacity: i64,
+    patterns: Vec[String],
+    mailbox: VecDeque[Message],
+    accepted: i64,
+    dropped: i64,
+}
+
+impl Subscriber {
+    fn new(name: String, capacity: i64) -> Subscriber {
+        Subscriber { name, capacity, patterns: Vec.new(), mailbox: VecDeque.new(), accepted: 0, dropped: 0 }
+    }
+
+    fn wants(ref self, topic: ref String) -> bool {
+        for p in self.patterns.iter() {
+            if topic_matches(p, topic) {
+                return true;
+            }
+        }
+        false
+    }
+
+    // Appends to the mailbox; when full, the oldest message is evicted and
+    // handed back so the broker can log it.
+    fn deliver(mut ref self, msg: Message) -> Option[Message] {
+        let mut evicted: Option[Message] = None;
+        if self.mailbox.len() >= self.capacity {
+            evicted = self.mailbox.pop_front();
+            self.dropped += 1;
+        }
+        self.mailbox.push_back(msg);
+        self.accepted += 1;
+        evicted
+    }
+}
+
+// ----------------------------------------------------------------- broker
+
+struct Broker {
+    clients: Vec[Subscriber],
+    retained: Map[String, Message],
+    next_id: i64,
+    published: i64,
+    deliveries: i64,
+    evictions: i64,
+}
+
+impl Broker {
+    fn new() -> Broker {
+        Broker { clients: Vec.new(), retained: Map.new(), next_id: 1, published: 0, deliveries: 0, evictions: 0 }
+    }
+
+    fn find(ref self, name: ref String) -> Option[i64] {
+        for (i, c) in self.clients.iter().enumerate() {
+            if c.name == name {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn lookup(ref self, name: ref String) -> Result[i64, BrokerError] {
+        match self.find(name) {
+            Some(i) => Ok(i),
+            None => Err(BrokerError.UnknownClient(name.clone())),
+        }
+    }
+
+    fn hand_to(mut ref self, idx: i64, msg: Message, log: mut ref Vec[String]) {
+        self.deliveries += 1;
+        if let Some(old) = self.clients[idx].deliver(msg) {
+            self.evictions += 1;
+            log.push(f"  {self.clients[idx].name} mailbox full, dropped #{old.id}");
+        }
+    }
+
+    fn connect(mut ref self, name: String, capacity: i64) -> Result[Vec[String], BrokerError] {
+        if self.find(name).is_some() {
+            return Err(BrokerError.DuplicateClient(name));
+        }
+        let line = f"connected {name} (capacity {capacity})";
+        self.clients.push(Subscriber.new(name, capacity));
+        Ok([line])
+    }
+
+    fn subscribe(mut ref self, name: String, pattern: String) -> Result[Vec[String], BrokerError] {
+        validate_pattern(pattern)?;
+        let idx = self.lookup(name)?;
+        let mut log: Vec[String] = Vec.new();
+        if self.clients[idx].patterns.contains(pattern) {
+            log.push(f"{name} already subscribed to {pattern}");
+            return Ok(log);
+        }
+        let mut topics: Vec[String] = Vec.new();
+        for t in self.retained.keys() {
+            if topic_matches(pattern, t) {
+                topics.push(t.clone());
+            }
+        }
+        topics.sort();
+        log.push(f"{name} subscribed to {pattern} ({topics.len()} retained)");
+        self.clients[idx].patterns.push(pattern);
+        for t in topics.iter() {
+            let replay = self.retained[t].copy_as(true);
+            self.hand_to(idx, replay, log);
+        }
+        Ok(log)
+    }
+
+    fn unsubscribe(mut ref self, name: String, pattern: String) -> Result[Vec[String], BrokerError] {
+        let idx = self.lookup(name)?;
+        match self.clients[idx].patterns.iter().position(|p| p == pattern) {
+            Some(pos) => {
+                self.clients[idx].patterns.remove(pos);
+                Ok([f"{name} unsubscribed from {pattern}"])
+            }
+            None => Err(BrokerError.NotSubscribed(name, pattern)),
+        }
+    }
+
+    fn publish(mut ref self, topic: String, payload: String, retain: bool) -> Result[Vec[String], BrokerError] {
+        validate_topic(topic)?;
+        if retain and payload.is_empty() {
+            let had = self.retained.remove(topic).is_some();
+            return Ok([f"cleared retained {topic} (had value: {had})"]);
+        }
+        // Workaround: `c.wants(msg.topic)` inside this loop freed msg.topic
+        // under `karac build` (double free), so match on `topic` first.
+        let mut targets: Vec[i64] = Vec.new();
+        for (i, c) in self.clients.iter().enumerate() {
+            if c.wants(topic) {
+                targets.push(i);
+            }
+        }
+        let msg = Message { id: self.next_id, topic, payload, retained: retain };
+        self.next_id += 1;
+        self.published += 1;
+        let kind = if retain { "pubr" } else { "pub" };
+        let mut log: Vec[String] = [f"{kind} #{msg.id} {msg.topic} -> {targets.len()} subscriber(s)"];
+        for i in targets.iter() {
+            self.hand_to(i, msg.copy_as(false), log);
+        }
+        if retain {
+            self.retained.insert(msg.topic.clone(), msg);
+        }
+        Ok(log)
+    }
+
+    fn disconnect(mut ref self, name: String) -> Result[Vec[String], BrokerError] {
+        let idx = self.lookup(name)?;
+        let gone = self.clients.remove(idx);
+        Ok([f"disconnected {name}, discarding {gone.mailbox.len()} pending message(s)"])
+    }
+
+    fn stats(ref self) -> String {
+        f"stats: clients={self.clients.len()} published={self.published} deliveries={self.deliveries} evictions={self.evictions} retained={self.retained.len()}"
+    }
+
+    fn execute(mut ref self, line: ref String) -> Result[Vec[String], BrokerError] {
+        match parse_command(line)? {
+            Command.Connect(name, cap) => self.connect(name, cap),
+            Command.Subscribe(name, pattern) => self.subscribe(name, pattern),
+            Command.Unsubscribe(name, pattern) => self.unsubscribe(name, pattern),
+            Command.Publish(topic, payload, retain) => self.publish(topic, payload, retain),
+            Command.Disconnect(name) => self.disconnect(name),
+            Command.Stats => Ok([self.stats()]),
+        }
+    }
+}
+
+// ---------------------------------------------------------------- parsing
+
+fn parse_command(line: ref String) -> Result[Command, BrokerError] {
+    let parts = line.split(" ");
+    let bad = BrokerError.BadCommand(line.clone());
+    let n = parts.len();
+    match parts[0] {
+        "connect" if n == 3 => match i64.parse(parts[2]) {
+            Some(cap) if cap > 0 => Ok(Command.Connect(parts[1].clone(), cap)),
+            _ => Err(BrokerError.BadCapacity(parts[2].clone())),
+        },
+        "subscribe" if n == 3 => Ok(Command.Subscribe(parts[1].clone(), parts[2].clone())),
+        "unsubscribe" if n == 3 => Ok(Command.Unsubscribe(parts[1].clone(), parts[2].clone())),
+        "pub" if n >= 3 => Ok(Command.Publish(parts[1].clone(), join(parts, 2, " "), false)),
+        "pubr" if n >= 2 => Ok(Command.Publish(parts[1].clone(), join(parts, 2, " "), true)),
+        "disconnect" if n == 2 => Ok(Command.Disconnect(parts[1].clone())),
+        "stats" if n == 1 => Ok(Command.Stats),
+        _ => Err(bad),
+    }
+}
+
+fn report(broker: ref Broker) {
+    println("== mailboxes ==");
+    for c in broker.clients.iter() {
+        let pats = join(c.patterns, 0, ", ");
+        println(f"{c.name} cap={c.capacity} accepted={c.accepted} dropped={c.dropped} patterns=[{pats}]");
+        if c.mailbox.is_empty() {
+            println("  (empty)");
+        }
+        for m in c.mailbox.iter() {
+            println(f"  {m.render()}");
+        }
+    }
+}
+
+fn main() {
+    // Was a """...""" literal; `karac build` cannot lower that yet.
+    let script = [
+        "connect alice 3",
+        "connect bob 2",
+        "connect carol 4",
+        "connect alice 5",
+        "connect dave zero",
+        "pubr sensors.kitchen.temp 21.5",
+        "pubr sensors.garage.temp 14.0",
+        "pub sensors.kitchen.humidity 40%",
+        "subscribe alice sensors.*.temp",
+        "subscribe bob sensors.#",
+        "subscribe carol alerts.#",
+        "subscribe carol sensors.kitchen.*",
+        "subscribe carol alerts.#",
+        "subscribe dave alerts.#",
+        "subscribe bob sensors.#.temp",
+        "pub sensors.kitchen.temp 22.0",
+        "pub sensors.garage.temp 13.5",
+        "pub alerts fire drill at noon",
+        "pub alerts.security.door front door opened",
+        "pub sensors..temp 1",
+        "pub sensors.attic.temp 30.1",
+        "pub sensors.attic.humidity 55%",
+        "unsubscribe alice sensors.*.temp",
+        "unsubscribe alice alerts.#",
+        "subscribe alice alerts.*.door",
+        "pub alerts.security.door back door opened",
+        "pubr alerts.status armed",
+        "subscribe alice alerts.status",
+        "pubr sensors.kitchen.temp",
+        "subscribe bob sensors.kitchen.temp",
+        "stats",
+        "disconnect bob",
+        "pub sensors.kitchen.temp 23.0",
+        "frobnicate now",
+        "connect erin 1",
+        "subscribe erin #",
+        "pub ops.deploy v1.2.3 shipped",
+        "pub ops.deploy v1.2.4 shipped",
+        "stats",
+    ];
+    let mut broker = Broker.new();
+    let mut step = 0;
+    let mut errors = 0;
+    for raw in script.iter() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        step += 1;
+        match broker.execute(line) {
+            Ok(log) => {
+                for entry in log.iter() {
+                    println(f"[{step}] {entry}");
+                }
+            }
+            Err(e) => {
+                errors += 1;
+                println(f"[{step}] error: {e}");
+            }
+        }
+    }
+    println(f"{step} commands, {errors} rejected");
+    report(broker);
+}

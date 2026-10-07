@@ -1,0 +1,36 @@
+SALES REPORT BY REGION AND MONTH
+source: sales.csv (22 data rows, 16 accepted, 6 rejected)
+
+REGION     MONTH      ORDERS   UNITS        REVENUE    AVG ORDER
+----------------------------------------------------------------
+East       Feb 2024        3      34       1,373.74       457.91
+           Mar 2024        1      15         105.00       105.00
+           subtotal        4      49       1,478.74       369.68
+
+North      Jan 2024        3      55         279.25        93.08
+           Feb 2024        1      12         144.00       144.00
+           Mar 2024        1       1       1,250.00     1,250.00
+           subtotal        5      68       1,673.25       334.65
+
+South      Jan 2024        2       7       3,779.00     1,889.50
+           Feb 2024        1      20          62.00        62.00
+           subtotal        3      27       3,841.00     1,280.33
+
+West       Feb 2024        1       9          65.25        65.25
+           Mar 2024        3      39       2,676.00       892.00
+           subtotal        4      48       2,741.25       685.31
+================================================================
+GRAND TOTAL               16     192       9,734.24       608.39
+
+Rejected rows:
+  line 11: invalid quantity 'ten'
+  line 14: invalid date '2024-13-02'
+  line 15: expected 6 fields, found 5
+  line 21: invalid unit price '12.5'
+  line 22: region is empty
+  line 24: invalid quantity '0'
+
+Upload validation:
+  good.csv: ok (2 records)
+  truncated.csv: error: unterminated quoted field starting on line 2
+  stray.csv: error: unexpected quote inside unquoted field on line 2

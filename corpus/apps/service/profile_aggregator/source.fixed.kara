@@ -1,0 +1,399 @@
+// Profile aggregator service: for each requested user id, "fetches" from three
+// backends (accounts, orders, recommendations), each a simulated round trip
+// (sleep_ms) plus an in-memory lookup, and merges them into a profile page. A
+// missing or unavailable backend record degrades to a fallback value.
+
+let BACKEND_LATENCY_MS: i64 = 3;
+let MAX_RECOMMENDATIONS: i64 = 3;
+
+#[derive(Clone)]
+enum Tier { Free, Silver, Gold }
+
+impl Tier {
+    fn label(ref self) -> String {
+        match self {
+            Tier.Free => "free",
+            Tier.Silver => "silver",
+            Tier.Gold => "gold",
+        }
+    }
+
+    fn discount_pct(ref self) -> i64 {
+        match self {
+            Tier.Free => 0,
+            Tier.Silver => 5,
+            Tier.Gold => 10,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum OrderStatus { Pending, Shipped, Delivered, Cancelled }
+
+impl OrderStatus {
+    fn label(ref self) -> String {
+        match self {
+            OrderStatus.Pending => "pending",
+            OrderStatus.Shipped => "shipped",
+            OrderStatus.Delivered => "delivered",
+            OrderStatus.Cancelled => "cancelled",
+        }
+    }
+
+    fn is_cancelled(ref self) -> bool {
+        match self {
+            OrderStatus.Cancelled => true,
+            _ => false,
+        }
+    }
+
+    fn is_open(ref self) -> bool {
+        match self {
+            OrderStatus.Pending | OrderStatus.Shipped => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Account {
+    user_id: i64,
+    name: String,
+    email: String,
+    tier: Tier,
+}
+
+#[derive(Clone)]
+struct Order {
+    order_id: i64,
+    item: String,
+    amount_cents: i64,
+    status: OrderStatus,
+}
+
+enum FetchError {
+    NotFound { backend: String, user_id: i64 },
+    Unavailable { backend: String, reason: String },
+}
+
+impl FetchError {
+    fn describe(ref self) -> String {
+        match self {
+            FetchError.NotFound { backend, user_id } => f"{backend}: no record for user {user_id}",
+            FetchError.Unavailable { backend, reason } => f"{backend}: unavailable ({reason})",
+        }
+    }
+}
+
+enum RequestError { InvalidId(i64), Duplicate(i64) }
+
+impl RequestError {
+    fn describe(ref self) -> String {
+        match self {
+            RequestError.InvalidId(id) => f"invalid id {id}",
+            RequestError.Duplicate(id) => f"duplicate id {id}",
+        }
+    }
+}
+
+struct AccountsBackend { table: Map[i64, Account] }
+
+impl AccountsBackend {
+    fn new() -> AccountsBackend {
+        let mut table: Map[i64, Account] = Map.new();
+        let rows = [
+            (101, "Ada Lovelace", "ada@example.com", Tier.Gold),
+            (102, "Grace Hopper", "grace@example.com", Tier.Silver),
+            (103, "Alan Turing", "alan@example.com", Tier.Free),
+            (104, "Katherine Johnson", "kj@example.com", Tier.Gold),
+            (106, "Edsger Dijkstra", "edsger@example.com", Tier.Silver),
+            (107, "Barbara Liskov", "barbara@example.com", Tier.Free),
+            (108, "Donald Knuth", "don@example.com", Tier.Silver),
+        ];
+        for (id, name, email, tier) in rows {
+            table.insert(id, Account { user_id: id, name: name.clone(), email: email.clone(), tier: tier.clone() });
+        }
+        AccountsBackend { table }
+    }
+
+    fn fetch(ref self, user_id: i64) -> Result[Account, FetchError] {
+        sleep_ms(BACKEND_LATENCY_MS);
+        match self.table.get(user_id) {
+            Some(account) => Ok(account.clone()),
+            None => Err(FetchError.NotFound { backend: "accounts", user_id: user_id }),
+        }
+    }
+}
+
+struct OrdersBackend { table: Map[i64, Vec[Order]] }
+
+impl OrdersBackend {
+    fn new() -> OrdersBackend {
+        let mut backend = OrdersBackend { table: Map.new() };
+        backend.add(101, 5001, "mechanical keyboard", 8999, OrderStatus.Shipped);
+        backend.add(101, 5002, "usb hub", 2450, OrderStatus.Delivered);
+        backend.add(101, 5003, "desk lamp", 3999, OrderStatus.Cancelled);
+        backend.add(102, 5004, "monitor arm", 6500, OrderStatus.Pending);
+        backend.add(103, 5005, "notebook", 1200, OrderStatus.Delivered);
+        backend.add(103, 5006, "fountain pen", 4500, OrderStatus.Delivered);
+        backend.add(104, 5007, "standing desk", 45000, OrderStatus.Pending);
+        backend.add(104, 5008, "monitor", 21999, OrderStatus.Shipped);
+        backend.add(105, 5009, "webcam", 5999, OrderStatus.Delivered);
+        backend.add(106, 5010, "headphones", 15000, OrderStatus.Delivered);
+        backend.add(108, 5011, "ergonomic chair", 32000, OrderStatus.Shipped);
+        backend.add(108, 5012, "notebook", 1200, OrderStatus.Pending);
+        backend
+    }
+
+    fn add(mut ref self, user_id: i64, order_id: i64, item: String, amount_cents: i64, status: OrderStatus) {
+        let order = Order { order_id, item, amount_cents, status };
+        self.table.entry(user_id).or_insert_with(|| Vec.new()).push(order);
+    }
+
+    fn fetch(ref self, user_id: i64) -> Result[Vec[Order], FetchError] {
+        sleep_ms(BACKEND_LATENCY_MS);
+        match self.table.get(user_id) {
+            Some(orders) => Ok(orders.clone()),
+            None => Err(FetchError.NotFound { backend: "orders", user_id: user_id }),
+        }
+    }
+}
+
+struct RecsBackend { table: Map[i64, Vec[String]], outage: Set[i64] }
+
+impl RecsBackend {
+    fn new() -> RecsBackend {
+        let mut table: Map[i64, Vec[String]] = Map.new();
+        table.insert(101, ["monitor", "usb hub", "desk lamp", "webcam"]);
+        table.insert(102, ["monitor", "standing desk", "headphones"]);
+        table.insert(103, ["fountain pen", "ink set", "notebook", "desk lamp"]);
+        table.insert(104, ["ergonomic chair", "monitor", "webcam"]);
+        table.insert(105, ["headphones", "webcam"]);
+        table.insert(106, ["usb hub", "notebook", "headphones"]);
+        table.insert(108, ["standing desk", "monitor arm"]);
+        let mut outage: Set[i64] = Set.new();
+        outage.insert(108);
+        RecsBackend { table, outage }
+    }
+
+    fn fetch(ref self, user_id: i64) -> Result[Vec[String], FetchError] {
+        sleep_ms(BACKEND_LATENCY_MS);
+        if self.outage.contains(user_id) {
+            return Err(FetchError.Unavailable { backend: "recommendations", reason: "shard timeout" });
+        }
+        match self.table.get(user_id) {
+            Some(items) => Ok(items.clone()),
+            None => Err(FetchError.NotFound { backend: "recommendations", user_id: user_id }),
+        }
+    }
+}
+
+struct Profile {
+    user_id: i64,
+    display_name: String,
+    email: String,
+    tier: Tier,
+    orders: Vec[Order],
+    recommendations: Vec[String],
+    fallbacks: Vec[String],
+}
+
+impl Profile {
+    fn total_spent(ref self) -> i64 {
+        let mut total = 0;
+        for order in self.orders {
+            if not order.status.is_cancelled() {
+                total += order.amount_cents;
+            }
+        }
+        total
+    }
+
+    fn open_orders(ref self) -> i64 {
+        self.orders.iter().filter(|o| o.status.is_open()).count()
+    }
+
+    fn discounted_spend(ref self) -> i64 {
+        self.total_spent() * (100 - self.tier.discount_pct()) / 100
+    }
+
+    fn is_degraded(ref self) -> bool {
+        not self.fallbacks.is_empty()
+    }
+}
+
+fn guest_account(user_id: i64) -> Account {
+    Account { user_id, name: "Guest", email: "unknown", tier: Tier.Free }
+}
+
+fn popular_items() -> Vec[String] {
+    ["monitor", "headphones", "notebook", "webcam"]
+}
+
+fn already_ordered(orders: ref Vec[Order], item: ref String) -> bool {
+    for order in orders {
+        if order.item == item and not order.status.is_cancelled() {
+            return true;
+        }
+    }
+    false
+}
+
+fn pick_recommendations(candidates: Vec[String], orders: ref Vec[Order]) -> Vec[String] {
+    let mut picked: Vec[String] = Vec.new();
+    for item in candidates {
+        if picked.len() >= MAX_RECOMMENDATIONS {
+            break;
+        }
+        if not already_ordered(orders, item) {
+            picked.push(item.clone());
+        }
+    }
+    picked
+}
+
+// The three fetches for one user are independent; merging waits for all three.
+fn build_profile(user_id: i64, accounts: ref AccountsBackend, orders: ref OrdersBackend, recs: ref RecsBackend) -> Profile {
+    let account_res = accounts.fetch(user_id);
+    let orders_res = orders.fetch(user_id);
+    let recs_res = recs.fetch(user_id);
+    // Merge, degrading each missing backend to a fallback (inlined: see notes.md).
+    let mut fallbacks: Vec[String] = Vec.new();
+    let account = match account_res {
+        Ok(a) => a,
+        Err(e) => {
+            fallbacks.push(e.describe());
+            guest_account(user_id)
+        }
+    };
+    let order_list = match orders_res {
+        Ok(o) => o,
+        Err(e) => {
+            fallbacks.push(e.describe());
+            Vec.new()
+        }
+    };
+    let candidates = match recs_res {
+        Ok(r) => r,
+        Err(e) => {
+            fallbacks.push(e.describe());
+            popular_items()
+        }
+    };
+    let recommendations = pick_recommendations(candidates, order_list);
+    Profile {
+        user_id,
+        display_name: account.name,
+        email: account.email,
+        tier: account.tier,
+        orders: order_list,
+        recommendations,
+        fallbacks,
+    }
+}
+
+fn format_cents(cents: i64) -> String {
+    let rem = cents % 100;
+    let pad = if rem < 10 { "0" } else { "" };
+    f"${cents / 100}.{pad}{rem}"
+}
+
+fn join(items: ref Vec[String], sep: String) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for item in items {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(item);
+        first = false;
+    }
+    out
+}
+
+fn render(profile: ref Profile) {
+    println(f"== profile {profile.user_id} ==");
+    println(f"name: {profile.display_name} <{profile.email}>");
+    println(f"tier: {profile.tier.label()} ({profile.tier.discount_pct()}% off)");
+    let spent = format_cents(profile.total_spent());
+    let paid = format_cents(profile.discounted_spend());
+    println(f"orders: {profile.orders.len()} total, {profile.open_orders()} open, spent {spent}, paid {paid}");
+    for order in profile.orders {
+        println(f"  #{order.order_id} {order.item} {format_cents(order.amount_cents)} {order.status.label()}");
+    }
+    if profile.recommendations.is_empty() {
+        println("recs: (none)");
+    } else {
+        println(f"recs: {join(profile.recommendations, ", ")}");
+    }
+    if profile.is_degraded() {
+        for note in profile.fallbacks {
+            println(f"fallback: {note}");
+        }
+    } else {
+        println("fallback: none");
+    }
+}
+
+fn check_id(id: i64, seen: ref Set[i64]) -> Result[i64, RequestError] {
+    if id <= 0 {
+        return Err(RequestError.InvalidId(id));
+    }
+    if seen.contains(id) {
+        return Err(RequestError.Duplicate(id));
+    }
+    Ok(id)
+}
+
+fn main() {
+    let accounts = AccountsBackend.new();
+    let orders = OrdersBackend.new();
+    let recs = RecsBackend.new();
+    let requests = [101, 102, 103, 0, 104, 105, 106, 103, 107, 108, -7];
+    let mut seen: Set[i64] = Set.new();
+    let mut rejected: Vec[RequestError] = Vec.new();
+    let mut profiles: Vec[Profile] = Vec.new();
+    for id in requests {
+        match check_id(id, seen) {
+            Ok(valid) => {
+                seen.insert(valid);
+                let profile = build_profile(valid, accounts, orders, recs);
+                render(profile);
+                profiles.push(profile);
+            }
+            Err(err) => rejected.push(err),
+        }
+    }
+    let mut degraded = 0;
+    let mut revenue = 0;
+    let mut fallback_counts: SortedMap[String, i64] = SortedMap.new();
+    let mut tier_counts: SortedMap[String, i64] = SortedMap.new();
+    for p in profiles {
+        if p.is_degraded() {
+            degraded += 1;
+        }
+        revenue += p.discounted_spend();
+        for note in p.fallbacks {
+            let parts = note.split(":");
+            let backend = parts[0].clone();
+            let current = fallback_counts.get(backend) ?? 0;
+            fallback_counts.insert(backend, current + 1);
+        }
+        let label = p.tier.label();
+        let current = tier_counts.get(label) ?? 0;
+        tier_counts.insert(label, current + 1);
+    }
+    println("== summary ==");
+    println(f"requests: {requests.len()}, served: {profiles.len()}, rejected: {rejected.len()}");
+    for err in rejected {
+        println(f"rejected: {err.describe()}");
+    }
+    println(f"degraded profiles: {degraded}");
+    for (backend, count) in fallback_counts {
+        println(f"fallbacks from {backend}: {count}");
+    }
+    for (tier, count) in tier_counts {
+        println(f"tier {tier}: {count}");
+    }
+    println(f"revenue after discounts: {format_cents(revenue)}");
+}

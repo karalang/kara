@@ -1,0 +1,88 @@
+line 10: skipped (expected 4 fields, found 3)
+line 20: skipped (bad cost 'x')
+line 47: skipped (cost must be positive, got 0)
+parsed 64 requests, 3 malformed lines
+#1 t=0 acme /login cost=1 -> allow (quota 5.000)
+#2 t=0 cyan /login cost=1 -> allow (quota 5.000)
+#3 t=2 delta /search cost=1 -> allow (quota 5.000)
+#4 t=4 bolt /upload cost=3 -> allow (quota 3.000)
+#5 t=6 echo /health cost=1 -> allow (quota 5.000)
+#6 t=7 cyan /login cost=1 -> allow (quota 5.000)
+#7 t=8 cyan /login cost=1 -> allow (quota 4.400)
+#8 t=10 acme /search cost=1 -> allow (quota 5.000)
+#9 t=12 delta /upload cost=3 -> allow (quota 3.000)
+#10 t=14 bolt /health cost=1 -> allow (quota 5.000)
+#11 t=14 cyan /login cost=1 -> throttle route-window
+#12 t=16 echo /login cost=1 -> allow (quota 5.000)
+#13 t=18 cyan /search cost=1 -> allow (quota 5.000)
+#14 t=20 acme /upload cost=3 -> allow (quota 3.000)
+#15 t=21 cyan /login cost=1 -> allow (quota 5.000)
+#16 t=22 delta /health cost=1 -> allow (quota 5.000)
+#17 t=24 bolt /login cost=1 -> allow (quota 5.000)
+#18 t=26 echo /search cost=1 -> allow (quota 5.000)
+#19 t=28 cyan /upload cost=3 -> allow (quota 3.000)
+#20 t=28 cyan /login cost=1 -> allow (quota 2.000)
+#21 t=30 acme /health cost=1 -> allow (quota 5.000)
+#22 t=30 bolt /search cost=1 -> allow (quota 5.000)
+#23 t=30 bolt /search cost=1 -> allow (quota 4.000)
+#24 t=30 bolt /search cost=1 -> allow (quota 3.000)
+  ! burst: bolt sent 4 requests within 3 ticks
+#25 t=31 bolt /search cost=1 -> allow (quota 2.400)
+#26 t=31 bolt /search cost=1 -> throttle route-bucket
+#27 t=31 bolt /search cost=1 -> throttle route-bucket
+#28 t=32 delta /login cost=1 -> allow (quota 5.000)
+#29 t=32 bolt /search cost=1 -> allow (quota 1.800)
+#30 t=32 bolt /search cost=1 -> throttle route-bucket
+#31 t=32 bolt /search cost=1 -> throttle route-bucket
+  ! burst: bolt sent 4 requests within 3 ticks
+#32 t=34 bolt /search cost=1 -> allow (quota 1.600)
+#33 t=35 cyan /login cost=1 -> allow (quota 3.800)
+#34 t=36 echo /upload cost=3 -> allow (quota 3.000)
+#35 t=38 cyan /health cost=1 -> allow (quota 4.000)
+#36 t=40 acme /login cost=1 -> allow (quota 5.000)
+#37 t=40 delta /login cost=1 -> allow (quota 5.000)
+#38 t=41 delta /login cost=1 -> allow (quota 4.400)
+#39 t=42 delta /search cost=1 -> allow (quota 3.800)
+  ! burst: delta sent 4 requests within 3 ticks
+#40 t=42 delta /login cost=1 -> throttle route-window
+#41 t=42 cyan /login cost=1 -> allow (quota 4.600)
+  ! burst: delta sent 4 requests within 3 ticks
+#42 t=43 delta /login cost=1 -> throttle route-window
+#43 t=44 bolt /upload cost=3 -> allow (quota 2.600)
+  ! burst: delta sent 4 requests within 3 ticks
+  ! penalty: delta blocked until t=52
+#44 t=44 delta /login cost=1 -> throttle route-window
+#45 t=45 delta /login cost=1 -> throttle penalty
+#46 t=46 echo /health cost=1 -> allow (quota 5.000)
+#47 t=48 cyan /login cost=1 -> allow (quota 5.000)
+#48 t=49 cyan /login cost=1 -> throttle route-window
+#49 t=50 acme /search cost=1 -> allow (quota 5.000)
+#50 t=50 zulu /admin cost=1 -> rejected (unknown route /admin)
+#51 t=50 echo /health cost=1 -> allow (quota 5.000)
+#52 t=50 echo /health cost=1 -> allow (quota 4.000)
+#53 t=50 echo /health cost=1 -> allow (quota 3.000)
+  ! burst: echo sent 4 requests within 3 ticks
+#54 t=51 echo /health cost=1 -> allow (quota 2.400)
+#55 t=51 echo /health cost=1 -> allow (quota 1.400)
+#56 t=51 echo /health cost=1 -> allow (quota 0.400)
+#57 t=52 delta /upload cost=3 -> allow (quota 3.000)
+#58 t=52 echo /health cost=1 -> throttle client-quota
+#59 t=52 echo /health cost=1 -> throttle client-quota
+  ! penalty: echo blocked until t=60
+#60 t=52 echo /health cost=1 -> throttle client-quota
+#61 t=54 bolt /health cost=1 -> allow (quota 5.000)
+#62 t=56 echo /login cost=1 -> throttle penalty
+#63 t=56 cyan /login cost=1 -> allow (quota 5.000)
+#64 t=58 cyan /search cost=1 -> allow (quota 4.800)
+rejected 1 requests
+== clients ==
+acme: total=6 allowed=6 route=0 quota=0 penalty=0 bursts=0 peak=1 tokens=5.000
+bolt: total=15 allowed=11 route=4 quota=0 penalty=0 bursts=2 peak=9 tokens=5.000
+cyan: total=15 allowed=13 route=2 quota=0 penalty=0 bursts=0 peak=2 tokens=4.800
+delta: total=12 allowed=8 route=3 quota=0 penalty=1 bursts=3 peak=4 tokens=3.000
+echo: total=15 allowed=11 route=0 quota=3 penalty=1 bursts=1 peak=9 tokens=0.800
+== routes ==
+/health: allowed=13 throttled=3 units=13
+/login: allowed=16 throttled=7 units=16
+/search: allowed=13 throttled=4 units=13
+/upload: allowed=7 throttled=0 units=21

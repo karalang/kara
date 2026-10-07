@@ -1,0 +1,13 @@
+source = "corpus/apps/service/http_router/source.orig.kara (v2 by karac fix + hand edits)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:service"]
+class = "unknown"
+expected_from = "mirror"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""

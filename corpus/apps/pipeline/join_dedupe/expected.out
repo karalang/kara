@@ -1,0 +1,24 @@
+== load ==
+crm: 9 parsed, 3 rejected
+  crm line 9: invalid email 'eve(at)adams.net'
+  crm line 11: invalid date '2024-13-01'
+  crm line 14: invalid id 'x'
+signups: 9 parsed, 2 rejected
+  signups line 9: unknown channel 'podcast'
+  signups line 11: expected 4 fields, got 3
+== dedupe ==
+crm: 9 -> 6 unique (3 merged)
+signups: 9 -> 6 unique (3 merged)
+== matched (3) ==
+  alice.smith@example.com: #2 Alice Smith (Acme Corp, 2024-03-02) <-> Alice Smith via event on 2024-03-15
+  carolwhite@gmail.com: #4 Carol White (Initech, 2024-02-14) <-> Carol White via web on 2024-02-25
+  dan@brown.org: #6 Dan Brown (-, 2024-02-01) <-> Daniel Brown via event on 2023-10-10
+== crm only (3) ==
+  bob@jones.io: #3 Bob Jones (Jones LLC, 2023-11-20)
+  grace@lee.co: #9 Grace Lee (Lee & Co, 2024-02-20)
+  ivan@petrov.ru: #11 Ivan Petrov (Petrov Ltd, 2023-12-31)
+== signups only (3) ==
+  heidi@klum.de: Heidi K via web on 2024-03-03
+  judy@hops.com: Judy Hopps via referral on 2024-02-29
+  zed@example.com: Zed via web on 2024-04-04
+newsletter coverage of crm: 50%

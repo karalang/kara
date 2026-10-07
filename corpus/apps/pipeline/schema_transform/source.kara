@@ -1,0 +1,397 @@
+// schema_transform: parse v1 user records (hand-written JSON), migrate to v2, re-serialize.
+
+shared enum JsonValue {
+    Null,
+    Bool(bool),
+    Num(String),
+    Str(String),
+    Arr(Vec[JsonValue]),
+    Obj(SortedMap[String, JsonValue]),
+}
+
+struct ParseError { pos: i64, msg: String }
+
+fn hex_val(c: char) -> Option[u32] {
+    match c {
+        '0'..='9' => Some(c as u32 - '0' as u32),
+        'a'..='f' => Some(c as u32 - 'a' as u32 + 10),
+        'A'..='F' => Some(c as u32 - 'A' as u32 + 10),
+        _ => None,
+    }
+}
+
+// Cursor over the decoded characters of one document; `pos` is a char index.
+struct JsonParser { chars: Vec[char], pos: i64 }
+
+impl JsonParser {
+    fn peek(ref self) -> Option[char] {
+        if self.pos < self.chars.len() { Some(self.chars[self.pos]) } else { None }
+    }
+    fn fail(ref self, msg: String) -> ParseError {
+        ParseError { pos: self.pos, msg: msg }
+    }
+    // Consumes `c` if it is the next character.
+    fn eat(mut ref self, c: char) -> bool {
+        if self.peek() != Some(c) { return false; }
+        self.pos += 1;
+        true
+    }
+    fn skip_ws(mut ref self) {
+        while let Some(c) = self.peek() {
+            if c != ' ' and c != '\n' and c != '\t' and c != '\r' { break; }
+            self.pos += 1;
+        }
+    }
+    fn expect(mut ref self, want: char) -> Result[(), ParseError] {
+        if self.eat(want) { return Ok(()); }
+        let found = match self.peek() { Some(c) => f"'{c}'", None => "end of input".to_string() };
+        Err(self.fail(f"expected '{want}', found {found}"))
+    }
+    fn parse_value(mut ref self) -> Result[JsonValue, ParseError] {
+        self.skip_ws();
+        match self.peek() {
+            None => Err(self.fail("unexpected end of input".to_string())),
+            Some('{') => self.parse_object(),
+            Some('[') => self.parse_array(),
+            Some('"') => Ok(JsonValue.Str(self.parse_string()?)),
+            Some('t') => self.parse_word("true", JsonValue.Bool(true)),
+            Some('f') => self.parse_word("false", JsonValue.Bool(false)),
+            Some('n') => self.parse_word("null", JsonValue.Null),
+            Some('-' | '0'..='9') => self.parse_number(),
+            Some(c) => Err(self.fail(f"unexpected character '{c}'")),
+        }
+    }
+    fn parse_word(mut ref self, word: String, value: JsonValue) -> Result[JsonValue, ParseError] {
+        for w in word.chars() {
+            if not self.eat(w) { return Err(self.fail(f"invalid literal, expected '{word}'")); }
+        }
+        Ok(value)
+    }
+    fn take_digits(mut ref self, out: mut ref String) -> Result[(), ParseError] {
+        let start = self.pos;
+        while let Some(c) = self.peek() {
+            if c < '0' or c > '9' { break; }
+            out.push(c);
+            self.pos += 1;
+        }
+        if self.pos == start { Err(self.fail("expected digit".to_string())) } else { Ok(()) }
+    }
+    // Numbers keep their source text so integers and decimals round-trip exactly.
+    fn parse_number(mut ref self) -> Result[JsonValue, ParseError] {
+        let mut text = String.new();
+        if self.eat('-') { text.push('-'); }
+        self.take_digits(mut text)?;
+        if self.eat('.') { text.push('.'); self.take_digits(mut text)?; }
+        if self.eat('e') or self.eat('E') {
+            text.push('e');
+            if self.eat('+') { text.push('+'); } else if self.eat('-') { text.push('-'); }
+            self.take_digits(mut text)?;
+        }
+        Ok(JsonValue.Num(text))
+    }
+    // Decodes the XXXX of a \uXXXX escape and appends the character to `out`.
+    fn parse_unicode_escape(mut ref self, out: mut ref String) -> Result[(), ParseError] {
+        let mut code: u32 = 0;
+        for _ in 0..4 {
+            let Some(d) = self.peek().and_then(hex_val) else { return Err(self.fail("bad \\u escape".to_string())); };
+            code = code * 16 + d;
+            self.pos += 1;
+        }
+        match char.try_from(code) {
+            Ok(ch) => { out.push(ch); Ok(()) }
+            Err(_) => Err(self.fail("invalid code point".to_string())),
+        }
+    }
+    fn parse_string(mut ref self) -> Result[String, ParseError] {
+        self.expect('"')?;
+        let mut out = String.new();
+        loop {
+            let Some(c) = self.peek() else { return Err(self.fail("unterminated string".to_string())); };
+            self.pos += 1;
+            if c == '"' { break; }
+            if c != '\\' {
+                if (c as u32) < 32 { return Err(self.fail("control character in string".to_string())); }
+                out.push(c);
+                continue;
+            }
+            let Some(esc) = self.peek() else { return Err(self.fail("unterminated escape".to_string())); };
+            self.pos += 1;
+            match esc {
+                '"' | '\\' | '/' => out.push(esc),
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                'u' => self.parse_unicode_escape(mut out)?,
+                other => return Err(self.fail(f"unknown escape '\\{other}'")),
+            }
+        }
+        Ok(out)
+    }
+    fn parse_array(mut ref self) -> Result[JsonValue, ParseError] {
+        self.expect('[')?;
+        let mut items: Vec[JsonValue] = Vec.new();
+        self.skip_ws();
+        if self.eat(']') { return Ok(JsonValue.Arr(items)); }
+        loop {
+            items.push(self.parse_value()?);
+            self.skip_ws();
+            if self.eat(']') { break; }
+            if not self.eat(',') { return Err(self.fail("expected ',' or ']'".to_string())); }
+        }
+        Ok(JsonValue.Arr(items))
+    }
+    fn parse_object(mut ref self) -> Result[JsonValue, ParseError] {
+        self.expect('{')?;
+        let mut fields: SortedMap[String, JsonValue] = SortedMap.new();
+        self.skip_ws();
+        if self.eat('}') { return Ok(JsonValue.Obj(fields)); }
+        loop {
+            self.skip_ws();
+            if self.peek() != Some('"') { return Err(self.fail("expected string key".to_string())); }
+            let key_pos = self.pos;
+            let key = self.parse_string()?;
+            self.skip_ws();
+            self.expect(':')?;
+            let value = self.parse_value()?;
+            if fields.contains_key(key) { return Err(ParseError { pos: key_pos, msg: f"duplicate key '{key}'" }); }
+            fields.insert(key, value);
+            self.skip_ws();
+            if self.eat('}') { break; }
+            if not self.eat(',') { return Err(self.fail("expected ',' or '}'".to_string())); }
+        }
+        Ok(JsonValue.Obj(fields))
+    }
+}
+
+fn parse_document(text: ref String) -> Result[JsonValue, ParseError] {
+    let mut p = JsonParser { chars: text.chars().collect(), pos: 0 };
+    let value = p.parse_value()?;
+    p.skip_ws();
+    if p.pos != p.chars.len() { return Err(p.fail("trailing characters".to_string())); }
+    Ok(value)
+}
+
+fn write_string(s: ref String, out: mut ref String) {
+    let hex: Vec[char] = "0123456789abcdef".chars().collect();
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            _ if (c as u32) < 32 => out.push_str(f"\\u00{hex[(c as u32 / 16) as i64]}{hex[(c as u32 % 16) as i64]}"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+// Compact serialization; object keys come out sorted because objects are SortedMaps.
+fn write_json(v: ref JsonValue, out: mut ref String) {
+    match v {
+        JsonValue.Null => out.push_str("null"),
+        JsonValue.Bool(b) => out.push_str(if b { "true" } else { "false" }),
+        JsonValue.Num(text) => out.push_str(text),
+        JsonValue.Str(s) => write_string(s, out),
+        JsonValue.Arr(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 { out.push(','); }
+                write_json(item, out);
+            }
+            out.push(']');
+        }
+        JsonValue.Obj(fields) => {
+            out.push('{');
+            let mut first = true;
+            for (k, item) in fields {
+                if not first { out.push(','); }
+                first = false;
+                write_string(k, out);
+                out.push(':');
+                write_json(item, out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn to_json(v: ref JsonValue) -> String {
+    let mut out = String.new();
+    write_json(v, mut out);
+    out
+}
+
+enum Status { Active, Suspended, Deleted, Pending }
+
+impl Status {
+    fn from_code(code: ref String) -> Option[Status] {
+        match code.trim().to_uppercase() {
+            "A" => Some(Status.Active),
+            "S" => Some(Status.Suspended),
+            "D" => Some(Status.Deleted),
+            "P" => Some(Status.Pending),
+            _ => None,
+        }
+    }
+    fn label(ref self) -> String {
+        match self {
+            Status.Active => "active",
+            Status.Suspended => "suspended",
+            Status.Deleted => "deleted",
+            Status.Pending => "pending",
+        }
+    }
+}
+
+fn optional_string(obj: ref SortedMap[String, JsonValue], key: String, errors: mut ref Vec[String]) -> Option[String] {
+    match obj.get(key) {
+        None => None,
+        Some(JsonValue.Null) => None,
+        Some(JsonValue.Str(s)) => Some(s.clone()),
+        Some(_) => { errors.push(f"field '{key}' must be a string"); None }
+    }
+}
+
+// v1 "street, city, postcode[, country]" -> v2 nested address object.
+fn split_address(raw: ref String) -> Result[JsonValue, String] {
+    let parts = raw.split(",");
+    if parts.len() < 3 or parts.len() > 4 {
+        return Err(f"field 'addr' must have 3 or 4 comma-separated parts, got {parts.len()}");
+    }
+    let mut addr: SortedMap[String, JsonValue] = SortedMap.new();
+    addr.insert("street", JsonValue.Str(parts[0].trim()));
+    addr.insert("city", JsonValue.Str(parts[1].trim()));
+    addr.insert("postcode", JsonValue.Str(parts[2].trim().to_uppercase()));
+    let country = if parts.len() == 4 { parts[3].trim().to_uppercase() } else { "GB".to_string() };
+    addr.insert("country", JsonValue.Str(country));
+    Ok(JsonValue.Obj(addr))
+}
+
+fn migrate(record: ref JsonValue) -> Result[JsonValue, Vec[String]] {
+    match record {
+        JsonValue.Obj(fields) => transform(fields),
+        _ => Err(["record is not an object".to_string()]),
+    }
+}
+
+fn transform(obj: ref SortedMap[String, JsonValue]) -> Result[JsonValue, Vec[String]] {
+    let known = ["id", "full_name", "email", "phone", "addr", "status", "tags", "age", "vip"];
+    let mut errors: Vec[String] = Vec.new();
+    let mut out: SortedMap[String, JsonValue] = SortedMap.new();
+    out.insert("schema", JsonValue.Num("2"));
+    match obj.get("id") {
+        Some(JsonValue.Num(text)) => match i64.parse(text) {
+            Some(n) if n > 0 => { out.insert("user_id", JsonValue.Num(n.to_string())); }
+            _ => errors.push("field 'id' must be a positive integer".to_string()),
+        },
+        Some(_) => errors.push("field 'id' must be a positive integer".to_string()),
+        None => errors.push("missing required field 'id'".to_string()),
+    }
+    match obj.get("full_name") {
+        Some(JsonValue.Str(name)) if name.trim().len() > 0 => { out.insert("display_name", JsonValue.Str(name.trim())); }
+        Some(_) => errors.push("field 'full_name' must be a non-empty string".to_string()),
+        None => errors.push("missing required field 'full_name'".to_string()),
+    }
+    let email = optional_string(obj, "email", mut errors);
+    let phone = optional_string(obj, "phone", mut errors);
+    let mut contact: SortedMap[String, JsonValue] = SortedMap.new();
+    contact.insert("email", match email { Some(e) => JsonValue.Str(e.to_lowercase()), None => JsonValue.Null });
+    contact.insert("phone", match phone { Some(p) => JsonValue.Str(p), None => JsonValue.Null });
+    out.insert("contact", JsonValue.Obj(contact));
+    match optional_string(obj, "addr", mut errors) {
+        Some(raw) => match split_address(raw) {
+            Ok(addr) => { out.insert("address", addr); }
+            Err(e) => errors.push(e),
+        },
+        None => { out.insert("address", JsonValue.Null); }
+    }
+    match optional_string(obj, "status", mut errors) {
+        Some(code) => match Status.from_code(code) {
+            Some(st) => { out.insert("status", JsonValue.Str(st.label())); }
+            None => errors.push(f"unknown status code '{code}'"),
+        },
+        None => { out.insert("status", JsonValue.Str(Status.Pending.label())); }
+    }
+    // Tags are normalized: trimmed, lowercased, de-duplicated and sorted.
+    let mut tags: SortedSet[String] = SortedSet.new();
+    match obj.get("tags") {
+        None => {}
+        Some(JsonValue.Arr(items)) => {
+            for (i, item) in items.iter().enumerate() {
+                match item {
+                    JsonValue.Str(t) => { tags.insert(t.trim().to_lowercase()); }
+                    _ => errors.push(f"tags[{i}] must be a string"),
+                }
+            }
+        }
+        Some(_) => errors.push("field 'tags' must be an array".to_string()),
+    }
+    let mut tag_values: Vec[JsonValue] = Vec.new();
+    for t in tags.iter() { tag_values.push(JsonValue.Str(t.clone())); }
+    out.insert("tags", JsonValue.Arr(tag_values));
+    match obj.get("age") {
+        None | Some(JsonValue.Null) => { out.insert("age", JsonValue.Null); }
+        Some(JsonValue.Num(text)) => match i64.parse(text) {
+            Some(n) if n >= 0 and n <= 150 => { out.insert("age", JsonValue.Num(n.to_string())); }
+            _ => errors.push(f"field 'age' must be an integer in 0..150, got {text}"),
+        },
+        Some(_) => errors.push("field 'age' must be a number".to_string()),
+    }
+    let vip = match obj.get("vip") {
+        None => false,
+        Some(JsonValue.Bool(b)) => b,
+        Some(_) => { errors.push("field 'vip' must be a boolean".to_string()); false }
+    };
+    out.insert("tier", JsonValue.Str(if vip { "gold" } else { "standard" }));
+    // Unknown v1 fields are carried over untouched under "legacy".
+    let mut legacy: SortedMap[String, JsonValue] = SortedMap.new();
+    for (k, v) in obj {
+        if not known.contains(k) { legacy.insert(k.clone(), v.clone()); }
+    }
+    if not legacy.is_empty() { out.insert("legacy", JsonValue.Obj(legacy)); }
+    if errors.is_empty() { Ok(JsonValue.Obj(out)) } else { Err(errors) }
+}
+
+fn v1_records() -> Vec[String] {
+    [
+        "{\"id\": 1, \"full_name\": \"Ada Lovelace\", \"email\": \"ADA@Example.COM\", \"addr\": \"12 St James Sq, London, sw1y 4jh\", \"status\": \"A\", \"tags\": [\"Math\", \"poetry\", \"math \"], \"age\": 36, \"vip\": true}",
+        "{\"id\": 2, \"full_name\": \"Zo\\u00eb \\\"Zed\\\" Brandt\", \"phone\": \"+44 20 7946 0018\", \"addr\": \"4 Rue de Rivoli, Paris, 75004, fr\", \"status\": \"s\", \"signup_src\": \"referral\", \"notes\": \"line1\\nline2 \\/ \\u0001 caf\u{e9}\"}",
+        "{ \"id\": 3, \"full_name\": \"Grace Hopper\", \"email\": \"grace@navy.mil\", \"status\": \"P\", \"age\": 85, \"tags\": [] }",
+        "{\"id\": -7, \"full_name\": \"  \", \"status\": \"X\", \"age\": 36.5, \"tags\": [\"ok\", 42], \"addr\": \"Nowhere\", \"vip\": \"yes\"}",
+        "{\"id\": 5, \"full_name\": \"Linus T\", \"addr\": \"1 Main St, Helsinki 00100\"",
+        "{\"id\": 6, \"full_name\": \"Ken\\tThompson\", \"email\": \"ken@bell-labs.com\", \"addr\": \"Murray Hill, NJ, 07974, us\", \"vip\": false, \"status\": \"D\", \"age\": 79, \"extra\": {\"z\": [true, false, null], \"a\": -0.5E-3, \"score\": 1.5e+3}}",
+        "[1, 2, 3]",
+        "{\"id\": 8, \"full_name\": \"Edsger\", \"status\": \"a\", \"email\": 12}",
+        "{\"id\": 9 \"full_name\": \"x\"}",
+        "{\"id\": 10, \"full_name\": \"Barbara Liskov\", \"status\": \"A\", \"addr\": \"  MIT ,Cambridge,02139  \", \"tags\": [\"CS\", \"cs\", \"Theory\"], \"age\": null}",
+        "{\"id\": 11} x",
+        "{\"id\": 12, \"full_name\": \"Dup\", \"id\": 13}",
+        "{\"id\": 14, \"full_name\": \"Bad Escape \\q\"}",
+        "{\"id\": 15, \"full_name\": \"Nul\", \"tags\": [tru]}",
+    ]
+}
+
+fn main() {
+    let mut ok = 0;
+    let mut invalid = 0;
+    let mut unparseable = 0;
+    let records = v1_records();
+    for (i, raw) in records.iter().enumerate() {
+        let n = i + 1;
+        match parse_document(raw) {
+            Err(e) => { println(f"record {n}: parse error at {e.pos}: {e.msg}"); unparseable += 1; }
+            Ok(doc) => match migrate(doc) {
+                Ok(v2) => { println(f"record {n}: ok {to_json(v2)}"); ok += 1; }
+                Err(errors) => {
+                    println(f"record {n}: {errors.len()} transform error(s)");
+                    for e in errors { println(f"  - {e}"); }
+                    invalid += 1;
+                }
+            },
+        }
+    }
+    println(f"summary: {ok} ok, {invalid} invalid, {unparseable} unparseable");
+}

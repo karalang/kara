@@ -1,0 +1,373 @@
+// Dependency resolver: reads package registries from manifest files, resolves
+// root requirements to concrete versions, detects cycles, and prints an
+// install plan (dependencies first) or the error for each scenario.
+
+struct Version {
+    major: i64,
+    minor: i64,
+    patch: i64,
+}
+
+impl Version {
+    fn parse(text: ref String) -> Result[Version, String] {
+        let parts = text.split(".");
+        if parts.len() != 3 {
+            return Err(f"bad version '{text}'");
+        }
+        let mut nums: Vec[i64] = Vec.new();
+        for p in parts {
+            match i64.parse(p.trim()) {
+                Some(n) => nums.push(n),
+                None => return Err(f"bad version '{text}'"),
+            }
+        }
+        Ok(Version { major: nums[0], minor: nums[1], patch: nums[2] })
+    }
+
+    fn compare(ref self, other: ref Version) -> i64 {
+        if self.major != other.major {
+            return if self.major < other.major { -1 } else { 1 };
+        }
+        if self.minor != other.minor {
+            return if self.minor < other.minor { -1 } else { 1 };
+        }
+        if self.patch != other.patch {
+            return if self.patch < other.patch { -1 } else { 1 };
+        }
+        0
+    }
+
+    fn text(ref self) -> String {
+        f"{self.major}.{self.minor}.{self.patch}"
+    }
+}
+
+enum Constraint {
+    Any,
+    Exact(Version),
+    AtLeast(Version),
+    Caret(Version),
+}
+
+impl Constraint {
+    fn parse(text: ref String) -> Result[Constraint, String] {
+        let t = text.trim();
+        if t == "*" {
+            return Ok(Constraint.Any);
+        }
+        if t.starts_with(">=") {
+            return Ok(Constraint.AtLeast(Version.parse(t.substring(2))?));
+        }
+        if t.starts_with("^") {
+            return Ok(Constraint.Caret(Version.parse(t.substring(1))?));
+        }
+        if t.starts_with("=") {
+            return Ok(Constraint.Exact(Version.parse(t.substring(1))?));
+        }
+        Err(f"bad constraint '{t}'")
+    }
+
+    fn matches(ref self, v: ref Version) -> bool {
+        match self {
+            Constraint.Any => true,
+            Constraint.Exact(want) => v.compare(want) == 0,
+            Constraint.AtLeast(low) => v.compare(low) >= 0,
+            Constraint.Caret(base) => {
+                if v.compare(base) < 0 {
+                    false
+                } else if base.major > 0 {
+                    v.major == base.major
+                } else {
+                    v.major == 0 and v.minor == base.minor
+                }
+            }
+        }
+    }
+
+    fn text(ref self) -> String {
+        match self {
+            Constraint.Any => "*",
+            Constraint.Exact(v) => "=" + v.text(),
+            Constraint.AtLeast(v) => ">=" + v.text(),
+            Constraint.Caret(v) => "^" + v.text(),
+        }
+    }
+}
+
+struct Dep {
+    name: String,
+    constraint: Constraint,
+}
+
+struct Release {
+    name: String,
+    version: Version,
+    deps: Vec[Dep],
+}
+
+enum ResolveError {
+    Parse(String),
+    MissingPackage { name: String, required_by: String },
+    NoMatchingVersion { name: String, wanted: String, required_by: String, available: String },
+    Conflict { name: String, chosen: String, wanted: String, required_by: String },
+    Cycle(Vec[String]),
+}
+
+impl ResolveError {
+    fn describe(ref self) -> String {
+        match self {
+            ResolveError.Parse(msg) => f"parse error: {msg}",
+            ResolveError.MissingPackage { name, required_by } =>
+                f"package '{name}' not found (required by {required_by})",
+            ResolveError.NoMatchingVersion { name, wanted, required_by, available } =>
+                f"no version of '{name}' matches {wanted} (required by {required_by}; available: {available})",
+            ResolveError.Conflict { name, chosen, wanted, required_by } =>
+                f"conflict on '{name}': {chosen} already selected, but {required_by} needs {wanted}",
+            ResolveError.Cycle(path) => f"dependency cycle: {join(path, " -> ")}",
+        }
+    }
+}
+
+fn join(items: ref Vec[String], sep: String) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < items.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(items[i]);
+        i += 1;
+    }
+    out
+}
+
+fn parse_dep(text: String) -> Result[Dep, String] {
+    let t = text.trim();
+    let pieces = t.split(" ");
+    if pieces.len() != 2 {
+        return Err(f"bad dependency '{t}'");
+    }
+    let constraint = Constraint.parse(pieces[1])?;
+    Ok(Dep { name: pieces[0].clone(), constraint })
+}
+
+// Line format: `name version` or `name version: dep constraint, dep constraint`
+fn parse_release(line: String) -> Result[Release, String] {
+    let halves = line.split(":");
+    let head = halves[0].trim().split(" ");
+    if head.len() != 2 {
+        return Err(f"bad release header '{line}'");
+    }
+    let version = Version.parse(head[1])?;
+    let mut deps: Vec[Dep] = Vec.new();
+    if halves.len() > 1 {
+        for item in halves[1].split(",") {
+            if not item.trim().is_empty() {
+                deps.push(parse_dep(item.clone())?);
+            }
+        }
+    }
+    Ok(Release { name: head[0].clone(), version, deps })
+}
+
+struct Resolver {
+    releases: Vec[Release],
+    chosen: Map[String, i64],
+}
+
+impl Resolver {
+    // Reads a manifest: one release per line, `#` starts a comment.
+    fn load(text: String) -> Result[Resolver, String] {
+        let mut releases: Vec[Release] = Vec.new();
+        for line in text.split("\n") {
+            let t = line.trim();
+            if t.is_empty() or t.starts_with("#") {
+                continue;
+            }
+            releases.push(parse_release(t)?);
+        }
+        Ok(Resolver { releases, chosen: Map.new() })
+    }
+
+    // Highest release of `name` satisfying `c`.
+    fn best_match(ref self, name: String, c: ref Constraint, required_by: String) -> Result[i64, ResolveError] {
+        let mut best: i64 = -1;
+        let mut available: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < self.releases.len() {
+            let rel = ref self.releases[i];
+            if rel.name == name {
+                available.push(rel.version.text());
+                if c.matches(rel.version) {
+                    if best < 0 or rel.version.compare(self.releases[best].version) > 0 {
+                        best = i;
+                    }
+                }
+            }
+            i += 1;
+        }
+        if available.is_empty() {
+            return Err(ResolveError.MissingPackage { name, required_by });
+        }
+        if best < 0 {
+            return Err(ResolveError.NoMatchingVersion {
+                name, wanted: c.text(), required_by, available: join(available, ", "),
+            });
+        }
+        Ok(best)
+    }
+
+    fn require(mut ref self, name: String, c: ref Constraint, required_by: String) -> Result[(), ResolveError] {
+        if let Some(idx) = self.chosen.get(name) {
+            let rel = ref self.releases[idx];
+            if c.matches(rel.version) {
+                return Ok(());
+            }
+            return Err(ResolveError.Conflict {
+                name, chosen: rel.version.text(), wanted: c.text(), required_by,
+            });
+        }
+        let idx = self.best_match(name.clone(), c, required_by)?;
+        self.chosen.insert(name, idx);
+        let rel = ref self.releases[idx];
+        let who = rel.name + "@" + rel.version.text();
+        for dep in rel.deps {
+            self.require(dep.name.clone(), dep.constraint, who)?;
+        }
+        Ok(())
+    }
+
+    // Post-order DFS: 0 = unvisited, 1 = on the stack, 2 = done.
+    fn visit(ref self, name: String, state: mut ref Map[String, i64], stack: mut ref Vec[String],
+             order: mut ref Vec[String]) -> Result[(), ResolveError] {
+        let mark = match state.get(name) { Some(s) => s, None => 0 };
+        if mark == 2 {
+            return Ok(());
+        }
+        if mark == 1 {
+            let mut path: Vec[String] = Vec.new();
+            let mut start = 0;
+            while stack[start] != name {
+                start += 1;
+            }
+            for i in start..stack.len() {
+                path.push(stack[i].clone());
+            }
+            path.push(name);
+            return Err(ResolveError.Cycle(path));
+        }
+        state.insert(name.clone(), 1);
+        stack.push(name.clone());
+        let idx = self.chosen[name];
+        let rel = ref self.releases[idx];
+        for dep in rel.deps {
+            self.visit(dep.name.clone(), state, stack, order)?;
+        }
+        stack.pop();
+        state.insert(name.clone(), 2);
+        order.push(name);
+        Ok(())
+    }
+
+    fn plan(mut ref self, roots: ref Vec[Dep]) -> Result[Vec[String], ResolveError] {
+        for root in roots {
+            self.require(root.name.clone(), root.constraint, "<root>")?;
+        }
+        let mut state: Map[String, i64] = Map.new();
+        let mut stack: Vec[String] = Vec.new();
+        let mut order: Vec[String] = Vec.new();
+        for root in roots {
+            self.visit(root.name.clone(), state, stack, order)?;
+        }
+        Ok(order)
+    }
+}
+
+struct Scenario {
+    title: String,
+    file: String,
+    roots: String,
+}
+
+fn run_scenario(sc: ref Scenario) -> Result[Vec[String], ResolveError] {
+    let text = match fs.read_to_string(sc.file) {
+        Ok(t) => t,
+        Err(_) => return Err(ResolveError.Parse(f"cannot read {sc.file}")),
+    };
+    let mut resolver = match Resolver.load(text) {
+        Ok(r) => r,
+        Err(msg) => return Err(ResolveError.Parse(msg)),
+    };
+    let mut roots: Vec[Dep] = Vec.new();
+    for item in sc.roots.split(",") {
+        match parse_dep(item.clone()) {
+            Ok(d) => roots.push(d),
+            Err(msg) => return Err(ResolveError.Parse(msg)),
+        }
+    }
+    let order = resolver.plan(roots)?;
+    let mut lines: Vec[String] = Vec.new();
+    for name in order {
+        let rel = ref resolver.releases[resolver.chosen[name]];
+        let mut line = f"{name} {rel.version.text()}";
+        if not rel.deps.is_empty() {
+            let mut names: Vec[String] = Vec.new();
+            for d in rel.deps {
+                names.push(d.name.clone());
+            }
+            line = line + " (needs " + join(names, ", ") + ")";
+        }
+        lines.push(line);
+    }
+    Ok(lines)
+}
+
+fn main() -> Result[(), IoError] {
+    let base = "log 0.3.0\nlog 0.3.2\nlog 1.0.0\njson 1.1.0: log ^0.3.0\njson 1.4.0: log ^0.3.1\n";
+    let web = base + "http 2.0.0: json ^1.2.0, log >=0.3.0\nhttp 2.1.0: json ^1.2.0, log ^0.3.0\n# app\napp 1.0.0: http ^2.0.0, json ^1.0.0\n";
+    let cyclic = base + "app 1.0.0: core ^1.0.0\ncore 1.0.0: plugin ^1.0.0, log ^0.3.0\nplugin 1.0.0: hooks ^1.0.0\nhooks 1.2.0: core >=1.0.0\n";
+    let conflict = base + "http 2.0.0: json ^1.2.0\napp 1.0.0: http ^2.0.0, json =1.1.0\n";
+    let broken = base + "cli 0.9.0: args ^0.2.0, log >=2.0.0\nargs 0.2.5\n";
+
+    fs.write("reg_web.txt", web)?;
+    fs.write("reg_cyclic.txt", cyclic)?;
+    fs.write("reg_conflict.txt", conflict)?;
+    fs.write("reg_broken.txt", broken)?;
+
+    let scenarios = [
+        Scenario { title: "web app", file: "reg_web.txt", roots: "app ^1.0.0" },
+        Scenario { title: "two roots sharing deps", file: "reg_web.txt", roots: "json ^1.0.0, http >=2.0.0, log *" },
+        Scenario { title: "plugin cycle", file: "reg_cyclic.txt", roots: "app ^1.0.0" },
+        Scenario { title: "version conflict", file: "reg_conflict.txt", roots: "app ^1.0.0" },
+        Scenario { title: "unsatisfiable", file: "reg_broken.txt", roots: "cli ^0.9.0" },
+        Scenario { title: "missing package", file: "reg_web.txt", roots: "app ^1.0.0, metrics ^0.1.0" },
+        Scenario { title: "pinned old json", file: "reg_web.txt", roots: "json =1.1.0, log *" },
+        Scenario { title: "pinned old log", file: "reg_web.txt", roots: "log =0.3.0, json *" },
+        Scenario { title: "bad manifest", file: "reg_web.txt", roots: "app 1.x" },
+    ];
+
+    let mut ok_count = 0;
+    let mut failed = 0;
+    let mut packages = 0;
+    for sc in scenarios {
+        println(f"== {sc.title} [{sc.roots}] ==");
+        match run_scenario(sc) {
+            Ok(lines) => {
+                println(f"plan: {lines.len()} packages");
+                let mut step = 1;
+                for line in lines {
+                    println(f"  {step}. install {line}");
+                    step += 1;
+                }
+                ok_count += 1;
+                packages += lines.len();
+            }
+            Err(e) => {
+                println(f"error: {e.describe()}");
+                failed += 1;
+            }
+        }
+    }
+    println(f"summary: {ok_count} resolved ({packages} installs), {failed} failed");
+    Ok(())
+}

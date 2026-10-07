@@ -1,0 +1,379 @@
+// pipeline/join_dedupe
+//
+// Two record sets -- CRM contacts and newsletter signups -- arrive as CSV
+// exports with fuzzy duplicates (case, stray whitespace, +tag aliases,
+// gmail dot-aliases). We normalize every row, dedupe each set keeping the
+// newest record per email, then join the two sets on the normalized email
+// and report matched, CRM-only and signup-only records.
+
+struct Contact {
+    id: i64,
+    name: String,
+    email: String,
+    company: String,
+    updated: i64,
+}
+
+enum Source {
+    Web,
+    Event,
+    Referral,
+}
+
+impl Display for Source {
+    fn to_string(ref self) -> String {
+        match self {
+            Source.Web => "web",
+            Source.Event => "event",
+            Source.Referral => "referral",
+        }
+    }
+}
+
+struct Signup {
+    name: String,
+    email: String,
+    channel: Source,
+    signed_up: i64,
+}
+
+enum RowError {
+    FieldCount(i64, i64),
+    BadId(String),
+    BadEmail(String),
+    BadDate(String),
+    UnknownChannel(String),
+}
+
+impl Display for RowError {
+    fn to_string(ref self) -> String {
+        match self {
+            RowError.FieldCount(want, got) => f"expected {want} fields, got {got}",
+            RowError.BadId(s) => f"invalid id '{s}'",
+            RowError.BadEmail(s) => f"invalid email '{s}'",
+            RowError.BadDate(s) => f"invalid date '{s}'",
+            RowError.UnknownChannel(s) => f"unknown channel '{s}'",
+        }
+    }
+}
+
+// ---------- normalization ----------
+
+fn title_case(word: ref String) -> String {
+    let lower = word.to_lowercase();
+    if lower.is_empty() {
+        return lower;
+    }
+    let head = lower.substring(0, 1).to_uppercase();
+    head + lower.substring(1)
+}
+
+fn normalize_name(raw: ref String) -> String {
+    let mut out = String.new();
+    for word in raw.trim().split(" ") {
+        if word.is_empty() {
+            continue;
+        }
+        if not out.is_empty() {
+            out.push_str(" ");
+        }
+        out.push_str(title_case(word));
+    }
+    out
+}
+
+fn canonical_domain(domain: ref String) -> String {
+    if domain == "googlemail.com" {
+        return "gmail.com";
+    }
+    domain.to_string()
+}
+
+fn normalize_email(raw: ref String) -> Result[String, RowError] {
+    let cleaned = raw.trim().to_lowercase();
+    let parts = cleaned.split("@");
+    if parts.len() != 2 {
+        return Err(RowError.BadEmail(raw.trim()));
+    }
+    let domain = canonical_domain(parts[1]);
+    if not domain.contains(".") {
+        return Err(RowError.BadEmail(raw.trim()));
+    }
+    let tagged = parts[0].split("+");
+    let mut local = tagged[0].to_string();
+    if domain == "gmail.com" {
+        local = local.replace(".", "");
+    }
+    if local.is_empty() {
+        return Err(RowError.BadEmail(raw.trim()));
+    }
+    Ok(local + "@" + domain)
+}
+
+fn parse_date(raw: ref String) -> Result[i64, RowError] {
+    let text = raw.trim();
+    let parts = text.split("-");
+    if parts.len() != 3 {
+        return Err(RowError.BadDate(text));
+    }
+    let y = i64.parse(parts[0]) ?? -1;
+    let m = i64.parse(parts[1]) ?? -1;
+    let d = i64.parse(parts[2]) ?? -1;
+    if y < 1900 or m < 1 or m > 12 or d < 1 or d > 31 {
+        return Err(RowError.BadDate(text));
+    }
+    Ok(y * 10000 + m * 100 + d)
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+fn format_date(stamp: i64) -> String {
+    let y = stamp / 10000;
+    let m = (stamp / 100) % 100;
+    let d = stamp % 100;
+    f"{y}-{pad2(m)}-{pad2(d)}"
+}
+
+fn parse_channel(raw: ref String) -> Result[Source, RowError] {
+    let c = raw.trim().to_lowercase();
+    match c {
+        "web" => Ok(Source.Web),
+        "event" => Ok(Source.Event),
+        "referral" => Ok(Source.Referral),
+        _ => Err(RowError.UnknownChannel(c)),
+    }
+}
+
+// ---------- parsing ----------
+
+fn split_fields(line: ref String, want: i64) -> Result[Vec[String], RowError] {
+    let fields = line.split(",");
+    if fields.len() != want {
+        return Err(RowError.FieldCount(want, fields.len()));
+    }
+    Ok(fields)
+}
+
+fn parse_contact(line: ref String) -> Result[Contact, RowError] {
+    let f = split_fields(line, 5)?;
+    let id_text = f[0].trim();
+    let id = match i64.parse(id_text) {
+        Some(n) => n,
+        None => return Err(RowError.BadId(id_text)),
+    };
+    let email = normalize_email(f[2])?;
+    let updated = parse_date(f[4])?;
+    let company = f[3].trim();
+    Ok(Contact {
+        id,
+        name: normalize_name(f[1]),
+        email,
+        company: if company.is_empty() { "-".to_string() } else { company },
+        updated,
+    })
+}
+
+fn parse_signup(line: ref String) -> Result[Signup, RowError] {
+    let f = split_fields(line, 4)?;
+    let email = normalize_email(f[0])?;
+    let channel = parse_channel(f[2])?;
+    let signed_up = parse_date(f[3])?;
+    Ok(Signup { name: normalize_name(f[1]), email, channel, signed_up })
+}
+
+// Data lines of a CSV export: skips the header, blanks and # comments.
+// Returns (1-based line number, text) pairs.
+fn data_lines(text: ref String) -> Vec[(i64, String)] {
+    let mut out: Vec[(i64, String)] = Vec.new();
+    let mut lineno = 0;
+    for line in text.split("\n") {
+        lineno += 1;
+        if lineno == 1 {
+            continue;
+        }
+        let t = line.trim();
+        if t.is_empty() or t.starts_with("#") {
+            continue;
+        }
+        out.push((lineno, line));
+    }
+    out
+}
+
+// ---------- dedupe ----------
+
+// Workaround: this was one generic `fn dedupe[T: Record](rows: Vec[T])` over a
+// `Record` trait (key/stamp). Under `karac build` a local `SortedMap[String, T]`
+// inside a generic fn returns garbage from `get` (old.stamp() read 16 or a
+// pointer-sized value instead of the stored date), so newest-wins picked the
+// wrong record. Split into two concrete functions.
+fn dedupe_contacts(rows: Vec[Contact]) -> (SortedMap[String, Contact], i64) {
+    let mut best: SortedMap[String, Contact] = SortedMap.new();
+    let mut merged = 0;
+    for row in rows.into_iter() {
+        let key = row.email.clone();
+        let replace = match best.get(key) {
+            Some(old) => {
+                merged += 1;
+                row.updated > old.updated
+            }
+            None => true,
+        };
+        if replace {
+            best.insert(key, row);
+        }
+    }
+    (best, merged)
+}
+
+fn dedupe_signups(rows: Vec[Signup]) -> (SortedMap[String, Signup], i64) {
+    let mut best: SortedMap[String, Signup] = SortedMap.new();
+    let mut merged = 0;
+    for row in rows.into_iter() {
+        let key = row.email.clone();
+        let replace = match best.get(key) {
+            Some(old) => {
+                merged += 1;
+                row.signed_up > old.signed_up
+            }
+            None => true,
+        };
+        if replace {
+            best.insert(key, row);
+        }
+    }
+    (best, merged)
+}
+
+// ---------- I/O ----------
+
+fn join_lines(lines: Vec[String]) -> String {
+    let mut out = String.new();
+    for l in lines {
+        out.push_str(l);
+        out.push_str("\n");
+    }
+    out
+}
+
+fn write_exports() -> Result[(), IoError] {
+    let crm = join_lines([
+        "id,name,email,company,updated",
+        "1,  alice   smith ,Alice.Smith@Example.com,Acme,2024-01-10",
+        "2,Alice Smith,alice.smith+crm@example.com,Acme Corp,2024-03-02",
+        "3,BOB JONES,bob@jones.io,Jones LLC,2023-11-20",
+        "# imported from legacy system",
+        "4,Carol  White,carol.white@gmail.com,Initech,2024-02-14",
+        "5,carol white,CarolWhite+news@googlemail.com,Initech,2024-01-05",
+        "6,Dan Brown,dan@brown.org,,2024-02-01",
+        "7,Eve Adams,eve(at)adams.net,Hooli,2024-01-01",
+        "",
+        "8,Frank Moore,frank@moore.dev,Moore Dev,2024-13-01",
+        "9,Grace Lee,grace@lee.co,Lee & Co,2024-02-20",
+        "10,grace lee, GRACE@LEE.CO ,Lee and Co,2024-02-20",
+        "x,Henry Ford,henry@ford.com,Ford,2024-01-01",
+        "11,Ivan Petrov,ivan@petrov.ru,Petrov Ltd,2023-12-31",
+    ]);
+    let signups = join_lines([
+        "email,name,channel,signed_up",
+        "alice.smith+newsletter@example.com,Alice S.,web,2024-02-11",
+        "ALICE.SMITH@example.com, alice  smith ,Event,2024-03-15",
+        "carol.white@gmail.com,Carol W,referral,2024-01-20",
+        "c.a.r.o.l.white@gmail.com,carol white,web,2024-02-25",
+        "dan@brown.org,Daniel Brown,event,2023-10-10",
+        "heidi@klum.de,Heidi K,web,2024-03-01",
+        "heidi+promo@klum.de,heidi  k,web,2024-03-03",
+        "ivan@petrov.ru,Ivan,podcast,2024-01-01",
+        "judy@hops.com,Judy Hopps,referral,2024-02-29",
+        "judy@hops.com,Judy Hopps,web",
+        "zed@example.com,Zed,web,2024-04-04",
+    ]);
+    fs.write("crm_contacts.csv", crm)?;
+    fs.write("newsletter_signups.csv", signups)?;
+    Ok(())
+}
+
+fn main() -> Result[(), IoError] {
+    write_exports()?;
+    let crm_text = fs.read_to_string("crm_contacts.csv")?;
+    let signup_text = fs.read_to_string("newsletter_signups.csv")?;
+
+    println("== load ==");
+    let mut contacts: Vec[Contact] = Vec.new();
+    let mut crm_rejects: Vec[String] = Vec.new();
+    let crm_rows = data_lines(crm_text);
+    for (lineno, line) in crm_rows.into_iter() {
+        match parse_contact(line) {
+            Ok(c) => contacts.push(c),
+            Err(e) => crm_rejects.push(f"  crm line {lineno}: {e}"),
+        }
+    }
+    println(f"crm: {contacts.len()} parsed, {crm_rejects.len()} rejected");
+    for r in crm_rejects {
+        println(r);
+    }
+
+    let mut signups: Vec[Signup] = Vec.new();
+    let mut signup_rejects: Vec[String] = Vec.new();
+    let signup_rows = data_lines(signup_text);
+    for (lineno, line) in signup_rows.into_iter() {
+        match parse_signup(line) {
+            Ok(s) => signups.push(s),
+            Err(e) => signup_rejects.push(f"  signups line {lineno}: {e}"),
+        }
+    }
+    println(f"signups: {signups.len()} parsed, {signup_rejects.len()} rejected");
+    for r in signup_rejects {
+        println(r);
+    }
+
+    println("== dedupe ==");
+    let crm_in = contacts.len();
+    let signup_in = signups.len();
+    // Workaround: `let (crm, crm_merged) = dedupe(contacts);` fails in codegen
+    // (no handler for method 'len' on a tuple-destructured SortedMap binding).
+    let crm_result = dedupe_contacts(contacts);
+    let crm_merged = crm_result.1;
+    let crm = crm_result.0;
+    let sub_result = dedupe_signups(signups);
+    let sub_merged = sub_result.1;
+    let subs = sub_result.0;
+    println(f"crm: {crm_in} -> {crm.len()} unique ({crm_merged} merged)");
+    println(f"signups: {signup_in} -> {subs.len()} unique ({sub_merged} merged)");
+
+    let mut matched: Vec[String] = Vec.new();
+    let mut left_only: Vec[String] = Vec.new();
+    for (email, c) in crm {
+        match subs.get(email) {
+            Some(s) => matched.push(
+                f"  {email}: #{c.id} {c.name} ({c.company}, {format_date(c.updated)}) <-> {s.name} via {s.channel} on {format_date(s.signed_up)}"
+            ),
+            None => left_only.push(f"  {email}: #{c.id} {c.name} ({c.company}, {format_date(c.updated)})"),
+        }
+    }
+    let mut right_only: Vec[String] = Vec.new();
+    for (email, s) in subs {
+        if not crm.contains_key(email) {
+            right_only.push(f"  {email}: {s.name} via {s.channel} on {format_date(s.signed_up)}");
+        }
+    }
+
+    println(f"== matched ({matched.len()}) ==");
+    for line in matched {
+        println(line);
+    }
+    println(f"== crm only ({left_only.len()}) ==");
+    for line in left_only {
+        println(line);
+    }
+    println(f"== signups only ({right_only.len()}) ==");
+    for line in right_only {
+        println(line);
+    }
+
+    let coverage = matched.len() * 100 / crm.len();
+    println(f"newsletter coverage of crm: {coverage}%");
+    Ok(())
+}

@@ -1,0 +1,89 @@
+=== Invoice INV-1001 ===
+Customer: Acme Corp   Region: NE   Currency: USD
+  GR-101 Organic coffee          x3          $38.97  tax 0.00%         $0.00
+  CL-220 Rain jacket             x1          $76.07  tax 4.00%         $3.04
+      discount -$13.43
+  EL-310 USB-C hub               x2          $69.98  tax 8.88%         $6.21
+  BK-007 Field guide             x4          $73.50  tax 2.50%         $1.84
+      discount -$24.50
+  Subtotal:            $296.45
+  Discount:            -$37.93
+  Tax:                  $11.09
+  TOTAL:               $269.61
+
+=== Invoice INV-1002 ===
+Customer: Bluebird Cafe   Region: WEST   Currency: USD
+  GR-140 Oat milk case          x12         $219.90  tax 1.25%         $2.75
+      discount -$43.98
+  SV-001 Espresso machine service   x1         $135.00  tax 5.00%         $6.75
+      discount -$15.00
+  EL-416 Receipt printer         x1         $123.49  tax 9.25%        $11.42
+      discount -$6.50
+  Subtotal:            $543.87
+  Discount:            -$65.48
+  Tax:                  $20.92
+  TOTAL:               $499.31
+
+=== Invoice INV-1003 ===
+Customer: Lindqvist AB   Region: EXPORT   Currency: EUR
+  EL-501 Label printer           x3      657,36 EUR  tax 0.00%      0,00 EUR
+      discount -89,64 EUR
+  BK-120 Manual set             x10      150,00 EUR  tax 0.00%      0,00 EUR
+      discount -37,50 EUR
+  Subtotal:         934,50 EUR
+  Discount:        -127,14 EUR
+  Tax:                0,00 EUR
+  TOTAL:            807,36 EUR
+
+=== Invoice INV-1005 ===
+Customer: Magnolia Books   Region: SOUTH   Currency: USD
+  BK-310 Atlas                   x2         $130.00  tax 0.00%         $0.00
+  GR-077 Pecan tin               x7          $82.50  tax 3.00%         $2.48
+      discount -$33.00
+  CL-404 Tote bag                x9          $73.87  tax 7.00%         $5.17
+      discount -$36.38
+  Subtotal:            $355.75
+  Discount:            -$69.38
+  Tax:                   $7.65
+  TOTAL:               $294.02
+
+=== Invoice INV-1007 ===
+Customer: Ridge Outfitters   Region: WEST   Currency: EUR
+  CL-610 Wool socks              x6       59,96 EUR  tax 9.25%      5,55 EUR
+      discount -29,98 EUR
+  EL-611 Headlamp                x2       74,31 EUR  tax 9.25%      6,87 EUR
+      discount -5,59 EUR
+  Subtotal:         169,84 EUR
+  Discount:         -35,57 EUR
+  Tax:               12,42 EUR
+  TOTAL:            146,69 EUR
+
+=== Invoice INV-1008 ===
+Customer: Kobe Gear   Region: EXPORT   Currency: JPY
+  CL-901 Denim jackets          x15     JPY 159,360  tax 0.00%         JPY 0
+      discount -JPY 32,640
+  BK-902 Catalog                 x8       JPY 9,000  tax 0.00%         JPY 0
+      discount -JPY 3,000
+  Subtotal:        JPY 204,000
+  Discount:        -JPY 35,640
+  Tax:                   JPY 0
+  TOTAL:           JPY 168,360
+
+=== Ledger summary ===
+Invoices issued: 6
+  EUR  invoices=2  billed       954,05 EUR
+  JPY  invoices=1  billed      JPY 168,360
+  USD  invoices=3  billed        $1,062.94
+Tax collected by currency/region:
+  EUR|EXPORT          0,00 EUR
+  EUR|WEST           12,42 EUR
+  JPY|EXPORT             JPY 0
+  USD|NE                $11.09
+  USD|SOUTH              $7.65
+  USD|WEST              $20.92
+Rejected records: 5
+  - line 2: ITEM before any ORDER
+  - line 11: 'two' is not a valid number
+  - line 23: unknown category 'toys'
+  - line 24: unknown region 'MARS'
+  - order INV-1004: no tax rule for services shipped to EXPORT

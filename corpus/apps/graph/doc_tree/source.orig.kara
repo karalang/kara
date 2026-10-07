@@ -1,0 +1,399 @@
+// doc_tree: a document outline (sections, paragraphs) stored as an arena of nodes with
+// parent links: insert, move-subtree, delete, find-by-path, numbering, outline rendering.
+
+#[derive(PartialEq, Eq)]
+enum NodeKind {
+    Document,
+    Section,
+    Paragraph,
+}
+
+struct Node {
+    kind: NodeKind,
+    title: String,
+    parent: Option[i64],
+    children: Vec[i64],
+    alive: bool,
+}
+
+enum TreeError {
+    NoSuchNode(i64),
+    PathNotFound(String),
+    LeafNode(String),
+    WouldCreateCycle { moved: String, target: String },
+    RootIsFixed,
+    IndexOutOfRange { index: i64, len: i64 },
+}
+
+impl Display for TreeError {
+    fn to_string(ref self) -> String {
+        match self {
+            TreeError.NoSuchNode(id) => f"no such node #{id}",
+            TreeError.PathNotFound(p) => f"path not found: '{p}'",
+            TreeError.LeafNode(p) => f"'{p}' is a paragraph and cannot have children",
+            TreeError.WouldCreateCycle { moved, target } => f"cannot move '{moved}' under its own descendant '{target}'",
+            TreeError.RootIsFixed => "the document root cannot be moved or deleted",
+            TreeError.IndexOutOfRange { index, len } => f"index {index} out of range (0..={len})",
+        }
+    }
+}
+
+struct DocTree {
+    nodes: Vec[Node],
+    root: i64,
+}
+
+fn join(parts: ref Vec[String], sep: ref String) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for p in parts {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(p);
+        first = false;
+    }
+    out
+}
+
+fn indent(depth: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..depth {
+        s.push_str("  ");
+    }
+    s
+}
+
+impl DocTree {
+    fn new(title: String) -> DocTree {
+        let mut nodes = Vec.new();
+        nodes.push(Node { kind: NodeKind.Document, title: title, parent: None, children: Vec.new(), alive: true });
+        DocTree { nodes: nodes, root: 0 }
+    }
+
+    fn check(ref self, id: i64) -> Result[(), TreeError] {
+        if id < 0 or id >= self.nodes.len() or not self.nodes[id].alive {
+            return Err(TreeError.NoSuchNode(id));
+        }
+        Ok(())
+    }
+
+    fn append(mut ref self, parent: i64, kind: NodeKind, title: String) -> Result[i64, TreeError] {
+        self.check(parent)?;
+        let len = self.nodes[parent].children.len();
+        self.insert_at(parent, len, kind, title)
+    }
+
+    fn insert_at(mut ref self, parent: i64, index: i64, kind: NodeKind, title: String) -> Result[i64, TreeError] {
+        self.check(parent)?;
+        if self.nodes[parent].kind == NodeKind.Paragraph {
+            return Err(TreeError.LeafNode(self.path_of(parent)));
+        }
+        let len = self.nodes[parent].children.len();
+        if index < 0 or index > len {
+            return Err(TreeError.IndexOutOfRange { index: index, len: len });
+        }
+        let id = self.nodes.len();
+        self.nodes.push(Node { kind: kind, title: title, parent: Some(parent), children: Vec.new(), alive: true });
+        self.nodes[parent].children.insert(index, id);
+        Ok(id)
+    }
+
+    // Position of `id` within its parent's child list.
+    fn position_in_parent(ref self, id: i64) -> i64 {
+        match self.nodes[id].parent {
+            Some(p) => {
+                let siblings = self.nodes[p].children;
+                for i in 0..siblings.len() {
+                    if siblings[i] == id {
+                        return i;
+                    }
+                }
+                -1
+            }
+            None => -1,
+        }
+    }
+
+    // Walks parent links upward from `node`; true if `anc` is on the way.
+    fn is_ancestor_or_self(ref self, anc: i64, node: i64) -> bool {
+        let mut cur = Some(node);
+        while let Some(c) = cur {
+            if c == anc {
+                return true;
+            }
+            cur = self.nodes[c].parent;
+        }
+        false
+    }
+
+    fn depth(ref self, id: i64) -> i64 {
+        let mut d = 0;
+        let mut cur = self.nodes[id].parent;
+        while let Some(c) = cur {
+            d += 1;
+            cur = self.nodes[c].parent;
+        }
+        d
+    }
+
+    // Slash-separated title path from the root, computed via parent links.
+    fn path_of(ref self, id: i64) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        let mut cur = id;
+        while cur != self.root {
+            parts.push(self.nodes[cur].title.clone());
+            match self.nodes[cur].parent {
+                Some(p) => { cur = p; }
+                None => { break; }
+            }
+        }
+        parts.reverse();
+        join(parts, "/")
+    }
+
+    // Rank of `id` among siblings of the same kind, 1-based.
+    fn rank_among_kind(ref self, id: i64) -> i64 {
+        let mut rank = 0;
+        match self.nodes[id].parent {
+            Some(p) => {
+                for c in self.nodes[p].children {
+                    if self.nodes[c].kind == self.nodes[id].kind {
+                        rank += 1;
+                    }
+                    if c == id {
+                        return rank;
+                    }
+                }
+                rank
+            }
+            None => 0,
+        }
+    }
+
+    // Hierarchical number such as "2.1.3"; paragraphs get a "pN" component.
+    fn number_of(ref self, id: i64) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        let mut cur = id;
+        while cur != self.root {
+            let rank = self.rank_among_kind(cur);
+            if self.nodes[cur].kind == NodeKind.Paragraph {
+                parts.push(f"p{rank}");
+            } else {
+                parts.push(f"{rank}");
+            }
+            match self.nodes[cur].parent {
+                Some(p) => { cur = p; }
+                None => { break; }
+            }
+        }
+        parts.reverse();
+        join(parts, ".")
+    }
+
+    fn find_by_path(ref self, path: String) -> Result[i64, TreeError] {
+        let mut cur = self.root;
+        for seg in path.split("/") {
+            let mut next: Option[i64] = None;
+            for c in self.nodes[cur].children {
+                if self.nodes[c].title == seg {
+                    next = Some(c);
+                    break;
+                }
+            }
+            match next {
+                Some(n) => { cur = n; }
+                None => { return Err(TreeError.PathNotFound(path)); }
+            }
+        }
+        Ok(cur)
+    }
+
+    fn detach(mut ref self, id: i64) {
+        let pos = self.position_in_parent(id);
+        if let Some(p) = self.nodes[id].parent {
+            self.nodes[p].children.remove(pos);
+        }
+        self.nodes[id].parent = None;
+    }
+
+    fn move_subtree(mut ref self, id: i64, new_parent: i64, index: i64) -> Result[(), TreeError] {
+        self.check(id)?;
+        self.check(new_parent)?;
+        if id == self.root {
+            return Err(TreeError.RootIsFixed);
+        }
+        if self.nodes[new_parent].kind == NodeKind.Paragraph {
+            return Err(TreeError.LeafNode(self.path_of(new_parent)));
+        }
+        if self.is_ancestor_or_self(id, new_parent) {
+            return Err(TreeError.WouldCreateCycle { moved: self.path_of(id), target: self.path_of(new_parent) });
+        }
+        let mut len = self.nodes[new_parent].children.len();
+        if self.nodes[id].parent == Some(new_parent) {
+            len -= 1;
+        }
+        if index < 0 or index > len {
+            return Err(TreeError.IndexOutOfRange { index: index, len: len });
+        }
+        self.detach(id);
+        self.nodes[new_parent].children.insert(index, id);
+        self.nodes[id].parent = Some(new_parent);
+        Ok(())
+    }
+
+    // Removes the node and its whole subtree; returns how many nodes died.
+    fn delete(mut ref self, id: i64) -> Result[i64, TreeError] {
+        self.check(id)?;
+        if id == self.root {
+            return Err(TreeError.RootIsFixed);
+        }
+        self.detach(id);
+        let mut stack: Vec[i64] = Vec.new();
+        stack.push(id);
+        let mut removed = 0;
+        while let Some(n) = stack.pop() {
+            self.nodes[n].alive = false;
+            removed += 1;
+            for c in self.nodes[n].children {
+                stack.push(c);
+            }
+            self.nodes[n].children.clear();
+        }
+        Ok(removed)
+    }
+
+    fn render_into(ref self, id: i64, depth: i64, out: mut ref Vec[String]) {
+        let pad = indent(depth);
+        let node = ref self.nodes[id];
+        match node.kind {
+            NodeKind.Document => out.push(f"# {node.title}"),
+            NodeKind.Section => out.push(f"{pad}{self.number_of(id)} {node.title}"),
+            NodeKind.Paragraph => out.push(f"{pad}- {node.title}"),
+        }
+        for c in node.children {
+            self.render_into(c, depth + 1, out);
+        }
+    }
+
+    fn render(ref self) -> Vec[String] {
+        let mut lines: Vec[String] = Vec.new();
+        self.render_into(self.root, 0, lines);
+        lines
+    }
+
+    fn stats(ref self) -> String {
+        let mut sections = 0;
+        let mut paragraphs = 0;
+        let mut max_depth = 0;
+        for i in 0..self.nodes.len() {
+            if not self.nodes[i].alive {
+                continue;
+            }
+            match self.nodes[i].kind {
+                NodeKind.Section => { sections += 1; }
+                NodeKind.Paragraph => { paragraphs += 1; }
+                NodeKind.Document => {}
+            }
+            let d = self.depth(i);
+            if d > max_depth {
+                max_depth = d;
+            }
+        }
+        f"sections={sections} paragraphs={paragraphs} max_depth={max_depth}"
+    }
+}
+
+fn print_outline(doc: ref DocTree, heading: String) {
+    println(f"== {heading} ==");
+    for line in doc.render() {
+        println(line);
+    }
+    println(doc.stats());
+}
+
+fn report(label: String, r: Result[(), TreeError]) {
+    match r {
+        Ok(()) => println(f"[ok]   {label}"),
+        Err(e) => println(f"[fail] {label}: {e}"),
+    }
+}
+
+fn locate(doc: ref DocTree, path: String) {
+    match doc.find_by_path(path) {
+        Ok(id) => println(f"find '{path}' -> #{id} number={doc.number_of(id)} depth={doc.depth(id)} path={doc.path_of(id)}"),
+        Err(e) => println(f"find '{path}' -> error: {e}"),
+    }
+}
+
+fn build_handbook() -> Result[DocTree, TreeError] {
+    let mut doc = DocTree.new("Kara Handbook");
+    let root = doc.root;
+    let intro = doc.append(root, NodeKind.Section, "Introduction")?;
+    doc.append(intro, NodeKind.Paragraph, "Why another systems language")?;
+    doc.append(intro, NodeKind.Paragraph, "Who this book is for")?;
+    let start = doc.append(root, NodeKind.Section, "Getting Started")?;
+    doc.append(start, NodeKind.Section, "Installation")?;
+    let first = doc.append(start, NodeKind.Section, "First Program")?;
+    doc.append(first, NodeKind.Paragraph, "Hello, world")?;
+    let build = doc.append(first, NodeKind.Section, "Building")?;
+    doc.append(build, NodeKind.Paragraph, "karac build vs karac run")?;
+    let tour = doc.append(root, NodeKind.Section, "Language Tour")?;
+    let types = doc.append(tour, NodeKind.Section, "Types")?;
+    doc.append(types, NodeKind.Section, "Structs")?;
+    doc.append(types, NodeKind.Section, "Enums")?;
+    doc.append(tour, NodeKind.Section, "Ownership")?;
+    let effects = doc.append(tour, NodeKind.Section, "Effects")?;
+    doc.append(effects, NodeKind.Paragraph, "Eight built-in verbs")?;
+    doc.append(root, NodeKind.Section, "Appendix")?;
+    doc.insert_at(root, 0, NodeKind.Paragraph, "Preface note")?;
+    Ok(doc)
+}
+
+fn main() -> Result[(), TreeError] {
+    let mut doc = build_handbook()?;
+    print_outline(doc, "initial");
+
+    locate(doc, "Language Tour/Types/Enums");
+    locate(doc, "Getting Started/First Program/Building");
+    locate(doc, "Language Tour/Generics");
+
+    let effects = doc.find_by_path("Language Tour/Effects")?;
+    let start = doc.find_by_path("Getting Started")?;
+    report("move Effects to front of Getting Started", doc.move_subtree(effects, start, 0));
+
+    let tour = doc.find_by_path("Language Tour")?;
+    let structs = doc.find_by_path("Language Tour/Types/Structs")?;
+    report("move Language Tour under Structs", doc.move_subtree(tour, structs, 0));
+
+    let para = doc.find_by_path("Introduction/Who this book is for")?;
+    let r = match doc.append(para, NodeKind.Section, "Audience") {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e),
+    };
+    report("add section under a paragraph", r);
+
+    let appendix = doc.find_by_path("Appendix")?;
+    report("move Appendix to index 9 of root", doc.move_subtree(appendix, doc.root, 9));
+    report("move Appendix to index 1 of root", doc.move_subtree(appendix, doc.root, 1));
+    report("move root", doc.move_subtree(doc.root, appendix, 0));
+
+    let types = doc.find_by_path("Language Tour/Types")?;
+    report("move Types to end of Language Tour", doc.move_subtree(types, tour, 1));
+
+    let first = doc.find_by_path("Getting Started/First Program")?;
+    match doc.delete(first) {
+        Ok(n) => println(f"[ok]   delete First Program: removed {n} nodes"),
+        Err(e) => println(f"[fail] delete First Program: {e}"),
+    }
+    match doc.delete(first) {
+        Ok(n) => println(f"[ok]   delete First Program again: removed {n} nodes"),
+        Err(e) => println(f"[fail] delete First Program again: {e}"),
+    }
+    locate(doc, "Getting Started/First Program/Building");
+    locate(doc, "Getting Started/Effects/Eight built-in verbs");
+    locate(doc, "Language Tour/Types/Structs");
+
+    print_outline(doc, "final");
+    Ok(())
+}

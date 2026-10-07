@@ -1,0 +1,399 @@
+// In-process HTTP router: route table, middleware chain, users resource.
+
+#[derive(Copy, Clone, PartialEq, Eq, Display)]
+enum Method { Get, Post, Put, Delete, Patch }
+
+impl Method {
+    fn parse(raw: ref String) -> Result[Method, String] {
+        for m in [Method.Get, Method.Post, Method.Put, Method.Delete, Method.Patch] {
+            if m.name() == raw.to_uppercase() { return Ok(m); }
+        }
+        Err(f"method {raw} not supported")
+    }
+
+    fn name(ref self) -> String {
+        self.to_string().to_uppercase()
+    }
+}
+
+struct HttpRequest { method: String, path: String, headers: Vec[(String, String)], body: String }
+
+impl HttpRequest {
+    fn header(ref self, name: ref String) -> Option[String] {
+        let wanted = name.to_lowercase();
+        for (k, v) in self.headers {
+            if k.to_lowercase() == wanted {
+                return Some(v.clone());
+            }
+        }
+        None
+    }
+}
+
+struct Reply { status: i64, body: String }
+struct User { id: i64, name: String, email: String }
+struct UserStore { users: Map[i64, User], next_id: i64 }
+struct RouteCtx { params: Map[String, String], body: String }
+
+enum ApiError { BadRequest(String), NotFound(String), Conflict(String) }
+impl ApiError {
+    fn to_reply(self) -> Reply {
+        match self {
+            ApiError.BadRequest(msg) => Reply { status: 400, body: msg },
+            ApiError.NotFound(msg) => Reply { status: 404, body: msg },
+            ApiError.Conflict(msg) => Reply { status: 409, body: msg },
+        }
+    }
+}
+
+type Handler = Fn(ref RouteCtx, mut ref UserStore) -> Result[Reply, ApiError];
+enum Segment { Static(String), Param(String), Tail(String) }
+struct Route { method: Method, pattern: Vec[Segment], handler: Handler }
+
+enum RouteResult {
+    Matched { index: i64, params: Map[String, String] },
+    MethodNotAllowed(Vec[String]),
+    NotFound,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Middleware { RequestId, Logger, Auth }
+const AUTH_TOKEN: String = "Bearer s3cret";
+
+fn join(items: ref Vec[String], sep: String) -> String {
+    let mut out = String.new();
+    for item in items {
+        if not out.is_empty() { out.push_str(sep); }
+        out.push_str(item);
+    }
+    out
+}
+
+fn split_path(path: ref String) -> Vec[String] {
+    let mut parts: Vec[String] = Vec.new();
+    for p in path.split("/") {
+        if not p.is_empty() { parts.push(p.clone()); }
+    }
+    parts
+}
+
+fn compile_pattern(pattern: String) -> Vec[Segment] {
+    let mut segs: Vec[Segment] = Vec.new();
+    for part in split_path(pattern) {
+        if part.starts_with(":") {
+            segs.push(Segment.Param(part.substring(1)));
+        } else if part.starts_with("*") {
+            segs.push(Segment.Tail(part.substring(1)));
+        } else {
+            segs.push(Segment.Static(part.clone()));
+        }
+    }
+    segs
+}
+
+fn match_pattern(pattern: ref Vec[Segment], parts: ref Vec[String]) -> Option[Map[String, String]] {
+    let mut params: Map[String, String] = Map.new();
+    let mut i = 0;
+    for seg in pattern {
+        match seg {
+            Segment.Static(text) => {
+                if i >= parts.len() or parts[i] != text { return None; }
+                i += 1;
+            }
+            Segment.Param(name) => {
+                if i >= parts.len() { return None; }
+                params.insert(name.clone(), parts[i].clone());
+                i += 1;
+            }
+            Segment.Tail(name) => {
+                let mut rest: Vec[String] = Vec.new();
+                while i < parts.len() { rest.push(parts[i].clone()); i += 1; }
+                params.insert(name.clone(), join(rest, "/"));
+            }
+        }
+    }
+    if i == parts.len() { Some(params) } else { None }
+}
+
+struct Router { routes: Vec[Route] }
+impl Router {
+    fn add(mut ref self, method: Method, pattern: String, handler: Handler) {
+        self.routes.push(Route { method, pattern: compile_pattern(pattern), handler });
+    }
+
+    fn handler_at(ref self, index: i64) -> Handler { self.routes[index].handler }
+
+    fn lookup(ref self, method: Method, path: ref String) -> RouteResult {
+        let parts = split_path(path);
+        let mut allowed: Vec[String] = Vec.new();
+        let mut index = 0;
+        for route in self.routes {
+            if let Some(params) = match_pattern(route.pattern, parts) {
+                if route.method == method {
+                    return RouteResult.Matched { index, params };
+                }
+                let name = route.method.name();
+                if not allowed.contains(name) { allowed.push(name); }
+            }
+            index += 1;
+        }
+        if allowed.is_empty() { RouteResult.NotFound } else { RouteResult.MethodNotAllowed(allowed) }
+    }
+}
+
+fn parse_form(body: ref String) -> Result[Map[String, String], ApiError] {
+    let mut fields: Map[String, String] = Map.new();
+    if body.trim().is_empty() { return Ok(fields); }
+    for pair in body.split("&") {
+        let kv = pair.split("=");
+        if kv.len() != 2 or kv[0].trim().is_empty() {
+            return Err(ApiError.BadRequest(f"malformed field '{pair}'"));
+        }
+        fields.insert(kv[0].trim(), kv[1].trim());
+    }
+    Ok(fields)
+}
+
+fn param_id(ctx: ref RouteCtx, key: String) -> Result[i64, ApiError] {
+    let raw = ctx.params.get(key).unwrap_or("");
+    match i64.parse(raw) {
+        Some(id) => Ok(id),
+        None => Err(ApiError.BadRequest(f"invalid id '{raw}'")),
+    }
+}
+
+fn email_owner(store: ref UserStore, email: ref String) -> Option[i64] {
+    for u in store.users.values() {
+        if u.email == email { return Some(u.id); }
+    }
+    None
+}
+
+fn health(ctx: ref RouteCtx, store: mut ref UserStore) -> Result[Reply, ApiError] {
+    Ok(Reply { status: 200, body: f"ok ({store.users.len()} users)" })
+}
+
+fn list_users(ctx: ref RouteCtx, store: mut ref UserStore) -> Result[Reply, ApiError] {
+    let mut ids: Vec[i64] = Vec.new();
+    for id in store.users.keys() { ids.push(id); }
+    ids.sort();
+    let mut entries: Vec[String] = Vec.new();
+    for id in ids {
+        if let Some(user) = store.users.get(id) {
+            entries.push(f"{user.id}:{user.name}");
+        }
+    }
+    if entries.is_empty() { entries.push("(none)"); }
+    Ok(Reply { status: 200, body: f"users: {join(entries, ",")}" })
+}
+
+fn get_user(ctx: ref RouteCtx, store: mut ref UserStore) -> Result[Reply, ApiError] {
+    let id = param_id(ctx, "id")?;
+    match store.users.get(id) {
+        Some(u) => Ok(Reply { status: 200, body: f"user {u.id} {u.name} <{u.email}>" }),
+        None => Err(ApiError.NotFound(f"user {id} not found")),
+    }
+}
+
+fn create_user(ctx: ref RouteCtx, store: mut ref UserStore) -> Result[Reply, ApiError] {
+    let mut form = parse_form(ctx.body)?;
+    let Some(name) = form.remove("name") else {
+        return Err(ApiError.BadRequest("missing field 'name'"));
+    };
+    let Some(email) = form.remove("email") else {
+        return Err(ApiError.BadRequest("missing field 'email'"));
+    };
+    if not email.contains("@") {
+        return Err(ApiError.BadRequest(f"invalid email '{email}'"));
+    }
+    if let Some(owner) = email_owner(store, email) {
+        return Err(ApiError.Conflict(f"email {email} already used by user {owner}"));
+    }
+    let id = store.next_id;
+    store.next_id += 1;
+    let body = f"created user {id} {name}";
+    store.users.insert(id, User { id, name, email });
+    Ok(Reply { status: 201, body })
+}
+
+fn update_user(ctx: ref RouteCtx, store: mut ref UserStore) -> Result[Reply, ApiError] {
+    let id = param_id(ctx, "id")?;
+    let mut form = parse_form(ctx.body)?;
+    let mut user = match store.users.remove(id) {
+        Some(u) => u,
+        None => return Err(ApiError.NotFound(f"user {id} not found")),
+    };
+    if let Some(name) = form.remove("name") { user.name = name; }
+    if let Some(email) = form.remove("email") { user.email = email; }
+    let body = f"updated user {user.id} {user.name} <{user.email}>";
+    store.users.insert(id, user);
+    Ok(Reply { status: 200, body })
+}
+
+fn delete_user(ctx: ref RouteCtx, store: mut ref UserStore) -> Result[Reply, ApiError] {
+    let id = param_id(ctx, "id")?;
+    match store.users.remove(id) {
+        Some(_) => Ok(Reply { status: 204, body: "" }),
+        None => Err(ApiError.NotFound(f"user {id} not found")),
+    }
+}
+
+fn serve_file(ctx: ref RouteCtx, store: mut ref UserStore) -> Result[Reply, ApiError] {
+    let path = ctx.params.get("path").unwrap_or("");
+    if path.is_empty() { return Ok(Reply { status: 200, body: "file index" }); }
+    Ok(Reply { status: 200, body: f"file {path}" })
+}
+
+fn reason(status: i64) -> String {
+    match status {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        409 => "Conflict",
+        501 => "Not Implemented",
+        _ => "Unknown",
+    }
+}
+
+fn pad4(n: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < 4 { s = "0" + s; }
+    s
+}
+
+struct App {
+    router: Router, store: UserStore, chain: Vec[Middleware],
+    log: Vec[String], request_id: String, id_counter: i64,
+}
+
+impl App {
+    fn before(mut ref self, mw: Middleware, req: ref HttpRequest) -> Option[Reply] {
+        match mw {
+            Middleware.RequestId => {
+                self.request_id = match req.header("x-request-id") {
+                    Some(given) => given,
+                    None => {
+                        self.id_counter += 1;
+                        "req-" + pad4(self.id_counter)
+                    }
+                };
+                None
+            }
+            Middleware.Logger => {
+                self.log.push(f"{self.request_id} start {req.method} {req.path}");
+                None
+            }
+            Middleware.Auth => {
+                if req.method.to_uppercase() == "GET" or not req.path.starts_with("/users") {
+                    return None;
+                }
+                let token = req.header("authorization").unwrap_or("");
+                if token == AUTH_TOKEN { return None; }
+                let (status, why) = if token.is_empty() { (401, "missing credentials") } else { (403, "invalid token") };
+                self.log.push(f"{self.request_id} auth denied: {why}");
+                Some(Reply { status, body: why })
+            }
+        }
+    }
+
+    fn after(mut ref self, mw: Middleware, reply: ref Reply) {
+        if mw == Middleware.Logger { self.log.push(f"{self.request_id} end {reply.status}"); }
+    }
+
+    fn dispatch(mut ref self, req: ref HttpRequest) -> Reply {
+        let method = match Method.parse(req.method) {
+            Ok(m) => m,
+            Err(msg) => return Reply { status: 501, body: msg },
+        };
+        match self.router.lookup(method, req.path) {
+            RouteResult.Matched { index, params } => {
+                let handler = self.router.handler_at(index);
+                let ctx = RouteCtx { params, body: req.body.clone() };
+                match handler(ctx, mut self.store) {
+                    Ok(reply) => reply,
+                    Err(e) => e.to_reply(),
+                }
+            }
+            RouteResult.MethodNotAllowed(allowed) => Reply { status: 405, body: f"allowed: {join(allowed, ", ")}" },
+            RouteResult.NotFound => Reply { status: 404, body: f"no route for {req.path}" },
+        }
+    }
+
+    fn handle(mut ref self, req: ref HttpRequest) -> String {
+        let mut ran = 0;
+        let mut early: Option[Reply] = None;
+        while ran < self.chain.len() {
+            let mw = self.chain[ran];
+            ran += 1;
+            if let Some(r) = self.before(mw, req) {
+                early = Some(r);
+                break;
+            }
+        }
+        let reply = if let Some(r) = early { r } else { self.dispatch(req) };
+        while ran > 0 {
+            ran -= 1;
+            let mw = self.chain[ran];
+            self.after(mw, reply);
+        }
+        let mut line = f"[{self.request_id}] {req.method} {req.path} -> {reply.status} {reason(reply.status)}";
+        if not reply.body.is_empty() { line.push_str(f": {reply.body}"); }
+        line
+    }
+}
+
+fn req(method: String, path: String, headers: Vec[(String, String)], body: String) -> HttpRequest {
+    HttpRequest { method, path, headers, body }
+}
+
+fn build_app() -> App {
+    let mut router = Router { routes: Vec.new() };
+    router.add(Method.Get, "/health", health);
+    router.add(Method.Get, "/users", list_users);
+    router.add(Method.Post, "/users", create_user);
+    router.add(Method.Get, "/users/:id", get_user);
+    router.add(Method.Put, "/users/:id", update_user);
+    router.add(Method.Delete, "/users/:id", delete_user);
+    router.add(Method.Get, "/files/*path", serve_file);
+
+    let mut users: Map[i64, User] = Map.new();
+    users.insert(1, User { id: 1, name: "alice", email: "alice@example.com" });
+    users.insert(2, User { id: 2, name: "bob", email: "bob@example.com" });
+    let chain = [Middleware.RequestId, Middleware.Logger, Middleware.Auth];
+    App { router, store: UserStore { users, next_id: 3 }, chain, log: Vec.new(), request_id: "", id_counter: 0 }
+}
+
+fn main() {
+    let mut app = build_app();
+    let ok_auth = ("Authorization", AUTH_TOKEN);
+    let requests = [
+        req("GET", "/health", [], ""),
+        req("GET", "/users", [], ""),
+        req("GET", "/users/1", [], ""),
+        req("GET", "/users/42", [], ""),
+        req("GET", "/users/abc", [], ""),
+        req("POST", "/users", [], "name=carol&email=carol@example.com"),
+        req("POST", "/users", [("authorization", "Bearer wrong")], "name=carol&email=carol@example.com"),
+        req("POST", "/users", [ok_auth.clone()], "name=carol&email=carol@example.com"),
+        req("POST", "/users", [ok_auth.clone()], "name=dave&email=alice@example.com"),
+        req("POST", "/users", [ok_auth.clone()], "name=erin"),
+        req("POST", "/users", [ok_auth.clone()], "name&email"),
+        req("PUT", "/users/2", [ok_auth.clone(), ("Content-Type", "form")], "name=robert"),
+        req("DELETE", "/users/1", [ok_auth.clone(), ("X-Request-Id", "trace-abc")], ""),
+        req("GET", "/users", [], ""),
+        req("DELETE", "/health", [], ""),
+        req("PATCH", "/users/2", [ok_auth], "name=bobby"),
+        req("GET", "/nope", [], ""),
+        req("GET", "/files/docs/guide/intro.md", [], ""),
+        req("GET", "/files", [], ""),
+        req("options", "/health", [], ""),
+    ];
+    for r in requests { println(app.handle(r)); }
+    println("--- log ---");
+    for entry in app.log { println(entry); }
+}

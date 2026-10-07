@@ -1,0 +1,719 @@
+{
+ "cli/config_merge": {
+  "check_clean": true,
+  "clones_by_fix": 6,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 2,
+   "E0500": 3
+  },
+  "draft_workarounds": [
+   "L186/L269/L285 .to_string() on a borrowed for-loop element going into an owned String field (author's type error, not a compiler gap)"
+  ],
+  "fix_rounds": 3,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 389,
+  "program": "cli/config_merge",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": true,
+  "stmt_par_groups": "L345-L346 two fs.write of separate files (app.conf, app.local.conf); L347-L348 two fs.read_to_string of those files"
+ },
+ "cli/csv_report": {
+  "check_clean": true,
+  "clones_by_fix": 3,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 2,
+   "E0500": 1
+  },
+  "draft_workarounds": [
+   "pad_left(f\"{orders}\", 6): an f-string temporary passed straight to a ref String param double-frees under build; .to_string() instead",
+   "L297 current = t.region.clone(): the copy out of a borrowed for element double-frees under build without it (also what v2 requires)",
+   "*p on a Map.get result rejected (the spec says Option[ref V]); dropped the *"
+  ],
+  "fix_rounds": 2,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 398,
+  "program": "cli/csv_report",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": false,
+  "stmt_par_groups": ""
+ },
+ "cli/log_summarizer": {
+  "check_clean": true,
+  "clones_by_fix": 0,
+  "clones_by_hand": 3,
+  "derive_copy_by_hand": 1,
+  "draft_errors": {
+   "E0200": 3,
+   "E0500": 1,
+   "E0515": 1
+  },
+  "draft_workarounds": [
+   "L222 or_insert_with(Vec.new) rejected (associated fn as a value); written as a closure",
+   "L221 insert(key, ..) then entry(key) builds with a warning and reads a freed String under build; cloned key",
+   "L125/L147/L151/L155 .clone() on Vec[String] index reads (E_INDEX_MOVE_NON_COPY)"
+  ],
+  "fix_refused": "karac fix refused the whole batch: its fix for the E0500 on a unit-variant pattern inserts `ref ` before the pattern (`ref Level.Error =>`), which does not parse, so the good .clone() fixes were not applied either (L128)",
+  "fix_rounds": 1,
+  "fix_would_clone": 3,
+  "hand_edits": [
+   "L8 #[derive(Copy)] on fieldless enum Level: 'match level' moved it, then it was used again (E0500)",
+   "L130 spec.errors[i] -> .clone(): a String taken out of a Vec element as a match-arm value (E0515)",
+   "L225 entry.message -> .clone(): Map key taken from a borrowed for element (E0200)",
+   "L233 message -> .clone(): Map key from a borrowed map walk moved into a struct (E0200)",
+   "L241 'for r in ranks' -> '.into_iter()': each element moved into another Vec (E0200)"
+  ],
+  "hand_lines_changed": 9,
+  "into_iter_by_hand": 1,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 344,
+  "program": "cli/log_summarizer",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": true,
+  "stmt_par_groups": "L324-L326 three fs.write of separate log files; L328-L330 three fs.read_to_string; L332-L334 three parses, one per file"
+ },
+ "cli/text_diff": {
+  "check_clean": true,
+  "clones_by_fix": 12,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 1,
+  "draft_errors": {
+   "E0200": 8,
+   "E0515": 5
+  },
+  "draft_workarounds": [
+   "ref edits[k] where an index read by value was rejected (E_INDEX_MOVE_NON_COPY)"
+  ],
+  "fix_rounds": 2,
+  "hand_edits": [
+   "L8 #[derive(Copy)] on the fieldless enum EditKind: copying e.kind out of a borrowed Edit (E0200); karac fix offers no fix for it"
+  ],
+  "hand_lines_changed": 1,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 308,
+  "program": "cli/text_diff",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": false
+ },
+ "cli/todo_store": {
+  "check_clean": true,
+  "clones_by_fix": 0,
+  "clones_by_hand": 2,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 2,
+   "E0500": 1
+  },
+  "draft_workarounds": [
+   "shared enum Filter: Command.List(Filter) rejected (E_ENUM_NESTED_ENUM_PAYLOAD), and shared is what the diagnostic suggests",
+   "let op = words[0].clone() (E_INDEX_MOVE_NON_COPY on the by-value read)"
+  ],
+  "fix_refused": "karac fix refused the whole batch: its fix for the E0500 on a unit-variant pattern inserts `ref ` before the pattern (`if let ref Command.Undo = cmd`), which does not parse, so the good .clone() fixes were not applied either (L336)",
+  "fix_rounds": 1,
+  "fix_would_clone": 2,
+  "hand_edits": [
+   "L240 line.clone(): a borrowed for element moved into an Err payload inside return (E0200); karac fix left it",
+   "L353 tag.clone(): a borrowed for element moved into a map key (E0200); karac fix left it",
+   "L336 let cmd = match cmd { Command.Undo => return undo_last(), other => other }: the checker treats if let Command.Undo = cmd (a unit variant, no bindings) as a move of cmd (E0500, a false positive), and ref cmd is not supported (E_REF_OPERAND_UNSUPPORTED)"
+  ],
+  "hand_lines_changed": 6,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "differs (ran, exit -6, 0 vs 2456 bytes)",
+   "legacy-interp": "agrees"
+  },
+  "legacy_note": "legacy build double-frees on the hand edit at L336 (let cmd = match cmd { Command.Undo => return .., other => other }); interp agrees",
+  "lines": 395,
+  "program": "cli/todo_store",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 1,
+  "stmt_par": true,
+  "stmt_par_groups": "L328-L329 fs.write of the store and of the undo file in undo_last; L375-L376 the same pair in main"
+ },
+ "cli/word_freq_multi": {
+  "check_clean": true,
+  "clones_by_fix": 2,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 2
+  },
+  "draft_workarounds": [
+   "FreqTable.top: Vec.sort() ignored a user Ord impl on WordCount on BOTH backends (sorted by field order); sorts (-count, word) tuples instead",
+   "match fs.write(..) { Ok(()) => .. } is non-exhaustive (the unit pattern does not cover ()); Ok(_)",
+   "*c on a Map.get result and *count on a map-walk value rejected (the spec says ref V); dropped the *"
+  ],
+  "fix_rounds": 2,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 264,
+  "program": "cli/word_freq_multi",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": true,
+  "stmt_par_groups": "L238-L242 five fs.read_to_string, one per text file"
+ },
+ "graph/dep_resolver": {
+  "check_clean": true,
+  "clones_by_fix": 12,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 7,
+   "E0500": 2,
+   "E0515": 1
+  },
+  "draft_workarounds": [
+   "Registry folded into Resolver: self.registry.releases[i] fails build (chained_field_receiver), and a ref-returning accessor is rejected (borrow-return form not yet supported)",
+   "let rel = ref self.releases[i] and parse(text: ref String) where an index read by value was rejected (E_INDEX_MOVE_NON_COPY)"
+  ],
+  "fix_rounds": 4,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 373,
+  "program": "graph/dep_resolver",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": true,
+  "stmt_par_groups": "L332-L335 four fs.write, each to its own manifest file"
+ },
+ "graph/doc_tree": {
+  "check_clean": true,
+  "clones_by_fix": 2,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0500": 1,
+   "E0515": 1
+  },
+  "draft_workarounds": [
+   "L268 let node = ref self.nodes[id] (E_INDEX_MOVE_NON_COPY on the by-value read)"
+  ],
+  "fix_rounds": 2,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 399,
+  "program": "graph/doc_tree",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": false
+ },
+ "graph/entity_system": {
+  "check_clean": true,
+  "clones_by_fix": 0,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {},
+  "draft_workarounds": [
+   "self.weapons[i].unwrap().range on a Vec[Option[4-field Copy struct]] double-frees under build; match instead",
+   "self.weapons[i] = t.weapon (an Option[Copy struct] field) leaves the slot dangling under build; if let Some(w) .. = Some(w)",
+   "for Hit { attacker, target, amount } in hits: codegen has no handler for methods on the destructured binding; destructure inside the loop"
+  ],
+  "fix_rounds": 1,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 398,
+  "program": "graph/entity_system",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": false,
+  "stmt_par_groups": ""
+ },
+ "graph/lru_cache": {
+  "check_clean": true,
+  "clones_by_fix": 9,
+  "clones_by_hand": -1,
+  "derive_copy_by_hand": 2,
+  "draft_errors": {
+   "E0200": 6,
+   "E0500": 5
+  },
+  "draft_workarounds": [
+   "L242/L244/L250 .clone() on words[i] (E_INDEX_MOVE_NON_COPY on the by-value read)"
+  ],
+  "fix_rounds": 2,
+  "hand_edits": [
+   "L13 #[derive(Copy)] on fieldless enum EvictReason: 'reason' passed by value inside a listener loop (E0500)",
+   "L60 #[derive(Copy)] on Stats (six i64): 'let s = cache.stats' moved the field out of cache (E0500); 'let s = ref cache.stats' is the natural fix but borrowing a field is not implemented yet (E_REF_OPERAND_UNSUPPORTED)",
+   "L321 removed a second .clone() that karac fix added: k.clone().clone(), two identical edits at 321:45 in its first round"
+  ],
+  "hand_lines_changed": 4,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 355,
+  "program": "graph/lru_cache",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 1,
+  "stmt_par": true,
+  "stmt_par_groups": "L344-L345 two fs.write of separate files; L347-L348 two fs.read_to_string of those files"
+ },
+ "graph/observer_list": {
+  "check_clean": true,
+  "clones_by_fix": 3,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 2,
+   "E0500": 1
+  },
+  "draft_workarounds": [
+   "Vec.remove_first(pred), listed in the spec, is missing (no method 'remove_first'); index loop + remove(i)",
+   "*i on a Map.get result rejected (the spec says Option[ref V]); dropped the *"
+  ],
+  "fix_rounds": 2,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 396,
+  "program": "graph/observer_list",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": false,
+  "stmt_par_groups": ""
+ },
+ "graph/undo_history": {
+  "check_clean": true,
+  "clones_by_fix": 7,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 4,
+   "E0500": 3
+  },
+  "draft_workarounds": [
+   "Step.Do(Command) rejected (E_ENUM_NESTED_ENUM_PAYLOAD); shared enum Command, the diagnostic's suggestion, segfaults or panics codegen under build, so Step.Do wraps a struct Request",
+   "editor.buffer.text.len() fails build (chained_field_receiver); bound to a local first",
+   "let e = ref batch.edits[i] (E_INDEX_MOVE_NON_COPY on the by-value read)"
+  ],
+  "fix_rounds": 4,
+  "hand_edits": [
+   "L328 script().into_iter(): the loop consumes each Step by value (E0200 on the bare for element); karac fix offers no fix for this"
+  ],
+  "hand_lines_changed": 2,
+  "into_iter_by_hand": 1,
+  "legacy": {
+   "legacy-build": "differs (ran, exit -6, 0 vs 1981 bytes)",
+   "legacy-interp": "agrees"
+  },
+  "legacy_note": "legacy build double-frees on karac fix's `text: ref text` + .clone() in the second match on an owned cmd (L132/L134); interp agrees",
+  "lines": 346,
+  "program": "graph/undo_history",
+  "refs_by_fix": 4,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": false,
+  "stmt_par_groups": ""
+ },
+ "pipeline/etl_orders": {
+  "check_clean": true,
+  "clones_by_fix": 2,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 3
+  },
+  "draft_workarounds": [],
+  "fix_rounds": 2,
+  "hand_edits": [
+   "L295 'for c in customers' -> 'customers.into_iter()': the loop moves each Customer into a Map (E0200)"
+  ],
+  "hand_lines_changed": 2,
+  "into_iter_by_hand": 1,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 345,
+  "program": "pipeline/etl_orders",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": true,
+  "stmt_par_groups": "L285-L286 two fs.write of separate files; L288-L289 load_orders / load_customers, each a read_to_string + parse of its own file"
+ },
+ "pipeline/invoice_pipeline": {
+  "check_clean": true,
+  "clones_by_fix": 12,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 1,
+  "draft_errors": {
+   "E0200": 7,
+   "E0500": 2,
+   "E0515": 4
+  },
+  "draft_workarounds": [
+   "E_INDEX_MOVE_NON_COPY on f[i] passed to owned-String parse helpers (9 sites); helpers take ref String. The same index reads as struct-literal fields were NOT rejected",
+   "a multi-line string literal fails codegen (no handler for MultiStringLit); input built with push_str per record",
+   "*v on a SortedMap.get result rejected (the spec says Option[ref V]); dropped the *"
+  ],
+  "fix_rounds": 2,
+  "hand_edits": [
+   "L6 #[derive(Copy)] on the fieldless enum Currency: order.currency copied out of a borrowed Order into the Invoice (E0200, 'this type has no .clone()'); karac fix offers no fix"
+  ],
+  "hand_lines_changed": 1,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 401,
+  "program": "pipeline/invoice_pipeline",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": false,
+  "stmt_par_groups": ""
+ },
+ "pipeline/join_dedupe": {
+  "check_clean": true,
+  "clones_by_fix": 1,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 1
+  },
+  "draft_workarounds": [
+   "let (crm, merged) = dedupe(..) with a SortedMap in the tuple fails build (no handler for method 'len' on a tuple-destructured SortedMap); reads .0/.1 instead",
+   "generic dedupe[T: Record] MISCOMPILED under build (a local SortedMap[String, T] in a generic fn returns a wrong value from get); split into two concrete functions"
+  ],
+  "fix_rounds": 2,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 379,
+  "program": "pipeline/join_dedupe",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": true,
+  "stmt_par_groups": "L293-L294 two fs.write of separate files; L300-L301 two fs.read_to_string of those files"
+ },
+ "pipeline/schema_transform": {
+  "check_clean": true,
+  "clones_by_fix": 0,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {},
+  "draft_workarounds": [
+   "enum named Json (prelude shadow) panicked codegen (stmts.rs StructValue vs PointerValue); renamed JsonValue",
+   "match on a ref shared-enum binding the Obj map, then obj.get(..): codegen has no handler for get; split into migrate + transform(obj: ref SortedMap)",
+   "for (i, raw) in v1_records().iter().enumerate() not lowered in codegen; bound records first",
+   "a closure returning a shared-enum value fails LLVM verification; inline match instead",
+   "? on Result[char, E] then s.push(c) fails LLVM verification (char loaded as i64); helper pushes into a mut ref String",
+   "for t in tags (SortedSet[String]) by value pushing into an enum payload printed garbage / double-freed under build; tags.iter() + t.clone()"
+  ],
+  "fix_rounds": 1,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 397,
+  "program": "pipeline/schema_transform",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 1,
+  "stmt_par": false,
+  "stmt_par_groups": ""
+ },
+ "pipeline/sensor_merge": {
+  "check_clean": true,
+  "clones_by_fix": 0,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {},
+  "draft_workarounds": [],
+  "fix_rounds": 1,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 335,
+  "program": "pipeline/sensor_merge",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": true,
+  "stmt_par_groups": "L302-L304 three fs.write, one per sensor file; L310-L312 three fs.read_to_string of those files"
+ },
+ "pipeline/windowed_stats": {
+  "check_clean": true,
+  "clones_by_fix": 0,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {},
+  "draft_workarounds": [
+   "Map.entry(k).or_insert(v).method() with a mut ref self method loses the update under build; remove-then-insert instead",
+   "ref-param pass of a Map struct field corrupts the field under build (garbage len, segfault at exit); pipeline destructured first",
+   "let st = ref windows[k] over a Map element fails codegen, though E_INDEX_MOVE_NON_COPY suggests it; match windows.get(k) instead"
+  ],
+  "fix_rounds": 1,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 397,
+  "program": "pipeline/windowed_stats",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": true,
+  "stmt_par_groups": "L332-L334 three fs.write, one feed file each; L336-L338 three fs.read_to_string of those files"
+ },
+ "service/http_router": {
+  "check_clean": true,
+  "clones_by_fix": 8,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 2,
+   "E0500": 1
+  },
+  "draft_workarounds": [
+   "Fn value in an enum payload panics codegen (closures.rs compile_closure_call); Matched carries a route index",
+   "self.router.routes[i].handler fails build (chained_field_receiver); accessor method",
+   "user struct Request with a header method was silently wrong under interp (prelude_shadow only warns); renamed HttpRequest",
+   "handler(ctx, self.store) in a mut ref self method demands a call-site mut marker, which the spec says is not needed"
+  ],
+  "fix_rounds": 7,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 399,
+  "program": "service/http_router",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": false
+ },
+ "service/job_queue": {
+  "check_clean": true,
+  "clones_by_fix": 0,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 2
+  },
+  "draft_workarounds": [
+   "L222 `let mut job = job` in a match arm emptied the String under build (same-name rebind); renamed to claimed",
+   "L112/L117 let cand = ref self.pending[i] (E_INDEX_MOVE_NON_COPY)"
+  ],
+  "fix_rounds": 1,
+  "hand_edits": [
+   "L257 'for job in seed_jobs()' -> '.into_iter()': each job is moved into the queue (E0200)",
+   "L274 'for slot in [o1, o2, o3]' -> '.into_iter()': each outcome is moved into settle (E0200)"
+  ],
+  "hand_lines_changed": 6,
+  "into_iter_by_hand": 3,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 342,
+  "program": "service/job_queue",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": true,
+  "stmt_par_groups": "L269-L271 three run_worker calls, each one call_remote standing in as sleep_ms(2); the take_next selections before them are sequential"
+ },
+ "service/profile_aggregator": {
+  "check_clean": true,
+  "clones_by_fix": 4,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 4
+  },
+  "draft_workarounds": [
+   "Set[108] prefix collection literal fails codegen (no handler for PrefixCollectionLiteral); Set.new() + insert",
+   "or_insert_with(Vec.new), the form design.md shows, rejected (associated fn as a value); closure",
+   "a let-bound Result[Vec[String], E] moved into a by-value param double-frees under build when E has a two-String variant; merge inlined",
+   "parts[0].clone() (E_INDEX_MOVE_NON_COPY on the by-value read)"
+  ],
+  "fix_rounds": 2,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 399,
+  "program": "service/profile_aggregator",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": true,
+  "stmt_par_groups": "L257-L259 three backend fetches (accounts, orders, recs), each sleep_ms(3) plus a map lookup"
+ },
+ "service/pubsub_broker": {
+  "check_clean": true,
+  "clones_by_fix": 1,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0500": 1
+  },
+  "draft_workarounds": [
+   "a method call passing msg.topic to a ref String param inside a for loop frees the field under build (double free); matches on the topic local before building Message",
+   "a multi-line string literal fails codegen (MultiStringLit); Vec of literals",
+   "let mut evicted = None assigned later from pop_front: cannot infer T; annotated Option[Message]"
+  ],
+  "fix_rounds": 2,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 400,
+  "program": "service/pubsub_broker",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": false,
+  "stmt_par_groups": ""
+ },
+ "service/rate_limiter": {
+  "check_clean": true,
+  "clones_by_fix": 4,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {
+   "E0200": 3,
+   "E0500": 1
+  },
+  "draft_workarounds": [
+   "Decision.Throttle(Reason) rejected (E_ENUM_NESTED_ENUM_PAYLOAD); reasons folded into Decision",
+   "entry(k).or_insert(struct) as mut ref V fails codegen (no handler / field not recorded) or segfaults when chained; take-out/put-back with remove + insert",
+   "self.policy_for(req.route) on a ref Request double-frees at exit under build; lookup inlined into handle",
+   "let s = ref self.clients[id] (the E_INDEX_MOVE_NON_COPY suggestion) fails in interp for a Map element; let Some(s) = self.clients.get(id) else .."
+  ],
+  "fix_note": "L365 karac fix cloned a const: `const LOG_PATH: String` used twice is reported as use-after-move (E0500), a false positive since a const is not a moved binding",
+  "fix_rounds": 2,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "differs (refused, exit 1, 0 vs 4466 bytes)",
+   "legacy-interp": "agrees"
+  },
+  "legacy_note": "legacy build refuses LOG_PATH.clone() on a const String (codegen: Vec/String method 'clone' is not yet supported), the clone karac fix added at L365",
+  "lines": 399,
+  "program": "service/rate_limiter",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 0,
+  "stmt_par": false,
+  "stmt_par_groups": ""
+ },
+ "service/session_store": {
+  "check_clean": true,
+  "clones_by_fix": 0,
+  "clones_by_hand": 0,
+  "derive_copy_by_hand": 0,
+  "draft_errors": {},
+  "draft_workarounds": [
+   "shared enum Expiry and shared enum TokenRef: a plain enum as another enum's payload is rejected (E_ENUM_NESTED_ENUM_PAYLOAD), and shared is the diagnostic's suggestion",
+   "L354 match out.evicted inside Ok(out) => double-freed the evicted token under build (interp right); destructured LoginOutcome { token, evicted } in the arm instead",
+   "L118 (c as u32) as i64: i64 + u32 arithmetic rejected although the spec lists u32 -> i64 as an implicit widening"
+  ],
+  "fix_rounds": 1,
+  "hand_edits": [],
+  "hand_lines_changed": 0,
+  "into_iter_by_hand": 0,
+  "legacy": {
+   "legacy-build": "agrees",
+   "legacy-interp": "agrees"
+  },
+  "lines": 399,
+  "program": "service/session_store",
+  "refs_by_fix": 0,
+  "refs_by_hand": 0,
+  "shared_types": 2,
+  "stmt_par": false,
+  "stmt_par_groups": ""
+ }
+}

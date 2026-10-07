@@ -1,0 +1,79 @@
+[01] insert@0 "Hello world"
+     |Hello world|
+[02] insert@5 ","
+     |Hello, world|
+[03] replace@7+5 "Kara"
+     |Hello, Kara|
+[04] begin group "decorate"
+     |Hello, Kara|
+[05] insert@11 "!"
+     |Hello, Kara!|
+[06] insert@0 ">> "
+     |>> Hello, Kara!|
+[07] end group (2 edits)
+     |>> Hello, Kara!|
+[08] undo [decorate]
+     |Hello, Kara|
+[09] undo [replace@7+5 "Kara"]
+     |Hello, world|
+[10] redo [replace@7+5 "Kara"]
+     |Hello, Kara|
+[11] delete@0+7 (discarded 1 redo)
+     |Kara|
+[12] error: nothing to redo
+     |Kara|
+[13] error: range 10..13 out of bounds for buffer of size 4
+     |Kara|
+[14] insert@4 " rocks"
+     |Kara rocks|
+[15] begin group "shout"
+     |Kara rocks|
+[16] replace@0+4 "KARA"
+     |KARA rocks|
+[17] error: cannot undo/redo while group "shout" is open
+     |KARA rocks|
+[18] error: group "shout" is already open
+     |KARA rocks|
+[19] replace@5+5 "ROCKS"
+     |KARA ROCKS|
+[20] end group (2 edits)
+     |KARA ROCKS|
+[21] error: no group is open
+     |KARA ROCKS|
+[22] begin group "nothing"
+     |KARA ROCKS|
+[23] error: group "nothing" recorded no edits
+     |KARA ROCKS|
+[24] undo [shout]
+     |Kara rocks|
+[25] undo [insert@4 " rocks"]
+     |Kara|
+[26] undo [delete@0+7]
+     |Hello, Kara|
+[27] undo [replace@7+5 "Kara"]
+     |Hello, world|
+[28] undo [insert@5 ","]
+     |Hello world|
+[29] undo [insert@0 "Hello world"]
+     ||
+[30] error: nothing to undo
+     ||
+[31] redo [insert@0 "Hello world"]
+     |Hello world|
+[32] redo [insert@5 ","]
+     |Hello, world|
+[33] redo [replace@7+5 "Kara"]
+     |Hello, Kara|
+[34] replace@0+5 "Howdy" (discarded 3 redo)
+     |Howdy, Kara|
+[35] error: nothing to redo
+     |Howdy, Kara|
+[36] undo [replace@0+5 "Howdy"]
+     |Hello, Kara|
+[37] redo [replace@0+5 "Howdy"]
+     |Howdy, Kara|
+--- summary ---
+final buffer: "Howdy, Kara" (11 bytes)
+undo stack: replace@0+5 "Howdy" | replace@7+5 "Kara" | insert@5 "," | insert@0 "Hello world"
+redo stack: (empty)
+applied=10 undone=9 redone=5 discarded=4 errors=8

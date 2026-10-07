@@ -1,0 +1,63 @@
+[req-0001] GET /health -> 200 OK: ok (2 users)
+[req-0002] GET /users -> 200 OK: users: 1:alice,2:bob
+[req-0003] GET /users/1 -> 200 OK: user 1 alice <alice@example.com>
+[req-0004] GET /users/42 -> 404 Not Found: user 42 not found
+[req-0005] GET /users/abc -> 400 Bad Request: invalid id 'abc'
+[req-0006] POST /users -> 401 Unauthorized: missing credentials
+[req-0007] POST /users -> 403 Forbidden: invalid token
+[req-0008] POST /users -> 201 Created: created user 3 carol
+[req-0009] POST /users -> 409 Conflict: email alice@example.com already used by user 1
+[req-0010] POST /users -> 400 Bad Request: missing field 'email'
+[req-0011] POST /users -> 400 Bad Request: malformed field 'name'
+[req-0012] PUT /users/2 -> 200 OK: updated user 2 robert <bob@example.com>
+[trace-abc] DELETE /users/1 -> 204 No Content
+[req-0013] GET /users -> 200 OK: users: 2:robert,3:carol
+[req-0014] DELETE /health -> 405 Method Not Allowed: allowed: GET
+[req-0015] PATCH /users/2 -> 405 Method Not Allowed: allowed: GET, PUT, DELETE
+[req-0016] GET /nope -> 404 Not Found: no route for /nope
+[req-0017] GET /files/docs/guide/intro.md -> 200 OK: file docs/guide/intro.md
+[req-0018] GET /files -> 200 OK: file index
+[req-0019] options /health -> 501 Not Implemented: method options not supported
+--- log ---
+req-0001 start GET /health
+req-0001 end 200
+req-0002 start GET /users
+req-0002 end 200
+req-0003 start GET /users/1
+req-0003 end 200
+req-0004 start GET /users/42
+req-0004 end 404
+req-0005 start GET /users/abc
+req-0005 end 400
+req-0006 start POST /users
+req-0006 auth denied: missing credentials
+req-0006 end 401
+req-0007 start POST /users
+req-0007 auth denied: invalid token
+req-0007 end 403
+req-0008 start POST /users
+req-0008 end 201
+req-0009 start POST /users
+req-0009 end 409
+req-0010 start POST /users
+req-0010 end 400
+req-0011 start POST /users
+req-0011 end 400
+req-0012 start PUT /users/2
+req-0012 end 200
+trace-abc start DELETE /users/1
+trace-abc end 204
+req-0013 start GET /users
+req-0013 end 200
+req-0014 start DELETE /health
+req-0014 end 405
+req-0015 start PATCH /users/2
+req-0015 end 405
+req-0016 start GET /nope
+req-0016 end 404
+req-0017 start GET /files/docs/guide/intro.md
+req-0017 end 200
+req-0018 start GET /files
+req-0018 end 200
+req-0019 start options /health
+req-0019 end 501

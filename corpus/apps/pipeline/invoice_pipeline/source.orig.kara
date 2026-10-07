@@ -1,0 +1,400 @@
+// Invoice pipeline: raw order lines -> priced invoices -> ledger summary.
+// All money is integer minor units (cents for USD/EUR, yen for JPY).
+
+enum Category { Grocery, Clothing, Electronics, Books, Services }
+enum Region { NorthEast, West, South, Export }
+enum Currency { Usd, Eur, Jpy }
+enum Discount { NoDiscount, Percent(i64), BuyNGetOne(i64) }
+
+enum PipelineError {
+    BadRecord(i64, String),
+    BadNumber(i64, String),
+    UnknownCategory(i64, String),
+    UnknownRegion(i64, String),
+    UnknownCurrency(i64, String),
+    ItemWithoutOrder(i64),
+    NoTaxRule(String, String),
+}
+
+impl Display for PipelineError {
+    fn to_string(ref self) -> String {
+        match self {
+            PipelineError.BadRecord(line, kind) => f"line {line}: malformed {kind} record",
+            PipelineError.BadNumber(line, text) => f"line {line}: '{text}' is not a valid number",
+            PipelineError.UnknownCategory(line, c) => f"line {line}: unknown category '{c}'",
+            PipelineError.UnknownRegion(line, r) => f"line {line}: unknown region '{r}'",
+            PipelineError.UnknownCurrency(line, c) => f"line {line}: unknown currency '{c}'",
+            PipelineError.ItemWithoutOrder(line) => f"line {line}: ITEM before any ORDER",
+            PipelineError.NoTaxRule(cat, region) => f"no tax rule for {cat} shipped to {region}",
+        }
+    }
+}
+
+struct LineItem {
+    sku: String, description: String, category: Category,
+    unit_price: i64, quantity: i64, discount: Discount,
+}
+
+struct Order {
+    id: String, customer: String, region: Region,
+    currency: Currency, items: Vec[LineItem],
+}
+
+struct PricedLine {
+    sku: String, description: String, quantity: i64, gross: i64,
+    discount: i64, net: i64, tax: i64, tax_bps: i64,
+}
+
+struct Invoice {
+    order_id: String, customer: String, region_name: String,
+    currency: Currency, lines: Vec[PricedLine], subtotal: i64,
+    discount_total: i64, tax_total: i64, total: i64,
+}
+
+fn category_name(c: ref Category) -> String {
+    match c {
+        Category.Grocery => "grocery",
+        Category.Clothing => "clothing",
+        Category.Electronics => "electronics",
+        Category.Books => "books",
+        Category.Services => "services",
+    }
+}
+
+fn region_name(r: ref Region) -> String {
+    match r {
+        Region.NorthEast => "NE",
+        Region.West => "WEST",
+        Region.South => "SOUTH",
+        Region.Export => "EXPORT",
+    }
+}
+
+fn currency_code(c: ref Currency) -> String {
+    match c {
+        Currency.Usd => "USD",
+        Currency.Eur => "EUR",
+        Currency.Jpy => "JPY",
+    }
+}
+
+fn parse_category(line: i64, s: ref String) -> Result[Category, PipelineError] {
+    match s {
+        "grocery" => Ok(Category.Grocery),
+        "clothing" => Ok(Category.Clothing),
+        "electronics" => Ok(Category.Electronics),
+        "books" => Ok(Category.Books),
+        "services" => Ok(Category.Services),
+        _ => Err(PipelineError.UnknownCategory(line, s.clone())),
+    }
+}
+
+fn parse_region(line: i64, s: ref String) -> Result[Region, PipelineError] {
+    match s {
+        "NE" => Ok(Region.NorthEast),
+        "WEST" => Ok(Region.West),
+        "SOUTH" => Ok(Region.South),
+        "EXPORT" => Ok(Region.Export),
+        _ => Err(PipelineError.UnknownRegion(line, s.clone())),
+    }
+}
+
+fn parse_currency(line: i64, s: ref String) -> Result[Currency, PipelineError] {
+    match s {
+        "USD" => Ok(Currency.Usd),
+        "EUR" => Ok(Currency.Eur),
+        "JPY" => Ok(Currency.Jpy),
+        _ => Err(PipelineError.UnknownCurrency(line, s.clone())),
+    }
+}
+
+fn parse_int(line: i64, s: ref String) -> Result[i64, PipelineError] {
+    match i64.parse(s.trim()) {
+        Some(n) if n >= 0 => Ok(n),
+        _ => Err(PipelineError.BadNumber(line, s.clone())),
+    }
+}
+
+fn parse_discount(line: i64, s: ref String) -> Result[Discount, PipelineError] {
+    if s == "none" {
+        return Ok(Discount.NoDiscount);
+    }
+    let parts = s.split(":");
+    if parts.len() != 2 {
+        return Err(PipelineError.BadRecord(line, "discount"));
+    }
+    let amount = parse_int(line, parts[1])?;
+    if parts[0] == "pct" {
+        Ok(Discount.Percent(amount))
+    } else if parts[0] == "bogo" {
+        Ok(Discount.BuyNGetOne(amount))
+    } else {
+        Err(PipelineError.BadRecord(line, "discount"))
+    }
+}
+
+// Tax rate in basis points (1/100 of a percent) by category and region.
+fn tax_rate_bps(cat: ref Category, region: ref Region) -> Result[i64, PipelineError] {
+    match (region, cat) {
+        (Region.Export, Category.Services) => Err(PipelineError.NoTaxRule(category_name(cat), region_name(region))),
+        (Region.Export, _) => Ok(0),
+        (Region.NorthEast, Category.Grocery) => Ok(0),
+        (Region.NorthEast, Category.Clothing) => Ok(400),
+        (Region.NorthEast, Category.Books) => Ok(250),
+        (Region.NorthEast, _) => Ok(888),
+        (Region.West, Category.Grocery) => Ok(125),
+        (Region.West, Category.Services) => Ok(500),
+        (Region.West, _) => Ok(925),
+        (Region.South, Category.Grocery) => Ok(300),
+        (Region.South, Category.Books) => Ok(0),
+        (Region.South, _) => Ok(700),
+    }
+}
+
+// Round a non-negative ratio to the nearest integer, halves going up.
+fn round_div(numer: i64, denom: i64) -> i64 {
+    (numer * 2 + denom) / (denom * 2)
+}
+
+fn price_line(item: ref LineItem, region: ref Region) -> Result[PricedLine, PipelineError] {
+    let gross = item.unit_price * item.quantity;
+    let discount = match item.discount {
+        Discount.NoDiscount => 0,
+        Discount.Percent(pct) => round_div(gross * pct, 100),
+        Discount.BuyNGetOne(n) => (item.quantity / (n + 1)) * item.unit_price,
+    };
+    let net = gross - discount;
+    let bps = tax_rate_bps(item.category, region)?;
+    let tax = round_div(net * bps, 10000);
+    Ok(PricedLine {
+        sku: item.sku,
+        description: item.description,
+        quantity: item.quantity,
+        gross, discount, net, tax,
+        tax_bps: bps,
+    })
+}
+
+fn build_invoice(order: ref Order) -> Result[Invoice, PipelineError] {
+    let mut lines: Vec[PricedLine] = Vec.new();
+    let mut subtotal = 0;
+    let mut discount_total = 0;
+    let mut tax_total = 0;
+    for item in order.items {
+        let priced = price_line(item, order.region)?;
+        subtotal = subtotal + priced.gross;
+        discount_total = discount_total + priced.discount;
+        tax_total = tax_total + priced.tax;
+        lines.push(priced);
+    }
+    Ok(Invoice {
+        order_id: order.id,
+        customer: order.customer,
+        region_name: region_name(order.region),
+        currency: order.currency,
+        lines, subtotal, discount_total, tax_total,
+        total: subtotal - discount_total + tax_total,
+    })
+}
+
+fn pad3(n: i64) -> String {
+    let s = n.to_string();
+    if n < 10 { f"00{s}" } else if n < 100 { f"0{s}" } else { s }
+}
+
+fn group_thousands(n: i64, sep: String) -> String {
+    if n < 1000 {
+        return n.to_string();
+    }
+    group_thousands(n / 1000, sep) + sep + pad3(n % 1000)
+}
+
+fn format_money(amount: i64, currency: ref Currency) -> String {
+    let sign = if amount < 0 { "-" } else { "" };
+    let abs = if amount < 0 { 0 - amount } else { amount };
+    let cents = abs % 100;
+    let pad = if cents < 10 { "0" } else { "" };
+    match currency {
+        Currency.Usd => f"{sign}${group_thousands(abs / 100, ",")}.{pad}{cents}",
+        Currency.Eur => f"{sign}{group_thousands(abs / 100, ".")},{pad}{cents} EUR",
+        Currency.Jpy => f"{sign}JPY {group_thousands(abs, ",")}",
+    }
+}
+
+fn format_rate(bps: i64) -> String {
+    let frac = bps % 100;
+    let pad = if frac < 10 { "0" } else { "" };
+    f"{bps / 100}.{pad}{frac}%"
+}
+
+fn pad_left(s: String, width: i64) -> String {
+    let mut out = String.new();
+    for _ in s.len()..width {
+        out.push(' ');
+    }
+    out.push_str(s);
+    out
+}
+
+fn pad_right(s: String, width: i64) -> String {
+    let mut out = s;
+    while out.len() < width {
+        out.push(' ');
+    }
+    out
+}
+
+fn print_invoice(inv: ref Invoice) {
+    println(f"=== Invoice {inv.order_id} ===");
+    println(f"Customer: {inv.customer}   Region: {inv.region_name}   Currency: {currency_code(inv.currency)}");
+    for line in inv.lines {
+        let label = pad_right(f"{line.sku} {line.description}", 28);
+        let qty = pad_left(f"x{line.quantity}", 5);
+        let net = pad_left(format_money(line.net, inv.currency), 16);
+        let tax = pad_left(format_money(line.tax, inv.currency), 14);
+        println(f"  {label}{qty}{net}  tax {format_rate(line.tax_bps)}{tax}");
+        if line.discount > 0 {
+            println(f"      discount {format_money(0 - line.discount, inv.currency)}");
+        }
+    }
+    println(f"  Subtotal: {pad_left(format_money(inv.subtotal, inv.currency), 18)}");
+    println(f"  Discount: {pad_left(format_money(0 - inv.discount_total, inv.currency), 18)}");
+    println(f"  Tax:      {pad_left(format_money(inv.tax_total, inv.currency), 18)}");
+    println(f"  TOTAL:    {pad_left(format_money(inv.total, inv.currency), 18)}");
+    println("");
+}
+
+fn parse_orders(text: String, rejects: mut ref Vec[String]) -> Vec[Order] {
+    let mut orders: Vec[Order] = Vec.new();
+    let mut line_no = 0;
+    for raw in text.split("\n") {
+        line_no = line_no + 1;
+        let line = raw.trim();
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        match parse_record(line_no, line, mut orders) {
+            Ok(()) => {}
+            Err(e) => rejects.push(e.to_string()),
+        }
+    }
+    orders
+}
+
+fn parse_record(line_no: i64, line: String, orders: mut ref Vec[Order]) -> Result[(), PipelineError] {
+    let f = line.split("|");
+    if f[0] == "ORDER" {
+        if f.len() != 5 {
+            return Err(PipelineError.BadRecord(line_no, "ORDER"));
+        }
+        let region = parse_region(line_no, f[3])?;
+        let currency = parse_currency(line_no, f[4])?;
+        orders.push(Order { id: f[1], customer: f[2], region, currency, items: Vec.new() });
+        return Ok(());
+    }
+    if f[0] != "ITEM" or f.len() != 7 {
+        return Err(PipelineError.BadRecord(line_no, f[0].clone()));
+    }
+    if orders.is_empty() {
+        return Err(PipelineError.ItemWithoutOrder(line_no));
+    }
+    let item = LineItem {
+        sku: f[1],
+        description: f[2],
+        category: parse_category(line_no, f[3])?,
+        unit_price: parse_int(line_no, f[4])?,
+        quantity: parse_int(line_no, f[5])?,
+        discount: parse_discount(line_no, f[6])?,
+    };
+    let last = orders.len() - 1;
+    orders[last].items.push(item);
+    Ok(())
+}
+
+fn input_text() -> String {
+    let mut s = String.new();
+    s.push_str("# kind|fields...\n");
+    s.push_str("ITEM|X-0|orphan|books|100|1|none\n");
+    s.push_str("ORDER|INV-1001|Acme Corp|NE|USD\n");
+    s.push_str("ITEM|GR-101|Organic coffee|grocery|1299|3|none\n");
+    s.push_str("ITEM|CL-220|Rain jacket|clothing|8950|1|pct:15\n");
+    s.push_str("ITEM|EL-310|USB-C hub|electronics|3499|2|none\n");
+    s.push_str("ITEM|BK-007|Field guide|books|2450|4|bogo:3\n");
+    s.push_str("ORDER|INV-1002|Bluebird Cafe|WEST|USD\n");
+    s.push_str("ITEM|GR-140|Oat milk case|grocery|2199|12|bogo:5\n");
+    s.push_str("ITEM|SV-001|Espresso machine service|services|15000|1|pct:10\n");
+    s.push_str("ITEM|EL-415|Card reader|electronics|5999|two|none\n");
+    s.push_str("ITEM|EL-416|Receipt printer|electronics|12999|1|pct:5\n");
+    s.push_str("ORDER|INV-1003|Lindqvist AB|EXPORT|EUR\n");
+    s.push_str("ITEM|EL-501|Label printer|electronics|24900|3|pct:12\n");
+    s.push_str("ITEM|BK-120|Manual set|books|1875|10|bogo:4\n");
+    s.push_str("ORDER|INV-1004|Sakura Trading|EXPORT|JPY\n");
+    s.push_str("ITEM|CL-900|Linen shirts|clothing|4800|25|pct:20\n");
+    s.push_str("ITEM|SV-020|Onsite setup|services|90000|1|none\n");
+    s.push_str("ORDER|INV-1005|Magnolia Books|SOUTH|USD\n");
+    s.push_str("ITEM|BK-310|Atlas|books|6500|2|none\n");
+    s.push_str("ITEM|GR-077|Pecan tin|grocery|1650|7|bogo:2\n");
+    s.push_str("ITEM|CL-404|Tote bag|clothing|1225|9|pct:33\n");
+    s.push_str("ITEM|ZZ-999|Mystery box|toys|999|1|none\n");
+    s.push_str("ORDER|INV-1006|Harbor Supply|MARS|USD\n");
+    s.push_str("ORDER|INV-1007|Ridge Outfitters|WEST|EUR\n");
+    s.push_str("ITEM|CL-610|Wool socks|clothing|1499|6|bogo:2\n");
+    s.push_str("ITEM|EL-611|Headlamp|electronics|3995|2|pct:7\n");
+    s.push_str("ORDER|INV-1008|Kobe Gear|EXPORT|JPY\n");
+    s.push_str("ITEM|CL-901|Denim jackets|clothing|12800|15|pct:17\n");
+    s.push_str("ITEM|BK-902|Catalog|books|1500|8|bogo:3\n");
+    s
+}
+
+fn main() -> Result[(), IoError] {
+    fs.write("orders.txt", input_text())?;
+    let text = fs.read_to_string("orders.txt")?;
+
+    let mut rejects: Vec[String] = Vec.new();
+    let orders = parse_orders(text, mut rejects);
+
+    let mut invoices: Vec[Invoice] = Vec.new();
+    for order in orders {
+        match build_invoice(order) {
+            Ok(inv) => invoices.push(inv),
+            Err(e) => rejects.push(f"order {order.id}: {e}"),
+        }
+    }
+
+    for inv in invoices {
+        print_invoice(inv);
+    }
+
+    let mut totals: SortedMap[String, i64] = SortedMap.new();
+    let mut tax_by_region: SortedMap[String, i64] = SortedMap.new();
+    let mut counts: SortedMap[String, i64] = SortedMap.new();
+    for inv in invoices {
+        let code = currency_code(inv.currency);
+        let key = f"{code}|{inv.region_name}";
+        let prev_total = match totals.get(code) { Some(v) => v, None => 0 };
+        totals.insert(code, prev_total + inv.total);
+        let prev_tax = match tax_by_region.get(key) { Some(v) => v, None => 0 };
+        tax_by_region.insert(key, prev_tax + inv.tax_total);
+        let prev_count = match counts.get(code) { Some(v) => v, None => 0 };
+        counts.insert(code, prev_count + 1);
+    }
+
+    println("=== Ledger summary ===");
+    println(f"Invoices issued: {invoices.len()}");
+    for (code, total) in totals {
+        let cur = parse_currency(0, code).unwrap();
+        let n = match counts.get(code) { Some(v) => v, None => 0 };
+        println(f"  {pad_right(code, 4)} invoices={n}  billed {pad_left(format_money(total, cur), 16)}");
+    }
+    println("Tax collected by currency/region:");
+    for (key, tax) in tax_by_region {
+        let parts = key.split("|");
+        let cur = parse_currency(0, parts[0]).unwrap();
+        println(f"  {pad_right(key, 12)}{pad_left(format_money(tax, cur), 16)}");
+    }
+    println(f"Rejected records: {rejects.len()}");
+    for r in rejects {
+        println(f"  - {r}");
+    }
+    Ok(())
+}

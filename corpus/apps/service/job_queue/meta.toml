@@ -1,0 +1,13 @@
+source = "corpus/apps/service/job_queue/source.orig.kara (v2 by karac fix + hand edits)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:service", "stmt-par"]
+class = "unknown"
+expected_from = "mirror"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "stmt-par groups (source.orig.kara lines): L269-L271 three run_worker calls, each one call_remote standing in as sleep_ms(2); the take_next selections before them are sequential"

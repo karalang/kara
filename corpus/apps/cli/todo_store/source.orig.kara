@@ -1,0 +1,395 @@
+// todo_store — a script-driven todo manager. Every command reloads the store
+// from disk, applies itself, and writes it back as lines:
+//     next|<next id>
+//     item|<id>|<0 or 1>|<tag,tag or ->|<title>
+// Mutating commands stash the previous text in an undo file (one level deep).
+
+fn store_path() -> String { "todos.db" }
+fn undo_path() -> String { "todos.undo" }
+
+// ---------------------------------------------------------------- errors
+
+enum TodoError {
+    NotFound(i64),
+    AlreadyDone(i64),
+    DuplicateTag(i64, String),
+    BadArgs(String),
+    UnknownCommand(String),
+    NothingToUndo,
+    Corrupt(i64, String),
+    Io(String),
+}
+
+impl Display for TodoError {
+    fn to_string(ref self) -> String {
+        match self {
+            TodoError.NotFound(id) => f"no todo with id {id}",
+            TodoError.AlreadyDone(id) => f"todo #{id} is already done",
+            TodoError.DuplicateTag(id, tag) => f"todo #{id} is already tagged '{tag}'",
+            TodoError.BadArgs(msg) => f"bad arguments: {msg}",
+            TodoError.UnknownCommand(op) => f"unknown command '{op}'",
+            TodoError.NothingToUndo => "nothing to undo",
+            TodoError.Corrupt(line, text) => f"corrupt store at line {line}: {text}",
+            TodoError.Io(msg) => f"i/o failure: {msg}",
+        }
+    }
+}
+
+impl From[IoError] for TodoError {
+    fn from(e: IoError) -> TodoError {
+        let msg = match e {
+            IoError.NotFound => "file not found",
+            IoError.PermissionDenied => "permission denied",
+            IoError.Other(m) => m,
+            _ => "unexpected i/o error",
+        };
+        TodoError.Io(msg)
+    }
+}
+
+// ---------------------------------------------------------------- helpers
+
+fn join_from(parts: ref Vec[String], start: i64, sep: ref String) -> String {
+    let mut out = String.new();
+    let mut i = start;
+    while i < parts.len() {
+        if i > start { out.push_str(sep); }
+        out.push_str(parts[i]);
+        i += 1;
+    }
+    out
+}
+
+fn parse_id(word: ref String) -> Result[i64, TodoError] {
+    match i64.parse(word) {
+        Some(n) => Ok(n),
+        None => Err(TodoError.BadArgs(f"'{word}' is not a valid id")),
+    }
+}
+
+// ---------------------------------------------------------------- model
+
+struct Todo {
+    id: i64,
+    title: String,
+    done: bool,
+    tags: Vec[String],
+}
+
+impl Todo {
+    fn new(id: i64, title: String) -> Todo {
+        Todo { id, title, done: false, tags: Vec.new() }
+    }
+
+    fn has_tag(ref self, tag: ref String) -> bool {
+        self.tags.contains(tag)
+    }
+
+    fn to_line(ref self) -> String {
+        let flag = if self.done { "1" } else { "0" };
+        let tags = if self.tags.is_empty() { "-" } else { join_from(self.tags, 0, ",") };
+        f"item|{self.id}|{flag}|{tags}|{self.title}"
+    }
+
+    fn render(ref self) -> String {
+        let mark = if self.done { "x" } else { " " };
+        let mut out = f"  [{mark}] #{self.id} {self.title}";
+        if not self.tags.is_empty() {
+            let tags = join_from(self.tags, 0, ", ");
+            out.push_str(f"  ({tags})");
+        }
+        out
+    }
+}
+
+shared enum Filter {
+    All,
+    Open,
+    Finished,
+    Tagged(String),
+}
+
+impl Filter {
+    fn parse(word: ref String) -> Result[Filter, TodoError] {
+        match word {
+            "" | "all" => Ok(Filter.All),
+            "open" => Ok(Filter.Open),
+            "done" => Ok(Filter.Finished),
+            _ => {
+                if not word.starts_with("tag:") or word.len() == 4 {
+                    return Err(TodoError.BadArgs(f"unknown list filter '{word}'"));
+                }
+                Ok(Filter.Tagged(word.substring(4)))
+            }
+        }
+    }
+
+    fn matches(ref self, t: ref Todo) -> bool {
+        match self {
+            Filter.All => true,
+            Filter.Open => not t.done,
+            Filter.Finished => t.done,
+            Filter.Tagged(tag) => t.has_tag(tag),
+        }
+    }
+
+    fn label(ref self) -> String {
+        match self {
+            Filter.All => "all",
+            Filter.Open => "open",
+            Filter.Finished => "done",
+            Filter.Tagged(tag) => f"tag {tag}",
+        }
+    }
+}
+
+enum Command {
+    Add(String),
+    Done(i64),
+    Edit(i64, String),
+    Tag(i64, String),
+    List(Filter),
+    Remove(i64),
+    Undo,
+}
+
+impl Command {
+    fn mutates(ref self) -> bool {
+        match self {
+            Command.List(_) | Command.Undo => false,
+            _ => true,
+        }
+    }
+}
+
+fn need_id(words: ref Vec[String], op: ref String) -> Result[i64, TodoError] {
+    if words.len() < 2 {
+        return Err(TodoError.BadArgs(f"{op} needs an id"));
+    }
+    parse_id(words[1])
+}
+
+fn need_text(words: ref Vec[String], from: i64, complaint: String) -> Result[String, TodoError] {
+    let text = join_from(words, from, " ");
+    if text.is_empty() { return Err(TodoError.BadArgs(complaint)); }
+    Ok(text)
+}
+
+fn parse_command(line: ref String) -> Result[Command, TodoError] {
+    let words = line.trim().split(" ");
+    let op = words[0].clone();
+    match op {
+        "add" => Ok(Command.Add(need_text(words, 1, "add needs a title")?)),
+        "list" => Ok(Command.List(Filter.parse(join_from(words, 1, " "))?)),
+        "undo" => Ok(Command.Undo),
+        "done" => Ok(Command.Done(need_id(words, op)?)),
+        "remove" => Ok(Command.Remove(need_id(words, op)?)),
+        "edit" => {
+            let id = need_id(words, op)?;
+            Ok(Command.Edit(id, need_text(words, 2, "edit needs a new title")?))
+        }
+        "tag" => {
+            let id = need_id(words, op)?;
+            let tag = need_text(words, 2, "tag needs a tag name")?;
+            if tag.contains(",") or tag.contains("|") or tag.contains(" ") {
+                return Err(TodoError.BadArgs(f"tag '{tag}' may not contain ',', '|' or spaces"));
+            }
+            Ok(Command.Tag(id, tag))
+        }
+        _ => Err(TodoError.UnknownCommand(op)),
+    }
+}
+
+// ---------------------------------------------------------------- store
+
+struct Store {
+    next_id: i64,
+    items: Vec[Todo],
+}
+
+impl Store {
+    fn empty() -> Store {
+        Store { next_id: 1, items: Vec.new() }
+    }
+
+    fn serialize(ref self) -> String {
+        let mut out = f"next|{self.next_id}\n";
+        for t in self.items {
+            out.push_str(t.to_line());
+            out.push_str("\n");
+        }
+        out
+    }
+
+    fn parse(text: ref String) -> Result[Store, TodoError] {
+        let mut store = Store.empty();
+        let mut lineno = 0;
+        for line in text.split("\n") {
+            lineno += 1;
+            if line.is_empty() { continue; }
+            let parts = line.split("|");
+            if parts[0] == "next" and parts.len() == 2 {
+                store.next_id = parse_id(parts[1])?;
+            } else if parts[0] == "item" and parts.len() >= 5 {
+                let id = parse_id(parts[1])?;
+                let mut todo = Todo.new(id, join_from(parts, 4, "|"));
+                todo.done = parts[2] == "1";
+                if parts[3] != "-" { todo.tags = parts[3].split(","); }
+                store.items.push(todo);
+            } else {
+                return Err(TodoError.Corrupt(lineno, line));
+            }
+        }
+        Ok(store)
+    }
+
+    fn index_of(ref self, id: i64) -> Result[i64, TodoError] {
+        match self.items.iter().position(|t| t.id == id) {
+            Some(i) => Ok(i),
+            None => Err(TodoError.NotFound(id)),
+        }
+    }
+
+    fn list(ref self, filter: ref Filter) -> String {
+        let mut out = String.new();
+        let mut shown = 0;
+        for t in self.items {
+            if filter.matches(t) {
+                out.push_str(t.render());
+                out.push_str("\n");
+                shown += 1;
+            }
+        }
+        if shown == 0 { out.push_str("  (nothing)\n"); }
+        let label = filter.label();
+        let total = self.items.len();
+        out.push_str(f"  -- {shown} shown ({label}) of {total} --");
+        out
+    }
+
+    fn apply(mut ref self, cmd: Command) -> Result[String, TodoError] {
+        match cmd {
+            Command.Add(title) => {
+                let id = self.next_id;
+                self.next_id += 1;
+                let msg = f"added #{id}: {title}";
+                self.items.push(Todo.new(id, title));
+                Ok(msg)
+            }
+            Command.Done(id) => {
+                let idx = self.index_of(id)?;
+                if self.items[idx].done { return Err(TodoError.AlreadyDone(id)); }
+                self.items[idx].done = true;
+                Ok(f"completed #{id}: {self.items[idx].title}")
+            }
+            Command.Edit(id, title) => {
+                let idx = self.index_of(id)?;
+                let msg = f"renamed #{id}: '{self.items[idx].title}' -> '{title}'";
+                self.items[idx].title = title;
+                Ok(msg)
+            }
+            Command.Tag(id, tag) => {
+                let idx = self.index_of(id)?;
+                if self.items[idx].has_tag(tag) { return Err(TodoError.DuplicateTag(id, tag)); }
+                let msg = f"tagged #{id} with '{tag}'";
+                self.items[idx].tags.push(tag);
+                Ok(msg)
+            }
+            Command.List(filter) => Ok(self.list(filter)),
+            Command.Remove(id) => {
+                let idx = self.index_of(id)?;
+                let gone = self.items.remove(idx);
+                Ok(f"removed #{id}: {gone.title}")
+            }
+            Command.Undo => Err(TodoError.BadArgs("undo is handled by the session")),
+        }
+    }
+}
+
+// ---------------------------------------------------------------- persistence
+
+fn read_or_empty(path: ref String) -> Result[String, TodoError] {
+    match fs.read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(IoError.NotFound) => Ok(""),
+        Err(e) => Err(TodoError.from(e)),
+    }
+}
+
+fn load_store() -> Result[Store, TodoError] {
+    let text = read_or_empty(store_path())?;
+    Store.parse(text)
+}
+
+fn undo_last() -> Result[String, TodoError] {
+    let snapshot = read_or_empty(undo_path())?;
+    if snapshot.is_empty() { return Err(TodoError.NothingToUndo); }
+    let restored = Store.parse(snapshot)?;
+    fs.write(store_path(), restored.serialize())?;
+    fs.write(undo_path(), "")?;
+    let count = restored.items.len();
+    Ok(f"undid last change; {count} todo(s) restored")
+}
+
+fn run_line(line: ref String) -> Result[String, TodoError] {
+    let cmd = parse_command(line)?;
+    if let Command.Undo = cmd { return undo_last(); }
+    let mut store = load_store()?;
+    let before = store.serialize();
+    let mutating = cmd.mutates();
+    let msg = store.apply(cmd)?;
+    if mutating { fs.write(undo_path(), before)?; }
+    fs.write(store_path(), store.serialize())?;
+    Ok(msg)
+}
+
+fn summary(store: ref Store) -> String {
+    let mut done = 0;
+    let mut tag_counts: SortedMap[String, i64] = SortedMap.new();
+    for t in store.items {
+        if t.done { done += 1; }
+        for tag in t.tags {
+            let prev = tag_counts.get(tag) ?? 0;
+            tag_counts.insert(tag, prev + 1);
+        }
+    }
+    let total = store.items.len();
+    let open = total - done;
+    let mut out = f"total {total}, done {done}, open {open}";
+    for (tag, n) in tag_counts {
+        out.push_str(f"\n  tag {tag}: {n}");
+    }
+    out
+}
+
+fn main() -> Result[(), TodoError] {
+    let script = [
+        "add Buy milk", "add Write quarterly report", "add Call the plumber",
+        "tag 2 work", "tag 2 urgent", "tag 3 home", "done 1", "list",
+        "edit 3 Call the plumber about the leak", "tag 2 work", "done 1", "done 42",
+        "remove 1", "list all", "undo", "list", "undo", "add Fix bug | high prio",
+        "tag 4 work", "done 2", "list open", "list done", "list tag:work",
+        "list someday", "frobnicate 3", "edit 4", "tag 4 bad,tag", "remove x",
+        "remove 3", "undo", "tag 1 home", "list",
+    ];
+    fs.write(store_path(), Store.empty().serialize())?;
+    fs.write(undo_path(), "")?;
+
+    let mut ok = 0;
+    let mut failed = 0;
+    for line in script {
+        println(f"> {line}");
+        match run_line(line) {
+            Ok(msg) => { println(msg); ok += 1; }
+            Err(e) => { println(f"error: {e}"); failed += 1; }
+        }
+    }
+
+    println(f"== {ok} ok, {failed} failed ==");
+    let final_store = load_store()?;
+    println(summary(final_store));
+    println("== final dump ==");
+    let dump = fs.read_to_string(store_path())?;
+    print(dump);
+    Ok(())
+}

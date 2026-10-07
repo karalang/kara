@@ -1,0 +1,13 @@
+source = "corpus/apps/pipeline/join_dedupe/source.orig.kara (v2 by karac fix + hand edits)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:pipeline", "stmt-par"]
+class = "unknown"
+expected_from = "mirror"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "stmt-par groups (source.orig.kara lines): L293-L294 two fs.write of separate files; L300-L301 two fs.read_to_string of those files"

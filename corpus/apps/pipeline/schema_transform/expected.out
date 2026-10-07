@@ -1,0 +1,24 @@
+record 1: ok {"address":{"city":"London","country":"GB","postcode":"SW1Y 4JH","street":"12 St James Sq"},"age":36,"contact":{"email":"ada@example.com","phone":null},"display_name":"Ada Lovelace","schema":2,"status":"active","tags":["math","poetry"],"tier":"gold","user_id":1}
+record 2: ok {"address":{"city":"Paris","country":"FR","postcode":"75004","street":"4 Rue de Rivoli"},"age":null,"contact":{"email":null,"phone":"+44 20 7946 0018"},"display_name":"Zoë \"Zed\" Brandt","legacy":{"notes":"line1\nline2 / \u0001 café","signup_src":"referral"},"schema":2,"status":"suspended","tags":[],"tier":"standard","user_id":2}
+record 3: ok {"address":null,"age":85,"contact":{"email":"grace@navy.mil","phone":null},"display_name":"Grace Hopper","schema":2,"status":"pending","tags":[],"tier":"standard","user_id":3}
+record 4: 7 transform error(s)
+  - field 'id' must be a positive integer
+  - field 'full_name' must be a non-empty string
+  - field 'addr' must have 3 or 4 comma-separated parts, got 1
+  - unknown status code 'X'
+  - tags[1] must be a string
+  - field 'age' must be an integer in 0..150, got 36.5
+  - field 'vip' must be a boolean
+record 5: parse error at 69: expected ',' or '}'
+record 6: ok {"address":{"city":"NJ","country":"US","postcode":"07974","street":"Murray Hill"},"age":79,"contact":{"email":"ken@bell-labs.com","phone":null},"display_name":"Ken\tThompson","legacy":{"extra":{"a":-0.5e-3,"score":1.5e+3,"z":[true,false,null]}},"schema":2,"status":"deleted","tags":[],"tier":"standard","user_id":6}
+record 7: 1 transform error(s)
+  - record is not an object
+record 8: 1 transform error(s)
+  - field 'email' must be a string
+record 9: parse error at 9: expected ',' or '}'
+record 10: ok {"address":{"city":"Cambridge","country":"GB","postcode":"02139","street":"MIT"},"age":null,"contact":{"email":null,"phone":null},"display_name":"Barbara Liskov","schema":2,"status":"active","tags":["cs","theory"],"tier":"standard","user_id":10}
+record 11: parse error at 11: trailing characters
+record 12: parse error at 31: duplicate key 'id'
+record 13: parse error at 38: unknown escape '\q'
+record 14: parse error at 43: invalid literal, expected 'true'
+summary: 5 ok, 3 invalid, 6 unparseable

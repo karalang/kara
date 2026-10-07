@@ -1,0 +1,66 @@
+config: tumble=60s slide=40s/20s lateness=12s
+loading feeds:
+  [boiler] skipped line 20: bad value 'n/a'
+  [boiler] skipped line 42: expected 3 fields
+  [boiler] skipped line 57: bad value 'n/a'
+  [boiler] parsed 87 events, 3 rejected
+  [intake] skipped line 20: bad value 'n/a'
+  [intake] skipped line 42: expected 3 fields
+  [intake] skipped line 57: bad value 'n/a'
+  [intake] parsed 77 events, 3 rejected
+  [exhaust] skipped line 20: bad value 'n/a'
+  [exhaust] skipped line 42: expected 3 fields
+  [exhaust] skipped line 57: bad value 'n/a'
+  [exhaust] parsed 67 events, 3 rejected
+== tumbling ==
+sensor        window      n      min      max     mean    stddev
+ boiler       [0,60)     22    58.28    71.71    65.11     3.834
+ boiler     [60,120)     21    57.17    72.91    64.21     5.485
+ boiler    [120,180)     20    57.47    72.93    66.40     4.619
+ boiler    [180,240)     18    57.38    72.54    63.22     4.861
+exhaust       [0,60)     22    90.45   105.38    97.70     4.663
+exhaust     [60,120)     21    91.88   105.67    99.87     3.755
+exhaust    [120,180)     20    90.93   105.07    97.84     4.699
+ intake       [0,60)     20     4.94    18.05    11.87     3.627
+ intake     [60,120)     23     4.28    19.38    11.38     4.239
+ intake    [120,180)     21     5.73    19.92    11.88     4.107
+ intake    [180,240)      9    10.47    19.42    15.50     2.902
+== sliding ==
+sensor        window      n      min      max     mean    stddev
+ boiler       [0,40)     15    59.95    71.71    65.50     3.968
+ boiler      [20,60)     15    58.28    69.24    64.25     3.049
+ boiler      [40,80)     13    58.28    72.91    65.46     4.428
+ boiler     [60,100)     14    57.17    72.91    64.07     5.570
+ boiler     [80,120)     15    57.17    71.62    63.15     5.288
+ boiler    [100,140)     14    57.24    72.93    66.53     4.858
+ boiler    [120,160)     14    62.37    72.93    67.27     3.293
+ boiler    [140,180)     13    57.47    72.30    65.23     4.810
+ boiler    [160,200)     14    57.47    72.47    63.72     5.618
+ boiler    [180,220)     15    57.38    72.54    63.89     5.055
+ boiler    [200,240)     10    57.38    72.54    63.22     4.772
+ boiler    [220,260)      3    59.13    61.16    59.90     0.896
+exhaust       [0,40)     15    90.45   105.38    97.39     4.758
+exhaust      [20,60)     15    91.75   104.36    98.76     3.994
+exhaust      [40,80)     14    91.75   104.36    99.63     3.720
+exhaust     [60,100)     15    91.88   105.67    99.94     3.475
+exhaust     [80,120)     14    91.88   105.67    99.37     4.206
+exhaust    [100,140)     14    91.95   105.07    99.25     4.225
+exhaust    [120,160)     13    91.22   105.07    98.56     4.777
+exhaust    [140,180)     12    90.93   104.86    97.13     4.946
+exhaust    [160,200)      7    90.93   103.77    96.50     4.235
+ intake       [0,40)     14     4.94    18.05    11.63     3.531
+ intake      [20,60)     13     5.26    18.05    12.85     3.665
+ intake      [40,80)     15     5.26    16.71    12.10     3.424
+ intake     [60,100)     16     6.55    19.38    12.57     4.000
+ intake     [80,120)     14     4.28    19.38    11.05     4.787
+ intake    [100,140)     14     4.28    19.92    10.92     4.525
+ intake    [120,160)     13     5.73    19.92    11.58     4.640
+ intake    [140,180)     14     5.73    18.93    11.23     3.821
+ intake    [160,200)     16     7.85    19.42    13.91     3.398
+ intake    [180,220)      9    10.47    19.42    15.50     2.902
+ intake    [200,240)      1    15.90    15.90    15.90     0.000
+== lateness ==
+ boiler on_time=74 merged=7 dropped=6 worst_merged=11s
+exhaust on_time=58 merged=5 dropped=4 worst_merged=12s
+ intake on_time=66 merged=7 dropped=4 worst_merged=12s
+total: merged=19 dropped=14 tumbling_windows=11 sliding_windows=32

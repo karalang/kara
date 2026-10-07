@@ -1,0 +1,93 @@
+> add Buy milk
+added #1: Buy milk
+> add Write quarterly report
+added #2: Write quarterly report
+> add Call the plumber
+added #3: Call the plumber
+> tag 2 work
+tagged #2 with 'work'
+> tag 2 urgent
+tagged #2 with 'urgent'
+> tag 3 home
+tagged #3 with 'home'
+> done 1
+completed #1: Buy milk
+> list
+  [x] #1 Buy milk
+  [ ] #2 Write quarterly report  (work, urgent)
+  [ ] #3 Call the plumber  (home)
+  -- 3 shown (all) of 3 --
+> edit 3 Call the plumber about the leak
+renamed #3: 'Call the plumber' -> 'Call the plumber about the leak'
+> tag 2 work
+error: todo #2 is already tagged 'work'
+> done 1
+error: todo #1 is already done
+> done 42
+error: no todo with id 42
+> remove 1
+removed #1: Buy milk
+> list all
+  [ ] #2 Write quarterly report  (work, urgent)
+  [ ] #3 Call the plumber about the leak  (home)
+  -- 2 shown (all) of 2 --
+> undo
+undid last change; 3 todo(s) restored
+> list
+  [x] #1 Buy milk
+  [ ] #2 Write quarterly report  (work, urgent)
+  [ ] #3 Call the plumber about the leak  (home)
+  -- 3 shown (all) of 3 --
+> undo
+error: nothing to undo
+> add Fix bug | high prio
+added #4: Fix bug | high prio
+> tag 4 work
+tagged #4 with 'work'
+> done 2
+completed #2: Write quarterly report
+> list open
+  [ ] #3 Call the plumber about the leak  (home)
+  [ ] #4 Fix bug | high prio  (work)
+  -- 2 shown (open) of 4 --
+> list done
+  [x] #1 Buy milk
+  [x] #2 Write quarterly report  (work, urgent)
+  -- 2 shown (done) of 4 --
+> list tag:work
+  [x] #2 Write quarterly report  (work, urgent)
+  [ ] #4 Fix bug | high prio  (work)
+  -- 2 shown (tag work) of 4 --
+> list someday
+error: bad arguments: unknown list filter 'someday'
+> frobnicate 3
+error: unknown command 'frobnicate'
+> edit 4
+error: bad arguments: edit needs a new title
+> tag 4 bad,tag
+error: bad arguments: tag 'bad,tag' may not contain ',', '|' or spaces
+> remove x
+error: bad arguments: 'x' is not a valid id
+> remove 3
+removed #3: Call the plumber about the leak
+> undo
+undid last change; 4 todo(s) restored
+> tag 1 home
+tagged #1 with 'home'
+> list
+  [x] #1 Buy milk  (home)
+  [x] #2 Write quarterly report  (work, urgent)
+  [ ] #3 Call the plumber about the leak  (home)
+  [ ] #4 Fix bug | high prio  (work)
+  -- 4 shown (all) of 4 --
+== 23 ok, 9 failed ==
+total 4, done 2, open 2
+  tag home: 2
+  tag urgent: 1
+  tag work: 2
+== final dump ==
+next|5
+item|1|1|home|Buy milk
+item|2|1|work,urgent|Write quarterly report
+item|3|0|home|Call the plumber about the leak
+item|4|0|work|Fix bug | high prio

@@ -1,0 +1,389 @@
+// config_merge: layered configuration resolver.
+//
+// Layers, lowest to highest precedence:
+//   defaults -> config files (written, then read back) -> environment -> command line
+// Keys are dotted ("server.port"); every value is coerced against a schema and
+// rejected with a validation error when it does not fit.
+
+enum Kind {
+    Int { min: i64, max: i64 },
+    Flag,
+    Text,
+    Choice(Vec[String]),
+    List,
+}
+
+enum Value {
+    Int(i64),
+    Bool(bool),
+    Str(String),
+    List(Vec[String]),
+}
+
+#[derive(Clone)]
+enum Layer {
+    Default,
+    File(String),
+    Env,
+    Cli,
+}
+
+enum ConfigError {
+    UnknownKey { layer: String, key: String },
+    BadInt { layer: String, key: String, raw: String },
+    OutOfRange { layer: String, key: String, value: i64, min: i64, max: i64 },
+    BadBool { layer: String, key: String, raw: String },
+    BadChoice { layer: String, key: String, raw: String, options: String },
+    Syntax { source: String, line: i64, text: String },
+    Missing { key: String },
+    Constraint { message: String },
+    Io { path: String },
+}
+
+struct Setting {
+    value: Value,
+    layer: Layer,
+}
+
+struct Config {
+    schema: SortedMap[String, Kind],
+    entries: SortedMap[String, Setting],
+    errors: Vec[ConfigError],
+}
+
+fn join(items: ref Vec[String], sep: ref String) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for item in items {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(item);
+        first = false;
+    }
+    out
+}
+
+impl Value {
+    fn render(ref self) -> String {
+        match self {
+            Value.Int(n) => f"{n}",
+            Value.Bool(b) => f"{b}",
+            Value.Str(s) => f"\"{s}\"",
+            Value.List(items) => "[" + join(items, ", ") + "]",
+        }
+    }
+}
+
+impl Layer {
+    fn label(ref self) -> String {
+        match self {
+            Layer.Default => "default",
+            Layer.File(path) => f"file:{path}",
+            Layer.Env => "env",
+            Layer.Cli => "cli",
+        }
+    }
+}
+
+impl Display for ConfigError {
+    fn to_string(ref self) -> String {
+        match self {
+            ConfigError.UnknownKey { layer, key } => f"{layer}: unknown key '{key}'",
+            ConfigError.BadInt { layer, key, raw } => f"{layer}: {key}: expected an integer, got '{raw}'",
+            ConfigError.OutOfRange { layer, key, value, min, max } =>
+                f"{layer}: {key}: {value} is outside [{min}, {max}]",
+            ConfigError.BadBool { layer, key, raw } => f"{layer}: {key}: expected a boolean, got '{raw}'",
+            ConfigError.BadChoice { layer, key, raw, options } =>
+                f"{layer}: {key}: '{raw}' is not one of {options}",
+            ConfigError.Syntax { source, line, text } => f"{source}:{line}: cannot parse '{text}'",
+            ConfigError.Missing { key } => f"required key '{key}' is not set",
+            ConfigError.Constraint { message } => f"constraint: {message}",
+            ConfigError.Io { path } => f"{path}: could not be read",
+        }
+    }
+}
+
+fn parse_bool(text: ref String) -> Option[bool] {
+    let lower = text.to_lowercase();
+    if lower == "true" or lower == "yes" or lower == "on" or lower == "1" {
+        Some(true)
+    } else if lower == "false" or lower == "no" or lower == "off" or lower == "0" {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn coerce(key: String, raw: String, kind: ref Kind, layer: String) -> Result[Value, ConfigError] {
+    let text = raw.trim();
+    match kind {
+        Kind.Int { min, max } => match i64.parse(text) {
+            None => Err(ConfigError.BadInt { layer, key, raw: text }),
+            Some(n) => {
+                if n < *min or n > *max {
+                    Err(ConfigError.OutOfRange { layer, key, value: n, min: *min, max: *max })
+                } else {
+                    Ok(Value.Int(n))
+                }
+            }
+        },
+        Kind.Flag => match parse_bool(text) {
+            Some(b) => Ok(Value.Bool(b)),
+            None => Err(ConfigError.BadBool { layer, key, raw: text }),
+        },
+        Kind.Text => Ok(Value.Str(text)),
+        Kind.Choice(options) => {
+            if options.contains(text) {
+                Ok(Value.Str(text))
+            } else {
+                Err(ConfigError.BadChoice { layer, key, raw: text, options: join(options, "|") })
+            }
+        },
+        Kind.List => {
+            let mut items: Vec[String] = Vec.new();
+            for part in text.split(",") {
+                let item = part.trim();
+                if not item.is_empty() {
+                    items.push(item);
+                }
+            }
+            Ok(Value.List(items))
+        },
+    }
+}
+
+impl Config {
+    fn new(schema: SortedMap[String, Kind]) -> Config {
+        Config { schema, entries: SortedMap.new(), errors: Vec.new() }
+    }
+
+    fn apply(mut ref self, key: String, raw: String, layer: Layer) {
+        match self.schema.get(key) {
+            None => self.errors.push(ConfigError.UnknownKey { layer: layer.label(), key }),
+            Some(kind) => match coerce(key, raw, kind, layer.label()) {
+                Ok(value) => {
+                    self.entries.insert(key, Setting { value, layer });
+                },
+                Err(e) => self.errors.push(e),
+            },
+        }
+    }
+
+    fn int(ref self, key: ref String) -> Option[i64] {
+        match self.entries.get(key) {
+            Some(entry) => match entry.value {
+                Value.Int(n) => Some(n),
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    fn validate(mut ref self, required: ref Vec[String]) {
+        for key in required {
+            if not self.entries.contains_key(key) {
+                self.errors.push(ConfigError.Missing { key: key.to_string() });
+            }
+        }
+        let workers = self.int("server.workers") ?? 0;
+        let pool = self.int("db.pool") ?? 0;
+        if workers > pool {
+            self.errors.push(ConfigError.Constraint {
+                message: f"server.workers ({workers}) must not exceed db.pool ({pool})",
+            });
+        }
+    }
+}
+
+fn schema() -> SortedMap[String, Kind] {
+    let mut s: SortedMap[String, Kind] = SortedMap.new();
+    s.insert("server.host", Kind.Text);
+    s.insert("server.port", Kind.Int { min: 1, max: 65535 });
+    s.insert("server.workers", Kind.Int { min: 1, max: 256 });
+    s.insert("log.level", Kind.Choice(["debug", "info", "warn", "error"]));
+    s.insert("log.json", Kind.Flag);
+    s.insert("log.file_path", Kind.Text);
+    s.insert("cache.enabled", Kind.Flag);
+    s.insert("cache.ttl", Kind.Int { min: 0, max: 86400 });
+    s.insert("features.flags", Kind.List);
+    s.insert("db.url", Kind.Text);
+    s.insert("db.pool", Kind.Int { min: 1, max: 64 });
+    s.insert("auth.token", Kind.Text);
+    s.insert("metrics.interval", Kind.Int { min: 1, max: 3600 });
+    s
+}
+
+fn defaults() -> Vec[(String, String)] {
+    [
+        ("server.host", "localhost"),
+        ("server.port", "8080"),
+        ("server.workers", "4"),
+        ("log.level", "info"),
+        ("log.json", "false"),
+        ("log.file_path", "/var/log/app.log"),
+        ("cache.enabled", "true"),
+        ("cache.ttl", "300"),
+        ("features.flags", "search"),
+        ("db.pool", "8"),
+        ("metrics.interval", "60"),
+    ]
+}
+
+// INI-style: "[section]" headers, "key = value" lines, '#' comments.
+fn load_file(cfg: mut ref Config, path: String, text: String) {
+    let mut section = String.new();
+    let mut line_no = 0;
+    for raw_line in text.split("\n") {
+        line_no = line_no + 1;
+        let line = raw_line.trim();
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        if line.starts_with("[") and line.ends_with("]") {
+            section = line.substring(1, line.len() - 1).trim();
+            continue;
+        }
+        match line.find("=") {
+            None => cfg.errors.push(ConfigError.Syntax { source: path, line: line_no, text: line }),
+            Some(pos) => {
+                let name = line.substring(0, pos).trim();
+                let value = line.substring(pos + 1).trim();
+                let key = if section.is_empty() { name } else { f"{section}.{name}" };
+                cfg.apply(key, value, Layer.File(path));
+            },
+        }
+    }
+}
+
+// APP_SERVER__PORT=9090  ->  server.port = 9090 ; variables without the prefix are ignored.
+fn load_env(cfg: mut ref Config, vars: ref Vec[String]) {
+    let prefix = "APP_";
+    let mut index = 0;
+    for var in vars {
+        index = index + 1;
+        if not var.starts_with(prefix) {
+            continue;
+        }
+        match var.find("=") {
+            None => cfg.errors.push(ConfigError.Syntax { source: "env", line: index, text: var.to_string() }),
+            Some(pos) => {
+                let name = var.substring(prefix.len(), pos);
+                let key = name.to_lowercase().replace("__", ".");
+                cfg.apply(key, var.substring(pos + 1), Layer.Env);
+            },
+        }
+    }
+}
+
+// --key=value sets a value, --flag means true, --no-flag means false.
+fn load_cli(cfg: mut ref Config, args: ref Vec[String]) {
+    let mut index = 0;
+    for arg in args {
+        index = index + 1;
+        if not arg.starts_with("--") {
+            cfg.errors.push(ConfigError.Syntax { source: "cli", line: index, text: arg.to_string() });
+            continue;
+        }
+        let body = arg.substring(2);
+        match body.find("=") {
+            Some(pos) => cfg.apply(body.substring(0, pos), body.substring(pos + 1), Layer.Cli),
+            None => {
+                if body.starts_with("no-") {
+                    cfg.apply(body.substring(3), "false", Layer.Cli);
+                } else {
+                    cfg.apply(body, "true", Layer.Cli);
+                }
+            },
+        }
+    }
+}
+
+fn pad(text: ref String, width: i64) -> String {
+    let mut out = text.to_string();
+    while out.len() < width {
+        out.push(' ');
+    }
+    out
+}
+
+fn report(cfg: ref Config) {
+    let mut key_width = 0;
+    for (key, _) in cfg.entries {
+        if key.len() > key_width {
+            key_width = key.len();
+        }
+    }
+    println(f"resolved {cfg.entries.len()} keys:");
+    let mut wins: SortedMap[String, i64] = SortedMap.new();
+    for (key, entry) in cfg.entries {
+        let label = entry.layer.label();
+        println(f"  {pad(key, key_width)} = {pad(entry.value.render(), 34)} ({label})");
+        let count = wins.get(label) ?? 0;
+        wins.insert(label, count + 1);
+    }
+    println("winning layers:");
+    for (label, count) in wins {
+        println(f"  {label}: {count}");
+    }
+    println(f"errors ({cfg.errors.len()}):");
+    for e in cfg.errors {
+        println(f"  {e}");
+    }
+}
+
+fn main() {
+    let mut cfg = Config.new(schema());
+    for (key, raw) in defaults() {
+        cfg.apply(key, raw, Layer.Default);
+    }
+
+    let base = "# application config\n[server]\nhost = api.example.org\nport = 8443\n\n[log]\nlevel = info\njson = yes\n\n[db]\npool = 16\nretries = 3\n";
+    let local = "[server]\nhost = staging.example.org\nthis line is broken\n[cache]\nttl = 600\n[log]\nlevel = verbose\nfile_path = /tmp/app-staging.log\n";
+
+    // Write both file layers, then read them back.
+    let wrote_base = fs.write("app.conf", base);
+    let wrote_local = fs.write("app.local.conf", local);
+    let read_base = fs.read_to_string("app.conf");
+    let read_local = fs.read_to_string("app.local.conf");
+
+    if wrote_base.is_err() or wrote_local.is_err() {
+        println("warning: could not write config files");
+    }
+    match read_base {
+        Ok(text) => load_file(mut cfg, "app.conf", text),
+        Err(_) => cfg.errors.push(ConfigError.Io { path: "app.conf" }),
+    }
+    match read_local {
+        Ok(text) => load_file(mut cfg, "app.local.conf", text),
+        Err(_) => cfg.errors.push(ConfigError.Io { path: "app.local.conf" }),
+    }
+
+    let env_vars = [
+        "HOME=/home/app",
+        "APP_SERVER__PORT=9090",
+        "APP_LOG__LEVEL=warn",
+        "APP_FEATURES__FLAGS=search, beta ,,metrics",
+        "APP_CACHE__TTL=abc",
+        "APP_BROKEN",
+        "APP_DB__URL=postgres://db.internal:5432/app?sslmode=require",
+        "APP_LOG__JSON=maybe",
+        "PATH=/usr/bin",
+    ];
+    load_env(mut cfg, env_vars);
+
+    let args = [
+        "--server.workers=32",
+        "--log.json",
+        "--no-cache.enabled",
+        "--server.port=70000",
+        "--metrics.interval=15s",
+        "--colour=always",
+        "positional",
+        "--features.flags=search,export",
+    ];
+    load_cli(mut cfg, args);
+
+    cfg.validate(["db.url", "auth.token"]);
+    report(cfg);
+}

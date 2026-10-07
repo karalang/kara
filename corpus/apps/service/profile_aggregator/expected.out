@@ -1,0 +1,74 @@
+== profile 101 ==
+name: Ada Lovelace <ada@example.com>
+tier: gold (10% off)
+orders: 3 total, 1 open, spent $114.49, paid $103.04
+  #5001 mechanical keyboard $89.99 shipped
+  #5002 usb hub $24.50 delivered
+  #5003 desk lamp $39.99 cancelled
+recs: monitor, desk lamp, webcam
+fallback: none
+== profile 102 ==
+name: Grace Hopper <grace@example.com>
+tier: silver (5% off)
+orders: 1 total, 1 open, spent $65.00, paid $61.75
+  #5004 monitor arm $65.00 pending
+recs: monitor, standing desk, headphones
+fallback: none
+== profile 103 ==
+name: Alan Turing <alan@example.com>
+tier: free (0% off)
+orders: 2 total, 0 open, spent $57.00, paid $57.00
+  #5005 notebook $12.00 delivered
+  #5006 fountain pen $45.00 delivered
+recs: ink set, desk lamp
+fallback: none
+== profile 104 ==
+name: Katherine Johnson <kj@example.com>
+tier: gold (10% off)
+orders: 2 total, 2 open, spent $669.99, paid $602.99
+  #5007 standing desk $450.00 pending
+  #5008 monitor $219.99 shipped
+recs: ergonomic chair, webcam
+fallback: none
+== profile 105 ==
+name: Guest <unknown>
+tier: free (0% off)
+orders: 1 total, 0 open, spent $59.99, paid $59.99
+  #5009 webcam $59.99 delivered
+recs: headphones
+fallback: accounts: no record for user 105
+== profile 106 ==
+name: Edsger Dijkstra <edsger@example.com>
+tier: silver (5% off)
+orders: 1 total, 0 open, spent $150.00, paid $142.50
+  #5010 headphones $150.00 delivered
+recs: usb hub, notebook
+fallback: none
+== profile 107 ==
+name: Barbara Liskov <barbara@example.com>
+tier: free (0% off)
+orders: 0 total, 0 open, spent $0.00, paid $0.00
+recs: monitor, headphones, notebook
+fallback: orders: no record for user 107
+fallback: recommendations: no record for user 107
+== profile 108 ==
+name: Donald Knuth <don@example.com>
+tier: silver (5% off)
+orders: 2 total, 2 open, spent $332.00, paid $315.40
+  #5011 ergonomic chair $320.00 shipped
+  #5012 notebook $12.00 pending
+recs: monitor, headphones, webcam
+fallback: recommendations: unavailable (shard timeout)
+== summary ==
+requests: 11, served: 8, rejected: 3
+rejected: invalid id 0
+rejected: duplicate id 103
+rejected: invalid id -7
+degraded profiles: 3
+fallbacks from accounts: 1
+fallbacks from orders: 1
+fallbacks from recommendations: 2
+tier free: 3
+tier gold: 2
+tier silver: 3
+revenue after discounts: $1342.67

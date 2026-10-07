@@ -1,0 +1,397 @@
+// windowed_stats: per-sensor tumbling and sliding window statistics over an
+// out-of-order event stream. Values are fixed-point (hundredths). Events that
+// arrive behind the sensor's high-water mark are merged when they are within
+// the allowed lateness, and dropped (and counted) otherwise.
+
+struct Config { tumble_size: i64, slide_size: i64, slide_step: i64, allowed_lateness: i64 }
+
+struct Event {
+    ts: i64,
+    sensor: String,
+    value: i64,
+}
+
+enum ParseError {
+    FieldCount(i64),
+    BadTimestamp(i64, String),
+    BadValue(i64, String),
+}
+
+impl ParseError {
+    fn describe(ref self) -> String {
+        match self {
+            ParseError.FieldCount(line) => f"line {line}: expected 3 fields",
+            ParseError.BadTimestamp(line, text) => f"line {line}: bad timestamp '{text}'",
+            ParseError.BadValue(line, text) => f"line {line}: bad value '{text}'",
+        }
+    }
+}
+
+enum Arrival {
+    OnTime,
+    MergedLate(i64),
+    Dropped(i64),
+}
+
+#[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
+struct WindowKey {
+    sensor: String,
+    start: i64,
+}
+
+struct WindowStats {
+    count: i64,
+    min: i64,
+    max: i64,
+    sum: i64,
+    sum_sq: i64,
+}
+
+impl WindowStats {
+    fn new() -> WindowStats {
+        WindowStats { count: 0, min: 0, max: 0, sum: 0, sum_sq: 0 }
+    }
+
+    fn add(mut ref self, v: i64) {
+        if self.count == 0 or v < self.min {
+            self.min = v;
+        }
+        if self.count == 0 or v > self.max {
+            self.max = v;
+        }
+        self.count += 1;
+        self.sum += v;
+        self.sum_sq += v * v;
+    }
+
+    fn mean_centi(ref self) -> i64 {
+        round_div(self.sum, self.count)
+    }
+
+    // Population standard deviation in thousandths: sqrt(n*S2 - S1^2) / n.
+    fn stddev_milli(ref self) -> i64 {
+        let spread = self.count * self.sum_sq - self.sum * self.sum;
+        isqrt(spread * 100) / self.count
+    }
+}
+
+struct SensorLedger { on_time: i64, merged: i64, dropped: i64, worst_merged: i64 }
+
+impl SensorLedger {
+    // Tallies one arrival; returns whether the event should be windowed.
+    fn record(mut ref self, arrival: Arrival) -> bool {
+        match arrival {
+            Arrival.OnTime => {
+                self.on_time += 1;
+                true
+            }
+            Arrival.MergedLate(late) => {
+                self.merged += 1;
+                if late > self.worst_merged {
+                    self.worst_merged = late;
+                }
+                true
+            }
+            Arrival.Dropped(_) => {
+                self.dropped += 1;
+                false
+            }
+        }
+    }
+}
+
+struct Pipeline {
+    config: Config,
+    high_water: Map[String, i64],
+    tumbling: Map[WindowKey, WindowStats],
+    sliding: Map[WindowKey, WindowStats],
+    ledgers: Map[String, SensorLedger],
+}
+
+impl Pipeline {
+    fn new(config: Config) -> Pipeline {
+        Pipeline {
+            config: config,
+            high_water: Map.new(),
+            tumbling: Map.new(),
+            sliding: Map.new(),
+            ledgers: Map.new(),
+        }
+    }
+
+    fn classify(ref self, ev: ref Event) -> Arrival {
+        match self.high_water.get(ev.sensor) {
+            None => Arrival.OnTime,
+            Some(high) => {
+                let lateness = high - ev.ts;
+                if lateness <= 0 {
+                    Arrival.OnTime
+                } else if lateness <= self.config.allowed_lateness {
+                    Arrival.MergedLate(lateness)
+                } else {
+                    Arrival.Dropped(lateness)
+                }
+            }
+        }
+    }
+
+    fn ingest(mut ref self, ev: Event) {
+        let arrival = self.classify(ev);
+        // Map.entry(..).or_insert(..).record(..) loses the update under karac build.
+        let mut ledger = match self.ledgers.remove(ev.sensor) {
+            Some(l) => l,
+            None => SensorLedger { on_time: 0, merged: 0, dropped: 0, worst_merged: 0 },
+        };
+        let accepted = ledger.record(arrival);
+        self.ledgers.insert(ev.sensor.clone(), ledger);
+        if not accepted {
+            return;
+        }
+        let high = match self.high_water.get(ev.sensor) {
+            Some(h) => h,
+            None => ev.ts,
+        };
+        if ev.ts >= high {
+            self.high_water.insert(ev.sensor.clone(), ev.ts);
+        }
+
+        let tumble_start = floor_to(ev.ts, self.config.tumble_size);
+        let key = WindowKey { sensor: ev.sensor.clone(), start: tumble_start };
+        bump(mut self.tumbling, key, ev.value);
+
+        // Every sliding window [start, start + size) that contains ts.
+        let mut start = floor_to(ev.ts, self.config.slide_step);
+        while start > ev.ts - self.config.slide_size {
+            if start >= 0 {
+                let skey = WindowKey { sensor: ev.sensor.clone(), start: start };
+                bump(mut self.sliding, skey, ev.value);
+            }
+            start -= self.config.slide_step;
+        }
+    }
+}
+
+// Folds one value into a window's running stats, creating it on first use.
+fn bump(windows: mut ref Map[WindowKey, WindowStats], key: WindowKey, value: i64) {
+    let mut st = match windows.remove(key) {
+        Some(existing) => existing,
+        None => WindowStats.new(),
+    };
+    st.add(value);
+    windows.insert(key, st);
+}
+
+fn floor_to(ts: i64, size: i64) -> i64 {
+    ts - ts.rem_euclid(size)
+}
+
+fn round_div(num: i64, den: i64) -> i64 {
+    if num >= 0 {
+        (2 * num + den) / (2 * den)
+    } else {
+        -((-2 * num + den) / (2 * den))
+    }
+}
+
+fn isqrt(n: i64) -> i64 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+fn fmt_fixed(v: i64, places: i64) -> String {
+    let mut scale = 1;
+    for _ in 0..places {
+        scale *= 10;
+    }
+    let mag = v.abs();
+    let mut frac = (mag % scale).to_string();
+    while frac.len() < places {
+        frac = "0" + frac;
+    }
+    let sign = if v < 0 { "-" } else { "" };
+    f"{sign}{mag / scale}.{frac}"
+}
+
+fn pad_left(s: String, width: i64) -> String {
+    let mut out = s;
+    while out.len() < width {
+        out = " " + out;
+    }
+    out
+}
+
+fn parse_fixed(text: ref String) -> Option[i64] {
+    let negative = text.starts_with("-");
+    let body = if negative { text.substring(1) } else { text.clone() };
+    let parts = body.split(".");
+    if parts.len() != 2 or parts[1].len() != 2 {
+        return None;
+    }
+    let whole = i64.parse(parts[0])?;
+    let frac = i64.parse(parts[1])?;
+    let v = whole * 100 + frac;
+    if negative { Some(-v) } else { Some(v) }
+}
+
+fn parse_line(line_no: i64, line: ref String) -> Result[Event, ParseError] {
+    let fields = line.split(",");
+    if fields.len() != 3 {
+        return Err(ParseError.FieldCount(line_no));
+    }
+    let ts = match i64.parse(fields[0]) {
+        Some(t) => t,
+        None => return Err(ParseError.BadTimestamp(line_no, fields[0].clone())),
+    };
+    let value = match parse_fixed(fields[2]) {
+        Some(v) => v,
+        None => return Err(ParseError.BadValue(line_no, fields[2].clone())),
+    };
+    Ok(Event { ts: ts, sensor: fields[1].clone(), value: value })
+}
+
+// Deterministic synthetic feed: a clock that advances 1..4s per event, with a
+// fraction of events delivered late by up to 25s and an occasional corrupt row.
+fn synthesize(sensor: String, seed: i64, base: i64, count: i64) -> String {
+    let mut state = seed;
+    let mut clock = 0;
+    let mut out = "ts,sensor,value\n";
+    for i in 0..count {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        clock += 1 + state % 4;
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let mut ts = clock;
+        if state % 7 == 0 {
+            ts = clock - (state / 7) % 26;
+            if ts < 0 {
+                ts = 0;
+            }
+        }
+        state = (state * 1103515245 + 12345) % 2147483648;
+        let value = base + (state % 1601) - 800;
+        if i % 37 == 19 {
+            out.push_str(f"{ts},{sensor},n/a\n");
+        } else if i % 53 == 41 {
+            out.push_str(f"{ts};{sensor};{fmt_fixed(value, 2)}\n");
+        } else {
+            out.push_str(f"{ts},{sensor},{fmt_fixed(value, 2)}\n");
+        }
+    }
+    out
+}
+
+fn load_stream(name: String, content: String) -> Vec[Event] {
+    let mut events: Vec[Event] = Vec.new();
+    let mut errors = 0;
+    let lines = content.split("\n");
+    for i in 1..lines.len() {
+        let line = lines[i].trim();
+        if line.is_empty() {
+            continue;
+        }
+        match parse_line(i, line) {
+            Ok(ev) => events.push(ev),
+            Err(e) => {
+                errors += 1;
+                println(f"  [{name}] skipped {e.describe()}");
+            }
+        }
+    }
+    println(f"  [{name}] parsed {events.len()} events, {errors} rejected");
+    events
+}
+
+fn print_windows(title: String, windows: ref Map[WindowKey, WindowStats], size: i64) {
+    println(f"== {title} ==");
+    println("sensor        window      n      min      max     mean    stddev");
+    let mut keys: Vec[WindowKey] = Vec.new();
+    for k in windows.keys() {
+        keys.push(k.clone());
+    }
+    keys.sort();
+    for k in keys {
+        let span = f"[{k.start},{k.start + size})";
+        match windows.get(k) {
+            Some(st) => println(f"{pad_left(k.sensor.clone(), 7)} {pad_left(span, 12)} {pad_left(st.count.to_string(), 6)} {pad_left(fmt_fixed(st.min, 2), 8)} {pad_left(fmt_fixed(st.max, 2), 8)} {pad_left(fmt_fixed(st.mean_centi(), 2), 8)} {pad_left(fmt_fixed(st.stddev_milli(), 3), 9)}"),
+            None => {}
+        }
+    }
+}
+
+fn run() -> Result[(), IoError] {
+    let config = Config { tumble_size: 60, slide_size: 40, slide_step: 20, allowed_lateness: 12 };
+    println(f"config: tumble={config.tumble_size}s slide={config.slide_size}s/{config.slide_step}s lateness={config.allowed_lateness}s");
+
+    fs.write("feed_boiler.csv", synthesize("boiler", 17, 6500, 90))?;
+    fs.write("feed_intake.csv", synthesize("intake", 4242, 1200, 80))?;
+    fs.write("feed_exhaust.csv", synthesize("exhaust", 991, 9800, 70))?;
+
+    let boiler_raw = fs.read_to_string("feed_boiler.csv")?;
+    let intake_raw = fs.read_to_string("feed_intake.csv")?;
+    let exhaust_raw = fs.read_to_string("feed_exhaust.csv")?;
+
+    println("loading feeds:");
+    let streams = [
+        load_stream("boiler", boiler_raw),
+        load_stream("intake", intake_raw),
+        load_stream("exhaust", exhaust_raw),
+    ];
+
+    // Interleave the three feeds in arrival order (round-robin by position).
+    let mut longest = 0;
+    for s in streams {
+        if s.len() > longest {
+            longest = s.len();
+        }
+    }
+    let mut pipeline = Pipeline.new(config);
+    for i in 0..longest {
+        for s in streams {
+            if i < s.len() {
+                let ev = ref s[i];
+                pipeline.ingest(Event { ts: ev.ts, sensor: ev.sensor.clone(), value: ev.value });
+            }
+        }
+    }
+
+    // Passing a Map field straight to a `ref Map` parameter corrupts it under
+    // karac build, so the finished pipeline is taken apart into locals first.
+    let Pipeline { config, high_water: _, tumbling, sliding, ledgers } = pipeline;
+    print_windows("tumbling", tumbling, config.tumble_size);
+    print_windows("sliding", sliding, config.slide_size);
+
+    println("== lateness ==");
+    let mut sensors: Vec[String] = Vec.new();
+    for k in ledgers.keys() {
+        sensors.push(k.clone());
+    }
+    sensors.sort();
+    let mut total_dropped = 0;
+    let mut total_merged = 0;
+    for name in sensors {
+        match ledgers.get(name) {
+            Some(l) => {
+                total_dropped += l.dropped;
+                total_merged += l.merged;
+                println(f"{pad_left(name.clone(), 7)} on_time={l.on_time} merged={l.merged} dropped={l.dropped} worst_merged={l.worst_merged}s");
+            }
+            None => {}
+        }
+    }
+    println(f"total: merged={total_merged} dropped={total_dropped} tumbling_windows={tumbling.len()} sliding_windows={sliding.len()}");
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => {}
+        Err(e) => println(f"pipeline failed: {e}"),
+    }
+}

@@ -1,0 +1,264 @@
+// word_freq_multi — a small text-analytics CLI.
+//
+// Writes a five-document corpus to disk, reads the five files back, counts
+// words per file and across the whole corpus (dropping stop words), and prints
+// the top ten words for each file and overall. Ties are broken alphabetically.
+
+let TOP_N: i64 = 10;
+let MIN_WORD_LEN: i64 = 2;
+
+// ---------------------------------------------------------------------------
+// Domain types
+// ---------------------------------------------------------------------------
+
+struct Document {
+    name: String,
+    body: String,
+}
+
+enum AppError {
+    Io { path: String, reason: String },
+    EmptyDocument(String),
+}
+
+impl Display for AppError {
+    fn to_string(ref self) -> String {
+        match self {
+            AppError.Io { path, reason } => f"i/o error on {path}: {reason}",
+            AppError.EmptyDocument(name) => f"document {name} has no words",
+        }
+    }
+}
+
+// One ranked entry in a report.
+struct WordCount {
+    word: String,
+    count: i64,
+}
+
+struct StopWords {
+    words: Set[String],
+}
+
+impl StopWords {
+    fn english() -> StopWords {
+        let list = [
+            "the", "a", "an", "and", "or", "of", "to", "in", "on", "for",
+            "is", "are", "was", "were", "with", "as", "it", "its", "that",
+            "this", "by", "at", "be", "from", "but", "not", "we", "our",
+            "they", "their", "each", "into", "when", "then", "than", "so",
+        ];
+        let mut words: Set[String] = Set.new();
+        for w in list {
+            words.insert(w);
+        }
+        StopWords { words }
+    }
+
+    fn contains(ref self, word: ref String) -> bool {
+        self.words.contains(word)
+    }
+}
+
+// Frequency table for one document (or the whole corpus).
+struct FreqTable {
+    label: String,
+    counts: Map[String, i64],
+    total_tokens: i64,
+    kept_tokens: i64,
+}
+
+impl FreqTable {
+    fn new(label: String) -> FreqTable {
+        FreqTable { label, counts: Map.new(), total_tokens: 0, kept_tokens: 0 }
+    }
+
+    fn add(mut ref self, word: String, n: i64) {
+        let current = match self.counts.get(word) {
+            Some(c) => c,
+            None => 0,
+        };
+        self.counts.insert(word, current + n);
+    }
+
+    fn absorb(mut ref self, other: ref FreqTable) {
+        for (word, count) in other.counts {
+            self.add(word.clone(), count);
+        }
+        self.total_tokens += other.total_tokens;
+        self.kept_tokens += other.kept_tokens;
+    }
+
+    fn unique(ref self) -> i64 {
+        self.counts.len()
+    }
+
+    // Highest counts first, ties broken alphabetically. The sort key is
+    // (-count, word) so the natural tuple ordering gives the ranking.
+    fn top(ref self, n: i64) -> Vec[WordCount] {
+        let mut keys: Vec[(i64, String)] = Vec.new();
+        for (word, count) in self.counts {
+            keys.push((-count, word.clone()));
+        }
+        keys.sort();
+        let mut out: Vec[WordCount] = Vec.new();
+        for (neg, word) in keys.into_iter() {
+            if out.len() >= n {
+                break;
+            }
+            out.push(WordCount { word, count: -neg });
+        }
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Corpus
+// ---------------------------------------------------------------------------
+
+fn corpus() -> Vec[Document] {
+    let mut docs: Vec[Document] = Vec.new();
+    docs.push(Document {
+        name: "wf_harbor.txt",
+        body: "The harbor wakes before the sun. Fishing boats leave the harbor in a slow line,\nand the gulls follow the boats out to sea. By noon the boats return with fish,\nand the market by the harbor fills with buyers. Fish, ice, rope and salt:\nthe harbor trades in all of them, and the boats never stop.",
+    });
+    docs.push(Document {
+        name: "wf_garden.txt",
+        body: "A garden needs water, light and patience. The tomatoes climb the fence;\nthe beans climb the poles. Water the garden early, before the heat.\nWeeds grow faster than tomatoes, so pull the weeds every morning.\nBy August the garden gives more tomatoes than the kitchen can use.",
+    });
+    docs.push(Document {
+        name: "wf_server.txt",
+        body: "The server accepts a request, parses the request, and writes a response.\nEach request carries headers; each response carries headers and a body.\nWhen the server is slow, requests queue, and the queue grows.\nA healthy server drains the queue faster than requests arrive.",
+    });
+    docs.push(Document {
+        name: "wf_library.txt",
+        body: "The library keeps books, maps and old newspapers. Readers borrow books\nand return books; the library tracks every loan. Quiet readers fill\nthe reading room. The library opens at nine and the readers arrive early,\nwaiting for the doors, waiting for the books.",
+    });
+    docs.push(Document {
+        name: "wf_kitchen.txt",
+        body: "In the kitchen the water boils and the bread rises. Salt the water,\nadd the pasta, stir the sauce. The kitchen smells of bread and garlic.\nTomatoes from the garden go into the sauce; fish from the harbor goes\non the grill. The kitchen is never quiet at dinner.",
+    });
+    docs
+}
+
+fn write_corpus(docs: ref Vec[Document]) -> Result[(), AppError] {
+    for doc in docs {
+        match fs.write(doc.name, doc.body) {
+            Ok(_) => {}
+            Err(e) => {
+                return Err(AppError.Io { path: doc.name.clone(), reason: describe_io(e) });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn describe_io(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "not found",
+        IoError.PermissionDenied => "permission denied",
+        IoError.AlreadyExists => "already exists",
+        IoError.UnexpectedEof => "unexpected end of file",
+        IoError.InvalidUtf8 => "invalid utf-8",
+        IoError.Interrupted => "interrupted",
+        IoError.Other(msg) => msg,
+    }
+}
+
+fn into_document(path: String, read: Result[String, IoError]) -> Result[Document, AppError] {
+    match read {
+        Ok(body) => Ok(Document { name: path, body }),
+        Err(e) => Err(AppError.Io { path, reason: describe_io(e) }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Text processing
+// ---------------------------------------------------------------------------
+
+fn normalize(text: ref String) -> String {
+    let mut out = text.to_lowercase();
+    let separators = [",", ".", ";", ":", "!", "?", "(", ")", "\"", "\n", "\t"];
+    for sep in separators {
+        out = out.replace(sep, " ");
+    }
+    out
+}
+
+fn tokenize(text: ref String) -> Vec[String] {
+    let mut tokens: Vec[String] = Vec.new();
+    for piece in normalize(text).split(" ") {
+        let word = piece.trim();
+        if not word.is_empty() {
+            tokens.push(word);
+        }
+    }
+    tokens
+}
+
+fn count_document(doc: ref Document, stop: ref StopWords) -> Result[FreqTable, AppError] {
+    let mut table = FreqTable.new(doc.name.clone());
+    for word in tokenize(doc.body) {
+        table.total_tokens += 1;
+        if word.len() < MIN_WORD_LEN or stop.contains(word) {
+            continue;
+        }
+        table.kept_tokens += 1;
+        table.add(word, 1);
+    }
+    if table.kept_tokens == 0 {
+        return Err(AppError.EmptyDocument(doc.name.clone()));
+    }
+    Ok(table)
+}
+
+// ---------------------------------------------------------------------------
+// Reporting
+// ---------------------------------------------------------------------------
+
+fn print_report(table: ref FreqTable) {
+    println(f"== {table.label} ==");
+    println(f"tokens: {table.total_tokens}  kept: {table.kept_tokens}  unique: {table.unique()}");
+    let mut rank = 1;
+    for entry in table.top(TOP_N) {
+        println(f"  {rank}. {entry.word} {entry.count}");
+        rank += 1;
+    }
+    println("");
+}
+
+fn run() -> Result[(), AppError] {
+    let docs = corpus();
+    write_corpus(docs)?;
+    println(f"wrote {docs.len()} files");
+    println("");
+
+    // The five reads touch five different files and do not depend on each
+    // other, so they are written as one group of independent statements.
+    let harbor = fs.read_to_string("wf_harbor.txt");
+    let garden = fs.read_to_string("wf_garden.txt");
+    let server = fs.read_to_string("wf_server.txt");
+    let library = fs.read_to_string("wf_library.txt");
+    let kitchen = fs.read_to_string("wf_kitchen.txt");
+
+    let mut loaded: Vec[Document] = Vec.new();
+    loaded.push(into_document("wf_harbor.txt", harbor)?);
+    loaded.push(into_document("wf_garden.txt", garden)?);
+    loaded.push(into_document("wf_server.txt", server)?);
+    loaded.push(into_document("wf_library.txt", library)?);
+    loaded.push(into_document("wf_kitchen.txt", kitchen)?);
+
+    let stop = StopWords.english();
+    let mut overall = FreqTable.new("ALL FILES");
+    for doc in loaded {
+        let table = count_document(doc, stop)?;
+        print_report(table);
+        overall.absorb(table);
+    }
+    print_report(overall);
+    Ok(())
+}
+
+fn main() -> Result[(), AppError] {
+    run()
+}

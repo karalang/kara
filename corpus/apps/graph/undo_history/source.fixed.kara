@@ -1,0 +1,346 @@
+// undo_history: a text editor buffer with an undo/redo history.
+//
+// Commands (insert, delete, replace) are applied to a buffer and recorded as
+// reversible edits. Edits can be grouped so one undo reverts several of them.
+// A new edit after an undo discards the redo branch.
+
+enum Command {
+    Insert { pos: i64, text: String },
+    Delete { pos: i64, len: i64 },
+    Replace { pos: i64, len: i64, text: String },
+}
+
+impl Command {
+    fn describe(ref self) -> String {
+        match self {
+            Command.Insert { pos, text } => f"insert@{pos} \"{text}\"",
+            Command.Delete { pos, len } => f"delete@{pos}+{len}",
+            Command.Replace { pos, len, text } => f"replace@{pos}+{len} \"{text}\"",
+        }
+    }
+}
+
+// Wrapper struct: v1 rejects an enum payload of nested enum type (Step.Do(Command)).
+struct Request {
+    cmd: Command,
+}
+
+enum Step {
+    Do(Request),
+    Undo,
+    Redo,
+    Begin(String),
+    End,
+}
+
+enum EditError {
+    OutOfRange { pos: i64, len: i64, size: i64 },
+    NothingToUndo,
+    NothingToRedo,
+    NestedGroup(String),
+    NoOpenGroup,
+    EmptyGroup(String),
+    GroupOpen(String),
+}
+
+impl EditError {
+    fn message(ref self) -> String {
+        match self {
+            EditError.OutOfRange { pos, len, size } =>
+                f"range {pos}..{pos + len} out of bounds for buffer of size {size}",
+            EditError.NothingToUndo => "nothing to undo",
+            EditError.NothingToRedo => "nothing to redo",
+            EditError.NestedGroup(name) => f"group \"{name}\" is already open",
+            EditError.NoOpenGroup => "no group is open",
+            EditError.EmptyGroup(name) => f"group \"{name}\" recorded no edits",
+            EditError.GroupOpen(name) => f"cannot undo/redo while group \"{name}\" is open",
+        }
+    }
+}
+
+// One reversible change: at `pos`, `removed` was replaced by `inserted`.
+struct Edit {
+    pos: i64,
+    removed: String,
+    inserted: String,
+}
+
+// A unit of undo: one or more edits applied together.
+struct Group {
+    label: String,
+    edits: Vec[Edit],
+}
+
+struct Buffer {
+    text: String,
+}
+
+impl Buffer {
+    fn new() -> Buffer {
+        Buffer { text: String.new() }
+    }
+
+    // Replace `len` bytes at `pos` with `insert`; returns the removed text.
+    fn splice(mut ref self, pos: i64, len: i64, insert: ref String) -> Result[String, EditError] {
+        let size = self.text.len();
+        if pos < 0 or len < 0 or pos + len > size {
+            return Err(EditError.OutOfRange { pos, len, size });
+        }
+        let removed = self.text.substring(pos, pos + len);
+        let before = self.text.substring(0, pos);
+        let after = self.text.substring(pos + len);
+        self.text = before + insert + after;
+        Ok(removed)
+    }
+}
+
+struct Editor {
+    buffer: Buffer,
+    undo_stack: Vec[Group],
+    redo_stack: Vec[Group],
+    group_label: Option[String],
+    pending: Vec[Edit],
+    applied: i64,
+    undone: i64,
+    redone: i64,
+    discarded: i64,
+}
+
+impl Editor {
+    fn new() -> Editor {
+        Editor {
+            buffer: Buffer.new(),
+            undo_stack: Vec.new(),
+            redo_stack: Vec.new(),
+            group_label: None,
+            pending: Vec.new(),
+            applied: 0,
+            undone: 0,
+            redone: 0,
+            discarded: 0,
+        }
+    }
+
+    // Applies a command; returns how many redo groups were discarded.
+    fn execute(mut ref self, cmd: Command) -> Result[i64, EditError] {
+        let removed = match cmd {
+            Command.Insert { pos, text: ref text } => self.buffer.splice(pos, 0, text)?,
+            Command.Delete { pos, len } => self.buffer.splice(pos, len, "")?,
+            Command.Replace { pos, len, text: ref text } => self.buffer.splice(pos, len, text)?,
+        };
+        let (pos, inserted) = match cmd {
+            Command.Insert { pos, text: ref text } => (pos, text.clone()),
+            Command.Delete { pos, len } => (pos, ""),
+            Command.Replace { pos, len, text: ref text } => (pos, text.clone()),
+        };
+        let edit = Edit { pos, removed, inserted };
+        self.applied += 1;
+
+        let dropped = self.redo_stack.len();
+        self.redo_stack.clear();
+        self.discarded += dropped;
+
+        if self.group_label.is_some() {
+            self.pending.push(edit);
+        } else {
+            let mut edits = Vec.new();
+            edits.push(edit);
+            self.undo_stack.push(Group { label: cmd.describe(), edits });
+        }
+        Ok(dropped)
+    }
+
+    fn begin(mut ref self, label: String) -> Result[(), EditError] {
+        match self.group_label {
+            Some(open) => return Err(EditError.NestedGroup(open.clone())),
+            None => {}
+        }
+        self.group_label = Some(label);
+        Ok(())
+    }
+
+    fn end(mut ref self) -> Result[i64, EditError] {
+        let label = match self.group_label {
+            Some(l) => l.clone(),
+            None => return Err(EditError.NoOpenGroup),
+        };
+        self.group_label = None;
+        if self.pending.is_empty() {
+            return Err(EditError.EmptyGroup(label));
+        }
+        let mut edits = Vec.new();
+        while let Some(e) = self.pending.pop() {
+            edits.push(e);
+        }
+        edits.reverse();
+        let count = edits.len();
+        self.undo_stack.push(Group { label, edits });
+        Ok(count)
+    }
+
+    fn check_no_group(ref self) -> Result[(), EditError] {
+        match self.group_label {
+            Some(open) => Err(EditError.GroupOpen(open.clone())),
+            None => Ok(()),
+        }
+    }
+
+    fn undo(mut ref self) -> Result[String, EditError] {
+        self.check_no_group()?;
+        let batch = match self.undo_stack.pop() {
+            Some(g) => g,
+            None => return Err(EditError.NothingToUndo),
+        };
+        let mut i = batch.edits.len() - 1;
+        while i >= 0 {
+            let e = ref batch.edits[i];
+            self.buffer.splice(e.pos, e.inserted.len(), e.removed)?;
+            i -= 1;
+        }
+        self.undone += 1;
+        let label = batch.label.clone();
+        self.redo_stack.push(batch);
+        Ok(label)
+    }
+
+    fn redo(mut ref self) -> Result[String, EditError] {
+        self.check_no_group()?;
+        let batch = match self.redo_stack.pop() {
+            Some(g) => g,
+            None => return Err(EditError.NothingToRedo),
+        };
+        for e in batch.edits {
+            self.buffer.splice(e.pos, e.removed.len(), e.inserted)?;
+        }
+        self.redone += 1;
+        let label = batch.label.clone();
+        self.undo_stack.push(batch);
+        Ok(label)
+    }
+
+    fn run_step(mut ref self, step: Step) -> Result[String, EditError] {
+        match step {
+            Step.Do(req) => {
+                let cmd = req.cmd;
+                let desc = cmd.describe();
+                let dropped = self.execute(cmd)?;
+                if dropped > 0 {
+                    Ok(f"{desc} (discarded {dropped} redo)")
+                } else {
+                    Ok(desc)
+                }
+            }
+            Step.Undo => {
+                let label = self.undo()?;
+                Ok(f"undo [{label}]")
+            }
+            Step.Redo => {
+                let label = self.redo()?;
+                Ok(f"redo [{label}]")
+            }
+            Step.Begin(name) => {
+                let msg = f"begin group \"{name}\"";
+                self.begin(name)?;
+                Ok(msg)
+            }
+            Step.End => {
+                let count = self.end()?;
+                Ok(f"end group ({count} edits)")
+            }
+        }
+    }
+}
+
+fn labels(groups: ref Vec[Group]) -> String {
+    let mut out = String.new();
+    let mut i = groups.len() - 1;
+    while i >= 0 {
+        if out.len() > 0 {
+            out.push_str(" | ");
+        }
+        out.push_str(groups[i].label);
+        i -= 1;
+    }
+    if out.is_empty() {
+        out.push_str("(empty)");
+    }
+    out
+}
+
+fn ins(pos: i64, text: String) -> Step {
+    Step.Do(Request { cmd: Command.Insert { pos, text } })
+}
+
+fn del(pos: i64, len: i64) -> Step {
+    Step.Do(Request { cmd: Command.Delete { pos, len } })
+}
+
+fn rep(pos: i64, len: i64, text: String) -> Step {
+    Step.Do(Request { cmd: Command.Replace { pos, len, text } })
+}
+
+fn script() -> Vec[Step] {
+    let mut steps = Vec.new();
+    steps.push(ins(0, "Hello world"));
+    steps.push(ins(5, ","));
+    steps.push(rep(7, 5, "Kara"));
+    steps.push(Step.Begin("decorate"));
+    steps.push(ins(11, "!"));
+    steps.push(ins(0, ">> "));
+    steps.push(Step.End);
+    steps.push(Step.Undo);
+    steps.push(Step.Undo);
+    steps.push(Step.Redo);
+    steps.push(del(0, 7));
+    steps.push(Step.Redo);
+    steps.push(del(10, 3));
+    steps.push(ins(4, " rocks"));
+    steps.push(Step.Begin("shout"));
+    steps.push(rep(0, 4, "KARA"));
+    steps.push(Step.Undo);
+    steps.push(Step.Begin("again"));
+    steps.push(rep(5, 5, "ROCKS"));
+    steps.push(Step.End);
+    steps.push(Step.End);
+    steps.push(Step.Begin("nothing"));
+    steps.push(Step.End);
+    steps.push(Step.Undo);
+    steps.push(Step.Undo);
+    steps.push(Step.Undo);
+    steps.push(Step.Undo);
+    steps.push(Step.Undo);
+    steps.push(Step.Undo);
+    steps.push(Step.Undo);
+    steps.push(Step.Redo);
+    steps.push(Step.Redo);
+    steps.push(Step.Redo);
+    steps.push(rep(0, 5, "Howdy"));
+    steps.push(Step.Redo);
+    steps.push(Step.Undo);
+    steps.push(Step.Redo);
+    steps
+}
+
+fn main() {
+    let mut editor = Editor.new();
+    let mut n = 0;
+    let mut failures = 0;
+    for step in script() {
+        n += 1;
+        let tag = if n < 10 { f"0{n}" } else { f"{n}" };
+        match editor.run_step(step) {
+            Ok(msg) => println(f"[{tag}] {msg}"),
+            Err(e) => {
+                failures += 1;
+                println(f"[{tag}] error: {e.message()}");
+            }
+        }
+        println(f"     |{editor.buffer.text}|");
+    }
+    println("--- summary ---");
+    let final_text = editor.buffer.text;
+    println(f"final buffer: \"{final_text}\" ({final_text.len()} bytes)");
+    println(f"undo stack: {labels(editor.undo_stack)}");
+    println(f"redo stack: {labels(editor.redo_stack)}");
+    println(f"applied={editor.applied} undone={editor.undone} redone={editor.redone} discarded={editor.discarded} errors={failures}");
+}

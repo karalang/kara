@@ -1,0 +1,13 @@
+source = "corpus/apps/graph/entity_system/source.orig.kara (v2 by karac fix + hand edits)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:graph", "par"]
+class = "unknown"
+expected_from = "mirror"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = ""
