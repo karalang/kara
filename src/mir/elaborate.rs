@@ -1373,18 +1373,9 @@ mod tests {
     /// this pass, so they are the ones that exercise it.
     #[test]
     fn mir_elab_core_built_pins_match_expected() {
-        use crate::mir::parse_module;
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut files: Vec<_> = std::fs::read_dir(root.join("tests/mir/core-built"))
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .collect();
-        files.sort();
-        let (mut ran, mut flagged, mut bad) = (0, 0, Vec::new());
-        for path in files {
-            let pin = path.file_stem().unwrap().to_str().unwrap().to_string();
-            let pin_dir = root.join("corpus/core").join(&pin);
-            let expected = std::fs::read_to_string(pin_dir.join("expected.out")).unwrap();
+        let (ran, flagged) = elaborate_and_run_pins("tests/mir/core-built", |pin| {
+            let pin_dir = root.join("corpus/core").join(pin);
             let meta = std::fs::read_to_string(pin_dir.join("meta.toml")).unwrap();
             let exit: i32 = meta
                 .lines()
@@ -1393,6 +1384,47 @@ mod tests {
                 .trim()
                 .parse()
                 .unwrap();
+            (
+                std::fs::read_to_string(pin_dir.join("expected.out")).unwrap(),
+                exit,
+            )
+        });
+        assert_eq!(ran, 23, "every runnable core pin has a Built form");
+        assert!(flagged > 0, "no pin needed a drop flag");
+    }
+
+    /// The closure pins in Built form, against the hand-derived `.out`
+    /// beside their elaborated twins; `closure_once_partial_move` is a
+    /// partial move out of a by-value environment.
+    #[test]
+    fn mir_elab_closure_built_pins_match_expected() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let (ran, _) = elaborate_and_run_pins("tests/mir/closures-built", |pin| {
+            let out = root.join("tests/mir/closures").join(format!("{pin}.out"));
+            (std::fs::read_to_string(out).unwrap(), 0)
+        });
+        assert!(ran >= 2, "the closure pins ran ({ran})");
+    }
+
+    /// Elaborates, validates and runs every Built pin in `dir`, requiring
+    /// the output and exit code `expected(pin)` gives; returns how many
+    /// pins ran and how many bodies needed a drop flag.
+    fn elaborate_and_run_pins(
+        dir: &str,
+        expected: impl Fn(&str) -> (String, i32),
+    ) -> (usize, usize) {
+        use crate::mir::parse_module;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files: Vec<_> = std::fs::read_dir(root.join(dir))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "mir"))
+            .collect();
+        files.sort();
+        let (mut ran, mut flagged, mut bad) = (0, 0, Vec::new());
+        for path in files {
+            let pin = path.file_stem().unwrap().to_str().unwrap().to_string();
+            let (want, exit) = expected(&pin);
             let src = std::fs::read_to_string(&path).unwrap();
             let mut m = parse_module(&src).unwrap_or_else(|e| panic!("{pin}: {e}"));
             for b in &mut m.bodies {
@@ -1412,10 +1444,10 @@ mod tests {
             let prog = Program::from_module(&m);
             let r = run(&prog, &m.tys, "main", vec![]);
             ran += 1;
-            if r.output != expected || r.exit_code() != Some(exit) {
+            if r.output != want || r.exit_code() != Some(exit) {
                 let main = m.bodies.iter().find(|b| b.instance.name == "main");
                 bad.push(format!(
-                    "{pin}: exit {:?} (want {exit}), outcome {:?}\n--- got\n{}--- want\n{expected}{}",
+                    "{pin}: exit {:?} (want {exit}), outcome {:?}\n--- got\n{}--- want\n{want}{}",
                     r.exit_code(),
                     r.outcome,
                     r.output,
@@ -1424,9 +1456,8 @@ mod tests {
                 ));
             }
         }
-        assert_eq!(ran, 23, "every runnable core pin has a Built form");
         assert!(bad.is_empty(), "{}", bad.join("\n"));
-        assert!(flagged > 0, "no pin needed a drop flag");
+        (ran, flagged)
     }
 
     /// A partial move out of a generic struct instance, `Pair[R]`: the
