@@ -1949,6 +1949,10 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         self.current_return_type = Some(return_type.clone());
+        self.fn_return_types.insert(
+            SpanKey::from_span(&f.span),
+            (return_type.clone(), self.current_generic_frame),
+        );
 
         // Return-position `impl Trait` single-witness pinning (design.md §
         // `impl Trait`: "one concrete return per monomorphization"). Arm the

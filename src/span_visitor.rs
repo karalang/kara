@@ -891,6 +891,22 @@ pub fn walk_item_mut_with(item: &mut Item, visit: &mut impl MutVisitor) {
     walk_item_mut(item, visit);
 }
 
+/// Every expression, pattern and statement id in `e`, in walk order (which
+/// is source order).
+pub fn expr_node_ids(e: &Expr) -> Vec<NodeId> {
+    struct Ids(Vec<NodeId>);
+    impl MutVisitor for Ids {
+        fn span(&mut self, _: &mut Span) {}
+        fn node_id(&mut self, id: &mut NodeId) {
+            self.0.push(*id);
+        }
+    }
+    let mut copy = e.clone();
+    let mut ids = Ids(Vec::new());
+    walk_expr_mut(&mut copy, &mut ids);
+    ids.0
+}
+
 fn walk_expr_mut(e: &mut Expr, visit: &mut impl MutVisitor) {
     visit.span(&mut e.span);
     visit.node_id(&mut e.id);

@@ -6,9 +6,9 @@
     python3 scripts/corpus/run.py --backend legacy-interp --filter fixtures/interpreter/
 
 Backends: legacy (per entry, its `legacy_backend`), legacy-interp,
-legacy-build (AOT at the default auto-par setting, which is off), and the
-mir-interp / mir-llvm / mir-llvm-asan slots, which have no command until the
-new pipeline lands.
+legacy-build (AOT at the default auto-par setting, which is off), mir-interp
+(the MIR builder and interpreter, `karac __mir-run`), and the mir-llvm /
+mir-llvm-asan slots, which have no command until MIR->LLVM lands.
 
 --filter matches a tag exactly or a substring of the entry path; repeat it to
 widen. Each entry is judged by its meta.toml `expect`:

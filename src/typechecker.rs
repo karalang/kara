@@ -1970,6 +1970,9 @@ pub struct TypeCheckResult {
     /// `NodeId`, so the callee's name resolution (keyed by that expression's
     /// own node) can be read per call.
     pub node_call_callees: FxHashMap<crate::ids::NodeId, crate::ids::NodeId>,
+    /// Each function's declared return type (`Self` resolved), keyed by the
+    /// function's span, with the generic frame its parameters are placed in.
+    pub fn_return_types: FxHashMap<SpanKey, (Type, u32)>,
     /// Per-call-site generic-param substitutions as ELEMENT-AWARE mono-mangle
     /// TOKENS (`T` → `"Vec_i64"` / `"Vec_String"` / `"String"`), the sibling of
     /// `call_type_subs` (which is head-only: both `Vec[i64]` and `Vec[String]`
@@ -2702,6 +2705,7 @@ pub struct TypeChecker<'a> {
     pub(super) node_generic_frames: Vec<Vec<String>>,
     pub(super) current_generic_frame: u32,
     pub(super) node_call_subs: FxHashMap<crate::ids::NodeId, FxHashMap<String, Type>>,
+    pub(super) fn_return_types: FxHashMap<SpanKey, (Type, u32)>,
     /// `(part, whole, how)`: a node whose type is a projection of another's,
     /// in recording order (a whole after its parts). See
     /// `refine_node_types_from_wholes`.
@@ -3065,6 +3069,7 @@ impl<'a> TypeChecker<'a> {
             current_generic_frame: 0,
             node_call_subs: FxHashMap::default(),
             node_type_links: Vec::new(),
+            fn_return_types: FxHashMap::default(),
             node_method_callees: FxHashMap::default(),
             node_call_callees: FxHashMap::default(),
             current_call_node: None,
@@ -3396,6 +3401,7 @@ impl<'a> TypeChecker<'a> {
             node_call_subs,
             node_method_callees: std::mem::take(&mut self.node_method_callees),
             node_call_callees: std::mem::take(&mut self.node_call_callees),
+            fn_return_types: std::mem::take(&mut self.fn_return_types),
             float_coerced_arg_sites: self.float_coerced_arg_sites,
             cast_source_unsigned: self.cast_source_unsigned,
             weak_elem_store_sites: self.weak_elem_store_sites,

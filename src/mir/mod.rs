@@ -11,6 +11,7 @@ pub mod borrowck;
 pub mod build;
 pub mod elaborate;
 pub mod interp;
+pub mod lower;
 pub mod movecheck;
 pub mod parse;
 pub mod place_ty;

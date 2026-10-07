@@ -1632,7 +1632,15 @@ impl<'a> super::TypeChecker<'a> {
         // return used to be unconditional, which is what made
         // `impl Zero for Slice[i64]` register (see `env_add_impl`) and then
         // report `no method 'zero' on type 'Slice[i64]'` at every call site.
-        if let Type::Slice { element, mutable } = &obj_ty.clone() {
+        // A `ref Slice[T]` receiver reaches the same methods (`s.len()` with
+        // `s: ref Slice[i64]`), which used to fall through untyped.
+        let slice_recv = match &obj_ty {
+            Type::Ref(inner) | Type::MutRef(inner) if matches!(**inner, Type::Slice { .. }) => {
+                (**inner).clone()
+            }
+            other => other.clone(),
+        };
+        if let Type::Slice { element, mutable } = &slice_recv {
             let routes_to_user_impl = !SLICE_BUILTIN_METHODS.contains(&method)
                 && !self
                     .env

@@ -622,6 +622,16 @@ impl TyCtxt {
     /// Core semantics § 1.4: owns heap memory, holds a shared handle, or has
     /// a `Drop` body anywhere inside.
     pub fn needs_drop(&self, ty: Ty) -> bool {
+        self.needs_drop_in(ty, &mut Vec::new())
+    }
+
+    /// [`Self::needs_drop`], with the types being asked about further out.
+    /// A type that contains itself (`struct N { next: Option[N] }`) is
+    /// stored behind a box, so meeting it again answers yes.
+    fn needs_drop_in(&self, ty: Ty, outer: &mut Vec<Ty>) -> bool {
+        if outer.contains(&ty) {
+            return true;
+        }
         match self.kind(ty) {
             // An opaque value's concrete type is unknown, so it is assumed to
             // need dropping.
@@ -630,20 +640,26 @@ impl TyCtxt {
             | TyKind::Intrinsic { .. }
             | TyKind::Weak(_)
             | TyKind::Opaque { .. } => true,
-            TyKind::Tuple(l) | TyKind::Closure { captures: l, .. } => {
-                self.list(l).into_iter().any(|t| self.needs_drop(t))
-            }
-            TyKind::Array { elem, .. } => self.needs_drop(elem),
+            TyKind::Tuple(l) | TyKind::Closure { captures: l, .. } => self
+                .list(l)
+                .into_iter()
+                .any(|t| self.needs_drop_in(t, outer)),
+            TyKind::Array { elem, .. } => self.needs_drop_in(elem, outer),
             TyKind::Adt { .. } => {
                 let Some((adt, args)) = self.adt_of(ty) else {
                     return false;
                 };
-                adt.has_drop_impl
-                    || adt.variants.iter().any(|v| {
-                        v.fields
-                            .iter()
-                            .any(|(_, t)| self.needs_drop(self.subst(*t, &args, &[])))
-                    })
+                if adt.has_drop_impl {
+                    return true;
+                }
+                outer.push(ty);
+                let r = adt.variants.iter().any(|v| {
+                    v.fields
+                        .iter()
+                        .any(|(_, t)| self.needs_drop_in(self.subst(*t, &args, &[]), outer))
+                });
+                outer.pop();
+                r
             }
             _ => false,
         }

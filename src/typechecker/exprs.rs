@@ -582,6 +582,13 @@ impl<'a> super::TypeChecker<'a> {
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         let ty = self.check_expr_inner(expr, expected);
+        // The checking-position constructor paths (`Ok(1)` against a
+        // `Result`) never reach `infer_expr`, which records the callee.
+        if let ExprKind::Call { callee, .. } = &expr.kind {
+            if !expr.id.is_dummy() {
+                self.node_call_callees.entry(expr.id).or_insert(callee.id);
+            }
+        }
         // A synthesized type that still names a parameter from some signature
         // (`None` as `Option[T]`) is less precise than the type it was checked
         // against; typed HIR records the context's type instead.

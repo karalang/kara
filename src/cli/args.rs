@@ -88,6 +88,47 @@ pub fn parse_args(args: &[String]) -> Command {
             crate::codegen::print_target_cpu_listing();
             process::exit(0);
         }
+        // Hidden plumbing for the corpus runner's `mir-interp` backend
+        // (redesign M1): check one file, build its MIR and run it on the MIR
+        // interpreter. Exits with the program's code, or 3 with the stage
+        // that refused it on stderr.
+        "__mir-run" => {
+            let Some(path) = args.get(2) else {
+                eprintln!("error: __mir-run requires a file argument");
+                process::exit(1);
+            };
+            let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
+                eprintln!("error: {path}: {e}");
+                process::exit(1);
+            });
+            // The MIR interpreter drops a long chain (a 100 000-node list)
+            // by recursion, so it runs on a thread with room for that.
+            let result = std::thread::Builder::new()
+                .stack_size(1 << 30)
+                .spawn(move || crate::mir::lower::run_source(&src))
+                .expect("failed to spawn the MIR interpreter thread")
+                .join()
+                .unwrap_or_else(|p| std::panic::resume_unwind(p));
+            match result {
+                Ok(r) => {
+                    use std::io::Write;
+                    print!("{}", r.output);
+                    let _ = std::io::stdout().flush();
+                    match (&r.outcome, r.exit_code()) {
+                        (_, Some(code)) => process::exit(code),
+                        (crate::mir::interp::Outcome::Error(e), None) => {
+                            eprintln!("error[mir]: run: {e}");
+                            process::exit(3);
+                        }
+                        _ => process::exit(3),
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error[mir]: {e}");
+                    process::exit(3);
+                }
+            }
+        }
         // Bare file path: treat as `karac run <file>`
         other if other.ends_with(".kara") => parse_run_command_from(args, 1),
         other => {

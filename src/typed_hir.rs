@@ -21,7 +21,7 @@ use crate::def_table::ProgramDefs;
 use crate::ids::{DefId, DefKind, NodeId};
 use crate::module::ModuleId;
 use crate::node_res::Res;
-use crate::ty::{LowerError, Ty, TyCtxt, TyList, TypeName};
+use crate::ty::{LowerError, Ty, TyCtxt, TyKind, TyList, TypeName};
 use crate::typechecker::types::Type;
 use crate::typechecker::TypeCheckResult;
 
@@ -73,6 +73,10 @@ pub trait HirDefs {
     /// A callable definition's generic parameter names in positional order,
     /// or `None` when unknown.
     fn generics(&self, def: DefId) -> Option<Vec<String>>;
+    /// The enum a variant belongs to, when `def` is a variant.
+    fn variant_enum(&self, _def: DefId) -> Option<DefId> {
+        None
+    }
 }
 
 /// [`HirDefs`] over the module-qualified definition table and the resolver's
@@ -169,6 +173,10 @@ impl HirDefs for ProgramHirDefs<'_> {
         let def = self.variant_enum.get(&def).copied().unwrap_or(def);
         Some(self.defs.generic_params(def))
     }
+
+    fn variant_enum(&self, def: DefId) -> Option<DefId> {
+        self.variant_enum.get(&def).copied()
+    }
 }
 
 /// The typed HIR tables of one program.
@@ -247,6 +255,22 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
         // Type arguments are spelled in the CALLER's generics, which are the
         // frame the call node itself was typed in.
         let frame = tc.node_types.get(&id).map_or(0, |(_, f)| *f);
+        // A variant constructor instantiates its enum, whose type arguments
+        // the call's own type carries in full.
+        let enum_args = match &callee {
+            Callee::Def(d) => defs.variant_enum(*d).and_then(|e| {
+                let t = *node_types.get(&id)?;
+                match tcx.kind(t) {
+                    TyKind::Adt { def, args } if def == e => Some(args),
+                    _ => None,
+                }
+            }),
+            _ => None,
+        };
+        if let Some(substs) = enum_args {
+            calls.insert(id, ResolvedCall { callee, substs });
+            continue;
+        }
         match place_substs(tc.node_call_subs.get(&id), &callee, defs, |t| {
             lower(t, frame)
         }) {
@@ -299,7 +323,6 @@ fn place_substs(
 mod tests {
     use super::*;
     use crate::ast::{Expr, ExprKind, ImplItem, Item, StmtKind, TypeKind};
-    use crate::ty::TyKind;
 
     /// A name-keyed stand-in for the definition table: one id per struct,
     /// enum, function and method, in source order.

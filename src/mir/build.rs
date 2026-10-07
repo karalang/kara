@@ -17,6 +17,11 @@ pub struct BodyBuilder {
 }
 
 impl BodyBuilder {
+    /// The instance this body is for.
+    pub fn instance(&self) -> &InstanceId {
+        &self.instance
+    }
+
     /// Starts a body returning `ret`. Add every parameter with
     /// [`Self::arg`] before any other local.
     pub fn new(instance: InstanceId, ret: Ty) -> Self {
@@ -117,6 +122,19 @@ impl BodyBuilder {
             kind,
             source_info: self.info,
         });
+    }
+
+    /// End every block that has no terminator yet with `kind`: the dead
+    /// blocks a builder opens after a `return` or `break`.
+    pub fn terminate_open_blocks(&mut self, kind: TerminatorKind) {
+        for slot in &mut self.blocks {
+            if slot.1.is_none() {
+                slot.1 = Some(Terminator {
+                    kind: kind.clone(),
+                    source_info: self.info,
+                });
+            }
+        }
     }
 
     /// Finishes the body in the `Built` phase. Fails if a block was left

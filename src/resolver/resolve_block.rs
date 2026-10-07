@@ -560,6 +560,9 @@ impl<'a> super::Resolver<'a> {
                 for arm in arms {
                     self.table.push_scope(ScopeKind::MatchArm);
                     self.resolve_pattern(&arm.pattern);
+                    if let Some(guard) = &arm.guard {
+                        self.resolve_expr(guard);
+                    }
                     self.resolve_expr(&arm.body);
                     self.table.pop_scope();
                 }

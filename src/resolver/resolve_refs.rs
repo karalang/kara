@@ -293,18 +293,19 @@ impl<'a> super::Resolver<'a> {
             PatternKind::Binding(name) => {
                 // `E.A` in pattern position is a unit variant, and so is a
                 // bare name that already names one; record what it names.
-                // The name is still defined as before (the typechecker
-                // decides variant-versus-binding), but it is not a binding.
-                let variant = self.pattern_variant_ref(name);
-                let defined = self.table.define(
-                    name.clone(),
-                    SymbolKind::Variable { is_mut: false },
-                    pattern.span,
-                    false,
-                );
-                match variant {
+                // A variant binds nothing, so it does not shadow itself: a
+                // `None` written in the arm's body is still the variant.
+                match self.pattern_variant_ref(name) {
                     Some((id, rest)) => self.record_node_ref(pattern.id, id, &rest),
-                    None => self.record_binding_node(&defined, pattern.id),
+                    None => {
+                        let defined = self.table.define(
+                            name.clone(),
+                            SymbolKind::Variable { is_mut: false },
+                            pattern.span,
+                            false,
+                        );
+                        self.record_binding_node(&defined, pattern.id);
+                    }
                 }
             }
             PatternKind::Literal(_) => {}
@@ -329,13 +330,15 @@ impl<'a> super::Resolver<'a> {
                     if let Some(ref sub_pattern) = field.pattern {
                         self.resolve_pattern(sub_pattern);
                     } else {
-                        // Shorthand: field name becomes binding
-                        let _ = self.table.define(
+                        // Shorthand: field name becomes binding, bound
+                        // through the struct pattern's node.
+                        let defined = self.table.define(
                             field.name.clone(),
                             SymbolKind::Variable { is_mut: false },
                             field.span,
                             false,
                         );
+                        self.record_binding_node(&defined, pattern.id);
                     }
                 }
             }

@@ -22,11 +22,14 @@ META_ORDER = ["source", "dedup_of", "expect", "exit", "tags", "class",
 
 # A backend is either a single command that compiles and runs (`run`) or a
 # compile step that leaves ./source behind and is then executed (`build`).
-# The mir-* slots have no command until the new pipeline exists.
+# `check` runs `karac check` first and counts its refusal as the backend's.
+# `mir-interp` is the hidden `karac __mir-run` (single-file programs: MIR
+# builder, drop elaboration, MIR interpreter); the other mir-* slots have no
+# command until MIR->LLVM exists.
 BACKENDS = {
     "legacy-interp": {"run": ["run", "--interp"]},
     "legacy-build": {"build": ["build"], "env": {"KARAC_AUTO_PAR": "0"}},
-    "mir-interp": None,
+    "mir-interp": {"check": True, "run": ["__mir-run"]},
     "mir-llvm": None,
     "mir-llvm-asan": None,
 }
@@ -77,6 +80,12 @@ def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra
         tmpd = Path(tmp)
         shutil.copy(entry / "source.kara", tmpd / "source.kara")
         try:
+            if spec.get("check"):
+                c = subprocess.run([karac, "check", "source.kara"], cwd=tmpd, env=env,
+                                   capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+                if c.returncode != 0:
+                    return {"status": "refused", "exit": c.returncode, "stdout": c.stdout,
+                            "stderr": c.stderr, "secs": time.monotonic() - start}
             if "build" in spec:
                 b = subprocess.run([karac, *spec["build"], "source.kara"], cwd=tmpd, env=env,
                                    capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
