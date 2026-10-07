@@ -21,19 +21,19 @@ use super::place_ty::place_ty;
 use super::syntax::*;
 use super::ty::{IntTy, Ty, TyInterner, TyKind};
 
-type PathIdx = usize;
+pub(super) type PathIdx = usize;
 
 struct MovePath {
     children: Vec<PathIdx>,
 }
 
-struct MovePaths {
+pub(super) struct MovePaths {
     paths: Vec<MovePath>,
     by_place: HashMap<Place, PathIdx>,
 }
 
 impl MovePaths {
-    fn lookup(&self, p: &Place) -> Option<PathIdx> {
+    pub(super) fn lookup(&self, p: &Place) -> Option<PathIdx> {
         self.by_place.get(p).copied()
     }
 
@@ -61,7 +61,7 @@ impl MovePaths {
     }
 
     /// `p` and all its descendants.
-    fn subtree(&self, p: PathIdx) -> Vec<PathIdx> {
+    pub(super) fn subtree(&self, p: PathIdx) -> Vec<PathIdx> {
         let mut out = vec![p];
         let mut i = 0;
         while i < out.len() {
@@ -74,9 +74,9 @@ impl MovePaths {
 
 /// Maybe-initialized and maybe-uninitialized, one bit per move path.
 #[derive(Clone, PartialEq)]
-struct State {
-    init: Vec<bool>,
-    uninit: Vec<bool>,
+pub(super) struct State {
+    pub(super) init: Vec<bool>,
+    pub(super) uninit: Vec<bool>,
 }
 
 impl State {
@@ -106,7 +106,7 @@ impl State {
 
 /// What a statement or terminator does to initialization, in order.
 #[derive(Clone, Copy)]
-enum Effect {
+pub(super) enum Effect {
     Init(PathIdx),
     Uninit(PathIdx),
 }
@@ -125,7 +125,7 @@ pub fn elaborate_drops(body: &mut Body, tys: &mut TyInterner) -> Result<(), Stri
     if body.phase >= MirPhase::DropsElaborated {
         return Err("drops are already elaborated".into());
     }
-    let paths = gather_move_paths(body, tys)?;
+    let paths = gather_move_paths(body, tys, &|t| tys.needs_drop(t))?;
     let n_orig = body.blocks.len();
 
     // Per-block effects of the statements (each statement's list) and of
@@ -236,27 +236,26 @@ pub fn elaborate_drops(body: &mut Body, tys: &mut TyInterner) -> Result<(), Stri
     Ok(())
 }
 
-fn needs_drop_place(body: &Body, tys: &TyInterner, p: &Place) -> bool {
-    match place_ty(body, tys, p) {
-        Ok(pt) => tys.needs_drop(pt.ty),
-        Err(_) => false,
-    }
-}
-
-fn gather_move_paths(body: &Body, tys: &TyInterner) -> Result<MovePaths, String> {
+/// Move paths for every place `track`ed by type that is moved, assigned or
+/// dropped, and every prefix of one, plus every tracked local.
+pub(super) fn gather_move_paths(
+    body: &Body,
+    tys: &TyInterner,
+    track: &dyn Fn(Ty) -> bool,
+) -> Result<MovePaths, String> {
     let mut mp = MovePaths {
         paths: Vec::new(),
         by_place: HashMap::new(),
     };
     for (i, decl) in body.locals.iter().enumerate().skip(1) {
-        if tys.needs_drop(decl.ty) {
+        if track(decl.ty) {
             mp.intern(&Place::local(Local(i as u32)));
         }
     }
     let mut add = |p: &Place| {
         if p.local != Local::RETURN_PLACE
             && !p.is_move_forbidden()
-            && needs_drop_place(body, tys, p)
+            && place_ty(body, tys, p).is_ok_and(|pt| track(pt.ty))
         {
             mp.intern(p);
         }
@@ -297,7 +296,7 @@ fn gather_move_paths(body: &Body, tys: &TyInterner) -> Result<MovePaths, String>
     Ok(mp)
 }
 
-fn rvalue_operands(rv: &Rvalue) -> Vec<&Operand> {
+pub(super) fn rvalue_operands(rv: &Rvalue) -> Vec<&Operand> {
     match rv {
         Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => vec![o],
         Rvalue::BinaryOp(_, a, b) | Rvalue::CheckedBinaryOp(_, a, b) => vec![a, b],
@@ -317,7 +316,7 @@ fn moves<'o>(paths: &MovePaths, ops: impl IntoIterator<Item = &'o Operand>) -> V
         .collect()
 }
 
-fn statement_effects(paths: &MovePaths, s: &StatementKind) -> Vec<Effect> {
+pub(super) fn statement_effects(paths: &MovePaths, s: &StatementKind) -> Vec<Effect> {
     match s {
         StatementKind::Assign(dest, rv) => {
             let mut v = moves(paths, rvalue_operands(rv));
@@ -335,7 +334,7 @@ fn statement_effects(paths: &MovePaths, s: &StatementKind) -> Vec<Effect> {
     }
 }
 
-fn terminator_effects(paths: &MovePaths, t: &TerminatorKind) -> Vec<Effect> {
+pub(super) fn terminator_effects(paths: &MovePaths, t: &TerminatorKind) -> Vec<Effect> {
     match t {
         TerminatorKind::Call {
             func,
@@ -359,7 +358,7 @@ fn terminator_effects(paths: &MovePaths, t: &TerminatorKind) -> Vec<Effect> {
     }
 }
 
-fn apply(paths: &MovePaths, st: &mut State, effs: &[Effect]) {
+pub(super) fn apply(paths: &MovePaths, st: &mut State, effs: &[Effect]) {
     for eff in effs {
         let (p, init) = match *eff {
             Effect::Init(p) => (p, true),
@@ -373,7 +372,7 @@ fn apply(paths: &MovePaths, st: &mut State, effs: &[Effect]) {
 }
 
 /// Parameters are initialized at entry; every other path is not.
-fn entry_state(body: &Body, paths: &MovePaths) -> State {
+pub(super) fn entry_state(body: &Body, paths: &MovePaths) -> State {
     let n = paths.paths.len();
     let mut st = State {
         init: vec![false; n],
@@ -388,7 +387,7 @@ fn entry_state(body: &Body, paths: &MovePaths) -> State {
 }
 
 /// The state at the entry of every block.
-fn dataflow(
+pub(super) fn dataflow(
     body: &Body,
     paths: &MovePaths,
     entry: &State,

@@ -10,6 +10,7 @@
 pub mod build;
 pub mod elaborate;
 pub mod interp;
+pub mod movecheck;
 pub mod parse;
 pub mod place_ty;
 pub mod pretty;
@@ -19,6 +20,7 @@ pub mod validate;
 
 pub use build::BodyBuilder;
 pub use elaborate::elaborate_drops;
+pub use movecheck::check_moves;
 pub use parse::{parse_module, pretty_module, MirModule};
 pub use pretty::pretty_body;
 pub use syntax::*;

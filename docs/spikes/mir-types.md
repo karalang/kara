@@ -179,7 +179,7 @@ pub enum MirPhase { Built, Checked, DropsElaborated, Optimized }
 | Phase | Produced by | Guarantees |
 |---|---|---|
 | `Built` | the builder, from typed HIR | Every scope end, early exit, assignment and temporary already has its `Drop` terminators, in the order core semantics D1 to D5 require. A `Drop` may name a place that is moved on some paths. `defer` / `errdefer` bodies are already inlined on the exits they cover. |
-| `Checked` | move check and borrow check (read-only passes) | No use after move, no move out of a forbidden place (C3), no partial move from a type with a `Drop` body (C4), borrows valid. The body is unchanged. |
+| `Checked` | move check and borrow check (read-only passes) | No use after move, no move out of a forbidden place (C3), no partial move from a type with a `Drop` body (C4), borrows valid. The body is unchanged. The move check is `src/mir/movecheck.rs`: drop elaboration's move paths and dataflow over every non-`Copy` place, with any read, borrow or move of a place that may be uninitialized an error; a `Drop` is not a use. |
 | `DropsElaborated` | drop elaboration | Every `Drop` runs on a place that is fully initialized on every path reaching it. Conditional drops are explicit `SwitchInt`s on `DropFlag` locals. A drop of a partially moved aggregate is expanded into drops of its remaining fields. Both backends accept only this phase or later. |
 | `Optimized` | optional passes | Same as `DropsElaborated`. The passes may only do what core semantics D9 allows. |
 
