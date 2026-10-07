@@ -560,6 +560,11 @@ pub fn kind_blocks_production(kind: &OwnershipErrorKind) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub enum OwnershipErrorKind {
     UseAfterMove,
+    /// v2 core C3 (`docs/core-semantics.md` §3.7): a non-`Copy` value is moved
+    /// out of a place its owner keeps, such as an element of a collection
+    /// (`v[i]` in a moving position). Legacy copies it silently. Reported
+    /// only by the strict commands (`karac check`, `karac fix`).
+    MoveOutOfPlace,
     /// B-2026-09-08-3 — a `Drop`-bearing field was moved out of an owned,
     /// still-live struct, and the same base was then handed to a call that
     /// assigns that field. BLOCKING, unlike its `UseAfterMove` neighbour,
@@ -760,6 +765,9 @@ pub(crate) fn class_for_ownership_error_kind(
     match kind {
         // "Use of a binding after its value was moved" — verbatim.
         OwnershipErrorKind::UseAfterMove => Some(DC::OwnershipMoveAfterUse),
+        // A move the v2 core forbids at its source (C3), named by the same
+        // class as the use-after-move it would otherwise become.
+        OwnershipErrorKind::MoveOutOfPlace => Some(DC::OwnershipMoveAfterUse),
 
         // "Read of a binding before it was initialised (let-uninit DFA)" —
         // verbatim.
@@ -1392,6 +1400,10 @@ pub struct OwnershipChecker<'a> {
     /// Consume sites that are not moves under the v2 core. See
     /// [`OwnershipCheckResult::core_non_move_sources`].
     pub(crate) core_non_move_sources: HashSet<SpanKey>,
+    /// Index projections the use classifier saw in a moving position
+    /// ([`crate::cfg::Classification::core_index_moves`]), across every
+    /// function; turned into `MoveOutOfPlace` errors by `core_move_errors`.
+    pub(crate) core_index_moves: Vec<Span>,
     /// Effective `panic_on_alloc_failure` (phase-8-stdlib-floor item 6). `true`
     /// (the default) leaves RC fallback as a perf note; `false` (hard mode)
     /// turns every RC-fallback site into a hard
@@ -1712,6 +1724,7 @@ impl<'a> OwnershipChecker<'a> {
             suppress_rc_notes: false,
             suppressed_rc_fn_keys: HashSet::new(),
             core_non_move_sources: HashSet::new(),
+            core_index_moves: Vec::new(),
             panic_on_alloc_failure: true,
             elided_bindings: HashMap::new(),
             elision_blocked: HashMap::new(),
@@ -2589,6 +2602,8 @@ impl<'a> OwnershipChecker<'a> {
         );
         self.core_non_move_sources
             .extend(classification.core_borrowed_spans.iter().copied());
+        self.core_index_moves
+            .extend(classification.core_index_moves.iter().copied());
         self.current_classification = Some(classification);
 
         // Walk the body

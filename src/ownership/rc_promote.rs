@@ -17,6 +17,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::resolver::SpanKey;
+
 use crate::ast::*;
 use crate::token::Span;
 
@@ -212,6 +214,40 @@ impl<'a> super::OwnershipChecker<'a> {
                 consume_span: Some(entry.consume_span),
             });
         }
+        // C3: an element moved out of a collection that still owns it.
+        let mut seen = HashSet::new();
+        for span in &self.core_index_moves {
+            let key = SpanKey::from_span(span);
+            if self.core_non_move_sources.contains(&key) || !seen.insert(key) {
+                continue;
+            }
+            let supports_clone = self.moved_type_supports_clone(span);
+            let replacement = supports_clone.then(|| {
+                Box::new(crate::resolver::TextEdit {
+                    offset: span.offset + span.length,
+                    length: 0,
+                    replacement: ".clone()".to_string(),
+                })
+            });
+            let suggestion = if supports_clone {
+                "write `.clone()` to take a copy, read the element in place, or take it out \
+                 with `v.swap(i, j)` / `mem.replace`"
+            } else {
+                "read the element in place, or take it out with `v.swap(i, j)` / \
+                 `mem.replace` (this type has no `.clone()`)"
+            };
+            out.push(OwnershipError {
+                message: "cannot move a non-`Copy` value out of a collection element: the \
+                          collection still owns it"
+                    .to_string(),
+                span: *span,
+                kind: OwnershipErrorKind::MoveOutOfPlace,
+                suggestion: Some(suggestion.to_string()),
+                replacement,
+                consume_span: None,
+            });
+        }
+        out.sort_by_key(|e| e.span.offset);
         out
     }
 

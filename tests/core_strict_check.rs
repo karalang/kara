@@ -280,3 +280,92 @@ fn impl_mode_weaker_than_trait_is_accepted() {
          fn main() { let p = P { x: 1 }; let v: Vec[i64] = Vec.new(); println(p.size(v)); }\n",
     );
 }
+
+#[test]
+fn move_out_of_a_collection_element_is_an_error() {
+    // §3.7: the Vec still owns its element, so a by-value read needs a copy.
+    rejected_then_fixed(
+        "index-arg",
+        "fn take(s: String) { println(s); }\n\
+         fn main() {\n\
+             let v = vec![\"a\".to_string(), \"b\".to_string()];\n\
+             take(v[0]);\n\
+             println(v[1]);\n\
+         }\n",
+        // The typechecker reports this one already; check says it once.
+        "E_INDEX_MOVE_NON_COPY",
+    );
+    rejected_then_fixed(
+        "index-tail",
+        "fn first(v: ref Vec[String]) -> String { v[0] }\n\
+         fn main() {\n\
+             let v = vec![\"a\".to_string()];\n\
+             println(first(v));\n\
+         }\n",
+        "out of a collection element",
+    );
+    rejected_then_fixed(
+        "index-push",
+        "fn main() {\n\
+             let v = vec![\"a\".to_string()];\n\
+             let mut w: Vec[String] = Vec.new();\n\
+             w.push(v[0]);\n\
+             println(w.len());\n\
+         }\n",
+        "out of a collection element",
+    );
+}
+
+#[test]
+fn reading_a_collection_element_without_moving_is_accepted() {
+    // Copy elements, range slices, `+` operands, numeric parses and
+    // `extend_from_slice` arguments read the element in place.
+    accepted(
+        "index-reads",
+        "fn main() {\n\
+             let n = vec![1, 2, 3];\n\
+             let a = n[0];\n\
+             let v = vec![\"a\".to_string(), \"12\".to_string()];\n\
+             let s = v[0] + v[0];\n\
+             let k = i64.parse(v[1]);\n\
+             let mut w: Vec[i64] = Vec.new();\n\
+             w.extend_from_slice(n[0..2]);\n\
+             println(f\"{a} {s} {k} {w.len()} {v[0].len()}\");\n\
+         }\n",
+    );
+}
+
+#[test]
+fn passing_a_bare_for_element_by_value_is_an_error() {
+    // §4.6: a bare `for` binds each element as a `ref`, so handing it to a
+    // by-value parameter moves out of the collection. `.clone()` copies it.
+    rejected_then_fixed(
+        "for-elem-arg",
+        "#[derive(Clone)]\n\
+         struct T { name: String }\n\
+         fn render(t: T) -> String { t.name }\n\
+         fn main() {\n\
+             let v = vec![T { name: \"a\".to_string() }];\n\
+             for t in v {\n\
+                 println(render(t));\n\
+             }\n\
+             println(v.len());\n\
+         }\n",
+        "`.into_iter()`",
+    );
+}
+
+#[test]
+fn passing_an_into_iter_element_by_value_is_accepted() {
+    accepted(
+        "into-iter-arg",
+        "struct S { name: String }\n\
+         fn render(s: S) -> String { s.name }\n\
+         fn main() {\n\
+             let v = vec![S { name: \"a\".to_string() }];\n\
+             for s in v.into_iter() {\n\
+                 println(render(s));\n\
+             }\n\
+         }\n",
+    );
+}

@@ -228,6 +228,12 @@ pub struct Classification {
     /// consumes, because its backends may move the operand; the strict
     /// commands drop any E0500 whose consume site is one of these.
     pub core_borrowed_spans: FxHashSet<SpanKey>,
+    /// Index projections (`v[i]`) of a non-`Copy` element in a moving
+    /// position: a tail, an argument to an owned parameter, a struct-literal
+    /// field, a pushed value. Legacy copies the element silently; under the
+    /// v2 core it is a move out of a place the collection still owns, which
+    /// the strict commands reject (`docs/core-semantics.md` §3.7, C3).
+    pub core_index_moves: Vec<crate::token::Span>,
 }
 
 /// A basic block in the CFG. Statements are not stored — only the use

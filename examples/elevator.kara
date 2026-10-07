@@ -151,7 +151,7 @@ fn main() {
         Request.FloorCall  { floor: 2, direction: Direction.Up },
     ];
 
-    for req in requests {
+    for req in requests.into_iter() {
         e.add_request(req);
     }
     println(f"start floor={e.floor}  queued={e.stops}");

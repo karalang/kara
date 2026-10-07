@@ -786,6 +786,13 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
             Some(DiagnosticClass::OwnershipMoveAfterUse),
         ),
     ),
+    (
+        "E0515",
+        own(
+            "MoveOutOfPlace",
+            Some(DiagnosticClass::OwnershipMoveAfterUse),
+        ),
+    ),
     // ── provider escape ─────────────────────────────────────────
     ("E0600", prov("ProviderEscape")),
     // ── lint (non-`TypeErrorKind`) ──────────────────────────────
@@ -2258,6 +2265,7 @@ mod tests {
             ("E0512", O::FrozenTypeNotFreezable),
             ("E0513", O::MovedFieldRefilledAcrossCall),
             ("E0514", O::RcFallbackOfDropType),
+            ("E0515", O::MoveOutOfPlace),
         ];
         for (code, kind) in ownerships {
             let want = crate::ownership::class_for_ownership_error_kind(kind);

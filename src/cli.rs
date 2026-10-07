@@ -1515,6 +1515,21 @@ impl Pipeline {
                         non_moves.contains(&crate::resolver::SpanKey::from_span(&c))
                     })
             });
+            // The typechecker's `E_INDEX_MOVE_NON_COPY` already reports some
+            // of the same element moves, with a fuller message; say it once.
+            let index_moves: std::collections::HashSet<_> = self
+                .typed
+                .as_ref()
+                .unwrap()
+                .errors
+                .iter()
+                .filter(|e| e.kind == crate::typechecker::TypeErrorKind::IndexMoveNonCopy)
+                .map(|e| crate::resolver::SpanKey::from_span(&e.span))
+                .collect();
+            ownership.errors.retain(|e| {
+                e.kind != crate::ownership::OwnershipErrorKind::MoveOutOfPlace
+                    || !index_moves.contains(&crate::resolver::SpanKey::from_span(&e.span))
+            });
             ownership.errors.sort_by_key(|e| e.span.offset);
         }
         self.ownership = Some(ownership);

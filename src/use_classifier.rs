@@ -229,6 +229,9 @@ pub fn classify_function_body_with(
         arm_consumed_names: Vec::new(),
     };
     classifier.walk_block(body, Mode::Reading);
+    if let Some(tail) = &body.final_expr {
+        classifier.walk_core_tail(tail);
+    }
     classifier.classification
 }
 
@@ -579,7 +582,80 @@ impl<'a> UseClassifier<'a> {
                 self.walk_expr(value, Mode::Reading);
                 self.walk_expr(target, Mode::Reading);
             }
-            StmtKind::Expr(e) => self.walk_expr(e, Mode::Reading),
+            StmtKind::Expr(e) => {
+                self.walk_expr(e, Mode::Reading);
+                self.walk_core_tail(e);
+            }
+        }
+    }
+
+    /// v2 core C3 only. Legacy walks a function body's tail and an expression
+    /// statement as READS, so an index projection there (`fn f() -> String {
+    /// v[1] }`, `if c { v[0] } else { v[1] };`) is copied silently. Under the
+    /// core both move the element out of the collection, so record the index
+    /// projections reachable through the value-producing structure of such an
+    /// expression. Nothing else is recorded here: the legacy classification
+    /// of these positions is unchanged.
+    fn walk_core_tail(&mut self, expr: &Expr) {
+        match &expr.kind {
+            ExprKind::Index { .. } => {
+                if self.core_moves_out_of_place(expr) {
+                    self.record_core_index_move(expr);
+                }
+            }
+            // `v[i].name` moves a field out of an element the collection
+            // still owns. The whole projection is recorded, so the fix clones
+            // what is taken (`v[i].name.clone()`).
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                if !self.core_moves_out_of_place(expr) {
+                    return;
+                }
+                let mut cur = expr;
+                loop {
+                    match &cur.kind {
+                        ExprKind::FieldAccess { object, .. }
+                        | ExprKind::TupleIndex { object, .. } => cur = object,
+                        ExprKind::Index { index, .. } if !is_range_index(index) => {
+                            self.classification.core_index_moves.push(expr.span);
+                            return;
+                        }
+                        _ => return,
+                    }
+                }
+            }
+            ExprKind::Block(b) => {
+                if let Some(t) = &b.final_expr {
+                    self.walk_core_tail(t);
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(t) = &then_block.final_expr {
+                    self.walk_core_tail(t);
+                }
+                if let Some(eb) = else_branch {
+                    self.walk_core_tail(eb);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.walk_core_tail(&arm.body);
+                }
+            }
+            ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => {
+                for e in es {
+                    self.walk_core_tail(e);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -752,7 +828,29 @@ impl<'a> UseClassifier<'a> {
                     self.walk_expr(&arg.value, arg_mode);
                 }
             }
-            ExprKind::MethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                // `i64.parse(s)` / `u8.from_str_radix(s, 16)` only read the
+                // text, and `v.extend_from_slice(w)` only copies `w`'s
+                // elements. Legacy classifies the argument as consumed; the v2
+                // core borrows it (strict commands only, like the concat
+                // operand).
+                let is_numeric_parse = matches!(method.as_str(), "parse" | "from_str_radix")
+                    && matches!(&object.kind, ExprKind::Identifier(t) if matches!(t.as_str(),
+                        "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                        | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                        | "f32" | "f64"));
+                if is_numeric_parse || method == "extend_from_slice" {
+                    if let Some(arg) = args.first() {
+                        self.classification
+                            .core_borrowed_spans
+                            .insert(SpanKey::from_span(&arg.value.span));
+                    }
+                }
                 let receiver_mode = if self.method_consumes_receiver(expr) {
                     Mode::Consuming
                 } else {
@@ -827,9 +925,15 @@ impl<'a> UseClassifier<'a> {
                 } else {
                     Mode::Reading
                 };
+                if mode == Mode::Consuming {
+                    self.walk_core_tail(expr);
+                }
                 self.walk_place(expr, leaf_mode, &mut PlacePath::new());
             }
             ExprKind::Index { object, index } => {
+                if mode == Mode::Consuming && self.core_moves_out_of_place(expr) {
+                    self.record_core_index_move(expr);
+                }
                 self.walk_expr(object, Mode::Reading);
                 self.walk_expr(index, Mode::Reading);
             }
@@ -1473,6 +1577,28 @@ impl<'a> UseClassifier<'a> {
         false
     }
 
+    /// Record `v[i]` as a v2 C3 move, unless it is a range slice (`s[i..j]`),
+    /// which builds a new value rather than naming an element.
+    fn record_core_index_move(&mut self, expr: &Expr) {
+        if let ExprKind::Index { index, .. } = &expr.kind {
+            if !is_range_index(index) {
+                self.classification.core_index_moves.push(expr.span);
+            }
+        }
+    }
+
+    /// v2 core C3: whether taking `expr` by value out of a place its owner
+    /// keeps is a move. A `Copy` value is copied, and a `weak` handle (what a
+    /// shared node stored into a `weak` field becomes) is a counted handle
+    /// like a `shared` one, so neither moves anything.
+    fn core_moves_out_of_place(&self, expr: &Expr) -> bool {
+        match self.tc.expr_types.get(&SpanKey::from_span(&expr.span)) {
+            Some(Type::Weak(_)) => false,
+            Some(t) => !self.is_copy_type(t),
+            None => false,
+        }
+    }
+
     fn expr_is_copy(&self, expr: &Expr) -> bool {
         self.tc
             .expr_types
@@ -1709,6 +1835,12 @@ pub fn classify_top_level_fn(
     })?;
     let param_types = param_types_for_function(f, tc);
     Some(classify_function_body(program, tc, &f.body, param_types))
+}
+
+/// `s[i..j]`, `v[..k]`: an index by a range slices out a new value; it does
+/// not name an element of the collection.
+fn is_range_index(index: &Expr) -> bool {
+    matches!(index.kind, ExprKind::Range { .. })
 }
 
 #[cfg(test)]

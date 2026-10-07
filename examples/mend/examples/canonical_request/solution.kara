@@ -132,7 +132,7 @@ fn canonical_query(params: Vec[QueryParam]) -> String {
     let sorted = sort_params(params);
     let mut out = String.new();
     let mut first = true;
-    for p in sorted {
+    for p in sorted.into_iter() {
         if not first {
             out = out + "&";
         }
@@ -154,7 +154,7 @@ fn canonical_request(
     let mut canon_headers = String.new();
     let mut signed = String.new();
     let mut first = true;
-    for h in sorted {
+    for h in sorted.into_iter() {
         let name = lower(h.name);
         canon_headers = canon_headers + name.clone() + ":" + trimall(h.value) + "\n";
         if not first {

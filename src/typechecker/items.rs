@@ -5346,6 +5346,11 @@ impl<'a> super::TypeChecker<'a> {
                 "a non-`Copy` value out of a borrowed place"
             };
             message = format!("cannot move {what}");
+            // §4.6: only `for x in c.into_iter()` moves the elements out.
+            if matches!(value.kind, ExprKind::Identifier(_)) {
+                message += ". A bare `for` binds each element as a `ref`; iterate with \
+                            `.into_iter()` to move the elements out of the collection";
+            }
             message += if has_clone {
                 ". Write `.clone()` to take a copy, or keep using it in place"
             } else {

@@ -2303,6 +2303,13 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. }
                 ) {
                     self.reject_index_move_non_copy(&arg.value, param_ty);
+                    // v2 core §3.7 / §4.6 (C3): a bare `for` element or a
+                    // projection of a borrowed place handed to a by-value
+                    // parameter is a move out of a borrow. Legacy copies it
+                    // silently here, so only the strict commands report it.
+                    if self.cli_lint_overrides.strict_core {
+                        self.warn_borrow_projection_copy_at(&arg.value, param_ty, false);
+                    }
                 }
                 // B-2026-09-03-20 — the same value position for the own-`Drop`
                 // partial-move rule. The borrow gate above is now inside that
@@ -2662,6 +2669,14 @@ impl<'a> super::TypeChecker<'a> {
                             };
                             self.check_int_literal_fits(value, ctx, &arg.value.span, sfx);
                         }
+                    }
+                    if self.cli_lint_overrides.strict_core
+                        && !matches!(
+                            resolved,
+                            Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. }
+                        )
+                    {
+                        self.warn_borrow_projection_copy_at(&arg.value, &resolved, false);
                     }
                     if apply_call_site_marker {
                         self.check_call_site_marker(arg, &resolved, arg_ty);

@@ -1312,7 +1312,7 @@ comptime fn proto_collect_messages(toks: ref Vec[String], n: i64) -> Vec[String]
     let mut i = 0;
     while i < n {
         if (toks[i] == "message" or toks[i] == "enum") and i + 1 < n {
-            names.push(toks[i + 1]);
+            names.push(toks[i + 1].clone());
         }
         i = i + 1;
     }

@@ -237,6 +237,7 @@ Bucket key: **A✓** applied · **A⚠** emitted-not-applied · **B** mechanical
 | N0507 | UnusedMutCaptureNote | `mut ref` capture never mutates | A✓ | `.replacement` `mut ref`→`ref` (applied) |
 | E0508 | RefCaptureEscapesScope | borrow capture escapes via return | C | clone-inside / don't-return / make-owned — human |
 | E0509 | BorrowReturnNotSourcePinned | `-> ref T` not pinned to ref param | C | unsupported return form — human |
+| E0515 | MoveOutOfPlace | non-`Copy` value moved out of a collection element (`karac check`) | B | `.clone()` on the element |
 | — | SliceFromTemporaryEscapes | slice from temp escapes stmt | B | bind temp to local, then slice |
 | — | SliceBorrowConflict | conflicting slice borrows | C | redesign lifetimes — human |
 | — | CrossBorrowConflict | slice + ref conflict on source | C | drop one borrow / redesign — human |

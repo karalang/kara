@@ -196,12 +196,14 @@ impl[T: Ord] PriorityQueue[T] {
     // a heap-carrying one. It leaves the queue undisturbed either way,
     // which is the property that makes it a peek rather than a
     // `pop`-then-`push` (O(log n) twice, and needing `mut ref` where a
-    // reader wants `ref`).
-    fn peek(ref self) -> Option[T] {
+    // reader wants `ref`). Under the v2 core that copy has to be written
+    // (`docs/core-semantics.md` §3.7: an element cannot be moved out of
+    // the vector that owns it), so `peek` asks for `T: Clone`.
+    fn peek(ref self) -> Option[T] where T: Clone {
         if self.xs.len() == 0 {
             return None;
         }
-        Some(self.xs[0])
+        Some(self.xs[0].clone())
     }
 
     // Remove and return the next element — the smallest of a
