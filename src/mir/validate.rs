@@ -253,7 +253,15 @@ impl Validator<'_> {
             ));
             return;
         }
-        let want: Vec<Ty> = v.fields.iter().map(|(_, t)| *t).collect();
+        // Instantiated for `ty`'s arguments, as a field projection is.
+        let variant_arg = adt.is_enum.then_some(variant.0);
+        let want: Vec<Ty> = (0..v.fields.len() as u32)
+            .map(|i| {
+                self.tys
+                    .field_ty(ty, variant_arg, i)
+                    .unwrap_or(v.fields[i as usize].1)
+            })
+            .collect();
         for (i, (w, g)) in want.iter().zip(got).enumerate() {
             if let Some(g) = g {
                 if g != w {

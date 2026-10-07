@@ -594,26 +594,23 @@ impl Elaborator<'_> {
                 self.drop_fields(st, &fields, p, succ)
             }
             TyKind::Adt(a) if !self.tys.adt(a).is_enum => {
-                let fields: Vec<(Place, Ty)> = self.tys.adt(a).variants[0]
-                    .fields
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (_, t))| (place.field(i as u32, *t), *t))
-                    .collect();
+                let n = self.tys.adt(a).variants[0].fields.len();
+                let fields = self.adt_fields(place, ty, None, n)?;
                 self.drop_fields(st, &fields, p, succ)
             }
             TyKind::Adt(a) => {
-                let variants = self.tys.adt(a).variants.clone();
+                let counts: Vec<usize> = self
+                    .tys
+                    .adt(a)
+                    .variants
+                    .iter()
+                    .map(|v| v.fields.len())
+                    .collect();
                 let mut arms = Vec::new();
-                for (v, var) in variants.iter().enumerate() {
+                for (v, n) in counts.into_iter().enumerate() {
                     let down = place.project(ProjElem::Downcast(VariantIdx(v as u32)));
                     let owner = self.paths.lookup(&down).unwrap_or(p);
-                    let fields: Vec<(Place, Ty)> = var
-                        .fields
-                        .iter()
-                        .enumerate()
-                        .map(|(i, (_, t))| (down.field(i as u32, *t), *t))
-                        .collect();
+                    let fields = self.adt_fields(&down, ty, Some(v as u32), n)?;
                     let arm = self.drop_fields(st, &fields, owner, succ)?;
                     arms.push((v as u128, arm));
                 }
@@ -643,6 +640,26 @@ impl Elaborator<'_> {
                 self.tys.display(ty)
             )),
         }
+    }
+
+    /// The `n` fields of `place` (of ADT type `ty`, seen as `variant` when
+    /// it is an enum), with their types instantiated for `ty`'s arguments.
+    fn adt_fields(
+        &self,
+        place: &Place,
+        ty: Ty,
+        variant: Option<u32>,
+        n: usize,
+    ) -> Result<Vec<(Place, Ty)>, String> {
+        (0..n as u32)
+            .map(|i| {
+                let t = self
+                    .tys
+                    .field_ty(ty, variant, i)
+                    .ok_or_else(|| format!("{} has no field {i}", self.tys.display(ty)))?;
+                Ok((place.field(i, t), t))
+            })
+            .collect()
     }
 
     fn drop_fields(
@@ -1405,6 +1422,61 @@ mod tests {
         assert_eq!(ran, 23, "every runnable core pin has a Built form");
         assert!(bad.is_empty(), "{}", bad.join("\n"));
         assert!(flagged > 0, "no pin needed a drop flag");
+    }
+
+    /// A partial move out of a generic struct instance, `Pair[R]`: the
+    /// remaining field's type must be the instantiated `R`, not the
+    /// definition's `T`, or the drop of `p.b` is lost.
+    #[test]
+    fn mir_elab_opens_a_generic_instance_with_its_args() {
+        use crate::ty::{ParamTy, TyKind as SharedKind};
+        let mut w = World::new();
+        let rt = w.rt;
+        let tcx = w.tys.tcx();
+        let t_param = tcx.intern(SharedKind::Param(ParamTy {
+            index: 0,
+            name: tcx.param_name("T"),
+        }));
+        w.tys.add_adt(AdtDef {
+            def: DefId(3),
+            name: "Pair".into(),
+            is_enum: false,
+            variants: vec![VariantDef {
+                name: "Pair".into(),
+                fields: vec![("a".into(), t_param), ("b".into(), t_param)],
+            }],
+            has_drop_impl: false,
+            is_copy: false,
+        });
+        let pair_r = w.tys.tcx().adt(DefId(3), &[rt]);
+        let mut b = BodyBuilder::new(inst("main"), w.unit);
+        let p = b.user_local("p", pair_r, Mutability::Not);
+        let (r1, r2) = (b.temp(rt), b.temp(rt));
+        let (bb0, bb1, bb2) = (b.new_block(), b.new_block(), b.new_block());
+        w.make_r(&mut b, bb0, r1, 1);
+        w.make_r(&mut b, bb0, r2, 2);
+        b.assign(
+            bb0,
+            p,
+            Rvalue::Aggregate(
+                AggregateKind::Adt {
+                    ty: pair_r,
+                    variant: VariantIdx(0),
+                },
+                vec![Operand::Move(r1.into()), Operand::Move(r2.into())],
+            ),
+        );
+        w.consume(&mut b, bb0, Place::from(p).field(0, rt), bb1);
+        b.terminate(
+            bb1,
+            TerminatorKind::Drop {
+                place: p.into(),
+                target: bb2,
+            },
+        );
+        w.ret_unit(&mut b, bb2);
+        let e = w.check(b.finish().unwrap(), &[(vec![], "drop 1\ndrop 2\n")]);
+        assert_eq!(drop_count(&e), 1);
     }
 
     /// Elaborating the same body twice is refused rather than repeated.
