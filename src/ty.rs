@@ -59,6 +59,15 @@ pub enum ArrayLen {
     Param(ParamTy),
 }
 
+/// What a type name denotes, as the caller's name lookup reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeName {
+    /// A struct, enum or other nominal type.
+    Adt(DefId),
+    /// A trait, written where a type goes: see [`TyKind::Opaque`].
+    Trait(DefId),
+}
+
 /// The structure of a type. Every field is a handle, so this is `Copy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TyKind {
@@ -110,6 +119,16 @@ pub enum TyKind {
         pointee: Ty,
     },
     Param(ParamTy),
+    /// A value of some type implementing the trait `bound`, instantiated with
+    /// `args`, whose concrete type the checker did not record. The legacy
+    /// checker collapses every iterator adapter (`map`, `filter`, `iter()`,
+    /// …) to `Iterator[T]`, so this is how those values reach typed HIR. It
+    /// never reaches MIR: once the stdlib's iterators are Kāra structs
+    /// (proposal § 5.4), each adapter call has a concrete result type.
+    Opaque {
+        bound: DefId,
+        args: TyList,
+    },
     /// A type that already failed to check; never reaches MIR.
     Error,
 
@@ -335,6 +354,7 @@ impl TyCtxt {
         match kind {
             TyKind::Tuple(list)
             | TyKind::Adt { args: list, .. }
+            | TyKind::Opaque { args: list, .. }
             | TyKind::Shared { args: list, .. }
             | TyKind::Intrinsic { args: list, .. }
             | TyKind::FnDef { args: list, .. }
@@ -382,6 +402,10 @@ impl TyCtxt {
             },
             TyKind::Shared { def, args: a } => TyKind::Shared {
                 def,
+                args: self.subst_list(a, args, const_args),
+            },
+            TyKind::Opaque { bound, args: a } => TyKind::Opaque {
+                bound,
                 args: self.subst_list(a, args, const_args),
             },
             TyKind::Intrinsic { kind, args: a } => TyKind::Intrinsic {
@@ -492,6 +516,13 @@ impl TyCtxt {
                 self.display(pointee, def_name)
             ),
             TyKind::Param(p) => self.resolve_name(p.name).to_string(),
+            TyKind::Opaque { bound, args } => {
+                if self.list(args).is_empty() {
+                    format!("impl {}", def_name(bound))
+                } else {
+                    format!("impl {}[{}]", def_name(bound), list(args))
+                }
+            }
             TyKind::Error => "{error}".into(),
             TyKind::StaticStr => "str".into(),
             TyKind::Shared { def, args } => {
@@ -583,6 +614,7 @@ impl TyCtxt {
             | TyKind::Weak(_)
             | TyKind::Fn { .. }
             | TyKind::Param(_)
+            | TyKind::Opaque { .. }
             | TyKind::Error => false,
         }
     }
@@ -591,9 +623,13 @@ impl TyCtxt {
     /// a `Drop` body anywhere inside.
     pub fn needs_drop(&self, ty: Ty) -> bool {
         match self.kind(ty) {
-            TyKind::Str | TyKind::Shared { .. } | TyKind::Intrinsic { .. } | TyKind::Weak(_) => {
-                true
-            }
+            // An opaque value's concrete type is unknown, so it is assumed to
+            // need dropping.
+            TyKind::Str
+            | TyKind::Shared { .. }
+            | TyKind::Intrinsic { .. }
+            | TyKind::Weak(_)
+            | TyKind::Opaque { .. } => true,
             TyKind::Tuple(l) | TyKind::Closure { captures: l, .. } => {
                 self.list(l).into_iter().any(|t| self.needs_drop(t))
             }
@@ -621,13 +657,13 @@ impl TyCtxt {
 
     // ── bridge from the legacy typechecker ──────────────────────────
 
-    /// Convert a legacy `typechecker::Type`. `lookup` maps a type name to its
-    /// definition; `param` places a generic parameter name in the current
+    /// Convert a legacy `typechecker::Type`. `lookup` maps a type name to what
+    /// it denotes; `param` places a generic parameter name in the current
     /// owner's generics.
     pub fn lower_legacy(
         &self,
         ty: &Type,
-        lookup: &dyn Fn(&str) -> Option<DefId>,
+        lookup: &dyn Fn(&str) -> Option<TypeName>,
         param: &dyn Fn(&str) -> Option<u32>,
     ) -> Result<Ty, LowerError> {
         let lower = |t: &Type| self.lower_legacy(t, lookup, param);
@@ -668,13 +704,29 @@ impl TyCtxt {
                 elem: lower(element)?,
                 mutable: *mutable,
             },
-            Type::Named { name, args } => TyKind::Adt {
-                def: lookup(name).ok_or_else(|| LowerError::UnknownName(name.clone()))?,
-                args: lower_all(args)?,
+            // The checker sometimes spells a generic parameter in scope as a
+            // nominal type (the result of `T: Add`'s `+` is `Named("T")`); a
+            // parameter shadows any type of the same name.
+            Type::Named { name, args } if args.is_empty() && param(name).is_some() => {
+                TyKind::Param(param_ty(name)?)
+            }
+            Type::Named { name, args } => match lookup(name) {
+                Some(TypeName::Adt(def)) => TyKind::Adt {
+                    def,
+                    args: lower_all(args)?,
+                },
+                Some(TypeName::Trait(bound)) => TyKind::Opaque {
+                    bound,
+                    args: lower_all(args)?,
+                },
+                None => return Err(LowerError::UnknownName(name.clone())),
             },
-            Type::Shared(name) => TyKind::Adt {
-                def: lookup(name).ok_or_else(|| LowerError::UnknownName(name.clone()))?,
-                args: self.empty_list(),
+            Type::Shared(name) => match lookup(name) {
+                Some(TypeName::Adt(def)) => TyKind::Adt {
+                    def,
+                    args: self.empty_list(),
+                },
+                _ => return Err(LowerError::UnknownName(name.clone())),
             },
             Type::Function {
                 params,
@@ -720,14 +772,19 @@ mod tests {
     use super::*;
 
     fn names(d: DefId) -> String {
-        ["Vec", "Node", "Option"][d.0 as usize].to_string()
+        ["Vec", "Node", "Option", "Iterator"][d.0 as usize].to_string()
     }
 
-    fn lookup(name: &str) -> Option<DefId> {
-        ["Vec", "Node", "Option"]
+    fn lookup(name: &str) -> Option<TypeName> {
+        let i = ["Vec", "Node", "Option", "Iterator"]
             .iter()
-            .position(|n| *n == name)
-            .map(|i| DefId(i as u32))
+            .position(|n| *n == name)?;
+        let def = DefId(i as u32);
+        Some(if name == "Iterator" {
+            TypeName::Trait(def)
+        } else {
+            TypeName::Adt(def)
+        })
     }
 
     fn params(name: &str) -> Option<u32> {
@@ -801,6 +858,38 @@ mod tests {
         );
         // Lowering twice gives the same handle.
         assert_eq!(tcx.lower_legacy(&legacy, &lookup, &params).unwrap(), ty);
+    }
+
+    #[test]
+    fn a_parameter_spelled_as_a_nominal_type_is_the_parameter() {
+        let tcx = TyCtxt::new();
+        let named_t = Type::Named {
+            name: "T".into(),
+            args: vec![],
+        };
+        assert_eq!(
+            tcx.lower_legacy(&named_t, &lookup, &params),
+            tcx.lower_legacy(&Type::TypeParam("T".into()), &lookup, &params)
+        );
+    }
+
+    #[test]
+    fn a_trait_in_type_position_lowers_to_an_opaque_type() {
+        let tcx = TyCtxt::new();
+        let iter = Type::Named {
+            name: "Iterator".into(),
+            args: vec![Type::TypeParam("T".into())],
+        };
+        let ty = tcx.lower_legacy(&iter, &lookup, &params).unwrap();
+        assert_eq!(tcx.display(ty, &names), "impl Iterator[T]");
+        let got = tcx.subst(ty, &[tcx.i64()], &[]);
+        assert_eq!(tcx.display(got, &names), "impl Iterator[i64]");
+        assert!(tcx.needs_drop(got) && !tcx.is_copy(got));
+        // A trait is not a `shared` type.
+        assert_eq!(
+            tcx.lower_legacy(&Type::Shared("Iterator".into()), &lookup, &params),
+            Err(LowerError::UnknownName("Iterator".into()))
+        );
     }
 
     #[test]

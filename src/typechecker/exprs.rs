@@ -590,8 +590,79 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             self.record_node_type(expr.id, &ty);
         }
+        self.link_part_node_types(expr);
         self.deny_for_element_drop_copy_in_literal(expr);
         ty
+    }
+
+    /// Link the parts of `expr` whose type is a projection of its type (the
+    /// elements of a tuple or array literal, the value-producing branches of
+    /// an `if`, `if let`, `match` or block), for
+    /// `refine_node_types_from_wholes`.
+    fn link_part_node_types(&mut self, expr: &Expr) {
+        use super::PartOf;
+        if expr.id.is_dummy() {
+            return;
+        }
+        let mut link = |part: &Expr, how: PartOf| {
+            if !part.id.is_dummy() {
+                self.node_type_links.push((part.id, expr.id, how));
+            }
+        };
+        match &expr.kind {
+            ExprKind::Block(b) => {
+                if let Some(e) = b.final_expr.as_deref() {
+                    link(e, PartOf::Same);
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                for e in then_block
+                    .final_expr
+                    .as_deref()
+                    .into_iter()
+                    .chain(else_branch.as_deref())
+                {
+                    link(e, PartOf::Same);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    link(&a.body, PartOf::Same);
+                }
+            }
+            ExprKind::Tuple(elems) => {
+                for (i, e) in elems.iter().enumerate() {
+                    link(e, PartOf::TupleElem(i));
+                }
+            }
+            ExprKind::ArrayLiteral(elems) => {
+                for e in elems {
+                    link(e, PartOf::Elem);
+                }
+            }
+            // By position only: a labelled argument may be out of order.
+            ExprKind::Call { callee, args } if args.iter().all(|a| a.label.is_none()) => {
+                for (index, a) in args.iter().enumerate() {
+                    link(
+                        &a.value,
+                        PartOf::CallArg {
+                            callee: callee.id,
+                            index,
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
     }
 
     fn check_expr_inner(&mut self, expr: &Expr, expected: &Type) -> Type {
@@ -4250,6 +4321,18 @@ impl<'a> super::TypeChecker<'a> {
         if let ExprKind::Call { callee, .. } = &expr.kind {
             if !expr.id.is_dummy() {
                 self.node_call_callees.insert(expr.id, callee.id);
+                // `Type.method(..)`: also keyed like a method call, for the
+                // associated functions name resolution has no definition for
+                // (derived and compiler-provided ones, `E.try_from`).
+                if let ExprKind::Path { segments, .. } = &callee.kind {
+                    if let [ty, method] = segments.as_slice() {
+                        if self.is_type_name(ty) {
+                            self.node_method_callees
+                                .entry(expr.id)
+                                .or_insert_with(|| format!("{ty}.{method}"));
+                        }
+                    }
+                }
             }
         }
         let ty = self.infer_expr_inner(expr);
@@ -4257,6 +4340,7 @@ impl<'a> super::TypeChecker<'a> {
         self.variant_ctor_in_callee = false;
         self.record_expr_type(&expr.span, &ty);
         self.record_node_type(expr.id, &ty);
+        self.link_part_node_types(expr);
         self.deny_for_element_drop_copy_in_literal(expr);
         ty
     }

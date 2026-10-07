@@ -2669,6 +2669,10 @@ pub struct TypeChecker<'a> {
     pub(super) node_generic_frames: Vec<Vec<String>>,
     pub(super) current_generic_frame: u32,
     pub(super) node_call_subs: FxHashMap<crate::ids::NodeId, FxHashMap<String, Type>>,
+    /// `(part, whole, how)`: a node whose type is a projection of another's,
+    /// in recording order (a whole after its parts). See
+    /// `refine_node_types_from_wholes`.
+    pub(super) node_type_links: Vec<(crate::ids::NodeId, crate::ids::NodeId, PartOf)>,
     pub(super) node_method_callees: FxHashMap<crate::ids::NodeId, String>,
     pub(super) node_call_callees: FxHashMap<crate::ids::NodeId, crate::ids::NodeId>,
     /// The call expression `infer_expr` is inside, with its span, so
@@ -3021,6 +3025,7 @@ impl<'a> TypeChecker<'a> {
             node_generic_frames: vec![Vec::new()],
             current_generic_frame: 0,
             node_call_subs: FxHashMap::default(),
+            node_type_links: Vec::new(),
             node_method_callees: FxHashMap::default(),
             node_call_callees: FxHashMap::default(),
             current_call_node: None,
@@ -5873,17 +5878,47 @@ impl<'a> TypeChecker<'a> {
                 &no_const_names,
             )
         };
-        let node_types = node_types
+        let mut node_types: FxHashMap<_, _> = node_types
             .into_iter()
             .map(|(id, (ty, frame))| (id, (resolve(&ty), frame)))
             .collect();
-        let node_call_subs = node_call_subs
+        let links = std::mem::take(&mut self.node_type_links);
+        refine_node_types_from_wholes(&mut node_types, &links, &self.node_generic_frames);
+        let mut node_call_subs: FxHashMap<_, FxHashMap<String, Type>> = node_call_subs
             .into_iter()
             .map(|(id, frame)| {
                 let frame = frame.into_iter().map(|(n, t)| (n, resolve(&t))).collect();
                 (id, frame)
             })
             .collect();
+        // A call's type argument that inference never bound (`E` of
+        // `Ok(5)`) is read off the call's own type, which the context fixed:
+        // the callee's declared return type matched against it.
+        for (&call, &callee) in &self.node_call_callees {
+            let (Some((call_ty, _)), Some((Type::Function { return_type, .. }, frame))) =
+                (node_types.get(&call), node_types.get(&callee))
+            else {
+                continue;
+            };
+            let scope = self
+                .node_generic_frames
+                .get(*frame as usize)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let mut bound = std::collections::HashMap::new();
+            bind_params(return_type, call_ty, scope, &mut bound);
+            let call_frame = node_call_subs.entry(call).or_default();
+            for (name, ty) in bound {
+                let caller_scope = self
+                    .node_generic_frames
+                    .get(node_types[&call].1 as usize)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                if !names_foreign_param(&ty, caller_scope) {
+                    call_frame.entry(name).or_insert(ty);
+                }
+            }
+        }
         (node_types, node_call_subs)
     }
 
@@ -6029,5 +6064,169 @@ fn item_own_lint_overrides(item: &Item) -> Option<&[crate::lints::LintLevelOverr
         Item::TypeAlias(t) => Some(&t.lint_overrides),
         Item::DistinctType(d) => Some(&d.lint_overrides),
         _ => None,
+    }
+}
+
+/// Does `ty` name a generic parameter outside `scope`, or an unsolved
+/// variable?
+fn names_foreign_param(ty: &Type, scope: &[String]) -> bool {
+    match ty {
+        Type::TypeParam(n) => !scope.iter().any(|s| s == n),
+        Type::TypeVar(_) => true,
+        Type::Tuple(ts) => ts.iter().any(|t| names_foreign_param(t, scope)),
+        Type::Named { args, .. } => args.iter().any(|t| names_foreign_param(t, scope)),
+        Type::Array { element, .. }
+        | Type::Vector { element, .. }
+        | Type::Slice { element, .. } => names_foreign_param(element, scope),
+        Type::Ref(t) | Type::MutRef(t) | Type::Weak(t) | Type::Rc(t) | Type::Arc(t) => {
+            names_foreign_param(t, scope)
+        }
+        Type::Pointer { inner, .. } => names_foreign_param(inner, scope),
+        Type::Function {
+            params,
+            return_type,
+        }
+        | Type::OnceFunction {
+            params,
+            return_type,
+        } => {
+            params.iter().any(|t| names_foreign_param(t, scope))
+                || names_foreign_param(return_type, scope)
+        }
+        _ => false,
+    }
+}
+
+/// Bind the generic parameters `pattern` names (outside `scope`) to the
+/// matching parts of `actual`. The first binding of a parameter wins.
+fn bind_params(
+    pattern: &Type,
+    actual: &Type,
+    scope: &[String],
+    out: &mut std::collections::HashMap<String, Type>,
+) {
+    match (pattern, actual) {
+        (Type::TypeParam(n), t) if !scope.iter().any(|s| s == n) => {
+            out.entry(n.clone()).or_insert_with(|| t.clone());
+        }
+        (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => {
+            for (x, y) in xs.iter().zip(ys) {
+                bind_params(x, y, scope, out);
+            }
+        }
+        (Type::Named { name: a, args: xs }, Type::Named { name: b, args: ys })
+            if a == b && xs.len() == ys.len() =>
+        {
+            for (x, y) in xs.iter().zip(ys) {
+                bind_params(x, y, scope, out);
+            }
+        }
+        (Type::Ref(x), Type::Ref(y)) | (Type::MutRef(x), Type::MutRef(y)) => {
+            bind_params(x, y, scope, out)
+        }
+        (Type::Array { element: x, .. }, Type::Array { element: y, .. })
+        | (Type::Slice { element: x, .. }, Type::Slice { element: y, .. }) => {
+            bind_params(x, y, scope, out)
+        }
+        _ => {}
+    }
+}
+
+/// How a node's type follows from another node's: see
+/// `TypeChecker::node_type_links`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PartOf {
+    /// The same type: a branch of an `if` or `match`, a block's tail.
+    Same,
+    /// Element `i` of a tuple.
+    TupleElem(usize),
+    /// The element of an array or `Vec`.
+    Elem,
+    /// Argument `index` of a call whose callee expression is `callee`: the
+    /// callee's declared parameter type, with the generic parameters bound by
+    /// matching its declared return type against the call's type. This is how
+    /// `None` in `Ok(None)` gets `Option[i64]` from the call's
+    /// `Result[Option[i64], i64]`.
+    CallArg {
+        callee: crate::ids::NodeId,
+        index: usize,
+    },
+}
+
+/// A synthesized type that still names a generic parameter of some signature
+/// (`None` as `Option[T]`, `Ho.Empty` as `Ho[T]`) is less precise than the
+/// type of the whole it is part of: `None` in `if c { a } else { None }` has
+/// the `if`'s `Option[R]`, and `Result.Ok(x)` in `(mk(1), Result.Ok(x))`
+/// passed as `(R, Result[R, String])` has `Result[R, String]`. This replaces
+/// such a part's type by the projection of its whole's, once inference has
+/// resolved both. Links are applied whole-first (reverse recording order), so
+/// a refinement reaches nested parts. Only a part whose type names a foreign
+/// parameter is replaced, and only by a type with the same head and none.
+pub(crate) fn refine_node_types_from_wholes(
+    node_types: &mut FxHashMap<crate::ids::NodeId, (Type, u32)>,
+    links: &[(crate::ids::NodeId, crate::ids::NodeId, PartOf)],
+    frames: &[Vec<String>],
+) {
+    fn same_head(a: &Type, b: &Type) -> bool {
+        match (a, b) {
+            (Type::Named { name: x, args: xs }, Type::Named { name: y, args: ys }) => {
+                x == y && xs.len() == ys.len()
+            }
+            (Type::Tuple(xs), Type::Tuple(ys)) => xs.len() == ys.len(),
+            _ => std::mem::discriminant(a) == std::mem::discriminant(b),
+        }
+    }
+    let scope = |frame: u32| frames.get(frame as usize).map(Vec::as_slice).unwrap_or(&[]);
+    for &(part, whole, how) in links.iter().rev() {
+        let Some((whole_ty, whole_frame)) = node_types.get(&whole) else {
+            continue;
+        };
+        let projected = match (how, whole_ty) {
+            (PartOf::Same, t) => t.clone(),
+            (PartOf::TupleElem(i), Type::Tuple(ts)) => match ts.get(i) {
+                Some(t) => t.clone(),
+                None => continue,
+            },
+            (PartOf::Elem, Type::Array { element, .. }) => (**element).clone(),
+            (PartOf::Elem, Type::Named { name, args }) if name == "Vec" && args.len() == 1 => {
+                args[0].clone()
+            }
+            (PartOf::CallArg { callee, index }, call_ty) => {
+                let Some((
+                    Type::Function {
+                        params,
+                        return_type,
+                    }
+                    | Type::OnceFunction {
+                        params,
+                        return_type,
+                    },
+                    callee_frame,
+                )) = node_types.get(&callee)
+                else {
+                    continue;
+                };
+                let Some(param) = params.get(index) else {
+                    continue;
+                };
+                let mut bound = std::collections::HashMap::new();
+                bind_params(return_type, call_ty, scope(*callee_frame), &mut bound);
+                let subs = bound
+                    .into_iter()
+                    .map(|(n, t)| (n, types::SubstValue::Type(t)))
+                    .collect();
+                inference::substitute_type_params(param, &subs)
+            }
+            _ => continue,
+        };
+        if names_foreign_param(&projected, scope(*whole_frame)) {
+            continue;
+        }
+        let Some((part_ty, part_frame)) = node_types.get_mut(&part) else {
+            continue;
+        };
+        if names_foreign_param(part_ty, scope(*part_frame)) && same_head(part_ty, &projected) {
+            *part_ty = projected;
+        }
     }
 }

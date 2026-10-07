@@ -21,7 +21,7 @@ use crate::def_table::ProgramDefs;
 use crate::ids::{DefId, DefKind, NodeId};
 use crate::module::ModuleId;
 use crate::node_res::Res;
-use crate::ty::{LowerError, Ty, TyCtxt, TyList};
+use crate::ty::{LowerError, Ty, TyCtxt, TyList, TypeName};
 use crate::typechecker::types::Type;
 use crate::typechecker::TypeCheckResult;
 
@@ -63,8 +63,8 @@ pub enum HirError {
 
 /// The name-to-definition map the bridge needs.
 pub trait HirDefs {
-    /// The struct or enum a type name denotes.
-    fn type_def(&self, name: &str) -> Option<DefId>;
+    /// The struct, enum or trait a type name denotes.
+    fn type_def(&self, name: &str) -> Option<TypeName>;
     /// The method `owner.method` (the type checker's `Type.method` key).
     fn method_callee(&self, owner: &str, method: &str) -> Option<Callee>;
     /// What a call's callee expression resolves to, by that expression's
@@ -102,18 +102,18 @@ impl<'a> ProgramHirDefs<'a> {
 }
 
 impl HirDefs for ProgramHirDefs<'_> {
-    fn type_def(&self, name: &str) -> Option<DefId> {
+    fn type_def(&self, name: &str) -> Option<TypeName> {
         let d = self.defs.lookup(self.module, name)?;
-        matches!(
-            self.defs.table.get(d).kind,
+        match self.defs.table.get(d).kind {
             DefKind::Struct
-                | DefKind::Enum
-                | DefKind::Union
-                | DefKind::OpaqueType
-                | DefKind::DistinctType
-                | DefKind::TypeAlias
-        )
-        .then_some(d)
+            | DefKind::Enum
+            | DefKind::Union
+            | DefKind::OpaqueType
+            | DefKind::DistinctType
+            | DefKind::TypeAlias => Some(TypeName::Adt(d)),
+            DefKind::Trait => Some(TypeName::Trait(d)),
+            _ => None,
+        }
     }
 
     fn method_callee(&self, owner: &str, method: &str) -> Option<Callee> {
@@ -152,7 +152,12 @@ impl HirDefs for ProgramHirDefs<'_> {
     }
 
     fn path_callee(&self, callee_expr: NodeId) -> Option<Callee> {
-        match self.res.get(&callee_expr)? {
+        // Every identifier and path has a resolution, so a callee without
+        // one is some other expression (`fs[i](x)`, `make()(x)`): a value.
+        let Some(res) = self.res.get(&callee_expr) else {
+            return Some(Callee::Value);
+        };
+        match res {
             Res::Def(d) => Some(Callee::Def(*d)),
             Res::Builtin(s) => Some(Callee::Builtin(s.clone())),
             Res::Local(_) => Some(Callee::Value),
@@ -215,18 +220,26 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
         }
     }
 
-    let call_ids = tc
+    let call_ids: rustc_hash::FxHashSet<NodeId> = tc
         .node_method_callees
         .keys()
         .chain(tc.node_call_callees.keys())
-        .copied();
+        .copied()
+        .collect();
     for id in call_ids {
-        let callee = if let Some(key) = tc.node_method_callees.get(&id) {
-            key.rsplit_once('.')
-                .and_then(|(owner, method)| defs.method_callee(owner, method))
-        } else {
-            defs.path_callee(tc.node_call_callees[&id])
-        };
+        // A path call (`f(..)`, `Type.method(..)`) is resolved by its callee
+        // expression; the `Type.method` key is the fallback for associated
+        // functions with no definition to resolve to.
+        let by_path = tc
+            .node_call_callees
+            .get(&id)
+            .and_then(|&e| defs.path_callee(e));
+        let callee = by_path.or_else(|| {
+            tc.node_method_callees.get(&id).and_then(|key| {
+                key.rsplit_once('.')
+                    .and_then(|(owner, method)| defs.method_callee(owner, method))
+            })
+        });
         let Some(callee) = callee else {
             errors.push((id, HirError::UnknownCallee));
             continue;
@@ -305,8 +318,8 @@ mod tests {
     }
 
     impl HirDefs for Names {
-        fn type_def(&self, name: &str) -> Option<DefId> {
-            self.id(name)
+        fn type_def(&self, name: &str) -> Option<TypeName> {
+            self.id(name).map(TypeName::Adt)
         }
         fn method_callee(&self, owner: &str, method: &str) -> Option<Callee> {
             self.id(&format!("{owner}.{method}")).map(Callee::Def)
@@ -530,6 +543,83 @@ fn main() {
             .calls
             .values()
             .any(|c| c.callee == Callee::Builtin("println".into())));
+    }
+
+    const CONTEXT_SRC: &str = "
+fn pick(a: Option[i64], c: bool) -> Option[i64] {
+    let r = if c { a } else { None };
+    return r;
+}
+fn take(t: (i64, Result[i64, String])) -> i64 { return t.0; }
+fn main() {
+    let a = pick(Some(1), true);
+    let b = take((1, Ok(2)));
+    let f = |x: i64| x + 1;
+    let c = f(3);
+    let d: Result[Option[i64], i64] = Ok(None);
+    println(f\"{a.is_some()} {b} {c} {d.is_ok()}\");
+}
+";
+
+    /// Synthesis alone gives `None` the type `Option[T]` and `Ok(2)` the
+    /// type `Result[i64, E]`; the expression each one is part of fixes the
+    /// rest, and typed HIR records that, not the leftover parameter.
+    #[test]
+    fn context_types_what_synthesis_left_generic() {
+        let parsed = crate::parse(CONTEXT_SRC);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut program = parsed.program;
+        crate::prepare_for_resolve(&mut program);
+        let r = crate::resolve(&program);
+        let tc = crate::typecheck(&program, &r);
+        assert!(tc.errors.is_empty(), "{:?}", tc.errors);
+        let defs = ProgramDefs::build_for_program(&program);
+        let res = crate::node_res::node_res(&r, &defs, 0, None);
+        let hir = build(&tc, &ProgramHirDefs::new(&defs, 0, &res));
+        assert!(hir.errors.is_empty(), "{:?}", hir.errors);
+
+        let name = |d: DefId| defs.table.get(d).path.segments.last().unwrap().to_string();
+        let show = |t: Ty| hir.tcx.display(t, &|d: DefId| name(d));
+        let ty_of = |e: &Expr| show(hir.node_types[&e.id]);
+        let call_args = |e: &Expr| match &e.kind {
+            ExprKind::Call { args, .. } => args.iter().map(|a| a.value.clone()).collect::<Vec<_>>(),
+            other => panic!("not a call: {other:?}"),
+        };
+
+        // `None` in an `if` branch takes the `if`'s type.
+        let ExprKind::If {
+            else_branch: Some(els),
+            ..
+        } = &let_value(&program, "pick", 0).kind
+        else {
+            panic!("not an if");
+        };
+        let none = match &els.kind {
+            ExprKind::Block(b) => b.final_expr.as_deref().unwrap(),
+            _ => els.as_ref(),
+        };
+        assert_eq!(ty_of(none), "Option[i64]");
+
+        // `Ok(2)` as a tuple element passed to `take`: typed from the
+        // parameter, and the call's `E` is read off that type.
+        let tuple = &call_args(let_value(&program, "main", 1))[0];
+        let ExprKind::Tuple(elems) = &tuple.kind else {
+            panic!("not a tuple");
+        };
+        assert_eq!(ty_of(&elems[1]), "Result[i64, String]");
+        let ok = &hir.calls[&elems[1].id];
+        let substs: Vec<String> = hir.tcx.list(ok.substs).into_iter().map(show).collect();
+        assert_eq!(substs, ["i64", "String"]);
+
+        // A closure value is called as a value.
+        assert_eq!(
+            hir.calls[&let_value(&program, "main", 3).id].callee,
+            Callee::Value
+        );
+
+        // `None` as a constructor argument takes the parameter's type.
+        let none = &call_args(let_value(&program, "main", 4))[0];
+        assert_eq!(ty_of(none), "Option[i64]");
     }
 
     #[test]
