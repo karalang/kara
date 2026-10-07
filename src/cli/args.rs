@@ -129,6 +129,33 @@ pub fn parse_args(args: &[String]) -> Command {
                 }
             }
         }
+        // Hidden plumbing for the C10 effect pass (redesign M1): check one
+        // file, build and elaborate its MIR, and print every instance's
+        // effects as JSON. Exits 3 with the stage that refused it on stderr.
+        "__mir-effects" => {
+            let Some(path) = args.get(2) else {
+                eprintln!("error: __mir-effects requires a file argument");
+                process::exit(1);
+            };
+            let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
+                eprintln!("error: {path}: {e}");
+                process::exit(1);
+            });
+            match crate::mir::lower::build_source(&src) {
+                Ok(l) => {
+                    let report = crate::mir::effects::analyze(&l.program, &l.tys);
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&report.to_json()).unwrap()
+                    );
+                    process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("error[mir]: {e}");
+                    process::exit(3);
+                }
+            }
+        }
         // Bare file path: treat as `karac run <file>`
         other if other.ends_with(".kara") => parse_run_command_from(args, 1),
         other => {

@@ -5665,6 +5665,13 @@ fn unit_const(unit: Ty) -> Operand {
 /// Check one source file, build its MIR, elaborate drops and run `main`
 /// on the MIR interpreter; or the first stage that refused it.
 pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
+    let lowered = build_source(src)?;
+    Ok(interp::run(&lowered.program, &lowered.tys, "main", vec![]))
+}
+
+/// Check one source file, build its MIR and elaborate drops; or the first
+/// stage that refused it.
+pub fn build_source(src: &str) -> Result<Lowered, String> {
     let parsed = crate::parse(src);
     if !parsed.errors.is_empty() {
         return Err(format!("parse: {:?}", parsed.errors[0]));
@@ -5713,7 +5720,7 @@ pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
         }
     }
-    Ok(interp::run(&lowered.program, &lowered.tys, "main", vec![]))
+    Ok(lowered)
 }
 
 #[cfg(test)]
