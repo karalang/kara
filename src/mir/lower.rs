@@ -837,6 +837,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         TerminatorKind::Drop {
                             place: p.clone(),
                             target: next,
+                            unwind: UnwindAction::Abort,
                         },
                         next,
                     );
@@ -1161,6 +1162,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 TerminatorKind::Drop {
                     place: place.clone(),
                     target: next,
+                    unwind: UnwindAction::Abort,
                 },
                 next,
             );
@@ -2554,6 +2556,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                             args: vec![lo, ro],
                             destination: dest,
                             target: Some(next),
+                            unwind: UnwindAction::Abort,
                         },
                         next,
                     );
@@ -4024,6 +4027,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 args,
                 destination: dest,
                 target: Some(next),
+                unwind: UnwindAction::Abort,
             },
             next,
         );
@@ -4099,6 +4103,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         args: ops,
                         destination: dest,
                         target: Some(next),
+                        unwind: UnwindAction::Abort,
                     },
                     next,
                 );
@@ -4366,6 +4371,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                             args: vec![recv],
                             destination: Place::local(s),
                             target: Some(next),
+                            unwind: UnwindAction::Abort,
                         },
                         next,
                     );
@@ -4527,6 +4533,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         args: ops,
                         destination: dest,
                         target: Some(next),
+                        unwind: UnwindAction::Abort,
                     },
                     next,
                 );
@@ -5154,6 +5161,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 args: ops,
                 destination: dest,
                 target: Some(next),
+                unwind: UnwindAction::Abort,
             },
             next,
         );

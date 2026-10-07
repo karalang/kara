@@ -2386,11 +2386,14 @@ impl<'a> Interp<'a> {
                     .map_or(targets.otherwise, |(_, b)| *b);
                 Ok(Some(next))
             }
+            // A panic aborts the run whatever the unwind action; v1 has no
+            // other.
             TerminatorKind::Call {
                 func,
                 args,
                 destination,
                 target,
+                unwind: UnwindAction::Abort,
             } => {
                 let (f, _) = self.operand(body, func)?;
                 let Value::Fn(inst) = f else {
@@ -2429,7 +2432,11 @@ impl<'a> Interp<'a> {
                     .push(Event::Init(self.place_str(body, destination)));
                 Ok(Some(*target))
             }
-            TerminatorKind::Drop { place, target } => {
+            TerminatorKind::Drop {
+                place,
+                target,
+                unwind: UnwindAction::Abort,
+            } => {
                 let Some((addr, ty)) = self.resolve(body, place, Mode::Probe)? else {
                     if strict {
                         return err(format!(
@@ -2882,6 +2889,7 @@ mod tests {
                 })],
                 destination: t.into(),
                 target: Some(bb1),
+                unwind: UnwindAction::Abort,
             },
         );
         b.terminate(
@@ -2893,6 +2901,7 @@ mod tests {
                 )],
                 destination: t.into(),
                 target: Some(bb2),
+                unwind: UnwindAction::Abort,
             },
         );
         let u = unit_const(&mut tys);
@@ -2910,6 +2919,7 @@ mod tests {
             TerminatorKind::Drop {
                 place: a.into(),
                 target: bb1,
+                unwind: UnwindAction::Abort,
             },
         );
         let u = unit_const(&mut tys);
@@ -2966,6 +2976,7 @@ mod tests {
                 args: vec![Operand::Move(r.into())],
                 destination: t.into(),
                 target: Some(bb2),
+                unwind: UnwindAction::Abort,
             },
         );
         if end_drop {
@@ -2974,6 +2985,7 @@ mod tests {
                 TerminatorKind::Drop {
                     place: r.into(),
                     target: bb3,
+                    unwind: UnwindAction::Abort,
                 },
             );
         } else {
@@ -3089,6 +3101,7 @@ exit main
             TerminatorKind::Drop {
                 place: a.into(),
                 target: bb1,
+                unwind: UnwindAction::Abort,
             },
         );
         b.terminate(
@@ -3096,6 +3109,7 @@ exit main
             TerminatorKind::Drop {
                 place: t.into(),
                 target: bb2,
+                unwind: UnwindAction::Abort,
             },
         );
         let u = unit_const(&mut w.tys);
@@ -3149,6 +3163,7 @@ exit main
             TerminatorKind::Drop {
                 place: y.into(),
                 target: bb1,
+                unwind: UnwindAction::Abort,
             },
         );
         b.terminate(
@@ -3156,6 +3171,7 @@ exit main
             TerminatorKind::Drop {
                 place: x.into(),
                 target: bb2,
+                unwind: UnwindAction::Abort,
             },
         );
         let u = unit_const(&mut w.tys);
@@ -3394,6 +3410,7 @@ fn main() -> () {
                 args: vec![],
                 destination: p.into(),
                 target: Some(bb1),
+                unwind: UnwindAction::Abort,
             },
         );
         b.assign(

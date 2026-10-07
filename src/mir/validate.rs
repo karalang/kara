@@ -221,16 +221,16 @@ impl Validator<'_> {
             Rvalue::UnaryOp(_, o) => self.operand(o),
             Rvalue::Cast(kind, o, t) => {
                 if let Some(from) = self.operand(o) {
-                    let ok = match (kind, self.tys.kind(from), self.tys.kind(*t)) {
+                    let ok = matches!(
+                        (kind, self.tys.kind(from), self.tys.kind(*t)),
                         (CastKind::IntToInt, TyKind::Int(_), TyKind::Int(_))
-                        | (CastKind::IntToFloat, TyKind::Int(_), TyKind::Float(_))
-                        | (CastKind::FloatToInt, TyKind::Float(_), TyKind::Int(_))
-                        | (CastKind::FloatToFloat, TyKind::Float(_), TyKind::Float(_))
-                        | (CastKind::IntToChar, TyKind::Int(IntTy::U8), TyKind::Char)
-                        | (CastKind::CharToInt, TyKind::Char, TyKind::Int(_))
-                        | (CastKind::BoolToInt, TyKind::Bool, TyKind::Int(_)) => true,
-                        _ => false,
-                    };
+                            | (CastKind::IntToFloat, TyKind::Int(_), TyKind::Float(_))
+                            | (CastKind::FloatToInt, TyKind::Float(_), TyKind::Int(_))
+                            | (CastKind::FloatToFloat, TyKind::Float(_), TyKind::Float(_))
+                            | (CastKind::IntToChar, TyKind::Int(IntTy::U8), TyKind::Char)
+                            | (CastKind::CharToInt, TyKind::Char, TyKind::Int(_))
+                            | (CastKind::BoolToInt, TyKind::Bool, TyKind::Int(_))
+                    );
                     if !ok {
                         self.err(format!(
                             "{kind:?} cast from {} to {}",
@@ -325,11 +325,13 @@ impl Validator<'_> {
                     self.err("switchInt lists a value twice");
                 }
             }
+            // `Abort` needs no check; a cleanup edge would.
             TerminatorKind::Call {
                 func,
                 args,
                 destination,
                 target,
+                unwind: UnwindAction::Abort,
             } => {
                 self.operand(func);
                 for a in args {
@@ -340,7 +342,11 @@ impl Validator<'_> {
                     self.target(*b);
                 }
             }
-            TerminatorKind::Drop { place, target } => {
+            TerminatorKind::Drop {
+                place,
+                target,
+                unwind: UnwindAction::Abort,
+            } => {
                 // Dropping through a `mut ref` or an index is D4's drop of
                 // the old value before `*r = v` / `a[i] = v`; through a
                 // shared `ref` nothing may be overwritten, so nothing drops.

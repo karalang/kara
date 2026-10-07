@@ -111,6 +111,7 @@ mod tests {
                 args: vec![Operand::Move(r.into())],
                 destination: tmp.into(),
                 target: Some(bb3),
+                unwind: UnwindAction::Abort,
             },
         );
         b.terminate(
@@ -118,6 +119,7 @@ mod tests {
             TerminatorKind::Drop {
                 place: r.into(),
                 target: bb3,
+                unwind: UnwindAction::Abort,
             },
         );
         b.assign(

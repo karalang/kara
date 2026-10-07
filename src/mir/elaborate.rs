@@ -159,7 +159,12 @@ pub fn elaborate_drops(body: &mut Body, tys: &mut TyInterner) -> Result<(), Stri
     // Pass A: rewrite every original `Drop`, using the state just before it.
     let mut drop_clears: Vec<Option<(PathIdx, BasicBlock)>> = vec![None; n_orig];
     for bi in 0..n_orig {
-        let TerminatorKind::Drop { place, target } = e.body.blocks[bi].terminator.kind.clone()
+        // Every drop this pass emits for the original keeps its unwind action.
+        let TerminatorKind::Drop {
+            place,
+            target,
+            unwind: UnwindAction::Abort,
+        } = e.body.blocks[bi].terminator.kind.clone()
         else {
             continue;
         };
@@ -533,6 +538,7 @@ impl Elaborator<'_> {
                 TerminatorKind::Drop {
                     place: place.clone(),
                     target: succ,
+                    unwind: UnwindAction::Abort,
                 },
             )),
             Style::Conditional => {
@@ -542,6 +548,7 @@ impl Elaborator<'_> {
                     TerminatorKind::Drop {
                         place: place.clone(),
                         target: succ,
+                        unwind: UnwindAction::Abort,
                     },
                 );
                 Ok(self.new_block(
@@ -825,6 +832,7 @@ mod tests {
                     })],
                     destination: t.into(),
                     target: Some(bb1),
+                    unwind: UnwindAction::Abort,
                 },
             );
             b.terminate(
@@ -836,6 +844,7 @@ mod tests {
                     )],
                     destination: t.into(),
                     target: Some(bb2),
+                    unwind: UnwindAction::Abort,
                 },
             );
             w.ret_unit(&mut b, bb2);
@@ -850,6 +859,7 @@ mod tests {
                 TerminatorKind::Drop {
                     place: a.into(),
                     target: bb1,
+                    unwind: UnwindAction::Abort,
                 },
             );
             w.ret_unit(&mut b, bb1);
@@ -907,6 +917,7 @@ mod tests {
                     args: vec![Operand::Move(arg)],
                     destination: t.into(),
                     target: Some(next),
+                    unwind: UnwindAction::Abort,
                 },
             );
         }
@@ -995,6 +1006,7 @@ mod tests {
             TerminatorKind::Drop {
                 place: r.into(),
                 target: bb3,
+                unwind: UnwindAction::Abort,
             },
         );
         w.ret_unit(&mut b, bb3);
@@ -1016,6 +1028,7 @@ mod tests {
             TerminatorKind::Drop {
                 place: r.into(),
                 target: bb2,
+                unwind: UnwindAction::Abort,
             },
         );
         w.ret_unit(&mut b, bb2);
@@ -1036,6 +1049,7 @@ mod tests {
             TerminatorKind::Drop {
                 place: r.into(),
                 target: bb1,
+                unwind: UnwindAction::Abort,
             },
         );
         w.ret_unit(&mut b, bb1);
@@ -1077,6 +1091,7 @@ mod tests {
             TerminatorKind::Drop {
                 place: t.into(),
                 target: ret,
+                unwind: UnwindAction::Abort,
             },
         );
         w.ret_unit(&mut b, ret);
@@ -1149,6 +1164,7 @@ mod tests {
                     TerminatorKind::Drop {
                         place: u.into(),
                         target: end,
+                        unwind: UnwindAction::Abort,
                     },
                 );
                 w.consume(b, part, Place::from(t).field(1, rt), end);
@@ -1255,6 +1271,7 @@ mod tests {
             TerminatorKind::Drop {
                 place: e.into(),
                 target: ret,
+                unwind: UnwindAction::Abort,
             },
         );
         w.ret_unit(&mut b, ret);
@@ -1318,6 +1335,7 @@ mod tests {
             TerminatorKind::Drop {
                 place: r.into(),
                 target: step,
+                unwind: UnwindAction::Abort,
             },
         );
         b.assign(
@@ -1352,6 +1370,7 @@ mod tests {
             TerminatorKind::Drop {
                 place: r.into(),
                 target: bb3,
+                unwind: UnwindAction::Abort,
             },
         );
         w.ret_unit(&mut b, bb3);
@@ -1508,6 +1527,7 @@ mod tests {
             TerminatorKind::Drop {
                 place: p.into(),
                 target: bb2,
+                unwind: UnwindAction::Abort,
             },
         );
         w.ret_unit(&mut b, bb2);

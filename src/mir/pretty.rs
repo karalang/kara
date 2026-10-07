@@ -88,11 +88,13 @@ pub fn terminator(body: &Body, tys: &TyInterner, t: &TerminatorKind) -> String {
                 arms.join(", ")
             )
         }
+        // `Abort`, the only unwind action, is not printed.
         TerminatorKind::Call {
             func,
             args,
             destination,
             target,
+            unwind: UnwindAction::Abort,
         } => {
             let callee = match func {
                 Operand::Const(Const {
@@ -114,7 +116,11 @@ pub fn terminator(body: &Body, tys: &TyInterner, t: &TerminatorKind) -> String {
                 next
             )
         }
-        TerminatorKind::Drop { place: p, target } => {
+        TerminatorKind::Drop {
+            place: p,
+            target,
+            unwind: UnwindAction::Abort,
+        } => {
             format!("drop({}) -> {target}", place(body, tys, p))
         }
         TerminatorKind::Return => "return".to_string(),

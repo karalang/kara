@@ -433,10 +433,14 @@ pub enum TerminatorKind {
         destination: Place,
         /// `None` when the callee never returns.
         target: Option<BasicBlock>,
+        /// Where a panic in the callee goes.
+        unwind: UnwindAction,
     },
     Drop {
         place: Place,
         target: BasicBlock,
+        /// Where a panic in the drop body goes.
+        unwind: UnwindAction,
     },
     Return,
     Abort {
@@ -448,16 +452,35 @@ pub enum TerminatorKind {
 impl TerminatorKind {
     pub fn successors(&self) -> Vec<BasicBlock> {
         match self {
-            TerminatorKind::Goto { target } | TerminatorKind::Drop { target, .. } => {
-                vec![*target]
-            }
+            TerminatorKind::Goto { target }
+            | TerminatorKind::Drop {
+                target,
+                unwind: UnwindAction::Abort,
+                ..
+            } => vec![*target],
             TerminatorKind::SwitchInt { targets, .. } => targets.all_targets().collect(),
-            TerminatorKind::Call { target, .. } => target.iter().copied().collect(),
+            TerminatorKind::Call {
+                target,
+                unwind: UnwindAction::Abort,
+                ..
+            } => target.iter().copied().collect(),
             TerminatorKind::Return | TerminatorKind::Abort { .. } | TerminatorKind::Unreachable => {
                 Vec::new()
             }
         }
     }
+}
+
+/// What a panic during a `Call` or `Drop` does (`docs/spikes/mir-types.md`
+/// §1). v1 has one answer: a panic aborts the process and no drops run
+/// (core semantics §7). The slot exists so that task-level recovery can add
+/// a cleanup edge later without changing the shape of every terminator;
+/// each pass matches on it exhaustively, so a new variant is a compile error
+/// at every place that has to decide what it means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnwindAction {
+    #[default]
+    Abort,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -18,7 +18,7 @@ source → parse → resolve → typecheck → typed HIR (NodeId, DefId, interne
 
 ## 2. Model: rustc's MIR, kept small
 
-The design follows rustc's MIR (a control-flow graph of basic blocks over typed locals and places) with the parts Kāra does not need left out: no unwind edges (panic aborts, C8), no lifetimes or regions in types, no two-phase borrows in M1, no coroutines, no inline assembly, no `Box` special-casing.
+The design follows rustc's MIR (a control-flow graph of basic blocks over typed locals and places) with the parts Kāra does not need left out: no unwind edges in use (panic aborts, C8; `Call` and `Drop` carry a slot for one, below), no lifetimes or regions in types, no two-phase borrows in M1, no coroutines, no inline assembly, no `Box` special-casing.
 
 ### 2.1 Body
 
@@ -168,7 +168,7 @@ pub enum TerminatorKind {
 }
 ```
 
-There are no unwind edges anywhere. A call that panics aborts the process inside the callee, so a `Call` has at most one successor.
+A call that panics aborts the process inside the callee, so a `Call` has at most one successor. `Call` and `Drop` still carry an `unwind: UnwindAction` field whose only value in v1 is `Abort` (plan recheck 2026-10-07 §2.3, adopted by Gowtham). It is the place a cleanup edge goes if task-level failure isolation arrives later: adding a `Cleanup(BasicBlock)` variant then is a compile error at every pass that must decide what it means (successors, the dataflows, drop elaboration, the validator, the interpreter and the LLVM lowering) instead of a change to the shape of every terminator. The text form prints nothing for `Abort`.
 
 ## 3. Phases and what each guarantees
 

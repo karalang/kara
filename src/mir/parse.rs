@@ -692,9 +692,11 @@ impl Parser {
             let place = self.place(body, &mut c)?;
             c.expect(")")?;
             c.expect("->")?;
+            // The text form names no unwind action: v1 has only `Abort`.
             TerminatorKind::Drop {
                 place,
                 target: c.block()?,
+                unwind: UnwindAction::Abort,
             }
         } else if c.eat("switchInt(") {
             let discr = self.operand(body, &mut c)?;
@@ -736,6 +738,7 @@ impl Parser {
                 args,
                 destination,
                 target,
+                unwind: UnwindAction::Abort,
             }
         };
         c.expect(";")?;
