@@ -234,6 +234,14 @@ pub struct Classification {
     /// v2 core it is a move out of a place the collection still owns, which
     /// the strict commands reject (`docs/core-semantics.md` §3.7, C3).
     pub core_index_moves: Vec<crate::token::Span>,
+    /// Method receivers that are borrowed places
+    /// ([`crate::typechecker::TypeCheckResult::core_borrowed_receivers`])
+    /// handed to a method taking `self` by value: a move out of a borrow
+    /// (`docs/core-semantics.md` §3.7, C3).
+    pub core_borrow_moves: Vec<crate::token::Span>,
+    /// Consumed field projections (`h.o`), keyed by their root identifier's
+    /// span: the projection's span and its source spelling.
+    pub core_projection_consumes: FxHashMap<SpanKey, (crate::token::Span, String)>,
 }
 
 /// A basic block in the CFG. Statements are not stored — only the use

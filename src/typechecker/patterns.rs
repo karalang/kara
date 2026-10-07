@@ -2833,6 +2833,9 @@ impl<'a> super::TypeChecker<'a> {
         self.record_node_type(pattern.id, ty);
         match &pattern.kind {
             PatternKind::Binding(name) => {
+                // v2 core §3.7: the `let` / parameter spelling of a binding
+                // that moves a part out of a type with a `Drop` body.
+                self.reject_core_move_out_binding(name, &pattern.span, ty, ScrutineeMode::Owned);
                 self.local_scope.insert(name.clone(), ty.clone());
                 // Record the surface type for codegen so it can reconstitute
                 // struct payloads from the i64 word at match-arm bind sites
@@ -3031,6 +3034,13 @@ impl<'a> super::TypeChecker<'a> {
                 has_rest,
             } => {
                 let struct_name = path.last().map(String::as_str).unwrap_or("");
+                // v2 core §3.7: inside a type with a `Drop` body every binding
+                // that would move a part out is an error (reported at the
+                // binding, with a `ref` fix).
+                let no_move_out = self.core_no_move_out_reason(struct_name, ScrutineeMode::Owned);
+                if let Some(reason) = &no_move_out {
+                    self.core_no_move_out.push(reason.clone());
+                }
 
                 // B-2026-09-01-38 — the `let H { r, .. } = h;` spelling of the
                 // same move. `bind_pattern_types` is the let route and never
@@ -3164,8 +3174,19 @@ impl<'a> super::TypeChecker<'a> {
                     if let Some(ref sub) = field.pattern {
                         self.bind_pattern_types(sub, &field_ty);
                     } else {
+                        self.core_shorthand_field = true;
+                        self.reject_core_move_out_binding(
+                            &field.name,
+                            &field.span,
+                            &field_ty,
+                            ScrutineeMode::Owned,
+                        );
+                        self.core_shorthand_field = false;
                         self.local_scope.insert(field.name.clone(), field_ty);
                     }
+                }
+                if no_move_out.is_some() {
+                    self.core_no_move_out.pop();
                 }
             }
             PatternKind::TupleVariant { patterns, .. } => {

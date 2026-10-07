@@ -1464,6 +1464,15 @@ pub struct TypeCheckResult {
     /// Each maps to the edits that make its moving bindings `ref`s, which
     /// is `karac fix`'s repair for a later use of the scrutinee.
     pub core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// v2 core (strict commands only): method receivers that are borrowed
+    /// places (a `ref` parameter or binding, a view, a place reached through
+    /// one or through a `shared` handle). A method taking `self` by value
+    /// there moves out of a borrow (§3.7), which the ownership pass reports.
+    pub core_borrowed_receivers: FxHashSet<SpanKey>,
+    /// Index reads that produce a fresh value rather than naming an element
+    /// the container keeps (`Column[i]`, a `Map` index). Nothing is moved out
+    /// of the container by taking them by value.
+    pub core_fresh_index_reads: FxHashSet<SpanKey>,
     /// Receiver `Vector[T, N]` type for each vector **instance**-method call
     /// (`reduce_*` / `dot` / `cross` / `select`), keyed by the method-call
     /// span, recorded as `(element, lane_count)`. A `MethodCall`'s span equals
@@ -2225,6 +2234,19 @@ pub struct TypeChecker<'a> {
     pub(super) core_ref_copy_spans: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::core_moving_scrutinees`].
     pub(super) core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// See [`TypeCheckResult::core_borrowed_receivers`].
+    pub(super) core_borrowed_receivers: FxHashSet<SpanKey>,
+    /// v2 core §3.7, checked per instantiation: inside a generic body, each
+    /// move of a bare type parameter's value out of a borrowed place, keyed
+    /// by the body's callee key (`f` or `Type.method`). Whether it is a move
+    /// at all depends on the type argument, so the error is reported at each
+    /// call whose argument is not `Copy` ([`Self::emit_core_generic_move_errors`]).
+    pub(super) core_generic_moves: FxHashMap<String, Vec<(String, Span)>>,
+    /// The callee key of the function being checked, for `core_generic_moves`.
+    pub(super) current_fn_core_key: Option<String>,
+    /// Every call under the strict commands: its node, its span, and the
+    /// callee's name when it is a plain free-function call.
+    pub(super) core_call_sites: Vec<(crate::ids::NodeId, Span, Option<String>)>,
     /// The `ref ` insertions for the by-value, non-`Copy` bindings found
     /// while a scrutinee's pattern is checked.
     pub(super) core_pattern_moves: Vec<crate::resolver::TextEdit>,
@@ -2953,6 +2975,10 @@ impl<'a> TypeChecker<'a> {
             core_shared_depth: 0,
             core_ref_copy_spans: FxHashSet::default(),
             core_moving_scrutinees: FxHashMap::default(),
+            core_borrowed_receivers: FxHashSet::default(),
+            core_generic_moves: FxHashMap::default(),
+            current_fn_core_key: None,
+            core_call_sites: Vec::new(),
             core_pattern_moves: Vec::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
@@ -3308,6 +3334,7 @@ impl<'a> TypeChecker<'a> {
         let compiler_builtins = self.env.compiler_builtins.clone();
         let must_use_functions = self.env.must_use_functions.clone();
         let (node_types, node_call_subs) = self.resolved_node_tables();
+        self.emit_core_generic_move_errors(&node_call_subs);
         TypeCheckResult {
             errors: self.errors,
             warnings: self.warnings,
@@ -3315,6 +3342,8 @@ impl<'a> TypeChecker<'a> {
             clonable_expr_spans,
             core_ref_copy_spans: self.core_ref_copy_spans,
             core_moving_scrutinees: self.core_moving_scrutinees,
+            core_borrowed_receivers: self.core_borrowed_receivers,
+            core_fresh_index_reads: self.index_read_is_fresh_value.clone(),
             vector_method_receivers: self.vector_method_receivers,
             pointer_method_receiver_pointees: self.pointer_method_receiver_pointees,
             struct_info: self.env.structs,
@@ -4096,6 +4125,10 @@ impl<'a> TypeChecker<'a> {
     /// "unknown lint names continue to compile"). Slice 4b cascade
     /// reader; slice 4b polish wired the CLI fall-through.
     pub(super) fn effective_lint_level(&self, lint_name: &str) -> crate::lints::LintLevel {
+        if self.cli_lint_overrides.strict_core && crate::lints::CORE_RULE_LINTS.contains(&lint_name)
+        {
+            return crate::lints::LintLevel::Deny;
+        }
         for frame in self.lint_override_stack.iter().rev() {
             for ov in frame.iter().rev() {
                 if ov.lint == lint_name {

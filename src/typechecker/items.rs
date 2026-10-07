@@ -1825,6 +1825,12 @@ impl<'a> super::TypeChecker<'a> {
 
         let mut gp = enclosing_generics.to_vec();
         gp.extend(Self::generic_param_names(&f.generic_params));
+        let saved_core_key = self.current_fn_core_key.take();
+        self.current_fn_core_key = match self_type {
+            None => Some(f.name.clone()),
+            Some(Type::Named { name, .. }) => Some(format!("{name}.{}", f.name)),
+            Some(_) => None,
+        };
         // v2 typed HIR: every node recorded inside this body places its
         // generic parameters by position in `gp`.
         let saved_generic_frame = self.current_generic_frame;
@@ -2113,7 +2119,77 @@ impl<'a> super::TypeChecker<'a> {
         self.current_body_dim_scope = saved_body_dim_scope;
         self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
         self.current_generic_frame = saved_generic_frame;
+        self.current_fn_core_key = saved_core_key;
         self.lint_override_stack.pop();
+    }
+
+    /// v2 core §3.7, checked per instantiation (the rule §5.8 gives views):
+    /// a generic body that moves a `T` out of a borrowed place moves only
+    /// when `T` is not `Copy`. Report it at each call that instantiates `T`
+    /// with a non-`Copy` type, naming the body's line.
+    pub(super) fn emit_core_generic_move_errors(
+        &mut self,
+        node_call_subs: &rustc_hash::FxHashMap<
+            crate::ids::NodeId,
+            rustc_hash::FxHashMap<String, Type>,
+        >,
+    ) {
+        if self.core_generic_moves.is_empty() {
+            return;
+        }
+        let sites = std::mem::take(&mut self.core_call_sites);
+        let mut seen: HashSet<(SpanKey, SpanKey)> = HashSet::new();
+        for (node, span, free) in sites {
+            let key = free
+                .filter(|n| self.core_generic_moves.contains_key(n))
+                .or_else(|| self.node_method_callees.get(&node).cloned());
+            let Some(moves) = key.as_ref().and_then(|k| self.core_generic_moves.get(k)) else {
+                continue;
+            };
+            let Some(subs) = node_call_subs.get(&node) else {
+                continue;
+            };
+            let mut found = Vec::new();
+            for (param, body_span) in moves {
+                let Some(arg) = subs.get(param) else {
+                    continue;
+                };
+                if matches!(
+                    arg,
+                    Type::TypeParam(_)
+                        | Type::TypeVar(_)
+                        | Type::Error
+                        | Type::Never
+                        | Type::Ref(_)
+                        | Type::Function { .. }
+                ) || self.is_copy_type_during_check(arg)
+                    || self.copy_is_only_an_rc_retain(arg)
+                {
+                    continue;
+                }
+                if seen.insert((SpanKey::from_span(&span), SpanKey::from_span(body_span))) {
+                    found.push((param.clone(), super::types::type_display(arg), *body_span));
+                }
+            }
+            let callee = key.unwrap_or_default();
+            for (param, arg, body_span) in found {
+                self.type_lint_warning_with_fix(
+                    format!(
+                        "cannot move a non-`Copy` value out of a borrowed place: this call \
+                         instantiates `{param}` with `{arg}`, which is not `Copy`, and \
+                         `{callee}` moves a `{param}` out of a borrow at line {}:{} \
+                         (core-semantics.md §3.7, checked per instantiation). Write \
+                         `.clone()` there under a `{param}: Clone` bound, or return a \
+                         reference",
+                        body_span.line, body_span.column
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                    "borrow_projection_copy",
+                    None,
+                );
+            }
+        }
     }
 
     // ── `#[repr(transparent)]` carrier-shape validation ──────────────────
@@ -5261,6 +5337,22 @@ impl<'a> super::TypeChecker<'a> {
             || self.core_map_get_view(Self::projection_root(value), true)
     }
 
+    /// v2 core §3.7: whether a method receiver is a borrowed place, so a
+    /// method taking `self` by value would move out of a borrow.
+    pub(super) fn core_receiver_is_borrowed(&self, object: &Expr) -> bool {
+        match &object.kind {
+            ExprKind::Identifier(n) => {
+                self.local_scope.is_view(n.as_str())
+                    || matches!(
+                        self.local_scope.lookup(n.as_str()),
+                        Some(Type::Ref(_) | Type::MutRef(_))
+                    )
+            }
+            ExprKind::SelfValue => self.current_fn_ref_params.contains("self"),
+            _ => self.copy_source_rooted_in_borrow(object),
+        }
+    }
+
     fn rooted_in_borrow(&self, value: &Expr, views: bool) -> bool {
         if let ExprKind::Identifier(n) = &value.kind {
             return views && self.local_scope.is_view(n.as_str());
@@ -5337,6 +5429,22 @@ impl<'a> super::TypeChecker<'a> {
 
     /// v2 core §4.6: is a `for` loop's iterable a standard collection, which
     /// `for` borrows whatever expression produced it?
+    /// v2 core §4.6: an iterator that hands out references into a collection
+    /// (`c.iter()`, `m.keys()`, and the adapters that pass its items on
+    /// unchanged, such as `enumerate` or `rev`), so a `for` over it binds refs.
+    pub(super) fn core_iter_yields_refs(iterable: &Expr) -> bool {
+        let mut e = iterable;
+        while let ExprKind::MethodCall { object, method, .. } = &e.kind {
+            match method.as_str() {
+                "iter" | "iter_mut" | "keys" | "values" | "values_mut" => return true,
+                "enumerate" | "rev" | "skip" | "take" | "step_by" | "filter" | "peekable"
+                | "skip_while" | "take_while" => e = object,
+                _ => return false,
+            }
+        }
+        false
+    }
+
     pub(super) fn for_iterable_is_core_collection(iter_ty: &Type) -> bool {
         let mut t = iter_ty;
         while let Type::Ref(inner) | Type::MutRef(inner) = t {
@@ -5418,7 +5526,17 @@ impl<'a> super::TypeChecker<'a> {
         // value is that its claim is true at the site it points at. Declining
         // costs a warning on the non-`Copy` instantiations; firing would put
         // a false one on the `Copy` ones.
-        if matches!(ty, Type::TypeParam(_)) {
+        if let Type::TypeParam(param) = ty {
+            // v2 core §3.7: whether this moves depends on the type argument,
+            // so the strict commands check it at each instantiation instead.
+            if self.cli_lint_overrides.strict_core {
+                if let Some(key) = self.current_fn_core_key.clone() {
+                    self.core_generic_moves
+                        .entry(key)
+                        .or_default()
+                        .push((param.clone(), value.span));
+                }
+            }
             return;
         }
         if deny && self.deny_for_element_drop_copy(value, ty) {
@@ -5460,9 +5578,10 @@ impl<'a> super::TypeChecker<'a> {
                 // pattern binding are both `ref`s; only
                 // `for x in c.into_iter()` moves the elements out.
                 format!(
-                    "cannot move '{n}': it borrows its value (a bare `for` element or a \
-                     `ref` pattern binding). For a `for` element, iterate with \
-                     `.into_iter()` to move the elements out of the collection"
+                    "cannot move '{n}': it borrows its value (a bare `for` element, a \
+                     `ref` binding, or a binding into a borrowed place). For a `for` \
+                     element, iterate with `.into_iter()` to move the elements out of \
+                     the collection"
                 )
             } else if self.core_map_get_view(Self::projection_root(value), true) {
                 "cannot move a non-`Copy` value out of a map: `get` returns a reference to \
@@ -5740,7 +5859,14 @@ impl<'a> super::TypeChecker<'a> {
         // recorded for the projected object.
         let owner = match self.drop_impl_type_name_of(object) {
             Some(o) => o,
-            None => self.drop_impl_type_name_of_fresh_projection(object)?,
+            None => match self.drop_impl_type_name_of_fresh_projection(object) {
+                Some(o) => o,
+                // v2 core §3.6: a `Drop` body anywhere on the path from the
+                // root rules the move out, not only on the innermost object
+                // (`w.inner.s` with `impl Drop for W`).
+                None if self.cli_lint_overrides.strict_core => self.drop_owner_on_path(object)?,
+                None => return None,
+            },
         };
         // The root must be an owned binding or a fresh temp. A borrow root
         // copies instead of moving, and belongs to `warn_borrow_projection_copy`.
@@ -5774,6 +5900,252 @@ impl<'a> super::TypeChecker<'a> {
                 _ => return None,
             }
         }
+    }
+
+    /// v2 core §3.7: report each value-producing tail of `e` (through `if`,
+    /// `match` and blocks) that is a reference to a non-`Copy` value, where
+    /// the whole is owned: taking it would move out of the borrow.
+    fn core_check_ref_tails(&mut self, e: &Expr) {
+        match &e.kind {
+            ExprKind::Block(b) => {
+                if let Some(t) = b.final_expr.as_deref() {
+                    self.core_check_ref_tails(t);
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(t) = then_block.final_expr.as_deref() {
+                    self.core_check_ref_tails(t);
+                }
+                if let Some(t) = else_branch.as_deref() {
+                    self.core_check_ref_tails(t);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    self.core_check_ref_tails(&a.body);
+                }
+            }
+            _ => {
+                let Some((Type::Ref(inner), _)) = self.node_types.get(&e.id) else {
+                    return;
+                };
+                let inner = inner.as_ref().clone();
+                // A view binding's tail is already reported as a move of it.
+                if self.errors.iter().any(|err| err.span == e.span) {
+                    return;
+                }
+                if matches!(inner, Type::Error | Type::Never | Type::TypeParam(_))
+                    || self.is_copy_type_during_check(&inner)
+                    || self.copy_is_only_an_rc_retain(&inner)
+                {
+                    return;
+                }
+                let has_clone = self.type_supports_clone(&inner);
+                let fix_it = has_clone.then(|| crate::typechecker::FixIt {
+                    span: Span {
+                        offset: e.span.offset + e.span.length,
+                        length: 0,
+                        line: e.span.line,
+                        column: e.span.column,
+                    },
+                    replacement: ".clone()".to_string(),
+                });
+                let help = if has_clone {
+                    "Write `.clone()` to take a copy"
+                } else {
+                    "This type has no `.clone()`: make every branch a reference, or take \
+                     the value out with `mem.replace` / `Option.take()`"
+                };
+                self.type_lint_warning_with_fix(
+                    format!(
+                        "cannot move a non-`Copy` value out of a reference: this branch \
+                         yields a reference where the result is an owned value \
+                         (core-semantics.md §3.7). {help}"
+                    ),
+                    e.span,
+                    TypeErrorKind::MoveOutOfNoMovePlace,
+                    "borrow_projection_copy",
+                    fix_it,
+                );
+            }
+        }
+    }
+
+    /// v2 core §5.2: whether `ty` holds a reference (a view).
+    pub(super) fn core_is_view(&self, ty: &Type) -> bool {
+        match ty {
+            Type::TypeVar(id) => self
+                .env
+                .substitutions
+                .get(id)
+                .is_some_and(|t| self.core_is_view(t)),
+            Type::Ref(_) | Type::MutRef(_) => true,
+            Type::Named { args, .. } => args.iter().any(|t| self.core_is_view(t)),
+            Type::Tuple(ts) => ts.iter().any(|t| self.core_is_view(t)),
+            _ => false,
+        }
+    }
+
+    /// The recorded type of `e`, as a view or not; `None` when unrecorded.
+    fn core_node_is_view(&self, e: &Expr) -> Option<bool> {
+        self.node_types
+            .get(&e.id)
+            .map(|(ty, _)| self.core_is_view(ty))
+    }
+
+    /// v2 core §5.5: the span of a temporary among the origins (§5.3) of the
+    /// view `e` evaluates to, if there is one.
+    fn core_view_temp_origin(&self, e: &Expr) -> Option<Span> {
+        // A branch or argument that is not itself a view borrows nothing.
+        if self.core_node_is_view(e) == Some(false) {
+            return None;
+        }
+        match &e.kind {
+            // §5.4: a `ref self` method's result borrows `self` only, and a
+            // by-value generic one (`unwrap`) carries its receiver's origins.
+            ExprKind::MethodCall { object, .. } => {
+                // A map `Entry` is itself a view of its map (its by-value
+                // `or_insert` hands out a reference into the map, not into
+                // the entry), so it carries its own origins on.
+                let entry = matches!(
+                    self.node_types.get(&object.id),
+                    Some((Type::Named { name, .. }, _)) if name == "Entry"
+                );
+                if entry {
+                    return self.core_view_temp_origin(object);
+                }
+                if self.core_expr_is_temp(object) {
+                    return Some(object.span);
+                }
+                if self.core_node_is_view(object) == Some(true) {
+                    return self.core_view_temp_origin(object);
+                }
+                None
+            }
+            // §5.4: a free function's result borrows every `ref` and view
+            // parameter; a constructor or generic call carries its view
+            // arguments' origins.
+            ExprKind::Call { callee, args } => {
+                let params = match &callee.kind {
+                    ExprKind::Identifier(n) => {
+                        self.env.functions.get(n).map(|sig| sig.params.clone())
+                    }
+                    _ => None,
+                };
+                args.iter().enumerate().find_map(|(i, a)| {
+                    let v = &a.value;
+                    let into_view = params
+                        .as_ref()
+                        .and_then(|p| p.get(i))
+                        .is_some_and(|t| self.core_is_view(t));
+                    if into_view && self.core_expr_is_temp(v) {
+                        return Some(v.span);
+                    }
+                    if self.core_node_is_view(v) == Some(true) {
+                        return self.core_view_temp_origin(v);
+                    }
+                    None
+                })
+            }
+            ExprKind::Unary {
+                op: UnaryOp::Ref,
+                operand,
+            } => {
+                if self.core_expr_is_temp(operand) {
+                    Some(operand.span)
+                } else {
+                    None
+                }
+            }
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. }
+            | ExprKind::Index { object, .. } => {
+                if self.core_node_is_view(object) == Some(true) {
+                    self.core_view_temp_origin(object)
+                } else {
+                    None
+                }
+            }
+            // §5.3: branches take the union of their arms.
+            ExprKind::Block(b) => b
+                .final_expr
+                .as_deref()
+                .and_then(|t| self.core_view_temp_origin(t)),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => then_block
+                .final_expr
+                .as_deref()
+                .and_then(|t| self.core_view_temp_origin(t))
+                .or_else(|| {
+                    else_branch
+                        .as_deref()
+                        .and_then(|t| self.core_view_temp_origin(t))
+                }),
+            ExprKind::Match { arms, .. } => arms
+                .iter()
+                .find_map(|a| self.core_view_temp_origin(&a.body)),
+            ExprKind::Tuple(items) => items.iter().find_map(|v| {
+                if self.core_node_is_view(v) == Some(true) {
+                    self.core_view_temp_origin(v)
+                } else {
+                    None
+                }
+            }),
+            _ => None,
+        }
+    }
+
+    /// v2 core §5.5: whether `e` produces a temporary that owns its value
+    /// (one with no named place), as opposed to a place or a view.
+    fn core_expr_is_temp(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Call { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::Block(_)
+            | ExprKind::If { .. }
+            | ExprKind::Match { .. } => self.core_node_is_view(e) == Some(false),
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::InterpolatedStringLit(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Binary { .. }
+            | ExprKind::ArrayLiteral(_)
+            | ExprKind::StructLiteral { .. }
+            | ExprKind::Cast { .. } => true,
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. }
+            | ExprKind::Index { object, .. } => self.core_expr_is_temp(object),
+            _ => false,
+        }
+    }
+
+    /// The first type with a `Drop` body among the objects `expr` projects
+    /// out of, innermost first (`expr` itself was already asked).
+    fn drop_owner_on_path(&self, expr: &Expr) -> Option<String> {
+        let mut cur = expr;
+        while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
+            &cur.kind
+        {
+            cur = object;
+            if let Some(o) = self
+                .drop_impl_type_name_of(cur)
+                .or_else(|| self.drop_impl_type_name_of_fresh_projection(cur))
+            {
+                return Some(o);
+            }
+        }
+        None
     }
 
     /// B-2026-09-26-5 — [`Self::drop_impl_type_name_of`] for a projected object
@@ -5849,7 +6221,9 @@ impl<'a> super::TypeChecker<'a> {
         mode: crate::typechecker::types::ScrutineeMode,
     ) {
         use crate::typechecker::types::ScrutineeMode;
-        if !matches!(mode, ScrutineeMode::Owned) {
+        // v2 core: each binding that moves a part out is reported on its own,
+        // with a `ref` fix (`reject_core_move_out_binding`).
+        if !matches!(mode, ScrutineeMode::Owned) || self.cli_lint_overrides.strict_core {
             return;
         }
         let has_drop =
@@ -5944,7 +6318,10 @@ impl<'a> super::TypeChecker<'a> {
         mode: crate::typechecker::types::ScrutineeMode,
     ) {
         use crate::typechecker::types::ScrutineeMode;
-        if !matches!(mode, ScrutineeMode::Owned) {
+        // v2 core: a plain binding of the payload moves it out whatever the
+        // arm does with it (§4.6), and `reject_core_move_out_binding` reports
+        // it per binding with a `ref` fix.
+        if !matches!(mode, ScrutineeMode::Owned) || self.cli_lint_overrides.strict_core {
             return;
         }
         // B-2026-09-16-24 — a scrutinee that is a PROJECTION OFF A BORROW is
@@ -6145,6 +6522,38 @@ impl<'a> super::TypeChecker<'a> {
         let Some(owner) = self.partial_move_of_drop_struct(value, ty) else {
             return;
         };
+        // v2 core §3.7 (C3): an error under the strict commands, worded as
+        // the core states it, with `.clone()` as the fix where it exists.
+        if self.cli_lint_overrides.strict_core {
+            let has_clone = self.type_supports_clone(ty);
+            let fix_it = has_clone.then(|| crate::typechecker::FixIt {
+                span: Span {
+                    offset: value.span.offset + value.span.length,
+                    length: 0,
+                    line: value.span.line,
+                    column: value.span.column,
+                },
+                replacement: ".clone()".to_string(),
+            });
+            let help = if has_clone {
+                "Write `.clone()` to take a copy, or keep using it in place"
+            } else {
+                "This type has no `.clone()`: use it in place, or take it with \
+                 `mem.replace` / `mem.swap` / `Option.take()`"
+            };
+            self.type_lint_warning_with_fix(
+                format!(
+                    "cannot move a non-`Copy` field out of `{owner}`, which has a `Drop` \
+                     body: the body needs every field when it runs \
+                     (core-semantics.md §3.7). {help}"
+                ),
+                value.span,
+                TypeErrorKind::MoveOutOfNoMovePlace,
+                "partial_move_of_drop_struct",
+                fix_it,
+            );
+            return;
+        }
         self.type_lint_warning_with_fix(
             format!(
                 "moving a field out of `{owner}`, which has its own `impl Drop`: the struct \
@@ -6364,6 +6773,31 @@ impl<'a> super::TypeChecker<'a> {
                 // initializer is the canonical value position, so a non-`Copy`
                 // element read here is rejected (B-2026-08-26-21).
                 self.reject_index_move_non_copy(value, &expected_ty);
+                // v2 core §3.7: a branch yielding a reference where the `let`
+                // keeps an owned value would move out of the borrow.
+                if self.cli_lint_overrides.strict_core
+                    && !self.core_is_view(&expected_ty)
+                    && matches!(
+                        value.kind,
+                        ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Block(_)
+                    )
+                {
+                    self.core_check_ref_tails(value);
+                }
+                // v2 core §5.5: a `let` that keeps a reference to a temporary.
+                if self.cli_lint_overrides.strict_core && self.core_is_view(&expected_ty) {
+                    if let Some(temp) = self.core_view_temp_origin(value) {
+                        self.type_error(
+                            "a reference to a temporary outlives its statement \
+                             (core-semantics.md §5.5): the value this `let` keeps \
+                             borrows from a temporary that is dropped at the `;`. Bind \
+                             the temporary to a variable first"
+                                .to_string(),
+                            temp,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
                 // B-2026-09-01-4 — its sibling one level up: the same read
                 // through a BORROW rather than through a container index.
                 // v2 core §4.6: destructuring a borrowed place moves nothing
@@ -6376,7 +6810,8 @@ impl<'a> super::TypeChecker<'a> {
                     && ty.is_none()
                     && matches!(pattern.kind, PatternKind::Binding(_))
                     && (matches!(&value.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n))
-                        || self.core_map_get_view(value, true));
+                        || self.core_map_get_view(value, true)
+                        || self.core_map_get_view(value, false));
                 if !self.cli_lint_overrides.strict_core
                     || (matches!(pattern.kind, PatternKind::Binding(_)) && !ref_copy)
                 {
@@ -6418,7 +6853,27 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::RefutablePattern,
                     );
                 }
+                // v2 core §4.6: destructuring a borrowed place (a view, a
+                // place reached through a reference or a `shared` handle, or a
+                // `shared` value itself) moves nothing; every binding is a
+                // `ref` into it.
+                let borrowed_destructure = self.cli_lint_overrides.strict_core
+                    && !matches!(pattern.kind, PatternKind::Binding(_))
+                    && (self.scrutinee_core_borrowed(value)
+                        || self.expr_is_shared_handle(value)
+                        || matches!(&pattern.kind, PatternKind::Struct { path, .. }
+                            if path.last().is_some_and(|n| self.name_is_shared_decl(n))));
+                let prev_core = std::mem::replace(
+                    &mut self.current_scrutinee_core_borrowed,
+                    borrowed_destructure,
+                );
                 self.bind_pattern_types(pattern, &expected_ty);
+                self.current_scrutinee_core_borrowed = prev_core;
+                if borrowed_destructure {
+                    for name in pattern.binding_names() {
+                        self.local_scope.mark_view(&name);
+                    }
+                }
                 if ref_copy {
                     if let PatternKind::Binding(n) = &pattern.kind {
                         self.local_scope.mark_view(n);

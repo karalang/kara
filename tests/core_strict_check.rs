@@ -738,3 +738,235 @@ fn a_loop_must_reassign_a_moved_place_before_it_loops_back() {
          }\n",
     );
 }
+
+#[test]
+fn a_move_out_of_a_drop_type_is_an_error_no_attribute_lowers() {
+    // §3.6 / §3.7: a `Drop` body anywhere on the path from the root rules the
+    // move out, and `#[allow]` cannot lower a core rule.
+    rejected_then_fixed(
+        "drop-field-allow",
+        "struct D { name: String, n: i64 }\n\
+         impl Drop for D { fn drop(mut ref self) { println(\"dD\"); } }\n\
+         fn main() {\n\
+             let d = D { name: \"a\".to_string(), n: 1 };\n\
+             #[allow(partial_move_of_drop_struct)]\n\
+             let x = d.name;\n\
+             println(x);\n\
+         }\n",
+        "which has a `Drop` body",
+    );
+    // The fixed form, `w.inner.s.clone()`, trips the legacy backend's
+    // `chained_field_receiver` deferral, so this case checks the rejection
+    // only; the direct case above covers the `.clone()` fix.
+    rejected(
+        "drop-field-path",
+        "struct P { s: String }\n\
+         struct W { inner: P }\n\
+         impl Drop for W { fn drop(mut ref self) { println(\"dW\"); } }\n\
+         fn main() {\n\
+             let w = W { inner: P { s: \"b\".to_string() } };\n\
+             let s = w.inner.s;\n\
+             println(s);\n\
+         }\n",
+        "out of `W`",
+    );
+    rejected_then_fixed_by(
+        "drop-field-let-pattern",
+        "struct D { name: String, n: i64 }\n\
+         impl Drop for D { fn drop(mut ref self) { println(\"dD\"); } }\n\
+         fn main() {\n\
+             let d = D { name: \"a\".to_string(), n: 1 };\n\
+             let D { name, n } = d;\n\
+             println(name);\n\
+             println(n);\n\
+         }\n",
+        "which has a `Drop` body",
+        "name: ref name",
+    );
+    accepted(
+        "drop-field-copy",
+        "struct D { name: String, n: i64 }\n\
+         impl Drop for D { fn drop(mut ref self) { println(\"dD\"); } }\n\
+         fn main() {\n\
+             let d = D { name: \"a\".to_string(), n: 1 };\n\
+             let k = d.n;\n\
+             let D { name: ref name, n } = d;\n\
+             println(k);\n\
+             println(name);\n\
+         }\n",
+    );
+}
+
+/// `check` must fail with `expect` in its output (no machine fix exists).
+fn rejected(tag: &str, src: &str, expect: &str) {
+    let (dir, path) = fixture(tag, src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{tag}: check must reject: {err}");
+    assert!(err.contains(expect), "{tag}: expected `{expect}` in: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_reference_to_a_temporary_cannot_outlive_its_statement() {
+    // §5.5, pin `err_ref_from_temp`: the result borrows both `ref` arguments
+    // (§5.4), and one of them is a temporary.
+    rejected(
+        "ref-from-temp-arg",
+        "fn longer(a: ref String, b: ref String) -> ref String { if a.len() > b.len() { a } else { b } }\n\
+         fn main() {\n\
+             let s = \"abc\".to_string();\n\
+             let r = longer(s, \"de\".to_string());\n\
+             println(r);\n\
+         }\n",
+        "§5.5",
+    );
+    // A `ref self` method's result borrows its receiver, here an `if`.
+    rejected(
+        "ref-from-temp-receiver",
+        "fn mk(n: i64) -> Vec[i64] { return [n, n + 1] }\n\
+         fn main() {\n\
+             let c = true;\n\
+             let d = (if c { mk(5) } else { mk(7) }).first();\n\
+             match d { Some(x) => println(x), None => println(0) }\n\
+         }\n",
+        "§5.5",
+    );
+    accepted(
+        "ref-from-named",
+        "fn longer(a: ref String, b: ref String) -> ref String { if a.len() > b.len() { a } else { b } }\n\
+         fn mk(n: i64) -> Vec[i64] { return [n, n + 1] }\n\
+         fn main() {\n\
+             let s = \"abc\".to_string();\n\
+             let t = \"de\".to_string();\n\
+             let r = longer(s, t);\n\
+             println(r);\n\
+             let v = mk(5);\n\
+             let d = v.first();\n\
+             match d { Some(x) => println(x), None => println(0) }\n\
+             let n = mk(3).len();\n\
+             println(n);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_by_value_receiver_moves_and_cannot_come_out_of_a_borrow() {
+    // `unwrap` takes `self` by value, so it moves its receiver: a field
+    // projection is named and cloned as itself.
+    rejected_then_fixed_by(
+        "receiver-unwrap-moves",
+        "struct H { o: Option[String], n: i64 }\n\
+         fn main() {\n\
+             let h = H { o: Some(\"b\".to_string()), n: 1 };\n\
+             let b = h.o.unwrap();\n\
+             println(b);\n\
+             println(h.o.is_some());\n\
+         }\n",
+        "value 'h.o' moved here",
+        "h.o.clone().unwrap()",
+    );
+    // §3.7: a by-value receiver may not come out of a `ref` parameter or out
+    // of a collection element.
+    rejected_then_fixed_by(
+        "receiver-out-of-ref",
+        "struct H { o: Option[String], n: i64 }\n\
+         fn f(r: ref H) -> String { r.o.unwrap() }\n\
+         fn main() {\n\
+             let h = H { o: Some(\"b\".to_string()), n: 1 };\n\
+             println(f(h));\n\
+         }\n",
+        "out of a borrowed place",
+        "r.o.clone().unwrap()",
+    );
+    rejected_then_fixed_by(
+        "receiver-out-of-element",
+        "struct H { o: Option[String], n: i64 }\n\
+         fn main() {\n\
+             let g = vec![H { o: Some(\"b\".to_string()), n: 1 }];\n\
+             println(g[0].o.unwrap());\n\
+         }\n",
+        "out of a collection element",
+        "g[0].o.clone().unwrap()",
+    );
+    accepted(
+        "receiver-borrowing-methods",
+        "struct H { o: Option[String], n: i64 }\n\
+         fn f(r: ref H) -> bool { r.o.is_some() }\n\
+         fn main() {\n\
+             let h = H { o: Some(\"b\".to_string()), n: 1 };\n\
+             println(f(h));\n\
+             println(h.o.is_some());\n\
+             let n: Option[i64] = Some(3);\n\
+             println(n.unwrap());\n\
+             println(n.unwrap());\n\
+         }\n",
+    );
+}
+
+#[test]
+fn destructuring_a_borrowed_place_or_iterating_refs_binds_references() {
+    // §4.6: a `let` destructure of a view binds `ref`s, so returning a part as
+    // an owned value is a move out of the borrow.
+    rejected_then_fixed(
+        "let-destructure-view",
+        "struct P { a: String, n: i64 }\n\
+         fn main() {\n\
+             let ps = vec![P { a: \"x\".to_string(), n: 1 }];\n\
+             let mut out: Vec[String] = Vec.new();\n\
+             for p in ps { let P { a, n } = p; out.push(a); }\n\
+             println(out.len());\n\
+         }\n",
+        "it borrows its value",
+    );
+    // `c.iter()` hands out references, so its `for` binds them.
+    rejected_then_fixed(
+        "for-over-iter",
+        "fn take(x: Vec[i64]) -> i64 { return x.len() }\n\
+         fn main() {\n\
+             let v: Vec[(Vec[i64], i64)] = [([1], 1)];\n\
+             for pair in v.iter() { match pair { (a, j) => println(take(a)) } }\n\
+         }\n",
+        "it borrows its value",
+    );
+    // A `Map.get` payload bound in one arm, an owned value in the other.
+    rejected_then_fixed(
+        "mixed-ref-owned-arms",
+        "fn main() {\n\
+             let mut m: Map[i64, String] = Map.new();\n\
+             m.insert(7, \"abc\".to_string());\n\
+             let g = m.get(7);\n\
+             let s = match g { Some(x) => x, None => \"n\".to_string() };\n\
+             println(s.len());\n\
+         }\n",
+        "it borrows its value",
+    );
+}
+
+#[test]
+fn a_generic_move_out_of_a_borrow_is_checked_per_instantiation() {
+    // §3.7 on a monomorphised instance, as §5.8 does for views: the body
+    // moves a `T` out of `ref self` only when `T` is not `Copy`, so the
+    // error names the call that instantiates it with `String`.
+    rejected(
+        "generic-ref-move",
+        "struct Bx[T] { v: T }\n\
+         impl[T] Bx[T] { fn get(ref self) -> T { self.v } }\n\
+         fn main() {\n\
+             let a = Bx { v: \"x\".to_string() };\n\
+             println(a.get());\n\
+         }\n",
+        "instantiates `T` with `String`",
+    );
+    accepted(
+        "generic-ref-move-copy",
+        "struct Bx[T] { v: T }\n\
+         impl[T] Bx[T] { fn get(ref self) -> T { self.v } }\n\
+         fn main() {\n\
+             let b = Bx { v: 3 };\n\
+             println(b.get());\n\
+             let c = Bx { v: (1, true) };\n\
+             println(c.get().0);\n\
+         }\n",
+    );
+}

@@ -431,6 +431,17 @@ pub struct CliLintOverrides {
     pub legacy_core: bool,
 }
 
+/// The lints that report a v2 core rule (`docs/core-semantics.md` §3.7: a
+/// move out of a borrowed place, or out of a type with a `Drop` body). Under
+/// the strict commands they are errors that no `#[allow]`, `#[expect]` or
+/// CLI flag can lower: the core has no program in which the move is legal.
+pub const CORE_RULE_LINTS: &[&str] = &[
+    "borrow_projection_copy",
+    "for_element_drop_copy",
+    "partial_move_of_drop_struct",
+    "partial_move_of_drop_enum",
+];
+
 impl CliLintOverrides {
     /// Resolve the build-wide level for a lint after the per-item
     /// cascade missed. Returns `None` when no CLI flag mentions the

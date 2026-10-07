@@ -153,7 +153,15 @@ impl<'a> super::OwnershipChecker<'a> {
         });
         let mut out = Vec::new();
         for entry in sites {
-            let binding = super::demangle_binding(&entry.binding);
+            // A moved field projection (`h.o`) is named, and cloned, as itself.
+            let projection = self
+                .core_projection_consumes
+                .get(&SpanKey::from_span(&entry.consume_span));
+            let binding = match projection {
+                Some((_, text)) => text.clone(),
+                None => super::demangle_binding(&entry.binding).to_string(),
+            };
+            let moved_span = projection.map_or(entry.consume_span, |(span, _)| *span);
             let (line, col) = (entry.consume_span.line, entry.consume_span.column);
             let message = match entry.trigger {
                 RcTrigger::DirectReuseAfterConsume
@@ -181,10 +189,10 @@ impl<'a> super::OwnershipChecker<'a> {
             // clone belongs in a `let` before the closure, which is not a
             // one-span edit.
             let capture = entry.trigger == RcTrigger::ClosureCaptureWithOuterUse;
-            let supports_clone = self.moved_type_supports_clone(&entry.consume_span);
+            let supports_clone = self.moved_type_supports_clone(&moved_span);
             let replacement = (supports_clone && !capture).then(|| {
                 Box::new(crate::resolver::TextEdit {
-                    offset: entry.consume_span.offset + entry.consume_span.length,
+                    offset: moved_span.offset + moved_span.length,
                     length: 0,
                     replacement: ".clone()".to_string(),
                 })
@@ -239,6 +247,38 @@ impl<'a> super::OwnershipChecker<'a> {
             out.push(OwnershipError {
                 message: "cannot move a non-`Copy` value out of a collection element: the \
                           collection still owns it"
+                    .to_string(),
+                span: *span,
+                kind: OwnershipErrorKind::MoveOutOfPlace,
+                suggestion: Some(suggestion.to_string()),
+                replacement,
+                consume_span: None,
+            });
+        }
+        // C3: a borrowed place handed to a method that takes `self` by value.
+        let mut seen = HashSet::new();
+        for span in &self.core_borrow_moves {
+            let key = SpanKey::from_span(span);
+            if !seen.insert(key) {
+                continue;
+            }
+            let supports_clone = self.moved_type_supports_clone(span);
+            let replacement = supports_clone.then(|| {
+                Box::new(crate::resolver::TextEdit {
+                    offset: span.offset + span.length,
+                    length: 0,
+                    replacement: ".clone()".to_string(),
+                })
+            });
+            let suggestion = if supports_clone {
+                "write `.clone()` to call it on a copy, or use a method that borrows"
+            } else {
+                "use a method that borrows, or take the value with `mem.replace` / \
+                 `Option.take()` (this type has no `.clone()`)"
+            };
+            out.push(OwnershipError {
+                message: "cannot move a non-`Copy` value out of a borrowed place: this method \
+                          takes `self` by value"
                     .to_string(),
                 span: *span,
                 kind: OwnershipErrorKind::MoveOutOfPlace,

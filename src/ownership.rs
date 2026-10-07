@@ -1452,6 +1452,12 @@ pub struct OwnershipChecker<'a> {
     /// ([`crate::cfg::Classification::core_index_moves`]), across every
     /// function; turned into `MoveOutOfPlace` errors by `core_move_errors`.
     pub(crate) core_index_moves: Vec<Span>,
+    /// [`crate::cfg::Classification::core_borrow_moves`], across every
+    /// function; turned into `MoveOutOfPlace` errors by `core_move_errors`.
+    pub(crate) core_borrow_moves: Vec<Span>,
+    /// [`crate::cfg::Classification::core_projection_consumes`], across
+    /// every function.
+    pub(crate) core_projection_consumes: FxHashMap<SpanKey, (Span, String)>,
     /// Effective `panic_on_alloc_failure` (phase-8-stdlib-floor item 6). `true`
     /// (the default) leaves RC fallback as a perf note; `false` (hard mode)
     /// turns every RC-fallback site into a hard
@@ -1773,6 +1779,8 @@ impl<'a> OwnershipChecker<'a> {
             suppressed_rc_fn_keys: HashSet::new(),
             core_non_move_sources: HashSet::new(),
             core_index_moves: Vec::new(),
+            core_borrow_moves: Vec::new(),
+            core_projection_consumes: FxHashMap::default(),
             panic_on_alloc_failure: true,
             elided_bindings: HashMap::new(),
             elision_blocked: HashMap::new(),
@@ -1943,6 +1951,47 @@ impl<'a> OwnershipChecker<'a> {
             }
         }
 
+        // v2 core: a use after a field projection moved (`h.o`) names the
+        // projection and clones it, not its root. The projections are known
+        // only once each body is classified, after its witnesses were built.
+        for e in self.errors.iter_mut() {
+            if e.kind != OwnershipErrorKind::UseAfterMove {
+                continue;
+            }
+            let Some(consume) = e.consume_span else {
+                continue;
+            };
+            let Some((moved, text)) = self
+                .core_projection_consumes
+                .get(&SpanKey::from_span(&consume))
+                .cloned()
+            else {
+                continue;
+            };
+            let supports_clone = self
+                .typecheck_result
+                .clonable_expr_spans
+                .contains(&SpanKey::from_span(&moved));
+            e.message = format!(
+                "value '{text}' moved here, used again here (moved at line {}:{})",
+                consume.line, consume.column
+            );
+            e.suggestion = Some(if supports_clone {
+                format!(
+                    "clone '{text}' at the move site (`{text}.clone()`), or restructure to \
+                     avoid reuse"
+                )
+            } else {
+                format!("restructure to avoid reuse ('{text}' has no `.clone()`)")
+            });
+            e.replacement = supports_clone.then(|| {
+                Box::new(crate::resolver::TextEdit {
+                    offset: moved.offset + moved.length,
+                    length: 0,
+                    replacement: ".clone()".to_string(),
+                })
+            });
+        }
         let core_errors = self.core_move_errors();
         OwnershipCheckResult {
             param_modes: self.param_modes,
@@ -2652,6 +2701,14 @@ impl<'a> OwnershipChecker<'a> {
             .extend(classification.core_borrowed_spans.iter().copied());
         self.core_index_moves
             .extend(classification.core_index_moves.iter().copied());
+        self.core_borrow_moves
+            .extend(classification.core_borrow_moves.iter().copied());
+        self.core_projection_consumes.extend(
+            classification
+                .core_projection_consumes
+                .iter()
+                .map(|(k, v)| (*k, v.clone())),
+        );
         self.current_classification = Some(classification);
 
         // Walk the body

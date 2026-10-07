@@ -4317,6 +4317,16 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
         ) {
             self.current_call_node = Some((expr.id, SpanKey::from_span(&expr.span)));
+            if self.cli_lint_overrides.strict_core && !expr.id.is_dummy() {
+                let free = match &expr.kind {
+                    ExprKind::Call { callee, .. } => match &callee.kind {
+                        ExprKind::Identifier(n) => Some(n.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                self.core_call_sites.push((expr.id, expr.span, free));
+            }
         }
         if let ExprKind::Call { callee, .. } = &expr.kind {
             if !expr.id.is_dummy() {
@@ -5312,6 +5322,10 @@ impl<'a> super::TypeChecker<'a> {
                 args_close_span,
             } => {
                 let t = self.infer_method_call(object, method, args, &expr.span, args_close_span);
+                if self.cli_lint_overrides.strict_core && self.core_receiver_is_borrowed(object) {
+                    self.core_borrowed_receivers
+                        .insert(SpanKey::from_span(&object.span));
+                }
                 // The GENERIC-QUALIFIED prelude ctor: `Option[R].Some(w.r)` and
                 // `Result[R, E].Ok(w.r)` parse as a MethodCall on a type
                 // receiver, not as a Call, so the `infer_call` hook above never
@@ -6203,8 +6217,12 @@ impl<'a> super::TypeChecker<'a> {
                 // pattern is a `ref` (`for x in c.into_iter()` iterates an
                 // `Iterator`, not a collection, and moves).
                 let core_borrowed = self.cli_lint_overrides.strict_core
-                    && Self::for_iterable_is_core_collection(&iter_ty);
+                    && (Self::for_iterable_is_core_collection(&iter_ty)
+                        || Self::core_iter_yields_refs(iterable));
+                let prev_core =
+                    std::mem::replace(&mut self.current_scrutinee_core_borrowed, core_borrowed);
                 self.bind_pattern_types(pattern, &elem_ty);
+                self.current_scrutinee_core_borrowed = prev_core;
                 if core_borrowed {
                     for n in pattern.binding_names() {
                         self.local_scope.mark_view(&n);

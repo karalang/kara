@@ -862,12 +862,37 @@ impl<'a> UseClassifier<'a> {
                             .insert(SpanKey::from_span(&arg.value.span));
                     }
                 }
-                let receiver_mode = if self.method_consumes_receiver(expr) {
+                let receiver_mode = if self.method_consumes_receiver(expr)
+                    || (self.core_builtin_consumes_receiver(object, method)
+                        && self.core_receiver_moves(object))
+                {
                     Mode::Consuming
                 } else {
                     Mode::Reading
                 };
-                if receiver_mode == Mode::Consuming {
+                // v2 core C3: a by-value receiver taken out of a borrow or out
+                // of a collection element.
+                let core_borrowed = receiver_mode == Mode::Consuming
+                    && crate::ownership::core_rules()
+                    && self.core_receiver_moves(object)
+                    && {
+                        if self
+                            .tc
+                            .core_borrowed_receivers
+                            .contains(&SpanKey::from_span(&object.span))
+                        {
+                            self.classification.core_borrow_moves.push(object.span);
+                            true
+                        } else {
+                            if place_has_element_index(object, &self.tc.core_fresh_index_reads) {
+                                self.classification.core_index_moves.push(object.span);
+                            }
+                            false
+                        }
+                    };
+                if core_borrowed {
+                    self.walk_expr(object, Mode::Reading);
+                } else if receiver_mode == Mode::Consuming {
                     // Round 12.18: sidestep the parser's `MethodCall.span ==
                     // receiver.span` aliasing for projection receivers like
                     // `c.inner.unwrap()`. The aliasing makes
@@ -938,6 +963,9 @@ impl<'a> UseClassifier<'a> {
                 };
                 if mode == Mode::Consuming {
                     self.walk_core_tail(expr);
+                }
+                if leaf_mode == Mode::Consuming {
+                    self.record_projection_consume(expr);
                 }
                 self.walk_place(expr, leaf_mode, &mut PlacePath::new());
             }
@@ -1214,6 +1242,7 @@ impl<'a> UseClassifier<'a> {
     /// a Read. Non-projection receivers (calls, blocks, etc.) fall
     /// back to a Reading walk; there's no rooted binding to consume.
     fn walk_method_receiver_consuming(&mut self, recv: &Expr) {
+        self.record_projection_consume(recv);
         self.walk_place(recv, Mode::Consuming, &mut PlacePath::new());
     }
 
@@ -1603,6 +1632,99 @@ impl<'a> UseClassifier<'a> {
 
     /// Record `v[i]` as a v2 C3 move, unless it is a range slice (`s[i..j]`),
     /// which builds a new value rather than naming an element.
+    /// v2 core: the prelude `Option` / `Result` methods that take `self` by
+    /// value (the set Rust's take by value). Legacy reads the receiver of
+    /// every one of them, so this applies under the strict commands only.
+    fn core_builtin_consumes_receiver(&self, object: &Expr, method: &str) -> bool {
+        if !crate::ownership::core_rules() {
+            return false;
+        }
+        let Some((ty, _)) = self.tc.node_types.get(&object.id) else {
+            return false;
+        };
+        let mut ty: &Type = ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            ty = inner;
+        }
+        let Type::Named { name, .. } = ty else {
+            return false;
+        };
+        matches!(name.as_str(), "Option" | "Result")
+            && matches!(
+                method,
+                "unwrap"
+                    | "expect"
+                    | "unwrap_or"
+                    | "unwrap_or_else"
+                    | "unwrap_or_default"
+                    | "unwrap_err"
+                    | "expect_err"
+                    | "map"
+                    | "map_err"
+                    | "map_or"
+                    | "map_or_else"
+                    | "and_then"
+                    | "or_else"
+                    | "and"
+                    | "or"
+                    | "xor"
+                    | "ok"
+                    | "err"
+                    | "ok_or"
+                    | "ok_or_else"
+                    | "filter"
+                    | "flatten"
+                    | "zip"
+                    | "unzip"
+            )
+    }
+
+    /// v2 core C3: whether handing `object` to a by-value `self` moves it:
+    /// its type (seen through a `ref`) is neither `Copy` nor a counted handle.
+    fn core_receiver_moves(&self, object: &Expr) -> bool {
+        let Some((ty, _)) = self.tc.node_types.get(&object.id) else {
+            return false;
+        };
+        let mut ty: &Type = ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            ty = inner;
+        }
+        !matches!(ty, Type::Weak(_) | Type::Error | Type::Never) && !self.is_copy_type(ty)
+    }
+
+    /// v2 core: when a consumed place is a field projection of a named root
+    /// (`h.o`), remember the projection under the root's span, so a later
+    /// use-after-move names the moved part and clones it rather than the root.
+    fn record_projection_consume(&mut self, expr: &Expr) {
+        if !crate::ownership::core_rules() {
+            return;
+        }
+        fn text(e: &Expr) -> Option<(crate::token::Span, String)> {
+            match &e.kind {
+                ExprKind::Identifier(n) => Some((e.span, n.clone())),
+                ExprKind::SelfValue => Some((e.span, "self".to_string())),
+                ExprKind::FieldAccess { object, field } => {
+                    text(object).map(|(root, t)| (root, format!("{t}.{field}")))
+                }
+                ExprKind::TupleIndex { object, index } => {
+                    text(object).map(|(root, t)| (root, format!("{t}.{index}")))
+                }
+                _ => None,
+            }
+        }
+        if !matches!(
+            expr.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            return;
+        }
+        if let Some((root, t)) = text(expr) {
+            self.classification
+                .core_projection_consumes
+                .insert(SpanKey::from_span(&root), (expr.span, t));
+        }
+    }
+
     fn record_core_index_move(&mut self, expr: &Expr) {
         if let ExprKind::Index { index, .. } = &expr.kind {
             if !is_range_index(index) {
@@ -1865,6 +1987,20 @@ pub fn classify_top_level_fn(
 /// not name an element of the collection.
 fn is_range_index(index: &Expr) -> bool {
     matches!(index.kind, ExprKind::Range { .. })
+}
+
+/// Whether a place expression reaches its root through an element index
+/// (`v[i].o`, `v[i]`), not a range slice.
+fn place_has_element_index(expr: &Expr, fresh: &rustc_hash::FxHashSet<SpanKey>) -> bool {
+    match &expr.kind {
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            place_has_element_index(object, fresh)
+        }
+        ExprKind::Index { index, .. } => {
+            !is_range_index(index) && !fresh.contains(&SpanKey::from_span(&expr.span))
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
