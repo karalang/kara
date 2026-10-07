@@ -59,49 +59,73 @@ fn move_errors(body: &Body, tys: &TyInterner) -> Result<Vec<String>, Vec<String>
         for (si, s) in block.statements.iter().enumerate() {
             let at = format!("bb{bi}[{si}]");
             for p in statement_uses(&s.kind) {
-                check_use(body, tys, &paths, &st, p, &at, &mut errs);
+                check_use(body, tys, &paths, &st, &p, &at, &mut errs);
             }
             apply(&paths, &mut st, &stmt_effects[bi][si]);
         }
         let at = format!("bb{bi}[term]");
         for p in terminator_uses(&block.terminator.kind) {
-            check_use(body, tys, &paths, &st, p, &at, &mut errs);
+            check_use(body, tys, &paths, &st, &p, &at, &mut errs);
         }
     }
     Ok(errs)
 }
 
 /// The places a statement reads, borrows or moves. An assignment's
-/// destination is a write, not a use.
-fn statement_uses(s: &StatementKind) -> Vec<&Place> {
+/// destination is a write, not a use, except that writing through a
+/// reference reads the reference (`written_through`).
+fn statement_uses(s: &StatementKind) -> Vec<Place> {
     match s {
-        StatementKind::Assign(_, rv) => {
-            let mut v: Vec<&Place> = rvalue_operands(rv)
+        StatementKind::Assign(dest, rv) => {
+            let mut v: Vec<Place> = rvalue_operands(rv)
                 .into_iter()
                 .filter_map(Operand::place)
+                .cloned()
                 .collect();
             match rv {
                 Rvalue::Ref(_, p)
                 | Rvalue::Retain(p)
                 | Rvalue::Discriminant(p)
-                | Rvalue::Len(p) => v.push(p),
+                | Rvalue::Len(p) => v.push(p.clone()),
                 _ => {}
             }
+            v.extend(written_through(dest));
             v
         }
+        StatementKind::SetDiscriminant(p, _) => written_through(p).into_iter().collect(),
         _ => Vec::new(),
     }
 }
 
-fn terminator_uses(t: &TerminatorKind) -> Vec<&Place> {
+fn terminator_uses(t: &TerminatorKind) -> Vec<Place> {
     match t {
-        TerminatorKind::Call { func, args, .. } => std::iter::once(func)
+        TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } => std::iter::once(func)
             .chain(args)
             .filter_map(Operand::place)
+            .cloned()
+            .chain(written_through(destination))
             .collect(),
-        TerminatorKind::SwitchInt { discr, .. } => discr.place().into_iter().collect(),
+        TerminatorKind::SwitchInt { discr, .. } => discr.place().into_iter().cloned().collect(),
+        // A drop is not a use of the dropped place, but dropping through a
+        // reference reads the reference.
+        TerminatorKind::Drop { place, .. } => written_through(place).into_iter().collect(),
         _ => Vec::new(),
     }
+}
+
+/// A place written or dropped through a dereference reads the reference
+/// it goes through: the prefix before its last `Deref`.
+fn written_through(p: &Place) -> Option<Place> {
+    let last = p.projection.iter().rposition(|e| *e == ProjElem::Deref)?;
+    Some(Place {
+        local: p.local,
+        projection: p.projection[..last].to_vec(),
+    })
 }
 
 /// A use of `place` is an error when any part of it may be uninitialized,
@@ -328,6 +352,44 @@ fn main() -> () {
         );
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert!(errs[0].starts_with("bb1[0]: use of _1.0"), "{errs:?}");
+    }
+
+    /// Writing or dropping through a reference reads the reference, so a
+    /// moved one cannot be written through (`*acc = v` after `a = acc`).
+    #[test]
+    fn mir_movecheck_write_through_a_moved_reference_is_an_error() {
+        let src = |stmt: &str| {
+            format!(
+                "
+fn bump(_1: mut ref i64) -> () {{
+    let mut _0: ();
+    let _2: mut ref i64;
+    let _3: i64;
+    bb0: {{
+        _3 = copy (*_1);
+        {stmt}
+        (*_1) = copy _3;
+        _0 = const ();
+        return;
+    }}
+}}
+
+fn main() -> () {{
+    let mut _0: ();
+    bb0: {{
+        _0 = const ();
+        return;
+    }}
+}}
+"
+            )
+        };
+        let mut m = parse_module(&src("_2 = move _1;")).unwrap_or_else(|e| panic!("{e}"));
+        let errs = check_moves(&mut m.bodies[0], &m.tys).unwrap_err();
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(errs[0].starts_with("bb0[2]: use of _1"), "{errs:?}");
+        let mut ok = parse_module(&src("_2 = &mut (*_1);")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(check_moves(&mut ok.bodies[0], &ok.tys), Ok(()));
     }
 
     /// Every Built core pin is a valid program: it passes, Drops of moved
