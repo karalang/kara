@@ -181,6 +181,7 @@ Pins: `drop_callee_owns`, `drop_callee_returns`.
   - A plain binding `name` of a non-`Copy` part **moves** that part out of the scrutinee on that path. That is a partial move (§3.6), or a whole move if the binding covers the whole value. The binding drops at the end of its arm or body unless moved on.
   - `ref name` **borrows** the part instead and leaves the scrutinee intact. `mut ref name` borrows it mutably and requires a mutable scrutinee.
   - **`_` never binds and never moves.** `let _ = x;` leaves `x` intact, and `match x { _ => … }` does not move `x`. `..` likewise moves nothing.
+  - **Only bindings move.** A pattern that binds nothing by value, such as a unit variant (`if let Level.Info = lv`), a literal, a range, or a variant whose sub-patterns are only `_`, `..` and `ref` bindings, tests the scrutinee and leaves it intact. So does a whole `match` whose arms bind nothing by value.
 - **A temporary scrutinee:**
   - In `match`, `if let` and `while let`, the temporary lives through the construct (§7.4). Whatever its bindings did not move drops at the end of the construct.
   - In `let`, the temporary ends at the `;`. The parts not bound (by `_` or `..`) drop there with the rest of it, so `let (a, _) = pair();` drops the second element at the `;`.
@@ -188,7 +189,7 @@ Pins: `drop_callee_owns`, `drop_callee_returns`.
 - **A pattern over a type with a `Drop` body** may bind the whole value, but may not move a part out (§3.7).
 - **`for x in c`** borrows `c` through `Iterable`; `x` is the iterator's item, `ref T` for the standard collections. **`for x in c.into_iter()`** moves `c` and each item.
 
-Pins: `ok_match_binding_modes`, `drop_match_scrutinee`, `drop_underscore`.
+Pins: `ok_match_binding_modes`, `drop_match_scrutinee`, `drop_underscore`, `ok_pattern_binds_nothing`.
 
 **4.7 An impl's modes may be weaker than its trait's.** An impl method may declare any parameter, the receiver included, with the same mode as the trait method or a weaker one, in the order owned → `mut ref` → `ref` (and `mut Slice[T]` → `Slice[T]`). It may never declare a stronger one.
 - A call whose impl is known where it is checked (a concrete type, including an operator on one) uses the impl's modes.

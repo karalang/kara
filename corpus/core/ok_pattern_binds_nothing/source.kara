@@ -1,0 +1,21 @@
+enum Level { Info, Error(String) }
+impl Drop for Level { fn drop(mut ref self) { println("drop level"); } }
+enum Op { Undo, Add(String) }
+fn eat(o: Op) {
+    match o {
+        Op.Add(s) => println(f"add {s}"),
+        Op.Undo => println("undo"),
+    }
+}
+fn main() {
+    let lv = Level.Error("disk".to_string());
+    if let Level.Info = lv { println("info"); }
+    match lv {
+        Level.Info => println("info"),
+        Level.Error(ref m) => println(f"err {m}"),
+    }
+    let op = Op.Add("x".to_string());
+    if let Op.Undo = op { println("undo"); }
+    eat(op);
+    println("end");
+}
