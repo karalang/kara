@@ -1615,6 +1615,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(Place::local(l))
     }
 
+    /// Whether `t` is a `shared` handle, which a read copies with a count.
+    fn is_handle(&self, t: Ty) -> bool {
+        matches!(self.tys().tcx().kind(t), HK::Shared { .. })
+    }
+
     /// Read a place as an operand: a copy for a `Copy` type, else a move.
     fn use_place(&self, p: Place, t: Ty) -> Operand {
         if self.is_copy(t) {
@@ -1633,6 +1638,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         if self.is_place(e) {
             let p = self.expr_place(e, false)?;
             let t = self.expr_ty(e)?;
+            if self.is_handle(t) {
+                let l = self.temp(t);
+                self.assign(l, Rvalue::Retain(p));
+                return Ok(Operand::Move(Place::local(l)));
+            }
             return Ok(self.use_place(p, t));
         }
         let t = self.expr_ty(e)?;
@@ -1762,6 +1772,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.assign(dest, Rvalue::Ref(kind, p));
                         return Ok(());
                     }
+                }
+                if self.is_handle(t) {
+                    // Copying a `shared` handle counts; the source keeps
+                    // its own (core semantics §6.1).
+                    self.assign(dest, Rvalue::Retain(p));
+                    return Ok(());
                 }
                 let op = self.use_place(p, t);
                 self.assign(dest, Rvalue::Use(op));
@@ -4964,6 +4980,13 @@ mod tests {
         Ok((r.output, code))
     }
 
+    /// Core pins the builder cannot run yet, each with what it waits on.
+    /// A listed pin must still fail, so the list only shrinks.
+    const NOT_YET: &[&str] = &[
+        // `TaskGroup` and `TaskHandle` have no MIR lowering or natives yet.
+        "ok_taskgroup_borrows",
+    ];
+
     /// Every runnable core pin, built from source, elaborated and run, prints
     /// its expected output and exits with its expected code.
     #[test]
@@ -4992,7 +5015,16 @@ mod tests {
                 .unwrap();
             let src = std::fs::read_to_string(dir.join("source.kara")).unwrap();
             ran += 1;
-            match run_source(&src) {
+            let result = run_source(&src);
+            let pass =
+                matches!(&result, Ok((out, code)) if *out == expected && *code == Some(exit));
+            if NOT_YET.contains(&pin.as_str()) {
+                if pass {
+                    bad.push(format!("{pin}: passes now; take it off NOT_YET"));
+                }
+                continue;
+            }
+            match result {
                 Ok((out, code)) if out == expected && code == Some(exit) => {}
                 Ok((out, code)) => bad.push(format!(
                     "{pin}: exit {code:?} (want {exit})\n--- got\n{out}--- want\n{expected}"

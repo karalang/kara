@@ -1,0 +1,11 @@
+shared struct Counter { name: String, mut hits: i64 }
+fn bump(c: ref Counter) {
+    c.hits = c.hits + 1;
+}
+fn main() {
+    let c = Counter { name: "c".to_string(), hits: 0 };
+    let other = c;
+    bump(c);
+    bump(other);
+    println(f"{c.name} {c.hits}");
+}
