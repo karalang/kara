@@ -40,7 +40,7 @@
 /// `#[must_use]`: discarding the guard immediately re-enables interrupts,
 /// collapsing the critical section to nothing — almost never intended. Bind
 /// it to a `let` so it lives across the guarded region.
-#[must_use = "discarding the guard immediately re-enables interrupts, collapsing the critical section to nothing — bind it to a variable (`let _guard = critical_section.acquire();`) so interrupts stay disabled across the guarded region"]
+#[must_use("discarding the guard immediately re-enables interrupts, collapsing the critical section to nothing — bind it to a variable (`let _guard = critical_section.acquire();`) so interrupts stay disabled across the guarded region")]
 pub struct CriticalSectionGuard {
     restore_token: i64,
 }

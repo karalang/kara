@@ -125,7 +125,7 @@ fn specialization_query_folds_every_tuple_into_options() {
 #[test]
 fn specialization_query_suppressed_by_specialize_attr() {
     let src = r#"
-#[specialize(T = i64)]
+#[specialize(T: i64)]
 fn identity[T](x: T) -> T { x }
 fn main() {
     let _ = identity(1i64);

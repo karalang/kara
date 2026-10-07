@@ -31,7 +31,7 @@ fn main() -> Result[(), String] {
 
     for id in ids {
         let tx = tx.clone();
-        go {
+        go; {
             tx.send(fetch(id)).unwrap();
         }
     }

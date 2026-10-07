@@ -2838,14 +2838,10 @@ fn test_attribute_with_args() {
 }
 
 #[test]
-fn test_attribute_with_equal_sign_args() {
-    // Per `docs/design.md § Testing` and `§ String Interpolation`, attribute
-    // args use `name = value` for new attributes. The parser also accepts
-    // the legacy `name: value` form (covered by `test_attribute_with_args`),
-    // but design-conformant attributes like `#[test(requires = [...])]`
-    // must parse out of the box.
+fn test_attribute_named_array_arg() {
+    // `#[test(requires: [...])]`: a named argument whose value is an array.
     let prog =
-        parse_ok("#[test(requires = [db.UserDB, payment.PaymentAPI])]\ntest \"checkout\" { }");
+        parse_ok("#[test(requires: [db.UserDB, payment.PaymentAPI])]\ntest \"checkout\" { }");
     let Item::TestCase(t) = &prog.items[0] else {
         panic!("expected TestCase");
     };
@@ -2865,14 +2861,15 @@ fn test_attribute_with_equal_sign_args() {
 #[test]
 fn test_attribute_string_value() {
     let prog =
-        parse_ok("#[must_use = \"connections must be explicitly disconnected\"]\nstruct Conn { }");
+        parse_ok("#[must_use(\"connections must be explicitly disconnected\")]\nstruct Conn { }");
     if let Item::StructDef(s) = &prog.items[0] {
         assert_eq!(s.attributes[0].path[0], "must_use");
         assert_eq!(
-            s.attributes[0].string_value.as_deref(),
+            s.attributes[0].string_arg(),
             Some("connections must be explicitly disconnected")
         );
-        assert!(s.attributes[0].args.is_empty());
+        assert!(s.attributes[0].string_value.is_none());
+        assert_eq!(s.attributes[0].args.len(), 1);
     } else {
         panic!("Expected StructDef");
     }
@@ -3001,7 +2998,7 @@ fn non_exhaustive_slice1_flag_set_on_private_struct_parser_does_not_reject() {
 #[test]
 fn non_exhaustive_slice1_coexists_with_other_attributes_on_struct() {
     let prog = parse_ok(
-        "#[non_exhaustive]\n#[must_use = \"build with .new()\"]\npub struct Config { x: i64, }",
+        "#[non_exhaustive]\n#[must_use(\"build with .new()\")]\npub struct Config { x: i64, }",
     );
     let Item::StructDef(s) = &prog.items[0] else {
         panic!("Expected StructDef");
@@ -3049,7 +3046,7 @@ fn track_caller_slice1_function_without_attribute_has_flag_false() {
 #[test]
 fn track_caller_slice1_coexists_with_other_attributes() {
     let prog =
-        parse_ok("#[track_caller]\n#[must_use = \"propagate\"]\nfn unwrap_inner() -> i64 { 0 }");
+        parse_ok("#[track_caller]\n#[must_use(\"propagate\")]\nfn unwrap_inner() -> i64 { 0 }");
     let Item::Function(f) = &prog.items[0] else {
         panic!("Expected Function");
     };
@@ -3548,8 +3545,11 @@ fn unstable_attr_bare_form_on_function() {
 }
 
 #[test]
-fn unstable_attr_shorthand_populates_note() {
-    let prog = parse_ok("#[unstable = \"shape may change before v1 lock\"]\nfn experimental() { }");
+fn unstable_attr_equals_shorthand_is_rejected_but_still_records_note() {
+    let (prog, errors) = parse_with_errors(
+        "#[unstable = \"shape may change before v1 lock\"]\nfn experimental() { }",
+    );
+    assert_eq!(errors.len(), 1, "{errors:?}");
     let Item::Function(f) = &prog.items[0] else {
         panic!("Expected Function");
     };
@@ -3594,7 +3594,8 @@ fn unstable_attr_struct_captures_payload() {
 
 #[test]
 fn unstable_attr_enum_captures_payload() {
-    let prog = parse_ok("#[unstable = \"variants growing\"]\npub enum ExperimentalKind { A, B, }");
+    let prog =
+        parse_ok("#[unstable(note: \"variants growing\")]\npub enum ExperimentalKind { A, B, }");
     let Item::EnumDef(e) = &prog.items[0] else {
         panic!("Expected EnumDef");
     };
@@ -3672,8 +3673,11 @@ fn deprecated_slice1_bare_form_on_function() {
 }
 
 #[test]
-fn deprecated_slice1_shorthand_populates_note() {
-    let prog = parse_ok("#[deprecated = \"use `read_to_string` instead\"]\nfn old_api() { }");
+fn deprecated_slice1_equals_shorthand_is_rejected_but_still_records_note() {
+    let (prog, errors) =
+        parse_with_errors("#[deprecated = \"use `read_to_string` instead\"]\nfn old_api() { }");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].message.contains("written like a call's"));
     let Item::Function(f) = &prog.items[0] else {
         panic!("Expected Function");
     };
@@ -3731,11 +3735,13 @@ fn deprecated_slice1_long_form_with_both_fields() {
 }
 
 #[test]
-fn deprecated_slice1_long_form_with_equals_separator() {
-    // The spec example uses `name: value` but the attribute parser
-    // also accepts `name = value`. Both shapes must populate the
-    // same fields.
-    let prog = parse_ok("#[deprecated(since = \"1.2.0\", note = \"use foo\")]\nfn old() { }");
+fn deprecated_slice1_long_form_with_equals_separator_is_rejected() {
+    // `name = value` is rejected (arguments are `name: value`), but the
+    // fields are still populated so the rest of the file checks.
+    let (prog, errors) =
+        parse_with_errors("#[deprecated(since = \"1.2.0\", note = \"use foo\")]\nfn old() { }");
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(errors[0].message.contains("`since: value`"));
     let Item::Function(f) = &prog.items[0] else {
         panic!("Expected Function");
     };
@@ -3758,7 +3764,7 @@ fn deprecated_slice1_struct_captures_payload() {
 
 #[test]
 fn deprecated_slice1_enum_captures_payload() {
-    let prog = parse_ok("#[deprecated = \"use NewError\"]\npub enum OldError { Bad, }");
+    let prog = parse_ok("#[deprecated(note: \"use NewError\")]\npub enum OldError { Bad, }");
     let Item::EnumDef(e) = &prog.items[0] else {
         panic!("Expected EnumDef");
     };
@@ -3919,7 +3925,7 @@ fn deprecated_slice1_set_on_impl_block_parser_does_not_reject() {
 fn enabling_change_variant_captures_attributes() {
     let prog = parse_ok(
         "pub enum Color {\n\
-         #[deprecated = \"use Rgb\"]\n\
+         #[deprecated(note: \"use Rgb\")]\n\
          Legacy,\n\
          Modern,\n\
          }",
@@ -3954,7 +3960,7 @@ fn enabling_change_variant_bare_deprecated_attaches() {
 fn enabling_change_trait_method_captures_attributes() {
     let prog = parse_ok(
         "pub trait Format {\n\
-         #[deprecated = \"use fmt_v2\"]\n\
+         #[deprecated(note: \"use fmt_v2\")]\n\
          fn fmt(ref self) -> String;\n\
          fn fmt_v2(ref self) -> String;\n\
          }",
@@ -4483,7 +4489,7 @@ fn lint_attrs_slice4a_multi_lint_list_on_struct() {
 
 #[test]
 fn const_attrs_module_const_captures_deprecated() {
-    let prog = parse_ok("#[deprecated = \"use NEW_VAL\"]\npub const OLD_VAL: i64 = 42;");
+    let prog = parse_ok("#[deprecated(note: \"use NEW_VAL\")]\npub const OLD_VAL: i64 = 42;");
     let Item::ConstDecl(c) = &prog.items[0] else {
         panic!("Expected ConstDecl");
     };
@@ -4699,7 +4705,7 @@ fn test_extern_function_accepts_pub_and_attributes() {
     let prog = parse_ok(
         r#"
         unsafe extern "C" {
-            #[link_name = "puts"]
+            #[link_name("puts")]
             pub fn puts(s: i64) -> i32;
         }
         "#,
@@ -5461,7 +5467,7 @@ fn test_extern_block_opaque_type_pub_doc_attributes() {
         r#"
         unsafe extern "C" {
             /// Opaque handle to an open file.
-            #[link_name = "_FILE"]
+            #[link_name("_FILE")]
             pub type File;
         }
         "#,
@@ -5519,7 +5525,7 @@ fn test_extern_block_opaque_type_kara_name_skips_class_check() {
     let prog = parse_ok(
         r#"
         unsafe extern "C" {
-            #[kara_name = "FILE"]
+            #[kara_name("FILE")]
             pub type File;
         }
         "#,
@@ -9263,7 +9269,7 @@ fn test_ident_class_extern_fn_kara_name_skips_check() {
     // With #[kara_name], the Kara-side name bypasses the naming check.
     parse_ok(
         r#"unsafe extern "C" {
-               #[kara_name = "malloc"]
+               #[kara_name("malloc")]
                fn BadName(size: i32) -> i32;
            }"#,
     );
@@ -13041,7 +13047,7 @@ fn multiversion_on_assoc_fn_errors() {
 fn target_feature_on_unsafe_fn_ok() {
     // The valid shape — `unsafe fn` + a non-empty enable list — parses cleanly.
     let (_, errors) = parse_with_errors(
-        "#[target_feature(enable = \"avx2,bmi2\")]\nunsafe fn hot(a: i64) -> i64 { a }",
+        "#[target_feature(enable: \"avx2,bmi2\")]\nunsafe fn hot(a: i64) -> i64 { a }",
     );
     assert!(
         !errors
@@ -15987,4 +15993,32 @@ fn par_for_reports_unsupported_not_a_missing_semicolon() {
         "got: {:?}",
         result.errors
     );
+}
+
+#[test]
+fn attribute_equals_forms_carry_call_form_fixes() {
+    let src = "#[must_use = \"x\"]\n#[deprecated = \"y\"]\n#[test(timeout_seconds = 5)]\nfn f() -> i64 { 1 }";
+    let r = parse(src);
+    assert_eq!(r.errors.len(), 3, "{:?}", r.errors);
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for e in &r.errors {
+        let key = karac::resolver::SpanKey::from_span(&e.span);
+        if let Some(ed) = r.fix_edits.get(&key) {
+            edits.push((ed.offset, ed.length, ed.replacement.clone()));
+        } else {
+            for ed in r.fix_diffs.get(&key).expect("every `=` form has a fix") {
+                edits.push((ed.offset, ed.length, ed.replacement.clone()));
+            }
+        }
+    }
+    edits.sort();
+    let mut out = src.to_string();
+    for (off, len, rep) in edits.into_iter().rev() {
+        out.replace_range(off..off + len, &rep);
+    }
+    assert_eq!(
+        out,
+        "#[must_use(\"x\")]\n#[deprecated(note: \"y\")]\n#[test(timeout_seconds: 5)]\nfn f() -> i64 { 1 }"
+    );
+    assert!(parse(&out).errors.is_empty());
 }

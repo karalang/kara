@@ -9,7 +9,7 @@ fn main() with writes(FileSystem) {{
                 Err(_) => println("write-err"),
             }}
             match f.sync_all() {{
-                Ok(_) => println("sync_all"),
+                Ok(_); => println("sync_all"),
                 Err(_) => println("sync_all-err"),
             }}
             match f.sync_data() {{

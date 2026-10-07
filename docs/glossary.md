@@ -318,7 +318,7 @@ Kāra's visibility model: `pub` (visible to end users — public API), default/n
 The three forms a parameter type can take in a function signature: `T` (owned — caller transfers ownership), `ref T` (immutable borrow), `mut ref T` (mutable borrow). Modes are *declared* at the signature, never inferred — the signature is the contract callers depend on. Body-level analysis verifies the declared mode is consistent with usage and surfaces a `karac explain` "would-be tighter mode" diagnostic when a stricter mode would also be valid. The programmer chooses whether to apply the suggestion; the compiler does not silently rewrite signatures.
 
 **`#[must_use]`**
-Attribute on a type or function that warns when a value is silently dropped: `#[must_use = "connections must be explicitly disconnected"]`. Completes the typestate pattern by ensuring a value reaches a terminal state. `Result` return values are implicitly `#[must_use]`.
+Attribute on a type or function that warns when a value is silently dropped: `#[must_use("connections must be explicitly disconnected")]`. Completes the typestate pattern by ensuring a value reaches a terminal state. `Result` return values are implicitly `#[must_use]`.
 
 ### Control Flow and Syntax
 

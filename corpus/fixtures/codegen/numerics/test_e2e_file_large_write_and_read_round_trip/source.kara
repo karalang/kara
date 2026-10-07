@@ -13,7 +13,7 @@ fn main() with reads(FileSystem) writes(FileSystem) {{
                 Err(_) => println("err"),
             }}
             match f.flush() {{
-                Ok(_) => println("flushed"),
+                Ok(_); => println("flushed"),
                 Err(_) => println("flush-err"),
             }}
         }}

@@ -9391,7 +9391,7 @@ fn test_test_kara_toml_timeout_applies() {
 
 #[test]
 fn test_test_per_test_attribute_timeout_overrides_manifest() {
-    // Sub-step 3: a per-test `#[test(timeout_seconds = 1)]` attribute wins
+    // Sub-step 3: a per-test `#[test(timeout_seconds: 1)]` attribute wins
     // over a generous kara.toml `[test] timeout_seconds = 30` — proves the
     // attribute is the highest-precedence layer.
     let tmp = scratch_project("test-timeout-attr");
@@ -9402,7 +9402,7 @@ fn test_test_per_test_attribute_timeout_overrides_manifest() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(timeout_seconds = 1)]\n\
+        "#[test(timeout_seconds: 1)]\n\
          test \"hangs\" {\n  \
              let mut i: i64 = 0;\n  \
              while true { i = i + 1; }\n  \
@@ -9593,7 +9593,7 @@ fn test_test_block_form_requires_skips_when_env_var_unset() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_blockreq_skipcase.fake_db])]\n\
+        "#[test(requires: [karac_blockreq_skipcase.fake_db])]\n\
          test \"needs db\" { assert(false); }\n",
     );
 
@@ -9660,7 +9660,7 @@ fn test_test_requires_skips_when_resource_unavailable() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_skipcase.fake_db])]\ntest \"needs db\" { assert(false); }\n",
+        "#[test(requires: [karac_slice2_skipcase.fake_db])]\ntest \"needs db\" { assert(false); }\n",
     );
 
     // Env var KARA_RESOURCE_KARAC_SLICE2_SKIPCASE_FAKE_DB is unset; the
@@ -9696,7 +9696,7 @@ fn test_test_requires_runs_when_env_var_set() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_runcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
+        "#[test(requires: [karac_slice2_runcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     let out = karac_bin()
@@ -9733,7 +9733,7 @@ fn test_test_requires_health_check_overrides_env_var() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_healthcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
+        "#[test(requires: [karac_slice2_healthcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     // env var IS set — but the failing health-check should take precedence.
@@ -9763,7 +9763,7 @@ fn test_test_requires_health_check_success_runs_test() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_healthok.fake_db])]\ntest \"needs db\" { assert(true); }\n",
+        "#[test(requires: [karac_slice2_healthok.fake_db])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     // No env var set — only the (passing) health check matters.
@@ -9791,7 +9791,7 @@ fn test_test_requires_partial_satisfied_lists_only_missing() {
     // Two requires; A is set in env, B is not. Skip event must list only B.
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_partial.have_a, karac_slice2_partial.miss_b])]\ntest \"needs both\" { assert(true); }\n",
+        "#[test(requires: [karac_slice2_partial.have_a, karac_slice2_partial.miss_b])]\ntest \"needs both\" { assert(true); }\n",
     );
 
     let out = karac_bin()
@@ -9825,7 +9825,7 @@ fn test_test_all_promotes_skip_to_failure() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_allcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
+        "#[test(requires: [karac_slice2_allcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     let out = karac_bin()
@@ -10170,7 +10170,7 @@ fn test_with_provider_second_constructor_failure_names_that_resource() {
 fn test_with_provider_and_requires_conflict_rejected_at_discovery() {
     // Same resource in both `requires` and `with_provider` — design.md
     // rejects with `requires_and_with_provider_conflict`.
-    let body = "#[test(requires = [Clock])]\n\
+    let body = "#[test(requires: [Clock])]\n\
                 #[with_provider(Clock, FakeClock { t: 0 })]\n\
                 test \"contradictory fixture\" {\n\
                     assert_eq(1, 1);\n\

@@ -133,7 +133,7 @@ impl File {
     // `sync_all` / `sync_data` also clear because they are strictly
     // stronger (they flush *and* fsync).
     #[compiler_builtin]
-    #[cancel_unsafe_until(method = "flush,sync_all,sync_data")]
+    #[cancel_unsafe_until(method: "flush,sync_all,sync_data")]
     fn write(ref self, buf: Slice[u8]) -> Result[usize, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]

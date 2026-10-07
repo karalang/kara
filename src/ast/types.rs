@@ -44,6 +44,22 @@ impl Attribute {
         self.path.len() == 1 && self.path[0] == name
     }
 
+    /// The attribute's string argument: the positional literal of
+    /// `#[must_use("reason")]`, or the `string_value` the rejected
+    /// `#[must_use = "reason"]` spelling still parses into.
+    pub fn string_arg(&self) -> Option<&str> {
+        use super::ExprKind;
+        if let Some(s) = &self.string_value {
+            return Some(s);
+        }
+        self.args
+            .iter()
+            .find_map(|a| match (&a.name, a.value.as_ref().map(|v| &v.kind)) {
+                (None, Some(ExprKind::StringLit(s))) => Some(s.as_str()),
+                _ => None,
+            })
+    }
+
     /// True iff this attribute is `#[repr(C)]`.
     ///
     /// Hoisted onto `Attribute` (B-2026-08-21-2) so the C-header emitter and

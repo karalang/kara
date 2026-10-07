@@ -11,6 +11,6 @@ fn main() with sends(Network) receives(Network) {{
             println(r.status());
             println(r.body());
         }}
-        Err(e) => println("err " + e.message()),
+        Err(e); => println("err " + e.message()),
     }}
 }}

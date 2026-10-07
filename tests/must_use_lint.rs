@@ -382,8 +382,7 @@ fn test_slice2_peekable_carries_must_use_annotation() {
         .find(|a| a.is_bare("must_use"))
         .expect("Peekable[T] should carry #[must_use] (slice 2 — iterator-adapter category)");
     let msg = attr
-        .string_value
-        .as_deref()
+        .string_arg()
         .expect("must_use attribute on Peekable should carry the spec-mandated message string");
     // Slice 2 spec mandates the exact message for iterator-adapter
     // return types: "discarding the iterator drops every adapter
@@ -410,8 +409,7 @@ fn test_slice2_pooled_connection_carries_must_use_annotation() {
         .find(|a| a.is_bare("must_use"))
         .expect("PooledConnection[T] should carry #[must_use] (slice 2 — guard category)");
     let msg = attr
-        .string_value
-        .as_deref()
+        .string_arg()
         .expect("must_use attribute on PooledConnection should carry a guard-shaped message");
     // Guard-category message should explain the wasted-acquire hazard
     // (slot released back without using the connection) and offer the
@@ -568,7 +566,7 @@ fn test_discarded_user_struct_with_must_use_attribute_warns() {
     // the type-level diagnostic with the author's reason in the
     // `note:` line.
     let diags = lint(
-        "#[must_use = \"loses the slot back to the pool\"]\n\
+        "#[must_use(\"loses the slot back to the pool\")]\n\
          struct Token { x: i64 }\n\
          fn make() -> Token { Token { x: 7 } }\n\
          fn caller() { make(); }",
@@ -592,7 +590,7 @@ fn test_discarded_user_enum_with_must_use_attribute_warns() {
     // Same shape on an enum declaration. Slice 4 populates
     // `EnumInfo.must_use_message` symmetrically with `StructInfo`.
     let diags = lint(
-        "#[must_use = \"every variant carries a hazard\"]\n\
+        "#[must_use(\"every variant carries a hazard\")]\n\
          enum Status { Ok, Pending, Failed }\n\
          fn make() -> Status { Status.Ok }\n\
          fn caller() { make(); }",
@@ -646,7 +644,7 @@ fn test_discarded_free_function_with_must_use_warns() {
     // type. The type-level check is silent (i64 has no
     // must_use_message); the function-level check fires.
     let diags = lint(
-        "#[must_use = \"the computed value is the only point of calling\"]\n\
+        "#[must_use(\"the computed value is the only point of calling\")]\n\
          pub fn compute() -> i64 { 42 }\n\
          fn caller() { compute(); }",
     );
@@ -708,7 +706,7 @@ fn test_discarded_static_method_with_must_use_warns() {
     let diags = lint(
         "struct Builder { x: i64 }\n\
          impl Builder {\n\
-             #[must_use = \"the builder needs a finalising call\"]\n\
+             #[must_use(\"the builder needs a finalising call\")]\n\
              fn new() -> Builder { Builder { x: 0 } }\n\
          }\n\
          fn caller() { Builder.new(); }",
@@ -729,7 +727,7 @@ fn test_discarded_instance_method_with_must_use_warns() {
         "struct Acc { total: i64 }\n\
          impl Acc {\n\
              fn new() -> Acc { Acc { total: 0 } }\n\
-             #[must_use = \"the accumulated total is what callers want\"]\n\
+             #[must_use(\"the accumulated total is what callers want\")]\n\
              fn finalize(ref self) -> i64 { self.total }\n\
          }\n\
          fn caller() {\n\
@@ -753,9 +751,9 @@ fn test_function_returning_must_use_type_prefers_type_level_diag() {
     // function-level fallback would be noise when the type-level
     // message is already present.
     let diags = lint(
-        "#[must_use = \"the wrapper carries the hazard\"]\n\
+        "#[must_use(\"the wrapper carries the hazard\")]\n\
          struct Wrap { x: i64 }\n\
-         #[must_use = \"the function also says don't drop\"]\n\
+         #[must_use(\"the function also says don't drop\")]\n\
          pub fn produce() -> Wrap { Wrap { x: 7 } }\n\
          fn caller() { produce(); }",
     );
@@ -783,7 +781,7 @@ fn test_result_discard_prefers_implicit_slice_1_diag() {
     // calls out: "Result / Option discard warns regardless of
     // attribute (continues to fire via slice 1's check)".
     let diags = lint(
-        "#[must_use = \"function-level reason\"]\n\
+        "#[must_use(\"function-level reason\")]\n\
          pub fn try_it() -> Result[i64, i64] { Result.Ok(7) }\n\
          fn caller() { try_it(); }",
     );
@@ -849,7 +847,7 @@ fn test_must_use_functions_registry_populates_from_free_function() {
     // Env-side pin: `env_add_function` writes the entry into
     // `TypeEnv.must_use_functions`, which `TypeCheckResult` snapshots.
     let (_prog, typed) = parse_and_typecheck(
-        "#[must_use = \"why\"]\n\
+        "#[must_use(\"why\")]\n\
          pub fn produce() -> i64 { 7 }\n\
          fn main() { }",
     );
@@ -868,7 +866,7 @@ fn test_must_use_functions_registry_populates_from_impl_method() {
     let (_prog, typed) = parse_and_typecheck(
         "struct Foo { x: i64 }\n\
          impl Foo {\n\
-             #[must_use = \"why\"]\n\
+             #[must_use(\"why\")]\n\
              fn make() -> Foo { Foo { x: 0 } }\n\
          }\n\
          fn main() { }",

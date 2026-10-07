@@ -26996,7 +26996,7 @@ fn unstable_api_call_to_unstable_fn_emits_warning() {
 #[test]
 fn unstable_api_shorthand_note_surfaces_in_warning() {
     let result = typecheck_ok(
-        "#[unstable = \"shape may change before v1 lock\"]\n\
+        "#[unstable(note: \"shape may change before v1 lock\")]\n\
          pub fn experimental() -> i64 { 0 }\n\
          fn caller() -> i64 { experimental() }",
     );
@@ -27297,7 +27297,7 @@ fn unstable_api_user_instance_method_call_emits_warning() {
     let result = typecheck_ok(
         "struct Widget { x: i64 }\n\
          impl Widget {\n\
-         \x20   #[unstable = \"experimental knob\"]\n\
+         \x20   #[unstable(note: \"experimental knob\")]\n\
          \x20   fn tweak(ref self) -> i64 { self.x }\n\
          }\n\
          fn use_it() -> i64 { let w = Widget { x: 1 }; w.tweak() }",
@@ -27336,7 +27336,7 @@ fn deprecated_user_instance_method_call_emits_warning() {
     let result = typecheck_ok(
         "struct Widget { x: i64 }\n\
          impl Widget {\n\
-         \x20   #[deprecated = \"use tweak2\"]\n\
+         \x20   #[deprecated(note: \"use tweak2\")]\n\
          \x20   fn tweak(ref self) -> i64 { self.x }\n\
          }\n\
          fn use_it() -> i64 { let w = Widget { x: 1 }; w.tweak() }",

@@ -3,7 +3,7 @@ fn main() {{
     match File.create("{path}") {{
         Ok(f) => {{
             let data = [65u8, 66u8, 67u8, 68u8];
-            match f.write(data[0..4]) {{ Ok(_) => {{}} Err(_) => println("write err") }}
+            match f.write(data[0..4]) {{ Ok(_) => {{}} Err(_); => println("write err") }}
             match f.flush() {{ Ok(_) => {{}} Err(_) => println("flush err") }}
         }}
         Err(_) => println("create err"),

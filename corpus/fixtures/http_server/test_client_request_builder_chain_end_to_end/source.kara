@@ -6,7 +6,7 @@ fn main() with sends(Network) receives(Network) {{
         Ok(resp) => {{
             println(resp.body());
         }}
-        Err(e) => {{
+        Err(e); => {{
             println("ERR");
             println(e.message());
         }}

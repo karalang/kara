@@ -6,7 +6,7 @@ fn main() with reads(FileSystem) {{
     while i < 40i64 {{
         match File.open("{path}") {{
             Ok(fh) => {{ let _h = Holder {{ f: fh }}; n = n + 1i64; }}
-            Err(_) => {{ n = n - 1i64; }}
+            Err(_); => {{ n = n - 1i64; }}
         }}
         i = i + 1;
     }}

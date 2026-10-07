@@ -2329,16 +2329,20 @@ fn f(self) -> T        with _;                   // trait method (semicolon, no 
 ```
 ATTRIBUTES = { ATTRIBUTE }
 ATTRIBUTE  = "#" "[" ATTR_PATH [ "(" ATTR_ARGS ")" ] "]"
-           | "#" "[" ATTR_PATH "=" STRING "]"
-             // e.g., #[must_use = "reason"]
+             // e.g., #[must_use("reason")], #[kara_name("CFile")]
 ATTR_PATH  = IDENT { "::" IDENT }
              // bare names: #[derive(Eq)], #[used]
              // namespaced:  #[diagnostic::on_unimplemented(...)],
              //              #[rustfmt::skip]
 ATTR_ARGS  = ATTR_ARG { "," ATTR_ARG }
-ATTR_ARG   = IDENT ":" EXPR | IDENT
+ATTR_ARG   = IDENT ":" EXPR | EXPR
              // e.g., #[diagnostic::on_unimplemented(message: "...", label: "...")]
 ```
+
+Arguments are written like a call's: positional, or `key: value`. There is no
+`#[name = value]` form and no `key = value` argument; the parser rejects both
+with a fix that rewrites them (`#[must_use = "x"]` to `#[must_use("x")]`,
+`#[deprecated = "x"]` to `#[deprecated(note: "x")]`, `key = v` to `key: v`).
 
 Attributes precede the item they annotate:
 
@@ -2347,7 +2351,7 @@ Attributes precede the item they annotate:
 struct Point { x: i64, y: i64 }
 
 // Tests are identified by test_ prefix in _test.kara files — no #[test] attribute.
-// Use #[test(requires = [...])] only for resource-gating, #[property] for property tests.
+// Use #[test(requires: [...])] only for resource-gating, #[property] for property tests.
 fn test_addition() {
     assert(1 + 1 == 2);
 }
@@ -2381,7 +2385,7 @@ fn flexible(condition: bool) -> String { ... }
 #[concurrency(max_tasks: 100)]
 fn batch_process(items: Vec[Item]) { ... }
 
-#[must_use = "connections must be explicitly disconnected"]
+#[must_use("connections must be explicitly disconnected")]
 struct Connection[State] { ... }
 
 #[tailrec]
@@ -2397,8 +2401,8 @@ Known attributes:
 |---|---|---|
 | `#[derive(Trait, ...)]` | Struct/Enum | Compiler generates trait implementations from fields |
 | `#[default]` | Enum variant | Mark the variant returned by `#[derive(Default)]` on the enclosing enum. Exactly one variant per enum may carry the marker, and the marked variant must be field-less. Errors: `E_DEFAULT_NO_VARIANT_MARKED`, `E_DEFAULT_MULTIPLE_VARIANTS`, `E_DEFAULT_VARIANT_HAS_PAYLOAD`, `E_DEFAULT_ATTRIBUTE_INVALID_POSITION`, `E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE`. See design.md § `#[derive(Default)]` and `#[default]` on enum variants. |
-| `#[must_use]` or `#[must_use = "reason"]` | Struct/Enum/Function | Warn if value is silently dropped (types) or return value discarded (functions). `Result` is implicitly `#[must_use]` |
-| `#[deprecated]`, `#[deprecated = "note"]`, or `#[deprecated(since: "...", note: "...")]` | Function/Struct/Enum/Variant/Method/Trait/Type alias/Const | Emit the `deprecated` lint at every use site. Suppress with `#[allow(deprecated)]` / `#[expect(deprecated)]`. See design.md § `#[deprecated]` for Item Deprecation. |
+| `#[must_use]` or `#[must_use("reason")]` | Struct/Enum/Function | Warn if value is silently dropped (types) or return value discarded (functions). `Result` is implicitly `#[must_use]` |
+| `#[deprecated]`, `#[deprecated(note: "...")]`, or `#[deprecated(since: "...", note: "...")]` | Function/Struct/Enum/Variant/Method/Trait/Type alias/Const | Emit the `deprecated` lint at every use site. Suppress with `#[allow(deprecated)]` / `#[expect(deprecated)]`. See design.md § `#[deprecated]` for Item Deprecation. |
 | `#[diagnostic::on_unimplemented(message: "...", label: "...", note: "...")]` | Trait | Customize the diagnostic emitted when a bound `T: ThisTrait` fails. `{Self}` placeholder interpolates the offending type. Advisory — compiler may ignore. Malformed → warning, not error. See design.md § Diagnostic Namespace Attributes. |
 | `#[diagnostic::do_not_recommend]` | `impl` block | Omit this impl from the "trait is implemented by ..." note in failed-bound diagnostics. Does not affect resolution or coherence. Advisory. |
 | `#[TOOL::NAME(...)]` (any other multi-segment path) | Any item | Tool-namespaced attribute. Compiler parses, stores on AST, emits no diagnostic. External tools (formatters, linters, analyzers) read via `karac query attributes` or LSP. v1-reserved tool names: `karafmt::*`, `karalint::*`, `karadoc::*`. See design.md § Tool-Namespaced Attributes. |
@@ -2419,7 +2423,7 @@ Known attributes:
 | `#[allow(pure_loop_in_par)]` | Function/Block | Suppress pure-tight-loop-in-par warning |
 | `#[property(cases: N)]` | Test function | Property-based test with custom iteration count |
 | `#[snapshot]` | Test function | Snapshot test (output compared against saved baseline) |
-| `#[test(requires = [...])]` | Test function | Declare resources needed for test |
+| `#[test(requires: [...])]` | Test function | Declare resources needed for test |
 | `#[with_provider(resource, constructor)]` | Test function | Per-test provider injection |
 | `#[prefer_rc]` | Function/Module | Compiler queries channel resolution surface for the RC fallback decision (P1.1). Hint that the Phase 2 RC→Arc promotion respects in ambiguous cases; conflicts with `#[no_rc]`. See design.md § Compiler Queries and § Feature 4 Part 4. |
 | `#[specialize(T = TYPE, ...)]` | Function | Compiler queries channel resolution surface for the specialization decision (P1.2). Author directs the compiler to specialize the body for the named monomorphization tuple. See design.md § Compiler Queries. |

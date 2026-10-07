@@ -293,7 +293,7 @@ impl Server {
     // `#[allow(unstable_api)]` or `[lints].allow_unstable_api = true`.
     // Revisit at v1 lock only if a real `#[unstable]` consumer appears to
     // take over the canary role.
-    #[unstable = "serve_static is a fixed-body convenience subsumed by Server.serve(handler); use serve(handler) for real servers"]
+    #[unstable(note: "serve_static is a fixed-body convenience subsumed by Server.serve(handler); use serve(handler) for real servers")]
     #[compiler_builtin]
     fn serve_static(addr: String, body: String) -> Result[Unit, HttpError] {
         Err(HttpError { message: "" })

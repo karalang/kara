@@ -8,7 +8,7 @@ fn main() with sends(Network) receives(Network) {{
                 None => println("xecho MISSING"),
             }}
             match r.header("content-type") {{
-                Some(v) => println("ct " + v),
+                Some(v); => println("ct " + v),
                 None => println("ct MISSING"),
             }}
             println(r.headers().len() > 1);

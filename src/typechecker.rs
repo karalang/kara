@@ -251,7 +251,7 @@ pub(super) fn extract_must_use_message(attributes: &[Attribute]) -> Option<Strin
     attributes
         .iter()
         .find(|a| a.is_bare("must_use"))
-        .map(|a| a.string_value.clone().unwrap_or_default())
+        .map(|a| a.string_arg().unwrap_or_default().to_string())
 }
 
 /// The set of field names of a `shared struct` / `par struct` that may be

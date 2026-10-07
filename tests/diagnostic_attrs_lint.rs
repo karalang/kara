@@ -199,10 +199,12 @@ fn on_unimpl_lint_non_string_value() {
 }
 
 #[test]
-fn on_unimpl_lint_shorthand_string_value_rejected() {
-    let diags = lint("#[diagnostic::on_unimplemented = \"x\"]\ntrait Foo { }");
-    assert_eq!(diags.len(), 1);
-    assert!(diags[0].message.contains("recognised shape"));
+fn on_unimpl_shorthand_string_value_is_a_parse_error() {
+    // `#[name = "..."]` is not Kāra syntax; the parser rejects it with a
+    // fix to the named-field form before the lint ever sees it.
+    let r = karac::parse("#[diagnostic::on_unimplemented = \"x\"]\ntrait Foo { }");
+    assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+    assert!(r.errors[0].message.contains("on_unimplemented(message: "));
 }
 
 #[test]
@@ -418,7 +420,7 @@ fn do_not_recommend_lint_paren_form_rejected() {
 fn do_not_recommend_lint_string_value_form_rejected() {
     let diags = lint(
         "struct S { x: i64 }\n\
-         #[diagnostic::do_not_recommend = \"x\"]\n\
+         #[diagnostic::do_not_recommend(\"x\")]\n\
          impl S { fn m(self) -> i64 { 0 } }",
     );
     assert_eq!(diags.len(), 1);

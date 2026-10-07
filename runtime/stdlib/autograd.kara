@@ -95,7 +95,7 @@ impl Tape {
     }
 
     /// Append a node and return its id. Internal — `Var`'s operations call it.
-    #[must_use = "the recorded node id is needed to build the Var handle"]
+    #[must_use("the recorded node id is needed to build the Var handle")]
     pub fn record(ref self, value: f64, kind: i64, a: i64, b: i64) -> i64 {
         let idx = self.values.len();
         self.values.push(value);
@@ -119,7 +119,7 @@ impl Tape {
     /// function (not a receiver method): it owns the tape for the whole pass.
     ///
     /// Example: `Tape.value_and_grad(|x| x.mul(x), 3.0)` -> `(9.0, 6.0)`.
-    #[must_use = "value_and_grad returns the computed (value, gradient) pair"]
+    #[must_use("value_and_grad returns the computed (value, gradient) pair")]
     pub fn value_and_grad(f: Fn(Var) -> Var, x: f64) -> (f64, f64) {
         let tape = Tape.new();
         let xv = Var.leaf(tape, x);
@@ -137,7 +137,7 @@ impl Tape {
     /// value-discarding sibling of `value_and_grad` (the analog of JAX's `grad`).
     ///
     /// Example: `Tape.grad(|x| x.mul(x).add(x), 2.0)` -> `5.0` (d/dx of x²+x at 2).
-    #[must_use = "grad returns the computed derivative"]
+    #[must_use("grad returns the computed derivative")]
     pub fn grad(f: Fn(Var) -> Var, x: f64) -> f64 {
         let vg = Tape.value_and_grad(f, x);
         vg.1
@@ -148,7 +148,7 @@ impl Var {
     /// A leaf (input) variable — a differentiable value with no parents. The
     /// tape is a parameter (a shared handle) rather than a receiver because a
     /// `shared struct` method may not store its own `self` into a field.
-    #[must_use = "a leaf Var is only useful once operated on and read back"]
+    #[must_use("a leaf Var is only useful once operated on and read back")]
     pub fn leaf(t: Tape, value: f64) -> Var {
         let idx = t.record(value, 0, -1, -1);
         Var { tape: t, idx: idx }
@@ -163,14 +163,14 @@ impl Var {
 
     /// This node's accumulated gradient (0 until `backward` runs from an output
     /// reachable through this node).
-    #[must_use = "the gradient is the whole point of reverse-mode AD"]
+    #[must_use("the gradient is the whole point of reverse-mode AD")]
     pub fn grad(ref self) -> f64 {
         let tp = self.tape;
         tp.grads[self.idx]
     }
 
     /// `self + other`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn add(ref self, other: ref Var) -> Var {
         let tp = self.tape;
         let v = self.value() + other.value();
@@ -179,7 +179,7 @@ impl Var {
     }
 
     /// `self - other`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn sub(ref self, other: ref Var) -> Var {
         let tp = self.tape;
         let v = self.value() - other.value();
@@ -188,7 +188,7 @@ impl Var {
     }
 
     /// `self * other`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn mul(ref self, other: ref Var) -> Var {
         let tp = self.tape;
         let v = self.value() * other.value();
@@ -197,7 +197,7 @@ impl Var {
     }
 
     /// `self / other`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn div(ref self, other: ref Var) -> Var with panics {
         let tp = self.tape;
         let v = self.value() / other.value();
@@ -206,7 +206,7 @@ impl Var {
     }
 
     /// `-self`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn neg(ref self) -> Var {
         let tp = self.tape;
         let v = 0.0 - self.value();
@@ -216,7 +216,7 @@ impl Var {
 
     /// ReLU activation: `max(0, self)`. Backward passes the gradient straight
     /// through where the input was positive and blocks it (0) otherwise.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn relu(ref self) -> Var {
         let tp = self.tape;
         let x = self.value();
@@ -227,7 +227,7 @@ impl Var {
 
     /// Logistic sigmoid `1 / (1 + e^-self)`. Backward is `s·(1 − s)` on the
     /// output `s`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn sigmoid(ref self) -> Var {
         let tp = self.tape;
         let v = 1.0 / (1.0 + (0.0 - self.value()).exp());
@@ -236,7 +236,7 @@ impl Var {
     }
 
     /// Hyperbolic tangent. Backward is `1 − t²` on the output `t`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn tanh(ref self) -> Var {
         let tp = self.tape;
         let v = self.value().tanh();
@@ -346,7 +346,7 @@ impl TensorTape {
     /// stored into a container double-frees). Every op pushes exactly one
     /// value + one grad before calling this, so `kind.len()` (pre-push) is the
     /// new node's id and keeps all five columns in lock-step.
-    #[must_use = "the recorded node id is needed to build the TensorVar handle"]
+    #[must_use("the recorded node id is needed to build the TensorVar handle")]
     pub fn push_node(ref self, kind: i64, a: i64, b: i64) -> i64 {
         let idx = self.kind.len();
         self.kind.push(kind);
@@ -362,7 +362,7 @@ impl TensorVar {
     /// keeps ownership of its input. `value` is borrowed (`ref`) rather than
     /// consumed — a `shared struct` method may not store its own `self` into a
     /// field, so the tape is a parameter rather than a receiver.
-    #[must_use = "a leaf TensorVar is only useful once operated on and read back"]
+    #[must_use("a leaf TensorVar is only useful once operated on and read back")]
     pub fn leaf(t: TensorTape, value: ref Tensor[f32, [?]]) -> TensorVar {
         let v: Tensor[f32, [?]] = value + 0.0;
         let zg: Tensor[f32, [?]] = value * 0.0;
@@ -383,7 +383,7 @@ impl TensorVar {
 
     /// A fresh copy of this node's accumulated gradient (an all-zero tensor
     /// until `backward` runs from an output reachable through this node).
-    #[must_use = "the gradient is the whole point of reverse-mode AD"]
+    #[must_use("the gradient is the whole point of reverse-mode AD")]
     pub fn grad(ref self) -> Tensor[f32, [?]] {
         let tp = self.tape;
         let g = ref tp.grads[self.idx];
@@ -392,7 +392,7 @@ impl TensorVar {
 
     /// One scalar element of this node's accumulated gradient (`grad()[i]`
     /// without materialising the whole tensor) — handy for assertions.
-    #[must_use = "the gradient is the whole point of reverse-mode AD"]
+    #[must_use("the gradient is the whole point of reverse-mode AD")]
     pub fn grad_at(ref self, i: i64) -> f32 {
         let tp = self.tape;
         let g = ref tp.grads[self.idx];
@@ -401,7 +401,7 @@ impl TensorVar {
 
     /// Element-wise `self + other`. The fresh sum and its zero-grad are pushed
     /// here (in this scope) so they move cleanly into the tape's Vec columns.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn add(ref self, other: ref TensorVar) -> TensorVar {
         let tp = self.tape;
         let av = ref tp.values[self.idx];
@@ -415,7 +415,7 @@ impl TensorVar {
     }
 
     /// Element-wise `self - other`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn sub(ref self, other: ref TensorVar) -> TensorVar {
         let tp = self.tape;
         let av = ref tp.values[self.idx];
@@ -429,7 +429,7 @@ impl TensorVar {
     }
 
     /// Element-wise (Hadamard) `self * other`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn mul(ref self, other: ref TensorVar) -> TensorVar {
         let tp = self.tape;
         let av = ref tp.values[self.idx];
@@ -443,7 +443,7 @@ impl TensorVar {
     }
 
     /// Element-wise `-self`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn neg(ref self) -> TensorVar {
         let tp = self.tape;
         let sv = ref tp.values[self.idx];
@@ -457,7 +457,7 @@ impl TensorVar {
 
     /// Element-wise ReLU: `max(0, self)`. Backward passes the gradient straight
     /// through where the input was positive and blocks it (0) otherwise.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn relu(ref self) -> TensorVar {
         let tp = self.tape;
         let sv = ref tp.values[self.idx];
@@ -471,7 +471,7 @@ impl TensorVar {
 
     /// Element-wise logistic sigmoid `1 / (1 + e^-self)`. Backward is
     /// `s·(1 − s)` on the output `s`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn sigmoid(ref self) -> TensorVar {
         let tp = self.tape;
         let sv = ref tp.values[self.idx];
@@ -484,7 +484,7 @@ impl TensorVar {
     }
 
     /// Element-wise hyperbolic tangent. Backward is `1 − t²` on the output `t`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn tanh(ref self) -> TensorVar {
         let tp = self.tape;
         let sv = ref tp.values[self.idx];
@@ -501,7 +501,7 @@ impl TensorVar {
     /// `mul` node, so `backward` flows through both with no dedicated op-code and
     /// the product rule reconstructs the exact derivative
     /// `σ(x) + x·σ(x)(1 − σ(x))` automatically.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn silu(ref self) -> TensorVar {
         let s = self.sigmoid();
         self.mul(s)
@@ -513,7 +513,7 @@ impl TensorVar {
     /// numerically stabilised by subtracting the max before exponentiating; the
     /// dense-Jacobian backward is `grad_x = s ⊙ (g − Σ(g ⊙ s))`, read off the
     /// stored output `s`. Op-code 11 on the tensor tape.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn softmax(ref self) -> TensorVar {
         let tp = self.tape;
         let sv = ref tp.values[self.idx];
@@ -534,7 +534,7 @@ impl TensorVar {
     /// derivative of that closed form, computed from the stored input `x`:
     /// `0.5(1+t) + 0.5·x·(1−t²)·√(2/π)·(1 + 3·0.044715·x²)` where
     /// `t = tanh(√(2/π)(x + 0.044715x³))`. Op-code 12 on the tensor tape.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn gelu(ref self) -> TensorVar {
         let tp = self.tape;
         let sv = ref tp.values[self.idx];
@@ -561,7 +561,7 @@ impl TensorVar {
     /// `backward()`. The only shape-changing op (input `[N]` → output `[1]`):
     /// since `d(sum(x))/dx_i = 1`, its backward broadcasts the upstream scalar
     /// gradient back to the input shape.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn sum(ref self) -> TensorVar {
         let tp = self.tape;
         let sv = ref tp.values[self.idx];
@@ -580,7 +580,7 @@ impl TensorVar {
     /// upstream scalar gradient divided by the element count back to the input
     /// shape. The count is `(x*0 + 1).sum()` — shape-agnostic, no extra
     /// primitive.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn mean(ref self) -> TensorVar {
         let tp = self.tape;
         let sv = ref tp.values[self.idx];
@@ -602,7 +602,7 @@ impl TensorVar {
     /// through them with no dedicated op-code. `dL/d(self) = 2·(self − target)/N`.
     /// The target is a `Var` (typically a leaf whose gradient is ignored); its
     /// gradient is the negation of `self`'s, available on the same tape.
-    #[must_use = "a loss is only useful once you call backward() and read a gradient"]
+    #[must_use("a loss is only useful once you call backward() and read a gradient")]
     pub fn mse(ref self, target: ref TensorVar) -> TensorVar {
         let d = self.sub(target);
         let sq = d.mul(d);
@@ -617,7 +617,7 @@ impl TensorVar {
     /// the usual convention). For raw logits prefer `sigmoid` then `bce`; a fused
     /// numerically-stable BCE-with-logits is a later slice. `p` must stay off the
     /// `{0, 1}` endpoints (where `ln` / the backward denominator diverge).
-    #[must_use = "a loss is only useful once you call backward() and read a gradient"]
+    #[must_use("a loss is only useful once you call backward() and read a gradient")]
     pub fn bce(ref self, target: ref TensorVar) -> TensorVar {
         let tp = self.tape;
         let p = ref tp.values[self.idx];
@@ -645,7 +645,7 @@ impl TensorVar {
     /// `L = −Σ_i t_i·ln(softmax(x)_i)`, a `[1]` scalar (numerically stabilised by
     /// the max-shift inside the softmax). Op-code 14. Backward accumulates
     /// `(softmax(x) − t)` into `self`; the `target` distribution is a constant.
-    #[must_use = "a loss is only useful once you call backward() and read a gradient"]
+    #[must_use("a loss is only useful once you call backward() and read a gradient")]
     pub fn cross_entropy(ref self, target: ref TensorVar) -> TensorVar {
         let tp = self.tape;
         let x = ref tp.values[self.idx];
@@ -846,7 +846,7 @@ impl MatTape {
     /// the value/grad matrices are pushed by the caller in its own scope (a fresh
     /// owned local moves cleanly into the Vec; a matrix threaded as an owned
     /// parameter would alias the caller).
-    #[must_use = "the recorded node id is needed to build the MatVar handle"]
+    #[must_use("the recorded node id is needed to build the MatVar handle")]
     pub fn push_node(ref self, kind: i64, a: i64, b: i64) -> i64 {
         let idx = self.kind.len();
         self.kind.push(kind);
@@ -859,7 +859,7 @@ impl MatTape {
 impl MatVar {
     /// A leaf (input) matrix. The tape stores its own copy (`value + 0.0`), so
     /// the caller keeps ownership; `value` is borrowed (`ref`).
-    #[must_use = "a leaf MatVar is only useful once operated on and read back"]
+    #[must_use("a leaf MatVar is only useful once operated on and read back")]
     pub fn leaf(t: MatTape, value: ref Tensor[f32, [?, ?]]) -> MatVar {
         let v: Tensor[f32, [?, ?]] = value + 0.0;
         let zg: Tensor[f32, [?, ?]] = v * 0.0;
@@ -878,7 +878,7 @@ impl MatVar {
     }
 
     /// A fresh copy of this node's accumulated gradient.
-    #[must_use = "the gradient is the whole point of reverse-mode AD"]
+    #[must_use("the gradient is the whole point of reverse-mode AD")]
     pub fn grad(ref self) -> Tensor[f32, [?, ?]] {
         let tp = self.tape;
         let g = ref tp.grads[self.idx];
@@ -886,7 +886,7 @@ impl MatVar {
     }
 
     /// One scalar element `grad()[i, j]` of this node's accumulated gradient.
-    #[must_use = "the gradient is the whole point of reverse-mode AD"]
+    #[must_use("the gradient is the whole point of reverse-mode AD")]
     pub fn grad_at(ref self, i: i64, j: i64) -> f32 {
         let tp = self.tape;
         let g = ref tp.grads[self.idx];
@@ -895,7 +895,7 @@ impl MatVar {
 
     /// Element-wise `self + other` (same shape). Backward passes the gradient to
     /// both parents unchanged.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn add(ref self, other: ref MatVar) -> MatVar {
         let tp = self.tape;
         let av = ref tp.values[self.idx];
@@ -910,7 +910,7 @@ impl MatVar {
 
     /// Matrix product `self @ other`: `[M, K] × [K, N] → [M, N]`. Backward is
     /// the classic pair `grad_A = grad_C · Bᵀ`, `grad_B = Aᵀ · grad_C`.
-    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    #[must_use("autograd ops build a graph node; discarding it drops the computation")]
     pub fn matmul(ref self, other: ref MatVar) -> MatVar {
         let tp = self.tape;
         let av = ref tp.values[self.idx];

@@ -157,7 +157,7 @@ A Rust program consumes Kāra the same way it consumes any C library: an `extern
 #[repr(C)]
 struct Stats { sum: f64, count: i64 }
 
-#[link(name = "kernel", kind = "dylib")]
+#[link(name: "kernel", kind: "dylib")]
 extern "C" {
     fn karac_runtime_init();
     fn karac_runtime_shutdown();

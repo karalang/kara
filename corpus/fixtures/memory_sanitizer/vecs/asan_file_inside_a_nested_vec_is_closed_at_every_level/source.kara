@@ -7,7 +7,7 @@ fn main() with reads(FileSystem) {{
         let mut inner: Vec[File] = Vec.new();
         match File.open("{path}") {{
             Ok(f) => {{ inner.push(f); n = n + 1i64; }}
-            Err(_) => {{ n = n - 1i64; }}
+            Err(_); => {{ n = n - 1i64; }}
         }}
         outer.push(inner);
         i = i + 1;

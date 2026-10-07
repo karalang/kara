@@ -145,12 +145,61 @@ impl super::Parser {
             );
         }
 
-        // #[name = "string"] form
-        let (args, string_value) = if self.eat(&Token::Equal) {
+        // `#[name = "string"]` is not Kāra syntax (design review 2026-10-07:
+        // attribute arguments are written like a call's). It still parses
+        // into `string_value` so the rest of the file checks, with an error
+        // whose fix rewrites it to the call form: `#[name("string")]`, or
+        // `#[name(note: "string")]` for the two attributes whose string is a
+        // named `note`.
+        let (args, string_value) = if self.check(&Token::Equal) {
+            let eq_span = self.current_span();
+            self.advance();
             match self.peek_token_ref() {
                 Token::StringLiteral(s) => {
                     let s = s.clone();
+                    let lit_span = self.current_span();
                     self.advance();
+                    let open =
+                        if path.len() == 1 && matches!(name.as_str(), "deprecated" | "unstable") {
+                            "(note: "
+                        } else if path.len() == 2 && path[1] == "on_unimplemented" {
+                            "(message: "
+                        } else {
+                            "("
+                        };
+                    let path_text = path.join("::");
+                    let err_span = Span {
+                        offset: eq_span.offset,
+                        length: lit_span.offset + lit_span.length - eq_span.offset,
+                        line: eq_span.line,
+                        column: eq_span.column,
+                    };
+                    self.error_at(
+                        &format!(
+                            "attribute arguments are written like a call's, not with `=`; \
+                             write `#[{path_text}{open}\"...\")]`"
+                        ),
+                        err_span,
+                    );
+                    // Replace from the end of the path through `=` and the
+                    // space after it, then close the call after the literal.
+                    let name_end = self.tokens[self.pos - 3].span.offset
+                        + self.tokens[self.pos - 3].span.length;
+                    self.fix_diffs.insert(
+                        crate::resolver::SpanKey::from_span(&err_span),
+                        vec![
+                            crate::resolver::TextEdit {
+                                offset: name_end,
+                                length: lit_span.offset - name_end,
+                                replacement: open.to_string(),
+                            },
+                            crate::resolver::TextEdit {
+                                offset: lit_span.offset + lit_span.length,
+                                length: 0,
+                                replacement: ")".to_string(),
+                            },
+                        ],
+                    );
                     (Vec::new(), Some(s))
                 }
                 _ => {
@@ -194,7 +243,30 @@ impl super::Parser {
                 // shape still matches named.
                 let (arg_name, value) = if self.is_named_attr_arg_head() {
                     let name = self.expect_attr_arg_name()?;
-                    let val = if self.eat(&Token::Colon) || self.eat(&Token::Equal) {
+                    let val = if self.eat(&Token::Colon) {
+                        Some(self.parse_expression()?)
+                    } else if self.check(&Token::Equal) {
+                        // `key = value` is not Kāra syntax: arguments are
+                        // `key: value`, like a call's named arguments.
+                        let eq_span = self.current_span();
+                        self.advance();
+                        self.error_at(
+                            &format!(
+                                "attribute arguments are written `{name}: value`, not \
+                                 `{name} = value`"
+                            ),
+                            eq_span,
+                        );
+                        let name_end = self.tokens[self.pos - 2].span.offset
+                            + self.tokens[self.pos - 2].span.length;
+                        self.fix_edits.insert(
+                            crate::resolver::SpanKey::from_span(&eq_span),
+                            crate::resolver::TextEdit {
+                                offset: name_end,
+                                length: eq_span.offset + eq_span.length - name_end,
+                                replacement: ":".to_string(),
+                            },
+                        );
                         Some(self.parse_expression()?)
                     } else {
                         None
@@ -452,7 +524,7 @@ impl super::Parser {
                     "unknown attribute inside `#[unsafe(...)]`: `{inner_name}`. The \
                      `#[unsafe(...)]` wrap is reserved for soundness-affecting linker \
                      attributes — `no_mangle` and `link_section(\"...\")`. Plain \
-                     attributes (e.g. `#[used]`, `#[noblock]`, `#[kara_name = \"...\"]`) \
+                     attributes (e.g. `#[used]`, `#[noblock]`, `#[kara_name(\"...\")]`) \
                      are written without the wrap. \
                      See design.md § Linker Control Attributes."
                 ));

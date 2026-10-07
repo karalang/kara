@@ -105,12 +105,12 @@ let fast_buffer: [u8; 1024] = [0; 1024];
 
 ## FFI
 
-### `#[kara_name = "identifier"]`
+### `#[kara_name("identifier")]`
 
 On an `extern` item: rebinds a non-conforming foreign name to a valid Kāra identifier. The Kāra-visible name must follow the identifier case-class rules; the foreign name may be arbitrary ASCII.
 
 ```kara,ignore
-#[kara_name = "GlxFbConfig"]
+#[kara_name("GlxFbConfig")]
 extern type GLXFBConfig;
 ```
 
@@ -171,14 +171,14 @@ fn mix(a: f32, b: f32) -> f32 {
 }
 ```
 
-### `#[must_use]`  /  `#[must_use = "reason"]`
+### `#[must_use]`  /  `#[must_use("reason")]`
 
 On a **type**: every binding site where a value of this type would be silently dropped produces a warning. Use for types that must be explicitly handled (e.g., a connection that must be closed).
 
 On a **function**: the return value must not be silently discarded. `Result` return values are implicitly `#[must_use]`.
 
 ```kara,ignore
-#[must_use = "connections must be explicitly disconnected"]
+#[must_use("connections must be explicitly disconnected")]
 struct Connection { ... }
 ```
 
@@ -190,7 +190,7 @@ struct Connection { ... }
 
 Mark a `test_`-prefixed function as a test case.
 
-### `#[test(requires = [resource, ...])]`
+### `#[test(requires: [resource, ...])]`
 
 Mark a test that needs a live external resource. When the resource is unavailable, the test is skipped (or fails with `reason: "unsatisfied_requires"` when `karac test --all` is used).
 

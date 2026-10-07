@@ -179,7 +179,13 @@ impl super::Formatter {
                 self.write_str(")");
             }
             if let Some(ref s) = attr.string_value {
-                self.write_str("(\"");
+                // The rejected `#[name = "s"]` spelling, written back in the
+                // call form its fix produces.
+                if attr.is_bare("deprecated") || attr.is_bare("unstable") {
+                    self.write_str("(note: \"");
+                } else {
+                    self.write_str("(\"");
+                }
                 self.write_str(s);
                 self.write_str("\")");
             }

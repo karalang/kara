@@ -7,7 +7,7 @@ fn main() with sends(Network) receives(Network) {{
             let b: Vec[u8] = resp.bytes();
             println(b.len());
         }}
-        Err(e) => {{
+        Err(e); => {{
             println("ERR");
             println(e.message());
         }}

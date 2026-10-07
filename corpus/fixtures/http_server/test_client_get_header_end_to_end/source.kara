@@ -9,7 +9,7 @@ fn main() with sends(Network) receives(Network) {{
                 None => println("MISSING"),
             }}
             match resp.header("x-absent") {{
-                Some(v2) => println(v2),
+                Some(v2); => println(v2),
                 None => println("ABSENT-OK"),
             }}
         }}

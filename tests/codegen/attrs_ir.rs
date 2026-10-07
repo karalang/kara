@@ -667,7 +667,7 @@ fn test_ir_target_feature_emits_function_attribute() {
     // must be `unsafe fn` (validated in the parser); a plain function without
     // the attribute gets no such per-function attribute.
     let ir = ir_for(
-        "#[target_feature(enable = \"avx2,bmi2\")]\n\
+        "#[target_feature(enable: \"avx2,bmi2\")]\n\
              unsafe fn hot(a: i64, b: i64) -> i64 { a + b }\n\
              fn cold_fn(a: i64) -> i64 { a }\n\
              fn main() { let _ = unsafe { hot(1, 2) }; let _ = cold_fn(3); }",

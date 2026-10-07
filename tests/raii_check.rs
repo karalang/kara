@@ -868,7 +868,7 @@ fn user_annotated_type_participates() {
          pub fn fetch() with sends(Network) receives(Network) {}
          struct Tx { }
          impl Tx {
-             #[cancel_unsafe_until(method = \"commit\")]
+             #[cancel_unsafe_until(method: \"commit\")]
              fn put(ref self, k: String, v: String) { }
              fn commit(ref self) { }
          }
@@ -1005,7 +1005,7 @@ const TX_PREAMBLE: &str = "effect resource Network;
      pub fn fetch() with sends(Network) receives(Network) {}
      struct Tx { }
      impl Tx {
-         #[cancel_unsafe_until(method = \"commit\")]
+         #[cancel_unsafe_until(method: \"commit\")]
          fn put(ref self, k: String, v: String) { }
          fn commit(ref self) { }
      }\n";

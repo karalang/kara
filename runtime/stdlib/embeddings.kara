@@ -22,7 +22,7 @@
 //   * ranking: `top_k` (the k highest scores as `(index, score)` pairs).
 
 /// Dot product of two same-width embedding vectors: `Σ aᵢ·bᵢ`.
-#[must_use = "the dot product is the whole result — discarding it wastes the traversal"]
+#[must_use("the dot product is the whole result — discarding it wastes the traversal")]
 pub fn dot[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
     // Chained `zip_with(...).sum()` so codegen fuses the product + reduction
     // into one vectorized accumulating pass (no intermediate products tensor).
@@ -30,7 +30,7 @@ pub fn dot[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
 }
 
 /// Euclidean (L2) norm of an embedding vector: `√(Σ aᵢ²)`.
-#[must_use = "the norm is the whole result — discarding it wastes the traversal"]
+#[must_use("the norm is the whole result — discarding it wastes the traversal")]
 pub fn l2_norm[D](a: ref Tensor[f32, [D]]) -> f32 {
     a.zip_with(a, |x, y| x * y).sum().sqrt()
 }
@@ -39,7 +39,7 @@ pub fn l2_norm[D](a: ref Tensor[f32, [D]]) -> f32 {
 /// Ranges in `[-1, 1]`; `1` for parallel, `0` for orthogonal, `-1` for
 /// antiparallel. Both inputs are borrowed, so the query vector `a` is reused
 /// across the two norms and the dot product without being consumed.
-#[must_use = "the similarity score is the whole result — discarding it wastes the computation"]
+#[must_use("the similarity score is the whole result — discarding it wastes the computation")]
 pub fn cosine_similarity[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 with panics {
     let ab = a.zip_with(b, |x, y| x * y).sum();
     let aa = a.zip_with(a, |x, y| x * y).sum();
@@ -50,7 +50,7 @@ pub fn cosine_similarity[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) ->
 /// Return a unit-length copy of `v` (`v / ‖v‖`) — the standard preprocessing
 /// step so a later `dot` equals the cosine similarity. A zero vector is
 /// returned unchanged (its norm is 0; dividing would produce NaNs).
-#[must_use = "l2_normalize returns a new unit vector; it does not mutate the input"]
+#[must_use("l2_normalize returns a new unit vector; it does not mutate the input")]
 pub fn l2_normalize[D](v: ref Tensor[f32, [D]]) -> Tensor[f32, [D]] with panics {
     let n = v.zip_with(v, |x, y| x * y).sum().sqrt();
     if n == 0.0f32 {
@@ -63,7 +63,7 @@ pub fn l2_normalize[D](v: ref Tensor[f32, [D]]) -> Tensor[f32, [D]] with panics 
 /// Batched dot product: `query · corpusᵢ` for each of the `N` rows of a
 /// `[N, D]` corpus, returning an `N`-length `Vec[f32]`. The single query is
 /// borrowed and reused across every row (no per-row copy).
-#[must_use = "the scores vector is the whole result — discarding it wastes the batch traversal"]
+#[must_use("the scores vector is the whole result — discarding it wastes the batch traversal")]
 pub fn dot_batched[N, D](query: ref Tensor[f32, [D]], corpus: ref Tensor[f32, [N, D]]) -> Vec[f32] {
     let mut out: Vec[f32] = Vec.new();
     // Iterate the rows directly. Either spelling fuses now — a single-use
@@ -81,7 +81,7 @@ pub fn dot_batched[N, D](query: ref Tensor[f32, [D]], corpus: ref Tensor[f32, [N
 /// of a `[N, D]` corpus, returning an `N`-length `Vec[f32]`. The query norm is
 /// computed once and reused; each row's norm is computed per row. This is the
 /// single-query semantic-search / nearest-neighbour scan.
-#[must_use = "the scores vector is the whole result — discarding it wastes the batch traversal"]
+#[must_use("the scores vector is the whole result — discarding it wastes the batch traversal")]
 pub fn cosine_similarity_batched[N, D](
     query: ref Tensor[f32, [D]],
     corpus: ref Tensor[f32, [N, D]],
@@ -106,7 +106,7 @@ pub fn cosine_similarity_batched[N, D](
 /// (`out[i, j]` is query `i`'s similarity to corpus row `j`). This is the
 /// SGEMM-shaped bulk-scoring path — a whole batch of queries against the whole
 /// corpus in one call. Both inputs are borrowed; the result is a fresh tensor.
-#[must_use = "the similarity matrix is the whole result — discarding it wastes the Q×N computation"]
+#[must_use("the similarity matrix is the whole result — discarding it wastes the Q×N computation")]
 pub fn cosine_similarity_matrix[Q, N, D](
     queries: ref Tensor[f32, [Q, D]],
     corpus: ref Tensor[f32, [N, D]],
@@ -146,7 +146,7 @@ pub fn cosine_similarity_matrix[Q, N, D](
 ///
 /// Cost is `O(n·k)` — a partial selection, the right shape for `k ≪ n` (the
 /// usual "top-10 of a million" case); it does not sort the whole vector.
-#[must_use = "the ranked results are the whole point — discarding them wastes the scan"]
+#[must_use("the ranked results are the whole point — discarding them wastes the scan")]
 pub fn top_k(scores: ref Vec[f32], k: i64) -> Vec[(i64, f32)] with panics {
     let n = scores.len();
     // `used[i]` marks an index already claimed by an earlier round.

@@ -3459,7 +3459,7 @@ fn deprecated_slice3b_preserves_since_and_note() {
 
 #[test]
 fn deprecated_slice3b_shorthand_populates_note() {
-    let result = resolve_ok("#[deprecated = \"replaced by `v2`\"]\npub fn old_api() { }");
+    let result = resolve_ok("#[deprecated(note: \"replaced by `v2`\")]\npub fn old_api() { }");
     let dep = lookup_deprecation(&result, "old_api").expect("recorded");
     assert!(dep.since.is_none());
     assert_eq!(dep.note.as_deref(), Some("replaced by `v2`"));
@@ -3485,13 +3485,13 @@ fn deprecated_slice3b_per_item_kind_coverage() {
     // string so a misrouting (one item's payload landing on another
     // item's id) would surface as a mismatched assertion.
     let result = resolve_ok(
-        "#[deprecated = \"fn-note\"]\nfn old_fn() { }\n\
-         #[deprecated = \"struct-note\"]\npub struct OldShape { x: i64, }\n\
-         #[deprecated = \"enum-note\"]\npub enum OldErr { Bad, }\n\
-         #[deprecated = \"trait-note\"]\npub trait OldFmt { fn fmt(ref self); }\n\
-         #[deprecated = \"const-note\"]\npub const OLD_LIMIT: i64 = 0;\n\
-         #[deprecated = \"alias-note\"]\npub type OldAlias = i64;\n\
-         #[deprecated = \"marker-note\"]\npub marker trait OldMarker;\n",
+        "#[deprecated(note: \"fn-note\")]\nfn old_fn() { }\n\
+         #[deprecated(note: \"struct-note\")]\npub struct OldShape { x: i64, }\n\
+         #[deprecated(note: \"enum-note\")]\npub enum OldErr { Bad, }\n\
+         #[deprecated(note: \"trait-note\")]\npub trait OldFmt { fn fmt(ref self); }\n\
+         #[deprecated(note: \"const-note\")]\npub const OLD_LIMIT: i64 = 0;\n\
+         #[deprecated(note: \"alias-note\")]\npub type OldAlias = i64;\n\
+         #[deprecated(note: \"marker-note\")]\npub marker trait OldMarker;\n",
     );
     assert_eq!(
         lookup_deprecation(&result, "old_fn")
@@ -3553,7 +3553,7 @@ fn deprecated_slice3b_records_on_enum_variant() {
     // parent enum holding the note.
     let result = resolve_ok(
         "pub enum Op {\n\
-         #[deprecated = \"variant-note\"]\nBad,\nGood,\n\
+         #[deprecated(note: \"variant-note\")]\nBad,\nGood,\n\
          }",
     );
     let dep = lookup_deprecation(&result, "Bad").expect("variant payload recorded");
@@ -3582,7 +3582,7 @@ fn deprecated_slice3b_records_on_impl_method() {
     let result = resolve_ok(
         "pub struct S { x: i64, }\n\
          impl S {\n\
-             #[deprecated = \"method-note\"]\nfn old_m(ref self) -> i64 { 0 }\n\
+             #[deprecated(note: \"method-note\")]\nfn old_m(ref self) -> i64 { 0 }\n\
              fn fresh_m(ref self) -> i64 { 0 }\n\
          }",
     );
@@ -3617,8 +3617,8 @@ fn deprecated_slice3b_lookup_returns_distinct_payloads_for_two_items() {
     // Two deprecated symbols must hold distinct payloads — pins
     // that the sidecar is keyed by id, not by name or position.
     let result = resolve_ok(
-        "#[deprecated = \"first\"]\npub fn one() { }\n\
-         #[deprecated = \"second\"]\npub fn two() { }\n",
+        "#[deprecated(note: \"first\")]\npub fn one() { }\n\
+         #[deprecated(note: \"second\")]\npub fn two() { }\n",
     );
     let d1 = lookup_deprecation(&result, "one").unwrap();
     let d2 = lookup_deprecation(&result, "two").unwrap();
@@ -4298,7 +4298,7 @@ fn attr_slice2_recognised_bare_attributes_accepted() {
     assert_no_unknown_attribute("#[non_exhaustive]\npub struct E { x: i64, }");
     assert_no_unknown_attribute("#[track_caller]\nfn f() { }");
     assert_no_unknown_attribute(
-        "#[kara_name = \"GLXFBConfig\"]\nunsafe extern \"C\" { fn g() -> i64; }",
+        "#[kara_name(\"GLXFBConfig\")]\nunsafe extern \"C\" { fn g() -> i64; }",
     );
 }
 
@@ -4473,7 +4473,7 @@ fn query_resolving_attribute_propagates_through_pipeline_without_diagnostic() {
     // resolution attributes without parser changes.
     use karac::{ownershipcheck, typecheck};
 
-    let src = "#[specialize(T = i64, mode: \"x\")]\nfn make() {}\n";
+    let src = "#[specialize(T: i64, mode: \"x\")]\nfn make() {}\n";
     let parsed = parse(src);
     assert!(
         parsed.errors.is_empty(),

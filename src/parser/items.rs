@@ -728,7 +728,7 @@ impl super::Parser {
             self.errors.push(super::ParseError {
                 kind: crate::parser::ParseErrorKind::Syntax,
                 message: "error[E_TARGET_FEATURE_EMPTY]: `#[target_feature(...)]` needs at least \
-                          one feature — e.g. `#[target_feature(enable = \"avx2\")]`"
+                          one feature — e.g. `#[target_feature(enable: \"avx2\")]`"
                     .to_string(),
                 span,
             });
@@ -1062,7 +1062,8 @@ impl super::Parser {
     /// `#[deprecated]` for Item Deprecation). Recognises three
     /// forms:
     /// - bare `#[deprecated]` → `Deprecation { since: None, note: None }`
-    /// - shorthand `#[deprecated = "note"]` → `note` populated
+    /// - `#[deprecated = "note"]` (an error with a fix to the long
+    ///   form, still read as the note so the rest of the file checks)
     /// - long form `#[deprecated(since: "...", note: "...")]` —
     ///   both fields optional, accepted as `name = value` AND
     ///   `name: value` (the attribute-arg parser already accepts
@@ -1073,13 +1074,30 @@ impl super::Parser {
     /// (`since`, `note`). Non-string values (`#[deprecated(since: 1)]`)
     /// emit `E_DEPRECATED_FIELD_NOT_STRING` naming the offending key.
     /// Positional args (`#[deprecated("oops")]`) emit
-    /// `E_DEPRECATED_POSITIONAL_ARG` — the long form requires named
-    /// fields, the only legal unnamed form is the shorthand
-    /// `= "string"`.
+    /// `E_DEPRECATED_POSITIONAL_ARG` — the fields are named; a
+    /// positional string gets a fix that names it `note:`.
     ///
     /// Multiple `#[deprecated]` attributes on the same item: only the
     /// first one wins; subsequent ones produce
     /// `E_DEPRECATED_DUPLICATE`. Same idempotency rule as Rust.
+    /// The fix for a positional string in `#[deprecated(...)]` /
+    /// `#[unstable(...)]`: name it `note:`.
+    fn push_note_fix(&mut self, arg: &AttrArg) {
+        if matches!(
+            arg.value.as_ref().map(|v| &v.kind),
+            Some(ExprKind::StringLit(_))
+        ) {
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&arg.span),
+                crate::resolver::TextEdit {
+                    offset: arg.span.offset,
+                    length: 0,
+                    replacement: "note: ".to_string(),
+                },
+            );
+        }
+    }
+
     pub(crate) fn scan_deprecated_attr(&mut self, attributes: &[Attribute]) -> Option<Deprecation> {
         let mut first: Option<Deprecation> = None;
         for attr in attributes {
@@ -1129,11 +1147,11 @@ impl super::Parser {
                         message: "error[E_DEPRECATED_POSITIONAL_ARG]: \
                                   `#[deprecated(...)]` requires named \
                                   arguments — use `since: \"...\"` and/or \
-                                  `note: \"...\"`, or the shorthand \
-                                  `#[deprecated = \"note\"]`"
+                                  `note: \"...\"`"
                             .to_string(),
                         span: arg.span,
                     });
+                    self.push_note_fix(arg);
                     continue;
                 };
                 let field_slot = match name.as_str() {
@@ -1193,7 +1211,8 @@ impl super::Parser {
     /// Positioning > Stable surface vs. unstable extension
     /// points). Recognises:
     /// - bare `#[unstable]` → `Unstable { note: None }`
-    /// - shorthand `#[unstable = "note"]` → `note` populated
+    /// - `#[unstable = "note"]` (an error with a fix to the long form,
+    ///   still read as the note)
     /// - long form `#[unstable(note: "...")]` — `note` is the
     ///   only field captured at v1; future RFC may add `feature`
     ///   / `issue`. Unknown named keys are silently ignored
@@ -1234,11 +1253,11 @@ impl super::Parser {
                         kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_UNSTABLE_POSITIONAL_ARG]: \
                                   `#[unstable(...)]` requires named \
-                                  arguments — use `note: \"...\"`, or \
-                                  the shorthand `#[unstable = \"note\"]`"
+                                  arguments — use `note: \"...\"`"
                             .to_string(),
                         span: arg.span,
                     });
+                    self.push_note_fix(arg);
                     continue;
                 };
                 if name != "note" {
