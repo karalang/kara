@@ -11,3 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "stmt-par groups (source.orig.kara lines): L269-L271 three run_worker calls, each one call_remote standing in as sleep_ms(2); the take_next selections before them are sequential"
+model_rev = "7b8ab2eb"

@@ -11,4 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'asan_vector_enum_payload_box_frees_once'"
-model_rev = "53ef2db0"
+model_rev = "7b8ab2eb"

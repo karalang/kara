@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'total'"
 model_exit = 0
-model_rev = "53ef2db0"
+model_rev = "7b8ab2eb"
 model_verdict = "SAME"

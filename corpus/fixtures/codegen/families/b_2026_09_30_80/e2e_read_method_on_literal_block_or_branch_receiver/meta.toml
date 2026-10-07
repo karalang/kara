@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = ""
 model_note = "a reference to a temporary outlives its statement (§5.5)"
-model_rev = "53ef2db0"
+model_rev = "7b8ab2eb"
 model_verdict = "V2-REJECT"

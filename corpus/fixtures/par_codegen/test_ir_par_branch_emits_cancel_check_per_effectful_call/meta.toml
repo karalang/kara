@@ -11,4 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'expected ≥3 mid-branch cancel checks before effectful helper() calls across all par branches, found {total}; IR: {ir}'"
-model_rev = "53ef2db0"
+model_rev = "7b8ab2eb"

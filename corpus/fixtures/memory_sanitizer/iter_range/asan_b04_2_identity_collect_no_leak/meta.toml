@@ -11,4 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: '3 3 identity-collect-local-bravo-bbbbbbbbbbbbbbbb 2 identity-collect-freshtemp-alpha-aaaaaaaaaaaa'"
-model_rev = "53ef2db0"
+model_rev = "7b8ab2eb"

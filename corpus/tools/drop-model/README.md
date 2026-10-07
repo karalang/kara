@@ -43,7 +43,7 @@ Every DIFF and REJECT is explained; none points at the model.
   2026-10-06, §6.1). The model also rejects a write through a `ref` (§5.9): an assignment, a `mut ref self`
   method (user `mut ref self` methods and a list of mutating builtins), a `mut` argument or `iter_mut` on a
   place whose last dereference is a `ref` rather than a `mut ref` or a shared handle. `KARA_MODEL_WRITE_REF=0`
-  turns that check off. On the corpus it changes no verdict (the 6544 programs that parse, re-run 2026-10-07).
+  turns that check off. On the corpus it changes no verdict (the 6544 programs that parse, re-run 2026-10-07). The model also implements §6.2 as amended on 2026-10-07 (D1): a `match`, a `for` or a `ref` on a `mut` field of a shared value borrows that field unless the field's type is Copy or a handle aggregate (then it is read as a value and nothing is borrowed). A write to a borrowed field through the same handle place raises `ModelError` (the compile-time half); a write through another handle to the same box raises a panic, exit 101 (the runtime borrow flag). `KARA_MODEL_SHARED_FLAGS=0` turns this off. On the 836 corpus programs that declare a `shared` type it changes no verdict (re-run 2026-10-07); the three D1 pins (`ok_shared_peek_then_mutate`, `err_shared_field_same_handle`, `panic_shared_field_alias`) give `1 3`, the §6.2 error and `start` then exit 101.
 - `corpus_run.py [--tag T] [--path P] [--json OUT] [--include-v2]`: runs the model on every corpus
   program and compares with the recorded legacy output. `KARA_ROOT` (default: the repo above this
   directory), `MODEL_TIMEOUT` seconds per program (use 3 for the whole corpus).
@@ -51,7 +51,7 @@ Every DIFF and REJECT is explained; none points at the model.
   DIFF, V2-REJECT, LEGACY-REJECT, UNSUP, PARSE, CRASH.
 - `validate.py`: the model against `corpus/core` and `corpus/drop-matrix`; exits 1 on a FAIL.
   Result: core 30 agree, 3 unsupported (escaping capture, `par`, nonescaping param);
-  drop-matrix 256/256. Fault injection (fields dropped first to last) gives 113 matrix failures.
+  drop-matrix 256/256. Re-run 2026-10-07 with D1: core 32 agree, 6 unsupported, drop-matrix 256/256, with the flags on or off. Fault injection (fields dropped first to last) gives 113 matrix failures.
 
 ### Whole corpus, 7002 programs, counting rule, 2026-10-07
 

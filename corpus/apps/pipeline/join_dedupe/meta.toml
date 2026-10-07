@@ -11,3 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "stmt-par groups (source.orig.kara lines): L293-L294 two fs.write of separate files; L300-L301 two fs.read_to_string of those files"
+model_rev = "7b8ab2eb"

@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'declaring `struct Response` without using the HTTP client must stay legal — `Server.serve` handlers return exactly that '"
 model_exit = 0
-model_rev = "53ef2db0"
+model_rev = "7b8ab2eb"
 model_verdict = "SAME"

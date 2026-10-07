@@ -239,6 +239,10 @@ import os as _os
 COUNT_HANDLE_AGGREGATES = _os.environ.get("KARA_MODEL_COUNT_AGG", "1") != "0"
 # §5.9: nothing is written through a `ref` (except a `mut` field of a shared value). Off: KARA_MODEL_WRITE_REF=0
 WRITE_THROUGH_REF = _os.environ.get("KARA_MODEL_WRITE_REF", "1") != "0"
+# §6.2 as amended 2026-10-07 (D1): a `for` or `match` over a `mut` field of a shared value that is neither Copy
+# nor a handle aggregate borrows it; a write to it through the same handle place is rejected, through another
+# handle it panics (the borrow flag). Off: KARA_MODEL_SHARED_FLAGS=0
+SHARED_FLAGS = _os.environ.get("KARA_MODEL_SHARED_FLAGS", "1") != "0"
 MUTATING = {
     "Str": {"push_str", "push", "clear", "insert", "truncate", "pop", "remove", "insert_str"},
     "Vec": {"push", "pop", "clear", "truncate", "insert", "remove", "swap_remove", "swap", "reverse", "sort",
@@ -264,6 +268,7 @@ class Model:
         self.globals = Scope()
         self.flags: set = set()
         self.steps = 0
+        self.sborrows: list = []  # live §6.2 read borrows: (box, field, handle place)
         Scope.depth_of = lambda: len(self.frames[-1].loops) if self.frames else 0
 
     # ── type facts ──
@@ -541,17 +546,55 @@ class Model:
     PLACES = ("var", "field", "tidx", "index")
     _insert_at = None
     _wlog = None  # deref kinds along the place being written (§5.9), or None when not checking
+    _slog = None  # §6.2 shared-field steps along the place being resolved, or None when not checking
+    _last_slog = None
+    _iter_sborrow = None
 
     def resolve_logged(self, e, temp):
         """Resolve e once, recording the dereferences on its path (§5.9). Returns (place, log)."""
-        saved = self._wlog
-        self._wlog = []
+        saved, ssaved = self._wlog, self._slog
+        self._wlog, self._slog = [], []
         try:
             pl = self.resolve_or_temp(e) if temp else self.resolve(e)
             log = self._wlog
+            self._last_slog = self._slog
         finally:
-            self._wlog = saved
+            self._wlog, self._slog = saved, ssaved
         return pl, log
+
+    def shared_step(self, c, p, fname):
+        """§6.2: when the place (c, p) holds a shared handle (through references), the step `.fname` on it is a
+        field of a shared value. Record (box, field, the handle place as written)."""
+        hv = self.get(c, p)
+        while isinstance(hv, Ref):
+            hv = self.get(hv.cell, hv.path)
+        if isinstance(hv, Handle):
+            self._slog.append((hv.box, fname, (id(c), tuple(p))))
+
+    def sborrow_token(self, slog):
+        """The §6.2 read borrow a `for` or `match` over this place holds, or None."""
+        if not SHARED_FLAGS or not slog:
+            return None
+        box, fname, hplace = slog[-1]
+        fv = box.v
+        if fv is MOVED or not isinstance(fv, Rec):
+            return None
+        fv = fv.fields.get(fname) if isinstance(getattr(fv, "fields", None), dict) else None
+        if fv is None or self.is_copy(fv) or self.handle_like(fv):
+            return None
+        return (box, fname, hplace)
+
+    def check_shared_write(self, slog, what):
+        """§6.2: writing a borrowed field of a shared value is an error through the same handle place, a panic
+        through another handle."""
+        if not SHARED_FLAGS or not slog:
+            return
+        for box, fname, hplace in slog:
+            for b2, f2, h2 in self.sborrows:
+                if b2 is box and f2 == fname:
+                    if h2 == hplace:
+                        raise ModelError(f"§6.2: `{fname}` of a shared value is written ({what}) through the same handle while it is borrowed")
+                    raise KPanic(f"borrow flag: `{fname}` of a shared value is already borrowed")
 
     def final_kind(self, pl, log, final=True):
         """The kind of the last dereference on a resolved place's path: "ref", "mutref", "shared" or None.
@@ -580,6 +623,8 @@ class Model:
                 return self.lookup(e[1]), [], None
         if k in ("field", "tidx", "index"):
             c, p, b = self.resolve_or_temp(e[1])
+            if k == "field" and self._slog is not None:
+                self.shared_step(c, p, e[2])
             c, p, b = self.deref(c, p, b)
             if k == "field":
                 st = ("f", e[2])
@@ -705,6 +750,8 @@ class Model:
             pl, log = self.resolve_logged(e, temp=False)
             if pl is not None and mut and WRITE_THROUGH_REF:
                 self.check_write(self.final_kind(pl, log), "a `mut` argument")
+            if pl is not None and mut:
+                self.check_shared_write(self._last_slog, "a `mut` argument")
             if pl is not None:
                 c, p, b = pl
                 v = self.get(c, p)
@@ -1489,7 +1536,21 @@ class Model:
 
     def e_match(self, e):
         _, scrut, arms = e
-        c, p, b = self.resolve_or_temp(scrut)
+        if SHARED_FLAGS and scrut[0] in self.PLACES:
+            (c, p, b), _log = self.resolve_logged(scrut, temp=True)
+            tok = self.sborrow_token(self._last_slog)
+        else:
+            c, p, b = self.resolve_or_temp(scrut)
+            tok = None
+        if tok is None:
+            return self.match_arms(c, p, b, arms)
+        self.sborrows.append(tok)
+        try:
+            return self.match_arms(c, p, b, arms)
+        finally:
+            self.sborrows.remove(tok)
+
+    def match_arms(self, c, p, b, arms):
         for pat, guard, body in arms:
             if not self.matches(pat, c, p):
                 continue
@@ -1594,7 +1655,12 @@ class Model:
 
     def e_for(self, e):
         _, pat, it, body = e
+        self._iter_sborrow = None
         items = self.iterate(it)
+        tok = self._iter_sborrow
+        self._iter_sborrow = None
+        if tok is not None:
+            self.sborrows.append(tok)
         fr = self.frame
         fr.loops.append(set())
         first = True
@@ -1618,6 +1684,8 @@ class Model:
             pass
         finally:
             fr.loops.pop()
+            if tok is not None:
+                self.sborrows.remove(tok)
             if hasattr(items, "close"):
                 items.close()
         return UNIT
@@ -1657,6 +1725,9 @@ class Model:
         (c, p, b), log = self.resolve_logged(e, temp=True)
         if mut and WRITE_THROUGH_REF and e[0] in self.PLACES:
             self.check_write(self.final_kind((c, p, b), log), "`iter_mut`")
+        if mut:
+            self.check_shared_write(self._last_slog, "`iter_mut`")
+        self._iter_sborrow = self.sborrow_token(self._last_slog)
         c, p, b = self.deref(c, p, b)
         v = self.get(c, p)
         if isinstance(v, tuple) and v[0] == "range":
@@ -1762,6 +1833,7 @@ class Model:
         if WRITE_THROUGH_REF and pl is not None and not (pl and pl[0] == "mapins"):
             refvar = place[0] == "var" and pl[0].refbind
             self.check_write(self.final_kind(pl, log, final=refvar), "an assignment")
+        self.check_shared_write(self._last_slog, "an assignment")
         if pl is None:
             raise Unsupported("assignment to a non-place")
         if pl[0] == "mapins":  # `m[k] = v` on a fresh key inserts (legacy behaviour; design.md is silent)
@@ -2067,15 +2139,18 @@ class Model:
         if isinstance(v0, Ref):
             tname = self.type_name(v)
         f = self.find_method(tname, name)
-        if WRITE_THROUGH_REF and recv[0] in self.PLACES:
+        slog = self._last_slog
+        if recv[0] in self.PLACES:
             if f is not None and f.recv is not None:
                 writes = f.recv == "mutref"
             else:
                 fam = ("Str" if isinstance(v, Str) else "Vec" if isinstance(v, VecV) else "Map" if isinstance(v, MapV)
                        else "Opt" if isinstance(v, Enum) and v.ty == "Option" else None)
                 writes = fam is not None and name in MUTATING[fam]
-            if writes:
+            if writes and WRITE_THROUGH_REF:
                 self.check_write(self.final_kind((c, p, b), rlog), f"`{name}` (a `mut ref self` method)")
+            if writes:
+                self.check_shared_write(slog, f"`{name}`")
         if f is not None and f.recv is not None:
             if f.recv == "own":
                 if isinstance(v0, Ref):

@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = ""
 model_note = "use of a partially moved value (C4)"
-model_rev = "53ef2db0"
+model_rev = "7b8ab2eb"
 model_verdict = "V2-REJECT"
