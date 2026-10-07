@@ -1103,6 +1103,9 @@ impl Pipeline {
     /// [`Self::with_lint_overrides`]: a CLI flag naming `borrow_projection_copy`
     /// still decides that lint's level, and only an unset one becomes `Deny`.
     fn strict_core(mut self) -> Self {
+        if self.lint_overrides.legacy_core {
+            return self;
+        }
         self.strict_core = true;
         self.lint_overrides.strict_core = true;
         self.lint_overrides
@@ -1495,6 +1498,7 @@ impl Pipeline {
         // fallback into a hard error (phase-8-stdlib-floor item 6).
         let mut profile_config = self.profile_config.clone();
         profile_config.profile = self.profile;
+        let _core_rules = crate::ownership::CoreRulesGuard::new(self.strict_core);
         let mut ownership = crate::ownershipcheck_with_profile_config(
             &self.parsed.program,
             self.typed.as_ref().unwrap(),
@@ -1509,10 +1513,12 @@ impl Pipeline {
                 .retain(|n| n.kind != crate::ownership::OwnershipErrorKind::RcFallbackNote);
             ownership.errors.extend(core);
             let non_moves = &ownership.core_non_move_sources;
+            let ref_copies = &self.typed.as_ref().unwrap().core_ref_copy_spans;
             ownership.errors.retain(|e| {
                 e.kind != crate::ownership::OwnershipErrorKind::UseAfterMove
                     || !e.consume_span.is_some_and(|c| {
-                        non_moves.contains(&crate::resolver::SpanKey::from_span(&c))
+                        let key = crate::resolver::SpanKey::from_span(&c);
+                        non_moves.contains(&key) || ref_copies.contains(&key)
                     })
             });
             // The typechecker's `E_INDEX_MOVE_NON_COPY` already reports some

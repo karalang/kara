@@ -66,26 +66,27 @@ impl super::Parser {
                     span: self.span_from(&start),
                 })
             }
-            // `ref name @ PATTERN` — the only position where `ref` is
-            // legal inside a pattern (design.md § @ Bindings, "Explicit
-            // `ref` on the `@` binding"). Per-binding `ref` annotations
-            // elsewhere don't exist in Kāra — binding modes flow from
-            // the scrutinee type (design.md § Match Arm Binding Modes).
+            // `ref name @ PATTERN` (design.md § @ Bindings, "Explicit
+            // `ref` on the `@` binding"), or a plain `ref name`, which
+            // borrows the part instead of moving it out
+            // (`docs/core-semantics.md` §4.6). The plain form stays an
+            // ordinary binding in the tree; the mark lives in
+            // `Program::ref_binding_spans`.
             Token::Ref => {
                 self.advance();
+                let name_start = self.current_span();
                 let name = self.expect_identifier()?;
                 let name_span = self.span_from(&start);
                 if !self.eat(&Token::At) {
-                    self.errors.push(ParseError {
-                        kind: crate::parser::ParseErrorKind::Syntax,
-                        message: format!(
-                            "'ref' in a pattern is only valid on an '@' binding \
-                             ('ref {name} @ PATTERN'); binding modes otherwise \
-                             follow the scrutinee type"
-                        ),
-                        span: name_span,
+                    self.check_ident_class(&name, IdentClass::Value, "binding", name_span);
+                    let span = self.span_from(&name_start);
+                    self.ref_binding_spans
+                        .insert(crate::resolver::SpanKey::from_span(&span));
+                    return Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
+                        kind: PatternKind::Binding(name),
+                        span,
                     });
-                    return None;
                 }
                 self.check_ident_class(&name, IdentClass::Value, "binding", name_span);
                 let sub_pattern = self.parse_single_pattern()?;

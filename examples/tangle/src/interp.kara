@@ -90,7 +90,7 @@ impl Scope {
 fn eval(e: Expr, scope: Scope) -> i64 {
     match e {
         Num(n) => n,
-        Var(name) => scope.get(name),
+        Var(name) => scope.get(name.clone()),
         Add(items) => {
             let mut total = 0;
             let mut i = 0;
@@ -119,7 +119,7 @@ fn eval(e: Expr, scope: Scope) -> i64 {
                 v = eval(body[i as u64], scope);
                 i = i + 1;
             }
-            scope.set(name, v);
+            scope.set(name.clone(), v);
             v
         }
         Seq(items) => {

@@ -55,10 +55,10 @@ Every DIFF and REJECT is explained; none points at the model.
 | Verdict | Count |
 |---|---|
 | UNSUP | 2948 (timeout ~330 at 3 s, `Vec.iter` 187, `env` 187, `Vec.filled` 104, `Vector` 87, closures, weak references, integer widths other than i64, hand-written `Hash`/`Ord` used outside an operator, impls chosen per instantiation) |
-| SAME | 2536 |
+| SAME | 2514 |
 | ORDER | 641 |
 | PARSE | 458 (`effect` items 84) |
-| V2-REJECT | 314 (index move 63, ref passed to owned param 55, Drop-type payload move 52, move out of ref 24, use after move) |
+| V2-REJECT | 336 (index move 63, Drop-type payload move 52, ref passed to owned param 51, move out of ref 22, a match arm yielding a ref beside an owned arm 21, ref returned where an owned value is expected 11, use after move) |
 | DIFF | 32: 22 differ in output, 8 are failed asserts (v2 exits 101, legacy 1; §10.1), 2 are legacy aborts (-6) the model runs to completion |
 | LEGACY-REJECT | 73 |
 | CRASH | 0 |
@@ -72,7 +72,7 @@ Under Rust's move-only rule for handle aggregates the V2-REJECT count is 505, of
 "move out of a shared place", 181 of them `Option[Handle]` (103 programs, 39 katas, from `a = n.next`).
 
 `corpus-verdicts.json` (per program verdict and reason) and `v2-reject-list.tsv` (corpus dir,
-legacy expectation, model reason; 17 of the 314 legacy already rejects) are in the review thread's
+legacy expectation, model reason; 17 of the 336 legacy already rejects) are in the review thread's
 shared folder `review/drop-model/`; regenerate with `corpus_run.py --json`.
 
 ## Limits

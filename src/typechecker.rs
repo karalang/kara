@@ -1179,6 +1179,11 @@ pub enum TypeErrorKind {
     /// never stronger (`docs/core-semantics.md` §4.7). Reported by `karac
     /// check` only while the v2 core is staged. `E0288`.
     ImplModeStrongerThanTrait,
+    /// A plain pattern binding would move a non-`Copy` part out of a
+    /// `shared` value or a type with a `Drop` body; it must be `ref name`
+    /// (`docs/core-semantics.md` §3.7, §4.6). Reported by `karac check`
+    /// only while the v2 core is staged. `E0289`.
+    MoveOutOfNoMovePlace,
     /// A `#[gpu]`-annotated function uses a type that is not GPU-compatible
     /// — a heap-allocated type (`String`, `Vec[T]`, `Map`/`Set`, …), an
     /// RC/`shared` reference type (`shared struct`, `Rc[T]`, `Arc[T]`,
@@ -1365,6 +1370,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::MainSignature
         | TypeErrorKind::AssignTargetNotPlace
         | TypeErrorKind::ImplModeStrongerThanTrait
+        | TypeErrorKind::MoveOutOfNoMovePlace
         | TypeErrorKind::CrossTaskUnsafeCapture
         | TypeErrorKind::LazyLockRuntimeCapture
         | TypeErrorKind::GpuNotSafe
@@ -1447,6 +1453,11 @@ pub struct TypeCheckResult {
     /// rejects a `Vec` whose element lacks `Clone` even though `Vec.clone()`
     /// resolves. Only the method-side predicate matches what `.clone()` does.
     pub clonable_expr_spans: FxHashSet<SpanKey>,
+    /// v2 core (strict commands only): initializers of `let u = x;` where
+    /// `x` is a `ref` binding. `ref T` is Copy (`docs/core-semantics.md`
+    /// §1.1), so the read copies the reference and moves nothing; the
+    /// pipeline drops a use-after-move whose consume site is one of these.
+    pub core_ref_copy_spans: FxHashSet<SpanKey>,
     /// Receiver `Vector[T, N]` type for each vector **instance**-method call
     /// (`reduce_*` / `dot` / `cross` / `select`), keyed by the method-call
     /// span, recorded as `(element, lane_count)`. A `MethodCall`'s span equals
@@ -2185,6 +2196,27 @@ pub struct TypeChecker<'a> {
     /// Set around the pattern check only, never across an arm BODY, so a
     /// nested `match` inside an arm is judged on its own scrutinee.
     pub(super) current_scrutinee_borrow_projection: bool,
+    /// v2 core (strict commands only): the scrutinee being destructured is a
+    /// place the function does not own — a projection off a `ref`, a view
+    /// (a bare `for` element, a `ref` binding) or an index. Its bindings are
+    /// `ref`s (`docs/core-semantics.md` §4.6), so binding a part moves
+    /// nothing. Set and restored beside
+    /// [`Self::current_scrutinee_borrow_projection`].
+    pub(super) current_scrutinee_core_borrowed: bool,
+    /// v2 core (strict commands only): while checking the parts of a
+    /// pattern over a `shared` value or a type with a `Drop` body, a
+    /// description of that type. A plain binding of a non-`Copy` part there
+    /// would move it out, which §3.7 forbids; it must be `ref name`.
+    pub(super) core_no_move_out: Vec<String>,
+    /// Set while a struct pattern's shorthand field (`S { f }`) is checked
+    /// as a synthetic binding, so the `ref` fix-it spells `f: ref f`.
+    pub(super) core_shorthand_field: bool,
+    /// v2 core (strict commands only): how many `shared` types the pattern
+    /// being checked has descended into. Above zero, every binding is a
+    /// `ref` (`docs/core-semantics.md` §4.6).
+    pub(super) core_shared_depth: usize,
+    /// See [`TypeCheckResult::core_ref_copy_spans`].
+    pub(super) core_ref_copy_spans: FxHashSet<SpanKey>,
     pub(super) errors: Vec<TypeError>,
     pub(super) warnings: Vec<TypeError>,
     pub(super) expr_types: FxHashMap<SpanKey, Type>,
@@ -2900,6 +2932,11 @@ impl<'a> TypeChecker<'a> {
             current_arm_body: None,
             current_arm_body_block: None,
             current_scrutinee_borrow_projection: false,
+            current_scrutinee_core_borrowed: false,
+            core_no_move_out: Vec::new(),
+            core_shorthand_field: false,
+            core_shared_depth: 0,
+            core_ref_copy_spans: FxHashSet::default(),
             errors: Vec::new(),
             warnings: Vec::new(),
             expr_types: FxHashMap::default(),
@@ -3258,6 +3295,7 @@ impl<'a> TypeChecker<'a> {
             warnings: self.warnings,
             expr_types: self.expr_types,
             clonable_expr_spans,
+            core_ref_copy_spans: self.core_ref_copy_spans,
             vector_method_receivers: self.vector_method_receivers,
             pointer_method_receiver_pointees: self.pointer_method_receiver_pointees,
             struct_info: self.env.structs,

@@ -227,6 +227,9 @@ pub struct Parser {
     /// onto [`crate::ast::Program::freeze_spans`] at the end. B-2026-08-01-33
     /// stage 3.
     pub(crate) freeze_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// `ref name` binding spans, moved onto
+    /// [`crate::ast::Program::ref_binding_spans`] at the end.
+    pub(crate) ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// Statement-position lint-level overrides, moved onto
     /// [`crate::ast::Program::stmt_lint_overrides`] at the end.
     pub(crate) stmt_lint_overrides:
@@ -367,6 +370,7 @@ impl Parser {
             frozen_consumed: false,
             frozen_self_consumed: false,
             freeze_spans: rustc_hash::FxHashSet::default(),
+            ref_binding_spans: rustc_hash::FxHashSet::default(),
             stmt_lint_overrides: rustc_hash::FxHashMap::default(),
             container_hashers: rustc_hash::FxHashMap::default(),
             allow_script_mode: true,
@@ -672,6 +676,7 @@ impl Parser {
             module_doc_comment,
             inner_attrs,
             freeze_spans: std::mem::take(&mut self.freeze_spans),
+            ref_binding_spans: std::mem::take(&mut self.ref_binding_spans),
             stmt_lint_overrides: std::mem::take(&mut self.stmt_lint_overrides),
             container_hashers: std::mem::take(&mut self.container_hashers),
             ..Program::default()

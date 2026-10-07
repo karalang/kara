@@ -17,6 +17,7 @@ mod types;
 pub fn format_program(program: &Program) -> String {
     let mut f = Formatter::new();
     f.freeze_spans = program.freeze_spans.clone();
+    f.ref_binding_spans = program.ref_binding_spans.clone();
     f.format_program(program);
     f.output
 }
@@ -92,6 +93,9 @@ pub(super) struct Formatter {
     /// rather than a program (`render_type_expr` and friends), where no `let`
     /// is reachable.
     pub(super) freeze_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// `ref name` pattern bindings, copied from `Program::ref_binding_spans`
+    /// for the same reason: the `ref` is not in the tree.
+    pub(super) ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
 }
 
 impl Formatter {
@@ -100,6 +104,7 @@ impl Formatter {
             output: String::new(),
             indent: 0,
             freeze_spans: rustc_hash::FxHashSet::default(),
+            ref_binding_spans: rustc_hash::FxHashSet::default(),
         }
     }
 

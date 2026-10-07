@@ -820,6 +820,15 @@ pub struct Program {
     /// existing `frozen_alias_bindings` hint, so codegen learns nothing new.
     /// Empty for every program that does not use the statement.
     pub freeze_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// `ref name` pattern bindings (no `@`), keyed by the binding pattern's
+    /// span, which covers the name only. Set by the PARSER and kept beside
+    /// the tree for the same reason as [`Self::freeze_spans`]: the pattern
+    /// stays an ordinary `PatternKind::Binding`, so legacy `build` / `run`
+    /// treat it exactly as before (they already infer a borrow for a binding
+    /// the arm only reads), and only the v2 core's checks (`karac check`)
+    /// read the mark: such a binding borrows its part and never moves it
+    /// (`docs/core-semantics.md` §4.6).
+    pub ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// The hasher each `Map[K, V, H]` / `Set[T, H]` type expression named
     /// (design.md § `Hash` and `Hasher`; B-2026-08-21-6), keyed by the
     /// container path's own span. Set by the PARSER, which also REMOVES the

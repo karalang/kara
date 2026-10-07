@@ -4742,7 +4742,7 @@ impl<'a> super::TypeChecker<'a> {
     /// miss the self-hosted compiler's `Vec[TypeExpr]` entirely. Checking the
     /// declaration covers both spellings, and the declaration is the thing the
     /// rule actually cares about.
-    fn name_is_shared_decl(&self, name: &str) -> bool {
+    pub(super) fn name_is_shared_decl(&self, name: &str) -> bool {
         // Through the ENV, not `program.items`: the items list is this module's
         // only, and a shared type is routinely declared elsewhere — the
         // self-hosted compiler's `TypeExpr` lives in `ast.kara` while the reads
@@ -5060,6 +5060,10 @@ impl<'a> super::TypeChecker<'a> {
                 let _ = args;
                 true
             }
+            // v2 core §6.1: a `Result` holding a handle is move-only.
+            Type::Named { name, .. } if name == "Result" && self.cli_lint_overrides.strict_core => {
+                false
+            }
             Type::Named { name, args } if matches!(name.as_str(), "Option" | "Result") => {
                 !args.is_empty()
                     && args.iter().any(|a| self.copy_is_only_an_rc_retain(a))
@@ -5161,6 +5165,38 @@ impl<'a> super::TypeChecker<'a> {
     /// the other must not call that copy a partial move of the original.
     pub(super) fn projection_rooted_in_borrow(&self, value: &Expr) -> bool {
         self.rooted_in_borrow(value, false)
+    }
+
+    /// v2 core §4.6: is this scrutinee a place the function does not own,
+    /// so that its pattern bindings are `ref`s? A projection off a borrow, a
+    /// view, or an index (or a projection of one). Answers `false` outside
+    /// the strict commands, which keep legacy's binding rules.
+    pub(super) fn scrutinee_core_borrowed(&self, value: &Expr) -> bool {
+        if !self.cli_lint_overrides.strict_core {
+            return false;
+        }
+        let mut root = value;
+        while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
+            &root.kind
+        {
+            // A place reached through a `shared` handle counts as borrowed.
+            if let Some(ty) = self.expr_types.get(&SpanKey::from_span(&object.span)) {
+                let ty = match ty {
+                    Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                    other => other,
+                };
+                if matches!(ty, Type::Shared(_))
+                    || matches!(ty, Type::Named { name, .. } if self.name_is_shared_decl(name))
+                {
+                    return true;
+                }
+            }
+            root = object;
+        }
+        matches!(root.kind, ExprKind::Index { .. })
+            || (matches!(root.kind, ExprKind::SelfValue)
+                && self.current_fn_ref_params.contains("self"))
+            || self.rooted_in_borrow(value, true)
     }
 
     /// B-2026-09-27-69 — [`Self::projection_rooted_in_borrow`] widened to a
@@ -5340,17 +5376,18 @@ impl<'a> super::TypeChecker<'a> {
         // of a borrowed place, which is an error. Say that, rather than
         // describe a copy the core never makes.
         if self.cli_lint_overrides.strict_core {
-            let what = if matches!(value.kind, ExprKind::Identifier(_)) {
-                "an element out of a `for` loop over a borrowed collection"
+            message = if let ExprKind::Identifier(n) = &value.kind {
+                // §4.6: a bare `for` element and a `ref` (or borrowed-place)
+                // pattern binding are both `ref`s; only
+                // `for x in c.into_iter()` moves the elements out.
+                format!(
+                    "cannot move '{n}': it borrows its value (a bare `for` element or a \
+                     `ref` pattern binding). For a `for` element, iterate with \
+                     `.into_iter()` to move the elements out of the collection"
+                )
             } else {
-                "a non-`Copy` value out of a borrowed place"
+                "cannot move a non-`Copy` value out of a borrowed place".to_string()
             };
-            message = format!("cannot move {what}");
-            // §4.6: only `for x in c.into_iter()` moves the elements out.
-            if matches!(value.kind, ExprKind::Identifier(_)) {
-                message += ". A bare `for` binds each element as a `ref`; iterate with \
-                            `.into_iter()` to move the elements out of the collection";
-            }
             message += if has_clone {
                 ". Write `.clone()` to take a copy, or keep using it in place"
             } else {
@@ -6246,7 +6283,21 @@ impl<'a> super::TypeChecker<'a> {
                 self.reject_index_move_non_copy(value, &expected_ty);
                 // B-2026-09-01-4 — its sibling one level up: the same read
                 // through a BORROW rather than through a container index.
-                self.warn_borrow_projection_copy(value, &expected_ty);
+                // v2 core §4.6: destructuring a borrowed place moves nothing
+                // (its bindings are `ref`s), so under the strict commands only
+                // a plain binding of the whole value is a move.
+                // §1.1: `ref T` is Copy, so `let u = x;` with `x` a `ref`
+                // (view) binding copies the reference and `u` is a `ref` too;
+                // only an owned annotation makes it a move.
+                let ref_copy = self.cli_lint_overrides.strict_core
+                    && ty.is_none()
+                    && matches!(pattern.kind, PatternKind::Binding(_))
+                    && matches!(&value.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n));
+                if !self.cli_lint_overrides.strict_core
+                    || (matches!(pattern.kind, PatternKind::Binding(_)) && !ref_copy)
+                {
+                    self.warn_borrow_projection_copy(value, &expected_ty);
+                }
                 self.warn_partial_move_of_drop_struct(value, &expected_ty);
                 // B-2026-09-04-15 — the RC-owner spelling of the same shape.
                 self.reject_shared_field_move(value, &expected_ty);
@@ -6284,6 +6335,13 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
                 self.bind_pattern_types(pattern, &expected_ty);
+                if ref_copy {
+                    if let PatternKind::Binding(n) = &pattern.kind {
+                        self.local_scope.mark_view(n);
+                    }
+                    self.core_ref_copy_spans
+                        .insert(SpanKey::from_span(&value.span));
+                }
                 // B-2026-09-24-1 — a plain re-bind of a borrowed String
                 // (`let t = r;` with `r: ref String`, a `Some(w)` payload, or
                 // `let x = ref v[0]`) is `ref String`, which the `let`-route
@@ -6326,10 +6384,14 @@ impl<'a> super::TypeChecker<'a> {
                     let dispatch_ty = dispatch_ty.clone();
                     // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
                     let scrut_bp = self.projection_rooted_in_borrow(value);
+                    let scrut_core = self.scrutinee_core_borrowed(value);
+                    let prev_core =
+                        std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
                     let prev_bp =
                         std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
                     self.check_pattern_against(pattern, &dispatch_ty, mode);
                     self.current_scrutinee_borrow_projection = prev_bp;
+                    self.current_scrutinee_core_borrowed = prev_core;
                 }
             }
             StmtKind::LetUninit {
@@ -6394,10 +6456,14 @@ impl<'a> super::TypeChecker<'a> {
                 let dispatch_ty = dispatch_ty.clone();
                 // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
                 let scrut_bp = self.projection_rooted_in_borrow(value);
+                let scrut_core = self.scrutinee_core_borrowed(value);
+                let prev_core =
+                    std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
                 let prev_bp =
                     std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
                 self.check_pattern_against(pattern, &dispatch_ty, mode);
                 self.current_scrutinee_borrow_projection = prev_bp;
+                self.current_scrutinee_core_borrowed = prev_core;
             }
             StmtKind::Defer { body } => {
                 let prev = self.in_defer;

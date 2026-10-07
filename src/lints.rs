@@ -425,6 +425,10 @@ pub struct CliLintOverrides {
     /// as a move out of a borrow (a borrowed `match` scrutinee is not one,
     /// `docs/core-semantics.md` §4.6) and how it words the error.
     pub strict_core: bool,
+    /// A legacy command reusing the check driver (the non-`llvm` `karac
+    /// build` fallback). `Pipeline::strict_core` leaves the v2 core rules
+    /// off for it, so `build` keeps tolerating what legacy accepts.
+    pub legacy_core: bool,
 }
 
 impl CliLintOverrides {

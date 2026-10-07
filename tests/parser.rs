@@ -8072,17 +8072,14 @@ fn test_ref_at_binding_formatter_roundtrip() {
 }
 
 #[test]
-fn test_ref_without_at_binding_rejected() {
-    // `ref` in a pattern is ONLY valid on an `@` binding — a bare
-    // `ref x` arm gets the focused rejection (binding modes otherwise
-    // flow from the scrutinee type, design.md § Match Arm Binding
-    // Modes).
+fn test_ref_without_at_binding_parses() {
+    // v2 core §4.6: `ref name` borrows the part instead of moving it, so a
+    // bare `ref x` pattern is a binding (it used to be rejected as valid
+    // only on an `@` binding).
     let (_, errors) = parse_with_errors("fn f(o: Option[i32]) -> i32 { match o { ref x => 0 } }");
     assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("only valid on an '@' binding")),
-        "expected the focused ref-without-@ rejection, got: {errors:?}"
+        errors.is_empty(),
+        "expected `ref x` to parse, got: {errors:?}"
     );
 }
 

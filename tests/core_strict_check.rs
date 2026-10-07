@@ -31,6 +31,11 @@ fn fixture(tag: &str, src: &str) -> (PathBuf, PathBuf) {
 
 /// `check` must fail with `expect` in its output; `fix` must then make it pass.
 fn rejected_then_fixed(tag: &str, src: &str, expect: &str) {
+    rejected_then_fixed_by(tag, src, expect, ".clone()");
+}
+
+/// [`rejected_then_fixed`], where the fix must write `edit`.
+fn rejected_then_fixed_by(tag: &str, src: &str, expect: &str, edit: &str) {
     let (dir, path) = fixture(tag, src);
     let out = karac().arg("check").arg(&path).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
@@ -44,7 +49,10 @@ fn rejected_then_fixed(tag: &str, src: &str, expect: &str) {
         "{tag}: check must pass after `karac fix`; source now:\n{fixed}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(fixed.contains(".clone()"), "{tag}: fix must clone: {fixed}");
+    assert!(
+        fixed.contains(edit),
+        "{tag}: fix must write `{edit}`: {fixed}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -367,5 +375,182 @@ fn passing_an_into_iter_element_by_value_is_accepted() {
                  println(render(s));\n\
              }\n\
          }\n",
+    );
+}
+
+#[test]
+fn a_result_holding_a_handle_moves() {
+    // §6.1: only `Option`s and tuples of handles copy by counting; a
+    // `Result` holding one is move-only, so reusing it is a use after move.
+    // (`Result` has no `.clone()` yet, so there is no fix to apply.)
+    let (dir, path) = fixture(
+        "result-handle",
+        "shared struct Node { v: i64 }\n\
+         fn take(r: Result[Node, i64]) -> i64 { match r { Ok(n) => n.v, Err(e) => e } }\n\
+         fn main() {\n\
+             let r: Result[Node, i64] = Ok(Node { v: 1 });\n\
+             let a = take(r);\n\
+             println(a + take(r));\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must reject: {err}");
+    assert!(err.contains("value 'r' moved here"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_option_or_tuple_of_handles_copies_by_counting() {
+    accepted(
+        "option-handle",
+        "shared struct Node { v: i64, next: Option[Node] }\n\
+         fn take(o: Option[Node]) -> i64 { match o { Some(n) => n.v, None => 0 } }\n\
+         fn pair(p: (Node, i64)) -> i64 { p.1 }\n\
+         fn main() {\n\
+             let o: Option[Node] = Some(Node { v: 1, next: None });\n\
+             let a = take(o);\n\
+             let p = (Node { v: 2, next: None }, 3);\n\
+             let b = pair(p);\n\
+             println(a + take(o) + b + pair(p));\n\
+         }\n",
+    );
+}
+
+#[test]
+fn binding_a_part_of_a_drop_or_shared_value_must_borrow() {
+    // §3.7 / §4.6: a plain binding would move the part out of a value the
+    // pattern may not take apart; `karac fix` writes `ref`.
+    rejected_then_fixed_by(
+        "drop-payload",
+        "struct R { id: i64 }\n\
+         enum T { Pair(String, i64), Leaf(R) }\n\
+         impl Drop for T { fn drop(mut ref self) { println(\"dT\"); } }\n\
+         fn main() {\n\
+             let t = T.Pair(\"x\".to_string(), 3);\n\
+             match t {\n\
+                 T.Pair(s, n) => println(f\"{s} {n}\"),\n\
+                 T.Leaf(r) => println(f\"{r.id}\"),\n\
+             }\n\
+         }\n",
+        "which has a `Drop` body",
+        "T.Pair(ref s, n)",
+    );
+}
+
+#[test]
+fn a_shared_scrutinee_binds_refs() {
+    // §4.6: a `shared` scrutinee counts as a `ref` scrutinee. Reading a
+    // part needs no `ref`; moving it is the error, and `.clone()` the fix.
+    accepted(
+        "shared-payload-read",
+        "shared enum H { Z(Vec[String]), N }\n\
+         fn main() {\n\
+             let h = H.Z([\"a\".to_string()]);\n\
+             match h { H.Z(v) => println(f\"{v.len()}\"), H.N => println(\"n\") }\n\
+         }\n",
+    );
+    rejected_then_fixed(
+        "shared-payload-moved",
+        "shared enum E { S(String), Other }\n\
+         fn get(e: E) -> String {\n\
+             match e { S(s) => s, Other => \"other\".to_string() }\n\
+         }\n\
+         fn main() { println(get(E.S(\"x\".to_string()))); }\n",
+        "cannot move 's'",
+    );
+}
+
+#[test]
+fn a_ref_binding_cannot_be_moved() {
+    // The `ref` binding borrows; handing it to a by-value parameter is a
+    // move out of a borrow, and `karac fix` clones it.
+    rejected_then_fixed(
+        "ref-binding-moved",
+        "shared enum H { Z(Vec[String]), N }\n\
+         fn eat(v: Vec[String]) -> i64 { v.len() }\n\
+         fn main() {\n\
+             let h = H.Z([\"a\".to_string()]);\n\
+             match h { H.Z(ref v) => println(f\"{eat(v)}\"), H.N => println(\"n\") }\n\
+         }\n",
+        "cannot move 'v'",
+    );
+}
+
+#[test]
+fn a_ref_binding_runs_and_formats_under_legacy() {
+    // `ref name` is an ordinary binding to `build` and `run`, and
+    // `karac fmt` keeps the `ref`.
+    let (dir, path) = fixture(
+        "ref-binding-legacy",
+        "enum T { Pair(String, i64), E }\n\
+         fn main() {\n\
+             let t = T.Pair(\"x\".to_string(), 3);\n\
+             match t {\n\
+                 T.Pair(ref s, n) => println(f\"{s} {n}\"),\n\
+                 T.E => println(\"e\"),\n\
+             }\n\
+         }\n",
+    );
+    let out = karac()
+        .arg("run")
+        .arg("--interp")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "x 3\n");
+    let out = karac().arg("fmt").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let formatted = std::fs::read_to_string(&path).unwrap();
+    assert!(formatted.contains("T.Pair(ref s, n)"), "{formatted}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn bindings_over_a_borrowed_receiver_or_view_borrow() {
+    // §4.6: `match self` under `ref self` and a destructuring `let` of a
+    // `ref` binding bind `ref`s; reading them moves nothing, even through a
+    // type with a `Drop` body.
+    accepted(
+        "borrowed-receiver",
+        "enum Es { A(String), B }\n\
+         impl Drop for Es { fn drop(mut ref self) { println(\"dEs\"); } }\n\
+         impl Es { fn len(ref self) -> i64 { match self { Es.A(s) => s.len(), Es.B => 0 } } }\n\
+         struct P { a: String, b: String }\n\
+         shared enum H { W(P), N }\n\
+         fn main() {\n\
+             let e = Es.A(\"x\".to_string());\n\
+             let h = H.W(P { a: \"a\".to_string(), b: \"b\".to_string() });\n\
+             match h { H.W(p) => { let P { a, b } = p; println(f\"{a}{b}\"); } H.N => {} }\n\
+             println(e.len());\n\
+         }\n",
+    );
+}
+
+#[test]
+fn copying_a_ref_binding_copies_the_reference() {
+    // §1.1: `ref T` is Copy. `let u = x;` with `x` a `ref` binding gives a
+    // second `ref`; moving `u` on into an owned place is still C3.
+    accepted(
+        "ref-copy",
+        "shared enum Sh { S((String, i64)), N }\n\
+         fn main() {\n\
+             let keep = Sh.S((\"a\".to_string(), 7));\n\
+             match keep { Sh.S(x) => { let u = x; println(f\"{u.0}{x.1}\"); } Sh.N => {} }\n\
+         }\n",
+    );
+    rejected_then_fixed(
+        "ref-copy-moved",
+        "shared enum Sh { S(String), N }\n\
+         fn eat(s: String) -> i64 { s.len() }\n\
+         fn main() {\n\
+             let keep = Sh.S(\"a\".to_string());\n\
+             match keep { Sh.S(x) => { let u = x; println(eat(u)); } Sh.N => {} }\n\
+         }\n",
+        "cannot move 'u'",
     );
 }

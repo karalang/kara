@@ -1136,6 +1136,49 @@ pub(crate) fn type_is_deeply_owned(ty: &Type) -> bool {
     }
 }
 
+thread_local! {
+    static CORE_RULES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While alive, the copy predicates below follow the v2 core's rules
+/// (`docs/core-semantics.md` §6.1) instead of legacy's: a `Result` holding a
+/// handle is move-only. Only the strict commands (`check`, `fix`) set it, so
+/// `build` and `run` keep legacy's copy semantics.
+pub(crate) struct CoreRulesGuard(bool);
+
+impl CoreRulesGuard {
+    pub(crate) fn new(on: bool) -> Self {
+        CoreRulesGuard(CORE_RULES.with(|c| c.replace(on)))
+    }
+}
+
+impl Drop for CoreRulesGuard {
+    fn drop(&mut self) {
+        CORE_RULES.with(|c| c.set(self.0));
+    }
+}
+
+fn core_rules() -> bool {
+    CORE_RULES.with(|c| c.get())
+}
+
+/// Whether `ty` holds a reference-counted handle anywhere a copy would
+/// have to count it.
+fn contains_handle(ty: &Type, tc: &TypeCheckResult) -> bool {
+    match ty {
+        Type::Shared(_) | Type::Rc(_) | Type::Arc(_) => true,
+        Type::Tuple(types) => types.iter().any(|t| contains_handle(t, tc)),
+        Type::Named { name, args } => {
+            tc.enum_info
+                .get(name)
+                .is_some_and(|info| info.is_shared || info.is_par)
+                || (matches!(name.as_str(), "Option" | "Result")
+                    && args.iter().any(|a| contains_handle(a, tc)))
+        }
+        _ => false,
+    }
+}
+
 fn is_copy_type_basic(ty: &Type) -> bool {
     matches!(
         ty,
@@ -1285,6 +1328,11 @@ pub(crate) fn is_copy_type_in_scope(
         Type::Function { .. } => true,
         Type::Named { name, args } => {
             if matches!(name.as_str(), "Option" | "Result") {
+                // §6.1: only `Option`s and tuples of handles count; a
+                // `Result` holding one moves.
+                if name == "Result" && core_rules() && args.iter().any(|a| contains_handle(a, tc)) {
+                    return false;
+                }
                 return args
                     .iter()
                     .all(|a| is_copy_type_in_scope(a, tc, copy_params));

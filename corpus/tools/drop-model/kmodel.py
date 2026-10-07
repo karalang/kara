@@ -748,6 +748,16 @@ class Model:
             is_err = is_err_result(v)
         except Ret as r:
             v, is_err = r.v, r.is_err
+        if isinstance(v, Ref) and not frame.ret_ref and fdef.ret is not None and not self.generic_ret(fdef):
+            # an owned return type: a reference flowing out is read (Copy), counted (handle) or a C3 move
+            target = self.deref_value(v)
+            if isinstance(target, Handle):
+                target.box.count += 1
+                v = Handle(target.box)
+            elif self.is_copy(target):
+                v = self.copy_value(target)
+            else:
+                raise ModelError("move out of a ref place (C3): a reference returned where an owned value is expected")
         self.exit_scope(ps, is_err)
         self.frames.pop()
         refs = [x for x in [recv] + list(args) if isinstance(x, Ref)]
@@ -797,6 +807,29 @@ class Model:
             else:
                 out.append(self.borrow(a, prm.mode == "mutref"))
         return out
+
+    def store_owned(self, v, ty, what):
+        """A value stored into an owned field or payload: a reference is read (Copy), counted (handle) or C3."""
+        if not isinstance(v, Ref):
+            return v
+        if ty is not None and (ty[0] in ("ref", "mutref") or ty[0] != "app"
+                               or (len(ty[1]) == 1 and ty[1] not in self.p.structs and ty[1] not in self.p.enums)):
+            return v  # a declared reference, a view, or a generic parameter
+        target = self.deref_value(v)
+        if isinstance(target, Handle):
+            target.box.count += 1
+            return Handle(target.box)
+        if self.is_copy(target):
+            return self.copy_value(target)
+        raise ModelError(f"move out of a ref place (C3): a reference stored into an owned {what}")
+
+    def generic_ret(self, fdef):
+        t = fdef.ret
+        if t is None or t[0] != "app":
+            return t is not None and t[0] not in ("tuple",)
+        if t[1] in fdef.generics:
+            return True
+        return len(t[1]) == 1 and t[1] not in self.p.structs and t[1] not in self.p.enums
 
     def generic_param(self, fdef, prm):
         t = prm.ty
@@ -931,15 +964,17 @@ class Model:
             ed = self.p.enums.get(t)
             if ed is None:
                 raise Unsupported(f"struct literal {name}")
-            vals = {f: self.value(x) for f, x in fs}
+            ftys = dict(ed.variants[var])
+            vals = {f: self.store_owned(self.value(x), ftys.get(f), "enum payload") for f, x in fs}
             order = [f for f, _ in ed.variants[var]]
             return self.wrap_shared(Enum(t, var, {f: vals[f] for f in order}))
         sd = self.p.structs.get(name)
         if sd is None:
             raise Unsupported(f"struct literal of unknown type {name}")
         vals = {}
+        ftys = dict(sd.fields)
         for f, x in fs:  # written order (§8.1)
-            vals[f] = self.value(x)
+            vals[f] = self.store_owned(self.value(x), ftys.get(f), "struct field")
         missing = [f for f, _ in sd.fields if f not in vals]
         if missing:
             raise Unsupported(f"missing fields {missing}")
@@ -1314,6 +1349,15 @@ class Model:
 
     LITERALS = ("int", "float", "bool", "str", "char", "unit")
 
+    def owned_expr(self, e):
+        """An arm body that plainly yields an owned value: a literal, an f-string, a struct literal or a clone."""
+        if e[0] == "block":
+            t = e[1].tail
+            return t is not None and self.owned_expr(t)
+        if e[0] in self.LITERALS or e[0] in ("fstr", "struct", "array", "tuple"):
+            return True
+        return e[0] == "mcall" and e[2] in ("to_string", "clone", "to_owned") and not e[3]
+
     def e_match(self, e):
         _, scrut, arms = e
         c, p, b = self.resolve_or_temp(scrut)
@@ -1343,11 +1387,19 @@ class Model:
                 self.exit_scope(sc, False)
                 self.frame.scopes.pop()
                 raise
-            if isinstance(v, Ref) and any(b[0] in self.LITERALS for _, _, b in arms):
-                # arms unify to the value type (a literal arm is not a reference): read a Copy referent
+            if isinstance(v, Ref) and any(self.owned_expr(b) for _, _, b in arms):
+                # arms unify to the value type (another arm is plainly owned): a Copy referent is read,
+                # anything else would move out of the reference (C3)
                 inner = self.deref_value(v)
-                if self.is_copy(inner):
+                if isinstance(inner, Handle):
+                    inner.box.count += 1
+                    v = Handle(inner.box)
+                elif self.is_copy(inner):
                     v = self.copy_value(inner)
+                else:
+                    self.exit_scope(sc, False)
+                    self.frame.scopes.pop()
+                    raise ModelError("move out of a ref place (C3): a match arm yields a reference where another yields an owned value")
             self.exit_scope(sc, False)
             self.frame.scopes.pop()
             return v
@@ -1752,7 +1804,10 @@ class Model:
                     t = self.frame.self_type
                 ed = self.p.enums.get(t)
                 if ed is not None and m in ed.variants:
-                    return self.wrap_shared(Enum(t, m, [self.value(a) for a in args]))
+                    tys = ed.variants[m] or []
+                    vals = [self.value(a) for a in args]
+                    vals = [self.store_owned(x, tys[i] if i < len(tys) else None, "enum payload") for i, x in enumerate(vals)]
+                    return self.wrap_shared(Enum(t, m, vals))
                 if t == "Option" and m == "Some":
                     return some(self.value(args[0]))
                 if t == "Result" and m in ("Ok", "Err"):

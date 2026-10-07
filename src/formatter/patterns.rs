@@ -9,7 +9,15 @@ impl super::Formatter {
     pub(super) fn format_pattern(&mut self, pat: &Pattern) {
         match &pat.kind {
             PatternKind::Wildcard => self.write_str("_"),
-            PatternKind::Binding(name) => self.write_ident(name),
+            PatternKind::Binding(name) => {
+                if self
+                    .ref_binding_spans
+                    .contains(&crate::resolver::SpanKey::from_span(&pat.span))
+                {
+                    self.write_str("ref ");
+                }
+                self.write_ident(name)
+            }
             PatternKind::Literal(lit) => self.format_literal_pattern(lit),
             PatternKind::RangePattern {
                 start,

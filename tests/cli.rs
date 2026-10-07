@@ -31260,11 +31260,11 @@ fn ownership_errors_gate_build_and_check_identically() {
         "check must reject use after move: {}",
         String::from_utf8_lossy(&check.stderr)
     );
-    // Without the llvm feature `build` falls back to `check`, so it rejects too.
-    assert_eq!(
+    // Without the llvm feature `build` falls back to a type check, which
+    // keeps legacy's rules too.
+    assert!(
         build.status.success(),
-        cfg!(feature = "llvm"),
-        "legacy build must still accept use after move (when it can build): {}",
+        "legacy build must still accept use after move: {}",
         String::from_utf8_lossy(&build.stderr)
     );
     let _ = std::fs::remove_dir_all(&tmp);

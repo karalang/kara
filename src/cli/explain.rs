@@ -514,6 +514,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // B-2026-10-04-61 — `f() = v`, `(a, b) = (b, a)`, `a + 1 = v`.
     ("E0287", ty("AssignTargetNotPlace", None)),
     ("E0288", ty("ImplModeStrongerThanTrait", None)),
+    ("E0289", ty("MoveOutOfNoMovePlace", None)),
     (
         "E0268",
         ty("StringNotIndexable", Some(DiagnosticClass::TypeMismatch)),

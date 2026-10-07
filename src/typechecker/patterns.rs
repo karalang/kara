@@ -191,9 +191,12 @@ impl<'a> super::TypeChecker<'a> {
             .replace(std::rc::Rc::new(then_block.clone()));
         // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
         let scrut_bp = self.projection_rooted_in_borrow(value);
+        let scrut_core = self.scrutinee_core_borrowed(value);
+        let prev_core = std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
         let prev_bp = std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
         self.check_pattern_against(pattern, &dispatch_ty, mode);
         self.current_scrutinee_borrow_projection = prev_bp;
+        self.current_scrutinee_core_borrowed = prev_core;
         self.current_arm_body_block = prev_blk;
         // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
         if self.block_materializes_scrutinee_copy(pattern, then_block) {
@@ -255,10 +258,14 @@ impl<'a> super::TypeChecker<'a> {
                 .replace(std::rc::Rc::new(arm.body.clone()));
             // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
             let scrut_bp = self.projection_rooted_in_borrow(scrutinee);
+            let scrut_core = self.scrutinee_core_borrowed(scrutinee);
+            let prev_core =
+                std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
             let prev_bp =
                 std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
             self.check_pattern_against(&arm.pattern, &dispatch_ty, mode);
             self.current_scrutinee_borrow_projection = prev_bp;
+            self.current_scrutinee_core_borrowed = prev_core;
             self.current_arm_body = prev_arm_body;
             materializes |= self.arm_materializes_scrutinee_copy(arm);
             scrutinee_mismatch |= self.errors[errs_before..]
@@ -285,6 +292,12 @@ impl<'a> super::TypeChecker<'a> {
             // with a Block body and is covered there instead; both are the same
             // value position and must answer alike.
             self.warn_partial_move_of_drop_struct(&arm.body, expected);
+            // v2 core §3.7: a bare arm body that hands back a `ref`
+            // binding moves out of a borrow (a braced body's tail is checked
+            // by the block).
+            if self.cli_lint_overrides.strict_core && !matches!(arm.body.kind, ExprKind::Block(_)) {
+                self.warn_borrow_projection_copy(&arm.body, expected);
+            }
             if scrut_borrows_an_element {
                 self.reject_consuming_arm_binding_out_of_index(&dispatch_ty, arm);
             }
@@ -597,10 +610,14 @@ impl<'a> super::TypeChecker<'a> {
                 .replace(std::rc::Rc::new(arm.body.clone()));
             // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
             let scrut_bp = self.projection_rooted_in_borrow(scrutinee);
+            let scrut_core = self.scrutinee_core_borrowed(scrutinee);
+            let prev_core =
+                std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
             let prev_bp =
                 std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
             self.check_pattern_against(&arm.pattern, &dispatch_ty, mode);
             self.current_scrutinee_borrow_projection = prev_bp;
+            self.current_scrutinee_core_borrowed = prev_core;
             self.current_arm_body = prev_arm_body;
             materializes |= self.arm_materializes_scrutinee_copy(arm);
             scrutinee_mismatch |= self.errors[errs_before..]
@@ -631,6 +648,12 @@ impl<'a> super::TypeChecker<'a> {
             };
             // The synth-mode twin of the check-mode arm hook above.
             self.warn_partial_move_of_drop_struct(&arm.body, &arm_ty);
+            // v2 core §3.7: a bare arm body that hands back a `ref`
+            // binding moves out of a borrow (a braced body's tail is checked
+            // by the block).
+            if self.cli_lint_overrides.strict_core && !matches!(arm.body.kind, ExprKind::Block(_)) {
+                self.warn_borrow_projection_copy(&arm.body, &arm_ty);
+            }
             if scrut_borrows_an_element {
                 self.reject_consuming_arm_binding_out_of_index(&dispatch_ty, arm);
             }
@@ -1103,8 +1126,23 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     self.report_at_binding_double_consume(name, &pattern.span);
                 }
+                self.reject_core_move_out_binding(name, &pattern.span, expected, mode);
                 let binding_ty = mode.wrap_binding_ty(expected.clone());
                 self.local_scope.insert(name.clone(), binding_ty);
+                // v2 core §4.6: a `ref name` binding, or any binding over a
+                // place the function does not own, borrows its part; moving
+                // it is §3.7's error, which the view rules report.
+                if self.cli_lint_overrides.strict_core
+                    && matches!(mode, ScrutineeMode::Owned)
+                    && (self.current_scrutinee_core_borrowed
+                        || self.core_shared_depth > 0
+                        || self
+                            .program
+                            .ref_binding_spans
+                            .contains(&SpanKey::from_span(&pattern.span)))
+                {
+                    self.local_scope.mark_view(name);
+                }
                 self.record_pattern_binding_borrow_mode(&pattern.span, mode, expected);
                 self.record_pattern_binding_surface_types(pattern, expected);
             }
@@ -1163,6 +1201,14 @@ impl<'a> super::TypeChecker<'a> {
                                 body.as_deref(),
                                 mode,
                             );
+                            let no_move_out = self.core_no_move_out_reason(name, mode);
+                            if let Some(reason) = &no_move_out {
+                                self.core_no_move_out.push(reason.clone());
+                            }
+                            let into_shared = self.core_enters_shared(name, mode);
+                            if into_shared {
+                                self.core_shared_depth += 1;
+                            }
                             for (pat, ty) in patterns.iter().zip(field_types.iter()) {
                                 let resolved = if subs.is_empty() {
                                     ty.clone()
@@ -1170,6 +1216,12 @@ impl<'a> super::TypeChecker<'a> {
                                     substitute_type_params(ty, &subs)
                                 };
                                 self.check_pattern_against(pat, &resolved, mode);
+                            }
+                            if no_move_out.is_some() {
+                                self.core_no_move_out.pop();
+                            }
+                            if into_shared {
+                                self.core_shared_depth -= 1;
                             }
                             return;
                         }
@@ -1346,6 +1398,14 @@ impl<'a> super::TypeChecker<'a> {
                         .collect()
                 });
 
+                let no_move_out = self.core_no_move_out_reason(&struct_name, mode);
+                if let Some(reason) = &no_move_out {
+                    self.core_no_move_out.push(reason.clone());
+                }
+                let into_shared = self.core_enters_shared(&struct_name, mode);
+                if into_shared {
+                    self.core_shared_depth += 1;
+                }
                 if let Some(ft) = field_types {
                     for field in fields {
                         let field_ty = ft
@@ -1380,7 +1440,9 @@ impl<'a> super::TypeChecker<'a> {
                                 kind: PatternKind::Binding(field.name.clone()),
                                 span: field.span,
                             };
+                            self.core_shorthand_field = true;
                             self.check_pattern_against(&synthetic, &field_ty, mode);
+                            self.core_shorthand_field = false;
                         }
                         // B-2026-09-30-14 — a struct-pattern LEAF typed by a
                         // bare generic parameter (`v` in `G { v, .. }` over
@@ -1403,6 +1465,12 @@ impl<'a> super::TypeChecker<'a> {
                             );
                         }
                     }
+                }
+                if no_move_out.is_some() {
+                    self.core_no_move_out.pop();
+                }
+                if into_shared {
+                    self.core_shared_depth -= 1;
                 }
             }
             PatternKind::Tuple(patterns) => {
@@ -1540,6 +1608,94 @@ impl<'a> super::TypeChecker<'a> {
     /// PascalCase name is a unit-variant *pattern* (which the interpreter's
     /// structural matcher treats it as) rather than a fresh binding.
     /// (B-2026-07-17-6.)
+    /// v2 core §3.7: the description of `type_name` when it is a type no
+    /// part may be moved out of — a `shared` type, or one with a `Drop`
+    /// body — and the pattern destructures an owned value of it. `None`
+    /// outside the strict commands.
+    fn core_no_move_out_reason(&self, type_name: &str, mode: ScrutineeMode) -> Option<String> {
+        if !self.cli_lint_overrides.strict_core
+            || !matches!(mode, ScrutineeMode::Owned)
+            || self.current_scrutinee_core_borrowed
+            || self.core_shared_depth > 0
+            || self.name_is_shared_decl(type_name)
+        {
+            return None;
+        }
+        let has_drop =
+            self.env.impls.iter().any(|imp| {
+                imp.trait_name.as_deref() == Some("Drop") && imp.target_type == type_name
+            });
+        has_drop.then(|| format!("'{type_name}', which has a `Drop` body"))
+    }
+
+    /// v2 core §4.6: destructuring a `shared` value counts as a `ref`
+    /// scrutinee, so every binding under it borrows its part (and moving one
+    /// is §3.7's error, which the view rules report).
+    fn core_enters_shared(&self, type_name: &str, mode: ScrutineeMode) -> bool {
+        self.cli_lint_overrides.strict_core
+            && matches!(mode, ScrutineeMode::Owned)
+            && !self.current_scrutinee_core_borrowed
+            && self.name_is_shared_decl(type_name)
+    }
+
+    /// v2 core §3.7 / §4.6: a plain binding of a non-`Copy` part of a type
+    /// with a `Drop` body would move that part out. It must borrow instead (`ref name`); `karac fix` inserts the
+    /// `ref`.
+    fn reject_core_move_out_binding(
+        &mut self,
+        name: &str,
+        span: &Span,
+        ty: &Type,
+        mode: ScrutineeMode,
+    ) {
+        let Some(reason) = self.core_no_move_out.last().cloned() else {
+            return;
+        };
+        if !matches!(mode, ScrutineeMode::Owned)
+            || self
+                .program
+                .ref_binding_spans
+                .contains(&SpanKey::from_span(span))
+            || matches!(
+                ty,
+                Type::Error
+                    | Type::Never
+                    | Type::Ref(_)
+                    | Type::MutRef(_)
+                    | Type::Slice { .. }
+                    | Type::Function { .. }
+                    | Type::TypeParam(_)
+            )
+            || self.is_copy_type_during_check(ty)
+            || self.copy_is_only_an_rc_retain(ty)
+        {
+            return;
+        }
+        let replacement = if self.core_shorthand_field {
+            format!("{name}: ref ")
+        } else {
+            "ref ".to_string()
+        };
+        let fix_it = crate::typechecker::FixIt {
+            span: Span {
+                offset: span.offset,
+                length: 0,
+                line: span.line,
+                column: span.column,
+            },
+            replacement,
+        };
+        self.type_error_with_fix_it(
+            format!(
+                "cannot move '{name}' out of {reason} (core-semantics.md §3.7): bind it \
+                 as `ref {name}` to borrow it, or `.clone()` it inside the arm"
+            ),
+            *span,
+            TypeErrorKind::MoveOutOfNoMovePlace,
+            fix_it,
+        );
+    }
+
     fn is_known_unit_variant(&self, name: &str) -> bool {
         self.env.enums.values().any(|e| {
             e.variants

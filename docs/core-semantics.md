@@ -64,6 +64,7 @@
 - The primitives (integers, floats, `bool`, `char`).
 - `Array[T, N]`, tuples and `Option[T]` when their parts are `Copy`.
 - User types with `#[derive(Copy)]`, which the compiler checks field by field.
+- `ref T`, but not `mut ref T`. Copying a shared reference gives a second reference to the same place, with the same origins (§5.3). So `let u = x;` with `x` bound by `ref` makes `u` a reference too, and moves nothing.
 - `distinct type` does not inherit `Copy`.
 - All of this is unchanged from `design.md` Part 6.
 
@@ -175,6 +176,7 @@ Pins: `drop_callee_owns`, `drop_callee_returns`.
 **4.6 Pattern binding modes.** This covers `match`, `if let`, `while let`, `let` destructuring and `for` patterns. The mode of every binding is decided by the pattern and the scrutinee's type, never by how the arm uses the binding.
 
 - **A `ref` or view scrutinee:** every binding is a `ref` into it, and moving a binding is an error (§3.7).
+- **A `shared` scrutinee** (a handle, or any place reached through one) counts as a `ref` scrutinee. A shared value's contents are only ever reached through a handle (§6.1), so nothing can move out of them. A plain binding of a part is therefore a `ref` automatically, and moving it is an error whose fix is `.clone()`. A binding that covers the whole handle copies the handle (§6.1). This is unlike a type with a `Drop` body (below), where a plain binding of a part still needs an explicit `ref`.
 - **An owned scrutinee** (a place rooted at a local or parameter the function owns, or a temporary):
   - A plain binding `name` of a non-`Copy` part **moves** that part out of the scrutinee on that path. That is a partial move (§3.6), or a whole move if the binding covers the whole value. The binding drops at the end of its arm or body unless moved on.
   - `ref name` **borrows** the part instead and leaves the scrutinee intact. `mut ref name` borrows it mutably and requires a mutable scrutinee.
@@ -200,7 +202,7 @@ Pins: `ok_match_binding_modes`, `drop_match_scrutinee`, `drop_underscore`.
 **5.1 Where `ref T` and `mut ref T` may appear:**
 - as a parameter type;
 - as a return type, or inside one (`Option[ref T]`, a tuple);
-- as the type of a local bound to a call that returns a reference, or to a projection of a named place;
+- as the type of a local bound to a call that returns a reference, to a projection of a named place, or to another reference;
 - inside a view (§5.2).
 
 **5.2 Views.** A *view* is any type that contains a `ref` or `mut ref` after generic substitution. Examples:

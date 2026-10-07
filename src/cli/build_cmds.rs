@@ -747,6 +747,11 @@ pub(super) fn cmd_build(
         let _ = crate_type;
         let _ = out_path;
         eprintln!("note: karac build requires the llvm feature; falling back to type check");
+        // A `build`, not a `check`: legacy's rules, not the v2 core's.
+        let lint_overrides = crate::lints::CliLintOverrides {
+            legacy_core: true,
+            ..lint_overrides
+        };
         cmd_check(
             filename,
             output,

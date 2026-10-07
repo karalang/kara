@@ -1815,6 +1815,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // core-semantics.md §4.7 — an impl method's mode is stronger
                 // than its trait's.
                 crate::typechecker::TypeErrorKind::ImplModeStrongerThanTrait => "E0288",
+                crate::typechecker::TypeErrorKind::MoveOutOfNoMovePlace => "E0289",
                 // `s[i]` (scalar index) on a `String` — UTF-8 is
                 // variable-width, so `[]` is rejected in favour of
                 // `s.char_at(i)` / `s.bytes()[i]` (design.md § Character type).
