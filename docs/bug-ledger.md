@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 726 |
+| miscompile | 727 |
 | run-vs-build | 604 |
 | leak | 601 |
 | double-free | 427 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 347 |
 | other | 114 |
 | ownership | 80 |
-| cli | 74 |
+| cli | 75 |
 | autopar | 59 |
 | parser | 56 |
 | runtime | 55 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-07). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -3898,6 +3898,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-126 | parser | low | RUST'S TURBOFISH ON A METHOD CALL IS REPORTED AS A MISSING SEMICOLON OR PAREN -- `(1..4).sum::[i64]()` and `it.collect::<Vec<i64>>()` fail with "Expe… | 63b3156d3 |
 | B-2026-10-06-129 | interp+codegen | high | SINCE B-2026-10-05-107 (a360d0f79), A GENERIC FN THAT WRAPS ITS BARE-`T` PARAM IN AN `Option` / `Result` LOCAL AND HANDS THAT LOCAL BACK ON SOME EXIT… | 38dbe8501 |
 | B-2026-10-06-134 | codegen | medium | A NON-GENERIC `shared enum` WITH AN `Option[shared]` PAYLOAD RELEASES THE WRONG OBJECT: IT LEAKS THE HANDLE AND A `None` PAYLOAD'S BOX, AND A BINDING… | 6a960dffa |
+| B-2026-10-07-1 | cli | medium | `karac fmt` DROPS THE PARENTHESES AROUND A CALLED FIELD: `(h.f)()` IS PRINTED AS `h.f()`, A METHOD CALL THAT NO LONGER RESOLVES (OR CALLS A SAME-NAME… | 74096e3f1 |
 
 </details>
 
