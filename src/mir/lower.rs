@@ -2147,8 +2147,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let tcx = self.tys().tcx();
                     let int = |t| matches!(tcx.kind(t), HK::Int(_) | HK::UInt(_));
                     let float = |t| matches!(tcx.kind(t), HK::Float(_));
+                    let (char_k, bool_k) =
+                        (|t| tcx.kind(t) == HK::Char, |t| tcx.kind(t) == HK::Bool);
                     match (int(from) || from == to, float(from), int(to), float(to)) {
                         _ if from == to => None,
+                        _ if char_k(to) && matches!(tcx.kind(from), HK::UInt(UIntSize::U8)) => {
+                            Some(CastKind::IntToChar)
+                        }
+                        _ if char_k(from) && int(to) => Some(CastKind::CharToInt),
+                        _ if bool_k(from) && int(to) => Some(CastKind::BoolToInt),
                         (true, _, true, _) => Some(CastKind::IntToInt),
                         (true, _, _, true) => Some(CastKind::IntToFloat),
                         (_, true, true, _) => Some(CastKind::FloatToInt),
@@ -6044,6 +6051,26 @@ fn main() {
         assert_eq!(
             run_source(src),
             Ok(("p = pos, q = neg\nneg\n".to_string(), Some(0)))
+        );
+    }
+
+    /// `u8 as char`, `char as` an integer and `bool as` an integer.
+    #[test]
+    fn char_and_bool_casts() {
+        let src = r#"
+fn main() {
+    let k: i64 = 30;
+    let c = ((k * 7919) % 26 + 97) as u8 as char;
+    let bs: Vec[u8] = Vec.new();
+    let d = 'z' as u32;
+    let e = 'A' as i64 + 1;
+    let t = true as i64;
+    println(f"{c} {d} {e} {t} {b'(' as char} {bs.len()}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("i 122 66 1 ( 0\n".to_string(), Some(0)))
         );
     }
 
