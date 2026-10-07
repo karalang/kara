@@ -353,7 +353,10 @@ impl TyInterner {
             }
             TyKind::Intrinsic(IntrinsicTy::Set(e)) => format!("Set[{}]", self.display(e)),
             TyKind::FnDef(d) => format!("fn#{}", d.0),
-            TyKind::Closure(d, _) => format!("closure#{}", d.0),
+            TyKind::Closure(d, caps) => {
+                let parts: Vec<String> = caps.iter().map(|&t| self.display(t)).collect();
+                format!("closure#{}({})", d.0, parts.join(", "))
+            }
             TyKind::Other => self.tcx.display(t, &|d| format!("def#{}", d.0)),
         }
     }

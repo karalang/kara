@@ -1773,18 +1773,45 @@ exit main
         assert_eq!(r.trace(), want);
     }
 
+    /// Closure pins (core-semantics §9.4), each in elaborated and Built
+    /// form: captures drop with the closure, last captured first, and a
+    /// once-callable body that moves one capture out drops the rest at
+    /// its end. Expected output is hand-derived in `tests/mir/closures`.
+    #[test]
+    fn mir_interp_runs_the_closure_pins() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let want = |pin: &str| {
+            let out = root.join("tests/mir/closures").join(format!("{pin}.out"));
+            (std::fs::read_to_string(out).unwrap(), 0)
+        };
+        let elaborated = run_pin_files("tests/mir/closures", MirPhase::DropsElaborated, &want);
+        let built = run_pin_files("tests/mir/closures-built", MirPhase::Built, &want);
+        assert_eq!((elaborated, built), (2, 2));
+    }
+
+    #[test]
+    fn mir_text_round_trips_closures() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for dir in ["tests/mir/closures", "tests/mir/closures-built"] {
+            for e in std::fs::read_dir(root.join(dir)).unwrap() {
+                let path = e.unwrap().path();
+                if path.extension().is_none_or(|e| e != "mir") {
+                    continue;
+                }
+                let m = crate::mir::parse_module(&std::fs::read_to_string(&path).unwrap())
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                let once = crate::mir::pretty_module(&m);
+                assert!(once.contains("closure#"), "{}", path.display());
+                let again = crate::mir::pretty_module(&crate::mir::parse_module(&once).unwrap());
+                assert_eq!(once, again, "{}", path.display());
+            }
+        }
+    }
+
     fn run_core_pins(dir: &str, phase: MirPhase) {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut ran = 0;
-        let mut bad = Vec::new();
-        let mut files: Vec<_> = std::fs::read_dir(root.join(dir))
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .collect();
-        files.sort();
-        for path in files {
-            let pin = path.file_stem().unwrap().to_str().unwrap().to_string();
-            let pin_dir = root.join("corpus/core").join(&pin);
+        let ran = run_pin_files(dir, phase, &|pin| {
+            let pin_dir = root.join("corpus/core").join(pin);
             let expected = std::fs::read_to_string(pin_dir.join("expected.out")).unwrap();
             let meta = std::fs::read_to_string(pin_dir.join("meta.toml")).unwrap();
             let exit: i32 = meta
@@ -1794,6 +1821,26 @@ exit main
                 .trim()
                 .parse()
                 .unwrap();
+            (expected, exit)
+        });
+        assert_eq!(ran, 23, "every runnable core pin has hand-written MIR");
+    }
+
+    /// Runs every `.mir` file in `dir` as `phase` and compares it with
+    /// `want(pin)`, the expected output and exit code; returns how many ran.
+    fn run_pin_files(dir: &str, phase: MirPhase, want: &dyn Fn(&str) -> (String, i32)) -> usize {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut ran = 0;
+        let mut bad = Vec::new();
+        let mut files: Vec<_> = std::fs::read_dir(root.join(dir))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "mir"))
+            .collect();
+        files.sort();
+        for path in files {
+            let pin = path.file_stem().unwrap().to_str().unwrap().to_string();
+            let (expected, exit) = want(&pin);
             let src = std::fs::read_to_string(&path).unwrap();
             let mut m = crate::mir::parse_module(&src).unwrap_or_else(|e| panic!("{pin}: {e}"));
             for b in &mut m.bodies {
@@ -1811,7 +1858,7 @@ exit main
                 ));
             }
         }
-        assert_eq!(ran, 23, "every runnable core pin has hand-written MIR");
         assert!(bad.is_empty(), "{}", bad.join("\n"));
+        ran
     }
 }

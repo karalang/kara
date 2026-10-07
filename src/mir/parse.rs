@@ -415,9 +415,8 @@ impl Parser {
             let n = c.number()? as u32;
             return match name {
                 "fn" => Ok(self.tys.intern(TyKind::FnDef(DefId(n)))),
-                _ => Err(format!(
-                    "`{name}#{n}`: closure types are not supported in the text form yet"
-                )),
+                "closure" => self.closure_ty(c, n),
+                _ => Err(format!("unknown type `{name}#{n}`")),
             };
         }
         let kind = match name {
@@ -905,6 +904,24 @@ impl Parser {
     }
 
     /// An rvalue assigned to a place of type `dest`.
+    /// The rest of a closure type after `closure#<n>`: its captures'
+    /// types in capture order, as `(T1, T2)`. `<n>` is the [`DefId`] of
+    /// the closure's body, numbered as for `fn#<n>`.
+    fn closure_ty(&mut self, c: &mut Cur, n: u32) -> Result<Ty, String> {
+        c.expect("(")?;
+        let mut caps = Vec::new();
+        if !c.eat(")") {
+            loop {
+                caps.push(self.ty(c)?);
+                if c.eat(")") {
+                    break;
+                }
+                c.expect(",")?;
+            }
+        }
+        Ok(self.tys.intern(TyKind::Closure(DefId(n), caps)))
+    }
+
     fn rvalue(&mut self, body: &Body, c: &mut Cur, dest: Ty) -> Result<Rvalue, String> {
         c.ws();
         if c.eat("&") {
@@ -950,6 +967,15 @@ impl Parser {
             };
             return Ok(Rvalue::Aggregate(
                 AggregateKind::Array(elem),
+                self.operands_until(body, c, "]")?,
+            ));
+        }
+        if c.eat("closure#") {
+            let n = c.number()? as u32;
+            let ty = self.closure_ty(c, n)?;
+            c.expect("[")?;
+            return Ok(Rvalue::Aggregate(
+                AggregateKind::Closure { ty },
                 self.operands_until(body, c, "]")?,
             ));
         }

@@ -1,0 +1,61 @@
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "d", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn main.c0(_1: ref closure#2(R, R)) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(copy (*_1).0.0, copy (*_1).1.0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: R; // a
+    let _2: R; // b
+    let _3: closure#2(R, R); // c
+    let _4: ();
+    let _5: ref closure#2(R, R);
+    bb0: {
+        _1 = R { const 1_i64 };
+        _2 = R { const 2_i64 };
+        _3 = closure#2(R, R) [move _2, move _1];
+        _5 = &_3;
+        _4 = main.c0(move _5) -> bb1;
+    }
+    bb1: {
+        _5 = &_3;
+        _4 = main.c0(move _5) -> bb2;
+    }
+    bb2: {
+        _4 = println(const "end") -> bb3;
+    }
+    bb3: {
+        drop(_3) -> bb4;
+    }
+    bb4: {
+        drop(_2) -> bb5;
+    }
+    bb5: {
+        drop(_1) -> bb6;
+    }
+    bb6: {
+        _0 = const ();
+        return;
+    }
+}
