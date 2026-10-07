@@ -1748,6 +1748,31 @@ exit main
         run_core_pins("tests/mir/core-built", MirPhase::Built);
     }
 
+    /// The §6 trace of one pin, in full: a conditional move with its drop
+    /// flag, where `f(true)` moves `a` into `take` (whose drop runs the
+    /// user body) and `f(false)` drops it at `f`'s end.
+    #[test]
+    fn mir_interp_trace_of_the_conditional_move_pin() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let src =
+            std::fs::read_to_string(root.join("tests/mir/core/drop_conditional_move.mir")).unwrap();
+        let mut m = crate::mir::parse_module(&src).unwrap();
+        for b in &mut m.bodies {
+            b.phase = MirPhase::DropsElaborated;
+        }
+        let r = run(&Program::from_module(&m), &m.tys, "main", vec![]);
+        assert_eq!(r.output, "took1\nd1\nend\nend\nd1\n");
+        let body_drop = "drop_body R\nenter R.drop\ninit _2\ninit _0\nexit R.drop\n";
+        let want = format!(
+            "enter main\nenter f\ninit _2\nflag _3 true\nflag _3 false\nmove _2\n\
+             enter take\ninit _2\ndrop _1 R\n{body_drop}init _0\nexit take\n\
+             init _4\ninit _4\ninit _0\nexit f\ninit _1\n\
+             enter f\ninit _2\nflag _3 true\ninit _4\ndrop _2 R\n{body_drop}\
+             init _0\nexit f\ninit _1\ninit _0\nexit main\n"
+        );
+        assert_eq!(r.trace(), want);
+    }
+
     fn run_core_pins(dir: &str, phase: MirPhase) {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut ran = 0;
