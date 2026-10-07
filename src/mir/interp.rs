@@ -1565,6 +1565,12 @@ impl<'a> Interp<'a> {
                         return err("division by zero; the builder must guard it")
                     }
                     Div => a / b,
+                    // `MIN % -1` is 0 mathematically, but it overflows on
+                    // the machine exactly as `MIN / -1` does, and C8 traps
+                    // both (Rust's `overflowing_rem`).
+                    Rem if it.signed() && b == -1 && a == wrap(1 << (it.bits() - 1), it) => {
+                        return Ok((Value::Int(0), true));
+                    }
                     Rem => a % b,
                     BitAnd => a & b,
                     BitOr => a | b,
@@ -2403,6 +2409,43 @@ exit main
             res.events.last(),
             Some(&Event::Abort(AbortReason::Overflow))
         );
+    }
+
+    /// C8: `MIN % -1` overflows like `MIN / -1` and the checked op flags
+    /// it; `Not` on an unsigned int stays within its width.
+    #[test]
+    fn mir_interp_signed_rem_overflow_and_unsigned_not() {
+        let src = "
+fn main() -> () {
+    let mut _0: ();
+    let _1: u8;
+    let _2: ();
+    let _3: (i64, bool);
+    bb0: {
+        _1 = Not(const 5_u8);
+        _2 = println(copy _1) -> bb1;
+    }
+    bb1: {
+        _3 = CheckedRem(const -9223372036854775808_i64, const -1_i64);
+        switchInt(copy _3.1) -> [0: bb2, otherwise: bb3];
+    }
+    bb2: {
+        _2 = println(const \"no trap\") -> bb4;
+    }
+    bb3: {
+        abort(Overflow);
+    }
+    bb4: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = crate::mir::parse_module(src).unwrap();
+        let prog = Program::from_module(&m);
+        let r = run(&prog, &m.tys, "main", vec![]);
+        assert_eq!(r.output, "250\n");
+        assert_eq!(r.exit_code(), Some(101), "{:?}", r.outcome);
     }
 
     #[test]
