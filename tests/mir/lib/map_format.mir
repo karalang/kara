@@ -75,35 +75,42 @@ fn main() -> () {
     }
     bb9: {
         _6 = &_1;
-        _11 = Map[i64, R].len(move _6) -> bb10;
+        _10 = Map[i64, R].index(move _6, const 1_i64) -> bb10;
     }
     bb10: {
-        _12 = format(const "n=", copy _11, const " ok") -> bb11;
+        _5 = println(const "idx", copy (*_10).0) -> bb11;
     }
     bb11: {
-        _13 = &_12;
-        _5 = println(move _13) -> bb12;
+        _6 = &_1;
+        _11 = Map[i64, R].len(move _6) -> bb12;
     }
     bb12: {
-        _14 = i64.to_string(const 42_i64) -> bb13;
+        _12 = format(const "n=", copy _11, const " ok") -> bb13;
     }
     bb13: {
-        _13 = &_14;
+        _13 = &_12;
         _5 = println(move _13) -> bb14;
     }
     bb14: {
-        _5 = println(const "end") -> bb15;
+        _14 = i64.to_string(const 42_i64) -> bb15;
     }
     bb15: {
-        drop(_14) -> bb16;
+        _13 = &_14;
+        _5 = println(move _13) -> bb16;
     }
     bb16: {
-        drop(_12) -> bb17;
+        _5 = println(const "end") -> bb17;
     }
     bb17: {
-        drop(_1) -> bb18;
+        drop(_14) -> bb18;
     }
     bb18: {
+        drop(_12) -> bb19;
+    }
+    bb19: {
+        drop(_1) -> bb20;
+    }
+    bb20: {
         _0 = const ();
         return;
     }

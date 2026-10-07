@@ -1,0 +1,62 @@
+fn main() -> () {
+    let mut _0: ();
+    let _1: Vec[i64]; // v
+    let _2: Array[i64, 4];
+    let _3: ref Vec[i64];
+    let _4: Slice[i64]; // s
+    let _5: ref Slice[i64];
+    let _6: ();
+    let _7: i64; // n
+    let _8: ref i64; // r
+    let _9: Array[i64, 3]; // a
+    let _10: ref Array[i64, 3];
+    let _11: Slice[i64]; // t
+    let _12: Slice[i64]; // u
+    bb0: {
+        _2 = [const 10_i64, const 20_i64, const 30_i64, const 40_i64];
+        _1 = Vec[i64].from_array(move _2) -> bb1;
+    }
+    bb1: {
+        _3 = &_1;
+        _4 = Vec[i64].slice(move _3, const 1_i64, const 3_i64) -> bb2;
+    }
+    bb2: {
+        _5 = &_4;
+        _6 = println(move _5) -> bb3;
+    }
+    bb3: {
+        _5 = &_4;
+        _7 = Slice[i64].len(move _5) -> bb4;
+    }
+    bb4: {
+        _5 = &_4;
+        _8 = Slice[i64].index(move _5, const 1_i64) -> bb5;
+    }
+    bb5: {
+        _6 = println(copy _7, const " ", copy (*_8)) -> bb6;
+    }
+    bb6: {
+        _9 = [const 1_i64, const 2_i64, const 3_i64];
+        _10 = &_9;
+        _11 = Array[i64, 3].as_slice(move _10) -> bb7;
+    }
+    bb7: {
+        _5 = &_11;
+        _6 = println(move _5) -> bb8;
+    }
+    bb8: {
+        _5 = &_4;
+        _12 = Slice[i64].slice(move _5, const 1_i64, const 2_i64) -> bb9;
+    }
+    bb9: {
+        _5 = &_12;
+        _6 = println(move _5) -> bb10;
+    }
+    bb10: {
+        drop(_1) -> bb11;
+    }
+    bb11: {
+        _0 = const ();
+        return;
+    }
+}

@@ -112,6 +112,13 @@ pub enum Value {
     /// heap allocation, which holds a `Str` or the elements as an `Agg`.
     Box(AllocId),
     Ref(Addr),
+    /// A `Slice[T]` view: `len` elements of the sequence at `base` (a
+    /// `Vec`'s allocation or an array place), starting at `lo`.
+    Slice {
+        base: Addr,
+        lo: u64,
+        len: u64,
+    },
     Fn(InstanceId),
 }
 
@@ -411,6 +418,9 @@ impl<'a> Interp<'a> {
                     path: vec![*i as u64],
                 }))
             }
+            (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut") | ("Slice" | "Array", _) => {
+                self.view_method(name, method, args)
+            }
             ("Vec" | "String", _) => self.collection_method(ty_name, method, args, arg_tys, ret),
             ("Map" | "Set", _) => self.table_method(ty_name, method, args, arg_tys, ret),
             _ => err(format!("call of unknown function {name}")),
@@ -617,6 +627,63 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// Slice views over a `Vec`, an array or another slice: `as_slice`,
+    /// `as_mut_slice`, `slice(lo, hi)` and `slice_mut(lo, hi)`, plus
+    /// `len`, `index` and `index_mut` on a slice (or an array). A view
+    /// borrows its elements; nothing is copied or dropped.
+    fn view_method(&mut self, name: &str, method: &str, args: Vec<Value>) -> R<Value> {
+        let Some(recv) = args.first() else {
+            return err(format!("{name} needs a receiver"));
+        };
+        let (base, lo, len) = self.view_of(recv)?;
+        match (method, &args[1..]) {
+            ("as_slice" | "as_mut_slice", []) => Ok(Value::Slice { base, lo, len }),
+            ("slice" | "slice_mut", [Value::Int(a), Value::Int(b)]) => {
+                if *a < 0 || a > b || *b > len as i128 {
+                    self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
+                }
+                Ok(Value::Slice {
+                    base,
+                    lo: lo + *a as u64,
+                    len: (*b - *a) as u64,
+                })
+            }
+            ("len", []) => Ok(Value::Int(len as i128)),
+            ("is_empty", []) => Ok(Value::Bool(len == 0)),
+            ("index" | "index_mut", [Value::Int(i)]) => {
+                if *i < 0 || *i >= len as i128 {
+                    self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
+                }
+                Ok(Value::Ref(base.child(lo + *i as u64)))
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// The sequence a view method's receiver reaches: a `Vec` (owned or
+    /// behind a reference), an array place behind a reference, or a slice.
+    fn view_of(&mut self, v: &Value) -> R<(Addr, u64, u64)> {
+        let held = match v {
+            Value::Ref(addr) => (Some(addr.clone()), self.slot(addr)?),
+            other => (None, other.clone()),
+        };
+        match held {
+            (_, Value::Box(id)) => {
+                let n = self.vec_elems(id)?.len() as u64;
+                let base = Addr {
+                    root: Root::Heap(id),
+                    path: Vec::new(),
+                };
+                Ok((base, 0, n))
+            }
+            (_, Value::Slice { base, lo, len }) => Ok((base, lo, len)),
+            (Some(addr), Value::Agg(fs)) => Ok((addr, 0, fs.len() as u64)),
+            (_, other) => err(format!("expected a sequence, found {other:?}")),
+        }
+    }
+
     /// The core `Map[K, V]` and `Set[T]` methods. A table is a box of
     /// entries in insertion order (`(key, value)` pairs for a `Map`);
     /// lookup compares keys by value, through boxes and references.
@@ -653,6 +720,18 @@ impl<'a> Interp<'a> {
                     })
                 });
                 self.option(ret, at)
+            }
+            ("index" | "index_mut", [key]) if is_map => {
+                // `m[k]`: a missing key panics (design.md § Collection
+                // Core Methods).
+                let Some(i) = self.find_key(id, key, true)? else {
+                    self.events.push(Event::Abort(AbortReason::Panic));
+                    return Err(Stop::Abort(AbortReason::Panic));
+                };
+                Ok(Value::Ref(Addr {
+                    root: Root::Heap(id),
+                    path: vec![i as u64, 1],
+                }))
             }
             ("insert", [key, rest @ ..]) => {
                 let found = self.find_key(id, key, is_map)?;
@@ -961,6 +1040,14 @@ impl<'a> Interp<'a> {
             }
             (TyKind::Tuple(ts), Value::Agg(fs)) => {
                 format!("({})", list(self, fs, &ts)?.join(", "))
+            }
+            (TyKind::Slice(e), Value::Slice { base, lo, len }) => {
+                let mut fs = Vec::with_capacity(*len as usize);
+                for i in *lo..*lo + *len {
+                    fs.push(self.slot(&base.child(i))?);
+                }
+                let tys = vec![e; fs.len()];
+                format!("[{}]", list(self, &fs, &tys)?.join(", "))
             }
             (TyKind::Adt(a), Value::Variant(k, fs)) => {
                 let adt = self.tys.adt(a);
@@ -1719,7 +1806,7 @@ impl<'a> Interp<'a> {
             return false;
         }
         let (variant, parts) = match v {
-            Value::Uninit => return false,
+            Value::Uninit | Value::Slice { .. } | Value::Ref(_) => return false,
             Value::Agg(fs) => (None, fs),
             Value::Variant(k, fs) => (Some(*k), fs),
             _ => return true,
@@ -2455,7 +2542,7 @@ exit main
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
-        assert_eq!(ran, 2);
+        assert_eq!(ran, 3);
     }
 
     /// A strict drop of a fieldless variant, a fieldless variant left in
