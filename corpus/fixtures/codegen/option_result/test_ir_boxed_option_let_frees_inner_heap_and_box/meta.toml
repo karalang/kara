@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'boxed Option[H] must free inner Vec + box (>=2 frees); got: {ir}'"
 model_exit = 0
-model_rev = "2209d30ce"
+model_rev = "451adfc6"
 model_verdict = "SAME"

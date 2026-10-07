@@ -114,6 +114,7 @@ class Cell:
     refbind: bool = False  # the binding is a reference (a ref parameter or a ref pattern binding)
     count: int = 0  # for a shared box
     loop_depth: int = -1  # loops enclosing the binding's declaration (-1: not a named binding)
+    ty: object = None  # declared type (a `let` annotation or a parameter type), when there is one
 
 
 @dataclass(eq=False)
@@ -170,6 +171,7 @@ class Frame:
     self_type: Optional[str] = None
     ret_ref: bool = False
     ret: object = None
+    own_ret: bool = False  # an owned, non-generic return type: a reference leaving the body is read/counted/C3
     loops: list = field(default_factory=list)  # per enclosing loop: cells moved in it that were declared outside
 
 
@@ -268,7 +270,7 @@ class Model:
             sd = self.p.structs.get(v.ty)
             return bool(sd and "Copy" in sd.derives)
         if isinstance(v, VecV) and v.kind == "Array":
-            return all(self.is_copy(x) for x in v.elems) and False
+            return all(self.is_copy(x) for x in v.elems)  # Array[T, N] is Copy when T is (§1.1)
         return False
 
     def handle_like(self, v) -> bool:
@@ -282,6 +284,45 @@ class Model:
                 return all(walk(y) or self.is_copy(y) for y in x.elems) and any(walk(y) for y in x.elems)
             return False
         return walk(v)
+
+    def read_through_ref(self, target):
+        """An owned value read through a reference (§6.1): Copy is copied, a handle or handle aggregate
+        is counted, anything else returns None (the caller reports C3)."""
+        if isinstance(target, Handle):
+            target.box.count += 1
+            return Handle(target.box)
+        if self.is_copy(target):
+            return self.copy_value(target)
+        if COUNT_HANDLE_AGGREGATES and self.handle_like(target):
+            return self.clone_value(target)
+        return None
+
+    def declared_type(self, c, p):
+        """The declared type of a place: a binding's annotation, or a struct field's declared type."""
+        if not p:
+            return c.ty
+        if p[-1][0] != "f":
+            return None
+        try:
+            parent = self.deref_value(self.get(c, p[:-1]))
+        except ModelError:
+            return None
+        sd = self.p.structs.get(parent.ty) if isinstance(parent, Rec) else None
+        return dict(sd.fields).get(p[-1][1]) if sd else None
+
+    def mark_array(self, v, ty):
+        """A list value declared `Array[T, N]` is an array (Copy when T is); literals are built as lists."""
+        if isinstance(v, VecV) and ty is not None and ty[0] == "app" and ty[1] == "Array":
+            v.kind = "Array"
+
+    def elem_types(self, kind):
+        """The declared element type(s) of the receiver collection, if known: [T] for Vec/Set, [K, V] for Map."""
+        t = getattr(self, "_recv_ty", None)
+        if t and t[0] in ("ref", "mutref"):
+            t = t[1]
+        if t and t[0] == "app" and t[1] == kind and t[2]:
+            return t[2]
+        return None
 
     def is_shared_type(self, ty) -> bool:
         sd = self.p.structs.get(ty)
@@ -304,6 +345,8 @@ class Model:
             return Enum(v.ty, v.var, None if v.payload is None else [self.copy_value(x) for x in v.payload])
         if isinstance(v, Rec):
             return Rec(v.ty, {k: self.copy_value(x) for k, x in v.fields.items()})
+        if isinstance(v, VecV) and v.kind == "Array":
+            return VecV([self.copy_value(x) for x in v.elems], "Array")
         raise ModelError("copy of a move-only value")
 
     def clone_value(self, v):
@@ -461,6 +504,12 @@ class Model:
             else:
                 return c, path, b
             v = self.get(c, path)
+
+    def deref_refs(self, v):
+        """Follow references only: a handle behind a reference stays a handle (it is counted, §6.1)."""
+        while isinstance(v, Ref):
+            v = self.get(v.cell, v.path)
+        return v
 
     def deref_value(self, v):
         while True:
@@ -662,13 +711,15 @@ class Model:
                     v = self.value(init)
                     if isinstance(v, Ref) and ty is not None and ty[0] not in ("ref", "mutref"):
                         # an owned annotation on a reference: Copy is read, anything else is C3
-                        inner = self.deref_value(v)
-                        if not self.is_copy(inner):
+                        r = self.read_through_ref(self.deref_refs(v))
+                        if r is None:
                             raise ModelError("move out of a ref place (C3): owned `let` annotation on a reference")
-                        v = self.copy_value(inner)
+                        v = r
                     self.check_no_temp_origin(v)
                     c = Cell(v)
                     c.refbind = isinstance(v, Ref)
+                    c.ty = ty
+                    self.mark_array(v, ty)
                     sc.bind(pat[1], c)
                     return None
                 c, p, b = self.resolve_or_temp(init)
@@ -714,6 +765,8 @@ class Model:
                 self.exec_stmt(s)
             if blk.tail is not None:
                 v = self.in_stmt(lambda: self.ret_value(blk.tail), keep_result=True)
+                if fn_body:
+                    v = self.own_returned(v)  # before the body's locals drop: the referent is still live
             else:
                 v = UNIT
         except Ret as r:
@@ -733,6 +786,7 @@ class Model:
         if fdef.body is None:
             raise Unsupported(f"call of bodiless fn {fdef.name}")
         frame = Frame([Scope()], self_type, ret_ref=bool(fdef.ret) and fdef.ret[0] in ("ref", "mutref"), ret=fdef.ret)
+        frame.own_ret = not frame.ret_ref and fdef.ret is not None and not self.generic_ret(fdef)
         self.frames.append(frame)
         ps = frame.scopes[0]
         if recv is not None:
@@ -742,6 +796,9 @@ class Model:
         for prm, a in zip(fdef.params, args):
             c = Cell(a)
             c.refbind = isinstance(a, Ref)
+            c.ty = prm.ty
+            if prm.mode == "own":
+                self.mark_array(a, prm.ty)
             ps.bind(prm.name, c)
         try:
             v = self.eval_block(fdef.body, fn_body=True)
@@ -750,12 +807,9 @@ class Model:
             v, is_err = r.v, r.is_err
         if isinstance(v, Ref) and not frame.ret_ref and fdef.ret is not None and not self.generic_ret(fdef):
             # an owned return type: a reference flowing out is read (Copy), counted (handle) or a C3 move
-            target = self.deref_value(v)
-            if isinstance(target, Handle):
-                target.box.count += 1
-                v = Handle(target.box)
-            elif self.is_copy(target):
-                v = self.copy_value(target)
+            r = self.read_through_ref(self.deref_refs(v))
+            if r is not None:
+                v = r
             else:
                 raise ModelError("move out of a ref place (C3): a reference returned where an owned value is expected")
         self.exit_scope(ps, is_err)
@@ -795,12 +849,9 @@ class Model:
             if prm.mode == "own":
                 v = self.value(a)
                 if isinstance(v, Ref) and not self.generic_param(fdef, prm):
-                    target = self.deref_value(v)
-                    if isinstance(target, Handle):
-                        target.box.count += 1
-                        v = Handle(target.box)
-                    elif self.is_copy(target):
-                        v = self.copy_value(target)
+                    r = self.read_through_ref(self.deref_refs(v))
+                    if r is not None:
+                        v = r
                     else:
                         raise ModelError("move out of a ref place (C3): a reference passed where an owned value is expected")
                 out.append(v)
@@ -815,13 +866,28 @@ class Model:
         if ty is not None and (ty[0] in ("ref", "mutref") or ty[0] != "app"
                                or (len(ty[1]) == 1 and ty[1] not in self.p.structs and ty[1] not in self.p.enums)):
             return v  # a declared reference, a view, or a generic parameter
-        target = self.deref_value(v)
-        if isinstance(target, Handle):
-            target.box.count += 1
-            return Handle(target.box)
-        if self.is_copy(target):
-            return self.copy_value(target)
+        r = self.read_through_ref(self.deref_refs(v))
+        if r is not None:
+            return r
         raise ModelError(f"move out of a ref place (C3): a reference stored into an owned {what}")
+
+    def own_nested(self, v, ty, what):
+        """store_owned applied through an aggregate, following its declared type: a reference inside an
+        owned tuple, array, Vec or Option/Result whose declared component is owned is read, counted or C3."""
+        if ty is None or ty[0] in ("ref", "mutref"):
+            return v
+        if isinstance(v, Ref):
+            return self.store_owned(v, ty, what)
+        if ty[0] == "tuple" and isinstance(v, Tup) and len(ty[1]) == len(v.elems):
+            v.elems = [self.own_nested(x, t, what) for x, t in zip(v.elems, ty[1])]
+        elif ty[0] == "app" and ty[2]:
+            if isinstance(v, VecV) and ty[1] in ("Vec", "Array") and v.kind in ("Vec", "Array"):
+                v.elems = [self.own_nested(x, ty[2][0], what) for x in v.elems]
+            elif isinstance(v, Enum) and v.ty == ty[1] and isinstance(v.payload, list) and len(v.payload) == 1:
+                k = 1 if (ty[1] == "Result" and v.var == "Err" and len(ty[2]) > 1) else 0
+                if ty[1] in ("Option", "Result"):
+                    v.payload = [self.own_nested(v.payload[0], ty[2][k], what)]
+        return v
 
     def generic_ret(self, fdef):
         t = fdef.ret
@@ -1327,12 +1393,20 @@ class Model:
     def e_if(self, e):
         _, cond, then, els = e
         if cond[0] == "let":
-            return self.if_let(cond[1], cond[2], then, els)
-        if self.truth(cond):
-            return self.eval_block(then)
-        if els is None:
+            v = self.if_let(cond[1], cond[2], then, els)
+        elif self.truth(cond):
+            v = self.eval_block(then)
+        elif els is None:
             return UNIT
-        return self.eval_block(els)
+        else:
+            v = self.eval_block(els)
+        if isinstance(v, Ref) and els is not None and (self.owned_expr(("block", then)) or self.owned_expr(("block", els))):
+            # the branches unify to the value type (one is plainly owned): read, count or C3, as for `match`
+            r = self.read_through_ref(self.deref_refs(v))
+            if r is None:
+                raise ModelError("move out of a ref place (C3): an if branch yields a reference where another yields an owned value")
+            v = r
+        return v
 
     def if_let(self, pat, scrut, then, els):
         c, p, b = self.resolve_or_temp(scrut)
@@ -1390,12 +1464,9 @@ class Model:
             if isinstance(v, Ref) and any(self.owned_expr(b) for _, _, b in arms):
                 # arms unify to the value type (another arm is plainly owned): a Copy referent is read,
                 # anything else would move out of the reference (C3)
-                inner = self.deref_value(v)
-                if isinstance(inner, Handle):
-                    inner.box.count += 1
-                    v = Handle(inner.box)
-                elif self.is_copy(inner):
-                    v = self.copy_value(inner)
+                r = self.read_through_ref(self.deref_refs(v))
+                if r is not None:
+                    v = r
                 else:
                     self.exit_scope(sc, False)
                     self.frame.scopes.pop()
@@ -1578,8 +1649,20 @@ class Model:
         return self.value(e)
 
     def e_ret(self, e):
-        v = UNIT if e[1] is None else self.ret_value(e[1])
+        v = UNIT if e[1] is None else self.own_returned(self.ret_value(e[1]))
         raise Ret(v, is_err_result(v))
+
+    def own_returned(self, v):
+        """A reference leaving a function whose return type is owned is read (Copy), counted (handle or
+        handle aggregate, §6.1) or a C3 move, at the return point, while its referent is still live."""
+        if not self.frame.own_ret:
+            return v
+        if not isinstance(v, Ref):
+            return self.own_nested(v, self.frame.ret, "return value")
+        r = self.read_through_ref(self.deref_refs(v))
+        if r is None:
+            raise ModelError("move out of a ref place (C3): a reference returned where an owned value is expected")
+        return r
 
     def e_break(self, e):
         raise Brk(None if e[1] is None else self.value(e[1]))
@@ -1927,11 +2010,8 @@ class Model:
         if f is not None and f.recv is not None:
             if f.recv == "own":
                 if isinstance(v0, Ref):
-                    if self.is_copy(v):
-                        r = self.copy_value(v)
-                    elif isinstance(v, Handle):
-                        r = self.use(*self.deref(c, p, b)[:2], None)
-                    else:
+                    r = self.read_through_ref(self.deref_refs(v0))
+                    if r is None:
                         raise ModelError("move out of a borrowed receiver (C3)")
                 else:
                     r = self.use(c, p, b)
@@ -1943,6 +2023,7 @@ class Model:
     def builtin_method(self, c, p, b, v0, v, name, args):
         # receiver place after following references and handles
         rc, rp, rb = self.deref(c, p, b)
+        self._recv_ty = self.declared_type(c, p) or self.declared_type(rc, rp)
         if name == "clone" and not args:
             return self.clone_value(v0 if isinstance(v0, Handle) else v)
         if name == "to_string" and not args:
@@ -2016,6 +2097,9 @@ class Model:
             return Prim(not v.elems, "bool")
         if name == "push":
             x = self.value(args[0])
+            et = self.elem_types(v.kind)
+            if et:
+                x = self.store_owned(x, et[0], "collection element")
             v = self.get(c, p)
             v.elems.append(x)
             return UNIT
@@ -2051,6 +2135,9 @@ class Model:
         if name == "insert":
             i = self.read(args[0]).v
             x = self.value(args[1])
+            et = self.elem_types(v.kind)
+            if et:
+                x = self.store_owned(x, et[0], "collection element")
             v.elems.insert(i, x)
             return UNIT
         if name in ("remove", "swap_remove"):
@@ -2107,9 +2194,8 @@ class Model:
             want_good = name != "unwrap_err"
             whole = self.use(c, p, b) if not isinstance(v0, Ref) else None
             if whole is None:
-                if self.is_copy(v):
-                    whole = self.copy_value(v)
-                else:
+                whole = self.read_through_ref(self.deref_refs(v0))
+                if whole is None:
                     raise ModelError("move out of a borrowed Option/Result (C3)")
             if (whole.var in ("Some", "Ok")) == want_good:
                 x = whole.payload[0]
@@ -2148,6 +2234,9 @@ class Model:
             return Prim(not m.keys, "bool")
         if name == "insert":
             k = self.value(args[0])
+            et = self.elem_types(m.kind)
+            if et:
+                k = self.store_owned(k, et[0], "collection key")
             if m.kind in ("Set", "SortedSet"):
                 i = self.map_find(m, k)
                 if i is not None:
@@ -2156,6 +2245,8 @@ class Model:
                 self.map_add(m, k, None)
                 return Prim(True, "bool")
             v = self.value(args[1])
+            if et and len(et) > 1:
+                v = self.store_owned(v, et[1], "collection value")
             i = self.map_find(m, k)
             if i is not None:
                 old = m.vals[i]

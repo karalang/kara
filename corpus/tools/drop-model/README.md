@@ -50,17 +50,17 @@ Every DIFF and REJECT is explained; none points at the model.
   Result: core 30 agree, 3 unsupported (escaping capture, `par`, nonescaping param);
   drop-matrix 256/256. Fault injection (fields dropped first to last) gives 113 matrix failures.
 
-### Whole corpus, 7002 programs, counting rule, 2026-10-06
+### Whole corpus, 7002 programs, counting rule, 2026-10-07
 
 | Verdict | Count |
 |---|---|
-| UNSUP | 2948 (timeout ~330 at 3 s, `Vec.iter` 187, `env` 187, `Vec.filled` 104, `Vector` 87, closures, weak references, integer widths other than i64, hand-written `Hash`/`Ord` used outside an operator, impls chosen per instantiation) |
-| SAME | 2514 |
+| UNSUP | 2929 (timeouts vary with machine load, 229 to ~330, 260 in this run; `Vec.iter` 187, `env` 187, `Vec.filled` 104, `Vector` 87, closures, weak references, integer widths other than i64, hand-written `Hash`/`Ord` used outside an operator, impls chosen per instantiation) |
+| SAME | 2535 |
 | ORDER | 641 |
 | PARSE | 458 (`effect` items 84) |
-| V2-REJECT | 336 (index move 63, Drop-type payload move 52, ref passed to owned param 51, move out of ref 22, a match arm yielding a ref beside an owned arm 21, ref returned where an owned value is expected 11, use after move) |
-| DIFF | 32: 22 differ in output, 8 are failed asserts (v2 exits 101, legacy 1; §10.1), 2 are legacy aborts (-6) the model runs to completion |
-| LEGACY-REJECT | 73 |
+| V2-REJECT | 332 (index move 62, Drop-type payload move 52, ref passed to owned param 43, ref stored into a declared owned collection 14, move out of ref 22, a match arm or if branch yielding a ref beside an owned one 21, ref returned where an owned value is expected 11, use after move) |
+| DIFF | 33: 22 differ in output, 8 are failed asserts (v2 exits 101, legacy 1; §10.1), 3 are legacy aborts (-6) the model runs to completion |
+| LEGACY-REJECT | 74 |
 | CRASH | 0 |
 
 The 22 output DIFFs read so far are legacy running too few `Drop` bodies (a local moved into a temporary
@@ -72,11 +72,12 @@ Under Rust's move-only rule for handle aggregates the V2-REJECT count is 505, of
 "move out of a shared place", 181 of them `Option[Handle]` (103 programs, 39 katas, from `a = n.next`).
 
 `corpus-verdicts.json` (per program verdict and reason) and `v2-reject-list.tsv` (corpus dir,
-legacy expectation, model reason; 17 of the 336 legacy already rejects) are in the review thread's
-shared folder `review/drop-model/`; regenerate with `corpus_run.py --json`.
+legacy expectation, model reason; 17 of the 332 legacy already rejects) are in this directory;
+regenerate with `corpus_run.py --json`.
 
 ## Limits
 
+- A reference stored into a collection is checked only when the collection's element type is declared (a `let` annotation, a parameter or a struct field). An unannotated `Vec.new()` is not checked. An `Array` is Copy only when it is declared `Array[T, N]`, since literals are built as lists.
 - Moves are checked on the executed path only. A maybe-moved use on a path not taken is not reported;
   generators must produce statically valid programs.
 - `model.py` does not model closures, `while let`, `?`, `Map`/`Set`, shared handles, views or `par`;

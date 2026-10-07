@@ -11,4 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'field reads inside par-branch must not add cancel checks; expected exactly 2 (one per helper() call), found {total}; IR:'"
-model_rev = "2209d30ce"
+model_rev = "451adfc6"

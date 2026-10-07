@@ -1,0 +1,333 @@
+corpus_dir	legacy_expect	model_reason
+corpus/examples/elevator	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/borrows/test_e2e_borrowed_tuple_member_leaf_is_a_copy	stdout	move out of a ref place (C3)
+corpus/fixtures/codegen/borrows/test_e2e_two_field_moves_then_borrow_reads	stdout	use of moved place e
+corpus/fixtures/codegen/control/e2e_scalar_leaf_return_keeps_the_arg_walk	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/drop_order/e2e_conditionally_rebound_enum_receiver_runs_its_payload_body_on_the_other_paths	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/drop_order/e2e_struct_field_leaf_moved_out_of_an_arm_runs_its_body_once	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/drop_order/test_e2e_in_loop_decl_rearms_cond_move_drop_flag_each_iteration	error:E0514	`p` is moved inside a loop and not initialized again before the next iteration (E0500)
+corpus/fixtures/codegen/enums/SRC	stdout	move out of a ref place (C3)
+corpus/fixtures/codegen/enums/e2e_fresh_temp_owned_enum_receiver_runs_the_shell_body	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/enums/e2e_generic_enum_with_generic_drop_impl_survives_an_owned_self_method	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/enums/e2e_let_else_over_an_indexed_element_runs_one_payload_body	stdout	use of a moved place
+corpus/fixtures/codegen/enums/e2e_owned_param_projection_payload_rebind_is_a_view	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/enums/e2e_owned_self_projection_scrutinee_runs_one_payload_body	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/enums/e2e_param_wrapped_in_returned_enum_variant_on_some_paths_has_one_owner	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/enums/e2e_projected_enum_payload_handed_out_runs_one_body	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/enums/e2e_reused_by_value_generic_enum_argument_is_not_freed_under_the_caller	stdout	use of moved place a
+corpus/fixtures/codegen/enums/e2e_unconsumed_enum_leaf_of_a_local_struct_scrutinee_runs_its_body	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/enums/test_e2e_enum_field_struct_field_move_out_loop	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_09_17_12/e2e_boxed_generic_enum_readonly_arm_is_a_view	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/families/b_2026_09_17_16/e2e_taken_tuple_payload_runs_element_bodies_once	stdout	use of moved place o
+corpus/fixtures/codegen/families/b_2026_09_17_17/e2e_taken_tuple_payload_handed_to_by_value_param_runs_bodies	stdout	use of moved place t
+corpus/fixtures/codegen/families/b_2026_09_17_33/e2e_conditionally_returned_param_consumed_by_call_output	stdout	use of moved place p
+corpus/fixtures/codegen/families/b_2026_09_19_53/e2e_shared_enum_let_pattern_vec_payload_one_owner	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_09_19_53/e2e_shared_generic_enum_boxed_payload_one_owner	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_09_27_102/e2e_boxed_generic_enum_param_handed_back_or_forwarded_by_path	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_09_27_110/e2e_while_let_boxed_generic_reassigned_scrutinee_frees_once	stdout	`g` is moved inside a loop and not initialized again before the next iteration (E0500)
+corpus/fixtures/codegen/families/b_2026_09_27_111/e2e_readonly_enum_arm_that_replaces_scrutinee_owns_payload	stdout	borrow of a partially moved value (C4)
+corpus/fixtures/codegen/families/b_2026_09_27_65/e2e_for_loop_boxed_generic_enum_view_handed_to_method_by_value	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_09_27_66/e2e_for_loop_boxed_generic_enum_copy_handed_on_by_value	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_09_27_96/e2e_boxed_generic_enum_string_param_handed_back_on_some_paths_in_loop	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_09_28_59/e2e_shared_enum_arm_binding_leaves_the_payload_for_other_handles	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/codegen/families/b_2026_09_28_62/e2e_shared_enum_struct_variant_arg_is_released	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_09_28_64/e2e_shared_generic_enum_payload_view_handed_on_freed_once	stdout	move out of a ref place (C3): a reference returned where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_09_28_74/e2e_enum_moved_by_assignment_has_one_owner	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/families/b_2026_09_29_10/e2e_borrowed_param_projection_pushed_into_container_keeps_the_callers_body	stdout	move out of a ref place (C3)
+corpus/fixtures/codegen/families/b_2026_09_29_33/e2e_user_enum_boxed_option_payload_is_dropped_once	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_09_29_77/e2e_owned_self_method_matching_self_on_some_paths_runs_the_payload_body_once	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/families/b_2026_09_30_12/e2e_mut_enum_local_reassigned_before_a_branch_move_keeps_its_body	stdout	`t` is moved inside a loop and not initialized again before the next iteration (E0500)
+corpus/fixtures/codegen/families/b_2026_09_30_12/e2e_mut_option_local_reassigned_before_a_branch_move_keeps_its_body	stdout	`t` is moved inside a loop and not initialized again before the next iteration (E0500)
+corpus/fixtures/codegen/families/b_2026_09_30_12/e2e_payload_binding_match_in_a_branch_across_shapes	stdout	`t` is moved inside a loop and not initialized again before the next iteration (E0500)
+corpus/fixtures/codegen/families/b_2026_09_30_13/e2e_let_use_after_move_copy_of_a_drop_struct_keeps_the_source_memory	stdout	use of moved place t
+corpus/fixtures/codegen/families/b_2026_09_30_3/e2e_tuple_pattern_match_on_loop_element_binds_views	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_09_30_7/e2e_caller_retained_struct_moved_twice_into_handback_callee_is_copied	stdout	use of moved place s
+corpus/fixtures/codegen/families/b_2026_09_30_80/e2e_read_method_on_literal_block_or_branch_receiver	stdout	a reference to a temporary outlives its statement (§5.5)
+corpus/fixtures/codegen/families/b_2026_10_02_32/e2e_result_struct_shared_field_readonly_arm_borrows	stdout	use of moved place r
+corpus/fixtures/codegen/families/b_2026_10_02_46/e2e_rebound_boxed_payload_alias_handed_on_frees_once	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/families/b_2026_10_02_91/e2e_if_let_over_for_loop_heap_enum_element_frees_once	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_10_02_93/e2e_enum_let_move_then_reuse_keeps_the_source_payload	stdout	use of moved place h
+corpus/fixtures/codegen/families/b_2026_10_03_35/e2e_generic_shared_enum_releases_its_shared_payload	stdout	move out of a shared place (C3)
+corpus/fixtures/codegen/families/b_2026_10_03_36/e2e_nested_shared_enum_pattern_tests_the_inner_tag_and_moves_once	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/codegen/families/b_2026_10_03_37/e2e_nested_shared_struct_variant_pattern_binds_its_handle	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/codegen/families/b_2026_10_03_38/e2e_value_enum_nested_shared_enum_pattern_moves_once	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/codegen/families/b_2026_10_03_39/e2e_shared_enum_releases_its_value_enum_payload	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/codegen/families/b_2026_10_04_31/e2e_shared_enum_map_payload_arm_binding_leaves_a_copy	stdout	move out of a ref place (C3): a reference returned where an owned value is expected
+corpus/fixtures/codegen/families/b_2026_10_04_33/e2e_moved_enum_with_boxed_option_payload_is_copied_for_its_reuse	stdout	use of moved place h
+corpus/fixtures/codegen/families/b_2026_10_04_76/e2e_index_element_block_and_arm_tail_is_copied	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/families/b_2026_10_04_77/e2e_array_for_binding_methods_and_moves	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/codegen/families/b_2026_10_05_4/e2e_shared_enum_value_payload_with_shared_handle_is_owned_once	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/generics/e2e_generic_callee_reaches_the_argument_site_copy_like_its_concrete_twin	stdout	use of moved place g
+corpus/fixtures/codegen/generics/e2e_generic_struct_enum_payload_param_owns_one_copy	stdout	use of moved place b
+corpus/fixtures/codegen/generics/test_e2e_tuple_type_arg_survives_a_nested_generic_call	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/io_runtime/test_e2e_conditional_param_view_assign_keeps_target_body_per_path_2	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/map_set/test_e2e_byte_parity_set_matches_interpreter	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/map_set/test_e2e_map_get_variant_payload_move_matches_interp	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/codegen/map_set/test_ir_map_get_letbound_moveout_emits_payload_clone	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/codegen/map_set/test_ir_map_get_moveout_arm_emits_payload_clone	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/codegen/misc/test_e2e_byvalue_aggregate_param_read_then_reused	stdout	use of moved place x
+corpus/fixtures/codegen/misc/test_e2e_declined_copy_param_rebind_keeps_the_callers_ownership	error:E0514	`r` is moved inside a loop and not initialized again before the next iteration (E0500)
+corpus/fixtures/codegen/misc/test_e2e_declined_copy_param_rebind_keeps_the_callers_ownership_2	stdout	use of moved place r
+corpus/fixtures/codegen/misc/test_e2e_one_binding_passed_twice_by_value_in_one_call	stdout	use of moved place g
+corpus/fixtures/codegen/mod/IFLET_INDEX_ELEM_CLONE_SRC	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/mod/INDEX_ELEM_CLONE_PAYLOAD_BODY_SRC	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/mod/SCRUTINEE_CLONE_DROP_BODY_SRC	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/moves/e2e_bare_owned_struct_self_scrutinee_binds_views	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/moves/e2e_deep_chain_move_out_then_bound_hop_runs_each_body_once	stdout	use of a partially moved value (C4)
+corpus/fixtures/codegen/moves/e2e_depth1_field_move_out_then_bound_leaf_runs_each_body_once	stdout	use of moved place o
+corpus/fixtures/codegen/moves/e2e_discarded_branch_in_a_generic_body_clones_nothing	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/moves/e2e_owned_self_field_let_runs_one_body	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/moves/e2e_whole_self_rebind_in_owned_method_runs_each_body_once	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/moves/test_e2e_second_field_move_of_one_binding_still_defensively_copies	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/numerics/test_e2e_self_referential_struct_through_vec_does_not_overflow_codegen	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/option_result/e2e_drop_free_argument_does_not_make_the_result_a_view	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/option_result/e2e_if_let_binding_shadowing_a_moved_local_frees_it	stdout	use of moved place doc
+corpus/fixtures/codegen/option_result/e2e_map_moved_then_read_again_keeps_its_own_table	stdout	use of moved place m
+corpus/fixtures/codegen/option_result/e2e_map_read_after_move_into_an_owner_keeps_its_free	stdout	use of moved place m
+corpus/fixtures/codegen/option_result/e2e_param_projection_optres_leaf_owns_its_field	stdout	use of moved place w
+corpus/fixtures/codegen/option_result/e2e_projection_source_optres_leaf_owns_its_field	stdout	use of moved place w
+corpus/fixtures/codegen/option_result/e2e_rc_fallback_boxed_optres_payload_handed_a_copy	stdout	use of moved place doc
+corpus/fixtures/codegen/option_result/e2e_rc_fallback_optres_local_frees_its_payload	stdout	use of moved place doc
+corpus/fixtures/codegen/option_result/e2e_rc_promoted_result_and_map_boxes_are_freed_once	stdout	use of moved place doc
+corpus/fixtures/codegen/option_result/e2e_repeated_by_value_optres_arg_reads_wrong_variant	stdout	use of moved place r
+corpus/fixtures/codegen/option_result/test_e2e_optres_field_unwrap_moves_the_field_once	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/patterns/e2e_bare_self_arm_passing_payload_to_scalar_fn_orders_payload_after_shell	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/patterns/e2e_borrow_projection_view_materialized_by_arm_value_or_call_arg_copies	stdout	move out of a ref place (C3): a reference returned where an owned value is expected
+corpus/fixtures/codegen/patterns/e2e_enum_leaf_handed_back_out_of_a_destructure	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/patterns/e2e_optres_struct_payload_read_only_arm_does_not_take_the_payload	stdout	use of moved place a
+corpus/fixtures/codegen/patterns/e2e_owned_enum_receiver_runs_its_payload_body_when_no_arm_claims_it	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/patterns/e2e_read_only_arm_on_owned_enum_receiver_orders_payload_after_shell	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/patterns/e2e_read_only_arm_on_owned_enum_receiver_runs_payload_body	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/patterns/e2e_readonly_if_let_over_borrow_projection_binds_a_view	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/patterns/e2e_tuple_destructure_result_payload_survives_every_depth	stdout	use of moved place g
+corpus/fixtures/codegen/patterns/e2e_two_level_destructure_hand_back_runs_one_payload_body	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/patterns/e2e_whole_payload_arm_binding_over_a_tuple_payload_runs_element_bodies	stdout	use of moved place o
+corpus/fixtures/codegen/patterns/e2e_wildcard_arm_over_owned_enum_receiver_runs_payload_body	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/rc_shared/test_e2e_heap_field_read_on_a_shared_temporary_receiver	stdout	move out of a shared place (C3)
+corpus/fixtures/codegen/rc_shared/test_e2e_ref_rooted_deep_place_heap_read_is_a_copy	stdout	move out of a ref place (C3)
+corpus/fixtures/codegen/slices/e2e_heap_vec_index_read_into_owning_sinks	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/slices/e2e_slice_param_from_a_borrowed_field_place	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/strings/test_ir_structpat_mapget_field_escape_clones	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/codegen/structs/e2e_destructure_owner_mask_reaches_the_remaining_arms	stdout	move out of a field of a type with a Drop body (C3)
+corpus/fixtures/codegen/structs/e2e_named_local_handing_back_a_nested_part_runs_one_body	stdout	use of moved place h
+corpus/fixtures/codegen/structs/e2e_nested_self_rebind_runs_each_body_once	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/structs/e2e_projection_source_struct_destructure_hands_each_leaf_its_body	stdout	use of moved place w
+corpus/fixtures/codegen/structs/e2e_tuple_argument_handing_back_a_nested_part_runs_one_body	stdout	use of moved place t
+corpus/fixtures/codegen/structs/test_e2e_field_param_view_leaves_sibling_field_bodies_armed	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/structs/test_e2e_field_target_param_view_assign_matches_the_identifier_spelling	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/codegen/structs/test_e2e_struct_valued_field_of_a_container_element_is_a_copy	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/structs/test_e2e_tuple_element_of_a_container_element_is_a_copy	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/vecs/e2e_generic_enum_loop_view_passed_by_value_runs_its_body_once	error:E0514	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/vecs/e2e_generic_enum_loop_view_passed_by_value_runs_its_body_once_2	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/vecs/e2e_generic_enum_payload_body_runs_as_vec_element_and_struct_field	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/vecs/e2e_generic_enum_vec_element_owns_its_payload_box	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/codegen/vecs/test_e2e_elem_optres_field_let_struct_pattern_and_loop_copies_interp	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/vecs/test_e2e_elem_optres_field_nested_patterns_copy_and_match_interp	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/codegen/vecs/test_e2e_elem_optres_field_reads_copy_and_match_interp	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/codegen/vecs/test_e2e_index_generic_call_result_in_place	stdout	use of moved place x
+corpus/fixtures/codegen/vecs/test_e2e_match_bound_payload_vec_field_copy_over_ref_vec	stdout	move out of a ref place (C3)
+corpus/fixtures/codegen/vecs/test_e2e_nested_container_tuple_index_read_matches_interp	stdout	move out of an index projection (C3)
+corpus/fixtures/codegen/vecs/test_e2e_owned_vec_param_let_move_param_reusable	stdout	use of moved place v
+corpus/fixtures/codegen/vecs/test_e2e_payload_binding_optres_field_match_copies_interp	stdout	move out of a ref place (C3)
+corpus/fixtures/codegen/vecs/test_e2e_rebound_vec_shared_param_keeps_every_element_alive	stdout	use of moved place v
+corpus/fixtures/codegen/vecs/test_e2e_tuple_hop_struct_field_read_matches_interp	stdout	move out of an index projection (C3)
+corpus/fixtures/interpreter/drop_order/interp_generic_enum_vec_element_owns_its_payload_box	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/interpreter/drop_order/interp_shadowed_binding_moved_out_on_the_taken_path_runs_each_body_once	error:E0514	`q` is moved inside a loop and not initialized again before the next iteration (E0500)
+corpus/fixtures/interpreter/enums/test_fresh_temp_owned_enum_receiver_runs_the_shell_body	error:E0200	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/enums/test_generic_enum_with_generic_drop_impl_survives_an_owned_self_method	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/enums/test_let_else_over_an_indexed_element_runs_one_payload_body	error:E0200	use of a moved place
+corpus/fixtures/interpreter/enums/test_owned_param_projection_payload_rebind_is_a_view	error:E0200	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/enums/test_owned_self_projection_scrutinee_runs_one_payload_body	error:E0200	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/enums/test_projected_enum_payload_handed_out_runs_one_body	error:E0200	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/enums/test_scrutinee_clone_does_not_rerun_the_enum_own_drop_body	error:E0200	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/families/b_2026_09_21_7/interp_struct_field_moved_by_one_arm_keeps_its_body_on_the_others	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/families/b_2026_10_04_64/interp_for_loop_over_fresh_vec_runs_element_bodies_per_iteration	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/interpreter/families/b_2026_10_06_100/interp_match_arm_payload_views_decided_per_arm	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/moves/test_bare_owned_struct_self_scrutinee_binds_views	error:E0200	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/moves/test_deep_chain_move_out_then_bound_hop_runs_each_body_once	stdout	use of a partially moved value (C4)
+corpus/fixtures/interpreter/moves/test_depth1_field_move_out_then_bound_leaf_runs_each_body_once	stdout	use of moved place o
+corpus/fixtures/interpreter/moves/test_owned_self_field_let_runs_one_body	error:E0200	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/numerics/container_argument_from_a_struct_field_round_trips_2	stdout	move out of an index projection (C3)
+corpus/fixtures/interpreter/patterns/enum_struct_variant_construction_match_and_equality	stdout	use of moved place c
+corpus/fixtures/interpreter/patterns/test_borrow_projection_view_materialized_by_arm_value_or_call_arg_copies	stdout	move out of a ref place (C3): a reference returned where an owned value is expected
+corpus/fixtures/interpreter/patterns/test_owned_enum_receiver_runs_its_payload_body_when_no_arm_claims_it	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/patterns/test_read_only_arm_on_owned_enum_receiver_runs_payload_body	error:E0200	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/patterns/test_readonly_if_let_over_borrow_projection_binds_a_view	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/interpreter/patterns/test_two_level_destructure_hand_back_runs_one_payload_body	error:E0200	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/interpreter/patterns/test_whole_payload_arm_binding_over_a_tuple_payload_runs_element_bodies	stdout	use of moved place o
+corpus/fixtures/memory_sanitizer/arrays/asan_array_elem_moved_out_of_an_owned_param_is_balanced	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/arrays/asan_array_local_read_after_a_container_literal_keeps_its_own_buffers	stdout	use of moved place a
+corpus/fixtures/memory_sanitizer/arrays/asan_array_moved_into_an_enum_ctor_is_balanced	stdout	use of moved place a1
+corpus/fixtures/memory_sanitizer/arrays/asan_array_owned_param_moved_into_nested_call_is_balanced	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/arrays/asan_multi_field_variant_owns_its_boxed_array_payload	stdout	use of moved place src
+corpus/fixtures/memory_sanitizer/arrays/asan_shared_enum_boxed_array_payload_interior_has_an_owner	stdout	use of moved place aB
+corpus/fixtures/memory_sanitizer/attrs_ir/asan_inline_map_get_unwrap_heap_value_no_double_free	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/borrows/asan_for_loop_borrow_then_rebind_let_no_leak	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/memory_sanitizer/borrows/asan_ref_param_field_let_move_no_leak_no_double_free	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/borrows/asan_ref_self_field_return_no_double_free	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/borrows/test_borrowed_tuple_member_leaf_is_cloned_not_aliased	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/borrows/test_struct_valued_field_of_a_container_element_is_cloned_not_aliased	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/borrows/test_tuple_element_of_a_container_element_is_cloned_not_aliased	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/closures/asan_owned_struct_option_shared_field_captured_from_builder_no_uaf	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/control/asan_scalar_leaf_return_is_balanced	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/drop_order/asan_attr_node_list_drop_consume_and_plain	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/drop_order/asan_by_value_struct_param_transfer_declines_reuse_places_temps_and_drop	stdout	use of moved place e
+corpus/fixtures/memory_sanitizer/drop_order/asan_conditionally_rebound_enum_receiver_is_freed_once	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/drop_order/asan_in_loop_rearmed_drop_flag_frees_each_iteration_exactly_once	error:E0514	`p` is moved inside a loop and not initialized again before the next iteration (E0500)
+corpus/fixtures/memory_sanitizer/drop_order/asan_own_drop_parent_masking_a_returned_field_frees_it	stdout	move out of a field of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/enums/asan_borrow_payload_field_direct_consume_no_double_free	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/enums/asan_boxed_payload_moved_into_by_value_call_is_freed	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/enums/asan_enum_field_struct_field_move_out_no_double_free	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/enums/asan_enum_nested_struct_payload_moved_out_no_leak_no_double_free	stdout	use of moved place e4
+corpus/fixtures/memory_sanitizer/enums/asan_live_local_block_spellings_over_user_enum_free_each_buffer_once	stdout	use of moved place a
+corpus/fixtures/memory_sanitizer/enums/asan_ref_chain_enum_scrutinee_clone_frees_once	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/enums/asan_ref_param_enum_field_payload_consume_no_leak_no_double_free	stdout	move out of a ref place (C3): a reference returned where an owned value is expected
+corpus/fixtures/memory_sanitizer/enums/asan_reused_by_value_generic_enum_argument_is_freed_exactly_once	stdout	use of moved place a
+corpus/fixtures/memory_sanitizer/enums/asan_shared_enum_struct_payload_child_moveout_no_double_free	stdout	move out of a ref place (C3): a reference returned where an owned value is expected
+corpus/fixtures/memory_sanitizer/enums/asan_shared_enum_view_field_move_incs_the_leaf_shared_children	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/enums/asan_shared_enum_view_field_move_incs_the_leaf_shared_children_2	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/families/b_2026_09_17_12/asan_boxed_generic_enum_readonly_arm_is_a_view	stdout	use of moved place g
+corpus/fixtures/memory_sanitizer/families/b_2026_09_19_54/asan_boxed_generic_array_payload_into_ctor_frees_once	stdout	use of moved place s
+corpus/fixtures/memory_sanitizer/families/b_2026_09_19_54/asan_boxed_generic_array_payload_rebind_frees_once	stdout	use of moved place s
+corpus/fixtures/memory_sanitizer/families/b_2026_09_20_56/asan_shared_enum_boxed_tuple_payload_is_freed_array	stdout	move out of a ref place (C3): a reference returned where an owned value is expected
+corpus/fixtures/memory_sanitizer/families/b_2026_09_20_56/asan_shared_enum_boxed_tuple_payload_is_freed_array_option	stdout	move out of a ref place (C3): a reference returned where an owned value is expected
+corpus/fixtures/memory_sanitizer/families/b_2026_09_20_56/asan_shared_enum_boxed_tuple_payload_is_freed_option	stdout	move out of a ref place (C3): a reference returned where an owned value is expected
+corpus/fixtures/memory_sanitizer/families/b_2026_09_20_56/asan_shared_enum_boxed_tuple_payload_is_freed_vec_option	stdout	move out of a ref place (C3): a reference returned where an owned value is expected
+corpus/fixtures/memory_sanitizer/families/b_2026_09_20_64/asan_sweep_b_2026_09_27_61_1	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/families/b_2026_09_20_64/asan_sweep_b_2026_09_27_61_2	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/families/b_2026_09_27_110/asan_while_let_boxed_generic_reassigned_scrutinee_frees_once	stdout	`g` is moved inside a loop and not initialized again before the next iteration (E0500)
+corpus/fixtures/memory_sanitizer/families/b_2026_09_27_111/asan_readonly_enum_arm_that_replaces_scrutinee_owns_payload	stdout	borrow of a partially moved value (C4)
+corpus/fixtures/memory_sanitizer/families/b_2026_09_29_33/asan_user_enum_boxed_option_payload_is_dropped_once	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/families/b_2026_10_01_55/asan_array_element_read_into_an_owning_sink_is_copied_drop_struct	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/families/b_2026_10_01_55/asan_array_element_read_into_an_owning_sink_is_copied_plain_struct	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/families/b_2026_10_01_55/asan_array_element_read_into_an_owning_sink_is_copied_string	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/families/b_2026_10_02_32/asan_result_struct_shared_field_readonly_arm_borrows	stdout	use of moved place r
+corpus/fixtures/memory_sanitizer/families/b_2026_10_02_91/asan_if_let_over_for_loop_heap_enum_element_frees_once	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/families/b_2026_10_03_35/asan_generic_shared_enum_releases_its_shared_payload	stdout	move out of a shared place (C3)
+corpus/fixtures/memory_sanitizer/families/b_2026_10_03_36/asan_nested_shared_enum_pattern_tests_the_inner_tag_and_moves_once	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/families/b_2026_10_03_37/asan_nested_shared_struct_variant_pattern_binds_its_handle	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/families/b_2026_10_03_38/asan_value_enum_nested_shared_enum_pattern_moves_once	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/families/b_2026_10_03_39/asan_shared_enum_releases_its_value_enum_payload	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/families/b_2026_10_04_33/asan_moved_enum_with_boxed_option_payload_is_copied_for_its_reuse	stdout	use of moved place h
+corpus/fixtures/memory_sanitizer/families/b_2026_10_04_76/asan_index_element_block_and_arm_tail_is_copied	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/families/b_2026_10_05_4/asan_shared_enum_value_payload_with_shared_handle_is_owned_once	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/families/b_2026_10_06_43/asan_const_vec_and_array_reads_are_balanced	stdout	use of moved place NUMS
+corpus/fixtures/memory_sanitizer/generics/asan_container_param_bound_to_a_struct_field_argument	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/generics/asan_container_param_bound_to_a_struct_field_argument_2	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/generics/asan_container_param_bound_to_a_struct_field_argument_3	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/generics/asan_let_bound_container_element_field_box_has_one_owner	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/generics/asan_let_bound_element_field_box_through_a_branch_and_a_field_root	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/iter_range/asan_getmove_iter_value_push_no_double_free	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/memory_sanitizer/iter_range/asan_iter_rev_range_reverse_iterate	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/map_set/asan_a_method_call_map_key_temporary_is_reclaimed_at_every_lookup_10	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/map_set/asan_b04_9a_vec_struct_field_entrycopy_wholedrop_no_double_free	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/map_set/asan_field_map_get_unwrap_heap_value_no_double_free	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/map_set/asan_for_loop_elem_map_set_field_consumes_freed	stdout	move out of a ref place (C3): a reference stored into an owned collection value
+corpus/fixtures/memory_sanitizer/map_set/asan_map_indexed_receiver_push_no_leak	stdout	use of moved place k
+corpus/fixtures/memory_sanitizer/misc/asan_declined_copy_param_rebind_keeps_the_callers_ownership	stdout	use of moved place r
+corpus/fixtures/memory_sanitizer/misc/asan_every_reused_consume_copy_is_balanced	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/moves/asan_bare_owned_struct_self_scrutinee_is_balanced	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/moves/asan_branch_value_owns_the_container_element_clone_it_hands_out	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/moves/asan_byvalue_aggregate_param_transferred_out_no_double_free	error:E0200	use of moved place y
+corpus/fixtures/memory_sanitizer/moves/asan_forloop_struct_element_field_move_no_double_free	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/moves/asan_generic_wrapper_accessor_and_move_no_double_free	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/moves/asan_nested_struct_field_moved_off_a_bitcopy_root_is_freed_once	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/moves/asan_place_field_move_assign_overwrite_no_leak	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/moves/asan_repeated_place_field_move_assign_keeps_one_owner	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/moves/asan_struct_moved_into_an_owning_sink_keeps_the_source_readable	stdout	use of moved place a
+corpus/fixtures/memory_sanitizer/moves/asan_struct_param_field_move_reuse_no_double_free	stdout	use of moved place h
+corpus/fixtures/memory_sanitizer/moves/asan_tail3v_whole_tuple_nontail_consume_no_leak	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/moves/asan_tail3v_whole_tuple_tail_move_no_double_free	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/moves/asan_use_after_move_as_call_argument_copies_in_a_callee	stdout	use of moved place e
+corpus/fixtures/memory_sanitizer/moves/asan_use_after_move_defensive_copy_frees_each_buffer_once	stdout	use of moved place s
+corpus/fixtures/memory_sanitizer/moves/test_struct_literal_temp_consuming_a_container_read_is_owned	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/option_result/asan_b04_7_option_heap_enum_struct_field_drop_no_leak	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/option_result/asan_b31_option_agg_payload_borrow_only_no_leak	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/option_result/asan_boxed_option_user_drop_field_move_out_no_leak_no_double_free	stdout	move out of a field of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/option_result/asan_by_value_optres_arg_passed_twice_no_double_free	stdout	use of moved place r
+corpus/fixtures/memory_sanitizer/option_result/asan_option_field_moveout_clean	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/option_result/asan_option_heap_moved_from_recursive_shared_enum_into_mut_ref_self_method_no_double_free	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/option_result/asan_rebound_option_local_transfers_payload_ownership	stdout	use of moved place p
+corpus/fixtures/memory_sanitizer/option_result/asan_shared_payload_view_optres_field_call_arg_copy_no_leak_no_double_free	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/option_result/asan_single_field_struct_option_payload_sizing_no_bad_access	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/patterns/asan_b27_option_enum_undestructured_drop_no_leak	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/patterns/asan_b27_option_struct_undestructured_drop_no_leak	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/patterns/asan_discarded_if_arm_element_is_not_cloned	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/patterns/asan_freshtemp_shared_enum_scrutinee_release_at_match_exit	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/patterns/asan_getmove_match_struct_payload_moveout_no_double_free	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/patterns/asan_nested_bare_arm_match_owns_its_moved_out_payload	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/patterns/asan_nested_if_let_owns_its_moved_out_payload	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/patterns/asan_nested_match_owns_its_moved_out_payload	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/patterns/asan_option_field_destructure_match_consume_clean	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/patterns/asan_option_field_destructure_unused_freed	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/patterns/asan_optres_destructuring_read_only_arm_is_a_borrow	stdout	use of moved place a
+corpus/fixtures/memory_sanitizer/patterns/asan_ref_param_struct_field_struct_pattern_no_leak_no_double_free	stdout	move out of a ref place (C3): a reference returned where an owned value is expected
+corpus/fixtures/memory_sanitizer/patterns/asan_returned_option_local_borrowed_by_a_readonly_arm_is_freed_once	stdout	use of a partially moved value (C4)
+corpus/fixtures/memory_sanitizer/rc_shared/asan_chained_call_struct_heap_field_no_leak	stdout	use of moved place n
+corpus/fixtures/memory_sanitizer/rc_shared/asan_destructure_owner_mask_remaining_arms_keep_the_heap	stdout	move out of a field of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/rc_shared/asan_for_loop_shared_bearing_struct_elem_move_out_no_double_free	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/memory_sanitizer/rc_shared/asan_rc_promoted_base_field_move_out_in_loop_2	stdout	`p` is moved inside a loop and not initialized again before the next iteration (E0500)
+corpus/fixtures/memory_sanitizer/rc_shared/asan_shared_struct_field_source_frees_the_targets_old_buffer	stdout	move out of a shared place (C3)
+corpus/fixtures/memory_sanitizer/rc_shared/asan_shared_struct_field_source_frees_the_targets_old_buffer_2	stdout	move out of a shared place (C3)
+corpus/fixtures/memory_sanitizer/rc_shared/asan_tuple_type_arg_with_a_heap_element_through_a_nested_generic_call	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/rc_shared/test_field_rooted_container_heap_field_read_is_cloned	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/rc_shared/test_ref_rooted_deep_place_heap_read_is_cloned_not_aliased	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/rc_shared/test_shared_temp_receiver_heap_field_read_owns_its_copy	stdout	move out of a shared place (C3)
+corpus/fixtures/memory_sanitizer/slices/asan_borrowed_index_field_enum_scrutinee_binding_outlives_container_no_uaf	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/slices/asan_fixed_array_into_a_method_ref_slice_is_a_borrow	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/slices/asan_heap_vec_index_read_into_sinks_no_double_free	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/slices/asan_return_field_index_element_no_double_free	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/slices/asan_self_field_vec_index_match_move_out_no_double_free	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/strings/asan_boxelem_tuple_payload_escape_no_double_free	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/strings/asan_for_loop_string_elem_into_push_and_insert_no_double_free	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/memory_sanitizer/strings/asan_forloop_element_destructure_string_field_move_into_collector_no_double_free	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/memory_sanitizer/strings/asan_generic_slice_elem_string_return_no_leak	error:E0238	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/strings/asan_getmove_iflet_string_payload_moveout_no_double_free	stdout	move out of a ref place (C3): an if branch yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/strings/asan_getmove_match_string_payload_moveout_no_double_free	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/strings/asan_match_out_of_live_option_string_no_use_after_free	stdout	use of moved place o
+corpus/fixtures/memory_sanitizer/strings/asan_match_variant_name_shared_across_enums_string_payload_no_leak	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/strings/asan_owned_string_param_consumed_twice_no_uaf	stdout	move out of a ref place (C3): owned `let` annotation on a reference
+corpus/fixtures/memory_sanitizer/strings/asan_shared_enum_string_payload_moveout_no_double_free	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/strings/asan_shared_struct_string_field_reassign_aliasing	stdout	move out of a shared place (C3)
+corpus/fixtures/memory_sanitizer/strings/asan_struct_vec_string_field_destructure_consume_clean	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/strings/asan_structpat_mapget_field_escape_no_double_free	stdout	move out of a ref place (C3): a match arm yields a reference where another yields an owned value
+corpus/fixtures/memory_sanitizer/structs/asan_field_param_view_sibling_bodies_free_exactly_once	stdout	move out of the payload of a type with a Drop body (C3)
+corpus/fixtures/memory_sanitizer/structs/asan_forloop_struct_element_clean_shapes_stay_clean	stdout	move out of a ref place (C3): a reference passed where an owned value is expected
+corpus/fixtures/memory_sanitizer/structs/asan_projection_source_struct_destructure_leaves_memory_alone	stdout	use of moved place w
+corpus/fixtures/memory_sanitizer/structs/test_container_element_tuple_field_read_is_cloned	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/vecs/asan_consuming_match_over_live_enum_vec_payload_frees_each_buffer_once	stdout	use of moved place e
+corpus/fixtures/memory_sanitizer/vecs/asan_dup_key_for_loop_elem_insert_no_leak	stdout	move out of a ref place (C3): a reference stored into an owned collection key
+corpus/fixtures/memory_sanitizer/vecs/asan_for_loop_elem_push_move_freed	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/memory_sanitizer/vecs/asan_generic_container_method_push_no_leak	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/vecs/asan_generic_owned_vec_param_temp_arg_no_leak	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/vecs/asan_getmove_match_arm_push_consume_no_double_free	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/memory_sanitizer/vecs/asan_if_arm_vec_element_bind_no_double_free	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/vecs/asan_match_bound_enum_payload_vec_field_copy_no_double_free	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/vecs/asan_rebound_vec_shared_param_survives_repeated_passes	stdout	use of moved place v
+corpus/fixtures/memory_sanitizer/vecs/asan_return_struct_field_vec_element_no_double_free	stdout	move out of an index projection (C3)
+corpus/fixtures/memory_sanitizer/vecs/asan_shared_enum_view_field_access_move_vec_shared_no_double_free	stdout	move out of a ref place (C3)
+corpus/fixtures/memory_sanitizer/vecs/asan_tuple_hop_option_field_match_takes_no_orphan_copy	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/fixtures/memory_sanitizer/vecs/asan_vec_element_field_move_by_assignment_no_double_free	stdout	move out of an index projection (C3)
+corpus/fixtures/ownership/a_string_rebind_still_reports_use_after_move	stdout	use of moved place s
+corpus/fixtures/par_codegen/test_e2e_auto_par_boxed_option_payload_slot_not_freed_early_3	stdout	move out of an index projection (C3)
+corpus/fixtures/par_codegen/test_e2e_auto_par_covered_nll_drop_point_neighbouring_spellings	stdout	move out of an index projection (C3)
+corpus/fixtures/par_codegen/test_e2e_auto_par_generic_slice_elem_nonint_return	stdout	move out of an index projection (C3)
+corpus/fixtures/par_codegen/test_e2e_auto_par_group_does_not_swallow_a_covered_nll_drop_point	stdout	move out of an index projection (C3)
+corpus/katas/101-200/126-word-ladder-ii/bench/word_ladder_ii	stdout	move out of an index projection (C3)
+corpus/katas/101-200/126-word-ladder-ii/word_ladder_ii	stdout	move out of an index projection (C3)
+corpus/katas/101-200/127-word-ladder/bench/word_ladder	stdout	move out of an index projection (C3)
+corpus/katas/101-200/127-word-ladder/word_ladder	stdout	move out of an index projection (C3)
+corpus/katas/201-300/261-graph-valid-tree/differential	stdout	move out of an index projection (C3)
+corpus/katas/201-300/273-integer-to-english-words/differential	stdout	move out of an index projection (C3)
+corpus/katas/201-300/273-integer-to-english-words/int_to_words_table	stdout	move out of an index projection (C3)
+corpus/katas/201-300/280-wiggle-sort/differential	stdout	use of moved place base
+corpus/katas/201-300/281-zigzag-iterator/differential	stdout	use of moved place lists
+corpus/katas/201-300/283-move-zeroes/differential	stdout	use of moved place src
+corpus/katas/301-400/332-reconstruct-itinerary/bench/reconstruct_itinerary	stdout	move out of an index projection (C3)
+corpus/katas/301-400/332-reconstruct-itinerary/reconstruct_itinerary	stdout	move out of an index projection (C3)
+corpus/katas/301-400/347-top-k-frequent-elements/top_k_frequent_words	stdout	move out of a ref place (C3): a reference stored into an owned collection element
+corpus/katas/oracle/fstring-arg-borrow-divergence/borrows	stdout	use of moved place t
+corpus/katas/oracle/fstring-arg-borrow-divergence/rejected	stdout	use of moved place t
+corpus/katas/oracle/recursive-owned-string-param-uaf/ablations/a1-local-binding-STILL-FAILS	stdout	move out of a ref place (C3): owned `let` annotation on a reference
+corpus/katas/oracle/recursive-owned-string-param-uaf/ablations/a4-plain-map-derived-drop-PASSES	stdout	move out of a ref place (C3): owned `let` annotation on a reference
+corpus/katas/oracle/recursive-owned-string-param-uaf/repro	stdout	move out of a ref place (C3): owned `let` annotation on a reference

@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = ""
 model_note = "`r` is moved inside a loop and not initialized again before the next iteration (E0500)"
-model_rev = "2209d30ce"
+model_rev = "451adfc6"
 model_verdict = "V2-REJECT"

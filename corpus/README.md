@@ -118,8 +118,8 @@ whose expectation moved.
 `record.py --model` runs `corpus/tools/drop-model/kmodel.py` over every
 recorded program outside `core/` and `drop-matrix/`. For model_verdict SAME,
 ORDER, ORDER-UNSPEC and DIFF it writes `model.out` and sets `model_verdict`,
-`model_exit` and `model_rev` (the last commit touching the model; a re-run
-redoes only entries at an older rev). A V2-REJECT gets `model_verdict` and
+`model_exit` and `model_rev` (an md5 prefix over the model's `.py` files; a
+re-run redoes only entries at another rev). A V2-REJECT gets `model_verdict` and
 `model_note` (the rule broken on the executed path) and no `model.out`. UNSUP,
 PARSE, CRASH and LEGACY-REJECT get only `model_rev`.
 

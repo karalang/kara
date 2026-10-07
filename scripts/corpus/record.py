@@ -33,8 +33,8 @@ over every recorded entry outside core/ and drop-matrix/ and writes:
 
   model.out      the model's stdout, for model_verdict SAME, ORDER,
                  ORDER-UNSPEC and DIFF; the MIR backends are held to it
-  meta.toml      model_verdict, model_exit, model_rev (the last commit touching
-                 the model), and model_note for a V2-REJECT (the rule it broke)
+  meta.toml      model_verdict, model_exit, model_rev (an md5 prefix over the
+                 model's .py files), and model_note for a V2-REJECT (the rule it broke)
 
 An entry the model has no verdict for (UNSUP, PARSE, CRASH, LEGACY-REJECT)
 loses all of these. Entries already at the current model_rev are kept
@@ -186,8 +186,13 @@ MODEL_OUT_VERDICTS = ("SAME", "ORDER", "ORDER-UNSPEC", "DIFF")
 
 
 def model_rev() -> str:
-    return subprocess.run(["git", "log", "-1", "--format=%h", "--", "corpus/tools/drop-model/"],
-                          cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+    """md5 prefix over the model's Python sources: a content hash rather than a
+    commit, so it is set before the model is committed and survives a rebase."""
+    import hashlib
+    h = hashlib.md5()
+    for f in sorted((ROOT / "corpus/tools/drop-model").glob("*.py")):
+        h.update(f.name.encode() + b"\0" + f.read_bytes())
+    return h.hexdigest()[:8]
 
 
 def _model_init() -> None:

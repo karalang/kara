@@ -11,4 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'load { i64 }'"
-model_rev = "2209d30ce"
+model_rev = "451adfc6"
