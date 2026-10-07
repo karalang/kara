@@ -168,8 +168,14 @@ pub fn elaborate_drops(body: &mut Body, tys: &mut TyInterner) -> Result<(), Stri
             apply(&e.paths, &mut st, effs);
         }
         let Some(p) = e.paths.lookup(&place) else {
-            // A place whose type needs no drop: nothing to do.
-            e.body.blocks[bi].terminator.kind = TerminatorKind::Goto { target };
+            // No move path: either the type needs no drop, or the place is
+            // behind a reference or an index, which this function never
+            // moves out of (C3), so it is initialized whenever it is
+            // reached; the D4 drop before `*r = v` is one. Keep that drop.
+            let keep = place_ty(e.body, e.tys, &place).is_ok_and(|pt| e.tys.needs_drop(pt.ty));
+            if !keep {
+                e.body.blocks[bi].terminator.kind = TerminatorKind::Goto { target };
+            }
             continue;
         };
         // Every way out of the drop passes `clear`, which resets the flags
@@ -1476,6 +1482,74 @@ mod tests {
         w.ret_unit(&mut b, bb2);
         let e = w.check(b.finish().unwrap(), &[(vec![], "drop 1\ndrop 2\n")]);
         assert_eq!(drop_count(&e), 1);
+    }
+
+    /// `*r = v` through a `mut ref` parameter: the builder drops the old
+    /// pointee first (D4). That place has no move path, since nothing moves
+    /// out through a reference, and its drop must stay rather than be
+    /// erased as if its type needed none.
+    #[test]
+    fn mir_elab_keeps_the_drop_behind_a_mut_ref() {
+        use crate::mir::parse_module;
+        let src = "
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const \"drop \", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn set(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: R;
+    bb0: {
+        _2 = R { const 2_i64 };
+        drop((*_1)) -> bb1;
+    }
+    bb1: {
+        (*_1) = move _2;
+        _0 = const ();
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let mut _1: R;
+    let _2: mut ref R;
+    let _3: ();
+    bb0: {
+        _1 = R { const 1_i64 };
+        _2 = &mut _1;
+        _3 = set(move _2) -> bb1;
+    }
+    bb1: {
+        drop(_1) -> bb2;
+    }
+    bb2: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let mut m = parse_module(src).unwrap();
+        for b in &mut m.bodies {
+            elaborate_drops(b, &mut m.tys).unwrap();
+            let errs = validate(b, &m.tys);
+            assert!(errs.is_empty(), "{}: {errs:?}", b.instance.name);
+        }
+        let set = m.bodies.iter().find(|b| b.instance.name == "set").unwrap();
+        assert_eq!(drop_count(set), 1);
+        let r = run(&Program::from_module(&m), &m.tys, "main", vec![]);
+        assert_eq!(r.outcome, Outcome::Returned(Value::Unit), "{}", r.output);
+        assert_eq!(r.output, "drop 1\ndrop 2\n");
     }
 
     /// Elaborating the same body twice is refused rather than repeated.

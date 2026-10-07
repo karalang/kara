@@ -84,6 +84,20 @@ impl Validator<'_> {
     }
 
     /// The type of `p`, reporting an ill-typed path.
+    /// Does `p` go through a `Deref` of a shared (`ref`) reference?
+    fn behind_shared_ref(&self, p: &Place) -> bool {
+        (0..p.projection.len()).any(|i| {
+            p.projection[i] == ProjElem::Deref && {
+                let prefix = Place {
+                    local: p.local,
+                    projection: p.projection[..i].to_vec(),
+                };
+                place_ty(self.body, self.tys, &prefix)
+                    .is_ok_and(|pt| matches!(self.tys.kind(pt.ty), TyKind::Ref(_)))
+            }
+        })
+    }
+
     fn place(&mut self, p: &Place) -> Option<Ty> {
         if !self.local_ok(p.local) {
             return None;
@@ -309,11 +323,11 @@ impl Validator<'_> {
                 }
             }
             TerminatorKind::Drop { place, target } => {
-                if let Some(ty) = self.place(place) {
-                    if place.is_move_forbidden() {
-                        self.err("drop of a place behind a reference or an index");
-                    }
-                    let _ = ty;
+                // Dropping through a `mut ref` or an index is D4's drop of
+                // the old value before `*r = v` / `a[i] = v`; through a
+                // shared `ref` nothing may be overwritten, so nothing drops.
+                if self.place(place).is_some() && self.behind_shared_ref(place) {
+                    self.err("drop of a place behind a shared reference");
                 }
                 self.target(*target);
             }
