@@ -23,7 +23,7 @@
 //! check, not this one.
 //!
 //! And it checks function kinds (§9.6): a closure literal that writes a
-//! captured binding is a `MutFn`, so passing it to a user function whose
+//! captured binding is a `MutFn`, so passing it to a user function or method whose
 //! parameter is a plain `Fn` is an error, as is passing a `MutFn` parameter
 //! on to one, or a local bound to such a closure. A closure that moves a
 //! capture out is an `OnceFn`, which the type checker already reports where
@@ -85,6 +85,8 @@ struct Walk<'t, 'a> {
     /// The program's own free functions by name, for the kind check at a
     /// call (§9.6). Library functions are not migrated to `MutFn` yet.
     fn_decls: &'t FxHashMap<String, &'a Function>,
+    /// The program's own methods, keyed `Type.method`.
+    method_decls: &'t FxHashMap<String, &'a Function>,
     /// Closure literals being walked, innermost last: the scope depth each
     /// starts at, and the first captured binding its body writes.
     closures: Vec<(usize, Option<String>)>,
@@ -163,6 +165,7 @@ impl<'a> TypeChecker<'a> {
         let mut self_modes: FxHashMap<String, SelfParam> = FxHashMap::default();
         let mut fns: Vec<&Function> = Vec::new();
         let mut fn_decls: FxHashMap<String, &Function> = FxHashMap::default();
+        let mut method_decls: FxHashMap<String, &Function> = FxHashMap::default();
         for item in &self.program.items {
             match item {
                 Item::Function(f) => {
@@ -180,6 +183,9 @@ impl<'a> TypeChecker<'a> {
                         if let ImplItem::Method(m) = it {
                             if let (Some(h), Some(sp)) = (&head, &m.self_param) {
                                 self_modes.insert(format!("{h}.{}", m.name), sp.clone());
+                            }
+                            if let (Some(h), false) = (&head, m.stdlib_origin) {
+                                method_decls.insert(format!("{h}.{}", m.name), m.as_ref());
                             }
                             fns.push(m.as_ref());
                         }
@@ -199,6 +205,7 @@ impl<'a> TypeChecker<'a> {
             borrowed: Vec::new(),
             conflicts: Vec::new(),
             fn_decls: &fn_decls,
+            method_decls: &method_decls,
             closures: Vec::new(),
             closure_writes: FxHashMap::default(),
             mut_fn_params: FxHashSet::default(),
@@ -678,6 +685,9 @@ impl Walk<'_, '_> {
             _ => {}
         }
         self.children(e);
+        if let ExprKind::MethodCall { args, .. } = &e.kind {
+            self.check_method_kinds(e, args);
+        }
     }
 
     fn children(&mut self, e: &Expr) {
@@ -772,6 +782,29 @@ impl Walk<'_, '_> {
         let Some(f) = self.fn_decls.get(name.as_str()).copied() else {
             return;
         };
+        self.check_arg_kinds(name, f, args);
+    }
+
+    /// §9.6 at a method call: the same check against a program's own
+    /// method.
+    fn check_method_kinds(&mut self, call: &Expr, args: &[CallArg]) {
+        let Some(key) = self
+            .tc
+            .method_callee_types
+            .get(&SpanKey::from_span(&call.span))
+        else {
+            return;
+        };
+        let Some(f) = self.method_decls.get(key.as_str()).copied() else {
+            return;
+        };
+        let name = key.clone();
+        self.check_arg_kinds(&name, f, args);
+    }
+
+    /// A plain `Fn` parameter of `f` takes neither a closure that writes a
+    /// capture nor a `MutFn` (§9.6).
+    fn check_arg_kinds(&mut self, name: &str, f: &Function, args: &[CallArg]) {
         let mut position = 0;
         for a in args {
             let param = match &a.label {

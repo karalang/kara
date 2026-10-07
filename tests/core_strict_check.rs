@@ -1708,6 +1708,20 @@ fn closure_kinds_follow_their_bodies() {
         "`c` mutates v, so it is a MutFn, but apply expects Fn (§9.6)",
     );
     rejected_with(
+        "fn-kind-method",
+        "struct Q { n: i64 }\n\
+         impl Q {\n\
+             fn apply(self, f: Fn()) { f(); }\n\
+         }\n\
+         fn main() {\n\
+             let q = Q { n: 1 };\n\
+             let mut c = 0;\n\
+             q.apply(|| { c += 1; });\n\
+             println(f\"{c}\");\n\
+         }\n",
+        "the closure mutates c, so it is a MutFn, but Q.apply expects Fn (§9.6)",
+    );
+    rejected_with(
         "once-called-twice",
         "fn call_twice(f: OnceFn()) {\n\
              f();\n\
