@@ -970,3 +970,164 @@ fn a_generic_move_out_of_a_borrow_is_checked_per_instantiation() {
          }\n",
     );
 }
+
+#[test]
+fn a_function_parameter_is_non_escaping_unless_declared_escaping() {
+    // §9.3, pin `err_store_nonescaping_param`.
+    rejected(
+        "store-nonescaping-param",
+        "struct Holder { f: Fn() -> i64 }\n\
+         fn keep(f: Fn() -> i64) -> Holder { Holder { f: f } }\n\
+         fn main() {\n\
+             let h = keep(|| 5);\n\
+             println(f\"{(h.f)()}\");\n\
+         }\n",
+        "parameter `f` is a non-escaping function value and cannot be stored",
+    );
+    rejected(
+        "return-nonescaping-param",
+        "fn pass(f: Fn() -> i64) -> Fn() -> i64 { f }\n\
+         fn main() { println(pass(|| 5)()); }\n",
+        "cannot be returned",
+    );
+    accepted(
+        "store-escaping-param",
+        "struct Holder { f: Fn() -> i64 }\n\
+         fn keep(f: escaping Fn() -> i64) -> Holder { Holder { f: f } }\n\
+         fn twice(g: Fn(i64) -> i64, x: i64) -> i64 { g(g(x)) }\n\
+         fn apply(g: Fn(i64) -> i64) -> i64 { twice(g, 1) }\n\
+         fn main() {\n\
+             let h = keep(|| 5);\n\
+             println(f\"{(h.f)()}\");\n\
+             println(apply(|x| x + 1));\n\
+         }\n",
+    );
+    // `escaping` belongs to a parameter only.
+    rejected(
+        "escaping-on-a-field",
+        "struct H { f: escaping Fn() -> i64 }\nfn main() {}\n",
+        "only accepted on a parameter's type",
+    );
+}
+
+#[test]
+fn an_escaping_closure_captures_by_move() {
+    // §9.3, pin `err_escaping_capture_reused`: stored in a struct field, the
+    // closure takes `s`, so the later `println(s)` is a use after move.
+    rejected(
+        "escaping-capture-reused",
+        "struct Holder { f: Fn() -> i64 }\n\
+         fn main() {\n\
+             let s = \"abc\".to_string();\n\
+             let h = Holder { f: || s.len() };\n\
+             println(s);\n\
+             println(f\"{(h.f)()}\");\n\
+         }\n",
+        "moved into an escaping closure",
+    );
+    rejected(
+        "escaping-capture-let-bound",
+        "fn main() {\n\
+             let s = \"abc\".to_string();\n\
+             let c = || s.len();\n\
+             let mut v: Vec[Fn() -> i64] = Vec.new();\n\
+             v.push(c);\n\
+             println(s);\n\
+         }\n",
+        "moved into an escaping closure",
+    );
+    // Passed down to a non-escaping parameter, the closure borrows.
+    accepted(
+        "nonescaping-closure-borrows",
+        "fn run(f: Fn() -> i64) -> i64 { f() }\n\
+         fn main() {\n\
+             let s = \"abc\".to_string();\n\
+             println(run(|| s.len()));\n\
+             println(s);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn the_formatter_keeps_escaping_and_a_called_field_in_parentheses() {
+    // `escaping` lives beside the tree (`Program::escaping_fn_types`), and
+    // `(h.f)()` without its parentheses reparses as the method call `h.f()`.
+    let src = "struct Holder {\n    f: Fn() -> i64,\n}\n\n\
+               fn keep(f: escaping Fn() -> i64, g: Fn(i64) -> i64) -> Holder {\n    \
+               Holder {\n        f: f,\n    }\n}\n\n\
+               fn main() {\n    let h = keep(|| 5, |x| x);\n    println((h.f)());\n}\n";
+    let parsed = karac::parse(src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let formatted = karac::formatter::format_program(&parsed.program);
+    assert_eq!(formatted, src, "round-trip mismatch:\n{formatted}");
+}
+
+#[test]
+fn storing_a_borrow_into_a_set_or_map_is_an_error() {
+    // §3.7: a bare `for` element borrows, and `insert` moves its argument.
+    rejected(
+        "set-insert-for-element",
+        "fn main() {\n\
+             let ps: Vec[String] = [\"a\".to_string()];\n\
+             let mut set: Set[String] = Set.new();\n\
+             for p in ps { set.insert(p); }\n\
+             println(set.len());\n\
+         }\n",
+        "cannot move 'p'",
+    );
+}
+
+#[test]
+fn a_task_group_borrows_what_its_tasks_capture() {
+    // §9.5, pins `ok_taskgroup_borrows`, `err_taskgroup_write_while_borrowed`,
+    // `err_taskgroup_origin_declared_after`.
+    let total = "fn total(v: ref Vec[i64]) -> i64 { v.len() }\n";
+    accepted(
+        "taskgroup-borrows",
+        &format!(
+            "{total}fn main() {{\n\
+                 let data: Vec[i64] = [1, 2, 3];\n\
+                 let mut g = TaskGroup.new();\n\
+                 let h = g.spawn(|| total(data));\n\
+                 let k = g.spawn(|| total(data));\n\
+                 println(h.join() + k.join());\n\
+                 println(data.len());\n\
+             }}\n"
+        ),
+    );
+    rejected(
+        "taskgroup-write-while-borrowed",
+        &format!(
+            "{total}fn main() {{\n\
+                 let mut data: Vec[i64] = [1, 2, 3];\n\
+                 let mut g = TaskGroup.new();\n\
+                 let h = g.spawn(|| total(data));\n\
+                 data.push(4);\n\
+                 println(h.join());\n\
+             }}\n"
+        ),
+        "`data` is written while a task of `g` borrows it",
+    );
+    rejected(
+        "taskgroup-origin-declared-after",
+        &format!(
+            "{total}fn main() {{\n\
+                 let mut g = TaskGroup.new();\n\
+                 let data: Vec[i64] = [1, 2, 3];\n\
+                 let h = g.spawn(|| total(data));\n\
+                 println(h.join());\n\
+             }}\n"
+        ),
+        "`data` drops before `g`",
+    );
+    rejected(
+        "taskgroup-mut-capture-in-loop",
+        "fn main() {\n\
+             let mut b: Vec[i64] = Vec.new();\n\
+             let mut g = TaskGroup.new();\n\
+             let mut k = 0;\n\
+             while k < 2 { let _ = g.spawn(|| { b.push(k); 0 }); k = k + 1; }\n\
+         }\n",
+        "captures `b` by `mut ref`",
+    );
+}

@@ -26,6 +26,7 @@ pub mod comptime;
 pub mod concurrency;
 pub mod concurrency_report;
 pub(crate) mod consume_class;
+pub mod core_escape;
 pub mod cost_summary;
 pub mod crash_report;
 pub mod def_path;

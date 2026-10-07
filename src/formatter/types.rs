@@ -161,6 +161,13 @@ impl super::Formatter {
     // ── Types ───────────────────────────────────────────────────
 
     pub(super) fn format_type_expr(&mut self, ty: &TypeExpr) {
+        if matches!(ty.kind, TypeKind::FnType { .. })
+            && self
+                .escaping_fn_types
+                .contains(&crate::resolver::SpanKey::from_span(&ty.span))
+        {
+            self.write_str("escaping ");
+        }
         match &ty.kind {
             TypeKind::Path(p) => {
                 self.write_path(&p.segments);

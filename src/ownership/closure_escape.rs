@@ -77,7 +77,9 @@ impl<'a> super::OwnershipChecker<'a> {
         // function-wise until callee-side annotation infrastructure
         // (`#[non_escaping]` on Fn parameter slots, or inter-
         // procedural body inspection for in-module callees) lands.
-        if !Self::fn_allows_ref_capture_escape(f) {
+        // v2 core §9.3: a function-typed parameter is non-escaping unless
+        // declared `escaping`, so passing a closure to one is not an escape.
+        if !Self::fn_allows_ref_capture_escape(f) && !super::core_rules() {
             self.collect_call_arg_escape_closures(
                 body,
                 &closure_let_bindings,
@@ -182,6 +184,11 @@ impl<'a> super::OwnershipChecker<'a> {
                     // xs.len()`) is diagnosed. A captured LOCAL is already owned
                     // by-value and is harmlessly ignored (not in `f.params`).
                     promoted_own_params.insert(cap_name.clone());
+                    continue;
+                }
+                // v2 core §9.3: an escaping closure captures by move, which
+                // the use classifier checks; there is no borrow to outlive.
+                if super::core_rules() {
                     continue;
                 }
                 let mode_str = match mode {

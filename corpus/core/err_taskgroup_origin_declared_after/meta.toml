@@ -1,0 +1,13 @@
+source = "review/core-pins/err_taskgroup_origin_declared_after"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "concurrency"]
+class = "unknown"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "legacy.out recorded by Thread A with legacy-build: legacy accepts the program and prints 6. The expected.out wording of an error pin is guidance, not a byte oracle."

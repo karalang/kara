@@ -1,0 +1,12 @@
+fn total(v: ref Vec[i64]) -> i64 {
+    let mut acc = 0;
+    for x in v { acc = acc + x; }
+    acc
+}
+fn main() {
+    let mut data: Vec[i64] = [1, 2, 3];
+    let mut g = TaskGroup.new();
+    let h = g.spawn(|| total(data));
+    data.push(4);
+    println(h.join());
+}

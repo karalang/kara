@@ -1,0 +1,1 @@
+ERROR at line 8: `data` drops before `g`, but a task of `g` borrows it (spawned at line 9); declare `data` before `g`

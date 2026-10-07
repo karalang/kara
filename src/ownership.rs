@@ -3012,6 +3012,14 @@ impl<'a> OwnershipChecker<'a> {
     /// rule `impl_head_keeps_type_args` states.
     ///
     /// A span with no entry answers `false`: no auto-fix, never a wrong one.
+    /// Whether `span` lies inside an escaping closure (v2 core §9.3).
+    fn in_escaping_closure(&self, span: &Span) -> bool {
+        self.typecheck_result
+            .core_escaping_closures
+            .iter()
+            .any(|k| k.0 <= span.offset && span.offset < k.0 + k.1)
+    }
+
     fn moved_type_supports_clone(&self, span: &Span) -> bool {
         self.typecheck_result
             .clonable_expr_spans

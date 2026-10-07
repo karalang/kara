@@ -253,7 +253,7 @@ Pins:
 - an escaping closure (§9.3);
 - the function's result, except as §5.4 allows.
 
-A view **may** enter a branch of `par {}`, or a `TaskGroup` task that joins inside the scope of every origin.
+A view **may** enter a branch of `par {}`, or a `TaskGroup` task that joins inside the scope of every origin (§9.5).
 
 **5.8 Views in generic code.** A generic parameter may be instantiated with a view.
 - The checks of §5.6–§5.7 run on the monomorphised instance.
@@ -436,7 +436,7 @@ An escaping closure captures every place by move. A captured place is then moved
 **Function-typed parameters** are non-escaping by default:
 - the callee may call such a parameter or pass it to another non-escaping parameter, and nothing else;
 - storing or returning it requires the declaration `f: escaping Fn(A) -> R`;
-- `spawn` and `TaskGroup.spawn` take escaping closures.
+- `spawn` takes an escaping closure. `TaskGroup.spawn` does not (§9.5).
 
 Pins: `err_escaping_capture_reused` (today it compiles and prints both lines), `err_store_nonescaping_param`.
 
@@ -444,6 +444,14 @@ Pins: `err_escaping_capture_reused` (today it compiles and prints both lines), `
 - A by-move capture moves the captured value into the closure when the closure is created.
 - A closure's captures drop when the closure value drops, in reverse capture order, which is the order their names first appear in the body.
 - A closure whose body moves a capture out can be called only once (`design.md` § First-Class Functions, "once-callable"). The call consumes the closure: the moved capture goes where the body sends it, and the other captures drop at the end of that call, as the callee's locals would.
+
+**9.5 `TaskGroup` tasks borrow.** The closure passed to `TaskGroup.spawn` captures as §9.1 infers: by `ref`, by `mut ref` or by move, place by place. It is not escaping.
+- The group and the returned `TaskHandle` then borrow the closure's origins (§5.3) until the group drops. Dropping a group joins its tasks, so the drop is the borrow's last use (§5.6).
+- So while the group lives, a captured place may not be written, moved or dropped, and a second task may not capture by `mut ref` a place another task already captured.
+- Every origin must outlive the group. A place declared after the group in the same scope drops before it (§7.3), which is an error. Declare the place first, or put the group in an inner block.
+- No signature can say "this parameter is kept by the receiver" (§5.4), so the compiler knows `TaskGroup.spawn` by name.
+
+Pins: `ok_taskgroup_borrows`, `err_taskgroup_write_while_borrowed`, `err_taskgroup_origin_declared_after`.
 
 ---
 
@@ -491,7 +499,7 @@ Pin: `err_par_conflict` (already an error today, E0408).
 **11.3 What may enter a task:**
 - owned values (moved in);
 - `frozen` and `par struct` handles;
-- views, into structured tasks only (§5.7).
+- views, into `par {}` branches and `TaskGroup` tasks only (§5.7, §9.5).
 
 Shared handles may not.
 

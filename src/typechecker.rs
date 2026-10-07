@@ -35,6 +35,7 @@ mod alloc_rejection;
 mod bounds;
 mod closures;
 mod const_eval;
+mod core_taskgroup;
 mod cross_task_check;
 mod derives;
 pub mod env;
@@ -1473,6 +1474,10 @@ pub struct TypeCheckResult {
     /// the container keeps (`Column[i]`, a `Map` index). Nothing is moved out
     /// of the container by taking them by value.
     pub core_fresh_index_reads: FxHashSet<SpanKey>,
+    /// v2 core §9.3: closure expressions that escape (returned, stored, sent
+    /// to a task, passed to an `escaping` parameter), keyed by span. They
+    /// capture every place by move. Empty outside the strict commands.
+    pub core_escaping_closures: FxHashSet<SpanKey>,
     /// Receiver `Vector[T, N]` type for each vector **instance**-method call
     /// (`reduce_*` / `dot` / `cross` / `select`), keyed by the method-call
     /// span, recorded as `(element, lane_count)`. A `MethodCall`'s span equals
@@ -3340,6 +3345,18 @@ impl<'a> TypeChecker<'a> {
         let must_use_functions = self.env.must_use_functions.clone();
         let (node_types, node_call_subs) = self.resolved_node_tables();
         self.emit_core_generic_move_errors(&node_call_subs);
+        if self.cli_lint_overrides.strict_core {
+            self.emit_core_taskgroup_errors(&node_types);
+        }
+        let core_escaping_closures = if self.cli_lint_overrides.strict_core {
+            let esc = crate::core_escape::analyze(self.program);
+            for (span, message) in esc.errors {
+                self.type_error(message, span, TypeErrorKind::TypeMismatch);
+            }
+            esc.escaping_closures
+        } else {
+            FxHashSet::default()
+        };
         TypeCheckResult {
             errors: self.errors,
             warnings: self.warnings,
@@ -3349,6 +3366,7 @@ impl<'a> TypeChecker<'a> {
             core_moving_scrutinees: self.core_moving_scrutinees,
             core_borrowed_receivers: self.core_borrowed_receivers,
             core_fresh_index_reads: self.index_read_is_fresh_value.clone(),
+            core_escaping_closures,
             vector_method_receivers: self.vector_method_receivers,
             pointer_method_receiver_pointees: self.pointer_method_receiver_pointees,
             struct_info: self.env.structs,

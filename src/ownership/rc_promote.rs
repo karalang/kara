@@ -180,6 +180,15 @@ impl<'a> super::OwnershipChecker<'a> {
                     "value '{binding}' was moved into a container (moved at line {line}:{col}), \
                      used again here"
                 ),
+                RcTrigger::ClosureCaptureWithOuterUse
+                    if self.in_escaping_closure(&entry.consume_span) =>
+                {
+                    format!(
+                        "value '{binding}' was moved into an escaping closure (captured at line \
+                         {line}:{col}), used again here: a closure that is returned, stored, or \
+                         sent to a task captures by move (core-semantics.md §9.3)"
+                    )
+                }
                 RcTrigger::ClosureCaptureWithOuterUse => format!(
                     "value '{binding}' was moved into a closure (captured at line {line}:{col}), \
                      used again here"

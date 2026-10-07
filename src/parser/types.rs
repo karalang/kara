@@ -53,6 +53,36 @@ impl super::Parser {
         // and was wrongly accepted. Taking it here covers every nested position
         // by construction rather than by enumerating them.
         let frozen_ok = std::mem::replace(&mut self.frozen_ok, false);
+        let escaping_ok = std::mem::replace(&mut self.escaping_ok, false);
+
+        // `escaping Fn(...)` (`docs/core-semantics.md` §9.3): a contextual
+        // keyword, recognised only before `Fn` / `OnceFn`, and accepted only
+        // as a parameter's outermost type. The mark is kept beside the tree
+        // (`Program::escaping_fn_types`), so the type itself is unchanged.
+        if let Token::Identifier { name, .. } = self.peek_token_ref() {
+            if name == "escaping"
+                && matches!(
+                    self.peek_token_ref_at(1),
+                    Token::Identifier { name, .. } if name == "Fn" || name == "OnceFn"
+                )
+            {
+                let kw_span = self.current_span();
+                self.advance();
+                if !escaping_ok {
+                    self.error_at(
+                        "`escaping` marks a function-typed parameter that the function \
+                         may store or return; it is only accepted on a parameter's type",
+                        kw_span,
+                    );
+                }
+                let inner = self.parse_type()?;
+                if escaping_ok {
+                    self.escaping_fn_types
+                        .insert(crate::resolver::SpanKey::from_span(&inner.span));
+                }
+                return Some(inner);
+            }
+        }
 
         // `frozen Type` — B-2026-08-01-33 mechanism 3, stage 1.
         //

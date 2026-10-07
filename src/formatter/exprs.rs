@@ -171,7 +171,28 @@ impl super::Formatter {
                 self.format_expr(right);
             }
             ExprKind::Call { callee, args } => {
+                // `(h.f)()` calls a function-typed field; without the
+                // parentheses it reparses as the method call `h.f()`. Any
+                // callee that is not a plain path or call keeps them too.
+                let paren = matches!(
+                    callee.kind,
+                    ExprKind::FieldAccess { .. }
+                        | ExprKind::TupleIndex { .. }
+                        | ExprKind::Closure { .. }
+                        | ExprKind::Binary { .. }
+                        | ExprKind::Unary { .. }
+                        | ExprKind::Cast { .. }
+                        | ExprKind::If { .. }
+                        | ExprKind::Match { .. }
+                        | ExprKind::Range { .. }
+                );
+                if paren {
+                    self.write_str("(");
+                }
                 self.format_expr(callee);
+                if paren {
+                    self.write_str(")");
+                }
                 self.write_str("(");
                 self.format_call_args(args);
                 self.write_str(")");

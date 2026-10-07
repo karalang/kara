@@ -199,6 +199,12 @@ pub struct Parser {
     /// is sticky (stage 2), and accepting them now would let programs depend
     /// on a spelling whose semantics are still undecided. Fail-closed.
     pub(crate) frozen_ok: bool,
+    /// `true` only for the outermost type of a function parameter, the one
+    /// position `escaping Fn(...)` is accepted (`docs/core-semantics.md`
+    /// §9.3). Taken by `parse_type` like [`Self::frozen_ok`].
+    pub(crate) escaping_ok: bool,
+    /// See [`crate::ast::Program::escaping_fn_types`].
+    pub(crate) escaping_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// `true` only while parsing the bracket list of a TRAIT BOUND, which is
     /// the one position where `IDENT = TYPE` means an associated-type binding
     /// rather than a positional type argument (B-2026-08-21-9). Cleared while
@@ -365,6 +371,8 @@ impl Parser {
             recursion_depth: 0,
             pending_extra_items: Vec::new(),
             frozen_ok: false,
+            escaping_ok: false,
+            escaping_fn_types: rustc_hash::FxHashSet::default(),
             assoc_bindings_allowed: false,
             pending_assoc_bindings: Vec::new(),
             frozen_consumed: false,
@@ -677,6 +685,7 @@ impl Parser {
             inner_attrs,
             freeze_spans: std::mem::take(&mut self.freeze_spans),
             ref_binding_spans: std::mem::take(&mut self.ref_binding_spans),
+            escaping_fn_types: std::mem::take(&mut self.escaping_fn_types),
             stmt_lint_overrides: std::mem::take(&mut self.stmt_lint_overrides),
             container_hashers: std::mem::take(&mut self.container_hashers),
             ..Program::default()

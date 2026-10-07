@@ -5333,6 +5333,29 @@ impl<'a> super::TypeChecker<'a> {
                     self.core_borrowed_receivers
                         .insert(SpanKey::from_span(&object.span));
                 }
+                // v2 core §3.7: storing into a builtin collection moves the
+                // value, so a borrow cannot be stored. `push` has its own
+                // site (`method_vec_mutation`); these are the other stores.
+                if self.cli_lint_overrides.strict_core
+                    && matches!(method.as_str(), "insert" | "push_back" | "push_front")
+                    && self.core_receiver_is_builtin_collection(object)
+                {
+                    for a in args {
+                        let Some((t, _)) = self.node_types.get(&a.value.id).cloned() else {
+                            continue;
+                        };
+                        let t = super::inference::resolve_type_vars(
+                            &t,
+                            &self.env.substitutions,
+                            &std::collections::HashMap::new(),
+                            &self.env.const_substitutions,
+                            &std::collections::HashMap::new(),
+                        );
+                        if !matches!(t, Type::TypeVar(_)) {
+                            self.warn_borrow_projection_copy(&a.value, &t);
+                        }
+                    }
+                }
                 // The GENERIC-QUALIFIED prelude ctor: `Option[R].Some(w.r)` and
                 // `Result[R, E].Ok(w.r)` parse as a MethodCall on a type
                 // receiver, not as a Call, so the `infer_call` hook above never

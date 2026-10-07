@@ -1621,9 +1621,11 @@ impl super::Parser {
         // accept-a-spelling-with-undecided-semantics trap the positional
         // restriction exists to avoid, refused for the same reason.
         self.frozen_ok = self.fn_context_stack.last() != Some(&FnContext::Extern);
+        self.escaping_ok = true;
         self.frozen_consumed = false;
         let ty = self.parse_type();
         self.frozen_ok = false;
+        self.escaping_ok = false;
         let is_frozen = std::mem::take(&mut self.frozen_consumed);
         let ty = ty?;
         let default_value = if self.eat(&Token::Equal) {

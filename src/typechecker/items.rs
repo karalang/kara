@@ -2127,6 +2127,29 @@ impl<'a> super::TypeChecker<'a> {
         self.lint_override_stack.pop();
     }
 
+    /// Whether `object` is a builtin `Vec` / `VecDeque` / `Set` / `Map` (or
+    /// a sorted twin), looking through references.
+    pub(super) fn core_receiver_is_builtin_collection(&self, object: &Expr) -> bool {
+        let Some((mut t, _)) = self.node_types.get(&object.id).cloned() else {
+            return false;
+        };
+        loop {
+            t = super::inference::resolve_type_var_top(&t, &self.env.substitutions);
+            match t {
+                Type::Ref(inner) | Type::MutRef(inner) => t = *inner,
+                _ => break,
+            }
+        }
+        matches!(
+            &t,
+            Type::Named { name, .. }
+                if matches!(
+                    name.as_str(),
+                    "Vec" | "VecDeque" | "Set" | "Map" | "SortedSet" | "SortedMap"
+                )
+        )
+    }
+
     /// v2 core §3.7, checked per instantiation (the rule §5.8 gives views):
     /// a generic body that moves a `T` out of a borrowed place moves only
     /// when `T` is not `Copy`. Report it at each call that instantiates `T`

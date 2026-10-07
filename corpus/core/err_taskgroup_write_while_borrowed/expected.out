@@ -1,0 +1,1 @@
+ERROR at line 10: `data` is written while a task of `g` borrows it (spawned at line 9; the borrow lasts until `g` drops)

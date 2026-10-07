@@ -226,6 +226,7 @@ pub fn classify_function_body_with(
         once_callable_closures,
         closure_span_stack: Vec::new(),
         closure_local_stack: Vec::new(),
+        escaping_closure_depth: 0,
         arm_consumed_names: Vec::new(),
     };
     classifier.walk_block(body, Mode::Reading);
@@ -295,6 +296,10 @@ struct UseClassifier<'a> {
     /// `|x: i64| acc.push(x)` twin passed only because `i64` is Copy and never
     /// consumed). Pushed on entry to a `Closure` arm, popped on exit.
     closure_local_stack: Vec<HashSet<String>>,
+    /// v2 core §9.3: how many enclosing closure bodies being walked belong to
+    /// an ESCAPING closure. Inside one, every outer binding the body names is
+    /// captured by move, so its leaf is classified as a consume.
+    escaping_closure_depth: u32,
     /// B-2026-08-30-10 — stack of the binding names CONSUMED inside each
     /// currently-open `match` arm body. One frame is pushed per arm; every
     /// `Consume` identifier-leaf recorded while frames are open adds its name
@@ -1161,7 +1166,14 @@ impl<'a> UseClassifier<'a> {
                     }
                 }
                 self.closure_local_stack.push(locals);
+                let escaping = crate::ownership::core_rules()
+                    && self
+                        .tc
+                        .core_escaping_closures
+                        .contains(&SpanKey::from_span(&expr.span));
+                self.escaping_closure_depth += u32::from(escaping);
                 self.walk_expr(body, Mode::Reading);
+                self.escaping_closure_depth -= u32::from(escaping);
                 self.closure_local_stack.pop();
                 self.closure_span_stack.pop();
                 self.consume_origin_ctx = saved;
@@ -1439,7 +1451,12 @@ impl<'a> UseClassifier<'a> {
     }
 
     fn classify_identifier(&self, name: &str, span: &crate::token::Span, mode: Mode) -> UseKind {
-        if mode == Mode::Reading {
+        // v2 core §9.3: an escaping closure captures every outer binding by
+        // move, whatever its body does with it.
+        let captured_by_move = self.escaping_closure_depth > 0
+            && !self.is_closure_local(name)
+            && (self.param_types.contains_key(name) || self.local_types.contains_key(name));
+        if mode == Mode::Reading && !captured_by_move {
             return UseKind::Read;
         }
         // Unit-variant constructors (`None`, `Ok`, custom `Pending`) are
