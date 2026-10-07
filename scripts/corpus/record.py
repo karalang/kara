@@ -145,7 +145,7 @@ def derive(meta: dict, rel: str, cands: dict, out: str) -> dict:
 
 def retag_one(entry: Path, corpus: Path, cands: dict) -> str:
     meta = read_toml(entry / "meta.toml")
-    if not (entry / "legacy.out").exists() or meta.get("expected_from") in ("pin", "spec"):
+    if not (entry / "legacy.out").exists() or meta.get("expected_from") in ("pin", "spec", "mirror"):
         return "untouched"
     before = dict(meta, tags=list(meta.get("tags", [])))
     meta = derive(meta, str(entry.relative_to(corpus)), cands, "")
@@ -272,6 +272,8 @@ def record_one(entry: Path, corpus: Path, cands: dict, args) -> str:
     src = (entry / "source.kara").read_text()
     # drop-matrix: the model was compared against the interpreter when it was built
     backend = "legacy-interp" if rel.startswith(("fixtures/interpreter/", "drop-matrix/")) else "legacy-build"
+    if meta.get("expected_from") == "mirror" and meta.get("legacy_backend"):
+        backend = meta["legacy_backend"]  # apps: chosen by apps.py finalize (a frozen legacy-build bug)
     logs = Path(args.work) / "logs" / rel
     logs.mkdir(parents=True, exist_ok=True)
 
@@ -307,7 +309,7 @@ def record_one(entry: Path, corpus: Path, cands: dict, args) -> str:
             expected_from = "assert"
     (entry / "legacy.out").write_bytes(res["stdout"] if res else b"")
     legacy_exit = -1 if res is None or res["exit"] is None else res["exit"]
-    if meta.get("expected_from") in ("pin", "spec"):
+    if meta.get("expected_from") in ("pin", "spec", "mirror"):
         # A v2 pin or drop-matrix program keeps the spec's expectation; only
         # the legacy record is added.
         meta.update({"tags": sorted(tags), "legacy_exit": legacy_exit, "legacy_backend": backend})

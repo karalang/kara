@@ -280,7 +280,9 @@ def main() -> int:
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     (work / "manifest.json").write_text(json.dumps(manifest))
-    stale = sorted(p.parent for p in corpus.rglob("source.kara") if p.parent not in written)
+    # corpus/apps/ is written by hand, not extracted: never stale.
+    stale = sorted(p.parent for p in corpus.rglob("source.kara")
+                   if p.parent not in written and not p.parent.relative_to(corpus).parts[0] == "apps")
     if args.prune:
         for p in stale:
             shutil.rmtree(p)
