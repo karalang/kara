@@ -87,6 +87,10 @@ impl BodyBuilder {
         l
     }
 
+    pub fn local_ty(&self, l: Local) -> Ty {
+        self.locals[l.index()].ty
+    }
+
     pub fn new_block(&mut self) -> BasicBlock {
         let b = BasicBlock(self.blocks.len() as u32);
         self.blocks.push((Vec::new(), None));

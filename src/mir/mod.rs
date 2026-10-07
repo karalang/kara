@@ -8,6 +8,7 @@
 //! interned types land; MIR only needs the queries it exposes.
 
 pub mod build;
+pub mod elaborate;
 pub mod interp;
 pub mod parse;
 pub mod place_ty;
@@ -17,6 +18,7 @@ pub mod ty;
 pub mod validate;
 
 pub use build::BodyBuilder;
+pub use elaborate::elaborate_drops;
 pub use parse::{parse_module, pretty_module, MirModule};
 pub use pretty::pretty_body;
 pub use syntax::*;
