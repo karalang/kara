@@ -2492,7 +2492,7 @@ impl<'a> Interp<'a> {
                 };
                 match k {
                     IntrinsicTy::String => {}
-                    IntrinsicTy::Vec(e) => {
+                    IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e) => {
                         let n = match &self.live(id)?.value {
                             Value::Agg(fs) => fs.len(),
                             other => return err(format!("a Vec allocation holds {other:?}")),
@@ -2508,7 +2508,7 @@ impl<'a> Interp<'a> {
                     // Entries in insertion order, the interpreter's
                     // (unspecified) iteration order; within an entry the
                     // key drops before the value (core-semantics §7).
-                    IntrinsicTy::Map(k, val) => {
+                    IntrinsicTy::Map(k, val) | IntrinsicTy::SortedMap(k, val) => {
                         for i in 0..self.vec_elems(id)?.len() as u64 {
                             let entry = Addr {
                                 root: Root::Heap(id),
@@ -2518,7 +2518,7 @@ impl<'a> Interp<'a> {
                             self.drop_at(&entry.child(1), val)?;
                         }
                     }
-                    IntrinsicTy::Set(e) => {
+                    IntrinsicTy::Set(e) | IntrinsicTy::SortedSet(e) => {
                         for i in 0..self.vec_elems(id)?.len() as u64 {
                             let at = Addr {
                                 root: Root::Heap(id),

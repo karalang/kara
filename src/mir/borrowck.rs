@@ -412,10 +412,15 @@ fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
             TyKind::Ref(_) | TyKind::MutRef(_) | TyKind::Slice(_) | TyKind::Other => true,
             TyKind::Tuple(ts) | TyKind::Closure(_, ts) => ts.iter().any(|t| go(tys, *t, seen)),
             TyKind::Array(t, _) => go(tys, t, seen),
-            TyKind::Intrinsic(IntrinsicTy::Vec(e)) | TyKind::Intrinsic(IntrinsicTy::Set(e)) => {
-                go(tys, e, seen)
+            TyKind::Intrinsic(
+                IntrinsicTy::Vec(e)
+                | IntrinsicTy::Set(e)
+                | IntrinsicTy::VecDeque(e)
+                | IntrinsicTy::SortedSet(e),
+            ) => go(tys, e, seen),
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
+                go(tys, k, seen) || go(tys, v, seen)
             }
-            TyKind::Intrinsic(IntrinsicTy::Map(k, v)) => go(tys, k, seen) || go(tys, v, seen),
             TyKind::Adt(a) => {
                 let adt = tys.adt(a);
                 // A task group holds its tasks' closures, which the
@@ -1291,12 +1296,7 @@ fn main() -> () {
             ("err_use_after_move", true, "move check main:"),
             ("err_move_out_of_ref", true, "borrow check name_of:"),
             ("err_ref_from_temp", true, "borrow check main:"),
-            // The builder passes `ref` receivers to `mut ref self` natives
-            // without a `&mut (*_1)` reborrow, and lowers a bare `for` over
-            // a place by moving it, so this is refused for a use after the
-            // loop's move, not for §5.9. When the builder borrows, it
-            // becomes "borrow check add:".
-            ("err_write_through_ref", true, "move check main:"),
+            ("err_write_through_ref", true, "borrow check add:"),
             ("err_escaping_capture_reused", false, "borrow check"),
             ("err_store_nonescaping_param", false, "borrow check"),
             ("err_taskgroup_origin_declared_after", false, "borrow check"),

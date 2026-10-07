@@ -485,6 +485,9 @@ impl<'a> Lcx<'a> {
                     "Vec" if std => Some(IntrinsicKind::Vec),
                     "Map" if std => Some(IntrinsicKind::Map),
                     "Set" if std => Some(IntrinsicKind::Set),
+                    "VecDeque" if std => Some(IntrinsicKind::VecDeque),
+                    "SortedMap" if std => Some(IntrinsicKind::SortedMap),
+                    "SortedSet" if std => Some(IntrinsicKind::SortedSet),
                     _ => None,
                 };
                 if let Some(kind) = intrinsic {
@@ -1083,12 +1086,19 @@ impl<'l, 'a> Bx<'l, 'a> {
         t: Ty,
         out: &mut Vec<(Local, Ty)>,
     ) -> R<()> {
+        // Destructuring through a reference binds references into the
+        // referent, as a match through one does.
+        if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(t) {
+            if !matches!(pat.kind, PatternKind::Wildcard | PatternKind::Binding(_)) {
+                return self.bind_pattern(pat, &place.project(ProjElem::Deref), inner, true, out);
+            }
+        }
         match &pat.kind {
             PatternKind::Wildcard => Ok(()),
             PatternKind::Binding(name) => {
                 let l = self.user_local(name, t, pat.id);
-                if self.is_handle(t) {
-                    self.assign(l, Rvalue::Retain(place));
+                if self.is_handle(t) || self.is_handle_aggregate(t) {
+                    self.count_copy(place, t, Place::local(l));
                 } else {
                     let op = self.use_place(place, t);
                     self.assign(l, Rvalue::Use(op));
@@ -1142,6 +1152,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         // then the old value is dropped and the new one stored (D4).
         let pending = self.prepare_place(target)?;
         let op = self.expr_operand(value)?;
+        let op = self.settle(op);
         let place = self.finish_place(pending, true)?;
         let (place, t) = self.write_through(place, value)?;
         if self.needs_drop(t) {
@@ -1156,6 +1167,23 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         self.assign(place, Rvalue::Use(op));
         Ok(())
+    }
+
+    /// An operand that reads through a projection (`copy (*_r)`, where `_r`
+    /// borrows an element) read into a temporary now, so the borrow it
+    /// reads through ends before the target's own borrow starts
+    /// (`v[k] = v[j]`).
+    fn settle(&mut self, op: Operand) -> Operand {
+        match op {
+            Operand::Copy(p) | Operand::Move(p) if !p.projection.is_empty() => {
+                let t = self.place_type(&p);
+                let l = self.temp(t);
+                let read = self.use_place(p, t);
+                self.assign(l, Rvalue::Use(read));
+                self.use_place(Place::local(l), t)
+            }
+            other => other,
+        }
     }
 
     /// The place an assignment writes: a `mut ref` binding assigned a value
@@ -1175,6 +1203,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn compound_assign(&mut self, target: &'a Expr, op: CompoundOp, value: &'a Expr) -> R<()> {
         let pending = self.prepare_place(target)?;
         let (rhs, _) = self.scalar_operand(value)?;
+        let rhs = self.settle(rhs);
         let place = self.finish_place(pending, true)?;
         let (place, t) = self.write_through(place, value)?;
         let bin = match op {
@@ -1624,6 +1653,32 @@ impl<'l, 'a> Bx<'l, 'a> {
         matches!(self.tys().tcx().kind(t), HK::Shared { .. })
     }
 
+    /// An `Option` or tuple made only of `shared` handles and `Copy` parts,
+    /// with at least one handle: a read copies it by counting each handle,
+    /// as for a bare handle (core semantics §6.1).
+    fn is_handle_aggregate(&self, t: Ty) -> bool {
+        let parts = match self.tys().tcx().kind(t) {
+            HK::Tuple(l) => self.tys().tcx().list(l),
+            HK::Adt { def, args } if self.lcx.def_name(def) == "Option" => {
+                self.tys().tcx().list(args)
+            }
+            _ => return false,
+        };
+        let counted = |p: Ty| self.is_handle(p) || self.is_handle_aggregate(p);
+        parts.iter().all(|&p| counted(p) || self.is_copy(p)) && parts.iter().any(|&p| counted(p))
+    }
+
+    /// `dest = <a counted copy of place>`, for a handle or handle aggregate.
+    fn count_copy(&mut self, place: Place, t: Ty, dest: Place) {
+        if self.is_handle(t) {
+            self.assign(dest, Rvalue::Retain(place));
+        } else {
+            let recv = self.ref_to(place, t);
+            let name = format!("{}.clone", self.tys().display(t));
+            self.call_native(&name, vec![recv], dest);
+        }
+    }
+
     /// Read a place as an operand: a copy for a `Copy` type, else a move.
     fn use_place(&self, p: Place, t: Ty) -> Operand {
         if self.is_copy(t) {
@@ -1642,9 +1697,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         if self.is_place(e) {
             let p = self.expr_place(e, false)?;
             let t = self.expr_ty(e)?;
-            if self.is_handle(t) {
+            if self.is_handle(t) || self.is_handle_aggregate(t) {
                 let l = self.temp(t);
-                self.assign(l, Rvalue::Retain(p));
+                self.count_copy(p, t, Place::local(l));
                 return Ok(Operand::Move(Place::local(l)));
             }
             return Ok(self.use_place(p, t));
@@ -1765,10 +1820,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let mutable = matches!(self.tys().tcx().kind(dt), HK::MutRef(_));
                 let mut p = self.expr_place(e, mutable)?;
                 let mut t = self.place_type(&p);
-                // A `ref T` of a Copy `T` flowing into a `T` slot is read
-                // through (`fn f(x: ref i64) -> i64 { return x; }`).
+                // A `ref T` flowing into a `T` slot is read through: a copy
+                // for a Copy `T` (`fn f(x: ref i64) -> i64 { return x; }`),
+                // else a move the borrow check refuses.
                 while let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(t) {
-                    if t == dt || !self.is_copy(inner) || self.ref_depth(t) <= self.ref_depth(dt) {
+                    if t == dt || self.ref_depth(t) <= self.ref_depth(dt) {
                         break;
                     }
                     p = p.project(ProjElem::Deref);
@@ -1786,10 +1842,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                         return Ok(());
                     }
                 }
-                if self.is_handle(t) {
+                if self.is_handle(t) || self.is_handle_aggregate(t) {
                     // Copying a `shared` handle counts; the source keeps
                     // its own (core semantics §6.1).
-                    self.assign(dest, Rvalue::Retain(p));
+                    self.count_copy(p, t, dest);
                     return Ok(());
                 }
                 let op = self.use_place(p, t);
@@ -2691,9 +2747,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
-    /// `for x in v` over a `Vec`. A borrowed collection (`v.iter()`,
+    /// `for x in v` over a `Vec`. A borrowed collection (`v`, `v.iter()`,
     /// `v.iter_mut()`, or a `ref Vec`) yields references to its elements by
-    /// index. An owned one (`v`, `v.into_iter()`) is moved into the loop and
+    /// index. `v.into_iter()` moves the collection into the loop, which
     /// gives up its elements front to front; what a `break` leaves behind
     /// drops with it at the loop's end.
     fn for_collection(
@@ -2727,7 +2783,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 };
                 (&**object, m)
             }
-            _ => (iterable, Mode::Owned),
+            // A bare `for x in c` borrows `c` (core semantics §5,
+            // "`for x in c` borrows `c` through `Iterable`"); only
+            // `c.into_iter()` moves it.
+            _ => (iterable, Mode::Ref),
         };
         let st = self.expr_ty(src)?;
         let (coll, src_is_ref) = match self.tys().tcx().kind(st) {
@@ -2762,7 +2821,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 len: crate::ty::ArrayLen::Known(n),
             } => {
                 let how = match mode {
-                    Mode::Owned if self.is_copy(elem) => None,
+                    Mode::Owned | Mode::Ref if self.is_copy(elem) => None,
                     Mode::Owned => {
                         return self.unsupported(e.span, "a `for` loop that moves out of an array")
                     }
@@ -3068,6 +3127,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let mut binds = Vec::new();
         match &pattern.kind {
+            // A shared reference to a `Copy` element reads the same as a
+            // copy of it, which is what `x` holds.
+            PatternKind::Binding(name) if by_ref && !mutable && self.is_copy(elem) => {
+                let x = self.user_local(name, elem, pattern.id);
+                self.assign(x, Rvalue::Use(Operand::Copy(place.clone())));
+                binds.push((x, elem));
+            }
             // `for x in v.iter()`: `x` is the reference itself.
             PatternKind::Binding(name) if by_ref => {
                 let x = self.user_local(name, elem_ref, pattern.id);
@@ -3603,9 +3669,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             out.push((l, rt));
         } else {
             let l = self.user_local(name, t, node);
-            if self.is_handle(t) {
+            if self.is_handle(t) || self.is_handle_aggregate(t) {
                 // A `shared` handle binds a counted copy (§6.1).
-                self.assign(l, Rvalue::Retain(place));
+                self.count_copy(place, t, Place::local(l));
             } else {
                 let op = self.use_place(place, t);
                 self.assign(l, Rvalue::Use(op));
@@ -4037,6 +4103,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                     IntrinsicKind::Vec => "Vec",
                     IntrinsicKind::Map => "Map",
                     IntrinsicKind::Set => "Set",
+                    IntrinsicKind::VecDeque => "VecDeque",
+                    IntrinsicKind::SortedMap => "SortedMap",
+                    IntrinsicKind::SortedSet => "SortedSet",
                 };
                 (self.lcx.defs.lookup(0, name)?, self.tys().tcx().list(args))
             }
@@ -4171,8 +4240,15 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// after the arguments (core semantics §5.6, two-phase borrows).
     fn recv_place(&mut self, object: &'a Expr, mutable: bool) -> R<PendingRecv> {
         let t = self.expr_ty(object)?;
-        if matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_)) {
-            return Ok(PendingRecv::Ready(self.expr_operand(object)?));
+        if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(t) {
+            // A receiver that is already a reference is reborrowed, so a
+            // `mut ref self` call through a `ref` reaches the borrow check
+            // as the `&mut (*r)` it is (§5.9).
+            if !self.is_place(object) {
+                return Ok(PendingRecv::Ready(self.expr_operand(object)?));
+            }
+            let p = self.expr_place(object, mutable)?.project(ProjElem::Deref);
+            return Ok(PendingRecv::Borrow(p, inner, mutable));
         }
         let p = self.expr_place(object, mutable)?;
         Ok(PendingRecv::Borrow(p, t, mutable))
@@ -4986,6 +5062,39 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.assign(dest, Rvalue::Use(Operand::Move(Place::local(s))));
                 Ok(())
             }
+            (_, "or_insert" | "or_insert_with" | "or_default") if matches!(&object.kind, ExprKind::MethodCall { method: m, .. } if m == "entry") =>
+            {
+                // `m.entry(k).or_insert(v)` is one call of the map's
+                // `entry_or_insert(mut ref m, k, v)`, which returns a
+                // `mut ref` to the value.
+                let ExprKind::MethodCall {
+                    object: map,
+                    args: key,
+                    ..
+                } = &object.kind
+                else {
+                    unreachable!()
+                };
+                let mt = self.expr_ty(map)?;
+                let (_, mbase) = self.strip_ty_full(mt);
+                let recv = self.recv_place(map, true)?;
+                let mut rest = Vec::new();
+                for a in key.iter().chain(args) {
+                    if self.is_fn_typed(a.value.id)
+                        || matches!(a.value.kind, ExprKind::Closure { .. })
+                    {
+                        let (op, _) = self.fn_value(&a.value)?;
+                        rest.push(op);
+                    } else {
+                        rest.push(self.expr_operand(&a.value)?);
+                    }
+                }
+                let mut ops = vec![self.recv_borrow(recv)];
+                ops.extend(rest);
+                let name = format!("{}.entry_{method}", self.tys().display(mbase));
+                self.call_native(&name, ops, dest);
+                Ok(())
+            }
             (_, "to_string") if matches!(&object.kind, ExprKind::StringLit(_)) => {
                 let ExprKind::StringLit(s) = &object.kind else {
                     unreachable!()
@@ -5054,11 +5163,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                         | "set"
                 );
                 for a in args {
+                    if self.is_fn_typed(a.value.id)
+                        || matches!(a.value.kind, ExprKind::Closure { .. })
+                    {
+                        // A closure or function goes by value; the native
+                        // calls it.
+                        let (op, _) = self.fn_value(&a.value)?;
+                        rest.push(op);
+                        continue;
+                    }
                     let at = self.expr_ty(&a.value)?;
-                    let callable = matches!(
-                        self.tys().tcx().kind(at),
-                        HK::Fn { .. } | HK::Closure { .. }
-                    );
+                    let callable = matches!(self.tys().tcx().kind(at), HK::Closure { .. });
                     let by_ref = !stores && !callable && !self.is_copy(at);
                     rest.push(self.lib_arg(&a.value, by_ref)?);
                 }

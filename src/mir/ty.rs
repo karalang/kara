@@ -149,6 +149,11 @@ pub enum IntrinsicTy {
     Vec(Ty),
     Map(Ty, Ty),
     Set(Ty),
+    VecDeque(Ty),
+    /// A map kept in key order.
+    SortedMap(Ty, Ty),
+    /// A set kept in key order.
+    SortedSet(Ty),
 }
 
 /// MIR's handle on the shared type context.
@@ -222,6 +227,18 @@ impl TyInterner {
                 kind: IntrinsicKind::Set,
                 args: tcx.intern_list(&[e]),
             },
+            TyKind::Intrinsic(IntrinsicTy::VecDeque(e)) => SharedKind::Intrinsic {
+                kind: IntrinsicKind::VecDeque,
+                args: tcx.intern_list(&[e]),
+            },
+            TyKind::Intrinsic(IntrinsicTy::SortedMap(k, v)) => SharedKind::Intrinsic {
+                kind: IntrinsicKind::SortedMap,
+                args: tcx.intern_list(&[k, v]),
+            },
+            TyKind::Intrinsic(IntrinsicTy::SortedSet(e)) => SharedKind::Intrinsic {
+                kind: IntrinsicKind::SortedSet,
+                args: tcx.intern_list(&[e]),
+            },
             TyKind::FnDef(d) => SharedKind::FnDef {
                 def: d,
                 args: none(),
@@ -267,6 +284,13 @@ impl TyInterner {
                     (IntrinsicKind::Vec, [e]) => TyKind::Intrinsic(IntrinsicTy::Vec(*e)),
                     (IntrinsicKind::Map, [k, v]) => TyKind::Intrinsic(IntrinsicTy::Map(*k, *v)),
                     (IntrinsicKind::Set, [e]) => TyKind::Intrinsic(IntrinsicTy::Set(*e)),
+                    (IntrinsicKind::VecDeque, [e]) => TyKind::Intrinsic(IntrinsicTy::VecDeque(*e)),
+                    (IntrinsicKind::SortedMap, [k, v]) => {
+                        TyKind::Intrinsic(IntrinsicTy::SortedMap(*k, *v))
+                    }
+                    (IntrinsicKind::SortedSet, [e]) => {
+                        TyKind::Intrinsic(IntrinsicTy::SortedSet(*e))
+                    }
                     _ => TyKind::Other,
                 }
             }
@@ -352,6 +376,15 @@ impl TyInterner {
                 format!("Map[{}, {}]", self.display(k), self.display(v))
             }
             TyKind::Intrinsic(IntrinsicTy::Set(e)) => format!("Set[{}]", self.display(e)),
+            TyKind::Intrinsic(IntrinsicTy::VecDeque(e)) => {
+                format!("VecDeque[{}]", self.display(e))
+            }
+            TyKind::Intrinsic(IntrinsicTy::SortedMap(k, v)) => {
+                format!("SortedMap[{}, {}]", self.display(k), self.display(v))
+            }
+            TyKind::Intrinsic(IntrinsicTy::SortedSet(e)) => {
+                format!("SortedSet[{}]", self.display(e))
+            }
             TyKind::FnDef(d) => format!("fn#{}", d.0),
             TyKind::Closure(d, caps) => {
                 let parts: Vec<String> = caps.iter().map(|&t| self.display(t)).collect();

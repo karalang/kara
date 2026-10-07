@@ -170,6 +170,12 @@ pub enum IntrinsicKind {
     Map,
     /// `Set[T]`
     Set,
+    /// `VecDeque[T]`
+    VecDeque,
+    /// `SortedMap[K, V]`
+    SortedMap,
+    /// `SortedSet[T]`
+    SortedSet,
 }
 
 impl IntrinsicKind {
@@ -178,6 +184,9 @@ impl IntrinsicKind {
             IntrinsicKind::Vec => "Vec",
             IntrinsicKind::Map => "Map",
             IntrinsicKind::Set => "Set",
+            IntrinsicKind::VecDeque => "VecDeque",
+            IntrinsicKind::SortedMap => "SortedMap",
+            IntrinsicKind::SortedSet => "SortedSet",
         }
     }
 }
