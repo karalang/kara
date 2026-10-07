@@ -339,6 +339,28 @@ impl<'a> Interp<'a> {
         let (ty_name, method) = split_method(name);
         let base = ty_name.split('[').next().unwrap_or(ty_name);
         match (base, method) {
+            ("Env", "args") => {
+                // argv[0] only: the MIR interpreter passes no arguments,
+                // and legacy counts the program name.
+                let prog = self.alloc_box("String", Value::Str("main".into()));
+                Ok(self.alloc_box(ty_name, Value::Agg(vec![prog])))
+            }
+            ("format", "") => {
+                // An f-string used as a value: print's convention, into a
+                // new String.
+                let mut text = String::new();
+                for v in &args {
+                    text.push_str(&self.display(v)?);
+                }
+                Ok(self.alloc_box("String", Value::Str(text)))
+            }
+            (_, "to_string") => {
+                let [v] = args.as_slice() else {
+                    return err(format!("{name} takes one argument"));
+                };
+                let text = self.display(v)?;
+                Ok(self.alloc_box("String", Value::Str(text)))
+            }
             ("println" | "print", "") => {
                 // The arguments print one after another (an f-string's
                 // parts); a reference prints what it points to.
@@ -396,6 +418,7 @@ impl<'a> Interp<'a> {
                 }))
             }
             ("Vec" | "String", _) => self.collection_method(ty_name, method, args, arg_tys, ret),
+            ("Map" | "Set", _) => self.table_method(ty_name, method, args, arg_tys, ret),
             _ => err(format!("call of unknown function {name}")),
         }
     }
@@ -439,6 +462,85 @@ impl<'a> Interp<'a> {
             (true, "is_empty", [v]) => {
                 let id = self.box_behind(v)?;
                 Ok(Value::Bool(self.vec_elems(id)?.is_empty()))
+            }
+            (true, "filled", [Value::Int(n), val]) => {
+                let e = match self.tys.kind(ret) {
+                    TyKind::Intrinsic(IntrinsicTy::Vec(e)) => e,
+                    _ => return err(format!("{name} into {}", self.tys.display(ret))),
+                };
+                // `val` moves into the first slot and is cloned into the rest.
+                let n = (*n).max(0) as usize;
+                let mut elems = Vec::with_capacity(n);
+                for i in 0..n {
+                    if i + 1 == n {
+                        elems.push(val.clone());
+                    } else {
+                        elems.push(self.clone_value(val, e)?);
+                    }
+                }
+                if n == 0 {
+                    self.drop_value(val.clone(), e)?;
+                }
+                Ok(self.alloc_box(ty_name, Value::Agg(elems)))
+            }
+            (true, "clone", [v]) => {
+                let id = self.box_behind(v)?;
+                let e = self.vec_elem_ty(arg_tys, &name)?;
+                let elems = self.vec_elems(id)?.clone();
+                let mut out = Vec::with_capacity(elems.len());
+                for x in &elems {
+                    out.push(self.clone_value(x, e)?);
+                }
+                Ok(self.alloc_box(ty_name, Value::Agg(out)))
+            }
+            (true, "contains", [v, needle]) => {
+                let id = self.box_behind(v)?;
+                let want = self.key_form(needle)?;
+                let elems = self.vec_elems(id)?.clone();
+                for x in &elems {
+                    if self.key_form(x)? == want {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+                Ok(Value::Bool(false))
+            }
+            (true, "truncate", [v, Value::Int(n)]) => {
+                let id = self.box_behind(v)?;
+                let e = self.vec_elem_ty(arg_tys, &name)?;
+                let len = self.vec_elems(id)?.len();
+                let keep = (*n).clamp(0, len as i128) as usize;
+                // The tail drops first to last, as a dying Vec does.
+                for i in keep..len {
+                    let at = Addr {
+                        root: Root::Heap(id),
+                        path: vec![i as u64],
+                    };
+                    self.drop_at(&at, e)?;
+                }
+                self.vec_elems(id)?.truncate(keep);
+                Ok(Value::Unit)
+            }
+            (true, "first", [v]) => {
+                let id = self.box_behind(v)?;
+                let n = self.vec_elems(id)?.len();
+                let elem = (n > 0).then(|| {
+                    Value::Ref(Addr {
+                        root: Root::Heap(id),
+                        path: vec![0],
+                    })
+                });
+                self.option(ret, elem)
+            }
+            (true, "last", [v]) => {
+                let id = self.box_behind(v)?;
+                let n = self.vec_elems(id)?.len();
+                let elem = (n > 0).then(|| {
+                    Value::Ref(Addr {
+                        root: Root::Heap(id),
+                        path: vec![n as u64 - 1],
+                    })
+                });
+                self.option(ret, elem)
             }
             (true, "get" | "last", [v, Value::Int(i)]) => {
                 let id = self.box_behind(v)?;
@@ -519,6 +621,222 @@ impl<'a> Interp<'a> {
             }
             _ => err(format!("call of unknown function {name}")),
         }
+    }
+
+    /// The core `Map[K, V]` and `Set[T]` methods. A table is a box of
+    /// entries in insertion order (`(key, value)` pairs for a `Map`);
+    /// lookup compares keys by value, through boxes and references.
+    fn table_method(
+        &mut self,
+        ty_name: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        let name = format!("{ty_name}.{method}");
+        let is_map = ty_name.starts_with("Map");
+        if method == "new" {
+            return Ok(self.alloc_box(ty_name, Value::Agg(vec![])));
+        }
+        let Some(recv) = args.first() else {
+            return err(format!("{name} needs a receiver"));
+        };
+        let id = self.box_behind(recv)?;
+        let (key_ty, val_ty) = self.table_tys(arg_tys, &name)?;
+        match (method, &args[1..]) {
+            ("len", []) => Ok(Value::Int(self.vec_elems(id)?.len() as i128)),
+            ("is_empty", []) => Ok(Value::Bool(self.vec_elems(id)?.is_empty())),
+            ("get" | "contains_key" | "contains", [key]) => {
+                let found = self.find_key(id, key, is_map)?;
+                if method != "get" {
+                    return Ok(Value::Bool(found.is_some()));
+                }
+                let at = found.map(|i| {
+                    Value::Ref(Addr {
+                        root: Root::Heap(id),
+                        path: vec![i as u64, 1],
+                    })
+                });
+                self.option(ret, at)
+            }
+            ("insert", [key, rest @ ..]) => {
+                let found = self.find_key(id, key, is_map)?;
+                match (is_map, found, rest) {
+                    // An existing key is kept and the new one dropped;
+                    // the old value is handed back.
+                    (true, Some(i), [val]) => {
+                        self.drop_value(key.clone(), key_ty)?;
+                        let Value::Agg(entry) = &mut self.vec_elems(id)?[i] else {
+                            return err(format!("{name}: a malformed entry"));
+                        };
+                        let old = std::mem::replace(&mut entry[1], val.clone());
+                        self.option(ret, Some(old))
+                    }
+                    (true, None, [val]) => {
+                        let entry = Value::Agg(vec![key.clone(), val.clone()]);
+                        self.vec_elems(id)?.push(entry);
+                        self.option(ret, None)
+                    }
+                    (false, Some(_), []) => {
+                        self.drop_value(key.clone(), key_ty)?;
+                        Ok(Value::Bool(false))
+                    }
+                    (false, None, []) => {
+                        self.vec_elems(id)?.push(key.clone());
+                        Ok(Value::Bool(true))
+                    }
+                    _ => err(format!("{name}: wrong arguments")),
+                }
+            }
+            ("remove", [key]) => {
+                let found = self.find_key(id, key, is_map)?;
+                let Some(i) = found else {
+                    return if is_map {
+                        self.option(ret, None)
+                    } else {
+                        Ok(Value::Bool(false))
+                    };
+                };
+                let removed = self.vec_elems(id)?.remove(i);
+                if !is_map {
+                    self.drop_value(removed, key_ty)?;
+                    return Ok(Value::Bool(true));
+                }
+                let Value::Agg(mut entry) = removed else {
+                    return err(format!("{name}: a malformed entry"));
+                };
+                let val = entry.pop().expect("an entry is a pair");
+                let k = entry.pop().expect("an entry is a pair");
+                self.drop_value(k, key_ty)?;
+                self.option(ret, Some(val))
+            }
+            ("clear", []) => {
+                let n = self.vec_elems(id)?.len();
+                for i in 0..n as u64 {
+                    let at = Addr {
+                        root: Root::Heap(id),
+                        path: vec![i],
+                    };
+                    if is_map {
+                        self.drop_at(&at.child(0), key_ty)?;
+                        self.drop_at(&at.child(1), val_ty)?;
+                    } else {
+                        self.drop_at(&at, key_ty)?;
+                    }
+                }
+                self.vec_elems(id)?.clear();
+                Ok(Value::Unit)
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// The key and value types of a `Map` receiver, or the element type
+    /// (twice) of a `Set` one.
+    fn table_tys(&self, arg_tys: &[Ty], name: &str) -> R<(Ty, Ty)> {
+        let mut t = *arg_tys
+            .first()
+            .ok_or_else(|| Stop::Error(format!("{name} needs its receiver's type")))?;
+        while let TyKind::Ref(inner) | TyKind::MutRef(inner) = self.tys.kind(t) {
+            t = inner;
+        }
+        match self.tys.kind(t) {
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v)) => Ok((k, v)),
+            TyKind::Intrinsic(IntrinsicTy::Set(e)) => Ok((e, e)),
+            _ => err(format!("{name} on {}", self.tys.display(t))),
+        }
+    }
+
+    /// The index of the entry whose key equals `key`, if any.
+    fn find_key(&mut self, id: AllocId, key: &Value, is_map: bool) -> R<Option<usize>> {
+        let want = self.key_form(key)?;
+        let entries = self.vec_elems(id)?.clone();
+        for (i, e) in entries.iter().enumerate() {
+            let k = match (is_map, e) {
+                (true, Value::Agg(pair)) => &pair[0],
+                (false, k) => k,
+                _ => return err("a malformed map entry"),
+            };
+            if self.key_form(k)? == want {
+                return Ok(Some(i));
+            }
+        }
+        Ok(None)
+    }
+
+    /// A key's value with references and boxes replaced by what they
+    /// hold, so two keys compare equal when their contents do.
+    fn key_form(&mut self, v: &Value) -> R<Value> {
+        Ok(match v {
+            Value::Ref(addr) => {
+                let inner = self.slot(addr)?;
+                self.key_form(&inner)?
+            }
+            Value::Box(id) => {
+                let inner = self.live(*id)?.value.clone();
+                self.key_form(&inner)?
+            }
+            Value::Agg(fs) => {
+                Value::Agg(fs.iter().map(|f| self.key_form(f)).collect::<R<Vec<_>>>()?)
+            }
+            Value::Variant(k, fs) => Value::Variant(
+                *k,
+                fs.iter().map(|f| self.key_form(f)).collect::<R<Vec<_>>>()?,
+            ),
+            other => other.clone(),
+        })
+    }
+
+    /// A copy of `v`, a value of type `ty`, for `Clone` on the library
+    /// types: scalars and `Copy` aggregates copy, a `String` or `Vec`
+    /// gets a new allocation with its contents cloned. A user type that
+    /// is not `Copy` needs its own `Clone` body, which is a call in MIR.
+    fn clone_value(&mut self, v: &Value, ty: Ty) -> R<Value> {
+        if self.tys.is_copy(ty) {
+            return Ok(v.clone());
+        }
+        match (self.tys.kind(ty), v) {
+            (TyKind::Intrinsic(IntrinsicTy::String), _) => {
+                let text = self.string_at(v)?;
+                Ok(self.alloc_box("String", Value::Str(text)))
+            }
+            (TyKind::Intrinsic(IntrinsicTy::Vec(e)), _) => {
+                let id = self.box_behind(v)?;
+                let elems = self.vec_elems(id)?.clone();
+                let mut out = Vec::with_capacity(elems.len());
+                for x in &elems {
+                    out.push(self.clone_value(x, e)?);
+                }
+                let name = self.tys.display(ty);
+                Ok(self.alloc_box(&name, Value::Agg(out)))
+            }
+            (TyKind::Tuple(ts), Value::Agg(fs)) => {
+                let mut out = Vec::with_capacity(fs.len());
+                for (f, t) in fs.iter().zip(ts.iter()) {
+                    out.push(self.clone_value(f, *t)?);
+                }
+                Ok(Value::Agg(out))
+            }
+            _ => err(format!(
+                "clone of {} needs its Clone body",
+                self.tys.display(ty)
+            )),
+        }
+    }
+
+    /// Drops a value that has no place of its own (a duplicate key), by
+    /// parking it in a scratch heap slot for the length of the drop.
+    fn drop_value(&mut self, v: Value, ty: Ty) -> R<()> {
+        let scratch = self.heap.len();
+        self.heap.push(Some(HeapObj { count: 1, value: v }));
+        let at = Addr {
+            root: Root::Heap(AllocId(scratch as u32)),
+            path: Vec::new(),
+        };
+        self.drop_at(&at, ty)?;
+        self.heap[scratch] = None;
+        Ok(())
     }
 
     /// The elements of the `Vec` allocation `id`.
@@ -1296,11 +1614,27 @@ impl<'a> Interp<'a> {
                             self.drop_at(&root.child(i as u64), e)?;
                         }
                     }
-                    IntrinsicTy::Map(..) | IntrinsicTy::Set(_) => {
-                        return err(format!(
-                            "drop of {} is not implemented in the interpreter yet",
-                            self.tys.display(ty)
-                        ))
+                    // Entries in insertion order, the interpreter's
+                    // (unspecified) iteration order; within an entry the
+                    // key drops before the value (core-semantics §7).
+                    IntrinsicTy::Map(k, val) => {
+                        for i in 0..self.vec_elems(id)?.len() as u64 {
+                            let entry = Addr {
+                                root: Root::Heap(id),
+                                path: vec![i],
+                            };
+                            self.drop_at(&entry.child(0), k)?;
+                            self.drop_at(&entry.child(1), val)?;
+                        }
+                    }
+                    IntrinsicTy::Set(e) => {
+                        for i in 0..self.vec_elems(id)?.len() as u64 {
+                            let at = Addr {
+                                root: Root::Heap(id),
+                                path: vec![i],
+                            };
+                            self.drop_at(&at, e)?;
+                        }
                     }
                 }
                 self.live(id)?;
@@ -2035,7 +2369,7 @@ exit main
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
-        assert_eq!(ran, 1);
+        assert_eq!(ran, 2);
     }
 
     /// A strict drop of a fieldless variant, a fieldless variant left in

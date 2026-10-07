@@ -1,0 +1,110 @@
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "d", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+enum Option[R] { None, Some(R) }
+enum Option[ref R] { None, Some(ref R) }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: Map[i64, R]; // m
+    let _2: mut ref Map[i64, R];
+    let _3: R;
+    let _4: Option[R];
+    let _5: ();
+    let _6: ref Map[i64, R];
+    let _7: i64;
+    let _8: Option[ref R];
+    let _9: i64;
+    let _10: ref R; // x
+    let _11: i64; // n
+    let _12: String; // s
+    let _13: ref String;
+    let _14: String; // t
+    let _15: R; // old
+    let _16: ref i64;
+    bb0: {
+        _1 = Map[i64, R].new() -> bb1;
+    }
+    bb1: {
+        _3 = R { const 1_i64 };
+        _2 = &mut _1;
+        _4 = Map[i64, R].insert(move _2, const 1_i64, move _3) -> bb2;
+    }
+    bb2: {
+        _3 = R { const 2_i64 };
+        _2 = &mut _1;
+        _4 = Map[i64, R].insert(move _2, const 2_i64, move _3) -> bb3;
+    }
+    bb3: {
+        _3 = R { const 3_i64 };
+        _2 = &mut _1;
+        _4 = Map[i64, R].insert(move _2, const 1_i64, move _3) -> bb4;
+    }
+    bb4: {
+        _9 = discriminant(_4);
+        switchInt(copy _9) -> [1: bb5, otherwise: bb6];
+    }
+    bb5: {
+        _15 = move (_4 as Some).0;
+        drop(_15) -> bb6;
+    }
+    bb6: {
+        _7 = const 2_i64;
+        _16 = &_7;
+        _6 = &_1;
+        _8 = Map[i64, R].get(move _6, move _16) -> bb7;
+    }
+    bb7: {
+        _9 = discriminant(_8);
+        switchInt(copy _9) -> [1: bb8, otherwise: bb9];
+    }
+    bb8: {
+        _10 = copy (_8 as Some).0;
+        _5 = println(const "got", copy (*_10).0) -> bb9;
+    }
+    bb9: {
+        _6 = &_1;
+        _11 = Map[i64, R].len(move _6) -> bb10;
+    }
+    bb10: {
+        _12 = format(const "n=", copy _11, const " ok") -> bb11;
+    }
+    bb11: {
+        _13 = &_12;
+        _5 = println(move _13) -> bb12;
+    }
+    bb12: {
+        _14 = i64.to_string(const 42_i64) -> bb13;
+    }
+    bb13: {
+        _13 = &_14;
+        _5 = println(move _13) -> bb14;
+    }
+    bb14: {
+        _5 = println(const "end") -> bb15;
+    }
+    bb15: {
+        drop(_14) -> bb16;
+    }
+    bb16: {
+        drop(_12) -> bb17;
+    }
+    bb17: {
+        drop(_1) -> bb18;
+    }
+    bb18: {
+        _0 = const ();
+        return;
+    }
+}
