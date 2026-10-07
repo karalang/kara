@@ -11,4 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: '3 running-sum-payload-0-plus-1 running-sum-payload-3-plus-3 3'"
-model_rev = "0f6622034"
+model_rev = "2209d30ce"

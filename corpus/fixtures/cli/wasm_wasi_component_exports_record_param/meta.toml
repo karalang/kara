@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'component-recparam'"
 model_exit = 0
-model_rev = "0f6622034"
+model_rev = "2209d30ce"
 model_verdict = "SAME"

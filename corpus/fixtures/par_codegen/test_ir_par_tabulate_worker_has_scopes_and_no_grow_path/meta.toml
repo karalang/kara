@@ -11,4 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'define void @__karac_reduce_worker_collect_tab_'"
-model_rev = "0f6622034"
+model_rev = "2209d30ce"

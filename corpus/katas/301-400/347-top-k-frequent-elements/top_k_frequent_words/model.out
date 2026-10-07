@@ -1,4 +1,4 @@
-k=2 -> [1,1]
-k=4 -> [1,2,3,4]
-k=3 -> [1,1,1]
-k=5 -> [1,2]
+k=2 -> [i,love]
+k=4 -> [the,is,sunny,day]
+k=3 -> [apple,fig,pear]
+k=5 -> [solo,duo]

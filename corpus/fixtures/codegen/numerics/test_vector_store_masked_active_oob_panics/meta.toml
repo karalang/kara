@@ -11,4 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'store_masked: active lane index out of bounds'"
-model_rev = "0f6622034"
+model_rev = "2209d30ce"

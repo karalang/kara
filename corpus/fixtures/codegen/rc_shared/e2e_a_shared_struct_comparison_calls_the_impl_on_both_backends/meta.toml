@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'a shared struct with real comparators must build'"
 model_exit = 0
-model_rev = "0f6622034"
-model_verdict = "DIFF"
+model_rev = "2209d30ce"
+model_verdict = "SAME"

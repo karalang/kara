@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'reduce_sum on a native Vector[f32, 4] must not be rejected'"
 model_exit = 0
-model_rev = "0f6622034"
+model_rev = "2209d30ce"
 model_verdict = "SAME"

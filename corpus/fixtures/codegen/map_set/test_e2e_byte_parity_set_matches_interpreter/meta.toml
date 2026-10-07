@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'interpreter errors: {interp_errs:?}'"
 model_note = "move out of a ref place (C3): a reference passed where an owned value is expected"
-model_rev = "0f6622034"
+model_rev = "2209d30ce"
 model_verdict = "V2-REJECT"

@@ -11,4 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'call i64 @karac_runtime_http_response_headers_count('"
-model_rev = "0f6622034"
+model_rev = "2209d30ce"

@@ -11,6 +11,4 @@ rules = []
 backends = []
 env = {}
 note = ""
-model_exit = 0
-model_rev = "0f6622034"
-model_verdict = "SAME"
+model_rev = "2209d30ce"
