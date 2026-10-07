@@ -9,6 +9,12 @@
 //!   every argument (§5.4); a reborrow `&(*r)` keeps `r`'s loans as well
 //!   as its own. MIR does not record receivers, so the caller says which
 //!   callees have one.
+//!   Only a value whose type can hold a reference has origins. A call
+//!   with a whole-local `mut ref` argument may store the other arguments'
+//!   borrows into its pointee, so the pointee's origins grow by theirs
+//!   (§5.3; `TaskGroup.spawn` is the §9.5 case); so does `(*r) = v`.
+//! - §5.9: a write, mutable borrow or non-`Copy` move through a `ref` is
+//!   an error unless a `shared` handle is projected after that deref.
 //! - A backward liveness gives the locals that may still be used. A loan
 //!   is live where some live local may hold it (non-lexical, §5.6).
 //! - An access to a place that overlaps a live loan's place conflicts when
@@ -23,9 +29,10 @@
 //! modelled; the builder takes a `mut ref self` receiver's borrow after
 //! the arguments (§5.6).
 
+use super::place_ty::place_ty;
 use super::pretty::place as show_place;
 use super::syntax::*;
-use super::ty::TyInterner;
+use super::ty::{IntrinsicTy, Ty, TyInterner, TyKind};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Access {
@@ -56,16 +63,22 @@ pub fn check_borrows(
     tys: &TyInterner,
     has_receiver: &dyn Fn(&InstanceId) -> bool,
 ) -> Result<(), Vec<String>> {
+    let mut errs = read_only_errors(body, tys);
     let loans = collect_loans(body);
     if loans.is_empty() {
-        return Ok(());
+        return if errs.is_empty() { Ok(()) } else { Err(errs) };
     }
     let n_locals = body.locals.len();
     let entry: Origins = vec![vec![false; loans.len()]; n_locals];
-    let origins = origins_dataflow(body, &loans, entry, has_receiver);
+    let cx = Cx {
+        body,
+        tys,
+        loans: &loans,
+        has_receiver,
+    };
+    let origins = origins_dataflow(&cx, entry);
     let live_out = liveness(body);
 
-    let mut errs = Vec::new();
     for (bi, block) in body.blocks.iter().enumerate() {
         let Some(mut o) = origins[bi].clone() else {
             continue; // unreachable
@@ -112,7 +125,7 @@ pub fn check_borrows(
                 }
             }
             if si < n {
-                transfer_origins(&mut o, &loans, &block.statements[si].kind, at);
+                cx.transfer(&mut o, &block.statements[si].kind, at);
             } else if let TerminatorKind::Return = block.terminator.kind {
                 for (li, loan) in loans.iter().enumerate() {
                     if o[0][li] && !loan.place.projection.contains(&ProjElem::Deref) {
@@ -133,6 +146,67 @@ pub fn check_borrows(
     } else {
         Err(errs)
     }
+}
+
+/// §5.9: nothing is written through a `ref`. A write, a mutable borrow
+/// or a move of a non-`Copy` value whose place goes through a `ref` is an
+/// error, unless a projection on a `shared` handle comes after that
+/// dereference: a `shared` value's fields are reached through the handle,
+/// and which of them are `mut` is the type checker's question.
+fn read_only_errors(body: &Body, tys: &TyInterner) -> Vec<String> {
+    let mut errs = Vec::new();
+    for (bi, block) in body.blocks.iter().enumerate() {
+        let n = block.statements.len();
+        for si in 0..=n {
+            let accesses = if si < n {
+                statement_accesses(&block.statements[si].kind)
+            } else {
+                terminator_accesses(&block.terminator.kind)
+            };
+            for (place, access) in accesses {
+                let what = match access {
+                    Access::Write => "write",
+                    Access::Borrow(BorrowKind::Mut) => "mutable borrow",
+                    Access::Move
+                        if place_ty(body, tys, &place).is_ok_and(|pt| !tys.is_copy(pt.ty)) =>
+                    {
+                        "move"
+                    }
+                    _ => continue,
+                };
+                if through_shared_ref(body, tys, &place) {
+                    errs.push(format!(
+                        "{}: {} of {} through a shared reference",
+                        loc((bi, si), n),
+                        what,
+                        show_place(body, tys, &place),
+                    ));
+                }
+            }
+        }
+    }
+    errs
+}
+
+/// Does `place` reach its target through a `ref` dereference with no
+/// `shared` handle projected after it?
+fn through_shared_ref(body: &Body, tys: &TyInterner, place: &Place) -> bool {
+    let mut read_only = false;
+    for i in 0..place.projection.len() {
+        let prefix = Place {
+            local: place.local,
+            projection: place.projection[..i].to_vec(),
+        };
+        let Ok(pt) = place_ty(body, tys, &prefix) else {
+            return false;
+        };
+        match tys.kind(pt.ty) {
+            TyKind::Ref(_) if place.projection[i] == ProjElem::Deref => read_only = true,
+            TyKind::Shared(_) => read_only = false,
+            _ => {}
+        }
+    }
+    read_only
 }
 
 fn loc((bi, si): (usize, usize), n_stmts: usize) -> String {
@@ -171,75 +245,202 @@ fn collect_loans(body: &Body) -> Vec<Loan> {
     loans
 }
 
-/// The origins of a value read from `place`: everything its local holds.
-fn place_origins(o: &Origins, place: &Place, into: &mut [bool]) {
-    for (d, s) in into.iter_mut().zip(&o[place.local.index()]) {
-        *d |= *s;
+/// What the origins transfer needs to know about the body.
+struct Cx<'a> {
+    body: &'a Body,
+    tys: &'a TyInterner,
+    loans: &'a [Loan],
+    has_receiver: &'a dyn Fn(&InstanceId) -> bool,
+}
+
+impl Cx<'_> {
+    /// Can a value of `place`'s type hold a borrow? Only those carry
+    /// origins: `x = *r` with `x: i64` holds nothing of `r`.
+    fn holds(&self, place: &Place) -> bool {
+        place_ty(self.body, self.tys, place).map_or(true, |pt| holds_borrow(self.tys, pt.ty))
+    }
+
+    /// The origins of a value read from `place`: what its local holds,
+    /// when its type can hold any.
+    fn place_origins(&self, o: &Origins, place: &Place, into: &mut [bool]) {
+        if self.holds(place) {
+            for (d, s) in into.iter_mut().zip(&o[place.local.index()]) {
+                *d |= *s;
+            }
+        }
+    }
+
+    fn operand_origins(&self, o: &Origins, op: &Operand, into: &mut [bool]) {
+        if let Some(p) = op.place() {
+            self.place_origins(o, p, into);
+        }
+    }
+
+    /// `dest = <value with origins val>`.
+    fn assign(&self, o: &mut Origins, dest: &Place, mut val: Vec<bool>) {
+        if !self.holds(dest) {
+            val.iter_mut().for_each(|b| *b = false);
+        }
+        if dest.projection.is_empty() {
+            o[dest.local.index()] = val;
+        } else if !dest.projection.contains(&ProjElem::Deref) {
+            // A part of the local: what the rest held stays.
+            for (d, s) in o[dest.local.index()].iter_mut().zip(val) {
+                *d |= s;
+            }
+        } else {
+            // A store through a reference: the places the reference
+            // mutably borrows now hold `val` too.
+            self.store_through(o, dest.local, &val);
+        }
+    }
+
+    /// A value with origins `val` is stored through the reference held in
+    /// local `r`: every local place `r` mutably borrows may now hold it.
+    fn store_through(&self, o: &mut Origins, r: Local, val: &[bool]) {
+        if !val.iter().any(|b| *b) {
+            return;
+        }
+        let targets: Vec<Local> = self
+            .loans
+            .iter()
+            .enumerate()
+            .filter(|(li, l)| {
+                o[r.index()][*li]
+                    && l.kind == BorrowKind::Mut
+                    && !l.place.projection.contains(&ProjElem::Deref)
+                    && self.holds(&l.place)
+            })
+            .map(|(_, l)| l.place.local)
+            .collect();
+        // A value never holds a borrow of its own local.
+        for t in targets {
+            for (li, s) in val.iter().enumerate() {
+                let own = self.loans[li].place.local == t
+                    && !self.loans[li].place.projection.contains(&ProjElem::Deref);
+                if *s && !own {
+                    o[t.index()][li] = true;
+                }
+            }
+        }
+    }
+
+    fn transfer(&self, o: &mut Origins, s: &StatementKind, at: (usize, usize)) {
+        let StatementKind::Assign(dest, rv) = s else {
+            if let StatementKind::StorageDead(l) = s {
+                o[l.index()].iter_mut().for_each(|b| *b = false);
+            }
+            return;
+        };
+        let mut val = vec![false; self.loans.len()];
+        match rv {
+            Rvalue::Ref(_, place) => {
+                if let Some(li) = self.loans.iter().position(|l| l.at == at) {
+                    val[li] = true;
+                }
+                // A reborrow through a reference keeps that reference's
+                // loans, whatever the type of the place reborrowed.
+                if place.projection.contains(&ProjElem::Deref) {
+                    for (d, s) in val.iter_mut().zip(&o[place.local.index()]) {
+                        *d |= *s;
+                    }
+                }
+            }
+            Rvalue::Use(op) | Rvalue::UnaryOp(_, op) | Rvalue::Cast(_, op, _) => {
+                self.operand_origins(o, op, &mut val)
+            }
+            Rvalue::Aggregate(_, ops) => {
+                for op in ops {
+                    self.operand_origins(o, op, &mut val);
+                }
+            }
+            Rvalue::Retain(p) => self.place_origins(o, p, &mut val),
+            Rvalue::BinaryOp(..)
+            | Rvalue::CheckedBinaryOp(..)
+            | Rvalue::Discriminant(_)
+            | Rvalue::Len(_) => {}
+        }
+        self.assign(o, dest, val);
+    }
+
+    /// A call: the result borrows from the receiver when the callee takes
+    /// one, else from every argument (§5.4); and a callee given a `mut ref`
+    /// may store any other argument's borrows into its pointee, as
+    /// `group.spawn(closure)` does (§9.5).
+    fn transfer_call(&self, o: &mut Origins, func: &Operand, args: &[Operand], dest: &Place) {
+        let receiver = matches!(
+            func,
+            Operand::Const(Const { kind: ConstKind::FnDef(callee), .. })
+                if !args.is_empty() && (self.has_receiver)(callee)
+        );
+        // Each whole-local `mut ref` argument may store the other operands'
+        // borrows into its pointee (§9.5).
+        let before = o.clone();
+        for (i, a) in args.iter().enumerate() {
+            let Some(p) = a.place() else { continue };
+            let is_mut_ref = place_ty(self.body, self.tys, p)
+                .is_ok_and(|pt| matches!(self.tys.kind(pt.ty), TyKind::MutRef(_)));
+            if !is_mut_ref || !p.projection.is_empty() {
+                continue;
+            }
+            let mut others = vec![false; self.loans.len()];
+            let rest = args.iter().enumerate().filter(|(j, _)| *j != i);
+            for a in std::iter::once(func).chain(rest.map(|(_, a)| a)) {
+                self.operand_origins(&before, a, &mut others);
+            }
+            self.store_through(o, p.local, &others);
+        }
+        let mut val = vec![false; self.loans.len()];
+        let from = if receiver { &args[..1] } else { args };
+        for a in std::iter::once(func).chain(from) {
+            self.operand_origins(o, a, &mut val);
+        }
+        self.assign(o, dest, val);
     }
 }
 
-fn operand_origins(o: &Origins, op: &Operand, into: &mut [bool]) {
-    if let Some(p) = op.place() {
-        place_origins(o, p, into);
-    }
-}
-
-fn assign_origins(o: &mut Origins, dest: &Place, val: Vec<bool>) {
-    let slot = &mut o[dest.local.index()];
-    if dest.projection.is_empty() {
-        *slot = val;
-    } else if !dest.projection.contains(&ProjElem::Deref) {
-        // A part of the local: what the rest held stays.
-        for (d, s) in slot.iter_mut().zip(val) {
-            *d |= s;
+/// Can a value of type `ty` hold a borrow? References and slices can, and
+/// so can anything with a part that can; a `shared` handle cannot (§5.7).
+/// A type MIR cannot see into is assumed to, and so is `TaskGroup`.
+fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
+    fn go(tys: &TyInterner, ty: Ty, seen: &mut Vec<Ty>) -> bool {
+        if seen.contains(&ty) {
+            return false;
         }
-    }
-    // A store through a reference changes what the pointee holds, which
-    // this body only reaches through the reference: no local changes.
-}
-
-fn transfer_origins(o: &mut Origins, loans: &[Loan], s: &StatementKind, at: (usize, usize)) {
-    let StatementKind::Assign(dest, rv) = s else {
-        if let StatementKind::StorageDead(l) = s {
-            o[l.index()].iter_mut().for_each(|b| *b = false);
-        }
-        return;
-    };
-    let mut val = vec![false; loans.len()];
-    match rv {
-        Rvalue::Ref(_, place) => {
-            if let Some(li) = loans.iter().position(|l| l.at == at) {
-                val[li] = true;
+        seen.push(ty);
+        match tys.kind(ty) {
+            TyKind::Ref(_) | TyKind::MutRef(_) | TyKind::Slice(_) | TyKind::Other => true,
+            TyKind::Tuple(ts) | TyKind::Closure(_, ts) => ts.iter().any(|t| go(tys, *t, seen)),
+            TyKind::Array(t, _) => go(tys, t, seen),
+            TyKind::Intrinsic(IntrinsicTy::Vec(e)) | TyKind::Intrinsic(IntrinsicTy::Set(e)) => {
+                go(tys, e, seen)
             }
-            // A reborrow through a reference keeps that reference's loans.
-            if place.projection.contains(&ProjElem::Deref) {
-                place_origins(o, place, &mut val);
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v)) => go(tys, k, seen) || go(tys, v, seen),
+            TyKind::Adt(a) => {
+                let adt = tys.adt(a);
+                // A task group holds its tasks' closures, which the
+                // runtime keeps out of its declared fields (§9.5).
+                if adt.name == "TaskGroup" {
+                    return true;
+                }
+                let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
+                let is_enum = adt.is_enum;
+                counts.iter().enumerate().any(|(v, n)| {
+                    (0..*n as u32).any(|f| {
+                        tys.field_ty(ty, is_enum.then_some(v as u32), f)
+                            .is_some_and(|t| go(tys, t, seen))
+                    })
+                })
             }
+            _ => false,
         }
-        Rvalue::Use(op) | Rvalue::UnaryOp(_, op) | Rvalue::Cast(_, op, _) => {
-            operand_origins(o, op, &mut val)
-        }
-        Rvalue::Aggregate(_, ops) => {
-            for op in ops {
-                operand_origins(o, op, &mut val);
-            }
-        }
-        Rvalue::Retain(p) => place_origins(o, p, &mut val),
-        Rvalue::BinaryOp(..)
-        | Rvalue::CheckedBinaryOp(..)
-        | Rvalue::Discriminant(_)
-        | Rvalue::Len(_) => {}
     }
-    assign_origins(o, dest, val);
+    go(tys, ty, &mut Vec::new())
 }
 
 /// Forward dataflow of origins; `None` for an unreachable block.
-fn origins_dataflow(
-    body: &Body,
-    loans: &[Loan],
-    entry: Origins,
-    has_receiver: &dyn Fn(&InstanceId) -> bool,
-) -> Vec<Option<Origins>> {
+fn origins_dataflow(cx: &Cx, entry: Origins) -> Vec<Option<Origins>> {
+    let body = cx.body;
     let mut states: Vec<Option<Origins>> = vec![None; body.blocks.len()];
     states[0] = Some(entry);
     let mut work = vec![0usize];
@@ -247,7 +448,7 @@ fn origins_dataflow(
         let mut o = states[bi].clone().expect("queued blocks have a state");
         let block = &body.blocks[bi];
         for (si, s) in block.statements.iter().enumerate() {
-            transfer_origins(&mut o, loans, &s.kind, (bi, si));
+            cx.transfer(&mut o, &s.kind, (bi, si));
         }
         if let TerminatorKind::Call {
             func,
@@ -256,17 +457,7 @@ fn origins_dataflow(
             ..
         } = &block.terminator.kind
         {
-            let mut val = vec![false; loans.len()];
-            let receiver = matches!(
-                func,
-                Operand::Const(Const { kind: ConstKind::FnDef(callee), .. })
-                    if !args.is_empty() && has_receiver(callee)
-            );
-            let from = if receiver { &args[..1] } else { &args[..] };
-            for a in std::iter::once(func).chain(from) {
-                operand_origins(&o, a, &mut val);
-            }
-            assign_origins(&mut o, destination, val);
+            cx.transfer_call(&mut o, func, args, destination);
         }
         for s in block.terminator.kind.successors() {
             let si = s.index();
@@ -828,6 +1019,175 @@ fn main(_1: ref P) -> ref i64 {
     }
 
     /// The Built core and closure pins are valid programs.
+    /// Only a value whose type can hold a reference carries a borrow: an
+    /// `i64` read through a reference does not keep the place borrowed.
+    #[test]
+    fn mir_borrowck_origins_follow_the_type() {
+        let errs = main_with(
+            "    let mut _1: i64;\n    let _2: ref i64;\n    let _3: i64;\n    let _4: i64;\n",
+            "        _1 = const 1_i64;
+        _2 = &_1;
+        _3 = copy (*_2);
+        _1 = const 2_i64;
+        _4 = copy _3;
+",
+        );
+        assert_eq!(errs, Vec::<String>::new());
+    }
+
+    /// §9.5: a call taking a `mut ref` stores its other arguments' borrows
+    /// into the pointee, so the group holds them while it is in use.
+    #[test]
+    fn mir_borrowck_mut_ref_argument_absorbs_the_other_loans() {
+        let src = |tail: &str| {
+            format!(
+                "
+struct G {{ r: ref i64 }}
+
+fn G.put(_1: mut ref G, _2: ref i64) -> () {{
+    let mut _0: ();
+    bb0: {{
+        _0 = const ();
+        return;
+    }}
+}}
+
+fn main() -> () {{
+    let mut _0: ();
+    let mut _1: i64;
+    let mut _2: G;
+    let _3: ref i64;
+    let _4: mut ref G;
+    let _5: ();
+    let _6: i64;
+    let _7: ref i64;
+    let _8: ref i64;
+    bb0: {{
+        _1 = const 1_i64;
+        _6 = const 0_i64;
+        _7 = &_6;
+        _2 = G {{ move _7 }};
+        _3 = &_1;
+        _4 = &mut _2;
+        _5 = G.put(move _4, move _3) -> bb1;
+    }}
+    bb1: {{
+        _1 = const 2_i64;
+{tail}        _0 = const ();
+        return;
+    }}
+}}
+"
+            )
+        };
+        one(
+            &errors(&src("        _8 = copy _2.0;\n")),
+            "bb1[0]: write of _1 while it is borrowed (borrow at bb0[4])",
+        );
+        assert_eq!(errors(&src("")), Vec::<String>::new());
+    }
+
+    /// `TaskGroup` declares only an id but holds its tasks' closures, so
+    /// a spawn into it keeps the closure's borrows live (§9.5).
+    #[test]
+    fn mir_borrowck_task_group_holds_spawned_borrows() {
+        let src = |tail: &str| {
+            format!(
+                "
+struct TaskGroup {{ id: i64 }}
+
+fn TaskGroup.spawn(_1: mut ref TaskGroup, _2: closure#1(ref i64)) -> () {{
+    let mut _0: ();
+    bb0: {{
+        _0 = const ();
+        return;
+    }}
+}}
+
+fn main() -> () {{
+    let mut _0: ();
+    let mut _1: i64;
+    let mut _2: TaskGroup;
+    let _3: ref i64;
+    let _4: closure#1(ref i64);
+    let _5: mut ref TaskGroup;
+    let _6: ();
+    let _7: i64;
+    bb0: {{
+        _1 = const 1_i64;
+        _2 = TaskGroup {{ const 0_i64 }};
+        _3 = &_1;
+        _4 = closure#1(ref i64) [move _3];
+        _5 = &mut _2;
+        _6 = TaskGroup.spawn(move _5, move _4) -> bb1;
+    }}
+    bb1: {{
+        _1 = const 2_i64;
+{tail}        _0 = const ();
+        return;
+    }}
+}}
+"
+            )
+        };
+        one(
+            &errors(&src("        _7 = copy _2.0;\n")),
+            "bb1[0]: write of _1 while it is borrowed (borrow at bb0[2])",
+        );
+        assert_eq!(errors(&src("")), Vec::<String>::new());
+    }
+
+    /// §5.9: nothing is written or mutably borrowed through a `ref`.
+    #[test]
+    fn mir_borrowck_write_through_a_shared_ref_is_an_error() {
+        let locals = "    let mut _1: i64;\n    let _2: ref i64;\n    let _3: mut ref i64;\n";
+        one(
+            &main_with(
+                locals,
+                "        _1 = const 1_i64;
+        _2 = &_1;
+        (*_2) = const 5_i64;
+",
+            ),
+            "bb0[2]: write of (*_2) through a shared reference",
+        );
+        one(
+            &main_with(
+                locals,
+                "        _1 = const 1_i64;
+        _2 = &_1;
+        _3 = &mut (*_2);
+",
+            ),
+            "bb0[2]: mutable borrow of (*_2) through a shared reference",
+        );
+    }
+
+    /// §5.9's exception: a `shared` value's field is reached through the
+    /// handle, so writing it through a `ref` to the handle is allowed.
+    #[test]
+    fn mir_borrowck_shared_field_through_a_ref_is_allowed() {
+        let errs = errors(
+            "
+struct S { a: i64 }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: shared S;
+    let _2: ref shared S;
+    bb0: {
+        _1 = shared S { const 1_i64 };
+        _2 = &_1;
+        (*_2).0 = const 2_i64;
+        _0 = const ();
+        return;
+    }
+}
+",
+        );
+        assert_eq!(errs, Vec::<String>::new());
+    }
+
     #[test]
     fn mir_borrowck_accepts_the_built_pins() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
