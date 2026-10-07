@@ -218,7 +218,10 @@ impl RunResult {
 }
 
 const MAX_DEPTH: usize = 1000;
-const MAX_STEPS: u64 = 10_000_000;
+/// The default step budget, which only stops a runaway loop: real
+/// programs in the corpus run tens of millions of steps, and the corpus
+/// runner's timeout bounds wall time. `KARAC_MIR_MAX_STEPS` overrides it.
+const MAX_STEPS: u64 = 4_000_000_000;
 
 /// Runs `entry` with `args`, validating every body first.
 pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -> RunResult {
@@ -237,6 +240,11 @@ pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -
         events: Vec::new(),
         output: String::new(),
         steps: 0,
+        max_steps: std::env::var("KARAC_MIR_MAX_STEPS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(MAX_STEPS),
+        snapshots: Vec::new(),
     };
     let outcome = if !problems.is_empty() {
         Outcome::Error(format!("invalid MIR:\n{}", problems.join("\n")))
@@ -301,6 +309,10 @@ struct Interp<'a> {
     events: Vec<Event>,
     output: String,
     steps: u64,
+    max_steps: u64,
+    /// Read-only copies a library method hands out a view of (the bytes
+    /// of a `String`): live until exit, and not leaks.
+    snapshots: Vec<AllocId>,
 }
 
 impl<'a> Interp<'a> {
@@ -421,8 +433,42 @@ impl<'a> Interp<'a> {
             (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut") | ("Slice" | "Array", _) => {
                 self.view_method(name, method, args)
             }
+            ("String", _) if STRING_TEXT_METHODS.contains(&method) => {
+                self.string_text_method(name, method, args, ret)
+            }
             ("Vec" | "String", _) => self.collection_method(ty_name, method, args, arg_tys, ret),
+            ("Map" | "Set", "clone") => {
+                let [v] = args.as_slice() else {
+                    return err(format!("{name} takes one argument"));
+                };
+                let t = self.deref_ty(arg_tys.first().copied(), name)?;
+                let v = match v {
+                    Value::Ref(a) => self.slot(a)?,
+                    v => v.clone(),
+                };
+                self.clone_value(&v, t)
+            }
             ("Map" | "Set", _) => self.table_method(ty_name, method, args, arg_tys, ret),
+            (
+                _,
+                "max" | "min" | "abs" | "pow" | "wrapping_add" | "wrapping_sub" | "wrapping_mul"
+                | "count_ones" | "signum" | "sqrt" | "floor" | "ceil" | "round",
+            ) if args
+                .first()
+                .is_some_and(|a| matches!(a, Value::Int(_) | Value::Float(_))) =>
+            {
+                self.scalar_method(name, method, &args, ret)
+            }
+            (_, "clone") if args.len() == 1 => {
+                // No user `Clone` body was found (it would have been
+                // called instead): the structural clone a derive gives.
+                let t = self.deref_ty(arg_tys.first().copied(), name)?;
+                let v = match &args[0] {
+                    Value::Ref(a) => self.slot(a)?,
+                    v => v.clone(),
+                };
+                self.clone_value(&v, t)
+            }
             _ => err(format!("call of unknown function {name}")),
         }
     }
@@ -891,6 +937,70 @@ impl<'a> Interp<'a> {
                 }
                 Ok(Value::Agg(out))
             }
+            (TyKind::Array(e, _), Value::Agg(fs)) => {
+                let mut out = Vec::with_capacity(fs.len());
+                for f in fs {
+                    out.push(self.clone_value(f, e)?);
+                }
+                Ok(Value::Agg(out))
+            }
+            // A new handle to the same object (core semantics §6.1).
+            (TyKind::Shared(_), Value::Shared(id)) => {
+                let obj = self.live(*id)?;
+                obj.count += 1;
+                let c = obj.count;
+                self.events.push(Event::Retain(*id, c));
+                Ok(Value::Shared(*id))
+            }
+            (TyKind::Intrinsic(IntrinsicTy::Map(k, val)), _) => {
+                let id = self.box_behind(v)?;
+                let entries = self.vec_elems(id)?.clone();
+                let mut out = Vec::with_capacity(entries.len());
+                for e in &entries {
+                    let Value::Agg(pair) = e else {
+                        return err("a malformed map entry");
+                    };
+                    let ck = self.clone_value(&pair[0], k)?;
+                    let cv = self.clone_value(&pair[1], val)?;
+                    out.push(Value::Agg(vec![ck, cv]));
+                }
+                let name = self.tys.display(ty);
+                Ok(self.alloc_box(&name, Value::Agg(out)))
+            }
+            (TyKind::Intrinsic(IntrinsicTy::Set(e)), _) => {
+                let id = self.box_behind(v)?;
+                let elems = self.vec_elems(id)?.clone();
+                let mut out = Vec::with_capacity(elems.len());
+                for x in &elems {
+                    out.push(self.clone_value(x, e)?);
+                }
+                let name = self.tys.display(ty);
+                Ok(self.alloc_box(&name, Value::Agg(out)))
+            }
+            // A struct or enum with no user `Clone` body: field by field,
+            // as `#[derive(Clone)]` does. A type with a user `Drop` body
+            // owns something a field copy cannot duplicate, so it needs
+            // its own `Clone`.
+            (TyKind::Adt(a), Value::Agg(_) | Value::Variant(..))
+                if !self.tys.adt(a).has_drop_impl =>
+            {
+                let (variant, fs) = match v {
+                    Value::Variant(k, fs) => (Some(*k), fs.clone()),
+                    Value::Agg(fs) => (None, fs.clone()),
+                    _ => unreachable!(),
+                };
+                let mut out = Vec::with_capacity(fs.len());
+                for (i, f) in fs.iter().enumerate() {
+                    let Some(t) = self.tys.field_ty(ty, variant, i as u32) else {
+                        return err(format!("{} has no field {i}", self.tys.display(ty)));
+                    };
+                    out.push(self.clone_value(f, t)?);
+                }
+                Ok(match variant {
+                    Some(k) => Value::Variant(k, out),
+                    None => Value::Agg(out),
+                })
+            }
             _ => err(format!(
                 "clone of {} needs its Clone body",
                 self.tys.display(ty)
@@ -910,6 +1020,176 @@ impl<'a> Interp<'a> {
         self.drop_at(&at, ty)?;
         self.heap[scratch] = None;
         Ok(())
+    }
+
+    /// The pointee type of a method's receiver type (`ref T` -> `T`).
+    fn deref_ty(&self, t: Option<Ty>, name: &str) -> R<Ty> {
+        let mut t = t.ok_or_else(|| Stop::Error(format!("{name} needs its receiver's type")))?;
+        while let TyKind::Ref(inner) | TyKind::MutRef(inner) = self.tys.kind(t) {
+            t = inner;
+        }
+        Ok(t)
+    }
+
+    /// `String` methods that read text and build new values
+    /// (`design.md` § Collection Core Methods, `String`).
+    fn string_text_method(
+        &mut self,
+        name: &str,
+        method: &str,
+        args: Vec<Value>,
+        ret: Ty,
+    ) -> R<Value> {
+        let mut texts = Vec::with_capacity(args.len());
+        for a in &args {
+            texts.push(match a {
+                Value::Int(_) => None,
+                a => Some(self.string_at(a)?),
+            });
+        }
+        let text = |i: usize| -> R<&str> {
+            texts
+                .get(i)
+                .and_then(|t| t.as_deref())
+                .ok_or_else(|| Stop::Error(format!("{name}: argument {i} is not a string")))
+        };
+        let int = |i: usize| -> R<i128> {
+            match args.get(i) {
+                Some(Value::Int(n)) => Ok(*n),
+                _ => err(format!("{name}: argument {i} is not an integer")),
+            }
+        };
+        let new_string = |me: &mut Self, t: String| Ok(me.alloc_box("String", Value::Str(t)));
+        let s = text(0)?;
+        match method {
+            "contains" => Ok(Value::Bool(s.contains(text(1)?))),
+            "starts_with" => Ok(Value::Bool(s.starts_with(text(1)?))),
+            "ends_with" => Ok(Value::Bool(s.ends_with(text(1)?))),
+            "trim" => {
+                let t = s.trim().to_string();
+                new_string(self, t)
+            }
+            "to_uppercase" => {
+                let t = s.to_uppercase();
+                new_string(self, t)
+            }
+            "to_lowercase" => {
+                let t = s.to_lowercase();
+                new_string(self, t)
+            }
+            "replace" => {
+                let t = s.replace(text(1)?, text(2)?);
+                new_string(self, t)
+            }
+            "repeat" => {
+                let t = s.repeat(int(1)?.max(0) as usize);
+                new_string(self, t)
+            }
+            "substring" => {
+                // Byte offsets, saturating to an empty String when out of
+                // range or inverted; a cut inside a codepoint panics
+                // (legacy's rule, B-2026-08-14-19).
+                let len = s.len() as i128;
+                let lo = int(1)?;
+                let hi = if args.len() > 2 { int(2)? } else { len };
+                if lo < 0 || hi > len || lo >= hi {
+                    return new_string(self, String::new());
+                }
+                let (lo, hi) = (lo as usize, hi as usize);
+                if !s.is_char_boundary(lo) || !s.is_char_boundary(hi) {
+                    self.events.push(Event::Abort(AbortReason::Panic));
+                    return Err(Stop::Abort(AbortReason::Panic));
+                }
+                let t = s[lo..hi].to_string();
+                new_string(self, t)
+            }
+            "split" => {
+                let parts: Vec<String> = s.split(text(1)?).map(str::to_string).collect();
+                let mut out = Vec::with_capacity(parts.len());
+                for p in parts {
+                    out.push(self.alloc_box("String", Value::Str(p)));
+                }
+                let vname = self.tys.display(ret);
+                Ok(self.alloc_box(&vname, Value::Agg(out)))
+            }
+            "bytes" => {
+                // A read-only `Slice[u8]` over a snapshot of the bytes.
+                let bytes: Vec<Value> = s.bytes().map(|b| Value::Int(b as i128)).collect();
+                let n = bytes.len() as u64;
+                let Value::Box(id) = self.alloc_box("bytes", Value::Agg(bytes)) else {
+                    unreachable!("alloc_box makes a box")
+                };
+                self.snapshots.push(id);
+                Ok(Value::Slice {
+                    base: Addr {
+                        root: Root::Heap(id),
+                        path: Vec::new(),
+                    },
+                    lo: 0,
+                    len: n,
+                })
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// Methods on a scalar receiver (by value): `max`, `min`, `abs`,
+    /// `pow`, the wrapping operations, and a few float functions.
+    fn scalar_method(&mut self, name: &str, method: &str, args: &[Value], ret: Ty) -> R<Value> {
+        let it = match self.tys.kind(ret) {
+            TyKind::Int(it) => Some(it),
+            _ => None,
+        };
+        let fit = |me: &mut Self, v: i128| -> R<Value> {
+            match it {
+                Some(it) if wrap(v, it) != v => {
+                    me.events.push(Event::Abort(AbortReason::Overflow));
+                    Err(Stop::Abort(AbortReason::Overflow))
+                }
+                _ => Ok(Value::Int(v)),
+            }
+        };
+        match (method, args) {
+            ("max", [Value::Int(a), Value::Int(b)]) => Ok(Value::Int(*a.max(b))),
+            ("min", [Value::Int(a), Value::Int(b)]) => Ok(Value::Int(*a.min(b))),
+            ("max", [Value::Float(a), Value::Float(b)]) => Ok(Value::Float(a.max(*b))),
+            ("min", [Value::Float(a), Value::Float(b)]) => Ok(Value::Float(a.min(*b))),
+            ("abs", [Value::Int(a)]) => fit(self, a.abs()),
+            ("abs", [Value::Float(a)]) => Ok(Value::Float(a.abs())),
+            ("signum", [Value::Int(a)]) => Ok(Value::Int(a.signum())),
+            ("pow", [Value::Int(a), Value::Int(b)]) => {
+                let Ok(e) = u32::try_from(*b) else {
+                    return err(format!("{name}: exponent {b} out of range"));
+                };
+                match a.checked_pow(e) {
+                    Some(v) => fit(self, v),
+                    None => fit(self, i128::MAX),
+                }
+            }
+            ("wrapping_add" | "wrapping_sub" | "wrapping_mul", [Value::Int(a), Value::Int(b)]) => {
+                let Some(it) = it else {
+                    return err(format!("{name} into a non-integer"));
+                };
+                let r = match method {
+                    "wrapping_add" => a.wrapping_add(*b),
+                    "wrapping_sub" => a.wrapping_sub(*b),
+                    _ => a.wrapping_mul(*b),
+                };
+                Ok(Value::Int(wrap(r, it)))
+            }
+            ("count_ones", [Value::Int(a)]) => {
+                let bits = match self.tys.kind(ret) {
+                    TyKind::Int(_) => (*a as u128 & u64::MAX as u128).count_ones(),
+                    _ => (*a as u128).count_ones(),
+                };
+                Ok(Value::Int(bits as i128))
+            }
+            ("sqrt", [Value::Float(a)]) => Ok(Value::Float(a.sqrt())),
+            ("floor", [Value::Float(a)]) => Ok(Value::Float(a.floor())),
+            ("ceil", [Value::Float(a)]) => Ok(Value::Float(a.ceil())),
+            ("round", [Value::Float(a)]) => Ok(Value::Float(a.round())),
+            _ => err(format!("call of unknown function {name}")),
+        }
     }
 
     /// The elements of the `Vec` allocation `id`.
@@ -986,15 +1266,20 @@ impl<'a> Interp<'a> {
     fn box_behind(&mut self, v: &Value) -> R<AllocId> {
         match v {
             Value::Box(a) => Ok(*a),
-            Value::Ref(addr) => match self.slot(addr)? {
-                Value::Box(a) => Ok(a),
-                other => err(format!("expected a library value, found {other:?}")),
-            },
+            // A reference to a reference (`ref ref Vec`, a `ref` binding
+            // of a `ref` element) reaches the same box.
+            Value::Ref(addr) => {
+                let inner = self.slot(addr)?;
+                match inner {
+                    Value::Box(a) => Ok(a),
+                    Value::Ref(_) => self.box_behind(&inner),
+                    other => err(format!("expected a library value, found {other:?}")),
+                }
+            }
             other => err(format!("expected a library value, found {other:?}")),
         }
     }
 
-    /// How `print` shows a value.
     /// The arguments of a print or an f-string, shown one after another,
     /// by type when the call site's types are known.
     fn show(&mut self, args: &[Value], tys: &[Ty]) -> R<String> {
@@ -1072,6 +1357,7 @@ impl<'a> Interp<'a> {
         })
     }
 
+    /// How `print` shows a value when its type is not known.
     fn display(&mut self, v: &Value) -> R<String> {
         Ok(match v {
             Value::Str(s) => s.clone(),
@@ -1122,7 +1408,7 @@ impl<'a> Interp<'a> {
 
     fn tick(&mut self) -> R<()> {
         self.steps += 1;
-        if self.steps > MAX_STEPS {
+        if self.steps > self.max_steps {
             return err("step limit exceeded");
         }
         Ok(())
@@ -1452,7 +1738,9 @@ impl<'a> Interp<'a> {
                     (UnOp::Neg, Value::Int(i), TyKind::Int(it)) => {
                         let r = -i;
                         if wrap(r, it) != r {
-                            return err("negation overflowed");
+                            // `-MIN` overflows, and C8 traps it.
+                            self.events.push(Event::Abort(AbortReason::Overflow));
+                            return Err(Stop::Abort(AbortReason::Overflow));
                         }
                         Ok(Value::Int(r))
                     }
@@ -1915,6 +2203,7 @@ impl<'a> Interp<'a> {
             .heap
             .iter()
             .enumerate()
+            .filter(|(i, _)| !self.snapshots.contains(&AllocId(*i as u32)))
             .filter_map(|(i, o)| o.as_ref().map(|o| format!("a{i} (count {})", o.count)))
             .collect();
         if live.is_empty() {
@@ -1924,6 +2213,21 @@ impl<'a> Interp<'a> {
         }
     }
 }
+
+/// `String` methods [`Interp::string_text_method`] implements.
+const STRING_TEXT_METHODS: &[&str] = &[
+    "contains",
+    "starts_with",
+    "ends_with",
+    "trim",
+    "to_uppercase",
+    "to_lowercase",
+    "replace",
+    "repeat",
+    "substring",
+    "split",
+    "bytes",
+];
 
 /// `Vec[R].len` -> (`Vec[R]`, `len`); a plain `println` -> (`println`, ``).
 fn split_method(name: &str) -> (&str, &str) {
@@ -2448,6 +2752,50 @@ fn main() -> () {
         assert_eq!(r.exit_code(), Some(101), "{:?}", r.outcome);
     }
 
+    /// C8: `-MIN` traps like the checked ops, and a library method reaches
+    /// its box through a reference to a reference.
+    #[test]
+    fn mir_interp_neg_overflow_traps_and_ref_chains_reach_the_box() {
+        let src = "
+fn main() -> () {
+    let mut _0: ();
+    let _1: Vec[i64];
+    let _2: ref Vec[i64];
+    let _3: ref ref Vec[i64];
+    let _4: i64;
+    let _5: ();
+    let _6: i8;
+    bb0: {
+        _1 = Vec[i64].new() -> bb1;
+    }
+    bb1: {
+        _2 = &_1;
+        _3 = &_2;
+        _4 = Vec[i64].len(move _3) -> bb2;
+    }
+    bb2: {
+        _5 = println(copy _4) -> bb3;
+    }
+    bb3: {
+        _6 = Neg(const -128_i8);
+        _5 = println(copy _6) -> bb4;
+    }
+    bb4: {
+        drop(_1) -> bb5;
+    }
+    bb5: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = crate::mir::parse_module(src).unwrap();
+        let prog = Program::from_module(&m);
+        let r = run(&prog, &m.tys, "main", vec![]);
+        assert_eq!(r.output, "0\n");
+        assert_eq!(r.exit_code(), Some(101), "{:?}", r.outcome);
+    }
+
     #[test]
     fn mir_interp_read_after_move_is_an_error() {
         let mut w = world();
@@ -2585,7 +2933,7 @@ fn main() -> () {
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
-        assert_eq!(ran, 3);
+        assert_eq!(ran, 4);
     }
 
     /// A strict drop of a fieldless variant, a fieldless variant left in

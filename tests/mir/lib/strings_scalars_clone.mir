@@ -1,0 +1,167 @@
+struct P { x: i64, s: String }
+
+struct Res: Drop { id: i64 }
+
+fn Res.drop(_1: mut ref shared Res) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "res", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: String; // s
+    let _2: ref String;
+    let _3: bool;
+    let _4: ();
+    let _5: String; // t
+    let _6: String; // w
+    let _7: String; // u
+    let _8: Vec[String]; // parts
+    let _9: ref Vec[String];
+    let _10: Slice[u8]; // b
+    let _11: ref Slice[u8];
+    let _12: i64;
+    let _13: ref u8;
+    let _14: i64;
+    let _15: i64;
+    let _16: i64;
+    let _17: P; // p
+    let _18: P; // q
+    let _19: ref P;
+    let _20: mut ref String;
+    let _21: shared Res; // a
+    let _22: shared Res; // c
+    let _23: ref shared Res;
+    let _24: String;
+    let _25: ref String;
+    bb0: {
+        _1 = String.from(const "  Hello, World  ") -> bb1;
+    }
+    bb1: {
+        _2 = &_1;
+        _5 = String.trim(move _2) -> bb2;
+    }
+    bb2: {
+        _2 = &_5;
+        _3 = String.contains(move _2, const "World") -> bb3;
+    }
+    bb3: {
+        _2 = &_5;
+        _4 = println(move _2, const " ", copy _3) -> bb4;
+    }
+    bb4: {
+        _2 = &_5;
+        _3 = String.starts_with(move _2, const "World") -> bb5;
+    }
+    bb5: {
+        _2 = &_5;
+        _6 = String.substring(move _2, const 7_i64, const 12_i64) -> bb6;
+    }
+    bb6: {
+        _2 = &_6;
+        _4 = println(copy _3, const " ", move _2) -> bb7;
+    }
+    bb7: {
+        _2 = &_5;
+        _7 = String.replace(move _2, const "l", const "L") -> bb8;
+    }
+    bb8: {
+        _2 = &_7;
+        _8 = String.split(move _2, const ", ") -> bb9;
+    }
+    bb9: {
+        _9 = &_8;
+        _4 = println(move _9) -> bb10;
+    }
+    bb10: {
+        _2 = &_6;
+        _10 = String.bytes(move _2) -> bb11;
+    }
+    bb11: {
+        _11 = &_10;
+        _12 = Slice[u8].len(move _11) -> bb12;
+    }
+    bb12: {
+        _11 = &_10;
+        _13 = Slice[u8].index(move _11, const 0_i64) -> bb13;
+    }
+    bb13: {
+        _4 = println(copy _12, const " ", copy (*_13)) -> bb14;
+    }
+    bb14: {
+        _14 = i64.max(const 3_i64, const 9_i64) -> bb15;
+    }
+    bb15: {
+        _15 = i64.abs(const -4_i64) -> bb16;
+    }
+    bb16: {
+        _16 = i64.pow(const 2_i64, const 10_i64) -> bb17;
+    }
+    bb17: {
+        _4 = println(copy _14, const " ", copy _15, const " ", copy _16) -> bb18;
+    }
+    bb18: {
+        _24 = String.from(const "p") -> bb19;
+    }
+    bb19: {
+        _17 = P { const 1_i64, move _24 };
+        _19 = &_17;
+        _18 = P.clone(move _19) -> bb20;
+    }
+    bb20: {
+        _18.0 = const 2_i64;
+        _20 = &mut _18.1;
+        _4 = String.push_str(move _20, const "q") -> bb21;
+    }
+    bb21: {
+        _2 = &_17.1;
+        _25 = &_18.1;
+        _4 = println(copy _17.0, const " ", copy _18.0, const " ", move _2, const " ", move _25) -> bb22;
+    }
+    bb22: {
+        _21 = shared Res { const 7_i64 };
+        _23 = &_21;
+        _22 = Res.clone(move _23) -> bb23;
+    }
+    bb23: {
+        drop(_21) -> bb24;
+    }
+    bb24: {
+        _4 = println(const "after a") -> bb25;
+    }
+    bb25: {
+        drop(_22) -> bb26;
+    }
+    bb26: {
+        drop(_18) -> bb27;
+    }
+    bb27: {
+        drop(_17) -> bb28;
+    }
+    bb28: {
+        drop(_8) -> bb29;
+    }
+    bb29: {
+        drop(_7) -> bb30;
+    }
+    bb30: {
+        drop(_6) -> bb31;
+    }
+    bb31: {
+        drop(_5) -> bb32;
+    }
+    bb32: {
+        drop(_1) -> bb33;
+    }
+    bb33: {
+        _0 = const ();
+        return;
+    }
+}
