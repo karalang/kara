@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use super::parse::MirModule;
+use super::place_ty::place_ty;
 use super::pretty;
 use super::syntax::*;
 use super::ty::{AdtId, IntTy, IntrinsicTy, Ty, TyInterner, TyKind};
@@ -294,7 +295,8 @@ struct Interp<'a> {
 impl<'a> Interp<'a> {
     fn call(&mut self, name: &str, args: Vec<Value>) -> R<Value> {
         let Some(body) = self.program.bodies.get(name) else {
-            return self.native(name, args);
+            let unit = self.tys.unit();
+            return self.native(name, args, &[], unit);
         };
         if args.len() != body.arg_count {
             return err(format!(
@@ -326,7 +328,10 @@ impl<'a> Interp<'a> {
 
     /// Library functions the interpreter implements directly. A method of
     /// a library type is named after the type instance, `Vec[R].len`.
-    fn native(&mut self, name: &str, args: Vec<Value>) -> R<Value> {
+    /// A library function with no body: `arg_tys` and `ret` are the
+    /// argument and result types at the call site, which say what a
+    /// generic method's element type is and how its `Option` is laid out.
+    fn native(&mut self, name: &str, args: Vec<Value>, arg_tys: &[Ty], ret: Ty) -> R<Value> {
         let (ty_name, method) = split_method(name);
         let base = ty_name.split('[').next().unwrap_or(ty_name);
         match (base, method) {
@@ -386,8 +391,193 @@ impl<'a> Interp<'a> {
                     path: vec![*i as u64],
                 }))
             }
+            ("Vec" | "String", _) => self.collection_method(ty_name, method, args, arg_tys, ret),
             _ => err(format!("call of unknown function {name}")),
         }
+    }
+
+    /// The core `Vec[T]` and `String` methods (`design.md` § Collection
+    /// Core Methods) beyond the constructors above.
+    fn collection_method(
+        &mut self,
+        ty_name: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        let name = format!("{ty_name}.{method}");
+        let is_vec = ty_name.starts_with("Vec");
+        match (is_vec, method, args.as_slice()) {
+            (true, "new" | "with_capacity", _) => Ok(self.alloc_box(ty_name, Value::Agg(vec![]))),
+            (false, "new", []) => Ok(self.alloc_box(ty_name, Value::Str(String::new()))),
+            (true, "push", [v, val]) => {
+                let id = self.box_behind(v)?;
+                self.vec_elems(id)?.push(val.clone());
+                Ok(Value::Unit)
+            }
+            (true, "pop", [v]) => {
+                let id = self.box_behind(v)?;
+                let last = self.vec_elems(id)?.pop();
+                self.option(ret, last)
+            }
+            (true, "insert", [v, Value::Int(i), val]) => {
+                let id = self.box_behind(v)?;
+                let i = self.bounds(id, *i, true)?;
+                self.vec_elems(id)?.insert(i, val.clone());
+                Ok(Value::Unit)
+            }
+            (true, "remove", [v, Value::Int(i)]) => {
+                let id = self.box_behind(v)?;
+                let i = self.bounds(id, *i, false)?;
+                Ok(self.vec_elems(id)?.remove(i))
+            }
+            (true, "is_empty", [v]) => {
+                let id = self.box_behind(v)?;
+                Ok(Value::Bool(self.vec_elems(id)?.is_empty()))
+            }
+            (true, "get" | "last", [v, Value::Int(i)]) => {
+                let id = self.box_behind(v)?;
+                let n = self.vec_elems(id)?.len() as i128;
+                let i = if method == "last" { n - 1 - i } else { *i };
+                let elem = (0..n).contains(&i).then(|| {
+                    Value::Ref(Addr {
+                        root: Root::Heap(id),
+                        path: vec![i as u64],
+                    })
+                });
+                self.option(ret, elem)
+            }
+            (true, "swap", [v, Value::Int(i), Value::Int(j)]) => {
+                let id = self.box_behind(v)?;
+                let (i, j) = (self.bounds(id, *i, false)?, self.bounds(id, *j, false)?);
+                self.vec_elems(id)?.swap(i, j);
+                Ok(Value::Unit)
+            }
+            (true, "reverse", [v]) => {
+                let id = self.box_behind(v)?;
+                self.vec_elems(id)?.reverse();
+                Ok(Value::Unit)
+            }
+            (true, "clear", [v]) => {
+                let id = self.box_behind(v)?;
+                let e = self.vec_elem_ty(arg_tys, &name)?;
+                let n = self.vec_elems(id)?.len();
+                // First to last, as when the whole Vec drops.
+                for i in 0..n {
+                    let at = Addr {
+                        root: Root::Heap(id),
+                        path: vec![i as u64],
+                    };
+                    self.drop_at(&at, e)?;
+                }
+                self.vec_elems(id)?.clear();
+                Ok(Value::Unit)
+            }
+            (true, "index_set", [v, Value::Int(i), val]) => {
+                let id = self.box_behind(v)?;
+                let e = self.vec_elem_ty(arg_tys, &name)?;
+                let i = self.bounds(id, *i, false)?;
+                let at = Addr {
+                    root: Root::Heap(id),
+                    path: vec![i as u64],
+                };
+                // The new value is evaluated already; the old one drops
+                // before the store (core-semantics D4).
+                self.drop_at(&at, e)?;
+                *self.slot_mut(&at)? = val.clone();
+                Ok(Value::Unit)
+            }
+            (false, "len", [s]) => Ok(Value::Int(self.string_at(s)?.len() as i128)),
+            (false, "is_empty", [s]) => Ok(Value::Bool(self.string_at(s)?.is_empty())),
+            (false, "clone", [s]) => {
+                let text = self.string_at(s)?;
+                Ok(self.alloc_box(ty_name, Value::Str(text)))
+            }
+            (false, "add", [a, b]) => {
+                let text = self.string_at(a)? + &self.string_at(b)?;
+                Ok(self.alloc_box(ty_name, Value::Str(text)))
+            }
+            (false, "eq", [a, b]) => Ok(Value::Bool(self.string_at(a)? == self.string_at(b)?)),
+            (false, "push_str" | "push" | "clear", [s, rest @ ..]) => {
+                let tail = match rest {
+                    [Value::Char(c)] => c.to_string(),
+                    [other] => self.string_at(other)?,
+                    _ => String::new(),
+                };
+                let id = self.box_behind(s)?;
+                match &mut self.live(id)?.value {
+                    Value::Str(text) if method == "clear" => text.clear(),
+                    Value::Str(text) => text.push_str(&tail),
+                    other => return err(format!("{name} of {other:?}")),
+                }
+                Ok(Value::Unit)
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// The elements of the `Vec` allocation `id`.
+    fn vec_elems(&mut self, id: AllocId) -> R<&mut Vec<Value>> {
+        match &mut self.live(id)?.value {
+            Value::Agg(fs) => Ok(fs),
+            other => err(format!("a Vec allocation holds {other:?}")),
+        }
+    }
+
+    /// `T` for a method whose receiver is a reference to a `Vec[T]`.
+    fn vec_elem_ty(&self, arg_tys: &[Ty], name: &str) -> R<Ty> {
+        let mut t = *arg_tys
+            .first()
+            .ok_or_else(|| Stop::Error(format!("{name} needs its receiver's type")))?;
+        while let TyKind::Ref(inner) | TyKind::MutRef(inner) = self.tys.kind(t) {
+            t = inner;
+        }
+        match self.tys.kind(t) {
+            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => Ok(e),
+            _ => err(format!("{name} on {}", self.tys.display(t))),
+        }
+    }
+
+    /// Checks `i` against the length of `id` (one past the end too when
+    /// `may_append`); out of bounds aborts, as the index operator does.
+    fn bounds(&mut self, id: AllocId, i: i128, may_append: bool) -> R<usize> {
+        let n = self.vec_elems(id)?.len() as i128;
+        let limit = if may_append { n + 1 } else { n };
+        if (0..limit).contains(&i) {
+            Ok(i as usize)
+        } else {
+            self.events.push(Event::Abort(AbortReason::BoundsCheck));
+            Err(Stop::Abort(AbortReason::BoundsCheck))
+        }
+    }
+
+    /// The text of a `String` (owned or behind a reference) or a constant.
+    fn string_at(&mut self, v: &Value) -> R<String> {
+        if let Value::Str(s) = v {
+            return Ok(s.clone());
+        }
+        let id = self.box_behind(v)?;
+        match &self.live(id)?.value {
+            Value::Str(s) => Ok(s.clone()),
+            other => err(format!("expected a String, found {other:?}")),
+        }
+    }
+
+    /// `Some(v)` or `None` in the `Option` type `ret`, by variant name.
+    fn option(&self, ret: Ty, v: Option<Value>) -> R<Value> {
+        let TyKind::Adt(a) = self.tys.kind(ret) else {
+            return err(format!(
+                "expected an Option, found {}",
+                self.tys.display(ret)
+            ));
+        };
+        let adt = self.tys.adt(a);
+        let want = if v.is_some() { "Some" } else { "None" };
+        let Some(idx) = adt.variants.iter().position(|var| var.name == want) else {
+            return err(format!("{} has no variant {want}", adt.name));
+        };
+        Ok(Value::Variant(idx as u32, v.into_iter().collect()))
     }
 
     fn alloc_box(&mut self, ty_name: &str, value: Value) -> Value {
@@ -983,10 +1173,20 @@ impl<'a> Interp<'a> {
                     return err("call of a value that is not a function item");
                 };
                 let mut vals = Vec::with_capacity(args.len());
+                let mut arg_tys = Vec::with_capacity(args.len());
                 for a in args {
-                    vals.push(self.operand(body, a)?.0);
+                    let (v, t) = self.operand(body, a)?;
+                    vals.push(v);
+                    arg_tys.push(t);
                 }
-                let ret = self.call(&inst.name, vals)?;
+                let ret_ty = place_ty(body, self.tys, destination)
+                    .map_err(|e| Stop::Error(format!("call destination: {e}")))?
+                    .ty;
+                let ret = if self.program.bodies.contains_key(&inst.name) {
+                    self.call(&inst.name, vals)?
+                } else {
+                    self.native(&inst.name, vals, &arg_tys, ret_ty)?
+                };
                 let Some(target) = target else {
                     return err(format!(
                         "{} returned, but the call site says it never does",
@@ -1787,6 +1987,19 @@ exit main
         let elaborated = run_pin_files("tests/mir/closures", MirPhase::DropsElaborated, &want);
         let built = run_pin_files("tests/mir/closures-built", MirPhase::Built, &want);
         assert_eq!((elaborated, built), (2, 2));
+    }
+
+    /// The core `Vec` and `String` methods, with element drops on
+    /// `index_set`, `pop` (through the caller) and `clear`.
+    #[test]
+    fn mir_interp_runs_the_library_method_pins() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let want = |pin: &str| {
+            let out = root.join("tests/mir/lib").join(format!("{pin}.out"));
+            (std::fs::read_to_string(out).unwrap(), 0)
+        };
+        let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
+        assert_eq!(ran, 1);
     }
 
     #[test]

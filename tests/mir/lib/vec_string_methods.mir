@@ -1,0 +1,128 @@
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "d", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+enum Option[R] { None, Some(R) }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: Vec[R]; // v
+    let _2: ();
+    let _3: R;
+    let _4: mut ref Vec[R];
+    let _5: Option[R];
+    let _6: R; // r
+    let _7: i64;
+    let _8: i64;
+    let _9: ref Vec[R];
+    let _10: String; // s
+    let _11: mut ref String;
+    let _12: String; // t
+    let _13: ref String;
+    let _14: ref String;
+    let _15: String; // u
+    let _16: bool;
+    bb0: {
+        _1 = Vec[R].new() -> bb1;
+    }
+    bb1: {
+        _3 = R { const 1_i64 };
+        _4 = &mut _1;
+        _2 = Vec[R].push(move _4, move _3) -> bb2;
+    }
+    bb2: {
+        _3 = R { const 2_i64 };
+        _4 = &mut _1;
+        _2 = Vec[R].push(move _4, move _3) -> bb3;
+    }
+    bb3: {
+        _3 = R { const 3_i64 };
+        _4 = &mut _1;
+        _2 = Vec[R].push(move _4, move _3) -> bb4;
+    }
+    bb4: {
+        _3 = R { const 4_i64 };
+        _4 = &mut _1;
+        _2 = Vec[R].index_set(move _4, const 0_i64, move _3) -> bb5;
+    }
+    bb5: {
+        _4 = &mut _1;
+        _5 = Vec[R].pop(move _4) -> bb6;
+    }
+    bb6: {
+        _8 = discriminant(_5);
+        switchInt(copy _8) -> [1: bb7, otherwise: bb9];
+    }
+    bb7: {
+        _6 = move (_5 as Some).0;
+        _2 = println(const "popped", copy _6.0) -> bb8;
+    }
+    bb8: {
+        drop(_6) -> bb9;
+    }
+    bb9: {
+        _9 = &_1;
+        _7 = Vec[R].len(move _9) -> bb10;
+    }
+    bb10: {
+        _2 = println(const "len", copy _7) -> bb11;
+    }
+    bb11: {
+        _4 = &mut _1;
+        _2 = Vec[R].clear(move _4) -> bb12;
+    }
+    bb12: {
+        _10 = String.from(const "ab") -> bb13;
+    }
+    bb13: {
+        _11 = &mut _10;
+        _2 = String.push_str(move _11, const "cd") -> bb14;
+    }
+    bb14: {
+        _13 = &_10;
+        _12 = String.clone(move _13) -> bb15;
+    }
+    bb15: {
+        _13 = &_10;
+        _14 = &_12;
+        _15 = String.add(move _13, move _14) -> bb16;
+    }
+    bb16: {
+        _13 = &_10;
+        _14 = &_12;
+        _16 = String.eq(move _13, move _14) -> bb17;
+    }
+    bb17: {
+        _13 = &_15;
+        _2 = println(move _13, const " ", copy _16) -> bb18;
+    }
+    bb18: {
+        _2 = println(const "end") -> bb19;
+    }
+    bb19: {
+        drop(_15) -> bb20;
+    }
+    bb20: {
+        drop(_12) -> bb21;
+    }
+    bb21: {
+        drop(_10) -> bb22;
+    }
+    bb22: {
+        drop(_1) -> bb23;
+    }
+    bb23: {
+        _0 = const ();
+        return;
+    }
+}
