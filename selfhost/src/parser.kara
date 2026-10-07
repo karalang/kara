@@ -1256,10 +1256,6 @@ impl Parser {
                 self.advance();
                 n
             }
-            Union => {
-                self.advance();
-                "union".to_string()
-            }
             Const => {
                 self.advance();
                 "const".to_string()
@@ -2435,6 +2431,28 @@ impl Parser {
         if self.pos >= self.tokens.len() {
             return TypeExpr.ErrTy(SpanNode { span: self.span_from(start) });
         }
+        // `weak T` — `weak` is a contextual keyword, a type modifier only when
+        // a type follows it.
+        if self.word_at(0) == "weak" and self.pos + 1 < self.tokens.len() {
+            let type_follows = match self.tokens[self.pos + 1].token {
+                Identifier(_) => true,
+                SelfType => true,
+                LeftParen => true,
+                Star => true,
+                Ref => true,
+                Mut => true,
+                Shared => true,
+                _ => false,
+            };
+            if type_follows {
+                self.advance();
+                let inner = self.parse_type();
+                return TypeExpr.WeakTy(WrapType {
+                    inner: inner,
+                    span: self.span_from(start),
+                });
+            }
+        }
         match self.tokens[self.pos].token {
             // `ref T`
             Ref => {
@@ -2465,15 +2483,6 @@ impl Parser {
                         span: self.span_from(start),
                     })
                 }
-            }
-            // `weak T`
-            Weak => {
-                self.advance();
-                let inner = self.parse_type();
-                TypeExpr.WeakTy(WrapType {
-                    inner: inner,
-                    span: self.span_from(start),
-                })
             }
             // `*const T` / `*mut T`
             Star => {
@@ -2965,19 +2974,35 @@ impl Parser {
         if self.pos >= self.tokens.len() {
             return Item.ErrItem(SpanNode { span: self.current_span() });
         }
-        match self.tokens[self.pos].token {
+        // Contextual item keywords: `use NAME`, `union NAME`, `par struct` /
+        // `par enum`. Each is a keyword only when the next token fits.
+        let w = self.word_at(0);
+        if w == "use" and self.word_at(1) != "" {
             // `use` carries neither attributes nor doc (seed parity) — both drop.
-            Use => self.parse_use_decl(is_pub),
+            return self.parse_use_decl(is_pub);
+        }
+        if w == "union" and self.word_at(1) != "" {
+            return self.parse_union_def(is_pub, attrs, doc);
+        }
+        if w == "par" and self.pos + 1 < self.tokens.len() {
+            let par_item = match self.tokens[self.pos + 1].token {
+                Struct => true,
+                Enum => true,
+                _ => false,
+            };
+            if par_item {
+                return self.parse_shared_or_par(is_pub, false, true, attrs, doc);
+            }
+        }
+        match self.tokens[self.pos].token {
             // `import` — the module-system form; supports the braced multi-item
             // group `import mod.{A, B as C}` binding every listed name.
             Import => self.parse_import_decl(is_pub),
             Const => self.parse_const_decl(is_pub, attrs, doc),
             Type => self.parse_type_alias_decl(is_pub, attrs, doc),
             Struct => self.parse_struct_def(is_pub, false, false, attrs, doc),
-            Union => self.parse_union_def(is_pub, attrs, doc),
             Enum => self.parse_enum_def(is_pub, false, false, attrs, doc),
             Shared => self.parse_shared_or_par(is_pub, true, false, attrs, doc),
-            Par => self.parse_shared_or_par(is_pub, false, true, attrs, doc),
             Fn => self.parse_fn_def(is_pub, attrs, doc),
             Trait => self.parse_trait_def(is_pub, attrs, doc),
             // `impl` carries no visibility (the seed's `Token::Impl` arm ignores a
@@ -3485,6 +3510,20 @@ impl Parser {
         Item.Func(self.parse_fn_def_node(is_pub, attrs, doc))
     }
 
+    // The text of the identifier `off` tokens ahead, or "" when that token is
+    // not an identifier. Contextual keywords (`union`, `par`, `weak`, the
+    // effect verbs, ...) lex as identifiers and are recognised by name in the
+    // positions where they act as keywords (design review § 3).
+    fn word_at(ref self, off: i64) -> String {
+        if self.pos + off >= self.tokens.len() {
+            return "".to_string();
+        }
+        match self.tokens[self.pos + off].token {
+            Identifier(n) => n,
+            _ => "".to_string(),
+        }
+    }
+
     // `with` — the leading token of a function-signature effect clause.
     fn at_with(ref self) -> bool {
         if self.pos >= self.tokens.len() {
@@ -3527,14 +3566,6 @@ impl Parser {
                 break;
             }
             let is_item = match self.tokens[self.pos].token {
-                Reads => true,
-                Writes => true,
-                Sends => true,
-                Receives => true,
-                Allocates => true,
-                Panics => true,
-                Blocks => true,
-                Suspends => true,
                 Identifier(_) => true,
                 _ => false,
             };

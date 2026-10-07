@@ -2104,7 +2104,7 @@ fn parse_error_kind_codes_reach_json() {
     let dir = std::env::temp_dir().join(format!("karac-parse-kind-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("kw.kara");
-    std::fs::write(&path, "fn main() {\n    let mut group = 1;\n}\n").unwrap();
+    std::fs::write(&path, "fn main() {\n    let mut where = 1;\n}\n").unwrap();
     let out = karac_bin()
         .args(["check", path.to_str().unwrap(), "--output=json"])
         .output()

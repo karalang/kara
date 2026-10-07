@@ -20,7 +20,7 @@ impl super::Parser {
         self.expect(&Token::Effect)?;
 
         if is_transparent {
-            if !self.eat(&Token::Verb) {
+            if !self.eat_kw("verb") {
                 self.error("Expected 'verb' after 'transparent effect'");
                 return None;
             }
@@ -36,12 +36,12 @@ impl super::Parser {
             }));
         }
 
-        match self.peek_token_ref() {
-            Token::Resource => {
+        match self.kw_here() {
+            Some("resource") => {
                 self.advance();
                 self.parse_effect_resource_tail(&start)
             }
-            Token::Group => {
+            Some("group") => {
                 self.advance();
                 let name = self.expect_identifier()?;
                 let name_span = self.span_from(&start);
@@ -57,7 +57,7 @@ impl super::Parser {
                     body,
                 }))
             }
-            Token::Verb => {
+            Some("verb") => {
                 self.advance();
                 let name = self.expect_identifier()?;
                 let name_span = self.span_from(&start);
@@ -213,18 +213,7 @@ impl super::Parser {
     }
 
     fn is_effect_start(&self) -> bool {
-        matches!(
-            self.peek_token(),
-            Token::Reads
-                | Token::Writes
-                | Token::Sends
-                | Token::Receives
-                | Token::Allocates
-                | Token::Panics
-                | Token::Blocks
-                | Token::Suspends
-                | Token::With
-        )
+        self.check(&Token::With) || self.kw_here().is_some_and(|w| EFFECT_VERBS.contains(&w))
     }
 
     pub(crate) fn parse_effect_list(
@@ -318,28 +307,19 @@ impl super::Parser {
     /// from drifting.
     pub(crate) fn try_parse_effect_verb(&mut self) -> Option<EffectVerb> {
         let start = self.current_span();
-        let kind = match self.peek_token_ref() {
-            Token::Reads => {
-                self.advance();
-                EffectVerbKind::Reads
-            }
-            Token::Writes => {
-                self.advance();
-                EffectVerbKind::Writes
-            }
-            Token::Sends => {
-                self.advance();
-                EffectVerbKind::Sends
-            }
-            Token::Receives => {
-                self.advance();
-                EffectVerbKind::Receives
-            }
-            Token::Allocates => {
-                self.advance();
-                EffectVerbKind::Allocates
-            }
-            Token::Panics => {
+        let builtin = match self.kw_here() {
+            Some("reads") => Some(EffectVerbKind::Reads),
+            Some("writes") => Some(EffectVerbKind::Writes),
+            Some("sends") => Some(EffectVerbKind::Sends),
+            Some("receives") => Some(EffectVerbKind::Receives),
+            Some("allocates") => Some(EffectVerbKind::Allocates),
+            Some("panics") => Some(EffectVerbKind::Panics),
+            Some("blocks") => Some(EffectVerbKind::Blocks),
+            Some("suspends") => Some(EffectVerbKind::Suspends),
+            _ => None,
+        };
+        let kind = match (builtin, self.peek_token_ref()) {
+            (Some(EffectVerbKind::Panics), _) => {
                 self.advance();
                 return Some(EffectVerb {
                     kind: EffectVerbKind::Panics,
@@ -347,20 +327,16 @@ impl super::Parser {
                     span: self.span_from(&start),
                 });
             }
-            Token::Blocks => {
+            (Some(kind), _) => {
                 self.advance();
-                EffectVerbKind::Blocks
+                kind
             }
-            Token::Suspends => {
-                self.advance();
-                EffectVerbKind::Suspends
-            }
-            Token::Identifier { name, .. } if self.peek_ahead_is_left_paren() => {
+            (None, Token::Identifier { name, .. }) if self.peek_ahead_is_left_paren() => {
                 let name = name.clone();
                 self.advance();
                 EffectVerbKind::UserDefined(name)
             }
-            _ => return None,
+            (None, _) => return None,
         };
 
         // Blocks and suspends may appear without resources (like panics)
@@ -421,3 +397,16 @@ impl super::Parser {
         })
     }
 }
+
+/// The built-in effect verbs: contextual keywords inside a `with` clause or
+/// an effect declaration, ordinary names everywhere else.
+const EFFECT_VERBS: &[&str] = &[
+    "reads",
+    "writes",
+    "sends",
+    "receives",
+    "allocates",
+    "panics",
+    "blocks",
+    "suspends",
+];

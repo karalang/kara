@@ -38,13 +38,9 @@ pub enum Token {
     // Keywords — declarations
     Fn,
     Struct,
-    Union,
     Enum,
     Trait,
-    Marker,
     Impl,
-    Mod,
-    Use,
     Import,
     Const,
     Type,
@@ -78,26 +74,10 @@ pub enum Token {
     // Ownership
     Own,
     Ref,
-    Weak,
-    Lock,
     Move,
     // Effects
     Effect,
-    Resource,
-    Verb,
-    Reads,
-    Writes,
-    Sends,
-    Receives,
-    Allocates,
-    Panics,
-    Blocks,
-    Suspends,
     With,
-    Transparent,
-    Stable,
-    Seq,
-    Par,
     Yield,
     // Type system
     As,
@@ -111,17 +91,12 @@ pub enum Token {
     Unsafe,
     Extern,
     Shared,
-    // Layout
-    Layout,
-    Group,
     // Comptime
     Comptime,
     // Literals (keyword)
     True,
     False,
     // Other keywords
-    Alias,
-    Independent,
     SelfValue,
     SelfType,
     Underscore,

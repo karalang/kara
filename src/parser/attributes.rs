@@ -200,7 +200,7 @@ impl super::Parser {
                         None
                     };
                     (Some(name), val)
-                } else if name == "repr" && self.check(&Token::Transparent) {
+                } else if name == "repr" && self.at_kw("transparent") {
                     // `#[repr(transparent)]` — `transparent` is a reserved keyword
                     // (it also introduces a `transparent effect` declaration), so
                     // `parse_expression()` would reject it. Inside a `repr`

@@ -472,7 +472,9 @@ impl super::Parser {
             // both legal; the modifier wraps the parsed field type in
             // `TypeKind::Weak`. This is sugar — the type-position form
             // `field: weak T` is also accepted via `parse_type`.
-            let weak_modifier_span = if matches!(self.peek_token_ref(), Token::Weak) {
+            let weak_modifier_span = if self.at_kw("weak")
+                && matches!(self.peek_token_ref_at(1), Token::Identifier { .. })
+            {
                 let span = self.current_span();
                 self.advance();
                 Some(span)

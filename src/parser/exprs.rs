@@ -278,24 +278,20 @@ impl super::Parser {
                             };
                         }
                         Token::Identifier { .. }
-                        | Token::Union
                         | Token::Const
                         | Token::Mut
                         | Token::Or
                         | Token::And => {
-                            // `union`, `const`, `mut`, `or`, and `and` are
-                            // keywords at item / type / parameter / operator
-                            // position only — in field- or method-name position
-                            // they're accepted as plain identifiers so surfaces
-                            // like `Set.union(...)`, `ptr.const(x)`, `ptr.mut(x)`
-                            // (raw-pointer construction — design.md § Raw Pointer
+                            // `const`, `mut`, `or`, and `and` are keywords at
+                            // item / type / parameter / operator position only —
+                            // in field- or method-name position they're
+                            // accepted as plain identifiers so surfaces like
+                            // `ptr.const(x)`, `ptr.mut(x)` (raw-pointer
+                            // construction — design.md § Raw Pointer
                             // Construction), and the Option/Result combinators
                             // `opt.or(alt)` / `opt.and(other)` (B-2026-07-14-6)
                             // keep working. Standard "weak keyword" treatment.
-                            let method = if self.check(&Token::Union) {
-                                self.advance();
-                                "union".to_string()
-                            } else if self.check(&Token::Const) {
+                            let method = if self.check(&Token::Const) {
                                 self.advance();
                                 "const".to_string()
                             } else if self.check(&Token::Mut) {
@@ -1556,7 +1552,10 @@ impl super::Parser {
             }
 
             // Seq block
-            Token::Seq => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "seq" && matches!(self.peek_token_ref_at(1), Token::LeftBrace) => {
                 self.advance();
                 let block = self.expect_keyword_block("seq")?;
                 Some(Expr {
@@ -1567,7 +1566,10 @@ impl super::Parser {
             }
 
             // Par block
-            Token::Par => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "par" && matches!(self.peek_token_ref_at(1), Token::LeftBrace) => {
                 self.advance();
                 let block = self.expect_keyword_block("par")?;
                 Some(Expr {
@@ -1584,7 +1586,15 @@ impl super::Parser {
             // with NO leading `.` is the optional alias. The `.` vs bare-IDENT
             // distinction disambiguates `lock a.b c { }` (alias `c`) from
             // `lock a.b.c { }` (the path continues).
-            Token::Lock => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "lock"
+                && matches!(
+                    self.peek_token_ref_at(1),
+                    Token::Identifier { .. } | Token::SelfValue
+                ) =>
+            {
                 self.advance();
                 let place_start = self.current_span();
                 let mut place = if self.check(&Token::SelfValue) {
@@ -2811,7 +2821,6 @@ impl super::Parser {
                 | Token::SelfType
                 | Token::Ref
                 | Token::Mut
-                | Token::Weak
                 | Token::Star
                 | Token::LeftParen
         )

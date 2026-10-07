@@ -230,7 +230,21 @@ impl super::Parser {
                 })
             }
             // weak Type
-            Token::Weak => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "weak"
+                && matches!(
+                    self.peek_token_ref_at(1),
+                    Token::Identifier { .. }
+                        | Token::SelfType
+                        | Token::LeftParen
+                        | Token::Star
+                        | Token::Ref
+                        | Token::Mut
+                        | Token::Shared
+                ) =>
+            {
                 self.advance();
                 let inner = self.parse_type()?;
                 Some(TypeExpr {

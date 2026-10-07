@@ -24,7 +24,7 @@ impl super::Parser {
         is_private: bool,
     ) -> Option<MarkerTraitDef> {
         let start = self.current_span();
-        self.expect(&Token::Marker)?;
+        self.expect_kw("marker")?;
         self.expect(&Token::Trait)?;
         let name = self.expect_identifier()?;
         let name_span = self.span_from(&start);

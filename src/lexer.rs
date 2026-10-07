@@ -1495,13 +1495,9 @@ impl<'a> Lexer<'a> {
             // Declarations
             "fn" => Token::Fn,
             "struct" => Token::Struct,
-            "union" => Token::Union,
             "enum" => Token::Enum,
             "trait" => Token::Trait,
-            "marker" => Token::Marker,
             "impl" => Token::Impl,
-            "mod" => Token::Mod,
-            "use" => Token::Use,
             "import" => Token::Import,
             "const" => Token::Const,
             "type" => Token::Type,
@@ -1535,29 +1531,13 @@ impl<'a> Lexer<'a> {
             // Ownership
             "own" => Token::Own,
             "ref" => Token::Ref,
-            "weak" => Token::Weak,
-            "lock" => Token::Lock,
             // Closure capture: `own |...|` is the explicit capture-by-value
             // prefix (see Rule 2½). `move` is reserved against the Rust idiom
             // and is rejected by the parser with a redirect to `own`.
             "move" => Token::Move,
             // Effects
             "effect" => Token::Effect,
-            "resource" => Token::Resource,
-            "verb" => Token::Verb,
-            "reads" => Token::Reads,
-            "writes" => Token::Writes,
-            "sends" => Token::Sends,
-            "receives" => Token::Receives,
-            "allocates" => Token::Allocates,
-            "panics" => Token::Panics,
-            "blocks" => Token::Blocks,
-            "suspends" => Token::Suspends,
             "with" => Token::With,
-            "transparent" => Token::Transparent,
-            "stable" => Token::Stable,
-            "seq" => Token::Seq,
-            "par" => Token::Par,
             "yield" => Token::Yield,
             // Type system
             "as" => Token::As,
@@ -1571,17 +1551,12 @@ impl<'a> Lexer<'a> {
             "unsafe" => Token::Unsafe,
             "extern" => Token::Extern,
             "shared" => Token::Shared,
-            // Layout
-            "layout" => Token::Layout,
-            "group" => Token::Group,
             // Comptime — compile-time evaluation (see deferred.md § Comptime).
             "comptime" => Token::Comptime,
             // Literals
             "true" => Token::True,
             "false" => Token::False,
             // Other
-            "alias" => Token::Alias,
-            "independent" => Token::Independent,
             "self" => Token::SelfValue,
             "Self" => Token::SelfType,
             // Underscore as identifier

@@ -979,6 +979,50 @@ impl Parser {
         );
     }
 
+    /// Whether the token `offset` ahead is the contextual keyword `kw`: an
+    /// identifier spelled `kw`, not written `r#kw`. Only words that start
+    /// items, statements or expressions are hard keywords; the rest
+    /// (`union`, `lock`, `par`, the effect verbs, …) are names everywhere
+    /// except the one position where they introduce syntax (design review
+    /// 2026-10-07, §3 "Contextual keywords").
+    fn at_kw_at(&self, offset: usize, kw: &str) -> bool {
+        matches!(
+            self.peek_token_ref_at(offset),
+            Token::Identifier { name, raw: false } if name == kw
+        )
+    }
+
+    fn at_kw(&self, kw: &str) -> bool {
+        self.at_kw_at(0, kw)
+    }
+
+    fn eat_kw(&mut self, kw: &str) -> bool {
+        if self.at_kw(kw) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect_kw(&mut self, kw: &str) -> Option<()> {
+        if self.eat_kw(kw) {
+            Some(())
+        } else {
+            self.error(&format!("Expected `{kw}`"));
+            None
+        }
+    }
+
+    /// The spelling of the current token when it is an identifier not
+    /// written `r#…`: what a contextual keyword is matched against.
+    fn kw_here(&self) -> Option<&str> {
+        match self.peek_token_ref() {
+            Token::Identifier { name, raw: false } => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
     fn expect_identifier(&mut self) -> Option<String> {
         match self.peek_token_ref() {
             Token::Identifier { name, .. } => {
@@ -1388,25 +1432,27 @@ impl Parser {
             match self.peek_token_ref() {
                 Token::Fn
                 | Token::Struct
-                | Token::Union
                 | Token::Enum
                 | Token::Trait
                 | Token::Impl
                 | Token::Effect
-                | Token::Transparent
-                | Token::Layout
-                | Token::Mod
-                | Token::Use
                 | Token::Import
                 | Token::Const
-                | Token::Alias
-                | Token::Independent
                 | Token::Extern
                 | Token::Type
                 | Token::Distinct
                 | Token::Pub
-                | Token::Stable
                 | Token::Pound => return,
+                // A contextual keyword resyncs only where it starts an item
+                // (`union Name`, `layout Name`, …), not as a plain name.
+                Token::Identifier { name, raw: false }
+                    if matches!(name.as_str(), "union" | "layout" | "alias" | "independent")
+                        && matches!(self.peek_token_ref_at(1), Token::Identifier { .. })
+                        || matches!(name.as_str(), "transparent" | "stable")
+                            && matches!(self.peek_token_ref_at(1), Token::Effect) =>
+                {
+                    return
+                }
                 _ => {
                     self.advance();
                 }

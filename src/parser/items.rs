@@ -89,9 +89,16 @@ impl super::Parser {
             Token::Struct => Some(Item::StructDef(
                 self.parse_struct_def(attributes, is_pub, is_private, false, false, None)?,
             )),
-            Token::Union => Some(Item::UnionDef(
-                self.parse_union_def(attributes, is_pub, is_private)?,
-            )),
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "union"
+                && matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) =>
+            {
+                Some(Item::UnionDef(
+                    self.parse_union_def(attributes, is_pub, is_private)?,
+                ))
+            }
             Token::Enum => Some(Item::EnumDef(
                 self.parse_enum_def(attributes, is_pub, is_private, false, false)?,
             )),
@@ -126,7 +133,15 @@ impl super::Parser {
             // for fix-it rewrites. Field-constraint validation (`mut` fields
             // must be `Atomic[T]` / `Mutex[T]`) and `mut self` rejection run in
             // the typechecker at the definition site, not here.
-            Token::Par => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "par"
+                && matches!(
+                    self.peek_token_ref_at(1),
+                    Token::Struct | Token::Enum | Token::Fn | Token::Trait | Token::Impl
+                ) =>
+            {
                 let par_kw_span = self.current_span();
                 self.advance(); // consume `par`
                 match self.peek_token_ref() {
@@ -148,9 +163,12 @@ impl super::Parser {
                 }
             }
             Token::Trait => self.parse_trait_or_alias(attributes, is_pub, is_private),
-            Token::Marker => Some(Item::MarkerTrait(
-                self.parse_marker_trait(attributes, is_pub, is_private)?,
-            )),
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "marker" && matches!(self.peek_token_ref_at(1), Token::Trait) => Some(
+                Item::MarkerTrait(self.parse_marker_trait(attributes, is_pub, is_private)?),
+            ),
             Token::Impl => Some(Item::ImplBlock(self.parse_impl_block(attributes)?)),
             Token::Effect => self.parse_effect_decl(is_pub, false, false),
             // Bare `resource Db;` — shorthand for `effect resource Db;`
@@ -161,29 +179,51 @@ impl super::Parser {
             // would now mis-route it into the synthesized main, so parse
             // it as the item it always denoted. Same body as the
             // `effect resource` arm in `parse_effect_decl`.
-            Token::Resource => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "resource"
+                && matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) =>
+            {
                 let start = self.current_span();
                 self.advance();
                 self.parse_effect_resource_tail(&start)
             }
-            Token::Stable => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "stable" && matches!(self.peek_token_ref_at(1), Token::Effect) => {
                 self.advance();
                 // stable effect group ...
                 self.parse_effect_decl(is_pub, true, false)
             }
-            Token::Transparent => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "transparent" && matches!(self.peek_token_ref_at(1), Token::Effect) => {
                 self.advance();
                 self.parse_effect_decl(is_pub, false, true)
             }
-            Token::Layout => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "layout"
+                && matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) =>
+            {
                 let def = self.parse_layout_def(attributes, is_pub)?;
                 Some(Item::LayoutDef(def))
             }
-            Token::Mod => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "mod" && matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) => {
                 self.reject_mod_decl();
                 None
             }
-            Token::Use => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "use" && matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) => {
                 let decl = self.parse_use_decl(is_pub)?;
                 Some(Item::UseDecl(decl))
             }
@@ -204,11 +244,21 @@ impl super::Parser {
                 let decl = self.parse_const_decl(attributes, is_pub, is_private)?;
                 Some(Item::ConstDecl(decl))
             }
-            Token::Alias => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "alias"
+                && matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) =>
+            {
                 let decl = self.parse_alias_decl()?;
                 Some(Item::AliasDecl(decl))
             }
-            Token::Independent => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "independent"
+                && matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) =>
+            {
                 let decl = self.parse_independent_decl()?;
                 Some(Item::IndependentDecl(decl))
             }
@@ -1904,7 +1954,7 @@ impl super::Parser {
         is_private: bool,
     ) -> Option<UnionDef> {
         let start = self.current_span();
-        self.expect(&Token::Union)?;
+        self.expect_kw("union")?;
         let name = self.expect_identifier()?;
         let name_span = self.span_from(&start);
         self.check_ident_class(&name, IdentClass::Type, "union", name_span);
@@ -2189,7 +2239,7 @@ impl super::Parser {
 
     fn parse_layout_def(&mut self, attributes: Vec<Attribute>, is_pub: bool) -> Option<LayoutDef> {
         let start = self.current_span();
-        self.expect(&Token::Layout)?;
+        self.expect_kw("layout")?;
         let name = self.expect_identifier()?;
         // Layout names are Value-class — they bind to a logical collection
         // (e.g., `layout entities: Collection[Entity]`). The Type-class
@@ -2202,7 +2252,7 @@ impl super::Parser {
         self.expect(&Token::LeftBrace)?;
         let mut items = Vec::new();
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
-            if self.check(&Token::Group) {
+            if self.at_kw("group") {
                 let gs = self.current_span();
                 self.advance();
                 let group_name = self.expect_identifier()?;
@@ -2420,7 +2470,7 @@ impl super::Parser {
 
     fn parse_use_decl(&mut self, is_pub: bool) -> Option<UseDecl> {
         let start = self.current_span();
-        self.expect(&Token::Use)?;
+        self.expect_kw("use")?;
         let path = self.parse_path_segments()?;
         self.expect(&Token::Semicolon)?;
         Some(UseDecl {
@@ -2644,7 +2694,7 @@ impl super::Parser {
 
     fn parse_alias_decl(&mut self) -> Option<AliasDecl> {
         let start = self.current_span();
-        self.expect(&Token::Alias)?;
+        self.expect_kw("alias")?;
         let left = self.parse_path_segments()?;
         self.expect(&Token::Equal)?;
         let right = self.parse_path_segments()?;
@@ -2658,7 +2708,7 @@ impl super::Parser {
 
     fn parse_independent_decl(&mut self) -> Option<IndependentDecl> {
         let start = self.current_span();
-        self.expect(&Token::Independent)?;
+        self.expect_kw("independent")?;
         let left = self.parse_path_segments()?;
         self.expect(&Token::Comma)?;
         let right = self.parse_path_segments()?;

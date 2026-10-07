@@ -38,12 +38,7 @@ Complete grammar reference for the Kāra programming language — a systems lang
 
 ```
 // Declarations
-fn  struct  enum  union  trait  impl  mod  use  type  distinct  marker
-            // `union` is the FFI-only untagged-union type; see design.md
-            // § FFI Unions. Requires #[repr(C)]; field reads are unsafe.
-            // `marker` is the trait-modifier prefix for marker traits
-            // (`marker trait Foo;` — no methods, empty impls). See
-            // design.md § Marker Traits.
+fn  struct  enum  trait  impl  type  distinct
 
 // Visibility
 pub  private
@@ -58,7 +53,7 @@ let  mut
 and  or  not   // word forms; `&&` / `||` / `!` are not accepted
 
 // Ownership
-ref  weak  shared  lock  own
+ref  shared  own
             // `own` is the explicit capture-by-value prefix on closure
             // expressions: `own |x| body` forces every captured path to be
             // moved into the closure (see design.md § Rule 2½). The bare
@@ -78,9 +73,7 @@ move          // Reserved but not active. Rust uses `move` for the
 defer  errdefer
 
 // Effects
-effect  resource  verb  reads  writes  sends  receives  allocates  panics
-blocks  suspends
-with  transparent  stable  seq  par
+effect  with
 
 // Type system
 as  where   // where is used for refinement types and contracts
@@ -91,9 +84,6 @@ unsafe
 
 // Foreign / host bindings
 extern  host
-
-// Layout
-layout  group
 
 // Reserved for future use (not yet meaningful to the parser beyond being reserved)
 dyn            // trait objects / dynamic dispatch
@@ -125,10 +115,32 @@ true  false
 providers
 
 // Other
-alias  independent  self  Self
+self  Self
 ```
 
-All keywords are reserved — they cannot be used as identifiers without the `r#` raw-identifier escape (§1.3 IDENTIFIER, design.md § Raw Identifiers). `r#NAME` parses as the identifier `NAME` even when `NAME` is a reserved keyword (`r#async`, `r#try`, `r#move`, `r#comptime`, etc.). Structural markers — `self`, `Self`, `_`, `super`, `crate`, `mod`, `pub`, `priv`, `private`, `mut`, `ref`, `own` — cannot be raw-escaped (`error[E_RAW_IDENT_NOT_ALLOWED]`, emitted as `E0004`; the canonical list is `token::UNESCAPABLE_MARKERS`, which the lexer's rejection and the parser's decision to suggest `r#` at all both read).
+**Contextual keywords** (design review 2026-10-07 § 3). These words are
+keywords only where they start their construct; everywhere else they are
+ordinary identifiers, so a struct can have fields named `reads` and `writes`,
+and a function can be called `union` or `lock`:
+
+```
+union        // `union NAME { ... }` — the FFI-only untagged union (design.md § FFI Unions)
+marker       // `marker trait NAME;` (design.md § Marker Traits)
+mod  use     // item forms, followed by a name
+weak         // `weak T` — before a type
+lock         // `lock m { ... }` / `lock m as x { ... }` — before a name
+resource  verb  group  stable  transparent   // effect declarations
+reads  writes  sends  receives  allocates  panics  blocks  suspends
+             // effect verbs — inside a `with` clause or effect declaration
+seq  par     // `seq { ... }` / `par { ... }` — before `{`; `par struct` / `par enum`
+layout       // `layout NAME ...`; `group` inside a layout block
+alias  independent   // resource-aliasing declarations, followed by a name
+```
+
+The lexer emits each as an identifier and the parser recognises it by name in
+those positions. `r#` on one of them is redundant but still accepted.
+
+All keywords are reserved — they cannot be used as identifiers without the `r#` raw-identifier escape (§1.3 IDENTIFIER, design.md § Raw Identifiers). `r#NAME` parses as the identifier `NAME` even when `NAME` is a reserved keyword (`r#async`, `r#try`, `r#move`, `r#comptime`, etc.). Structural markers — `self`, `Self`, `_`, `super`, `crate`, `pub`, `priv`, `private`, `mut`, `ref`, `own` — cannot be raw-escaped (`error[E_RAW_IDENT_NOT_ALLOWED]`, emitted as `E0004`; the canonical list is `token::UNESCAPABLE_MARKERS`, which the lexer's rejection and the parser's decision to suggest `r#` at all both read).
 
 **Reserved identifiers** (not keywords, but cannot be used as user-defined identifiers):
 

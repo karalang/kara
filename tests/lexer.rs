@@ -98,7 +98,10 @@ fn test_function_with_effects() {
         Token::Comma,
         ident("Error"),
         Token::GreaterThan,
-        Token::Writes,
+        Token::Identifier {
+            name: "writes".into(),
+            raw: false,
+        },
         Token::LeftParen,
         ident("UserDB"),
         Token::RightParen,
@@ -162,8 +165,14 @@ fn test_effect_declarations() {
 
     let tokens = tokens_only(source);
     assert_eq!(tokens[0], Token::Effect);
-    assert!(tokens.contains(&Token::Transparent));
-    assert!(tokens.contains(&Token::Group));
+    assert!(tokens.contains(&Token::Identifier {
+        name: "transparent".into(),
+        raw: false
+    }));
+    assert!(tokens.contains(&Token::Identifier {
+        name: "group".into(),
+        raw: false
+    }));
 }
 
 #[test]
@@ -180,7 +189,10 @@ fn test_ownership_keywords() {
 
     let tokens = tokens_only(source);
     assert!(tokens.contains(&Token::Ref));
-    assert!(tokens.contains(&Token::Weak));
+    assert!(tokens.contains(&Token::Identifier {
+        name: "weak".into(),
+        raw: false
+    }));
 }
 
 #[test]
@@ -294,8 +306,17 @@ fn test_layout_block() {
     "#;
 
     let tokens = tokens_only(source);
-    assert_eq!(tokens[0], Token::Layout);
-    assert!(tokens.contains(&Token::Group));
+    assert_eq!(
+        tokens[0],
+        Token::Identifier {
+            name: "layout".into(),
+            raw: false
+        }
+    );
+    assert!(tokens.contains(&Token::Identifier {
+        name: "group".into(),
+        raw: false
+    }));
 }
 
 #[test]
@@ -360,8 +381,14 @@ fn test_alias_and_independent() {
     "#;
 
     let tokens = tokens_only(source);
-    assert!(tokens.contains(&Token::Alias));
-    assert!(tokens.contains(&Token::Independent));
+    assert!(tokens.contains(&Token::Identifier {
+        name: "alias".into(),
+        raw: false
+    }));
+    assert!(tokens.contains(&Token::Identifier {
+        name: "independent".into(),
+        raw: false
+    }));
 }
 
 #[test]
@@ -383,8 +410,14 @@ fn test_modules() {
     "#;
 
     let tokens = tokens_only(source);
-    assert!(tokens.contains(&Token::Mod));
-    assert!(tokens.contains(&Token::Use));
+    assert!(tokens.contains(&Token::Identifier {
+        name: "mod".into(),
+        raw: false
+    }));
+    assert!(tokens.contains(&Token::Identifier {
+        name: "use".into(),
+        raw: false
+    }));
     assert!(tokens.contains(&Token::Pub));
     assert!(tokens.contains(&Token::Const));
 }
@@ -864,8 +897,20 @@ fn test_ownership_keywords_full() {
     let tokens = tokens_only("own ref weak lock");
     assert_eq!(tokens[0], Token::Own);
     assert_eq!(tokens[1], Token::Ref);
-    assert_eq!(tokens[2], Token::Weak);
-    assert_eq!(tokens[3], Token::Lock);
+    assert_eq!(
+        tokens[2],
+        Token::Identifier {
+            name: "weak".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[3],
+        Token::Identifier {
+            name: "lock".into(),
+            raw: false
+        }
+    );
 }
 
 #[test]
@@ -874,26 +919,110 @@ fn test_effect_keywords_full() {
         "effect resource verb reads writes sends receives allocates panics blocks suspends",
     );
     assert_eq!(tokens[0], Token::Effect);
-    assert_eq!(tokens[1], Token::Resource);
-    assert_eq!(tokens[2], Token::Verb);
-    assert_eq!(tokens[3], Token::Reads);
-    assert_eq!(tokens[4], Token::Writes);
-    assert_eq!(tokens[5], Token::Sends);
-    assert_eq!(tokens[6], Token::Receives);
-    assert_eq!(tokens[7], Token::Allocates);
-    assert_eq!(tokens[8], Token::Panics);
-    assert_eq!(tokens[9], Token::Blocks);
-    assert_eq!(tokens[10], Token::Suspends);
+    assert_eq!(
+        tokens[1],
+        Token::Identifier {
+            name: "resource".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[2],
+        Token::Identifier {
+            name: "verb".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[3],
+        Token::Identifier {
+            name: "reads".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[4],
+        Token::Identifier {
+            name: "writes".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[5],
+        Token::Identifier {
+            name: "sends".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[6],
+        Token::Identifier {
+            name: "receives".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[7],
+        Token::Identifier {
+            name: "allocates".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[8],
+        Token::Identifier {
+            name: "panics".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[9],
+        Token::Identifier {
+            name: "blocks".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[10],
+        Token::Identifier {
+            name: "suspends".into(),
+            raw: false
+        }
+    );
 }
 
 #[test]
 fn test_effect_modifier_keywords() {
     let tokens = tokens_only("with transparent stable seq par yield");
     assert_eq!(tokens[0], Token::With);
-    assert_eq!(tokens[1], Token::Transparent);
-    assert_eq!(tokens[2], Token::Stable);
-    assert_eq!(tokens[3], Token::Seq);
-    assert_eq!(tokens[4], Token::Par);
+    assert_eq!(
+        tokens[1],
+        Token::Identifier {
+            name: "transparent".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[2],
+        Token::Identifier {
+            name: "stable".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[3],
+        Token::Identifier {
+            name: "seq".into(),
+            raw: false
+        }
+    );
+    assert_eq!(
+        tokens[4],
+        Token::Identifier {
+            name: "par".into(),
+            raw: false
+        }
+    );
     assert_eq!(tokens[5], Token::Yield);
 }
 
@@ -1691,7 +1820,7 @@ fn test_raw_ident_rejects_underscore() {
 #[test]
 fn test_raw_ident_rejects_mut_pub_ref_own() {
     for marker in [
-        "mut", "pub", "ref", "own", "priv", "private", "mod", "super", "crate",
+        "mut", "pub", "ref", "own", "priv", "private", "super", "crate",
     ] {
         let src = format!("r#{marker}");
         let tokens = tokens_only(&src);

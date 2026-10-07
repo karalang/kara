@@ -1677,18 +1677,19 @@ fn test_keyword_as_identifier_names_the_keyword() {
     // keyword must report the keyword by spelling, not the internal Debug token
     // name ("Expected pattern, found Group"). Covers the four identifier-context
     // error sites: let-pattern, parameter pattern, expression, and the generic
-    // expect_identifier path.
+    // expect_identifier path. (`group` itself is a contextual keyword now, so
+    // the pin uses `where`, which stays reserved.)
     for src in [
-        "fn main() { let mut group = 0; }", // let pattern
-        "fn f(group: i64) -> i64 { 0 }",    // parameter pattern
-        "fn main() { let x = group; }",     // expression position
+        "fn main() { let mut where = 0; }", // let pattern
+        "fn f(where: i64) -> i64 { 0 }",    // parameter pattern
+        "fn main() { let x = where; }",     // expression position
     ] {
         let (_prog, errors) = parse_with_errors(src);
         assert!(!errors.is_empty(), "expected a parse error for: {src}");
         assert!(
             errors.iter().any(|e| e.message
-                == "'group' is a reserved keyword and cannot be used as an identifier; \
-                    write `r#group` to use it as an ordinary identifier"),
+                == "'where' is a reserved keyword and cannot be used as an identifier; \
+                    write `r#where` to use it as an ordinary identifier"),
             "message should name the reserved keyword; got {:?} for: {src}",
             errors.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
@@ -15740,11 +15741,11 @@ fn reserved_future_and_active_keywords_are_worded_differently() {
         "got {:?}",
         future[0].message,
     );
-    let (_p, active) = parse_with_errors("fn main() { let union = 1; }");
+    let (_p, active) = parse_with_errors("fn main() { let where = 1; }");
     assert!(
         active[0]
             .message
-            .starts_with("'union' is a reserved keyword"),
+            .starts_with("'where' is a reserved keyword"),
         "got {:?}",
         active[0].message,
     );
@@ -15755,9 +15756,7 @@ fn reserved_future_and_active_keywords_are_worded_differently() {
 /// apply it mechanically. Before the fix, 0 of 18 mentioned it.
 #[test]
 fn reserved_keyword_diagnostics_name_the_raw_identifier_escape() {
-    for kw in [
-        "union", "group", "blocks", "match", "async", "typeof", "gen",
-    ] {
+    for kw in ["where", "effect", "with", "match", "async", "typeof", "gen"] {
         let (_p, errors) = parse_with_errors(&format!("fn main() {{ let {kw} = 1; }}"));
         assert!(
             errors
@@ -15800,7 +15799,7 @@ fn a_reserved_keyword_yields_one_diagnostic_per_occurrence() {
     let two = parse_with_errors(r#"fn main() { let async = 1; println(f"{async}"); }"#).1;
     assert_eq!(two.len(), 2, "got {:?}", two);
     // Same shape for an active keyword — no future-reserved-specific cascade.
-    let active = parse_with_errors(r#"fn main() { let group = 1; println(f"{group}"); }"#).1;
+    let active = parse_with_errors(r#"fn main() { let where = 1; println(f"{where}"); }"#).1;
     assert_eq!(active.len(), 2, "got {:?}", active);
 }
 
@@ -15813,11 +15812,12 @@ fn a_reserved_keyword_yields_one_diagnostic_per_occurrence() {
 ///
 /// The scope here is wider than the row that filed it: that row named only
 /// `try`, because the sweep behind it covered the 18 RESERVED words and
-/// `seq` / `par` / `unsafe` / `loop` are not among them. All five share one
-/// code path and one defect, so all five are pinned.
+/// `unsafe` / `loop` are not among them. They share one code path and one
+/// defect, so all are pinned. (`seq` and `par` were pinned here too until they
+/// became contextual keywords: without a `{` after them they are identifiers.)
 #[test]
 fn a_block_keyword_without_its_block_names_the_construct_not_the_punctuation() {
-    for kw in ["try", "seq", "par", "unsafe", "loop", "comptime"] {
+    for kw in ["try", "unsafe", "loop", "comptime"] {
         let (_p, errors) = parse_with_errors(&format!("fn main() {{ let x = {kw}; }}"));
         assert!(!errors.is_empty(), "expected a parse error for `{kw}`");
         let msg = &errors[0].message;
@@ -15837,7 +15837,7 @@ fn a_block_keyword_without_its_block_names_the_construct_not_the_punctuation() {
 /// reserved. Naming only the first would leave the second reader stuck.
 #[test]
 fn a_block_keyword_diagnostic_also_offers_the_raw_identifier_reading() {
-    for kw in ["try", "seq", "par", "unsafe", "loop", "comptime"] {
+    for kw in ["try", "unsafe", "loop", "comptime"] {
         let (_p, errors) = parse_with_errors(&format!("fn main() {{ let x = {kw}; }}"));
         assert!(
             errors[0].message.contains(&format!(

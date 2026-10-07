@@ -85,12 +85,9 @@ pub enum Token {
     // Declarations
     Fn,
     Struct,
-    Union,
     Enum,
     Trait,
     Impl,
-    Mod,
-    Use,
     Import,
     Const,
     Type,
@@ -123,27 +120,11 @@ pub enum Token {
     // Ownership
     Own,
     Ref,
-    Weak,
-    Lock,
     // Closure capture (kept reserved for future ref/mut-ref capture work; bare `|...|` is owned-by-default and `move` is not used)
     Move,
     // Effects
     Effect,
-    Resource,
-    Verb,
-    Reads,
-    Writes,
-    Sends,
-    Receives,
-    Allocates,
-    Panics,
-    Blocks,
-    Suspends,
     With,
-    Transparent,
-    Stable,
-    Seq,
-    Par,
     Yield,
     // Type system
     As,
@@ -154,9 +135,6 @@ pub enum Token {
     Extern,
     // Shared
     Shared,
-    // Layout
-    Layout,
-    Group,
     // Literals
     True,
     False,
@@ -171,10 +149,6 @@ pub enum Token {
     /// (?-retargeting + error-type unification) lands in P1. See
     /// design.md § Error Handling > Try Blocks (try { ... }).
     Try,
-    /// `marker trait NAME;` — marker-trait declaration. Per design.md §
-    /// Marker Traits (v60 item 55). Users with a local binding named
-    /// `marker` must rename or use `r#marker`.
-    Marker,
     // Assembly
     Asm,
     GlobalAsm,
@@ -186,8 +160,6 @@ pub enum Token {
     // `examples/parallax/src/providers.kara`).
     // Other
     Distinct,
-    Alias,
-    Independent,
     SelfValue, // self
     SelfType,  // Self
 
@@ -365,7 +337,7 @@ pub const RESERVED_FUTURE_KEYWORDS: &[&str] = &[
 /// diagnostic that recommends an escape the lexer then rejects is worse than a
 /// diagnostic that recommends nothing.
 pub const UNESCAPABLE_MARKERS: &[&str] = &[
-    "self", "Self", "_", "super", "crate", "mod", "pub", "priv", "private", "mut", "ref", "own",
+    "self", "Self", "_", "super", "crate", "pub", "priv", "private", "mut", "ref", "own",
 ];
 
 /// Whether `kw` can be escaped to an ordinary identifier with `r#kw`.
@@ -397,13 +369,9 @@ impl Token {
         let s = match self {
             Token::Fn => "fn",
             Token::Struct => "struct",
-            Token::Union => "union",
             Token::Enum => "enum",
             Token::Trait => "trait",
-            Token::Marker => "marker",
             Token::Impl => "impl",
-            Token::Mod => "mod",
-            Token::Use => "use",
             Token::Import => "import",
             Token::Const => "const",
             Token::Type => "type",
@@ -432,25 +400,9 @@ impl Token {
             Token::Not => "not",
             Token::Own => "own",
             Token::Ref => "ref",
-            Token::Weak => "weak",
-            Token::Lock => "lock",
             Token::Move => "move",
             Token::Effect => "effect",
-            Token::Resource => "resource",
-            Token::Verb => "verb",
-            Token::Reads => "reads",
-            Token::Writes => "writes",
-            Token::Sends => "sends",
-            Token::Receives => "receives",
-            Token::Allocates => "allocates",
-            Token::Panics => "panics",
-            Token::Blocks => "blocks",
-            Token::Suspends => "suspends",
             Token::With => "with",
-            Token::Transparent => "transparent",
-            Token::Stable => "stable",
-            Token::Seq => "seq",
-            Token::Par => "par",
             Token::Yield => "yield",
             Token::As => "as",
             Token::Where => "where",
@@ -461,13 +413,9 @@ impl Token {
             Token::Unsafe => "unsafe",
             Token::Extern => "extern",
             Token::Shared => "shared",
-            Token::Layout => "layout",
-            Token::Group => "group",
             Token::Comptime => "comptime",
             Token::True => "true",
             Token::False => "false",
-            Token::Alias => "alias",
-            Token::Independent => "independent",
             Token::SelfValue => "self",
             Token::SelfType => "Self",
             // Not a v1 keyword, but a keyword-shaped rejection: reporting it
