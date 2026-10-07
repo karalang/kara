@@ -794,6 +794,16 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
             Some(DiagnosticClass::OwnershipMoveAfterUse),
         ),
     ),
+    // v2 core: borrow conflicts the checker finds before MIR borrowck runs
+    // under `check`; MIR borrowck uses the same codes.
+    (
+        "E0516",
+        ty("BorrowConflict", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E0517",
+        ty("WriteThroughSharedRef", Some(DiagnosticClass::TypeMismatch)),
+    ),
     // ── provider escape ─────────────────────────────────────────
     ("E0600", prov("ProviderEscape")),
     // ── lint (non-`TypeErrorKind`) ──────────────────────────────

@@ -697,6 +697,11 @@ pub enum TypeErrorKind {
     /// kind existed — `let r = ref make()` printed `3` under the interpreter
     /// while failing to compile under codegen (B-2026-08-26-36).
     RefOperandUnsupported,
+    /// v2 core §5.6 / §6.2: a write to a place while a `for` loop over it
+    /// borrows it, through the same binding (E0516).
+    BorrowConflict,
+    /// v2 core §5.9: a write through a shared `ref` (E0517).
+    WriteThroughSharedRef,
     /// B-2026-08-26-15 — a `LazyLock.new` closure captured a function local.
     LazyLockRuntimeCapture,
     /// `let t = v[i]` / `x = v[j]` where the element type is not `Copy`.
@@ -1315,7 +1320,9 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::LabelMismatch
         | TypeErrorKind::NonContiguousLabels
         | TypeErrorKind::PatternScrutineeMismatch
-        | TypeErrorKind::OnceFnIntoFnSlot => Some(DC::TypeMismatch),
+        | TypeErrorKind::OnceFnIntoFnSlot
+        | TypeErrorKind::BorrowConflict
+        | TypeErrorKind::WriteThroughSharedRef => Some(DC::TypeMismatch),
 
         TypeErrorKind::WrongNumberOfArgs | TypeErrorKind::AtomicMissingOrdering => {
             Some(DC::WrongNumberOfArgs)

@@ -1576,3 +1576,79 @@ fn derive_copy_fixes_loop_and_field_moves() {
         "#[derive(Copy)]\nstruct Stats",
     );
 }
+
+/// `check` must fail with `expect` in its output (no fix is expected).
+fn rejected_with(tag: &str, src: &str, expect: &str) {
+    let (dir, path) = fixture(tag, src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{tag}: check must reject: {err}");
+    assert!(err.contains(expect), "{tag}: expected `{expect}` in: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// §6.2 / §5.6: a `for` loop borrows the place it iterates for its whole
+/// body, so writing that place through the same binding inside the loop is
+/// an error, for a `mut` field of a shared value (pin
+/// err_shared_field_same_handle) and for an owned collection alike.
+#[test]
+fn writing_a_place_a_for_loop_iterates_is_an_error() {
+    rejected_with(
+        "for-write-shared-field",
+        "shared struct Bag { mut items: Vec[i64] }\n\
+         fn main() {\n\
+             let b = Bag { items: Vec.new() };\n\
+             b.items.push(1);\n\
+             for x in b.items {\n\
+                 if x == 1 { b.items.push(2); }\n\
+             }\n\
+             println(f\"{b.items.len()}\");\n\
+         }\n",
+        "while the `for` loop over `b.items` borrows it",
+    );
+    rejected_with(
+        "for-write-owned",
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             for x in v {\n\
+                 if x == 1 { v.push(2); }\n\
+             }\n\
+             println(f\"{v.len()}\");\n\
+         }\n",
+        "while the `for` loop over `v` borrows it (core-semantics.md §5.6)",
+    );
+    rejected_with(
+        "for-write-self-method",
+        "struct Q { mut items: Vec[i64], mut n: i64 }\n\
+         impl Q {\n\
+             fn grow(mut ref self) { self.items.push(0); }\n\
+             fn run(mut ref self) {\n\
+                 for x in self.items.iter() { if x > 0 { self.grow(); } }\n\
+             }\n\
+         }\n\
+         fn main() { let mut q = Q { items: [1], n: 0 }; q.run(); println(q.n); }\n",
+        "while the `for` loop over `self.items` borrows it",
+    );
+    // Another field, an element through `iter_mut`, a consumed or copied
+    // collection, and a rebinding are not conflicts.
+    accepted(
+        "for-write-ok",
+        "struct Q { mut items: Vec[i64], mut n: i64 }\n\
+         impl Q {\n\
+             fn run(mut ref self) {\n\
+                 for x in self.items { self.n += x; }\n\
+                 for x in self.items.iter_mut() { *x += 1; }\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let mut q = Q { items: [1, 2], n: 0 };\n\
+             q.run();\n\
+             let mut v: Vec[i64] = [1, 2];\n\
+             for x in v.clone() { v.push(x); }\n\
+             let mut w: Vec[i64] = [3];\n\
+             for x in w.into_iter() { println(x); }\n\
+             println(f\"{q.n} {v.len()}\");\n\
+         }\n",
+    );
+}

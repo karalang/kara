@@ -15,6 +15,12 @@
 //! (its call sites then get their own `mut` marker fix), a `ref self`
 //! receiver becomes `mut ref self`, and a bare `for` over a `Vec` or array
 //! iterates `.iter_mut()`.
+//!
+//! The same walk checks that a place a `for` loop iterates is not written
+//! in the loop's body through the same binding (§5.6; §6.2 for a `mut` field
+//! of a shared value): pushing to `self.items` inside `for x in self.items`.
+//! A write through another handle to the same object is §6.2's run-time
+//! check, not this one.
 
 use super::*;
 use crate::index_disjoint::{for_each_child_public, Child};
@@ -62,6 +68,28 @@ struct Walk<'t, 'a> {
     /// The edit that makes a `ref self` receiver `mut ref self`.
     self_fix: Option<FixIt>,
     errors: Vec<(Span, String, Option<FixIt>)>,
+    /// The places enclosing `for` loops iterate, innermost last.
+    borrowed: Vec<Borrowed>,
+    /// Conflicting writes to a borrowed place (§5.6, §6.2).
+    conflicts: Vec<(Span, String)>,
+}
+
+/// A place a `for` loop borrows for its whole body.
+struct Borrowed {
+    root: Root,
+    /// Field and tuple steps from the root; `None` is an index.
+    path: Vec<Option<String>>,
+    /// The place as written, for the message.
+    text: String,
+    /// Reached through a `shared` handle (§6.2 rather than §5.6).
+    handle: bool,
+}
+
+/// Which binding a place is rooted at: `self`, or a position in `scopes`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Root {
+    SelfValue,
+    Local(usize, usize),
 }
 
 /// A binding in scope: its name, why it is read-only, and the edit to its
@@ -129,6 +157,8 @@ impl<'a> TypeChecker<'a> {
             self_read_only: false,
             self_fix: None,
             errors: Vec::new(),
+            borrowed: Vec::new(),
+            conflicts: Vec::new(),
         };
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
             w.self_read_only = matches!(f.self_param, Some(SelfParam::Ref));
@@ -163,9 +193,16 @@ impl<'a> TypeChecker<'a> {
                         .map(move |n| (n, origin, fix.clone()))
                 })
                 .collect()];
+            w.borrowed.clear();
             w.block(&f.body);
         }
+        let mut conflicts = w.conflicts;
         let mut errors = w.errors;
+        conflicts.sort_by_key(|(s, _)| s.offset);
+        conflicts.dedup_by(|a, b| a.0.offset == b.0.offset);
+        for (span, message) in conflicts {
+            self.type_error(message, span, TypeErrorKind::BorrowConflict);
+        }
         errors.sort_by_key(|(s, _, _)| s.offset);
         errors.dedup_by(|a, b| a.0.offset == b.0.offset);
         // Several writes through one borrow share its declaration's edit;
@@ -173,10 +210,13 @@ impl<'a> TypeChecker<'a> {
         let mut fixed: FxHashSet<usize> = FxHashSet::default();
         for (span, message, fix) in errors {
             match fix.filter(|f| fixed.insert(f.span.offset)) {
-                Some(fix) => {
-                    self.type_error_with_fix_it(message, span, TypeErrorKind::TypeMismatch, fix)
-                }
-                None => self.type_error(message, span, TypeErrorKind::TypeMismatch),
+                Some(fix) => self.type_error_with_fix_it(
+                    message,
+                    span,
+                    TypeErrorKind::WriteThroughSharedRef,
+                    fix,
+                ),
+                None => self.type_error(message, span, TypeErrorKind::WriteThroughSharedRef),
             }
         }
     }
@@ -242,6 +282,115 @@ impl Walk<'_, '_> {
         }
     }
 
+    /// The binding `name` resolves to.
+    fn root_of(&self, name: &str) -> Root {
+        if name == "self" {
+            return Root::SelfValue;
+        }
+        for (i, scope) in self.scopes.iter().enumerate().rev() {
+            if let Some(j) = scope.iter().rposition(|(n, _, _)| n == name) {
+                return Root::Local(i, j);
+            }
+        }
+        Root::SelfValue
+    }
+
+    /// A place's root binding and its projection steps, and whether a step
+    /// goes through a `shared` handle.
+    fn place_path(&self, e: &Expr) -> Option<(Root, Vec<Option<String>>, bool)> {
+        let mut path = Vec::new();
+        let mut handle = false;
+        let mut cur = e;
+        loop {
+            let (object, step) = match &cur.kind {
+                ExprKind::FieldAccess { object, field } => (object, Some(field.clone())),
+                ExprKind::TupleIndex { object, index } => (object, Some(index.to_string())),
+                ExprKind::Index { object, .. } => (object, None),
+                ExprKind::Identifier(n) => {
+                    path.reverse();
+                    return Some((self.root_of(n), path, handle));
+                }
+                ExprKind::SelfValue => {
+                    path.reverse();
+                    return Some((Root::SelfValue, path, handle));
+                }
+                _ => return None,
+            };
+            path.push(step);
+            handle |= self
+                .node_types
+                .get(&object.id)
+                .is_some_and(|(t, _)| match t {
+                    Type::Ref(inner) | Type::MutRef(inner) => self.is_handle(inner),
+                    t => self.is_handle(t),
+                });
+            cur = object;
+        }
+    }
+
+    /// The place a `for` over `iterable` borrows for its whole body: the
+    /// collection place under any iterator adaptors (`v.iter()`,
+    /// `v.iter_mut().enumerate()`). A temporary, or a consuming
+    /// `.into_iter()`, borrows nothing.
+    fn iterated_place(&self, iterable: &Expr) -> Option<Borrowed> {
+        let mut e = iterable;
+        while let ExprKind::MethodCall { object, method, .. } = &e.kind {
+            match method.as_str() {
+                "iter" | "iter_mut" | "keys" | "values" | "values_mut" | "enumerate" | "rev"
+                | "skip" | "take" | "step_by" | "filter" | "peekable" | "skip_while"
+                | "take_while" | "chars" | "bytes" | "lines" => e = object,
+                _ => return None,
+            }
+        }
+        let (root, path, handle) = self.place_path(e)?;
+        Some(Borrowed {
+            root,
+            path,
+            text: place_text(e)?,
+            handle,
+        })
+    }
+
+    /// §5.6 / §6.2: a write to `place` while an enclosing `for` loop iterates
+    /// it, a place inside it, or a place it is inside, through the same
+    /// binding.
+    fn check_borrowed_write(&mut self, place: &Expr, at: Span, verb: &str) {
+        if self.borrowed.is_empty() {
+            return;
+        }
+        let Some((root, path, handle)) = self.place_path(place) else {
+            return;
+        };
+        let overlaps = |b: &Borrowed| {
+            b.root == root
+                && b.path
+                    .iter()
+                    .zip(&path)
+                    .all(|(x, y)| x.is_none() || y.is_none() || x == y)
+        };
+        let Some(b) = self.borrowed.iter().rev().find(|b| overlaps(b)) else {
+            return;
+        };
+        let text = place_text(place).unwrap_or_else(|| b.text.clone());
+        let message = if b.handle || handle {
+            format!(
+                "cannot {verb} `{text}` while the `for` loop over `{}` borrows it: a `mut` \
+                 field of a shared value is borrowed for the whole loop, and this write \
+                 goes through the same handle (core-semantics.md §6.2). Collect the \
+                 changes and apply them after the loop",
+                b.text
+            )
+        } else {
+            format!(
+                "cannot {verb} `{text}` while the `for` loop over `{}` borrows it \
+                 (core-semantics.md §5.6). Collect the changes and apply them after the \
+                 loop, or iterate over a copy",
+                b.text
+            )
+        };
+        self.conflicts.push((at, message));
+    }
+
     fn lookup(&self, name: &str) -> Option<&Binding> {
         self.scopes
             .iter()
@@ -289,6 +438,12 @@ impl Walk<'_, '_> {
                 self.expr(value);
                 self.expr(target);
                 self.check_assign(target);
+                self.check_borrowed_write(target, target.span, "assign");
+                // A rebound root names another value from here on.
+                if let ExprKind::Identifier(n) = &target.kind {
+                    let root = self.root_of(n);
+                    self.borrowed.retain(|b| b.root != root);
+                }
             }
             StmtKind::MultiAssign { targets, values } => {
                 for e in values.iter().chain(targets) {
@@ -296,6 +451,7 @@ impl Walk<'_, '_> {
                 }
                 for t in targets {
                     self.check_assign(t);
+                    self.check_borrowed_write(t, t.span, "assign");
                 }
             }
             StmtKind::Expr(e) => self.expr(e),
@@ -317,10 +473,13 @@ impl Walk<'_, '_> {
                     _ => format!("`.{method}` (a method that writes its receiver)"),
                 };
                 self.check_through(object, e.span, &action);
+                let verb = format!("call `.{method}` (a method that writes its receiver) on");
+                self.check_borrowed_write(object, e.span, &verb);
             }
             ExprKind::Call { args, .. } => {
                 for a in args.iter().filter(|a| a.mut_marker) {
                     self.check_through(&a.value, a.value.span, "a `mut` argument");
+                    self.check_borrowed_write(&a.value, a.value.span, "pass `mut`");
                 }
             }
             ExprKind::For {
@@ -335,10 +494,16 @@ impl Walk<'_, '_> {
                 } else {
                     (Origin::Owned, None)
                 };
+                let borrowed = self.iterated_place(iterable);
+                let pushed = borrowed.is_some();
+                self.borrowed.extend(borrowed);
                 self.scopes.push(Vec::new());
                 self.bind(pattern, origin, fix);
                 self.block(body);
                 self.scopes.pop();
+                if pushed {
+                    self.borrowed.pop();
+                }
                 return;
             }
             ExprKind::Match { scrutinee, arms } => {
@@ -631,6 +796,18 @@ impl Walk<'_, '_> {
             _ => false,
         }
     }
+}
+
+/// A place expression as written: `self.items`, `b.items[]`.
+fn place_text(e: &Expr) -> Option<String> {
+    Some(match &e.kind {
+        ExprKind::Identifier(n) => n.clone(),
+        ExprKind::SelfValue => "self".to_string(),
+        ExprKind::FieldAccess { object, field } => format!("{}.{field}", place_text(object)?),
+        ExprKind::TupleIndex { object, index } => format!("{}.{index}", place_text(object)?),
+        ExprKind::Index { object, .. } => format!("{}[..]", place_text(object)?),
+        _ => return None,
+    })
 }
 
 /// The binding a place expression is rooted at.
