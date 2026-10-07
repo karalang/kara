@@ -1,6 +1,6 @@
 fn get_display_name(users: Map[i64, String], user_id: i64) -> String {
     match users.get(user_id) {
-        Some(name) => name,
+        Some(name) => name.clone(),
         None => "Unknown",
     }
 }

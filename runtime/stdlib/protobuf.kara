@@ -834,7 +834,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
     let mut idx = 1;
     let mut first = true;
     for f in T.fields() {
-        let fname = f.name;
+        let fname = f.name.clone();
         let tn = f.ty.name();
         // A `Vec[T]` field (element other than `u8`) is a repeated field.
         let repeated = tn.starts_with("Vec[") and tn != "Vec[u8]";
@@ -905,7 +905,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
             let mut vvnames = Vec.new();
             if venum {
                 for vv in vt.variants() {
-                    vvnames.push(vv.name);
+                    vvnames.push(vv.name.clone());
                 }
             }
             if not proto_supported(ktn) {
@@ -974,7 +974,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
             let mut evnames = Vec.new();
             if eis_enum {
                 for v in et.variants() {
-                    evnames.push(v.name);
+                    evnames.push(v.name.clone());
                 }
             }
             if is_msg and not et.derives("Message") {
@@ -1005,8 +1005,8 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
             let mut k = 0;
             let mut fnum = idx;
             for v in f.ty.variants() {
-                let vn = v.name;
-                let pt = v.payload;
+                let vn = v.name.clone();
+                let pt = v.payload.clone();
                 if k == 0 {
                     firstv = "" + vn;
                 }
@@ -1016,13 +1016,13 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                     // The payload may itself be a nested message (length-delimited
                     // sub-message) or an enum (varint index) — reflect on it via
                     // `payload_ty` — or a scalar/float.
-                    let pty = v.payload_ty;
+                    let pty = v.payload_ty.clone();
                     let pmsg = pty.is_struct();
                     let penum = pty.is_enum();
                     let mut pvn = Vec.new();
                     if penum {
                         for pv2 in pty.variants() {
-                            pvn.push(pv2.name);
+                            pvn.push(pv2.name.clone());
                         }
                     }
                     if pmsg and not pty.derives("Message") {
@@ -1079,7 +1079,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
             // codec — variant 0 is the proto3 default + unknown-value fallback).
             let mut vnames = Vec.new();
             for v in f.ty.variants() {
-                vnames.push(v.name);
+                vnames.push(v.name.clone());
             }
             dflt = tn + "." + vnames[0];
             efield = "out.extend_from_slice(ProtoBuf.encode_tag(" + tag

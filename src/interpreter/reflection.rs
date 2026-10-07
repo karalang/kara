@@ -130,6 +130,10 @@ impl Interpreter<'_> {
         let tc = self.typecheck_result;
         match method {
             "name" => Value::String(type_name.to_string()),
+            // A `Type` is a name, so its copy is itself. `karac check` asks
+            // for `.clone()` where a derive copies one out of a borrowed
+            // `Field` / `Variant` (v2 core §3.7).
+            "clone" => Value::TypeVal(type_name.to_string()),
             "is_struct" => Value::Bool(tc.struct_info.contains_key(type_name)),
             "is_enum" => Value::Bool(tc.enum_info.contains_key(type_name)),
             "is_union" => Value::Bool(tc.union_info.contains_key(type_name)),

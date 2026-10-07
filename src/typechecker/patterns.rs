@@ -1398,11 +1398,17 @@ impl<'a> super::TypeChecker<'a> {
                         .collect()
                 });
 
-                let no_move_out = self.core_no_move_out_reason(&struct_name, mode);
+                // The declaring type: the enum for a struct variant
+                // (`H.Y { v }`), the struct itself otherwise.
+                let owner_name = match expected {
+                    Type::Named { name, .. } => name.clone(),
+                    _ => struct_name.clone(),
+                };
+                let no_move_out = self.core_no_move_out_reason(&owner_name, mode);
                 if let Some(reason) = &no_move_out {
                     self.core_no_move_out.push(reason.clone());
                 }
-                let into_shared = self.core_enters_shared(&struct_name, mode);
+                let into_shared = self.core_enters_shared(&owner_name, mode);
                 if into_shared {
                     self.core_shared_depth += 1;
                 }

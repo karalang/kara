@@ -554,3 +554,124 @@ fn copying_a_ref_binding_copies_the_reference() {
         "cannot move 'u'",
     );
 }
+
+#[test]
+fn a_map_get_payload_is_a_reference() {
+    // `Map.get` hands out `Option[ref V]`: moving the payload out is C3.
+    rejected_then_fixed(
+        "map-get-unwrap",
+        "fn take(s: String) -> i64 { s.len() }\n\
+         fn main() {\n\
+             let mut m: Map[i64, String] = Map.new();\n\
+             m.insert(1, \"a\".to_string());\n\
+             println(take(m.get(1).unwrap()));\n\
+         }\n",
+        "out of a map",
+    );
+    rejected_then_fixed(
+        "map-get-arm",
+        "fn pick(m: ref Map[i64, String]) -> String {\n\
+             match m.get(1) { Some(v) => v, None => \"x\".to_string() }\n\
+         }\n\
+         fn main() {\n\
+             let mut m: Map[i64, String] = Map.new();\n\
+             m.insert(1, \"a\".to_string());\n\
+             println(pick(m));\n\
+         }\n",
+        "cannot move 'v'",
+    );
+    // `let s = m.get(k).unwrap();` copies the reference; moving `s` is C3.
+    rejected_then_fixed(
+        "map-get-let",
+        "fn take(s: String) -> i64 { s.len() }\n\
+         fn main() {\n\
+             let mut m: Map[i64, String] = Map.new();\n\
+             m.insert(1, \"a\".to_string());\n\
+             let s = m.get(1).unwrap();\n\
+             println(s.len());\n\
+             println(take(s));\n\
+         }\n",
+        "cannot move 's'",
+    );
+    accepted(
+        "map-get-read",
+        "fn main() {\n\
+             let mut m: Map[i64, String] = Map.new();\n\
+             m.insert(1, \"a\".to_string());\n\
+             let s = m.get(1).unwrap();\n\
+             println(s.len() + m.get(1).unwrap().len());\n\
+             if let Some(v) = m.get(1) { println(v); }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_for_over_a_temporary_collection_binds_refs() {
+    rejected_then_fixed(
+        "for-temp",
+        "fn mk() -> Vec[String] { [\"a\".to_string()] }\n\
+         fn take(s: String) -> i64 { s.len() }\n\
+         fn main() { for s in mk() { println(take(s)); } }\n",
+        "cannot move 's'",
+    );
+    rejected_then_fixed(
+        "for-map-pair",
+        "fn take(s: String) -> i64 { s.len() }\n\
+         fn main() {\n\
+             let mut m: Map[i64, String] = Map.new();\n\
+             m.insert(1, \"a\".to_string());\n\
+             for (k, v) in m { println(take(v) + k); }\n\
+         }\n",
+        "cannot move 'v'",
+    );
+    accepted(
+        "for-into-iter",
+        "fn mk() -> Vec[String] { [\"a\".to_string()] }\n\
+         fn take(s: String) -> i64 { s.len() }\n\
+         fn main() { for s in mk().into_iter() { println(take(s)); } }\n",
+    );
+}
+
+#[test]
+fn a_field_read_through_a_ref_binding_or_a_handle_is_a_borrow() {
+    // A `ref`-mode pattern binding is a borrow, so its fields are too.
+    rejected_then_fixed(
+        "ref-binding-field",
+        "struct F { name: String, ps: Vec[i64] }\n\
+         enum It { Fu(F), Other }\n\
+         fn f(it: ref It) -> i64 {\n\
+             match it { It.Fu(x) => { let ps = x.ps; ps.len() } It.Other => 0 }\n\
+         }\n\
+         fn main() { println(f(It.Other)); }\n",
+        "out of a borrowed place",
+    );
+    // A field of a `shared` value is reached through a handle (§4.6).
+    rejected_then_fixed(
+        "shared-field",
+        "shared struct B { mut name: String }\n\
+         fn main() {\n\
+             let b = B { name: \"n\".to_string() };\n\
+             let s = b.name;\n\
+             println(s);\n\
+         }\n",
+        "out of a borrowed place",
+    );
+    // A struct variant of a `shared` enum binds refs too.
+    rejected_then_fixed(
+        "shared-struct-variant",
+        "shared enum H { Y { v: Vec[String] }, N }\n\
+         fn eat(v: Vec[String]) -> i64 { v.len() }\n\
+         fn f(h: H) -> i64 { match h { H.Y { v } => eat(v), H.N => 0 } }\n\
+         fn main() { println(f(H.N)); }\n",
+        "cannot move 'v'",
+    );
+    accepted(
+        "shared-field-read",
+        "shared struct B { mut name: String, n: i64 }\n\
+         fn main() {\n\
+             let b = B { name: \"n\".to_string(), n: 1 };\n\
+             let k = b.n;\n\
+             println(b.name.len() + k);\n\
+         }\n",
+    );
+}

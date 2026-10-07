@@ -6114,14 +6114,27 @@ impl<'a> super::TypeChecker<'a> {
                 // covering Vec, Map, SortedSet, Set, Slice, Array, Range* and
                 // any user type that has registered an "Item" assoc binding.
                 let elem_ty = self.element_type_of(&iter_ty);
+                // v2 core §4.6: `for x in c` borrows any standard collection,
+                // a temporary one included, so every binding of its item
+                // pattern is a `ref` (`for x in c.into_iter()` iterates an
+                // `Iterator`, not a collection, and moves).
+                let core_borrowed = self.cli_lint_overrides.strict_core
+                    && Self::for_iterable_is_core_collection(&iter_ty);
                 self.bind_pattern_types(pattern, &elem_ty);
+                if core_borrowed {
+                    for n in pattern.binding_names() {
+                        self.local_scope.mark_view(&n);
+                    }
+                }
                 // B-2026-09-27-69 — a bare `for` over a collection PLACE
                 // borrows it (design.md § `for` loops), so its element is a
                 // view: materializing it (`let h = g`, `w.push(g)`) copies,
                 // exactly as a projection off a `ref` param does, and
                 // `borrow_projection_copy` reports it the same way.
                 if let PatternKind::Binding(n) = &pattern.kind {
-                    if Self::for_iterable_is_borrowed_collection(iterable, &iter_ty) {
+                    if core_borrowed
+                        || Self::for_iterable_is_borrowed_collection(iterable, &iter_ty)
+                    {
                         self.local_scope.mark_view(n);
                     }
                 }

@@ -276,7 +276,7 @@ impl Parser {
                                                 match argv.get(i) {
                                                     Some(val) => {
                                                         sub_values.push(ParsedValue {
-                                                            name: entry.name,
+                                                            name: entry.name.clone(),
                                                             value: val.clone(),
                                                         });
                                                     }
@@ -299,7 +299,7 @@ impl Parser {
                                         match sentry.flags.get(k) {
                                             Some(fentry) => {
                                                 if fentry.name == token {
-                                                    sub_flags_set.push(fentry.name);
+                                                    sub_flags_set.push(fentry.name.clone());
                                                     matched = true;
                                                 }
                                             }
@@ -326,7 +326,7 @@ impl Parser {
                                         match argv.get(i) {
                                             Some(val) => {
                                                 values.push(ParsedValue {
-                                                    name: entry.name,
+                                                    name: entry.name.clone(),
                                                     value: val.clone(),
                                                 });
                                             }
@@ -349,7 +349,7 @@ impl Parser {
                                 match self.flags.get(k) {
                                     Some(fentry) => {
                                         if fentry.name == token {
-                                            flags_set.push(fentry.name);
+                                            flags_set.push(fentry.name.clone());
                                             matched = true;
                                         }
                                     }
@@ -369,7 +369,7 @@ impl Parser {
                                     Some(sentry) => {
                                         if sentry.name == token {
                                             in_sub = true;
-                                            sub_name = sentry.name;
+                                            sub_name = sentry.name.clone();
                                             sub_parser_idx = s;
                                             matched = true;
                                         }

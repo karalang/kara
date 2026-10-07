@@ -5180,16 +5180,8 @@ impl<'a> super::TypeChecker<'a> {
             &root.kind
         {
             // A place reached through a `shared` handle counts as borrowed.
-            if let Some(ty) = self.expr_types.get(&SpanKey::from_span(&object.span)) {
-                let ty = match ty {
-                    Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
-                    other => other,
-                };
-                if matches!(ty, Type::Shared(_))
-                    || matches!(ty, Type::Named { name, .. } if self.name_is_shared_decl(name))
-                {
-                    return true;
-                }
+            if self.expr_is_shared_handle(object) {
+                return true;
             }
             root = object;
         }
@@ -5197,6 +5189,66 @@ impl<'a> super::TypeChecker<'a> {
             || (matches!(root.kind, ExprKind::SelfValue)
                 && self.current_fn_ref_params.contains("self"))
             || self.rooted_in_borrow(value, true)
+            || self.core_map_get_view(value, false)
+            || self.core_map_get_view(value, true)
+    }
+
+    /// Is `e` (as typed) a `shared` handle, or a reference to one?
+    fn expr_is_shared_handle(&self, e: &Expr) -> bool {
+        let Some(ty) = self.expr_types.get(&SpanKey::from_span(&e.span)) else {
+            return false;
+        };
+        let ty = match ty {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        matches!(ty, Type::Shared(_))
+            || matches!(ty, Type::Named { name, .. } if self.name_is_shared_decl(name))
+    }
+
+    /// v2 core: `Map.get` / `SortedMap.get` hands out `Option[ref V]`, a
+    /// view of the stored value. Is `e` such a call, or (with `unwrapped`)
+    /// its `.unwrap()` / `.expect(..)`? Answers `false` outside the strict
+    /// commands, where legacy types the payload as an owned `V`.
+    pub(super) fn core_map_get_view(&self, e: &Expr, unwrapped: bool) -> bool {
+        if !self.cli_lint_overrides.strict_core {
+            return false;
+        }
+        let mut e = e;
+        if unwrapped {
+            match &e.kind {
+                ExprKind::MethodCall { object, method, .. }
+                    if matches!(method.as_str(), "unwrap" | "expect") =>
+                {
+                    e = object
+                }
+                _ => return false,
+            }
+        }
+        let ExprKind::MethodCall { object, method, .. } = &e.kind else {
+            return false;
+        };
+        if method != "get" {
+            return false;
+        }
+        let Some(mut ty) = self.expr_types.get(&SpanKey::from_span(&object.span)) else {
+            return false;
+        };
+        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            ty = inner;
+        }
+        matches!(ty, Type::Named { name, .. } if matches!(name.as_str(), "Map" | "SortedMap"))
+    }
+
+    /// The root of a field / tuple projection chain.
+    fn projection_root(value: &Expr) -> &Expr {
+        let mut root = value;
+        while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
+            &root.kind
+        {
+            root = object;
+        }
+        root
     }
 
     /// B-2026-09-27-69 — [`Self::projection_rooted_in_borrow`] widened to a
@@ -5206,6 +5258,7 @@ impl<'a> super::TypeChecker<'a> {
     /// which is what their fixtures measured.
     fn copy_source_rooted_in_borrow(&self, value: &Expr) -> bool {
         self.rooted_in_borrow(value, true)
+            || self.core_map_get_view(Self::projection_root(value), true)
     }
 
     fn rooted_in_borrow(&self, value: &Expr, views: bool) -> bool {
@@ -5222,10 +5275,16 @@ impl<'a> super::TypeChecker<'a> {
         // the sibling rule's business, and anything else (a call, a literal)
         // produces a fresh value that nobody else owns — no copy, nothing to
         // report.
+        let strict = self.cli_lint_overrides.strict_core;
         let mut cur = value;
         loop {
             match &cur.kind {
                 ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    // v2 core §4.6: a place reached through a `shared`
+                    // handle is borrowed, wherever the handle came from.
+                    if strict && views && self.expr_is_shared_handle(object) {
+                        return true;
+                    }
                     cur = object;
                 }
                 // A named root must be a borrow BOTH in the signature and at
@@ -5237,12 +5296,15 @@ impl<'a> super::TypeChecker<'a> {
                 // enough for a parameter, but not for `self`, which is bound
                 // under its bare type rather than a `Ref`, so both tests stay.
                 ExprKind::Identifier(n) => {
-                    break (self.current_fn_ref_params.contains(n.as_str())
-                        && matches!(
-                            self.local_scope.lookup(n.as_str()),
-                            Some(Type::Ref(_) | Type::MutRef(_))
-                        ))
+                    let is_ref = matches!(
+                        self.local_scope.lookup(n.as_str()),
+                        Some(Type::Ref(_) | Type::MutRef(_))
+                    );
+                    break (self.current_fn_ref_params.contains(n.as_str()) && is_ref)
                         || (views && self.local_scope.is_view(n.as_str()))
+                        // v2 core: any `ref`-typed local (a `ref` pattern
+                        // binding included) is a borrow.
+                        || (strict && views && is_ref);
                 }
                 ExprKind::SelfValue => break self.current_fn_ref_params.contains("self"),
                 _ => return false,
@@ -5269,6 +5331,23 @@ impl<'a> super::TypeChecker<'a> {
         match t {
             Type::Array { .. } | Type::Slice { .. } => true,
             Type::Named { name, .. } => matches!(name.as_str(), "Vec" | "Set" | "SortedSet"),
+            _ => false,
+        }
+    }
+
+    /// v2 core §4.6: is a `for` loop's iterable a standard collection, which
+    /// `for` borrows whatever expression produced it?
+    pub(super) fn for_iterable_is_core_collection(iter_ty: &Type) -> bool {
+        let mut t = iter_ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = inner;
+        }
+        match t {
+            Type::Array { .. } | Type::Slice { .. } => true,
+            Type::Named { name, .. } => matches!(
+                name.as_str(),
+                "Vec" | "Set" | "SortedSet" | "Map" | "SortedMap"
+            ),
             _ => false,
         }
     }
@@ -5385,6 +5464,10 @@ impl<'a> super::TypeChecker<'a> {
                      `ref` pattern binding). For a `for` element, iterate with \
                      `.into_iter()` to move the elements out of the collection"
                 )
+            } else if self.core_map_get_view(Self::projection_root(value), true) {
+                "cannot move a non-`Copy` value out of a map: `get` returns a reference to \
+                 the stored value"
+                    .to_string()
             } else {
                 "cannot move a non-`Copy` value out of a borrowed place".to_string()
             };
@@ -6292,7 +6375,8 @@ impl<'a> super::TypeChecker<'a> {
                 let ref_copy = self.cli_lint_overrides.strict_core
                     && ty.is_none()
                     && matches!(pattern.kind, PatternKind::Binding(_))
-                    && matches!(&value.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n));
+                    && (matches!(&value.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n))
+                        || self.core_map_get_view(value, true));
                 if !self.cli_lint_overrides.strict_core
                     || (matches!(pattern.kind, PatternKind::Binding(_)) && !ref_copy)
                 {
