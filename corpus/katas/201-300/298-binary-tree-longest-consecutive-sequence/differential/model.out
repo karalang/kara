@@ -1,0 +1,7 @@
+trees 700 nodes 8726
+P1 arm disagreements 0
+P2 oracle mismatches 0
+P3 bound violations 0
+P4 invariance failures 0
+P5 adversarial-shape failures 0
+DIFFERENTIAL OK

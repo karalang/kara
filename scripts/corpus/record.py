@@ -196,7 +196,11 @@ def model_rev() -> str:
 
 
 def _model_init() -> None:
+    import os
     import signal
+    # corpus_run's 20 s default is per program run alone; under --jobs load
+    # several katas that take 11-19 s alone time out and lose model.out.
+    os.environ.setdefault("MODEL_TIMEOUT", "90")
     sys.path.insert(0, str(ROOT / "corpus/tools/drop-model"))
     import corpus_run
     signal.signal(signal.SIGALRM, corpus_run._alarm)
