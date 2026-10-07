@@ -5234,7 +5234,7 @@ pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Check, build, elaborate and run `src`; the output and exit code, or
@@ -5250,7 +5250,7 @@ mod tests {
 
     /// Core pins the builder cannot run yet, each with what it waits on.
     /// A listed pin must still fail, so the list only shrinks.
-    const NOT_YET: &[&str] = &[
+    pub(crate) const NOT_YET: &[&str] = &[
         // `TaskGroup` and `TaskHandle` have no MIR lowering or natives yet.
         "ok_taskgroup_borrows",
     ];
