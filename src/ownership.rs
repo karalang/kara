@@ -2944,10 +2944,15 @@ impl<'a> OwnershipChecker<'a> {
         // at), then the consume site, then the binding name as a total-order
         // tie-break. This is the ordering the "first witness in source order"
         // sentence above always intended; nothing was sorting it.
-        let mut uam_witnesses: Vec<_> =
+        // The strict commands report every reused move, not just the first
+        // per binding, so one `karac fix` pass clones them all.
+        let mut uam_witnesses: Vec<_> = if core_rules() {
+            crate::rc_predicate::direct_uam_all_witnesses_from_sites(&sites, &dom)
+        } else {
             crate::rc_predicate::direct_uam_candidates_from_sites(&sites, &dom)
                 .into_iter()
-                .collect();
+                .collect()
+        };
         uam_witnesses.sort_by(|(ab, aw), (bb, bw)| {
             aw.other_use_span
                 .offset

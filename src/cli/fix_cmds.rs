@@ -107,7 +107,9 @@ pub(super) fn cmd_debug(input: &str, output: OutputMode) {
 pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     let source = read_source(filename);
     let mut pipeline = Pipeline::new(filename, &source).strict_core();
-    let mut edits: Vec<crate::resolver::TextEdit> = Vec::new();
+    // Each edit carries the id of the fix it belongs to: a multi-edit
+    // envelope is one fix, applied or skipped whole.
+    let mut fixes = FixSet::default();
     if pipeline.has_parse_errors() {
         // The file doesn't fully parse, but parsing may still have
         // synthesized machine-applicable recovery edits (e.g. deleting a
@@ -115,12 +117,12 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
         // each pass unblocks the next re-check. Post-parse phases can't run
         // on an unparseable file, so only parse edits are available here; if
         // there are none, report the parse errors and exit as before.
-        edits.extend(pipeline.parsed.fix_edits.values().cloned());
+        fixes.singles(pipeline.parsed.fix_edits.values().cloned());
         // Multi-edit parse envelopes (B-2026-08-13-13) — the brace-wrap for a
         // bare assignment `match` arm body. Both halves or neither, so they
         // live only here, never in the single-edit map.
-        edits.extend(pipeline.parsed.fix_diffs.values().flatten().cloned());
-        if edits.is_empty() {
+        fixes.groups(pipeline.parsed.fix_diffs.values());
+        if fixes.edits.is_empty() {
             for err in &pipeline.parsed.errors {
                 eprintln!(
                     "error[parse]: {}:{}:{}: {}",
@@ -132,7 +134,7 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     } else {
         pipeline.run_all_checks();
         if let Some(ref r) = pipeline.resolved {
-            edits.extend(
+            fixes.singles(
                 r.errors
                     .iter()
                     .filter_map(|e| e.replacement.as_deref().cloned()),
@@ -142,22 +144,22 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
             // single-edit `replacement` slot, so it lands here instead —
             // and only here, so applying just `replacement` can never leave
             // a half-renamed program behind.
-            edits.extend(r.error_fix_diffs.values().flatten().cloned());
+            fixes.groups(r.error_fix_diffs.values());
         }
         if let Some(ref ef) = pipeline.effects {
-            edits.extend(
+            fixes.singles(
                 ef.errors
                     .iter()
                     .filter_map(|e| e.replacement.as_deref().cloned()),
             );
         }
         if let Some(ref o) = pipeline.ownership {
-            edits.extend(
+            fixes.singles(
                 o.errors
                     .iter()
                     .filter_map(|e| e.replacement.as_deref().cloned()),
             );
-            edits.extend(
+            fixes.singles(
                 o.notes
                     .iter()
                     .filter_map(|e| e.replacement.as_deref().cloned()),
@@ -175,13 +177,13 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
             // envelope's edits in here; the descending-offset sort +
             // overlap dedup below applies them safely alongside the
             // single-edit replacements.
-            edits.extend(o.error_fix_diffs.values().flatten().cloned());
+            fixes.groups(o.error_fix_diffs.values());
         }
         if let Some(ref t) = pipeline.typed {
             // Typecheck fix-its (e.g. E0205 missing-match-arm insertion, the
             // `#[non_exhaustive]` cross-package wildcard) use FixIt{span,
             // replacement}; convert to the TextEdit offset/length form.
-            edits.extend(t.errors.iter().filter_map(|e| {
+            fixes.singles(t.errors.iter().filter_map(|e| {
                 e.fix_it.as_ref().map(|f| crate::resolver::TextEdit {
                     offset: f.span.offset,
                     length: f.span.length,
@@ -195,7 +197,7 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
             // warning's fix is by definition optional-but-safe (the code
             // already compiles and is correct), which is exactly what `fix` is
             // for.
-            edits.extend(t.warnings.iter().filter_map(|e| {
+            fixes.singles(t.warnings.iter().filter_map(|e| {
                 e.fix_it.as_ref().map(|f| crate::resolver::TextEdit {
                     offset: f.span.offset,
                     length: f.span.length,
@@ -205,18 +207,27 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
         }
     }
 
-    if edits.is_empty() {
+    if fixes.edits.is_empty() {
         println!("(no fixable diagnostics in {filename})");
         return;
     }
+    let mut edits = fixes.edits;
 
     // Drop overlapping edits (e.g. the same token reported by multiple
     // sources). Sort by offset descending so that applying them in order
     // does not invalidate the offsets of later edits.
-    edits.sort_by_key(|e| std::cmp::Reverse(e.offset));
-    let mut deduped: Vec<crate::resolver::TextEdit> = Vec::with_capacity(edits.len());
+    edits.sort_by_key(|(_, e)| std::cmp::Reverse(e.offset));
+    let mut deduped: Vec<(usize, crate::resolver::TextEdit)> = Vec::with_capacity(edits.len());
     let mut last_start = usize::MAX;
-    for edit in edits {
+    // Two diagnostics can ask for the same edit (a move out of a borrowed
+    // place and a use after that move both clone at the move site); apply it
+    // once, or a zero-length insertion lands twice (`k.clone().clone()`).
+    let mut seen: std::collections::HashSet<(usize, usize, String)> =
+        std::collections::HashSet::new();
+    for (fix, edit) in edits {
+        if !seen.insert((edit.offset, edit.length, edit.replacement.clone())) {
+            continue;
+        }
         let end = edit.offset.saturating_add(edit.length);
         if end > last_start {
             // Overlaps a later (higher-offset) edit already in the buffer
@@ -225,12 +236,12 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
             continue;
         }
         last_start = edit.offset;
-        deduped.push(edit);
+        deduped.push((fix, edit));
     }
 
     if dry_run {
         println!("would apply {} fix(es) to {filename}:", deduped.len());
-        for edit in deduped.iter().rev() {
+        for (_, edit) in deduped.iter().rev() {
             // Render in source order for human readability.
             let original = source
                 .get(edit.offset..edit.offset.saturating_add(edit.length))
@@ -244,21 +255,14 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
         return;
     }
 
-    let mut rewritten = source.clone();
-    for edit in &deduped {
-        let end = edit.offset.saturating_add(edit.length);
-        if end > rewritten.len() {
-            // Source shrank between read and apply — bail rather than
-            // produce an out-of-bounds slice.
-            eprintln!(
-                "error: fix would write past end of file ({} > {}) — aborting without modifying {filename}",
-                end,
-                rewritten.len()
-            );
-            process::exit(1);
-        }
-        rewritten.replace_range(edit.offset..end, &edit.replacement);
-    }
+    let Some(mut rewritten) = apply_edits(&source, deduped.iter().map(|(_, e)| e)) else {
+        // Source shrank between read and apply — bail rather than produce an
+        // out-of-bounds slice.
+        eprintln!(
+            "error: fix would write past end of file — aborting without modifying {filename}"
+        );
+        process::exit(1);
+    };
     // Refuse to write a rewrite that PARSES WORSE than the input.
     //
     // Every machine-applicable edit is an (offset, length, replacement)
@@ -277,23 +281,124 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     // branch above deliberately applies recovery edits to a file that does not
     // parse, and each pass is meant to reduce the count, not necessarily reach
     // zero in one go.
+    //
+    // One bad fix must not cost the good ones in the same pass, so when the
+    // whole set parses worse, each fix (a multi-edit envelope as a unit) is
+    // tried alone and the ones that break the parse by themselves are left
+    // out. The rest are applied only if they, together, still parse no worse.
     let before = pipeline.parsed.errors.len();
-    let after = crate::parse(&rewritten).errors.len();
-    if after > before {
-        eprintln!(
-            "error: applying {} fix(es) would leave {filename} with MORE parse errors than it \
-             started with ({before} -> {after}) — refusing to write.\n       \
-             This means a fix's edit range did not mean what its diagnostic meant; the file is \
-             unchanged. Re-run with `--dry-run` to see the edits, and please report it.",
-            deduped.len()
-        );
-        process::exit(1);
+    let mut applied = deduped.len();
+    if crate::parse(&rewritten).errors.len() > before {
+        match drop_unparseable_fixes(&source, before, &deduped) {
+            Some((r, kept, skipped)) => {
+                for edit in skipped {
+                    let (line, col) = crate::byte_offset_to_line_col(&source, edit.offset);
+                    eprintln!(
+                        "warning: skipped a fix at {filename}:{line}:{col} (`{}`): applying it \
+                         would not parse; please report it",
+                        edit.replacement
+                    );
+                }
+                applied = kept;
+                rewritten = r;
+            }
+            None => {
+                eprintln!(
+                    "error: applying {} fix(es) would leave {filename} with MORE parse errors \
+                     than it started with — refusing to write.\n       \
+                     This means a fix's edit range did not mean what its diagnostic meant; the \
+                     file is unchanged. Re-run with `--dry-run` to see the edits, and please \
+                     report it.",
+                    deduped.len()
+                );
+                process::exit(1);
+            }
+        }
     }
     if let Err(e) = std::fs::write(filename, &rewritten) {
         eprintln!("error: failed to write {filename}: {e}");
         process::exit(1);
     }
-    println!("applied {} fix(es) to {filename}", deduped.len());
+    println!("applied {applied} fix(es) to {filename}");
+}
+
+/// The fixes `karac fix` collects, each edit tagged with the fix it belongs
+/// to so a multi-edit envelope is kept or dropped whole.
+#[derive(Default)]
+struct FixSet {
+    edits: Vec<(usize, crate::resolver::TextEdit)>,
+    next: usize,
+}
+
+impl FixSet {
+    fn singles(&mut self, edits: impl IntoIterator<Item = crate::resolver::TextEdit>) {
+        for e in edits {
+            self.edits.push((self.next, e));
+            self.next += 1;
+        }
+    }
+
+    fn groups<'g>(&mut self, groups: impl IntoIterator<Item = &'g Vec<crate::resolver::TextEdit>>) {
+        for g in groups {
+            self.edits.extend(g.iter().cloned().map(|e| (self.next, e)));
+            self.next += 1;
+        }
+    }
+}
+
+/// When `edits` together parse worse than `before` errors: try each fix (all
+/// edits sharing an id) alone, leave out the ones that break the parse by
+/// themselves, and return the rewrite from the rest with the number of edits
+/// kept and the edits skipped, in source order. `None` when nothing is left
+/// or the rest still parse worse.
+fn drop_unparseable_fixes<'e>(
+    source: &str,
+    before: usize,
+    edits: &'e [(usize, crate::resolver::TextEdit)],
+) -> Option<(String, usize, Vec<&'e crate::resolver::TextEdit>)> {
+    let bad: std::collections::HashSet<usize> = edits
+        .iter()
+        .map(|(f, _)| *f)
+        .filter(|id| {
+            apply_edits(
+                source,
+                edits.iter().filter(|(f, _)| f == id).map(|(_, e)| e),
+            )
+            .is_none_or(|alone| crate::parse(&alone).errors.len() > before)
+        })
+        .collect();
+    let kept: Vec<_> = edits.iter().filter(|(f, _)| !bad.contains(f)).collect();
+    if kept.is_empty() {
+        return None;
+    }
+    let rewritten = apply_edits(source, kept.iter().map(|(_, e)| e))?;
+    if crate::parse(&rewritten).errors.len() > before {
+        return None;
+    }
+    let skipped = edits
+        .iter()
+        .rev()
+        .filter(|(f, _)| bad.contains(f))
+        .map(|(_, e)| e)
+        .collect();
+    Some((rewritten, kept.len(), skipped))
+}
+
+/// `source` with `edits` (sorted by descending offset, non-overlapping)
+/// applied, or `None` when one would write past the end.
+fn apply_edits<'e>(
+    source: &str,
+    edits: impl Iterator<Item = &'e crate::resolver::TextEdit>,
+) -> Option<String> {
+    let mut out = source.to_string();
+    for edit in edits {
+        let end = edit.offset.checked_add(edit.length)?;
+        if end > out.len() || !out.is_char_boundary(edit.offset) || !out.is_char_boundary(end) {
+            return None;
+        }
+        out.replace_range(edit.offset..end, &edit.replacement);
+    }
+    Some(out)
 }
 
 // `byte_offset_to_line_col` was promoted to `crate::byte_offset_to_line_col`
@@ -825,4 +930,62 @@ pub(super) fn workspace_has_uncommitted_changes(filename: &str) -> bool {
         return false;
     }
     !output.stdout.is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resolver::TextEdit;
+
+    fn edit(offset: usize, length: usize, replacement: &str) -> TextEdit {
+        TextEdit {
+            offset,
+            length,
+            replacement: replacement.to_string(),
+        }
+    }
+
+    #[test]
+    fn one_unparseable_fix_does_not_cost_the_others() {
+        // `fn main() { let a = 1; let b = a; }`: fix 0 renames `b` to `c`,
+        // fix 1 negates the `1`, and fix 2 inserts
+        // `}` after `{`, which does not parse. Descending offsets, as
+        // `cmd_fix` sorts them.
+        let src = "fn main() { let a = 1; let b = a; }";
+        let b_at = src.find("let b").unwrap() + 4;
+        let one_at = src.find('1').unwrap();
+        let edits = vec![
+            (0, edit(b_at, 1, "c")),
+            (1, edit(one_at, 0, "-")),
+            (2, edit(11, 0, " }")),
+        ];
+        let (out, kept, skipped) = drop_unparseable_fixes(src, 0, &edits).expect("kept");
+        assert_eq!(out, "fn main() { let a = -1; let c = a; }");
+        assert_eq!(kept, 2);
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].replacement, " }");
+    }
+
+    #[test]
+    fn a_multi_edit_fix_is_kept_or_dropped_whole() {
+        // Fix 7 is two edits that only parse together: both are kept.
+        let src = "fn main() { let a = 1; }";
+        let one_at = src.find('1').unwrap();
+        let edits = vec![
+            (7, edit(one_at + 1, 0, ")")),
+            (7, edit(one_at, 0, "(")),
+            (8, edit(11, 0, " }")),
+        ];
+        let (out, kept, skipped) = drop_unparseable_fixes(src, 0, &edits).expect("kept");
+        assert_eq!(out, "fn main() { let a = (1); }");
+        assert_eq!(kept, 2);
+        assert_eq!(skipped.len(), 1);
+    }
+
+    #[test]
+    fn nothing_parseable_left_refuses() {
+        let src = "fn main() { let a = 1; }";
+        let edits = vec![(0, edit(11, 0, " }"))];
+        assert!(drop_unparseable_fixes(src, 0, &edits).is_none());
+    }
 }

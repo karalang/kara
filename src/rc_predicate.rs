@@ -734,6 +734,22 @@ pub fn direct_uam_all_consume_sites(cfg: &Cfg, dom: &DominatorTree) -> Vec<crate
     direct_uam_all_consume_sites_from_sites(&collect_use_sites(cfg), dom)
 }
 
+/// Every (C, U) witness in the function, one per reused consume site.
+/// The strict commands report all of them, so `karac fix` clones every
+/// reused move in one pass instead of one per binding per pass.
+pub(crate) fn direct_uam_all_witnesses_from_sites(
+    sites: &UseSitesByBinding<'_>,
+    dom: &DominatorTree,
+) -> Vec<(String, UamWitness)> {
+    let mut out = Vec::new();
+    for (binding, uses) in sites {
+        for w in uam_witnesses_for_binding(binding, uses, dom, false) {
+            out.push((binding.to_string(), w));
+        }
+    }
+    out
+}
+
 pub(crate) fn direct_uam_all_consume_sites_from_sites(
     sites: &UseSitesByBinding<'_>,
     dom: &DominatorTree,
