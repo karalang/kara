@@ -1,0 +1,36 @@
+u/bind
+  r
+  dSaaaaaaaa0
+  dSaaaaaaaa1
+u/wild
+  w
+  dSbbbbbbbb0
+  dSbbbbbbbb1
+u/read
+  r:cccccccc0
+  dScccccccc0
+  dScccccccc1
+u/iflet
+  r
+  dSdddddddd0
+  dSdddddddd1
+u/letelse
+  r
+  dSeeeeeeee0
+  dSeeeeeeee1
+u/three
+  r
+  dSffffffff0
+  dSffffffff1
+  dSffffffff2
+u/noheap
+  r
+  dN2
+  dN3
+b/str
+  r:gggggggg0
+b/local
+  r
+  dSllllllll0
+  dSllllllll1
+end

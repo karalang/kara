@@ -1,0 +1,31 @@
+vecenum
+  x
+  d2:9
+vecstruct
+  x
+  dS7
+  dS8
+vecmixed
+  x
+  dS9
+vecempty
+  x
+unitvar
+  x
+array
+  x
+  dS1
+  dS2
+struct
+  x
+  d2:9
+sharedec
+  x
+  d2:9
+genvec
+  x
+  d2:9
+gensh
+  x
+  d2:9
+end

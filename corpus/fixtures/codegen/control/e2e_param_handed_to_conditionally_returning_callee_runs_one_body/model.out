@@ -1,0 +1,82 @@
+one-t
+sc 1
+dR1
+two-f
+dR2
+sc 99
+dR99
+three-t
+scu
+dR3
+four-f
+dR4
+scu
+dR99
+five-t
+dR5
+scd
+six-f
+dR6
+dR99
+scd
+seven-t
+dR7
+scs
+eight-f
+dR8
+dR99
+scs
+nine-t
+got 9
+ten-f
+dR10
+got 99
+eleven-t
+got 11
+twelve-f
+dR12
+got 99
+thirteen-t
+so 13
+dR13
+fourteen-f
+dR14
+so none
+fifteen-tt
+scn 15
+dR15
+scn-out
+sixteen-ft
+dR16
+scn 99
+dR99
+scn-out
+seventeen-tf
+scn-out
+dR17
+eighteen-lt
+sl 50
+dR50
+nineteen-lf
+dR50
+sl 99
+dR99
+twenty-mt
+mc 20
+dR20
+twentyone-mf
+dR21
+mc 99
+dR99
+twentytwo-nt
+sc 22
+dR22
+twentythree-nf
+dR23
+sc 99
+dR99
+end
+dR99
+dR11
+dR99
+dR9

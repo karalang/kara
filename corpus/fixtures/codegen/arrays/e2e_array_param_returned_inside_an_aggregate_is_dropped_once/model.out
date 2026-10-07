@@ -1,0 +1,60 @@
+bind
+k1 b
+d1
+d2
+tail
+k2 4
+d3
+d4
+tup
+k3 3
+d5
+d6
+nest
+k4 n
+d7
+d8
+two
+k5 11
+d11
+d12
+d9
+d10
+tail
+d13
+d14
+k6
+tail
+k7 t
+d15
+d16
+tail
+k8 17
+d17
+d18
+meth
+k9 m
+d19
+d20
+fwd
+k10 6
+d21
+d22
+mk
+k11 5
+d40
+d41
+mk
+eat40
+d40
+d41
+k12 5
+mk
+k13
+d40
+d41
+mk
+d40
+d41
+k14 5
+end

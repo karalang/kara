@@ -1,0 +1,15 @@
+n=1 -> true
+n=2 -> true
+n=3 -> true
+n=4 -> false
+n=5 -> true
+n=6 -> true
+n=7 -> true
+n=8 -> false
+n=9 -> true
+n=10 -> true
+n=11 -> true
+n=12 -> false
+n=2147483647 -> true
+n=2147483644 -> false
+n=0 -> false

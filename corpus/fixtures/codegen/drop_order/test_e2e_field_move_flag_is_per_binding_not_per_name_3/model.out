@@ -1,0 +1,11 @@
+p0
+drop p0
+k
+drop r0
+drop o0
+no
+k
+drop p1
+drop r1
+drop o1
+end

@@ -1,0 +1,9 @@
+A use 1 e1
+B use 2 e2
+C use 3 e3
+D use 4 e4
+end
+drop 4
+drop 3
+drop 2
+drop 1

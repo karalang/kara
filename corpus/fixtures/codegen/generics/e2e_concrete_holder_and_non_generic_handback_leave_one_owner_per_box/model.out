@@ -1,0 +1,27 @@
+holder
+  x
+handon
+  mx 24
+wrapbind
+  mx 24
+wrapnone
+  mx 0
+wrapdisc
+  x
+identbind
+  mx 24
+identdisc
+  x
+identtmp
+  mx 24
+fresh
+  mx 24
+scalar
+  n24
+unit
+  s24
+twoargs
+  mx 24
+nongen
+  nx 24
+end

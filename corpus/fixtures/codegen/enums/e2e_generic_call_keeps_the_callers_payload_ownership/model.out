@@ -1,0 +1,27 @@
+inline
+  10
+result
+  10
+noarm
+  out
+twocalls
+  10
+  10
+body
+  got 6
+  dD6
+bodyboxed
+  got 7
+  dW7
+bodynoarm
+  out
+  dW8
+monoinline
+  10
+monobody
+  got 10
+  dD10
+nocall
+  got 11
+  dD11
+end

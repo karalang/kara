@@ -1,0 +1,19 @@
+c=true
+  s29
+  e29
+  discarded
+  v3 1
+  r1
+  d1
+  d2
+c=false
+  s29
+  e29
+  discarded
+  v2 4
+  d1
+  d2
+  r8
+  d8
+  d9
+end

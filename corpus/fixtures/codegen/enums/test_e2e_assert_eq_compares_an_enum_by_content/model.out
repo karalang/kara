@@ -1,0 +1,11 @@
+eq-payload ok
+ne-payload ok
+eq-tuple ok
+ne-tuple ok
+eq-unit ok
+ne-tag ok
+eq-generic ok
+ne-generic ok
+eq-struct ok
+eq-string ok
+eq-int ok

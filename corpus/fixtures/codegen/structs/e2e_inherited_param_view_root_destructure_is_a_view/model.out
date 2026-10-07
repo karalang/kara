@@ -1,0 +1,29 @@
+norebind
+  b21
+dR21
+norebind end
+rebind
+  b22
+dR22
+rebind end
+twohop
+  b23
+dR23
+twohop end
+tupreb
+  b24
+dR24
+tupreb end
+method
+  b25
+dR25
+method end
+local
+  b26
+dR26
+local end
+noproj
+  np
+dR27
+noproj end
+done

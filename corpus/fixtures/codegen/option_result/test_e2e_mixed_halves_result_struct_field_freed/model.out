@@ -1,0 +1,17 @@
+ok-struct:
+10
+drop 1 aaaa1
+err-string:
+20
+byvalue-ok-struct:
+drop 3 ccc3
+30
+moveout-ok-struct:
+40
+drop 4 dddd4
+swapped-sides:
+50
+swapped-sides-err:
+60
+drop 6 ffffff6
+end

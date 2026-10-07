@@ -1,0 +1,41 @@
+plain
+  b1
+  end
+dR1
+plain end
+rename
+  b2
+  end
+dR2
+rename end
+rest
+  b3
+  end
+dR3
+rest end
+heapstr
+  b4 nm
+  end
+dR4
+heapstr end
+nested
+  b5
+  end
+dR5
+nested end
+norebind
+  b6
+  end
+dR6
+norebind end
+refparam
+  b7
+  end
+refparam end
+local
+  b8
+  end
+dR8
+local end
+done
+dR7

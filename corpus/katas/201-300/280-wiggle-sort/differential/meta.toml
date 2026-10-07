@@ -11,3 +11,6 @@ rules = []
 backends = []
 env = {}
 note = ""
+model_note = "use of moved place base"
+model_rev = "0f6622034"
+model_verdict = "V2-REJECT"

@@ -1,0 +1,51 @@
+proj_none
+  mid
+  dR1
+  dR2
+  v=1
+proj_ret
+  mid
+  dR3
+  dR4
+  v=3
+proj_b
+  mid
+  dR6
+  dR5
+  v=6
+proj_both
+  mid
+  dR8
+  dR7
+  v=15
+proj_reads
+  m9
+  m10
+  dR10
+  dR9
+  v=1
+proj_whole
+  mid
+  dR12
+  v=11
+proj_heap
+  mid
+  dR13
+  v=15
+self_root
+  mid
+  dR14
+  dR15
+  v=14
+named
+  mid
+  dR16
+  dR17
+  v=1
+destr
+  mid
+  dR19
+  dR18
+  v=18
+end
+  dR11

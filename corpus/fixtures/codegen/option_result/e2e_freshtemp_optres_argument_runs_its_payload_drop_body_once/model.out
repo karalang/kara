@@ -1,0 +1,22 @@
+A named->ignore
+  ig
+d:9
+B named->matchit
+  m:ssssssss2
+d:9
+C named->giveback
+  gb
+d:9
+D temp->ignore
+  ig
+d:9
+E temp->matchit
+  m:ssssssss5
+d:9
+F temp->giveback
+  gb
+d:9
+G temp->resig
+  rig
+d:9
+end

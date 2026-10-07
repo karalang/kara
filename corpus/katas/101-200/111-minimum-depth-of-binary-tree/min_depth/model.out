@@ -1,0 +1,9 @@
+tree 0: min_depth 3
+tree 1: min_depth 8
+tree 2: min_depth 3
+tree 3: min_depth 10
+tree 4: min_depth 4
+tree 5: min_depth 12
+tree 6: min_depth 4
+tree 7: min_depth 14
+sink: 255966475

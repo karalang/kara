@@ -11,3 +11,6 @@ rules = []
 backends = []
 env = {}
 note = ""
+model_note = "`p` is moved inside a loop and not initialized again before the next iteration (E0500)"
+model_rev = "0f6622034"
+model_verdict = "V2-REJECT"

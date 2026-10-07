@@ -1,0 +1,46 @@
+c1
+c2
+dR1
+dR2
+c3
+c4
+c5
+c6 a-heap-string-longer-than-sso-6 6
+c7 7
+c8 a-heap-string-longer-than-sso-8 8
+c9 40
+dR0
+dR1
+dR2
+c10
+c11 3
+c13 a-heap-string-longer-than-sso-13 5
+c14 a-heap-string-longer-than-sso-14 5
+c15 b-heap-string-longer-than-sso-15 6
+c19 3
+dR19
+dR20
+dR21
+c20 a-heap-string-longer-than-sso-20 9
+c21 2 5
+dR22
+dR23
+c22 3 5
+dR24
+dR25
+dR26
+m1
+dW2
+m7
+dW3
+rd a333 7
+dW4
+m4
+wc 7
+dW5
+m5
+m9 7
+dW6
+m10
+dW7
+end

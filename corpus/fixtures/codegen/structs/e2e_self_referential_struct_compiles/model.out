@@ -1,0 +1,19 @@
+bare_local
+  v=1
+drop_local
+  v=2
+free_fn_rebind
+  dN3
+  v=3
+free_fn_read
+  dN4
+  v=4
+plain_struct_rebind
+  v=5
+owned_self_rebind
+  dN6
+  v=6
+boxed_envelope
+  v=7
+end
+  dN2

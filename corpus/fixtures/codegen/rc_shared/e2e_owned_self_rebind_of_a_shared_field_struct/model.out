@@ -1,0 +1,19 @@
+temp_receiver
+  dR1
+  v=1
+named_receiver
+  dR2
+  v=2
+twice
+  dR3
+  v=3
+borrowed
+  v=5
+copyable_struct
+  dP6
+  v=6
+free_function
+  dR7
+  v=7
+end
+  dR5

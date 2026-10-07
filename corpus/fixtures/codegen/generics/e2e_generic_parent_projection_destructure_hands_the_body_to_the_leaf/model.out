@@ -1,0 +1,47 @@
+generic
+  b41/t41/1
+dR41/t41/1
+generic end
+marker
+  b42/t42
+  z9
+dR42/t42/1
+marker end
+nongeneric
+  b43/t43
+dR43/t43/1
+nongeneric end
+rebind
+  b44/t44/1
+dR44/t44/1
+rebind end
+bothelems
+  b45/95
+dR95/t95/1
+dR45/t45/1
+bothelems end
+secondpos
+  b7/46
+dR46/t46/1
+secondpos end
+nodrop
+  b1/2
+nodrop end
+wildcard
+  b0
+dR48/t48/1
+wildcard end
+nested
+  b49/1/2
+dR49/t49/1
+nested end
+genericfn
+  in
+dR51/t51/1
+  b5
+genericfn end
+paramroot
+  b52/t52
+dR52/t52/1
+paramroot end
+done

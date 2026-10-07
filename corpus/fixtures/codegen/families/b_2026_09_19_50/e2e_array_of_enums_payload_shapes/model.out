@@ -1,0 +1,40 @@
+stmt
+  dR1
+  x
+unit
+  x
+ret
+  x
+  dR2
+armpass
+  dR4
+  n1
+armelem
+  in 5
+  dR5
+iflet
+  in
+  dR6
+vec
+  x
+  dR7
+opt
+  x
+  dR8
+tup
+  x
+  dR9
+nested
+  x
+  dR10
+owndrop
+  x
+  dMd
+  dR11
+generic
+  x
+  dR13
+fieldmv
+  x
+  dR14
+end

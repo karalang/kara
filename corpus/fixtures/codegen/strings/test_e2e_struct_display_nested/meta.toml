@@ -11,3 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'Wrap { p: Point { x: 1, y: 2 }, name: hi, ok: true }'"
+model_rev = "0f6622034"

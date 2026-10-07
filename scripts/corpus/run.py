@@ -20,7 +20,15 @@ widen. Each entry is judged by its meta.toml `expect`:
                   `error:codegen` = any refusal)
     skip          not run
 
-Output: one `PASS|FAIL|SKIP <entry>` line per program (FAIL lines carry the
+On the mir-* backends the expectation is expected.out, then model.out (the
+drop model's output, held to `model_exit`; an ORDER-UNSPEC entry compares its
+lines as a set), then legacy.out. An entry the model rejects (model_verdict
+V2-REJECT) is not run: `karac check` must refuse it. When check accepts it the
+verdict is MREJ ("model rejects, check accepts"), neither a pass nor a fail:
+each one is a checker gap or a model bug. MREJ is judged even before a mir
+backend has a command, since it needs only `karac check`.
+
+Output: one `PASS|FAIL|SKIP|MREJ <entry>` line per program (FAIL lines carry the
 reason), then a summary by class and by tag, and the number of programs
 actually executed. Exits 1 on any FAIL, and 2 when nothing ran — a filter that
 matches nothing must not read as a pass.
@@ -42,9 +50,15 @@ def judge(entry: Path, corpus: Path, args) -> dict:
     meta = read_toml(entry / "meta.toml")
     expect = meta.get("expect", "stdout")
     backend = meta.get("legacy_backend", "legacy-build") if args.backend == "legacy" else args.backend
-    base = {"name": rel, "class": meta.get("class", "unknown"), "tags": meta.get("tags", [])}
+    base = {"name": rel, "class": meta.get("class", "unknown"), "tags": meta.get("tags", []),
+            "model": meta.get("model_verdict", "(none)")}
     if expect == "skip" or (meta.get("backends") and backend not in meta["backends"]):
         return {**base, "verdict": "SKIP", "why": expect if expect == "skip" else "backend excluded", "ran": False}
+    mir = backend.startswith("mir-")
+    if mir and meta.get("model_verdict") == "V2-REJECT" and not expect.startswith("error"):
+        if check_refuses(entry, args):
+            return {**base, "verdict": "PASS", "why": "", "ran": True}
+        return {**base, "verdict": "MREJ", "why": f"model: {meta.get('model_note', '')}", "ran": True}
     if BACKENDS.get(backend) is None:
         return {**base, "verdict": "SKIP", "why": f"backend {backend} not available yet", "ran": False}
     env = {"KARAC_HASH_SEED": str(args.seed), **meta.get("env", {})}
@@ -61,6 +75,11 @@ def judge(entry: Path, corpus: Path, args) -> dict:
     else:
         want_exit = int(expect.split(":", 1)[1]) if expect.startswith("panic:") else int(meta.get("exit", 0))
         exp_file = entry / "expected.out"
+        as_set = False
+        if not exp_file.exists() and mir and (entry / "model.out").exists():
+            exp_file = entry / "model.out"
+            want_exit = int(meta.get("model_exit", want_exit))
+            as_set = meta.get("model_verdict") == "ORDER-UNSPEC"
         if not exp_file.exists():
             exp_file = entry / "legacy.out"  # unclassified: legacy is the baseline
         exp = exp_file.read_bytes() if exp_file.exists() else None
@@ -68,11 +87,20 @@ def judge(entry: Path, corpus: Path, args) -> dict:
             why = f"refused (exit {res['exit']}): {first_line(res['stderr'])}"
         elif exp is None:
             why = "no expected.out"
+        elif as_set and sorted(res["stdout"].splitlines()) == sorted(exp.splitlines()):
+            if res["exit"] != want_exit:
+                why = f"exit {res['exit']}, expected {want_exit}"
         elif res["stdout"] != exp:
             why = f"stdout differs ({len(res['stdout'])} vs {len(exp)} bytes)"
         elif res["exit"] != want_exit:
             why = f"exit {res['exit']}, expected {want_exit}"
     return {**base, "verdict": "FAIL" if why else "PASS", "why": why, "ran": True}
+
+
+def check_refuses(entry: Path, args) -> bool:
+    r = subprocess.run([args.karac, "check", "source.kara"], cwd=entry, capture_output=True,
+                       timeout=args.timeout, stdin=subprocess.DEVNULL)
+    return r.returncode != 0
 
 
 def check_codes(entry: Path, args) -> list:
@@ -123,27 +151,31 @@ def main() -> int:
     with cf.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         for r in pool.map(lambda e: judge(e, corpus, args), todo):
             results.append(r)
-            if r["verdict"] == "FAIL" or not args.quiet:
-                tail = f"  ({r['why']})" if r["why"] and r["verdict"] == "FAIL" else ""
+            if r["verdict"] in ("FAIL", "MREJ") or not args.quiet:
+                tail = f"  ({r['why']})" if r["why"] and r["verdict"] in ("FAIL", "MREJ") else ""
                 print(f"{r['verdict']} {r['name']}{tail}", flush=True)
 
     def tally(key_fn):
         t: dict[str, dict[str, int]] = {}
         for r in results:
             for k in key_fn(r):
-                t.setdefault(k, {"PASS": 0, "FAIL": 0, "SKIP": 0})[r["verdict"]] += 1
+                t.setdefault(k, {"PASS": 0, "FAIL": 0, "SKIP": 0, "MREJ": 0})[r["verdict"]] += 1
         return t
 
     print()
-    for title, t in (("class", tally(lambda r: [r["class"]])), ("tag", tally(lambda r: r["tags"] or ["(none)"]))):
+    for title, t in (("class", tally(lambda r: [r["class"]])), ("tag", tally(lambda r: r["tags"] or ["(none)"])),
+                     ("model_verdict", tally(lambda r: [r["model"]]))):
         print(f"by {title}:")
         for k, v in sorted(t.items()):
-            print(f"  {k:28} pass={v['PASS']} fail={v['FAIL']} skip={v['SKIP']}")
+            mrej = f" model-reject-check-accepts={v['MREJ']}" if v["MREJ"] else ""
+            print(f"  {k:28} pass={v['PASS']} fail={v['FAIL']} skip={v['SKIP']}{mrej}")
     ran = sum(r["ran"] for r in results)
     fails = sum(r["verdict"] == "FAIL" for r in results)
     passes = sum(r["verdict"] == "PASS" for r in results)
+    mrej = sum(r["verdict"] == "MREJ" for r in results)
     print(f"corpus-run backend={args.backend} matched={len(results)} executed={ran} "
-          f"pass={passes} fail={fails} skip={len(results) - passes - fails}")
+          f"pass={passes} fail={fails} skip={len(results) - passes - fails - mrej}"
+          + (f" model-reject-check-accepts={mrej}" if mrej else ""))
     if ran == 0:
         print("corpus-run: nothing executed", file=sys.stderr)
         return 2

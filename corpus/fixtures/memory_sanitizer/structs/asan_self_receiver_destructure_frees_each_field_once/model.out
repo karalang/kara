@@ -1,0 +1,52 @@
+start
+  rd1
+  okt101
+dR101/t101
+dR1/t1
+  rd2
+dR102/t102
+dR2/t2
+  eat103
+dR103/t103
+dR3/t3
+  rd4
+  okt104
+dR104/t104
+dR4/t4
+  rd5
+dR105/t105
+dR5/t5
+  rd11
+  okt111
+dR111/t111
+dR11/t11
+  rd12
+dR112/t112
+dR12/t12
+  eat113
+dR113/t113
+dR13/t13
+  rd14
+  okt114
+dR114/t114
+dR14/t14
+  rd15
+dR115/t115
+dR15/t15
+  rd21
+  okt121
+dR121/t121
+dR21/t21
+  rd22
+dR122/t122
+dR22/t22
+  eat123
+dR123/t123
+dR23/t23
+  rd24
+  okt124
+dR124/t124
+dR24/t24
+  rd25
+dR125/t125
+dR25/t25

@@ -1,0 +1,72 @@
+row
+  mid
+  dR5
+  dR6
+  out
+second
+  mid
+  dR6
+  dR5
+  out
+result
+  mid
+  dR5
+  dR6
+  out
+method
+  mid
+  dR5
+  dR6
+  out
+three
+  mid
+  dR5
+  dR7
+  dR6
+  out
+iflet
+  mid
+  dR5
+  dR6
+  out
+call-arg
+  mid
+  dR5
+  dR6
+  out
+later
+  mid
+  v5
+  dR5
+  dR6
+  out
+ctl-named-arg
+  mid
+  dR5
+  dR6
+  out
+ctl-nomove
+  mid
+  dR6
+  dR5
+  out
+ctl-scalar
+  mid
+  dR5
+  out
+ctl-both
+  mid
+  dR6
+  dR5
+  out
+ctl-escape
+  dR6
+  got5
+  dR5
+  out
+ctl-struct
+  mid
+  dR5
+  dR6
+  out
+end

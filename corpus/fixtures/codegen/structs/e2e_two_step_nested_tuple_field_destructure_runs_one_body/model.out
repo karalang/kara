@@ -1,0 +1,35 @@
+local3
+  l3 9
+  dR9
+norebind
+  nr 7
+  dR7
+viacall
+  dR4
+  vc 4
+three
+  t3 3
+  dR3
+leftin
+  li 1
+  dR2
+nestedblock
+  nb 13
+  dR13
+  after
+flat
+  fl 8
+  dR8
+plainlocal
+  pl 6
+  dR6
+fromcall
+  fc 11
+  dR11
+wholecopy
+  wc 12
+  dR12
+param3
+  p3 5
+  dR5
+end

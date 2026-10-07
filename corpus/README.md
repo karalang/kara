@@ -93,6 +93,7 @@ SKIP until the new pipeline exists.
 python3 scripts/corpus/extract.py --katas ../kara-katas    # sources -> source.kara + meta.toml
 python3 scripts/corpus/record.py                           # one legacy run + check per new program
 python3 scripts/corpus/record.py --recheck --filter <path>  # mark a program nondeterministic if a re-run differs
+python3 scripts/corpus/record.py --model                    # drop model output per program (model.out, model_verdict)
 ```
 
 `extract.py` also regenerates the drop matrix from `corpus/tools/drop-model/`
@@ -111,3 +112,20 @@ is classified, and the runner holds it to `legacy.out`: a measured baseline of
 OLD behaviour, not a specification. Classification against the MIR
 interpreter writes `expected.out` per class, so the diff shows every program
 whose expectation moved.
+
+## The drop model's output
+
+`record.py --model` runs `corpus/tools/drop-model/kmodel.py` over every
+recorded program outside `core/` and `drop-matrix/`. For model_verdict SAME,
+ORDER, ORDER-UNSPEC and DIFF it writes `model.out` and sets `model_verdict`,
+`model_exit` and `model_rev` (the last commit touching the model; a re-run
+redoes only entries at an older rev). A V2-REJECT gets `model_verdict` and
+`model_note` (the rule broken on the executed path) and no `model.out`. UNSUP,
+PARSE, CRASH and LEGACY-REJECT get only `model_rev`.
+
+On the mir backends `run.py` takes the expectation from `expected.out`, then
+`model.out` (held to `model_exit`; ORDER-UNSPEC compares lines as a set), then
+`legacy.out`. A V2-REJECT program is not run: `karac check` must refuse it, and
+when check accepts it the verdict is MREJ, "model rejects, check accepts",
+counted on its own. MREJ needs only `karac check`, so it is judged before any
+mir backend exists. The legacy backends ignore all of this.

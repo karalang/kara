@@ -11,3 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'call void @karac_string_clone('"
+model_rev = "0f6622034"

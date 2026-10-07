@@ -28,6 +28,18 @@ format! template, or the legacy run timed out).
 Raw logs (check JSON, stdout, stderr) go to --work/logs/<entry>/.
 Entries that already have legacy.out are skipped unless --redo.
 
+--model runs the source-level drop model (corpus/tools/drop-model/kmodel.py)
+over every recorded entry outside core/ and drop-matrix/ and writes:
+
+  model.out      the model's stdout, for model_verdict SAME, ORDER,
+                 ORDER-UNSPEC and DIFF; the MIR backends are held to it
+  meta.toml      model_verdict, model_exit, model_rev (the last commit touching
+                 the model), and model_note for a V2-REJECT (the rule it broke)
+
+An entry the model has no verdict for (UNSUP, PARSE, CRASH, LEGACY-REJECT)
+loses all of these. Entries already at the current model_rev are kept
+unless --redo.
+
 --recheck runs every already-recorded entry (narrow it with --filter) once
 more on its legacy backend. One whose stdout or exit code differs from its
 record prints something that changes between runs (a bound port, thread
@@ -169,6 +181,61 @@ def mirror_one(entry: Path, args) -> str:
     return tag
 
 
+MODEL_KEYS = ("model_verdict", "model_exit", "model_rev", "model_note")
+MODEL_OUT_VERDICTS = ("SAME", "ORDER", "ORDER-UNSPEC", "DIFF")
+
+
+def model_rev() -> str:
+    return subprocess.run(["git", "log", "-1", "--format=%h", "--", "corpus/tools/drop-model/"],
+                          cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _model_init() -> None:
+    import signal
+    sys.path.insert(0, str(ROOT / "corpus/tools/drop-model"))
+    import corpus_run
+    signal.signal(signal.SIGALRM, corpus_run._alarm)
+
+
+def model_one(job) -> str:
+    """One entry through the drop model. Runs in a worker process: the model's
+    timeout is SIGALRM, which only a process's main thread can take."""
+    entry, rev, redo = job
+    import corpus_run
+    meta = read_toml(entry / "meta.toml")
+    if not (entry / "legacy.out").exists() or meta.get("expect") == "skip":
+        return "unrecorded-or-skip"
+    if meta.get("model_rev") == rev and not redo:
+        return "kept"
+    seen = {}
+    real = corpus_run.run_source
+
+    def capture(src):
+        seen["r"] = real(src)
+        return seen["r"]
+
+    corpus_run.run_source = capture
+    try:
+        v, why, out = corpus_run.verdict(entry, meta)
+    finally:
+        corpus_run.run_source = real
+    for k in MODEL_KEYS:
+        meta.pop(k, None)
+    mo = entry / "model.out"
+    if v in MODEL_OUT_VERDICTS:
+        mo.write_text(out)
+        meta.update({"model_verdict": v, "model_exit": seen["r"][1], "model_rev": rev})
+    else:
+        if mo.exists():
+            mo.unlink()
+        if v == "V2-REJECT":
+            meta.update({"model_verdict": v, "model_rev": rev, "model_note": " ".join(why.split())[:200]})
+        else:
+            meta["model_rev"] = rev  # no verdict, but this rev has looked at it
+    write_toml(entry / "meta.toml", meta)
+    return v
+
+
 def recheck_one(entry: Path, args) -> str:
     meta = read_toml(entry / "meta.toml")
     if not (entry / "legacy.out").exists() or meta.get("expect") == "skip":
@@ -257,6 +324,8 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--redo", action="store_true")
+    ap.add_argument("--model", action="store_true",
+                    help="record the drop model's output and verdict per entry (model.out, model_verdict)")
     ap.add_argument("--mirror", action="store_true",
                     help="run each kata's Python mirror and tag mirror-agrees / mirror-differs")
     ap.add_argument("--katas", default=str(ROOT.parent / "kara-katas"), help="kara-katas checkout, for --mirror")
@@ -274,6 +343,16 @@ def main() -> int:
     todo = [e for e in entries(corpus) if not args.filter or any(f in str(e.relative_to(corpus)) for f in args.filter)]
     counts: dict[str, int] = {}
     done = 0
+    if args.model:
+        rev = model_rev()
+        todo = [e for e in todo if not str(e.relative_to(corpus)).startswith(("core/", "drop-matrix/"))]
+        counts: dict[str, int] = {}
+        with cf.ProcessPoolExecutor(max_workers=args.jobs, initializer=_model_init) as pool:
+            for v in pool.map(model_one, [(e, rev, args.redo) for e in todo], chunksize=16):
+                counts[v] = counts.get(v, 0) + 1
+        print(f"corpus-record: model_rev={rev} " + " ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+              + f" of {len(todo)}")
+        return 0
     if args.mirror:
         step = lambda e: mirror_one(e, args)  # noqa: E731
     elif args.retag:

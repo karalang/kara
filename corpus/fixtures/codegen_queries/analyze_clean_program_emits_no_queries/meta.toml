@@ -11,3 +11,6 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'expected zero queries for a clean program; got {:?}'"
+model_exit = 0
+model_rev = "0f6622034"
+model_verdict = "SAME"

@@ -1,0 +1,39 @@
+dvec
+  x
+  dS6
+darr
+  x
+  dS7
+dres
+  x
+  dS8
+dopt
+  x
+  dS9
+dnone
+  x
+dopt2
+  x
+  dS10
+dtup
+  x
+  dS11
+dmulti
+  x
+  dS12
+disc
+  dS13
+  x
+ret
+  x
+  dS14
+arg
+  dS15
+  1
+field
+  x
+  dS16
+move
+  x
+  dS17
+end

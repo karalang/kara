@@ -1,0 +1,5 @@
+n=3 celebrity=1 calls=6 (bound 6)
+n=3 celebrity=-1 calls=4 (bound 6)
+n=1 celebrity=0 calls=0 (bound 0)
+n=4 celebrity=0 calls=9 (bound 9)
+n=2 celebrity=-1 calls=2 (bound 3)

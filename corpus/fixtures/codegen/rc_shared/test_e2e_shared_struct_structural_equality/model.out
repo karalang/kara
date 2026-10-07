@@ -1,0 +1,6 @@
+eq
+ne
+self
+line-eq
+line-ne-field
+line-ne-string

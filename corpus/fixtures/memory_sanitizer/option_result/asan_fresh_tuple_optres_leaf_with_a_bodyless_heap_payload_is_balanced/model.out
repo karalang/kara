@@ -1,0 +1,40 @@
+ostr
+  a1true
+dR1
+owild
+  b2
+dR2
+rstr
+  c3true
+dR3
+ovec
+  d4true
+dR4
+vwild
+  e5
+dR5
+ocarry
+  f6true
+dR6
+omove
+  g7true
+dR7
+oarm
+  hp8
+  i8
+dR8
+rarm
+  jp9
+  k9
+dR9
+odrop
+  l10true
+dR110
+dR10
+loops
+  m11true
+dR11
+  m11true
+dR11
+  n
+done

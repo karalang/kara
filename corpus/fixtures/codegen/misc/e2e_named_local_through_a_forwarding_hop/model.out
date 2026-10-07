@@ -1,0 +1,20 @@
+named_hop
+  v=1
+fresh_hop
+  v=2
+rebind_hop
+  v=3
+copyable_hop
+  v=4
+dies_in_hop
+  dR5
+  v=5
+mixed_dies_inside
+  dR6
+  v=99
+end
+  dR99
+  dP4
+  dR3
+  dR2
+  dR1

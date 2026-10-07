@@ -1,0 +1,41 @@
+full_ret
+  mid
+  dR2
+  dR1
+  v=2
+full_let
+  mid
+  dR4
+  dR3
+  v=7
+rest_ret
+  mid
+  dR5
+  dR6
+  v=5
+wild_ret
+  mid
+  dR7
+  dR8
+  v=7
+rest_len
+  mid
+  dR9
+  dR10
+  v=2
+rest_none
+  mid
+  dR11
+  dR12
+  v=1
+whole_b
+  mid
+  dR13
+  v=14
+named
+  mid
+  dR16
+  dR15
+  v=16
+end
+  dR14

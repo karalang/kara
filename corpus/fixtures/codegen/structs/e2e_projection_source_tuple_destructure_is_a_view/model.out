@@ -1,0 +1,25 @@
+plain
+  b1
+dR1
+plain end
+ownstr
+  b2 n
+dR2
+ownstr end
+twohop
+  b3
+dR3
+twohop end
+norebind
+  b4
+dR4
+norebind end
+rebind
+  b5
+dR5
+rebind end
+refparam
+  b6
+refparam end
+done
+dR6

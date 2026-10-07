@@ -1,0 +1,20 @@
+arr
+  x
+  dR1
+  dR2
+vec
+  x
+  dR4
+  dR5
+arm
+  in 3
+  dR6
+  dR7
+genarr
+  x
+  dR8
+  dR9
+genvec
+  x
+  dR10
+end

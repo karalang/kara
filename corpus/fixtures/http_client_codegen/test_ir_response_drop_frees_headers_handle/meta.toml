@@ -11,3 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: '__karac_drop_struct_Response'"
+model_rev = "0f6622034"

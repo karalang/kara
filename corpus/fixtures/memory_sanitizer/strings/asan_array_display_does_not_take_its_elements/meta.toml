@@ -11,3 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'asan_array_display_does_not_take_its_elements'"
+model_rev = "0f6622034"

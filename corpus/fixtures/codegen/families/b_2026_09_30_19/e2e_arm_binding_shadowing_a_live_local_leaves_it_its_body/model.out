@@ -1,0 +1,80 @@
+n51
+dS51
+dS50
+r 0
+n51
+dS51
+w50
+dS50
+r 0
+u61
+dS61
+t60
+dS60
+r 0
+dS2
+dS1
+r 0
+u2
+dS2
+dS1
+r 0
+dS2
+w1
+dS1
+r 0
+u2
+dS2
+w1
+dS1
+r 0
+u4
+dS4
+t3
+dS3
+r 0
+dS4
+dS3
+r 4
+u6
+dS6
+t5
+dS5
+r 0
+dS6
+dS5
+r 9
+u20
+dS20
+dS10
+u21
+dS21
+dS11
+r 0
+u20
+dS20
+w10
+dS10
+u21
+dS21
+w11
+dS11
+r 0
+dS32
+m31
+dS31
+dS30
+r 0
+dS32
+m31
+dS31
+dS30
+r 0
+dS41
+end6
+dS40
+r 0
+dS40
+dS41
+end6
+r 0

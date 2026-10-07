@@ -1,0 +1,52 @@
+local_a
+  mid
+  dR1
+  dR2
+  v=1
+local_ab
+  mid
+  dR11
+  dR10
+  dR12
+  v=21
+local_all_rest
+  mid
+  dR21
+  dR20
+  v=1
+local_wild
+  mid
+  dR30
+  dR31
+  v=30
+lit_a
+  dR41
+  mid
+  dR40
+  v=40
+lit_wild
+  dR51
+  mid
+  dR50
+  v=50
+call_a
+  dR61
+  mid
+  dR60
+  v=60
+param_a
+  mid
+  dR70
+  dR71
+  v=1
+view_a
+  mid
+  dR90
+  dR80
+  v=90
+view_w
+  mid
+  dR92
+  dR82
+  v=92
+end

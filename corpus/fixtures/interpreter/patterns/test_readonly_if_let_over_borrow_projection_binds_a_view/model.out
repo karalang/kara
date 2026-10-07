@@ -1,0 +1,49 @@
+p_iflet
+  got1
+p_iflet_mut
+  got2
+p_iflet_assign
+  got4
+p_whilelet
+  got4
+p_iflet2
+  got5
+p_match
+  got6
+p_iflet_move
+  got7
+p_iflet_consume
+  got8
+m_iflet
+  got9
+m_iflet_mut
+  got10
+m_whilelet
+  got11
+m_iflet_move
+  got12
+end
+  dE
+  dR12
+  dE
+  dR11
+  dE
+  dR10
+  dE
+  dR9
+  dE
+  dR8
+  dE
+  dR7
+  dE
+  dR6
+  dE
+  dR5
+  dE
+  dR4
+  dE
+  dR3
+  dE
+  dR2
+  dE
+  dR1

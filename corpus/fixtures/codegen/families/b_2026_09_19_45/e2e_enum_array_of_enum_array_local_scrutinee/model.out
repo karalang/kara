@@ -1,0 +1,11 @@
+  in 4
+  after
+  drop 4
+  q
+  after
+  drop 5
+  in
+  after
+  drop 6
+  drop 7
+end

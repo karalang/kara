@@ -1,0 +1,40 @@
+s/bind
+  in
+  d1
+  d2
+s/two
+  in:zz
+  d11
+  d12
+s/three
+  in
+  d21
+  d22
+  d23
+s/noheap
+  in
+  dN31
+  dN32
+s/read
+  in:41
+  d41
+  d42
+n/str
+  in:s51
+n/tuple
+  in
+  d71
+  d72
+b/local
+  in
+  d91
+  d92
+b/discard
+  d101
+  d102
+  in
+b/ctl
+  in
+  d111
+  d112
+end

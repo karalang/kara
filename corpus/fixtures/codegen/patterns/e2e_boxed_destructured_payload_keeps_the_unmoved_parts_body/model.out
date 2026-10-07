@@ -1,0 +1,33 @@
+scalar
+  dH1
+  got:9
+readscalar
+  in2
+  dH2
+  got:8
+first
+  dH4
+  got:3
+  dH3
+second
+  dH5
+  got:6
+  dH6
+middle
+  dH9
+  dH7
+  got:8
+  dH8
+bothtouched
+  keep11
+  dH11
+  got:10
+  dH10
+noneout
+  dH13
+  dH12
+  got:25
+resultout
+  dH14
+  got:7
+end

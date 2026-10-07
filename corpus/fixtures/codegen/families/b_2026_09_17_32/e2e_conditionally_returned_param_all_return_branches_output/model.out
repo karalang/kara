@@ -1,0 +1,82 @@
+m2-dies
+dW101
+  7
+m2-back
+  102
+i2-dies
+dW103
+  5
+i2-back
+  104
+il-dies
+dW105
+  8
+il-back
+  106
+m3-dies0
+dW107
+  50
+m3-back
+  108
+m3-dies2
+dW109
+  52
+mg-dies
+dW110
+  3
+mg-back
+  111
+mh-dies
+dH112
+  4
+mh-back
+  113
+g8-dies
+dW114
+  8
+g8-back
+  115
+ms-dies
+  side
+dW116
+  60
+ms-back
+  117
+dH120
+  loop0
+dH0
+dH121
+  loop1
+dH1
+h8-dies
+dW130
+  9
+h8-back
+  131
+hh-dies
+dH132
+  10
+hh-back
+  133
+end
+dH133
+dH10
+dW131
+dW9
+dW117
+dW60
+dW115
+dW8
+dH113
+dH4
+dW111
+dW3
+dW52
+dW108
+dW50
+dW106
+dW8
+dW104
+dW5
+dW102
+dW7

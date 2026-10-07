@@ -1,0 +1,42 @@
+named
+  mid
+  dR5
+  out
+temp
+  mid
+  dR5
+  out
+after
+  mid
+  dR5
+  after
+  out
+heap
+  mid
+  dH5
+  out
+tuple
+  mid
+  dR5
+  out
+nomove
+  peek9
+  dR5
+  out
+method
+  mid
+  dR5
+  out
+assoc
+  mid
+  dR5
+  out
+two
+  mid
+  dR5
+  dR6
+  out
+none
+  n
+  out
+end

@@ -1,0 +1,10 @@
+start
+  ate
+  held 2
+read 10
+peek 4
+  ate
+  ate
+  took 6
+  took 7
+end

@@ -1,0 +1,12 @@
+gvec
+  x
+  dS2
+dnone
+  x
+rebind
+  in
+  dS3
+grebind
+  in
+  dS11
+end

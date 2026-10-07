@@ -1,0 +1,91 @@
+wr
+  rd10
+dR10/t10
+dR110/t110
+wboth
+  x
+dR112/t112
+dR12/t12
+w0
+  k5
+dR14/t14
+resw
+  rd40
+dR40/t40
+dR140/t140
+nestw
+  n3
+dR170/t170
+dR70/t70
+projw
+  rd90
+dR90/t90
+dR190/t190
+nonew
+  rd16
+dR16/t16
+loopw
+dR180/t180
+dR80/t80
+dR180/t180
+dR80/t80
+  x
+bind
+  rd21
+dR221/t221
+dR21/t21
+bothst
+  x
+dR150/t150
+dR50/t50
+optstr
+  rd60
+dR60/t60
+undest
+  rd6
+dR66/t66
+dR6/t6
+marm
+  m
+dR105/t105
+dR5/t5
+i64opt
+  z
+dR77/t77
+frw
+dR131/t131
+  rd31
+dR31/t31
+frres
+dR135/t135
+  rd35
+dR35/t35
+frw0
+dR41/t41
+  rd141
+dR141/t141
+frboth
+dR142/t142
+dR42/t42
+  x
+frnest
+dR143/t143
+dR43/t43
+  n4
+frloop
+dR144/t144
+dR44/t44
+dR144/t144
+dR44/t44
+  x
+frstr
+  rd45
+dR45/t45
+frplain
+dR146/t146
+  rd46
+dR46/t46
+frnone
+  rd47
+dR47/t47
+done

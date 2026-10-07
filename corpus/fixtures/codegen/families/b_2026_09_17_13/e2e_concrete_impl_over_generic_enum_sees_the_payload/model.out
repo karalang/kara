@@ -1,0 +1,18 @@
+dR23
+a1
+dR24
+b2
+dR25
+c1
+mx twin-payload-alpha
+mx temp-payload-beta
+mx call-payload-gamma
+mx NONE
+named-get-delta!
+temp-get-epsilon
+pk ref-payload-zeta
+pk ref-payload-zeta
+il iflet-payload-eta
+mx loop-payload-0-iota
+mx loop-payload-1-iota
+end

@@ -1,0 +1,47 @@
+bind_first
+  dR1
+  dR2
+  v=1
+bind_last
+  dR4
+  dR3
+  v=4
+bind_middle
+  dR6
+  dR7
+  dR5
+  v=6
+bind_all
+  dR9
+  dR8
+  v=17
+bind_none
+  dR11
+  dR10
+  v=1
+renamed
+  dR12
+  dR13
+  v=12
+wild_field
+  dR15
+  dR14
+  v=1
+nested_leaf
+  dR16
+  dR17
+  v=16
+scalar_beside
+  dR18
+  dR19
+  v=18
+iflet_named
+  dR20
+  dR21
+  v=20
+moved_on
+  dR23
+  dR24
+  dR22
+  v=23
+end

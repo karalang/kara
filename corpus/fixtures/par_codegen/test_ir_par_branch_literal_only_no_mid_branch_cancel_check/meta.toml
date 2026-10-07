@@ -11,3 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'literal-only par-branches must not emit mid-branch cancel checks; found {total}; IR: {ir}'"
+model_rev = "0f6622034"

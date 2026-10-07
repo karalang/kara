@@ -1,0 +1,66 @@
+c false
+dS1
+re
+dS2
+r 0
+dS3
+re
+dS4
+r 4
+dS5
+r 0
+dS20
+re
+dS21
+r 0
+dS30
+re
+dS31
+r 0
+dS40
+dS41
+re
+dS42
+r 0
+dS50
+re
+dS51
+r 0
+c true
+y
+dS1
+re
+dS2
+r 0
+k
+dS3
+re
+dS4
+r 4
+y
+dS5
+y
+dS6
+dS7
+r 0
+dS20
+m 20
+re
+dS21
+r 0
+y
+dS30
+re
+dS31
+r 0
+y
+dS40
+dS41
+re
+dS42
+r 0
+y
+dS50
+re
+r 0
+end

@@ -1,0 +1,48 @@
+dS11
+dS10
+r 0
+k10
+dS10
+dS11
+r 0
+dS21
+dS20
+r 0
+q21
+dS21
+dS20
+r 0
+k30
+dS30
+dS31
+r 0
+dS41
+dS40
+r 0
+nd
+dS41
+dS40
+r 0
+k41
+dS41
+dS40
+r 0
+dS51
+dS50
+r 0
+dS50
+dS51
+r 50
+dS61
+dS60
+r 0
+k60
+dS60
+dS61
+r 0
+dS71
+dS70
+r 0
+dS70
+dS71
+r 0

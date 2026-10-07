@@ -11,3 +11,6 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'dR30 s dR31 dE dR8 a39 -'"
+model_note = "move out of the payload of a type with a Drop body (C3)"
+model_rev = "0f6622034"
+model_verdict = "V2-REJECT"

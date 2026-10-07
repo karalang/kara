@@ -1,0 +1,44 @@
+u-rebind
+drop 2 h2
+rb-f
+drop 3 h3
+rb-t
+drop 4 h4
+ok-f
+drop 5 h5
+ok-t
+drop 6 h6
+bare
+drop 7 h7
+named-u
+drop 8 h8
+named-top
+drop 9 h9
+named-rb-f
+drop 10 h10
+named-rb-t
+drop 11 h11
+chain-f
+drop 12 h12
+chain-t
+drop 13 h13
+inbr-f
+after
+drop 14 h14
+inbr-t
+drop 15 h15
+tail-f
+drop 16 h16
+tail-t
+drop 17 h17
+shadow-f
+sh 99
+drop 99 h99
+drop 18 h18
+m-rb-f
+drop 20 h20
+m-rb-t
+drop 21 h21
+m-u
+drop 22 h22
+done

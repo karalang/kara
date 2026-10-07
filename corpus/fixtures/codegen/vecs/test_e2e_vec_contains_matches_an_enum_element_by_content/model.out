@@ -1,0 +1,16 @@
+enum=true
+enum-ne=false
+enum-pair=true
+enum-pair-ne=false
+enum-unit=true
+generic=true
+generic-ne=false
+generic-none=true
+shared=true
+shared-ne=false
+str=true
+str-ne=false
+struct=true
+struct-ne=false
+int=true
+int-ne=false

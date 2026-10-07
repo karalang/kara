@@ -1,0 +1,7 @@
+o-fn
+drop 1
+r-fn
+drop 2
+o-ctor
+drop 3
+done

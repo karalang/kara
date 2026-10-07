@@ -1,0 +1,37 @@
+m/callee
+  r:aaaaaaaa0:strstr01
+  dSaaaaaaaa0
+  dSaaaaaaaa1
+m/local
+  r:local000
+  dSbbbbbbbb0
+  dSbbbbbbbb1
+m/literal
+  r:literal1
+  dScccccccc0
+  dScccccccc1
+m/callres
+  r:callres0
+  dSdddddddd0
+  dSdddddddd1
+m/rebind
+  r:strstr11
+  dSeeeeeeee0
+  dSeeeeeeee1
+m/letlocal
+  r:letloc00
+  dSffffffff0
+  dSffffffff1
+n/both
+  r:gggggggg1:gggggggg2
+  dSgggggggg2
+  dSgggggggg3
+  dSgggggggg0
+  dSgggggggg1
+n/first
+  r:hlocal01
+  dShlocal00
+  dShlocal01
+  dShhhhhhhh0
+  dShhhhhhhh1
+end

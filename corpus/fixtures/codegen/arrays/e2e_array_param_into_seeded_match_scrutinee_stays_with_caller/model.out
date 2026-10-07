@@ -1,0 +1,36 @@
+p/arr
+  r:aaaaaaaa0
+  dSaaaaaaaa0
+  dSaaaaaaaa1
+p/wild
+  w
+  dSbbbbbbbb0
+  dSbbbbbbbb1
+p/str
+  r:cccccccc0
+p/res
+  r
+  dSdddddddd0
+  dSdddddddd1
+p/gen
+  r
+  dSeeeeeeee0
+  dSeeeeeeee1
+p/three
+  r
+  dSffffffff0
+  dSffffffff1
+  dSffffffff2
+p/noheap
+  r
+  dN2
+  dN3
+p/nonefirst
+  r
+  dShhhhhhhh0
+  dShhhhhhhh1
+b/local
+  r
+  dSllllllll0
+  dSllllllll1
+end

@@ -11,3 +11,6 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'main-result-wide-err'"
+model_exit = 1
+model_rev = "0f6622034"
+model_verdict = "SAME"
