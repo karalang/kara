@@ -1208,4 +1208,136 @@ fn main() -> () {
         assert!(n >= 25, "{n} pins");
         assert!(bad.is_empty(), "{}", bad.join("\n"));
     }
+
+    /// Builds `src` from source and runs the move and borrow checks on
+    /// every body: `Err` names the stage that stopped before them, `Ok`
+    /// holds one line per refused body. A callee with no body is a library
+    /// native, whose result borrows only from its receiver.
+    fn check_built(src: &str) -> Result<Vec<String>, String> {
+        let parsed = crate::parse(src);
+        if !parsed.errors.is_empty() {
+            return Err("parse".into());
+        }
+        let mut program = parsed.program;
+        crate::prepare_for_resolve(&mut program);
+        let r = crate::resolve(&program);
+        if !r.errors.is_empty() {
+            return Err("resolve".into());
+        }
+        let tc = crate::typecheck(&program, &r);
+        if !tc.errors.is_empty() {
+            return Err(format!("typecheck: {}", tc.errors[0].message));
+        }
+        let defs = crate::def_table::ProgramDefs::build_for_program(&program);
+        let res = crate::node_res::node_res(&r, &defs, 0, None);
+        let hir =
+            crate::typed_hir::build(&tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
+        let own = crate::ownershipcheck(&program, &tc);
+        let mut lowered = crate::mir::lower::lower_program(
+            &program,
+            &tc,
+            &defs,
+            &res,
+            &r,
+            hir,
+            &own.closure_captures,
+        );
+        if !lowered.errors.is_empty() {
+            return Err(format!("build: {}", lowered.errors[0]));
+        }
+        let methods: Vec<(String, bool)> = lowered
+            .program
+            .bodies
+            .values()
+            .map(|b| {
+                let recv = b.instance.name.contains('.')
+                    && b.arg_count > 0
+                    && matches!(
+                        lowered.tys.kind(b.locals[1].ty),
+                        TyKind::Ref(_) | TyKind::MutRef(_)
+                    );
+                (b.instance.name.clone(), recv)
+            })
+            .collect();
+        let has_receiver = |c: &InstanceId| {
+            methods
+                .iter()
+                .find(|(n, _)| *n == c.name)
+                .is_none_or(|(_, r)| *r)
+        };
+        let mut refused = Vec::new();
+        for body in lowered.program.bodies.values_mut() {
+            let name = body.instance.name.clone();
+            if let Err(e) = crate::mir::check_moves(body, &lowered.tys) {
+                refused.push(format!("move check {name}: {}", e.join("; ")));
+            } else if let Err(e) = check_borrows(body, &lowered.tys, &has_receiver) {
+                refused.push(format!("borrow check {name}: {}", e.join("; ")));
+            }
+        }
+        Ok(refused)
+    }
+
+    /// The core pins built from source: no runnable pin is refused, and
+    /// each `err_` pin whose rule MIR checks is refused by the right check.
+    /// A pin the builder cannot lower yet is skipped, so each table row
+    /// names whether it must build today.
+    #[test]
+    fn mir_borrowck_core_pins_built_from_source() {
+        // (pin, must build today, the start of its first refusal).
+        let err_pins: &[(&str, bool, &str)] = &[
+            ("err_maybe_moved", true, "move check f:"),
+            ("err_moved_in_loop", true, "move check main:"),
+            ("err_partial_then_whole", true, "move check main:"),
+            ("err_use_after_move", true, "move check main:"),
+            ("err_move_out_of_ref", true, "borrow check name_of:"),
+            ("err_ref_from_temp", true, "borrow check main:"),
+            // The builder passes `ref` receivers to `mut ref self` natives
+            // without a `&mut (*_1)` reborrow, and lowers a bare `for` over
+            // a place by moving it, so this is refused for a use after the
+            // loop's move, not for §5.9. When the builder borrows, it
+            // becomes "borrow check add:".
+            ("err_write_through_ref", true, "move check main:"),
+            ("err_escaping_capture_reused", false, "borrow check"),
+            ("err_store_nonescaping_param", false, "borrow check"),
+            ("err_taskgroup_origin_declared_after", false, "borrow check"),
+            ("err_taskgroup_write_while_borrowed", false, "borrow check"),
+        ];
+        // Rules checked before MIR: `par` effects and Drop-type moves.
+        let not_mir = ["err_par_conflict", "err_partial_move_drop_type"];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
+        let mut pins: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        pins.sort();
+        let (mut ok_checked, mut bad) = (0, Vec::new());
+        for dir in pins {
+            let pin = dir.file_name().unwrap().to_str().unwrap().to_string();
+            if not_mir.contains(&pin.as_str()) {
+                continue;
+            }
+            let src = std::fs::read_to_string(dir.join("source.kara")).unwrap();
+            let verdict = check_built(&src);
+            if !pin.starts_with("err_") {
+                match verdict {
+                    Ok(refused) if refused.is_empty() => ok_checked += 1,
+                    Ok(refused) => bad.push(format!("{pin}: {}", refused.join(" | "))),
+                    Err(e) => bad.push(format!("{pin}: {e}")),
+                }
+                continue;
+            }
+            let Some((_, must_build, want)) = err_pins.iter().find(|(p, ..)| *p == pin) else {
+                bad.push(format!("{pin}: not in this test's table"));
+                continue;
+            };
+            match verdict {
+                Ok(refused) if refused.first().is_some_and(|r| r.starts_with(want)) => {}
+                Ok(refused) => bad.push(format!("{pin}: want {want}, got {refused:?}")),
+                Err(e) if *must_build => bad.push(format!("{pin}: {e}")),
+                Err(_) => {}
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
+        assert!(ok_checked >= 20, "only {ok_checked} runnable pins checked");
+    }
 }
