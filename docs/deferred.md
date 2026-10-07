@@ -738,10 +738,10 @@ test "request id is deterministic under a fake clock" {
 
 These test attributes depend on effect resources and providers. They extend the v1 test runner ([design.md §14](design.md#14-testing)).
 
-Tests that require live external services (databases, APIs) are marked with `#[test(requires = [...])]` on the test case. `karac test` skips tests with unsatisfied `requires`; `karac test --all` fails if any required resource is unavailable:
+Tests that require live external services (databases, APIs) are marked with `#[test(requires: [...])]` on the test case. `karac test` skips tests with unsatisfied `requires`; `karac test --all` fails if any required resource is unavailable:
 
 ```
-#[test(requires = [db.UserDB, payment.PaymentAPI])]
+#[test(requires: [db.UserDB, payment.PaymentAPI])]
 test "checkout flow" {
     // needs real database and payment service running
 }
@@ -774,11 +774,11 @@ test "create user" {
 }
 ```
 
-The argument to `#[with_provider]` is `(resource_path, constructor_fn)`. Multiple `#[with_provider]` attributes are allowed on a single test for tests that use several resources. This is distinct from `#[test(requires = [...])]`, which is for tests that need a real external service — `#[with_provider]` is for tests that supply their own in-memory implementation.
+The argument to `#[with_provider]` is `(resource_path, constructor_fn)`. Multiple `#[with_provider]` attributes are allowed on a single test for tests that use several resources. This is distinct from `#[test(requires: [...])]`, which is for tests that need a real external service — `#[with_provider]` is for tests that supply their own in-memory implementation.
 
 **Multi-attribute order.** When several `#[with_provider]` attributes decorate one test, source order is outer-to-inner: the first attribute is the outermost scope, the last is innermost. All constructors are evaluated before any provider scope is entered (evaluate-all-then-scope), matching `providers { } in { }`'s semantics. If a constructor fails, later constructors don't run and the test fails with `reason = "provider_construction_failed"` (see the runner output additions below).
 
-**`requires` and `with_provider` on the same resource are rejected.** A test decorated with both `#[test(requires = [X])]` and `#[with_provider(X, ...)]` for the same resource `X` is a contradiction — `requires` gates on an external service, `with_provider` supplies a fake. The runner rejects this at discovery time and emits `test_fail` with `reason = "requires_and_with_provider_conflict"`. Different resources in the two lists are fine (e.g., `requires = [db.UserDB]` + `with_provider(Clock, ...)`).
+**`requires` and `with_provider` on the same resource are rejected.** A test decorated with both `#[test(requires: [X])]` and `#[with_provider(X, ...)]` for the same resource `X` is a contradiction — `requires` gates on an external service, `with_provider` supplies a fake. The runner rejects this at discovery time and emits `test_fail` with `reason = "requires_and_with_provider_conflict"`. Different resources in the two lists are fine (e.g., `requires: [db.UserDB]` + `with_provider(Clock, ...)`).
 
 **Built-in primitives use the same mechanism.** `#[with_provider(Clock, FakeClock.at(T))]` and `#[with_provider(RandomSource, FakeRandom.from_seed(42))]` work identically to user-declared resources. Built-in primitives (`Clock`, `RandomSource`, `Env`, `FileSystem`, etc.) register their default providers at program start; `#[with_provider]` pushes a replacement on the provider stack for the test's duration. The override is uniformly visible inside the test body via the same resource-using calls.
 
@@ -786,7 +786,7 @@ The argument to `#[with_provider]` is `(resource_path, constructor_fn)`. Multipl
 
 | Event | Fields | Notes |
 |---|---|---|
-| `test_fail` | `test: string`, `duration_ms: int`, `location: {file, line, col}`, `message: string` | Optional `assertion: string` (source text of the assertion), `left: string` + `right: string` for `assert_eq` / `assert_ne` failures. Optional `reason: string` for non-assertion failures. Reasons: `"provider_construction_failed"` (a `#[with_provider]` constructor panicked or returned `Err`; `duration_ms: 0` since the body never ran), `"requires_and_with_provider_conflict"` (same resource appears in both `#[test(requires = [X])]` and `#[with_provider(X, ...)]`). Optional `providers: [string]` lists fully-qualified resource paths that were active for this test (via `#[with_provider]` or program-rooted defaults); surfaced only on failure events so post-hoc triage is self-contained without source access. |
+| `test_fail` | `test: string`, `duration_ms: int`, `location: {file, line, col}`, `message: string` | Optional `assertion: string` (source text of the assertion), `left: string` + `right: string` for `assert_eq` / `assert_ne` failures. Optional `reason: string` for non-assertion failures. Reasons: `"provider_construction_failed"` (a `#[with_provider]` constructor panicked or returned `Err`; `duration_ms: 0` since the body never ran), `"requires_and_with_provider_conflict"` (same resource appears in both `#[test(requires: [X])]` and `#[with_provider(X, ...)]`). Optional `providers: [string]` lists fully-qualified resource paths that were active for this test (via `#[with_provider]` or program-rooted defaults); surfaced only on failure events so post-hoc triage is self-contained without source access. |
 | `test_skip` | `test: string`, `reason: string` | Reasons: `"unsatisfied_requires"` (with `resources: [string]` field listing missing resource paths). Future slices may introduce new reasons — consumers must tolerate unknown reason strings. |
 
 **Exit code.** `0` if every test passes (or is skipped under permitted conditions). Non-zero if any `test_fail` event was emitted, or if any `test_skip` event was emitted under `--all`.
@@ -2512,11 +2512,11 @@ v1 has item-level `#[cfg]` with the `target` and `target_os` keys and the `all`,
 **Design shape:**
 
 ```kara
-#[cfg(target_feature = "avx512")]
+#[cfg(target_feature: "avx512")]
 fn fast_multiply(a: Vector[f32, 8], b: Vector[f32, 8]) -> Vector[f32, 8] { ... }
 ```
 
-v1 has no feature flags, in `kara.toml` or as `#[cfg(feature = ...)]`, and a constrained feature axis is held for a later RFC ([design.md §4](design.md#4-modules-and-packages)).
+v1 has no feature flags, in `kara.toml` or as `#[cfg(feature: ...)]`, and a constrained feature axis is held for a later RFC ([design.md §4](design.md#4-modules-and-packages)).
 
 ### `#[no_std]` / Bare Metal Support
 
@@ -3582,7 +3582,7 @@ The fallback is silent by default. A `--simd-report=verbose` flag prints which o
 
 **Idiom note — construction inside hot loops.** Building a fresh `Vector[T, N]` from scalar lane expressions **every loop iteration** is an anti-pattern the optimizer does not clean up: each construction is N scalar evaluations plus N lane inserts (and on wasm the backend never re-fuses the chain into a `v128.load` — the per-tap-construction form measured **~4.7x slower** than the scalar baseline it replaced, while the keep-vectors-live form of the same kernel won 1.47x). The winning idiom: construct/`splat` **outside** the loop, keep accumulators and coefficient vectors live **across** iterations, and extract lanes rarely. One shape is compiler-recognized: `Vector[T, N](v[b], v[b + 1], …, v[b + N-1])` — all lanes consecutive indexes into one `Vec[T]` whose element type is exactly `T`, with a side-effect-free base — lowers as a **single elem-aligned vector load** (`v128.load` on wasm, unaligned vector load on native) with the same two bounds checks and the same panic order the scalar form has. Anything else (casts in the lanes — `src[p] as f64` cannot be a contiguous load; mixed sources; non-consecutive offsets) stays on the insertelement chain, so hoist it out of the loop instead.
 
-**Architecture-specific intrinsics.** Beyond the portable surface, target-specific intrinsics — AVX-512 mask shuffles, NEON pairwise adds, SVE predicates — live in platform modules gated by `#[cfg(target_feature = "...")]`. Code that uses them is non-portable by construction, so cfg-gating is mandatory: every direct intrinsic call is in a `#[cfg]`-scoped function. The portable `Vector[T, N]` API never panics on a missing vector unit; cfg-gated intrinsic modules simply don't compile when the target feature is absent.
+**Architecture-specific intrinsics.** Beyond the portable surface, target-specific intrinsics — AVX-512 mask shuffles, NEON pairwise adds, SVE predicates — live in platform modules gated by `#[cfg(target_feature: "...")]`. Code that uses them is non-portable by construction, so cfg-gating is mandatory: every direct intrinsic call is in a `#[cfg]`-scoped function. The portable `Vector[T, N]` API never panics on a missing vector unit; cfg-gated intrinsic modules simply don't compile when the target feature is absent.
 
 **GPU mapping.** On the GPU backend, `Vector[T, N]` for `N ∈ {2, 3, 4}` maps directly to SPIR-V `OpTypeVector` / WGSL `vec<N, T>`. Larger `N` lowers to GPU buffer ops with explicit lane-width loops — same auto-fallback principle, different hardware.
 
@@ -3670,7 +3670,7 @@ fn cosine_similarity(a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
 
 These rules extend the v1 CPU baseline ([design.md §16](design.md#cpu-baseline)).
 
-**Interaction with `#[target_feature(...)]`.** The two operate on different layers and never conflict: `--target-features` edits the **floor** — the baseline feature set every monomorphized function compiles against — while a function-level `#[target_feature(enable = "...")]` widens **above** the floor for that one function, guarded by multiversioning dispatch. A baseline `-feat` therefore does not narrow, disable, or error against a function-level `+feat`: the function still compiles with the feature and still dispatches only on hardware that has it — exactly the floor/ceiling composition described under "What this is not" below. The converse also holds: a function-level enable never leaks the feature into the floor for the rest of the program. (An attribute-level *disable* form, if ever added, would be the only place a conflict could arise and must be specified then; only the `enable` direction is reserved.)
+**Interaction with `#[target_feature(...)]`.** The two operate on different layers and never conflict: `--target-features` edits the **floor** — the baseline feature set every monomorphized function compiles against — while a function-level `#[target_feature(enable: "...")]` widens **above** the floor for that one function, guarded by multiversioning dispatch. A baseline `-feat` therefore does not narrow, disable, or error against a function-level `+feat`: the function still compiles with the feature and still dispatches only on hardware that has it — exactly the floor/ceiling composition described under "What this is not" below. The converse also holds: a function-level enable never leaks the feature into the floor for the rest of the program. (An attribute-level *disable* form, if ever added, would be the only place a conflict could arise and must be specified then; only the `enable` direction is reserved.)
 
 **What this is not.** The baseline is *not* a substitute for function multiversioning (per-function feature dispatch at runtime). The baseline is the floor every monomorphized function compiles against; multiversioning is the ceiling specific functions can opt up to. They compose: a build with `--target-cpu=apple-m1` and a `#[multiversion]` hot path for `apple-m4` features stays portable to every Apple Silicon Mac and dispatches the wider implementation on M4-or-newer at runtime.
 
@@ -5051,7 +5051,7 @@ User-defined resources have no intrinsic target affinity — they exist wherever
 
 #### Provider Injection for SSR-shared Code (primary pattern)
 
-For SSR components that must run on both `native` (server rendering) and `wasm_browser` (client hydration), the Kāra-shaped pattern is **not** to partition the component with `#[cfg(target = ...)]` attributes. The component is an ordinary target-agnostic function; **different I/O providers are bound on different targets** via the existing `with_provider` mechanism (see [Provider-Rooted Resources](#provider-rooted-resources-trait-based-injection)).
+For SSR components that must run on both `native` (server rendering) and `wasm_browser` (client hydration), the Kāra-shaped pattern is **not** to partition the component with `#[cfg(target: ...)]` attributes. The component is an ordinary target-agnostic function; **different I/O providers are bound on different targets** via the existing `with_provider` mechanism (see [Provider-Rooted Resources](#provider-rooted-resources-trait-based-injection)).
 
 ```kara
 // Target-agnostic component. Declares effect against a user resource.
@@ -5063,7 +5063,7 @@ pub fn user_profile(user_id: UserId) -> Result[Html, Error]
 }
 
 // Server entry point. Binds PostgresUserStore for `native`.
-#[cfg(target = "native")]
+#[cfg(target: "native")]
 fn main() -> Result[(), AppError] {
     providers {
         UserStore => PostgresUserStore.connect(env.var("DATABASE_URL")?)?,
@@ -5074,7 +5074,7 @@ fn main() -> Result[(), AppError] {
 }
 
 // Client entry point. Binds JsonRpcUserStore for `wasm_browser`.
-#[cfg(target = "wasm_browser")]
+#[cfg(target: "wasm_browser")]
 pub fn hydrate(user_id: UserId) -> Result[(), AppError] {
     providers {
         UserStore => JsonRpcUserStore.new("/api"),
@@ -5087,7 +5087,7 @@ pub fn hydrate(user_id: UserId) -> Result[(), AppError] {
 
 The component `user_profile` has one implementation. Each target binds the providers its platform can satisfy. This keeps shared code annotation-free and gives the programmer type-safe I/O routing per target — no `#[cfg]` chains in the component body.
 
-**Worked example.** The `ssr_counter` example shows this pattern end-to-end — one shared component rendered to HTML on `native` and to the live DOM on `wasm_browser`, with `#[cfg(target = ...)]` only on the two entry points. It uses nested `with_provider` blocks, a user-defined render-sink resource, and DOM mutation through `host fn`s in place of the `providers { } in { }` block and the `std.web` `Display` provider.
+**Worked example.** The `ssr_counter` example shows this pattern end-to-end — one shared component rendered to HTML on `native` and to the live DOM on `wasm_browser`, with `#[cfg(target: ...)]` only on the two entry points. It uses nested `with_provider` blocks, a user-defined render-sink resource, and DOM mutation through `host fn`s in place of the `providers { } in { }` block and the `std.web` `Display` provider.
 
 ### Web / Host Effect Vocabulary
 
@@ -5115,7 +5115,7 @@ Browser and host-runtime APIs live behind effect resources **declared in stdlib 
 
 **Module gating, not prelude.** Web/host resources are **not** in the prelude. Native-only code never imports `std.web` and never sees `Display`, `Storage`, etc. in its resource namespace, avoiding inference noise for server-only programs. A cross-target program (SSR + hydration) imports `std.web` only in the modules that touch browser APIs; shared business logic imports neither and stays target-agnostic by construction.
 
-**Effect-driven target gating.** A function with effect `writes(Display)` cannot compile to native (no provider for `Display`); a function with `writes(FileSystem)` cannot compile to browser-WASM (no provider there). This is how the effect system enforces target correctness without `#[cfg(target = ...)]` boilerplate. The formal rules for target-provided resource sets and cross-target shared code are spec'd in [Cross-target Compilation](#cross-target-compilation).
+**Effect-driven target gating.** A function with effect `writes(Display)` cannot compile to native (no provider for `Display`); a function with `writes(FileSystem)` cannot compile to browser-WASM (no provider there). This is how the effect system enforces target correctness without `#[cfg(target: ...)]` boilerplate. The formal rules for target-provided resource sets and cross-target shared code are spec'd in [Cross-target Compilation](#cross-target-compilation).
 
 **Why not conflate with `FileSystem` or `Process`.** Reusing `FileSystem` for `localStorage` or `Process` for `console.log` is semantic dishonesty. A UI library declaring `writes(FileSystem)` to mean "mutates the DOM" confuses every reviewer; the cost of a small, honest vocabulary is paid once, the cost of mental translation compounds forever.
 
@@ -5285,12 +5285,12 @@ Unpinned builds accept whatever version is discovered; a missing binary is a har
 Exported symbols in a WASM build are the public functions tagged for the corresponding target. A function is exported when all of the following hold:
 
 1. It is `pub`.
-2. It carries `#[cfg(target = "wasm_browser")]` or `#[cfg(target = "wasm_wasi")]` matching the build target *(or is target-agnostic and transitively reachable from such an entry point — that case is tracked by the linker's dead-code elimination in the usual way)*.
+2. It carries `#[cfg(target: "wasm_browser")]` or `#[cfg(target: "wasm_wasi")]` matching the build target *(or is target-agnostic and transitively reachable from such an entry point — that case is tracked by the linker's dead-code elimination in the usual way)*.
 3. Its parameter and return types are expressible in the binding surface (`wasm_browser` exports require primitives / `Copy` / opaque-handle types — same restriction as `host fn`; `wasm_wasi` exports can additionally use WIT-expressible types).
 
-There is no separate `#[export]` attribute. `pub` + `#[cfg(target = ...)]` is sufficient.
+There is no separate `#[export]` attribute. `pub` + `#[cfg(target: ...)]` is sufficient.
 
-> **Open.** `#[target]` was merged into `#[cfg]`, so export discovery now keys on a `#[cfg(target = ...)]` condition, which makes `#[cfg]` double as an export marker. The track should confirm that, or bring back a separate marker.
+> **Open.** `#[target]` was merged into `#[cfg]`, so export discovery now keys on a `#[cfg(target: ...)]` condition, which makes `#[cfg]` double as an export marker. The track should confirm that, or bring back a separate marker.
 
 ### `host fn` browser and Component Model lowering
 
@@ -6536,13 +6536,13 @@ pub fn abs(x: i32) -> i32 { if x < 0 { -x } else { x } }
 
 *Cons:* requires parser support for extracting fenced code blocks from doc comments as test bodies; effect declaration is awkward (where does `with reads(FileSystem)` go on a fenced block?); test ID is positional within the docstring rather than named.
 
-**(iii) `#[example(of = path)]` as a separate top-level item.**
+**(iii) `#[example(of: path)]` as a separate top-level item.**
 
 ```kara
 /// Computes the absolute value.
 pub fn abs(x: i32) -> i32 { if x < 0 { -x } else { x } }
 
-#[example(of = abs)]
+#[example(of: abs)]
 fn abs_handles_negatives() {
     assert_eq(abs(-5), 5);
     assert_eq(abs(0), 0);
@@ -6707,7 +6707,7 @@ test "sort preserves length"(input: Vec[i32]) {
     assert(sort(input.clone()).len() == input.len());
 }
 
-#[property(cases = 1000)]          // default is 100
+#[property(cases: 1000)]          // default is 100
 test "sort is idempotent"(input: Vec[i32]) {
     let once = sort(input.clone());
     let twice = sort(once.clone());

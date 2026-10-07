@@ -208,14 +208,14 @@ let user_count = 0;
 5. **CN-5 (leading underscore).** A Value-class identifier may begin with `_` (`_unused`, `_tmp`). The class is unchanged. The underscore marks the binding as intentionally unused and suppresses unused-binding diagnostics. Type-class and Const-class identifiers may not begin with `_`.
 6. **CN-6 (enum variants).** Enum variants are Type class: `enum Status { Active, Inactive }`, not `{ active, inactive }`.
 7. **CN-7 (single-letter type parameters).** A single uppercase letter (`T`, `K`, `V`, `E`, `R`) is Type class, by the one-letter case of the table above. Constants are always longer than one letter (`MAX`, `PI`), so there is no confusion. A const generic parameter is exempt: in `const N: i64` the `const` already says that `N` is a value, so a one-letter name there is Const class.
-8. **CN-8 (FFI exception).** Foreign functions and types may have any ASCII name at the FFI boundary, but the Kāra-visible name must follow the rules above. `#[kara_name = "..."]` rebinds a non-conforming foreign name. Foreign declarations live in an `unsafe extern "ABI" { ... }` block ([§15](#15-unsafe-ffi-and-layout-control)):
+8. **CN-8 (FFI exception).** Foreign functions and types may have any ASCII name at the FFI boundary, but the Kāra-visible name must follow the rules above. `#[kara_name("...")]` rebinds a non-conforming foreign name. Foreign declarations live in an `unsafe extern "ABI" { ... }` block ([§15](#15-unsafe-ffi-and-layout-control)):
 
    ```kara
    unsafe extern "C" {
        fn memcpy(dst: *mut u8, src: *const u8, n: usize) -> *mut u8;
        // `memcpy` is Value class: no rename needed.
 
-       #[kara_name = "GlxFbConfig"]
+       #[kara_name("GlxFbConfig")]
        type GLXFBConfig;
        // A vendor type, rebound to a Type-class name on the Kāra side.
    }
@@ -887,16 +887,16 @@ Most code needs none. A function compiles for a target when every resource its e
 `#[cfg]` compiles the declaration it marks only when its condition holds.
 
 ```kara
-#[cfg(target = "native")]                        // only when compiling for native
+#[cfg(target: "native")]                        // only when compiling for native
 fn main() { ... }
 
-#[cfg(not(target = "native"))]                   // for every target except native
+#[cfg(not(target: "native"))]                   // for every target except native
 fn platform_name() -> String { "wasm" }
 
-#[cfg(target_os = "linux")]                      // only when the OS platform is Linux
+#[cfg(target_os: "linux")]                      // only when the OS platform is Linux
 fn create_poller() -> Poller { epoll_create() }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os: "linux", target_os: "macos"))]
 fn unix_socket_path() -> String { "/tmp/app.sock" }
 ```
 
@@ -925,7 +925,7 @@ An unknown key or value is an error.
 
 #### Platform files
 
-A file whose name ends in an OS suffix (`_linux`, `_macos`, `_windows`, `_wasm`) compiles only for that OS. It is the file-level form of `#[cfg(target_os = ...)]`.
+A file whose name ends in an OS suffix (`_linux`, `_macos`, `_windows`, `_wasm`) compiles only for that OS. It is the file-level form of `#[cfg(target_os: ...)]`.
 
 ```
 net/
@@ -941,15 +941,15 @@ net/
 **Missing platforms.** If platform files cover some operating systems and no shared file exists, the module does not exist on the others, and importing it there is `E0112 UnknownModule` with a note listing the platforms that define it. `karac check --platform=all` checks the package once per platform and fails if any fails, so one machine can verify every OS. There is no compiler check that every OS is covered; that is a CI concern.
 
 **Three meanings of "target".**
-- The **compilation target** of [§16](#16-targets-and-compilation), which `#[cfg(target = ...)]` tests. `--target=<name>` chooses it; the default is `native`.
+- The **compilation target** of [§16](#16-targets-and-compilation), which `#[cfg(target: ...)]` tests. `--target=<name>` chooses it; the default is `native`.
 - The **manifest overlay triple**, which selects the `[target.<triple>]` blocks to merge. `--target=<triple>` (any value that is not a target name) chooses it, else `[build].target`, else the host triple.
-- The **OS platform**, which `#[cfg(target_os = ...)]` and the file suffixes test. `karac check --platform=<name>` chooses it. Otherwise a wasm compilation target selects `wasm`, and every other target selects the host OS. `[build].target` never affects it.
+- The **OS platform**, which `#[cfg(target_os: ...)]` and the file suffixes test. `karac check --platform=<name>` chooses it. Otherwise a wasm compilation target selects `wasm`, and every other target selects the host OS. `[build].target` never affects it.
 
 `--platform` is accepted only by `karac check`. Analysing another OS's half from any machine is what keeps a platform split maintainable; emitting it is not possible, because code generation targets the host triple. `karac build` and `karac run` refuse `--platform` and name `check`. Per-OS artifacts come from a CI matrix. Test binaries are built for the host OS.
 
 #### No feature flags
 
-Kāra has no Cargo-style `[features]`, in `kara.toml` or as `#[cfg(feature = ...)]`. Feature unification across a dependency graph is Cargo's largest practical pain ("compiles in `cargo test` but not `cargo build`"), and Kāra avoids it rather than copying it. The usual uses of feature flags are covered one by one:
+Kāra has no Cargo-style `[features]`, in `kara.toml` or as `#[cfg(feature: ...)]`. Feature unification across a dependency graph is Cargo's largest practical pain ("compiles in `cargo test` but not `cargo build`"), and Kāra avoids it rather than copying it. The usual uses of feature flags are covered one by one:
 - **Test-only dependencies:** `[dev-dependencies]`.
 - **Target-dependent source:** `#[cfg]` and platform files.
 - **Build configuration:** profiles ([§16](#16-targets-and-compilation)) are the one configuration axis.
@@ -4271,7 +4271,7 @@ enum Status {
 
 **Where `#[default]` may appear.** `#[default]` is a derive helper in the core attribute set ([§17 Attributes](#attributes)). It is allowed only on a unit variant of an enum that derives `Default`:
 - anywhere else (a struct, field, function, alias, trait, impl, constant or extern item) it is `E_DEFAULT_ATTRIBUTE_INVALID_POSITION`;
-- it takes no arguments: `#[default(...)]` and `#[default = ...]` are malformed;
+- it takes no arguments: `#[default(...)]` is malformed;
 - on a variant of an enum without `#[derive(Default)]` it is `E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE`, so unused marks do not accumulate. The fix-it adds the derive.
 
 `#[default]` is independent of `#[non_exhaustive]` ([§11](#11-ownership-and-sharing)) and of explicit discriminants. `#[non_exhaustive] #[derive(Default)] enum Mode { #[default] Idle, ... }` is the usual shape of an evolving state enum, and `#[repr(u8)] #[derive(Default)] enum Op { #[default] Reset = 0x01, ... }` defaults to `Op.Reset`.
@@ -4333,18 +4333,18 @@ trait Deserialize {
 ```kara
 #[derive(Serialize, Deserialize)]
 struct Config {
-    #[serde(rename = "server_name")]
+    #[serde(rename: "server_name")]
     name: String,
     #[serde(skip)]
     internal_cache: Vec[i64],
-    #[serde(default = 8080)]
+    #[serde(default: 8080)]
     port: i64,
 }
 ```
 
 - The attributes are `rename`, `skip`, `skip_serializing`, `skip_deserializing` and `default` (deserializing only).
-- Enums are externally tagged by default. `#[serde(tag = "type")]` makes them internally tagged and `#[serde(untagged)]` untagged.
-- **`#[serde(default = expr)]`** takes a constant expression, the same class a `const` initializer accepts ([§4 Constants](#constants)): literals, named constants (`i64.MAX`), constant arithmetic (`MAX_PORT - 1`), and struct, array and tuple literals built from constants. A run-time expression (`Vec.new()`, `load_config()`) is a "not a constant expression" error.
+- Enums are externally tagged by default. `#[serde(tag: "type")]` makes them internally tagged and `#[serde(untagged)]` untagged.
+- **`#[serde(default: expr)]`** takes a constant expression, the same class a `const` initializer accepts ([§4 Constants](#constants)): literals, named constants (`i64.MAX`), constant arithmetic (`MAX_PORT - 1`), and struct, array and tuple literals built from constants. A run-time expression (`Vec.new()`, `load_config()`) is a "not a constant expression" error.
 
 ---
 
@@ -4954,7 +4954,7 @@ A state cannot be forked: once `connect` consumes the `Connection[Disconnected]`
 `#[must_use]` on a type makes silently dropping a value of that type a warning. It completes typestate by making sure a value reaches a final state instead of being forgotten:
 
 ```kara
-#[must_use = "connections must be explicitly disconnected"]
+#[must_use("connections must be explicitly disconnected")]
 struct Connection[State] {
     socket: Socket,
 }
@@ -4969,7 +4969,7 @@ Writing `let _ = connect(conn)?;` discards the value on purpose and suppresses t
 
 **Rules:**
 - On a type, it applies wherever a value of that type would be dropped without being bound or used.
-- The warning text is the string argument: `#[must_use = "reason"]`. Without one, a default message is used.
+- The warning text is the string argument: `#[must_use("reason")]`. Without one, a default message is used.
 - On a function, it warns when the return value is discarded. That is separate from the type form.
 - There are no linear types. `#[must_use]` asks for at least one use, as a warning. `let _ = expr;` is the standard way to discard on purpose; it drops the value at the `;` ([core-semantics.md §4.6](core-semantics.md#4-parameters-calls-and-patterns)).
 
@@ -5013,14 +5013,14 @@ The standard library marks every public error enum and option struct that is exp
 #[deprecated]
 pub fn old_api() { ... }
 
-#[deprecated = "use `fs.read_to_string` instead"]
+#[deprecated(note: "use `fs.read_to_string` instead")]
 pub fn read_file_contents(path: Str) -> String { ... }
 
 #[deprecated(since: "1.2.0", note: "use `parse_config` instead")]
 pub fn load_config(path: Str) -> Config { ... }
 ```
 
-The bare form gives a default warning. `= "text"` sets the warning's note. The full form takes two labeled arguments, either of which may be left out: `since: "version"`, which is advisory and not checked against `kara.toml`, and `note: "text"`, the migration message.
+The bare form gives a default warning. Otherwise it takes two labeled arguments, either of which may be left out: `since: "version"`, which is advisory and not checked against `kara.toml`, and `note: "text"`, the migration message.
 
 ```
 warning[deprecated]: use of deprecated function `read_file_contents`
@@ -6469,7 +6469,7 @@ Many C APIs hand back a *handle*: a pointer to a struct whose layout the library
 
 ```kara
 unsafe extern "C" {
-    #[kara_name = "CFile"]
+    #[kara_name("CFile")]
     type FILE;                   // C's `FILE`, named `CFile` in Kāra (CN-8)
 
     fn fopen(path: *const u8, mode: *const u8) -> *mut CFile
@@ -6632,7 +6632,7 @@ Kāra v1 has a **closed set** of compilation targets:
 
 The set is closed so that the effect checker's target-to-resource table is finite and `karac check` has a bounded number of configurations. The [web track](deferred.md#web) adds `wasm_browser` and the [GPU track](deferred.md#gpu) adds `gpu`. Opening the set to user-defined targets is additive.
 
-An item that exists on some targets only is marked with `#[cfg(target = ...)]` ([§4](#4-modules-and-packages)). There is no runtime `if target == ...` form.
+An item that exists on some targets only is marked with `#[cfg(target: ...)]` ([§4](#4-modules-and-packages)). There is no runtime `if target == ...` form.
 
 #### Resources each target provides
 
@@ -6679,7 +6679,7 @@ When a package declares several targets, `karac check` type-checks and effect-ch
 - **Errors.** Unknown names and duplicates are hard manifest errors. A soft warning would let a typo silently drop a target from a CI matrix.
 - **Discovery.** `karac check <file>` finds the manifest by walking upward from the file's directory, the same rule as `karac run`.
 - **Override.** `karac check <file> --targets=<list|all>`.
-- **Each pass sees one target.** Each pass re-parameterizes the provided-resource set and the `#[cfg(target = ...)]` filtering, so it sees exactly what that target's build would see.
+- **Each pass sees one target.** Each pass re-parameterizes the provided-resource set and the `#[cfg(target: ...)]` filtering, so it sees exactly what that target's build would see.
 - **Deduplication.** A finding identical on every target is reported once, in an "all targets" group (text) or a `shared_diagnostics` array (JSON): it is a target-agnostic bug. JSONL output streams each target between `target_start` and `target_complete` events and leaves deduplication to the consumer.
 - **One target.** A single declared target is not a matrix but still runs with that target's resource set: a `wasm_wasi`-only package is checked against `wasm_wasi`, not the host.
 
@@ -7227,7 +7227,7 @@ The v1 core set:
 | `#[derive(...)]` | Generate trait impls. | [§9](#9-traits) |
 | `#[default]` | Mark the default variant for `#[derive(Default)]` (a derive helper). | [§9](#default-and-default) |
 | `#[serde(...)]` | Rename, skip or default a field, and choose an enum's tagging, for `#[derive(Serialize, Deserialize)]` (a derive helper). | [§9](#serialize-and-deserialize) |
-| `#[cfg(...)]` | Conditional compilation, including `target =`. | [§4](#4-modules-and-packages) |
+| `#[cfg(...)]` | Conditional compilation, including `target:`. | [§4](#4-modules-and-packages) |
 | `#[repr(...)]` | ABI layout: `C`, an integer type, `transparent`. | [§15](#repr-abi-layout) |
 | `#[must_use]` | Warn when a value is discarded. | [§11](#must_use) |
 | `#[non_exhaustive]` | Let a public type gain variants or fields: other packages need a wildcard arm or `..`. | [§11](#non_exhaustive) |
@@ -7237,10 +7237,12 @@ The v1 core set:
 | `#[allow]`, `#[warn]`, `#[deny]`, `#[expect]` | Lint levels. | [Lint levels](#lint-levels) |
 | `#[unstable]` | Mark an API as unstable; using it requires `#[allow(unstable_api)]`. | this section |
 | `#[no_effect(...)]` | Forbid an effect in a function and everything it calls. | [§12](#no_effect) |
-| `#[kara_name = "..."]` | Give a foreign function or type a Kāra name that follows the case rules. | [§3](#rules) |
+| `#[kara_name("...")]` | Give a foreign function or type a Kāra name that follows the case rules. | [§3](#rules) |
 | `#[compiler_builtin]` | A standard-library declaration implemented by the compiler. Standard library only. | [Intrinsics](#intrinsics) |
 
 Tests are `test "name" { }` blocks, not an attribute ([§14](#14-testing)).
+
+**Arguments are written like a call's.** An attribute is a bare name (`#[non_exhaustive]`), or a name with a parenthesized list of positional arguments and `key: value` arguments, the same shape as a call with named arguments ([§7](#named-and-default-parameters)): `#[repr(C)]`, `#[kara_name("CFile")]`, `#[serde(rename: "server_name")]`, `#[deprecated(since: "1.2.0", note: "...")]`. There is no `#[name = value]` form and no `key = value` argument. Inside `#[cfg(...)]` each condition is `key: value` (`target: "native"`, `target_os: "linux"`), and `not`, `any` and `all` take conditions as positional arguments, so `any(target_os: "linux", target_os: "macos")` may repeat a key.
 
 **Attribute paths have one segment.** A multi-segment path such as `#[karac::proto]` is an error in v1; tool namespaces are deferred.
 

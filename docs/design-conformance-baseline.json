@@ -225,7 +225,7 @@
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "`own self` is not a valid receiver form. Bare `self` is the owned/consuming receiver; `ref self` and `mut ref self` are the two borrow forms."
     },
-    "54e7604dfd1f": {
+    "6bf78b2dea1b": {
       "line": 4334,
       "heading": "Derive > `Serialize` and `Deserialize`",
       "outcome": "REJECTED",
@@ -274,7 +274,7 @@
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): tuple-valued `par { e1, e2 }` (core-semantics amendment 6)",
       "first_diagnostic": "Expected Equal, found RightBrace"
     },
-    "898f2945a1ef": {
+    "3a362b932e2c": {
       "line": 4957,
       "heading": "11. Ownership and sharing > `#[must_use]`",
       "outcome": "REJECTED",
@@ -400,7 +400,7 @@
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `pure fn` in an `extern` block",
       "first_diagnostic": "expected `fn` or `type` inside `unsafe extern { ... }` block — only foreign function declarations (`fn name(...) -> T;`) and opaque foreign type declarations (`type Name;`) are legal here. See design.md § FFI > `unsafe extern { ... }` block requirement."
     },
-    "947e1a24ad4c": {
+    "bfc864dc4a9e": {
       "line": 6471,
       "heading": "`extern \"C\"` > Opaque foreign types",
       "outcome": "SIGNATURE-MISSING",
