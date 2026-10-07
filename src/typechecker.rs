@@ -2253,6 +2253,11 @@ pub struct TypeChecker<'a> {
     pub(super) core_generic_moves: FxHashMap<String, Vec<(String, Span)>>,
     /// The callee key of the function being checked, for `core_generic_moves`.
     pub(super) current_fn_core_key: Option<String>,
+    /// Set while the strict commands check an unannotated `let`'s
+    /// initializer that is a named place or a projection of one: a move out
+    /// of a borrowed place there can be fixed by borrowing it instead
+    /// (`let x = ref s.f`, core-semantics.md §5.1).
+    pub(super) core_let_ref_fix: bool,
     /// Every call under the strict commands: its node, its span, and the
     /// callee's name when it is a plain free-function call.
     pub(super) core_call_sites: Vec<(crate::ids::NodeId, Span, Option<String>)>,
@@ -2988,6 +2993,7 @@ impl<'a> TypeChecker<'a> {
             core_borrowed_receivers: FxHashSet::default(),
             core_generic_moves: FxHashMap::default(),
             current_fn_core_key: None,
+            core_let_ref_fix: false,
             core_call_sites: Vec::new(),
             core_pattern_moves: Vec::new(),
             errors: Vec::new(),

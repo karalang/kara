@@ -3289,7 +3289,15 @@ impl<'a> super::TypeChecker<'a> {
                 // backend aliases and the other snapshots would reintroduce the
                 // run-vs-build divergence this whole line of work exists to
                 // close (B-2026-08-26-21 / -36).
-                if !matches!(operand.kind, ExprKind::Index { .. }) {
+                //
+                // The v2 core (`karac check`) takes any named place and its
+                // projections (core-semantics.md §5.1: a `ref` local "bound to
+                // … a projection of a named place"). That is a language rule,
+                // and the limit above is the legacy backends'; the MIR backend
+                // borrows any place.
+                let core_place =
+                    self.cli_lint_overrides.strict_core && is_named_place_projection(operand);
+                if !matches!(operand.kind, ExprKind::Index { .. }) && !core_place {
                     self.type_error(
                         "error[E_REF_OPERAND_UNSUPPORTED]: only `ref <sequence>[i]` is \
                          supported in v1; borrowing this expression is not yet \
@@ -3977,5 +3985,17 @@ impl<'a> super::TypeChecker<'a> {
                     })
                 })
         })
+    }
+}
+
+/// A named place or a projection of one: `x`, `self`, `x.f`, `x.0`,
+/// `x[i]`, and any chain of those.
+pub(super) fn is_named_place_projection(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Identifier(_) | ExprKind::SelfValue => true,
+        ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. } => is_named_place_projection(object),
+        _ => false,
     }
 }

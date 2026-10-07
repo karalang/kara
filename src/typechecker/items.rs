@@ -5619,20 +5619,36 @@ impl<'a> super::TypeChecker<'a> {
             };
             message += if has_clone {
                 ". Write `.clone()` to take a copy, or keep using it in place"
+            } else if self.core_let_ref_fix {
+                ". This type has no `.clone()`: borrow it instead (`ref <place>`), use it \
+                 in place, or take it with `mem.replace` / `mem.swap` / `Option.take()`"
             } else {
                 ". This type has no `.clone()`: use it in place, or take it with \
                  `mem.replace` / `mem.swap` / `Option.take()`"
             };
         }
-        let fix_it = has_clone.then(|| crate::typechecker::FixIt {
-            span: Span {
-                offset: value.span.offset + value.span.length,
-                length: 0,
-                line: value.span.line,
-                column: value.span.column,
-            },
-            replacement: ".clone()".to_string(),
-        });
+        let fix_it = if has_clone {
+            Some(crate::typechecker::FixIt {
+                span: Span {
+                    offset: value.span.offset + value.span.length,
+                    length: 0,
+                    line: value.span.line,
+                    column: value.span.column,
+                },
+                replacement: ".clone()".to_string(),
+            })
+        } else if self.core_let_ref_fix {
+            // `let x = s.f` → `let x = ref s.f` (§5.1).
+            Some(crate::typechecker::FixIt {
+                span: Span {
+                    length: 0,
+                    ..value.span
+                },
+                replacement: "ref ".to_string(),
+            })
+        } else {
+            None
+        };
         self.type_lint_warning_with_fix(
             message,
             value.span,
@@ -6842,7 +6858,12 @@ impl<'a> super::TypeChecker<'a> {
                 if !self.cli_lint_overrides.strict_core
                     || (matches!(pattern.kind, PatternKind::Binding(_)) && !ref_copy)
                 {
+                    self.core_let_ref_fix = self.cli_lint_overrides.strict_core
+                        && ty.is_none()
+                        && !matches!(value.kind, ExprKind::Identifier(_))
+                        && super::expr_ops::is_named_place_projection(value);
                     self.warn_borrow_projection_copy(value, &expected_ty);
+                    self.core_let_ref_fix = false;
                 }
                 self.warn_partial_move_of_drop_struct(value, &expected_ty);
                 // B-2026-09-04-15 — the RC-owner spelling of the same shape.

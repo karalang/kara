@@ -61,6 +61,10 @@ fn rejected_then_fixed_in(tag: &str, src: &str, expect: &str, edit: &str, passes
         fixed.contains(edit),
         "{tag}: fix must write `{edit}`: {fixed}"
     );
+    assert!(
+        !fixed.contains(".clone().clone()"),
+        "{tag}: fix applied one edit twice: {fixed}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1319,5 +1323,69 @@ fn a_mut_ref_pattern_writes_through_its_scrutinee() {
          }\n",
         "`v` is bound by `ref`",
         "Slot.Full(mut ref v)",
+    );
+}
+
+/// One `karac fix` pass repairs every reused move, and two diagnostics that
+/// ask for the same edit apply it once.
+#[test]
+fn fix_clones_every_reused_move_once() {
+    rejected_then_fixed_by(
+        "uam-every-site",
+        "fn take(s: String) -> i64 { s.len() }\n\
+         fn main() {\n\
+             let k = \"a\".to_string();\n\
+             let a = take(k);\n\
+             let b = take(k);\n\
+             let c = take(k);\n\
+             println(f\"{a} {b} {c} {k}\");\n\
+         }\n",
+        "value 'k' moved here",
+        "let c = take(k.clone());",
+    );
+    rejected_then_fixed_by(
+        "uam-and-borrow-move-same-site",
+        "enum Cmd { Delete(String), Clear }\n\
+         fn delete(k: String) -> bool { k.len() > 0 }\n\
+         fn main() {\n\
+             let cmds: Vec[Cmd] = [Cmd.Delete(\"a\".to_string()), Cmd.Clear];\n\
+             for cmd in cmds {\n\
+                 match cmd {\n\
+                     Cmd.Delete(k) => { let removed = delete(k); println(f\"del {k} {removed}\"); }\n\
+                     Cmd.Clear => println(\"clear\"),\n\
+                 }\n\
+             }\n\
+         }\n",
+        "cannot move 'k'",
+        "delete(k.clone());",
+    );
+}
+
+/// §5.1: a `ref` local may borrow any named place or projection of one, and
+/// a move out of a borrowed place whose type has no `.clone()` is fixed by
+/// borrowing it.
+#[test]
+fn a_ref_local_borrows_a_projection() {
+    accepted(
+        "ref-projection",
+        "struct Stats { hits: i64, names: Vec[String] }\n\
+         struct Cache { stats: Stats, n: i64 }\n\
+         fn main() {\n\
+             let cache = Cache { stats: Stats { hits: 2, names: [] }, n: 1 };\n\
+             let s = ref cache.stats;\n\
+             println(f\"{s.hits} {cache.n}\");\n\
+         }\n",
+    );
+    rejected_then_fixed_by(
+        "move-out-of-ref-no-clone",
+        "struct Inner { n: i64 }\n\
+         struct S { r: Inner, m: i64 }\n\
+         fn show(s: ref S) -> i64 {\n\
+             let m = s.r;\n\
+             m.n + s.m\n\
+         }\n\
+         fn main() { let s = S { r: Inner { n: 1 }, m: 2 }; println(show(s)); }\n",
+        "cannot move a non-`Copy` value out of a borrowed place",
+        "let m = ref s.r;",
     );
 }
