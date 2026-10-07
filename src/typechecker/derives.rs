@@ -10,6 +10,9 @@
 use crate::ast::*;
 
 use super::types::{is_numeric, type_display, Type, UIntSize, VariantTypeInfo};
+use crate::resolver::SpanKey;
+use rustc_hash::FxHashSet;
+
 use super::{
     extract_derived_traits, FxHashMap, NestedEnumInstKey, NestedEnumInstSite, Span, TypeErrorKind,
 };
@@ -721,6 +724,125 @@ impl<'a> super::TypeChecker<'a> {
         self.env.is_type_copy(ty)
     }
 
+    /// v2 core: the expressions whose type could be made `Copy` by adding
+    /// `#[derive(Copy)]` to its declaration ([`Self::copy_derive_decls`]),
+    /// for the ownership pass's use-after-move fixes.
+    pub(super) fn copy_derivable_expr_spans(
+        &self,
+        clonable: &FxHashSet<SpanKey>,
+    ) -> FxHashMap<SpanKey, (String, crate::resolver::TextEdit)> {
+        let decls = self.copy_derive_decls();
+        if decls.is_empty() {
+            return FxHashMap::default();
+        }
+        self.expr_types
+            .iter()
+            .filter(|(key, _)| !clonable.contains(*key))
+            .filter_map(|(key, ty)| match ty {
+                Type::Named { name, args } if args.is_empty() => decls
+                    .get(name.as_str())
+                    .map(|(edit, _)| (*key, (name.clone(), edit.clone()))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// v2 core: the `#[derive(Copy)]` fix that would make `ty` `Copy`, when
+    /// it is one of [`Self::copy_derive_decls`].
+    pub(super) fn copy_derive_fix(&self, ty: &Type) -> Option<super::FixIt> {
+        let Type::Named { name, args } = ty else {
+            return None;
+        };
+        if !args.is_empty() {
+            return None;
+        }
+        let (edit, line) = self.copy_derive_decls().remove(name.as_str())?;
+        Some(super::FixIt {
+            span: Span {
+                offset: edit.offset,
+                length: 0,
+                line,
+                column: 1,
+            },
+            replacement: edit.replacement,
+        })
+    }
+
+    /// The local types that could be made `Copy` by deriving it: non-generic
+    /// structs and enums of this program (not `shared` / `par`, not from the
+    /// stdlib) with no `Clone` or `Copy` derive, no `Drop` impl, and only
+    /// `Copy` fields. The edit goes at the start of the declaration's line,
+    /// ahead of any `pub` / `shared` before the keyword its span starts at.
+    fn copy_derive_decls(&self) -> FxHashMap<&str, (crate::resolver::TextEdit, usize)> {
+        let drops: FxHashSet<&str> = self
+            .env
+            .impls
+            .iter()
+            .filter(|imp| imp.trait_name.as_deref() == Some("Drop"))
+            .map(|imp| imp.target_type.as_str())
+            .collect();
+        let mut decls: FxHashMap<&str, (crate::resolver::TextEdit, usize)> = FxHashMap::default();
+        for item in &self.program.items {
+            let (name, span, fields) = match item {
+                Item::StructDef(s) if !s.is_shared && !s.is_par && s.generic_params.is_none() => {
+                    let Some(info) = self.env.structs.get(&s.name) else {
+                        continue;
+                    };
+                    if info.defining_stdlib_origin
+                        || info.derived_traits.contains("Copy")
+                        || info.derived_traits.contains("Clone")
+                    {
+                        continue;
+                    }
+                    let fields: Vec<&Type> = info.fields.iter().map(|(_, t, _)| t).collect();
+                    (s.name.as_str(), s.span, fields)
+                }
+                Item::EnumDef(e) if !e.is_shared && !e.is_par && e.generic_params.is_none() => {
+                    let Some(info) = self.env.enums.get(&e.name) else {
+                        continue;
+                    };
+                    if info.defining_stdlib_origin
+                        || info.derived_traits.contains("Copy")
+                        || info.derived_traits.contains("Clone")
+                    {
+                        continue;
+                    }
+                    let fields: Vec<&Type> = info
+                        .variants
+                        .iter()
+                        .flat_map(|(_, v)| match v {
+                            VariantTypeInfo::Unit => Vec::new(),
+                            VariantTypeInfo::Tuple(ts) => ts.iter().collect(),
+                            VariantTypeInfo::Struct(fs) => fs.iter().map(|(_, t)| t).collect(),
+                        })
+                        .collect();
+                    (e.name.as_str(), e.span, fields)
+                }
+                _ => continue,
+            };
+            if span.length == 0
+                || span.column == 0
+                || span.offset < span.column - 1
+                || drops.contains(name)
+                || !fields.iter().all(|t| self.is_type_copy(t))
+            {
+                continue;
+            }
+            decls.insert(
+                name,
+                (
+                    crate::resolver::TextEdit {
+                        offset: span.offset - (span.column - 1),
+                        length: 0,
+                        replacement: "#[derive(Copy)]\n".to_string(),
+                    },
+                    span.line,
+                ),
+            );
+        }
+        decls
+    }
+
     /// Validate that #[derive(Copy)] structs/enums have all-Copy fields, and
     /// that distinct types with #[derive(Copy)] have a Copy base type.
     pub(super) fn validate_derive_copy(&mut self) {
@@ -905,6 +1027,12 @@ impl<'a> super::TypeChecker<'a> {
     /// through `Vec[T]`, `Slice[T]`, tuples, or `shared` enums is
     /// fine — those layers stop the size recursion at one indirection.
     pub(super) fn validate_enum_payload_no_nested_enum(&mut self) {
+        // v2 core: an enum may carry another enum as a payload
+        // (`Step.Do(Command)`). One level of nesting was a limit of the
+        // legacy backend, which `karac check` no longer applies.
+        if self.cli_lint_overrides.strict_core {
+            return;
+        }
         // Collect enum names for the carve-out check. `shared` enums
         // are heap-allocated via RC, so a payload field of type
         // `SharedFoo` is a single pointer word and is allowed.
@@ -1100,6 +1228,11 @@ impl<'a> super::TypeChecker<'a> {
     /// Sorted by span before emission — the offenders live in a hash map, and an
     /// unsorted drain would order diagnostics differently between runs.
     pub(super) fn emit_nested_enum_inst_errors(&mut self) {
+        // See `validate_enum_payload_no_nested_enum`.
+        if self.cli_lint_overrides.strict_core {
+            self.nested_enum_inst_offenders.clear();
+            return;
+        }
         if self.nested_enum_inst_offenders.is_empty() {
             return;
         }

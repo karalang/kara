@@ -2016,21 +2016,37 @@ impl<'a> OwnershipChecker<'a> {
                 "value '{text}' moved here, used again here (moved at line {}:{})",
                 consume.line, consume.column
             );
+            // Inline rather than `derive_copy_fix`: `self.errors` is borrowed.
+            let derive_copy = if supports_clone || !core_rules() {
+                None
+            } else {
+                self.typecheck_result
+                    .copy_derivable_expr_spans
+                    .get(&SpanKey::from_span(&moved))
+                    .cloned()
+            };
             e.suggestion = Some(if supports_clone {
                 format!(
                     "clone '{text}' at the move site (`{text}.clone()`), or restructure to \
                      avoid reuse"
                 )
+            } else if let Some((ty, _)) = &derive_copy {
+                format!(
+                    "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so '{text}' is \
+                     copied instead of moved), or restructure to avoid reuse"
+                )
             } else {
                 format!("restructure to avoid reuse ('{text}' has no `.clone()`)")
             });
-            e.replacement = supports_clone.then(|| {
-                Box::new(crate::resolver::TextEdit {
+            e.replacement = if supports_clone {
+                Some(Box::new(crate::resolver::TextEdit {
                     offset: moved.offset + moved.length,
                     length: 0,
                     replacement: ".clone()".to_string(),
-                })
-            });
+                }))
+            } else {
+                derive_copy.map(|(_, edit)| Box::new(edit))
+            };
         }
         let core_errors = self.core_move_errors();
         OwnershipCheckResult {
@@ -2990,13 +3006,21 @@ impl<'a> OwnershipChecker<'a> {
             // surface one witness at a time, so an iterated `fix` resolves each
             // pair.
             let supports_clone = self.moved_type_supports_clone(&w.consume_span);
-            let replacement = supports_clone.then(|| {
-                Box::new(crate::resolver::TextEdit {
+            // v2 core: a local type that could be `Copy` is fixed by saying so.
+            let derive_copy = if supports_clone {
+                None
+            } else {
+                self.derive_copy_fix(&w.consume_span)
+            };
+            let replacement = if supports_clone {
+                Some(Box::new(crate::resolver::TextEdit {
                     offset: w.consume_span.offset + w.consume_span.length,
                     length: 0,
                     replacement: ".clone()".to_string(),
-                })
-            });
+                }))
+            } else {
+                derive_copy.map(|(_, edit)| Box::new(edit.clone()))
+            };
             self.errors.push(OwnershipError {
                 message: format!(
                     "value '{}' moved here, used again here (moved at line {}:{})",
@@ -3019,6 +3043,12 @@ impl<'a> OwnershipChecker<'a> {
                         "clone '{}' at the move site (`{}.clone()`), declare the callee \
                          parameter `ref` if it only reads, or restructure to avoid reuse",
                         binding, binding
+                    )
+                } else if let Some((ty, _)) = derive_copy {
+                    format!(
+                        "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so \
+                         '{binding}' is copied instead of moved), declare the callee \
+                         parameter `ref` if it only reads, or restructure to avoid reuse"
                     )
                 } else {
                     format!(
@@ -3063,6 +3093,18 @@ impl<'a> OwnershipChecker<'a> {
             .core_escaping_closures
             .iter()
             .any(|k| k.0 <= span.offset && span.offset < k.0 + k.1)
+    }
+
+    /// v2 core (strict commands): the `#[derive(Copy)]` edit, with the type's
+    /// name, for a moved value at `span` whose local type could be `Copy`
+    /// (see `TypeCheckResult::copy_derivable_expr_spans`).
+    fn derive_copy_fix(&self, span: &Span) -> Option<&(String, crate::resolver::TextEdit)> {
+        if !core_rules() {
+            return None;
+        }
+        self.typecheck_result
+            .copy_derivable_expr_spans
+            .get(&SpanKey::from_span(span))
     }
 
     fn moved_type_supports_clone(&self, span: &Span) -> bool {

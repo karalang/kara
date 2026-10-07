@@ -3251,6 +3251,18 @@ impl<'a> super::TypeChecker<'a> {
         )
     }
 
+    /// v2 core (strict commands): is `operand` a view the checker binds at
+    /// its element type, so that `*operand` reads through a borrow?
+    fn core_deref_of_view(&self, operand: &Expr) -> bool {
+        if !self.cli_lint_overrides.strict_core {
+            return false;
+        }
+        match &operand.kind {
+            ExprKind::Identifier(n) => self.local_scope.is_view(n),
+            _ => self.core_map_get_view(operand, true),
+        }
+    }
+
     pub(super) fn infer_unary(&mut self, op: &UnaryOp, operand: &Expr, span: &Span) -> Type {
         let ty = self.infer_expr(operand);
         if ty == Type::Error {
@@ -3469,6 +3481,29 @@ impl<'a> super::TypeChecker<'a> {
                 // lint layer, not the type layer, so callers can still reason
                 // about the deref's result type.
                 Type::Pointer { inner, .. } => *inner,
+                // v2 core: a view (a bare `for` element, a `ref` or map-payload
+                // binding) is a `ref` the checker binds at its element type,
+                // so `*p` reads through it. A non-`Copy` value would move out
+                // of the borrow; `p` already reads it in place.
+                other if self.core_deref_of_view(operand) => {
+                    if !self.is_copy_type_during_check(&other) {
+                        let fix = crate::typechecker::FixIt {
+                            span: Span { length: 1, ..*span },
+                            replacement: String::new(),
+                        };
+                        self.type_lint_warning_with_fix(
+                            "cannot move a non-`Copy` value out of a borrow with `*`: the \
+                             binding already reads the value in place, so drop the `*` (or \
+                             write `.clone()` for a copy)"
+                                .to_string(),
+                            *span,
+                            TypeErrorKind::InvalidUnaryOp,
+                            "borrow_projection_copy",
+                            Some(fix),
+                        );
+                    }
+                    other
+                }
                 _ => {
                     self.type_error(
                         format!(

@@ -1465,6 +1465,12 @@ pub struct TypeCheckResult {
     /// rejects a `Vec` whose element lacks `Clone` even though `Vec.clone()`
     /// resolves. Only the method-side predicate matches what `.clone()` does.
     pub clonable_expr_spans: FxHashSet<SpanKey>,
+    /// v2 core (strict commands only): expressions whose type is a local
+    /// struct or enum that has no `.clone()`, no `Drop` body and only `Copy`
+    /// fields, with the type's name and the edit that adds `#[derive(Copy)]`
+    /// to its declaration. The ownership pass offers it as the fix for
+    /// reusing a moved value of that type.
+    pub copy_derivable_expr_spans: FxHashMap<SpanKey, (String, crate::resolver::TextEdit)>,
     /// v2 core (strict commands only): initializers of `let u = x;` where
     /// `x` is a `ref` binding. `ref T` is Copy (`docs/core-semantics.md`
     /// §1.1), so the read copies the reference and moves nothing; the
@@ -3360,6 +3366,11 @@ impl<'a> TypeChecker<'a> {
             })
             .map(|(key, _)| *key)
             .collect();
+        let copy_derivable_expr_spans = if self.cli_lint_overrides.strict_core {
+            self.copy_derivable_expr_spans(&clonable_expr_spans)
+        } else {
+            FxHashMap::default()
+        };
         // B-2026-09-10-13 — drain the instantiation-side nested-enum-payload
         // offenders gathered during body inference. Must run before `errors`
         // moves into the result below.
@@ -3387,6 +3398,7 @@ impl<'a> TypeChecker<'a> {
             warnings: self.warnings,
             expr_types: self.expr_types,
             clonable_expr_spans,
+            copy_derivable_expr_spans,
             core_ref_copy_spans: self.core_ref_copy_spans,
             core_moving_scrutinees: self.core_moving_scrutinees,
             core_borrowed_receivers: self.core_borrowed_receivers,

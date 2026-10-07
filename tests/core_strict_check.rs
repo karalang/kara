@@ -1444,3 +1444,135 @@ fn a_for_element_moves_out_by_into_iter() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// v2 core: reusing a moved value of a local type whose fields are all
+/// `Copy` (and which has no `.clone()` and no `Drop` body) is fixed by
+/// deriving `Copy` on the type.
+#[test]
+fn a_reused_all_copy_value_is_fixed_by_derive_copy() {
+    rejected_then_fixed_by(
+        "derive-copy-struct",
+        "pub struct P { x: i64, y: i64 }\n\
+         fn take(p: P) -> i64 { p.x + p.y }\n\
+         fn main() {\n\
+             let p = P { x: 1, y: 2 };\n\
+             println(take(p));\n\
+             println(take(p));\n\
+         }\n",
+        "moved here, used again",
+        "#[derive(Copy)]\npub struct P",
+    );
+    rejected_then_fixed_by(
+        "derive-copy-enum",
+        "enum Dir { North, South(i64) }\n\
+         fn show(d: Dir) -> i64 { match d { Dir.North => 0, Dir.South(n) => n } }\n\
+         fn main() {\n\
+             let d = Dir.South(3);\n\
+             println(show(d));\n\
+             println(show(d));\n\
+         }\n",
+        "moved here, used again",
+        "#[derive(Copy)]\nenum Dir",
+    );
+    // A heap field or a `Drop` body rules it out: no derive is written.
+    for (tag, src) in [
+        (
+            "derive-copy-heap-field",
+            "struct N { s: String }\n\
+             fn take(n: N) {}\n\
+             fn main() { let n = N { s: \"a\" }; take(n); take(n); }\n",
+        ),
+        (
+            "derive-copy-drop",
+            "struct D { x: i64 }\n\
+             impl Drop for D { fn drop(mut ref self) { println(self.x) } }\n\
+             fn take(d: D) {}\n\
+             fn main() { let d = D { x: 1 }; take(d); take(d); }\n",
+        ),
+    ] {
+        let (dir, path) = fixture(tag, src);
+        karac().arg("fix").arg(&path).output().unwrap();
+        let fixed = std::fs::read_to_string(&path).unwrap();
+        assert!(!fixed.contains("derive(Copy)"), "{tag}: {fixed}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// v2 core: an enum can carry another enum as its payload; the one-level
+/// limit was the legacy backend's.
+#[test]
+fn an_enum_payload_may_be_an_enum() {
+    accepted(
+        "nested-enum-payload",
+        "enum Command { Add(i64), Clear }\n\
+         enum Step { Do(Command), Skip }\n\
+         fn main() {\n\
+             let s = Step.Do(Command.Add(3));\n\
+             match s {\n\
+                 Step.Do(Command.Add(n)) => println(n),\n\
+                 Step.Do(Command.Clear) => println(0),\n\
+                 Step.Skip => println(-1),\n\
+             }\n\
+         }\n",
+    );
+}
+
+/// v2 core: `Map.get` returns `Option[ref V]`, so `*c` reads through the
+/// payload binding. A non-`Copy` value is read in place instead.
+#[test]
+fn deref_reads_through_a_map_payload() {
+    accepted(
+        "map-get-deref",
+        "fn main() {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             m.insert(\"a\", 1);\n\
+             match m.get(\"a\") {\n\
+                 Some(c) => println(f\"{*c}\"),\n\
+                 None => {},\n\
+             }\n\
+         }\n",
+    );
+    rejected_then_fixed_by(
+        "map-get-deref-string",
+        "fn main() {\n\
+             let mut m: Map[String, String] = Map.new();\n\
+             m.insert(\"a\", \"x\");\n\
+             match m.get(\"a\") {\n\
+                 Some(c) => println(f\"{*c}\"),\n\
+                 None => {},\n\
+             }\n\
+         }\n",
+        "out of a borrow with `*`",
+        "println(f\"{c}\")",
+    );
+}
+
+/// The `#[derive(Copy)]` fix covers a move inside a loop and a moved field.
+#[test]
+fn derive_copy_fixes_loop_and_field_moves() {
+    rejected_then_fixed_by(
+        "derive-copy-loop",
+        "enum Reason { Capacity, Deleted }\n\
+         fn note(r: Reason) -> i64 { match r { Reason.Capacity => 1, Reason.Deleted => 2 } }\n\
+         fn main() {\n\
+             let r = Reason.Deleted;\n\
+             let mut i = 0;\n\
+             while i < 2 { println(note(r)); i = i + 1; }\n\
+         }\n",
+        "moved inside a loop",
+        "#[derive(Copy)]\nenum Reason",
+    );
+    rejected_then_fixed_by(
+        "derive-copy-field",
+        "struct Stats { hits: i64 }\n\
+         struct Cache { stats: Stats, size: i64 }\n\
+         fn main() {\n\
+             let c = Cache { stats: Stats { hits: 1 }, size: 2 };\n\
+             let s = c.stats;\n\
+             let d = c;\n\
+             println(s.hits + d.size);\n\
+         }\n",
+        "moved here, used again",
+        "#[derive(Copy)]\nstruct Stats",
+    );
+}

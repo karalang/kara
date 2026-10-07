@@ -199,14 +199,29 @@ impl<'a> super::OwnershipChecker<'a> {
             // one-span edit.
             let capture = entry.trigger == RcTrigger::ClosureCaptureWithOuterUse;
             let supports_clone = self.moved_type_supports_clone(&moved_span);
-            let replacement = (supports_clone && !capture).then(|| {
-                Box::new(crate::resolver::TextEdit {
-                    offset: moved_span.offset + moved_span.length,
-                    length: 0,
-                    replacement: ".clone()".to_string(),
+            // A local type that could be `Copy` is fixed by saying so.
+            let derive_copy = if supports_clone {
+                None
+            } else {
+                self.derive_copy_fix(&moved_span)
+            };
+            let replacement = if supports_clone {
+                (!capture).then(|| {
+                    Box::new(crate::resolver::TextEdit {
+                        offset: moved_span.offset + moved_span.length,
+                        length: 0,
+                        replacement: ".clone()".to_string(),
+                    })
                 })
-            });
-            let suggestion = if capture && supports_clone {
+            } else {
+                derive_copy.map(|(_, edit)| Box::new(edit.clone()))
+            };
+            let suggestion = if let Some((ty, _)) = derive_copy {
+                format!(
+                    "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so '{binding}' \
+                     is copied instead of moved), or restructure to avoid the reuse"
+                )
+            } else if capture && supports_clone {
                 format!(
                     "clone '{binding}' into a new binding before the closure and capture that, \
                      or restructure to avoid the reuse"
@@ -239,19 +254,33 @@ impl<'a> super::OwnershipChecker<'a> {
                 continue;
             }
             let supports_clone = self.moved_type_supports_clone(span);
-            let replacement = supports_clone.then(|| {
-                Box::new(crate::resolver::TextEdit {
+            let derive_copy = if supports_clone {
+                None
+            } else {
+                self.derive_copy_fix(span)
+            };
+            let replacement = if supports_clone {
+                Some(Box::new(crate::resolver::TextEdit {
                     offset: span.offset + span.length,
                     length: 0,
                     replacement: ".clone()".to_string(),
-                })
-            });
-            let suggestion = if supports_clone {
+                }))
+            } else {
+                derive_copy.map(|(_, edit)| Box::new(edit.clone()))
+            };
+            let suggestion = if let Some((ty, _)) = derive_copy {
+                format!(
+                    "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`), read the \
+                     element in place, or take it out with `v.swap(i, j)` / `mem.replace`"
+                )
+            } else if supports_clone {
                 "write `.clone()` to take a copy, read the element in place, or take it out \
                  with `v.swap(i, j)` / `mem.replace`"
+                    .to_string()
             } else {
                 "read the element in place, or take it out with `v.swap(i, j)` / \
                  `mem.replace` (this type has no `.clone()`)"
+                    .to_string()
             };
             out.push(OwnershipError {
                 message: "cannot move a non-`Copy` value out of a collection element: the \
@@ -272,18 +301,31 @@ impl<'a> super::OwnershipChecker<'a> {
                 continue;
             }
             let supports_clone = self.moved_type_supports_clone(span);
-            let replacement = supports_clone.then(|| {
-                Box::new(crate::resolver::TextEdit {
+            let derive_copy = if supports_clone {
+                None
+            } else {
+                self.derive_copy_fix(span)
+            };
+            let replacement = if supports_clone {
+                Some(Box::new(crate::resolver::TextEdit {
                     offset: span.offset + span.length,
                     length: 0,
                     replacement: ".clone()".to_string(),
-                })
-            });
-            let suggestion = if supports_clone {
-                "write `.clone()` to call it on a copy, or use a method that borrows"
+                }))
+            } else {
+                derive_copy.map(|(_, edit)| Box::new(edit.clone()))
+            };
+            let suggestion = if let Some((ty, _)) = derive_copy {
+                format!(
+                    "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`), or use a \
+                     method that borrows"
+                )
+            } else if supports_clone {
+                "write `.clone()` to call it on a copy, or use a method that borrows".to_string()
             } else {
                 "use a method that borrows, or take the value with `mem.replace` / \
                  `Option.take()` (this type has no `.clone()`)"
+                    .to_string()
             };
             out.push(OwnershipError {
                 message: "cannot move a non-`Copy` value out of a borrowed place: this method \

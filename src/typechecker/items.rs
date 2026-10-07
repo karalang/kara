@@ -5487,8 +5487,9 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// §4.6: does this `for` iterate a local collection the function owns,
-    /// so that `.into_iter()` appended to it moves the elements out? A
+    /// §4.6: does this `for` iterate a local collection the function owns, or
+    /// a temporary one, so that `.into_iter()` appended to it moves the
+    /// elements out? A
     /// borrowed binding (a `ref` local, a view, a `ref` parameter) would be a
     /// move out of a borrow instead.
     pub(super) fn for_iterable_is_owned_local_collection(
@@ -5496,14 +5497,19 @@ impl<'a> super::TypeChecker<'a> {
         iterable: &Expr,
         iter_ty: &Type,
     ) -> bool {
-        let ExprKind::Identifier(n) = &iterable.kind else {
-            return false;
-        };
-        matches!(iter_ty, Type::Named { name, .. }
-            if matches!(name.as_str(), "Vec" | "Set" | "SortedSet" | "Map" | "SortedMap"))
-            && !self.local_scope.is_view(n)
-            && !self.current_fn_ref_params.contains(n.as_str())
-            && matches!(self.local_scope.lookup(n), Some(Type::Named { .. }))
+        let collection = matches!(iter_ty, Type::Named { name, .. }
+            if matches!(name.as_str(), "Vec" | "Set" | "SortedSet" | "Map" | "SortedMap"));
+        match &iterable.kind {
+            ExprKind::Identifier(n) => {
+                collection
+                    && !self.local_scope.is_view(n)
+                    && !self.current_fn_ref_params.contains(n.as_str())
+                    && matches!(self.local_scope.lookup(n), Some(Type::Named { .. }))
+            }
+            // A call returns a temporary nobody else can reuse.
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. } => collection,
+            _ => false,
+        }
     }
 
     /// The pattern-scrutinee entry to [`Self::warn_borrow_projection_copy`]
@@ -5671,6 +5677,9 @@ impl<'a> super::TypeChecker<'a> {
                 },
                 replacement: "ref ".to_string(),
             })
+        } else if self.cli_lint_overrides.strict_core {
+            // A local type that could be `Copy` is fixed by saying so.
+            self.copy_derive_fix(ty)
         } else {
             None
         };
