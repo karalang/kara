@@ -215,6 +215,22 @@ struct ClosureJob<'a> {
 /// A variant as the checker records it: its name and named field types.
 type CheckedVariant = (String, Vec<(String, Type)>);
 
+/// An integer constant re-typed to `t` (the checker records an unsuffixed
+/// literal as `i64` whatever the other operand is); any other operand as
+/// it is.
+fn retype_const(o: Operand, t: Ty) -> Operand {
+    match o {
+        Operand::Const(Const {
+            kind: ConstKind::Scalar(v),
+            ..
+        }) => Operand::Const(Const {
+            ty: t,
+            kind: ConstKind::Scalar(v),
+        }),
+        o => o,
+    }
+}
+
 fn at(span: Span) -> String {
     format!("{}:{}", span.line, span.column)
 }
@@ -1776,6 +1792,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.count_copy(p, t, Place::local(l));
                 return Ok(Operand::Move(Place::local(l)));
             }
+            if let HK::MutRef(_) = self.tys().tcx().kind(t) {
+                // A `mut ref` used as a value is reborrowed.
+                let l = self.temp(t);
+                self.assign(l, Rvalue::Ref(BorrowKind::Mut, p.project(ProjElem::Deref)));
+                return Ok(Operand::Move(Place::local(l)));
+            }
             return Ok(self.use_place(p, t));
         }
         let t = self.expr_ty(e)?;
@@ -1908,6 +1930,21 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     p = p.project(ProjElem::Deref);
                     t = inner;
+                }
+                // A `mut ref` used as a value is reborrowed, `&mut (*r)`, so
+                // its source keeps it (as when it is passed on).
+                if let (HK::MutRef(inner), HK::Ref(di) | HK::MutRef(di)) =
+                    (self.tys().tcx().kind(t), self.tys().tcx().kind(dt))
+                {
+                    if di == inner {
+                        let kind = if mutable {
+                            BorrowKind::Mut
+                        } else {
+                            BorrowKind::Shared
+                        };
+                        self.assign(dest, Rvalue::Ref(kind, p.project(ProjElem::Deref)));
+                        return Ok(());
+                    }
                 }
                 // A place of `T` flowing into a `ref T` slot is borrowed.
                 if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(dt) {
@@ -4072,6 +4109,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let inst_args = self.instance_args(e.span, &substs)?;
                 let f = self.lcx.fns.get(&d).map(|i| i.f);
                 let Some(f) = f else {
+                    let name = self.lcx.def_name(d);
+                    if self.scalar_min_max(e, &name, args, dest.clone())? {
+                        return Ok(());
+                    }
                     return self.unsupported(e.span, "a call to this function");
                 };
                 if args.len() != f.params.len() {
@@ -4292,6 +4333,67 @@ impl<'l, 'a> Bx<'l, 'a> {
             Place::local(s),
         );
         Ok(s)
+    }
+
+    /// The prelude's `min(a, b)` and `max(a, b)` on integers and chars,
+    /// in place until the library's Kāra bodies are lowered: `min` is `b`
+    /// when `a > b`, else `a`; `max` is `b` when `a < b`, else `a` (the
+    /// bodies in `ordering.kara`). `false` for anything else.
+    fn scalar_min_max(
+        &mut self,
+        e: &'a Expr,
+        name: &str,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<bool> {
+        let [a, b] = args else {
+            return Ok(false);
+        };
+        let cmp = match name {
+            "min" => BinOp::Gt,
+            "max" => BinOp::Lt,
+            _ => return Ok(false),
+        };
+        let t = self.expr_ty(e)?;
+        if !matches!(
+            self.tys().tcx().kind(t),
+            HK::Int(_) | HK::UInt(_) | HK::Char
+        ) {
+            return Ok(false);
+        }
+        let bool_t = self.tys().bool();
+        let x = self.temp(t);
+        let (o, _) = self.scalar_operand(&a.value)?;
+        self.assign(x, Rvalue::Use(retype_const(o, t)));
+        let y = self.temp(t);
+        let (o, _) = self.scalar_operand(&b.value)?;
+        self.assign(y, Rvalue::Use(retype_const(o, t)));
+        let c = self.temp(bool_t);
+        self.assign(
+            c,
+            Rvalue::BinaryOp(
+                cmp,
+                Operand::Copy(Place::local(x)),
+                Operand::Copy(Place::local(y)),
+            ),
+        );
+        let take_b = self.b.new_block();
+        let take_a = self.b.new_block();
+        let join = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(c)),
+                targets: SwitchTargets::if_else(take_b, take_a),
+            },
+            take_b,
+        );
+        self.assign(dest.clone(), Rvalue::Use(Operand::Copy(Place::local(y))));
+        self.goto(join);
+        self.cur = take_a;
+        self.assign(dest, Rvalue::Use(Operand::Copy(Place::local(x))));
+        self.goto(join);
+        self.cur = join;
+        Ok(true)
     }
 
     fn builtin_call(&mut self, e: &'a Expr, name: &str, args: &'a [CallArg], dest: Place) -> R<()> {
@@ -5819,6 +5921,26 @@ fn main() {
             run_source(src),
             Ok(("p = pos, q = neg\nneg\n".to_string(), Some(0)))
         );
+    }
+
+    /// A `mut ref` read into a `let` is reborrowed, so writing through the
+    /// parameter afterwards still reaches the caller; the prelude's
+    /// `min`/`max` on integers and chars.
+    #[test]
+    fn mut_ref_let_reborrows_and_scalar_min_max() {
+        let src = r#"
+fn bump(acc: mut ref i64) {
+    let a = acc;
+    acc = a * 2 + 1;
+}
+fn main() {
+    let mut x = 3;
+    bump(mut x);
+    let a: i32 = 7;
+    println(f"{x} {min(3, 9)} {max(a, 2)} {min('q', 'c')}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("7 3 7 c\n".to_string(), Some(0))));
     }
 
     /// A `mut ref` passed on to a function or a library method is
