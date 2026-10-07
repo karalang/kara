@@ -546,11 +546,13 @@ impl<'a> super::Resolver<'a> {
                             bound,
                         );
                     } else {
+                        // Shorthand: bound through the struct pattern's node,
+                        // as in a match arm.
                         self.define_binding_leaf(
                             &field.name,
                             is_mut,
                             field.span,
-                            None,
+                            Some(pattern.id),
                             allow_shadow,
                             bound,
                         );

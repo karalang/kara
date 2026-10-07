@@ -1087,8 +1087,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             PatternKind::Wildcard => Ok(()),
             PatternKind::Binding(name) => {
                 let l = self.user_local(name, t, pat.id);
-                let op = self.use_place(place, t);
-                self.assign(l, Rvalue::Use(op));
+                if self.is_handle(t) {
+                    self.assign(l, Rvalue::Retain(place));
+                } else {
+                    let op = self.use_place(place, t);
+                    self.assign(l, Rvalue::Use(op));
+                }
                 out.push((l, t));
                 Ok(())
             }
@@ -1759,8 +1763,17 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ if self.is_place(e) => {
                 let dt = self.place_type(&dest);
                 let mutable = matches!(self.tys().tcx().kind(dt), HK::MutRef(_));
-                let p = self.expr_place(e, mutable)?;
-                let t = self.place_type(&p);
+                let mut p = self.expr_place(e, mutable)?;
+                let mut t = self.place_type(&p);
+                // A `ref T` of a Copy `T` flowing into a `T` slot is read
+                // through (`fn f(x: ref i64) -> i64 { return x; }`).
+                while let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(t) {
+                    if t == dt || !self.is_copy(inner) || self.ref_depth(t) <= self.ref_depth(dt) {
+                        break;
+                    }
+                    p = p.project(ProjElem::Deref);
+                    t = inner;
+                }
                 // A place of `T` flowing into a `ref T` slot is borrowed.
                 if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(dt) {
                     if inner == t {
@@ -3262,7 +3275,10 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// reference.
     fn scrutinee(&mut self, scrutinee: &'a Expr) -> R<(Place, Ty, bool)> {
         let st = self.expr_ty(scrutinee)?;
-        let place = if self.is_place(scrutinee) && self.is_local_rooted(scrutinee) {
+        // An element (`v[i]`) is matched where it lies, as a local is: a
+        // binding then copies, counts or borrows it out of the collection.
+        let element = matches!(scrutinee.kind, ExprKind::Index { .. });
+        let place = if self.is_place(scrutinee) && (element || self.is_local_rooted(scrutinee)) {
             self.expr_place(scrutinee, false)?
         } else {
             let l = self.scoped_temp(st);
@@ -3587,8 +3603,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             out.push((l, rt));
         } else {
             let l = self.user_local(name, t, node);
-            let op = self.use_place(place, t);
-            self.assign(l, Rvalue::Use(op));
+            if self.is_handle(t) {
+                // A `shared` handle binds a counted copy (§6.1).
+                self.assign(l, Rvalue::Retain(place));
+            } else {
+                let op = self.use_place(place, t);
+                self.assign(l, Rvalue::Use(op));
+            }
             out.push((l, t));
         }
     }
@@ -3761,6 +3782,16 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// The kind of `t` under any references.
+    /// How many references `t` is under.
+    fn ref_depth(&self, mut t: Ty) -> usize {
+        let mut n = 0;
+        while let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(t) {
+            t = inner;
+            n += 1;
+        }
+        n
+    }
+
     fn strip_ty(&self, mut t: Ty) -> HK {
         loop {
             match self.tys().tcx().kind(t) {
@@ -4232,6 +4263,207 @@ impl<'l, 'a> Bx<'l, 'a> {
         out
     }
 
+    /// The captures in `caps` that `body` moves: a non-`Copy` capture used
+    /// where a value is consumed (an owned argument or receiver, a `let`,
+    /// a return, a field of a new value, the closure's result).
+    fn moved_captures(&self, body: &'a Expr, caps: &[SymbolId]) -> FxHashSet<SymbolId> {
+        let mut out = FxHashSet::default();
+        self.mv_expr(body, true, caps, &mut out);
+        out
+    }
+
+    fn owned_node(&self, id: NodeId) -> bool {
+        self.lcx.node_types.get(&id).is_some_and(|&t| {
+            !self.is_copy(t)
+                && !matches!(
+                    self.tys().tcx().kind(t),
+                    HK::Shared { .. } | HK::Ref(_) | HK::MutRef(_)
+                )
+        })
+    }
+
+    /// Whether the user function `d`'s parameter `i` takes its argument by
+    /// value (not as a reference or a slice view).
+    fn owned_param(&self, d: DefId, i: usize) -> bool {
+        self.lcx.fns.get(&d).is_some_and(|item| {
+            item.f.params.get(i).is_some_and(|p| {
+                self.lcx.node_types.get(&p.pattern.id).is_some_and(|&t| {
+                    // A slice parameter views its argument.
+                    !matches!(
+                        self.tys().tcx().kind(t),
+                        HK::Ref(_) | HK::MutRef(_) | HK::Slice { .. }
+                    )
+                })
+            })
+        })
+    }
+
+    fn mv_block(&self, b: &'a Block, ctx: bool, caps: &[SymbolId], out: &mut FxHashSet<SymbolId>) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Let { value, .. } => self.mv_expr(value, true, caps, out),
+                StmtKind::Assign { target, value } => {
+                    self.mv_expr(target, false, caps, out);
+                    self.mv_expr(value, true, caps, out);
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
+                    self.mv_expr(target, false, caps, out);
+                    self.mv_expr(value, false, caps, out);
+                }
+                StmtKind::Expr(e) => self.mv_expr(e, false, caps, out),
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    self.mv_block(body, false, caps, out)
+                }
+                _ => {}
+            }
+        }
+        if let Some(e) = &b.final_expr {
+            self.mv_expr(e, ctx, caps, out);
+        }
+    }
+
+    fn mv_expr(&self, e: &'a Expr, ctx: bool, caps: &[SymbolId], out: &mut FxHashSet<SymbolId>) {
+        let ctx = ctx && self.owned_node(e.id);
+        let go =
+            |x: &'a Expr, c: bool, out: &mut FxHashSet<SymbolId>| self.mv_expr(x, c, caps, out);
+        match &e.kind {
+            ExprKind::Identifier(_) => {
+                if let Some(Res::Local(sym)) = self.lcx.res.get(&e.id) {
+                    if ctx && caps.contains(sym) {
+                        out.insert(*sym);
+                    }
+                }
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                go(object, ctx, out)
+            }
+            ExprKind::Index { object, index } => {
+                go(object, false, out);
+                go(index, false, out);
+            }
+            ExprKind::Call { callee, args } => {
+                let def = match self.lcx.calls.get(&e.id).map(|c| &c.callee) {
+                    Some(Callee::Def(d)) => Some(*d),
+                    _ => match self.lcx.res.get(&callee.id) {
+                        Some(Res::Def(d)) => Some(*d),
+                        _ => None,
+                    },
+                };
+                let variant =
+                    def.is_some_and(|d| self.lcx.defs.table.get(d).kind == DefKind::Variant);
+                go(callee, false, out);
+                for (i, a) in args.iter().enumerate() {
+                    let owned = variant || def.is_some_and(|d| self.owned_param(d, i));
+                    go(&a.value, owned, out);
+                }
+            }
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                let def = match self.lcx.calls.get(&e.id).map(|c| &c.callee) {
+                    Some(Callee::Def(d)) if self.lcx.fns.contains_key(d) => Some(*d),
+                    _ => None,
+                };
+                let recv_owned = def.is_some_and(|d| {
+                    matches!(self.lcx.fns[&d].f.self_param, Some(SelfParam::Owned))
+                });
+                go(object, recv_owned, out);
+                let stores = matches!(
+                    method.as_str(),
+                    "push" | "push_back" | "push_front" | "insert" | "extend" | "append" | "set"
+                );
+                for (i, a) in args.iter().enumerate() {
+                    let owned = match def {
+                        Some(d) => self.owned_param(d, i),
+                        None => stores,
+                    };
+                    go(&a.value, owned, out);
+                }
+            }
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                for f in fields {
+                    go(&f.value, true, out);
+                }
+                if let Some(s) = spread {
+                    go(s, true, out);
+                }
+            }
+            ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => {
+                for x in es {
+                    go(x, true, out);
+                }
+            }
+            ExprKind::Block(b) => self.mv_block(b, ctx, caps, out),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                go(condition, false, out);
+                self.mv_block(then_block, ctx, caps, out);
+                if let Some(x) = else_branch {
+                    go(x, ctx, out);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                go(value, false, out);
+                self.mv_block(then_block, ctx, caps, out);
+                if let Some(x) = else_branch {
+                    go(x, ctx, out);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                go(scrutinee, false, out);
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        go(g, false, out);
+                    }
+                    go(&arm.body, ctx, out);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                go(condition, false, out);
+                self.mv_block(body, false, caps, out);
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                go(value, false, out);
+                self.mv_block(body, false, caps, out);
+            }
+            ExprKind::For { iterable, body, .. } => {
+                go(iterable, false, out);
+                self.mv_block(body, false, caps, out);
+            }
+            ExprKind::Loop { body, .. } => self.mv_block(body, false, caps, out),
+            ExprKind::Closure { body, .. } => go(body, true, out),
+            ExprKind::Return(Some(x)) | ExprKind::Question(x) => go(x, true, out),
+            ExprKind::Break { value: Some(x), .. } => go(x, true, out),
+            ExprKind::Binary { left, right, .. } => {
+                go(left, false, out);
+                go(right, false, out);
+            }
+            ExprKind::Unary { operand, .. } => go(operand, false, out),
+            ExprKind::Cast { expr, .. } => go(expr, false, out),
+            ExprKind::InterpolatedStringLit(parts) => {
+                for p in parts {
+                    if let ParsedInterpolationPart::Expr(x, _) = p {
+                        go(x, false, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Create a closure: its environment is an aggregate of the captures,
     /// each moved, copied or borrowed by the mode the body needs (§9.1).
     fn closure_value(&mut self, e: &'a Expr) -> R<(Operand, Ty)> {
@@ -4258,7 +4490,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             .unwrap_or_default();
         let mut caps = Vec::new();
         let mut ops = Vec::new();
-        for sym in self.closure_captures(body) {
+        let captured = self.closure_captures(body);
+        let moved = self.moved_captures(body, &captured);
+        for sym in captured {
             let place = match self.locals.get(&sym) {
                 Some(&l) => Place::local(l),
                 None => self.captured[&sym].clone(),
@@ -4277,17 +4511,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Some(ast::CaptureMode::MutRef) => Some(OwnershipMode::MutRef),
                 None => None,
             };
+            let explicit = declared.is_some();
             let mode = declared.or_else(|| {
                 legacy
                     .iter()
                     .find(|(n, _)| *n == name)
                     .map(|(_, m)| m.clone())
             });
-            // A `Copy` place is copied in unless the body assigns to it.
+            // A `Copy` place is copied in unless the body assigns to it. A
+            // once-callable closure moves something out of its captures, so
+            // its non-`Copy` captures move in (core semantics §9.1).
             let cm = match mode {
                 Some(OwnershipMode::MutRef) => CapMode::Mut,
                 Some(OwnershipMode::Own) => CapMode::Value,
                 _ if self.is_copy(t) => CapMode::Value,
+                None | Some(OwnershipMode::Ref) if (once || moved.contains(&sym)) && !explicit => {
+                    CapMode::Value
+                }
                 _ => CapMode::Ref,
             };
             let (ft, op) = match cm {
@@ -4308,7 +4548,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             caps.push((sym, cm, ft));
             ops.push(op);
         }
-        let env = if once
+        let env = if (once || !moved.is_empty())
             && caps
                 .iter()
                 .any(|&(_, m, t)| m == CapMode::Value && !self.is_copy(t))
@@ -4773,25 +5013,53 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             _ => {
-                let mutates = match method {
-                    "len" | "is_empty" | "get" | "last" | "first" | "contains_key" | "contains"
-                    | "clone" => false,
-                    "push" | "pop" | "insert" | "remove" | "swap" | "reverse" | "clear"
-                    | "push_str" | "truncate" => true,
-                    _ => return self.unsupported(e.span, &format!("the library method `{key}`")),
+                // Any other library method is a call of the native
+                // `<receiver type>.<method>`. A number takes its receiver by
+                // value; a collection by `mut ref` when the method writes it,
+                // else by `ref`.
+                let number = matches!(
+                    self.tys().tcx().kind(base),
+                    HK::Int(_) | HK::UInt(_) | HK::Float(_) | HK::Bool | HK::Char
+                );
+                let recv = if number {
+                    let op = self.expr_operand(object)?;
+                    PendingRecv::Ready(match self.tys().tcx().kind(ot) {
+                        HK::Ref(_) | HK::MutRef(_) => {
+                            Operand::Copy(self.expr_place(object, false)?.project(ProjElem::Deref))
+                        }
+                        _ => op,
+                    })
+                } else {
+                    let mutates = crate::ast::is_mutating_collection_method(method)
+                        || matches!(
+                            method,
+                            "push_str" | "set" | "sort_unstable" | "sort_unstable_by"
+                        );
+                    self.recv_place(object, mutates)?
                 };
-                let recv = self.recv_place(object, mutates)?;
                 let mut rest = Vec::with_capacity(args.len());
                 self.hint_lib_args(base, method, args);
-                // Keys and needles are borrowed; pushed and inserted values
-                // move in.
-                let borrows = matches!(
+                // Stored values and closures move in; other non-Copy
+                // arguments (keys, needles, slices, text) are borrowed.
+                let stores = matches!(
                     method,
-                    "push_str" | "get" | "contains_key" | "contains" | "remove"
+                    "push"
+                        | "push_back"
+                        | "push_front"
+                        | "insert"
+                        | "extend"
+                        | "append"
+                        | "resize"
+                        | "fill"
+                        | "set"
                 );
                 for a in args {
                     let at = self.expr_ty(&a.value)?;
-                    let by_ref = method == "push_str" || (borrows && !self.is_copy(at));
+                    let callable = matches!(
+                        self.tys().tcx().kind(at),
+                        HK::Fn { .. } | HK::Closure { .. }
+                    );
+                    let by_ref = !stores && !callable && !self.is_copy(at);
                     rest.push(self.lib_arg(&a.value, by_ref)?);
                 }
                 let mut ops = vec![self.recv_borrow(recv)];
@@ -4939,7 +5207,7 @@ pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
     // `KARAC_MIR_DUMP=built` or `=elaborated` prints every body to stderr.
     let dump = std::env::var("KARAC_MIR_DUMP").ok();
     let names: FxHashSet<String> = lowered.program.bodies.keys().cloned().collect();
-    let borrowck = std::env::var("KARAC_MIR_BORROWCK").is_ok_and(|v| v == "1");
+    let borrowck = std::env::var("KARAC_MIR_BORROWCK").as_deref() != Ok("0");
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
@@ -4947,8 +5215,8 @@ pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
         crate::mir::check_moves(body, &lowered.tys)
             .map_err(|e| format!("move check {}: {}", body.instance.name, e.join("; ")))?;
         // A library native's result borrows from its first argument, the
-        // collection, when it borrows at all. Opt-in (`KARAC_MIR_BORROWCK=1`)
-        // until a call's owned result stops inheriting its arguments' loans.
+        // collection, when it borrows at all. `KARAC_MIR_BORROWCK=0` skips
+        // the check.
         if borrowck {
             let has_receiver = |i: &InstanceId| {
                 !names.contains(i.name.as_str()) || lowered.receivers.contains(&i.name)
@@ -5061,5 +5329,33 @@ fn main() {
             run_source(src),
             Ok(("p = pos, q = neg\nneg\n".to_string(), Some(0)))
         );
+    }
+
+    /// Struct shorthand in a `let`, a closure whose body moves its capture,
+    /// a `ref` read into a value, and a match on an element that binds a
+    /// `shared` handle.
+    #[test]
+    fn shorthand_moving_closure_ref_read_and_element_match() {
+        let src = r#"
+struct A { id: i64 }
+struct S2 { a: A, b: A }
+struct P { x: i64 }
+impl P { fn take(self) -> i64 { self.x } }
+shared struct N { v: i64 }
+fn read(x: ref i64) -> i64 { return x; }
+fn main() {
+    let S2 { a, b } = S2 { a: A { id: 1 }, b: A { id: 2 } };
+    let p = P { x: 7 };
+    let f = || p.take();
+    let mut v: Vec[Option[N]] = Vec.new();
+    v.push(Some(N { v: 5 }));
+    let got = match v[0] {
+        Some(n) => n.v,
+        None => 0,
+    };
+    println(f"{a.id} {b.id} {f()} {read(9)} {got}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("1 2 7 9 5\n".to_string(), Some(0))));
     }
 }
