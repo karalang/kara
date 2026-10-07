@@ -1,0 +1,12 @@
+fn add(v: ref Vec[i64]) {
+    v.push(1);
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    add(v);
+    let mut grid: Vec[Vec[i64]] = [Vec.new(), Vec.new()];
+    for row in grid {
+        row.push(9);
+    }
+    println(f"{v.len()} {grid[0].len()}");
+}

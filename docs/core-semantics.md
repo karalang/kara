@@ -219,7 +219,10 @@ A view borrows exactly like a reference.
 - projecting a place `p` borrows `p`;
 - a call result borrows the origins of the arguments that the signature rule (§5.4) selects;
 - a literal that builds a view takes the union of its fields' origins;
-- branches take the union of their arms.
+- branches take the union of their arms;
+- a call with a `mut ref` argument (a `mut ref self` receiver included) whose pointee can hold a reference may store the other reference and view arguments into it, so the pointee's origins grow by theirs. `v.push(r)` on a `Vec[ref T]` is the common case.
+
+Only a value whose type can hold a reference has origins: a reference, a view, a closure, and an aggregate or collection containing one. A type the compiler cannot see into counts as one that can; `TaskGroup` is such a type, because it holds its tasks' closures. So an `i64` copied out through a reference borrows nothing.
 
 **5.4 The signature rule.** For a function that returns a reference or a view:
 - if it has a `ref self` or `mut ref self` receiver, the result borrows from `self` only;
@@ -258,6 +261,17 @@ A view **may** enter a branch of `par {}`, or a `TaskGroup` task that joins insi
 **5.8 Views in generic code.** A generic parameter may be instantiated with a view.
 - The checks of §5.6–§5.7 run on the monomorphised instance.
 - An instance whose body stores a view-typed value somewhere a view may not go is an error. It is reported at the instantiation site, with a note at the generic body's line.
+
+**5.9 Nothing is written through a `ref`.** A place whose path dereferences a `ref` is read-only. That covers a `ref` parameter or receiver, a `ref` pattern binding, the item of `for x in c` (§4.6), a `ref` returned by a call, and a local bound to any of these. Such a place may not be:
+- assigned or compound-assigned;
+- mutably borrowed: a `mut ref self` receiver, an argument marked `mut`, or a `mut ref name` binding;
+- moved out of (§3.7).
+
+**The exception** is a `mut` field of a `shared` value. It is writable through any handle, however the handle was reached, under §6.2's flags; that is why a shared type's methods can take `ref self` (§4.3).
+
+**The fixes:** declare the parameter `mut ref T` and mark its call sites `mut`; iterate with `c.iter_mut()`; or bind with `mut ref name` from a mutable owned scrutinee.
+
+Pins: `err_write_through_ref`, `ok_shared_field_through_ref`.
 
 ---
 
@@ -446,10 +460,10 @@ Pins: `err_escaping_capture_reused` (today it compiles and prints both lines), `
 - A closure whose body moves a capture out can be called only once (`design.md` § First-Class Functions, "once-callable"). The call consumes the closure: the moved capture goes where the body sends it, and the other captures drop at the end of that call, as the callee's locals would.
 
 **9.5 `TaskGroup` tasks borrow.** The closure passed to `TaskGroup.spawn` captures as §9.1 infers: by `ref`, by `mut ref` or by move, place by place. It is not escaping.
-- The group and the returned `TaskHandle` then borrow the closure's origins (§5.3) until the group drops. Dropping a group joins its tasks, so the drop is the borrow's last use (§5.6).
+- The group then borrows the closure's origins (§5.3) until it drops. Dropping a group joins its tasks, so the drop is the borrow's last use (§5.6). The returned `TaskHandle` borrows nothing; it owns its task's result.
 - So while the group lives, a captured place may not be written, moved or dropped, and a second task may not capture by `mut ref` a place another task already captured.
 - Every origin must outlive the group. A place declared after the group in the same scope drops before it (§7.3), which is an error. Declare the place first, or put the group in an inner block.
-- No signature can say "this parameter is kept by the receiver" (§5.4), so the compiler knows `TaskGroup.spawn` by name.
+- This is §5.3's `mut ref` rule applied to `spawn`'s `mut ref self` receiver; nothing about `TaskGroup` is special except that it can hold a reference.
 
 Pins: `ok_taskgroup_borrows`, `err_taskgroup_write_while_borrowed`, `err_taskgroup_origin_declared_after`.
 

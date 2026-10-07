@@ -1,0 +1,2 @@
+ERROR at line 2: `v` is a `ref` parameter, so `v.push` (a `mut ref self` method) cannot modify it; declare `v: mut ref Vec[i64]` and call `add(mut v)`
+ERROR at line 9: `row` is a `ref` to an element of `grid`, so `row.push` cannot modify it; iterate with `grid.iter_mut()`

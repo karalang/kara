@@ -1131,3 +1131,79 @@ fn a_task_group_borrows_what_its_tasks_capture() {
         "captures `b` by `mut ref`",
     );
 }
+
+#[test]
+fn an_allow_attribute_does_not_silence_a_core_rule() {
+    // §3.6/§3.7: moving a field out of a Drop type was a lint; it is now a
+    // core rule, so an `#[allow]` written for the lint is reported as having
+    // no effect rather than suppressing the error.
+    let drop_w = "struct R { name: String }\n\
+                  struct W { r: R, n: i64 }\n\
+                  impl Drop for W { fn drop(mut ref self) { println(\"drop\"); } }\n";
+    rejected(
+        "allow-field-move",
+        &format!(
+            "{drop_w}#[allow(partial_move_of_drop_struct)]\n\
+             fn take(w: W) -> R {{ return w.r; }}\n\
+             fn main() {{ let r = take(W {{ r: R {{ name: \"a\" }}, n: 1 }}); println(r.name); }}\n"
+        ),
+        "`#[allow(partial_move_of_drop_struct)]` here has no effect any more",
+    );
+    rejected(
+        "allow-pattern-move",
+        &format!(
+            "{drop_w}#[allow(partial_move_of_drop_struct)]\n\
+             fn take(w: W) -> R {{ let W {{ r, n }} = w; r }}\n\
+             fn main() {{ let r = take(W {{ r: R {{ name: \"a\" }}, n: 1 }}); println(r.name); }}\n"
+        ),
+        "`#[allow(partial_move_of_drop_struct)]` here has no effect any more",
+    );
+}
+
+#[test]
+fn a_shared_ref_place_is_read_only() {
+    // §5.9: no write through a `ref` parameter, a bare `for` item, a `ref`
+    // pattern binding, or `ref self`.
+    rejected(
+        "write-through-ref-param",
+        "fn add(v: ref Vec[i64]) { v.push(1); }\n\
+         fn main() { let mut v: Vec[i64] = Vec.new(); add(v); println(v.len()); }\n",
+        "`v` is a `ref` parameter",
+    );
+    rejected(
+        "write-through-for-item",
+        "fn main() {\n\
+             let mut grid: Vec[Vec[i64]] = [Vec.new()];\n\
+             for row in grid { row.push(9); }\n\
+             println(grid[0].len());\n\
+         }\n",
+        "`row` is a `ref` to an element",
+    );
+    rejected(
+        "write-through-ref-self",
+        "struct C { n: i64 }\n\
+         impl C { fn bump(ref self) { self.n = self.n + 1; } }\n\
+         fn main() { let c = C { n: 0 }; c.bump(); println(c.n); }\n",
+        "the receiver is `ref self`",
+    );
+    // `iter_mut`, `mut ref` parameters, and a `ref self` method of a stdlib
+    // type (`Arena.push`) all stay legal; so does a `mut` field of a
+    // `shared` value reached through a `ref` (§6.2).
+    accepted(
+        "write-through-ref-legal",
+        "shared struct Counter { mut hits: i64 }\n\
+         fn bump(c: ref Counter) { c.hits = c.hits + 1; }\n\
+         fn add(v: mut ref Vec[i64]) { v.push(1); }\n\
+         fn grow(a: ref Arena[i64]) -> i64 { let r = a.push(3); a.get(r) }\n\
+         fn main() {\n\
+             let c = Counter { hits: 0 };\n\
+             bump(c);\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             add(mut v);\n\
+             let mut grid: Vec[Vec[i64]] = [Vec.new()];\n\
+             for row in grid.iter_mut() { row.push(9); }\n\
+             let a: Arena[i64] = Arena.new();\n\
+             println(f\"{c.hits} {v.len()} {grid[0].len()} {grow(a)}\");\n\
+         }\n",
+    );
+}

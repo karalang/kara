@@ -35,6 +35,7 @@ mod alloc_rejection;
 mod bounds;
 mod closures;
 mod const_eval;
+mod core_ref_write;
 mod core_taskgroup;
 mod cross_task_check;
 mod derives;
@@ -3347,6 +3348,7 @@ impl<'a> TypeChecker<'a> {
         self.emit_core_generic_move_errors(&node_call_subs);
         if self.cli_lint_overrides.strict_core {
             self.emit_core_taskgroup_errors(&node_types);
+            self.emit_core_ref_write_errors(&node_types);
         }
         let core_escaping_closures = if self.cli_lint_overrides.strict_core {
             let esc = crate::core_escape::analyze(self.program);
@@ -4090,6 +4092,10 @@ impl<'a> TypeChecker<'a> {
     ) {
         use crate::lints::LintLevel;
         let level = self.effective_lint_level(lint_name);
+        let mut message = message;
+        if crate::lints::CORE_RULE_LINTS.contains(&lint_name) {
+            message.push_str(&self.core_rule_allow_note(&[lint_name]));
+        }
         // Lint entries default to `LintWarning` regardless of the
         // underlying kind so the JSON consumer can distinguish lint-
         // surfaced diagnostics from hard rules without parsing the
@@ -4148,6 +4154,28 @@ impl<'a> TypeChecker<'a> {
     /// registry — matching the design.md "Naming" rule of
     /// "unknown lint names continue to compile"). Slice 4b cascade
     /// reader; slice 4b polish wired the CLI fall-through.
+    /// v2 core: a core rule is not a lint, so an `#[allow]` / `#[warn]` /
+    /// `#[expect]` written for one of `lints` when it was a lint no longer
+    /// changes anything. Returns a sentence saying so (to append to the
+    /// error), so the attribute can be deleted; empty when there is none.
+    pub(super) fn core_rule_allow_note(&self, lints: &[&str]) -> String {
+        if !self.cli_lint_overrides.strict_core {
+            return String::new();
+        }
+        for lint in lints {
+            if let Some(ov) = self.find_innermost_matching_override(lint) {
+                if ov.level != crate::lints::LintLevel::Deny {
+                    return format!(
+                        ". The `#[{}({lint})]` here has no effect any more: a core rule \
+                         cannot be allowed",
+                        ov.level.as_attr_name()
+                    );
+                }
+            }
+        }
+        String::new()
+    }
+
     pub(super) fn effective_lint_level(&self, lint_name: &str) -> crate::lints::LintLevel {
         if self.cli_lint_overrides.strict_core && crate::lints::CORE_RULE_LINTS.contains(&lint_name)
         {

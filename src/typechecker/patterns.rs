@@ -1736,10 +1736,11 @@ impl<'a> super::TypeChecker<'a> {
             },
             replacement,
         };
+        let note = self.core_rule_allow_note(crate::lints::CORE_RULE_LINTS);
         self.type_error_with_fix_it(
             format!(
                 "cannot move '{name}' out of {reason} (core-semantics.md §3.7): bind it \
-                 as `ref {name}` to borrow it, or `.clone()` it inside the arm"
+                 as `ref {name}` to borrow it, or `.clone()` it inside the arm{note}"
             ),
             *span,
             TypeErrorKind::MoveOutOfNoMovePlace,
