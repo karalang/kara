@@ -17,9 +17,10 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use super::parse::MirModule;
 use super::pretty;
 use super::syntax::*;
-use super::ty::{AdtId, IntTy, Ty, TyInterner, TyKind};
+use super::ty::{AdtId, IntTy, IntrinsicTy, Ty, TyInterner, TyKind};
 use super::validate::validate;
 
 /// The functions of a program, by instance name, and the `Drop` body of
@@ -35,6 +36,24 @@ pub struct Program {
 impl Program {
     pub fn add(&mut self, body: Body) {
         self.bodies.insert(body.instance.name.clone(), body);
+    }
+
+    /// Every body of a parsed module; a body named `T.drop` is the `Drop`
+    /// body of the ADT `T`.
+    pub fn from_module(m: &MirModule) -> Program {
+        let mut p = Program::default();
+        for b in &m.bodies {
+            if let Some(adt) = b
+                .instance
+                .name
+                .strip_suffix(".drop")
+                .and_then(|t| m.adt_named(t))
+            {
+                p.drop_impls.insert(adt, b.instance.name.clone());
+            }
+            p.add(b.clone());
+        }
+        p
     }
 }
 
@@ -88,6 +107,9 @@ pub enum Value {
     /// An enum value: the variant index and its fields.
     Variant(u32, Vec<Value>),
     Shared(AllocId),
+    /// A library collection (`String`, `Vec[T]`): the sole owner of its
+    /// heap allocation, which holds a `Str` or the elements as an `Agg`.
+    Box(AllocId),
     Ref(Addr),
     Fn(InstanceId),
 }
@@ -302,29 +324,113 @@ impl<'a> Interp<'a> {
         result
     }
 
-    /// Library functions the interpreter implements directly.
+    /// Library functions the interpreter implements directly. A method of
+    /// a library type is named after the type instance, `Vec[R].len`.
     fn native(&mut self, name: &str, args: Vec<Value>) -> R<Value> {
-        match name {
-            "println" | "print" => {
-                let [v] = args.as_slice() else {
-                    return err(format!("{name} takes one argument"));
-                };
-                let text = match v {
-                    Value::Str(s) => s.clone(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Char(c) => c.to_string(),
-                    Value::Unit => "()".to_string(),
-                    other => return err(format!("{name} cannot print {other:?}")),
-                };
+        let (ty_name, method) = split_method(name);
+        let base = ty_name.split('[').next().unwrap_or(ty_name);
+        match (base, method) {
+            ("println" | "print", "") => {
+                // The arguments print one after another (an f-string's
+                // parts); a reference prints what it points to.
+                let mut text = String::new();
+                for v in &args {
+                    text.push_str(&self.display(v)?);
+                }
                 self.output.push_str(&text);
                 if name == "println" {
                     self.output.push('\n');
                 }
                 Ok(Value::Unit)
             }
+            ("String", "from") => {
+                let [Value::Str(s)] = args.as_slice() else {
+                    return err("String.from takes a string constant");
+                };
+                Ok(self.alloc_box(ty_name, Value::Str(s.clone())))
+            }
+            ("Vec", "from_array") => {
+                let [Value::Agg(elems)] = args.as_slice() else {
+                    return err(format!("{name} takes an array"));
+                };
+                if !elems.iter().all(Value::fully_init) {
+                    return err(format!("{name} of a partly uninitialized array"));
+                }
+                Ok(self.alloc_box(ty_name, Value::Agg(elems.clone())))
+            }
+            ("Vec", "len") => {
+                let [v] = args.as_slice() else {
+                    return err(format!("{name} takes one argument"));
+                };
+                let id = self.box_behind(v)?;
+                match &self.live(id)?.value {
+                    Value::Agg(fs) => Ok(Value::Int(fs.len() as i128)),
+                    other => err(format!("{name} of {other:?}")),
+                }
+            }
+            ("Vec", "index" | "index_mut") => {
+                let [v, Value::Int(i)] = args.as_slice() else {
+                    return err(format!("{name} takes a reference and an index"));
+                };
+                let id = self.box_behind(v)?;
+                let len = match &self.live(id)?.value {
+                    Value::Agg(fs) => fs.len() as i128,
+                    other => return err(format!("{name} of {other:?}")),
+                };
+                if *i < 0 || *i >= len {
+                    self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
+                }
+                Ok(Value::Ref(Addr {
+                    root: Root::Heap(id),
+                    path: vec![*i as u64],
+                }))
+            }
             _ => err(format!("call of unknown function {name}")),
         }
+    }
+
+    fn alloc_box(&mut self, ty_name: &str, value: Value) -> Value {
+        let a = AllocId(self.heap.len() as u32);
+        self.heap.push(Some(HeapObj { count: 1, value }));
+        self.events.push(Event::Alloc(a, ty_name.to_string()));
+        Value::Box(a)
+    }
+
+    /// The allocation a library value, or a reference to one, owns.
+    fn box_behind(&mut self, v: &Value) -> R<AllocId> {
+        match v {
+            Value::Box(a) => Ok(*a),
+            Value::Ref(addr) => match self.slot(addr)? {
+                Value::Box(a) => Ok(a),
+                other => err(format!("expected a library value, found {other:?}")),
+            },
+            other => err(format!("expected a library value, found {other:?}")),
+        }
+    }
+
+    /// How `print` shows a value.
+    fn display(&mut self, v: &Value) -> R<String> {
+        Ok(match v {
+            Value::Str(s) => s.clone(),
+            Value::Int(i) => i.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Char(c) => c.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Unit => "()".to_string(),
+            Value::Ref(addr) => {
+                let inner = self.slot(addr)?;
+                if !inner.fully_init() {
+                    return err("print through a reference to an uninitialized value");
+                }
+                self.display(&inner)?
+            }
+            Value::Box(a) => match &self.live(*a)?.value {
+                Value::Str(s) => s.clone(),
+                other => return err(format!("print cannot show {other:?}")),
+            },
+            other => return err(format!("print cannot show {other:?}")),
+        })
     }
 
     fn run_body(&mut self, body: &'a Body) -> R<Value> {
@@ -965,10 +1071,37 @@ impl<'a> Interp<'a> {
                 }
                 Ok(())
             }
-            TyKind::Intrinsic(_) => err(format!(
-                "drop of {} is not implemented in the interpreter yet",
-                self.tys.display(ty)
-            )),
+            TyKind::Intrinsic(k) => {
+                let Value::Box(id) = v else {
+                    return err(format!("a {} place holds no box", self.tys.display(ty)));
+                };
+                match k {
+                    IntrinsicTy::String => {}
+                    IntrinsicTy::Vec(e) => {
+                        let n = match &self.live(id)?.value {
+                            Value::Agg(fs) => fs.len(),
+                            other => return err(format!("a Vec allocation holds {other:?}")),
+                        };
+                        let root = Addr {
+                            root: Root::Heap(id),
+                            path: Vec::new(),
+                        };
+                        for i in 0..n {
+                            self.drop_at(&root.child(i as u64), e)?;
+                        }
+                    }
+                    IntrinsicTy::Map(..) | IntrinsicTy::Set(_) => {
+                        return err(format!(
+                            "drop of {} is not implemented in the interpreter yet",
+                            self.tys.display(ty)
+                        ))
+                    }
+                }
+                self.live(id)?;
+                self.heap[id.0 as usize] = None;
+                self.events.push(Event::Free(id));
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -1040,6 +1173,24 @@ impl<'a> Interp<'a> {
         } else {
             Some(format!("leaked at exit: {}", live.join(", ")))
         }
+    }
+}
+
+/// `Vec[R].len` -> (`Vec[R]`, `len`); a plain `println` -> (`println`, ``).
+fn split_method(name: &str) -> (&str, &str) {
+    let mut depth = 0;
+    let mut dot = None;
+    for (i, c) in name.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            '.' if depth == 0 => dot = Some(i),
+            _ => {}
+        }
+    }
+    match dot {
+        Some(i) => (&name[..i], &name[i + 1..]),
+        None => (name, ""),
     }
 }
 
@@ -1577,5 +1728,52 @@ exit main
             panic!("expected an error, got {:?}", res.outcome)
         };
         assert!(e.contains("dangling reference"), "{e}");
+    }
+
+    /// The core pins (`corpus/core/`), hand-lowered to elaborated MIR in
+    /// `tests/mir/core/<pin>.mir`, print exactly the pin's expected output
+    /// and exit with its code. Each pin's `expected.out` is the same oracle
+    /// the drop reference model is checked against.
+    #[test]
+    fn mir_interp_runs_the_hand_lowered_core_pins() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut ran = 0;
+        let mut bad = Vec::new();
+        let mut files: Vec<_> = std::fs::read_dir(root.join("tests/mir/core"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        files.sort();
+        for path in files {
+            let pin = path.file_stem().unwrap().to_str().unwrap().to_string();
+            let pin_dir = root.join("corpus/core").join(&pin);
+            let expected = std::fs::read_to_string(pin_dir.join("expected.out")).unwrap();
+            let meta = std::fs::read_to_string(pin_dir.join("meta.toml")).unwrap();
+            let exit: i32 = meta
+                .lines()
+                .find_map(|l| l.strip_prefix("exit = "))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let src = std::fs::read_to_string(&path).unwrap();
+            let mut m = crate::mir::parse_module(&src).unwrap_or_else(|e| panic!("{pin}: {e}"));
+            for b in &mut m.bodies {
+                b.phase = MirPhase::DropsElaborated;
+            }
+            let prog = Program::from_module(&m);
+            let r = run(&prog, &m.tys, "main", vec![]);
+            ran += 1;
+            if r.output != expected || r.exit_code() != Some(exit) {
+                bad.push(format!(
+                    "{pin}: exit {:?} (want {exit}), outcome {:?}\n--- got\n{}--- want\n{expected}",
+                    r.exit_code(),
+                    r.outcome,
+                    r.output
+                ));
+            }
+        }
+        assert_eq!(ran, 23, "every runnable core pin has hand-written MIR");
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
     }
 }

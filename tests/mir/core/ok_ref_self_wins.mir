@@ -1,0 +1,55 @@
+struct Bag { items: Vec[String] }
+
+fn Bag.first(_1: ref Bag, _2: ref String) -> ref String {
+    let mut _0: ref String;
+    let _3: ref Vec[String];
+    bb0: {
+        _3 = &(*_1).0;
+        _0 = Vec[String].index(copy _3, const 0_usize) -> bb1;
+    }
+    bb1: {
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: Bag; // b
+    let _2: ref String; // r
+    let _3: Array[String, 1];
+    let _4: String;
+    let _5: Vec[String];
+    let _6: String;
+    let _7: ref String;
+    let _8: ref Bag;
+    let _9: ();
+    bb0: {
+        _4 = String.from(const "x") -> bb1;
+    }
+    bb1: {
+        _3 = [move _4];
+        _5 = Vec[String].from_array(move _3) -> bb2;
+    }
+    bb2: {
+        _1 = Bag { move _5 };
+        _6 = String.from(const "unused") -> bb3;
+    }
+    bb3: {
+        _8 = &_1;
+        _7 = &_6;
+        _2 = Bag.first(copy _8, copy _7) -> bb4;
+    }
+    bb4: {
+        drop(_6) -> bb5;
+    }
+    bb5: {
+        _9 = println(copy _2) -> bb6;
+    }
+    bb6: {
+        drop(_1) -> bb7;
+    }
+    bb7: {
+        _0 = const ();
+        return;
+    }
+}

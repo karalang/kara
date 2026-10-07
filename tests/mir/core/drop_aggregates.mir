@@ -1,0 +1,66 @@
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "d", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+struct P { a: R, b: R, c: R }
+enum E { Two(R, R), One(R) }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: Vec[R]; // v
+    let _2: (R, R, R); // t
+    let _3: P; // p
+    let _4: E; // e
+    let _5: Array[R, 3];
+    let _6: R;
+    let _7: R;
+    let _8: R;
+    let _9: ();
+    bb0: {
+        _6 = R { const 1_i64 };
+        _7 = R { const 2_i64 };
+        _8 = R { const 3_i64 };
+        _5 = [move _6, move _7, move _8];
+        _1 = Vec[R].from_array(move _5) -> bb1;
+    }
+    bb1: {
+        _6 = R { const 4_i64 };
+        _7 = R { const 5_i64 };
+        _8 = R { const 6_i64 };
+        _2 = (move _6, move _7, move _8);
+        _6 = R { const 7_i64 };
+        _7 = R { const 8_i64 };
+        _8 = R { const 9_i64 };
+        _3 = P { move _6, move _7, move _8 };
+        _6 = R { const 10_i64 };
+        _7 = R { const 11_i64 };
+        _4 = E.Two { move _6, move _7 };
+        _9 = println(const "end") -> bb2;
+    }
+    bb2: {
+        drop(_4) -> bb3;
+    }
+    bb3: {
+        drop(_3) -> bb4;
+    }
+    bb4: {
+        drop(_2) -> bb5;
+    }
+    bb5: {
+        drop(_1) -> bb6;
+    }
+    bb6: {
+        _0 = const ();
+        return;
+    }
+}
