@@ -237,6 +237,18 @@ def _has_moved(v) -> bool:
 # Copy parts count like a bare handle (on), or move as §6.1 says today (off)? KARA_MODEL_COUNT_AGG=0 for the latter.
 import os as _os
 COUNT_HANDLE_AGGREGATES = _os.environ.get("KARA_MODEL_COUNT_AGG", "1") != "0"
+# §5.9: nothing is written through a `ref` (except a `mut` field of a shared value). Off: KARA_MODEL_WRITE_REF=0
+WRITE_THROUGH_REF = _os.environ.get("KARA_MODEL_WRITE_REF", "1") != "0"
+MUTATING = {
+    "Str": {"push_str", "push", "clear", "insert", "truncate", "pop", "remove", "insert_str"},
+    "Vec": {"push", "pop", "clear", "truncate", "insert", "remove", "swap_remove", "swap", "reverse", "sort",
+            "sort_by", "sort_by_key", "sort_unstable", "extend", "append", "retain", "dedup", "push_back",
+            "push_front", "pop_back", "pop_front", "drain", "fill", "get_mut", "last_mut", "first_mut",
+            "iter_mut", "resize", "split_off"},
+    "Map": {"insert", "remove", "clear", "get_mut", "entry", "retain", "extend", "pop_first", "pop_last",
+            "get_or_insert", "iter_mut", "values_mut"},
+    "Opt": {"take", "replace", "as_mut", "get_or_insert", "get_or_insert_with", "insert"},
+}
 
 INT_TYPES = {"i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize"}
 
@@ -499,8 +511,12 @@ class Model:
         while True:
             if isinstance(v, Ref):
                 c, path, b = v.cell, list(v.path), "ref"
+                if self._wlog is not None:
+                    self._wlog.append("mutref" if v.mut else "ref")
             elif isinstance(v, Handle):
                 c, path, b = v.box, [], "shared"
+                if self._wlog is not None:
+                    self._wlog.append("shared")
             else:
                 return c, path, b
             v = self.get(c, path)
@@ -524,6 +540,35 @@ class Model:
 
     PLACES = ("var", "field", "tidx", "index")
     _insert_at = None
+    _wlog = None  # deref kinds along the place being written (§5.9), or None when not checking
+
+    def resolve_logged(self, e, temp):
+        """Resolve e once, recording the dereferences on its path (§5.9). Returns (place, log)."""
+        saved = self._wlog
+        self._wlog = []
+        try:
+            pl = self.resolve_or_temp(e) if temp else self.resolve(e)
+            log = self._wlog
+        finally:
+            self._wlog = saved
+        return pl, log
+
+    def final_kind(self, pl, log, final=True):
+        """The kind of the last dereference on a resolved place's path: "ref", "mutref", "shared" or None.
+        final: also follow a reference or handle stored at the place itself. No evaluation happens here."""
+        log = list(log)
+        if final and pl is not None and not (pl and pl[0] == "mapins"):
+            saved = self._wlog
+            self._wlog = log
+            try:
+                self.deref(*pl)
+            finally:
+                self._wlog = saved
+        return log[-1] if log else None
+
+    def check_write(self, kind, what):
+        if WRITE_THROUGH_REF and kind == "ref":
+            raise ModelError(f"write through a ref (§5.9): {what}")
 
     def resolve(self, e):
         """(cell, path, borrowed) for a place expression; a non-place base becomes a temporary."""
@@ -542,7 +587,11 @@ class Model:
                 st = ("i", e[2])
             else:
                 base = self.get(c, p)
-                iv = self.read(e[2])
+                saved, self._wlog = self._wlog, None
+                try:
+                    iv = self.read(e[2])
+                finally:
+                    self._wlog = saved
                 if isinstance(iv, Prim) and iv.kind == "int":
                     if not isinstance(base, VecV):
                         if isinstance(base, MapV):
@@ -574,7 +623,11 @@ class Model:
         pl = self.resolve(e)
         if pl is not None:
             return pl
-        c = Cell(self.eval(e), "<temp>", temp=True)
+        saved, self._wlog = self._wlog, None
+        try:
+            c = Cell(self.eval(e), "<temp>", temp=True)
+        finally:
+            self._wlog = saved
         self.temps[-1].append(c)
         return c, [], None
 
@@ -649,12 +702,14 @@ class Model:
 
     def borrow(self, e, mut=False):
         if e[0] in self.PLACES:
-            pl = self.resolve(e)
+            pl, log = self.resolve_logged(e, temp=False)
+            if pl is not None and mut and WRITE_THROUGH_REF:
+                self.check_write(self.final_kind(pl, log), "a `mut` argument")
             if pl is not None:
                 c, p, b = pl
                 v = self.get(c, p)
                 if isinstance(v, Ref):
-                    return v
+                    return Ref(v.cell, v.path, v.mut or mut, v.origins) if mut and not v.mut else v
                 if _has_moved(v):
                     raise ModelError("borrow of a partially moved value (C4)")
                 return Ref(c, p, mut)
@@ -1578,7 +1633,7 @@ class Model:
             if name == "into_iter" and not args:
                 return self.owned_iter(self.value(recv))
             if name in ("iter", "iter_mut") and not args:
-                return self.ref_iter(recv)
+                return self.ref_iter(recv, name == "iter_mut")
             if name == "enumerate" and not args:
                 inner = self.iterate(recv) if recv[0] in ("mcall",) else self.ref_iter(recv)
                 return (Tup([Prim(i, "int"), x]) for i, x in enumerate(inner))
@@ -1598,8 +1653,10 @@ class Model:
             raise Unsupported(f"for over .{name}()")
         return self.ref_iter(it)
 
-    def ref_iter(self, e):
-        c, p, b = self.resolve_or_temp(e)
+    def ref_iter(self, e, mut=False):
+        (c, p, b), log = self.resolve_logged(e, temp=True)
+        if mut and WRITE_THROUGH_REF and e[0] in self.PLACES:
+            self.check_write(self.final_kind((c, p, b), log), "`iter_mut`")
         c, p, b = self.deref(c, p, b)
         v = self.get(c, p)
         if isinstance(v, tuple) and v[0] == "range":
@@ -1608,13 +1665,13 @@ class Model:
             def gen():
                 i = 0
                 while i < len(self.get(c, p).elems):
-                    yield Ref(c, p + [("i", i)])
+                    yield Ref(c, p + [("i", i)], mut)
                     i += 1
             return gen()
         if isinstance(v, MapV):
             if v.kind in ("Set", "SortedSet"):
                 return (Ref(c, p + [("k", i)]) for i in range(len(v.keys)))
-            return (Tup([Ref(c, p + [("k", i)]), Ref(c, p + [("i", i)])]) for i in range(len(v.keys)))
+            return (Tup([Ref(c, p + [("k", i)]), Ref(c, p + [("i", i)], mut)]) for i in range(len(v.keys)))
         if isinstance(v, Str):
             raise Unsupported("for over a String")
         raise Unsupported(f"for over {type(v).__name__}")
@@ -1699,9 +1756,12 @@ class Model:
         _, op, place, rhs = e
         self._insert_at = place if (op == "=" and place[0] == "index") else None
         try:
-            pl = self.resolve(place)
+            pl, log = self.resolve_logged(place, temp=False)
         finally:
             self._insert_at = None
+        if WRITE_THROUGH_REF and pl is not None and not (pl and pl[0] == "mapins"):
+            refvar = place[0] == "var" and pl[0].refbind
+            self.check_write(self.final_kind(pl, log, final=refvar), "an assignment")
         if pl is None:
             raise Unsupported("assignment to a non-place")
         if pl[0] == "mapins":  # `m[k] = v` on a fresh key inserts (legacy behaviour; design.md is silent)
@@ -2000,13 +2060,22 @@ class Model:
         _, recv, name, args = e
         if recv[0] == "path" or (recv[0] == "var" and recv[1][:1].isupper() and recv[1] in self.p.structs):
             raise Unsupported("method on a path")
-        c, p, b = self.resolve_or_temp(recv)
+        (c, p, b), rlog = self.resolve_logged(recv, temp=True)
         v0 = self.get(c, p)
         v = self.deref_value(v0)
         tname = self.type_name(v0 if not isinstance(v0, Ref) else v)
         if isinstance(v0, Ref):
             tname = self.type_name(v)
         f = self.find_method(tname, name)
+        if WRITE_THROUGH_REF and recv[0] in self.PLACES:
+            if f is not None and f.recv is not None:
+                writes = f.recv == "mutref"
+            else:
+                fam = ("Str" if isinstance(v, Str) else "Vec" if isinstance(v, VecV) else "Map" if isinstance(v, MapV)
+                       else "Opt" if isinstance(v, Enum) and v.ty == "Option" else None)
+                writes = fam is not None and name in MUTATING[fam]
+            if writes:
+                self.check_write(self.final_kind((c, p, b), rlog), f"`{name}` (a `mut ref self` method)")
         if f is not None and f.recv is not None:
             if f.recv == "own":
                 if isinstance(v0, Ref):
@@ -2218,7 +2287,7 @@ class Model:
         if name in ("as_ref", "as_mut") and is_opt:
             if not good:
                 return none()
-            return some(Ref(rc, rp + [("i", 0)]))
+            return some(Ref(rc, rp + [("i", 0)], name == "as_mut"))
         raise Unsupported(f"method {v.ty}.{name}")
 
     def map_find(self, m, k):
@@ -2260,7 +2329,7 @@ class Model:
             i = self.map_find(m, k)
             if i is None:
                 return none()
-            return some(Ref(c, p + [("i", i)]))
+            return some(Ref(c, p + [("i", i)], name == "get_mut"))
         if name in ("contains_key", "contains"):
             return Prim(self.map_find(m, self.read(args[0])) is not None, "bool")
         if name == "remove":

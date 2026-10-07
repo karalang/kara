@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'first: {a} again: {b}'"
 model_note = "move out of a ref place (C3)"
-model_rev = "451adfc6"
+model_rev = "53ef2db0"
 model_verdict = "V2-REJECT"

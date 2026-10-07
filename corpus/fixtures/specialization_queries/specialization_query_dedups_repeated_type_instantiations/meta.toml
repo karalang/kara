@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'two distinct tuples (i64, i32) is below the bar; got {:?}'"
 model_exit = 0
-model_rev = "451adfc6"
+model_rev = "53ef2db0"
 model_verdict = "SAME"

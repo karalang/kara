@@ -11,4 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'declare void @karac_par_run'"
-model_rev = "451adfc6"
+model_rev = "53ef2db0"

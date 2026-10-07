@@ -39,8 +39,11 @@ Every DIFF and REJECT is explained; none points at the model.
   `Vec`, `String`, `Option`/`Result`, `Map`/`Set` (Map drops flagged unordered). `run_source(src)` returns
   `(stdout, exit, flags)` or raises `ModelError` for a program v2 rejects (executed path only, so a
   lower bound). `KARA_MODEL_COUNT_AGG=0` switches handle aggregates (`Option[Node]`, tuples of handles
-  and Copy parts) from counted copies to Rust's move-only rule; the default is counted, pending
-  Gowtham's decision on that card.
+  and Copy parts) from counted copies to Rust's move-only rule; the default is counted (decided
+  2026-10-06, §6.1). The model also rejects a write through a `ref` (§5.9): an assignment, a `mut ref self`
+  method (user `mut ref self` methods and a list of mutating builtins), a `mut` argument or `iter_mut` on a
+  place whose last dereference is a `ref` rather than a `mut ref` or a shared handle. `KARA_MODEL_WRITE_REF=0`
+  turns that check off. On the corpus it changes no verdict (the 6544 programs that parse, re-run 2026-10-07).
 - `corpus_run.py [--tag T] [--path P] [--json OUT] [--include-v2]`: runs the model on every corpus
   program and compares with the recorded legacy output. `KARA_ROOT` (default: the repo above this
   directory), `MODEL_TIMEOUT` seconds per program (use 3 for the whole corpus).
@@ -78,6 +81,7 @@ regenerate with `corpus_run.py --json`.
 ## Limits
 
 - A reference stored into a collection is checked only when the collection's element type is declared (a `let` annotation, a parameter or a struct field). An unannotated `Vec.new()` is not checked. An `Array` is Copy only when it is declared `Array[T, N]`, since literals are built as lists.
+- §5.9 does not cover a `mut ref name` pattern binding into a borrowed scrutinee, and a builtin method mutates only if it is on the list in `MUTATING`.
 - Moves are checked on the executed path only. A maybe-moved use on a path not taken is not reported;
   generators must produce statically valid programs.
 - `model.py` does not model closures, `while let`, `?`, `Map`/`Set`, shared handles, views or `par`;

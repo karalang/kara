@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'asan_if_let_family_over_an_indexed_element_is_memory_clean'"
 model_exit = 0
-model_rev = "451adfc6"
+model_rev = "53ef2db0"
 model_verdict = "ORDER"

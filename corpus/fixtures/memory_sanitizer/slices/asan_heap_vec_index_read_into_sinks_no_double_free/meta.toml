@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'index-sink-element-alpha-aaaaaaaaaaaaaaaaaaaa index-sink-element-charlie-cccccccccccccccccc index-sink-element-bravo-bbb'"
 model_note = "move out of an index projection (C3)"
-model_rev = "451adfc6"
+model_rev = "53ef2db0"
 model_verdict = "V2-REJECT"

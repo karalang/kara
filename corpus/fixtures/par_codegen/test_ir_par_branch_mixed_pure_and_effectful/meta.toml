@@ -11,4 +11,4 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'expected exactly 2 mid-branch cancel checks (one per effectful call); found {total}; IR: {ir}'"
-model_rev = "451adfc6"
+model_rev = "53ef2db0"

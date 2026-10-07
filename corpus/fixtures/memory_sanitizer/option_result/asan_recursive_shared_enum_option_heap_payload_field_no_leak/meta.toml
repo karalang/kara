@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'asan_recursive_shared_enum_option_heap_payload_field_no_leak'"
 model_exit = 0
-model_rev = "451adfc6"
+model_rev = "53ef2db0"
 model_verdict = "SAME"

@@ -1,0 +1,19 @@
+16 -> true
+5 -> false
+1 -> true
+0 -> false
+4 -> true
+64 -> true
+2 -> false
+8 -> false
+32 -> false
+-4 -> false
+-16 -> false
+1073741824 -> true
+1073741823 -> false
+1073741825 -> false
+536870912 -> false
+2147483647 -> false
+-2147483648 -> false
+powers 2^0..2^30: 16 powers of four, 0 neighbours above 4 accepted
+[-1000, 1000000]: 10 powers, sum 349525
