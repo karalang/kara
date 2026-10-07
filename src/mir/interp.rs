@@ -436,6 +436,10 @@ impl<'a> Interp<'a> {
             ("String", _) if STRING_TEXT_METHODS.contains(&method) => {
                 self.string_text_method(name, method, args, ret)
             }
+            ("char", "len_utf8") => match args.as_slice() {
+                [Value::Char(c)] => Ok(Value::Int(c.len_utf8() as i128)),
+                _ => err(format!("{name} takes a char")),
+            },
             ("Vec", "from_slice") => {
                 // A new Vec of clones of the slice's elements.
                 let [view] = args.as_slice() else {
@@ -1199,6 +1203,15 @@ impl<'a> Interp<'a> {
                 self.drop_value(k, key_ty)?;
                 self.option(ret, Some(val))
             }
+            ("entry_at", [Value::Int(i)]) => {
+                // The `i`th entry in iteration order, for a borrowing `for`:
+                // a `ref (K, V)` into a Map, a `ref T` into a Set.
+                let i = self.bounds(id, *i, false)?;
+                Ok(Value::Ref(Addr {
+                    root: Root::Heap(id),
+                    path: vec![i as u64],
+                }))
+            }
             ("get_or", [key, default]) if is_map => {
                 // A copy of the stored value, or the default (cloned when
                 // it came by reference).
@@ -1558,6 +1571,20 @@ impl<'a> Interp<'a> {
                 }
                 let t = s[lo..hi].to_string();
                 new_string(self, t)
+            }
+            "char_at_byte" => {
+                // The char starting at byte `i`, for the builder's `chars()`
+                // cursor; a non-boundary or out-of-range byte panics.
+                let i = int(1)?;
+                let c = (0..s.len() as i128)
+                    .contains(&i)
+                    .then(|| s.get(i as usize..).and_then(|t| t.chars().next()))
+                    .flatten();
+                let Some(c) = c else {
+                    self.events.push(Event::Abort(AbortReason::Panic));
+                    return Err(Stop::Abort(AbortReason::Panic));
+                };
+                Ok(Value::Char(c))
             }
             "index_range" => {
                 // `s[a..b]`: a new String; out of range, inverted or off a
@@ -2835,6 +2862,7 @@ const STRING_TEXT_METHODS: &[&str] = &[
     "split",
     "bytes",
     "index_range",
+    "char_at_byte",
 ];
 
 /// `Vec` methods [`Interp::vec_more_method`] implements.
@@ -3642,7 +3670,7 @@ fn main() -> () {
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
-        assert_eq!(ran, 6);
+        assert_eq!(ran, 7);
     }
 
     /// A strict drop of a fieldless variant, a fieldless variant left in
