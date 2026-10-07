@@ -1652,3 +1652,91 @@ fn writing_a_place_a_for_loop_iterates_is_an_error() {
          }\n",
     );
 }
+
+/// §9.6: a function type has a kind. A closure that writes a capture is a
+/// `MutFn`, which a plain `Fn` parameter does not take (pins
+/// ok_closure_kinds, err_fn_kind_mismatch); calling an `OnceFn` moves it,
+/// so a second call is E0500 (pin err_once_called_twice).
+#[test]
+fn closure_kinds_follow_their_bodies() {
+    accepted(
+        "closure-kinds",
+        "fn twice(f: MutFn()) { f(); f(); }\n\
+         fn once(f: OnceFn() -> String) -> String { f() }\n\
+         fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+         fn main() {\n\
+             let mut count = 0;\n\
+             twice(|| { count += 1; });\n\
+             println(f\"{count}\");\n\
+             let s = \"owned\".to_string();\n\
+             let r = once(|| s);\n\
+             println(r);\n\
+             let k = 10;\n\
+             println(f\"{apply(|x| x + k, 5)}\");\n\
+         }\n",
+    );
+    rejected_with(
+        "fn-kind-mismatch",
+        "fn apply(f: Fn()) { f(); }\n\
+         fn main() {\n\
+             let mut n = 0;\n\
+             apply(|| { n += 1; });\n\
+             println(f\"{n}\");\n\
+         }\n",
+        "the closure mutates n, so it is a MutFn, but apply expects Fn (§9.6)",
+    );
+    rejected_with(
+        "fn-kind-mutfn-param",
+        "fn apply(f: Fn()) { f(); }\n\
+         fn fwd(f: MutFn()) { apply(f); }\n\
+         fn main() {\n\
+             let mut n = 0;\n\
+             fwd(|| { n += 1; });\n\
+             println(f\"{n}\");\n\
+         }\n",
+        "`f` is a MutFn, but apply expects Fn (§9.6)",
+    );
+    rejected_with(
+        "fn-kind-closure-local",
+        "fn apply(f: Fn()) { f(); }\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             let c = || { v.push(1); };\n\
+             apply(c);\n\
+             println(f\"{v.len()}\");\n\
+         }\n",
+        "`c` mutates v, so it is a MutFn, but apply expects Fn (§9.6)",
+    );
+    rejected_with(
+        "once-called-twice",
+        "fn call_twice(f: OnceFn()) {\n\
+             f();\n\
+             f();\n\
+         }\n\
+         fn main() {\n\
+             let s = \"x\".to_string();\n\
+             call_twice(|| { let t = s; });\n\
+         }\n",
+        "f moved by the first call at line 2:1 (an OnceFn is called once, §9.6)",
+    );
+}
+
+/// §9.6: the capture prefixes `own |x|`, `ref |x|` and `mut ref |x|` are
+/// removed, and `karac fix` deletes them.
+#[test]
+fn capture_prefixes_are_removed() {
+    for prefix in ["own", "ref", "mut ref"] {
+        rejected_then_fixed_by(
+            &format!("capture-prefix-{}", prefix.replace(' ', "-")),
+            &format!(
+                "fn main() {{\n\
+                     let k = 1;\n\
+                     let a = {prefix} || k + 1;\n\
+                     println(f\"{{a()}}\");\n\
+                 }}\n"
+            ),
+            "closure capture prefixes are removed",
+            "let a = || k + 1;",
+        );
+    }
+}

@@ -214,7 +214,16 @@ impl super::Formatter {
                 effect_spec,
                 is_once,
             } => {
-                self.write_str(if *is_once { "OnceFn(" } else { "Fn(" });
+                let is_mut = self
+                    .mut_fn_types
+                    .contains(&crate::resolver::SpanKey::from_span(&ty.span));
+                self.write_str(if *is_once {
+                    "OnceFn("
+                } else if is_mut {
+                    "MutFn("
+                } else {
+                    "Fn("
+                });
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         self.write_str(", ");

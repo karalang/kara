@@ -846,6 +846,11 @@ pub struct Program {
     /// A function-typed parameter without the mark is non-escaping: the
     /// callee may call it or pass it to another non-escaping parameter.
     pub escaping_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// `MutFn(...)` types (`docs/core-semantics.md` §9.6), keyed by the
+    /// function type's span. Kept beside the tree like
+    /// [`Self::escaping_fn_types`]: the type is an ordinary non-once `FnType`
+    /// for every legacy phase, and only the v2 core's kind checks read it.
+    pub mut_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// The hasher each `Map[K, V, H]` / `Set[T, H]` type expression named
     /// (design.md § `Hash` and `Hasher`; B-2026-08-21-6), keyed by the
     /// container path's own span. Set by the PARSER, which also REMOVES the

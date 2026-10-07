@@ -21,6 +21,14 @@
 //! of a shared value): pushing to `self.items` inside `for x in self.items`.
 //! A write through another handle to the same object is §6.2's run-time
 //! check, not this one.
+//!
+//! And it checks function kinds (§9.6): a closure literal that writes a
+//! captured binding is a `MutFn`, so passing it to a user function whose
+//! parameter is a plain `Fn` is an error, as is passing a `MutFn` parameter
+//! on to one, or a local bound to such a closure. A closure that moves a
+//! capture out is an `OnceFn`, which the type checker already reports where
+//! an `Fn` is expected (E0235). The removed capture prefixes are reported
+//! here too, with the edit that deletes them.
 
 use super::*;
 use crate::index_disjoint::{for_each_child_public, Child};
@@ -72,6 +80,27 @@ struct Walk<'t, 'a> {
     borrowed: Vec<Borrowed>,
     /// Conflicting writes to a borrowed place (§5.6, §6.2).
     conflicts: Vec<(Span, String)>,
+    /// The program's own free functions by name, for the kind check at a
+    /// call (§9.6). Library functions are not migrated to `MutFn` yet.
+    fn_decls: &'t FxHashMap<String, &'a Function>,
+    /// Closure literals being walked, innermost last: the scope depth each
+    /// starts at, and the first captured binding its body writes.
+    closures: Vec<(usize, Option<String>)>,
+    /// The captured binding each closure literal writes, by the closure's
+    /// span offset.
+    closure_writes: FxHashMap<usize, String>,
+    /// The current function's `MutFn` parameters.
+    mut_fn_params: FxHashSet<String>,
+    /// Locals bound to a closure literal that writes a capture, with the
+    /// capture's name.
+    mut_closure_locals: Vec<((usize, usize), String)>,
+    /// Function-kind errors (§9.6).
+    kind_errors: Vec<(Span, String)>,
+    /// Removed capture prefixes, with the edit that deletes each (§9.6).
+    prefix_errors: Vec<(Span, String, FixIt)>,
+    /// The callee of each call of an `OnceFn` value, for the ownership
+    /// pass's E0500 wording (§9.6).
+    once_calls: FxHashSet<SpanKey>,
 }
 
 /// A place a `for` loop borrows for its whole body.
@@ -126,12 +155,18 @@ impl<'a> TypeChecker<'a> {
     pub(super) fn emit_core_ref_write_errors(
         &mut self,
         node_types: &FxHashMap<crate::ids::NodeId, (Type, u32)>,
-    ) {
+    ) -> FxHashSet<SpanKey> {
         let mut self_modes: FxHashMap<String, SelfParam> = FxHashMap::default();
         let mut fns: Vec<&Function> = Vec::new();
+        let mut fn_decls: FxHashMap<String, &Function> = FxHashMap::default();
         for item in &self.program.items {
             match item {
-                Item::Function(f) => fns.push(f),
+                Item::Function(f) => {
+                    if !f.stdlib_origin {
+                        fn_decls.insert(f.name.clone(), f);
+                    }
+                    fns.push(f)
+                }
                 Item::ImplBlock(imp) => {
                     let head = match &imp.target_type.kind {
                         TypeKind::Path(p) => p.segments.last().cloned(),
@@ -159,6 +194,14 @@ impl<'a> TypeChecker<'a> {
             errors: Vec::new(),
             borrowed: Vec::new(),
             conflicts: Vec::new(),
+            fn_decls: &fn_decls,
+            closures: Vec::new(),
+            closure_writes: FxHashMap::default(),
+            mut_fn_params: FxHashSet::default(),
+            mut_closure_locals: Vec::new(),
+            kind_errors: Vec::new(),
+            prefix_errors: Vec::new(),
+            once_calls: FxHashSet::default(),
         };
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
             w.self_read_only = matches!(f.self_param, Some(SelfParam::Ref));
@@ -194,10 +237,28 @@ impl<'a> TypeChecker<'a> {
                 })
                 .collect()];
             w.borrowed.clear();
+            w.mut_fn_params.clear();
+            w.mut_closure_locals.clear();
+            let mut_fns: Vec<String> = f
+                .params
+                .iter()
+                .filter(|p| w.is_mut_fn(&p.ty))
+                .flat_map(|p| p.pattern.binding_names())
+                .collect();
+            w.mut_fn_params.extend(mut_fns);
             w.block(&f.body);
         }
         let mut conflicts = w.conflicts;
         let mut errors = w.errors;
+        let kind_errors = w.kind_errors;
+        let prefix_errors = w.prefix_errors;
+        let once_calls = w.once_calls;
+        for (span, message) in kind_errors {
+            self.type_error(message, span, TypeErrorKind::FnKindMismatch);
+        }
+        for (span, message, fix) in prefix_errors {
+            self.type_error_with_fix_it(message, span, TypeErrorKind::CapturePrefixRemoved, fix);
+        }
         conflicts.sort_by_key(|(s, _)| s.offset);
         conflicts.dedup_by(|a, b| a.0.offset == b.0.offset);
         for (span, message) in conflicts {
@@ -219,6 +280,7 @@ impl<'a> TypeChecker<'a> {
                 None => self.type_error(message, span, TypeErrorKind::WriteThroughSharedRef),
             }
         }
+        once_calls
     }
 }
 
@@ -232,6 +294,8 @@ impl Walk<'_, '_> {
             self.expr(e);
         }
         self.scopes.pop();
+        let depth = self.scopes.len();
+        self.mut_closure_locals.retain(|((i, _), _)| *i < depth);
     }
 
     /// Bring `pattern`'s bindings into the innermost scope with `origin`;
@@ -416,6 +480,14 @@ impl Walk<'_, '_> {
                     _ => (Origin::Owned, None),
                 };
                 self.bind(pattern, origin, fix);
+                let wrote = self.closure_writes.get(&value.span.offset).cloned();
+                if let (Some(n), PatternKind::Binding(name)) = (wrote, &pattern.kind) {
+                    if matches!(value.kind, ExprKind::Closure { .. }) {
+                        if let Root::Local(i, j) = self.root_of(name) {
+                            self.mut_closure_locals.push(((i, j), n));
+                        }
+                    }
+                }
             }
             StmtKind::LetElse {
                 pattern,
@@ -439,6 +511,7 @@ impl Walk<'_, '_> {
                 self.expr(target);
                 self.check_assign(target);
                 self.check_borrowed_write(target, target.span, "assign");
+                self.note_capture_write(target);
                 // A rebound root names another value from here on.
                 if let ExprKind::Identifier(n) = &target.kind {
                     let root = self.root_of(n);
@@ -452,6 +525,7 @@ impl Walk<'_, '_> {
                 for t in targets {
                     self.check_assign(t);
                     self.check_borrowed_write(t, t.span, "assign");
+                    self.note_capture_write(t);
                 }
             }
             StmtKind::Expr(e) => self.expr(e),
@@ -475,12 +549,17 @@ impl Walk<'_, '_> {
                 self.check_through(object, e.span, &action);
                 let verb = format!("call `.{method}` (a method that writes its receiver) on");
                 self.check_borrowed_write(object, e.span, &verb);
+                self.note_capture_write(object);
             }
-            ExprKind::Call { args, .. } => {
+            ExprKind::Call { callee, args } => {
                 for a in args.iter().filter(|a| a.mut_marker) {
                     self.check_through(&a.value, a.value.span, "a `mut` argument");
                     self.check_borrowed_write(&a.value, a.value.span, "pass `mut`");
+                    self.note_capture_write(&a.value);
                 }
+                self.children(e);
+                self.check_fn_kinds(callee, args);
+                return;
             }
             ExprKind::For {
                 pattern,
@@ -551,17 +630,49 @@ impl Walk<'_, '_> {
                 self.scopes.pop();
                 return;
             }
-            ExprKind::Closure { params, body, .. } => {
+            ExprKind::Closure {
+                params,
+                body,
+                prefix_span,
+                ..
+            } => {
+                if let Some(sp) = prefix_span {
+                    // Delete the prefix and the space after it; `karac fix`
+                    // drops the edit if what is left does not parse.
+                    let fix = FixIt {
+                        span: Span {
+                            length: sp.length + 1,
+                            ..*sp
+                        },
+                        replacement: String::new(),
+                    };
+                    self.prefix_errors.push((
+                        *sp,
+                        "closure capture prefixes are removed; a closure's captures are \
+                         inferred from its body (§9.6). Clone a value before the closure \
+                         to give the closure its own copy"
+                            .to_string(),
+                        fix,
+                    ));
+                }
+                self.closures.push((self.scopes.len(), None));
                 self.scopes.push(Vec::new());
                 for p in params {
                     self.bind(&p.pattern, Origin::Owned, None);
                 }
                 self.expr(body);
                 self.scopes.pop();
+                if let Some((_, Some(name))) = self.closures.pop() {
+                    self.closure_writes.insert(e.span.offset, name);
+                }
                 return;
             }
             _ => {}
         }
+        self.children(e);
+    }
+
+    fn children(&mut self, e: &Expr) {
         let mut kids: Vec<Child<'_>> = Vec::new();
         for_each_child_public(e, &mut |c| kids.push(c));
         for c in kids {
@@ -569,6 +680,117 @@ impl Walk<'_, '_> {
                 Child::Expr(x) => self.expr(x),
                 Child::Block(b) => self.block(b),
             }
+        }
+    }
+
+    /// A `MutFn(...)` type, under any `ref`s.
+    fn is_mut_fn(&self, ty: &TypeExpr) -> bool {
+        matches!(ty.kind, TypeKind::FnType { is_once: false, .. })
+            && self
+                .tc
+                .program
+                .mut_fn_types
+                .contains(&SpanKey::from_span(&ty.span))
+    }
+
+    /// A write to `place` from inside a closure that captures its root makes
+    /// that closure (and each enclosing one that captures it) a `MutFn`.
+    fn note_capture_write(&mut self, place: &Expr) {
+        if self.closures.is_empty() {
+            return;
+        }
+        let mut p = place;
+        while let ExprKind::Unary {
+            op: UnaryOp::Deref,
+            operand,
+        } = &p.kind
+        {
+            p = operand;
+        }
+        let Some(root) = place_root(p) else {
+            return;
+        };
+        let depth = if root == "self" {
+            0
+        } else {
+            match self
+                .scopes
+                .iter()
+                .rposition(|s| s.iter().any(|(n, _, _)| n == root))
+            {
+                Some(i) => i,
+                None => return,
+            }
+        };
+        for frame in self.closures.iter_mut().filter(|f| f.0 > depth) {
+            frame.1.get_or_insert_with(|| root.to_string());
+        }
+    }
+
+    /// §9.6 at a call: a user function's plain `Fn` parameter takes neither
+    /// a closure that writes a capture nor a `MutFn` parameter.
+    fn check_fn_kinds(&mut self, callee: &Expr, args: &[CallArg]) {
+        let ExprKind::Identifier(name) = &callee.kind else {
+            return;
+        };
+        if let Some((Type::OnceFunction { .. }, _)) = self.node_types.get(&callee.id) {
+            self.once_calls.insert(SpanKey::from_span(&callee.span));
+        }
+        if self.lookup(name).is_some() {
+            return;
+        }
+        let Some(f) = self.fn_decls.get(name.as_str()).copied() else {
+            return;
+        };
+        let mut position = 0;
+        for a in args {
+            let param = match &a.label {
+                Some(l) => f
+                    .params
+                    .iter()
+                    .find(|p| p.pattern.binding_names().iter().any(|n| n == l)),
+                None => {
+                    position += 1;
+                    f.params.get(position - 1)
+                }
+            };
+            let Some(param) = param else {
+                continue;
+            };
+            let mut ty = &param.ty;
+            while let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &ty.kind {
+                ty = inner;
+            }
+            if !matches!(ty.kind, TypeKind::FnType { is_once: false, .. }) || self.is_mut_fn(ty) {
+                continue;
+            }
+            let message = match &a.value.kind {
+                ExprKind::Closure { .. } => match self.closure_writes.get(&a.value.span.offset) {
+                    Some(n) => format!(
+                        "the closure mutates {n}, so it is a MutFn, but {name} expects Fn \
+                         (§9.6)"
+                    ),
+                    None => continue,
+                },
+                ExprKind::Identifier(x) => {
+                    match self.root_of(x) {
+                        Root::Local(0, _) if self.mut_fn_params.contains(x) => {
+                            format!("`{x}` is a MutFn, but {name} expects Fn (§9.6)")
+                        }
+                        Root::Local(i, j) => match self.mut_closure_locals.iter().find(|(r, n)| {
+                            *r == (i, j) && self.scopes[i][j].0 == *x && !n.is_empty()
+                        }) {
+                            Some((_, n)) => format!(
+                                "`{x}` mutates {n}, so it is a MutFn, but {name} expects Fn (§9.6)"
+                            ),
+                            None => continue,
+                        },
+                        Root::SelfValue => continue,
+                    }
+                }
+                _ => continue,
+            };
+            self.kind_errors.push((a.value.span, message));
         }
     }
 

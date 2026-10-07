@@ -1318,7 +1318,9 @@ impl<'a> super::OwnershipChecker<'a> {
                 // consumes a different capture (which fires the K2 error
                 // path) still emits the unused-mut note for any read-only
                 // siblings.
-                if matches!(capture_mode, Some(CaptureMode::MutRef)) {
+                // v2 core (§9.6) removes the prefix itself, and its error's
+                // fix deletes it; a rewrite to `ref` would fight that edit.
+                if matches!(capture_mode, Some(CaptureMode::MutRef)) && !super::core_rules() {
                     let usage = self.classify_capture_body_uses(body, &pre_live);
                     for name in &pre_live {
                         let u = match usage.get(name) {

@@ -3021,11 +3021,24 @@ impl<'a> OwnershipChecker<'a> {
             } else {
                 derive_copy.map(|(_, edit)| Box::new(edit.clone()))
             };
+            // v2 core §9.6: calling an `OnceFn` moves it.
+            let once_call = self
+                .typecheck_result
+                .core_once_calls
+                .contains(&SpanKey::from_span(&w.consume_span));
             self.errors.push(OwnershipError {
-                message: format!(
-                    "value '{}' moved here, used again here (moved at line {}:{})",
-                    binding, w.consume_span.line, w.consume_span.column
-                ),
+                message: if once_call {
+                    format!(
+                        "{binding} moved by the first call at line {}:{} (an OnceFn is \
+                         called once, §9.6)",
+                        w.consume_span.line, w.consume_span.column
+                    )
+                } else {
+                    format!(
+                        "value '{}' moved here, used again here (moved at line {}:{})",
+                        binding, w.consume_span.line, w.consume_span.column
+                    )
+                },
                 span: w.other_use_span,
                 kind: OwnershipErrorKind::UseAfterMove,
                 // Only advise `.clone()` for a type that HAS one. This sentence

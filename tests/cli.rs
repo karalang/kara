@@ -11927,12 +11927,10 @@ fn test_fix_missing_file_arg_rejected() {
 
 #[test]
 fn test_fix_applies_n0507_mut_ref_to_ref() {
-    // Round 12.32: `karac fix` now runs through ownership and applies
-    // the closure-prefix rewrite from N0507 (UnusedMutCaptureNote).
-    // The source compiles cleanly (the note is a perf note, not an
-    // error), so without ownership-side harvesting `karac fix` would
-    // print "no fixable diagnostics" — pinning that the new path
-    // collects ownership replacements alongside resolver ones.
+    // Round 12.32 pinned N0507's `mut ref` → `ref` rewrite here. The v2
+    // core removes capture prefixes altogether (core-semantics §9.6), so
+    // `karac fix` (a strict command) now deletes the prefix through
+    // E0519's edit and N0507 stays silent under it.
     let path = fix_scratch_file(
         "n0507-apply",
         "struct Owned { x: i64 }\n\
@@ -11958,8 +11956,8 @@ fn test_fix_applies_n0507_mut_ref_to_ref() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("let f = ref || o.x + 1;"),
-        "expected `mut ref` swapped for `ref`, got: {rewritten}"
+        rewritten.contains("let f = || o.x + 1;"),
+        "expected the `mut ref` prefix deleted, got: {rewritten}"
     );
     assert!(
         !rewritten.contains("mut ref"),
@@ -11971,8 +11969,9 @@ fn test_fix_applies_n0507_mut_ref_to_ref() {
 #[test]
 fn test_fix_dry_run_previews_n0507_without_writing() {
     // Dry-run companion to the apply test: --dry-run prints the
-    // would-be rewrite (`mut ref` → `ref`) but does not modify the
-    // file. The source is unchanged on disk after the command exits.
+    // would-be edit (deleting the `mut ref` prefix, §9.6) but does not
+    // modify the file. The source is unchanged on disk after the command
+    // exits.
     let original = "struct Owned { x: i64 }\n\
                     fn main() {\n\
                         let o = Owned { x: 1 };\n\
@@ -11991,12 +11990,8 @@ fn test_fix_dry_run_previews_n0507_without_writing() {
         "expected dry-run header, got: {stdout}"
     );
     assert!(
-        stdout.contains("`mut ref`"),
-        "expected dry-run to mention old text `mut ref`, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("`ref`"),
-        "expected dry-run to mention new text `ref`, got: {stdout}"
+        stdout.contains("`mut ref ` → ``"),
+        "expected dry-run to show the prefix deleted, got: {stdout}"
     );
     let on_disk = std::fs::read_to_string(&path).unwrap();
     assert_eq!(on_disk, original, "dry-run must not write to disk");
@@ -12045,7 +12040,9 @@ fn test_fix_aggregates_resolver_and_ownership_in_one_pass() {
         String::from_utf8_lossy(&out.stderr)
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
-    assert!(rewritten.contains("let f = ref || o.x + 1;"));
+    // The v2 core deletes the capture prefix (E0519, §9.6) rather than
+    // N0507's `mut ref` -> `ref` rewrite.
+    assert!(rewritten.contains("let f = || o.x + 1;"));
     assert!(rewritten.contains("fn helper() -> i64 { 42 }"));
     let _ = std::fs::remove_file(&path);
 }
@@ -12173,13 +12170,10 @@ fn test_test_project_jsonl_includes_replacement_for_unknown_item() {
 
 #[test]
 fn test_check_json_includes_replacement_for_n0507_note() {
-    // Round 12.31: the ownership-checker N0507 (UnusedMutCaptureNote) now
-    // carries machine-applicable `replacement` metadata covering the
-    // closure prefix tokens (`mut ref` → `ref`). The single-file
-    // `karac check --output=json` path renders ownership notes through
-    // the same `extra_json` slot used for resolver replacement payloads,
-    // so IDE quick-fix UIs see the same JSON shape across diagnostic
-    // phases. First non-resolver class to gain replacement metadata.
+    // Round 12.31 pinned N0507's `mut ref` → `ref` replacement here. The v2
+    // core removes capture prefixes (core-semantics §9.6), so `karac check`
+    // reports E0519 instead, and its machine-applicable edit deletes the
+    // prefix tokens; N0507 stays silent under the strict commands.
     let path = fix_scratch_file(
         "json-replacement-n0507",
         "struct Owned { x: i64 }\n\
@@ -12195,16 +12189,16 @@ fn test_check_json_includes_replacement_for_n0507_note() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("\"code\":\"N0507\""),
-        "expected N0507 in JSON output, got: {stdout}"
+        stdout.contains("\"code\":\"E0519\""),
+        "expected E0519 in JSON output, got: {stdout}"
     );
     assert!(
-        stdout.contains("\"replacement\":"),
-        "expected `replacement` field on the N0507 note, got: {stdout}"
+        !stdout.contains("\"code\":\"N0507\""),
+        "N0507 must stay silent under `check`, got: {stdout}"
     );
     assert!(
-        stdout.contains("\"text\":\"ref\""),
-        "expected replacement text `ref`, got: {stdout}"
+        stdout.contains("\"length\":8},\"replacement\":\"\""),
+        "expected an edit deleting `mut ref `, got: {stdout}"
     );
     let _ = std::fs::remove_file(&path);
 }

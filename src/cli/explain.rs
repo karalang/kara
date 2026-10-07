@@ -804,6 +804,15 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0517",
         ty("WriteThroughSharedRef", Some(DiagnosticClass::TypeMismatch)),
     ),
+    // v2 core §9.6: function kinds and the removed capture prefixes.
+    (
+        "E0518",
+        ty("FnKindMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E0519",
+        ty("CapturePrefixRemoved", Some(DiagnosticClass::TypeMismatch)),
+    ),
     // ── provider escape ─────────────────────────────────────────
     ("E0600", prov("ProviderEscape")),
     // ── lint (non-`TypeErrorKind`) ──────────────────────────────

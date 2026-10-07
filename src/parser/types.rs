@@ -63,7 +63,8 @@ impl super::Parser {
             if name == "escaping"
                 && matches!(
                     self.peek_token_ref_at(1),
-                    Token::Identifier { name, .. } if name == "Fn" || name == "OnceFn"
+                    Token::Identifier { name, .. }
+                        if name == "Fn" || name == "MutFn" || name == "OnceFn"
                 )
             {
                 let kw_span = self.current_span();
@@ -454,8 +455,13 @@ impl super::Parser {
             // (round 12.46, Step 4). Both share the same AST shape; the
             // `is_once` flag distinguishes them so `lower_type_expr` can emit
             // `Type::OnceFunction` for the OnceFn form.
-            Token::Identifier { ref name, .. } if name == "Fn" || name == "OnceFn" => {
+            // `MutFn(...)` (`docs/core-semantics.md` §9.6) parses as a
+            // non-once `FnType` and is recorded in `mut_fn_types`.
+            Token::Identifier { ref name, .. }
+                if name == "Fn" || name == "MutFn" || name == "OnceFn" =>
+            {
                 let is_once = name == "OnceFn";
+                let is_mut = name == "MutFn";
                 self.advance();
                 self.expect(&Token::LeftParen)?;
                 let mut params = Vec::new();
@@ -506,6 +512,11 @@ impl super::Parser {
                     None
                 };
 
+                let span = self.span_from(&start);
+                if is_mut {
+                    self.mut_fn_types
+                        .insert(crate::resolver::SpanKey::from_span(&span));
+                }
                 Some(TypeExpr {
                     kind: TypeKind::FnType {
                         params,
@@ -513,7 +524,7 @@ impl super::Parser {
                         effect_spec,
                         is_once,
                     },
-                    span: self.span_from(&start),
+                    span,
                 })
             }
             // Path type: ident[::ident]*[<T, U>]

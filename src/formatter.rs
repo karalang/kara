@@ -20,6 +20,7 @@ pub fn format_program(program: &Program) -> String {
     f.ref_binding_spans = program.ref_binding_spans.clone();
     f.mut_ref_binding_spans = program.mut_ref_binding_spans.clone();
     f.escaping_fn_types = program.escaping_fn_types.clone();
+    f.mut_fn_types = program.mut_fn_types.clone();
     f.format_program(program);
     f.output
 }
@@ -103,6 +104,8 @@ pub(super) struct Formatter {
     /// `escaping Fn(...)` parameter types, copied from
     /// `Program::escaping_fn_types`: the keyword is not in the tree either.
     pub(super) escaping_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// `MutFn(...)` types, copied from `Program::mut_fn_types`.
+    pub(super) mut_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
 }
 
 impl Formatter {
@@ -114,6 +117,7 @@ impl Formatter {
             ref_binding_spans: rustc_hash::FxHashSet::default(),
             mut_ref_binding_spans: rustc_hash::FxHashSet::default(),
             escaping_fn_types: rustc_hash::FxHashSet::default(),
+            mut_fn_types: rustc_hash::FxHashSet::default(),
         }
     }
 

@@ -702,6 +702,13 @@ pub enum TypeErrorKind {
     BorrowConflict,
     /// v2 core §5.9: a write through a shared `ref` (E0517).
     WriteThroughSharedRef,
+    /// v2 core §9.6: a function value of a less permissive kind passed where
+    /// a more permissive one is expected (a closure that mutates a capture
+    /// where `Fn` is expected), or a `MutFn` called through a `ref` (E0518).
+    FnKindMismatch,
+    /// v2 core §9.6: the closure capture prefixes `own |x|`, `ref |x|` and
+    /// `mut ref |x|` are removed; captures are inferred (E0519).
+    CapturePrefixRemoved,
     /// B-2026-08-26-15 — a `LazyLock.new` closure captured a function local.
     LazyLockRuntimeCapture,
     /// `let t = v[i]` / `x = v[j]` where the element type is not `Copy`.
@@ -1322,7 +1329,9 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::PatternScrutineeMismatch
         | TypeErrorKind::OnceFnIntoFnSlot
         | TypeErrorKind::BorrowConflict
-        | TypeErrorKind::WriteThroughSharedRef => Some(DC::TypeMismatch),
+        | TypeErrorKind::WriteThroughSharedRef
+        | TypeErrorKind::FnKindMismatch
+        | TypeErrorKind::CapturePrefixRemoved => Some(DC::TypeMismatch),
 
         TypeErrorKind::WrongNumberOfArgs | TypeErrorKind::AtomicMissingOrdering => {
             Some(DC::WrongNumberOfArgs)
@@ -1478,6 +1487,10 @@ pub struct TypeCheckResult {
     /// to its declaration. The ownership pass offers it as the fix for
     /// reusing a moved value of that type.
     pub copy_derivable_expr_spans: FxHashMap<SpanKey, (String, crate::resolver::TextEdit)>,
+    /// v2 core (strict commands only): the callee of each call of an
+    /// `OnceFn` value. Calling one moves it (§9.6), and the ownership pass
+    /// words a second call's E0500 by it.
+    pub core_once_calls: FxHashSet<SpanKey>,
     /// v2 core (strict commands only): initializers of `let u = x;` where
     /// `x` is a `ref` binding. `ref T` is Copy (`docs/core-semantics.md`
     /// §1.1), so the read copies the reference and moves nothing; the
@@ -2264,6 +2277,8 @@ pub struct TypeChecker<'a> {
     pub(super) core_shared_depth: usize,
     /// See [`TypeCheckResult::core_ref_copy_spans`].
     pub(super) core_ref_copy_spans: FxHashSet<SpanKey>,
+    /// See [`TypeCheckResult::core_once_calls`].
+    pub(super) core_once_calls: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::core_moving_scrutinees`].
     pub(super) core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// See [`TypeCheckResult::core_borrowed_receivers`].
@@ -3018,6 +3033,7 @@ impl<'a> TypeChecker<'a> {
             core_shorthand_field: false,
             core_shared_depth: 0,
             core_ref_copy_spans: FxHashSet::default(),
+            core_once_calls: FxHashSet::default(),
             core_moving_scrutinees: FxHashMap::default(),
             core_borrowed_receivers: FxHashSet::default(),
             core_generic_moves: FxHashMap::default(),
@@ -3389,7 +3405,7 @@ impl<'a> TypeChecker<'a> {
         self.emit_core_generic_move_errors(&node_call_subs);
         if self.cli_lint_overrides.strict_core {
             self.emit_core_taskgroup_errors(&node_types);
-            self.emit_core_ref_write_errors(&node_types);
+            self.core_once_calls = self.emit_core_ref_write_errors(&node_types);
         }
         let core_escaping_closures = if self.cli_lint_overrides.strict_core {
             let esc = crate::core_escape::analyze(self.program);
@@ -3406,6 +3422,7 @@ impl<'a> TypeChecker<'a> {
             expr_types: self.expr_types,
             clonable_expr_spans,
             copy_derivable_expr_spans,
+            core_once_calls: std::mem::take(&mut self.core_once_calls),
             core_ref_copy_spans: self.core_ref_copy_spans,
             core_moving_scrutinees: self.core_moving_scrutinees,
             core_borrowed_receivers: self.core_borrowed_receivers,
