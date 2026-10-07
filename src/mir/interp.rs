@@ -433,6 +433,81 @@ impl<'a> Interp<'a> {
             (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut") | ("Slice" | "Array", _) => {
                 self.view_method(name, method, args)
             }
+            ("format_spec", "") => {
+                // One hole with a spec (`{x:.3}`, `{n:04}`, `{s:>10}`): the
+                // value, then the raw spec text after the colon.
+                let (Some(Value::Str(spec)), [v]) = (args.last(), &args[..args.len() - 1]) else {
+                    return err(format!("{name} takes a value and a spec"));
+                };
+                let fs = crate::format_spec::FormatSpec::parse(spec)
+                    .map_err(|e| Stop::Error(format!("{name}: {e}")))?;
+                let mut t = arg_tys.first().copied().unwrap_or(ret);
+                let mut v = v.clone();
+                while let (TyKind::Ref(inner) | TyKind::MutRef(inner), Value::Ref(at)) =
+                    (self.tys.kind(t), &v)
+                {
+                    v = self.slot(at)?;
+                    t = inner;
+                }
+                let text = match (self.tys.kind(t), &v) {
+                    (TyKind::Int(IntTy::U64 | IntTy::Usize), Value::Int(i)) => {
+                        fs.apply_uint(*i as u64)
+                    }
+                    (_, Value::Int(i)) => fs.apply_int(*i as i64),
+                    (_, Value::Float(f)) => fs.apply_float(*f),
+                    _ => {
+                        let shown = self.display_typed(&v, t)?;
+                        fs.apply_str(&shown)
+                    }
+                };
+                Ok(self.alloc_box("String", Value::Str(text)))
+            }
+            ("String", "from_utf8") => {
+                // The bytes by value (a `Vec[u8]`, freed here) or a view.
+                let [v] = args.as_slice() else {
+                    return err(format!("{name} takes one argument"));
+                };
+                let held: Vec<Value> = match v {
+                    Value::Box(id) => {
+                        let fs = std::mem::take(self.vec_elems(*id)?);
+                        self.heap[id.0 as usize] = None;
+                        self.events.push(Event::Free(*id));
+                        fs
+                    }
+                    view => {
+                        let (base, lo, len) = self.view_of(view)?;
+                        let mut fs = Vec::with_capacity(len as usize);
+                        for i in 0..len {
+                            fs.push(self.slot(&base.child(lo + i))?);
+                        }
+                        fs
+                    }
+                };
+                let mut bytes = Vec::with_capacity(held.len());
+                for b in held {
+                    let Value::Int(b) = b else {
+                        return err(format!("{name} of a non-byte {b:?}"));
+                    };
+                    bytes.push(b as u8);
+                }
+                match String::from_utf8(bytes) {
+                    Ok(text) => {
+                        let s = self.alloc_box("String", Value::Str(text));
+                        self.variant_named(ret, None, "Ok", vec![s])
+                    }
+                    Err(e) => {
+                        // Legacy's reading of `Utf8Error::error_len`: none
+                        // means the input ended inside a sequence.
+                        let kind = if e.utf8_error().error_len().is_none() {
+                            "IncompleteSequence"
+                        } else {
+                            "InvalidByte"
+                        };
+                        let payload = self.variant_named(ret, Some("Err"), kind, Vec::new())?;
+                        self.variant_named(ret, None, "Err", vec![payload])
+                    }
+                }
+            }
             ("String", _) if STRING_TEXT_METHODS.contains(&method) => {
                 self.string_text_method(name, method, args, ret)
             }
@@ -1531,6 +1606,7 @@ impl<'a> Interp<'a> {
         let new_string = |me: &mut Self, t: String| Ok(me.alloc_box("String", Value::Str(t)));
         let s = text(0)?;
         match method {
+            "lt" => Ok(Value::Bool(s < text(1)?)),
             "contains" => Ok(Value::Bool(s.contains(text(1)?))),
             "starts_with" => Ok(Value::Bool(s.starts_with(text(1)?))),
             "ends_with" => Ok(Value::Bool(s.ends_with(text(1)?))),
@@ -1767,6 +1843,43 @@ impl<'a> Interp<'a> {
                 self.option(ret, Some(copy))
             }
         }
+    }
+
+    /// The variant `want` of the enum `ty`, holding `fields`. With
+    /// `inside`, the enum is instead the type of field 0 of `ty`'s variant
+    /// `inside` (the `E` of a `Result[T, E]`'s `Err`).
+    fn variant_named(
+        &self,
+        ty: Ty,
+        inside: Option<&str>,
+        want: &str,
+        fields: Vec<Value>,
+    ) -> R<Value> {
+        let mut ty = ty;
+        if let Some(outer) = inside {
+            let TyKind::Adt(a) = self.tys.kind(ty) else {
+                return err(format!("expected an enum, found {}", self.tys.display(ty)));
+            };
+            let k = self
+                .tys
+                .adt(a)
+                .variants
+                .iter()
+                .position(|v| v.name == outer);
+            ty = k
+                .and_then(|k| self.tys.field_ty(ty, Some(k as u32), 0))
+                .ok_or_else(|| {
+                    Stop::Error(format!("{} has no {outer} payload", self.tys.display(ty)))
+                })?;
+        }
+        let TyKind::Adt(a) = self.tys.kind(ty) else {
+            return err(format!("expected an enum, found {}", self.tys.display(ty)));
+        };
+        let adt = self.tys.adt(a);
+        let Some(idx) = adt.variants.iter().position(|var| var.name == want) else {
+            return err(format!("{} has no variant {want}", adt.name));
+        };
+        Ok(Value::Variant(idx as u32, fields))
     }
 
     /// `Some(v)` or `None` in the `Option` type `ret`, by variant name.
@@ -2863,6 +2976,7 @@ const STRING_TEXT_METHODS: &[&str] = &[
     "bytes",
     "index_range",
     "char_at_byte",
+    "lt",
 ];
 
 /// `Vec` methods [`Interp::vec_more_method`] implements.
@@ -3670,7 +3784,7 @@ fn main() -> () {
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
-        assert_eq!(ran, 7);
+        assert_eq!(ran, 8);
     }
 
     /// A strict drop of a fieldless variant, a fieldless variant left in

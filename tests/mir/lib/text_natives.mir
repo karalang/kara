@@ -1,0 +1,125 @@
+enum Utf8Error { InvalidByte, IncompleteSequence, Other(String) }
+enum Result[String, Utf8Error] { Ok(String), Err(Utf8Error) }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: String;
+    let _2: ref String;
+    let _3: ();
+    let _4: String;
+    let _5: String;
+    let _6: ref String;
+    let _7: ref String;
+    let _8: bool;
+    let _9: Array[u8, 2];
+    let _10: Vec[u8];
+    let _11: Result[String, Utf8Error];
+    let _12: ref Result[String, Utf8Error];
+    let _13: Array[u8, 1];
+    let _14: Array[u8, 2];
+    bb0: {
+        _1 = format_spec(const 3.14159_f64, const ".2") -> bb1;
+    }
+    bb1: {
+        _2 = &_1;
+        _3 = println(move _2) -> bb2;
+    }
+    bb2: {
+        drop(_1) -> bb3;
+    }
+    bb3: {
+        _1 = format_spec(const 7_i64, const "04") -> bb4;
+    }
+    bb4: {
+        _2 = &_1;
+        _3 = println(const "[", move _2, const "]") -> bb5;
+    }
+    bb5: {
+        drop(_1) -> bb6;
+    }
+    bb6: {
+        _4 = String.from(const "abc") -> bb7;
+    }
+    bb7: {
+        _5 = String.from(const "abd") -> bb8;
+    }
+    bb8: {
+        _6 = &_4;
+        _1 = format_spec(move _6, const ">5") -> bb9;
+    }
+    bb9: {
+        _2 = &_1;
+        _3 = println(const "[", move _2, const "]") -> bb10;
+    }
+    bb10: {
+        drop(_1) -> bb11;
+    }
+    bb11: {
+        _6 = &_4;
+        _7 = &_5;
+        _8 = String.lt(move _6, move _7) -> bb12;
+    }
+    bb12: {
+        _3 = println(copy _8) -> bb13;
+    }
+    bb13: {
+        _6 = &_5;
+        _7 = &_4;
+        _8 = String.lt(move _6, move _7) -> bb14;
+    }
+    bb14: {
+        _3 = println(copy _8) -> bb15;
+    }
+    bb15: {
+        drop(_4) -> bb16;
+    }
+    bb16: {
+        drop(_5) -> bb17;
+    }
+    bb17: {
+        _9 = [const 104_u8, const 105_u8];
+        _10 = Vec[u8].from_array(move _9) -> bb18;
+    }
+    bb18: {
+        _11 = String.from_utf8(move _10) -> bb19;
+    }
+    bb19: {
+        _12 = &_11;
+        _3 = println(move _12) -> bb20;
+    }
+    bb20: {
+        drop(_11) -> bb21;
+    }
+    bb21: {
+        _13 = [const 255_u8];
+        _10 = Vec[u8].from_array(move _13) -> bb22;
+    }
+    bb22: {
+        _11 = String.from_utf8(move _10) -> bb23;
+    }
+    bb23: {
+        _12 = &_11;
+        _3 = println(move _12) -> bb24;
+    }
+    bb24: {
+        drop(_11) -> bb25;
+    }
+    bb25: {
+        _14 = [const 195_u8, const 169_u8];
+        _10 = Vec[u8].from_array(move _14) -> bb26;
+    }
+    bb26: {
+        _11 = String.from_utf8(move _10) -> bb27;
+    }
+    bb27: {
+        _12 = &_11;
+        _3 = println(move _12) -> bb28;
+    }
+    bb28: {
+        drop(_11) -> bb29;
+    }
+    bb29: {
+        _0 = ();
+        return;
+    }
+}
