@@ -370,16 +370,31 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("sleep_ms", "") => vec![(Blocks, "", None)],
         // The collections the MIR interpreter implements natively: they
         // allocate, and an out-of-range index or a missing key panics.
-        ("String" | "Vec" | "Map" | "Set" | "SortedMap" | "SortedSet" | "Slice" | "Array", _) => {
-            vec![HEAP, PANICS]
-        }
+        // `Option`/`Result` combinators are here too; a closure they take is
+        // charged below, with every native's closure arguments.
+        (
+            "String" | "Vec" | "VecDeque" | "Map" | "Set" | "SortedMap" | "SortedSet" | "Entry"
+            | "Slice" | "Array" | "Option" | "Result",
+            _,
+        ) => vec![HEAP, PANICS],
         (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut") => vec![PANICS],
         (_, "clone") => vec![HEAP],
+        // Arithmetic, conversions and predicates on scalars touch no
+        // resource; an overflow or a checked conversion can panic.
         (
+            "bool" | "char" | "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16"
+            | "u32" | "u64" | "u128" | "usize" | "f16" | "bf16" | "f32" | "f64",
             _,
-            "max" | "min" | "abs" | "pow" | "wrapping_add" | "wrapping_sub" | "wrapping_mul"
-            | "count_ones" | "signum" | "sqrt" | "floor" | "ceil" | "round",
         ) => vec![PANICS],
+        ("Ordering", _) => vec![],
+        // A comparison native on a user type is a derived one: it reads its
+        // operands and nothing else.
+        (_, "cmp" | "partial_cmp" | "eq" | "ne") => vec![PANICS],
+        // An atomic is a resource of its own, keyed by the atomic value.
+        ("Atomic", "load") => vec![(Reads, "Atomic", Some(0))],
+        ("Atomic", "store" | "swap" | "compare_exchange" | "fetch_add" | "fetch_sub") => {
+            vec![(Writes, "Atomic", Some(0))]
+        }
         // D6: channels and connections key their effects by the endpoint
         // (argument 0, the receiver); files by the open file. These have no
         // MIR natives yet (M2 brings the I/O intrinsics); the entries fix
