@@ -1344,6 +1344,69 @@ mod tests {
         assert!(has_flag(&e));
     }
 
+    /// The core pins in Built form (`tests/mir/core-built/`), each with a
+    /// scope-end `Drop` for every local even where it was moved: elaborated,
+    /// validated and run, each must still print its `expected.out` and exit
+    /// as its `meta.toml` says. Eight of them fail if run elaborated without
+    /// this pass, so they are the ones that exercise it.
+    #[test]
+    fn mir_elab_core_built_pins_match_expected() {
+        use crate::mir::parse_module;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files: Vec<_> = std::fs::read_dir(root.join("tests/mir/core-built"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        files.sort();
+        let (mut ran, mut flagged, mut bad) = (0, 0, Vec::new());
+        for path in files {
+            let pin = path.file_stem().unwrap().to_str().unwrap().to_string();
+            let pin_dir = root.join("corpus/core").join(&pin);
+            let expected = std::fs::read_to_string(pin_dir.join("expected.out")).unwrap();
+            let meta = std::fs::read_to_string(pin_dir.join("meta.toml")).unwrap();
+            let exit: i32 = meta
+                .lines()
+                .find_map(|l| l.strip_prefix("exit = "))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let src = std::fs::read_to_string(&path).unwrap();
+            let mut m = parse_module(&src).unwrap_or_else(|e| panic!("{pin}: {e}"));
+            for b in &mut m.bodies {
+                assert_eq!(b.phase, MirPhase::Built, "{pin}: {}", b.instance.name);
+                if let Err(e) = elaborate_drops(b, &mut m.tys) {
+                    bad.push(format!("{pin}: {}: {e}", b.instance.name));
+                    continue;
+                }
+                let errs = validate(b, &m.tys);
+                if !errs.is_empty() {
+                    bad.push(format!("{pin}: {}: invalid: {errs:?}", b.instance.name));
+                }
+                if has_flag(b) {
+                    flagged += 1;
+                }
+            }
+            let prog = Program::from_module(&m);
+            let r = run(&prog, &m.tys, "main", vec![]);
+            ran += 1;
+            if r.output != expected || r.exit_code() != Some(exit) {
+                let main = m.bodies.iter().find(|b| b.instance.name == "main");
+                bad.push(format!(
+                    "{pin}: exit {:?} (want {exit}), outcome {:?}\n--- got\n{}--- want\n{expected}{}",
+                    r.exit_code(),
+                    r.outcome,
+                    r.output,
+                    main.map(|b| crate::mir::pretty_body(b, &m.tys))
+                        .unwrap_or_default()
+                ));
+            }
+        }
+        assert_eq!(ran, 23, "every runnable core pin has a Built form");
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
+        assert!(flagged > 0, "no pin needed a drop flag");
+    }
+
     /// Elaborating the same body twice is refused rather than repeated.
     #[test]
     fn mir_elab_refuses_an_elaborated_body() {
