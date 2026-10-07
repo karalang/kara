@@ -922,6 +922,9 @@ impl super::Formatter {
         self.format_attributes(&e.attributes);
         self.write_indent();
         self.write_visibility(e.visibility());
+        if e.is_pure {
+            self.write_str("pure ");
+        }
         self.write_str("fn ");
         self.write_ident(&e.name);
         self.write_str("(");

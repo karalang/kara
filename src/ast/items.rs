@@ -1246,6 +1246,10 @@ pub struct ExternFunction {
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
     pub effects: Option<EffectList>,
+    /// `pure fn strlen(s: CStr) -> i64;` inside an `extern` block: the
+    /// foreign function has no effects. Without it (and without a `with`
+    /// clause) an extern function gets its ABI's default effect set.
+    pub is_pure: bool,
 }
 
 /// `unsafe extern "ABI" { ... }` block — see [`Item::ExternBlock`].

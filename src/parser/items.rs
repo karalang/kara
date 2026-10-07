@@ -220,6 +220,17 @@ impl super::Parser {
                 self.reject_mod_decl();
                 None
             }
+            // `pure` marks an extern function as effect-free; it means nothing
+            // on a function with a body, whose effects are inferred or checked.
+            Token::ReservedFuture("pure") if matches!(self.peek_token_ref_at(1), Token::Fn) => {
+                self.error(
+                    "only functions in an `extern` block take `pure`; a function with \
+                     a body has the effects its body has",
+                );
+                self.advance();
+                let f = self.parse_function(attributes, is_pub, is_private, false, false)?;
+                Some(Item::Function(f))
+            }
             // `use a.b.C;` was the pre-module-system spelling of `import`. It is
             // gone (design review 2026-10-07 § 3); the diagnostic carries the
             // rewrite, and the declaration is parsed as the `import` it means

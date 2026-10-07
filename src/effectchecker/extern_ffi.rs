@@ -47,6 +47,8 @@ impl<'a> super::EffectChecker<'a> {
             || block_attrs.iter().any(|a| a.is_bare("noblock"));
         let mut abi_defaults = EffectSet::new();
         match e.abi.as_str() {
+            // `pure fn`: no effects at all, whatever the ABI.
+            _ if e.is_pure => {}
             "C" if !has_noblock => {
                 abi_defaults.add(
                     Effect {
@@ -119,8 +121,11 @@ impl<'a> super::EffectChecker<'a> {
             }
         }
 
-        // Advisory linter hints for commonly-omitted effects.
-        self.check_ffi_linter_hints(&e.name, &e.span, &final_decl);
+        // Advisory linter hints for commonly-omitted effects. A `pure`
+        // declaration is the author saying there are none.
+        if !e.is_pure {
+            self.check_ffi_linter_hints(&e.name, &e.span, &final_decl);
+        }
 
         let sym = self.interner.intern(&e.name);
         self.declared_effects.insert(sym, final_decl);

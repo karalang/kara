@@ -113,12 +113,20 @@ impl super::Parser {
                 false
             };
 
+            // `pure fn ...;` — the foreign function has no effects.
+            let pure_span = self.current_span();
+            let is_pure = matches!(self.peek_token_ref(), Token::ReservedFuture("pure"))
+                && matches!(self.peek_token_ref_at(1), Token::Fn);
+            if is_pure {
+                self.advance();
+            }
+
             // Dispatch on the next significant token: `fn` for a foreign
             // function declaration, `type` for an opaque foreign type
             // declaration. Anything else is a focused diagnostic.
             match self.peek_token_ref() {
                 Token::Fn => {
-                    let item = self.parse_extern_block_item_fn(
+                    let mut item = self.parse_extern_block_item_fn(
                         &abi,
                         attributes,
                         doc_comment,
@@ -126,6 +134,14 @@ impl super::Parser {
                         is_private,
                         item_start,
                     )?;
+                    if is_pure && item.effects.is_some() {
+                        self.error_at(
+                            "a `pure` extern function has no effects, so it takes no \
+                             `with` clause; remove one of the two",
+                            pure_span,
+                        );
+                    }
+                    item.is_pure = is_pure;
                     items.push(ExternItem::Function(Box::new(item)));
                 }
                 Token::Type => {
@@ -217,6 +233,7 @@ impl super::Parser {
             params,
             return_type,
             effects,
+            is_pure: false,
         })
     }
 
@@ -317,6 +334,7 @@ impl super::Parser {
             params,
             return_type,
             effects,
+            is_pure: false,
         })
     }
 

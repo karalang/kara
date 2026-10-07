@@ -998,6 +998,10 @@ extern "C" fn read(fd: i32, buf: *mut u8, count: usize) -> isize
     with reads(FileSystem);
 ```
 
+Inside an `unsafe extern "ABI" { ... }` block, `pure` before `fn` declares a
+foreign function with no effects (`pure fn strlen(s: CStr) -> i64;`). A `pure`
+declaration takes no `with` clause, and only extern functions take `pure`.
+
 ### 3.12 Type Aliases and Refinement Types
 
 ```
