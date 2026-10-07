@@ -41,6 +41,8 @@ pub struct Lowered {
     /// One line per construct the builder does not lower yet, with its
     /// position. Empty when every reachable body was built.
     pub errors: Vec<String>,
+    /// The instances that take `ref self` or `mut ref self`.
+    pub receivers: FxHashSet<String>,
 }
 
 /// Lower every instance reachable from `main`.
@@ -107,8 +109,16 @@ pub fn lower_program(
         }
         None => lcx.errors.push("no `main` function".into()),
     }
+    let mut receivers = FxHashSet::default();
     loop {
         if let Some((def, args, name)) = lcx.queue.pop() {
+            if lcx
+                .fns
+                .get(&def)
+                .is_some_and(|i| matches!(i.f.self_param, Some(SelfParam::Ref | SelfParam::MutRef)))
+            {
+                receivers.insert(name.clone());
+            }
             lcx.lower_instance(def, &args, &name);
         } else if let Some(job) = lcx.closure_queue.pop() {
             lcx.lower_closure(job);
@@ -120,6 +130,7 @@ pub fn lower_program(
         program: lcx.program,
         tys: lcx.tys,
         errors: lcx.errors,
+        receivers,
     }
 }
 
@@ -2510,10 +2521,16 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// A user `impl PartialEq` method `eq` for `t`, with its instance
     /// arguments.
     fn user_eq(&self, t: Ty) -> Option<(DefId, Vec<Ty>)> {
+        self.user_impl_method(t, "PartialEq", "eq")
+    }
+
+    /// Method `method` of the user's `impl <tr> for t`, with the impl's
+    /// generic arguments when it has any.
+    fn user_impl_method(&self, t: Ty, tr: &str, method: &str) -> Option<(DefId, Vec<Ty>)> {
         let (adt, args) = self.tys().tcx().adt_of(t)?;
         let mut path = self.lcx.defs.table.get(adt.def).path.segments.clone();
-        path.push("impl PartialEq#0".to_string());
-        path.push("eq".to_string());
+        path.push(format!("impl {tr}#0"));
+        path.push(method.to_string());
         let d = self.lcx.defs.table.lookup(&DefPath::new(path))?;
         let item = self.lcx.fns.get(&d)?;
         Some((
@@ -3873,7 +3890,29 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => {
                 let t = self.expr_ty(a)?;
-                if self.is_copy(t) {
+                let (_, base) = self.strip_ty_full(t);
+                if let Some((d, args)) = self.user_impl_method(base, "Display", "to_string") {
+                    // A user type prints through its `Display`: its
+                    // `to_string` into a String the statement drops.
+                    let p = self.expr_place(a, false)?;
+                    let (p, base) = self.strip_refs(p);
+                    let recv = self.ref_to(p, base);
+                    let st = self.tys().tcx().intern(HK::Str);
+                    let s = self.scoped_temp(st);
+                    let name = self.lcx.instance(d, args.clone());
+                    let func = self.fn_operand(&name, d, args);
+                    let next = self.b.new_block();
+                    self.goto_with(
+                        TerminatorKind::Call {
+                            func,
+                            args: vec![recv],
+                            destination: Place::local(s),
+                            target: Some(next),
+                        },
+                        next,
+                    );
+                    ops.push(self.ref_to(Place::local(s), st));
+                } else if self.is_copy(t) {
                     ops.push(self.expr_operand(a)?);
                 } else {
                     let p = self.expr_place(a, false)?;
@@ -4001,16 +4040,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.lcx.self_tys.entry(d).or_insert(base);
                 }
                 let recv = match mode {
-                    Some(SelfParam::Owned) => self.expr_operand(object)?,
-                    Some(SelfParam::Ref) => self.recv_ref(object, false)?,
-                    Some(SelfParam::MutRef) => self.recv_ref(object, true)?,
+                    Some(SelfParam::Owned) => PendingRecv::Ready(self.expr_operand(object)?),
+                    Some(SelfParam::Ref) => self.recv_place(object, false)?,
+                    Some(SelfParam::MutRef) => self.recv_place(object, true)?,
                     None => return self.unsupported(e.span, "an associated function as a method"),
                 };
-                let mut ops = vec![recv];
+                let mut rest = Vec::with_capacity(args.len());
                 for (a, p) in args.iter().zip(&f.params) {
                     let pt = self.callee_param_ty(p, &inst_args)?;
-                    ops.push(self.arg_operand(&a.value, pt)?);
+                    rest.push(self.arg_operand(&a.value, pt)?);
                 }
+                let mut ops = vec![self.recv_borrow(recv)];
+                ops.extend(rest);
                 let name = self.lcx.instance(d, inst_args.clone());
                 let func = self.fn_operand(&name, d, inst_args);
                 let next = self.b.new_block();
@@ -4074,11 +4115,27 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// A reference to the receiver, unless it already is one.
     fn recv_ref(&mut self, object: &'a Expr, mutable: bool) -> R<Operand> {
+        let pending = self.recv_place(object, mutable)?;
+        Ok(self.recv_borrow(pending))
+    }
+
+    /// The first half of a receiver borrow: evaluate the receiver's place,
+    /// leaving the borrow itself to `recv_borrow`, which the caller emits
+    /// after the arguments (core semantics §5.6, two-phase borrows).
+    fn recv_place(&mut self, object: &'a Expr, mutable: bool) -> R<PendingRecv> {
         let t = self.expr_ty(object)?;
         if matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_)) {
-            return self.expr_operand(object);
+            return Ok(PendingRecv::Ready(self.expr_operand(object)?));
         }
         let p = self.expr_place(object, mutable)?;
+        Ok(PendingRecv::Borrow(p, t, mutable))
+    }
+
+    fn recv_borrow(&mut self, pending: PendingRecv) -> Operand {
+        let (p, t, mutable) = match pending {
+            PendingRecv::Ready(op) => return op,
+            PendingRecv::Borrow(p, t, m) => (p, t, m),
+        };
         let rt = self.tys().tcx().reference(t, mutable);
         let r = self.temp(rt);
         let kind = if mutable {
@@ -4087,7 +4144,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             BorrowKind::Shared
         };
         self.assign(r, Rvalue::Ref(kind, p));
-        Ok(Operand::Move(Place::local(r)))
+        Operand::Move(Place::local(r))
     }
 
     // ── function values ─────────────────────────────────────────────
@@ -4707,8 +4764,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                     | "push_str" | "truncate" => true,
                     _ => return self.unsupported(e.span, &format!("the library method `{key}`")),
                 };
-                let recv = self.recv_ref(object, mutates)?;
-                let mut ops = vec![recv];
+                let recv = self.recv_place(object, mutates)?;
+                let mut rest = Vec::with_capacity(args.len());
                 self.hint_lib_args(base, method, args);
                 // Keys and needles are borrowed; pushed and inserted values
                 // move in.
@@ -4719,14 +4776,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                 for a in args {
                     let at = self.expr_ty(&a.value)?;
                     let by_ref = method == "push_str" || (borrows && !self.is_copy(at));
-                    ops.push(self.lib_arg(&a.value, by_ref)?);
+                    rest.push(self.lib_arg(&a.value, by_ref)?);
                 }
+                let mut ops = vec![self.recv_borrow(recv)];
+                ops.extend(rest);
                 let name = format!("{}.{method}", self.tys().display(base));
                 self.call_native(&name, ops, dest);
                 Ok(())
             }
         }
     }
+}
+
+/// A method receiver whose borrow is not taken yet: an operand already in
+/// hand, or the place to borrow, its type and whether mutably.
+enum PendingRecv {
+    Ready(Operand),
+    Borrow(Place, Ty, bool),
 }
 
 enum PendingPlace<'a> {
@@ -4856,12 +4922,24 @@ pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
     }
     // `KARAC_MIR_DUMP=built` or `=elaborated` prints every body to stderr.
     let dump = std::env::var("KARAC_MIR_DUMP").ok();
+    let names: FxHashSet<String> = lowered.program.bodies.keys().cloned().collect();
+    let borrowck = std::env::var("KARAC_MIR_BORROWCK").is_ok_and(|v| v == "1");
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
         }
         crate::mir::check_moves(body, &lowered.tys)
             .map_err(|e| format!("move check {}: {}", body.instance.name, e.join("; ")))?;
+        // A library native's result borrows from its first argument, the
+        // collection, when it borrows at all. Opt-in (`KARAC_MIR_BORROWCK=1`)
+        // until a call's owned result stops inheriting its arguments' loans.
+        if borrowck {
+            let has_receiver = |i: &InstanceId| {
+                !names.contains(i.name.as_str()) || lowered.receivers.contains(&i.name)
+            };
+            crate::mir::check_borrows(body, &lowered.tys, &has_receiver)
+                .map_err(|e| format!("borrow check {}: {}", body.instance.name, e.join("; ")))?;
+        }
         crate::mir::elaborate_drops(body, &mut lowered.tys)
             .map_err(|e| format!("elaborate {}: {e}", body.instance.name))?;
         if dump.as_deref() == Some("elaborated") {
@@ -4928,6 +5006,28 @@ mod tests {
             "{} of {ran}:\n{}",
             bad.len(),
             bad.join("\n")
+        );
+    }
+
+    /// A user type with a `Display` impl prints through its `to_string`,
+    /// in `println(x)` and inside an f-string.
+    #[test]
+    fn user_display_prints_through_to_string() {
+        let src = r#"
+struct P { x: i64 }
+impl Display for P {
+    fn to_string(ref self) -> String { if self.x > 0 { "pos" } else { "neg" } }
+}
+fn main() {
+    let p = P { x: 1 };
+    let q = P { x: -1 };
+    println(f"p = {p}, q = {q}");
+    println(q);
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("p = pos, q = neg\nneg\n".to_string(), Some(0)))
         );
     }
 }
