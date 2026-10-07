@@ -214,6 +214,11 @@ impl ProgramDefs {
             .copied()
     }
 
+    /// Is `def` the compiler's `std::builtin::Unit`, which names `()`?
+    pub fn is_builtin_unit(&self, def: DefId) -> bool {
+        self.table.get(def).path.segments == ["std", "builtin", "Unit"]
+    }
+
     /// Every type and const parameter in scope inside `def`, in the order a
     /// substitution lists them: for a method, its impl's (or trait's)
     /// parameters, then its own; otherwise the definition's own.

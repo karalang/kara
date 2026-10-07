@@ -108,6 +108,10 @@ impl<'a> ProgramHirDefs<'a> {
 impl HirDefs for ProgramHirDefs<'_> {
     fn type_def(&self, name: &str) -> Option<TypeName> {
         let d = self.defs.lookup(self.module, name)?;
+        if self.defs.is_builtin_unit(d) {
+            // `Unit` spelled by name is `()`.
+            return None;
+        }
         match self.defs.table.get(d).kind {
             DefKind::Struct
             | DefKind::Enum

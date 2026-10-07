@@ -203,7 +203,8 @@ pub struct AdtDef {
     pub variants: Vec<VariantDef>,
     /// A user `Drop` body exists for this type itself.
     pub has_drop_impl: bool,
-    /// Derives `Copy`.
+    /// Derives `Copy` (`Option` is `Copy` without saying so, core
+    /// semantics §1.1); an instance is `Copy` when its arguments are too.
     pub is_copy: bool,
 }
 
@@ -617,7 +618,12 @@ impl TyCtxt {
                 self.list(l).into_iter().all(|t| self.is_copy(t))
             }
             TyKind::Array { elem, .. } => self.is_copy(elem),
-            TyKind::Adt { def, .. } => self.adt_def(def).is_some_and(|a| a.is_copy),
+            // A generic type that is `Copy` is so at the instances whose
+            // arguments are (`Option[i64]`, not `Option[String]`).
+            TyKind::Adt { def, args } => {
+                self.adt_def(def).is_some_and(|a| a.is_copy)
+                    && self.list(args).into_iter().all(|t| self.is_copy(t))
+            }
             TyKind::Str
             | TyKind::Shared { .. }
             | TyKind::MutRef(_)
@@ -746,6 +752,8 @@ impl TyCtxt {
                     bound,
                     args: lower_all(args)?,
                 },
+                // `Unit` spelled by name is `()` (design.md § Entry Point).
+                None if name == "Unit" && args.is_empty() => TyKind::Unit,
                 None => return Err(LowerError::UnknownName(name.clone())),
             },
             Type::Shared(name) => match lookup(name) {

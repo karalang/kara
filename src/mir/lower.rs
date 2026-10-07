@@ -155,8 +155,9 @@ struct Lcx<'a> {
     /// shorthand fields all bind through that pattern's node).
     binding_syms: FxHashMap<(NodeId, String), SymbolId>,
     fns: FxHashMap<DefId, FnItem<'a>>,
-    /// Module-level constants, by definition.
-    consts: FxHashMap<DefId, &'a ast::ConstDecl>,
+    /// Module-level constants and immutable `let` bindings, by
+    /// definition, with their initializers.
+    consts: FxHashMap<DefId, &'a Expr>,
     /// The receiver type a method of a non-generic impl was called with:
     /// its `self` type when the impl names a concrete instance of a
     /// generic type (`impl Joiner for Vec[String]`).
@@ -260,7 +261,14 @@ impl<'a> Lcx<'a> {
                 }
                 Item::ConstDecl(c) => {
                     if let Some(d) = self.defs.lookup(0, &c.name) {
-                        self.consts.insert(d, c);
+                        self.consts.insert(d, &c.value);
+                    }
+                }
+                // An immutable module `let` is evaluated where it is used,
+                // like a constant; `let mut` needs a global place.
+                Item::ModuleBinding(b) if !b.is_mut => {
+                    if let Some(d) = self.defs.lookup(0, &b.name) {
+                        self.consts.insert(d, &b.value);
                     }
                 }
                 Item::ImplBlock(b) => {
@@ -455,6 +463,10 @@ impl<'a> Lcx<'a> {
         let defs = self.defs;
         let lookup = |name: &str| {
             let d = defs.lookup(0, name)?;
+            if defs.is_builtin_unit(d) {
+                // `Unit` spelled by name is `()`.
+                return None;
+            }
             match defs.table.get(d).kind {
                 DefKind::Trait => Some(TypeName::Trait(d)),
                 _ => Some(TypeName::Adt(d)),
@@ -611,7 +623,7 @@ impl<'a> Lcx<'a> {
             is_enum,
             variants: vdefs,
             has_drop_impl,
-            is_copy: derived.contains("Copy"),
+            is_copy: derived.contains("Copy") || (is_enum && name == "Option"),
         });
         if has_drop_impl {
             let drop_fn = self
@@ -1052,6 +1064,37 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.push_scope();
                 self.compound_assign(target, op.clone(), value)?;
                 self.pop_scope()
+            }
+            StmtKind::LetElse {
+                pattern,
+                value,
+                else_block,
+                ..
+            } => {
+                // `let P = v else { diverge };`: the bindings belong to the
+                // enclosing block; the scrutinee's temporaries are the
+                // statement's, dropped on either path.
+                self.push_scope();
+                let (place, st, by_ref) = self.scrutinee(value)?;
+                let fail = self.b.new_block();
+                self.test_pattern(pattern, &place, st, fail)?;
+                let matched = self.cur;
+                self.cur = fail;
+                self.push_scope();
+                let t = self.unit();
+                let tmp = self.temp(t);
+                self.block_into(else_block, Place::local(tmp))?;
+                self.pop_scope()?;
+                // The else block diverges (the type checker requires it).
+                self.diverge(TerminatorKind::Unreachable);
+                self.cur = matched;
+                let mut binds = Vec::new();
+                self.bind_pattern(pattern, &place, st, by_ref, &mut binds)?;
+                self.pop_scope()?;
+                for (l, t) in binds {
+                    self.declare(l, t);
+                }
+                Ok(())
             }
             StmtKind::Defer { body } => {
                 self.schedule(ScopeEntry::Defer(body));
@@ -1521,6 +1564,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                 operand,
             } => {
                 let p = self.expr_place(operand, mutable)?;
+                // A `Copy` part bound through a `ref` is bound by value
+                // (`bind_one`), so `*min` of it is the binding itself.
+                let pt = self.place_type(&p);
+                if !matches!(
+                    self.tys().tcx().kind(pt),
+                    HK::Ref(_) | HK::MutRef(_) | HK::RawPtr { .. }
+                ) && self.is_copy(pt)
+                {
+                    return Ok(p);
+                }
                 Ok(p.project(ProjElem::Deref))
             }
             _ => self.temp_place(e),
@@ -2255,6 +2308,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 ..
             } => self.method_call(e, object, method, args, dest),
             ExprKind::Question(inner) => self.question(e, inner, dest),
+            ExprKind::NilCoalesce { left, right } => self.nil_coalesce(left, right, dest),
             ExprKind::InterpolatedStringLit(_) => {
                 // An f-string as a value: the library's `format`, which takes
                 // the parts the way `print` does.
@@ -2290,7 +2344,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     None => match self.lcx.consts.get(&d) {
                         // A constant's value is computed where it is used.
-                        Some(c) => self.const_value(e, &c.value, dest),
+                        Some(value) => self.const_value(e, value, dest),
                         None => self.unsupported(e.span, "this path"),
                     },
                 }
@@ -2931,7 +2985,26 @@ impl<'l, 'a> Bx<'l, 'a> {
         body: &'a Block,
         dest: Place,
     ) -> R<()> {
+        // `for (i, x) in c.iter().enumerate()`: the loop over `c`, with `i`
+        // bound to the position.
+        let (iterable, idx, pattern) = match (&iterable.kind, &pattern.kind) {
+            (
+                ExprKind::MethodCall {
+                    object,
+                    method,
+                    args,
+                    ..
+                },
+                PatternKind::Tuple(ps),
+            ) if method == "enumerate" && args.is_empty() && ps.len() == 2 => {
+                (&**object, Some(&ps[0]), &ps[1])
+            }
+            _ => (iterable, None, pattern),
+        };
         if let Some(text) = self.chars_of(iterable)? {
+            if idx.is_some() {
+                return self.unsupported(e.span, "`enumerate` over chars");
+            }
             return self.for_chars(label, pattern, body, text, dest);
         }
         #[derive(PartialEq, Clone, Copy)]
@@ -3028,6 +3101,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         if src_is_ref && mode == Mode::Owned {
             return self.unsupported(e.span, "a `for` loop that moves out of a borrow");
+        }
+        if idx.is_some() && mode == Mode::Owned {
+            return self.unsupported(e.span, "`enumerate` over a moved collection");
         }
         let coll_name = self.tys().display(coll);
         // A `Vec` is read by `index` with a `usize`; the other collections
@@ -3141,6 +3217,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         });
         let r = self.for_collection_round(
             pattern,
+            idx,
             body,
             mode == Mode::Owned,
             mode == Mode::Mut,
@@ -3474,6 +3551,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn for_collection_round(
         &mut self,
         pattern: &'a Pattern,
+        idx: Option<&'a Pattern>,
         body: &'a Block,
         owned: bool,
         mutable: bool,
@@ -3530,6 +3608,21 @@ impl<'l, 'a> Bx<'l, 'a> {
             (Place::local(r).project(ProjElem::Deref), true)
         };
         let mut binds = Vec::new();
+        if let Some(ip) = idx {
+            if !matches!(ip.kind, PatternKind::Wildcard) {
+                let it = self.node_ty(ip.id, ip.span)?;
+                let ut = self.b.local_ty(i);
+                let v = self.temp(it);
+                let at = Operand::Copy(Place::local(i));
+                let rv = if it == ut {
+                    Rvalue::Use(at)
+                } else {
+                    Rvalue::Cast(CastKind::IntToInt, at, it)
+                };
+                self.assign(v, rv);
+                self.bind_pattern(ip, &Place::local(v), it, false, &mut binds)?;
+            }
+        }
         match &pattern.kind {
             // A shared reference to a `Copy` element reads the same as a
             // copy of it, which is what `x` holds.
@@ -3541,7 +3634,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             // `for x in v.iter()`: `x` is the reference itself.
             PatternKind::Binding(name) if by_ref => {
                 let x = self.user_local(name, elem_ref, pattern.id);
-                self.assign(x, Rvalue::Use(Operand::Copy(Place::local(place.local))));
+                let r = Place::local(place.local);
+                let op = if mutable {
+                    Operand::Move(r)
+                } else {
+                    Operand::Copy(r)
+                };
+                self.assign(x, Rvalue::Use(op));
                 binds.push((x, elem_ref));
             }
             _ => self.bind_pattern(pattern, &place, elem, by_ref, &mut binds)?,
@@ -3690,6 +3789,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         let (place, st, by_ref) = self.scrutinee(scrutinee)?;
         let join = self.b.new_block();
         for arm in arms {
+            if let PatternKind::Or(alts) = &arm.pattern.kind {
+                if arm.guard.is_none() && self.pattern_binds(&arm.pattern) {
+                    self.or_arm(alts, &arm.body, &place, st, by_ref, join, dest.clone())?;
+                    continue;
+                }
+            }
             let next = self.b.new_block();
             self.test_pattern(&arm.pattern, &place, st, next)?;
             self.push_scope();
@@ -3739,6 +3844,69 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.pop_scope()
     }
 
+    /// A `match` arm `A(x) | B(x) => body`: each alternative is tested in
+    /// turn and binds its own locals, which move into the first
+    /// alternative's; the body reads those. Leaves `self.cur` at the next
+    /// arm's test.
+    #[allow(clippy::too_many_arguments)]
+    fn or_arm(
+        &mut self,
+        alts: &'a [Pattern],
+        body: &'a Expr,
+        place: &Place,
+        st: Ty,
+        by_ref: bool,
+        join: BasicBlock,
+        dest: Place,
+    ) -> R<()> {
+        let body_bb = self.b.new_block();
+        let next = self.b.new_block();
+        self.push_scope();
+        let mut canon: Vec<(String, Local, Ty)> = Vec::new();
+        for (i, alt) in alts.iter().enumerate() {
+            let fail = if i + 1 == alts.len() {
+                next
+            } else {
+                self.b.new_block()
+            };
+            self.test_pattern(alt, place, st, fail)?;
+            let mut binds = Vec::new();
+            self.bind_pattern(alt, place, st, by_ref, &mut binds)?;
+            for (l, t) in binds {
+                let Some((name, node)) = self.b.user_name(l) else {
+                    continue;
+                };
+                let c = match canon.iter().find(|(n, ..)| *n == name) {
+                    Some(&(_, c, _)) => {
+                        let op = self.use_place(Place::local(l), t);
+                        self.assign(c, Rvalue::Use(op));
+                        c
+                    }
+                    None => {
+                        canon.push((name.clone(), l, t));
+                        l
+                    }
+                };
+                // The body's uses of `name` resolve to one alternative's
+                // binding: every alternative's names the shared local.
+                if let Some(&sym) = self.lcx.binding_syms.get(&(node, name)) {
+                    self.locals.insert(sym, c);
+                }
+            }
+            self.goto(body_bb);
+            self.cur = fail;
+        }
+        self.cur = body_bb;
+        for &(_, l, t) in &canon {
+            self.declare(l, t);
+        }
+        self.expr_into(body, dest)?;
+        self.pop_scope()?;
+        self.goto(join);
+        self.cur = next;
+        Ok(())
+    }
+
     /// The place a `match` or `if let` reads its scrutinee from (a temporary
     /// in the current scope unless it names a local's place), seen through
     /// any reference: the place, its type, and whether it binds by
@@ -3747,7 +3915,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         let st = self.expr_ty(scrutinee)?;
         // An element (`v[i]`) is matched where it lies, as a local is: a
         // binding then copies, counts or borrows it out of the collection.
-        let element = matches!(scrutinee.kind, ExprKind::Index { .. });
+        fn element(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::Index { .. } => true,
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    element(object)
+                }
+                _ => false,
+            }
+        }
+        let element = element(scrutinee);
         let place = if self.is_place(scrutinee) && (element || self.is_local_rooted(scrutinee)) {
             self.expr_place(scrutinee, false)?
         } else {
@@ -3758,6 +3935,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         // Matching through a reference binds by reference.
         Ok(match self.tys().tcx().kind(st) {
             HK::Ref(inner) | HK::MutRef(inner) => (place.project(ProjElem::Deref), inner, true),
+            // A place reached through a reference or handle (`self.label`
+            // in a `ref self` method, `v[i]`) is a `ref` scrutinee too
+            // (core semantics §4.6): matched through a shared reborrow, so
+            // its bindings are `ref`s even under a `mut ref`.
+            _ if place.projection.contains(&ProjElem::Deref) => {
+                let rt = self.tys().tcx().reference(st, false);
+                let r = self.temp(rt);
+                self.assign(r, Rvalue::Ref(BorrowKind::Shared, place));
+                (Place::local(r).project(ProjElem::Deref), st, true)
+            }
             _ => (place, st, false),
         })
     }
@@ -3860,6 +4047,29 @@ impl<'l, 'a> Bx<'l, 'a> {
                         return self.test_variant(pat, d, &[], place, t, fail);
                     }
                 }
+                Ok(())
+            }
+            PatternKind::Literal(LiteralPattern::String(text)) => {
+                // `"USD" =>`: the library's `String.eq` against the constant.
+                let r = match self.tys().tcx().kind(t) {
+                    HK::Ref(_) | HK::MutRef(_) => Operand::Copy(place.clone()),
+                    _ => self.ref_to(place.clone(), t),
+                };
+                let bool_t = self.tys().bool();
+                let eq = self.temp(bool_t);
+                self.call_native(
+                    "String.eq",
+                    vec![r, self.static_str(text)],
+                    Place::local(eq),
+                );
+                let ok = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::SwitchInt {
+                        discr: Operand::Move(Place::local(eq)),
+                        targets: SwitchTargets::if_else(ok, fail),
+                    },
+                    ok,
+                );
                 Ok(())
             }
             PatternKind::Literal(lit) => {
@@ -4146,7 +4356,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         // payload); through a `ref`, a `Copy` part is copied, which reads
         // the same.
         let mutable = by_ref && self.through_mut_ref(&place);
-        if mutable || (by_ref && !self.is_copy(t)) {
+        // A binding that covers a whole handle (or handle aggregate) copies
+        // it even from a `ref` scrutinee (core semantics §4.6, §6.1).
+        let handle = self.is_handle(t) || self.is_handle_aggregate(t);
+        if mutable || (by_ref && !self.is_copy(t) && !handle) {
             let rt = self.tys().tcx().reference(t, mutable);
             let l = self.user_local(name, rt, node);
             let kind = if mutable {
@@ -4158,7 +4371,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             out.push((l, rt));
         } else {
             let l = self.user_local(name, t, node);
-            if self.is_handle(t) || self.is_handle_aggregate(t) {
+            if handle {
                 // A `shared` handle binds a counted copy (§6.1).
                 self.count_copy(place, t, Place::local(l));
             } else {
@@ -4204,7 +4417,31 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let callee_kind = rc.callee.clone();
         let substs = self.lcx.tys.tcx().list(rc.substs);
-        let _ = callee;
+        // `LOG_PATH.clone()` parses as a path: a library method of the
+        // constant's value, which is computed here.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if let [c, m] = segments.as_slice() {
+                let value = self
+                    .lcx
+                    .defs
+                    .lookup(0, c)
+                    .and_then(|d| self.lcx.consts.get(&d).copied());
+                if let Some(value) = value {
+                    let vt = self.expr_ty(value)?;
+                    let tmp = self.scoped_temp(vt);
+                    self.expr_into(value, Place::local(tmp))?;
+                    let mut ops = vec![self.ref_to(Place::local(tmp), vt)];
+                    for a in args {
+                        let t = self.expr_ty(&a.value)?;
+                        let by_ref = !self.is_copy(t);
+                        ops.push(self.lib_arg(&a.value, by_ref)?);
+                    }
+                    let name = format!("{}.{m}", self.tys().display(vt));
+                    self.call_native(&name, ops, dest);
+                    return Ok(());
+                }
+            }
+        }
         match callee_kind {
             Callee::Builtin(name) => self.builtin_call(e, &name, args, dest),
             Callee::Value => self.call_value(e, callee, args, dest),
@@ -4229,7 +4466,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                     if self.scalar_min_max(e, &name, args, dest.clone())? {
                         return Ok(());
                     }
-                    return self.unsupported(e.span, "a call to this function");
+                    if !inst_args.is_empty() || name.contains('.') {
+                        return self.unsupported(e.span, "a call to this function");
+                    }
+                    // A library function with no Kāra body (`sleep_ms(2)`):
+                    // the interpreter's, by name. Copy arguments go by
+                    // value, the rest by reference.
+                    let mut ops = Vec::new();
+                    for a in args {
+                        let t = self.expr_ty(&a.value)?;
+                        let by_ref = !self.is_copy(t);
+                        ops.push(self.lib_arg(&a.value, by_ref)?);
+                    }
+                    self.call_native(&name, ops, dest);
+                    return Ok(());
                 };
                 if args.len() != f.params.len() {
                     return self.unsupported(e.span, "a call that leaves out default arguments");
@@ -4532,7 +4782,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             // a library constructor, named after the type it builds.
             _ if name.contains('.') => {
                 let (owner, m) = name.rsplit_once('.').unwrap();
-                let t = self.expr_ty(e)?;
+                // `x.unwrap_or(Vec.new())`: a constructor whose type the
+                // checker left to its context has its destination's.
+                let t = if self.lcx.node_types.contains_key(&e.id)
+                    || self.ty_hints.contains_key(&e.id)
+                {
+                    self.expr_ty(e)?
+                } else {
+                    self.place_type(&dest)
+                };
                 let mut ty_name = self.tys().display(t);
                 if ty_name.split('[').next() != Some(owner) {
                     // A library function that builds something else
@@ -4642,6 +4900,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                 ops.push(self.lib_arg(&a.value, by_ref)?);
             }
             self.call_native(&format!("{resource}.{method}"), ops, dest);
+            return Ok(());
+        }
+        if let Some(owner) = self.primitive_owner(object) {
+            // `i64.parse(s)`, `f64.parse(s)`: a library function of a
+            // primitive type, named after it. Copy arguments go by value,
+            // the rest by reference.
+            let mut ops = Vec::new();
+            for a in args {
+                let t = self.expr_ty(&a.value)?;
+                let by_ref = !self.is_copy(t);
+                ops.push(self.lib_arg(&a.value, by_ref)?);
+            }
+            self.call_native(&format!("{owner}.{method}"), ops, dest);
             return Ok(());
         }
         if method == "collect" && args.is_empty() {
@@ -4755,7 +5026,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let pt = self.callee_param_ty(p, &inst_args)?;
                     rest.push(self.arg_operand(&a.value, pt)?);
                 }
-                let mut ops = vec![self.recv_borrow(recv)];
+                let mut ops = vec![self.recv_borrow_after(recv, &mut rest)];
                 ops.extend(rest);
                 let name = self.lcx.instance(d, inst_args.clone());
                 let func = self.fn_operand(&name, d, inst_args);
@@ -4800,6 +5071,24 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The ambient resource a lowercase module receiver names (`env` is
     /// `Env`), unless a local shadows it.
+    /// The primitive type `object` names when it is a type rather than a
+    /// value: `i64` in `i64.parse(s)`.
+    fn primitive_owner(&self, object: &Expr) -> Option<&'a str> {
+        let ExprKind::Identifier(name) = &object.kind else {
+            return None;
+        };
+        if matches!(self.lcx.res.get(&object.id), Some(Res::Local(_)))
+            || self.lcx.node_types.contains_key(&object.id)
+        {
+            return None;
+        }
+        const PRIMS: [&str; 16] = [
+            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+            "f32", "f64", "bool", "char",
+        ];
+        PRIMS.iter().copied().find(|p| *p == name)
+    }
+
     fn ambient_module(&self, object: &Expr) -> Option<&'static str> {
         let ExprKind::Identifier(name) = &object.kind else {
             return None;
@@ -4842,6 +5131,28 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         let p = self.expr_place(object, mutable)?;
         Ok(PendingRecv::Borrow(p, t, mutable))
+    }
+
+    /// The receiver's borrow, taken after the arguments `rest` were
+    /// evaluated (core semantics §5.6, two-phase borrows): an argument that
+    /// still names a place (`doc.move_subtree(a, doc.root, 9)`) is read
+    /// into a temporary first, so `&mut doc` does not cover the read.
+    fn recv_borrow_after(&mut self, pending: PendingRecv, rest: &mut [Operand]) -> Operand {
+        if matches!(pending, PendingRecv::Borrow(_, _, true)) {
+            for op in rest.iter_mut() {
+                let (Operand::Copy(p) | Operand::Move(p)) = op else {
+                    continue;
+                };
+                if p.projection.is_empty() && self.b.is_temp(p.local) {
+                    continue;
+                }
+                let t = self.place_type(p);
+                let l = self.temp(t);
+                let read = std::mem::replace(op, Operand::Move(Place::local(l)));
+                self.assign(l, Rvalue::Use(read));
+            }
+        }
+        self.recv_borrow(pending)
     }
 
     fn recv_borrow(&mut self, pending: PendingRecv) -> Operand {
@@ -5632,6 +5943,65 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(true)
     }
 
+    /// `left ?? right`: `left`'s `Some`/`Ok` payload, else `right`, which is
+    /// evaluated only then (design.md § Optional chaining). `left` is taken
+    /// by value, as `unwrap_or` takes its receiver.
+    fn nil_coalesce(&mut self, left: &'a Expr, right: &'a Expr, dest: Place) -> R<()> {
+        let lt = self.expr_ty(left)?;
+        let unsupported = |s: &mut Self| s.unsupported(left.span, "`??` on this type");
+        let Some((adt, _)) = self.tys().tcx().adt_of(lt) else {
+            return unsupported(self);
+        };
+        let ok_name = match adt.name.as_str() {
+            "Option" => "Some",
+            "Result" => "Ok",
+            _ => return unsupported(self),
+        };
+        let Some(ok) = adt.variants.iter().position(|v| v.name == ok_name) else {
+            return unsupported(self);
+        };
+        let ok = ok as u32;
+        let p = if self.is_place(left) && self.is_local_rooted(left) {
+            self.expr_place(left, false)?
+        } else {
+            let l = self.scoped_temp(lt);
+            self.expr_into(left, Place::local(l))?;
+            Place::local(l)
+        };
+        let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+        let d = self.temp(i64_t);
+        self.assign(d, Rvalue::Discriminant(p.clone()));
+        let ok_bb = self.b.new_block();
+        let other = self.b.new_block();
+        let join = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(d)),
+                targets: SwitchTargets {
+                    values: vec![(ok as u128, ok_bb)],
+                    otherwise: other,
+                },
+            },
+            ok_bb,
+        );
+        match self.tys().tcx().field_ty(lt, Some(ok), 0) {
+            Some(pt) => {
+                let fp = p.project(ProjElem::Downcast(VariantIdx(ok))).field(0, pt);
+                let op = self.use_place(fp, pt);
+                self.assign(dest.clone(), Rvalue::Use(op));
+            }
+            None => self.assign(dest.clone(), Rvalue::Use(unit_const(self.unit()))),
+        }
+        self.goto(join);
+        self.cur = other;
+        self.push_scope();
+        self.expr_into(right, dest)?;
+        self.pop_scope()?;
+        self.goto(join);
+        self.cur = join;
+        Ok(())
+    }
+
     /// A library method the interpreter implements natively.
     fn builtin_method(
         &mut self,
@@ -5690,7 +6060,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         rest.push(self.expr_operand(&a.value)?);
                     }
                 }
-                let mut ops = vec![self.recv_borrow(recv)];
+                let mut ops = vec![self.recv_borrow_after(recv, &mut rest)];
                 ops.extend(rest);
                 let name = format!("{}.entry_{method}", self.tys().display(mbase));
                 self.call_native(&name, ops, dest);
@@ -5778,7 +6148,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let by_ref = !stores && !callable && !self.is_copy(at);
                     rest.push(self.lib_arg(&a.value, by_ref)?);
                 }
-                let mut ops = vec![self.recv_borrow(recv)];
+                let mut ops = vec![self.recv_borrow_after(recv, &mut rest)];
                 ops.extend(rest);
                 let name = format!("{}.{method}", self.tys().display(base));
                 self.call_native(&name, ops, dest);
@@ -6071,6 +6441,77 @@ fn main() {
         assert_eq!(
             run_source(src),
             Ok(("i 122 66 1 ( 0\n".to_string(), Some(0)))
+        );
+    }
+
+    /// What the real-world apps (`corpus/apps`) lean on: `main` returning a
+    /// `Result`, module `let`s and constants with methods, `??`, `let`-else,
+    /// string literal patterns, or-arms that bind, matching a field through
+    /// `ref self`, `Option` of a `Copy` type read out of a `Vec`, a
+    /// two-phase receiver borrow and `enumerate`.
+    #[test]
+    fn apps_slice_constructs() {
+        let src = r#"
+let LIMIT: i64 = 3;
+const TAG: String = "t";
+enum Shape { Sq(i64), Rect(i64, i64), Dot }
+struct Node { parent: Option[i64], label: Option[String] }
+struct Doc { nodes: Vec[Node], root: i64 }
+impl Doc {
+    fn depth(ref self, id: i64) -> i64 {
+        let mut d = 0;
+        let mut cur = self.nodes[id].parent;
+        while let Some(c) = cur {
+            d += 1;
+            cur = self.nodes[c].parent;
+        }
+        d
+    }
+    fn label(ref self, id: i64) -> String {
+        match self.nodes[id].label {
+            Some(l) => l.clone(),
+            None => "-".to_string(),
+        }
+    }
+    fn shift(mut ref self, by: i64, at: i64) -> i64 { self.root = by + at; self.root }
+}
+fn side(s: Shape) -> i64 {
+    match s {
+        Shape.Sq(a) | Shape.Rect(a, _) => a,
+        Shape.Dot => 0,
+    }
+}
+fn code(s: ref String) -> i64 {
+    match s { "a" => 1, "b" => 2, _ => 0 }
+}
+fn first(v: ref Vec[i64]) -> i64 {
+    let Some(x) = v.first() else { return -1 };
+    *x
+}
+fn main() -> Result[(), String] {
+    let none: Option[i64] = None;
+    let n = none ?? LIMIT;
+    let mut doc = Doc {
+        nodes: [
+            Node { parent: None, label: Some("r".to_string()) },
+            Node { parent: Some(0), label: None },
+            Node { parent: Some(1), label: None },
+        ],
+        root: 0,
+    };
+    let e: Vec[i64] = Vec.new();
+    let moved = doc.shift(doc.root, 4);
+    println(f"{n} {TAG.clone()} {side(Shape.Rect(7, 2))} {side(Shape.Dot)} {code("b".to_string())}");
+    println(f"{doc.depth(2)} {doc.label(0)} {doc.label(1)} {first([5, 6])} {first(e)} {moved}");
+    for (i, x) in [10, 20].iter().enumerate() {
+        println(f"{i}:{x}");
+    }
+    Ok(())
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("3 t 7 0 2\n2 r - 5 -1 4\n0:10\n1:20\n".to_string(), Some(0)))
         );
     }
 

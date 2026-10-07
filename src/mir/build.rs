@@ -92,6 +92,18 @@ impl BodyBuilder {
         l
     }
 
+    /// A user binding's name and pattern node.
+    pub fn user_name(&self, l: Local) -> Option<(String, NodeId)> {
+        match &self.locals[l.index()].kind {
+            LocalKind::User { name, node } => Some((name.clone(), *node)),
+            _ => None,
+        }
+    }
+
+    pub fn is_temp(&self, l: Local) -> bool {
+        matches!(self.locals[l.index()].kind, LocalKind::Temp)
+    }
+
     pub fn local_ty(&self, l: Local) -> Ty {
         self.locals[l.index()].ty
     }
