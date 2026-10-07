@@ -36,12 +36,20 @@ fn rejected_then_fixed(tag: &str, src: &str, expect: &str) {
 
 /// [`rejected_then_fixed`], where the fix must write `edit`.
 fn rejected_then_fixed_by(tag: &str, src: &str, expect: &str, edit: &str) {
+    rejected_then_fixed_in(tag, src, expect, edit, 1);
+}
+
+/// [`rejected_then_fixed_by`], over `passes` runs of `karac fix`: a fix that
+/// changes a signature leaves its call sites to the next pass.
+fn rejected_then_fixed_in(tag: &str, src: &str, expect: &str, edit: &str, passes: usize) {
     let (dir, path) = fixture(tag, src);
     let out = karac().arg("check").arg(&path).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "{tag}: check must reject: {err}");
     assert!(err.contains(expect), "{tag}: expected `{expect}` in: {err}");
-    karac().arg("fix").arg(&path).output().unwrap();
+    for _ in 0..passes {
+        karac().arg("fix").arg(&path).output().unwrap();
+    }
     let fixed = std::fs::read_to_string(&path).unwrap();
     let out = karac().arg("check").arg(&path).output().unwrap();
     assert!(
@@ -1185,6 +1193,33 @@ fn a_shared_ref_place_is_read_only() {
          impl C { fn bump(ref self) { self.n = self.n + 1; } }\n\
          fn main() { let c = C { n: 0 }; c.bump(); println(c.n); }\n",
         "the receiver is `ref self`",
+    );
+    // `karac fix` makes each of those writable at the borrow's declaration.
+    rejected_then_fixed_in(
+        "fix-ref-param",
+        "fn add(v: ref Vec[i64]) { v.push(1); v.push(2); }\n\
+         fn main() { let mut v: Vec[i64] = Vec.new(); add(v); println(v.len()); }\n",
+        "`v` is a `ref` parameter",
+        "fn add(v: mut ref Vec[i64])",
+        2,
+    );
+    rejected_then_fixed_by(
+        "fix-for-item",
+        "fn main() {\n\
+             let mut grid: Vec[Vec[i64]] = [Vec.new()];\n\
+             for row in grid { row.push(9); row.push(8); }\n\
+             println(grid[0].len());\n\
+         }\n",
+        "`row` is a `ref` to an element",
+        "for row in grid.iter_mut()",
+    );
+    rejected_then_fixed_by(
+        "fix-ref-self",
+        "struct C { n: i64 }\n\
+         impl C { fn bump(ref self) { self.n = self.n + 1; } }\n\
+         fn main() { let mut c = C { n: 0 }; c.bump(); println(c.n); }\n",
+        "the receiver is `ref self`",
+        "fn bump(mut ref self)",
     );
     // `iter_mut`, `mut ref` parameters, and a `ref self` method of a stdlib
     // type (`Arena.push`) all stay legal; so does a `mut` field of a

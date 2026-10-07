@@ -1,5 +1,5 @@
 //! v2 core: a shared `ref` place is read-only (`docs/core-semantics.md`
-//! §5.6). Writing through one — assigning a place reached through it,
+//! §5.9). Writing through one — assigning a place reached through it,
 //! calling a `mut ref self` method on it, or passing it as a `mut`
 //! argument — is an error. A write through a `mut ref`, or through a handle
 //! (`shared` / `par` value, `Rc`, `Arc`) whose `mut` fields carry their own
@@ -9,6 +9,12 @@
 //! place's type at each step of its projection chain comes from the typed
 //! node table, so a binding that is a `ref` because of its declaration, its
 //! parameter mode, a bare `for` (§4.6) or a `ref` pattern is all one case.
+//!
+//! Where the borrow's declaration says how to make it writable, the error
+//! carries that edit for `karac fix`: a `ref` parameter becomes `mut ref`
+//! (its call sites then get their own `mut` marker fix), a `ref self`
+//! receiver becomes `mut ref self`, and a bare `for` over a `Vec` or array
+//! iterates `.iter_mut()`.
 
 use super::*;
 use crate::index_disjoint::{for_each_child_public, Child};
@@ -50,11 +56,17 @@ struct Walk<'t, 'a> {
     self_modes: &'t FxHashMap<String, SelfParam>,
     /// Bindings in scope, innermost last, with where each came from. A
     /// shadowing binding is pushed as `Owned`.
-    scopes: Vec<Vec<(String, Origin)>>,
+    scopes: Vec<Vec<Binding>>,
     /// The function's receiver is `ref self`.
     self_read_only: bool,
-    errors: Vec<(Span, String)>,
+    /// The edit that makes a `ref self` receiver `mut ref self`.
+    self_fix: Option<FixIt>,
+    errors: Vec<(Span, String, Option<FixIt>)>,
 }
+
+/// A binding in scope: its name, why it is read-only, and the edit to its
+/// declaration that would make it writable, when there is one.
+type Binding = (String, Origin, Option<FixIt>);
 
 /// Why a binding is a read-only borrow, for the error's fix.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -112,32 +124,57 @@ impl<'a> TypeChecker<'a> {
             self_modes: &self_modes,
             scopes: Vec::new(),
             self_read_only: false,
+            self_fix: None,
             errors: Vec::new(),
         };
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
             w.self_read_only = matches!(f.self_param, Some(SelfParam::Ref));
+            w.self_fix = match &f.self_span {
+                Some(sp) if w.self_read_only && !f.self_is_frozen => Some(FixIt {
+                    span: sp.clone(),
+                    replacement: "mut ref self".to_string(),
+                }),
+                _ => None,
+            };
             w.scopes = vec![f
                 .params
                 .iter()
                 .flat_map(|p| {
-                    let origin = if matches!(p.ty.kind, TypeKind::Ref(_)) {
-                        Origin::Param
+                    let (origin, fix) = if matches!(p.ty.kind, TypeKind::Ref(_)) {
+                        // `ref T` → `mut ref T`: insert before the `ref`.
+                        let span = Span {
+                            length: 0,
+                            ..p.ty.span.clone()
+                        };
+                        let fix = (!p.is_frozen).then(|| FixIt {
+                            span,
+                            replacement: "mut ".to_string(),
+                        });
+                        (Origin::Param, fix)
                     } else {
-                        Origin::Owned
+                        (Origin::Owned, None)
                     };
                     p.pattern
                         .binding_names()
                         .into_iter()
-                        .map(move |n| (n, origin))
+                        .map(move |n| (n, origin, fix.clone()))
                 })
                 .collect()];
             w.block(&f.body);
         }
         let mut errors = w.errors;
-        errors.sort_by_key(|(s, _)| s.offset);
+        errors.sort_by_key(|(s, _, _)| s.offset);
         errors.dedup_by(|a, b| a.0.offset == b.0.offset);
-        for (span, message) in errors {
-            self.type_error(message, span, TypeErrorKind::TypeMismatch);
+        // Several writes through one borrow share its declaration's edit;
+        // attach it once, or `karac fix` would apply it once per write.
+        let mut fixed: FxHashSet<usize> = FxHashSet::default();
+        for (span, message, fix) in errors {
+            match fix.filter(|f| fixed.insert(f.span.offset)) {
+                Some(fix) => {
+                    self.type_error_with_fix_it(message, span, TypeErrorKind::TypeMismatch, fix)
+                }
+                None => self.type_error(message, span, TypeErrorKind::TypeMismatch),
+            }
         }
     }
 }
@@ -156,16 +193,16 @@ impl Walk<'_, '_> {
 
     /// Bring `pattern`'s bindings into the innermost scope with `origin`;
     /// a `ref name` binding is read-only whatever `origin` says.
-    fn bind(&mut self, pattern: &Pattern, origin: Origin) {
+    fn bind(&mut self, pattern: &Pattern, origin: Origin, fix: Option<FixIt>) {
         let ref_spans = &self.tc.program.ref_binding_spans;
-        let names: Vec<(String, Origin)> = pattern
+        let names: Vec<Binding> = pattern
             .binding_name_spans()
             .into_iter()
             .map(|(n, sp)| {
                 if ref_spans.contains(&SpanKey::from_span(&sp)) {
-                    (n, Origin::RefPattern)
+                    (n, Origin::RefPattern, None)
                 } else {
-                    (n, origin)
+                    (n, origin, fix.clone())
                 }
             })
             .collect();
@@ -174,24 +211,30 @@ impl Walk<'_, '_> {
         }
     }
 
-    fn origin_of(&self, name: &str) -> Origin {
+    fn lookup(&self, name: &str) -> Option<&Binding> {
         self.scopes
             .iter()
             .rev()
-            .find_map(|s| s.iter().rev().find(|(n, _)| n == name).map(|(_, o)| *o))
-            .unwrap_or(Origin::Owned)
+            .find_map(|s| s.iter().rev().find(|(n, _, _)| n == name))
+    }
+
+    fn origin_of(&self, name: &str) -> Origin {
+        self.lookup(name).map_or(Origin::Owned, |b| b.1)
     }
 
     fn stmt(&mut self, s: &Stmt) {
         match &s.kind {
             StmtKind::Let { pattern, value, .. } => {
                 self.expr(value);
-                // A local bound to a read-only borrow is one too (§5.9).
-                let origin = match &value.kind {
-                    ExprKind::Identifier(n) => self.origin_of(n),
-                    _ => Origin::Owned,
+                // A local bound to a read-only borrow is one too (§5.9),
+                // and the same edit to the borrow's declaration fixes it.
+                let (origin, fix) = match &value.kind {
+                    ExprKind::Identifier(n) => self
+                        .lookup(n)
+                        .map_or((Origin::Owned, None), |b| (b.1, b.2.clone())),
+                    _ => (Origin::Owned, None),
                 };
-                self.bind(pattern, origin);
+                self.bind(pattern, origin, fix);
             }
             StmtKind::LetElse {
                 pattern,
@@ -201,11 +244,11 @@ impl Walk<'_, '_> {
             } => {
                 self.expr(value);
                 self.block(else_block);
-                self.bind(pattern, Origin::Owned);
+                self.bind(pattern, Origin::Owned, None);
             }
             StmtKind::LetUninit { name, .. } => {
                 if let Some(scope) = self.scopes.last_mut() {
-                    scope.push((name.clone(), Origin::Owned));
+                    scope.push((name.clone(), Origin::Owned, None));
                 }
             }
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => self.block(body),
@@ -254,13 +297,13 @@ impl Walk<'_, '_> {
                 ..
             } => {
                 self.expr(iterable);
-                let origin = if self.for_binds_read_only(iterable) {
-                    Origin::ForElem
+                let (origin, fix) = if self.for_binds_read_only(iterable) {
+                    (Origin::ForElem, self.iter_mut_fix(iterable))
                 } else {
-                    Origin::Owned
+                    (Origin::Owned, None)
                 };
                 self.scopes.push(Vec::new());
-                self.bind(pattern, origin);
+                self.bind(pattern, origin, fix);
                 self.block(body);
                 self.scopes.pop();
                 return;
@@ -269,7 +312,7 @@ impl Walk<'_, '_> {
                 self.expr(scrutinee);
                 for arm in arms {
                     self.scopes.push(Vec::new());
-                    self.bind(&arm.pattern, Origin::Owned);
+                    self.bind(&arm.pattern, Origin::Owned, None);
                     if let Some(g) = &arm.guard {
                         self.expr(g);
                     }
@@ -281,7 +324,7 @@ impl Walk<'_, '_> {
             ExprKind::Closure { params, body, .. } => {
                 self.scopes.push(Vec::new());
                 for p in params {
-                    self.bind(&p.pattern, Origin::Owned);
+                    self.bind(&p.pattern, Origin::Owned, None);
                 }
                 self.expr(body);
                 self.scopes.pop();
@@ -315,6 +358,32 @@ impl Walk<'_, '_> {
         self.node_types
             .get(&iterable.id)
             .is_some_and(|(t, _)| TypeChecker::for_iterable_is_core_collection(t))
+    }
+
+    /// The edit that makes a bare `for` over a `Vec` or array bind its
+    /// elements as `mut ref`: append `.iter_mut()` to the iterated place.
+    /// Other iterables (a map, a set, an iterator chain) have no one edit.
+    fn iter_mut_fix(&self, iterable: &Expr) -> Option<FixIt> {
+        if place_root(iterable).is_none() {
+            return None;
+        }
+        let mut t = &self.node_types.get(&iterable.id)?.0;
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = inner;
+        }
+        let vec_like = match t {
+            Type::Array { .. } => true,
+            Type::Named { name, .. } => name == "Vec",
+            _ => false,
+        };
+        vec_like.then(|| FixIt {
+            span: Span {
+                offset: iterable.span.offset + iterable.span.length,
+                length: 0,
+                ..iterable.span.clone()
+            },
+            replacement: ".iter_mut()".to_string(),
+        })
     }
 
     fn method_writes_receiver(&self, call: &Expr, object: &Expr, method: &str) -> bool {
@@ -377,7 +446,13 @@ impl Walk<'_, '_> {
             match self.step(cur) {
                 Step::ReadOnly => {
                     let message = self.read_only_message(cur, action);
-                    self.errors.push((at, message));
+                    let fix = match &cur.kind {
+                        ExprKind::SelfValue => self.self_fix.clone(),
+                        ExprKind::Identifier(n) if n == "self" => self.self_fix.clone(),
+                        ExprKind::Identifier(n) => self.lookup(n).and_then(|b| b.2.clone()),
+                        _ => None,
+                    };
+                    self.errors.push((at, message, fix));
                     return;
                 }
                 Step::Writable => return,
