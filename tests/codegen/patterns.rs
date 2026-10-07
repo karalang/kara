@@ -13624,7 +13624,7 @@ fn e2e_a_let_family_destructure_runs_the_payload_drop_body_once() {
         (
             "control: `let ... else` still runs exactly one body",
             "let Some(H { r, .. }) = Some(H { r: R { s: pad(1) }, n: 4 }) else { return };\n \
-                 println(f\"{r.s.len()}\")",
+                 println(f\"{r.s.len()}\");",
             "47\ndR47\nend\n",
             "47\ndR47\nend\n",
         ),

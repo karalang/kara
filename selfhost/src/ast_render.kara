@@ -1304,6 +1304,7 @@ pub fn render_item(item: Item) -> String {
                 segments,
                 names,
                 span,
+                ..
             } = n;
             out.push_str("(use");
             out.push_str(render_vis(is_pub));

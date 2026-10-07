@@ -3043,9 +3043,11 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // `import`
         let mut segs: Vec[String] = Vec.new();
+        let mut last_span = self.current_span();
         let first = self.take_member_name();
         segs.push(first);
         let mut names: Vec[String] = Vec.new();
+        let mut name_spans: Vec[Span] = Vec.new();
         let mut braced = false;
         loop {
             if not self.at_dot() {
@@ -3062,11 +3064,12 @@ impl Parser {
             };
             if next_is_brace {
                 self.advance(); // consume `.`
-                names = self.parse_import_group();
+                names = self.parse_import_group(name_spans);
                 braced = true;
                 break;
             }
             self.advance(); // consume `.`
+            last_span = self.current_span();
             let nm = self.take_member_name();
             segs.push(nm);
         }
@@ -3075,6 +3078,7 @@ impl Parser {
             let n = segs.len();
             if n > 0 {
                 names.push(dup_str(segs[n - 1]));
+                name_spans.push(last_span);
             }
         }
         self.eat_semicolon();
@@ -3082,13 +3086,14 @@ impl Parser {
             is_pub: is_pub,
             segments: segs,
             names: names,
+            name_spans: name_spans,
             span: self.span_from(start),
         })
     }
 
     // `{ A, B as C, ... }` import group — `self.pos` is AT the `{`. Returns each
     // item's alias-or-name (the binding set). Trailing comma tolerated.
-    fn parse_import_group(mut ref self) -> Vec[String] {
+    fn parse_import_group(mut ref self, spans: mut ref Vec[Span]) -> Vec[String] {
         self.expect_lbrace(); // consume {
         let mut names: Vec[String] = Vec.new();
         loop {
@@ -3102,6 +3107,7 @@ impl Parser {
             if at_rbrace {
                 break;
             }
+            let item_start = self.current_span();
             let nm = self.take_member_name();
             // Optional `as ALIAS` — the alias is what binds.
             let is_as = if self.pos < self.tokens.len() {
@@ -3119,6 +3125,7 @@ impl Parser {
             } else {
                 names.push(nm);
             }
+            spans.push(item_start);
             let ate = if self.pos < self.tokens.len() {
                 match self.tokens[self.pos].token {
                     Comma => true,

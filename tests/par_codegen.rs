@@ -786,11 +786,11 @@ fn main() {
             )
         };
         let bodies: &[(&str, &str)] = &[
-            ("a field place bound to a local", "let k = o.inner; k.v;"),
-            ("an element bound to a local", "let k = o.kids[0]; k.v;"),
+            ("a field place bound to a local", "let k = o.inner; k.v"),
+            ("an element bound to a local", "let k = o.kids[0]; k.v"),
             (
                 "a bound alias passed on to a frozen slot",
-                "let k = o.inner; readi(k);",
+                "let k = o.inner; readi(k)",
             ),
         ];
         for (label, body) in bodies {
@@ -863,15 +863,15 @@ fn main() {
         let bodies: &[(&str, &str)] = &[
             (
                 "a shared element read as a scalar",
-                "let mut s: i64 = 0; for k in n.kids { s = s + k.v; } s;",
+                "let mut s: i64 = 0; for k in n.kids { s = s + k.v; } s",
             ),
             (
                 "a shared element passed to a frozen slot",
-                "let mut s: i64 = 0; for k in n.kids { s = s + g(k); } s;",
+                "let mut s: i64 = 0; for k in n.kids { s = s + g(k); } s",
             ),
             (
                 "a scalar element",
-                "let mut s: i64 = 0; for k in n.nums { s = s + k; } s;",
+                "let mut s: i64 = 0; for k in n.nums { s = s + k; } s",
             ),
             // B-2026-08-01-33 — the `.iter()` spelling, which is the one the
             // kata corpus actually writes (22 uses against 0 of the bare-place
@@ -883,11 +883,11 @@ fn main() {
             // peel is admitting a lowering nobody measured.
             (
                 "a shared element read as a scalar, through `.iter()`",
-                "let mut s: i64 = 0; for k in n.kids.iter() { s = s + k.v; } s;",
+                "let mut s: i64 = 0; for k in n.kids.iter() { s = s + k.v; } s",
             ),
             (
                 "a shared element passed to a frozen slot, through `.iter()`",
-                "let mut s: i64 = 0; for k in n.kids.iter() { s = s + g(k); } s;",
+                "let mut s: i64 = 0; for k in n.kids.iter() { s = s + g(k); } s",
             ),
         ];
         for (label, body) in bodies {
@@ -903,7 +903,7 @@ fn main() {
         // The discriminating leg: aliasing a loop element goes through the
         // stage-2.5 binding path, where `frozen` and `ref` genuinely differ.
         // If this pair ever collapses, the zeros above stop meaning anything.
-        let alias_body = "let mut s: i64 = 0; for k in n.kids { let j = k; s = s + j.v; } s;";
+        let alias_body = "let mut s: i64 = 0; for k in n.kids { let j = k; s = s + j.v; } s";
         assert_eq!(
             traffic_in(&ir_for_analyzed(&program("frozen ", alias_body)), "outer"),
             (0, 0),

@@ -214,7 +214,7 @@ impl super::Parser {
         self.expect(&Token::RightParen)?;
 
         let return_type = if self.eat(&Token::Arrow) {
-            Some(self.parse_type()?)
+            Some(self.parse_return_type()?)
         } else {
             None
         };
@@ -299,7 +299,7 @@ impl super::Parser {
         self.expect(&Token::RightParen)?;
 
         let return_type = if self.eat(&Token::Arrow) {
-            Some(self.parse_type()?)
+            Some(self.parse_return_type()?)
         } else {
             None
         };

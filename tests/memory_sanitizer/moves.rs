@@ -892,7 +892,7 @@ fn main() {
     println(f"b4={use_v(if c { mkv(n) } else { mkv(n + 1) })}");
 
     println(f"c1={if c { mk(n) } else { mk(n + 1) }}");
-    println(f"c2={{ mk(n) }}");
+    println(f"c2={ { mk(n) } }");
 
     let e1 = if c { { mk(n) } } else { mk(n + 1) }.contains("p");
     println(f"e1={e1}");

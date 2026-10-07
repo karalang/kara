@@ -234,6 +234,12 @@ pub struct Parser {
     /// Set when the receiver just parsed was written `own self` (D5); taken
     /// by the function or trait method that owns the receiver.
     pub(crate) own_self_consumed: bool,
+    /// Set for exactly one `parse_type` call: a function's return type.
+    /// There a trailing `with` is the function's own clause, so a `Fn(..)`
+    /// or `impl Trait` at the tail does not take it; a function-type or
+    /// `impl` return with its own clause is parenthesized
+    /// (`-> (Fn(Str) with writes(Log)) with allocates(Heap)`).
+    pub(crate) return_tail: bool,
     /// `freeze <place>` initializer spans collected during the parse, moved
     /// onto [`crate::ast::Program::freeze_spans`] at the end. B-2026-08-01-33
     /// stage 3.
@@ -395,6 +401,7 @@ impl Parser {
             frozen_consumed: false,
             frozen_self_consumed: false,
             own_self_consumed: false,
+            return_tail: false,
             freeze_spans: rustc_hash::FxHashSet::default(),
             ref_binding_spans: rustc_hash::FxHashSet::default(),
             mut_ref_binding_spans: rustc_hash::FxHashSet::default(),

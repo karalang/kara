@@ -8,7 +8,7 @@
                             if n == 0 {{ break; }}
                             let _s = ws.send_text(buf);
                         }}
-                        Result.Err(_); => {{ break; }}
+                        Result.Err(_) => {{ break; }}
                     }}
                 }}
             }}
@@ -21,7 +21,7 @@
                 loop {{
                     match WebSocket.accept_tls(listener) {{
                         Result.Ok(ws) => {{ tg.spawn(|| handle_ws(ws)); }}
-                        Result.Err(_); => {{}}
+                        Result.Err(_) => {{}}
                     }}
                 }}
             }}

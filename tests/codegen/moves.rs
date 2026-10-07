@@ -1246,7 +1246,7 @@ fn e2e_freshtemp_scrutinee_body_fires_at_construct_exit() {
             ),
             (
                 "nested-in-expression",
-                "println(f\"c{sink(match mk(2) { E.A(r) => { r.id } E.B => { 0 } })}\")\n",
+                "println(f\"c{sink(match mk(2) { E.A(r) => { r.id } E.B => { 0 } })}\");\n",
                 "dR2\ndE\nc2\npost\n",
             ),
             (

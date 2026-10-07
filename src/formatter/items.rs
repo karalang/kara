@@ -222,7 +222,7 @@ impl super::Formatter {
         self.write_str(")");
         if let Some(ref rt) = f.return_type {
             self.write_str(" -> ");
-            self.format_type_expr(rt);
+            self.format_return_type(rt);
         }
         self.format_effects(&f.effects);
         self.format_where_clause(&f.where_clause);
@@ -648,7 +648,7 @@ impl super::Formatter {
         self.write_str(")");
         if let Some(ref rt) = m.return_type {
             self.write_str(" -> ");
-            self.format_type_expr(rt);
+            self.format_return_type(rt);
         }
         self.format_effects(&m.effects);
         self.format_where_clause(&m.where_clause);
@@ -892,7 +892,7 @@ impl super::Formatter {
         self.write_str(")");
         if let Some(ref rt) = e.return_type {
             self.write_str(" -> ");
-            self.format_type_expr(rt);
+            self.format_return_type(rt);
         }
         self.format_effects(&e.effects);
         self.write_str(";\n");
@@ -939,7 +939,7 @@ impl super::Formatter {
         self.write_str(")");
         if let Some(ref rt) = e.return_type {
             self.write_str(" -> ");
-            self.format_type_expr(rt);
+            self.format_return_type(rt);
         }
         self.format_effects(&e.effects);
         self.write_str(";\n");

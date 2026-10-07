@@ -2990,13 +2990,13 @@ fn e2e_freshtemp_shared_enum_scrutinee_releases_at_construct_exit() {
             (
                 "statement-match",
                 "match mkSe(1) { Se.A(n) => { println(f\"v{n}\") } Se.B => {} }\n\
-                 println(\"s1\")\n",
+                 println(\"s1\");\n",
                 "v1\ndSe\ns1\npost\n",
             ),
             (
                 "heap-payload",
                 "match mkSh(1) { Sh.A(s) => { println(f\"v[{s}]\") } Sh.B => {} }\n\
-                 println(\"s1\")\n",
+                 println(\"s1\");\n",
                 "v[pay1]\ndSh\ns1\npost\n",
             ),
             (

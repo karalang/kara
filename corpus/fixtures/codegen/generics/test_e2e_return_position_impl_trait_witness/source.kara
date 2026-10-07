@@ -35,7 +35,7 @@ impl Named for Emitter {
 fn a_holder(n: i64) -> impl Named[Label = String] { Holder { items: [n, n] } }
 fn a_colour() -> impl Named[Label = String] { Colour.Blue }
 fn a_node() -> impl Named[Label = String] { Node { name: "n1" } }
-fn an_emitter() -> impl Named[Label = String] with writes(Log) { Emitter { n: 5 } }
+fn an_emitter() -> (impl Named[Label = String] with writes(Log)) { Emitter { n: 5 } }
 
 // No inline binding — the caller annotates instead. Same substitution.
 fn bare(n: i64) -> impl Named { Holder { items: [n] } }

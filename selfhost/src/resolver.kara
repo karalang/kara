@@ -680,7 +680,7 @@ impl Resolver {
                     if i >= cnt {
                         break;
                     }
-                    self.define(u.names[i].clone(), u.span);
+                    self.define(u.names[i].clone(), clone_span(u.name_spans[i]));
                     i = i + 1;
                 }
             }

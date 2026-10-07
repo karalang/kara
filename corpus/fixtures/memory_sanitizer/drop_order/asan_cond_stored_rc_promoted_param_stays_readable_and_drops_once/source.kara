@@ -2,7 +2,7 @@
 shared struct Inner {{ v: i64 }}
 struct R {{ id: i64, name: String, inner: Inner }}
 impl Drop for R {{ fn drop(mut ref self) {{ println(f"dR{{self.id}}") }} }}
-fn mk(i: i64) -> R {{ return R; {{ id;: i, name: f"h{{i}}", inner: Inner {{ v: i }} }}; }}
+fn mk(i: i64) -> R {{ return R {{ id: i, name: f"h{{i}}", inner: Inner {{ v: i }} }}; }}
 struct Box2 {{ mut xs: Vec[R] }}
 impl Box2 {{
   fn m(mut ref self, r: R, k: bool) {{ if k {{ self.xs.push(r); }} println(f"s{read}"); }}

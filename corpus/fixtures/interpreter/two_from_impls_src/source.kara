@@ -16,7 +16,7 @@ fn q_parse() -> Result[i64, AppError] {{ let n = fails_parse()?; return Ok(n); }
 fn q_db() -> Result[i64, AppError] {{ let n = fails_db()?; return Ok(n); }}
 fn main() {{
     match q_parse() {{ Ok(_) => println("ok"), Err(e) => println(label(e)), }}
-    match q_db() {{ Ok(_); => println("ok"), Err(e) => println(label(e)), }}
+    match q_db() {{ Ok(_) => println("ok"), Err(e) => println(label(e)), }}
     println(label(AppError.from(ParseError {{ tag: "p" }})));
     println(label(AppError.from(DbError {{ code: 7 }})));
     let a: AppError = (ParseError {{ tag: "p" }}).into();

@@ -4102,7 +4102,7 @@ fn e2e_freshtemp_struct_scrutinee_runs_its_own_drop_body() {
         (
             "let-else",
             "let S { r: _ } = mkS() else { println(\"miss\"); return };\n\
-                 println(\"s1\")\n",
+                 println(\"s1\");\n",
             "dS\ndR7\ns1\npost\n",
         ),
         (

@@ -6073,7 +6073,7 @@ impl Named for Emitter {
 fn a_holder(n: i64) -> impl Named[Label = String] { Holder { items: [n, n] } }
 fn a_colour() -> impl Named[Label = String] { Colour.Blue }
 fn a_node() -> impl Named[Label = String] { Node { name: "n1" } }
-fn an_emitter() -> impl Named[Label = String] with writes(Log) { Emitter { n: 5 } }
+fn an_emitter() -> (impl Named[Label = String] with writes(Log)) { Emitter { n: 5 } }
 
 // No inline binding — the caller annotates instead. Same substitution.
 fn bare(n: i64) -> impl Named { Holder { items: [n] } }
@@ -6159,14 +6159,14 @@ struct L { v: i64 }
 impl Emit for L { fn emit(ref self) -> i64 with writes(Log) { self.v } }
 
 // The inert shape: `F` appears only in return position.
-fn make[with F]() -> impl Emit with F { S { v: 7 } }
+fn make[with F]() -> (impl Emit with F) { S { v: 7 } }
 
 // The param-bound shape: `F` is bound by a parameter, so it is not inert.
-fn wrap[with F](f: Fn() -> i64 with F) -> impl Emit with F { S { v: f() } }
+fn wrap[with F](f: Fn() -> i64 with F) -> (impl Emit with F) { S { v: f() } }
 fn src_pure() -> i64 { 5 }
 
 // An effect variable alongside a concrete verb on the same clause.
-fn mixed[with F]() -> impl Emit with writes(Log) F { L { v: 9 } }
+fn mixed[with F]() -> (impl Emit with writes(Log) F) { L { v: 9 } }
 
 fn main() {
     let e = make();

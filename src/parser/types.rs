@@ -33,6 +33,15 @@ impl super::Parser {
 
     // Depth-guarded shell: type nesting (`Vec[Vec[…]]`, tuple types) shares
     // the recursion budget with expressions and patterns (B-2026-08-16-4).
+    /// A function's return type: a trailing `with` after it is the
+    /// function's clause, not the type's (see `Parser::return_tail`).
+    pub(crate) fn parse_return_type(&mut self) -> Option<TypeExpr> {
+        self.return_tail = true;
+        let t = self.parse_type();
+        self.return_tail = false;
+        t
+    }
+
     pub(crate) fn parse_type(&mut self) -> Option<TypeExpr> {
         if !self.enter_recursion() {
             return None;
@@ -54,6 +63,8 @@ impl super::Parser {
         // by construction rather than by enumerating them.
         let frozen_ok = std::mem::replace(&mut self.frozen_ok, false);
         let escaping_ok = std::mem::replace(&mut self.escaping_ok, false);
+        // Same one-shot shape: only the return type's own tail sees it.
+        let return_tail = std::mem::replace(&mut self.return_tail, false);
 
         // `escaping Fn(...)` (`docs/core-semantics.md` §9.3): a contextual
         // keyword, recognised only before `Fn` / `OnceFn`, and accepted only
@@ -420,7 +431,7 @@ impl super::Parser {
                 // `FnType` arm above — `parse_effect_list` itself
                 // consumes the `with` keyword, so we peek-only and
                 // dispatch on the token immediately following `with`.
-                let use_effects = if self.check(&Token::With) {
+                let use_effects = if !return_tail && self.check(&Token::With) {
                     let saved = self.pos;
                     if let Some(token) = self.tokens.get(self.pos + 1) {
                         if matches!(token.token, Token::Underscore) {
@@ -490,13 +501,17 @@ impl super::Parser {
                 }
                 self.expect(&Token::RightParen)?;
 
+                // A tail `Fn` passes the return position on to its own
+                // return type: `-> Fn(i64) -> Fn(i64) with E` still ends in
+                // the function's clause.
                 let return_type = if self.eat(&Token::Arrow) {
+                    self.return_tail = return_tail;
                     Some(Box::new(self.parse_type()?))
                 } else {
                     None
                 };
 
-                let effect_spec = if self.check(&Token::With) {
+                let effect_spec = if !return_tail && self.check(&Token::With) {
                     // Peek-only: `parse_effect_list` consumes the `with`
                     // keyword itself and then handles `_` / verbs / named
                     // effect variables / group names uniformly. Pre-

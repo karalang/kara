@@ -4,8 +4,8 @@ fn main() {{
     let mut s: {set}[i64] = {set}.new();
     s.insert(5);
     let t = s.clone();
-    let h = Holder {{ m;: a.clone(), s: t.clone() }};
-    let mut h2 = Holder {{ m;: h.m.clone(), s: h.s.clone() }};
+    let h = Holder {{ m: a.clone(), s: t.clone() }};
+    let mut h2 = Holder {{ m: h.m.clone(), s: h.s.clone() }};
     h2.s.remove(5);
     h2.s.insert(7);
     println(f"{{h2.s.len()}} {{h2.s.contains(7)}} {{h2.s.contains(5)}} {{h.s.len()}} {{t.len()}}");

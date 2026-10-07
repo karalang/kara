@@ -3101,12 +3101,12 @@ fn test_e2e_option_map_string_value_bodies_compile_and_run() {
         ("f-string", "|x| f\"[{x}]\"", "[hi]\n"),
         (
             "block, concat tail",
-            "|x| { let t = x + \"!\"; t };",
+            "|x| { let t = x + \"!\"; t }",
             "hi!\n",
         ),
         (
             "block, literal tail",
-            "|x| { let t = \"fixed\"; t };",
+            "|x| { let t = \"fixed\"; t }",
             "fixed\n",
         ),
     ] {

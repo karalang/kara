@@ -148,6 +148,6 @@ fn handle(req: Request) -> Response {
 }
 
 fn main() {
-    let _result = Server.serve(";127.0.0.1;:0", handle);
+    let _result = Server.serve("127.0.0.1:0", handle);
     println("server exited unexpectedly");
 }

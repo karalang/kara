@@ -2899,15 +2899,14 @@ fn test_unit_is_not_display_in_fstring() {
     // it must be rejected at typecheck, closing the divergence at the source.
     // The reachable form is `f"{()}"` (an empty `{}` hole is a parse error,
     // and `{{}}` is a pair of literal braces).
-    for src in ["fn main() { let s = f\"x{()}y\"; }"] {
-        let errors = typecheck_errors(src);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.message.contains("does not implement Display")),
-            "expected a Display rejection for unit interpolation in {src:?}, got: {errors:?}"
-        );
-    }
+    let src = "fn main() { let s = f\"x{()}y\"; }";
+    let errors = typecheck_errors(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("does not implement Display")),
+        "expected a Display rejection for unit interpolation in {src:?}, got: {errors:?}"
+    );
     // A genuinely Display-able interpolation still typechecks, and the
     // doubled-brace escape (`{{` / `}}`) renders literal braces (no interp).
     typecheck_ok("fn main() { let n = 7; let s = f\"n={n}\"; }");
@@ -25385,7 +25384,7 @@ fn impl_trait_slice3_return_position_with_effect_clause_typechecks() {
          trait Tagged { fn tag(ref self) -> i64; }\n\
          struct Beta { flag: bool }\n\
          impl Tagged for Beta { fn tag(ref self) -> i64 { 2 } }\n\
-         fn make() -> impl Tagged with reads(World) { Beta { flag: true } }\n\
+         fn make() -> (impl Tagged with reads(World)) { Beta { flag: true } }\n\
          fn main() { let x = make(); }",
     );
 }

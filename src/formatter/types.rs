@@ -3,6 +3,30 @@
 use crate::ast::*;
 
 impl super::Formatter {
+    /// A function's return type. A tail `Fn(..)` / `impl Trait` that carries
+    /// its own `with` is parenthesized, since a bare trailing `with` there is
+    /// the function's clause.
+    pub(super) fn format_return_type(&mut self, t: &TypeExpr) {
+        fn tail_has_with(t: &TypeExpr) -> bool {
+            match &t.kind {
+                TypeKind::FnType {
+                    effect_spec,
+                    return_type,
+                    ..
+                } => effect_spec.is_some() || return_type.as_deref().is_some_and(tail_has_with),
+                TypeKind::ImplTrait { use_effects, .. } => use_effects.is_some(),
+                _ => false,
+            }
+        }
+        if tail_has_with(t) {
+            self.write_str("(");
+            self.format_type_expr(t);
+            self.write_str(")");
+        } else {
+            self.format_type_expr(t);
+        }
+    }
+
     pub(super) fn format_generic_params(&mut self, gp: &Option<GenericParams>) {
         let gp = match gp {
             Some(g) => g,

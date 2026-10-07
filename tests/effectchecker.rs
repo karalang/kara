@@ -2536,7 +2536,7 @@ fn test_honest_fn_slots_accept_the_effectful_value() {
             "LetUninit",
         ),
         (
-            "fn get() -> Fn(i64) -> i64 with writes(UserDB) { save }\n\
+            "fn get() -> (Fn(i64) -> i64 with writes(UserDB)) { save }\n\
              pub fn go() -> i64 with writes(UserDB) { let g = get(); g(7) }",
             "return position",
         ),

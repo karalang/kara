@@ -2197,6 +2197,11 @@ FUNCTION_TYPE = "Fn" "(" [ TYPE_LIST ] ")" [ "->" TYPE ] [ "with" EFFECT_SPEC ]
 
 Note: `Fn` (uppercase) is the function/closure type. `fn` (lowercase) declares functions.
 
+In a function's return position a trailing `with` is the function's own
+clause, so a function-type (or `impl Trait`) return with its own clause is
+parenthesized: `fn make_logger() -> (Fn(Str) with writes(Log)) with allocates(Heap)`.
+In a parameter, field or element type the `with` belongs to the type.
+
 ```
 Fn(T) -> U                              // pure closure type
 Fn(T) -> U with _                       // any-effects closure type

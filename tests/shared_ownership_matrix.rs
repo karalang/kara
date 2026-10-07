@@ -336,7 +336,7 @@ mod shared_ownership_matrix_tests {
         Flow {
             name: "discard",
             expected: [Clean, Clean, Clean],
-            build: |_c| ("".into(), "let d = take(); 1;".into(), 200),
+            build: |_c| ("".into(), "let d = take(); 1".into(), 200),
         },
         Flow {
             name: "index_match",
@@ -379,7 +379,7 @@ mod shared_ownership_matrix_tests {
                     ty = c.ty,
                     m = match_val(c, "r")
                 );
-                (extra, "let d = take(); eat(d);".into(), 1400)
+                (extra, "let d = take(); eat(d)".into(), 1400)
             },
         },
         Flow {
@@ -391,7 +391,7 @@ mod shared_ownership_matrix_tests {
                     ty = c.ty,
                     m = match_val(c, "r")
                 );
-                (extra, "let d = take(); eat(d);".into(), 1400)
+                (extra, "let d = take(); eat(d)".into(), 1400)
             },
         },
         // FRONTIER: Option is Clean here (it has the full move-out

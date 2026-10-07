@@ -195,7 +195,7 @@ fn build_pins_a_git_dependency_to_a_tag() {
     git(&["tag", "v1.0.0"], &upstream);
     write(
         &upstream.join("src/lib.kara"),
-        b"pub fn answer() -> i64 { syntax; error; here }\n",
+        b"pub fn answer() -> i64 { syntax error here }\n",
     );
     git(&["add", "-A"], &upstream);
     git(&["commit", "--quiet", "-m", "break"], &upstream);

@@ -521,7 +521,7 @@ fn an_existential_declaring_effect_variables_is_replaced_too() {
         "trait Emit { fn emit(ref self) -> i64; }\n\
          struct E { n: i64 }\n\
          impl Emit for E { fn emit(ref self) -> i64 { self.n } }\n\
-         fn make[with F]() -> impl Emit with F { E { n: 4 } }\n\
+         fn make[with F]() -> (impl Emit with F) { E { n: 4 } }\n\
          fn main() { let e = make(); println(e.emit()); }",
     );
     assert_eq!(
@@ -545,7 +545,7 @@ fn an_effect_variable_existential_still_reports_its_effects() {
          trait Emit { fn emit(ref self) -> i64; }\n\
          struct E { n: i64 }\n\
          impl Emit for E { fn emit(ref self) -> i64 with writes(Log) { self.n } }\n\
-         fn make[with F]() -> impl Emit with F { E { n: 4 } }\n\
+         fn make[with F]() -> (impl Emit with F) { E { n: 4 } }\n\
          pub fn caller() -> i64 { let e = make(); e.emit() }\n\
          fn main() { println(caller()); }";
     let mut parsed = parse(src);
@@ -586,7 +586,7 @@ fn an_existential_declaring_only_concrete_effects_is_replaced() {
          trait Emit { fn emit(ref self) -> i64; }\n\
          struct E { n: i64 }\n\
          impl Emit for E { fn emit(ref self) -> i64 with writes(Log) { self.n } }\n\
-         fn make() -> impl Emit with writes(Log) { E { n: 4 } }\n\
+         fn make() -> (impl Emit with writes(Log)) { E { n: 4 } }\n\
          fn main() { let e = make(); println(e.emit()); }",
     );
     assert_eq!(return_path_segment(&prog, "make").as_deref(), Some("E"));

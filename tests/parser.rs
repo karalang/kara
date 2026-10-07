@@ -10607,7 +10607,7 @@ fn impl_trait_slice1_with_effect_clause_parses() {
     // records the effect list on the `ImplTrait`'s `use_effects`
     // field; effect-checker integration is Phase 8 (parent epic
     // item (9) at phase-5-diagnostics.md line 391).
-    let prog = parse_ok("fn f() -> impl Iterator with reads(World) { iter_empty() }");
+    let prog = parse_ok("fn f() -> (impl Iterator with reads(World)) { iter_empty() }");
     let Item::Function(f) = &prog.items[0] else {
         panic!("Expected Function");
     };
@@ -16021,4 +16021,77 @@ fn attribute_equals_forms_carry_call_form_fixes() {
         "#[must_use(\"x\")]\n#[deprecated(note: \"y\")]\n#[test(timeout_seconds: 5)]\nfn f() -> i64 { 1 }"
     );
     assert!(parse(&out).errors.is_empty());
+}
+
+/// A trailing `with` after a return type is the function's own clause, even
+/// when the return type is a function type or `impl Trait`; the type's own
+/// clause goes inside parentheses (design review 2026-10-07).
+#[test]
+fn trailing_with_after_a_fn_or_impl_return_is_the_functions_clause() {
+    fn ret_has_with(t: &TypeExpr) -> bool {
+        match &t.kind {
+            TypeKind::FnType { effect_spec, .. } => effect_spec.is_some(),
+            TypeKind::ImplTrait { use_effects, .. } => use_effects.is_some(),
+            _ => false,
+        }
+    }
+    for (src, type_with, fn_with) in [
+        (
+            "fn f() -> Fn(i64) -> i64 with writes(Log) { g }",
+            false,
+            true,
+        ),
+        (
+            "fn f() -> (Fn(i64) -> i64 with writes(Log)) { g }",
+            true,
+            false,
+        ),
+        (
+            "fn f() -> (Fn(i64) -> i64 with writes(Log)) with allocates(Heap) { g }",
+            true,
+            true,
+        ),
+        ("fn f() -> impl Iterator with reads(Fs) { g }", false, true),
+        (
+            "fn f() -> (impl Iterator with reads(Fs)) { g }",
+            true,
+            false,
+        ),
+        (
+            "fn f() -> Fn(i64) -> Fn(i64) with writes(Log) { g }",
+            false,
+            true,
+        ),
+    ] {
+        let prog = parse_ok(src);
+        let Item::Function(f) = &prog.items[0] else {
+            panic!("expected a function");
+        };
+        let rt = f.return_type.as_ref().unwrap();
+        let inner_with = match &rt.kind {
+            TypeKind::FnType {
+                return_type: Some(r),
+                ..
+            } => ret_has_with(r),
+            _ => false,
+        };
+        assert_eq!(ret_has_with(rt) || inner_with, type_with, "{src}");
+        assert_eq!(f.effects.is_some(), fn_with, "{src}");
+    }
+    // In a parameter the `with` still belongs to the type.
+    let prog = parse_ok("fn f(h: Fn(i64) with writes(Log)) {}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected a function");
+    };
+    assert!(ret_has_with(&f.params[0].ty));
+}
+
+#[test]
+fn formatter_parenthesizes_a_return_type_that_has_its_own_with() {
+    let src = "fn f() -> (impl Iterator with reads(Fs)) with allocates(Heap) {\n    g\n}\n";
+    let out = karac::formatter::format_program(&parse_ok(src));
+    assert!(
+        out.contains("-> (impl Iterator with reads(Fs)) with allocates(Heap)"),
+        "{out}"
+    );
 }

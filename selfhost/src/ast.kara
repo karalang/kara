@@ -749,6 +749,10 @@ pub struct UseDeclNode {
     // `import a.{X, Y as Z}` it is each item's alias-or-name (`[X, Z]`).
     // Mirrors the seed's `ImportDecl.items` binding set.
     pub names: Vec[String],
+    // Where each bound name is written: the last segment of a single import,
+    // or the item of a braced one. A duplicate is reported there, as the
+    // seed reports it at `ImportItem.span`.
+    pub name_spans: Vec[Span],
     pub span: Span,
 }
 
