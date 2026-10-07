@@ -610,13 +610,15 @@ impl TyCtxt {
             | TyKind::Ref(_)
             | TyKind::RawPtr { .. }
             | TyKind::FnDef { .. } => true,
+            // A shared slice is a borrow, copied like `ref T`; a `mut Slice`
+            // is unique, like `mut ref T`.
+            TyKind::Slice { mutable, .. } => !mutable,
             TyKind::Tuple(l) | TyKind::Closure { captures: l, .. } => {
                 self.list(l).into_iter().all(|t| self.is_copy(t))
             }
             TyKind::Array { elem, .. } => self.is_copy(elem),
             TyKind::Adt { def, .. } => self.adt_def(def).is_some_and(|a| a.is_copy),
             TyKind::Str
-            | TyKind::Slice { .. }
             | TyKind::Shared { .. }
             | TyKind::MutRef(_)
             | TyKind::Intrinsic { .. }

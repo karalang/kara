@@ -1466,6 +1466,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     None => self.unsupported(e.span, "this tuple index"),
                 }
             }
+            // `v[a..b]` is a value (a slice, or a new `String`).
+            ExprKind::Index { index, .. } if matches!(index.kind, ExprKind::Range { .. }) => {
+                self.temp_place(e)
+            }
             ExprKind::Index { object, index } => {
                 let idx = self.index_operand(object, index)?;
                 self.index_place(object, idx, e, mutable)
@@ -1621,6 +1625,74 @@ impl<'l, 'a> Bx<'l, 'a> {
         });
         self.cur = ok;
         base.project(ProjElem::Index(i))
+    }
+
+    /// `s[a..b]` on a `String`: a new `String` holding those bytes, from
+    /// the library's `String.index_range(ref s, a, b)`, which panics off a
+    /// char boundary or out of range. An open start is 0, an open end the
+    /// length, and `a..=b` ends at `b + 1`.
+    fn string_range(
+        &mut self,
+        object: &'a Expr,
+        start: Option<&'a Expr>,
+        end: Option<&'a Expr>,
+        inclusive: bool,
+        dest: Place,
+    ) -> R<()> {
+        let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+        let p = self.expr_place(object, false)?;
+        let (p, ct) = self.strip_refs(p);
+        let rt = self.tys().tcx().reference(ct, false);
+        let bound = |this: &mut Self, x: &'a Expr| -> R<Operand> {
+            let (o, t) = this.scalar_operand(x)?;
+            Ok(if t == i64_t {
+                o
+            } else {
+                this.cast_index(o, i64_t)
+            })
+        };
+        let lo = match start {
+            Some(x) => bound(self, x)?,
+            None => Operand::Const(Const {
+                ty: i64_t,
+                kind: ConstKind::Scalar(0),
+            }),
+        };
+        let hi = match end {
+            Some(x) => {
+                let o = bound(self, x)?;
+                if inclusive {
+                    let one = Operand::Const(Const {
+                        ty: i64_t,
+                        kind: ConstKind::Scalar(1),
+                    });
+                    let h = self.temp(i64_t);
+                    self.arith(BinOp::Add, o, one, i64_t, Place::local(h));
+                    Operand::Copy(Place::local(h))
+                } else {
+                    o
+                }
+            }
+            None => {
+                let r = self.temp(rt);
+                self.assign(r, Rvalue::Ref(BorrowKind::Shared, p.clone()));
+                let n = self.temp(i64_t);
+                self.call_native(
+                    "String.len",
+                    vec![Operand::Move(Place::local(r))],
+                    Place::local(n),
+                );
+                Operand::Copy(Place::local(n))
+            }
+        };
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+        self.call_native(
+            "String.index_range",
+            vec![Operand::Move(Place::local(r)), lo, hi],
+            dest,
+        );
+        Ok(())
     }
 
     fn cast_index(&mut self, idx: Operand, usize_t: Ty) -> Operand {
@@ -1795,6 +1867,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 else {
                     unreachable!("a non-place index is a range")
                 };
+                let ot = self.expr_ty(object)?;
+                if matches!(self.strip_ty(ot), HK::Str) {
+                    let (start, end) = (start.as_deref(), end.as_deref());
+                    return self.string_range(object, start, end, *inclusive, dest);
+                }
                 if *inclusive {
                     return self.unsupported(index.span, "an inclusive slice range");
                 }
@@ -2692,10 +2769,32 @@ impl<'l, 'a> Bx<'l, 'a> {
             PatternKind::Wildcard => None,
             _ => return self.unsupported(pattern.span, "this loop pattern"),
         };
-        let t = self.expr_ty(left)?;
+        let (lt, rt) = (self.expr_ty(left)?, self.expr_ty(right)?);
         self.push_scope();
         let start = self.expr_operand(left)?;
         let end = self.expr_operand(right)?;
+        // An unsuffixed literal bound takes the other bound's type (the
+        // checker records `-1000i32..1000001`'s end as an `i64`).
+        let scalar = |o: &Operand| match o {
+            Operand::Const(Const {
+                kind: ConstKind::Scalar(v),
+                ..
+            }) => Some(*v),
+            _ => None,
+        };
+        let t = if scalar(&start).is_some() && scalar(&end).is_none() {
+            rt
+        } else {
+            lt
+        };
+        let retype = |o: Operand| match scalar(&o) {
+            Some(v) => Operand::Const(Const {
+                ty: t,
+                kind: ConstKind::Scalar(v),
+            }),
+            None => o,
+        };
+        let (start, end) = (retype(start), retype(end));
         let end_t = self.temp(t);
         self.assign(end_t, Rvalue::Use(end));
         let i = self.temp(t);
@@ -2761,6 +2860,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         body: &'a Block,
         dest: Place,
     ) -> R<()> {
+        if let Some(text) = self.chars_of(iterable)? {
+            return self.for_chars(label, pattern, body, text, dest);
+        }
         #[derive(PartialEq, Clone, Copy)]
         enum Mode {
             Ref,
@@ -2809,6 +2911,27 @@ impl<'l, 'a> Bx<'l, 'a> {
                 kind: IntrinsicKind::Vec,
                 args,
             } => self.tys().tcx().list(args)[0],
+            // The other library collections are read by position, through
+            // the same `len` and `index`, in the collection's own order. A
+            // map's element is its `(key, value)` entry.
+            HK::Intrinsic {
+                kind:
+                    kind @ (IntrinsicKind::Set
+                    | IntrinsicKind::SortedSet
+                    | IntrinsicKind::VecDeque
+                    | IntrinsicKind::Map
+                    | IntrinsicKind::SortedMap),
+                args,
+            } if mode == Mode::Ref => {
+                let tcx = self.tys().tcx();
+                let args = tcx.list(args);
+                match kind {
+                    IntrinsicKind::Map | IntrinsicKind::SortedMap => {
+                        tcx.intern(HK::Tuple(tcx.intern_list(&args)))
+                    }
+                    _ => args[0],
+                }
+            }
             // A slice is a view: its loop reads the elements in place.
             HK::Slice { elem, mutable } => {
                 if mode == Mode::Owned {
@@ -2836,10 +2959,17 @@ impl<'l, 'a> Bx<'l, 'a> {
             return self.unsupported(e.span, "a `for` loop that moves out of a borrow");
         }
         let coll_name = self.tys().display(coll);
+        // A `Vec` is read by `index` with a `usize`; the other collections
+        // by `entry_at` with an `i64` (`Map.index` is the key lookup).
+        let by_entry = self.by_entry(coll);
         let (usize_t, bool_t, ref_coll, mut_coll, elem_ref) = {
             let tcx = self.tys().tcx();
             (
-                tcx.intern(HK::UInt(UIntSize::Usize)),
+                if by_entry {
+                    tcx.intern(HK::Int(IntSize::I64))
+                } else {
+                    tcx.intern(HK::UInt(UIntSize::Usize))
+                },
                 tcx.intern(HK::Bool),
                 tcx.reference(coll, false),
                 tcx.reference(coll, true),
@@ -2962,6 +3092,195 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
+    /// `s` when `e` is `s.chars()` on a `String`. Until the library's
+    /// iterators are written in Kāra, a `for` over it and its `.collect()`
+    /// into a `Vec[char]` are lowered in place.
+    fn chars_of(&mut self, e: &'a Expr) -> R<Option<&'a Expr>> {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &e.kind
+        else {
+            return Ok(None);
+        };
+        if method != "chars" || !args.is_empty() {
+            return Ok(None);
+        }
+        let t = self.expr_ty(object)?;
+        Ok(matches!(self.strip_ty(t), HK::Str).then_some(&**object))
+    }
+
+    /// Walk the chars of the `String` `text`: `each` runs once per char,
+    /// in a scope of its own, with the char in a local. The loop borrows
+    /// the string for its whole run and steps by each char's UTF-8 width,
+    /// through the library's `String.char_at_byte(ref s, i)` and
+    /// `char.len_utf8(c)`. `continue` goes to the loop head (`i` has
+    /// already stepped).
+    fn walk_chars(
+        &mut self,
+        label: &Option<String>,
+        text: &'a Expr,
+        each: &mut dyn FnMut(&mut Self, Local) -> R<()>,
+    ) -> R<()> {
+        let (i64_t, bool_t, char_t) = {
+            let tcx = self.tys().tcx();
+            (
+                tcx.intern(HK::Int(IntSize::I64)),
+                tcx.intern(HK::Bool),
+                tcx.intern(HK::Char),
+            )
+        };
+        let p = if self.is_place(text) {
+            self.expr_place(text, false)?
+        } else {
+            self.temp_place(text)?
+        };
+        let (p, st) = self.strip_refs(p);
+        let rt = self.tys().tcx().reference(st, false);
+        let h = self.temp(rt);
+        self.assign(h, Rvalue::Ref(BorrowKind::Shared, p));
+        let reborrow = |this: &mut Self| {
+            let r = this.temp(rt);
+            let target = Place::local(h).project(ProjElem::Deref);
+            this.assign(r, Rvalue::Ref(BorrowKind::Shared, target));
+            Operand::Move(Place::local(r))
+        };
+        let n = self.temp(i64_t);
+        let r = reborrow(self);
+        self.call_native("String.len", vec![r], Place::local(n));
+        let i = self.temp(i64_t);
+        self.assign(
+            i,
+            Rvalue::Use(Operand::Const(Const {
+                ty: i64_t,
+                kind: ConstKind::Scalar(0),
+            })),
+        );
+        let head = self.b.new_block();
+        let body_bb = self.b.new_block();
+        let exit = self.b.new_block();
+        self.goto(head);
+        self.cur = head;
+        let c = self.temp(bool_t);
+        self.assign(
+            c,
+            Rvalue::BinaryOp(
+                BinOp::Lt,
+                Operand::Copy(Place::local(i)),
+                Operand::Copy(Place::local(n)),
+            ),
+        );
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(c)),
+                targets: SwitchTargets::if_else(body_bb, exit),
+            },
+            body_bb,
+        );
+        let ch = self.temp(char_t);
+        let r = reborrow(self);
+        self.call_native(
+            "String.char_at_byte",
+            vec![r, Operand::Copy(Place::local(i))],
+            Place::local(ch),
+        );
+        let w = self.temp(i64_t);
+        self.call_native(
+            "char.len_utf8",
+            vec![Operand::Copy(Place::local(ch))],
+            Place::local(w),
+        );
+        self.assign(
+            i,
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Operand::Copy(Place::local(i)),
+                Operand::Move(Place::local(w)),
+            ),
+        );
+        self.loops.push(LoopCx {
+            label: label.clone(),
+            break_bb: exit,
+            continue_bb: head,
+            depth: self.scopes.len(),
+            dest: None,
+        });
+        let r = (|| {
+            self.push_scope();
+            each(self, ch)?;
+            self.pop_scope()
+        })();
+        self.loops.pop();
+        r?;
+        self.goto(head);
+        self.cur = exit;
+        Ok(())
+    }
+
+    /// `for c in s.chars() { body }`.
+    fn for_chars(
+        &mut self,
+        label: &Option<String>,
+        pattern: &'a Pattern,
+        body: &'a Block,
+        text: &'a Expr,
+        dest: Place,
+    ) -> R<()> {
+        let char_t = self.tys().tcx().intern(HK::Char);
+        self.push_scope();
+        let r = self.walk_chars(label, text, &mut |this, ch| {
+            let mut binds = Vec::new();
+            this.bind_pattern(pattern, &Place::local(ch), char_t, false, &mut binds)?;
+            for &(l, t) in &binds {
+                this.declare(l, t);
+            }
+            let t = this.unit();
+            let tmp = this.temp(t);
+            this.block_into(body, Place::local(tmp))
+        });
+        r?;
+        self.pop_scope()?;
+        self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+        Ok(())
+    }
+
+    /// `s.chars().collect()` into a `Vec[char]`: push each char.
+    fn collect_chars(&mut self, e: &'a Expr, text: &'a Expr, dest: Place) -> R<()> {
+        let vt = self.expr_ty(e)?;
+        let char_t = self.tys().tcx().intern(HK::Char);
+        let is_char_vec = matches!(self.tys().tcx().kind(vt), HK::Intrinsic {
+            kind: IntrinsicKind::Vec,
+            args,
+        } if self.tys().tcx().list(args)[0] == char_t);
+        if !is_char_vec {
+            return self.unsupported(e.span, "collecting chars into this type");
+        }
+        let name = self.tys().display(vt);
+        self.push_scope();
+        let v = self.scoped_temp(vt);
+        self.call_native(&format!("{name}.new"), vec![], Place::local(v));
+        let mt = self.tys().tcx().reference(vt, true);
+        let unit_t = self.unit();
+        self.walk_chars(&None, text, &mut |this, ch| {
+            let r = this.temp(mt);
+            this.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(v)));
+            let u = this.temp(unit_t);
+            this.call_native(
+                &format!("{name}.push"),
+                vec![
+                    Operand::Move(Place::local(r)),
+                    Operand::Copy(Place::local(ch)),
+                ],
+                Place::local(u),
+            );
+            Ok(())
+        })?;
+        self.assign(dest, Rvalue::Use(Operand::Move(Place::local(v))));
+        self.pop_scope()
+    }
+
     /// `for x in a` over a fixed-size array, by position: `x` is a copy of
     /// each element (`how` is `None`, the elements are `Copy`) or a
     /// reference to it (`Some(mutable)`).
@@ -3069,6 +3388,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
+    /// Is `coll` a library collection read by `entry_at` (every one but
+    /// `Vec` and slices, which use `index`)?
+    fn by_entry(&self, coll: Ty) -> bool {
+        matches!(
+            self.tys().tcx().kind(coll),
+            HK::Intrinsic { kind, .. } if kind != IntrinsicKind::Vec
+        )
+    }
+
     /// One round of [`Self::for_collection`]: take the element, bind the
     /// pattern to it, and run the body in its own scope.
     #[allow(clippy::too_many_arguments)]
@@ -3114,7 +3442,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Rvalue::Ref(kind, Place::local(handle).project(ProjElem::Deref)),
             );
             let r = self.temp(elem_ref);
-            let method = if mutable { "index_mut" } else { "index" };
+            let by_entry = self.by_entry(coll);
+            let method = match (by_entry, mutable) {
+                (true, _) => "entry_at",
+                (false, true) => "index_mut",
+                (false, false) => "index",
+            };
             self.call_native(
                 &format!("{coll_name}.{method}"),
                 vec![
@@ -3826,6 +4159,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         }
         let arg_is_ref = matches!(self.tys().tcx().kind(at), HK::Ref(_) | HK::MutRef(_));
+        // A `mut ref` place passed on is reborrowed, `&mut (*r)` (or `&(*r)`
+        // for a `ref` parameter), so the caller keeps its reference.
+        if let (Some(kind), HK::MutRef(_)) = (borrow, self.tys().tcx().kind(at)) {
+            if self.is_place(a) {
+                let p = self
+                    .expr_place(a, kind == BorrowKind::Mut)?
+                    .project(ProjElem::Deref);
+                let r = self.temp(pt);
+                self.assign(r, Rvalue::Ref(kind, p));
+                return Ok(Operand::Move(Place::local(r)));
+            }
+        }
         match borrow {
             Some(kind) if !arg_is_ref => {
                 let p = self.expr_place(a, kind == BorrowKind::Mut)?;
@@ -4059,6 +4404,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             self.call_native(&format!("{resource}.{method}"), ops, dest);
             return Ok(());
+        }
+        if method == "collect" && args.is_empty() {
+            if let Some(text) = self.chars_of(object)? {
+                return self.collect_chars(e, text, dest);
+            }
         }
         let Some(rc) = self.lcx.calls.get(&e.id) else {
             if self.option_method(object, method, args, dest.clone())? {
@@ -4900,8 +5250,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(self.static_str(s));
         }
         let at = self.expr_ty(a)?;
-        if matches!(self.tys().tcx().kind(at), HK::Ref(_) | HK::MutRef(_)) {
-            return self.expr_operand(a);
+        match self.tys().tcx().kind(at) {
+            // A `mut ref` place lends a shared reborrow, `&(*r)`, so the
+            // caller keeps its reference.
+            HK::MutRef(inner) if self.is_place(a) => {
+                let p = self.expr_place(a, false)?.project(ProjElem::Deref);
+                let rt = self.tys().tcx().reference(inner, false);
+                let r = self.temp(rt);
+                self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+                return Ok(Operand::Move(Place::local(r)));
+            }
+            HK::Ref(_) | HK::MutRef(_) => return self.expr_operand(a),
+            _ => {}
         }
         let p = self.expr_place(a, false)?;
         let rt = self.tys().tcx().reference(at, false);
@@ -5443,6 +5803,52 @@ fn main() {
         assert_eq!(
             run_source(src),
             Ok(("p = pos, q = neg\nneg\n".to_string(), Some(0)))
+        );
+    }
+
+    /// A `mut ref` passed on to a function or a library method is
+    /// reborrowed, and a shared slice is copied: the caller uses both again.
+    #[test]
+    fn mut_ref_arguments_reborrow_and_slices_copy() {
+        let src = r#"
+fn add_one(out: mut ref Vec[i64], n: i64) {
+    if n > 0 {
+        out.push(n);
+        add_one(out, n - 1);
+        add_one(out, 0);
+    }
+}
+
+fn total(xs: Slice[i64]) -> i64 {
+    let mut s = 0;
+    for x in xs {
+        s = s + x;
+    }
+    s
+}
+
+fn report(xs: Slice[i64]) {
+    println(f"{total(xs)} {total(xs)}");
+}
+
+fn grow(x: mut ref String) {
+    x = x + "tail";
+}
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    add_one(mut v, 3);
+    println(f"{v.len()}");
+    let a: Array[i64, 3] = [1, 2, 3];
+    report(a);
+    let mut s: String = "head";
+    grow(mut s);
+    println(s);
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("3\n6 6\nheadtail\n".to_string(), Some(0)))
         );
     }
 
