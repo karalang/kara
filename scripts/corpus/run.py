@@ -30,7 +30,8 @@ backend has a command, since it needs only `karac check`.
 
 Output: one `PASS|FAIL|SKIP|MREJ <entry>` line per program (FAIL lines carry the
 reason), then a summary by class and by tag, and the number of programs
-actually executed. Exits 1 on any FAIL, and 2 when nothing ran — a filter that
+actually executed. corpus/apps gets its own last line (`corpus-run apps ...`):
+the share of apps programs without a `deferred:` tag that pass, with the M1 bar. Exits 1 on any FAIL, and 2 when nothing ran — a filter that
 matches nothing must not read as a pass.
 """
 
@@ -176,6 +177,16 @@ def main() -> int:
     print(f"corpus-run backend={args.backend} matched={len(results)} executed={ran} "
           f"pass={passes} fail={fails} skip={len(results) - passes - fails - mrej}"
           + (f" model-reject-check-accepts={mrej}" if mrej else ""))
+    # corpus/apps is reported on its own line with its own bar, never pooled with the katas
+    # (PLAN_RECHECK_2026-10-07 §2: at M1, 95% of the apps programs that use no deferred
+    # feature must pass on the MIR interpreter).
+    apps = [r for r in results if r["name"].startswith("apps/")]
+    if apps:
+        eligible = [r for r in apps if not any(t.startswith("deferred:") for t in r["tags"])]
+        ok = sum(r["verdict"] == "PASS" for r in eligible)
+        pct = f"{100 * ok / len(eligible):.0f}%" if eligible else "-"
+        print(f"corpus-run apps backend={args.backend} programs={len(apps)} without-deferred={len(eligible)} "
+              f"pass={ok} ({pct}; M1 bar on mir-interp: 95%)")
     if ran == 0:
         print("corpus-run: nothing executed", file=sys.stderr)
         return 2
