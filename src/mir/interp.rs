@@ -1502,6 +1502,9 @@ impl<'a> Interp<'a> {
         };
         let mut ty = body.local(place.local).ty;
         let mut variant: Option<u32> = None;
+        // A downcast of a `shared enum` follows the handle and keeps the
+        // type, so the field after it must not follow it again.
+        let mut behind_handle = false;
         let tys = self.tys;
         let uninit = |what: &str| -> R<Option<(Addr, Ty)>> {
             if mode == Mode::Probe {
@@ -1516,6 +1519,7 @@ impl<'a> Interp<'a> {
         for elem in &place.projection {
             if matches!(elem, ProjElem::Field(..) | ProjElem::Downcast(_))
                 && matches!(self.tys.kind(ty), TyKind::Shared(_))
+                && !behind_handle
             {
                 match self.slot(&addr)? {
                     Value::Shared(a) => {
@@ -1523,6 +1527,7 @@ impl<'a> Interp<'a> {
                             root: Root::Heap(a),
                             path: Vec::new(),
                         };
+                        behind_handle = true;
                     }
                     Value::Uninit => return uninit("projection"),
                     other => return err(format!("expected a shared handle, found {other:?}")),
@@ -1541,6 +1546,7 @@ impl<'a> Interp<'a> {
                     addr.path.push(f.0 as u64);
                     ty = fty;
                     variant = None;
+                    behind_handle = false;
                 }
                 ProjElem::Downcast(v) => {
                     let n = self.n_fields(ty, Some(v.0));
@@ -1572,6 +1578,7 @@ impl<'a> Interp<'a> {
                         TyKind::Ref(t) | TyKind::MutRef(t) => t,
                         _ => return err("deref of a non-reference type"),
                     };
+                    behind_handle = false;
                 }
                 ProjElem::Index(_) | ProjElem::ConstIndex(_) => {
                     let i = match *elem {
@@ -1591,6 +1598,7 @@ impl<'a> Interp<'a> {
                         TyKind::Array(e, _) | TyKind::Slice(e) => e,
                         _ => return err("index into a non-array type"),
                     };
+                    behind_handle = false;
                     // Bounds are checked when the slot is reached.
                     self.slot_mut(&addr)?;
                 }
@@ -2794,6 +2802,39 @@ fn main() -> () {
         let r = run(&prog, &m.tys, "main", vec![]);
         assert_eq!(r.output, "0\n");
         assert_eq!(r.exit_code(), Some(101), "{:?}", r.outcome);
+    }
+
+    /// A field read through a downcast of a `shared enum` follows the
+    /// handle once: the downcast reaches the heap and the field stays there.
+    #[test]
+    fn mir_interp_reads_a_shared_enum_payload_through_one_handle_hop() {
+        let src = "
+enum V { Num(i64), Nil }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: shared V;
+    let _2: i64;
+    let _3: ();
+    bb0: {
+        _1 = shared V.Num { const 42_i64 };
+        _2 = copy (_1 as Num).0;
+        _3 = println(copy _2) -> bb1;
+    }
+    bb1: {
+        drop(_1) -> bb2;
+    }
+    bb2: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = crate::mir::parse_module(src).unwrap();
+        let prog = Program::from_module(&m);
+        let r = run(&prog, &m.tys, "main", vec![]);
+        assert_eq!(r.output, "42\n", "{:?}", r.outcome);
+        assert_eq!(r.exit_code(), Some(0), "{:?}", r.outcome);
     }
 
     #[test]
