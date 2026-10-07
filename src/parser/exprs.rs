@@ -1569,8 +1569,20 @@ impl super::Parser {
             Token::Identifier {
                 ref name,
                 raw: false,
-            } if name == "par" && matches!(self.peek_token_ref_at(1), Token::LeftBrace) => {
+            } if name == "par"
+                && matches!(self.peek_token_ref_at(1), Token::LeftBrace | Token::For) =>
+            {
                 self.advance();
+                if self.check(&Token::For) {
+                    // `par for` is in the v1 spec but not in this parser yet;
+                    // say so rather than reading `par` as a name and then
+                    // asking for a `;` before the `for`.
+                    self.error(
+                        "`par for` is not supported by this compiler yet; \
+                         write a plain `for`, or a `par { ... }` block",
+                    );
+                    return None;
+                }
                 let block = self.expect_keyword_block("par")?;
                 Some(Expr {
                     id: crate::ids::NodeId::DUMMY,

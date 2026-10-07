@@ -16160,3 +16160,26 @@ fn method_turbofish_is_named_and_deleted() {
         result.errors
     );
 }
+
+/// `par` is a contextual keyword, so `par for` must not read as a name `par`
+/// followed by a missing `;`; until the parser has `par for`, it says so.
+#[test]
+fn par_for_reports_unsupported_not_a_missing_semicolon() {
+    let result = parse("fn main() { let v = par for p in xs { f(p) }; }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("`par for` is not supported")),
+        "got: {:?}",
+        result.errors
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .all(|e| !e.message.contains("Expected Semicolon")),
+        "got: {:?}",
+        result.errors
+    );
+}
